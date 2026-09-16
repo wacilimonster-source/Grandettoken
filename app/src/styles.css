@@ -71,6 +71,16 @@ body{
 .val .p{font-size:10px;color:var(--tx3);margin-top:1px}
 .bar{height:4px;border-radius:3px;background:#2a2f3b;overflow:hidden;margin:8px 0 0}
 .bar>i{display:block;height:100%;border-radius:3px;transition:width .5s cubic-bezier(.3,1,.4,1)}
+/* 配额型(OpenCode Go):5 小时 / 本周 / 本月 三个窗口各一行迷你条 */
+.wins{margin-top:8px;display:flex;flex-direction:column;gap:5px}
+.win{display:flex;align-items:center;gap:7px;font-size:10px;color:var(--tx3)}
+.win .wl{flex:none;width:44px}
+.win .wb{flex:1;height:4px;border-radius:3px;background:#2a2f3b;overflow:hidden}
+.win .wb>i{display:block;height:100%;border-radius:3px;
+  transition:width .5s cubic-bezier(.3,1,.4,1)}
+.win .wv{flex:none;width:42px;text-align:right;font-size:10.5px;font-weight:500;
+  font-variant-numeric:tabular-nums}
+
 .use{display:flex;margin-top:7px}
 .use div{flex:1;font-size:10px;color:var(--tx3);border-left:1px solid #262b36;padding-left:7px}
 .use div:first-child{border-left:0;padding-left:0}
@@ -165,14 +175,20 @@ body.view-manage #lkKeys{display:none}
 .foot .lk{color:var(--tx2);cursor:pointer}
 .foot .lk:hover{color:var(--ac)}
 
+/* 紧凑条专属的形态切换按钮(条内其余部分不放按钮) */
+.cctl{display:none;align-items:center;gap:2px;flex:none;padding:0 6px 0 2px}
+.cctl .ib{color:var(--tx3)}
+.cctl .ib:hover{color:var(--tx)}
+
 /* ── 形态 2:紧凑条(设计稿里的 chip 条) ── */
-body.form-compact{border-radius:10px}
+body.form-compact{border-radius:10px;flex-direction:row;align-items:center}
+body.form-compact .cctl{display:flex}
 body.form-compact .tbar,
 body.form-compact .sum,
 body.form-compact .manage,
 body.form-compact .foot{display:none}
 body.form-compact .list{display:flex;flex-direction:row;align-items:center;
-  padding:8px 11px;gap:10px;overflow-x:auto;overflow-y:hidden}
+  padding:8px 4px 8px 11px;gap:10px;overflow-x:auto;overflow-y:hidden}
 body.form-compact .list::-webkit-scrollbar{height:0}
 body.form-compact .row{border:0;flex:none}
 body.form-compact .rhead{padding:3px 7px;cursor:pointer;border-radius:6px;
@@ -180,6 +196,7 @@ body.form-compact .rhead{padding:3px 7px;cursor:pointer;border-radius:6px;
 body.form-compact .r1{gap:5px}
 body.form-compact .bar,
 body.form-compact .use,
+body.form-compact .wins,
 body.form-compact .caret,
 body.form-compact .rbody,
 body.form-compact .nm .s,

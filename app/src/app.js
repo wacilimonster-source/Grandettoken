@@ -91,6 +91,13 @@ function renderRow(c, i) {
   const r = remainRatio(c);
   const pct = r === null ? null : Math.round(r * 100);
   const isPct = c.kind === "percent";
+  // 配额型(OpenCode Go)的展示基准是三个限流窗口本身:
+  // 大数字取最紧的那个窗口,下面三行各带一条迷你条
+  const wins = isPct && c.windows && c.windows.length ? c.windows : [];
+  const tightest = wins.length
+    ? wins.reduce((a, b) => (b.remainPercent < a.remainPercent ? b : a))
+    : null;
+  const limitedWin = wins.find((w) => w.status === "rate-limited") || null;
 
   let main;
   if (noKey) main = "——";
@@ -105,16 +112,18 @@ function renderRow(c, i) {
   let sub;
   if (noKey) sub = "未配置密钥";
   else if (failed) sub = "取数失败";
-  else if (c.limited) sub = "已限流 · 配额触顶";
-  else if (isPct) sub = "三个限流窗口的剩余";
+  else if (limitedWin) sub = `${limitedWin.label}窗触顶 · 已限流`;
+  else if (tightest) sub = `${tightest.label}窗最紧`;
+  else if (c.limited) sub = "已限流";
   else if (pct !== null) sub = `额度 ¥${c.total}`;
-  else sub = "充值余额 · 无限额";
+  else sub = ""; // 金额型拿到多少就是可用多少,不加说明
 
   let subVal;
   if (noKey) subVal = "待配置";
   else if (failed) subVal = c.stale ? "上次快照" : "失联";
+  else if (tightest) subVal = `${tightest.label}窗`;
   else if (pct !== null) subVal = `剩 ${pct}%`;
-  else subVal = c.unit === "%" ? "配额" : "可用";
+  else subVal = "";
 
   // 状态点
   let dot = "";
@@ -124,15 +133,20 @@ function renderRow(c, i) {
   else if (tone === "warn") dot = '<span class="dot w"></span>';
   else dot = '<span class="dot"></span>';
 
-  // 第三段:金额型显示日/周/月,配额型显示三个限流窗口
+  // 第三段:金额型显示日/周/月;配额型显示三个限流窗口,每行一条迷你条
   let useHtml;
-  if (isPct && c.windows && c.windows.length) {
-    useHtml = `<div class="use">${c.windows
-      .map(
-        (w) => `<div>${w.label}<b style="color:${
-          w.status === "rate-limited" ? "var(--bad)" : "var(--tx2)"
-        }">${w.remainPercent.toFixed(1)}%</b></div>`
-      )
+  if (wins.length) {
+    useHtml = `<div class="wins">${wins
+      .map((w) => {
+        const wr = Math.max(0, Math.min(100, w.remainPercent));
+        const lim = w.status === "rate-limited";
+        const wt = lim ? "bad" : wr < CFG.critPercent ? "bad" : wr < CFG.warnPercent ? "warn" : "ok";
+        return `<div class="win">
+          <span class="wl">${w.label}</span>
+          <i class="wb"><i style="width:${wr}%;background:${TONE_HEX[wt]}"></i></i>
+          <b class="wv" style="color:${lim ? "var(--bad)" : TONE_COLOR[wt]}">${wr.toFixed(1)}%</b>
+        </div>`;
+      })
       .join("")}</div>`;
   } else {
     const f = (v) => (v === null || v === undefined ? "——" : "¥" + v.toFixed(2));
@@ -143,8 +157,9 @@ function renderRow(c, i) {
     </div>`;
   }
 
+  // 配额型的三条迷你条已经表达了余量,不再重复画顶部大条
   const bar =
-    pct !== null && !failed && !noKey
+    pct !== null && !failed && !noKey && !wins.length
       ? `<div class="bar"><i style="width:${pct}%;background:${TONE_HEX[tone]}"></i></div>`
       : "";
 
@@ -483,6 +498,9 @@ $("btnC").addEventListener("click", () => {
 $("btnH").addEventListener("click", () => invoke("window_cmd", { action: "hide" }));
 $("lkQuit").addEventListener("click", () => invoke("window_cmd", { action: "quit" }));
 $("lkKeys").addEventListener("click", openManage);
+// 紧凑条上的两个方向:展开一级 / 再收一级
+$("btnExpand").addEventListener("click", () => applyForm("panel"));
+$("btnToPill").addEventListener("click", () => applyForm("pill"));
 $("pill").addEventListener("click", () => applyForm("panel"));
 
 // 密钥的保存 / 删除只在管理页里发生
