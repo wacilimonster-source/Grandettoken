@@ -1,21 +1,27 @@
+/* TokenScope 样式。视觉基准 = token-dashboard-prototype.html:
+   同一套调色板与字号;窗口无边框(transparent),body 自己就是那张卡片,
+   所以圆角/描边/内高光都在 body 上,各形态只改圆角与底色。 */
 :root{
   --bg:#12141a; --bg2:#191c24; --bg3:#20242e;
   --line:#282d3a; --line2:#333a4a;
   --tx:#e6e9f0; --tx2:#9aa3b5; --tx3:#646d80;
   --ok:#3ecf8e; --warn:#f0b23c; --bad:#f0554d; --ac:#5b8cff;
+  --r:12px;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;overflow:hidden}
 body{
-  background:var(--bg);color:var(--tx);border-radius:12px;
+  background:var(--bg);color:var(--tx);border-radius:var(--r);
+  border:1px solid var(--line);
+  box-shadow:0 0 0 1px #ffffff08 inset;
   font:13px/1.5 "Segoe UI","Microsoft YaHei",sans-serif;
   display:flex;flex-direction:column;user-select:none;
-  border:1px solid var(--line);
 }
 
-/* ── 标题栏(拖拽区) ── */
+/* ── 标题栏(拖拽区,固定尺寸下仍可拖动移动) ── */
 .tbar{display:flex;align-items:center;gap:9px;padding:9px 8px 9px 12px;flex:none;
-  background:linear-gradient(180deg,#1d2129,#171a21);border-bottom:1px solid var(--line)}
+  background:linear-gradient(180deg,#1d2129,#171a21);border-bottom:1px solid var(--line);
+  cursor:move}
 .mark{width:17px;height:17px;border-radius:5px;flex:none;position:relative;
   background:linear-gradient(135deg,#5b8cff,#8b5bff)}
 .mark::after{content:"";position:absolute;inset:5px;border-radius:2px;background:#12141a}
@@ -29,9 +35,10 @@ body{
 .ib.spin{animation:spin .7s ease}
 @keyframes spin{to{transform:rotate(360deg)}}
 
-/* ── 消耗汇总(次要信息,压扁) ── */
+/* ── 消耗汇总(次要信息,压扁成一条) ── */
 .sum{display:flex;align-items:stretch;border-bottom:1px solid var(--line);
   background:#141720;flex:none}
+.sum:empty{display:none}
 .sum .cell{flex:1;padding:7px 12px;border-right:1px solid #1e222b;min-width:0}
 .sum .cell:last-child{border-right:0}
 .sum .lb{font-size:9.5px;color:var(--tx3);letter-spacing:.08em;margin-bottom:2px;
@@ -41,9 +48,11 @@ body{
 .sum .dl{font-size:9.5px;color:var(--tx3);margin-left:4px;font-weight:400}
 
 /* ── 渠道列表 ── */
-.list{flex:1;overflow-y:auto;overflow-x:hidden}
-.list::-webkit-scrollbar{width:8px}
-.list::-webkit-scrollbar-thumb{background:#333a4a;border-radius:9px;border:2px solid var(--bg)}
+.list{flex:1;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column}
+.list>.row{flex:none}
+.list::-webkit-scrollbar,.mbody::-webkit-scrollbar{width:8px}
+.list::-webkit-scrollbar-thumb,.mbody::-webkit-scrollbar-thumb{background:#333a4a;
+  border-radius:9px;border:2px solid var(--bg)}
 .row{border-bottom:1px solid #1e222b}
 .row:last-child{border-bottom:0}
 .rhead{padding:10px 12px 9px;cursor:pointer}
@@ -96,22 +105,32 @@ body{
 .btn:hover{border-color:#4a556b;color:var(--tx)}
 .btn.p{background:#5b8cff1a;border-color:#5b8cff55;color:#9dbaff}
 .btn.danger:hover{border-color:var(--bad);color:var(--bad)}
-.hint{font-size:10px;color:var(--tx3);margin-top:7px}
+.hint{font-size:10px;color:var(--tx3);margin-top:7px;line-height:1.7}
+.hint a,.hint .lk{color:var(--tx2);cursor:pointer}
+.hint a:hover,.hint .lk:hover{color:var(--ac)}
 
-/* ── 密钥输入 ── */
-.keyrow{display:flex;gap:6px;margin-bottom:7px}
-.keyrow input{flex:1;background:#0e1015;border:1px solid var(--line2);border-radius:6px;
-  color:var(--tx);font-size:11px;padding:5px 8px;font-family:inherit;min-width:0}
-.keyrow input:focus{outline:none;border-color:var(--ac)}
+/* ── 空态(未配置任何密钥时的引导卡) ── */
+.empty{margin:auto 14px;width:calc(100% - 28px);padding:20px 16px;text-align:center;
+  color:var(--tx3);font-size:11.5px;line-height:1.9;border:1px dashed var(--line2);
+  border-radius:10px;background:#ffffff03}
+.empty .ek{font-size:22px;line-height:1;margin-bottom:10px;opacity:.9}
+.empty b{color:var(--tx2);display:block;margin-bottom:6px;font-size:12.5px}
+.empty .btn{margin-top:12px}
 
-/* ── 设置面板 ── */
-.pane{max-height:0;overflow:hidden;transition:max-height .3s ease;flex:none;
-  border-bottom:1px solid transparent}
-.pane.open{max-height:60vh;overflow-y:auto;border-bottom-color:var(--line)}
-.pane-in{padding:12px 13px}
-.pane h4{font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:.1em;
-  margin:0 0 8px;font-weight:600}
-.pane h4:not(:first-child){margin-top:16px}
+/* ── 设置与管理(独立视图,与展示区分开) ── */
+.manage{display:none;flex:1;min-height:0;flex-direction:column}
+body.view-manage .manage{display:flex}
+body.view-manage .sum,
+body.view-manage .list{display:none}
+body.view-manage #lkKeys{display:none}
+.mhead{display:flex;align-items:center;gap:8px;padding:7px 10px;flex:none;
+  border-bottom:1px solid var(--line);background:#141720}
+.mhead .mt{font-size:11.5px;font-weight:600;letter-spacing:.02em}
+.mbody{flex:1;overflow-y:auto;padding:12px 13px 16px}
+.mbody h4{font-size:11px;color:var(--tx3);text-transform:uppercase;letter-spacing:.1em;
+  margin:0 0 9px;font-weight:600}
+.mbody h4:not(:first-child){margin-top:18px}
+.khint{font-size:10px;color:var(--tx3);line-height:1.7;margin:-3px 0 10px}
 .field{display:flex;align-items:center;justify-content:space-between;padding:6px 0;
   border-bottom:1px solid #1e222b;font-size:11.5px;gap:10px}
 .field:last-child{border-bottom:0}
@@ -126,50 +145,70 @@ body{
   font-size:11px;padding:3px 6px;font-family:inherit;flex:none}
 .sel:focus{outline:none;border-color:var(--ac)}
 
+/* 密钥行:上行 = 渠道 + 状态 + 删除,下行 = 输入 + 保存 */
+.krow{padding:9px 0;border-bottom:1px solid #1e222b}
+.krow:last-child{border-bottom:0}
+.krow1{display:flex;align-items:center;gap:9px;margin-bottom:7px}
+.krow1 .ico{width:24px;height:24px;font-size:10px;border-radius:7px}
+.kmeta{flex:1;min-width:0}
+.krow .kn{font-size:11.5px;font-weight:500;display:flex;align-items:center;gap:6px}
+.krow .ks{font-size:10px;color:var(--tx3);margin-top:1px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.krow2{display:flex;gap:6px}
+.krow2 input{flex:1;background:#0e1015;border:1px solid var(--line2);border-radius:6px;
+  color:var(--tx);font-size:11px;padding:5px 8px;font-family:inherit;min-width:0}
+.krow2 input:focus{outline:none;border-color:var(--ac)}
+
 /* ── 底栏 ── */
 .foot{display:flex;align-items:center;gap:8px;padding:7px 12px;background:#141720;
   border-top:1px solid var(--line);font-size:10.5px;color:var(--tx3);flex:none}
 .foot .lk{color:var(--tx2);cursor:pointer}
 .foot .lk:hover{color:var(--ac)}
 
-/* ── 空态 / 错误条 ── */
-.empty{padding:26px 18px;text-align:center;color:var(--tx3);font-size:11.5px;line-height:1.9}
-.empty b{color:var(--tx2);display:block;margin-bottom:6px;font-size:12.5px}
-
-/* ── 紧凑条形态 ── */
+/* ── 形态 2:紧凑条(设计稿里的 chip 条) ── */
+body.form-compact{border-radius:10px}
 body.form-compact .tbar,
 body.form-compact .sum,
-body.form-compact .pane,
+body.form-compact .manage,
 body.form-compact .foot{display:none}
 body.form-compact .list{display:flex;flex-direction:row;align-items:center;
-  padding:6px 8px;gap:6px;overflow-x:auto;overflow-y:hidden}
+  padding:8px 11px;gap:10px;overflow-x:auto;overflow-y:hidden}
+body.form-compact .list::-webkit-scrollbar{height:0}
 body.form-compact .row{border:0;flex:none}
-body.form-compact .rhead{padding:0;cursor:default}
-body.form-compact .r1{gap:6px}
+body.form-compact .rhead{padding:3px 7px;cursor:pointer;border-radius:6px;
+  background:var(--bg3);min-width:0}
+body.form-compact .r1{gap:5px}
 body.form-compact .bar,
 body.form-compact .use,
 body.form-compact .caret,
 body.form-compact .rbody,
 body.form-compact .nm .s,
 body.form-compact .val .p{display:none}
-body.form-compact .ico{width:20px;height:20px;font-size:9px;border-radius:6px}
-body.form-compact .nm{flex:none}
-body.form-compact .nm .n{font-size:10px;color:var(--tx3)}
-body.form-compact .val .v{font-size:11px}
-body.form-compact .val .v i{font-size:9px}
-body.form-compact .row{cursor:pointer}
+body.form-compact .ico{width:16px;height:16px;font-size:8px;border-radius:4px}
+body.form-compact .nm{flex:none;min-width:0}
+/* chip 里不放渠道名(图标已经带缩写),只留状态点 + 数值,和设计稿一致 */
+body.form-compact .nm .nn{display:none}
+body.form-compact .nm .n{gap:0}
+body.form-compact .nm .n .dot{width:5px;height:5px}
+body.form-compact .val .v{font-size:11px;font-weight:500}
+/* 金额型舍掉小数位,百分比型的 % 要留着 */
+body.form-compact .val .v .dec{display:none}
+body.form-compact .val .v .pct{font-size:9px}
+/* 放不下的渠道收进 +N 徽标 */
+body.form-compact .more{flex:none;font-size:10px;color:var(--tx3);padding:3px 2px;
+  font-variant-numeric:tabular-nums}
 
-/* ── 胶囊形态 ── */
+/* ── 形态 3:胶囊(只显示最紧张的一个平台) ── */
+body.form-pill{border-radius:999px;background:#12141aee;border-color:var(--line2);
+  backdrop-filter:blur(8px)}
 body.form-pill .tbar,
 body.form-pill .sum,
-body.form-pill .pane,
+body.form-pill .manage,
 body.form-pill .foot{display:none}
-.pill-body{display:none;align-items:center;gap:8px;padding:7px 12px 7px 9px;flex:1;
+body.form-pill .list{display:none}
+.pill-body{display:none;align-items:center;gap:8px;padding:7px 13px 7px 9px;flex:1;
   cursor:pointer;overflow:hidden}
 body.form-pill .pill-body{display:flex}
-body.form-pill .list{display:none}
-.pill-body .t{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;
-  white-space:nowrap}
+.pill-body .t{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pill-body .t i{font-style:normal;font-size:10px;color:var(--tx3);margin-left:2px}
-.pill-body .sub{font-size:9.5px;color:var(--tx3);white-space:nowrap;overflow:hidden;
-  text-overflow:ellipsis}

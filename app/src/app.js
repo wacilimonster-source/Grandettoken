@@ -8,7 +8,6 @@ const $ = (id) => document.getElementById(id);
 
 let CHANNELS = [];
 let CFG = null;
-let FLASH = null;      // 刚配置过密钥的渠道 id,短暂展开
 let sparkCache = {};   // { [id]: {24:[],168:[],720:[]} }
 
 const emit = (ev, payload) => T.event.emit(ev, payload);
@@ -32,7 +31,7 @@ function remainRatio(c) {
 }
 
 function toneOf(c) {
-  if (!c.has_key || !c.valid) return "off";
+  if (!c.hasKey || !c.valid) return "off";
   const r = remainRatio(c);
   if (r === null) return "ok";
   if (r < CFG.critPercent / 100) return "bad";
@@ -47,7 +46,7 @@ const TONE_HEX = { ok: "#3ecf8e", warn: "#f0b23c", bad: "#f0554d", off: "#333a4a
 function sortChannels(list) {
   const mode = CFG.sort;
   const score = (c) => {
-    if (!c.has_key) return 9999;
+    if (!c.hasKey) return 9999;
     if (!c.valid) return 5000;
     if (mode === "balance") return -(c.remaining ?? 0);
     if (mode === "dayUsage") return -(c.day ?? 0);
@@ -60,7 +59,7 @@ function sortChannels(list) {
 // ───────────── 渲染 ─────────────
 function renderSummary() {
   // 汇总只累加金额型渠道 —— 百分比和金额不能相加
-  const am = CHANNELS.filter((c) => c.kind === "amount" && c.has_key && c.remaining !== null);
+  const am = CHANNELS.filter((c) => c.kind === "amount" && c.hasKey && c.remaining !== null);
   const sum = (f) => {
     const vals = am.map((c) => c[f]).filter((v) => v !== null && v !== undefined);
     if (!vals.length) return null;
@@ -87,8 +86,8 @@ function renderSummary() {
 
 function renderRow(c, i) {
   const tone = toneOf(c);
-  const noKey = !c.has_key;
-  const failed = c.has_key && !c.valid;
+  const noKey = !c.hasKey;
+  const failed = c.hasKey && !c.valid;
   const r = remainRatio(c);
   const pct = r === null ? null : Math.round(r * 100);
   const isPct = c.kind === "percent";
@@ -96,10 +95,10 @@ function renderRow(c, i) {
   let main;
   if (noKey) main = "——";
   else if (c.remaining === null) main = "——";
-  else if (isPct) main = c.remaining.toFixed(1) + "<i>%</i>";
+  else if (isPct) main = c.remaining.toFixed(1) + '<i class="pct">%</i>';
   else {
     const [int, dec] = c.remaining.toFixed(2).split(".");
-    main = "¥" + int + "<i>." + dec + "</i>";
+    main = "¥" + int + '<i class="dec">.' + dec + "</i>";
   }
 
   // 第二行给状态语义,大数字下方给数值口径,两处不重复
@@ -160,7 +159,7 @@ function renderRow(c, i) {
       <div class="r1">
         <div class="ico" style="background:${noKey || failed ? "#333a4a" : c.color}">${c.short}</div>
         <div class="nm">
-          <div class="n">${c.name}${dot}</div>
+          <div class="n"><span class="nn">${c.name}</span>${dot}</div>
           <div class="s">${c.unstable ? "未公开接口 · " : ""}${sub}</div>
         </div>
         <div class="val">
@@ -177,27 +176,16 @@ function renderRow(c, i) {
 }
 
 function renderDetail(c) {
-  const noKey = !c.has_key;
+  const noKey = !c.hasKey;
 
-  const keyBlock = `
-    <div class="keyrow">
-      <input type="password" id="key-${c.id}" placeholder="${
-        noKey ? "粘贴 API Key" : "已保存,留空则不改动"
-      }" autocomplete="off" spellcheck="false">
-      <button class="btn p" data-act="savekey" data-id="${c.id}">保存</button>
-    </div>
-    ${
-      noKey
-        ? ""
-        : `<div class="acts" style="margin-bottom:9px">
-             <button class="btn danger" data-act="delkey" data-id="${c.id}">删除密钥</button>
-           </div>`
-    }`;
+  // 密钥收纳进「设置与管理」页,行详情只留一个入口 —— 展示与设置分开
+  const manageLink = `<div class="hint" style="margin-top:2px">密钥、刷新与阈值在
+    <span class="lk" data-act="open-manage" data-id="${c.id}">设置与管理</span> 里配置。</div>`;
 
   if (noKey) {
     return `<div class="rbody-in">
-      <div class="hint" style="margin:0 0 8px">未配置密钥。密钥只写入 Windows 凭据管理器,不会进配置文件、数据库或日志。</div>
-      ${keyBlock}
+      <div class="hint" style="margin:0 0 8px">未配置密钥,尚未开始取数。密钥只写入 Windows 凭据管理器,不会进配置文件、数据库或日志。</div>
+      ${manageLink}
     </div>`;
   }
 
@@ -242,14 +230,14 @@ function renderDetail(c) {
       `<div class="hint" style="margin:0 0 8px">消耗为本地快照推算值 —— 该接口只返回当前余额,不含累计消耗;程序未运行的时段不计入。</div>`
     );
   }
-  body.push(keyBlock);
+  body.push(manageLink);
 
   return `<div class="rbody-in">${body.join("")}</div>`;
 }
 
 function render() {
   const sorted = sortChannels(CHANNELS);
-  $("cnt").textContent = CHANNELS.filter((c) => c.has_key).length + " / " + CHANNELS.length + " 个渠道";
+  $("cnt").textContent = CHANNELS.filter((c) => c.hasKey).length + " / " + CHANNELS.length + " 个渠道";
 
   renderSummary();
 
@@ -259,26 +247,30 @@ function render() {
   }
 
   const openId = document.querySelector(".row.open")?.dataset.id;
-  const keepOpen = FLASH || openId;
 
-  $("list").innerHTML = sorted.every((c) => !c.has_key)
-    ? `<div class="empty"><b>还没有配置任何渠道</b>点击下面「管理密钥」填入至少一个 API Key</div>` +
-      sorted.map((c, i) => renderRow(c, i)).join("")
-    : sorted.map((c, i) => renderRow(c, i)).join("");
+  // 一个密钥都没配时不铺灰行,直接给一张引导卡 —— 展示区只承载真实数据
+  const configured = sorted.some((c) => c.hasKey);
+  $("list").innerHTML = configured
+    ? sorted.map((c, i) => renderRow(c, i)).join("")
+    : `<div class="empty">
+         <div class="ek">&#128273;</div>
+         <b>还没有配置任何渠道</b>
+         填入至少一个 API Key 后开始取数<br>密钥只写入 Windows 凭据管理器,界面保存后不回显
+         <div><button class="btn p" data-act="open-manage">去配置密钥</button></div>
+       </div>`;
 
-  if (keepOpen) {
-    const row = document.querySelector(`.row[data-id="${keepOpen}"]`);
+  if (configured && openId) {
+    const row = document.querySelector(`.row[data-id="${openId}"]`);
     if (row) {
       row.classList.add("open");
-      const c = CHANNELS.find((x) => x.id === keepOpen);
+      const c = CHANNELS.find((x) => x.id === openId);
       const body = row.querySelector(".rbody");
       if (c && body) body.innerHTML = renderDetail(c);
     }
-    FLASH = null;
   }
 
   // 底栏状态
-  const withKey = CHANNELS.filter((c) => c.has_key);
+  const withKey = CHANNELS.filter((c) => c.hasKey);
   const bad = withKey.filter((c) => !c.valid).length;
   const warn = withKey.filter((c) => c.valid && (c.limited || toneOf(c) === "bad")).length;
   $("fdot").className =
@@ -288,40 +280,67 @@ function render() {
     : `${withKey.length - bad} 正常${warn ? ` · ${warn} 预警` : ""}${bad ? ` · ${bad} 失联` : ""}`;
 
   renderPill(sorted);
+  fitCompact();
+  refreshKeyStatuses();
+}
+
+/** 紧凑条:按重要度排在前面,尾部放不下的收进 "+N" 徽标(设计稿的截断规则)。 */
+function fitCompact() {
+  const list = $("list");
+  const rows = [...list.querySelectorAll(".row")];
+  const badge = list.querySelector(".more");
+  // 先整体还原:切回面板时必须把紧凑条里藏掉的行放出来
+  rows.forEach((r) => (r.style.display = ""));
+  if (badge) badge.remove();
+  if (!document.body.classList.contains("form-compact") || !rows.length) return;
+
+  const more = document.createElement("div");
+  more.className = "more";
+  list.appendChild(more);
+  let hidden = 0;
+  for (let i = rows.length - 1; i >= 0 && list.scrollWidth > list.clientWidth; i--) {
+    rows[i].style.display = "none";
+    hidden += 1;
+    more.textContent = "+" + hidden;
+  }
+  if (hidden) {
+    more.title = hidden + " 个渠道放不下,展开面板查看";
+  } else {
+    more.remove();
+  }
 }
 
 function renderPill(sorted) {
-  // 先清掉上一轮插入的状态点,否则每次刷新都会多堆一个
-  $("pill").querySelectorAll(".dot").forEach((d) => d.remove());
-
-  const active = sorted.filter((c) => c.has_key);
+  // 胶囊只显示最紧张的一个平台,而不是总额 —— 总额不能告诉你哪个 Key 要挂了
+  const active = sorted.filter((c) => c.hasKey);
   const tight = active
     .filter((c) => c.valid)
     .sort((a, b) => (remainRatio(a) ?? 2) - (remainRatio(b) ?? 2))[0];
+  const dot = $("pillDot");
 
   if (!tight) {
-    $("pillV").textContent = "——";
-    $("pillS").textContent = active.length ? "取数失败" : "未配置渠道";
+    dot.className = "dot o";
+    $("pillV").textContent = active.length ? "取数失败" : "未配置";
+    $("pill").title = active.length ? "渠道全部取数失败,点开面板看原因" : "尚未配置密钥";
     return;
   }
 
-  const r = remainRatio(tight);
+  const tone = toneOf(tight);
+  dot.className = "dot" + (tone === "bad" ? " b" : tone === "warn" ? " w" : "");
   $("pillV").innerHTML =
     tight.kind === "percent"
-      ? `${tight.name} ${tight.remaining.toFixed(1)}<i>%</i>`
-      : `${tight.name} ${money(tight.remaining)}`;
-  $("pillS").textContent =
-    r === null
-      ? "可用余额"
-      : `剩 ${Math.round(r * 100)}%${tight.limited ? " · 已限流" : ""}`;
-
-  const tone = toneOf(tight);
-  const dot = document.createElement("span");
-  dot.className = "dot" + (tone === "bad" ? " b" : tone === "warn" ? " w" : "");
-  $("pill").querySelector(".spacer").after(dot);
+      ? `${tight.short} ${tight.remaining.toFixed(1)}<i>%</i>`
+      : `${tight.short} ${money(tight.remaining)}`;
+  const r = remainRatio(tight);
+  const parts = [tight.name];
+  if (r !== null) parts.push(`剩 ${Math.round(r * 100)}%`);
+  if (tight.limited) parts.push("已限流");
+  $("pill").title = parts.join(" · ");
 }
 
 // ───────────── 形态切换 ─────────────
+// 每种形态都是固定尺寸:拖标题栏只能移动窗口,拉不动大小。
+// resizable(false) 去掉缩放宽边,min/max 双钳位兜底(即便有残留的缩放边框也拉不动)。
 const SIZES = {
   panel: [380, 560],
   compact: [380, 46],
@@ -329,21 +348,21 @@ const SIZES = {
 };
 
 async function applyForm(form, remember = true) {
-  document.body.className = "form-" + form;
+  document.body.className =
+    "form-" + form + (manageOpen() ? " view-manage" : "");
   const [w, h] = SIZES[form] || SIZES.panel;
   try {
-    if (form === "panel") {
-      await appWindow.setResizable(true);
-      await appWindow.setMinSize(new T.dpi.LogicalSize(320, 120));
-    } else {
-      await appWindow.setResizable(false);
-      // 紧凑条/胶囊高 46,低于面板形态的 minHeight,先解除约束再缩放
-      await appWindow.setMinSize(null);
-      await appWindow.setAlwaysOnTop(true);
-    }
+    // 先解除上一形态的钳位,否则新尺寸会被旧 min/max 卡住
+    await appWindow.setMinSize(null);
+    await appWindow.setMaxSize(null);
+    await appWindow.setResizable(false);
     // Tauri 2 的 LogicalSize 在 dpi 命名空间(v1 才在 window 下),
     // 写错命名空间会抛 TypeError 并被这里的 catch 吞掉,窗口尺寸就永远不变
     await appWindow.setSize(new T.dpi.LogicalSize(w, h));
+    await appWindow.setMinSize(new T.dpi.LogicalSize(w, h));
+    await appWindow.setMaxSize(new T.dpi.LogicalSize(w, h));
+    // 视口变化后重新量一次紧凑条,决定尾巴要收几个进 "+N"
+    setTimeout(fitCompact, 150);
   } catch (e) {
     console.error("切换形态失败", e);
   }
@@ -353,6 +372,55 @@ async function applyForm(form, remember = true) {
   }
 }
 
+// ───────────── 设置与管理(密钥与设置同页,与展示视图分开) ─────────────
+const manageOpen = () => document.body.classList.contains("view-manage");
+
+function renderKeyRows() {
+  $("keyList").innerHTML = CHANNELS.map((c) => {
+    const state = !c.hasKey
+      ? '<span class="dot o"></span>未配置'
+      : c.valid
+        ? '<span class="dot"></span>已配置'
+        : '<span class="dot o"></span>已配置 · 取数失败';
+    return `<div class="krow" data-id="${c.id}">
+      <div class="krow1">
+        <div class="ico" style="background:${c.hasKey ? c.color : "#333a4a"}">${c.short}</div>
+        <div class="kmeta">
+          <div class="kn">${c.name}</div>
+          <div class="ks">${state}</div>
+        </div>
+        ${
+          c.hasKey
+            ? `<button class="btn danger" data-act="delkey" data-id="${c.id}">删除</button>`
+            : ""
+        }
+      </div>
+      <div class="krow2">
+        <input type="password" id="key-${c.id}" autocomplete="off" spellcheck="false"
+          placeholder="${c.hasKey ? "已保存 · 留空则不修改" : "粘贴 API Key"}">
+        <button class="btn p" data-act="savekey" data-id="${c.id}">保存</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+/** 轮询刷新时更新状态;正在输入就不重建,免得把输入内容冲掉。 */
+function refreshKeyStatuses() {
+  if (!manageOpen()) return;
+  const typing = [...$("keyList").querySelectorAll("input")].some((i) => i.value);
+  if (!typing) renderKeyRows();
+}
+
+function openManage() {
+  renderKeyRows();
+  document.body.classList.add("view-manage");
+  $("btnS").classList.add("on");
+}
+function closeManage() {
+  document.body.classList.remove("view-manage");
+  $("btnS").classList.remove("on");
+}
+
 // ───────────── 事件绑定 ─────────────
 $("list").addEventListener("click", async (e) => {
   const act = e.target.closest("[data-act]");
@@ -360,27 +428,8 @@ $("list").addEventListener("click", async (e) => {
     e.stopPropagation();
     const id = act.dataset.id;
     const a = act.dataset.act;
-    if (a === "savekey") {
-      const input = $("key-" + id);
-      const val = input.value.trim();
-      if (!val) return;
-      try {
-        await invoke("set_key", { id, key: val });
-        FLASH = id;
-        input.value = "";
-        await refresh();
-      } catch (err) {
-        alert("保存失败:" + err);
-      }
-    } else if (a === "delkey") {
-      if (!confirm("删除该渠道的密钥?余额数据会保留在本地。")) return;
-      try {
-        await invoke("delete_key", { id });
-        FLASH = id;
-        await refresh();
-      } catch (err) {
-        alert("删除失败:" + err);
-      }
+    if (a === "open-manage") {
+      openManage();
     } else if (a === "range") {
       const h = Number(act.dataset.h);
       sparkCache[id] = await invoke("get_series", { id, hours: h });
@@ -422,10 +471,8 @@ $("btnR").addEventListener("click", async (e) => {
   setTimeout(() => e.currentTarget.classList.remove("spin"), 720);
   await refresh();
 });
-$("btnS").addEventListener("click", (e) => {
-  $("pane").classList.toggle("open");
-  e.currentTarget.classList.toggle("on");
-});
+$("btnS").addEventListener("click", () => (manageOpen() ? closeManage() : openManage()));
+$("btnBack").addEventListener("click", closeManage);
 $("btnP").addEventListener("click", async (e) => {
   await invoke("window_cmd", { action: "pin" });
   e.currentTarget.classList.toggle("on");
@@ -435,21 +482,38 @@ $("btnC").addEventListener("click", () => {
 });
 $("btnH").addEventListener("click", () => invoke("window_cmd", { action: "hide" }));
 $("lkQuit").addEventListener("click", () => invoke("window_cmd", { action: "quit" }));
-$("lkKeys").addEventListener("click", () => {
-  const p = $("pane");
-  if (!p.classList.contains("open")) {
-    p.classList.add("open");
-    $("btnS").classList.add("on");
-  }
-  const first = $("list").querySelector(".row");
-  if (first) {
-    document.querySelectorAll(".row").forEach((r) => r.classList.remove("open"));
-    first.classList.add("open");
-    const c = CHANNELS.find((x) => x.id === first.dataset.id);
-    if (c) first.querySelector(".rbody").innerHTML = renderDetail(c);
+$("lkKeys").addEventListener("click", openManage);
+$("pill").addEventListener("click", () => applyForm("panel"));
+
+// 密钥的保存 / 删除只在管理页里发生
+$("manage").addEventListener("click", async (e) => {
+  const act = e.target.closest("[data-act]");
+  if (!act) return;
+  const id = act.dataset.id;
+  const a = act.dataset.act;
+  if (a === "savekey") {
+    const input = $("key-" + id);
+    const val = input ? input.value.trim() : "";
+    if (!val) return;
+    try {
+      await invoke("set_key", { id, key: val });
+      input.value = "";
+      await refresh();
+      renderKeyRows();
+    } catch (err) {
+      alert("保存失败:" + err);
+    }
+  } else if (a === "delkey") {
+    if (!confirm("删除该渠道的密钥?余额数据会保留在本地。")) return;
+    try {
+      await invoke("delete_key", { id });
+      await refresh();
+      renderKeyRows();
+    } catch (err) {
+      alert("删除失败:" + err);
+    }
   }
 });
-$("pill").addEventListener("click", () => applyForm("panel"));
 
 // 设置项
 function bindSelect(id, key, cast = Number) {
@@ -508,15 +572,13 @@ function applyConfigToUI() {
 }
 
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") {
-    if ($("pane").classList.contains("open")) {
-      $("pane").classList.remove("open");
-      $("btnS").classList.remove("on");
-    } else if (document.body.className.includes("form-panel")) {
-      applyForm("pill");
-    } else {
-      applyForm("panel");
-    }
+  if (e.key !== "Escape") return;
+  if (manageOpen()) {
+    closeManage();
+  } else if (document.body.className.includes("form-panel")) {
+    applyForm("pill");
+  } else {
+    applyForm("panel");
   }
 });
 
