@@ -104,9 +104,27 @@ function iconHtml(c, cls = "ico", off = false) {
   return `<div class="${cls} logo${off ? " off" : ""}"><img src="${src}" alt="${c.short}"></div>`;
 }
 
-/** 主排序:剩余百分比升序,最紧张的置顶。 */
+/** 自定义排序下的完整顺序:配置里列出的 + 未列入的(附在末尾,新增渠道不会丢)。 */
+function currentOrderIds() {
+  const order = (CFG && CFG.channelOrder) || [];
+  return [
+    ...order.filter((id) => CHANNELS.some((c) => c.id === id)),
+    ...CHANNELS.filter((c) => !order.includes(c.id)).map((c) => c.id),
+  ];
+}
+
+/** 主排序:剩余百分比升序(默认)/ 余额 / 今日消耗 / 自定义。 */
 function sortChannels(list) {
   const mode = CFG.sort;
+  if (mode === "custom") {
+    // 自定义顺序就是用户排的顺序,不做任何干预(失败/未配置也按排的位置显示)
+    const order = currentOrderIds();
+    const rank = (c) => {
+      const i = order.indexOf(c.id);
+      return i < 0 ? 9999 : i;
+    };
+    return [...list].sort((a, b) => rank(a) - rank(b));
+  }
   const score = (c) => {
     if (!c.hasKey) return 9999;
     if (!c.valid) return 5000;
@@ -371,10 +389,12 @@ function render() {
 
   const openId = document.querySelector(".row.open")?.dataset.id;
 
-  // 一个密钥都没配时不铺灰行,直接给一张引导卡 —— 展示区只承载真实数据
-  const configured = sorted.some((c) => c.hasKey);
+  // 展示区只显示已配置密钥的渠道(未配置的只在管理页里出现,用于配置);
+  // 一个都没配时给一张引导卡
+  const shown = sorted.filter((c) => c.hasKey);
+  const configured = shown.length > 0;
   $("list").innerHTML = configured
-    ? sorted.map((c, i) => renderRow(c, i)).join("")
+    ? shown.map((c, i) => renderRow(c, i)).join("")
     : `<div class="empty">
          <div class="ek">&#128273;</div>
          <b>还没有配置任何渠道</b>
@@ -405,6 +425,7 @@ function render() {
   renderPill(sorted);
   renderDock();
   renderPillPick();
+  renderOrderRows();
   refreshClaimRows();
   fitCompact();
   refreshKeyStatuses();
@@ -549,6 +570,25 @@ function refreshClaimRows() {
   const ae = document.activeElement;
   if (ae && ae.closest && ae.closest("#claimList")) return;
   renderClaimRows();
+}
+
+/** 管理页里的「渠道顺序」:↑ ↓ 调整自定义排序,改完立即生效。 */
+function renderOrderRows() {
+  const ids = currentOrderIds();
+  $("orderList").innerHTML = CHANNELS.filter((c) => ids.includes(c.id))
+    .sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id))
+    .map((c, i) => `<div class="orow" data-id="${c.id}">
+        ${iconHtml(c, "ico", !c.hasKey)}
+        <div class="kmeta">
+          <div class="kn">${c.name}</div>
+          <div class="ks">${c.hasKey ? "已配置" : "未配置"}</div>
+        </div>
+        <button class="btn ord" data-act="ordermove" data-id="${c.id}" data-dir="-1"
+          ${i === 0 ? "disabled" : ""} title="上移">&#9650;</button>
+        <button class="btn ord" data-act="ordermove" data-id="${c.id}" data-dir="1"
+          ${i === CHANNELS.length - 1 ? "disabled" : ""} title="下移">&#9660;</button>
+      </div>`)
+    .join("");
 }
 
 /** 管理页里的胶囊渠道选择:点一下加入/移出轮播列表。 */
@@ -736,7 +776,7 @@ function dockScheduleCollapse() {
     if (!DOCK.on || !DOCK.open) return;
     if (document.body.classList.contains("view-manage")) return;
     dockLayout(false);
-  }, 700);
+  }, 1000);
 }
 
 function dockCancelCollapse() {
@@ -807,6 +847,7 @@ function openManage() {
   // 所以打开时主动建一次,不然第一次进来会是空的
   renderKeyRows();
   renderPillPick();
+  renderOrderRows();
   renderClaimRows();
   document.body.classList.add("view-manage");
   $("btnS").classList.add("on");
@@ -912,20 +953,17 @@ $("dockBody").addEventListener("mouseenter", () => {
     if (DOCK.on && !DOCK.open) dockLayout(true);
   }, DOCK_HOVER_DELAY);
 });
-$("dockBody").addEventListener("mouseleave", () => {
-  dockCancelHover();
-  if (DOCK.on && DOCK.open) dockScheduleCollapse();
-});
+// 注意:这里**不**监听竖条自身的 mouseleave —— 展开时它被隐藏,浏览器会补发
+// 一次假的 mouseleave,光标其实还在窗口里,会导致刚展开就折叠。
 document.addEventListener("mouseleave", () => {
   dockCancelHover();
   if (DOCK.on && DOCK.open) dockScheduleCollapse();
 });
 document.addEventListener("mouseenter", dockCancelCollapse);
-// 兜底:鼠标已经离开窗口时 :hover 会失效,靠它把贴边收回去
-setInterval(() => {
-  if (!DOCK.on || !DOCK.open) return;
-  if (!document.body.matches(":hover")) dockScheduleCollapse();
-}, 400);
+// 折叠只认「文档级 mouseleave」这一个信号 —— 它是真的离开了窗口才会触发。
+// 不要用 body.matches(":hover") 判断:窗口会周期性重绘(轮询 render 替换 DOM),
+// 之后若没有任何鼠标事件,Chromium 不会重算 hover,那份"陈旧 false"会让光标
+// 明明还在窗口里也把窗口收走(实测踩过)。
 // 拖动判定:窗口一移动就重新计时,停稳 250ms 后看是否贴边
 appWindow.onMoved(() => scheduleSettleCheck());
 // 胶囊轮播。不做"悬停暂停":挂件上的鼠标经常就停在胶囊附近,
@@ -1021,6 +1059,16 @@ $("manage").addEventListener("click", async (e) => {
     cur.manualLastAt = null;
     cur.manualSetAt = null;
     await saveConfigAndRefresh();
+  } else if (a === "ordermove") {
+    const dir = Number(act.dataset.dir);
+    const ids = currentOrderIds();
+    const i = ids.indexOf(id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= ids.length) return;
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    CFG.channelOrder = ids; // 未列入的渠道先落到数组里,顺序不会因为新增渠道而乱
+    await invoke("set_config", { config: CFG }).catch(() => {});
+    render(); // 排序是前端算的,不用重新取数
   } else if (a === "pillpick") {
     const sel = CFG.pillChannels || (CFG.pillChannels = []);
     const at = sel.indexOf(id);

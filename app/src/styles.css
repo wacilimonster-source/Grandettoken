@@ -173,6 +173,14 @@ body.view-manage #lkKeys{display:none}
 .pick:hover{border-color:#4a556b;color:var(--tx)}
 .pick.on{background:#5b8cff1f;border-color:#5b8cff55;color:#9dbaff}
 
+/* 渠道顺序:一行一个渠道,两个小按钮调序 */
+.orow{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #1e222b}
+.orow:last-child{border-bottom:0}
+.orow .ico{width:24px;height:24px;font-size:10px;border-radius:7px}
+.orow .kmeta{flex:1;min-width:0}
+.orow .btn.ord{padding:3px 7px;font-size:10px;line-height:1}
+.orow .btn.ord:disabled{opacity:.35;cursor:default}
+
 /* 额度申请:每渠道一行开关,开启后展开额度 / 间隔 / 上次申请 */
 .crow{padding:9px 0;border-bottom:1px solid #1e222b}
 .crow:last-child{border-bottom:0}

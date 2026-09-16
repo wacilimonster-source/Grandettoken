@@ -69,6 +69,8 @@ pub struct Config {
     pub pill_channels: Vec<String>,
     /// 申请制额度规则:渠道 id -> 规则
     pub claim_channels: HashMap<String, ClaimConfig>,
+    /// 「自定义排序」下的渠道顺序(渠道 id 数组);未列入的渠道附在末尾
+    pub channel_order: Vec<String>,
 }
 
 impl Default for Config {
@@ -90,6 +92,7 @@ impl Default for Config {
                 "4sapi".to_string(),
                 ClaimConfig::for_channel("4sapi"),
             )]),
+            channel_order: Vec::new(),
         }
     }
 }
