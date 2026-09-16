@@ -131,14 +131,22 @@ fn window_cmd(app: tauri::AppHandle, action: String) -> Result<(), String> {
     match action.as_str() {
         "hide" => win.hide().map_err(|e| e.to_string())?,
         "minimize" => win.minimize().map_err(|e| e.to_string())?,
-        "pin" => {
-            let cur = win.is_always_on_top().unwrap_or(false);
-            win.set_always_on_top(!cur).map_err(|e| e.to_string())?;
-        }
         "quit" => app.exit(0),
         _ => return Err(format!("未知操作: {action}")),
     }
     Ok(())
+}
+
+/// 置顶的唯一写入口:窗口状态与配置一起改,不会出现"按钮亮了其实没置顶"。
+/// 折叠形态(紧凑条/胶囊/贴边)没有置顶按钮,靠设置页里的同一个开关控制。
+#[tauri::command]
+fn set_pin(app: tauri::AppHandle, state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let win = app.get_webview_window("main").ok_or("窗口不存在")?;
+    win.set_always_on_top(enabled).map_err(|e| e.to_string())?;
+    let mut cfg = state.config.lock().map_err(|e| e.to_string())?;
+    cfg.always_on_top = enabled;
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    cfg.save(&store)
 }
 
 /// 后台轮询。四个渠道都是账务接口,查询余额不消耗 token,所以间隔可以压得比较短;
@@ -211,6 +219,11 @@ pub fn run() {
             // 用户挪动 exe 后无需重新设置自启
             let _ = autostart::set(config.autostart);
 
+            // 置顶是持久化设置:启动时按配置应用,折叠形态没有置顶按钮也生效
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.set_always_on_top(config.always_on_top);
+            }
+
             let _ = store.prune(now_ts() - 90 * 86400);
 
             app.manage(AppState {
@@ -229,6 +242,9 @@ pub fn run() {
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("TokenScope")
                 .menu(&menu)
+                // 左键只切换显示/隐藏(下面的事件处理),菜单留给右键。
+                // 不设这个开关时 Tauri 在 Windows 上左键也会弹菜单。
+                .show_menu_on_left_click(false)
                 .on_menu_event(|app, ev| match ev.id().as_ref() {
                     "quit" => app.exit(0),
                     "show" => {
@@ -287,6 +303,7 @@ pub fn run() {
             get_series,
             provider_meta,
             set_autostart,
+            set_pin,
             window_cmd,
         ])
         .run(tauri::generate_context!())

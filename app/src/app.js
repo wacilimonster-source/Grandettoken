@@ -25,11 +25,27 @@ function relTime(ts) {
 }
 
 /**
- * 剩余比例。分母:申请制渠道(4SAPI)用**单次额度**,其他渠道用接口给的总额。
- * 接口的"累计发放"只增不减,拿它当分母会越算越低,没有决策价值。
- * 充值型无 total 时返回 null —— 不画进度条,也不参与百分比排序。
+ * 配额型渠道的主窗口:固定看「本月」(订阅按自然月结),窗口缺失时退到最后一个。
+ * 大数字与状态色都按它走 —— 5 小时 / 本周的波动不该左右整行的观感。
+ */
+function mainWindow(c) {
+  const wins = c.windows || [];
+  if (!wins.length) return null;
+  return wins.find((w) => w.label === "本月") || wins[wins.length - 1];
+}
+
+/**
+ * 主展示比例 —— 状态色、排序、胶囊都按它算。
+ * 配额型:本月窗剩余;金额型:剩余/分母(申请制用单次额度,其他用接口给的
+ * 总额 —— 累计发放只增不减,拿它当分母会越算越低,没有决策价值)。
+ * 充值型无 total 时返回 null,不画进度条也不参与百分比排序。
  */
 function remainRatio(c) {
+  if (c.kind === "percent") {
+    const w = mainWindow(c);
+    if (!w) return null;
+    return Math.max(0, Math.min(100, w.remainPercent)) / 100;
+  }
   const denom = c.claim && c.claim.amount > 0 ? c.claim.amount : c.total;
   if (c.remaining === null || denom === null || denom === undefined || !denom) return null;
   return c.remaining / denom;
@@ -137,19 +153,18 @@ function renderRow(c, i) {
   const r = remainRatio(c);
   const pct = r === null ? null : Math.round(r * 100);
   const isPct = c.kind === "percent";
-  // 配额型(OpenCode Go)的展示基准是三个限流窗口本身:
-  // 大数字取最紧的那个窗口,下面三行各带一条迷你条
+  // 配额型(OpenCode Go):大数字固定取「本月」窗的剩余(订阅按自然月结),
+  // 下面三行各带一条迷你条把 5 小时 / 本周 / 本月都摊开
   const wins = isPct && c.windows && c.windows.length ? c.windows : [];
-  const tightest = wins.length
-    ? wins.reduce((a, b) => (b.remainPercent < a.remainPercent ? b : a))
-    : null;
-  const limitedWin = wins.find((w) => w.status === "rate-limited") || null;
+  const mw = wins.length ? mainWindow(c) : null;
 
   let main;
   if (noKey) main = "——";
   else if (c.remaining === null) main = "——";
-  else if (isPct) main = c.remaining.toFixed(1) + '<i class="pct">%</i>';
-  else {
+  else if (isPct) {
+    const v = Math.max(0, Math.min(100, mw ? mw.remainPercent : c.remaining));
+    main = v.toFixed(1) + '<i class="pct">%</i>';
+  } else {
     const [int, dec] = c.remaining.toFixed(2).split(".");
     main = "¥" + int + '<i class="dec">.' + dec + "</i>";
   }
@@ -158,11 +173,12 @@ function renderRow(c, i) {
   const claim = c.claim || null;
 
   // 第二行给状态语义,大数字下方给数值口径,两处不重复
+  // 副标题只留"状态语义":渠道是否可用。其余说明文字一律不写
+  // (未公开接口、哪个窗口最紧 —— 明细里都有,不必占一行)
   let sub;
   if (noKey) sub = "未配置密钥";
   else if (failed) sub = "取数失败";
-  else if (limitedWin) sub = `${limitedWin.label}窗触顶 · 已限流`;
-  else if (tightest) sub = `${tightest.label}窗最紧`;
+  else if (wins.length) sub = "";
   else if (c.limited) sub = "已限流";
   else if (claim) sub = `本轮额度 ¥${claim.amount}${claimTail(claim)}`;
   else if (pct !== null) sub = `额度 ¥${c.total}`;
@@ -171,7 +187,7 @@ function renderRow(c, i) {
   let subVal;
   if (noKey) subVal = "待配置";
   else if (failed) subVal = c.stale ? "上次快照" : "失联";
-  else if (tightest) subVal = `${tightest.label}窗`;
+  else if (mw) subVal = `${mw.label}窗`;
   else if (pct !== null) subVal = `剩 ${pct}%`;
   else subVal = "";
 
@@ -233,7 +249,7 @@ function renderRow(c, i) {
         ${iconHtml(c, "ico", noKey || failed)}
         <div class="nm">
           <div class="n"><span class="nn">${c.name}</span>${dot}</div>
-          <div class="s">${c.unstable ? "未公开接口 · " : ""}${sub}</div>
+          <div class="s">${sub}</div>
         </div>
         <div class="val">
           <div class="v" style="color:${TONE_COLOR[tone]}">${main}</div>
@@ -341,7 +357,10 @@ function renderDetail(c) {
 
 function render() {
   const sorted = sortChannels(CHANNELS);
-  $("cnt").textContent = CHANNELS.filter((c) => c.hasKey).length + " / " + CHANNELS.length + " 个渠道";
+  // 标题栏挤了 6 个按钮,计数用短写法,完整说法放 tooltip
+  const withKeyN = CHANNELS.filter((c) => c.hasKey).length;
+  $("cnt").textContent = withKeyN + "/" + CHANNELS.length;
+  $("cnt").title = `已配置 ${withKeyN} / 共 ${CHANNELS.length} 个渠道`;
 
   renderSummary();
 
@@ -384,6 +403,7 @@ function render() {
     : `${withKey.length - bad} 正常${warn ? ` · ${warn} 预警` : ""}${bad ? ` · ${bad} 失联` : ""}`;
 
   renderPill(sorted);
+  renderDock();
   renderPillPick();
   refreshClaimRows();
   fitCompact();
@@ -574,6 +594,132 @@ async function applyForm(form, remember = true) {
   }
 }
 
+// ───────────── 贴边(吸附屏幕边缘) ─────────────
+// 吸附后收成一条竖标签贴在屏幕右侧;鼠标移入展开成吸附前的形态,移出自动收回。
+// 竖标签始终置顶 —— 否则鼠标移过去也看不见它。退出贴边点标题栏的贴边按钮。
+const DOCK_SIZE = [26, 96];
+const DOCK = { on: false, open: false, prevPos: null, edgeX: 0, y: 0, timer: null };
+
+const currentForm = () => (document.body.className.match(/form-(\w+)/) || [])[1] || "panel";
+
+async function dockEnter() {
+  if (DOCK.on) return;
+  try {
+    DOCK.prevPos = await appWindow.outerPosition();
+    const mon = await T.window.currentMonitor();
+    if (!mon) throw new Error("拿不到显示器信息");
+    const sf = await appWindow.scaleFactor();
+    DOCK.edgeX = mon.position.x + mon.size.width - Math.round(DOCK_SIZE[0] * sf);
+    // 竖向保持当前位置,夹进显示器范围
+    const wantY = DOCK.prevPos ? DOCK.prevPos.y : mon.position.y + 120;
+    const minY = mon.position.y + 8;
+    const maxY = mon.position.y + mon.size.height - Math.round(DOCK_SIZE[1] * sf) - 8;
+    DOCK.y = Math.max(minY, Math.min(maxY, wantY));
+    DOCK.on = true;
+    await appWindow.setAlwaysOnTop(true);
+    await dockLayout(false);
+    renderDock(); // 立即填内容,不然要等下一次轮询
+    applyDockUI();
+  } catch (e) {
+    DOCK.on = false;
+    console.error("贴边失败", e);
+  }
+}
+
+/** 展开(true)/ 收回(false)。展开时右边缘保持贴边,窗口不会跑到屏幕外。 */
+async function dockLayout(open) {
+  const [w, h] = open ? SIZES[currentForm()] || SIZES.panel : DOCK_SIZE;
+  try {
+    const sf = await appWindow.scaleFactor();
+    await appWindow.setMinSize(null);
+    await appWindow.setMaxSize(null);
+    await appWindow.setSize(new T.dpi.LogicalSize(w, h));
+    const x = open
+      ? DOCK.edgeX + Math.round(DOCK_SIZE[0] * sf) - Math.round(w * sf)
+      : DOCK.edgeX;
+    await appWindow.setPosition(new T.dpi.PhysicalPosition(x, DOCK.y));
+    await appWindow.setMinSize(new T.dpi.LogicalSize(w, h));
+    await appWindow.setMaxSize(new T.dpi.LogicalSize(w, h));
+  } catch (e) {
+    console.error("贴边尺寸切换失败", e);
+  }
+  DOCK.open = open;
+  document.body.classList.toggle("docked", !open);
+  if (open) setTimeout(fitCompact, 150);
+}
+
+/** 退出贴边:恢复吸附前的形态、位置,以及置顶设置。 */
+async function dockExit() {
+  if (!DOCK.on) return;
+  DOCK.on = false;
+  DOCK.open = false;
+  document.body.classList.remove("docked");
+  const [w, h] = SIZES[currentForm()] || SIZES.panel;
+  try {
+    await appWindow.setMinSize(null);
+    await appWindow.setMaxSize(null);
+    await appWindow.setSize(new T.dpi.LogicalSize(w, h));
+    if (DOCK.prevPos) await appWindow.setPosition(DOCK.prevPos);
+    await appWindow.setMinSize(new T.dpi.LogicalSize(w, h));
+    await appWindow.setMaxSize(new T.dpi.LogicalSize(w, h));
+  } catch (e) {
+    console.error("退出贴边失败", e);
+  }
+  await invoke("set_pin", { enabled: !!(CFG && CFG.alwaysOnTop) }).catch(() => {});
+  applyDockUI();
+  render();
+}
+
+function applyDockUI() {
+  for (const id of ["btnDock", "btnDockP"]) {
+    const el = $(id);
+    if (!el) continue;
+    el.classList.toggle("on", DOCK.on);
+    el.title = DOCK.on ? "取消贴边" : "吸附到屏幕边缘";
+  }
+}
+
+/** 移出后 0.7 秒收回,避免手一抖就收走;正在设置页里操作时不收。 */
+function dockScheduleCollapse() {
+  // 已经在倒计时就别重置 —— 兜底的轮询每 400ms 一次,重置会让 700ms 永远等不到
+  if (DOCK.timer) return;
+  DOCK.timer = setTimeout(() => {
+    DOCK.timer = null;
+    if (!DOCK.on || !DOCK.open) return;
+    if (document.body.classList.contains("view-manage")) return;
+    dockLayout(false);
+  }, 700);
+}
+
+function dockCancelCollapse() {
+  if (DOCK.timer) {
+    clearTimeout(DOCK.timer);
+    DOCK.timer = null;
+  }
+}
+
+function renderDock() {
+  if (!DOCK.on) return;
+  // 和胶囊用同一套选择逻辑(设置里选中的渠道,没选则取最紧张的那个)
+  const c = PILL.list[0] || null;
+  const body = $("dockBody");
+  const dot = $("dockDot");
+  if (!c) {
+    dot.className = "dot o";
+    $("dockV").textContent = PILL.sorted.some((x) => x.hasKey) ? "取数失败" : "未配置";
+    body.style.background = "linear-gradient(180deg,#3a4152,#2b313e)";
+    return;
+  }
+  const tone = toneOf(c);
+  dot.className = "dot" + (tone === "bad" ? " b" : tone === "warn" ? " w" : tone === "off" ? " o" : "");
+  $("dockV").innerHTML =
+    c.kind === "percent"
+      ? `${c.short} ${((remainRatio(c) ?? 0) * 100).toFixed(1)}<i>%</i>`
+      : `${c.short} ${money(c.remaining)}`;
+  body.style.background = `linear-gradient(180deg, ${TONE_HEX[tone]}, ${TONE_HEX[tone]}cc)`;
+  body.title = `${c.name} · 移入或点击展开`;
+}
+
 // ───────────── 设置与管理(密钥与设置同页,与展示视图分开) ─────────────
 const manageOpen = () => document.body.classList.contains("view-manage");
 
@@ -679,10 +825,27 @@ $("btnR").addEventListener("click", async (e) => {
 });
 $("btnS").addEventListener("click", () => (manageOpen() ? closeManage() : openManage()));
 $("btnBack").addEventListener("click", closeManage);
-$("btnP").addEventListener("click", async (e) => {
-  await invoke("window_cmd", { action: "pin" });
-  e.currentTarget.classList.toggle("on");
-});
+// 置顶:窗口状态与配置一起改(见 Rust 的 set_pin),按钮与设置项共用同一个值
+async function setPin(enabled) {
+  try {
+    await invoke("set_pin", { enabled });
+    CFG.alwaysOnTop = enabled;
+    applyPinUI();
+  } catch (e) {
+    alert("置顶设置失败:" + e);
+  }
+}
+
+function applyPinUI() {
+  const on = !!(CFG && CFG.alwaysOnTop);
+  const btn = $("btnP");
+  btn.classList.toggle("on", on);
+  btn.title = on ? "已置顶(点击取消)" : "窗口置顶";
+  const sw = $("cfgPin");
+  if (sw) sw.classList.toggle("on", on);
+}
+
+$("btnP").addEventListener("click", () => setPin(!CFG.alwaysOnTop));
 $("btnC").addEventListener("click", () => {
   applyForm(document.body.className.includes("form-compact") ? "panel" : "compact");
 });
@@ -696,6 +859,29 @@ $("btnPillUp").addEventListener("click", (e) => {
   e.stopPropagation(); // 别让胶囊整体的"点哪都能展开"再触发一次
   applyForm("panel");
 });
+$("btnDock").addEventListener("click", () => (DOCK.on ? dockExit() : dockEnter()));
+$("btnDockP").addEventListener("click", (e) => {
+  e.stopPropagation();
+  if (DOCK.on) dockExit();
+  else dockEnter();
+});
+// 贴边的移入 / 移出
+$("dockBody").addEventListener("mouseenter", () => {
+  dockCancelCollapse();
+  if (DOCK.on && !DOCK.open) dockLayout(true);
+});
+$("dockBody").addEventListener("click", () => {
+  if (DOCK.on && !DOCK.open) dockLayout(true);
+});
+document.addEventListener("mouseleave", () => {
+  if (DOCK.on && DOCK.open) dockScheduleCollapse();
+});
+document.addEventListener("mouseenter", dockCancelCollapse);
+// 兜底:鼠标已经离开窗口时 :hover 会失效,靠它把贴边收回去
+setInterval(() => {
+  if (!DOCK.on || !DOCK.open) return;
+  if (!document.body.matches(":hover")) dockScheduleCollapse();
+}, 400);
 // 胶囊轮播。不做"悬停暂停":挂件上的鼠标经常就停在胶囊附近,
 // 一暂停看起来就像轮播坏了(实测踩过);点击动作只是展开面板,内容变换无副作用。
 setInterval(() => {
@@ -839,6 +1025,11 @@ bindSelect("cfgCrit", "critPercent");
 bindSwitch("cfgAutostart", "autostart", (on) => invoke("set_autostart", { enabled: on }));
 bindSwitch("cfgNotify", "notify");
 bindSwitch("cfgBlur", "collapseOnBlur");
+// 置顶走 set_pin:窗口与配置一起改,失败时 bindSwitch 会回滚开关
+bindSwitch("cfgPin", "alwaysOnTop", async (on) => {
+  await invoke("set_pin", { enabled: on });
+  applyPinUI();
+});
 
 function applyConfigToUI() {
   if (!CFG) return;
@@ -893,6 +1084,12 @@ async function refresh() {
     };
   }
   applyConfigToUI();
+  // 置顶以真实窗口状态为准(Rust 启动时按配置应用),避免按钮与实际不一致
+  try {
+    const real = await appWindow.isAlwaysOnTop();
+    if (real !== CFG.alwaysOnTop) CFG.alwaysOnTop = real;
+  } catch {}
+  applyPinUI();
   await applyForm(CFG.form || "panel", false);
   await refresh();
 

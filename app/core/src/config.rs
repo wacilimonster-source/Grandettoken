@@ -58,6 +58,9 @@ pub struct Config {
     pub notify: bool,
     pub autostart: bool,
     pub collapse_on_blur: bool,
+    /// 窗口置顶(全局开关)。折叠形态没有置顶按钮,所以置顶状态要能持久化;
+    /// 面板的 📌 按钮与设置项共用这一个值,避免两处状态打架。
+    pub always_on_top: bool,
     /// panel | compact | pill | edge
     pub form: String,
     /// percent | balance | dayUsage
@@ -79,6 +82,7 @@ impl Default for Config {
             notify: true,
             autostart: false,
             collapse_on_blur: false,
+            always_on_top: true,
             form: "panel".into(),
             sort: "percent".into(),
             pill_channels: Vec::new(),

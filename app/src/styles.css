@@ -25,13 +25,16 @@ body{
 .mark{width:17px;height:17px;border-radius:5px;flex:none;position:relative;
   background:linear-gradient(135deg,#5b8cff,#8b5bff)}
 .mark::after{content:"";position:absolute;inset:5px;border-radius:2px;background:#12141a}
-.tt{font-size:12px;font-weight:600;letter-spacing:.02em}
-.tt small{font-weight:400;color:var(--tx3);margin-left:6px;font-size:11px}
+.tt{font-size:12px;font-weight:600;letter-spacing:.02em;white-space:nowrap}
+.tt small{font-weight:400;color:var(--tx3);margin-left:5px;font-size:11px}
 .spacer{flex:1}
 .ib{width:24px;height:24px;border:0;background:transparent;border-radius:6px;color:var(--tx2);
   cursor:pointer;display:grid;place-items:center;font-size:13px;flex:none;font-family:inherit}
 .ib:hover{background:#ffffff12;color:var(--tx)}
-.ib.on{color:var(--ac);background:#5b8cff1f}
+.ib svg{display:block}
+/* 选中态用实心强调色:emoji 图标改不了颜色,所以图标统一换成 currentColor 的 SVG */
+.ib.on{color:#fff;background:var(--ac)}
+.ib.on:hover{background:#6f9bff;color:#fff}
 .ib.spin{animation:spin .7s ease}
 @keyframes spin{to{transform:rotate(360deg)}}
 
@@ -41,11 +44,11 @@ body{
 .sum:empty{display:none}
 .sum .cell{flex:1;padding:7px 12px;border-right:1px solid #1e222b;min-width:0}
 .sum .cell:last-child{border-right:0}
-.sum .lb{font-size:9.5px;color:var(--tx3);letter-spacing:.08em;margin-bottom:2px;
+.sum .lb{font-size:10.5px;color:var(--tx3);letter-spacing:.08em;margin-bottom:2px;
   white-space:nowrap}
-.sum .vv{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;
+.sum .vv{font-size:13.5px;font-weight:600;font-variant-numeric:tabular-nums;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.sum .dl{font-size:9.5px;color:var(--tx3);margin-left:4px;font-weight:400}
+.sum .dl{font-size:10.5px;color:var(--tx3);margin-left:4px;font-weight:400}
 
 /* ── 渠道列表 ── */
 .list{flex:1;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column}
@@ -55,20 +58,20 @@ body{
   border-radius:9px;border:2px solid var(--bg)}
 .row{border-bottom:1px solid #1e222b}
 .row:last-child{border-bottom:0}
-.rhead{padding:10px 12px 9px;cursor:pointer}
+.rhead{padding:9px 12px 8px;cursor:pointer}
 .rhead:hover{background:#ffffff07}
 .r1{display:flex;align-items:center;gap:9px}
 .ico{width:28px;height:28px;border-radius:8px;flex:none;display:grid;place-items:center;
   font-size:11px;font-weight:700;color:#fff}
 .nm{min-width:0;flex:1}
-.nm .n{font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;
+.nm .n{font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;
   text-overflow:ellipsis;display:flex;align-items:center;gap:5px}
-.nm .s{font-size:10px;color:var(--tx3);margin-top:1px;white-space:nowrap;
+.nm .s{font-size:11px;color:var(--tx3);margin-top:1px;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
 .val{text-align:right;flex:none;font-variant-numeric:tabular-nums}
-.val .v{font-size:19px;font-weight:600;letter-spacing:-.4px;line-height:1.1}
-.val .v i{font-style:normal;font-size:12px;font-weight:400;color:var(--tx3)}
-.val .p{font-size:10px;color:var(--tx3);margin-top:1px}
+.val .v{font-size:20px;font-weight:600;letter-spacing:-.4px;line-height:1.1}
+.val .v i{font-style:normal;font-size:13px;font-weight:400;color:var(--tx3)}
+.val .p{font-size:11px;color:var(--tx3);margin-top:1px}
 .bar{height:4px;border-radius:3px;background:#2a2f3b;overflow:hidden;margin:8px 0 0}
 .bar>i{display:block;height:100%;border-radius:3px;transition:width .5s cubic-bezier(.3,1,.4,1)}
 /* 官方图标:有官方标的渠道用图片,容器仍是原来的圆角方块(尺寸/圆角由各上下文决定) */
@@ -81,18 +84,18 @@ body.form-compact .ico.logo>img{width:88%;height:88%}
 
 /* 配额型(OpenCode Go):5 小时 / 本周 / 本月 三个窗口各一行迷你条 */
 .wins{margin-top:8px;display:flex;flex-direction:column;gap:5px}
-.win{display:flex;align-items:center;gap:7px;font-size:10px;color:var(--tx3)}
-.win .wl{flex:none;width:44px}
+.win{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--tx3)}
+.win .wl{flex:none;width:48px}
 .win .wb{flex:1;height:4px;border-radius:3px;background:#2a2f3b;overflow:hidden}
 .win .wb>i{display:block;height:100%;border-radius:3px;
   transition:width .5s cubic-bezier(.3,1,.4,1)}
-.win .wv{flex:none;width:42px;text-align:right;font-size:10.5px;font-weight:500;
+.win .wv{flex:none;width:46px;text-align:right;font-size:11.5px;font-weight:500;
   font-variant-numeric:tabular-nums}
 
 .use{display:flex;margin-top:7px}
-.use div{flex:1;font-size:10px;color:var(--tx3);border-left:1px solid #262b36;padding-left:7px}
+.use div{flex:1;font-size:11px;color:var(--tx3);border-left:1px solid #262b36;padding-left:7px}
 .use div:first-child{border-left:0;padding-left:0}
-.use b{display:block;font-size:11.5px;color:var(--tx2);font-weight:500;
+.use b{display:block;font-size:12px;color:var(--tx2);font-weight:500;
   font-variant-numeric:tabular-nums;margin-top:1px}
 .caret{color:var(--tx3);font-size:9px;flex:none;width:12px;text-align:center;
   transition:transform .25s}
@@ -106,11 +109,11 @@ body.form-compact .ico.logo>img{width:88%;height:88%}
 .row.open .rbody{max-height:340px;overflow-y:auto}
 .rbody-in{padding:4px 13px 13px 49px;background:#ffffff05}
 .seg{display:flex;gap:4px;margin-bottom:9px}
-.seg button{flex:1;font-size:10px;padding:3px 0;border:1px solid var(--line);
+.seg button{flex:1;font-size:11px;padding:3px 0;border:1px solid var(--line);
   background:var(--bg3);color:var(--tx3);border-radius:5px;cursor:pointer;font-family:inherit}
 .seg button.on{background:#5b8cff1f;border-color:#5b8cff55;color:#9dbaff}
 .kv{display:grid;grid-template-columns:1fr 1fr;gap:7px 14px;margin-bottom:10px}
-.kv div{display:flex;justify-content:space-between;font-size:11px;
+.kv div{display:flex;justify-content:space-between;font-size:12px;
   border-bottom:1px dashed #262b36;padding-bottom:4px;gap:6px;min-width:0}
 .kv span{color:var(--tx3);white-space:nowrap}
 .kv b{font-weight:500;font-variant-numeric:tabular-nums;white-space:nowrap;
@@ -118,21 +121,21 @@ body.form-compact .ico.logo>img{width:88%;height:88%}
 .spark{height:30px;display:flex;align-items:flex-end;gap:2px;margin-bottom:9px}
 .spark i{flex:1;background:#37527f;border-radius:1px;min-height:1px}
 .acts{display:flex;gap:6px;flex-wrap:wrap}
-.btn{border:1px solid var(--line2);background:var(--bg3);color:var(--tx2);font-size:11px;
+.btn{border:1px solid var(--line2);background:var(--bg3);color:var(--tx2);font-size:12px;
   padding:4px 9px;border-radius:6px;cursor:pointer;font-family:inherit}
 .btn:hover{border-color:#4a556b;color:var(--tx)}
 .btn.p{background:#5b8cff1a;border-color:#5b8cff55;color:#9dbaff}
 .btn.danger:hover{border-color:var(--bad);color:var(--bad)}
-.hint{font-size:10px;color:var(--tx3);margin-top:7px;line-height:1.7}
+.hint{font-size:11px;color:var(--tx3);margin-top:7px;line-height:1.7}
 .hint a,.hint .lk{color:var(--tx2);cursor:pointer}
 .hint a:hover,.hint .lk:hover{color:var(--ac)}
 
 /* ── 空态(未配置任何密钥时的引导卡) ── */
 .empty{margin:auto 14px;width:calc(100% - 28px);padding:20px 16px;text-align:center;
-  color:var(--tx3);font-size:11.5px;line-height:1.9;border:1px dashed var(--line2);
+  color:var(--tx3);font-size:12.5px;line-height:1.9;border:1px dashed var(--line2);
   border-radius:10px;background:#ffffff03}
 .empty .ek{font-size:22px;line-height:1;margin-bottom:10px;opacity:.9}
-.empty b{color:var(--tx2);display:block;margin-bottom:6px;font-size:12.5px}
+.empty b{color:var(--tx2);display:block;margin-bottom:6px;font-size:13.5px}
 .empty .btn{margin-top:12px}
 
 /* ── 设置与管理(独立视图,与展示区分开) ── */
@@ -145,12 +148,12 @@ body.view-manage #lkKeys{display:none}
   border-bottom:1px solid var(--line);background:#141720}
 .mhead .mt{font-size:11.5px;font-weight:600;letter-spacing:.02em}
 .mbody{flex:1;overflow-y:auto;padding:12px 13px 16px}
-.mbody h4{font-size:11px;color:var(--tx3);text-transform:uppercase;letter-spacing:.1em;
+.mbody h4{font-size:12px;color:var(--tx3);text-transform:uppercase;letter-spacing:.1em;
   margin:0 0 9px;font-weight:600}
 .mbody h4:not(:first-child){margin-top:18px}
-.khint{font-size:10px;color:var(--tx3);line-height:1.7;margin:-3px 0 10px}
+.khint{font-size:11px;color:var(--tx3);line-height:1.7;margin:-3px 0 10px}
 .field{display:flex;align-items:center;justify-content:space-between;padding:6px 0;
-  border-bottom:1px solid #1e222b;font-size:11.5px;gap:10px}
+  border-bottom:1px solid #1e222b;font-size:12px;gap:10px}
 .field:last-child{border-bottom:0}
 .field>span{flex:1;min-width:0}
 .sw{width:32px;height:17px;border-radius:99px;background:#333a4a;position:relative;
@@ -160,12 +163,12 @@ body.view-manage #lkKeys{display:none}
 .sw.on{background:#5b8cff59}
 .sw.on::after{left:17px;background:var(--ac)}
 .sel{background:var(--bg3);border:1px solid var(--line2);color:var(--tx2);border-radius:5px;
-  font-size:11px;padding:3px 6px;font-family:inherit;flex:none}
+  font-size:12px;padding:3px 6px;font-family:inherit;flex:none}
 .sel:focus{outline:none;border-color:var(--ac)}
 
 /* 胶囊显示渠道的多选芯片 */
 .picks{display:flex;flex-wrap:wrap;gap:6px}
-.pick{border:1px solid var(--line2);background:var(--bg3);color:var(--tx3);font-size:11px;
+.pick{border:1px solid var(--line2);background:var(--bg3);color:var(--tx3);font-size:12px;
   padding:4px 9px;border-radius:999px;cursor:pointer;font-family:inherit}
 .pick:hover{border-color:#4a556b;color:var(--tx)}
 .pick.on{background:#5b8cff1f;border-color:#5b8cff55;color:#9dbaff}
@@ -177,16 +180,16 @@ body.view-manage #lkKeys{display:none}
 .crow1 .ico{width:24px;height:24px;font-size:10px;border-radius:7px}
 /* 单列:两列时"最短间隔 + 输入 + 单位"会被挤到裁切,列表本身可滚动,不差这点高度 */
 .cfields{margin-top:9px;display:grid;grid-template-columns:1fr;gap:7px}
-.cfields label{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--tx3);
+.cfields label{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tx3);
   white-space:nowrap}
 .cfields label>span:first-child{flex:none;width:52px}
 .cfields input{flex:1;min-width:0;background:#0e1015;border:1px solid var(--line2);
-  border-radius:6px;color:var(--tx);font-size:11px;padding:4px 7px;font-family:inherit}
+  border-radius:6px;color:var(--tx);font-size:12px;padding:4px 7px;font-family:inherit}
 .cfields input:focus{outline:none;border-color:var(--ac)}
 .cfields .cbtns{grid-column:1 / -1;display:flex;gap:6px}
 
 /* 撑不到下次申请的提示(列表行内) */
-.claim-warn{font-size:10px;color:var(--warn);margin-top:6px;line-height:1.6}
+.claim-warn{font-size:11px;color:var(--warn);margin-top:6px;line-height:1.6}
 .nm .s .cy{color:var(--ac)}
 .nm .s .ct{color:var(--tx3)}
 
@@ -196,17 +199,17 @@ body.view-manage #lkKeys{display:none}
 .krow1{display:flex;align-items:center;gap:9px;margin-bottom:7px}
 .krow1 .ico{width:24px;height:24px;font-size:10px;border-radius:7px}
 .kmeta{flex:1;min-width:0}
-.krow .kn{font-size:11.5px;font-weight:500;display:flex;align-items:center;gap:6px}
-.krow .ks{font-size:10px;color:var(--tx3);margin-top:1px;white-space:nowrap;
+.krow .kn{font-size:12.5px;font-weight:500;display:flex;align-items:center;gap:6px}
+.krow .ks{font-size:11px;color:var(--tx3);margin-top:1px;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
 .krow2{display:flex;gap:6px}
 .krow2 input{flex:1;background:#0e1015;border:1px solid var(--line2);border-radius:6px;
-  color:var(--tx);font-size:11px;padding:5px 8px;font-family:inherit;min-width:0}
+  color:var(--tx);font-size:12px;padding:5px 8px;font-family:inherit;min-width:0}
 .krow2 input:focus{outline:none;border-color:var(--ac)}
 
 /* ── 底栏 ── */
 .foot{display:flex;align-items:center;gap:8px;padding:7px 12px;background:#141720;
-  border-top:1px solid var(--line);font-size:10.5px;color:var(--tx3);flex:none}
+  border-top:1px solid var(--line);font-size:11px;color:var(--tx3);flex:none}
 .foot .lk{color:var(--tx2);cursor:pointer}
 .foot .lk:hover{color:var(--ac)}
 
@@ -214,6 +217,25 @@ body.view-manage #lkKeys{display:none}
 .cctl{display:none;align-items:center;gap:2px;flex:none;padding:0 6px 0 2px}
 .cctl .ib{color:var(--tx3)}
 .cctl .ib:hover{color:var(--tx)}
+
+/* ── 贴边(吸附屏幕边缘) ──
+   收起时窗口只有 26×96,只显示这块竖标签;移入即展开成吸附前的形态。 */
+.dock-body{display:none;width:100%;height:100%;flex-direction:column;align-items:center;
+  justify-content:center;gap:7px;cursor:pointer;overflow:hidden;border-radius:8px 0 0 8px}
+body.docked{display:flex;border-radius:8px 0 0 8px;border-right:0}
+body.docked .dock-body{display:flex}
+body.docked .tbar,
+body.docked .sum,
+body.docked .list,
+body.docked .foot,
+body.docked .manage,
+body.docked .cctl,
+body.docked .pill-body{display:none}
+.dock-body .dt{writing-mode:vertical-rl;font-size:11.5px;font-weight:600;color:#fff;
+  letter-spacing:.03em;white-space:nowrap;text-shadow:0 1px 2px #0006}
+.dock-body .dt i{font-style:normal;font-size:9.5px;opacity:.9}
+/* 彩底上的状态点统一用白色:底色本身已经在表达状态色 */
+.dock-body .dot{background:#fff}
 
 /* ── 形态 2:紧凑条(设计稿里的 chip 条) ── */
 body.form-compact{border-radius:10px;flex-direction:row;align-items:center}
@@ -242,12 +264,12 @@ body.form-compact .nm{flex:none;min-width:0}
 body.form-compact .nm .nn{display:none}
 body.form-compact .nm .n{gap:0}
 body.form-compact .nm .n .dot{width:5px;height:5px}
-body.form-compact .val .v{font-size:11px;font-weight:500}
+body.form-compact .val .v{font-size:12px;font-weight:500}
 /* 金额型舍掉小数位,百分比型的 % 要留着 */
 body.form-compact .val .v .dec{display:none}
-body.form-compact .val .v .pct{font-size:9px}
+body.form-compact .val .v .pct{font-size:10px}
 /* 放不下的渠道收进 +N 徽标 */
-body.form-compact .more{flex:none;font-size:10px;color:var(--tx3);padding:3px 2px;
+body.form-compact .more{flex:none;font-size:11px;color:var(--tx3);padding:3px 2px;
   font-variant-numeric:tabular-nums}
 
 /* ── 形态 3:胶囊(只显示最紧张的一个平台) ── */
@@ -264,6 +286,6 @@ body.form-pill .pill-body{display:flex}
 /* 胶囊里的展开按钮:之前只能靠"点哪都能展开"这个隐藏手势,加个看得见的入口 */
 .pill-body .ib{width:22px;height:22px;font-size:11px;color:var(--tx3)}
 .pill-body .ib:hover{color:var(--tx)}
-.pill-body .t{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;
+.pill-body .t{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pill-body .t i{font-style:normal;font-size:10px;color:var(--tx3);margin-left:2px}
