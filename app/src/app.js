@@ -70,6 +70,24 @@ function toneOf(c) {
 const TONE_COLOR = { ok: "var(--ok)", warn: "var(--warn)", bad: "var(--bad)", off: "var(--tx3)" };
 const TONE_HEX = { ok: "#3ecf8e", warn: "#f0b23c", bad: "#f0554d", off: "#333a4a" };
 
+// 官方图标(素材出处见 app/src/logos/README.md)。没有官方标的渠道继续用字母方块。
+const LOGOS = {
+  "opencode-go": "logos/opencode.svg",
+  deepseek: "logos/deepseek.png",
+};
+
+/**
+ * 渠道图标。统一入口:列表行 / 密钥行 / 额度申请行都用它。
+ * off = 未配置或取数失败 —— 字母方块变灰,官方标压暗去色,语义保持一致。
+ */
+function iconHtml(c, cls = "ico", off = false) {
+  const src = LOGOS[c.id];
+  if (!src) {
+    return `<div class="${cls}" style="background:${off ? "#333a4a" : c.color}">${c.short}</div>`;
+  }
+  return `<div class="${cls} logo${off ? " off" : ""}"><img src="${src}" alt="${c.short}"></div>`;
+}
+
 /** 主排序:剩余百分比升序,最紧张的置顶。 */
 function sortChannels(list) {
   const mode = CFG.sort;
@@ -212,7 +230,7 @@ function renderRow(c, i) {
   return `<div class="row" data-id="${c.id}" data-i="${i}">
     <div class="rhead">
       <div class="r1">
-        <div class="ico" style="background:${noKey || failed ? "#333a4a" : c.color}">${c.short}</div>
+        ${iconHtml(c, "ico", noKey || failed)}
         <div class="nm">
           <div class="n"><span class="nn">${c.name}</span>${dot}</div>
           <div class="s">${c.unstable ? "未公开接口 · " : ""}${sub}</div>
@@ -493,7 +511,7 @@ function renderClaimRows() {
 
     return `<div class="crow" data-id="${c.id}">
       <div class="crow1">
-        <div class="ico" style="background:${on ? c.color : "#333a4a"}">${c.short}</div>
+        ${iconHtml(c, "ico", !on)}
         <div class="kmeta">
           <div class="kn">${c.name}</div>
           <div class="ks">${state}</div>
@@ -568,7 +586,7 @@ function renderKeyRows() {
         : '<span class="dot o"></span>已配置 · 取数失败';
     return `<div class="krow" data-id="${c.id}">
       <div class="krow1">
-        <div class="ico" style="background:${c.hasKey ? c.color : "#333a4a"}">${c.short}</div>
+        ${iconHtml(c, "ico", !c.hasKey)}
         <div class="kmeta">
           <div class="kn">${c.name}</div>
           <div class="ks">${state}</div>

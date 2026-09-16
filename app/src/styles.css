@@ -71,6 +71,14 @@ body{
 .val .p{font-size:10px;color:var(--tx3);margin-top:1px}
 .bar{height:4px;border-radius:3px;background:#2a2f3b;overflow:hidden;margin:8px 0 0}
 .bar>i{display:block;height:100%;border-radius:3px;transition:width .5s cubic-bezier(.3,1,.4,1)}
+/* 官方图标:有官方标的渠道用图片,容器仍是原来的圆角方块(尺寸/圆角由各上下文决定) */
+.ico.logo{background:transparent;padding:0;overflow:hidden}
+.ico.logo>img{width:100%;height:100%;object-fit:contain;display:block}
+/* 未配置 / 取数失败:和字母方块的"变灰"语义对齐 */
+.ico.logo.off>img{filter:grayscale(1);opacity:.5}
+/* 紧凑条的 chip 图标更小,官方标要稍微收一点,不然视觉上盖过文字 */
+body.form-compact .ico.logo>img{width:88%;height:88%}
+
 /* 配额型(OpenCode Go):5 小时 / 本周 / 本月 三个窗口各一行迷你条 */
 .wins{margin-top:8px;display:flex;flex-direction:column;gap:5px}
 .win{display:flex;align-items:center;gap:7px;font-size:10px;color:var(--tx3)}

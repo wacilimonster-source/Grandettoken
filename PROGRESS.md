@@ -333,6 +333,28 @@ JSON 字段是 **`hasKey`**,而前端 14 处全在读 `c.has_key` → 恒为 `un
 运行时断言(CDP):行内文案与分母、管理页只列金额型渠道、填日期后倒计时立即
 生效、清除后回到自动。
 
+### 追加调整 4(2026-09-17,官方图标;方案经用户确认选 A)
+
+OpenCode Go 与 DeepSeek 换成**官方标**,4SAPI / Hapi 仍是字母方块。
+
+| 文件 | 渠道 | 来源 | 体积 |
+|---|---|---|---|
+| `app/src/logos/opencode.svg` | OpenCode Go | https://opencode.ai/favicon.svg | 612 B |
+| `app/src/logos/deepseek.png` | DeepSeek | https://www.deepseek.com/favicon.ico(225×225 帧转 PNG) | 6.4 KB |
+
+- 方案 A(用户确认):官方标原样用,不再叠渠道色方块。OpenCode 的标自带
+  深色底(`#131010`,与界面底几乎同色)呈现为白色方框;DeepSeek 的鲸鱼是
+  品牌蓝 `#4d6bfe` 透明底,直接放在界面底色上 —— 与列表里 DeepSeek 的
+  主题色正好一致,所以**不要**再给方块,否则同色叠加会看不见。
+- 统一入口 `iconHtml(c, cls, off)`:列表行 / 密钥行 / 额度申请行 / 紧凑条
+  chip 都用它;`off`(未配置或取数失败)时字母方块变灰、官方标
+  `grayscale + 50% 透明`,两边语义一致。
+- 素材本地内嵌(前端 CSP 只允许 `'self'` 与 `data:`),出处与版权说明见
+  `app/src/logos/README.md`(指明性使用,版权归各自所有者)。
+- 验证:CDP 断言四个渠道的图标形态 + `naturalWidth > 0`(图真的加载成功,
+  404 时会静默变空白所以必须查这一条);面板行、管理页两处、紧凑条 4x 截图核对;
+  `verify-form.js` 全项回归通过。
+
 ### 验证工具(本轮新增/扩展)
 
 - `build/verify-form.js`:三形态切换 + `resizable` + Win32 样式位(固定尺寸)。
