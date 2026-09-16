@@ -295,6 +295,7 @@ function render() {
     : `${withKey.length - bad} 正常${warn ? ` · ${warn} 预警` : ""}${bad ? ` · ${bad} 失联` : ""}`;
 
   renderPill(sorted);
+  renderPillPick();
   fitCompact();
   refreshKeyStatuses();
 }
@@ -325,32 +326,70 @@ function fitCompact() {
   }
 }
 
-function renderPill(sorted) {
-  // 胶囊只显示最紧张的一个平台,而不是总额 —— 总额不能告诉你哪个 Key 要挂了
-  const active = sorted.filter((c) => c.hasKey);
-  const tight = active
-    .filter((c) => c.valid)
-    .sort((a, b) => (remainRatio(a) ?? 2) - (remainRatio(b) ?? 2))[0];
-  const dot = $("pillDot");
+// 胶囊显示哪些渠道:设置里选中的按顺序轮播;一个都没选就自动取最紧张的那个
+// (总额不能告诉你哪个 Key 要挂了,所以自动模式只挑最紧的)
+const PILL = { list: [], sorted: [], idx: 0, auto: true };
+const PILL_ROTATE_MS = 5000;
 
-  if (!tight) {
+function renderPill(sorted) {
+  PILL.sorted = sorted;
+  const picked = (CFG && CFG.pillChannels) || [];
+  PILL.auto = !picked.length;
+  PILL.list = picked.length
+    ? picked.map((id) => CHANNELS.find((c) => c.id === id)).filter(Boolean)
+    : (() => {
+        const active = sorted.filter((c) => c.hasKey);
+        const tight = active
+          .filter((c) => c.valid)
+          .sort((a, b) => (remainRatio(a) ?? 2) - (remainRatio(b) ?? 2))[0];
+        return tight ? [tight] : [];
+      })();
+  if (PILL.idx >= PILL.list.length) PILL.idx = 0;
+  renderPillFace();
+}
+
+function renderPillFace() {
+  const dot = $("pillDot");
+  const c = PILL.list[PILL.idx];
+
+  if (!c) {
+    const withKey = PILL.sorted.filter((x) => x.hasKey);
     dot.className = "dot o";
-    $("pillV").textContent = active.length ? "取数失败" : "未配置";
-    $("pill").title = active.length ? "渠道全部取数失败,点开面板看原因" : "尚未配置密钥";
+    $("pillV").textContent = withKey.length ? "取数失败" : "未配置";
+    $("pill").title = withKey.length ? "渠道全部取数失败,点开面板看原因" : "尚未配置密钥";
     return;
   }
 
-  const tone = toneOf(tight);
-  dot.className = "dot" + (tone === "bad" ? " b" : tone === "warn" ? " w" : "");
+  const tone = toneOf(c);
+  dot.className =
+    "dot" + (tone === "bad" ? " b" : tone === "warn" ? " w" : tone === "off" ? " o" : "");
   $("pillV").innerHTML =
-    tight.kind === "percent"
-      ? `${tight.short} ${tight.remaining.toFixed(1)}<i>%</i>`
-      : `${tight.short} ${money(tight.remaining)}`;
-  const r = remainRatio(tight);
-  const parts = [tight.name];
-  if (r !== null) parts.push(`剩 ${Math.round(r * 100)}%`);
-  if (tight.limited) parts.push("已限流");
-  $("pill").title = parts.join(" · ");
+    c.remaining === null
+      ? `${c.short} ——`
+      : c.kind === "percent"
+        ? `${c.short} ${c.remaining.toFixed(1)}<i>%</i>`
+        : `${c.short} ${money(c.remaining)}`;
+
+  const bits = [c.name];
+  const r = remainRatio(c);
+  if (!c.hasKey) bits.push("未配置密钥");
+  else if (c.remaining === null) bits.push("取数失败");
+  else {
+    if (r !== null) bits.push(`剩 ${Math.round(r * 100)}%`);
+    if (c.limited) bits.push("已限流");
+  }
+  if (PILL.auto) bits.push("自动:最紧张的一个");
+  else if (PILL.list.length > 1) bits.push(`${PILL.idx + 1}/${PILL.list.length} 轮播`);
+  $("pill").title = bits.join(" · ");
+}
+
+/** 管理页里的胶囊渠道选择:点一下加入/移出轮播列表。 */
+function renderPillPick() {
+  const sel = (CFG && CFG.pillChannels) || [];
+  $("cfgPill").innerHTML = CHANNELS.map(
+    (c) =>
+      `<button class="pick${sel.includes(c.id) ? " on" : ""}" data-act="pillpick" data-id="${c.id}">${c.name}</button>`
+  ).join("");
 }
 
 // ───────────── 形态切换 ─────────────
@@ -501,6 +540,18 @@ $("lkKeys").addEventListener("click", openManage);
 // 紧凑条上的两个方向:展开一级 / 再收一级
 $("btnExpand").addEventListener("click", () => applyForm("panel"));
 $("btnToPill").addEventListener("click", () => applyForm("pill"));
+$("btnPillUp").addEventListener("click", (e) => {
+  e.stopPropagation(); // 别让胶囊整体的"点哪都能展开"再触发一次
+  applyForm("panel");
+});
+// 胶囊轮播。不做"悬停暂停":挂件上的鼠标经常就停在胶囊附近,
+// 一暂停看起来就像轮播坏了(实测踩过);点击动作只是展开面板,内容变换无副作用。
+setInterval(() => {
+  if (PILL.list.length < 2) return;
+  if (!document.body.className.includes("form-pill")) return;
+  PILL.idx = (PILL.idx + 1) % PILL.list.length;
+  renderPillFace();
+}, PILL_ROTATE_MS);
 $("pill").addEventListener("click", () => applyForm("panel"));
 
 // 密钥的保存 / 删除只在管理页里发生
@@ -530,6 +581,15 @@ $("manage").addEventListener("click", async (e) => {
     } catch (err) {
       alert("删除失败:" + err);
     }
+  } else if (a === "pillpick") {
+    const sel = CFG.pillChannels || (CFG.pillChannels = []);
+    const at = sel.indexOf(id);
+    if (at >= 0) sel.splice(at, 1);
+    else sel.push(id);
+    act.classList.toggle("on", at < 0);
+    PILL.idx = 0;
+    invoke("set_config", { config: CFG }).catch(() => {});
+    render(); // 胶囊内容立即跟着变
   }
 });
 
@@ -618,7 +678,7 @@ async function refresh() {
     CFG = {
       activeIntervalSec: 60, idleIntervalSec: 300, backoffIntervalSec: 900,
       warnPercent: 40, critPercent: 15, notify: true, autostart: false,
-      collapseOnBlur: false, form: "panel", sort: "percent",
+      collapseOnBlur: false, form: "panel", sort: "percent", pillChannels: [],
     };
   }
   applyConfigToUI();

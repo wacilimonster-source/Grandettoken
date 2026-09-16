@@ -155,6 +155,13 @@ body.view-manage #lkKeys{display:none}
   font-size:11px;padding:3px 6px;font-family:inherit;flex:none}
 .sel:focus{outline:none;border-color:var(--ac)}
 
+/* 胶囊显示渠道的多选芯片 */
+.picks{display:flex;flex-wrap:wrap;gap:6px}
+.pick{border:1px solid var(--line2);background:var(--bg3);color:var(--tx3);font-size:11px;
+  padding:4px 9px;border-radius:999px;cursor:pointer;font-family:inherit}
+.pick:hover{border-color:#4a556b;color:var(--tx)}
+.pick.on{background:#5b8cff1f;border-color:#5b8cff55;color:#9dbaff}
+
 /* 密钥行:上行 = 渠道 + 状态 + 删除,下行 = 输入 + 保存 */
 .krow{padding:9px 0;border-bottom:1px solid #1e222b}
 .krow:last-child{border-bottom:0}
@@ -223,9 +230,12 @@ body.form-pill .sum,
 body.form-pill .manage,
 body.form-pill .foot{display:none}
 body.form-pill .list{display:none}
-.pill-body{display:none;align-items:center;gap:8px;padding:7px 13px 7px 9px;flex:1;
+.pill-body{display:none;align-items:center;gap:8px;padding:7px 7px 7px 9px;flex:1;
   cursor:pointer;overflow:hidden}
 body.form-pill .pill-body{display:flex}
+/* 胶囊里的展开按钮:之前只能靠"点哪都能展开"这个隐藏手势,加个看得见的入口 */
+.pill-body .ib{width:22px;height:22px;font-size:11px;color:var(--tx3)}
+.pill-body .ib:hover{color:var(--tx)}
 .pill-body .t{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pill-body .t i{font-style:normal;font-size:10px;color:var(--tx3);margin-left:2px}

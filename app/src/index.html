@@ -12,6 +12,7 @@
     <span class="dot" id="pillDot"></span>
     <div class="t" id="pillV">——</div>
     <div class="spacer"></div>
+    <button class="ib" id="btnPillUp" title="展开为面板">&#9650;</button>
   </div>
 
   <div class="tbar" data-tauri-drag-region>
@@ -63,6 +64,10 @@
           <option value="300">5 分钟</option><option value="900">15 分钟</option>
           <option value="1800">30 分钟</option>
         </select></div>
+
+      <h4>胶囊显示</h4>
+      <div class="khint">不选 = 自动显示最紧张的一个;选中的渠道固定显示,选多个每 5 秒轮播。</div>
+      <div class="picks" id="cfgPill"></div>
 
       <h4>显示</h4>
       <div class="field"><span>渠道排序</span>
