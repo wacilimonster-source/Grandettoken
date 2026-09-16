@@ -572,6 +572,9 @@ const SIZES = {
 async function applyForm(form, remember = true) {
   document.body.className =
     "form-" + form + (manageOpen() ? " view-manage" : "");
+  // 紧凑条整条可拖(里面没有需要点击的东西);面板里行要能点开,所以禁用
+  const list = $("list");
+  if (list) list.setAttribute("data-tauri-drag-region", form === "compact" ? "deep" : "false");
   const [w, h] = SIZES[form] || SIZES.panel;
   try {
     // 先解除上一形态的钳位,否则新尺寸会被旧 min/max 卡住
@@ -594,97 +597,142 @@ async function applyForm(form, remember = true) {
   }
 }
 
-// ───────────── 贴边(吸附屏幕边缘) ─────────────
-// 吸附后收成一条竖标签贴在屏幕右侧;鼠标移入展开成吸附前的形态,移出自动收回。
-// 竖标签始终置顶 —— 否则鼠标移过去也看不见它。退出贴边点标题栏的贴边按钮。
-const DOCK_SIZE = [26, 96];
-const DOCK = { on: false, open: false, prevPos: null, edgeX: 0, y: 0, timer: null };
+// ───────────── 贴边(拖到屏幕边缘自动吸附) ─────────────
+// 没有按钮:把窗口拖到屏幕左/右边缘松手就吸附,收成 8×64 的纯色条(不显示任何
+// 数字)。鼠标移入 150ms 后展开成吸附前的形态,移出 0.7 秒收回;把窗口从边缘
+// 拖走即解除吸附。吸附期间强制置顶 —— 否则鼠标移过去也看不见它。
+const DOCK_SIZE = [8, 64];
+const DOCK_SNAP_LOGICAL = 16;   // 松手时距边缘多少逻辑像素内算"贴边"
+const DOCK_SETTLE_MS = 250;     // 停止移动多久算松手(拖拽过程中不判)
+const DOCK_HOVER_DELAY = 150;   // 移入意图延迟:8px 太窄,不加延迟路过就会弹开
+const DOCK = {
+  on: false, open: false, side: "right", y: 0,
+  collapseTimer: null, hoverTimer: null, settleTimer: null,
+  selfMove: false, selfMoveTimer: null,
+};
 
 const currentForm = () => (document.body.className.match(/form-(\w+)/) || [])[1] || "panel";
 
-async function dockEnter() {
+/** 自己的 setPosition / setSize 也会触发 moved 事件,这段时间内不判定吸附。 */
+function markSelfMove() {
+  DOCK.selfMove = true;
+  clearTimeout(DOCK.selfMoveTimer);
+  DOCK.selfMoveTimer = setTimeout(() => (DOCK.selfMove = false), 600);
+}
+
+async function monitorInfo() {
+  const mon = await T.window.currentMonitor();
+  const sf = await appWindow.scaleFactor();
+  if (!mon) return null;
+  return { mon, sf, left: mon.position.x, right: mon.position.x + mon.size.width,
+    top: mon.position.y, bottom: mon.position.y + mon.size.height };
+}
+
+/** 吸附。side = right | left,y 保持当前竖直位置(夹进显示器范围)。 */
+async function dockEnter(side, pos) {
   if (DOCK.on) return;
+  const info = await monitorInfo();
+  if (!info) return;
+  DOCK.side = side;
+  DOCK.y = Math.max(info.top + 8,
+    Math.min(info.bottom - Math.round(DOCK_SIZE[1] * info.sf) - 8, pos ? pos.y : info.top + 120));
+  DOCK.on = true;
   try {
-    DOCK.prevPos = await appWindow.outerPosition();
-    const mon = await T.window.currentMonitor();
-    if (!mon) throw new Error("拿不到显示器信息");
-    const sf = await appWindow.scaleFactor();
-    DOCK.edgeX = mon.position.x + mon.size.width - Math.round(DOCK_SIZE[0] * sf);
-    // 竖向保持当前位置,夹进显示器范围
-    const wantY = DOCK.prevPos ? DOCK.prevPos.y : mon.position.y + 120;
-    const minY = mon.position.y + 8;
-    const maxY = mon.position.y + mon.size.height - Math.round(DOCK_SIZE[1] * sf) - 8;
-    DOCK.y = Math.max(minY, Math.min(maxY, wantY));
-    DOCK.on = true;
     await appWindow.setAlwaysOnTop(true);
     await dockLayout(false);
-    renderDock(); // 立即填内容,不然要等下一次轮询
-    applyDockUI();
+    renderDock(); // 立刻染色,不然要等下一次轮询才有颜色
   } catch (e) {
     DOCK.on = false;
-    console.error("贴边失败", e);
+    console.error("吸附失败", e);
   }
 }
 
-/** 展开(true)/ 收回(false)。展开时右边缘保持贴边,窗口不会跑到屏幕外。 */
+/** 展开(true)/ 收起(false)。展开时贴边那一侧保持对齐,窗口不会跑到屏幕外。 */
 async function dockLayout(open) {
+  const info = await monitorInfo();
+  if (!info) return;
   const [w, h] = open ? SIZES[currentForm()] || SIZES.panel : DOCK_SIZE;
+  const barW = Math.round(DOCK_SIZE[0] * info.sf);
+  const x = DOCK.side === "right"
+    ? info.right - (open ? Math.round(w * info.sf) : barW)
+    : info.left + (open ? 0 : 0);
   try {
-    const sf = await appWindow.scaleFactor();
+    markSelfMove();
     await appWindow.setMinSize(null);
     await appWindow.setMaxSize(null);
     await appWindow.setSize(new T.dpi.LogicalSize(w, h));
-    const x = open
-      ? DOCK.edgeX + Math.round(DOCK_SIZE[0] * sf) - Math.round(w * sf)
-      : DOCK.edgeX;
     await appWindow.setPosition(new T.dpi.PhysicalPosition(x, DOCK.y));
     await appWindow.setMinSize(new T.dpi.LogicalSize(w, h));
     await appWindow.setMaxSize(new T.dpi.LogicalSize(w, h));
   } catch (e) {
-    console.error("贴边尺寸切换失败", e);
+    console.error("吸附尺寸切换失败", e);
   }
   DOCK.open = open;
   document.body.classList.toggle("docked", !open);
+  document.body.classList.toggle("dock-left", DOCK.side === "left");
   if (open) setTimeout(fitCompact, 150);
 }
 
-/** 退出贴边:恢复吸附前的形态、位置,以及置顶设置。 */
-async function dockExit() {
+/** 解除吸附。keepPos = 留在当前位置(拖着离开边缘时用),否则回到屏幕内可见处。 */
+async function dockExit(keepPos) {
   if (!DOCK.on) return;
   DOCK.on = false;
   DOCK.open = false;
   document.body.classList.remove("docked");
   const [w, h] = SIZES[currentForm()] || SIZES.panel;
+  const info = await monitorInfo();
   try {
+    markSelfMove();
     await appWindow.setMinSize(null);
     await appWindow.setMaxSize(null);
+    const pos = await appWindow.outerPosition();
     await appWindow.setSize(new T.dpi.LogicalSize(w, h));
-    if (DOCK.prevPos) await appWindow.setPosition(DOCK.prevPos);
+    if (info) {
+      // 夹进屏幕:拖到边缘松开时展开不能跑到屏幕外
+      const maxX = info.right - Math.round(w * info.sf);
+      const maxY = info.bottom - Math.round(h * info.sf);
+      const x = keepPos ? Math.max(info.left, Math.min(maxX, pos.x)) : Math.max(info.left, maxX - 24);
+      const y = keepPos ? Math.max(info.top, Math.min(maxY, pos.y)) : Math.max(info.top + 60, Math.min(maxY, pos.y));
+      await appWindow.setPosition(new T.dpi.PhysicalPosition(x, y));
+    }
     await appWindow.setMinSize(new T.dpi.LogicalSize(w, h));
     await appWindow.setMaxSize(new T.dpi.LogicalSize(w, h));
   } catch (e) {
-    console.error("退出贴边失败", e);
+    console.error("解除吸附失败", e);
   }
   await invoke("set_pin", { enabled: !!(CFG && CFG.alwaysOnTop) }).catch(() => {});
-  applyDockUI();
   render();
 }
 
-function applyDockUI() {
-  for (const id of ["btnDock", "btnDockP"]) {
-    const el = $(id);
-    if (!el) continue;
-    el.classList.toggle("on", DOCK.on);
-    el.title = DOCK.on ? "取消贴边" : "吸附到屏幕边缘";
-  }
+/** 松手判定:停止移动 250ms 后看窗口是不是贴着屏幕左/右边缘。 */
+function scheduleSettleCheck() {
+  if (DOCK.selfMove) return;
+  clearTimeout(DOCK.settleTimer);
+  DOCK.settleTimer = setTimeout(async () => {
+    if (DOCK.selfMove) return;
+    const info = await monitorInfo();
+    if (!info) return;
+    const pos = await appWindow.outerPosition();
+    const size = await appWindow.outerSize();
+    const snap = Math.round(DOCK_SNAP_LOGICAL * info.sf);
+    // "拖到边"的实际情况是窗口探出屏幕外(拖动时光标能到屏幕边缘,窗口会超出去),
+    // 所以贴齐和探出都算 —— 只判"恰好贴齐"会漏掉绝大多数真实拖动。
+    const nearRight = pos.x + size.width >= info.right - snap;
+    const nearLeft = pos.x <= info.left + snap;
+    if (!DOCK.on) {
+      if (nearRight || nearLeft) await dockEnter(nearRight ? "right" : "left", pos);
+    } else if (!nearRight && !nearLeft) {
+      await dockExit(true); // 拖离边缘 = 解除吸附,留在松手的位置
+    }
+  }, DOCK_SETTLE_MS);
 }
 
 /** 移出后 0.7 秒收回,避免手一抖就收走;正在设置页里操作时不收。 */
 function dockScheduleCollapse() {
   // 已经在倒计时就别重置 —— 兜底的轮询每 400ms 一次,重置会让 700ms 永远等不到
-  if (DOCK.timer) return;
-  DOCK.timer = setTimeout(() => {
-    DOCK.timer = null;
+  if (DOCK.collapseTimer) return;
+  DOCK.collapseTimer = setTimeout(() => {
+    DOCK.collapseTimer = null;
     if (!DOCK.on || !DOCK.open) return;
     if (document.body.classList.contains("view-manage")) return;
     dockLayout(false);
@@ -692,32 +740,27 @@ function dockScheduleCollapse() {
 }
 
 function dockCancelCollapse() {
-  if (DOCK.timer) {
-    clearTimeout(DOCK.timer);
-    DOCK.timer = null;
+  if (DOCK.collapseTimer) {
+    clearTimeout(DOCK.collapseTimer);
+    DOCK.collapseTimer = null;
   }
 }
 
-function renderDock() {
-  if (!DOCK.on) return;
-  // 和胶囊用同一套选择逻辑(设置里选中的渠道,没选则取最紧张的那个)
-  const c = PILL.list[0] || null;
-  const body = $("dockBody");
-  const dot = $("dockDot");
-  if (!c) {
-    dot.className = "dot o";
-    $("dockV").textContent = PILL.sorted.some((x) => x.hasKey) ? "取数失败" : "未配置";
-    body.style.background = "linear-gradient(180deg,#3a4152,#2b313e)";
-    return;
+function dockCancelHover() {
+  if (DOCK.hoverTimer) {
+    clearTimeout(DOCK.hoverTimer);
+    DOCK.hoverTimer = null;
   }
-  const tone = toneOf(c);
-  dot.className = "dot" + (tone === "bad" ? " b" : tone === "warn" ? " w" : tone === "off" ? " o" : "");
-  $("dockV").innerHTML =
-    c.kind === "percent"
-      ? `${c.short} ${((remainRatio(c) ?? 0) * 100).toFixed(1)}<i>%</i>`
-      : `${c.short} ${money(c.remaining)}`;
-  body.style.background = `linear-gradient(180deg, ${TONE_HEX[tone]}, ${TONE_HEX[tone]}cc)`;
-  body.title = `${c.name} · 移入或点击展开`;
+}
+
+/** 竖条只染色,不显示任何数字 —— 状态色是唯一信息。 */
+function renderDock() {
+  const body = $("dockBody");
+  const c = PILL.list[0] || null; // 与胶囊同一套选择逻辑
+  if (!DOCK.on) return;
+  const color = c ? TONE_HEX[toneOf(c)] : "#3a4152";
+  body.style.background = `linear-gradient(180deg, ${color}, ${color}cc)`;
+  body.title = c ? `${c.name} · 移入展开` : "移入展开";
 }
 
 // ───────────── 设置与管理(密钥与设置同页,与展示视图分开) ─────────────
@@ -859,21 +902,22 @@ $("btnPillUp").addEventListener("click", (e) => {
   e.stopPropagation(); // 别让胶囊整体的"点哪都能展开"再触发一次
   applyForm("panel");
 });
-$("btnDock").addEventListener("click", () => (DOCK.on ? dockExit() : dockEnter()));
-$("btnDockP").addEventListener("click", (e) => {
-  e.stopPropagation();
-  if (DOCK.on) dockExit();
-  else dockEnter();
-});
-// 贴边的移入 / 移出
+// 移入竖条 → 延迟 150ms 展开(8px 太窄,路过就弹开很打扰);移出 → 收回
 $("dockBody").addEventListener("mouseenter", () => {
   dockCancelCollapse();
-  if (DOCK.on && !DOCK.open) dockLayout(true);
+  if (!DOCK.on || DOCK.open) return;
+  dockCancelHover();
+  DOCK.hoverTimer = setTimeout(() => {
+    DOCK.hoverTimer = null;
+    if (DOCK.on && !DOCK.open) dockLayout(true);
+  }, DOCK_HOVER_DELAY);
 });
-$("dockBody").addEventListener("click", () => {
-  if (DOCK.on && !DOCK.open) dockLayout(true);
+$("dockBody").addEventListener("mouseleave", () => {
+  dockCancelHover();
+  if (DOCK.on && DOCK.open) dockScheduleCollapse();
 });
 document.addEventListener("mouseleave", () => {
+  dockCancelHover();
   if (DOCK.on && DOCK.open) dockScheduleCollapse();
 });
 document.addEventListener("mouseenter", dockCancelCollapse);
@@ -882,6 +926,8 @@ setInterval(() => {
   if (!DOCK.on || !DOCK.open) return;
   if (!document.body.matches(":hover")) dockScheduleCollapse();
 }, 400);
+// 拖动判定:窗口一移动就重新计时,停稳 250ms 后看是否贴边
+appWindow.onMoved(() => scheduleSettleCheck());
 // 胶囊轮播。不做"悬停暂停":挂件上的鼠标经常就停在胶囊附近,
 // 一暂停看起来就像轮播坏了(实测踩过);点击动作只是展开面板,内容变换无副作用。
 setInterval(() => {
@@ -890,7 +936,7 @@ setInterval(() => {
   PILL.idx = (PILL.idx + 1) % PILL.list.length;
   renderPillFace();
 }, PILL_ROTATE_MS);
-$("pill").addEventListener("click", () => applyForm("panel"));
+// 胶囊整块是拖动区(见 index.html),展开只走 ▲ 按钮,避免和拖动抢手势
 
 /** 存配置 + 立刻重取一次:申请状态是后端按配置算的,不重取看不到变化。 */
 async function saveConfigAndRefresh() {

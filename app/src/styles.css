@@ -218,12 +218,14 @@ body.view-manage #lkKeys{display:none}
 .cctl .ib{color:var(--tx3)}
 .cctl .ib:hover{color:var(--tx)}
 
-/* ── 贴边(吸附屏幕边缘) ──
-   收起时窗口只有 26×96,只显示这块竖标签;移入即展开成吸附前的形态。 */
-.dock-body{display:none;width:100%;height:100%;flex-direction:column;align-items:center;
-  justify-content:center;gap:7px;cursor:pointer;overflow:hidden;border-radius:8px 0 0 8px}
-body.docked{display:flex;border-radius:8px 0 0 8px;border-right:0}
-body.docked .dock-body{display:flex}
+/* ── 贴边(拖到屏幕边缘自动吸附) ──
+   收起时窗口只有 8×64,只有一条状态色,不显示任何数字;
+   移入即展开成吸附前的形态。左右边缘都支持,靠 .dock-left 镜像。 */
+.dock-body{display:none;width:100%;height:100%;cursor:pointer;
+  border-radius:4px 0 0 4px;transition:filter .15s}
+body.docked{display:flex;border:0;background:transparent;box-shadow:none}
+body.docked .dock-body{display:block}
+body.docked.dock-left .dock-body{border-radius:0 4px 4px 0}
 body.docked .tbar,
 body.docked .sum,
 body.docked .list,
@@ -231,11 +233,7 @@ body.docked .foot,
 body.docked .manage,
 body.docked .cctl,
 body.docked .pill-body{display:none}
-.dock-body .dt{writing-mode:vertical-rl;font-size:11.5px;font-weight:600;color:#fff;
-  letter-spacing:.03em;white-space:nowrap;text-shadow:0 1px 2px #0006}
-.dock-body .dt i{font-style:normal;font-size:9.5px;opacity:.9}
-/* 彩底上的状态点统一用白色:底色本身已经在表达状态色 */
-.dock-body .dot{background:#fff}
+.dock-body:hover{filter:brightness(1.15)}
 
 /* ── 形态 2:紧凑条(设计稿里的 chip 条) ── */
 body.form-compact{border-radius:10px;flex-direction:row;align-items:center}
