@@ -3,6 +3,7 @@
 //! 核心原则:**失败不降级成 0**。取数失败时继续显示上次成功快照并标注时间,
 //! 因为余额类工具最危险的 bug 就是把请求失败渲染成"余额归零",用户会以为欠费了。
 
+use crate::config::{ClaimConfig, Config};
 use crate::providers::{self, FetchResult, Kind};
 use crate::store::Store;
 use crate::secrets;
@@ -41,6 +42,113 @@ pub struct ChannelView {
     /// 本次取数失败,以上数值来自上次成功快照
     pub stale: bool,
     pub updated_at: i64,
+    /// 申请制额度状态;None = 该渠道没启用申请制(见 ClaimConfig)
+    pub claim: Option<ClaimState>,
+}
+
+/// 申请制额度渠道(4SAPI 这类:定期申请,把余额补到固定上限)的展示状态。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaimState {
+    /// 单次额度,也是剩余百分比的分母
+    pub amount: f64,
+    /// 生效的上次申请时间;None = 还没记录到
+    pub last_claim_at: Option<i64>,
+    /// auto(快照跳升检测) | manual(手动修正) | none
+    pub source: String,
+    /// 距可再次申请还有几天;None = 未记录申请时间
+    pub days_until_eligible: Option<i64>,
+    pub eligible: bool,
+    /// 近 7 天日均消耗推算(数据覆盖不足 1 天时为 None)
+    pub daily_burn: Option<f64>,
+    /// 按当前速度,余额还能用几天
+    pub days_of_balance: Option<f64>,
+    /// 余额可能撑不到下次可申请日
+    pub shortage_risk: bool,
+}
+
+/// 申请事件的最小跳升幅度(元)。低于这个数当四舍五入抖动,不记为一次申请。
+const CLAIM_JUMP_MIN_DELTA: f64 = 20.0;
+/// 回溯窗口:与快照保留期(90 天)对齐
+const CLAIM_LOOKBACK_SEC: i64 = 90 * 86_400;
+
+/// 合成"上次申请时间":手动修正优先,除非快照检测到了比手动写入时刻更晚的一次跳升
+/// —— 那说明用户又申请了一次,自动值接管。
+fn effective_last_claim(cfg: &ClaimConfig, auto_at: Option<i64>) -> Option<(i64, &'static str)> {
+    match (auto_at, cfg.manual_last_at) {
+        (Some(auto), Some(man)) => {
+            let set_at = cfg.manual_set_at.unwrap_or(0);
+            if auto > set_at && auto >= man {
+                Some((auto, "auto"))
+            } else {
+                Some((man, "manual"))
+            }
+        }
+        (Some(auto), None) => Some((auto, "auto")),
+        (None, Some(man)) => Some((man, "manual")),
+        (None, None) => None,
+    }
+}
+
+/// 由原始输入算出申请制状态。纯函数,便于测试。
+pub fn claim_state(
+    cfg: &ClaimConfig,
+    auto_at: Option<i64>,
+    now: i64,
+    remaining: Option<f64>,
+    daily_burn: Option<f64>,
+) -> Option<ClaimState> {
+    if !cfg.enabled || cfg.amount <= 0.0 {
+        return None;
+    }
+
+    let days_of_balance = match (remaining, daily_burn) {
+        (Some(r), Some(b)) if b > 0.0 => Some(r / b),
+        _ => None,
+    };
+
+    let Some((last, source)) = effective_last_claim(cfg, auto_at) else {
+        // 还没记录到申请时间:只知道额度上限,给不出倒计时
+        return Some(ClaimState {
+            amount: cfg.amount,
+            last_claim_at: None,
+            source: "none".into(),
+            days_until_eligible: None,
+            eligible: false,
+            daily_burn,
+            days_of_balance,
+            shortage_risk: false,
+        });
+    };
+
+    let elapsed_days = (now - last).max(0) / 86_400;
+    let until = (cfg.min_interval_days - elapsed_days).max(0);
+    let eligible = until == 0;
+    let shortage_risk = !eligible && days_of_balance.map_or(false, |d| d < until as f64);
+
+    Some(ClaimState {
+        amount: cfg.amount,
+        last_claim_at: Some(last),
+        source: source.into(),
+        days_until_eligible: Some(until),
+        eligible,
+        daily_burn,
+        days_of_balance,
+        shortage_risk,
+    })
+}
+
+/// 近 7 天日均消耗(推算)。快照覆盖不足 1 天时返回 None ——
+/// 样本太短算出来的斜率会离谱,宁可不报。
+fn seven_day_burn(store: &Store, id: &str, now: i64) -> Option<f64> {
+    let since = now - 7 * 86_400;
+    let first = store.first_ts_since(id, since).ok().flatten()?;
+    let covered = now - first;
+    if covered < 86_400 {
+        return None;
+    }
+    let used = store.consumed_in_window(id, since, now).ok()?;
+    Some(used / (covered as f64 / 86_400.0))
 }
 
 pub fn now_ts() -> i64 {
@@ -137,12 +245,28 @@ pub async fn fetch_channel(
     result
 }
 
+/// 申请制状态:只有开启了申请制的渠道才算,并且要查快照历史。
+fn claim_for(def: &providers::ProviderDef, cfg: &Config, store: &Store, remaining: Option<f64>) -> Option<ClaimState> {
+    let ccfg = cfg.claim_channels.get(def.id)?;
+    if !ccfg.enabled {
+        return None;
+    }
+    let now = now_ts();
+    let auto_at = store
+        .last_jump_since(def.id, now - CLAIM_LOOKBACK_SEC, CLAIM_JUMP_MIN_DELTA)
+        .ok()
+        .flatten();
+    let burn = seven_day_burn(store, def.id, now);
+    claim_state(ccfg, auto_at, now, remaining, burn)
+}
+
 fn build_view(
     def: &providers::ProviderDef,
     result: FetchResult,
     stale: bool,
     updated_at: i64,
     store: &Store,
+    cfg: &Config,
 ) -> ChannelView {
     // 只有金额型才有"消耗"这个概念可算;配额型的用量由接口直接给出
     let (day, week, month) = if result.valid && result.kind == Kind::Amount {
@@ -188,6 +312,7 @@ fn build_view(
         estimated: result.kind == Kind::Amount,
         stale,
         updated_at,
+        claim: claim_for(def, cfg, store, result.remaining),
     }
 }
 
@@ -216,6 +341,7 @@ fn placeholder(def: &providers::ProviderDef) -> ChannelView {
         estimated: false,
         stale: false,
         updated_at: 0,
+        claim: None,
     }
 }
 
@@ -290,10 +416,13 @@ impl Fetcher {
                     Kind::Amount => "amount",
                     Kind::Percent => "percent",
                 };
+                // 注意顺序:先写快照再组视图 —— 申请制额度的跳升检测要用最新快照
                 let _ = s.record(id, *ts, result.remaining, result.used, result.total, kind);
             }
+            // 配置从库里读:前端改完设置立刻生效,不必等下一次轮询换内存态
+            let cfg = Config::load(&s);
             for (i, def, result, stale, ts) in pending {
-                out[i] = Some(build_view(def, result, stale, ts, &s));
+                out[i] = Some(build_view(def, result, stale, ts, &s, &cfg));
             }
         }
 
@@ -337,6 +466,127 @@ mod tests {
         let d = Local.timestamp_opt(ts, 0).unwrap();
         assert_eq!(d.day(), now.day());
         assert_eq!(d.hour(), 0);
+    }
+
+    /// 申请制:按"上次申请 + 最短间隔"倒计时,到点变成可申请。
+    #[test]
+    fn claim_counts_down_until_eligible() {
+        let cfg = ClaimConfig {
+            enabled: true,
+            amount: 200.0,
+            min_interval_days: 14,
+            ..Default::default()
+        };
+        let now = 1_700_000_000;
+        let eight_days_ago = now - 8 * 86_400;
+
+        let s = claim_state(&cfg, Some(eight_days_ago), now, Some(19.0), None).unwrap();
+        assert_eq!(s.days_until_eligible, Some(6));
+        assert!(!s.eligible);
+        assert_eq!(s.source, "auto");
+        assert_eq!(s.amount, 200.0);
+
+        // 满 14 天 → 可申请
+        let s = claim_state(&cfg, Some(now - 14 * 86_400), now, Some(19.0), None).unwrap();
+        assert_eq!(s.days_until_eligible, Some(0));
+        assert!(s.eligible);
+    }
+
+    /// 手动修正优先;但如果快照检测到比"手动写入时刻"更晚的跳升(又申请了一次),自动值接管。
+    #[test]
+    fn manual_fix_wins_until_a_newer_jump_appears() {
+        let now = 1_700_000_000;
+        let manual_day = now - 3 * 86_400;
+        let cfg = ClaimConfig {
+            enabled: true,
+            amount: 200.0,
+            min_interval_days: 14,
+            manual_last_at: Some(manual_day),
+            manual_set_at: Some(now - 2 * 86_400), // 两天前手动改的
+        };
+
+        // 自动检测到的是"手动之前"的跳升 → 用手动值
+        let older_jump = now - 5 * 86_400;
+        let s = claim_state(&cfg, Some(older_jump), now, Some(50.0), None).unwrap();
+        assert_eq!(s.last_claim_at, Some(manual_day));
+        assert_eq!(s.source, "manual");
+
+        // 手动之后又跳升了一次 → 用自动值
+        let newer_jump = now - 86_400;
+        let s = claim_state(&cfg, Some(newer_jump), now, Some(190.0), None).unwrap();
+        assert_eq!(s.last_claim_at, Some(newer_jump));
+        assert_eq!(s.source, "auto");
+        assert_eq!(s.days_until_eligible, Some(13));
+    }
+
+    /// 撑不到下次可申请:按当前速度余额只够 2 天,但还要等 6 天 → 预警。
+    #[test]
+    fn shortage_risk_when_balance_runs_out_before_eligible() {
+        let cfg = ClaimConfig {
+            enabled: true,
+            amount: 200.0,
+            min_interval_days: 14,
+            ..Default::default()
+        };
+        let now = 1_700_000_000;
+        let last = now - 8 * 86_400;
+
+        let s = claim_state(&cfg, Some(last), now, Some(20.0), Some(10.0)).unwrap();
+        assert_eq!(s.days_of_balance, Some(2.0));
+        assert!(s.shortage_risk);
+
+        // 消耗慢就够用
+        let s = claim_state(&cfg, Some(last), now, Some(200.0), Some(10.0)).unwrap();
+        assert!(!s.shortage_risk);
+    }
+
+    /// 端到端:快照里出现"余额跳升" → 自动识别为一次申请,并算出倒计时。
+    #[test]
+    fn claim_detects_an_application_from_snapshot_jumps() {
+        let s = Store::open_memory().unwrap();
+        let now = now_ts();
+        let applied_at = now - 12 * 86_400;
+        // 申请前余额 19,申请后补到 200,又花到 18.99
+        s.record("4sapi", applied_at, Some(19.0), None, None, "amount").unwrap();
+        s.record("4sapi", applied_at + 300, Some(200.0), None, None, "amount").unwrap();
+        s.record("4sapi", now - 60, Some(18.99), None, None, "amount").unwrap();
+
+        let cfg = Config::default();
+        let def = providers::PROVIDERS
+            .iter()
+            .find(|d| d.id == "4sapi")
+            .expect("4sapi 应在渠道表里");
+
+        let st = claim_for(def, &cfg, &s, Some(18.99)).expect("4sapi 默认开启申请制");
+        assert_eq!(st.source, "auto");
+        assert_eq!(st.last_claim_at, Some(applied_at + 300));
+        // 按整天向下取整:差 5 分钟不满 12 天 → 算 11 天,还剩 3 天(宁可保守,
+        // 也不能提前说"可申请"—— 用户去申请会被拒)
+        assert_eq!(st.days_until_eligible, Some(3));
+        assert!(!st.eligible);
+
+        // 小额抖动不算申请
+        s.record("hapi", now - 100, Some(50.0), None, None, "amount").unwrap();
+        s.record("hapi", now - 90, Some(55.0), None, None, "amount").unwrap();
+        let mut cfg2 = Config::default();
+        cfg2.claim_channels.insert("hapi".into(), ClaimConfig { enabled: true, ..Default::default() });
+        let def_h = providers::PROVIDERS.iter().find(|d| d.id == "hapi").unwrap();
+        let st = claim_for(def_h, &cfg2, &s, Some(55.0)).unwrap();
+        assert_eq!(st.source, "none");
+    }
+
+    /// 未启用 / 未记录到申请时间:不硬编倒计时。
+    #[test]
+    fn claim_without_config_or_history_is_reported_as_such() {
+        let off = ClaimConfig { enabled: false, ..Default::default() };
+        assert!(claim_state(&off, Some(1), 2, Some(1.0), None).is_none());
+
+        let on = ClaimConfig { enabled: true, ..Default::default() };
+        let s = claim_state(&on, None, 1_700_000_000, Some(18.99), None).unwrap();
+        assert_eq!(s.last_claim_at, None);
+        assert_eq!(s.days_until_eligible, None);
+        assert!(!s.eligible);
+        assert_eq!(s.source, "none");
     }
 
     #[test]

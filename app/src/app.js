@@ -24,10 +24,38 @@ function relTime(ts) {
   return Math.floor(s / 86400) + " 天前";
 }
 
-/** 剩余比例。充值型无 total 时返回 null —— 不画进度条,也不参与百分比排序。 */
+/**
+ * 剩余比例。分母:申请制渠道(4SAPI)用**单次额度**,其他渠道用接口给的总额。
+ * 接口的"累计发放"只增不减,拿它当分母会越算越低,没有决策价值。
+ * 充值型无 total 时返回 null —— 不画进度条,也不参与百分比排序。
+ */
 function remainRatio(c) {
-  if (c.remaining === null || c.total === null || !c.total) return null;
-  return c.remaining / c.total;
+  const denom = c.claim && c.claim.amount > 0 ? c.claim.amount : c.total;
+  if (c.remaining === null || denom === null || denom === undefined || !denom) return null;
+  return c.remaining / denom;
+}
+
+/** 申请周期状态:可申请 / 还要等几天 / 未记录。 */
+function claimTail(cl) {
+  if (cl.daysUntilEligible === null || cl.daysUntilEligible === undefined) {
+    return ' · <span class="ct">未记录申请时间</span>';
+  }
+  if (cl.eligible) return ' · <span class="cy">现在可申请</span>';
+  return ` · 再等 ${cl.daysUntilEligible} 天可申请`;
+}
+
+/** 本地日期(yyyy-mm-dd),给 date input 用。 */
+function toDateInput(ts) {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function fmtDay(ts) {
+  if (!ts) return "——";
+  const d = new Date(ts * 1000);
+  return `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 function toneOf(c) {
@@ -108,6 +136,9 @@ function renderRow(c, i) {
     main = "¥" + int + '<i class="dec">.' + dec + "</i>";
   }
 
+  // 申请制额度(4SAPI):分母是本轮额度,副标题给周期状态
+  const claim = c.claim || null;
+
   // 第二行给状态语义,大数字下方给数值口径,两处不重复
   let sub;
   if (noKey) sub = "未配置密钥";
@@ -115,6 +146,7 @@ function renderRow(c, i) {
   else if (limitedWin) sub = `${limitedWin.label}窗触顶 · 已限流`;
   else if (tightest) sub = `${tightest.label}窗最紧`;
   else if (c.limited) sub = "已限流";
+  else if (claim) sub = `本轮额度 ¥${claim.amount}${claimTail(claim)}`;
   else if (pct !== null) sub = `额度 ¥${c.total}`;
   else sub = ""; // 金额型拿到多少就是可用多少,不加说明
 
@@ -163,6 +195,14 @@ function renderRow(c, i) {
       ? `<div class="bar"><i style="width:${pct}%;background:${TONE_HEX[tone]}"></i></div>`
       : "";
 
+  // 撑不到下次可申请:按当前速度余额不够撑到冷静期结束,行内直接提示
+  const claimWarn =
+    claim && claim.shortageRisk && claim.daysOfBalance !== null && claim.daysOfBalance !== undefined
+      ? `<div class="claim-warn">按当前速度余额约可用 ${Math.max(1, Math.round(
+          claim.daysOfBalance
+        ))} 天,可能撑不到下次可申请</div>`
+      : "";
+
   const src = c.stale
     ? `<div class="hint" style="color:var(--warn)">显示的是 ${relTime(c.updatedAt)} 的成功快照${
         c.error ? " · " + c.error : ""
@@ -185,6 +225,7 @@ function renderRow(c, i) {
       </div>
       ${bar}
       ${useHtml}
+      ${claimWarn}
     </div>
     <div class="rbody" data-body="${c.id}"></div>
   </div>`;
@@ -204,7 +245,37 @@ function renderDetail(c) {
     </div>`;
   }
 
-  const kv = c.extra && c.extra.length ? c.extra : [];
+  // 申请制额度:把周期口径摊开在详情里(列表行只放状态)
+  const claimKv = [];
+  if (c.claim) {
+    const cl = c.claim;
+    claimKv.push(["本轮额度", `¥${cl.amount}`]);
+    claimKv.push([
+      "上次申请",
+      cl.lastClaimAt
+        ? `${fmtDay(cl.lastClaimAt)}(${cl.source === "auto" ? "自动检测" : "手动"})`
+        : "未记录",
+    ]);
+    claimKv.push([
+      "可再申请",
+      cl.daysUntilEligible === null || cl.daysUntilEligible === undefined
+        ? "——"
+        : cl.eligible
+          ? "现在可申请"
+          : `再等 ${cl.daysUntilEligible} 天`,
+    ]);
+    if (cl.dailyBurn !== null && cl.dailyBurn !== undefined) {
+      claimKv.push(["日均消耗(推算)", `¥${cl.dailyBurn.toFixed(2)}`]);
+    }
+    if (cl.daysOfBalance !== null && cl.daysOfBalance !== undefined) {
+      claimKv.push(["预计可用", `约 ${Math.round(cl.daysOfBalance)} 天`]);
+    }
+    if (c.total !== null && c.total !== undefined) {
+      claimKv.push(["累计发放", `¥${c.total}`]);
+    }
+  }
+
+  const kv = [...claimKv, ...(c.extra && c.extra.length ? c.extra : [])];
   const kvHtml = kv.length
     ? `<div class="kv">${kv
         .map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`)
@@ -296,6 +367,7 @@ function render() {
 
   renderPill(sorted);
   renderPillPick();
+  refreshClaimRows();
   fitCompact();
   refreshKeyStatuses();
 }
@@ -383,6 +455,64 @@ function renderPillFace() {
   $("pill").title = bits.join(" · ");
 }
 
+/** 管理页里的「额度申请」:每渠道一行开关,开启后展开额度/间隔/上次申请。 */
+function renderClaimRows() {
+  const map = (CFG && CFG.claimChannels) || {};
+  // 只有金额型渠道有"把余额补到某额度"这回事;配额型(OpenCode Go)不适用
+  $("claimList").innerHTML = CHANNELS.filter((c) => c.kind === "amount").map((c) => {
+    const cc = map[c.id] || null;
+    const on = !!(cc && cc.enabled);
+    const cl = c.claim;
+
+    let state = "未启用申请制额度";
+    if (on) {
+      if (!cl) state = "等待取数";
+      else if (cl.daysUntilEligible === null || cl.daysUntilEligible === undefined) {
+        state = "未记录申请时间";
+      } else {
+        state = cl.eligible ? "现在可申请" : `再等 ${cl.daysUntilEligible} 天可申请`;
+      }
+      const src = cl && cl.source === "auto" ? " · 自动检测" : cl && cl.source === "manual" ? " · 手动修正" : "";
+      state += src;
+    }
+
+    const fields = !on
+      ? ""
+      : `<div class="cfields">
+          <label><span>单次额度</span><input type="number" min="1" step="10" value="${cc.amount}"
+            data-act="claimamount" data-id="${c.id}"><span>元</span></label>
+          <label><span>最短间隔</span><input type="number" min="1" step="1" value="${cc.minIntervalDays}"
+            data-act="claimdays" data-id="${c.id}"><span>天</span></label>
+          <label><span>上次申请</span><input type="date" value="${toDateInput(cl && cl.lastClaimAt)}"
+            data-act="claimdate" data-id="${c.id}"></label>
+          <div class="cbtns">
+            <button class="btn" data-act="claimnow" data-id="${c.id}">记一次申请=今天</button>
+            <button class="btn" data-act="claimclear" data-id="${c.id}">清除手动值</button>
+          </div>
+        </div>`;
+
+    return `<div class="crow" data-id="${c.id}">
+      <div class="crow1">
+        <div class="ico" style="background:${on ? c.color : "#333a4a"}">${c.short}</div>
+        <div class="kmeta">
+          <div class="kn">${c.name}</div>
+          <div class="ks">${state}</div>
+        </div>
+        <div class="sw${on ? " on" : ""}" data-act="claimtoggle" data-id="${c.id}"></div>
+      </div>
+      ${fields}
+    </div>`;
+  }).join("");
+}
+
+/** 轮询刷新时更新状态;输入框还聚焦着就不重建,免得打断编辑。 */
+function refreshClaimRows() {
+  if (!manageOpen()) return;
+  const ae = document.activeElement;
+  if (ae && ae.closest && ae.closest("#claimList")) return;
+  renderClaimRows();
+}
+
 /** 管理页里的胶囊渠道选择:点一下加入/移出轮播列表。 */
 function renderPillPick() {
   const sel = (CFG && CFG.pillChannels) || [];
@@ -466,7 +596,11 @@ function refreshKeyStatuses() {
 }
 
 function openManage() {
+  // 这三块都只在管理页里出现,而轮询渲染会因为"页面没打开"跳过它们,
+  // 所以打开时主动建一次,不然第一次进来会是空的
   renderKeyRows();
+  renderPillPick();
+  renderClaimRows();
   document.body.classList.add("view-manage");
   $("btnS").classList.add("on");
 }
@@ -554,6 +688,45 @@ setInterval(() => {
 }, PILL_ROTATE_MS);
 $("pill").addEventListener("click", () => applyForm("panel"));
 
+/** 存配置 + 立刻重取一次:申请状态是后端按配置算的,不重取看不到变化。 */
+async function saveConfigAndRefresh() {
+  await invoke("set_config", { config: CFG }).catch(() => {});
+  await refresh();
+}
+
+// 数值 / 日期字段用 change(失焦或回车提交),避免每敲一个字符就写盘取数
+$("manage").addEventListener("change", async (e) => {
+  const el = e.target.closest("[data-act]");
+  if (!el) return;
+  const id = el.dataset.id;
+  const a = el.dataset.act;
+  const cur = CFG.claimChannels && CFG.claimChannels[id];
+  if (!cur) return;
+  if (a === "claimamount") {
+    const v = Number(el.value);
+    if (!(v > 0)) return;
+    cur.amount = v;
+  } else if (a === "claimdays") {
+    const v = Math.round(Number(el.value));
+    if (!(v > 0)) return;
+    cur.minIntervalDays = v;
+  } else if (a === "claimdate") {
+    if (!el.value) {
+      cur.manualLastAt = null;
+      cur.manualSetAt = null;
+    } else {
+      // 按本地日期零点算:用户填的是"哪天申请的"
+      const ts = Math.floor(new Date(el.value + "T00:00:00").getTime() / 1000);
+      if (!Number.isFinite(ts)) return;
+      cur.manualLastAt = ts;
+      cur.manualSetAt = Math.floor(Date.now() / 1000);
+    }
+  } else {
+    return;
+  }
+  await saveConfigAndRefresh();
+});
+
 // 密钥的保存 / 删除只在管理页里发生
 $("manage").addEventListener("click", async (e) => {
   const act = e.target.closest("[data-act]");
@@ -581,6 +754,23 @@ $("manage").addEventListener("click", async (e) => {
     } catch (err) {
       alert("删除失败:" + err);
     }
+  } else if (a === "claimtoggle") {
+    const map = CFG.claimChannels || (CFG.claimChannels = {});
+    const cur = map[id] || { enabled: false, amount: 200, minIntervalDays: 14, manualLastAt: null, manualSetAt: null };
+    cur.enabled = !cur.enabled;
+    map[id] = cur;
+    await saveConfigAndRefresh();
+    renderClaimRows();
+  } else if (a === "claimnow") {
+    const cur = CFG.claimChannels[id];
+    cur.manualLastAt = Math.floor(Date.now() / 1000);
+    cur.manualSetAt = cur.manualLastAt;
+    await saveConfigAndRefresh();
+  } else if (a === "claimclear") {
+    const cur = CFG.claimChannels[id];
+    cur.manualLastAt = null;
+    cur.manualSetAt = null;
+    await saveConfigAndRefresh();
   } else if (a === "pillpick") {
     const sel = CFG.pillChannels || (CFG.pillChannels = []);
     const at = sel.indexOf(id);
@@ -679,6 +869,9 @@ async function refresh() {
       activeIntervalSec: 60, idleIntervalSec: 300, backoffIntervalSec: 900,
       warnPercent: 40, critPercent: 15, notify: true, autostart: false,
       collapseOnBlur: false, form: "panel", sort: "percent", pillChannels: [],
+      claimChannels: {
+        "4sapi": { enabled: true, amount: 200, minIntervalDays: 14, manualLastAt: null, manualSetAt: null },
+      },
     };
   }
   applyConfigToUI();

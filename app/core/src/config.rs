@@ -1,6 +1,45 @@
 //! 应用设置。存 SQLite 的 settings 表,单条 JSON。
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+/// 申请制额度渠道的规则(4SAPI 这类:定期申请,把余额补到固定上限)。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ClaimConfig {
+    pub enabled: bool,
+    /// 单次额度:申请后余额补到这个数,同时也是剩余百分比的分母
+    /// (接口给的累计发放只增不减,拿它当分母会越算越低,没有决策价值)
+    pub amount: f64,
+    /// 两次申请之间至少间隔多少天(用户口径:超过 2 周可再申请)
+    pub min_interval_days: i64,
+    /// 手动修正的上次申请时间(unix 秒);None = 完全用自动检测
+    pub manual_last_at: Option<i64>,
+    /// 手动值写入的时刻。自动检测到比它更晚的一次跳升 = 又申请了一次,自动值接管
+    pub manual_set_at: Option<i64>,
+}
+
+impl Default for ClaimConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            amount: 200.0,
+            min_interval_days: 14,
+            manual_last_at: None,
+            manual_set_at: None,
+        }
+    }
+}
+
+impl ClaimConfig {
+    /// 4SAPI 是典型的申请制渠道,默认开启;其他渠道默认关,需要时在设置里打开
+    pub fn for_channel(id: &str) -> Self {
+        Self {
+            enabled: id == "4sapi",
+            ..Default::default()
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -25,6 +64,8 @@ pub struct Config {
     pub sort: String,
     /// 胶囊形态固定显示哪些渠道(按顺序轮播);空 = 自动显示最紧张的一个
     pub pill_channels: Vec<String>,
+    /// 申请制额度规则:渠道 id -> 规则
+    pub claim_channels: HashMap<String, ClaimConfig>,
 }
 
 impl Default for Config {
@@ -41,6 +82,10 @@ impl Default for Config {
             form: "panel".into(),
             sort: "percent".into(),
             pill_channels: Vec::new(),
+            claim_channels: HashMap::from([(
+                "4sapi".to_string(),
+                ClaimConfig::for_channel("4sapi"),
+            )]),
         }
     }
 }
@@ -61,7 +106,7 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
-    use super::Config;
+    use super::{ClaimConfig, Config};
 
     /// 老库里的 settings JSON 没有 pillChannels 字段,必须能按默认值加载
     /// (容器上的 serde default 保证前向兼容),否则升级后配置整体读不出来。
@@ -84,5 +129,40 @@ mod tests {
         let json = serde_json::to_string(&c).unwrap();
         let back: Config = serde_json::from_str(&json).unwrap();
         assert_eq!(back.pill_channels, vec!["hapi".to_string(), "deepseek".to_string()]);
+    }
+
+    /// 老配置里没有 claimChannels,加载后必须拿到"4SAPI 默认开启申请制"。
+    #[test]
+    fn missing_claim_channels_defaults_to_four_s_api_enabled() {
+        let old = r#"{"activeIntervalSec":60,"form":"panel","sort":"percent"}"#;
+        let c: Config = serde_json::from_str(old).unwrap();
+        let s = c.claim_channels.get("4sapi").expect("4sapi 应有默认规则");
+        assert!(s.enabled);
+        assert_eq!(s.amount, 200.0);
+        assert_eq!(s.min_interval_days, 14);
+        // 其他渠道默认不开
+        assert!(!c.claim_channels.contains_key("hapi"));
+    }
+
+    #[test]
+    fn claim_channels_roundtrip() {
+        let mut c = Config::default();
+        c.claim_channels.insert(
+            "hapi".into(),
+            ClaimConfig {
+                enabled: true,
+                amount: 100.0,
+                min_interval_days: 7,
+                manual_last_at: Some(1_700_000_000),
+                manual_set_at: Some(1_700_000_100),
+            },
+        );
+        let json = serde_json::to_string(&c).unwrap();
+        let back: Config = serde_json::from_str(&json).unwrap();
+        let h = back.claim_channels.get("hapi").unwrap();
+        assert!(h.enabled);
+        assert_eq!(h.amount, 100.0);
+        assert_eq!(h.min_interval_days, 7);
+        assert_eq!(h.manual_last_at, Some(1_700_000_000));
     }
 }

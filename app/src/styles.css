@@ -162,6 +162,26 @@ body.view-manage #lkKeys{display:none}
 .pick:hover{border-color:#4a556b;color:var(--tx)}
 .pick.on{background:#5b8cff1f;border-color:#5b8cff55;color:#9dbaff}
 
+/* 额度申请:每渠道一行开关,开启后展开额度 / 间隔 / 上次申请 */
+.crow{padding:9px 0;border-bottom:1px solid #1e222b}
+.crow:last-child{border-bottom:0}
+.crow1{display:flex;align-items:center;gap:9px}
+.crow1 .ico{width:24px;height:24px;font-size:10px;border-radius:7px}
+/* 单列:两列时"最短间隔 + 输入 + 单位"会被挤到裁切,列表本身可滚动,不差这点高度 */
+.cfields{margin-top:9px;display:grid;grid-template-columns:1fr;gap:7px}
+.cfields label{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--tx3);
+  white-space:nowrap}
+.cfields label>span:first-child{flex:none;width:52px}
+.cfields input{flex:1;min-width:0;background:#0e1015;border:1px solid var(--line2);
+  border-radius:6px;color:var(--tx);font-size:11px;padding:4px 7px;font-family:inherit}
+.cfields input:focus{outline:none;border-color:var(--ac)}
+.cfields .cbtns{grid-column:1 / -1;display:flex;gap:6px}
+
+/* 撑不到下次申请的提示(列表行内) */
+.claim-warn{font-size:10px;color:var(--warn);margin-top:6px;line-height:1.6}
+.nm .s .cy{color:var(--ac)}
+.nm .s .ct{color:var(--tx3)}
+
 /* 密钥行:上行 = 渠道 + 状态 + 删除,下行 = 输入 + 保存 */
 .krow{padding:9px 0;border-bottom:1px solid #1e222b}
 .krow:last-child{border-bottom:0}
