@@ -85,6 +85,46 @@ fn provider_meta() -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// 开机自启:写 HKCU 的 Run 键,不需要管理员权限。
+/// 产物是绿色单文件 exe,可能被用户移动位置,所以 setup 里每次启动都按
+/// `current_exe()` 重写一遍注册表 —— 路径永远指向当前这份 exe。
+#[cfg(windows)]
+mod autostart {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+
+    const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+    const NAME: &str = "TokenScope";
+
+    pub fn set(enabled: bool) -> Result<(), String> {
+        let (key, _) = RegKey::predef(HKEY_CURRENT_USER)
+            .create_subkey(RUN_KEY)
+            .map_err(|e| e.to_string())?;
+        if enabled {
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            // 路径可能含空格,必须加引号;--hidden 让开机自启直接进托盘不弹窗
+            let cmd = format!("\"{}\" --hidden", exe.display());
+            key.set_value(NAME, &cmd).map_err(|e| e.to_string())?;
+        } else {
+            // 关掉时键可能本就不存在,删除报错属正常,忽略
+            let _ = key.delete_value(NAME);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+mod autostart {
+    pub fn set(_enabled: bool) -> Result<(), String> {
+        Err("开机自启仅支持 Windows".into())
+    }
+}
+
+#[tauri::command]
+fn set_autostart(enabled: bool) -> Result<(), String> {
+    autostart::set(enabled)
+}
+
 #[tauri::command]
 fn window_cmd(app: tauri::AppHandle, action: String) -> Result<(), String> {
     let win = app.get_webview_window("main").ok_or("窗口不存在")?;
@@ -167,6 +207,10 @@ pub fn run() {
             let store = Store::open(&dir.join("tokenscope.db"))?;
             let config = Config::load(&store);
 
+            // 注册表与配置对齐:开机自启以配置为准,并刷新为当前 exe 路径,
+            // 用户挪动 exe 后无需重新设置自启
+            let _ = autostart::set(config.autostart);
+
             let _ = store.prune(now_ts() - 90 * 86400);
 
             app.manage(AppState {
@@ -222,6 +266,15 @@ pub fn run() {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move { poll_loop(handle).await });
 
+            // 窗口配置为 visible:false,这里统一控制显隐:
+            // 正常启动立即显示;开机自启带 --hidden,直接进托盘等用户点开
+            if !std::env::args().any(|a| a == "--hidden") {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -233,6 +286,7 @@ pub fn run() {
             key_hint,
             get_series,
             provider_meta,
+            set_autostart,
             window_cmd,
         ])
         .run(tauri::generate_context!())

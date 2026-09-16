@@ -11,7 +11,11 @@ $ErrorActionPreference = 'Stop'
 
 $root     = Split-Path -Parent $PSScriptRoot
 $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
-$mingwBin = Join-Path $PSScriptRoot 'mingw64\bin'
+# MinGW must live on an ASCII path: GNU ld cannot resolve its own sysroot files
+# when the toolchain sits under a non-ASCII directory (e.g. a Chinese repo path),
+# so it installs to the user profile instead of inside the repo.
+$mingwBin = Join-Path $env:USERPROFILE 'mingw64\bin'
+if (-not (Test-Path $mingwBin)) { $mingwBin = Join-Path $PSScriptRoot 'mingw64\bin' }
 $tauriDir = Join-Path $root 'app\src-tauri'
 
 foreach ($p in @($cargoBin, $mingwBin)) {
@@ -21,6 +25,13 @@ foreach ($p in @($cargoBin, $mingwBin)) {
 $env:Path = "$cargoBin;$mingwBin;$env:Path"
 $env:CARGO_HOME  = Join-Path $env:USERPROFILE '.cargo'
 $env:RUSTUP_HOME = Join-Path $env:USERPROFILE '.rustup'
+
+# GNU binutils (ld, windres) cannot open files under non-ASCII paths: ld fails
+# on .o/.rlib inputs, windres fails on the exe icon. Fail fast here instead of
+# letting the linker produce cryptic errors halfway through the build.
+if ($root -match '[^\x00-\x7F]') {
+  throw "repo path is not ASCII: $root  (GNU ld/windres require an ASCII repo path)"
+}
 
 # MinGW's gcc is the linker for the *-pc-windows-gnu target.
 $env:CC  = Join-Path $mingwBin 'gcc.exe'

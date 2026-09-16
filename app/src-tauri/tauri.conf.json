@@ -22,7 +22,7 @@
         "skipTaskbar": true,
         "alwaysOnTop": false,
         "center": false,
-        "visible": true
+        "visible": false
       }
     ],
     "security": {

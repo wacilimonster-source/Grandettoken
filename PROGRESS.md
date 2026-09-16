@@ -1,13 +1,24 @@
 # TokenScope 开发进展
 
 > 最后更新:2026-09-16
-> 状态:**可编译、可运行、逻辑层已测试通过;前端渲染有一个未解决的布局缺陷**
+> 状态:**形态切换已在真实运行时验证通过(ACL 缺失是第二层根因,已修复);仓库迁回纯英文路径、构建不再镜像;单 exe 交付被 WebView2Loader.dll 动态导入阻塞,方案已论证待定夺**
 
 ## 一句话现状
 
-Rust 侧全部完成并通过 14 个单元测试,应用能编译成 5MB 的单文件 exe 并启动,
-IPC 正常(能从 Rust 取到渠道数据并渲染出渠道行);
-**但前端布局塌陷成"紧凑条"样式,尚未定位,见下方「未解决问题」**。
+Rust 侧完成并通过 14 个单元测试,release 编译通过(5.24 MB exe);
+前端三种形态(面板/紧凑条/胶囊)已用 CDP 探针在真实窗口上验证全部通过 ——
+上一轮的静态修复漏掉了 Tauri 2 的 ACL 权限(见「形态切换」章节);
+开机自启的注册表写入与启动同步已实测。仓库已迁到纯英文路径
+`G:\game\nw\Grandettoken`,构建不再镜像到用户目录。
+**遗留一个交付层问题**:GNU 工具链下 exe 加载期依赖 `WebView2Loader.dll`,
+裸单文件启动报系统错误 —— 见「进行中」章节,三个可选方案已论证。
+
+## 产物约束(用户确认)
+
+**单 exe、免安装、绿色运行。** 现状与该约束的差距:功能与体积没问题
+(5.24 MB、全部系统 DLL 依赖),唯一例外是 WebView2 加载器 ——
+Tauri 在 GNU 工具链下默认动态链接 `WebView2Loader.dll`(MSVC 工具链才静态链接),
+裸 exe 缺它会拒绝启动。解决路径见「进行中」章节;无论选哪条,产物都无需安装。
 
 ---
 
@@ -26,6 +37,7 @@ IPC 正常(能从 Rust 取到渠道数据并渲染出渠道行);
 | HTTP | reqwest + **native-tls** | Windows 走系统 SChannel。用 rustls 会因为 ring/aws-lc 需要 nasm 汇编器,在 GNU 工具链下容易失败 |
 | 数据库 | rusqlite(bundled) | 单文件 SQLite,存用量快照 |
 | 密钥 | Windows 凭据管理器(keyring) | 见下方安全设计 |
+| 开机自启 | winreg 写 HKCU Run 键 | 免管理员权限;每次启动重写 exe 路径,绿色版移动位置不失效 |
 | 工具链 | Rust **GNU** 工具链 + MinGW-w64 | 本机无管理员权限,装不了 MSVC Build Tools |
 
 ### 3. 代码结构
@@ -121,61 +133,160 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 
 ---
 
-## 未解决问题(下次继续)
+## 已解决:前端布局塌陷(2026-09-16 定位并修复)
 
-### 前端布局塌陷成"紧凑条"样式
+根因是**两个 bug 叠加**,都不是技术栈问题:
 
-**现象**:应用启动后,窗口是面板尺寸(380×560),但内容按"紧凑条"形态渲染 ——
-标题栏不可见、渠道行横向排列、空态文字被挤成竖排、列表底部出现横向滚动条。
+1. **`app.js` 用了 Tauri v1 的 API 位置**:`new T.window.LogicalSize(w, h)` 在
+   Tauri 2 里抛 `is not a constructor`(v2 把尺寸类型移到了 `dpi` 命名空间,
+   正确写法是 `new T.dpi.LogicalSize(...)`),而 `applyForm` 的 try/catch 把
+   异常静默吞掉 —— **窗口尺寸从启动起就从未改变过**,永远停在 380×560。
+2. **数据库里持久化了 `form: "compact"`**:此前测试时点过"切换紧凑条"按钮,
+   `Config::load` 从 SQLite 读回 compact,启动时 body 被设为 `form-compact`,
+   而尺寸切换又因上一条失败 —— 于是精确复现"面板尺寸的窗口 + 紧凑条的内容"
+  (横向排列、竖排文字、横向滚动条)。
 
-**已排除的可能**(都实际验证过):
+此前排查全部落空的原因:排查第 1 步的 Node mock 里 `get_config` 返回的是**默认值**
+(panel),掩盖了数据库里的真实值;排查第 4 步验证的是 `Config::default()` 而非
+数据库实存值 —— 两步都测错了对象。
 
-1. ❌ **不是 JS 逻辑问题**。用 Node 加载真实的 `app.js`、mock DOM 和 `__TAURI__` 跑了一遍,
-   最终 `document.body.className` 是 **`"form-panel"`**(正确),且无任何异常。
-   诊断脚本留在 `build/probe-frontend.js`,可重复运行。
-2. ❌ **不是 CSS 写错**。`styles.css` 里 `body.form-compact ...` 选择器书写正确,
-   且只匹配 `form-compact`,不会误匹配 `form-panel`。
-3. ❌ **不是二进制里的前端过期**。`tokenscope.exe` 的修改时间(16:11)晚于
-   `app.js`(15:16)、`styles.css`(15:15),Tauri 在编译期打包前端,时间上不可能落后。
-4. ❌ **不是 Rust 侧返回的配置不对**。`Config::default()` 里 `form: "panel"`。
+修复内容(`app.js` / `styles.css`):
 
-**矛盾点**:JS 说 class 是 `form-panel`,但渲染结果只能由 `body.form-compact` 解释
-(只有那条规则会把 `.tbar/.sum/.foot` 设为 `display:none`、把 `.list` 设为
-`display:flex; flex-direction:row; align-items:center` —— 正好对应观察到的
-"横向排列 + 垂直居中 + 横向滚动条")。理论推断和实际渲染对不上,尚未找到原因。
+- `new T.dpi.LogicalSize(...)` 改正命名空间,catch 里已有 console.error
+- 紧凑条 / 胶囊形态先 `setMinSize(null)` 再缩放(否则 46px 高度被
+  `minHeight: 120` 钳住);回面板时恢复 `setMinSize(320×120)`
+- 删除 `styles.css` 里 `body.form-pill{background:transition}` 非法声明
+- **数据库无需清理**:修复后持久化的 compact 会以正确的 380×46 渲染,
+  点标题栏按钮即可切回面板
 
-**下一步建议**(按推荐顺序):
+`build/cdp-probe.js` / `launch-debug.ps1` 保留,仍是排查 WebView2 运行时
+DOM 的有效工具。
 
-1. **用 WebView2 CDP 直接查运行中的 DOM**(最推荐)。
-   `build/cdp-probe.js` 已经写好,它通过 `--remote-debugging-port=9222` 连接,
-   能读出真实的 `document.body.className`、各元素的 `getComputedStyle`、
-   以及 `document.styleSheets` 是否加载成功。
-   配合 `build/launch-debug.ps1`(用 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`
-   环境变量开调试端口)使用。**上次任务就是停在这一步之前。**
+### 运行时验证才发现:还有第二层根因 —— ACL 权限集为空(2026-09-16 修复)
 
-   注意:`document.title` 改不动窗口标题(Tauri 不同步),别再用那个办法做诊断。
+上一轮的修复(命名空间 + minSize 顺序)是必要的,但**不充分**。真正让
+"窗口尺寸永不变化"的还有 Tauri 2 的 ACL:
 
-2. 若 CDP 显示 class 确实是 `form-panel` 却仍渲染成紧凑条,
-   则检查 `styles.css` 是否真的被加载(`document.styleSheets` 里应有 1 张表且
-   `cssRules.length > 0`)。Tauri 用自定义协议提供资源,若 CSS 静默 404,
-   页面会呈现"部分样式生效"的假象。
+- 项目里**没有 `capabilities/` 目录**,`tauri.conf.json` 也没声明 capability,
+  构建后解析出的权限集是空 `{}`(见 `gen/schemas/capabilities.json`);
+- Tauri 2 默认不授予任何核心命令权限,前端 `appWindow.setSize` /
+  `setMinSize` / `setResizable` / `setAlwaysOnTop`(以及标题栏
+  `data-tauri-drag-region` 的 start-dragging)全部被 IPC 拒绝;
+- `applyForm` 的 `try/catch` 把拒绝异常静默吞掉 —— 现象与命名空间笔误
+  **完全一样**(DOM 切了、窗口没动),所以纯静态排查看不出区别;
+- 应用自己的 `#[tauri::command]`(`window_cmd` 等)**不受 ACL 约束**,
+  这也解释了为什么"部分窗口操作看起来是好的"。
 
-3. 检查是否存在 WebView2 资源缓存导致的旧版本混合。
+修复:新增 `app/src-tauri/capabilities/default.json`,授予 `core:default` +
+`core:window:allow-set-size` / `allow-set-min-size` / `allow-set-resizable` /
+`allow-set-always-on-top` / `allow-start-dragging`。
 
-**临时绕过**:如果要先看面板形态的效果,可以直接改 `index.html` 里
-`<body class="form-panel">`,或在 `app.js` 的 `applyForm` 里把 class 写死。
+**验证(新增 `build/verify-form.js`)**:通过 CDP 在真实窗口上调 `applyForm`,
+断言 body class 与真实窗口尺寸同步变化:
+
+```
+compact  body=form-compact tbar=none   window=380x47  expected=380x46   PASS
+pill     body=form-pill    tbar=none   window=200x47  expected=200x46   PASS
+panel    body=form-panel   tbar=flex   window=380x560 expected=380x560  PASS
+```
+
+(47 而非 46:dpr=1.25 下物理像素取整,±1 属正常。)
+
+教训记一笔:**"改完没在真实进程上跑过"的修复等于没修**。这一轮的形态切换、
+注册表同步都是实测通过后才写"已完成"。
+
+## 开机自启(2026-09-16 新增)
+
+设计约束:绿色单文件 exe、无管理员权限。
+
+- Rust 命令 `set_autostart`:winreg 写 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`,
+  值为 `"当前exe完整路径" --hidden`
+- **每次启动 setup 里按 `current_exe()` 重写注册表** —— exe 被移动位置后自启
+  依然指向新位置,无需重新设置;配置关闭时删除该键
+- `--hidden` 参数:开机自启直接进托盘不弹窗。窗口配置改为 `visible: false`,
+  由 setup 统一控制显隐(正常启动立即 show)
+- 前端开关(`bindSwitch` 增加 onChange 回调):注册表写失败会回滚开关与配置,
+  不让界面显示与系统实际状态不一致
+- **实测(2026-09-16)**:
+  - 写路径:调用 `set_autostart(true)` 后注册表键值确为
+    `"G:\...\target\release\tokenscope.exe" --hidden`(引号 + 隐藏参数正确);
+  - 启动同步:重启应用后因配置为关,该键被 setup 里的同步逻辑自动删除 ——
+    "配置为准"的行为符合设计。
+
+## 进行中:单 exe 的最后一个阻塞 —— WebView2Loader.dll
+
+### 现象与误判
+
+把 `tokenscope.exe` 单独拷进空目录启动,弹系统错误对话框:
+`由于找不到 WebView2Loader.dll,无法继续执行代码`。
+**教训**:首次测试时 `Start-Process` 报告 "RUNNING" 是假象 —— 进程卡在
+错误对话框上没退出,被当成了启动成功。判断 GUI 程序是否真的起来,
+必须看窗口/日志,不能只看进程存活。
+
+### 根因(已定位到源码行)
+
+`webview2-com-sys 0.38.2` 的 `src/lib.rs`:
+
+```rust
+#[cfg_attr(target_env = "msvc",
+    link(name = "WebView2LoaderStatic", kind = "static"))]
+#[cfg_attr(not(target_env = "msvc"),
+    link(name = "WebView2Loader.dll"))]
+```
+
+MSVC 工具链静态链接加载器;**GNU 工具链(Free 约束下的选择)动态导入**。
+Tauri dev 运行时把 160 KB 的 `WebView2Loader.dll` 放在 exe 旁边所以一直没暴露。
+objdump 确认 exe 导入表:`KERNEL32 / advapi32 / ws2_32` 等全是系统 DLL,
+唯一非系统项就是 `WebView2Loader.dll`。WebView2 Runtime 自带这个 DLL,
+但不在标准搜索路径上,救不了加载期导入。
+
+### 实验:强行静态链接(GNU ld + WebView2LoaderStatic.lib)
+
+用 rustc 最小程序直接链 MSVC 格式的静态库 —— **失败**,未定义符号共 20 种
+(59 KB 报错去重统计):
+
+| 符号 | 次数 | 性质 | 可解性 |
+|---|---|---|---|
+| `__security_cookie` / `__security_check_cookie` | 43+21 | MSVC /GS 栈保护 | 可垫(shim 全局 + no-op 校验) |
+| `_Init_thread_header/_footer/_epoch` | 7×3 | MSVC 魔法静态初始化线程同步 | **危险**:语义与编译器紧耦合,垫错有并发隐患 |
+| `__imp_RegOpenKeyExW` 等 advapi32/ole32 | 11 | 常规 API 导入 | 易:补 `-ladvapi32 -lole32` |
+| `??2@`/`??3@`/`??_U@`/`??_V@`/`std::nothrow` | 5 | MSVC C++ ABI 的 operator new/delete | 可用 asm 别名垫到 malloc/free,但已在补 ABI 缝隙 |
+
+### 三个方案(待定夺)
+
+| 方案 | 单 exe? | 风险 | 备注 |
+|---|---|---|---|
+| **A. exe + DLL 双文件** | ✗(2 文件) | 零 | Tauri 对 GNU 的官方行为;DLL 仅 160 KB、微软允许再分发;依旧免安装绿色,可打成 zip |
+| B. 换 MSVC 工具链 | ✓ | 无(官方路径) | 需管理员权限装 VS Build Tools,**本机装不了**(Free 约束的由来) |
+| C. 符号垫片强行静态链接 | ✓ | 中高 | 上表 20 个符号可垫齐,但 `_Init_thread_*` 并发语义最难对齐;WebView2Loader 内部是 MSVC C++,公共 API 是 C 边界,理论上自洽,需充分回归 |
+
+**推荐 A**:交付 `tokenscope.exe + WebView2Loader.dll`(或 zip 打包),
+把工程资源留给产品本身;将来若能上 MSVC 工具链,自然升级成真单文件。
+
+### 顺带的验证结论(不受阻塞影响)
+
+- exe 体积 **5.24 MB**,VersionInfo 正确(TokenScope 0.1.0)
+- 导入表其余全是系统 DLL(api-ms-win-* 是 UCRT),无其他第三方依赖
+- SQLite / native-tls / keyring 均静态编入,单 exe 约束只差这一个加载器
 
 ---
 
 ## 环境与构建
 
-本机**无管理员权限**,工具链全部装在用户目录:
+**仓库已迁到纯英文路径 `G:\game\nw\Grandettoken`**,不再镜像、不再重定向
+CARGO_TARGET_DIR:构建直接在仓库里跑,产物落在 `app/src-tauri/target`。
+本机**无管理员权限**,工具链装在用户目录:
 
 | 组件 | 路径 |
 |---|---|
 | Rust GNU 工具链 | `%USERPROFILE%\.cargo\bin`(rustc 1.98.1) |
-| MinGW-w64 14.2.0 | `build/mingw64/bin` |
-| PortableGit 2.55 | `build/git/cmd` |
+| MinGW-w64 14.2.0 | `%USERPROFILE%\mingw64`(GNU 工具链自身也要求 ASCII 路径,故不进仓库) |
+| git | 系统安装的 2.55.0.windows.3(`build/git` 便携版已不存在,无需再装) |
+| 构建产物 | `app/src-tauri/target`(仓库内,已被 .gitignore 覆盖) |
+
+> 迁移时把旧的重定向 target 缓存(1.9 GB)搬进了 `app/src-tauri/target`
+> 复用,依赖产物大多命中;`%USERPROFILE%\tokenscope-build` 镜像与
+> `%USERPROFILE%\.cargo\target` 已删除,用户目录不再有本项目文件。
 
 ```powershell
 .\build\install-toolchain.ps1   # 一次性:Rust + MinGW(约 250MB 下载)
@@ -187,6 +298,21 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 
 ### 已知构建坑
 
+- **仓库路径必须保持纯 ASCII**(历史坑,现由 build.ps1 快速失败兜底):
+  GNU binutils 打不开非 ASCII 路径的输入文件 —— ld 读不了 .o/.rlib,
+  windres 打不开 icon.ico(路径显示为 GBK 乱码,`can't open icon file`)。
+  早前仓库在中文路径下时,试过 target 重定向 + robocopy 镜像 + junction
+  (junction 会被 Rust `canonicalize()` 看穿,无效),最终靠镜像绕过。
+  现在仓库已是 ASCII 路径,镜像逻辑已删除;若将来路径又含中文,
+  build.ps1 会直接报错而不是产出难懂的链接错误。
+- **不要把 cargo target 缓存直接搬到新路径复用**(本轮踩坑):
+  cargo 的新鲜度指纹不包含 target 目录位置,搬过来的 build script
+  `output` 里缓存的 `DEP_*` 绝对路径仍指向旧目录,表现为
+  `tauri` 读权限文件时 `os error 3` 失败,或最终链接找不到
+  webview2 / sqlite 的 link-search。受影响包(实测):
+  `tauri` / `tauri-plugin-opener` / `webview2-com-sys` / `libsqlite3-sys`
+  (其中 `windows_x86_64_gnu` 的路径指向 registry,稳定,无需处理)。
+  修法:`cargo clean -p <包> --release` 后重编即可,不必全量 clean。
 - **`crate-type` 不能带 `cdylib`**。Tauri 模板默认 `["staticlib","cdylib","rlib"]`
   是为移动端,但 Windows GNU 工具链下 cdylib 会导出全部符号,依赖树规模超过
   DLL 导出序号上限,报 `export ordinal too large: 127822`。桌面端已改为 `["rlib"]`。
@@ -212,11 +338,22 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 
 ---
 
-## 尚未实现
+## 尚未实现 / 待验证
 
-- 开机自启注册(设置里有开关,但没接系统 API)
+- ~~布局修复的运行时验证~~ ✅ 已完成(2026-09-16):`build/verify-form.js`
+  三形态全部 PASS,并顺带挖出 ACL 第二层根因(见上)
+- ~~开机自启的注册表写入验证~~ ✅ 已完成(2026-09-16):写入格式正确,
+  启动同步(配置关则删键)实测通过
+- **待定夺**:单 exe 交付方案 A/B/C(见「进行中」章节)
 - 屏幕边缘吸附与自动折叠(原型里有设计,代码里 `collapse_on_blur` 开关未接线)
-- 胶囊 / 边缘吸附两种窗口形态(前端有 CSS,`applyForm` 有分支,但没实测过)
+- 边缘吸附形态(原型里有设计;胶囊形态本次已实测通过)
 - 托盘图标角标显示最紧张渠道的百分比(当前是静态图标)
 - 余额低于阈值的系统通知
-- NSIS 安装包(`build.ps1 bundle` 未跑过)
+- NSIS 安装包(`build.ps1 bundle` 未跑过;若选双文件交付,NSIS 仍可作为分发形态)
+- **待观察**:一个修复前的旧实例在运行 3~5 分钟后进程消失,当时没捕获 stderr,
+  原因未知(不排除是手动关闭)。修复后的实例(含三次窗口尺寸切换、
+  多个轮询周期)稳定;`launch-debug.ps1` 现在把 stdout/stderr 落到
+  `%TEMP%\tokenscope-debug\`,若再复现直接看 stderr.log
+- **待确认(小行为)**:从紧凑条/胶囊切回面板后 `alwaysOnTop` 不会复位
+  (panel 分支没有 `setAlwaysOnTop(false)`);对桌面挂件而言保持置顶
+  也许正是想要的,先记录不改

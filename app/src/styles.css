@@ -160,7 +160,6 @@ body.form-compact .val .v i{font-size:9px}
 body.form-compact .row{cursor:pointer}
 
 /* ── 胶囊形态 ── */
-body.form-pill{background:transition}
 body.form-pill .tbar,
 body.form-pill .sum,
 body.form-pill .pane,

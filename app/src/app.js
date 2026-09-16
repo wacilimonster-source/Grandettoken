@@ -332,13 +332,18 @@ async function applyForm(form, remember = true) {
   document.body.className = "form-" + form;
   const [w, h] = SIZES[form] || SIZES.panel;
   try {
-    await appWindow.setSize(new T.window.LogicalSize(w, h));
     if (form === "panel") {
       await appWindow.setResizable(true);
+      await appWindow.setMinSize(new T.dpi.LogicalSize(320, 120));
     } else {
       await appWindow.setResizable(false);
+      // 紧凑条/胶囊高 46,低于面板形态的 minHeight,先解除约束再缩放
+      await appWindow.setMinSize(null);
       await appWindow.setAlwaysOnTop(true);
     }
+    // Tauri 2 的 LogicalSize 在 dpi 命名空间(v1 才在 window 下),
+    // 写错命名空间会抛 TypeError 并被这里的 catch 吞掉,窗口尺寸就永远不变
+    await appWindow.setSize(new T.dpi.LogicalSize(w, h));
   } catch (e) {
     console.error("切换形态失败", e);
   }
@@ -456,12 +461,23 @@ function bindSelect(id, key, cast = Number) {
     if (key === "sort") render();
   });
 }
-function bindSwitch(id, key) {
+function bindSwitch(id, key, onChange) {
   const el = $(id);
-  el.addEventListener("click", () => {
+  el.addEventListener("click", async () => {
     CFG[key] = !CFG[key];
     el.classList.toggle("on", CFG[key]);
     invoke("set_config", { config: CFG }).catch(() => {});
+    if (onChange) {
+      try {
+        await onChange(CFG[key]);
+      } catch (err) {
+        // 系统操作失败则回滚开关与配置,不让界面骗人
+        CFG[key] = !CFG[key];
+        el.classList.toggle("on", CFG[key]);
+        invoke("set_config", { config: CFG }).catch(() => {});
+        alert("操作失败:" + err);
+      }
+    }
   });
 }
 bindSelect("cfgActive", "activeIntervalSec");
@@ -470,7 +486,7 @@ bindSelect("cfgBackoff", "backoffIntervalSec");
 bindSelect("cfgSort", "sort", String);
 bindSelect("cfgWarn", "warnPercent");
 bindSelect("cfgCrit", "critPercent");
-bindSwitch("cfgAutostart", "autostart");
+bindSwitch("cfgAutostart", "autostart", (on) => invoke("set_autostart", { enabled: on }));
 bindSwitch("cfgNotify", "notify");
 bindSwitch("cfgBlur", "collapseOnBlur");
 

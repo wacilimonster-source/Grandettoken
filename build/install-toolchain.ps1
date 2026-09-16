@@ -4,9 +4,12 @@
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$root  = 'C:\Users\wacil\.zcode\workspace\default\build'
+# Derive from script location so the repo is self-contained on any machine.
+# MinGW goes to the user profile (ASCII path). GNU ld cannot resolve its sysroot
+# under a non-ASCII directory, so it must NOT live inside a non-ASCII repo path.
+$root  = $PSScriptRoot
 $dl    = Join-Path $root 'dl'
-$mingw = Join-Path $root 'mingw64'
+$mingw = Join-Path $env:USERPROFILE 'mingw64'
 New-Item -ItemType Directory -Force -Path $dl | Out-Null
 
 function Get-File($url, $out) {
