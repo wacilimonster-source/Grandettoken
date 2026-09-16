@@ -1,0 +1,6 @@
+# 源码统一用 LF 入库,避免 Windows 上 CRLF 造成的无意义 diff
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.db binary

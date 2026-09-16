@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>TokenScope</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body class="form-panel">
+
+  <div class="pill-body" id="pill">
+    <div class="mark"></div>
+    <div style="min-width:0">
+      <div class="t" id="pillV">——</div>
+      <div class="sub" id="pillS">加载中</div>
+    </div>
+    <div class="spacer"></div>
+  </div>
+
+  <div class="tbar" data-tauri-drag-region>
+    <div class="mark"></div>
+    <div class="tt" data-tauri-drag-region>TokenScope <small id="cnt"></small></div>
+    <div class="spacer" data-tauri-drag-region></div>
+    <button class="ib" id="btnR" title="立即刷新">&#8635;</button>
+    <button class="ib" id="btnS" title="设置">&#9881;</button>
+    <button class="ib" id="btnP" title="置顶">&#128204;</button>
+    <button class="ib" id="btnC" title="切换紧凑条">&#9644;</button>
+    <button class="ib" id="btnH" title="隐藏到托盘">&#10005;</button>
+  </div>
+
+  <div class="pane" id="pane">
+    <div class="pane-in">
+      <h4>刷新</h4>
+      <div class="field"><span>面板展开时</span>
+        <select class="sel" id="cfgActive">
+          <option value="30">30 秒</option><option value="60">1 分钟</option>
+          <option value="120">2 分钟</option><option value="300">5 分钟</option>
+        </select></div>
+      <div class="field"><span>折叠 / 托盘时</span>
+        <select class="sel" id="cfgIdle">
+          <option value="60">1 分钟</option><option value="300">5 分钟</option>
+          <option value="600">10 分钟</option><option value="1800">30 分钟</option>
+        </select></div>
+      <div class="field"><span>连续失败后</span>
+        <select class="sel" id="cfgBackoff">
+          <option value="300">5 分钟</option><option value="900">15 分钟</option>
+          <option value="1800">30 分钟</option>
+        </select></div>
+
+      <h4>显示</h4>
+      <div class="field"><span>渠道排序</span>
+        <select class="sel" id="cfgSort">
+          <option value="percent">剩余百分比升序</option>
+          <option value="balance">余额高 → 低</option>
+          <option value="dayUsage">今日消耗高 → 低</option>
+        </select></div>
+      <div class="field"><span>开机自启 · 吸附屏幕右侧</span>
+        <div class="sw" id="cfgAutostart"></div></div>
+      <div class="field"><span>余额不足时提醒</span>
+        <div class="sw" id="cfgNotify"></div></div>
+      <div class="field"><span>失焦后自动折叠</span>
+        <div class="sw" id="cfgBlur"></div></div>
+
+      <h4>阈值(剩余百分比)</h4>
+      <div class="field"><span>标黄</span>
+        <select class="sel" id="cfgWarn">
+          <option value="50">50%</option><option value="40">40%</option>
+          <option value="30">30%</option><option value="20">20%</option>
+        </select></div>
+      <div class="field"><span>标红</span>
+        <select class="sel" id="cfgCrit">
+          <option value="20">20%</option><option value="15">15%</option>
+          <option value="10">10%</option><option value="5">5%</option>
+        </select></div>
+    </div>
+  </div>
+
+  <div class="sum" id="sum"></div>
+  <div class="list" id="list">
+    <div class="empty">加载中…</div>
+  </div>
+
+  <div class="foot">
+    <span class="dot" id="fdot"></span>
+    <span id="fstat">正在取数…</span>
+    <div class="spacer"></div>
+    <span class="lk" id="lkKeys">管理密钥</span>
+    <span style="color:var(--line2)">|</span>
+    <span class="lk" id="lkQuit">退出</span>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,536 @@
+/* TokenScope 前端。经 window.__TAURI__ 调 Rust 命令(withGlobalTauri)。 */
+const T = window.__TAURI__;
+const invoke = T.core.invoke;
+const listen = T.event.listen;
+const appWindow = T.window.getCurrentWindow();
+
+const $ = (id) => document.getElementById(id);
+
+let CHANNELS = [];
+let CFG = null;
+let FLASH = null;      // 刚配置过密钥的渠道 id,短暂展开
+let sparkCache = {};   // { [id]: {24:[],168:[],720:[]} }
+
+const emit = (ev, payload) => T.event.emit(ev, payload);
+
+// ───────────── 格式化 ─────────────
+const money = (v) => (v === null || v === undefined ? "——" : "¥" + v.toFixed(2));
+
+function relTime(ts) {
+  if (!ts) return "从未";
+  const s = Math.floor(Date.now() / 1000) - ts;
+  if (s < 60) return "刚刚";
+  if (s < 3600) return Math.floor(s / 60) + " 分钟前";
+  if (s < 86400) return Math.floor(s / 3600) + " 小时前";
+  return Math.floor(s / 86400) + " 天前";
+}
+
+/** 剩余比例。充值型无 total 时返回 null —— 不画进度条,也不参与百分比排序。 */
+function remainRatio(c) {
+  if (c.remaining === null || c.total === null || !c.total) return null;
+  return c.remaining / c.total;
+}
+
+function toneOf(c) {
+  if (!c.has_key || !c.valid) return "off";
+  const r = remainRatio(c);
+  if (r === null) return "ok";
+  if (r < CFG.critPercent / 100) return "bad";
+  if (r < CFG.warnPercent / 100) return "warn";
+  return "ok";
+}
+
+const TONE_COLOR = { ok: "var(--ok)", warn: "var(--warn)", bad: "var(--bad)", off: "var(--tx3)" };
+const TONE_HEX = { ok: "#3ecf8e", warn: "#f0b23c", bad: "#f0554d", off: "#333a4a" };
+
+/** 主排序:剩余百分比升序,最紧张的置顶。 */
+function sortChannels(list) {
+  const mode = CFG.sort;
+  const score = (c) => {
+    if (!c.has_key) return 9999;
+    if (!c.valid) return 5000;
+    if (mode === "balance") return -(c.remaining ?? 0);
+    if (mode === "dayUsage") return -(c.day ?? 0);
+    const r = remainRatio(c);
+    return r === null ? 4000 : r * 100;
+  };
+  return [...list].sort((a, b) => score(a) - score(b));
+}
+
+// ───────────── 渲染 ─────────────
+function renderSummary() {
+  // 汇总只累加金额型渠道 —— 百分比和金额不能相加
+  const am = CHANNELS.filter((c) => c.kind === "amount" && c.has_key && c.remaining !== null);
+  const sum = (f) => {
+    const vals = am.map((c) => c[f]).filter((v) => v !== null && v !== undefined);
+    if (!vals.length) return null;
+    return vals.reduce((a, b) => a + b, 0);
+  };
+  const cells = [
+    ["今日消耗", sum("day"), true],
+    ["本周消耗", sum("week"), true],
+    ["本月消耗", sum("month"), false],
+  ];
+  if (!am.length) {
+    $("sum").innerHTML = "";
+    return;
+  }
+  $("sum").innerHTML = cells
+    .map(([label, v, est]) => {
+      const txt = v === null ? "——" : money(v);
+      const note = v === null ? "数据不足" : est ? "推算" : `${am.length} 个渠道`;
+      return `<div class="cell"><div class="lb">${label}</div>
+        <div class="vv">${txt}<span class="dl">${note}</span></div></div>`;
+    })
+    .join("");
+}
+
+function renderRow(c, i) {
+  const tone = toneOf(c);
+  const noKey = !c.has_key;
+  const failed = c.has_key && !c.valid;
+  const r = remainRatio(c);
+  const pct = r === null ? null : Math.round(r * 100);
+  const isPct = c.kind === "percent";
+
+  let main;
+  if (noKey) main = "——";
+  else if (c.remaining === null) main = "——";
+  else if (isPct) main = c.remaining.toFixed(1) + "<i>%</i>";
+  else {
+    const [int, dec] = c.remaining.toFixed(2).split(".");
+    main = "¥" + int + "<i>." + dec + "</i>";
+  }
+
+  // 第二行给状态语义,大数字下方给数值口径,两处不重复
+  let sub;
+  if (noKey) sub = "未配置密钥";
+  else if (failed) sub = "取数失败";
+  else if (c.limited) sub = "已限流 · 配额触顶";
+  else if (isPct) sub = "三个限流窗口的剩余";
+  else if (pct !== null) sub = `额度 ¥${c.total}`;
+  else sub = "充值余额 · 无限额";
+
+  let subVal;
+  if (noKey) subVal = "待配置";
+  else if (failed) subVal = c.stale ? "上次快照" : "失联";
+  else if (pct !== null) subVal = `剩 ${pct}%`;
+  else subVal = c.unit === "%" ? "配额" : "可用";
+
+  // 状态点
+  let dot = "";
+  if (noKey) dot = '<span class="dot o"></span>';
+  else if (failed) dot = '<span class="dot o"></span>';
+  else if (c.limited || tone === "bad") dot = '<span class="dot b"></span>';
+  else if (tone === "warn") dot = '<span class="dot w"></span>';
+  else dot = '<span class="dot"></span>';
+
+  // 第三段:金额型显示日/周/月,配额型显示三个限流窗口
+  let useHtml;
+  if (isPct && c.windows && c.windows.length) {
+    useHtml = `<div class="use">${c.windows
+      .map(
+        (w) => `<div>${w.label}<b style="color:${
+          w.status === "rate-limited" ? "var(--bad)" : "var(--tx2)"
+        }">${w.remainPercent.toFixed(1)}%</b></div>`
+      )
+      .join("")}</div>`;
+  } else {
+    const f = (v) => (v === null || v === undefined ? "——" : "¥" + v.toFixed(2));
+    useHtml = `<div class="use">
+      <div>今日<b>${f(c.day)}</b></div>
+      <div>本周<b>${f(c.week)}</b></div>
+      <div>本月<b>${f(c.month)}</b></div>
+    </div>`;
+  }
+
+  const bar =
+    pct !== null && !failed && !noKey
+      ? `<div class="bar"><i style="width:${pct}%;background:${TONE_HEX[tone]}"></i></div>`
+      : "";
+
+  const src = c.stale
+    ? `<div class="hint" style="color:var(--warn)">显示的是 ${relTime(c.updatedAt)} 的成功快照${
+        c.error ? " · " + c.error : ""
+      }</div>`
+    : `<div class="hint">更新于 ${relTime(c.updatedAt)}</div>`;
+
+  return `<div class="row" data-id="${c.id}" data-i="${i}">
+    <div class="rhead">
+      <div class="r1">
+        <div class="ico" style="background:${noKey || failed ? "#333a4a" : c.color}">${c.short}</div>
+        <div class="nm">
+          <div class="n">${c.name}${dot}</div>
+          <div class="s">${c.unstable ? "未公开接口 · " : ""}${sub}</div>
+        </div>
+        <div class="val">
+          <div class="v" style="color:${TONE_COLOR[tone]}">${main}</div>
+          <div class="p">${subVal}</div>
+        </div>
+        <div class="caret">&#9654;</div>
+      </div>
+      ${bar}
+      ${useHtml}
+    </div>
+    <div class="rbody" data-body="${c.id}"></div>
+  </div>`;
+}
+
+function renderDetail(c) {
+  const noKey = !c.has_key;
+
+  const keyBlock = `
+    <div class="keyrow">
+      <input type="password" id="key-${c.id}" placeholder="${
+        noKey ? "粘贴 API Key" : "已保存,留空则不改动"
+      }" autocomplete="off" spellcheck="false">
+      <button class="btn p" data-act="savekey" data-id="${c.id}">保存</button>
+    </div>
+    ${
+      noKey
+        ? ""
+        : `<div class="acts" style="margin-bottom:9px">
+             <button class="btn danger" data-act="delkey" data-id="${c.id}">删除密钥</button>
+           </div>`
+    }`;
+
+  if (noKey) {
+    return `<div class="rbody-in">
+      <div class="hint" style="margin:0 0 8px">未配置密钥。密钥只写入 Windows 凭据管理器,不会进配置文件、数据库或日志。</div>
+      ${keyBlock}
+    </div>`;
+  }
+
+  const kv = c.extra && c.extra.length ? c.extra : [];
+  const kvHtml = kv.length
+    ? `<div class="kv">${kv
+        .map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`)
+        .join("")}</div>`
+    : "";
+
+  const spark = sparkCache[c.id] || [];
+  const sparkHtml = spark.length
+    ? `<div class="spark">${(() => {
+        const max = Math.max(...spark, 0.000001);
+        return spark
+          .map((v) => `<i style="height:${Math.max(2, (v / max) * 100)}%"></i>`)
+          .join("");
+      })()}</div>`
+    : `<div class="spark">${Array.from({ length: 24 }, () => '<i style="height:2%"></i>').join(
+        ""
+      )}</div>`;
+
+  const body = [];
+  body.push(
+    `<div class="seg">
+       <button class="on" data-act="range" data-id="${c.id}" data-h="24">近 24 小时</button>
+       <button data-act="range" data-id="${c.id}" data-h="168">近 7 天</button>
+       <button data-act="range" data-id="${c.id}" data-h="720">近 30 天</button>
+     </div>`
+  );
+  if (c.error) {
+    body.push(
+      `<div class="hint" style="color:var(--bad);margin:0 0 8px">${c.error}${
+        c.stale ? " · 下列数值为上次成功快照" : ""
+      }</div>`
+    );
+  }
+  body.push(kvHtml);
+  body.push(sparkHtml);
+  if (c.estimated && c.kind === "amount") {
+    body.push(
+      `<div class="hint" style="margin:0 0 8px">消耗为本地快照推算值 —— 该接口只返回当前余额,不含累计消耗;程序未运行的时段不计入。</div>`
+    );
+  }
+  body.push(keyBlock);
+
+  return `<div class="rbody-in">${body.join("")}</div>`;
+}
+
+function render() {
+  const sorted = sortChannels(CHANNELS);
+  $("cnt").textContent = CHANNELS.filter((c) => c.has_key).length + " / " + CHANNELS.length + " 个渠道";
+
+  renderSummary();
+
+  if (!CHANNELS.length) {
+    $("list").innerHTML = `<div class="empty"><b>正在取数…</b>首次启动需要几秒</div>`;
+    return;
+  }
+
+  const openId = document.querySelector(".row.open")?.dataset.id;
+  const keepOpen = FLASH || openId;
+
+  $("list").innerHTML = sorted.every((c) => !c.has_key)
+    ? `<div class="empty"><b>还没有配置任何渠道</b>点击下面「管理密钥」填入至少一个 API Key</div>` +
+      sorted.map((c, i) => renderRow(c, i)).join("")
+    : sorted.map((c, i) => renderRow(c, i)).join("");
+
+  if (keepOpen) {
+    const row = document.querySelector(`.row[data-id="${keepOpen}"]`);
+    if (row) {
+      row.classList.add("open");
+      const c = CHANNELS.find((x) => x.id === keepOpen);
+      const body = row.querySelector(".rbody");
+      if (c && body) body.innerHTML = renderDetail(c);
+    }
+    FLASH = null;
+  }
+
+  // 底栏状态
+  const withKey = CHANNELS.filter((c) => c.has_key);
+  const bad = withKey.filter((c) => !c.valid).length;
+  const warn = withKey.filter((c) => c.valid && (c.limited || toneOf(c) === "bad")).length;
+  $("fdot").className =
+    "dot" + (bad ? " o" : warn ? " b" : withKey.length ? "" : " o");
+  $("fstat").textContent = !withKey.length
+    ? "未配置渠道"
+    : `${withKey.length - bad} 正常${warn ? ` · ${warn} 预警` : ""}${bad ? ` · ${bad} 失联` : ""}`;
+
+  renderPill(sorted);
+}
+
+function renderPill(sorted) {
+  // 先清掉上一轮插入的状态点,否则每次刷新都会多堆一个
+  $("pill").querySelectorAll(".dot").forEach((d) => d.remove());
+
+  const active = sorted.filter((c) => c.has_key);
+  const tight = active
+    .filter((c) => c.valid)
+    .sort((a, b) => (remainRatio(a) ?? 2) - (remainRatio(b) ?? 2))[0];
+
+  if (!tight) {
+    $("pillV").textContent = "——";
+    $("pillS").textContent = active.length ? "取数失败" : "未配置渠道";
+    return;
+  }
+
+  const r = remainRatio(tight);
+  $("pillV").innerHTML =
+    tight.kind === "percent"
+      ? `${tight.name} ${tight.remaining.toFixed(1)}<i>%</i>`
+      : `${tight.name} ${money(tight.remaining)}`;
+  $("pillS").textContent =
+    r === null
+      ? "可用余额"
+      : `剩 ${Math.round(r * 100)}%${tight.limited ? " · 已限流" : ""}`;
+
+  const tone = toneOf(tight);
+  const dot = document.createElement("span");
+  dot.className = "dot" + (tone === "bad" ? " b" : tone === "warn" ? " w" : "");
+  $("pill").querySelector(".spacer").after(dot);
+}
+
+// ───────────── 形态切换 ─────────────
+const SIZES = {
+  panel: [380, 560],
+  compact: [380, 46],
+  pill: [200, 46],
+};
+
+async function applyForm(form, remember = true) {
+  document.body.className = "form-" + form;
+  const [w, h] = SIZES[form] || SIZES.panel;
+  try {
+    await appWindow.setSize(new T.window.LogicalSize(w, h));
+    if (form === "panel") {
+      await appWindow.setResizable(true);
+    } else {
+      await appWindow.setResizable(false);
+      await appWindow.setAlwaysOnTop(true);
+    }
+  } catch (e) {
+    console.error("切换形态失败", e);
+  }
+  if (remember && CFG) {
+    CFG.form = form;
+    invoke("set_config", { config: CFG }).catch(() => {});
+  }
+}
+
+// ───────────── 事件绑定 ─────────────
+$("list").addEventListener("click", async (e) => {
+  const act = e.target.closest("[data-act]");
+  if (act) {
+    e.stopPropagation();
+    const id = act.dataset.id;
+    const a = act.dataset.act;
+    if (a === "savekey") {
+      const input = $("key-" + id);
+      const val = input.value.trim();
+      if (!val) return;
+      try {
+        await invoke("set_key", { id, key: val });
+        FLASH = id;
+        input.value = "";
+        await refresh();
+      } catch (err) {
+        alert("保存失败:" + err);
+      }
+    } else if (a === "delkey") {
+      if (!confirm("删除该渠道的密钥?余额数据会保留在本地。")) return;
+      try {
+        await invoke("delete_key", { id });
+        FLASH = id;
+        await refresh();
+      } catch (err) {
+        alert("删除失败:" + err);
+      }
+    } else if (a === "range") {
+      const h = Number(act.dataset.h);
+      sparkCache[id] = await invoke("get_series", { id, hours: h });
+      document
+        .querySelectorAll(`.seg button[data-id="${id}"]`)
+        .forEach((b) => b.classList.toggle("on", b === act));
+      const c = CHANNELS.find((x) => x.id === id);
+      const body = document.querySelector(`.rbody[data-body="${id}"]`);
+      if (c && body) body.innerHTML = renderDetail(c);
+    }
+    return;
+  }
+
+  const head = e.target.closest(".rhead");
+  if (!head) return;
+  const row = head.closest(".row");
+  const id = row.dataset.id;
+  const was = row.classList.contains("open");
+  document.querySelectorAll(".row").forEach((r) => r.classList.remove("open"));
+  if (!was) {
+    row.classList.add("open");
+    const c = CHANNELS.find((x) => x.id === id);
+    const body = row.querySelector(".rbody");
+    if (c && body) {
+      if (!sparkCache[id]) {
+        try {
+          sparkCache[id] = await invoke("get_series", { id, hours: 24 });
+        } catch {
+          sparkCache[id] = [];
+        }
+      }
+      body.innerHTML = renderDetail(c);
+    }
+  }
+});
+
+$("btnR").addEventListener("click", async (e) => {
+  e.currentTarget.classList.add("spin");
+  setTimeout(() => e.currentTarget.classList.remove("spin"), 720);
+  await refresh();
+});
+$("btnS").addEventListener("click", (e) => {
+  $("pane").classList.toggle("open");
+  e.currentTarget.classList.toggle("on");
+});
+$("btnP").addEventListener("click", async (e) => {
+  await invoke("window_cmd", { action: "pin" });
+  e.currentTarget.classList.toggle("on");
+});
+$("btnC").addEventListener("click", () => {
+  applyForm(document.body.className.includes("form-compact") ? "panel" : "compact");
+});
+$("btnH").addEventListener("click", () => invoke("window_cmd", { action: "hide" }));
+$("lkQuit").addEventListener("click", () => invoke("window_cmd", { action: "quit" }));
+$("lkKeys").addEventListener("click", () => {
+  const p = $("pane");
+  if (!p.classList.contains("open")) {
+    p.classList.add("open");
+    $("btnS").classList.add("on");
+  }
+  const first = $("list").querySelector(".row");
+  if (first) {
+    document.querySelectorAll(".row").forEach((r) => r.classList.remove("open"));
+    first.classList.add("open");
+    const c = CHANNELS.find((x) => x.id === first.dataset.id);
+    if (c) first.querySelector(".rbody").innerHTML = renderDetail(c);
+  }
+});
+$("pill").addEventListener("click", () => applyForm("panel"));
+
+// 设置项
+function bindSelect(id, key, cast = Number) {
+  const el = $(id);
+  el.addEventListener("change", () => {
+    CFG[key] = cast(el.value);
+    emit("config-changed", CFG);
+    invoke("set_config", { config: CFG }).catch(() => {});
+    if (key === "sort") render();
+  });
+}
+function bindSwitch(id, key) {
+  const el = $(id);
+  el.addEventListener("click", () => {
+    CFG[key] = !CFG[key];
+    el.classList.toggle("on", CFG[key]);
+    invoke("set_config", { config: CFG }).catch(() => {});
+  });
+}
+bindSelect("cfgActive", "activeIntervalSec");
+bindSelect("cfgIdle", "idleIntervalSec");
+bindSelect("cfgBackoff", "backoffIntervalSec");
+bindSelect("cfgSort", "sort", String);
+bindSelect("cfgWarn", "warnPercent");
+bindSelect("cfgCrit", "critPercent");
+bindSwitch("cfgAutostart", "autostart");
+bindSwitch("cfgNotify", "notify");
+bindSwitch("cfgBlur", "collapseOnBlur");
+
+function applyConfigToUI() {
+  if (!CFG) return;
+  const set = (id, v) => {
+    const el = $(id);
+    if (el) el.value = String(v);
+  };
+  set("cfgActive", CFG.activeIntervalSec);
+  set("cfgIdle", CFG.idleIntervalSec);
+  set("cfgBackoff", CFG.backoffIntervalSec);
+  set("cfgSort", CFG.sort);
+  set("cfgWarn", CFG.warnPercent);
+  set("cfgCrit", CFG.critPercent);
+  $("cfgAutostart").classList.toggle("on", !!CFG.autostart);
+  $("cfgNotify").classList.toggle("on", !!CFG.notify);
+  $("cfgBlur").classList.toggle("on", !!CFG.collapseOnBlur);
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    if ($("pane").classList.contains("open")) {
+      $("pane").classList.remove("open");
+      $("btnS").classList.remove("on");
+    } else if (document.body.className.includes("form-panel")) {
+      applyForm("pill");
+    } else {
+      applyForm("panel");
+    }
+  }
+});
+
+// ───────────── 启动 ─────────────
+async function refresh() {
+  try {
+    const list = await invoke("get_channels");
+    CHANNELS = list;
+    render();
+  } catch (e) {
+    $("list").innerHTML = `<div class="empty"><b>取数失败</b>${e}</div>`;
+  }
+}
+
+(async function init() {
+  try {
+    CFG = await invoke("get_config");
+  } catch {
+    CFG = {
+      activeIntervalSec: 60, idleIntervalSec: 300, backoffIntervalSec: 900,
+      warnPercent: 40, critPercent: 15, notify: true, autostart: false,
+      collapseOnBlur: false, form: "panel", sort: "percent",
+    };
+  }
+  applyConfigToUI();
+  await applyForm(CFG.form || "panel", false);
+  await refresh();
+
+  listen("channels-updated", (ev) => {
+    CHANNELS = ev.payload;
+    render();
+  });
+})();

@@ -1,0 +1,13 @@
+[package]
+name = "tokenscope-core"
+version = "0.1.0"
+edition = "2021"
+description = "TokenScope 的纯逻辑层:渠道适配、快照推算、密钥存储。不依赖 Tauri,便于单元测试。"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["json", "gzip"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+keyring = { version = "3", features = ["windows-native"] }
+chrono = { version = "0.4", features = ["serde"] }

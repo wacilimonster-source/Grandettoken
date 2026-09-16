@@ -1,0 +1,40 @@
+# ── 构建产物 ──
+app/src-tauri/target/
+app/core/target/
+target/
+# tauri-build 自动生成的 ACL schema
+app/src-tauri/gen/schemas/
+
+# ── 工具链(约 1 GB,绝不入库)──
+build/dl/
+build/mingw64/
+build/git/
+
+# ── 依赖 ──
+node_modules/
+
+# ── 本地数据:SQLite 快照里可能含余额与用量历史 ──
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# ── 密钥 / 凭据(理论上不会落到文件,防御性忽略)──
+*.pem
+*.key
+*.p12
+*.pfx
+.env
+.env.*
+secrets.json
+credentials.json
+*.secret
+
+# ── 编辑器 / 系统 ──
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store

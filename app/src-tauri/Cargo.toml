@@ -1,0 +1,34 @@
+[package]
+name = "tokenscope"
+version = "0.1.0"
+description = "多平台 Token 余额监控"
+authors = ["wacil"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "tokenscope_lib"
+# 仅 rlib。Tauri 模板默认带 cdylib/staticlib 是为了移动端,但 Windows GNU 工具链下
+# cdylib 会导出全部符号,依赖树规模超过 DLL 导出序号上限(export ordinal too large)。
+# 桌面端不需要它们。
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# 纯逻辑层(渠道适配、快照推算、密钥存储)。拆出去是为了能独立跑 cargo test,
+# 不必把 WebView2 整套链接进测试二进制。
+tokenscope-core = { path = "../core" }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["time", "macros", "rt-multi-thread"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>TokenScope · 产品原型</title>
+<style>
+:root{
+  --bg:#12141a; --bg2:#191c24; --bg3:#20242e;
+  --line:#282d3a; --line2:#333a4a;
+  --tx:#e6e9f0; --tx2:#9aa3b5; --tx3:#646d80;
+  --ok:#3ecf8e; --warn:#f0b23c; --bad:#f0554d; --ac:#5b8cff;
+  --r:10px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:#0a0b0f;
+  background-image:radial-gradient(900px 500px at 78% 8%,#1b2138 0%,transparent 60%);
+  min-height:100vh;font:13px/1.5 "Segoe UI","Microsoft YaHei",sans-serif;color:var(--tx);
+  display:flex;flex-direction:column;align-items:center;gap:26px;padding:34px 20px 70px;
+}
+.stage-label{font-size:11px;letter-spacing:.14em;color:var(--tx3);text-transform:uppercase;
+  display:flex;align-items:center;gap:10px;width:380px}
+.stage-label::after{content:"";flex:1;height:1px;background:var(--line)}
+
+/* ---------- 窗体 ---------- */
+.win{width:380px;background:var(--bg);border:1px solid var(--line);border-radius:12px;
+  box-shadow:0 22px 60px -12px #000,0 0 0 1px #ffffff08 inset;overflow:hidden}
+
+/* 标题栏 / 拖拽区 */
+.tbar{display:flex;align-items:center;gap:9px;padding:9px 8px 9px 12px;
+  background:linear-gradient(180deg,#1d2129,#171a21);border-bottom:1px solid var(--line);cursor:move}
+.mark{width:17px;height:17px;border-radius:5px;background:linear-gradient(135deg,#5b8cff,#8b5bff);
+  flex:none;position:relative}
+.mark::after{content:"";position:absolute;inset:5px;border-radius:2px;background:#12141a}
+.tt{font-size:12px;font-weight:600;letter-spacing:.02em}
+.tt small{font-weight:400;color:var(--tx3);margin-left:6px;font-size:11px}
+.spacer{flex:1}
+.ib{width:24px;height:24px;border:0;background:transparent;border-radius:6px;color:var(--tx2);
+  cursor:pointer;display:grid;place-items:center;font-size:13px;flex:none}
+.ib:hover{background:#ffffff12;color:var(--tx)}
+.ib.on{color:var(--ac);background:#5b8cff1f}
+
+/* 消耗汇总条(次要信息,压扁) */
+.sum{display:flex;align-items:stretch;border-bottom:1px solid var(--line);background:#141720}
+.sum .cell{flex:1;padding:7px 12px;border-right:1px solid #1e222b}
+.sum .cell:last-child{border-right:0}
+.sum .cell .lb{font-size:9.5px;color:var(--tx3);letter-spacing:.08em;margin-bottom:2px}
+.sum .cell .vv{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}
+.sum .cell .dl{font-size:9.5px;color:var(--tx3);margin-left:4px;font-weight:400}
+.up{color:var(--bad)} .down{color:var(--ok)}
+.dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok);
+  margin-right:5px;vertical-align:1px}
+.dot.w{background:var(--warn)} .dot.b{background:var(--bad)} .dot.o{background:var(--tx3)}
+
+/* 平台列表 */
+.list{max-height:430px;overflow-y:auto}
+.list::-webkit-scrollbar{width:8px}
+.list::-webkit-scrollbar-thumb{background:#333a4a;border-radius:9px;border:2px solid var(--bg)}
+
+.row{border-bottom:1px solid #1e222b}
+.row:last-child{border-bottom:0}
+.rhead{padding:10px 12px 9px;cursor:pointer}
+.rhead:hover{background:#ffffff07}
+.r1{display:flex;align-items:center;gap:9px}
+.ico{width:28px;height:28px;border-radius:8px;flex:none;display:grid;place-items:center;
+  font-size:11px;font-weight:700;color:#fff}
+.nm{min-width:0;flex:1}
+.nm .n{font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nm .s{font-size:10px;color:var(--tx3);margin-top:1px}
+/* 余额 = 主角 */
+.val{text-align:right;flex:none;font-variant-numeric:tabular-nums}
+.val .v{font-size:19px;font-weight:600;letter-spacing:-.4px;line-height:1.1}
+.val .v i{font-style:normal;font-size:12px;font-weight:400;color:var(--tx3)}
+.val .p{font-size:10px;color:var(--tx3);margin-top:1px}
+.bar{height:4px;border-radius:3px;background:#2a2f3b;overflow:hidden;position:relative;margin:8px 0 0}
+.bar>i{position:absolute;inset:0 auto 0 0;border-radius:3px;transition:width .5s cubic-bezier(.3,1,.4,1)}
+/* 行内日/周/月消耗 */
+.use{display:flex;gap:0;margin-top:7px}
+.use div{flex:1;font-size:10px;color:var(--tx3);border-left:1px solid #262b36;padding-left:7px}
+.use div:first-child{border-left:0;padding-left:0}
+.use b{display:block;font-size:11.5px;color:var(--tx2);font-weight:500;
+  font-variant-numeric:tabular-nums;margin-top:1px}
+.caret{color:var(--tx3);font-size:9px;flex:none;width:12px;text-align:center;transition:transform .25s}
+.row.open .caret{transform:rotate(90deg)}
+
+/* 平台展开详情 */
+.rbody{max-height:0;overflow:hidden;transition:max-height .3s ease}
+.row.open .rbody{max-height:300px}
+.rbody-in{padding:4px 13px 13px 49px;background:#ffffff05}
+.seg{display:flex;gap:4px;margin-bottom:9px}
+.seg button{flex:1;font-size:10px;padding:3px 0;border:1px solid var(--line);background:var(--bg3);
+  color:var(--tx3);border-radius:5px;cursor:pointer;font-family:inherit}
+.seg button.on{background:#5b8cff1f;border-color:#5b8cff55;color:#9dbaff}
+.kv{display:grid;grid-template-columns:1fr 1fr;gap:7px 14px;margin-bottom:10px}
+.kv div{display:flex;justify-content:space-between;font-size:11px;
+  border-bottom:1px dashed #262b36;padding-bottom:4px}
+.kv span{color:var(--tx3)} .kv b{font-weight:500;font-variant-numeric:tabular-nums}
+.spark{height:30px;display:flex;align-items:flex-end;gap:2px;margin-bottom:9px}
+.spark i{flex:1;background:#37527f;border-radius:1px}
+.acts{display:flex;gap:6px}
+.btn{border:1px solid var(--line2);background:var(--bg3);color:var(--tx2);font-size:11px;
+  padding:4px 9px;border-radius:6px;cursor:pointer;font-family:inherit}
+.btn:hover{border-color:#4a556b;color:var(--tx)}
+.btn.p{background:#5b8cff1a;border-color:#5b8cff55;color:#9dbaff}
+
+/* 底栏 */
+.foot{display:flex;align-items:center;gap:8px;padding:7px 12px;background:#141720;
+  border-top:1px solid var(--line);font-size:10.5px;color:var(--tx3)}
+.foot .lk{color:var(--tx2);cursor:pointer}
+.foot .lk:hover{color:var(--ac)}
+
+/* ---------- 形态2:紧凑条 ---------- */
+.compact{width:380px;display:flex;align-items:center;gap:10px;padding:8px 11px;
+  background:var(--bg);border:1px solid var(--line);border-radius:10px;
+  box-shadow:0 14px 34px -10px #000}
+.chip{display:flex;align-items:center;gap:5px;padding:3px 7px;border-radius:6px;
+  background:var(--bg3);font-size:11px;font-variant-numeric:tabular-nums}
+.chip u{text-decoration:none;color:var(--tx3);font-size:10px}
+
+/* ---------- 形态3:胶囊 ---------- */
+.pill{display:inline-flex;align-items:center;gap:8px;padding:7px 13px 7px 9px;
+  background:#12141aee;border:1px solid var(--line2);border-radius:999px;
+  box-shadow:0 10px 26px -8px #000;cursor:pointer;backdrop-filter:blur(8px)}
+.pill:hover{border-color:#4a556b}
+.pill .t{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}
+.pill .t i{font-style:normal;font-size:10px;color:var(--tx3);margin-left:2px}
+
+/* ---------- 边缘吸附 ---------- */
+.edge-demo{width:380px;height:150px;border:1px dashed var(--line2);border-radius:10px;
+  position:relative;background:#0e1015;overflow:hidden}
+.edge-demo .desk{position:absolute;inset:0;font-size:10px;color:#2f3644;
+  display:grid;place-items:center;letter-spacing:.2em}
+.tab{position:absolute;right:0;top:44px;width:26px;padding:9px 0;
+  background:linear-gradient(180deg,#5b8cff,#4a6fd6);border-radius:8px 0 0 8px;
+  writing-mode:vertical-rl;font-size:10px;letter-spacing:.1em;text-align:center;cursor:pointer;
+  box-shadow:-4px 0 14px -4px #5b8cff88}
+.note{width:380px;font-size:11.5px;color:var(--tx2);line-height:1.85;
+  background:#141720;border:1px solid var(--line);border-left:2px solid var(--ac);
+  border-radius:0 8px 8px 0;padding:10px 13px}
+.note b{color:var(--tx);font-weight:600}
+.note code{background:#232935;padding:1px 5px;border-radius:4px;font-size:10.5px;color:#9dbaff}
+
+/* ---------- 设置面板 ---------- */
+.pane{max-height:0;overflow:hidden;transition:max-height .35s ease;border-bottom:1px solid var(--line)}
+.pane.open{max-height:340px}
+.pane-in{padding:12px 13px}
+.pane h4{font-size:11px;color:var(--tx3);text-transform:uppercase;letter-spacing:.1em;
+  margin-bottom:9px;font-weight:600}
+.field{display:flex;align-items:center;justify-content:space-between;padding:6px 0;
+  border-bottom:1px solid #1e222b;font-size:11.5px}
+.field:last-child{border:0}
+.sw{width:32px;height:17px;border-radius:99px;background:#333a4a;position:relative;
+  cursor:pointer;flex:none;transition:background .2s}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;
+  background:#8b94a8;transition:.2s}
+.sw.on{background:#5b8cff59}
+.sw.on::after{left:17px;background:var(--ac)}
+.sel{background:var(--bg3);border:1px solid var(--line2);color:var(--tx2);border-radius:5px;
+  font-size:11px;padding:3px 6px;font-family:inherit}
+</style>
+</head>
+<body>
+
+<div class="stage-label">形态 A · 完全展开</div>
+
+<div class="win">
+  <div class="tbar">
+    <div class="mark"></div>
+    <div class="tt">TokenScope <small>6 个平台</small></div>
+    <div class="spacer"></div>
+    <button class="ib" id="btnR" title="立即刷新">⟳</button>
+    <button class="ib" id="btnS" title="设置">⚙</button>
+    <button class="ib" title="置顶">📌</button>
+    <button class="ib" title="收起为紧凑条">▬</button>
+    <button class="ib" title="最小化到托盘">✕</button>
+  </div>
+
+  <div class="pane" id="pane">
+    <div class="pane-in">
+      <h4>刷新与显示</h4>
+      <div class="field"><span>展开时刷新间隔</span>
+        <select class="sel"><option selected>1 分钟</option><option>30 秒</option><option>5 分钟</option></select></div>
+      <div class="field"><span>折叠/托盘态刷新间隔</span>
+        <select class="sel"><option>1 分钟</option><option selected>5 分钟</option><option>15 分钟</option></select></div>
+      <div class="field"><span>余额低于阈值时提醒</span><div class="sw on" onclick="this.classList.toggle('on')"></div></div>
+      <div class="field"><span>平台排序</span>
+        <select class="sel"><option selected>剩余百分比升序</option><option>余额高→低</option><option>今日消耗高→低</option><option>自定义拖拽</option></select></div>
+      <div class="field"><span>开机自启 · 吸附屏幕右侧</span><div class="sw on" onclick="this.classList.toggle('on')"></div></div>
+      <div class="field"><span>失焦后 3 秒自动折叠</span><div class="sw" onclick="this.classList.toggle('on')"></div></div>
+    </div>
+  </div>
+
+  <div class="sum" id="sum"></div>
+
+  <div class="list" id="list"></div>
+
+  <div class="foot">
+    <span class="dot"></span><span>5 正常 · 1 预警</span>
+    <div class="spacer" style="flex:1"></div>
+    <span class="lk">管理密钥</span><span style="color:var(--line2)">|</span><span class="lk">导出账单</span>
+  </div>
+</div>
+
+<div class="stage-label">形态 B · 紧凑条(半折叠)</div>
+<div class="compact">
+  <div class="mark"></div>
+  <div class="chip"><span class="dot b"></span>OC<u>1.3%</u></div>
+  <div class="chip"><span class="dot"></span>HA<u>¥98</u></div>
+  <div class="chip"><span class="dot"></span>4S<u>¥187</u></div>
+  <div class="chip"><span class="dot"></span>DS<u>¥256</u></div>
+  <div class="chip"><span class="dot o"></span>OC<u>——</u></div>
+  <div class="spacer" style="flex:1"></div>
+  <button class="ib" title="展开">▾</button>
+</div>
+<div class="note" style="border-left-color:var(--warn)">
+紧凑条<b>按剩余百分比升序</b>排列,最需要关注的排最前(此处 OpenCode Go 仅剩 1.3% 且已限流,置顶标红);宽度不够时截断尾部并显示 <code>+2</code>。
+</div>
+
+<div class="stage-label">形态 C · 胶囊(最小态)</div>
+<div style="width:380px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+  <div class="pill"><div class="mark"></div><span class="dot b"></span><div class="t">OC 1.3<i>%</i></div></div>
+  <div class="pill" style="padding:7px 11px"><div class="mark"></div><span class="dot b"></span></div>
+</div>
+<div class="note">
+胶囊只显示<b>最紧张的那一个平台</b>,而不是总额——总额不能告诉你哪个 Key 要挂了。多平台并列时鼠标滚轮可轮播。
+</div>
+
+<div class="stage-label">形态 D · 吸附屏幕边缘(隐藏态)</div>
+<div class="edge-demo">
+  <div class="desk">DESKTOP</div>
+  <div class="tab" style="background:linear-gradient(180deg,#f0554d,#c93f38);box-shadow:-4px 0 14px -4px #f0554d88">OC 1.3%</div>
+</div>
+
+<div class="stage-label">交互说明</div>
+<div class="note">
+<b>四级折叠</b>,一路收窄:完全展开 → 紧凑条 → 胶囊 → 吸附边缘。状态记忆,下次启动恢复。<br>
+<b>触发</b>:胶囊/边缘标签 <code>单击</code> 展开;面板 <code>失焦</code> 或按 <code>Esc</code> 回退一级;全局快捷键 <code>Alt+T</code> 任意态唤起。<br>
+<b>平台行是主体</b>:余额用 19px 大字并直接染上状态色,一屏内视线自然落到最红的那个。行内固定三段消耗(今日/本周/月),不点开也能看趋势。点击行展开明细(单开,自动收起其他)。<br>
+<b>顶部三格</b>是全平台消耗合计,属于次要信息,所以压成一条 34px 的窄条;今日/本周带环比箭头。<br>
+<b>状态色</b>:<span style="color:var(--ok)">绿 &gt;40%</span> · <span style="color:var(--warn)">黄 15–40%</span> · <span style="color:var(--bad)">红 &lt;15%</span> · <span style="color:var(--tx3)">灰 = 取数失败/未配置</span>。<br>
+<b>取数失败</b>不留白:行降级为灰点 + "重试"按钮,保留上次成功值并标注时间,避免误判为余额归零。<br>
+<b>两类渠道分开渲染</b>:<span style="color:#9dbaff">金额型</span>(4SAPI / DeepSeek / Hapi)显示人民币余额;<span style="color:#9dbaff">配额型</span>(OpenCode Go)接口只给百分比,行内三格换成 5 小时 / 本周 / 本月三个限流窗口的剩余配额,不显示金额也不参与消耗合计。<br>
+<b>轮询不花钱</b>:四个都是账务接口,不是推理接口,查余额不消耗 token。所以展开态 1 分钟、折叠态 5 分钟自动刷新,连续失败退避到 15 分钟,系统唤醒和网络恢复时补一次。<br>
+<b>币种统一 ¥</b>:各接口标注的 USD 实际结算为人民币,全部按 ¥ 展示并直接求和,不做汇率换算。<br>
+<b>有限额才画进度条</b>:充值型(DeepSeek / Hapi)没有分母,进度条会误导,所以直接不画,只显示余额和消耗。<br>
+<b>消耗口径</b>:今日按本地零点起算,本周按周一起算。金额型渠道的消耗多数需<b>本地流水推算</b>(接口只给当前余额),展开区会标注数据来源。<br>
+<b>排序</b>:默认按剩余百分比升序,快用完的置顶;可切换为按余额、按今日消耗、按自定义顺序。<br>
+<b>托盘</b>:图标角标显示最紧张渠道的百分比;右键菜单 = 立即刷新 / 切换形态 / 退出。<br>
+<b>密钥</b>:界面明文输入,落盘写 Windows 凭据管理器,永不进 JSON / 数据库 / 日志 / 导出文件。出网请求只发往渠道自身域名,无遥测无云同步。
+</div>
+
+<script>
+// 数值取自 providers.js 各 extractor 的真实输出结构
+const P=[
+ {k:'4S',n:'4SAPI',s:'额度 ¥500.00',c:'#e8622c',kind:'amount',u:'¥',
+  bal:187.00,total:500,day:6.80,week:38.40,month:313.00,
+  d:{'已消耗':'¥313.00','日均(30天)':'¥10.43','原始积分':'93,500,000','换算':'500000 积分 = ¥1','预计可用':'约 18 天'},t:'1 分钟前'},
+
+ {k:'OC',n:'OpenCode Go',s:'订阅配额 · 三窗口限流',c:'#f5a623',kind:'percent',u:'',
+  bal:1.3,total:100,day:null,week:null,month:null,limited:true,
+  windows:[{l:'5 小时',p:12.4,st:'ok',r:'18:00 重置'},
+           {l:'本周',p:33.1,st:'ok',r:'周一 08:00 重置'},
+           {l:'本月',p:98.7,st:'rate-limited',r:'10-01 重置'}],
+  d:{'当前状态':'已限流(月窗)','5 小时窗':'已用 12.4%','本周窗':'已用 33.1%','本月窗':'已用 98.7%','接口':'未公开,无稳定保证'},t:'1 分钟前'},
+
+ {k:'DS',n:'DeepSeek',s:'充值余额 · 无限额',c:'#4d6bfe',kind:'amount',u:'¥',
+  bal:256.00,total:null,day:2.10,week:11.30,month:44.00,
+  d:{'充值余额':'¥256.00','赠送余额':'¥0.00','日均(30天)':'¥1.46','消耗来源':'本地流水推算','预计可用':'约 175 天'},t:'2 分钟前'},
+
+ {k:'HA',n:'Hapi',s:'充值余额 · 无限额',c:'#22a06b',kind:'amount',u:'¥',
+  bal:98.73,total:null,day:1.40,week:8.90,month:36.20,
+  d:{'原始积分':'1,974.50','换算':'20 积分 = ¥1','日均(30天)':'¥1.21','消耗来源':'本地流水推算','预计可用':'约 81 天'},t:'2 分钟前'},
+
+ {k:'OC',n:'OpenCode Go (备用号)',s:'未订阅 Go 套餐',c:'#f5a623',kind:'percent',u:'',
+  bal:null,total:100,day:null,week:null,month:null,
+  d:{'错误':'403 EntitlementError','含义':'该密钥无 Go 订阅','已重试':'3 次','最后成功':'从未','建议':'检查订阅或移除该渠道'},t:'27 分钟前'}
+];
+const F=(v,u)=>v===null?'——':(u||'¥')+v.toFixed(2);
+const cls=r=>r<.15?'bad':r<.4?'warn':'ok';
+const col=r=>r<.15?'#f0554d':r<.4?'#f0b23c':'#3ecf8e';
+
+// 汇总只累加金额型渠道(配额型是百分比,不可相加);全部人民币,直接求和
+const AM=P.filter(p=>p.kind==='amount'&&p.bal!==null);
+const sumOf=f=>AM.reduce((s,p)=>s+(p[f]||0),0);
+document.getElementById('sum').innerHTML=[
+  ['今日消耗',sumOf('day'),'<span class="dl up">↑12%</span>'],
+  ['本周消耗',sumOf('week'),'<span class="dl down">↓4%</span>'],
+  ['本月消耗',sumOf('month'),`<span class="dl">${AM.length} 个金额型渠道</span>`]
+].map(([l,v,d])=>`<div class="cell"><div class="lb">${l}</div>
+  <div class="vv">¥${v.toFixed(2)}${d}</div></div>`).join('');
+
+document.getElementById('list').innerHTML=P.map((p,i)=>{
+  const off=p.bal===null;
+  const isPct=p.kind==='percent';
+  // 充值型无 total,进度条无意义 → 不画条
+  const hasBar=!off&&p.total!=null;
+  const r=hasBar?p.bal/p.total:1, pct=(r*100).toFixed(0);
+  const mainV=off?'——'
+    :isPct?p.bal.toFixed(1)+'<i>%</i>'
+    :p.u+p.bal.toFixed(0)+'<i>.'+p.bal.toFixed(2).split('.')[1]+'</i>';
+  const sub=off?'取数失败'
+    :isPct?(p.limited?'已限流':'剩余配额')
+    :p.total!=null?'剩 '+pct+'% / '+p.u+p.total:'可用余额';
+
+  return `<div class="row" data-i="${i}">
+   <div class="rhead">
+     <div class="r1">
+       <div class="ico" style="background:${off?'#333a4a':p.c}">${p.k}</div>
+       <div class="nm"><div class="n">${p.n} ${off?'<span class="dot o" style="margin-left:3px"></span>':p.limited?'<span class="dot b" style="margin-left:3px"></span>':''}</div>
+         <div class="s">${p.s}</div></div>
+       <div class="val">
+         <div class="v" style="color:${off?'var(--tx3)':col(r)}">${mainV}</div>
+         <div class="p">${sub}</div>
+       </div>
+       <div class="caret">▶</div>
+     </div>
+     ${hasBar?`<div class="bar"><i style="width:${pct}%;background:${col(r)}"></i></div>`:''}
+     ${isPct?`<div class="use">${(p.windows||[{l:'5 小时'},{l:'本周'},{l:'本月'}]).map(w=>
+         `<div>${w.l}<b style="color:${w.p==null?'var(--tx3)':col(1-w.p/100)}">${w.p==null?'——':(100-w.p).toFixed(1)+'%'}</b></div>`).join('')}</div>`
+      :`<div class="use">
+         <div>今日<b>${F(p.day,p.u)}</b></div>
+         <div>本周<b>${F(p.week,p.u)}</b></div>
+         <div>本月<b>${F(p.month,p.u)}</b></div>
+       </div>`}
+   </div>
+   <div class="rbody"><div class="rbody-in">
+     <div class="seg"><button class="on">近 24 小时</button><button>近 7 天</button><button>近 30 天</button></div>
+     <div class="kv">${Object.entries(p.d).map(([a,b])=>`<div><span>${a}</span><b>${b}</b></div>`).join('')}</div>
+     <div class="spark">${Array.from({length:24},()=>`<i style="height:${20+Math.random()*80}%"></i>`).join('')}</div>
+     <div class="acts">
+       ${off?'<button class="btn p">重新配置密钥</button><button class="btn">立即重试</button>'
+            :'<button class="btn p">打开控制台</button><button class="btn">用量趋势</button><button class="btn">设置阈值</button>'}
+     </div>
+     <div style="font-size:10px;color:var(--tx3);margin-top:7px">更新于 ${p.t}</div>
+   </div></div></div>`;
+}).join('');
+
+document.querySelectorAll('.rhead').forEach(h=>h.onclick=()=>{
+  const row=h.parentElement, was=row.classList.contains('open');
+  document.querySelectorAll('.row').forEach(r=>r.classList.remove('open'));
+  if(!was) row.classList.add('open');
+});
+document.getElementById('btnS').onclick=e=>{
+  document.getElementById('pane').classList.toggle('open');
+  e.currentTarget.classList.toggle('on');
+};
+document.getElementById('btnR').onclick=e=>{
+  const b=e.currentTarget; b.style.transition='transform .7s'; b.style.transform='rotate(720deg)';
+  document.querySelectorAll('.bar>i').forEach(i=>{const w=i.style.width;i.style.width='0%';setTimeout(()=>i.style.width=w,120)});
+  setTimeout(()=>{b.style.transition='none';b.style.transform='none'},760);
+};
+</script>
+</body>
+</html>
