@@ -268,8 +268,12 @@ fn build_view(
     store: &Store,
     cfg: &Config,
 ) -> ChannelView {
-    // 只有金额型才有"消耗"这个概念可算;配额型的用量由接口直接给出
-    let (day, week, month) = if result.valid && result.kind == Kind::Amount {
+    // 只有金额型才有"消耗"这个概念可算;配额型的用量由接口直接给出。
+    // 注意:**不要**把 `result.valid` 串进来 —— 消耗是本地快照推算的,和这次网络请求
+    // 成不成功无关。之前取数一失败就把三个窗口一起置 None,汇总里"今日/本周/本月"
+    // 会整片显示"数据不足",明明本地有快照。
+    let has_amount = result.kind == Kind::Amount && result.remaining.is_some();
+    let (day, week, month) = if has_amount {
         let now = now_ts();
         (
             store

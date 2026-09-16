@@ -52,11 +52,52 @@ async function connect() {
       ws.send(JSON.stringify({ id: i, method: 'Runtime.evaluate', params: { expression, awaitPromise, returnByValue: true } }));
     });
 
-  return { ws, evalJs };
+  // 通用调用:截图 / 模拟透明默认底色这类非 Runtime 域的命令要走这里
+  const send = (method, params = {}) =>
+    new Promise((res, rej) => {
+      const i = ++id;
+      pending.set(i, (m) => (m.error ? rej(new Error(`${method}: ${m.error.message}`)) : res(m.result)));
+      ws.send(JSON.stringify({ id: i, method, params }));
+    });
+
+  return { ws, evalJs, send };
+}
+
+// 圆角外必须"真透明"。根元素 html 没有背景时,body 的 background 会被
+// **背景传播**提升到根画布绘制,而画布恒为整窗矩形、不吃 border-radius ——
+// 圆角描边(body 的 border,不参与传播)和直角底色就会同框。
+// 透明窗口下正确的结果是:四角 alpha=0,胶囊本体仍然不透明。
+// 抓图后把 PNG 塞回页面里用 canvas 读像素,省掉一个 PNG 解码依赖。
+async function cornerAlpha(send, evalJs) {
+  // 真实窗口是 transparent:true,截图也必须以透明默认底色合成,
+  // 否则拿到的是 CDP 的白色底,测不出角上透不透。
+  await send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });
+  await sleep(400);
+  const shot = await send('Page.captureScreenshot', { format: 'png' });
+  const raw = await evalJs(`(async () => {
+    const img = new Image();
+    img.src = 'data:image/png;base64,${shot.data}';
+    await img.decode();
+    const c = document.createElement('canvas');
+    c.width = img.width; c.height = img.height;
+    const g = c.getContext('2d');
+    g.drawImage(img, 0, 0);
+    const at = (x, y) => [...g.getImageData(x, y, 1, 1).data];
+    return JSON.stringify({
+      w: img.width, h: img.height,
+      tl: at(1, 1), tr: at(img.width - 2, 1),
+      bl: at(1, img.height - 2), br: at(img.width - 2, img.height - 2),
+      ct: at(img.width >> 1, img.height >> 1),
+    });
+  })()`, true);
+  await send('Emulation.setDefaultBackgroundColorOverride', {});
+  const p = JSON.parse(raw);
+  const corners = [p.tl, p.tr, p.bl, p.br];
+  return { ...p, corners, cornerAlpha: Math.max(...corners.map((c) => c[3])), centerAlpha: p.ct[3] };
 }
 
 (async () => {
-  const { ws, evalJs } = await connect();
+  const { ws, evalJs, send } = await connect();
   const rows = [];
   let ok = true;
 
@@ -82,7 +123,11 @@ async function connect() {
     })()`, true));
 
     const [ew, eh] = EXPECT[form];
-    const sizeOk = near(state.w, ew) && near(state.h, eh);
+    // 胶囊宽度随内容自适应(去掉图标后不再固定 200),这里只卡高度与合理区间
+    const sizeOk =
+      form === 'pill'
+        ? near(state.h, eh) && state.w >= 130 && state.w <= 242
+        : near(state.w, ew) && near(state.h, eh);
     const classOk = state.bodyClass.includes('form-' + form);
     // 行可见性:面板必须显示全部行(紧凑条藏起来的行要还原);
     // 紧凑条若有隐藏行,数目必须和 "+N" 徽标对得上
@@ -92,9 +137,16 @@ async function connect() {
       if (form === 'panel') rowsOk = hidden === 0;
       else rowsOk = hidden === 0 ? state.badge === null : state.badge === '+' + hidden;
     }
-    const pass = sizeOk && classOk && state.resizable === false && rowsOk;
+    // 胶囊形态额外验:圆角外真透明(见 cornerAlpha 的注释)
+    let corner = null;
+    let cornerOk = true;
+    if (form === 'pill') {
+      corner = await cornerAlpha(send, evalJs);
+      cornerOk = corner.cornerAlpha === 0 && corner.centerAlpha > 200;
+    }
+    const pass = sizeOk && classOk && state.resizable === false && rowsOk && cornerOk;
     if (!pass) ok = false;
-    rows.push({ form, ...state, ew, eh, sizeOk, classOk, rowsOk, pass });
+    rows.push({ form, ...state, ew, eh, sizeOk, classOk, rowsOk, corner, cornerOk, pass });
   }
 
   // Win32 style bits: fixed-size window must have no resize border / maximize box
@@ -113,10 +165,16 @@ async function connect() {
   console.log('=== form verification ===');
   for (const r of rows) {
     console.log(
-      `  ${r.form.padEnd(8)} body=${r.bodyClass.padEnd(18)} tbar=${r.tbar.padEnd(6)} window=${r.w}x${r.h} expected=${r.ew}x${r.eh}  ` +
+      `  ${r.form.padEnd(8)} body=${r.bodyClass.padEnd(18)} tbar=${r.tbar.padEnd(6)} window=${r.w}x${r.h} expected=${r.form === 'pill' ? '132~242' : r.ew}x${r.eh}  ` +
       `switch=${r.sizeOk && r.classOk ? 'PASS' : 'FAIL'}  resizable=${r.resizable ? 'YES(BAD)' : 'no'}  ` +
       `rows=${r.visible}/${r.rows}${r.badge ? ' (' + r.badge + ')' : ''} ${r.rowsOk ? 'PASS' : 'FAIL(rows)'}`
     );
+    if (r.corner) {
+      console.log(
+        `           corners alpha=${r.corner.cornerAlpha} center alpha=${r.corner.centerAlpha} ` +
+        `(${r.corner.w}x${r.corner.h})  ${r.cornerOk ? 'PASS 角上真透明' : 'FAIL 圆角被直角底色盖住'}`
+      );
+    }
   }
 
   if (styleErr) {

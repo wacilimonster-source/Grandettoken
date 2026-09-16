@@ -37,13 +37,37 @@ if ($root -match '[^\x00-\x7F]') {
 $env:CC  = Join-Path $mingwBin 'gcc.exe'
 $env:CXX = Join-Path $mingwBin 'g++.exe'
 
+# ---- single-exe delivery: static WebView2 loader ----
+# `-lWebView2Loader.dll` only matches `libWebView2Loader.dll.a`. The crate's build
+# script copies the real DLL into its OUT_DIR and adds that dir to the search path;
+# which one wins depends on -L order. So before every build: 1) make sure our
+# static archive exists, 2) delete that DLL so only the archive can match.
+$wvArchive = Join-Path $root 'build\webview2-static\out\libWebView2Loader.dll.a'
+if (-not (Test-Path $wvArchive)) {
+  Write-Host "prep  static WebView2 loader archive"
+  & (Join-Path $PSScriptRoot 'make-webview2-static.ps1')
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path $wvArchive)) { throw "make-webview2-static.ps1 failed" }
+}
+$targetRoot = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $tauriDir 'target' }
+foreach ($profile in @('release', 'debug')) {
+  $buildDir = Join-Path $targetRoot (Join-Path $profile 'build')
+  if (-not (Test-Path $buildDir)) { continue }
+  Get-ChildItem -Path $buildDir -Directory -Filter 'webview2-com-sys-*' -EA SilentlyContinue |
+    ForEach-Object {
+      foreach ($n in @('WebView2Loader.dll', 'WebView2Loader.dll.lib')) {
+        $f = Join-Path $_.FullName ('out\x64\' + $n)
+        if (Test-Path $f) { Remove-Item $f -Force; Write-Host "strip $f (static link, single exe)" }
+      }
+    }
+}
+
 $coreDir = Join-Path $root 'app\core'
 
 Push-Location $tauriDir
 try {
   switch ($Task) {
-    # 逻辑层的测试独立跑:只链接 serde/rusqlite 等基础库,秒级完成,
-    # 不像 Tauri 二进制那样需要 WebView2 运行时才能启动。
+    # Core tests link only serde/rusqlite, so they run in a second and do not
+    # need the WebView2 runtime the way the Tauri binary does.
     'test-core' { Push-Location $coreDir; try { & cargo test } finally { Pop-Location } }
     'test'      { Push-Location $coreDir; try { & cargo test } finally { Pop-Location } }
     'check'     { & cargo check --all-targets }

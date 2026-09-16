@@ -24,6 +24,8 @@ function makeEl(id) {
     id, innerHTML: '', textContent: '', value: '', style: {}, dataset: {},
     classList: makeClassList(),
     addEventListener() {}, appendChild() {}, after() {}, remove() {}, focus() {},
+    setAttribute() {}, getAttribute: () => null, matches: () => false,
+    style: {}, classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
     querySelector: () => makeEl('q'),
     querySelectorAll: () => [],
     closest: () => null,
@@ -72,13 +74,32 @@ const windowMock = {
   __TAURI__: {
     core: { invoke },
     event: { listen: async () => {}, emit: async () => {} },
+    // 与 app.js 现在用的 API 对齐:Tauri 2 把尺寸类型放在 dpi 命名空间,
+    // 窗口对象上还有 setMinSize/setMaxSize/outerPosition/scaleFactor/onMoved/
+    // isAlwaysOnTop 等。写错命名空间或漏方法会让这个探针报出假故障。
     window: {
       getCurrentWindow: () => ({
         setSize: async () => {},
+        setMinSize: async () => {},
+        setMaxSize: async () => {},
         setResizable: async () => {},
         setAlwaysOnTop: async () => {},
+        setPosition: async () => {},
+        outerPosition: async () => ({ x: 0, y: 0 }),
+        outerSize: async () => ({ width: 380, height: 560 }),
+        scaleFactor: async () => 1,
+        isAlwaysOnTop: async () => false,
+        onMoved: async () => () => {},
       }),
+      currentMonitor: async () => ({
+        position: { x: 0, y: 0 },
+        size: { width: 1920, height: 1080 },
+        scaleFactor: 1,
+      }),
+    },
+    dpi: {
       LogicalSize: class LogicalSize { constructor(w, h) { this.w = w; this.h = h; } },
+      PhysicalPosition: class PhysicalPosition { constructor(x, y) { this.x = x; this.y = y; } },
     },
   },
 };
@@ -91,7 +112,8 @@ const ctx = {
     error: (...a) => logs.push(['ERROR', a.map(String).join(' ')]),
     warn: (...a) => logs.push(['warn', a.map(String).join(' ')]),
   },
-  setTimeout, clearTimeout, Math, Date, JSON, Number, String, Object, Array, Set, Map,
+  setTimeout, clearTimeout, setInterval, clearInterval,
+  Math, Date, JSON, Number, String, Object, Array, Set, Map,
   parseInt, parseFloat, isNaN, Promise, Error,
 };
 ctx.globalThis = ctx;
@@ -117,4 +139,6 @@ setTimeout(() => {
   console.log('=== console output ===');
   if (!logs.length) console.log('(none)');
   logs.forEach(([lv, msg]) => console.log('[' + lv + '] ' + msg));
+  // app.js 会注册 setInterval(贴边折叠等),不显式退出进程会一直挂着
+  process.exit(logs.some(([lv]) => lv === 'THROWN' || lv === 'UNHANDLED') ? 1 : 0);
 }, 400);

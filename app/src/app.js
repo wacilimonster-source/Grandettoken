@@ -9,10 +9,17 @@ const $ = (id) => document.getElementById(id);
 let CHANNELS = [];
 let CFG = null;
 let sparkCache = {};   // { [id]: {24:[],168:[],720:[]} }
+let sparkHours = {};   // { [id]: 当前选中的区间 },渲染详情时据此标记选中项
 
 const emit = (ev, payload) => T.event.emit(ev, payload);
 
 // ───────────── 格式化 ─────────────
+/** HTML 转义:接口返回的错误文案、渠道名等会直接进 innerHTML。
+    CSP 已经挡掉脚本执行,但把数据当 HTML 拼本身就该避免。 */
+const esc = (v) =>
+  String(v ?? "").replace(/[&<>"']/g, (ch) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch])
+  );
 const money = (v) => (v === null || v === undefined ? "——" : "¥" + v.toFixed(2));
 
 function relTime(ts) {
@@ -99,9 +106,9 @@ const LOGOS = {
 function iconHtml(c, cls = "ico", off = false) {
   const src = LOGOS[c.id];
   if (!src) {
-    return `<div class="${cls}" style="background:${off ? "#333a4a" : c.color}">${c.short}</div>`;
+    return `<div class="${cls}" style="background:${off ? "#333a4a" : c.color}">${esc(c.short)}</div>`;
   }
-  return `<div class="${cls} logo${off ? " off" : ""}"><img src="${src}" alt="${c.short}"></div>`;
+  return `<div class="${cls} logo${off ? " off" : ""}"><img src="${src}" alt="${esc(c.short)}"></div>`;
 }
 
 /** 自定义排序下的完整顺序:配置里列出的 + 未列入的(附在末尾,新增渠道不会丢)。 */
@@ -157,7 +164,10 @@ function renderSummary() {
   $("sum").innerHTML = cells
     .map(([label, v, est]) => {
       const txt = v === null ? "——" : money(v);
-      const note = v === null ? "数据不足" : est ? "推算" : `${am.length} 个渠道`;
+      // 计数要按"真正参与了求和"的渠道数 —— 有的渠道这个窗口还没数据,
+      // 用 am.length 会把没算进去的也算上,看起来像少加了钱
+      const contributors = am.filter((c) => v !== null && c[est ? "day" : "month"] != null).length;
+      const note = v === null ? "数据不足" : est ? "推算" : `${contributors} 个渠道`;
       return `<div class="cell"><div class="lb">${label}</div>
         <div class="vv">${txt}<span class="dl">${note}</span></div></div>`;
     })
@@ -257,7 +267,7 @@ function renderRow(c, i) {
 
   const src = c.stale
     ? `<div class="hint" style="color:var(--warn)">显示的是 ${relTime(c.updatedAt)} 的成功快照${
-        c.error ? " · " + c.error : ""
+        c.error ? " · " + esc(c.error) : ""
       }</div>`
     : `<div class="hint">更新于 ${relTime(c.updatedAt)}</div>`;
 
@@ -266,7 +276,7 @@ function renderRow(c, i) {
       <div class="r1">
         ${iconHtml(c, "ico", noKey || failed)}
         <div class="nm">
-          <div class="n"><span class="nn">${c.name}</span>${dot}</div>
+          <div class="n"><span class="nn">${esc(c.name)}</span>${dot}</div>
           <div class="s">${sub}</div>
         </div>
         <div class="val">
@@ -330,7 +340,7 @@ function renderDetail(c) {
   const kv = [...claimKv, ...(c.extra && c.extra.length ? c.extra : [])];
   const kvHtml = kv.length
     ? `<div class="kv">${kv
-        .map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`)
+        .map(([k, v]) => `<div><span>${esc(k)}</span><b>${esc(v)}</b></div>`)
         .join("")}</div>`
     : "";
 
@@ -349,14 +359,17 @@ function renderDetail(c) {
   const body = [];
   body.push(
     `<div class="seg">
-       <button class="on" data-act="range" data-id="${c.id}" data-h="24">近 24 小时</button>
-       <button data-act="range" data-id="${c.id}" data-h="168">近 7 天</button>
-       <button data-act="range" data-id="${c.id}" data-h="720">近 30 天</button>
+       ${[[24, "近 24 小时"], [168, "近 7 天"], [720, "近 30 天"]]
+         .map(
+           ([h, label]) =>
+             `<button class="${(sparkHours[c.id] || 24) === h ? "on" : ""}" data-act="range" data-id="${c.id}" data-h="${h}">${label}</button>`
+         )
+         .join("")}
      </div>`
   );
   if (c.error) {
     body.push(
-      `<div class="hint" style="color:var(--bad);margin:0 0 8px">${c.error}${
+      `<div class="hint" style="color:var(--bad);margin:0 0 8px">${esc(c.error)}${
         c.stale ? " · 下列数值为上次成功快照" : ""
       }</div>`
     );
@@ -496,12 +509,12 @@ function renderPillFace() {
     "dot" + (tone === "bad" ? " b" : tone === "warn" ? " w" : tone === "off" ? " o" : "");
   $("pillV").innerHTML =
     c.remaining === null
-      ? `${c.short} ——`
+      ? `${esc(c.short)} ——`
       : c.kind === "percent"
-        ? `${c.short} ${c.remaining.toFixed(1)}<i>%</i>`
-        : `${c.short} ${money(c.remaining)}`;
+        ? `${esc(c.short)} ${((remainRatio(c) ?? 0) * 100).toFixed(1)}<i>%</i>`
+        : `${esc(c.short)} ${money(c.remaining)}`;
 
-  const bits = [c.name];
+  const bits = [c.name];  // tooltip 是纯文本,不需要转义
   const r = remainRatio(c);
   if (!c.hasKey) bits.push("未配置密钥");
   else if (c.remaining === null) bits.push("取数失败");
@@ -512,6 +525,86 @@ function renderPillFace() {
   if (PILL.auto) bits.push("自动:最紧张的一个");
   else if (PILL.list.length > 1) bits.push(`${PILL.idx + 1}/${PILL.list.length} 轮播`);
   $("pill").title = bits.join(" · ");
+
+  fitPill();
+  drawTrayIcon();
+}
+
+/**
+ * 胶囊宽度随内容自适应:去掉图标后不再固定 200,能装下就行。
+ * 用离屏 span 量文本实际宽度(带同款字体),再加圆点/按钮/内边距的固定开销。
+ * 宽度变化小于 6px 就不动窗口,避免数值抖动时窗口一直跳。
+ */
+function fitPill() {
+  const el = $("pillV");
+  if (!el) return;
+  const probe = document.createElement("span");
+  probe.style.cssText =
+    "position:absolute;left:-9999px;top:-9999px;white-space:nowrap;visibility:hidden";
+  probe.style.font = getComputedStyle(el).font;
+  probe.textContent = el.textContent || "";
+  document.body.appendChild(probe);
+  const textW = probe.getBoundingClientRect().width;
+  probe.remove();
+  // 圆点 6 + 间距 8×2 + 展开按钮 22 + 内边距 16 ≈ 76
+  const w = Math.max(132, Math.min(240, Math.ceil(textW) + 76));
+  if (Math.abs(w - SIZES.pill[0]) >= 6) {
+    SIZES.pill = [w, 46];
+    if (currentForm() === "pill") applyForm("pill", false);
+  }
+}
+
+/**
+ * 托盘角标:和胶囊同一套逻辑(同一个渠道、同一个轮播位、同一个状态色),
+ * 托盘只有 16px,写数字看不清,所以角标是纯色点,数字放 tooltip。
+ */
+let trayKey = "";
+function drawTrayIcon() {
+  const c = PILL.list[PILL.idx] || null;
+  const tone = c ? toneOf(c) : "off";
+  const text = c
+    ? `${c.name} ${($("pillV").textContent || "").trim()}`
+    : PILL.sorted.some((x) => x.hasKey)
+      ? "渠道全部取数失败"
+      : "尚未配置密钥";
+  const key = tone + "|" + text;
+  if (key === trayKey) return; // 内容没变就不重画、不跨进程传数据
+  trayKey = key;
+
+  const S = 32;
+  const cv = document.createElement("canvas");
+  cv.width = S;
+  cv.height = S;
+  const g = cv.getContext("2d");
+  const r = 8;
+  const grad = g.createLinearGradient(0, 0, S, S);
+  grad.addColorStop(0, "#5b8cff");
+  grad.addColorStop(1, "#8b5bff");
+  g.beginPath();
+  g.moveTo(r, 0);
+  g.arcTo(S, 0, S, S, r);
+  g.arcTo(S, S, 0, S, r);
+  g.arcTo(0, S, 0, 0, r);
+  g.arcTo(0, 0, S, 0, r);
+  g.closePath();
+  g.fillStyle = grad;
+  g.fill();
+  g.globalCompositeOperation = "destination-out"; // 中间挖空,和标题栏图标同款
+  g.beginPath();
+  if (g.roundRect) g.roundRect(10, 10, 12, 12, 3);
+  else g.rect(10, 10, 12, 12);
+  g.fill();
+  g.globalCompositeOperation = "source-over";
+  g.beginPath();
+  g.arc(22.5, 22.5, 7, 0, Math.PI * 2); // 右下角标
+  g.fillStyle = TONE_HEX[tone];
+  g.fill();
+  g.lineWidth = 2;
+  g.strokeStyle = "#12141a";
+  g.stroke();
+
+  const rgba = Array.from(g.getImageData(0, 0, S, S).data);
+  invoke("set_tray_icon", { rgba, size: S, tooltip: text }).catch(() => {});
 }
 
 /** 管理页里的「额度申请」:每渠道一行开关,开启后展开额度/间隔/上次申请。 */
@@ -554,7 +647,7 @@ function renderClaimRows() {
       <div class="crow1">
         ${iconHtml(c, "ico", !on)}
         <div class="kmeta">
-          <div class="kn">${c.name}</div>
+          <div class="kn">${esc(c.name)}</div>
           <div class="ks">${state}</div>
         </div>
         <div class="sw${on ? " on" : ""}" data-act="claimtoggle" data-id="${c.id}"></div>
@@ -580,7 +673,7 @@ function renderOrderRows() {
     .map((c, i) => `<div class="orow" data-id="${c.id}">
         ${iconHtml(c, "ico", !c.hasKey)}
         <div class="kmeta">
-          <div class="kn">${c.name}</div>
+          <div class="kn">${esc(c.name)}</div>
           <div class="ks">${c.hasKey ? "已配置" : "未配置"}</div>
         </div>
         <button class="btn ord" data-act="ordermove" data-id="${c.id}" data-dir="-1"
@@ -596,7 +689,7 @@ function renderPillPick() {
   const sel = (CFG && CFG.pillChannels) || [];
   $("cfgPill").innerHTML = CHANNELS.map(
     (c) =>
-      `<button class="pick${sel.includes(c.id) ? " on" : ""}" data-act="pillpick" data-id="${c.id}">${c.name}</button>`
+      `<button class="pick${sel.includes(c.id) ? " on" : ""}" data-act="pillpick" data-id="${c.id}">${esc(c.name)}</button>`
   ).join("");
 }
 
@@ -610,6 +703,9 @@ const SIZES = {
 };
 
 async function applyForm(form, remember = true) {
+  if (!SIZES[form]) form = "panel"; // 白名单:老配置里的 form 可能是个已废弃的名字
+  // 切换到折叠形态时管理页没有意义(它的入口都在面板上),顺手关掉
+  if (form !== "panel" && manageOpen()) closeManage();
   document.body.className =
     "form-" + form + (manageOpen() ? " view-manage" : "");
   // 紧凑条整条可拖(里面没有需要点击的东西);面板里行要能点开,所以禁用
@@ -817,7 +913,7 @@ function renderKeyRows() {
       <div class="krow1">
         ${iconHtml(c, "ico", !c.hasKey)}
         <div class="kmeta">
-          <div class="kn">${c.name}</div>
+          <div class="kn">${esc(c.name)}</div>
           <div class="ks">${state}</div>
         </div>
         ${
@@ -868,6 +964,7 @@ $("list").addEventListener("click", async (e) => {
       openManage();
     } else if (a === "range") {
       const h = Number(act.dataset.h);
+      sparkHours[id] = h; // 记住选择,轮询重建详情时不会再跳回 24 小时
       sparkCache[id] = await invoke("get_series", { id, hours: h });
       document
         .querySelectorAll(`.seg button[data-id="${id}"]`)
@@ -1117,8 +1214,6 @@ bindSelect("cfgSort", "sort", String);
 bindSelect("cfgWarn", "warnPercent");
 bindSelect("cfgCrit", "critPercent");
 bindSwitch("cfgAutostart", "autostart", (on) => invoke("set_autostart", { enabled: on }));
-bindSwitch("cfgNotify", "notify");
-bindSwitch("cfgBlur", "collapseOnBlur");
 // 置顶走 set_pin:窗口与配置一起改,失败时 bindSwitch 会回滚开关
 bindSwitch("cfgPin", "alwaysOnTop", async (on) => {
   await invoke("set_pin", { enabled: on });
@@ -1138,8 +1233,6 @@ function applyConfigToUI() {
   set("cfgWarn", CFG.warnPercent);
   set("cfgCrit", CFG.critPercent);
   $("cfgAutostart").classList.toggle("on", !!CFG.autostart);
-  $("cfgNotify").classList.toggle("on", !!CFG.notify);
-  $("cfgBlur").classList.toggle("on", !!CFG.collapseOnBlur);
 }
 
 document.addEventListener("keydown", (e) => {

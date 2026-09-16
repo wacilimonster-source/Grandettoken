@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TokenScope 设计规范与优化看板</title>
+<style>
+  :root{
+    --bg:#f5f6f8; --card:#fff; --line:#e2e5ea; --line2:#eef0f4;
+    --tx:#1b1f28; --tx2:#5a6272; --tx3:#8b93a3;
+    --ac:#3d6fb5; --acb:#eef4fc;
+    --p0:#c0392b; --p0b:#fdf0ee; --p1:#b8730a; --p1b:#fdf7ea; --p2:#3d6fb5; --p2b:#eef4fc;
+    --ok:#1f8a5c;
+    --app-bg:#12141a; --app-bg3:#20242e; --app-line:#282d3a;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--tx);
+    font:14px/1.7 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+    padding:40px 24px 80px}
+  .wrap{max-width:1040px;margin:0 auto}
+  header{margin-bottom:30px}
+  .kicker{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--tx3);font-weight:600}
+  h1{font-size:27px;line-height:1.3;margin:8px 0 10px;letter-spacing:-.3px}
+  .lede{color:var(--tx2);font-size:14.5px;max-width:76ch}
+  .meta{margin-top:16px;display:flex;flex-wrap:wrap;gap:8px}
+  .meta span{font-size:12px;color:var(--tx2);background:var(--card);border:1px solid var(--line);
+    border-radius:999px;padding:3px 11px}
+  h2{font-size:17px;margin:40px 0 6px;padding-bottom:9px;border-bottom:1px solid var(--line)}
+  h2 .sub{font-size:12.5px;font-weight:400;color:var(--tx3);margin-left:8px}
+  h3{font-size:13.5px;margin:22px 0 10px;color:var(--tx2)}
+  .sec-note{font-size:13px;color:var(--tx3);margin:10px 0 16px;max-width:80ch}
+
+  /* ── 色板 ── */
+  .swatches{display:grid;grid-template-columns:repeat(auto-fill,minmax(184px,1fr));gap:10px}
+  .sw{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .sw .chip{height:56px;display:flex;align-items:center;justify-content:center;
+    font-size:13px;font-weight:600}
+  .sw .info{padding:9px 11px}
+  .sw .nm{font-size:12px;font-weight:600}
+  .sw .var{font-family:ui-monospace,Consolas,monospace;font-size:11px;color:var(--tx3);margin-top:1px}
+  .sw .use{font-size:11.5px;color:var(--tx2);margin-top:5px;line-height:1.5}
+  .ratio{display:inline-block;font-size:11px;font-weight:700;border-radius:4px;padding:1px 6px;
+    margin-top:6px;font-variant-numeric:tabular-nums}
+  .ratio.pass{background:#edf8f2;color:var(--ok);border:1px solid #c8e8d8}
+  .ratio.fail{background:var(--p0b);color:var(--p0);border:1px solid #f2cec9}
+  .sw.flag{border-color:#f2cec9;box-shadow:0 0 0 3px #fdf0ee}
+
+  /* ── 字号阶梯 ── */
+  .scale{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:16px 18px}
+  .scale-row{display:flex;align-items:baseline;gap:14px;padding:7px 0;border-bottom:1px solid var(--line2)}
+  .scale-row:last-child{border-bottom:0}
+  .scale-row .px{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:var(--tx3);
+    width:56px;flex:none;text-align:right}
+  .scale-row .demo{flex:1;min-width:0;color:var(--tx)}
+  .scale-row .where{font-size:11.5px;color:var(--tx3);width:210px;flex:none}
+  .scale-row.kill{opacity:.42}
+  .scale-row.kill .px::after{content:" → 并档";color:var(--p1);font-size:10px}
+  .scale-row.keep .px{color:var(--ok);font-weight:600}
+  .legend{display:flex;gap:16px;font-size:12px;color:var(--tx3);margin-top:12px;flex-wrap:wrap}
+  .legend i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px}
+
+  /* ── 形态图 ── */
+  .forms{display:flex;gap:26px;align-items:flex-end;flex-wrap:wrap;
+    background:var(--card);border:1px solid var(--line);border-radius:11px;padding:22px 20px}
+  .form-fig{text-align:center}
+  .form-box{background:var(--app-bg);border:1px solid var(--app-line);position:relative;
+    margin:0 auto;display:flex;align-items:center;justify-content:center}
+  .form-box span{font-size:9px;color:#646d80;font-family:ui-monospace,Consolas,monospace}
+  .form-fig .fn{font-size:12px;font-weight:600;margin-top:9px}
+  .form-fig .fs{font-size:11px;color:var(--tx3);font-family:ui-monospace,Consolas,monospace}
+  .form-fig .fd{font-size:11px;color:var(--tx2);margin-top:4px;max-width:170px;line-height:1.5}
+  .panel-b{width:152px;height:224px;border-radius:6px}
+  .compact-b{width:152px;height:19px;border-radius:4px}
+  .pill-b{width:80px;height:19px;border-radius:99px}
+  .dock-b{width:5px;height:38px;border-radius:2px;
+    background:linear-gradient(180deg,#3ecf8e,#3ecf8ecc);border-color:#3ecf8e}
+  .dock-b span{display:none}
+  .scale-note{font-size:11px;color:var(--tx3);margin-top:12px;text-align:center;width:100%}
+
+  /* ── 阈值条 ── */
+  .thresh{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:18px 20px}
+  .tbar{height:22px;border-radius:6px;overflow:hidden;display:flex;font-size:11px;
+    color:#fff;font-weight:600}
+  .tbar div{display:flex;align-items:center;justify-content:center}
+  .t-ok{background:#3ecf8e;color:#0d2b1e;flex:60}
+  .t-warn{background:#f0b23c;color:#3a2a06;flex:25}
+  .t-bad{background:#f0554d;flex:15}
+  .t-legend{display:flex;gap:18px;margin-top:12px;font-size:12px;color:var(--tx2);flex-wrap:wrap}
+  .t-legend b{font-family:ui-monospace,Consolas,monospace;font-size:11.5px}
+
+  /* ── IA 两栏 ── */
+  .ia{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .ia-col{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:15px 18px}
+  .ia-col h4{font-size:12.5px;margin-bottom:10px;display:flex;align-items:center;gap:7px}
+  .ia-col h4 em{font-style:normal;font-family:ui-monospace,Consolas,monospace;font-size:11px;
+    color:var(--tx3);font-weight:400}
+  .ia-col ul{list-style:none}
+  .ia-col li{font-size:12.5px;color:var(--tx2);padding:5px 0 5px 14px;position:relative;
+    border-bottom:1px solid var(--line2)}
+  .ia-col li:last-child{border-bottom:0}
+  .ia-col li::before{content:"";position:absolute;left:0;top:12px;width:5px;height:5px;
+    border-radius:50%;background:var(--line)}
+  .ia-col.show li::before{background:#3ecf8e}
+  .ia-col.cfg li::before{background:var(--ac)}
+  @media(max-width:720px){.ia{grid-template-columns:1fr}}
+
+  /* ── 优化看板 ── */
+  .board{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:8px}
+  @media(max-width:860px){.board{grid-template-columns:1fr}}
+  .col{background:#fbfcfd;border:1px solid var(--line);border-radius:12px;padding:14px}
+  .col > .ch{font-size:12.5px;font-weight:700;display:flex;align-items:center;
+    justify-content:space-between;margin-bottom:11px;padding-bottom:9px;
+    border-bottom:1px solid var(--line)}
+  .col .cnt{font-size:11px;font-weight:600;color:var(--tx3)}
+  .col.p0 > .ch{color:var(--p0)} .col.p1 > .ch{color:var(--p1)} .col.p2 > .ch{color:var(--p2)}
+  .item{background:#fff;border:1px solid var(--line);border-radius:9px;padding:10px 12px;
+    margin-bottom:9px}
+  .item:last-child{margin-bottom:0}
+  .item .ih{display:flex;align-items:baseline;gap:7px;font-size:12.5px;font-weight:600}
+  .item .tag{font-family:ui-monospace,Consolas,monospace;font-size:10.5px;font-weight:700;
+    color:var(--tx3);background:var(--line2);border-radius:4px;padding:1px 5px;flex:none}
+  .item .why{font-size:11.5px;color:var(--tx2);margin-top:4px;line-height:1.55}
+  .item .cost{font-size:10.5px;color:var(--tx3);margin-top:5px}
+  .cost em{font-style:normal;color:var(--ok);font-weight:600}
+  .cost em.mid{color:var(--p1)}
+  .cost em.hi{color:var(--p0)}
+
+  /* ── 落地顺序 ── */
+  .rounds{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin-top:8px}
+  .round{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:15px 17px;
+    border-top:3px solid var(--ac)}
+  .round h4{font-size:12.5px;margin-bottom:4px}
+  .round .rt{font-size:11px;color:var(--tx3);margin-bottom:9px}
+  .round ul{list-style:none}
+  .round li{font-size:12px;color:var(--tx2);padding:3px 0 3px 14px;position:relative}
+  .round li::before{content:"›";position:absolute;left:2px;color:var(--tx3)}
+
+  .warnbox{background:#fffdf5;border:1px solid #f0e6c8;border-radius:9px;padding:12px 15px;
+    font-size:13px;color:#6b5a1e;margin-top:14px;line-height:1.7}
+  footer{margin-top:46px;padding-top:18px;border-top:1px solid var(--line);
+    font-size:12.5px;color:var(--tx3);line-height:1.8}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">Design Spec · 可视化评审</div>
+  <h1>TokenScope 设计规范与优化看板</h1>
+  <p class="lede">
+    这是 <code>DESIGN.md</code> 的可视化版:把色板、字号阶梯、形态尺寸、状态阈值和优化项摊开看。
+    文字规范以 <code>DESIGN.md</code> 为准,本页只承载"需要看图才说得清"的部分。
+  </p>
+  <div class="meta">
+    <span>版本 1.0 · 2026-09-17</span>
+    <span>28 条优化建议</span>
+    <span>4 种形态</span>
+    <span>对比度为 WCAG 实测值</span>
+  </div>
+</header>
+
+<h2>1 · 色板与对比度 <span class="sub">在 --bg #12141a 上实测</span></h2>
+<p class="sec-note">
+  状态色全部达标,唯一不达标的是 <b>--tx3</b> —— 而它承载的恰恰是界面上最小最密的字(汇总条标签、
+  副标题、三格标签、底栏、行内说明)。这是投入产出比最高的一条优化。
+</p>
+
+<div class="swatches">
+  <div class="sw">
+    <div class="chip" style="background:#12141a;color:#e6e9f0;border-bottom:1px solid var(--line)">主文字</div>
+    <div class="info">
+      <div class="nm">--tx</div><div class="var">#e6e9f0</div>
+      <div class="use">渠道名、主数值、明细值</div>
+      <span class="ratio pass">15.1 : 1</span>
+    </div>
+  </div>
+  <div class="sw">
+    <div class="chip" style="background:#12141a;color:#9aa3b5;border-bottom:1px solid var(--line)">次要文字</div>
+    <div class="info">
+      <div class="nm">--tx2</div><div class="var">#9aa3b5</div>
+      <div class="use">按钮文字、可点击项、消耗数值</div>
+      <span class="ratio pass">7.3 : 1</span>
+    </div>
+  </div>
+  <div class="sw flag">
+    <div class="chip" style="background:#12141a;color:#646d80;border-bottom:1px solid var(--line)">标签 / 说明</div>
+    <div class="info">
+      <div class="nm">--tx3 <span style="color:var(--p0);font-weight:700">不达标</span></div>
+      <div class="var">#646d80</div>
+      <div class="use">10.5–11px 小字:汇总标签、副标题、三格标签、底栏</div>
+      <span class="ratio fail">3.54 : 1 · AA 需 4.5</span>
+    </div>
+  </div>
+  <div class="sw">
+    <div class="chip" style="background:#12141a;color:#7b8499;border-bottom:1px solid var(--line)">建议替换为</div>
+    <div class="info">
+      <div class="nm">--tx3 <span style="color:var(--ok);font-weight:700">达标</span></div>
+      <div class="var">#7b8499</div>
+      <div class="use">保持三级层次,同时满足 AA</div>
+      <span class="ratio pass">4.91 : 1</span>
+    </div>
+  </div>
+  <div class="sw">
+    <div class="chip" style="background:#12141a;color:#3ecf8e;border-bottom:1px solid var(--line)">正常</div>
+    <div class="info">
+      <div class="nm">--ok</div><div class="var">#3ecf8e</div>
+      <div class="use">剩余 &gt; 标黄线 · 主数值直接染色</div>
+      <span class="ratio pass">9.2 : 1</span>
+    </div>
+  </div>
+  <div class="sw">
+    <div class="chip" style="background:#12141a;color:#f0b23c;border-bottom:1px solid var(--line)">预警</div>
+    <div class="info">
+      <div class="nm">--warn</div><div class="var">#f0b23c</div>
+      <div class="use">标红线 &lt; 剩余 ≤ 标黄线 · 撑不到预警</div>
+      <span class="ratio pass">9.8 : 1</span>
+    </div>
+  </div>
+  <div class="sw">
+    <div class="chip" style="background:#12141a;color:#f0554d;border-bottom:1px solid var(--line)">危险</div>
+    <div class="info">
+      <div class="nm">--bad</div><div class="var">#f0554d</div>
+      <div class="use">剩余 ≤ 标红线 · 已限流</div>
+      <span class="ratio pass">5.4 : 1</span>
+    </div>
+  </div>
+  <div class="sw">
+    <div class="chip" style="background:#12141a;color:#5b8cff;border-bottom:1px solid var(--line)">强调</div>
+    <div class="info">
+      <div class="nm">--ac</div><div class="var">#5b8cff</div>
+      <div class="use">选中态、链接 hover、主按钮</div>
+      <span class="ratio pass">5.8 : 1</span>
+    </div>
+  </div>
+</div>
+
+<h2>2 · 字号阶梯 <span class="sub">现状 9 档 → 建议 5 档</span></h2>
+<p class="sec-note">
+  相邻差 0.5px 在 100% 缩放下不可分辨,却让"哪个用哪档"变成需要记忆的规则。
+  收敛后视觉更整齐,改版也可预期。
+</p>
+<div class="scale">
+  <div class="scale-row keep"><div class="px">20px</div>
+    <div class="demo" style="font-size:20px;font-weight:600;letter-spacing:-.4px">¥187.00</div>
+    <div class="where">主数值(列表行)</div></div>
+  <div class="scale-row"><div class="px">14px</div>
+    <div class="demo" style="font-size:14px;font-weight:600">OC 1.3%</div>
+    <div class="where">胶囊主数值 → 建议并入 15</div></div>
+  <div class="scale-row"><div class="px">13.5px</div>
+    <div class="demo" style="font-size:13.5px;font-weight:600">¥38.40</div>
+    <div class="where">汇总条数值 → 建议并入 13</div></div>
+  <div class="scale-row keep"><div class="px">13px</div>
+    <div class="demo" style="font-size:13px;font-weight:500">4SAPI &nbsp; OpenCode Go</div>
+    <div class="where">渠道名 · 保留</div></div>
+  <div class="scale-row"><div class="px">12.5px</div>
+    <div class="demo" style="font-size:12.5px">单次额度 &nbsp; 最短间隔</div>
+    <div class="where">管理页行标题 → 建议并入 13</div></div>
+  <div class="scale-row keep"><div class="px">12px</div>
+    <div class="demo" style="font-size:12px">管理页字段 · 三格数值 · chip</div>
+    <div class="where">正文 · 保留</div></div>
+  <div class="scale-row"><div class="px">11.5px</div>
+    <div class="demo" style="font-size:11.5px">三窗口数值 · 管理页字段</div>
+    <div class="where">→ 建议并入 12</div></div>
+  <div class="scale-row keep"><div class="px">11px</div>
+    <div class="demo" style="font-size:11px">副标题 · 三格标签 · 底栏 · 说明文字</div>
+    <div class="where">标签 · 保留(对比度见第 1 节)</div></div>
+  <div class="scale-row kill"><div class="px">10.5px</div>
+    <div class="demo" style="font-size:10.5px">今日消耗 · 推算</div>
+    <div class="where">汇总标签</div></div>
+</div>
+<div class="legend">
+  <span><i style="background:#1f8a5c"></i>保留档位</span>
+  <span><i style="background:#b8730a"></i>建议并档</span>
+  <span>建议最终阶梯:<b>11 / 12 / 13 / 15 / 20</b></span>
+</div>
+
+<h2>3 · 四形态尺寸 <span class="sub">按 0.4 倍比例绘制</span></h2>
+<p class="sec-note">
+  所有形态固定尺寸、不可拖拽改变大小。真正挡住拖拽的不是 min/max 钳位,而是窗口样式里没有
+  <code>WS_THICKFRAME</code> 和 <code>WS_MAXIMIZEBOX</code> —— Windows 对程序化
+  <code>SetWindowPos</code> 不套用 tracking 约束。
+</p>
+<div class="forms">
+  <div class="form-fig">
+    <div class="form-box panel-b"><span>380 × 560</span></div>
+    <div class="fn">面板</div><div class="fs">380 × 560</div>
+    <div class="fd">默认形态。一屏放下四个渠道</div>
+  </div>
+  <div class="form-fig">
+    <div class="form-box compact-b"><span>380 × 46</span></div>
+    <div class="fn">紧凑条</div><div class="fs">380 × 46</div>
+    <div class="fd">chip 条,放不下收进 +N</div>
+  </div>
+  <div class="form-fig">
+    <div class="form-box pill-b"><span>200×46</span></div>
+    <div class="fn">胶囊</div><div class="fs">200 × 46</div>
+    <div class="fd">只显示最紧张的一个</div>
+  </div>
+  <div class="form-fig">
+    <div class="form-box dock-b"><span>8×64</span></div>
+    <div class="fn">贴边</div><div class="fs">8 × 64</div>
+    <div class="fd">纯色竖条,刻意不显示数字</div>
+  </div>
+  <div class="scale-note">窗口 transparent + shadow:false,圆角外是真透明;body 自己就是那张卡片</div>
+</div>
+
+<h2>4 · 状态色阈值</h2>
+<div class="thresh">
+  <div class="tbar">
+    <div class="t-ok">绿 · 剩余 &gt; 40%</div>
+    <div class="t-warn">黄 · 15–40%</div>
+    <div class="t-bad">红 · &lt; 15%</div>
+  </div>
+  <div class="t-legend">
+    <span>默认 <b>--warn 40%</b> / <b>--crit 15%</b>,可在管理页「阈值」调整(黄 50/40/30/20 · 红 20/15/10/5)</span>
+    <span>灰 = 未配置密钥 <b>或</b> 取数失败 —— 两种语义目前共用一个灰点,建议拆分</span>
+  </div>
+  <div class="warnbox">
+    <b>配额型渠道的比例取「本月窗」剩余</b>,不取最紧窗口 —— 订阅按自然月结,5 小时 / 本周的波动不该左右整行观感。
+    <br><b>充值型(DeepSeek / Hapi)没有分母</b>,不画进度条、不参与百分比排序,状态恒为绿。
+  </div>
+</div>
+
+<h2>5 · 信息架构 <span class="sub">展示面与配置面互不重叠</span></h2>
+<div class="ia">
+  <div class="ia-col show">
+    <h4>展示面 <em>body 默认</em></h4>
+    <ul>
+      <li>标题栏 —— 计数 / 刷新 / 设置 / 置顶 / 切换紧凑条 / 隐藏</li>
+      <li>汇总条 —— 今日 / 本周 / 本月消耗合计(仅金额型)</li>
+      <li>渠道行 —— 图标 + 名称 + 状态点 + 主数值 + 口径 + 进度条 + 三格消耗</li>
+      <li>行展开 —— 区间切换 / 明细 KV / 迷你柱图 / 数据来源说明</li>
+      <li>底栏 —— 状态汇总 / 设置与管理 / 退出</li>
+    </ul>
+  </div>
+  <div class="ia-col cfg">
+    <h4>配置面 <em>body.view-manage</em></h4>
+    <ul>
+      <li>密钥 —— 每渠道状态 / 删除 / 输入 / 保存</li>
+      <li>额度申请 —— 开关 + 单次额度 / 最短间隔 / 上次申请日期</li>
+      <li>刷新 —— 展开态 / 折叠态 / 失败退避间隔</li>
+      <li>渠道顺序 —— ▲▼ 调自定义排序</li>
+      <li>胶囊显示 —— 多选芯片</li>
+      <li>显示 / 阈值 / 启动</li>
+    </ul>
+  </div>
+</div>
+<div class="warnbox">
+  <b>约束:展示区不放任何设置项。</b>行详情里只留一句「密钥、刷新与阈值在『设置与管理』里配置」的入口链接。
+  这条来自一次真实的设计失败 —— 改版前设置是下压面板、密钥藏在每个渠道的展开区里,两处分散且"管理密钥"入口名不副实。
+</div>
+
+<h2>6 · 优化看板 <span class="sub">28 条,按影响面 × 实施成本分级</span></h2>
+<div class="board">
+
+  <div class="col p0">
+    <div class="ch">P0 · 优先做 <span class="cnt">11 条</span></div>
+
+    <div class="item"><div class="ih"><span class="tag">A4</span>文字对比度达标</div>
+      <div class="why">--tx3 实测 3.54:1,低于 AA 的 4.5:1;提到 #7b8499 → 4.91:1</div>
+      <div class="cost">成本 <em>一行改动</em> · 全部小字受益</div></div>
+
+    <div class="item"><div class="ih"><span class="tag">A7</span>滚动条样式覆盖 .rbody</div>
+      <div class="why">行详情滚动时出现系统浅色滚动条,深色卡片里非常突兀</div>
+      <div class="cost">成本 <em>一行改动</em></div></div>
+
+    <div class="item"><div class="ih"><span class="tag">A3</span>状态点语义分层</div>
+      <div class="why">灰点同时表示"未配置"和"取数失败",语义完全不同</div>
+      <div class="cost">成本 <em>低</em> · 兼色盲可用性</div></div>
+
+    <div class="item"><div class="ih"><span class="tag">A11</span>焦点态与开关语义</div>
+      <div class="why">.sw 是 div,键盘完全不可达;所有控件都没有 :focus-visible</div>
+      <div class="cost">成本 <em>低</em> · 可达性合规</div></div>
+
+    <div class="item"><div class="ih"><span class="tag">B6</span>刷新按钮真实进度反馈</div>
+      <div class="why">动画 720ms 就结束,但取数是 4 个渠道串行、单渠道超时 20s;用户会重复点击</div>
+      <div class="cost">成本 <em class="mid">中低</em></div></div>
+
+    <div class="item"><div class="ih"><span class="tag">B7</span>汇总条恢复环比</div>
+      <div class="why">原型稿有 ↑12% / ↓4%,实现时去掉了;看不出"今天比昨天多花还是少花"</div>
+      <div class="cost">成本 <em class="mid">中</em> · 需历史同期数据</div></div>
+
+    <div class="item"><div class="ih"><span class="tag">B8</span>排序入口前置到展示区</div>
+      <div class="why">排序是高频操作,却藏在管理页 select 里,要 3 步才能改</div>
+      <div class="cost">成本 <em>低</em></div></div>
+
+    <div class="item"><div class="ih"><span class="tag">B9</span>+N 徽标可交互</div>
+      <div class="why">紧凑条藏起来的渠道只有纯文字 +N,点了没反应 —— 信息可见但不可达</div>
+      <div class="cost">成本 <em>低</em></div></div>
+
+    <div class="item"><div class="ih"><span class="tag">B12</span>原生对话框换自绘</div>
+      <div class="why">confirm / alert 与界面风格脱节,alert 还会阻塞;在无边框透明窗口上尤其突兀</div>
+      <div class="cost">成本 <em class="mid">中低</em></div></div>
+
+    <div class="item"><div class="ih"><span class="tag">B13</span>窗口位置持久化</div>
+      <div class="why">形态持久化了,位置没有;每次开机都要重新摆位置 —— 常驻挂件的基本预期</div>
+      <div class="cost">成本 <em class="mid">中</em></div></div>
+
+    <div class="item"><div class="ih"><span class="tag">B3</span>吸附展开态加关闭入口</div>
+      <div class="why">收回只能靠鼠标移出 1 秒;在设置页里操作时不收回 → 会卡在展开态</div>
+      <div class="cost">成本 <em>低</em></div></div>
+  </div>
+
+  <div class="col p1">
+    <div class="ch">P1 · 显著提升 <span class="cnt">12 条</span></div>
+
+    <div class="item"><div class="ih"><span class="tag">A1</span>建立设计令牌层</div>
+      <div class="why">字号散落 CSS + JS 内联样式;状态色在 JS 常量和 CSS 变量两处,容易走偏</div>
+      <div class="cost">成本 <em class="hi">中高</em> · 但一次投入长期受益</div></div>
+
+    <div class="item"><div class="ih"><span class="tag">A2</span>浅色主题</div>
+      <div class="why">白天浅色壁纸下对比过强;窗口已 transparent,只需换 body 底色与描边</div>
+      <div class="cost">成本 <em class="mid">中</em></div></div>
+
+    <div class="item"><div class="ih"><span class="tag">A5</span>字号阶梯收敛 9 → 5</div>
+      <div class="why">相邻差 0.5px 不可分辨,却需要记忆规则</div>
+      <div class="cost">成本 <em class="mid">中</em> · 配合 A1</div></div>
+
+    <div class="item"><div class="ih"><span class="tag">A6</span>恢复卡片外阴影</div>
+      <div class="why">原型稿有 0 22px 60px -12px #000,实现时因窗口边界裁切丢失;浅色壁纸上卡片浮不起来</div>
+      <div class="cost">成本 <em class="hi">中高</em> · 需留 10px 透明边距并重标尺寸</div></div>
+
+    <div class="item"><div class="ih"><span class="tag">A8</span>小尺寸图标清晰度</div>
+      <div class="why">DeepSeek 位图在 14–16px 下重采样,细节糊成一团</div>
+      <div class="cost">成本 <em class="mid">中低</em></div></div>
+
+    <div class="item"><div class="ih"><span class="tag">A9</span>动效规范统一</div>
+      <div class="why">进度条 / 行展开 / 刷新各用一套缓动;贴边展开是瞬变,在屏幕边缘"砸"出 380×560</div>
+      <div class="cost">成本 <em class="mid">中</em></div></div>
+
+    <div class="item"><div class="ih"><span class="tag">B1</span>吸附预览线</div>
+      <div class="why">吸附功能界面上零提示,新用户不可能发现;阈值 16px 也不可见</div>
+      <div class="cost">成本 <em class="mid">中</em></div></div>
+
+    <div class="item"><div class="ih"><span class="tag">B2</span>吸附展开分级</div>
+      <div class="why">鼠标路过 8px 竖条 150ms 就弹出完整面板,无法区分"路过"与"要看"</div>
+      <div class="cost">成本 <em class="mid">中</em> · 悬停预览 + 点击展开</div></div>
+
+    <div class="item"><div class="ih"><span class="tag">B4</span>胶囊轮播指示点</div>
+      <div class="why">5 秒切走会打断阅读,但暂停又"看起来像坏了" → 用指示点让"会变"可见,间隔放宽到 8–10s</div>
+      <div class="cost">成本 <em>低</em></div></div>
+
+    <div class="item"><div class="ih"><span class="tag">B5</span>点击穿透 / 锁定模式</div>
+      <div class="why">置顶挂件挡住下层窗口的鼠标操作 —— 桌面挂件最常见的抱怨</div>
+      <div class="cost">成本 <em class="mid">中</em></div></div>
+
+    <div class="item"><div class="ih"><span class="tag">B10</span>阈值告警行为出口</div>
+      <div class="why">notify 开关未接线,行内只有颜色变化;不盯着窗口就会错过</div>
+      <div class="cost">成本 <em class="mid">中</em> · 托盘角标 + 一次性呼吸</div></div>
+
+    <div class="item"><div class="ih"><span class="tag">B15</span>密钥保存成功反馈</div>
+      <div class="why">后端 key_hint 已实现未接线;用户无法确认存的是哪把 key</div>
+      <div class="cost">成本 <em>低</em> · 接线即可</div></div>
+
+    <div class="item"><div class="ih"><span class="tag">B17</span>托盘角标与菜单补全</div>
+      <div class="why">角标未实现;菜单缺"切换形态"与状态摘要</div>
+      <div class="cost">成本 <em class="mid">中</em></div></div>
+  </div>
+
+  <div class="col p2">
+    <div class="ch">P2 · 打磨与合规 <span class="cnt">5 条</span></div>
+
+    <div class="item"><div class="ih"><span class="tag">A10</span>prefers-reduced-motion</div>
+      <div class="why">所有动画无条件播放,对前庭敏感用户不友好</div>
+      <div class="cost">成本 <em>低</em></div></div>
+
+    <div class="item"><div class="ih"><span class="tag">A12</span>chip 信息完整性</div>
+      <div class="why">chip 显示 187,不知道是 ¥187 还是 187 积分;也没有 title</div>
+      <div class="cost">成本 <em>低</em></div></div>
+
+    <div class="item"><div class="ih"><span class="tag">B11</span>行展开多开选项</div>
+      <div class="why">单开是合理默认,但"对比两个渠道消耗"是真实场景</div>
+      <div class="cost">成本 <em>低</em></div></div>
+
+    <div class="item"><div class="ih"><span class="tag">B14</span>管理页切换过渡</div>
+      <div class="why">display 硬切,缺少空间关系提示</div>
+      <div class="cost">成本 <em>低</em></div></div>
+
+    <div class="item"><div class="ih"><span class="tag">B16</span>键盘与全局快捷键</div>
+      <div class="why">只有 Esc;原型稿承诺的 Alt+T 全局唤起未实现</div>
+      <div class="cost">成本 <em class="mid">中</em></div></div>
+  </div>
+
+</div>
+
+<h2>7 · 建议落地顺序</h2>
+<div class="rounds">
+  <div class="round">
+    <h4>第一轮 · 纯打磨</h4>
+    <div class="rt">不改结构,风险极低,用户立刻能感知</div>
+    <ul>
+      <li>A4 对比度</li><li>A7 滚动条</li><li>B6 刷新反馈</li>
+      <li>B9 +N 可交互</li><li>B12 换掉 confirm/alert</li><li>A11 焦点态</li>
+    </ul>
+  </div>
+  <div class="round">
+    <h4>第二轮 · 信息价值</h4>
+    <div class="rt">让界面回答"该不该充值"而不只是"还剩多少"</div>
+    <ul>
+      <li>B7 汇总环比</li><li>B8 排序前置</li>
+      <li>A3 状态点分层</li><li>B13 位置持久化</li>
+    </ul>
+  </div>
+  <div class="round">
+    <h4>第三轮 · 结构升级</h4>
+    <div class="rt">一次投入,长期降低改版成本</div>
+    <ul>
+      <li>A1 设计令牌</li><li>A5 字号收敛</li>
+      <li>A9 动效规范</li><li>A6 卡片外阴影</li>
+    </ul>
+  </div>
+  <div class="round">
+    <h4>第四轮 · 新能力</h4>
+    <div class="rt">扩展产品边界</div>
+    <ul>
+      <li>B5 点击穿透</li><li>B2 + B1 吸附分级与预览线</li>
+      <li>B4 轮播指示点</li><li>A2 浅色主题</li><li>B10/B17 告警闭环</li>
+    </ul>
+  </div>
+</div>
+
+<div class="warnbox">
+  <b>两个交叉依赖必须一起改:</b><br>
+  · <b>A6 卡片外阴影</b>会改变固定尺寸的标定值 —— <code>build/verify-form.js</code> 的
+  <code>EXPECT</code> 与 <code>win-style.ps1</code> 的断言必须同步更新,否则验证脚本会假失败。<br>
+  · <b>A2 浅色主题</b>落地前先做 <b>A4 对比度修正</b> —— 否则浅色下的层级关系要重新推导一遍。
+</div>
+
+<footer>
+  TokenScope 设计规范与优化看板 · 版本 1.0 · 2026-09-17<br>
+  文字规范与完整清单见仓库根目录 <code>DESIGN.md</code>;实现进展与踩坑记录见 <code>PROGRESS.md</code>。
+</footer>
+
+</div>
+</body>
+</html>

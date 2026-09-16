@@ -10,6 +10,14 @@
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;overflow:hidden}
+/* 别删这一行 —— 它看着没用,但它是圆角能生效的前提。
+   按 CSS 背景传播规则(Backgrounds 3 §2.11.2):根元素(html)的 background-color
+   为 transparent 且 background-image 为 none 时,body 的背景会被"提升"到根画布绘制,
+   而画布永远是整窗矩形、不吃 border-radius —— 结果就是圆角描边(body 的 border,
+   不参与传播)和直角底色同框。把 html 的 background-image 设成非 none,传播即被阻断,
+   body 自己按圆角画背景。实测(CDP 抓带 alpha 的页面截图):
+   加这行前窗口四角 rgba(18,20,26,238),加完 alpha=0,中心色值一字不变。 */
+html{background:linear-gradient(transparent,transparent)}
 body{
   background:var(--bg);color:var(--tx);border-radius:var(--r);
   border:1px solid var(--line);
@@ -236,13 +244,6 @@ body.view-manage #lkKeys{display:none}
 body.docked{display:flex;border:0;background:transparent;box-shadow:none}
 body.docked .dock-body{display:block}
 body.docked.dock-left .dock-body{border-radius:0 4px 4px 0}
-body.docked .tbar,
-body.docked .sum,
-body.docked .list,
-body.docked .foot,
-body.docked .manage,
-body.docked .cctl,
-body.docked .pill-body{display:none}
 .dock-body:hover{filter:brightness(1.15)}
 
 /* ── 形态 2:紧凑条(设计稿里的 chip 条) ── */
@@ -281,8 +282,9 @@ body.form-compact .more{flex:none;font-size:11px;color:var(--tx3);padding:3px 2p
   font-variant-numeric:tabular-nums}
 
 /* ── 形态 3:胶囊(只显示最紧张的一个平台) ── */
-body.form-pill{border-radius:999px;background:#12141aee;border-color:var(--line2);
-  backdrop-filter:blur(8px)}
+/* 不再用 backdrop-filter:透明窗口里浏览器采不到桌面当 backdrop,这属性本来
+   就是空转,还会让 Chromium 给 body 单开一层合成层(整窗暗块的隐患)。 */
+body.form-pill{border-radius:999px;background:#12141af2;border-color:var(--line2)}
 body.form-pill .tbar,
 body.form-pill .sum,
 body.form-pill .manage,
@@ -297,3 +299,15 @@ body.form-pill .pill-body{display:flex}
 .pill-body .t{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pill-body .t i{font-style:normal;font-size:inherit;font-weight:inherit;color:inherit}
+
+/* ── 吸附态:隐藏除竖条以外的一切 ──
+   必须放在所有形态规则之后:body.docked .x 与 body.form-compact .x 优先级相同(0-2-1),
+   同优先级按源码顺序取后者 —— 写在中间时,紧凑条/胶囊的 display:flex 会反过来把内容
+   重新显示出来,窗口只有 8px 宽,竖条会被挤没(实测:从面板吸附正常,从紧凑条/胶囊吸附看不到竖条)。 */
+body.docked .tbar,
+body.docked .sum,
+body.docked .list,
+body.docked .foot,
+body.docked .manage,
+body.docked .cctl,
+body.docked .pill-body{display:none}

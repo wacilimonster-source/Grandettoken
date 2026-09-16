@@ -7,6 +7,8 @@ app/src-tauri/gen/schemas/
 
 # ── 工具链(约 1 GB,绝不入库)──
 build/dl/
+# 静态 WebView2 加载器归档(由 make-webview2-static.ps1 从 cargo registry 现成产物重打)
+build/webview2-static/out/
 build/mingw64/
 build/git/
 

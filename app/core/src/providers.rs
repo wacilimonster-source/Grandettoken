@@ -112,9 +112,14 @@ pub fn extract_4sapi(body: &Value) -> FetchResult {
         .and_then(num)
         .unwrap_or(granted - available);
 
+    // 两者任一显式为 false 就是业务失败。之前写成 `||`,而正常响应里没有
+    // is_active,右侧恒为 true —— 整个表达式永远为真,`code:false` 被吞掉,
+    // 失败会被当成成功渲染出来。
+    let code_ok = body.get("code").and_then(|c| c.as_bool()).unwrap_or(true);
+    let active_ok = path(body, &["is_active"]).and_then(|c| c.as_bool()).unwrap_or(true);
+
     FetchResult {
-        valid: body.get("code").and_then(|c| c.as_bool()).unwrap_or(true)
-            || path(body, &["is_active"]).and_then(|c| c.as_bool()).unwrap_or(true),
+        valid: code_ok && active_ok,
         kind: Kind::Amount,
         remaining: Some(round2(available / RATE)),
         used: Some(round2(used / RATE)),
@@ -227,8 +232,14 @@ pub fn extract_deepseek(body: &Value) -> FetchResult {
     };
 
     let total_balance = info.get("total_balance").and_then(num);
-    let granted = info.get("granted_balance").and_then(num).unwrap_or(0.0);
-    let topped = info.get("topped_up_balance").and_then(num).unwrap_or(0.0);
+    // 缺字段就是"未知",不能拿 0.00 顶替 —— 界面会把"没这个数据"读成"余额是 0"
+    let mut extra = Vec::new();
+    if let Some(g) = info.get("granted_balance").and_then(num) {
+        extra.push(("赠送余额".to_string(), format!("¥{:.2}", g)));
+    }
+    if let Some(t) = info.get("topped_up_balance").and_then(num) {
+        extra.push(("充值余额".to_string(), format!("¥{:.2}", t)));
+    }
 
     FetchResult {
         valid: body
@@ -240,11 +251,7 @@ pub fn extract_deepseek(body: &Value) -> FetchResult {
         used: None,
         total: None, // 充值型无"限额"概念,不画进度条
         unit: "CNY".into(),
-        extra: vec![
-            ("赠送余额".into(), format!("¥{:.2}", granted)),
-            ("充值余额".into(), format!("¥{:.2}", topped)),
-            ("消耗来源".into(), "本地流水推算".into()),
-        ],
+        extra,
         ..Default::default()
     }
 }
@@ -381,6 +388,28 @@ mod tests {
         assert!(!r.valid);
         assert!(r.remaining.is_none());
         assert!(r.error.is_some());
+    }
+
+    /// 业务失败(HTTP 200 但 code:false)必须判为无效 —— 之前 `||` 写法会把它吞掉。
+    #[test]
+    fn four_s_api_business_failure_is_invalid() {
+        let r = extract_4sapi(&json!({
+            "code": false,
+            "data": { "total_granted": 1000, "total_available": 200, "total_used": 800 }
+        }));
+        assert!(!r.valid, "code:false 必须判为无效");
+        // is_active:false 同理(老的部署用它表示停用)
+        let r = extract_4sapi(&json!({
+            "is_active": false,
+            "data": { "total_granted": 1000, "total_available": 200, "total_used": 800 }
+        }));
+        assert!(!r.valid, "is_active:false 必须判为无效");
+        // 正常响应(两个字段都没有)仍然是有效的
+        let r = extract_4sapi(&json!({
+            "data": { "total_granted": 1000, "total_available": 200, "total_used": 800 }
+        }));
+        assert!(r.valid);
+        assert_eq!(r.remaining, Some(0.0)); // 200/500000 四舍五入到分
     }
 
     #[test]

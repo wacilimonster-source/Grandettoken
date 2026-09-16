@@ -456,6 +456,62 @@ OpenCode Go 与 DeepSeek 换成**官方标**,4SAPI / Hapi 仍是字母方块。
 - 紧凑条:百分比跟数字一致;**金额仍隐藏小数位**(紧凑条只有 46px 高,
   宽度也紧张,这条保持不变)
 
+### 追加调整 9(2026-09-17,缺陷审查 14 处 + 四个新功能)
+
+**A. bug-report-2026-09-17.html 的 14 处缺陷:逐条核验,全部处理**
+
+严重 3 处:
+1. `providers.rs` 4SAPI 的 valid 写成 `code.unwrap_or(true) || is_active.unwrap_or(true)`
+   —— 正常响应没有 `is_active`,右侧恒为 true,`code:false` 被吞掉当成功。改成
+   `code_ok && active_ok`,并补测试 `four_s_api_business_failure_is_invalid`。
+2. **CSS 层叠顺序**:`body.docked .xxx{display:none}` 与 `body.form-compact .list`
+   等等优先级相同(0-2-1),同优先级取后者 —— 从紧凑条/胶囊吸附时内容重新显示,
+   8px 窗口被 flex 一挤,竖条直接消失(只有从面板吸附正常)。把吸附态规则移到
+   样式表末尾。实测:三种形态吸附后竖条都稳定 8px。
+3. `fetch.rs` 消耗推算被 `result.valid` 连坐:取数失败时 day/week/month 一起置 None,
+   但那是本地快照推算、与网络无关。改为只看 `kind == Amount && remaining.is_some()`;
+   汇总条"N 个渠道"改为只数真正参与求和的渠道。
+
+中等 4 处:胶囊口径统一到本月窗;`renderDetail` 不再重置区间选择(记住 sparkHours);
+两个空开关(notify / collapse_on_blur)删除 —— 功能没实现,留着就是骗人;
+`key_hint` / `provider_meta` 前端从未调用,命令与注册一并删除。
+
+轻微 6 处:接口字符串进 innerHTML 前统一 `esc()` 转义;DeepSeek 缺字段不再冒充
+`¥0.00`(缺就不显示);`applyForm` 加形态白名单并顺手关掉管理页;
+删除三个必然抛错的陈旧 git 脚本(`build/git` 早已不存在);
+`probe-frontend.js` 的 mock 对齐 Tauri 2 API(`T.dpi.LogicalSize` + setMinSize 等,
+并让探针跑完自己退出);并发 cargo 打坏增量缓存那条记录在案。
+
+**B. 四个新功能**
+
+1. **OpenCode Go 三种形态都取本月窗**:此前只有面板用 `mainWindow()`,胶囊用的是
+   接口给的 `remaining`(最紧窗)。统一走 `remainRatio()` 后,面板/紧凑条/胶囊
+   的数字与状态色一致(实测:本月 96% vs 最紧窗 91%,三处都显示 96.0%)。
+2. **胶囊去掉软件图标、宽度自适应**:去掉 `.mark`,宽度用离屏 span 量文本后
+   取 132~240(变化小于 6px 不动窗口,避免数值抖动导致窗口跳)。实测 200 → **132**。
+3. **单 exe 交付(静态链接 WebView2 加载器)**:见下节。
+4. **托盘角标**:前端 canvas 画 32×32(外框图标同款造型 + 状态色角标),RGBA 交给
+   Rust 换成托盘图标,tooltip 放与胶囊完全相同的文字 —— 渠道选择、轮播位、
+   状态色都共用胶囊那一套逻辑(`PILL.list[PILL.idx]` + `toneOf`)。
+
+**C. 单 exe 是怎么做到的(重要)**
+
+- 机制:crate 里写的是 `#[link(name = "WebView2Loader.dll")]`,GNU ld 解析它时
+  **只找 `libWebView2Loader.dll.a`**。于是把 MSVC 的 `WebView2LoaderStatic.lib`
+  (10.5MB)与一个 MSVC CRT 垫片重打成同名归档,放进搜索路径。
+- 垫片(`build/webview2-static/msvc-shim.c` + `msvc-alias.S`)提供 MSVC CRT 里
+  gcc 没有的符号:`__security_cookie` / `__security_check_cookie`、线程安全魔法静态
+  三件套 `_Init_thread_header/footer/epoch`、`operator new/delete` 与 `std::nothrow`。
+  修饰名带 `?` `@`,GAS 要用带引号的符号名做汇编别名(`--defsym` 不接受这种名字)。
+- **关键坑**:ld 的候选后缀包含 `.lib`,所以只删 `WebView2Loader.dll` 不够 ——
+  导入库 `WebView2Loader.dll.lib` 会被优先命中,照样生成 DLL 依赖。两个都要删。
+  build.ps1 与 app/src-tauri/build.rs 各删一遍(前者每次构建都跑,后者让直接
+  `cargo build` 也正确)。
+- 验证:`objdump -p` 导入表里 WebView2Loader 计数 **0**;把 exe **单独**拷进空目录
+  启动,进程起来、WebView2 子进程 6 个、CDP 能读到正常渲染的 DOM(4 个渠道/13px 字号)。
+- 已知无害噪音:链接时 MSVC 对象的 `.drectve` 段会让 ld 报
+  `corrupt .drectve at end of def file`(MSVC 指令格式 ld 解析不了),不影响产物。
+
 ### 验证工具(本轮新增/扩展)
 
 - `build/verify-form.js`:三形态切换 + `resizable` + Win32 样式位(固定尺寸)。

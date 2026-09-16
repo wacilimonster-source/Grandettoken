@@ -51,12 +51,6 @@ fn delete_key(id: String) -> Result<(), String> {
     secrets::delete(&id)
 }
 
-/// 只回显尾 4 位,用于界面确认存的是哪把 key,不泄露完整密钥。
-#[tauri::command]
-fn key_hint(id: String) -> Option<String> {
-    secrets::masked(&id)
-}
-
 #[tauri::command]
 fn get_series(state: State<'_, AppState>, id: String, hours: i64) -> Vec<f64> {
     let from = now_ts() - hours * 3600;
@@ -66,23 +60,6 @@ fn get_series(state: State<'_, AppState>, id: String, hours: i64) -> Vec<f64> {
         .ok()
         .and_then(|s| s.series(&id, from, 24).ok())
         .unwrap_or_default()
-}
-
-#[tauri::command]
-fn provider_meta() -> Vec<serde_json::Value> {
-    providers::PROVIDERS
-        .iter()
-        .map(|p| {
-            serde_json::json!({
-                "id": p.id,
-                "name": p.name,
-                "short": p.short,
-                "color": p.color,
-                "url": p.url,
-                "unstable": p.unstable,
-            })
-        })
-        .collect()
 }
 
 /// 开机自启:写 HKCU 的 Run 键,不需要管理员权限。
@@ -123,6 +100,18 @@ mod autostart {
 #[tauri::command]
 fn set_autostart(enabled: bool) -> Result<(), String> {
     autostart::set(enabled)
+}
+
+/// 托盘角标。前端用 canvas 画好 32×32 的 RGBA(图标同款造型 + 状态色角标),
+/// 这里换成托盘图标并把文字放进 tooltip —— 托盘图标只有 16px,数字放 tooltip,
+/// 和胶囊共用同一套渠道与轮播逻辑。
+#[tauri::command]
+fn set_tray_icon(app: tauri::AppHandle, rgba: Vec<u8>, size: u32, tooltip: String) -> Result<(), String> {
+    let tray = app.tray_by_id("main").ok_or("托盘不存在")?;
+    let img = tauri::image::Image::new_owned(rgba, size, size);
+    tray.set_icon(Some(img)).map_err(|e| e.to_string())?;
+    tray.set_tooltip(Some(&tooltip)).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -299,11 +288,10 @@ pub fn run() {
             set_config,
             set_key,
             delete_key,
-            key_hint,
             get_series,
-            provider_meta,
             set_autostart,
             set_pin,
+            set_tray_icon,
             window_cmd,
         ])
         .run(tauri::generate_context!())
