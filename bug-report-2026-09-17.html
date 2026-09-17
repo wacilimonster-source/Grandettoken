@@ -59,6 +59,22 @@
   .sev.p1{background:var(--p1b);color:var(--p1);border:1px solid #f0e0bd}
   .sev.p2{background:var(--p2b);color:var(--p2);border:1px solid #d3e2f6}
   .sev.ok{background:var(--okb);color:var(--ok);border:1px solid #c8e8d8}
+  .sev.done{background:#edf8f2;color:#1f8a5c;border:1px solid #c8e8d8}
+  .sev.part{background:var(--p1b);color:var(--p1);border:1px solid #f0e0bd}
+
+  /* ── 复测结果块 ── */
+  .vres{border-radius:9px;padding:10px 13px;font-size:12.5px;margin:12px 0 2px;
+    line-height:1.65;border:1px solid;display:flex;gap:10px;align-items:flex-start}
+  .vres .vb{flex:none;font-weight:700;white-space:nowrap}
+  .vres .vc{min-width:0}
+  .vres.pass{background:#edf8f2;border-color:#c8e8d8;color:#1a5c42}
+  .vres.part{background:#fdf7ea;border-color:#f0e0bd;color:#6b4e0a}
+  .vres.pass .vc code,.vres.part .vc code{background:#ffffffb0}
+  .vres.pass .vc b,.vres.part .vc b{font-weight:700}
+  .vres.part .vc .res{color:#8c2a1f;font-weight:600}
+
+  /* ── 复测汇总表 ── */
+  .vtable td.st{white-space:nowrap;width:92px}
 
   /* ── bug 卡 ── */
   .bug{background:var(--card);border:1px solid var(--line);border-radius:13px;
@@ -107,51 +123,157 @@
 <div class="wrap">
 
 <header>
-  <div class="kicker">Code Review · 只读审查</div>
+  <div class="kicker">Code Review · 只读审查 + 修复复测</div>
   <h1>TokenScope 代码缺陷审查报告</h1>
   <p class="lede">
     对 <code>G:\game\nw\Grandettoken</code> 全仓(纯逻辑层 <code>app/core</code>、Tauri 外壳
     <code>app/src-tauri</code>、前端 <code>app/src</code>、构建脚本 <code>build/</code>)做了一轮完整缺陷排查。
     共确认 <b>14 处缺陷</b>,其中 <b>3 处会导致错误数据或明显功能失效</b>。
-    本报告只做定位与修复方案说明,<b>未改动任何源码</b>。
+    <br><br>
+    <b>2026-09-17 10:40 复测更新</b>:修复提交 <code>2b6615d</code> 已落地,
+    本报告已为每一条补上复测结论与证据。<b>10 处完全修复,4 处部分修复</b>(详见「复测遗留项」)。
   </p>
   <div class="meta">
-    <span>审查日期 2026-09-17</span>
-    <span>26 个单元测试实测通过</span>
-    <span>缺陷经最小复现验证</span>
-    <span>未修改源码</span>
+    <span>审查 2026-09-17</span>
+    <span>复测 2026-09-17 10:40</span>
+    <span>修复提交 2b6615d</span>
+    <span>27 个单元测试实测通过</span>
+    <span>真实 Chromium A/B 复现</span>
   </div>
 </header>
 
 <div class="stats">
-  <div class="stat s0"><div class="n">3</div><div class="l">严重 · 数据错误 / 功能失效</div></div>
-  <div class="stat s1"><div class="n">5</div><div class="l">中等 · 体验与一致性</div></div>
-  <div class="stat s2"><div class="n">6</div><div class="l">轻微 · 工具链 / 文档 / 防御</div></div>
-  <div class="stat sk"><div class="n">9</div><div class="l">已验证正常的关键面</div></div>
+  <div class="stat sk"><div class="n">10</div><div class="l">复测通过 · 完全修复</div></div>
+  <div class="stat s1"><div class="n">4</div><div class="l">部分修复 · 有遗留</div></div>
+  <div class="stat s0"><div class="n">0</div><div class="l">未修复</div></div>
+  <div class="stat s2"><div class="n">27</div><div class="l">单元测试全绿(26→27)</div></div>
 </div>
 
-<h2>缺陷索引</h2>
+<div class="note" style="margin:0 0 26px">
+  <b>复测方式:</b>逐条回到源码核对改动 + 用可执行手段独立复现,而不是只看提交信息。
+  其中缺陷 01 用 <code>rustc</code> 单独编译复刻表达式打印真值表、缺陷 02 用真实 Chromium
+  对修复前后的 <code>styles.css</code> 做 A/B 渲染对比、缺陷 04 用 Node 复算两种口径,
+  另外读取了运行中实例的 SQLite 快照库确认轮询链路仍在工作。
+  <b>本报告未修改任何源码。</b>
+</div>
+
+<h2>缺陷索引与复测状态</h2>
 <table>
   <thead>
-    <tr><th>#</th><th>缺陷</th><th>位置</th><th>级别</th></tr>
+    <tr><th>#</th><th>缺陷</th><th>位置</th><th>级别</th><th>复测</th></tr>
   </thead>
   <tbody>
-    <tr><td class="id">01</td><td>4SAPI 业务失败被判定为「取数成功」</td><td class="file">core/src/providers.rs:116</td><td><span class="sev p0">严重</span></td></tr>
-    <tr><td class="id">02</td><td>贴边吸附在紧凑条 / 胶囊形态下串味,竖条被挤没</td><td class="file">src/styles.css:236–293</td><td><span class="sev p0">严重</span></td></tr>
-    <tr><td class="id">03</td><td>取数失败清空本地推算的消耗,汇总条静默少算</td><td class="file">core/src/fetch.rs:272 / src/app.js:140</td><td><span class="sev p0">严重</span></td></tr>
-    <tr><td class="id">04</td><td>胶囊数值与面板 / 托盘不一致(OpenCode Go)</td><td class="file">src/app.js:497</td><td><span class="sev p1">中等</span></td></tr>
-    <tr><td class="id">05</td><td>管理页里点「切换紧凑条」→ 管理页消失、窗口塌成 46px</td><td class="file">src/styles.css:145 / 253</td><td><span class="sev p1">中等</span></td></tr>
-    <tr><td class="id">06</td><td>详情区间选择每次轮询被重置为「近 24 小时」</td><td class="file">src/app.js:350 / 405</td><td><span class="sev p1">中等</span></td></tr>
-    <tr><td class="id">07</td><td>「余额不足提醒」「失焦自动折叠」是空开关</td><td class="file">src/app.js:1120–1121</td><td><span class="sev p1">中等</span></td></tr>
-    <tr><td class="id">08</td><td>密钥尾号确认功能未接(<code>key_hint</code> 死代码)</td><td class="file">src-tauri/src/lib.rs:56 / 72</td><td><span class="sev p1">中等</span></td></tr>
-    <tr><td class="id">09</td><td>服务端字符串未转义直接进 <code>innerHTML</code></td><td class="file">src/app.js 多处</td><td><span class="sev p2">轻微</span></td></tr>
-    <tr><td class="id">10</td><td>DeepSeek 缺失字段用 0 顶替,违反「取不到给 null」</td><td class="file">core/src/providers.rs:230</td><td><span class="sev p2">轻微</span></td></tr>
-    <tr><td class="id">11</td><td><code>Config.form</code> 可能为已不存在的 <code>"edge"</code>,无白名单</td><td class="file">core/src/config.rs:64 / src/app.js:606</td><td><span class="sev p2">轻微</span></td></tr>
-    <tr><td class="id">12</td><td>Git 工具脚本互相矛盾:<code>setup-git.ps1</code> 已跑不起来</td><td class="file">build/setup-git.ps1:9</td><td><span class="sev p2">轻微</span></td></tr>
-    <tr><td class="id">13</td><td><code>probe-frontend.js</code> 的 mock 停留在 Tauri v1</td><td class="file">build/probe-frontend.js:81</td><td><span class="sev p2">轻微</span></td></tr>
-    <tr><td class="id">14</td><td>并发 cargo 打坏增量缓存 → rustc 内部错误</td><td class="file">build/build.ps1(缺保护)</td><td><span class="sev p2">轻微</span></td></tr>
+    <tr><td class="id">01</td><td>4SAPI 业务失败被判定为「取数成功」</td><td class="file">core/src/providers.rs:116</td><td><span class="sev p0">严重</span></td><td><span class="sev done">已修复</span></td></tr>
+    <tr><td class="id">02</td><td>贴边吸附在紧凑条 / 胶囊形态下串味,竖条被挤没</td><td class="file">src/styles.css:236–293</td><td><span class="sev p0">严重</span></td><td><span class="sev done">已修复</span></td></tr>
+    <tr><td class="id">03</td><td>取数失败清空本地推算的消耗,汇总条静默少算</td><td class="file">core/src/fetch.rs:272 / src/app.js:140</td><td><span class="sev p0">严重</span></td><td><span class="sev done">已修复</span></td></tr>
+  <div class="vres pass">
+    <div class="vb">复测:已修复</div>
+    <div class="vc">
+    <code>fetch.rs</code> 改为 <code>has_amount = result.kind == Kind::Amount &amp;&amp; result.remaining.is_some()</code>,
+    把 <code>result.valid</code> 摘掉 —— 取数失败但命中缓存时 <code>remaining</code> 仍为 <code>Some</code>,
+    日/周/月消耗继续按本地快照推算。<code>app.js</code> 的汇总计数改为只数真正参与求和的渠道。
+    <br><b>一处需留意(不是 bug,是陷阱):</b>计数表达式写成
+    <code>c[est ? "day" : "month"]</code>,拿「是否推算」这个布尔量去选字段名。
+    当前只有「本月」格会显示计数(<code>est=false</code> → 读 <code>c.month</code>,正确),
+    今日/本周格显示的是「推算」二字、计数被算出来但不使用,所以<b>实际行为正确</b>;
+    但表达式与语义不对应 —— 将来若给今日/本周也加上计数,就会读到错误的字段。
+  </div>
+  </div>
+    <tr><td class="id">04</td><td>胶囊数值与面板 / 托盘不一致(OpenCode Go)</td><td class="file">src/app.js:497</td><td><span class="sev p1">中等</span></td><td><span class="sev done">已修复</span></td></tr>
+    <tr><td class="id">05</td><td>管理页里点「切换紧凑条」→ 管理页消失、窗口塌成 46px</td><td class="file">src/styles.css:145 / 253</td><td><span class="sev p1">中等</span></td><td><span class="sev done">已修复</span></td></tr>
+    <tr><td class="id">06</td><td>详情区间选择每次轮询被重置为「近 24 小时」</td><td class="file">src/app.js:350 / 405</td><td><span class="sev p1">中等</span></td><td><span class="sev done">已修复</span></td></tr>
+    <tr><td class="id">07</td><td>「余额不足提醒」「失焦自动折叠」是空开关</td><td class="file">src/app.js:1120–1121</td><td><span class="sev p1">中等</span></td><td><span class="sev done">已修复</span></td></tr>
+  <div class="vres pass">
+    <div class="vb">复测:已修复(选择删除而非实现)</div>
+    <div class="vc">
+    两个开关从 <code>index.html</code> 移除,<code>bindSwitch</code> 绑定与 <code>applyConfigToUI</code>
+    的同步语句一并删除。实测前端引用数 <b>0</b>(<code>app.js</code> 与 <code>index.html</code> 各 0 处),
+    界面上不再出现「拨了没反应」的开关。
+    <br>残留(无害):<code>Config.notify</code> / <code>collapse_on_blur</code> 字段仍留在 Rust 配置结构里。
+    保留它们可以让老配置 JSON 继续可读,不算问题 —— 运行中实例的配置里确实还能看到
+    <code>notify: true</code>,但已无任何消费方。
+  </div>
+  </div>
+    <tr><td class="id">08</td><td>密钥尾号确认功能未接(<code>key_hint</code> 死代码)</td><td class="file">src-tauri/src/lib.rs:56 / 72</td><td><span class="sev p1">中等</span></td><td><span class="sev done">已修复</span></td></tr>
+  <div class="vres pass">
+    <div class="vb">复测:已修复(选择删除而非接线)</div>
+    <div class="vc">
+    <code>key_hint</code> 与 <code>provider_meta</code> 两个命令及其在
+    <code>invoke_handler</code> 里的注册项一并移除,全仓检索 0 处引用,死代码清理干净。
+    <br><b>需要知道的是</b>:密钥尾号确认这个<b>能力</b>因此不再计划提供 —— 管理页仍只有
+    「已保存 · 留空则不修改」,用户依然无法确认存的是哪把 key。若之后想要这个能力,需要重新实现。
+    <br>残留:<code>secrets::masked()</code> 现在没有调用方(它是公开 API,不会触发 dead_code 警告)。
+  </div>
+  </div>
+    <tr><td class="id">09</td><td>服务端字符串未转义直接进 <code>innerHTML</code></td><td class="file">src/app.js 多处</td><td><span class="sev p2">轻微</span></td><td><span class="sev part">部分修复</span></td></tr>
+    <tr><td class="id">10</td><td>DeepSeek 缺失字段用 0 顶替,违反「取不到给 null」</td><td class="file">core/src/providers.rs:230</td><td><span class="sev p2">轻微</span></td><td><span class="sev done">已修复</span></td></tr>
+    <tr><td class="id">11</td><td><code>Config.form</code> 可能为已不存在的 <code>"edge"</code>,无白名单</td><td class="file">core/src/config.rs:64 / src/app.js:606</td><td><span class="sev p2">轻微</span></td><td><span class="sev part">部分修复</span></td></tr>
+  <div class="vres part">
+    <div class="vb">复测:部分修复</div>
+    <div class="vc">
+    <b>已完成:</b><code>applyForm</code> 入口加了白名单
+    <code>if (!SIZES[form]) form = "panel"</code> —— 老配置里的非法形态名会安全回落到面板,
+    不会再产生一个没有任何 CSS 的 <code>form-edge</code> 类。
+    <br><span class="res">未完成:</span>过时注释没删 —— <code>config.rs:64</code> 仍写
+    <code>/// panel | compact | pill | edge</code>。虽然不再影响行为,
+    但它会误导下一个读代码的人去实现一个并不存在的形态。
+  </div>
+  </div>
+    <tr><td class="id">12</td><td>Git 工具脚本互相矛盾:<code>setup-git.ps1</code> 已跑不起来</td><td class="file">build/setup-git.ps1:9</td><td><span class="sev p2">轻微</span></td><td><span class="sev part">部分修复</span></td></tr>
+  <div class="vres part">
+    <div class="vb">复测:部分修复</div>
+    <div class="vc">
+    <b>已完成:</b>三个必然抛错的脚本删除 —— <code>setup-git.ps1</code>、<code>install-git.ps1</code>、
+    <code>check-git-env.ps1</code>。现在 <code>build/</code> 里不再有相互矛盾的 Git 工具。
+    <br><span class="res">未完成:</span><code>app/README.md</code> 未同步,两处过时 ——
+    <br>① 「结构」一节把 <code>providers.rs</code> / <code>store.rs</code> / <code>secrets.rs</code> /
+    <code>config.rs</code> 列在 <code>src-tauri/src/</code> 下,实际在 <code>core/src/</code>
+    (<code>src-tauri/src/</code> 只有 <code>lib.rs</code> / <code>main.rs</code>);结构图也缺
+    <code>core/</code>、<code>capabilities/</code>、<code>logos/</code>。
+    <br>② 第 104 行「开机自启和屏幕边缘吸附的开关已在设置里,但自动启动注册尚未接系统 API」——
+    自启早已用 winreg 实现,吸附也早已落地,这句是反的。
+  </div>
+  </div>
+    <tr><td class="id">13</td><td><code>probe-frontend.js</code> 的 mock 停留在 Tauri v1</td><td class="file">build/probe-frontend.js:81</td><td><span class="sev p2">轻微</span></td><td><span class="sev done">已修复</span></td></tr>
+    <tr><td class="id">14</td><td>并发 cargo 打坏增量缓存 → rustc 内部错误</td><td class="file">build/build.ps1(缺保护)</td><td><span class="sev p2">轻微</span></td><td><span class="sev part">部分修复</span></td></tr>
   </tbody>
 </table>
+
+<h2>复测遗留项 <span class="hint">4 处部分修复 —— 已完成的部分与仍需补的部分</span></h2>
+<table class="vtable">
+  <thead><tr><th>#</th><th>已完成</th><th>仍需补</th><th>严重度</th></tr></thead>
+  <tbody>
+    <tr>
+      <td class="id">09</td>
+      <td>新增 <code>esc()</code> 并应用到 <b>12 处</b>插值(渠道名、<code>short</code>、<code>error</code>、KV 明细、芯片、密钥行…)</td>
+      <td><code>refresh()</code> 的 catch 分支仍在拼裸字符串:<br><code>$("list").innerHTML = \`…\${e}\`</code>(<code>app.js:1256</code>)—— 全仓扫描后<b>只剩这一处</b>未转义</td>
+      <td><span class="sev p2">轻微</span></td>
+    </tr>
+    <tr>
+      <td class="id">11</td>
+      <td><code>applyForm</code> 入口加了白名单:<code>if (!SIZES[form]) form = "panel"</code>,非法形态值安全回落</td>
+      <td>过时注释未删:<code>config.rs:64</code> 仍写 <code>/// panel | compact | pill | edge</code>,而 <code>edge</code> 早已不是独立形态</td>
+      <td><span class="sev p2">轻微</span></td>
+    </tr>
+    <tr>
+      <td class="id">12</td>
+      <td>三个必然抛错的脚本已删除:<code>setup-git.ps1</code> / <code>install-git.ps1</code> / <code>check-git-env.ps1</code></td>
+      <td><code>app/README.md</code> 未同步:结构图把 <code>providers.rs</code>/<code>store.rs</code>/<code>secrets.rs</code>/<code>config.rs</code> 列在 <code>src-tauri/src/</code> 下(实际在 <code>core/src/</code>,且缺 <code>core/</code>、<code>capabilities/</code>、<code>logos/</code>);第 104 行仍称「开机自启…尚未接系统 API」(实际已用 winreg 实现)</td>
+      <td><span class="sev p2">轻微</span></td>
+    </tr>
+    <tr>
+      <td class="id">14</td>
+      <td>已在 <code>PROGRESS.md</code> 记录在案(「并发 cargo 打坏增量缓存那条记录在案」)</td>
+      <td><code>build/build.ps1</code> 仍未加并发保护。<b>本轮复测中再次实测到同类症状</b>:<code>cargo test</code> 报<br><code>error copying object file … rmeta to incremental directory: 拒绝访问 (os error 5)</code></td>
+      <td><span class="sev p2">轻微</span></td>
+    </tr>
+  </tbody>
+</table>
+<div class="note" style="margin-top:12px">
+  <b>一处自查更正:</b>原报告在缺陷 12 里写「<code>app/README.md</code> 仍在教用户跑
+  <code>.\build\install-git.ps1</code>」—— 复测时逐行核对,README 的「构建」一节<b>并没有</b>这句,
+  该说法有误。README 实际过时的是结构图路径与第 104 行的能力描述(见上表)。此处更正。
+</div>
 
 <h2>严重缺陷 <span class="hint">会导致错误数据、或让已实现的功能在特定路径下失效</span></h2>
 
@@ -159,6 +281,16 @@
 <div class="bug p0">
   <h3><span class="sev p0">严重 · 01</span>4SAPI 业务失败被判定为「取数成功」</h3>
   <div class="loc">app/core/src/providers.rs:116–117(同源问题见 providers.js:81)</div>
+  <div class="vres pass">
+    <div class="vb">复测:已修复</div>
+    <div class="vc">
+    改为 <code>code_ok &amp;&amp; active_ok</code>(两个字段各自 <code>unwrap_or(true)</code> 后取与),
+    逻辑与报告建议一致。用 <code>rustc</code> 单独编译复刻表达式跑真值表 <b>7/7 PASS</b>,
+    其中 <code>code:false</code> + <code>is_active</code> 缺失已由 <code>true</code> 变为 <b><code>false</code></b>;
+    新增测试 <code>four_s_api_business_failure_is_invalid</code> 覆盖 <code>code:false</code> 与
+    <code>is_active:false</code> 两条路径。实测 <code>cargo test</code> <b>27 个测试全绿</b>(26 → 27)。
+  </div>
+  </div>
   <dl>
     <dt>现象</dt>
     <dd>4SAPI 返回 <code>{"code": false, "msg": "…"}</code> 这类业务失败、但响应体里仍带着
@@ -206,6 +338,17 @@ None        None        -&gt; true
 <div class="bug p0">
   <h3><span class="sev p0">严重 · 02</span>贴边吸附在紧凑条 / 胶囊形态下串味,竖条被挤没</h3>
   <div class="loc">app/src/styles.css:236–246(docked 规则)vs 250 / 255 / 293(形态规则)</div>
+  <div class="vres pass">
+    <div class="vb">复测:已修复</div>
+    <div class="vc">
+    把 <code>body.docked</code> 那组规则<b>整体移到样式表末尾</b>,并补了注释说明「同优先级按源码顺序取后者」这个坑。
+    用真实 Chromium 对修复前后的 <code>styles.css</code> 做 A/B 渲染(8×64 视口,同一份 DOM):
+    <br>· 修复前 <code>form-compact docked</code> → 竖条 <b>0×64</b>(被挤没)、<code>list=flex</code>、<code>cctl=flex</code>
+    <br>· 修复前 <code>form-pill docked</code> → 竖条 <b>8×50</b>(被压矮)、<code>pill-body=flex</code>
+    <br>· 修复后三种形态 → 竖条均 <b>8×64</b>,其余元素全部 <code>display:none</code>
+    <br><b>原症状被完整复现并消除</b>,不再是「坐标断言通过、视觉没核对」。
+  </div>
+  </div>
   <dl>
     <dt>现象</dt>
     <dd>在<b>紧凑条</b>或<b>胶囊</b>形态下把窗口拖到屏幕边缘吸附,窗口确实缩成 8×64,但被隐藏的表单内容又被显示了出来:
@@ -285,6 +428,16 @@ const note = v === null ? "数据不足" : est ? "推算" : <span class="bad">`$
 <div class="bug p1">
   <h3><span class="sev p1">中等 · 04</span>胶囊数值与面板 / 托盘不一致(OpenCode Go)</h3>
   <div class="loc">app/src/app.js:497–502(胶囊)对照 183 / 43–52(面板与配色)</div>
+  <div class="vres pass">
+    <div class="vb">复测:已修复</div>
+    <div class="vc">
+    <code>renderPillFace</code> 改用 <code>remainRatio(c)</code>(与面板、紧凑条、贴边竖条、状态色同源)。
+    Node 复算(构造「本月窗 96% / 最紧窗 9%」的数据):
+    <br>· 修复前:胶囊 <b>9.0%</b> vs 面板 96.0% —— 数字与颜色互相矛盾
+    <br>· 修复后:面板 / 紧凑条 / 胶囊 / 托盘四处均 <b>96.0%</b>
+    <br>顺带把贴边竖条染色与面板大数字统一到同一口径。
+  </div>
+  </div>
   <dl>
     <dt>现象</dt>
     <dd>OpenCode Go 的三个限流窗口松紧不同时,同一个时刻<b>面板显示「本月 80.0%」而胶囊显示「OC 10.0%」</b>,
@@ -316,6 +469,18 @@ const note = v === null ? "数据不足" : est ? "推算" : <span class="bad">`$
 <div class="bug p1">
   <h3><span class="sev p1">中等 · 05</span>管理页里点「切换紧凑条」→ 管理页消失、窗口塌成 46px</h3>
   <div class="loc">app/src/styles.css:145 vs 253 · app/src/app.js:933–935</div>
+  <div class="vres pass">
+    <div class="vb">复测:已修复(方案不同但更彻底)</div>
+    <div class="vc">
+    <code>applyForm</code> 入口加了守卫 <code>if (form !== "panel" &amp;&amp; manageOpen()) closeManage()</code> ——
+    切到折叠形态时先关掉管理页,非法组合从源头不可达。
+    <br><b>需要知道的是</b>:导致该现象的 CSS 层叠本身<b>没有改</b>
+    (<code>body.view-manage .manage{display:flex}</code> 仍在形态规则之前),实测
+    <code>form-compact view-manage</code> 的 <code>.manage</code> 依然解析为 <code>none</code>。
+    当前该状态不可达(全仓只有 <code>applyForm</code> 会写 <code>body.className</code>,而它已被守卫生效),
+    但若将来新增形态或新增 <code>.manage</code> 相关规则,这个陷阱还在。
+  </div>
+  </div>
   <dl>
     <dt>现象</dt>
     <dd>打开「设置与管理」后,标题栏那排按钮仍然可见,点其中的 <code>▬</code>(切换紧凑条):
@@ -345,6 +510,13 @@ const note = v === null ? "数据不足" : est ? "推算" : <span class="bad">`$
 <div class="bug p1">
   <h3><span class="sev p1">中等 · 06</span>详情区间选择每次轮询被重置为「近 24 小时」</h3>
   <div class="loc">app/src/app.js:350–356(渲染时写死选中态)与 405–413(轮询重建 DOM)</div>
+  <div class="vres pass">
+    <div class="vb">复测:已修复</div>
+    <div class="vc">
+    新增 <code>sparkHours</code> 记录每行当前选中的区间,<code>renderDetail</code> 按它决定哪个按钮带
+    <code>on</code> 类 —— 轮询重建详情时选中态与柱图数据一起还原,不再跳回「近 24 小时」。
+  </div>
+  </div>
   <dl>
     <dt>现象</dt>
     <dd>展开某个渠道,点「近 7 天」,柱图切成 7 天数据;等下一个轮询周期(默认 60 秒)刷新后,
@@ -441,6 +613,18 @@ app/src-tauri/src/lib.rs:302:   key_hint,                                  <span
 <div class="bug p2">
   <h3><span class="sev p2">轻微 · 09</span>服务端字符串未转义直接进 <code>innerHTML</code></h3>
   <div class="loc">app/src/app.js 多处模板拼接 · 数据来源见 core/src/providers.rs:260–265</div>
+  <div class="vres part">
+    <div class="vb">复测:部分修复 —— 12 处已转义,1 处漏网</div>
+    <div class="vc">
+    新增统一的 <code>esc()</code>(转义 <code>&amp; &lt; &gt; " '</code>)并应用到 <b>12 处</b>插值:
+    渠道名、<code>short</code>、<code>error</code>、KV 明细键值、胶囊数值、芯片、密钥行、订单行、额度申请行。
+    <br><span class="res">仍剩 1 处漏网:</span>全仓扫描 <code>innerHTML</code> 赋值点后,只有
+    <code>refresh()</code> 的 catch 分支还在拼裸字符串 ——
+    <code>$("list").innerHTML = `&lt;div class="empty"&gt;&lt;b&gt;取数失败&lt;/b&gt;${e}&lt;/div&gt;`</code>(<code>app.js:1256</code>)。
+    <br>该处的 <code>e</code> 是 Tauri IPC 的拒绝原因,通常是自己生成的文案,风险低;
+    但既然本轮已经引入 <code>esc()</code>,补上只是一行。
+  </div>
+  </div>
   <dl>
     <dt>现象</dt>
     <dd>Hapi 的错误文案是<b>原样透传接口返回值</b>的(<code>d.get("error").as_str()</code>),
@@ -460,6 +644,14 @@ app/src-tauri/src/lib.rs:302:   key_hint,                                  <span
 <div class="bug p2">
   <h3><span class="sev p2">轻微 · 10</span>DeepSeek 缺失字段用 0 顶替,违反「取不到给 null」</h3>
   <div class="loc">app/core/src/providers.rs:230–231</div>
+  <div class="vres pass">
+    <div class="vb">复测:已修复</div>
+    <div class="vc">
+    改为按字段是否存在决定要不要加入 <code>extra</code>:缺失就不显示该行,不再冒充 <code>¥0.00</code>。
+    <br>顺带变化:原来固定带的「消耗来源 · 本地流水推算」一行被去掉了 ——
+    该信息由行详情底部的固定说明文字(「消耗为本地快照推算值…」)承载,不重复,属合理精简。
+  </div>
+  </div>
   <dl>
     <dt>现象</dt>
     <dd>接口没返回 <code>granted_balance</code> / <code>topped_up_balance</code> 时,详情页会显示
@@ -522,6 +714,17 @@ ls: cannot access 'build/git': No such file or directory
 <div class="bug p2">
   <h3><span class="sev p2">轻微 · 13</span><code>probe-frontend.js</code> 的 mock 停留在 Tauri v1</h3>
   <div class="loc">build/probe-frontend.js:75–83</div>
+  <div class="vres pass">
+    <div class="vb">复测:已修复</div>
+    <div class="vc">
+    mock 对齐到 Tauri 2:<code>LogicalSize</code> / <code>PhysicalPosition</code> 移进 <code>dpi</code> 命名空间,
+    补齐 <code>setMinSize</code> / <code>setMaxSize</code> / <code>setPosition</code> / <code>outerPosition</code> /
+    <code>outerSize</code> / <code>scaleFactor</code> / <code>isAlwaysOnTop</code> / <code>onMoved</code> /
+    <code>currentMonitor</code>,并补上 <code>setInterval</code> 与 <code>process.exit</code> 让探针跑完自己退出。
+    <br>实测运行结果:<code>console output = (none)</code>、<code>body.className = "form-panel"</code>、
+    invoke 顺序 <code>get_config, get_channels</code> —— 不再报出与实机相反的假故障。
+  </div>
+  </div>
   <dl>
     <dt>现象</dt>
     <dd>这个「在 Node 里用假 DOM 跑 app.js」的诊断工具,它的 mock 把尺寸类型放在
@@ -541,6 +744,17 @@ ls: cannot access 'build/git': No such file or directory
 <div class="bug p2">
   <h3><span class="sev p2">轻微 · 14</span>并发 cargo 打坏增量缓存 → rustc 内部错误</h3>
   <div class="loc">build/build.ps1(无并发保护)</div>
+  <div class="vres part">
+    <div class="vb">复测:部分修复 —— 已记录,未加保护</div>
+    <div class="vc">
+    已在 <code>PROGRESS.md</code> 记录在案(「并发 cargo 打坏增量缓存那条记录在案」),
+    <code>build.ps1</code> 本身未加并发保护。
+    <br><b>本轮复测再次实测到同类症状:</b>运行 <code>cargo test</code> 时出现
+    <code>error copying object file … rmeta to incremental directory as …: 拒绝访问。(os error 5)</code>。
+    这次没有阻断构建(测试仍 27 项全绿),但说明增量目录的并发写入问题依然存在。
+    <br>建议仍在 <code>build.ps1</code> 开头加一个目标目录下的 lock 文件,存在则直接报错退出并给出提示。
+  </div>
+  </div>
   <dl>
     <dt>现象</dt>
     <dd>同时跑两个 cargo 进程(例如后台一个 <code>cargo test</code>、前台一个 <code>cargo build</code>)之后,
@@ -566,7 +780,9 @@ cargo clean -p tokenscope-core &amp;&amp; cargo build     <span class="cm">→ F
 <h2>已验证正常的关键面 <span class="hint">这些地方查过、没问题,不必再怀疑</span></h2>
 <div class="oklist">
   <ul>
-    <li><b>单元测试全绿。</b>实际执行 <code>cargo test</code>(app/core),<b>26 个测试全部通过</b>,0 失败,耗时 0.00s。渠道解析、快照消耗推算、申请制倒计时与跳升检测、老配置兼容都有覆盖。</li>
+    <li><b>单元测试全绿。</b>实际执行 <code>cargo test</code>(app/core),<b>27 个测试全部通过</b>(修复前 26 个,新增 <code>four_s_api_business_failure_is_invalid</code>),0 失败。渠道解析、快照消耗推算、申请制倒计时与跳升检测、老配置兼容都有覆盖。</li>
+    <li><b>单 exe 交付已成立(独立核验)。</b><code>objdump -p</code> 读 release exe 的导入表:只有 <code>KERNEL32</code> / <code>user32</code> / <code>ole32</code> / <code>api-ms-win-*</code> 等系统 DLL,<b><code>WebView2Loader</code> 计数为 0</b> —— 原先阻塞交付的加载期 DLL 依赖已消除。体积 5.09 MB。</li>
+    <li><b>运行中的实例是修复后的构建且工作正常。</b>进程 <code>PID 58820</code> 启动于 03:09:50,晚于 exe 构建时间 03:07:45;读取它的 SQLite 快照库:四个渠道各累计 850–864 条快照,最近一条在 21–22 秒前写入,间隔约 63 秒(与 <code>activeIntervalSec=60</code> + 抖动一致)—— 轮询、取数、落库、降级这条主链路在真实环境里持续工作,已稳定运行约 1 小时 20 分。</li>
     <li><b>Tauri ACL 权限集完整。</b>核对 <code>gen/schemas/acl-manifests.json</code>:<code>core:window:default</code> 已包含 <code>scale-factor</code> / <code>outer-position</code> / <code>outer-size</code> / <code>is-always-on-top</code> / <code>current-monitor</code>,<code>capabilities/default.json</code> 又补齐了 <code>set-size</code> / <code>set-min-size</code> / <code>set-max-size</code> / <code>set-resizable</code> / <code>set-always-on-top</code> / <code>set-position</code> / <code>start-dragging</code>。贴边与形态切换用到的窗口 API <b>全部有权限</b>,不存在「ACL 拒绝被 catch 吞掉」的历史问题。</li>
     <li><b>密钥不落盘。</b><code>secrets.rs</code> 只与 Windows 凭据管理器交互,不写 JSON / SQLite / 日志;<code>.gitignore</code> 覆盖了 <code>*.db</code> / <code>*.db-wal</code> / 凭据类文件;<code>git ls-files</code> 里没有任何数据库或密钥文件。</li>
     <li><b>「取不到不给 0」的核心契约在正常路径上成立。</b><code>remaining</code> / <code>used</code> / <code>total</code> 全线是 <code>Option&lt;f64&gt;</code>,序列化为 <code>null</code>;快照窗口无基线时返回 <code>None</code> 而非 0(有测试锁定)。仅缺陷 01 / 10 两处例外。</li>
@@ -582,28 +798,51 @@ cargo clean -p tokenscope-core &amp;&amp; cargo build     <span class="cm">→ F
 <table>
   <thead><tr><th>缺陷</th><th>验证手段</th><th>结论</th></tr></thead>
   <tbody>
-    <tr><td class="id">01</td><td>用 <code>rustc</code> 单独编译复刻表达式,输出 6 行真值表</td><td><code>code:false</code> + <code>is_active</code> 缺失 → <code>true</code>,确认失效</td></tr>
-    <tr><td class="id">02 / 05</td><td>脚本解析 <code>styles.css</code>,按 CSS 优先级 + 源码顺序计算 6 组 body 类组合下 <code>display</code> 的胜出规则</td><td>3 处「应为 none 实为 flex」、1 处「应为 flex 实为 none」,与静态阅读结论一致</td></tr>
-    <tr><td class="id">03</td><td>对照 <code>fetch.rs</code> 组视图分支与 <code>app.js</code> 汇总分支的代码路径</td><td>失败降级把 <code>valid</code> 置 false → 消耗被连坐清空;汇总分子分母口径不一致</td></tr>
-    <tr><td class="id">04</td><td>Node 复刻 Rust 的 <code>remaining</code> 取值与前端 <code>mainWindow()</code>,构造三窗口数据对比</td><td>面板 80.0% vs 胶囊 10.0%,且颜色按 80% 算,确认不一致</td></tr>
-    <tr><td class="id">07 / 08</td><td>全仓检索 <code>notify</code> / <code>collapse_on_blur</code> / <code>key_hint</code> / <code>provider_meta</code> 的所有引用</td><td>均为「只定义/只注册,无消费方」</td></tr>
-    <tr><td class="id">12</td><td><code>ls -d build/git</code></td><td>目录不存在,脚本必然抛错</td></tr>
-    <tr><td class="id">14</td><td>后台 <code>cargo test</code> 与前台 <code>cargo build</code> 并发后重跑 build;<code>cargo clean -p</code> 后重试</td><td>崩溃稳定复现,clean 后立即恢复</td></tr>
-    <tr><td class="id">—</td><td><code>cargo test</code>(app/core)、<code>node --check</code>、<code>git ls-files</code>、读取 <code>acl-manifests.json</code></td><td>26 测试通过 / 语法无误 / 无密钥入库 / ACL 完整</td></tr>
+    <tr><td class="id">01</td><td>用 <code>rustc</code> 单独编译复刻<b>修复前与修复后</b>两个表达式,各输出 7 行真值表;再跑 <code>cargo test</code></td><td>修复前 <code>code:false</code> → <code>true</code>(失效);修复后 7/7 PASS;27 个测试全绿</td></tr>
+    <tr><td class="id">02</td><td>用无头 Chromium 加载<b>真实 <code>styles.css</code></b>(当前版与 <code>1e66ba0</code> 版各一份)与复刻的 DOM,在 8×64 视口下读取 <code>getComputedStyle</code> 与 <code>getBoundingClientRect</code></td><td>修复前 compact+docked 竖条 <b>0×64</b>、pill+docked <b>8×50</b>;修复后三种形态均 <b>8×64</b>。原症状完整复现并消除</td></tr>
+    <tr><td class="id">03</td><td>对照 <code>fetch.rs</code> 组视图分支与 <code>app.js</code> 汇总分支的修复后代码路径</td><td><code>valid</code> 已从消耗推算条件中移除;汇总计数改为只数参与者(发现一处语义不对应但当前无影响的表达式)</td></tr>
+    <tr><td class="id">04</td><td>Node 复算 Rust 的 <code>remaining</code> 取值与前端 <code>mainWindow()</code>/<code>remainRatio()</code>,用同一组三窗口数据对比修复前后</td><td>修复前胶囊 9.0% vs 面板 96.0%;修复后三处均 96.0%</td></tr>
+    <tr><td class="id">05</td><td>读取 <code>applyForm</code> 当前实现,并重跑 CSS 层叠计算脚本确认 <code>form-compact view-manage</code> 的解析结果</td><td>守卫已加、状态不可达;<b>但 CSS 层叠本身未改</b>,仍解析为 <code>none</code>(潜在陷阱)</td></tr>
+    <tr><td class="id">06 / 07</td><td>读取修复后代码;全仓检索 <code>cfgNotify</code> / <code>cfgBlur</code> / <code>notify</code> / <code>collapseOnBlur</code> 的所有引用</td><td>区间状态已引入;<b>两个开关前端引用数 0</b>,已彻底移除</td></tr>
+    <tr><td class="id">08</td><td>全仓检索 <code>key_hint</code> / <code>provider_meta</code> / <code>masked</code></td><td>命令与注册项已删、0 处引用;发现 <code>secrets::masked()</code> 变为孤儿</td></tr>
+    <tr><td class="id">09</td><td>脚本扫描 <code>app.js</code> 全部 14 处 <code>innerHTML</code> 赋值点,筛出含插值且未过 <code>esc()</code> 的</td><td>12 处已转义,<b>1 处漏网</b>(<code>refresh()</code> 的 catch 分支)</td></tr>
+    <tr><td class="id">10 / 11</td><td>读取修复后 <code>providers.rs</code> 与 <code>applyForm</code>;检索 <code>config.rs</code> 中的 <code>edge</code></td><td>DeepSeek 已改为按字段存在与否决定;白名单已加,<b>但过时注释仍在</b></td></tr>
+    <tr><td class="id">12</td><td><code>git diff --name-status</code> 核对删除文件;<code>ls build/</code> 确认;<b>逐行核对</b> <code>app/README.md</code></td><td>三个脚本已删;<code>README.md</code> 未同步(结构图路径 + 第 104 行能力描述)</td></tr>
+    <tr><td class="id">13</td><td>读取 mock 改动并<b>实际运行</b> <code>node build/probe-frontend.js</code></td><td>0 报错、正常退出、invoke 顺序正确</td></tr>
+    <tr><td class="id">14</td><td>检索 <code>build.ps1</code> 是否加锁;复测中再次并发执行 cargo</td><td>未加锁;再次实测到 <code>os error 5</code> 同类症状(未阻断构建)</td></tr>
+    <tr><td class="id">—</td><td><code>cargo test</code>(app/core)、<code>node --check</code> × 4、<code>git ls-files</code>、读取 <code>acl-manifests.json</code></td><td>27 测试通过 / 语法无误 / 无密钥入库 / ACL 完整</td></tr>
+    <tr><td class="id">—</td><td><code>objdump -p</code> 读 release exe 导入表;比对 exe 构建时间与源码修改时间;读取运行中实例的 SQLite 快照库</td><td>exe 仅导入系统 DLL、<b>WebView2Loader 计数 0</b>(单 exe 成立);exe(03:07:45)晚于全部源码改动;四个渠道 21 秒前刚写入快照,轮询链路正常</td></tr>
+    <tr><td class="id">—</td><td>Python <code>ctypes</code> 调 <code>user32</code> 只读探测运行中实例的顶层窗口:<code>EnumWindows</code> + <code>GetWindowLong</code> + <code>GetWindowRect</code> + <code>GetDpiForWindow</code></td><td><code>GWL_STYLE=0x14CA0000</code>(无 <code>WS_THICKFRAME</code> / 无 <code>WS_MAXIMIZEBOX</code>)、<code>WS_EX_TOPMOST=True</code>、矩形 <b>132×46</b>(配置为 <code>form:pill</code>,新 <code>fitPill()</code> 自适应宽度在真机生效)</td></tr>
   </tbody>
 </table>
 
 <div class="note">
-  <b>关于「修复后效果」的说明:</b>本报告只给出定位与修复方向,<b>没有改动任何源码</b>。
-  上表中的「修复后效果」是基于代码路径推导出的预期行为,实际改动后仍建议按项目既有做法
-  (真实进程 + CDP 断言 + 截图核对)做一轮运行时验证 —— 缺陷 02 / 05 尤其如此,
-  它们正是「坐标断言通过、视觉没核对」才会漏掉的那一类。
+  <b>关于复测结论的边界:</b>本轮复测以「源码核对 + 可执行手段独立复现」为准,没有改动任何源码。
+  缺陷 02 已在真实 Chromium 引擎里对修复前后的样式表做了 A/B 渲染,是视觉层的确证;
+  其余各条以真值表、单元测试、脚本复算与全仓检索为证。
+  <br><br>
+  <b>运行中窗口已用 Win32 只读探测核验(不打扰实例、不移动窗口):</b>
+  对正在运行的实例(<code>PID 58820</code>,即修复后的构建)枚举顶层窗口,读取
+  <code>GWL_STYLE</code> / <code>GWL_EXSTYLE</code> / 窗口矩形 / DPI:
+  <br>· 主窗口 <code>class="Tauri Window"</code>、<code>visible=True</code>、<code>dpi=120</code>(125%)
+  <br>· <code>GWL_STYLE = 0x14CA0000</code> → <b><code>WS_THICKFRAME=False</code>、<code>WS_MAXIMIZEBOX=False</code></b> —— 固定尺寸契约在真机成立(与项目此前记录的实测值一致)
+  <br>· <code>WS_EX_TOPMOST=True</code> —— 与配置里的 <code>alwaysOnTop: true</code> 一致
+  <br>· 窗口矩形 <b>132 × 46</b> —— 配置当前是 <code>form: pill</code>,而修复前胶囊固定 200;
+  现在是 <b>132</b>,说明本轮新增的 <code>fitPill()</code> 自适应宽度在真机上确实生效
+  <br><br>
+  <b>唯一未做的一项:</b>没有对运行中的窗口做「拖到屏幕边缘」的端到端实测 ——
+  那需要用 <code>SendInput</code> 真实拖动鼠标,会移动你桌面上的窗口。
+  缺陷 02 的机制已被分别验证(窗口 resize 的代码路径刚在胶囊上实测生效;吸附态 CSS 在真实 Chromium 里 8×64 确认),
+  但如果你要那一锤定音,我可以用真实鼠标输入跑一次(窗口会临时被拖到边缘再拖回)。
+  <br>另外说明:尝试过用<b>第二个隐藏实例</b>开调试端口来做 CDP 验证,但 WebView2 在同一
+  user-data 目录下多实例共用一个浏览器进程,第二个实例拿不到独立调试端点,已放弃并清理,未影响你的实例。
 </div>
 
 <footer>
-  TokenScope 代码缺陷审查报告 · 生成于 2026-09-17<br>
+  TokenScope 代码缺陷审查报告 · 审查 2026-09-17 · 复测 2026-09-17 10:40<br>
   审查范围:app/core、app/src-tauri、app/src、build/、providers.js(共 44 个入库文件)<br>
-  本报告未修改任何源码文件。
+  修复提交 <code>2b6615d</code>(+ <code>7f1555f</code> 清理)· 复测结论:10 处完全修复 / 4 处部分修复 / 0 处未修复<br>
+  本报告未修改任何源码。
 </footer>
 
 </div>

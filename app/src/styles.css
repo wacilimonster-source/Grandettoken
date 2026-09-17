@@ -218,6 +218,7 @@ body.view-manage #lkKeys{display:none}
 .krow1 .ico{width:24px;height:24px;font-size:10px;border-radius:7px}
 .kmeta{flex:1;min-width:0}
 .krow .kn{font-size:12.5px;font-weight:500;display:flex;align-items:center;gap:6px}
+.krow .ks .kh{color:var(--tx3);font-variant-numeric:tabular-nums}
 .krow .ks{font-size:11px;color:var(--tx3);margin-top:1px;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
 .krow2{display:flex;gap:6px}

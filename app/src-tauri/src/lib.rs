@@ -38,6 +38,13 @@ fn set_config(state: State<'_, AppState>, config: Config) -> Result<(), String> 
     Ok(())
 }
 
+/// 只回显尾 4 位,用于确认每个渠道存的到底是哪把 key(存错 key 却以为是接口坏了,
+/// 是最难排查的一类问题)。不回显完整密钥。
+#[tauri::command]
+fn key_hint(id: String) -> Option<String> {
+    secrets::masked(&id)
+}
+
 #[tauri::command]
 fn set_key(id: String, key: String) -> Result<(), String> {
     if providers::find(&id).is_none() {
@@ -292,6 +299,7 @@ pub fn run() {
             set_autostart,
             set_pin,
             set_tray_icon,
+            key_hint,
             window_cmd,
         ])
         .run(tauri::generate_context!())

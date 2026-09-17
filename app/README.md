@@ -69,28 +69,40 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 
 ```
 app/
-  src/                    前端(纯静态,无打包器)
-    index.html
-    styles.css
-    app.js
-  src-tauri/
+  core/                   纯逻辑层,不依赖 Tauri(可独立跑测试)
     src/
       providers.rs        渠道定义 + 响应解析(带单元测试)
       store.rs            SQLite 快照与消耗推算(带单元测试)
       secrets.rs          Windows 凭据管理器封装
-      config.rs           设置项
-      lib.rs              命令、托盘、轮询调度
+      config.rs           设置项(含申请制额度、胶囊渠道、自定义排序)
+      fetch.rs            取数、失败降级、视图组装(带单元测试)
+  src/                    前端(纯静态,无打包器)
+    index.html
+    styles.css
+    app.js
+    logos/                渠道官方图标(来源与版权见该目录 README)
+  src-tauri/
+    src/
+      lib.rs              命令、托盘、轮询调度、开机自启、置顶
+    capabilities/         Tauri 2 ACL:窗口尺寸/位置/置顶等权限
+    build.rs              链接静态 WebView2 加载器(单 exe 交付)
     tauri.conf.json
     icons/
 build/
   install-toolchain.ps1   免管理员工具链安装
-  build.ps1               构建入口
+  build.ps1               构建入口(含单 exe 的静态加载器准备)
+  make-webview2-static.ps1 把 MSVC 静态加载器 + CRT 垫片重打成 GNU 归档
+  webview2-static/        垫片源码(msvc-shim.c / msvc-alias.S)
+  verify-form.js          三形态 / 固定尺寸 / 圆角透明的 CDP 断言
+  win-style.ps1           读运行中窗口的 Win32 样式位
+  launch-debug.ps1        带调试端口启动,stdout/stderr 落盘
+  cdp-probe.js            读运行中实例的 DOM 状态
   gen-icons.js            图标生成(手写 PNG/ICO,无依赖)
 ```
 
 ## 加新渠道
 
-1. 在 `providers.rs` 写一个 `extract_xxx(&Value) -> FetchResult`
+1. 在 `app/core/src/providers.rs` 写一个 `extract_xxx(&Value) -> FetchResult`
 2. 加一条 `ProviderDef` 到 `PROVIDERS` 数组
 3. 加一个 `#[test]` 覆盖正常返回和错误分支
 
@@ -101,4 +113,7 @@ build/
 - OpenCode Go 的接口未公开,无稳定性保证,响应结构变化时该渠道会显示取数失败。
   渠道定义里标了 `unstable: true`,便于界面上区分。
 - OpenCode Zen 的按量付费 credits 余额没有公开接口,只能在网页控制台查看。
-- 开机自启和屏幕边缘吸附的开关已在设置里,但自动启动注册尚未接系统 API。
+- 开机自启已接通系统 API(winreg 写 HKCU Run 键,启动时按当前 exe 路径重写);
+  贴边吸附也已落地(拖到屏幕左/右边缘松手即吸附,鼠标移入展开、移出 1 秒收回)。
+- 单 exe 交付:exe 静态链接 WebView2 加载器,不再需要旁边的 `WebView2Loader.dll`
+  (见 `app/src-tauri/build.rs` 与 `build/make-webview2-static.ps1`)。

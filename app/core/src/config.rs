@@ -61,7 +61,7 @@ pub struct Config {
     /// 窗口置顶(全局开关)。折叠形态没有置顶按钮,所以置顶状态要能持久化;
     /// 面板的 📌 按钮与设置项共用这一个值,避免两处状态打架。
     pub always_on_top: bool,
-    /// panel | compact | pill | edge
+    /// panel | compact | pill(贴边不是独立形态,是这三种形态之上的吸附态)
     pub form: String,
     /// percent | balance | dayUsage
     pub sort: String,

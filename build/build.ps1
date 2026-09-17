@@ -63,6 +63,22 @@ foreach ($profile in @('release', 'debug')) {
 
 $coreDir = Join-Path $root 'app\core'
 
+# ---- one build at a time ----
+# Two cargo processes sharing one target dir corrupt the incremental cache:
+# rustc then panics with "no entry found for key" (or "os error 5" while copying
+# rmeta), which reads like a compiler bug and wastes an hour. Refuse to start
+# when another build holds the lock. A lock older than 2h is treated as stale.
+$lockFile = Join-Path $targetRoot '.build-lock'
+New-Item -ItemType Directory -Force -Path $targetRoot | Out-Null
+if (Test-Path $lockFile) {
+  $age = (Get-Date) - (Get-Item $lockFile).LastWriteTime
+  if ($age.TotalHours -lt 2) {
+    throw "another build is running (lock: $lockFile, age $([math]::Round($age.TotalMinutes)) min). Wait for it, or delete the file if you are sure nothing else is building."
+  }
+  Write-Host "warn  stale build lock ($([math]::Round($age.TotalHours,1))h old) - taking over"
+}
+Set-Content -Path $lockFile -Value $PID -Encoding ASCII
+
 Push-Location $tauriDir
 try {
   switch ($Task) {
@@ -78,5 +94,6 @@ try {
   }
   if ($LASTEXITCODE -ne 0) { throw "task '$Task' failed with exit code $LASTEXITCODE" }
 } finally {
+  Remove-Item $lockFile -Force -EA SilentlyContinue
   Pop-Location
 }

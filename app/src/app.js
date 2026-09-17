@@ -152,22 +152,25 @@ function renderSummary() {
     if (!vals.length) return null;
     return vals.reduce((a, b) => a + b, 0);
   };
+  // 每格显式带上自己的字段名与注释文案 —— 不要拿"是否推算"去推字段名,
+  // 那种写法今天恰好对,给今日/本周也加计数时就会读到错的字段
   const cells = [
-    ["今日消耗", sum("day"), true],
-    ["本周消耗", sum("week"), true],
-    ["本月消耗", sum("month"), false],
+    { label: "今日消耗", field: "day", note: "推算" },
+    { label: "本周消耗", field: "week", note: "推算" },
+    { label: "本月消耗", field: "month", note: null },
   ];
   if (!am.length) {
     $("sum").innerHTML = "";
     return;
   }
   $("sum").innerHTML = cells
-    .map(([label, v, est]) => {
+    .map(({ label, field, note: cellNote }) => {
+      const v = sum(field);
       const txt = v === null ? "——" : money(v);
       // 计数要按"真正参与了求和"的渠道数 —— 有的渠道这个窗口还没数据,
       // 用 am.length 会把没算进去的也算上,看起来像少加了钱
-      const contributors = am.filter((c) => v !== null && c[est ? "day" : "month"] != null).length;
-      const note = v === null ? "数据不足" : est ? "推算" : `${contributors} 个渠道`;
+      const contributors = am.filter((c) => c[field] != null).length;
+      const note = v === null ? "数据不足" : cellNote || `${contributors} 个渠道`;
       return `<div class="cell"><div class="lb">${label}</div>
         <div class="vv">${txt}<span class="dl">${note}</span></div></div>`;
     })
@@ -657,6 +660,19 @@ function renderClaimRows() {
   }).join("");
 }
 
+/** 异步补每把 key 的尾号(IPC 一次一个,失败就留空,不影响其它信息)。 */
+function fillKeyHints() {
+  CHANNELS.filter((c) => c.hasKey).forEach(async (c) => {
+    try {
+      const hint = await invoke("key_hint", { id: c.id });
+      const el = document.querySelector(`.kh[data-hint="${c.id}"]`);
+      if (el && hint) el.textContent = " · " + hint;
+    } catch {
+      /* 拿不到就不显示,不打扰 */
+    }
+  });
+}
+
 /** 轮询刷新时更新状态;输入框还聚焦着就不重建,免得打断编辑。 */
 function refreshClaimRows() {
   if (!manageOpen()) return;
@@ -914,7 +930,7 @@ function renderKeyRows() {
         ${iconHtml(c, "ico", !c.hasKey)}
         <div class="kmeta">
           <div class="kn">${esc(c.name)}</div>
-          <div class="ks">${state}</div>
+          <div class="ks">${state}<span class="kh" data-hint="${c.id}"></span></div>
         </div>
         ${
           c.hasKey
@@ -942,6 +958,7 @@ function openManage() {
   // 这三块都只在管理页里出现,而轮询渲染会因为"页面没打开"跳过它们,
   // 所以打开时主动建一次,不然第一次进来会是空的
   renderKeyRows();
+  fillKeyHints();
   renderPillPick();
   renderOrderRows();
   renderClaimRows();
@@ -1253,7 +1270,7 @@ async function refresh() {
     CHANNELS = list;
     render();
   } catch (e) {
-    $("list").innerHTML = `<div class="empty"><b>取数失败</b>${e}</div>`;
+    $("list").innerHTML = `<div class="empty"><b>取数失败</b>${esc(e)}</div>`;
   }
 }
 
