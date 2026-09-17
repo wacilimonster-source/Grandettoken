@@ -1404,7 +1404,9 @@ async function refresh() {
     if (real !== CFG.alwaysOnTop) CFG.alwaysOnTop = real;
   } catch {}
   applyPinUI();
-  await applyForm(CFG.form || "panel", false);
+  // 启动一律面板形态:安装后(以及每天开机)先看到完整信息,而不是上次留下的
+  // 紧凑条 / 胶囊。CFG.form 仍会记录用户的选择,只是不再用于启动恢复。
+  await applyForm("panel", false);
   await refresh();
 
   listen("channels-updated", (ev) => {

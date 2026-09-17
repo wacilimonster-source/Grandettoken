@@ -78,7 +78,9 @@ mod autostart {
     use winreg::RegKey;
 
     const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-    const NAME: &str = "TokenScope";
+    const NAME: &str = "Grandettoken";
+    /// 改名前的键名:停用/同步时一并清掉,避免残留一个指向已删除 exe 的自启项
+    const LEGACY_NAME: &str = "TokenScope";
 
     pub fn set(enabled: bool) -> Result<(), String> {
         let (key, _) = RegKey::predef(HKEY_CURRENT_USER)
@@ -92,6 +94,7 @@ mod autostart {
         } else {
             // 关掉时键可能本就不存在,删除报错属正常,忽略
             let _ = key.delete_value(NAME);
+            let _ = key.delete_value(LEGACY_NAME);
         }
         Ok(())
     }
@@ -412,7 +415,7 @@ pub fn run() {
 
             TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("TokenScope")
+                .tooltip("Grandettoken")
                 .menu(&menu)
                 // 左键只切换显示/隐藏(下面的事件处理),菜单留给右键。
                 // 不设这个开关时 Tauri 在 Windows 上左键也会弹菜单。

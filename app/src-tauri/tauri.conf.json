@@ -1,7 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "TokenScope",
-  "version": "0.1.0",
+  "productName": "Grandettoken",
+  "mainBinaryName": "Grandettoken",
+  "version": "0.1.1",
   "identifier": "com.wacil.tokenscope",
   "build": {
     "frontendDist": "../src"
@@ -11,7 +12,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "TokenScope",
+        "title": "Grandettoken",
         "width": 380,
         "height": 560,
         "resizable": false,
