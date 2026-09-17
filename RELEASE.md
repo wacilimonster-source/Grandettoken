@@ -2,7 +2,7 @@
 
 > 交付形态:**只有 NSIS 安装包**(绿色单 exe 已下线,见 PROGRESS「追加调整 12」)。
 
-产物是 **NSIS 安装包**(per-user,装到 `%LOCALAPPDATA%\TokenScope`(实测确认,不是 Programs 子目录),
+产物是 **NSIS 安装包**(per-user,装到 `%LOCALAPPDATA%\Grandettoken`(实测确认,不是 Programs 子目录),
 **不需要管理员权限**)。更新走 GitHub Releases。
 
 ## 一次性准备(已完成,别重复做)
@@ -51,8 +51,8 @@ cargo tauri build
 产出(在 `app/src-tauri/target/release/bundle/nsis/`):
 
 ```
-TokenScope_<版本>_x64-setup.exe       # 安装包,人手动下载
-TokenScope_<版本>_x64-setup.exe.sig   # 签名,自动更新校验用
+Grandettoken_<版本>_x64-setup.exe       # 安装包,人手动下载
+Grandettoken_<版本>_x64-setup.exe.sig   # 签名,自动更新校验用
 ```
 
 ### 4. 生成更新清单
@@ -69,11 +69,18 @@ node build/make-latest-json.js "更新说明写在这里"
 ```bash
 gh auth login            # 只第一次需要
 gh release create v0.2.0 \
-  --title "TokenScope v0.2.0" \
+  --title "Grandettoken 0.2.0 — 一句话亮点" \
   --notes "更新说明" \
-  target/release/bundle/nsis/TokenScope_0.2.0_x64-setup.exe \
-  target/release/bundle/nsis/TokenScope_0.2.0_x64-setup.exe.sig \
+  target/release/bundle/nsis/Grandettoken_0.2.0_x64-setup.exe \
+  target/release/bundle/nsis/Grandettoken_0.2.0_x64-setup.exe.sig \
   target/release/bundle/nsis/latest.json
+```
+
+`gh` 没登录时,可以直接用它已经存在 Windows 凭据管理器里的凭据
+(不落盘、不回显):
+
+```bash
+export GH_TOKEN=$(printf "protocol=https\nhost=github.com\n\n" | git credential fill | sed -n 's/^password=//p')
 ```
 
 也可以用网页上传。**三个文件都要传**,少一个更新链路就断。
@@ -91,10 +98,15 @@ gh release create v0.2.0 \
 
 ## 用户数据
 
-数据库在 `%APPDATA%\com.wacil.tokenscope\tokenscope.db`,密钥在 Windows 凭据管理器,
+数据库在 `%APPDATA%\com.wacil.tokenscope\tokenscope.db`(目录名是 bundle id,
+产品改名后不变),密钥在 Windows 凭据管理器,
 **都不在安装目录里**,所以升级、重装、覆盖安装都不丢数据。卸载默认也不删。
 
 ## 卸载
 
-开始菜单 → TokenScope → Uninstall。卸载时应该清掉开机自启注册表键
-(`HKCU\...\Run` 里的 TokenScope),否则会残留一个指向已删除 exe 的自启项。
+开始菜单 → Grandettoken → Uninstall(或 `%LOCALAPPDATA%\Grandettoken\uninstall.exe`)。
+卸载时应该清掉开机自启注册表键(`HKCU\...\Run` 里的 Grandettoken),
+否则会残留一个指向已删除 exe 的自启项。
+
+> 签名私钥在 `C:\Users\wacil\.tauri\tokenscope.key`(文件名沿用旧产品名,内容与
+> `tauri.conf.json` 里的公钥配套;产品改名不影响这一对密钥)。

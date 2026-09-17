@@ -1,13 +1,12 @@
 # TokenScope 开发进展
 
 > 最后更新:2026-09-17
-> 状态:**v0.1.3 已发版(main);分支 `feat/trae-workbuddy-points` 上新增
-> Trae / WorkBuddy 积分监控(剩余 + 逐笔到期),实机验证通过,未发版**
+> 状态:**v0.1.4 已合并到 main 并发版(Trae / WorkBuddy 积分渠道)**
 
-## 分支:Trae / WorkBuddy 积分(2026-09-17,未发版)
+## Trae / WorkBuddy 积分(v0.1.4,2026-09-17)
 
-**分支 `feat/trae-workbuddy-points`**(从 v0.1.3 的 `26ddfe9` 切出),按用户要求:
-效果好就合并回 main,不好就整个丢弃,不影响主线。**分支不发版、不推 tag。**
+**开发在分支 `feat/trae-workbuddy-points`(commit `52c22da`)上完成,用户确认效果后
+fast-forward 合并进 main 并随 v0.1.4 发版。**分支保留在本地与 origin,可随时回看。
 
 ### 需求与结论
 
