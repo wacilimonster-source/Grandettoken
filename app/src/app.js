@@ -138,6 +138,8 @@ const TONE_HEX = { ok: "#3ecf8e", warn: "#f0b23c", bad: "#f0554d", off: "#333a4a
 const LOGOS = {
   "opencode-go": "logos/opencode.svg",
   deepseek: "logos/deepseek.png",
+  trae: "logos/trae.svg",
+  workbuddy: "logos/workbuddy.png",
 };
 
 /**
@@ -1523,13 +1525,19 @@ async function checkUpdate(force) {
       UPDC.phase = "ready";
       renderUpdChip();
       showCard(st);
+    } else if (st.error) {
+      // 这次检查**没成功**(没网 / 被限流 / 清单拉不下来):不要把已经知道的新版本撤掉。
+      // 踩过:用户刚看到「有新版本」,一次自动检查失败就把提示清空,再点就没反应了,
+      // 看起来像应用坏了 —— 检查失败只是"这次没问到",不代表"没有新版本"。
+      if (force) setMsg("检查失败:" + st.error, true);
     } else {
+      // 真的问到了、确实没有新版本(或被「跳过此版本」):这时才清掉提示
       UPD.info = null;
       UPDC.phase = null;
       renderUpdChip();
       hideCard();
       // 自动检查一律静默:没更新、没网、被限流都不打扰。只有手动点才给反馈。
-      if (force) setMsg(st.error ? "检查失败:" + st.error : "已是最新版本", !!st.error);
+      if (force) setMsg("已是最新版本");
     }
   } catch (e) {
     if (force) setMsg("检查失败:" + e, true);

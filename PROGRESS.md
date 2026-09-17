@@ -52,7 +52,25 @@ fast-forward 合并进 main 并随 v0.1.4 发版。**分支保留在本地与 or
 - **未做** WorkBuddy 的 DPAPI 兜底(`state.vscdb` 的 Safe Storage):明文 `.info` 在本机一直存在,
   再引 `windows-sys` + `aes-gcm` 两条依赖、且无法端到端验证,收益不成立;真读不到就提示"打开一次 WorkBuddy"。
 - 两个渠道都标 `unstable: true`(未公开接口),失败静默降级沿用上次快照。
-- 官方图标未做:这两个渠道目前是字母方块(`TR` / `WB`),要换官方标需要另取素材(与 OC/DeepSeek 同流程)。
+
+### 发版之后的两处改动(2026-09-17,未发版)
+
+1. **一次失败的检查不再清掉"有新版本"提示**(`app/src/app.js` 的 `checkUpdate`)。
+   原来只要 `available:false` 就把 `UPD.info` / 标题旁标签 / 卡片一起清掉 —— 检查失败
+   (没网 / 被限流)也走这条分支,于是"用户刚看到新版本、还没点更新,一次自动检查失败
+   提示就消失了"(v0.1.4 验证时实测到一次)。现在**只有真的问到"没有新版本"**(或被
+   「跳过此版本」)才清;检查失败只给反馈,不动已有状态。
+   **验证**:临时把 `plugins.updater.endpoints` 指向 `https://127.0.0.1:9/latest.json`
+   (拒绝连接),先人造"已知有新版本"的状态再走真实 `check_update` ——
+   命令返回 `error: "error sending request for url (...)"`,而 `UPD.info` / 标签 / 卡片
+   全部保留(PASS);端点还原后确认 `error:null` 的那次会正常清空。
+   注:页面里没法用 `mockIPC` 打桩 —— `window.__TAURI_INTERNALS__` 是
+   **不可写不可配置**属性,只能这样真造失败。
+2. **Trae / WorkBuddy 换成软件真实图标**(与 OC / DeepSeek 同一套做法):
+   - `trae.svg` ← 本机 TRAE SOLO CN 客户端自带素材 `resources/app/out/media/trae-logo.svg`
+     (深底 `#1A1B1D` + 荧光绿几何标,和任务栏里看到的是同一个);
+   - `workbuddy.png` ← 本机 WorkBuddy 客户端 `Assets/Square44x44Logo.targetsize-256.png`(256×256)。
+   来源与版权说明写进了 `app/src/logos/README.md` 的来源表。
 
 ---
 
