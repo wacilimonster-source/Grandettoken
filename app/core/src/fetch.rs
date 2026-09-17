@@ -3,14 +3,18 @@
 //! 核心原则:**失败不降级成 0**。取数失败时继续显示上次成功快照并标注时间,
 //! 因为余额类工具最危险的 bug 就是把请求失败渲染成"余额归零",用户会以为欠费了。
 
+use crate::appauth::{self};
 use crate::config::{ClaimConfig, Config};
-use crate::providers::{self, FetchResult, Kind};
+use crate::providers::{self, AuthKind, Expiring, FetchResult, Kind, Method};
 use crate::store::Store;
 use crate::secrets;
 use chrono::{Datelike, Duration, Local, TimeZone, Weekday};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+
+/// 距到期多久算"近期"。界面上的"近 30 天将过期"用的就是它。
+pub const EXPIRING_SOON_DAYS: i64 = 30;
 
 /// 传给界面的一行。
 #[derive(Debug, Clone, Serialize)]
@@ -30,9 +34,17 @@ pub struct ChannelView {
     pub total: Option<f64>,
     pub unit: String,
     pub windows: Vec<providers::Window>,
+    /// 逐笔到期(升序)。积分型渠道才有内容。
+    pub expiring: Vec<Expiring>,
+    /// 近 30 天内会到期的合计;没有则 None
+    pub expiring_soon: Option<Expiring>,
     pub extra: Vec<(String, String)>,
     pub error: Option<String>,
     pub limited: bool,
+    /// 凭据来源:"keyring"(用户填的密钥) / "app"(复用本机应用的登录态)
+    pub auth_source: String,
+    /// 凭据来源的说明文字,直接显示在界面上
+    pub auth_label: String,
     /// 今日 / 本周 / 本月消耗。None 表示数据窗口有空洞,不能报 0
     pub day: Option<f64>,
     pub week: Option<f64>,
@@ -86,6 +98,15 @@ impl FailKind {
     pub fn retryable(self) -> bool {
         matches!(self, FailKind::Transport | FailKind::Server)
     }
+}
+
+/// 值得换"下一份凭据"再试吗?
+///
+/// 只有服务器明确答复"这份凭据不行"(401/403)才是换凭据的信号:本机可能留着
+/// 几份登录态(Trae 装了多个版本、WorkBuddy 有几份 .info 备份),其中一份可能已作废。
+/// 网络不通、5xx、业务失败都跟身份无关,换凭据只是白等。
+pub fn another_credential_may_help(kind: Option<FailKind>) -> bool {
+    kind == Some(FailKind::Client)
 }
 
 /// 尝试顺序:上次成功的入口优先(避免每轮都先撞那个挂掉的),
@@ -233,13 +254,21 @@ async fn fetch_once(
     url: &str,
     key: &str,
 ) -> (FetchResult, Option<FailKind>) {
-    let mut req = client
-        .get(url)
-        .header("Authorization", format!("Bearer {}", key.trim()))
-        .header("Accept", "application/json")
-        // 单次尝试的预算:4 个入口最坏 32 秒,还收在 60 秒轮询周期内。
-        // 用客户端的 20 秒默认值会让"某个域名挂着"直接拖垮整轮取数。
-        .timeout(std::time::Duration::from_secs(8));
+    let mut req = match def.method {
+        Method::Get => client.get(url),
+        Method::PostJson(body) => client
+            .post(url)
+            .header("Content-Type", "application/json")
+            .body(body()),
+    }
+    .header(
+        "Authorization",
+        format!("{}{}", def.auth_prefix, key.trim()),
+    )
+    .header("Accept", "application/json")
+    // 单次尝试的预算:4 个入口最坏 32 秒,还收在 60 秒轮询周期内。
+    // 用客户端的 20 秒默认值会让"某个域名挂着"直接拖垮整轮取数。
+    .timeout(std::time::Duration::from_secs(8));
 
     for (k, v) in def.extra_headers {
         req = req.header(*k, *v);
@@ -290,6 +319,13 @@ async fn fetch_once(
         result.valid = false;
         result.error = Some(format!("HTTP {}", status.as_u16()));
     }
+    // 复用本机登录态的渠道:401/403 不是"配置错了",而是那份登录态过期了 ——
+    // 用户能做的只有去客户端里重新登录一次,直接把话说清楚。
+    if !status.is_success() && (status.as_u16() == 401 || status.as_u16() == 403) {
+        if let AuthKind::App(app) = def.auth {
+            result.error = Some(format!("登录状态已失效 · 打开一次 {} 即可", app.label()));
+        }
+    }
 
     let kind = if result.valid {
         None
@@ -307,15 +343,16 @@ async fn fetch_once(
     (result, kind)
 }
 
-/// 返回 (结果, 成功时用的地址)。调用方据此记住"哪个入口是通的"。
+/// 返回 (结果, 成功时用的地址, 最后一次失败的类别)。调用方据此记住"哪个入口是通的"。
 pub async fn fetch_channel(
     client: &reqwest::Client,
     def: &providers::ProviderDef,
     key: &str,
     last_good: Option<&str>,
-) -> (FetchResult, Option<String>) {
+) -> (FetchResult, Option<String>, Option<FailKind>) {
     let order = attempt_order(def.url, def.fallback_urls, last_good);
     let mut last: Option<FetchResult> = None;
+    let mut last_kind: Option<FailKind> = None;
 
     for (i, url) in order.iter().enumerate() {
         let (result, kind) = fetch_once(client, def, url, key).await;
@@ -326,8 +363,9 @@ pub async fn fetch_channel(
         };
         if stop || i + 1 == order.len() {
             let used = if result.valid { Some(url.clone()) } else { None };
-            return (result, used);
+            return (result, used, kind);
         }
+        last_kind = kind;
         last = Some(result);
     }
     // order 至少含主地址,这里到不了;给个兜底避免 unwrap
@@ -338,7 +376,61 @@ pub async fn fetch_channel(
             ..Default::default()
         }),
         None,
+        last_kind,
     )
+}
+
+/// 取一个渠道的凭据候选(按可信度排序)。空的返回值 = 没有可用凭据。
+fn credentials(def: &providers::ProviderDef) -> Vec<appauth::Credential> {
+    match def.auth {
+        AuthKind::Keyring => secrets::get(def.id)
+            .map(|k| {
+                vec![appauth::Credential {
+                    token: k,
+                    source: String::new(),
+                }]
+            })
+            .unwrap_or_default(),
+        // 本机应用的登录态:可能有几份(多个安装 / 旧备份),按可信度依次试
+        AuthKind::App(app) => appauth::candidates(app),
+    }
+}
+
+/// 凭据来源的说明文字,直接显示在界面上。
+fn auth_label(def: &providers::ProviderDef, cred: Option<&appauth::Credential>) -> String {
+    match def.auth {
+        AuthKind::Keyring => "Windows 凭据管理器".into(),
+        AuthKind::App(app) => match cred {
+            Some(c) => {
+                let src = c.source.trim_end_matches(".info");
+                if src.is_empty() {
+                    format!("本机 {}", app.label())
+                } else {
+                    format!("{} · {}", app.label(), src)
+                }
+            }
+            None => format!("未检测到 {} 登录信息", app.label()),
+        },
+    }
+}
+
+/// 汇总"近 30 天会过期多少"。
+fn expiring_soon(expiring: &[Expiring], now: i64) -> Option<Expiring> {
+    let limit = now + EXPIRING_SOON_DAYS * 86_400;
+    let mut sum = 0.0;
+    let mut soonest: Option<i64> = None;
+    for e in expiring.iter().filter(|e| e.at >= now && e.at <= limit) {
+        sum += e.amount;
+        soonest = soonest.or(Some(e.at));
+    }
+    if sum < 0.01 {
+        return None;
+    }
+    Some(Expiring {
+        at: soonest.unwrap_or(limit),
+        amount: (sum * 100.0).round() / 100.0,
+        label: format!("近 {} 天", EXPIRING_SOON_DAYS),
+    })
 }
 
 /// 申请制状态:只有开启了申请制的渠道才算,并且要查快照历史。
@@ -363,6 +455,7 @@ fn build_view(
     updated_at: i64,
     store: &Store,
     cfg: &Config,
+    cred: Option<&appauth::Credential>,
 ) -> ChannelView {
     // 只有金额型才有"消耗"这个概念可算;配额型的用量由接口直接给出。
     // 注意:**不要**把 `result.valid` 串进来 —— 消耗是本地快照推算的,和这次网络请求
@@ -389,6 +482,8 @@ fn build_view(
         (None, None, None)
     };
 
+    let soon = expiring_soon(&result.expiring, now_ts());
+
     ChannelView {
         id: def.id.into(),
         name: def.name.into(),
@@ -396,16 +491,23 @@ fn build_view(
         color: def.color.into(),
         kind: result.kind,
         unstable: def.unstable,
-        has_key: secrets::exists(def.id),
+        has_key: true,
         valid: result.valid,
         remaining: result.remaining,
         used: result.used,
         total: result.total,
         unit: result.unit,
         windows: result.windows,
+        expiring: result.expiring,
+        expiring_soon: soon,
         extra: result.extra,
         error: result.error,
         limited: result.limited,
+        auth_source: match def.auth {
+            AuthKind::Keyring => "keyring".into(),
+            AuthKind::App(_) => "app".into(),
+        },
+        auth_label: auth_label(def, cred),
         day,
         week,
         month,
@@ -416,25 +518,35 @@ fn build_view(
     }
 }
 
-/// 未配置密钥的渠道占位。这不是故障,只是没启用。
+/// 没有可用凭据的渠道占位。这不是故障,只是没启用。
 fn placeholder(def: &providers::ProviderDef) -> ChannelView {
     ChannelView {
         id: def.id.into(),
         name: def.name.into(),
         short: def.short.into(),
         color: def.color.into(),
-        kind: Kind::Amount,
+        kind: def.default_kind,
         unstable: def.unstable,
         has_key: false,
         valid: false,
         remaining: None,
         used: None,
         total: None,
-        unit: "CNY".into(),
+        unit: match def.default_kind {
+            Kind::Amount => "CNY".into(),
+            _ => "credits".into(),
+        },
         windows: vec![],
+        expiring: vec![],
+        expiring_soon: None,
         extra: vec![],
         error: None,
         limited: false,
+        auth_source: match def.auth {
+            AuthKind::Keyring => "keyring".into(),
+            AuthKind::App(_) => "app".into(),
+        },
+        auth_label: auth_label(def, None),
         day: None,
         week: None,
         month: None,
@@ -481,23 +593,48 @@ impl Fetcher {
     pub async fn fetch_all(&self, store: &Arc<Mutex<Store>>) -> Vec<ChannelView> {
         let n = providers::PROVIDERS.len();
         let mut out: Vec<Option<ChannelView>> = (0..n).map(|_| None).collect();
-        let mut pending: Vec<(usize, &'static providers::ProviderDef, FetchResult, bool, i64)> =
-            Vec::new();
+        let mut pending: Vec<(
+            usize,
+            &'static providers::ProviderDef,
+            FetchResult,
+            bool,
+            i64,
+            Option<appauth::Credential>,
+        )> = Vec::new();
         let mut successful: Vec<(&'static str, FetchResult, i64)> = Vec::new();
 
         // ── await 段:纯网络,不碰数据库 ──
         for (i, def) in providers::PROVIDERS.iter().enumerate() {
-            let Some(key) = secrets::get(def.id) else {
+            let creds = credentials(def);
+            if creds.is_empty() {
                 out[i] = Some(placeholder(def));
                 continue;
-            };
+            }
 
             let memo = self
                 .url_memo
                 .lock()
                 .ok()
                 .and_then(|m| m.get(def.id).cloned());
-            let (result, used_url) = fetch_channel(&self.http, def, &key, memo.as_deref()).await;
+
+            // 有多个凭据候选时依次试:只有"服务器明确说这份凭据不行"(401/403)
+            // 才换下一份 —— 网络不通时换凭据是白费功夫。
+            let mut chosen: Option<appauth::Credential> = None;
+            let mut result = FetchResult::default();
+            let mut used_url = None;
+            for cred in creds.iter() {
+                let (r, url, kind) = fetch_channel(&self.http, def, &cred.token, memo.as_deref()).await;
+                result = r;
+                used_url = url;
+                if result.valid {
+                    chosen = Some(cred.clone());
+                    break;
+                }
+                if another_credential_may_help(kind) {
+                    continue;
+                }
+                break;
+            }
             let ts = now_ts();
 
             if let (true, Some(url)) = (result.valid, used_url.as_ref()) {
@@ -508,7 +645,7 @@ impl Fetcher {
 
             if result.valid {
                 successful.push((def.id, result.clone(), ts));
-                pending.push((i, def, result, false, ts));
+                pending.push((i, def, result, false, ts, chosen));
             } else {
                 // 失败降级:沿用上次成功值,标注时间,绝不显示成 0
                 let cached = self.cache.lock().ok().and_then(|c| c.get(def.id).cloned());
@@ -516,9 +653,9 @@ impl Fetcher {
                     Some((mut prev, prev_ts)) => {
                         prev.error = result.error;
                         prev.valid = false;
-                        pending.push((i, def, prev, true, prev_ts));
+                        pending.push((i, def, prev, true, prev_ts, chosen));
                     }
-                    None => pending.push((i, def, result, false, ts)),
+                    None => pending.push((i, def, result, false, ts, chosen)),
                 }
             }
         }
@@ -530,14 +667,15 @@ impl Fetcher {
                 let kind = match result.kind {
                     Kind::Amount => "amount",
                     Kind::Percent => "percent",
+                    Kind::Points => "points",
                 };
                 // 注意顺序:先写快照再组视图 —— 申请制额度的跳升检测要用最新快照
                 let _ = s.record(id, *ts, result.remaining, result.used, result.total, kind);
             }
             // 配置从库里读:前端改完设置立刻生效,不必等下一次轮询换内存态
             let cfg = Config::load(&s);
-            for (i, def, result, stale, ts) in pending {
-                out[i] = Some(build_view(def, result, stale, ts, &s, &cfg));
+            for (i, def, result, stale, ts, cred) in pending {
+                out[i] = Some(build_view(def, result, stale, ts, &s, &cfg, cred.as_ref()));
             }
         }
 
@@ -726,5 +864,37 @@ mod tests {
     #[test]
     fn week_start_not_after_today_start() {
         assert!(local_week_start() <= local_midnight_today());
+    }
+
+    /// 近 30 天到期的合计:只算未来 30 天内的,已过期的不算,更远的不算。
+    #[test]
+    fn expiring_soon_sums_next_30_days() {
+        let now = 1_700_000_000;
+        let day = 86_400;
+        let list = vec![
+            Expiring { at: now - day, amount: 5.0, label: "已过期".into() },
+            Expiring { at: now + 3 * day, amount: 10.0, label: "a".into() },
+            Expiring { at: now + 20 * day, amount: 2.5, label: "b".into() },
+            Expiring { at: now + 40 * day, amount: 100.0, label: "c".into() },
+        ];
+        let s = expiring_soon(&list, now).expect("30 天内有到期");
+        assert_eq!(s.amount, 12.5);
+        assert_eq!(s.at, now + 3 * day, "取最近的那天");
+
+        // 只有 30 天外的 → 没有"近期过期"
+        assert!(expiring_soon(&list[3..], now).is_none());
+        // 空列表 / 已过期 → 也是 None(不能报 0,界面会渲染成"有 0 分要过期")
+        assert!(expiring_soon(&[], now).is_none());
+        assert!(expiring_soon(&list[..1], now).is_none());
+    }
+
+    /// 换凭据的判定:只有 401/403 值得换下一份登录态。
+    #[test]
+    fn only_client_failures_try_another_credential() {
+        assert!(another_credential_may_help(Some(FailKind::Client)));
+        assert!(!another_credential_may_help(Some(FailKind::Transport)));
+        assert!(!another_credential_may_help(Some(FailKind::Server)));
+        assert!(!another_credential_may_help(Some(FailKind::Business)));
+        assert!(!another_credential_may_help(None));
     }
 }

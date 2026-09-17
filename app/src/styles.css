@@ -126,6 +126,45 @@ body.form-compact .ico.logo>img{width:88%;height:88%}
 .use div:first-child{border-left:0;padding-left:0}
 .use b{display:block;font-size:12px;color:var(--tx2);font-weight:500;
   font-variant-numeric:tabular-nums;margin-top:1px}
+
+/* 积分型:大数字后的单位(分),和小数位一样跟着数值走不另设样式 */
+.val .v i.unit{font-style:normal;font-size:inherit;font-weight:inherit;color:inherit;
+  margin-left:1px}
+
+/* 积分型:逐笔到期。列表行只放最近的几笔,展开里是全量表 */
+.exps{margin-top:8px;display:flex;flex-direction:column;gap:4px}
+.exp{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--tx3)}
+.exp .ed{flex:none;width:76px;color:var(--tx2);font-variant-numeric:tabular-nums}
+.exp .ed i{font-style:normal;color:var(--tx3);margin-left:4px;font-size:10px}
+.exp .ea{flex:none;width:80px;text-align:right;color:var(--tx2);font-weight:500;
+  font-variant-numeric:tabular-nums}
+.exp .el{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 30 天内黄、7 天内红 —— 只有到期日与数量染色,标签保持中性 */
+.exp.w .ed,.exp.w .ea{color:var(--warn)}
+.exp.b .ed,.exp.b .ea{color:var(--bad)}
+.expmore{font-size:10.5px;color:var(--tx3);margin-top:2px}
+
+/* 展开详情里的逐笔到期全量表 */
+.extab{margin:0 0 10px;max-height:168px;overflow-y:auto;
+  border:1px solid var(--line);border-radius:7px;background:#ffffff05}
+.extab .exrow,.extab .exhead{display:flex;align-items:center;gap:8px;font-size:11px;
+  padding:4px 9px;border-bottom:1px solid #232833}
+.extab .exrow:last-of-type{border-bottom:0}
+.extab .exhead{font-size:10.5px;color:var(--tx3);position:sticky;top:0;
+  background:#171a21;letter-spacing:.04em}
+.extab .ed{flex:none;width:86px;color:var(--tx2);font-variant-numeric:tabular-nums}
+.extab .ed i{font-style:normal;color:var(--tx3);margin-left:4px;font-size:10px}
+.extab .ea{flex:none;width:78px;text-align:right;color:var(--tx2);font-weight:500;
+  font-variant-numeric:tabular-nums}
+.extab .el{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  color:var(--tx3)}
+.extab .exrow.w .ed,.extab .exrow.w .ea{color:var(--warn)}
+.extab .exrow.b .ed,.extab .exrow.b .ea{color:var(--bad)}
+.extab .exrow.past{opacity:.55}
+.extab .exfoot{font-size:10.5px;color:var(--tx3);padding:5px 9px;background:#ffffff05;
+  border-top:1px solid var(--line)}
+.extab::-webkit-scrollbar{width:6px}
+.extab::-webkit-scrollbar-thumb{background:#333a4a;border-radius:9px}
 .caret{color:var(--tx3);font-size:9px;flex:none;width:12px;text-align:center;
   transition:transform .25s}
 .row.open .caret{transform:rotate(90deg)}
@@ -296,6 +335,7 @@ body.form-compact .r1{gap:5px}
 body.form-compact .bar,
 body.form-compact .use,
 body.form-compact .wins,
+body.form-compact .exps,
 body.form-compact .caret,
 body.form-compact .rbody,
 body.form-compact .nm .s,
@@ -307,9 +347,10 @@ body.form-compact .nm .nn{display:none}
 body.form-compact .nm .n{gap:0}
 body.form-compact .nm .n .dot{width:5px;height:5px}
 body.form-compact .val .v{font-size:12px;font-weight:500}
-/* 金额型舍掉小数位,百分比型的 % 要留着 */
+/* 金额型舍掉小数位,百分比型的 % 要留着;积分型的"分"字也一并省略,位置太窄 */
 body.form-compact .val .v .dec{display:none}
 body.form-compact .val .v .pct{font-size:inherit}
+body.form-compact .val .v .unit{display:none}
 /* 放不下的渠道收进 +N 徽标 */
 body.form-compact .more{flex:none;font-size:11px;color:var(--tx3);padding:3px 2px;
   font-variant-numeric:tabular-nums}

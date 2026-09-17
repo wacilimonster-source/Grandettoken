@@ -39,22 +39,37 @@ fn set_config(state: State<'_, AppState>, config: Config) -> Result<(), String> 
 }
 
 /// 只回显尾 4 位,用于确认每个渠道存的到底是哪把 key(存错 key 却以为是接口坏了,
-/// 是最难排查的一类问题)。不回显完整密钥。
+/// 是最难排查的一类问题)。不回显完整密钥。复用本机应用登录态的渠道没有密钥可回显。
 #[tauri::command]
 fn key_hint(id: String) -> Option<String> {
+    if !matches!(
+        providers::find(&id).map(|d| d.auth),
+        Some(providers::AuthKind::Keyring)
+    ) {
+        return None;
+    }
     secrets::masked(&id)
 }
 
 #[tauri::command]
 fn set_key(id: String, key: String) -> Result<(), String> {
-    if providers::find(&id).is_none() {
-        return Err(format!("未知渠道: {id}"));
+    let def = providers::find(&id).ok_or_else(|| format!("未知渠道: {id}"))?;
+    if let providers::AuthKind::App(app) = def.auth {
+        return Err(format!(
+            "{} 不需要填密钥:凭据直接读本机已登录的 {} 客户端",
+            def.name,
+            app.label()
+        ));
     }
     secrets::set(&id, &key)
 }
 
 #[tauri::command]
 fn delete_key(id: String) -> Result<(), String> {
+    let def = providers::find(&id).ok_or_else(|| format!("未知渠道: {id}"))?;
+    if let providers::AuthKind::App(app) = def.auth {
+        return Err(format!("{} 没有本应用保存的密钥(用的是 {} 的登录态)", def.name, app.label()));
+    }
     secrets::delete(&id)
 }
 

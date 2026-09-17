@@ -1,7 +1,61 @@
 # TokenScope 开发进展
 
-> 最后更新:2026-09-16
-> 状态:**三种形态固定尺寸 + 视觉对齐设计稿 + 「设置与管理」页 + OpenCode 三窗口展示 + 紧凑条切换入口,全部落地并验证;单 exe 交付仍待定夺**
+> 最后更新:2026-09-17
+> 状态:**v0.1.3 已发版(main);分支 `feat/trae-workbuddy-points` 上新增
+> Trae / WorkBuddy 积分监控(剩余 + 逐笔到期),实机验证通过,未发版**
+
+## 分支:Trae / WorkBuddy 积分(2026-09-17,未发版)
+
+**分支 `feat/trae-workbuddy-points`**(从 v0.1.3 的 `26ddfe9` 切出),按用户要求:
+效果好就合并回 main,不好就整个丢弃,不影响主线。**分支不发版、不推 tag。**
+
+### 需求与结论
+
+用户要的是"近期过期的积分要精确到哪天过期多少"。**第 0 步探测结论:两家都能逐笔**
+
+| 平台 | 凭据来源 | 接口 | 逐笔到期 |
+|---|---|---|---|
+| Trae(SOLO CN) | `%APPDATA%\TRAE SOLO CN\User\globalStorage\storage.json` 的 `iCubeAuthInfo://icube.cloudide`(`tc` 容器,需解密) | `POST api.trae.cn/trae/api/v2/pay/user_current_entitlement_list` | ✅ 每个额度包一条:数量 `quota.credits_limit`、已用 `usage.credits_amount`、到期 `expire_time` |
+| WorkBuddy | `%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\*.info`(明文 JSON) | `POST www.workbuddy.cn/billing/meter/get-user-resource` | ✅ 每个包一条:`CycleCapacitySizePrecise` / `RemainPrecise`,到期取 `DeductionEndTime ‖ ExpiredTime ‖ CycleEndTime` |
+
+### 实机验收数据(2026-09-17,与官方口径交叉核对一致)
+
+- **Trae**:剩余 3,855.28 分(4050 发放 − 194.72 已用);22 笔有剩余,最近 9-18 到期 5.28 分
+- **WorkBuddy**:剩余 6,075.52 分 = 本周期 8300 − 已用 2224.48
+  (与 `/get-user-resource-summary` 的 5575.52 + 500 完全对齐);30 笔包,27 笔有剩余
+
+### 实现要点
+
+- 新模块 `app/core/src/appauth.rs`:**只读复用本机登录态,绝不写回、绝不刷新**。
+  刷新会轮换 refreshToken、把客户端挤下线,所以 token 失效只提示"打开一次 X 即可"。
+- Trae 的 `tc` 解密:base64 → [6 字节头][32 字节随机密钥][密文],`SHA512(rb)` →
+  `SHA512(h + 固定盐)` 取 key/iv,AES-128-CBC;明文前 64 字节是校验和。
+  单测里有一份 **OpenSSL 生成的交叉验证向量**(不是自证)。
+- 凭据候选排序:WorkBuddy 的 `auth.domain` 必须是 `www.codebuddy.cn`/`www.workbuddy.cn`,
+  且**备份文件(文件名带 ISO 时间戳)排后** —— 一份 6 月备份的 expiresAt 更晚但 token 已作废
+  (实测 401)。取数遇到 401/403 才换下一份候选(`another_credential_may_help`)。
+- 新数据模型 `Kind::Points` + `expiring: [{at, amount, label}]` + `expiringSoon`(近 30 天合计)。
+- 前端:**主数值不带 ¥**,副标题「近 30 天将过期 N 分」,行内列最近三笔到期,
+  展开是逐笔到期全量表(7 天内红 / 30 天内黄);密钥页对这两个渠道显示"已读取本机登录"、不给输入框。
+
+### 顺手修掉的坑
+
+- `fitPill` 用 `getComputedStyle(el).font` **简写**量文字宽度,Chromium 里该简写常是空串 →
+  按 13px/400 量,窗口比文字窄几像素,胶囊里出现 `WB 6,075…` 半截数字。改成逐项拷字体长手属性。
+- 积分型不参与"剩余百分比/余额"排序(`score = 4000`,排在可比渠道之后、取数失败之前);
+  状态色按**近 7 天**到期占剩余的比例(≥30% 红 / ≥10% 黄)—— 用 30 天窗口会让 Trae 常红
+  (它的签到积分本来就 31 天有效)。
+- WorkBuddy 查询时间窗从"近 7 天起"改回"当前时刻起"(与官方前端一致):
+  窗口开宽会多捞回 4 个旧包,"本周期发放/已使用"比官方口径多 400 积分。
+
+### 已知边界 / 未做
+
+- **未做** WorkBuddy 的 DPAPI 兜底(`state.vscdb` 的 Safe Storage):明文 `.info` 在本机一直存在,
+  再引 `windows-sys` + `aes-gcm` 两条依赖、且无法端到端验证,收益不成立;真读不到就提示"打开一次 WorkBuddy"。
+- 两个渠道都标 `unstable: true`(未公开接口),失败静默降级沿用上次快照。
+- 官方图标未做:这两个渠道目前是字母方块(`TR` / `WB`),要换官方标需要另取素材(与 OC/DeepSeek 同流程)。
+
+---
 
 ## 一句话现状
 

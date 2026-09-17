@@ -22,6 +22,26 @@ const esc = (v) =>
   );
 const money = (v) => (v === null || v === undefined ? "——" : "¥" + v.toFixed(2));
 
+/** 积分:带千分位;小数按需显示(3855 → 3,855;6075.5 → 6,075.5)。 */
+const points = (v) =>
+  v === null || v === undefined
+    ? "——"
+    : v.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
+
+/** 距今天还有几天(向上取整:不足一天也算 1 天,不说"0 天后过期")。 */
+function daysUntil(ts) {
+  if (!ts) return null;
+  return Math.ceil((ts * 1000 - Date.now()) / 86400000);
+}
+
+/** 到期紧迫度:7 天内红、30 天内黄,其余不强调。 */
+function expClass(days, warnDays = 30, critDays = 7) {
+  if (days === null) return "";
+  if (days <= critDays) return "b";
+  if (days <= warnDays) return "w";
+  return "";
+}
+
 function relTime(ts) {
   if (!ts) return "从未";
   const s = Math.floor(Date.now() / 1000) - ts;
@@ -81,8 +101,29 @@ function fmtDay(ts) {
   return `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+/** 未来 days 天内会过期的积分合计。 */
+function expiringWithin(c, days) {
+  const now = Date.now() / 1000;
+  const limit = now + days * 86400;
+  return (c.expiring || [])
+    .filter((e) => e.at >= now && e.at <= limit)
+    .reduce((a, e) => a + e.amount, 0);
+}
+
 function toneOf(c) {
   if (!c.hasKey || !c.valid) return "off";
+  // 积分型的风险是"过期",不是"余额低"。看**近 7 天**到期的量占剩余的比例:
+  // 用 30 天会误报 —— Trae 的签到积分本来就是 31 天有效,几乎所有积分都落在
+  // "30 天内到期",整行会常红;7 天窗口才是"该动手花掉"的信号。
+  // 同时用占比而不是绝对值:过期 5 分不该把整行染红。
+  if (c.kind === "points") {
+    const r = c.remaining ?? 0;
+    if (r <= 0) return "ok";
+    const share = expiringWithin(c, 7) / r;
+    if (share >= 0.3) return "bad";
+    if (share >= 0.1) return "warn";
+    return "ok";
+  }
   const r = remainRatio(c);
   if (r === null) return "ok";
   if (r < CFG.critPercent / 100) return "bad";
@@ -135,6 +176,9 @@ function sortChannels(list) {
   const score = (c) => {
     if (!c.hasKey) return 9999;
     if (!c.valid) return 5000;
+    // 积分和金额/百分比不是一回事,不能混进同一条数轴比大小:
+    // 统一排在"可比渠道之后、取数失败之前"
+    if (c.kind === "points") return 4000;
     if (mode === "balance") return -(c.remaining ?? 0);
     if (mode === "dayUsage") return -(c.day ?? 0);
     const r = remainRatio(c);
@@ -184,6 +228,7 @@ function renderRow(c, i) {
   const r = remainRatio(c);
   const pct = r === null ? null : Math.round(r * 100);
   const isPct = c.kind === "percent";
+  const isPts = c.kind === "points";
   // 配额型(OpenCode Go):大数字固定取「本月」窗的剩余(订阅按自然月结),
   // 下面三行各带一条迷你条把 5 小时 / 本周 / 本月都摊开
   const wins = isPct && c.windows && c.windows.length ? c.windows : [];
@@ -195,6 +240,10 @@ function renderRow(c, i) {
   else if (isPct) {
     const v = Math.max(0, Math.min(100, mw ? mw.remainPercent : c.remaining));
     main = v.toFixed(1) + '<i class="pct">%</i>';
+  } else if (isPts) {
+    // 积分不带货币符号;整数部分千分位,小数部分照旧
+    const [ip, dp] = points(c.remaining).split(".");
+    main = ip + (dp ? '<i class="dec">.' + dp + "</i>" : "") + '<i class="unit">分</i>';
   } else {
     const [int, dec] = c.remaining.toFixed(2).split(".");
     main = "¥" + int + '<i class="dec">.' + dec + "</i>";
@@ -203,22 +252,33 @@ function renderRow(c, i) {
   // 申请制额度(4SAPI):分母是本轮额度,副标题给周期状态
   const claim = c.claim || null;
 
+  // 积分型:副标题说清"近期会过期多少",这是这个渠道最该被看见的信息
+  const soon = c.expiringSoon || null;
+  const soonDays = soon ? daysUntil(soon.at) : null;
+
   // 第二行给状态语义,大数字下方给数值口径,两处不重复
   // 副标题只留"状态语义":渠道是否可用。其余说明文字一律不写
   // (未公开接口、哪个窗口最紧 —— 明细里都有,不必占一行)
   let sub;
-  if (noKey) sub = "未配置密钥";
+  if (noKey) sub = c.authSource === "app" ? `未检测到 ${c.name} 登录信息` : "未配置密钥";
   else if (failed) sub = "取数失败";
   else if (wins.length) sub = "";
   else if (c.limited) sub = "已限流";
-  else if (claim) sub = `本轮额度 ¥${claim.amount}${claimTail(claim)}`;
+  else if (isPts) {
+    sub = soon
+      ? `近 30 天将过期 ${points(soon.amount)} 分`
+      : c.expiring && c.expiring.length
+        ? "30 天内无到期"
+        : "近期无到期";
+  } else if (claim) sub = `本轮额度 ¥${claim.amount}${claimTail(claim)}`;
   else if (pct !== null) sub = `额度 ¥${c.total}`;
   else sub = ""; // 金额型拿到多少就是可用多少,不加说明
 
   let subVal;
-  if (noKey) subVal = "待配置";
+  if (noKey) subVal = c.authSource === "app" ? "需打开应用" : "待配置";
   else if (failed) subVal = c.stale ? "上次快照" : "失联";
   else if (mw) subVal = `${mw.label}窗`;
+  else if (isPts) subVal = soon ? `最近 ${fmtDay(soon.at)} 到期` : "无近期到期";
   else if (pct !== null) subVal = `剩 ${pct}%`;
   else subVal = "";
 
@@ -230,9 +290,29 @@ function renderRow(c, i) {
   else if (tone === "warn") dot = '<span class="dot w"></span>';
   else dot = '<span class="dot"></span>';
 
-  // 第三段:金额型显示日/周/月;配额型显示三个限流窗口,每行一条迷你条
+  // 第三段:金额型显示日/周/月;配额型显示三个限流窗口;积分型显示最近的几笔到期
   let useHtml;
-  if (wins.length) {
+  if (isPts) {
+    const list = (c.expiring || []).filter((e) => daysUntil(e.at) >= 0);
+    const head = list.slice(0, 3);
+    useHtml = head.length
+      ? `<div class="exps">${head
+          .map((e) => {
+            const d = daysUntil(e.at);
+            const cls = expClass(d);
+            return `<div class="exp${cls ? " " + cls : ""}">
+              <span class="ed">${fmtDay(e.at)}<i>${d === 0 ? "今天" : "剩 " + d + " 天"}</i></span>
+              <b class="ea">${points(e.amount)} 分</b>
+              <span class="el">${esc(e.label)}</span>
+            </div>`;
+          })
+          .join("")}${
+          list.length > head.length
+            ? `<div class="expmore">另有 ${list.length - head.length} 笔更晚到期,展开看全部</div>`
+            : ""
+        }</div>`
+      : `<div class="exps"><div class="expmore">没有待用积分:所有额度包都已用完或已过期</div></div>`;
+  } else if (wins.length) {
     useHtml = `<div class="wins">${wins
       .map((w) => {
         const wr = Math.max(0, Math.min(100, w.remainPercent));
@@ -254,9 +334,9 @@ function renderRow(c, i) {
     </div>`;
   }
 
-  // 配额型的三条迷你条已经表达了余量,不再重复画顶部大条
+  // 配额型的三条迷你条已经表达了余量,积分型的到期列表也没有"余量比例"可画
   const bar =
-    pct !== null && !failed && !noKey && !wins.length
+    pct !== null && !failed && !noKey && !wins.length && !isPts
       ? `<div class="bar"><i style="width:${pct}%;background:${TONE_HEX[tone]}"></i></div>`
       : "";
 
@@ -304,6 +384,17 @@ function renderDetail(c) {
     <span class="lk" data-act="open-manage" data-id="${c.id}">设置与管理</span> 里配置。</div>`;
 
   if (noKey) {
+    // 复用本机登录态的渠道:没有"密钥"可填,只能引导用户去客户端登录一次
+    if (c.authSource === "app") {
+      return `<div class="rbody-in">
+        <div class="hint" style="margin:0 0 8px">未检测到 ${esc(
+          c.name
+        )} 的登录信息。它的积分只能用客户端自己的登录态查询,先打开一次 ${esc(
+          c.name
+        )} 并登录,再回来刷新即可。本应用只读那份凭据,不写回、也不刷新。</div>
+        ${manageLink}
+      </div>`;
+    }
     return `<div class="rbody-in">
       <div class="hint" style="margin:0 0 8px">未配置密钥,尚未开始取数。密钥只写入 Windows 凭据管理器,不会进配置文件、数据库或日志。</div>
       ${manageLink}
@@ -347,6 +438,41 @@ function renderDetail(c) {
         .join("")}</div>`
     : "";
 
+  // 积分型:逐笔到期全量表(到期日 | 剩余 | 来源),近 7/30 天分别红/黄
+  let expHtml = "";
+  if (c.kind === "points" && c.expiring && c.expiring.length) {
+    const rows = c.expiring
+      .map((e) => {
+        const d = daysUntil(e.at);
+        const cls = d !== null && d < 0 ? "past" : expClass(d);
+        const tail = d === null ? "" : d < 0 ? "已过期" : d === 0 ? "今天" : `剩 ${d} 天`;
+        return `<div class="exrow${cls ? " " + cls : ""}">
+          <span class="ed">${fmtDay(e.at)}<i>${tail}</i></span>
+          <b class="ea">${points(e.amount)}</b>
+          <span class="el">${esc(e.label)}</span>
+        </div>`;
+      })
+      .join("");
+    const soon = c.expiringSoon;
+    expHtml = `<div class="extab">
+      <div class="exhead"><span class="ed">到期日</span><span class="ea">剩余积分</span><span class="el">来源</span></div>
+      ${rows}
+      <div class="exfoot">共 ${c.expiring.length} 笔有剩余 · 合计 ${points(c.remaining)} 分${
+        soon ? ` · 近 30 天将过期 ${points(soon.amount)} 分` : ""
+      }</div>
+    </div>`;
+  }
+
+  // 复用本机登录态的渠道:说清凭据从哪来、为什么不刷新
+  const authHint =
+    c.authSource === "app"
+      ? `<div class="hint" style="margin:0 0 8px">凭据来自本机已登录的 ${esc(
+          c.authLabel
+        )} · 只读复用,不写回、不刷新;失效时打开一次 ${esc(
+          c.name
+        )} 即可(刷新会顶掉客户端手里的登录态,把你挤下线)。</div>`
+      : "";
+
   const spark = sparkCache[c.id] || [];
   const sparkHtml = spark.length
     ? `<div class="spark">${(() => {
@@ -378,12 +504,14 @@ function renderDetail(c) {
     );
   }
   body.push(kvHtml);
+  body.push(expHtml);
   body.push(sparkHtml);
   if (c.estimated && c.kind === "amount") {
     body.push(
       `<div class="hint" style="margin:0 0 8px">消耗为本地快照推算值 —— 该接口只返回当前余额,不含累计消耗;程序未运行的时段不计入。</div>`
     );
   }
+  if (authHint) body.push(authHint);
   body.push(manageLink);
 
   return `<div class="rbody-in">${body.join("")}</div>`;
@@ -418,8 +546,8 @@ function render() {
     ? shown.map((c, i) => renderRow(c, i)).join("")
     : `<div class="empty">
          <div class="ek">&#128273;</div>
-         <b>还没有配置任何渠道</b>
-         填入至少一个 API Key 后开始取数<br>密钥只写入 Windows 凭据管理器,界面保存后不回显
+         <b>还没有可显示的渠道</b>
+         填入至少一个 API Key,或在别的应用里登录一次(Trae / WorkBuddy 会直接读取)<br>密钥只写入 Windows 凭据管理器,界面保存后不回显
          <div><button class="btn p" data-act="open-manage">去配置密钥</button></div>
        </div>`;
 
@@ -520,14 +648,19 @@ function renderPillFace() {
       ? `${esc(c.short)} ——`
       : c.kind === "percent"
         ? `${esc(c.short)} ${((remainRatio(c) ?? 0) * 100).toFixed(1)}<i>%</i>`
-        : `${esc(c.short)} ${money(c.remaining)}`;
+        : c.kind === "points"
+          ? `${esc(c.short)} ${points(c.remaining)}`
+          : `${esc(c.short)} ${money(c.remaining)}`;
 
   const bits = [c.name];  // tooltip 是纯文本,不需要转义
   const r = remainRatio(c);
-  if (!c.hasKey) bits.push("未配置密钥");
+  if (!c.hasKey) bits.push(c.authSource === "app" ? "未检测到登录" : "未配置密钥");
   else if (c.remaining === null) bits.push("取数失败");
   else {
     if (r !== null) bits.push(`剩 ${Math.round(r * 100)}%`);
+    if (c.kind === "points" && c.expiringSoon) {
+      bits.push(`近 30 天过期 ${points(c.expiringSoon.amount)} 分`);
+    }
     if (c.limited) bits.push("已限流");
   }
   if (PILL.auto) bits.push("自动:最紧张的一个");
@@ -549,7 +682,15 @@ function fitPill() {
   const probe = document.createElement("span");
   probe.style.cssText =
     "position:absolute;left:-9999px;top:-9999px;white-space:nowrap;visibility:hidden";
-  probe.style.font = getComputedStyle(el).font;
+  // 逐项拷字体,不要用 `font` 简写 —— 在 Chromium 里 getComputedStyle().font
+  // 经常是空串,量出来的就是默认 13px/400 的宽度,窗口会比文字窄几个像素,
+  // 胶囊里出现 "WB 6,075…" 这种半截数字(实测踩过)。
+  const cs = getComputedStyle(el);
+  probe.style.fontFamily = cs.fontFamily;
+  probe.style.fontSize = cs.fontSize;
+  probe.style.fontWeight = cs.fontWeight;
+  probe.style.fontStyle = cs.fontStyle;
+  probe.style.letterSpacing = cs.letterSpacing;
   probe.textContent = el.textContent || "";
   document.body.appendChild(probe);
   const textW = probe.getBoundingClientRect().width;
@@ -947,11 +1088,22 @@ const manageOpen = () => document.body.classList.contains("view-manage");
 
 function renderKeyRows() {
   $("keyList").innerHTML = CHANNELS.map((c) => {
+    const isApp = c.authSource === "app";
     const state = !c.hasKey
-      ? '<span class="dot o"></span>未配置'
+      ? `<span class="dot o"></span>${isApp ? "未检测到登录" : "未配置"}`
       : c.valid
-        ? '<span class="dot"></span>已配置'
-        : '<span class="dot o"></span>已配置 · 取数失败';
+        ? `<span class="dot"></span>${isApp ? "已读取本机登录" : "已配置"}`
+        : `<span class="dot o"></span>${isApp ? "已读取 · 取数失败" : "已配置 · 取数失败"}`;
+    // 复用本机登录态的渠道没有密钥可填:直接把凭据来源和怎么恢复写清楚
+    const second = isApp
+      ? `<div class="khint" style="margin:0">凭据来自本机已登录的 ${esc(
+          c.authLabel
+        )}。本应用只读复用,不写回、不刷新;失效时打开一次 ${esc(c.name)} 再刷新即可。</div>`
+      : `<div class="krow2">
+        <input type="password" id="key-${c.id}" autocomplete="off" spellcheck="false"
+          placeholder="${c.hasKey ? "已保存 · 留空则不修改" : "粘贴 API Key"}">
+        <button class="btn p" data-act="savekey" data-id="${c.id}">保存</button>
+      </div>`;
     return `<div class="krow" data-id="${c.id}">
       <div class="krow1">
         ${iconHtml(c, "ico", !c.hasKey)}
@@ -960,16 +1112,12 @@ function renderKeyRows() {
           <div class="ks">${state}<span class="kh" data-hint="${c.id}"></span></div>
         </div>
         ${
-          c.hasKey
+          !isApp && c.hasKey
             ? `<button class="btn danger" data-act="delkey" data-id="${c.id}">删除</button>`
             : ""
         }
       </div>
-      <div class="krow2">
-        <input type="password" id="key-${c.id}" autocomplete="off" spellcheck="false"
-          placeholder="${c.hasKey ? "已保存 · 留空则不修改" : "粘贴 API Key"}">
-        <button class="btn p" data-act="savekey" data-id="${c.id}">保存</button>
-      </div>
+      ${second}
     </div>`;
   }).join("");
 }
