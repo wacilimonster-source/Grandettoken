@@ -1,6 +1,8 @@
 # 发布流程
 
-产物是 **NSIS 安装包**(per-user,装到 `%LOCALAPPDATA%\Programs\TokenScope`,
+> 交付形态:**只有 NSIS 安装包**(绿色单 exe 已下线,见 PROGRESS「追加调整 12」)。
+
+产物是 **NSIS 安装包**(per-user,装到 `%LOCALAPPDATA%\TokenScope`(实测确认,不是 Programs 子目录),
 **不需要管理员权限**)。更新走 GitHub Releases。
 
 ## 一次性准备(已完成,别重复做)

@@ -568,6 +568,27 @@ OpenCode Go 与 DeepSeek 换成**官方标**,4SAPI / Hapi 仍是字母方块。
   端点取回的 latest.json 与本地**逐字节一致**;公钥与 `~/.tauri/*.pub` 的 sha256 一致;
   绿色 exe 打包后依然零 WebView2Loader 依赖。
 
+### 追加调整 12(2026-09-17,绿色 exe 下线 + 安装包实测)
+
+用户决定:**绿色单 exe 形态下线,只留 NSIS 安装包**。理由与设计文档一致 ——
+两条交付线 = 两套更新逻辑 + 双倍回归,而 per-user 安装本来就不需要管理员。
+绿色版已从 GitHub Release 撤下(代码里的静态加载器垫片**保留** —— 安装包里的那份
+exe 正是靠它做到零 DLL 依赖,去掉反而要往安装目录塞 WebView2Loader.dll)。
+
+**安装包实测(静默安装 `/S`,退出码 0)**:
+- 实际安装路径:**`%LOCALAPPDATA%\TokenScope`**(不是 `Programs\TokenScope`,
+  文档里原先写错了,已改)。目录内容:`tokenscope.exe` 6.6MB + `uninstall.exe` 77KB。
+- **没有 `WebView2Loader.dll`** ✓ —— 静态链接在安装版布局里依然成立。
+- 注册表卸载项 ✓(DisplayName/DisplayVersion/InstallLocation/UninstallString 齐全)、
+  开始菜单快捷方式 ✓(`Start Menu\Programs\TokenScope.lnk`)。
+- 启动安装版:界面正常渲染(4 个渠道、4/4 已配置)✓,**数据完全继承** ——
+  四个渠道的密钥都在(与开发版共用 `%APPDATA%` 数据库 + Windows 凭据管理器),
+  印证了"升级/重装不丢数据"。
+- **自动更新链路端到端验证** ✓:在安装版里调 `check_update(force=true)`,它真的去拉了
+  `releases/latest/download/latest.json` 并返回
+  `{"current":"0.1.0","available":false,"checkedNow":true,"error":null}` ——
+  端点可达、清单可解析、签名校验无报错(版本相同,判断正确)。
+
 ### 验证工具(本轮新增/扩展)
 
 - `build/verify-form.js`:三形态切换 + `resizable` + Win32 样式位(固定尺寸)。
