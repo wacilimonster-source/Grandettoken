@@ -1297,6 +1297,39 @@ let UPD = { info: null, last: null };
 
 const fmtMB = (n) => (n / 1048576).toFixed(1) + " MB";
 
+// ───────────── 更新提示:标题旁的标签 + 覆盖卡片 ─────────────
+// 有新版才出现;自动检查失败一律静默。折叠形态不显示(宽度敏感)。
+const UPDC = { info: null, phase: null, pct: 0 };
+
+function renderUpdChip() {
+  const chip = $("updChip");
+  if (!chip) return;
+  let text = "";
+  if (UPDC.phase === "ready" && UPDC.info) text = "新版本 " + UPDC.info.version;
+  else if (UPDC.phase === "downloading") text = "下载 " + UPDC.pct + "%";
+  else if (UPDC.phase === "failed") text = "重试";
+  chip.textContent = text;
+  chip.style.display = text ? "" : "none";
+  chip.title = text ? "点开查看更新详情" : "";
+}
+
+function openUpdOverlay() {
+  const st = UPDC.info;
+  $("ovVer").textContent = st ? "发现新版本 " + st.version : "更新";
+  $("ovDate").textContent = (st && st.date) || "";
+  $("ovNotes").textContent = ((st && st.notes) || "").trim() || "(无更新说明)";
+  $("ovBar").style.display = "none";
+  $("ovMsg").style.display = "none";
+  $("updOv").style.display = "";
+}
+function closeUpdOverlay() { $("updOv").style.display = "none"; }
+
+$("updChip").addEventListener("click", openUpdOverlay);
+$("ovLater").addEventListener("click", closeUpdOverlay);
+// 「立即更新 / 跳过」复用管理页那套已经写好的流程(避免两份实现分叉)
+$("ovGo").addEventListener("click", () => { closeUpdOverlay(); $("btnUpdGo").click(); });
+$("ovSkip").addEventListener("click", () => { closeUpdOverlay(); $("btnUpdSkip").click(); });
+
 function setMsg(text, bad) {
   const el = $("updMsg");
   el.textContent = text || "";
@@ -1305,7 +1338,7 @@ function setMsg(text, bad) {
 }
 
 function renderAbout(st) {
-  if (st && st.current) $("uver").textContent = "TokenScope " + st.current;
+  if (st && st.current) $("uver").textContent = "Grandettoken " + st.current;
   const last = CFG && CFG.lastCheckAt;
   $("usub").textContent =
     "上次检查:" + (last ? new Date(last * 1000).toLocaleString("zh-CN", { hour12: false }) : "从未");
@@ -1338,9 +1371,14 @@ async function checkUpdate(force) {
     renderAbout(st);
     if (st.available) {
       UPD.info = st;
+      UPDC.info = st;
+      UPDC.phase = "ready";
+      renderUpdChip();
       showCard(st);
     } else {
       UPD.info = null;
+      UPDC.phase = null;
+      renderUpdChip();
       hideCard();
       // 自动检查一律静默:没更新、没网、被限流都不打扰。只有手动点才给反馈。
       if (force) setMsg(st.error ? "检查失败:" + st.error : "已是最新版本", !!st.error);
@@ -1351,6 +1389,17 @@ async function checkUpdate(force) {
 }
 
 function onUpdProgress(p) {
+  // 标题旁的标签同步反映下载状态:卡片关掉也能看到进度
+  const phase = (p && p.phase) || "";
+  if (phase === "downloading" || phase === "started") {
+    const total = (p && p.total) || 0;
+    const rec = (p && p.received) || 0;
+    UPDC.phase = "downloading";
+    UPDC.pct = total ? Math.min(100, Math.round((rec / total) * 100)) : 0;
+  } else if (phase === "failed") {
+    UPDC.phase = "failed";
+  }
+  if (UPDC.phase) renderUpdChip();
   if (!p) return;
   const bar = $("updBar");
   if (p.phase === "started") {

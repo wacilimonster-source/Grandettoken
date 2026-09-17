@@ -20,6 +20,7 @@
   <div class="tbar" data-tauri-drag-region>
     <div class="mark"></div>
     <div class="tt" data-tauri-drag-region>Grandettoken</div>
+    <button class="uchip" id="updChip" style="display:none"></button>
     <div class="spacer" data-tauri-drag-region></div>
     <button class="tb" id="btnR" title="立即刷新">刷新</button>
     <button class="tb" id="btnS" title="设置与管理">设置</button>
@@ -37,6 +38,22 @@
   <div class="cctl" id="cctl">
     <button class="ib" id="btnExpand" title="展开为面板">&#9650;</button>
     <button class="ib" id="btnToPill" title="收成胶囊">&#9679;</button>
+  </div>
+
+  <!-- 更新提示卡:从标题旁的标签打开,覆盖在列表上,不切页面 -->
+  <div class="upd-ov" id="updOv" style="display:none">
+    <div class="upd-ov-in">
+      <div class="uhead"><b id="ovVer"></b><span class="usub" id="ovDate"></span></div>
+      <div class="unotes" id="ovNotes"></div>
+      <div class="ubar" id="ovBar" style="display:none"><div class="bar"><i id="ovBarI" style="width:0%"></i></div><div class="usub" id="ovPct"></div></div>
+      <div class="usub ublk" id="ovMsg" style="display:none"></div>
+      <div class="acts" style="margin-top:9px">
+        <button class="btn p" id="ovGo">立即更新</button>
+        <button class="btn" id="ovSkip">跳过此版本</button>
+        <button class="btn" id="ovLater">稍后</button>
+      </div>
+      <div class="usub" style="margin-top:7px">点「立即更新」会下载安装包并在安装时自动重启应用</div>
+    </div>
   </div>
 
   <!-- 设置与管理:密钥与设置同页,与展示视图完全分开(body.view-manage 切换) -->

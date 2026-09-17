@@ -54,6 +54,17 @@ body{
 @keyframes pulse{50%{opacity:.35}}
 @keyframes spin{to{transform:rotate(360deg)}}
 
+/* 标题旁的更新提示:强调色,不是告警色 —— 更新不是故障 */
+.uchip{flex:none;border:1px solid #5b8cff66;background:#5b8cff1f;color:#9dbaff;
+  font:600 10px/1.2 inherit;font-family:inherit;padding:3px 7px;border-radius:999px;cursor:pointer;
+  white-space:nowrap;font-variant-numeric:tabular-nums}
+.uchip:hover{background:#5b8cff33;color:#c3d4ff}
+/* 覆盖在列表上的更新卡 */
+.upd-ov{position:absolute;left:0;right:0;top:80px;bottom:34px;z-index:5;
+  background:#0e1015f2;backdrop-filter:blur(2px);display:flex;align-items:flex-start;padding:12px}
+.upd-ov-in{width:100%;background:var(--bg2);border:1px solid var(--line);border-radius:10px;
+  padding:12px;box-shadow:0 12px 30px -10px #000}
+
 /* ── 消耗汇总(次要信息,压扁成一条) ── */
 .sum{display:flex;align-items:stretch;border-bottom:1px solid var(--line);
   background:#141720;flex:none}
