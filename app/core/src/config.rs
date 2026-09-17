@@ -71,6 +71,13 @@ pub struct Config {
     pub claim_channels: HashMap<String, ClaimConfig>,
     /// 「自定义排序」下的渠道顺序(渠道 id 数组);未列入的渠道附在末尾
     pub channel_order: Vec<String>,
+    /// 是否自动检查更新。关掉后只能靠管理页里的「检查更新」按钮手动触发。
+    pub auto_check_update: bool,
+    /// 上次检查更新的 unix 秒。自动检查的节流依据(24 小时一次),
+    /// 检查失败也写它 —— 不让网络故障变成重试风暴。
+    pub last_check_at: Option<i64>,
+    /// 用户在更新提示里选了「跳过此版本」的版本号。等于它就不提示。
+    pub skipped_version: Option<String>,
 }
 
 impl Default for Config {
@@ -93,6 +100,9 @@ impl Default for Config {
                 ClaimConfig::for_channel("4sapi"),
             )]),
             channel_order: Vec::new(),
+            auto_check_update: true,
+            last_check_at: None,
+            skipped_version: None,
         }
     }
 }

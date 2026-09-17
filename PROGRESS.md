@@ -540,6 +540,34 @@ OpenCode Go 与 DeepSeek 换成**官方标**,4SAPI / Hapi 仍是字母方块。
   (教训:改模板时 `renderKeyRows` 与 `renderClaimRows` 的 HTML 片段完全相同,
   按字符串替换会插错函数 —— 第二次用行范围定位才改对。)
 
+### 追加调整 11(2026-09-17,安装包 + 自动更新)
+
+交付形态从"只有绿色单 exe"扩成**两种**:NSIS 安装包(推荐,支持自动更新)+ 绿色单 exe。
+设计文档 `DESIGN-INSTALLER-UPDATE.md`,发布流程 `RELEASE.md`,更新清单生成
+`build/make-latest-json.js`。
+
+- **安装包**:`installMode=currentUser`(装到 `%LOCALAPPDATA%\Programs\TokenScope`,
+  不需要管理员)、`embedBootstrapper`(内嵌 WebView2 引导程序,断网也能装)、简体中文界面。
+- **自动更新**:官方 `tauri-plugin-updater`;公钥在 `tauri.conf.json`,端点 =
+  `releases/latest/download/latest.json`;`createUpdaterArtifacts` 产出 `.sig`。
+  更新逻辑全在 Rust(前端是无打包器的静态页,拿不到 npm 包):`check_update` /
+  `install_update` / `skip_update_version` + `update-progress` 事件。
+  自动检查 24 小时一次且**失败也写时间戳**(防一次网络故障变成请求风暴);
+  手动「检查更新」不受节流;跳过某版本后手动也不再弹。
+- **两个卡死坑(都实测踩过)**:
+  1. **签名环节会等交互输入密码** —— 密钥未加密,但不设
+     `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 时 Tauri 会打印
+     "expect a prompt for password" 然后永久等待(日志停在那行、CPU 1.5 秒/25 分钟)。
+     连续两次打包都死在这里,第一次还误判成网络问题。显式给空密码即可。
+  2. 从**已断开的会话**启动打包同样会卡(父 shell 没了、子进程等管道)——
+     排查这类"打包不动"时先看 CPU 与文件时间戳,别只看进程还在。
+- **安全**:私钥在 `~/.tauri/tokenscope.key`(**仓库外**,已确认未入库);
+  发布物只含安装包 / `.sig` / `latest.json`;更新包带 minisign 签名校验;
+  私钥丢失 = 已装用户永久收不到更新,务必备份。
+- **发版实测**:安装包 4.34MB + `.sig` 420B + `latest.json` 717B 已上传 v0.1.0;
+  端点取回的 latest.json 与本地**逐字节一致**;公钥与 `~/.tauri/*.pub` 的 sha256 一致;
+  绿色 exe 打包后依然零 WebView2Loader 依赖。
+
 ### 验证工具(本轮新增/扩展)
 
 - `build/verify-form.js`:三形态切换 + `resizable` + Win32 样式位(固定尺寸)。

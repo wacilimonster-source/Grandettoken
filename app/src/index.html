@@ -111,12 +111,35 @@
       <h4>启动</h4>
       <div class="field"><span>开机自启(静默进托盘)</span>
         <div class="sw" id="cfgAutostart"></div></div>
+
+      <h4>关于</h4>
+      <div class="field">
+        <span>版本<span class="usub" id="uver"></span></span>
+        <button class="btn" id="btnCheck">检查更新</button>
+      </div>
+      <div class="usub ublk" id="usub">上次检查:从未</div>
+      <div class="field"><span>自动检查更新</span><div class="sw" id="cfgAutoUpdate"></div></div>
+      <div class="usub ublk" id="updMsg" style="display:none"></div>
+      <div class="upcard" id="updCard" style="display:none">
+        <div class="uhead"><b id="updVer"></b><span class="usub" id="updDate"></span></div>
+        <div class="unotes" id="updNotes"></div>
+        <div class="ubar" id="updBar" style="display:none">
+          <div class="bar"><i id="updBarI" style="width:0%"></i></div>
+          <div class="usub" id="updPct"></div>
+        </div>
+        <div class="acts" style="margin-top:9px">
+          <button class="btn p" id="btnUpdGo">立即更新</button>
+          <button class="btn" id="btnUpdSkip">跳过此版本</button>
+          <button class="btn" id="btnUpdLater">稍后</button>
+        </div>
+      </div>
     </div>
   </div>
 
   <div class="foot">
     <span class="dot" id="fdot"></span>
     <span id="fstat">正在取数…</span>
+    <span class="lk" id="lkUpd" style="display:none"></span>
     <div class="spacer"></div>
     <span class="lk" id="lkKeys">设置与管理</span>
     <span style="color:var(--line2)">|</span>

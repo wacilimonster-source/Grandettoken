@@ -38,6 +38,24 @@
       "icons/icon.ico"
     ],
     "shortDescription": "多平台 Token 余额监控",
-    "longDescription": "常驻桌面的多平台 AI Token 余额与用量监控小组件,支持四级折叠"
+    "longDescription": "常驻桌面的多平台 AI Token 余额与用量监控小组件,支持四级折叠",
+    "createUpdaterArtifacts": true,
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["SimpChinese"],
+        "displayLanguageSelector": false
+      },
+      "webviewInstallMode": { "type": "embedBootstrapper" }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUyMkYyQzQ1MzczQTUxQUQKUldTdFVUbzNSU3d2NGdkd2JoM0VYUFhsK2hURmVidm01djZZbWd6M21jREtnYVFKR1ZJVWxOZkEK",
+      "endpoints": [
+        "https://github.com/wacilimonster-source/Grandettoken/releases/latest/download/latest.json"
+      ],
+      "windows": { "installMode": "passive" }
+    }
   }
 }

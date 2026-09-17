@@ -199,10 +199,186 @@ async fn refresh_now(app: &tauri::AppHandle) {
     let _ = app.emit("channels-updated", &views);
 }
 
+// ───────────── 检查更新 ─────────────
+// 更新逻辑放 Rust 而不是前端:前端是无打包器的静态页,拿不到
+// @tauri-apps/plugin-updater 的 npm 包。返回值 + 事件这套路子与
+// get_channels / channels-updated 一致 —— 前端只负责渲染,不做判断。
+//
+// 端点与公钥都在 tauri.conf.json 的 plugins.updater 里,插件自己读。
+const UPDATE_CHECK_INTERVAL_SEC: i64 = 24 * 60 * 60;
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateState {
+    /// 当前运行的版本
+    pub current: String,
+    /// 有新版本时为 true
+    pub available: bool,
+    pub version: String,
+    pub notes: String,
+    pub date: Option<String>,
+    /// 这次是否真的去问过服务器。节流 / 关掉自动检查时都是 false。
+    pub checked_now: bool,
+    /// 只有真去问了才有值。失败原因只给手动点击看,自动检查一律静默。
+    pub error: Option<String>,
+}
+
+impl UpdateState {
+    fn idle(current: &str) -> Self {
+        Self {
+            current: current.into(),
+            available: false,
+            version: String::new(),
+            notes: String::new(),
+            date: None,
+            checked_now: false,
+            error: None,
+        }
+    }
+}
+
+// 注意:async 命令只要带了 State(借用)就必须返回 Result,否则 tauri 的代码生成
+// 过不了(AsyncCommandMustReturnResult)。所以这里是 Result<UpdateState, String>,
+// Err 只表示命令本身坏了,更新"没有可用版本"是 Ok 里的 available:false。
+#[tauri::command]
+async fn check_update(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    force: bool,
+) -> Result<UpdateState, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let current = env!("CARGO_PKG_VERSION").to_string();
+
+    let (auto, last_check_at, skipped) = {
+        let cfg = state.config.lock().unwrap();
+        (
+            cfg.auto_check_update,
+            cfg.last_check_at,
+            cfg.skipped_version.clone(),
+        )
+    };
+    // 自动检查的闸门:开关关着、或距上次不足 24 小时,就直接闲置,不发请求。
+    // 手动点「检查更新」(force=true)一律放行。
+    if !force && !auto {
+        return Ok(UpdateState::idle(&current));
+    }
+    if !force {
+        if let Some(last) = last_check_at {
+            if now_ts() - last < UPDATE_CHECK_INTERVAL_SEC {
+                return Ok(UpdateState::idle(&current));
+            }
+        }
+    }
+
+    // 只要真的要发请求就先把时间戳写掉 —— 失败也算检查过,
+    // 否则一次网络故障会变成每次启动都重试的请求风暴。
+    {
+        let store = state.store.lock();
+        if let Ok(s) = store {
+            let mut cfg = state.config.lock().unwrap();
+            cfg.last_check_at = Some(now_ts());
+            let _ = cfg.save(&s);
+        }
+    }
+
+    let updater = match app.updater_builder().build() {
+        Ok(u) => u,
+        Err(e) => {
+            return Ok(UpdateState {
+                checked_now: true,
+                error: Some(e.to_string()),
+                ..UpdateState::idle(&current)
+            })
+        }
+    };
+    Ok(match updater.check().await {
+        Ok(Some(u)) => {
+            // 「跳过此版本」要尊重到底:手动点也不该把跳过的版本重新弹出来
+            if skipped.as_deref() == Some(u.version.as_str()) {
+                UpdateState::idle(&current)
+            } else {
+                UpdateState {
+                    current,
+                    available: true,
+                    version: u.version.clone(),
+                    // 更新说明在远端清单里可能没有,缺失就留空,前端会显示占位
+                    notes: u.body.clone().unwrap_or_default(),
+                    date: u.date.as_ref().map(|d| d.to_string()),
+                    checked_now: true,
+                    error: None,
+                }
+            }
+        }
+        Ok(None) => UpdateState {
+            checked_now: true,
+            ..UpdateState::idle(&current)
+        },
+        // 网络不通、限流、清单格式不对都走这里。自动检查时前端不会显示它
+        Err(e) => UpdateState {
+            checked_now: true,
+            error: Some(e.to_string()),
+            ..UpdateState::idle(&current)
+        },
+    })
+}
+
+/// 下载并安装。Windows 上 install 那一步会直接退出进程,
+/// 所以这里不会返回 "装好了" —— 前端别在它后面再弹确认框。
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let updater = app.updater_builder().build().map_err(|e| e.to_string())?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "没有可用的更新".to_string())?;
+
+    let mut received: u64 = 0;
+    let mut total: u64 = 0;
+    let h1 = app.clone();
+    let h2 = app.clone();
+    let _ = h1.emit(
+        "update-progress",
+        serde_json::json!({ "phase": "started", "received": 0, "total": 0 }),
+    );
+    update
+        .download_and_install(
+            move |chunk: usize, content_length: Option<u64>| {
+                received += chunk as u64;
+                if let Some(cl) = content_length {
+                    total = cl;
+                }
+                let _ = h1.emit(
+                    "update-progress",
+                    serde_json::json!({ "phase": "downloading", "received": received, "total": total }),
+                );
+            },
+            move || {
+                let _ = h2.emit("update-progress", serde_json::json!({ "phase": "installing" }));
+            },
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit("update-progress", serde_json::json!({ "phase": "finished" }));
+    Ok(())
+}
+
+/// 记住「跳过此版本」。
+#[tauri::command]
+fn skip_update_version(state: State<'_, AppState>, version: String) -> Result<(), String> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    let mut cfg = state.config.lock().map_err(|e| e.to_string())?;
+    cfg.skipped_version = Some(version);
+    cfg.save(&store)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // 公钥与端点都在 tauri.conf.json 的 plugins.updater 里,插件自己读配置
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let dir = app
                 .path()
@@ -301,6 +477,9 @@ pub fn run() {
             set_tray_icon,
             key_hint,
             window_cmd,
+            check_update,
+            install_update,
+            skip_update_version,
         ])
         .run(tauri::generate_context!())
         .expect("TokenScope 启动失败");

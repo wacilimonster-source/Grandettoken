@@ -176,6 +176,19 @@ body.view-manage #lkKeys{display:none}
   font-size:12px;padding:3px 6px;font-family:inherit;flex:none}
 .sel:focus{outline:none;border-color:var(--ac)}
 
+/* ── 关于 / 检查更新 ── */
+.usub{color:var(--tx3);font-size:11px;font-weight:400}
+.field .usub{margin-left:6px}
+.ublk{display:block;margin:2px 0 8px}
+.ublk.bad{color:var(--bad)}
+.upcard{margin-top:9px;padding:10px 11px;border:1px solid var(--line2);border-radius:8px;
+  background:#ffffff05}
+.upcard .uhead{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px}
+.upcard .unotes{font-size:11.5px;color:var(--tx2);line-height:1.7;white-space:pre-line;
+  max-height:132px;overflow-y:auto}
+.upcard .ubar{margin-top:9px}
+.upcard .ubar .bar{margin:0 0 3px}
+
 /* 胶囊显示渠道的多选芯片 */
 .picks{display:flex;flex-wrap:wrap;gap:6px}
 .pick{border:1px solid var(--line2);background:var(--bg3);color:var(--tx3);font-size:12px;

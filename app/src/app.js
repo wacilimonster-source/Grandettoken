@@ -962,6 +962,7 @@ function openManage() {
   renderPillPick();
   renderOrderRows();
   renderClaimRows();
+  renderAbout(UPD.last); // 版本号与上次检查时间
   document.body.classList.add("view-manage");
   $("btnS").classList.add("on");
 }
@@ -1231,6 +1232,7 @@ bindSelect("cfgSort", "sort", String);
 bindSelect("cfgWarn", "warnPercent");
 bindSelect("cfgCrit", "critPercent");
 bindSwitch("cfgAutostart", "autostart", (on) => invoke("set_autostart", { enabled: on }));
+bindSwitch("cfgAutoUpdate", "autoCheckUpdate");
 // 置顶走 set_pin:窗口与配置一起改,失败时 bindSwitch 会回滚开关
 bindSwitch("cfgPin", "alwaysOnTop", async (on) => {
   await invoke("set_pin", { enabled: on });
@@ -1250,7 +1252,115 @@ function applyConfigToUI() {
   set("cfgWarn", CFG.warnPercent);
   set("cfgCrit", CFG.critPercent);
   $("cfgAutostart").classList.toggle("on", !!CFG.autostart);
+  $("cfgAutoUpdate").classList.toggle("on", CFG.autoCheckUpdate !== false);
+  renderAbout();
 }
+
+// ───────────── 检查更新 ─────────────
+// 判断全在 Rust 侧(开关、24 小时节流、跳过此版本、版本比较),前端只负责渲染。
+// 前端是无打包器的静态页,拿不到 @tauri-apps/plugin-updater,所以走命令 + 事件,
+// 和 get_channels / channels-updated 同一套路子。
+let UPD = { info: null, last: null };
+
+const fmtMB = (n) => (n / 1048576).toFixed(1) + " MB";
+
+function setMsg(text, bad) {
+  const el = $("updMsg");
+  el.textContent = text || "";
+  el.style.display = text ? "block" : "none";
+  el.classList.toggle("bad", !!bad);
+}
+
+function renderAbout(st) {
+  if (st && st.current) $("uver").textContent = "TokenScope " + st.current;
+  const last = CFG && CFG.lastCheckAt;
+  $("usub").textContent =
+    "上次检查:" + (last ? new Date(last * 1000).toLocaleString("zh-CN", { hour12: false }) : "从未");
+}
+
+function showCard(st) {
+  $("updCard").style.display = "block";
+  $("updVer").textContent = "发现新版本 " + st.version;
+  $("updDate").textContent = st.date || "";
+  $("updNotes").textContent = (st.notes || "").trim() || "(无更新说明)";
+  $("updBar").style.display = "none";
+  setMsg("");
+  // 常驻挂件不弹窗:只在底栏挂一个入口,点进去才展开卡片
+  const lk = $("lkUpd");
+  lk.textContent = "有新版本 " + st.version;
+  lk.style.display = "";
+}
+
+function hideCard() {
+  $("updCard").style.display = "none";
+  $("lkUpd").style.display = "none";
+}
+
+async function checkUpdate(force) {
+  try {
+    if (force) setMsg("正在检查…");
+    const st = await invoke("check_update", { force });
+    UPD.last = st;
+    if (st.checkedNow) CFG.lastCheckAt = Math.floor(Date.now() / 1000);
+    renderAbout(st);
+    if (st.available) {
+      UPD.info = st;
+      showCard(st);
+    } else {
+      UPD.info = null;
+      hideCard();
+      // 自动检查一律静默:没更新、没网、被限流都不打扰。只有手动点才给反馈。
+      if (force) setMsg(st.error ? "检查失败:" + st.error : "已是最新版本", !!st.error);
+    }
+  } catch (e) {
+    if (force) setMsg("检查失败:" + e, true);
+  }
+}
+
+function onUpdProgress(p) {
+  if (!p) return;
+  const bar = $("updBar");
+  if (p.phase === "started") {
+    bar.style.display = "block";
+    $("updBarI").style.width = "0%";
+    $("updPct").textContent = "准备下载…";
+    setMsg("");
+  } else if (p.phase === "downloading") {
+    bar.style.display = "block";
+    const pct = p.total ? Math.round((p.received / p.total) * 100) : 0;
+    $("updBarI").style.width = pct + "%";
+    $("updPct").textContent = p.total
+      ? pct + "% · " + fmtMB(p.received) + " / " + fmtMB(p.total)
+      : fmtMB(p.received);
+  } else if (p.phase === "installing") {
+    // Windows 上 install 那一步会直接退出进程,不会再有后续事件
+    setMsg("正在安装,完成后会自动重启");
+  }
+}
+
+$("btnCheck").addEventListener("click", () => checkUpdate(true));
+$("lkUpd").addEventListener("click", () => {
+  openManage();
+  if ($("updCard")) $("updCard").scrollIntoView({ block: "center" });
+});
+$("btnUpdGo").addEventListener("click", async () => {
+  if (!UPD.info) return;
+  try {
+    await invoke("install_update");
+  } catch (e) {
+    setMsg("更新失败:" + e, true);
+  }
+});
+$("btnUpdSkip").addEventListener("click", () => {
+  if (!UPD.info) return;
+  const v = UPD.info.version;
+  invoke("skip_update_version", { version: v }).catch(() => {});
+  UPD.info = null;
+  hideCard();
+  setMsg("已跳过 " + v + ",下次发布新版本再提醒");
+});
+$("btnUpdLater").addEventListener("click", () => hideCard());
+listen("update-progress", (ev) => onUpdProgress(ev.payload));
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
@@ -1301,4 +1411,8 @@ async function refresh() {
     CHANNELS = ev.payload;
     render();
   });
+
+  // 启动 30 秒后再自动检查:避开启动时的取数高峰。节流在 Rust 侧(24 小时一次),
+  // 所以这里每天最多真的发一次请求;失败也静默。
+  setTimeout(() => checkUpdate(false), 30_000);
 })();
