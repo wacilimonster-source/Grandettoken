@@ -67,6 +67,43 @@ pub struct ClaimState {
     pub shortage_risk: bool,
 }
 
+/// 一次尝试的失败类型 —— 它决定"要不要换个域名再试"。
+/// 分错会让排障变难:密钥错(4xx)换域名只是白等,网络故障不换就白白瞎掉一个渠道。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailKind {
+    /// 连不上 / DNS / 超时:换域名
+    Transport,
+    /// 5xx、429、响应不是 JSON:换域名(可能是入口自身的问题或限流)
+    Server,
+    /// 4xx(除 429):密钥/权限问题,换域名也是同一个答案
+    Client,
+    /// 业务失败(HTTP 200 但 code:false 之类):服务器明确答复了,不换
+    Business,
+}
+
+impl FailKind {
+    /// 值得换域名重试吗
+    pub fn retryable(self) -> bool {
+        matches!(self, FailKind::Transport | FailKind::Server)
+    }
+}
+
+/// 尝试顺序:上次成功的入口优先(避免每轮都先撞那个挂掉的),
+/// 其余按定义顺序补上,去重。
+pub fn attempt_order(primary: &str, fallbacks: &[&str], last_good: Option<&str>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for u in last_good
+        .into_iter()
+        .chain(std::iter::once(primary))
+        .chain(fallbacks.iter().copied())
+    {
+        if !out.iter().any(|x| x == u) {
+            out.push(u.to_string());
+        }
+    }
+    out
+}
+
 /// 申请事件的最小跳升幅度(元)。低于这个数当四舍五入抖动,不记为一次申请。
 const CLAIM_JUMP_MIN_DELTA: f64 = 20.0;
 /// 回溯窗口:与快照保留期(90 天)对齐
@@ -189,15 +226,20 @@ pub fn local_month_start() -> i64 {
     local_date_start(n.year(), n.month(), 1)
 }
 
-pub async fn fetch_channel(
+/// 单次尝试:一个地址、一次请求。返回结果与"这次失败值不值得换域名"。
+async fn fetch_once(
     client: &reqwest::Client,
     def: &providers::ProviderDef,
+    url: &str,
     key: &str,
-) -> FetchResult {
+) -> (FetchResult, Option<FailKind>) {
     let mut req = client
-        .get(def.url)
+        .get(url)
         .header("Authorization", format!("Bearer {}", key.trim()))
-        .header("Accept", "application/json");
+        .header("Accept", "application/json")
+        // 单次尝试的预算:4 个入口最坏 32 秒,还收在 60 秒轮询周期内。
+        // 用客户端的 20 秒默认值会让"某个域名挂着"直接拖垮整轮取数。
+        .timeout(std::time::Duration::from_secs(8));
 
     for (k, v) in def.extra_headers {
         req = req.header(*k, *v);
@@ -213,11 +255,14 @@ pub async fn fetch_channel(
             } else {
                 format!("请求失败: {e}")
             };
-            return FetchResult {
-                valid: false,
-                error: Some(msg),
-                ..Default::default()
-            };
+            return (
+                FetchResult {
+                    valid: false,
+                    error: Some(msg),
+                    ..Default::default()
+                },
+                Some(FailKind::Transport),
+            );
         }
     };
 
@@ -225,11 +270,15 @@ pub async fn fetch_channel(
     let body: serde_json::Value = match resp.json().await {
         Ok(v) => v,
         Err(_) => {
-            return FetchResult {
-                valid: false,
-                error: Some(format!("响应不是合法 JSON (HTTP {})", status.as_u16())),
-                ..Default::default()
-            }
+            return (
+                FetchResult {
+                    valid: false,
+                    error: Some(format!("响应不是合法 JSON (HTTP {})", status.as_u16())),
+                    ..Default::default()
+                },
+                // 可能是入口返回的错误页 —— 换个域名值得一试
+                Some(FailKind::Server),
+            )
         }
     };
 
@@ -242,7 +291,54 @@ pub async fn fetch_channel(
         result.error = Some(format!("HTTP {}", status.as_u16()));
     }
 
-    result
+    let kind = if result.valid {
+        None
+    } else if !status.is_success() {
+        let code = status.as_u16();
+        Some(if code == 429 || code >= 500 {
+            FailKind::Server
+        } else {
+            FailKind::Client // 401/403 等:密钥或权限问题,换域名也是同一答案
+        })
+    } else {
+        Some(FailKind::Business) // HTTP 200 但业务失败
+    };
+
+    (result, kind)
+}
+
+/// 返回 (结果, 成功时用的地址)。调用方据此记住"哪个入口是通的"。
+pub async fn fetch_channel(
+    client: &reqwest::Client,
+    def: &providers::ProviderDef,
+    key: &str,
+    last_good: Option<&str>,
+) -> (FetchResult, Option<String>) {
+    let order = attempt_order(def.url, def.fallback_urls, last_good);
+    let mut last: Option<FetchResult> = None;
+
+    for (i, url) in order.iter().enumerate() {
+        let (result, kind) = fetch_once(client, def, url, key).await;
+        // 成功,或者失败类型不值得换域名(密钥错/业务失败)—— 就此打住
+        let stop = match kind {
+            None => true,
+            Some(k) => !k.retryable(),
+        };
+        if stop || i + 1 == order.len() {
+            let used = if result.valid { Some(url.clone()) } else { None };
+            return (result, used);
+        }
+        last = Some(result);
+    }
+    // order 至少含主地址,这里到不了;给个兜底避免 unwrap
+    (
+        last.unwrap_or(FetchResult {
+            valid: false,
+            error: Some("没有可用的接口地址".into()),
+            ..Default::default()
+        }),
+        None,
+    )
 }
 
 /// 申请制状态:只有开启了申请制的渠道才算,并且要查快照历史。
@@ -353,6 +449,9 @@ fn placeholder(def: &providers::ProviderDef) -> ChannelView {
 pub struct Fetcher {
     pub http: reqwest::Client,
     cache: Mutex<HashMap<String, (FetchResult, i64)>>,
+    /// 每个渠道上次成功的入口地址。本轮先试它,避免每分钟都先撞挂掉的域名。
+    /// 只存内存:重启后退回定义顺序,不往磁盘写状态。
+    url_memo: Mutex<HashMap<String, String>>,
 }
 
 impl Default for Fetcher {
@@ -370,6 +469,7 @@ impl Fetcher {
                 .build()
                 .expect("HTTP 客户端初始化失败"),
             cache: Mutex::new(HashMap::new()),
+            url_memo: Mutex::new(HashMap::new()),
         }
     }
 
@@ -392,8 +492,19 @@ impl Fetcher {
                 continue;
             };
 
-            let result = fetch_channel(&self.http, def, &key).await;
+            let memo = self
+                .url_memo
+                .lock()
+                .ok()
+                .and_then(|m| m.get(def.id).cloned());
+            let (result, used_url) = fetch_channel(&self.http, def, &key, memo.as_deref()).await;
             let ts = now_ts();
+
+            if let (true, Some(url)) = (result.valid, used_url.as_ref()) {
+                if let Ok(mut m) = self.url_memo.lock() {
+                    m.insert(def.id.to_string(), url.clone());
+                }
+            }
 
             if result.valid {
                 successful.push((def.id, result.clone(), ts));
@@ -591,6 +702,25 @@ mod tests {
         assert_eq!(s.days_until_eligible, None);
         assert!(!s.eligible);
         assert_eq!(s.source, "none");
+    }
+
+    /// 换域名重试的策略:网络/5xx/429 才值得换;密钥错与业务失败不换。
+    #[test]
+    fn only_transport_and_server_failures_retry() {
+        assert!(FailKind::Transport.retryable());
+        assert!(FailKind::Server.retryable());
+        assert!(!FailKind::Client.retryable());   // 401/403:换域名也是同一答案
+        assert!(!FailKind::Business.retryable()); // code:false:服务器已明确答复
+    }
+
+    /// 尝试顺序:上次成功的优先,其次主地址,再依次补备用,且不重复。
+    #[test]
+    fn attempt_order_puts_last_good_first_and_dedups() {
+        let fbs = ["https://b/x", "https://c/x"];
+        assert_eq!(attempt_order("https://a/x", &fbs, None), vec!["https://a/x", "https://b/x", "https://c/x"]);
+        assert_eq!(attempt_order("https://a/x", &fbs, Some("https://c/x")), vec!["https://c/x", "https://a/x", "https://b/x"]);
+        // last_good 就是主地址时不产生重复项
+        assert_eq!(attempt_order("https://a/x", &fbs, Some("https://a/x")), vec!["https://a/x", "https://b/x", "https://c/x"]);
     }
 
     #[test]

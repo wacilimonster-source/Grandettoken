@@ -306,6 +306,9 @@ pub struct ProviderDef {
     pub short: &'static str,
     pub color: &'static str,
     pub url: &'static str,
+    /// 同渠道的备用入口。主地址失败且失败类型"值得换域名"时按顺序重试。
+    /// 4SAPI 有四个域名,某个挂了不至于让这个渠道瞎掉。
+    pub fallback_urls: &'static [&'static str],
     /// 额外请求头,除 Authorization 外
     pub extra_headers: &'static [(&'static str, &'static str)],
     /// 未公开接口,失败要静默降级而非报警
@@ -320,6 +323,11 @@ pub const PROVIDERS: &[ProviderDef] = &[
         short: "4S",
         color: "#e8622c",
         url: "https://4sapi.com/api/usage/token",
+        fallback_urls: &[
+            "https://4sapi.cn/api/usage/token",
+            "https://4sapi.ai/api/usage/token",
+            "https://4sapi.org/api/usage/token",
+        ],
         extra_headers: &[],
         unstable: false,
         extract: extract_4sapi,
@@ -330,6 +338,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         short: "OC",
         color: "#f5a623",
         url: "https://opencode.ai/zen/go/v1/usage",
+        fallback_urls: &[],
         extra_headers: &[], // 只认 Bearer,x-api-key 无效
         unstable: true,
         extract: extract_opencode_go,
@@ -340,6 +349,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         short: "DS",
         color: "#4d6bfe",
         url: "https://api.deepseek.com/user/balance",
+        fallback_urls: &[],
         extra_headers: &[],
         unstable: false,
         extract: extract_deepseek,
@@ -350,6 +360,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         short: "HA",
         color: "#22a06b",
         url: "https://ai.yuchuantest.com/v1/usage",
+        fallback_urls: &[],
         extra_headers: &[("User-Agent", "cc-switch/1.0")],
         unstable: false,
         extract: extract_hapi,
