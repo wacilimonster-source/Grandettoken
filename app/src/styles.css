@@ -44,6 +44,14 @@ body{
 .ib.on{color:#fff;background:var(--ac)}
 .ib.on:hover{background:#6f9bff;color:#fff}
 .ib.spin{animation:spin .7s ease}
+/* 面板标题栏的文字按钮:比图标直白,紧凑排版(内边距 2×6、字号 10.5px)保证不挤标题 */
+.tb{border:0;background:transparent;color:var(--tx2);cursor:pointer;font-family:inherit;
+  font-size:10.5px;line-height:1.25;padding:3px 6px;border-radius:5px;flex:none;white-space:nowrap}
+.tb:hover{background:#ffffff12;color:var(--tx)}
+.tb.on{color:#fff;background:var(--ac)}
+/* 文字按钮没法"转",刷新反馈改成脉冲 */
+.tb.spin{animation:pulse .7s ease}
+@keyframes pulse{50%{opacity:.35}}
 @keyframes spin{to{transform:rotate(360deg)}}
 
 /* ── 消耗汇总(次要信息,压扁成一条) ── */

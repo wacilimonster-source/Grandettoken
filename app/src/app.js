@@ -392,9 +392,14 @@ function renderDetail(c) {
 function render() {
   const sorted = sortChannels(CHANNELS);
   // 标题栏挤了 6 个按钮,计数用短写法,完整说法放 tooltip
-  const withKeyN = CHANNELS.filter((c) => c.hasKey).length;
-  $("cnt").textContent = withKeyN + "/" + CHANNELS.length;
-  $("cnt").title = `已配置 ${withKeyN} / 共 ${CHANNELS.length} 个渠道`;
+  // 标题栏改文字按钮后不再放计数(放不下),底栏已有「N 正常 · M 预警」;
+  // 元素可能不存在,这里做守卫
+  const cnt = $("cnt");
+  if (cnt) {
+    const withKeyN = CHANNELS.filter((c) => c.hasKey).length;
+    cnt.textContent = withKeyN + "/" + CHANNELS.length;
+    cnt.title = `已配置 ${withKeyN} / 共 ${CHANNELS.length} 个渠道`;
+  }
 
   renderSummary();
 
@@ -747,6 +752,26 @@ async function applyForm(form, remember = true) {
     CFG.form = form;
     invoke("set_config", { config: CFG }).catch(() => {});
   }
+  clampToMonitor();
+}
+
+/** 把窗口夹进当前显示器:胶囊在屏幕角落时展开成面板会"长出"屏幕,看不全。 */
+async function clampToMonitor() {
+  try {
+    const info = await monitorInfo();
+    if (!info) return;
+    if (DOCK.on && !DOCK.open) return; // 吸附收起态由吸附逻辑自己管位置
+    const pos = await appWindow.outerPosition();
+    const size = await appWindow.outerSize();
+    const x = Math.max(info.left, Math.min(info.right - size.width, pos.x));
+    const y = Math.max(info.top, Math.min(info.bottom - size.height, pos.y));
+    if (x !== pos.x || y !== pos.y) {
+      markSelfMove(); // 别让这次移动触发"拖到边缘"判定
+      await appWindow.setPosition(new T.dpi.PhysicalPosition(x, y));
+    }
+  } catch (e) {
+    console.error("窗口夹回屏幕失败", e);
+  }
 }
 
 // ───────────── 贴边(拖到屏幕边缘自动吸附) ─────────────
@@ -872,6 +897,8 @@ function scheduleSettleCheck() {
     const nearRight = pos.x + size.width >= info.right - snap;
     const nearLeft = pos.x <= info.left + snap;
     if (!DOCK.on) {
+      // 开关关着就不吸附:挂件随手一拖就变竖条太意外,所以默认关闭
+      if (!(CFG && CFG.dockEnabled)) return;
       if (nearRight || nearLeft) await dockEnter(nearRight ? "right" : "left", pos);
     } else if (!nearRight && !nearLeft) {
       await dockExit(true); // 拖离边缘 = 解除吸附,留在松手的位置
@@ -1040,6 +1067,8 @@ function applyPinUI() {
   const btn = $("btnP");
   btn.classList.toggle("on", on);
   btn.title = on ? "已置顶(点击取消)" : "窗口置顶";
+  const dock = $("cfgDock");
+  if (dock) dock.classList.toggle("on", !!CFG.dockEnabled);
   const sw = $("cfgPin");
   if (sw) sw.classList.toggle("on", on);
 }
@@ -1234,6 +1263,10 @@ bindSelect("cfgCrit", "critPercent");
 bindSwitch("cfgAutostart", "autostart", (on) => invoke("set_autostart", { enabled: on }));
 bindSwitch("cfgAutoUpdate", "autoCheckUpdate");
 // 置顶走 set_pin:窗口与配置一起改,失败时 bindSwitch 会回滚开关
+// 吸附开关:关掉时如果正吸附着,立刻解除
+bindSwitch("cfgDock", "dockEnabled", async (on) => {
+  if (!on && DOCK.on) await dockExit(true);
+});
 bindSwitch("cfgPin", "alwaysOnTop", async (on) => {
   await invoke("set_pin", { enabled: on });
   applyPinUI();

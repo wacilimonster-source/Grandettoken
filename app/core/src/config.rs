@@ -71,6 +71,9 @@ pub struct Config {
     pub claim_channels: HashMap<String, ClaimConfig>,
     /// 「自定义排序」下的渠道顺序(渠道 id 数组);未列入的渠道附在末尾
     pub channel_order: Vec<String>,
+    /// 拖到屏幕边缘自动吸附。**默认关** —— 挂件随手放在哪里都可能,自动吸附
+    /// 会让人措手不及(往右上角一拖就变成一条竖条),所以做成显式开启。
+    pub dock_enabled: bool,
     /// 是否自动检查更新。关掉后只能靠管理页里的「检查更新」按钮手动触发。
     pub auto_check_update: bool,
     /// 上次检查更新的 unix 秒。自动检查的节流依据(24 小时一次),
@@ -100,6 +103,7 @@ impl Default for Config {
                 ClaimConfig::for_channel("4sapi"),
             )]),
             channel_order: Vec::new(),
+            dock_enabled: false,
             auto_check_update: true,
             last_check_at: None,
             skipped_version: None,

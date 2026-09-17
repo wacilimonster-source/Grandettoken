@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><title>Grandettoken · 三形态按钮对照</title>
+<style>
+ body{margin:0;padding:24px 28px 60px;background:#0a0b0f;color:#e6e9f0;font:13px/1.6 "Segoe UI","Microsoft YaHei",sans-serif}
+ h1{font-size:15px;margin:0 0 4px}.lead{color:#9aa3b5;font-size:12.5px;margin-bottom:18px}
+ h2{font-size:12.5px;margin:24px 0 2px;color:#9aa3b5;font-weight:600}
+ h3{font-size:11.5px;margin:12px 0 4px;color:#646d80;font-weight:600}
+ .win{width:380px;background:#12141a;border:1px solid #282d3a;border-radius:12px;overflow:hidden}
+ .bar{display:flex;align-items:center;gap:9px;background:linear-gradient(180deg,#1d2129,#171a21)}
+ .panelbar{padding:9px 8px 9px 12px}
+ .bar46{padding:8px;height:46px;box-sizing:border-box;border-radius:10px}
+ .pillbar{gap:8px;padding:7px 8px 7px 9px;height:46px;box-sizing:border-box;border-radius:999px}
+ .mark{width:17px;height:17px;border-radius:5px;flex:none;position:relative;background:linear-gradient(135deg,#5b8cff,#8b5bff)}
+ .mark::after{content:"";position:absolute;inset:5px;border-radius:2px;background:#12141a}
+ .tt{font-size:12px;font-weight:600;white-space:nowrap}.tt small{font-weight:400;color:#646d80;margin-left:5px;font-size:11px}
+ .spacer{flex:1}
+ .ib{width:24px;height:24px;border:0;background:transparent;border-radius:6px;color:#9aa3b5;display:grid;place-items:center;font-size:13px;flex:none;font-family:inherit}
+ .ib.on{color:#fff;background:#5b8cff}
+ .ib2{width:26px;height:26px;border:0;background:transparent;border-radius:7px;color:#c9d1e0;display:grid;place-items:center;flex:none}
+ .ib2.on{color:#fff;background:#5b8cff}
+ .ib svg,.ib2 svg{display:block}
+ .tb{border:0;background:transparent;color:#c9d1e0;font-family:inherit;font-size:10.5px;padding:3px 6px;border-radius:5px;flex:none;white-space:nowrap;line-height:1.2}
+ .tb.on{color:#fff;background:#5b8cff}
+ .sep{width:1px;height:16px;background:#282d3a;flex:none;margin:0 2px}
+ .tb2{border:0;background:transparent;color:#c9d1e0;font-family:inherit;font-size:10px;padding:2px 5px;border-radius:5px;flex:none;white-space:nowrap;line-height:1.25;letter-spacing:0}
+ .tb2:hover{background:#ffffff12;color:#fff}
+ .tb2.on{color:#fff;background:#5b8cff}
+ .chip{display:flex;align-items:center;gap:5px;padding:3px 7px;border-radius:6px;background:#20242e;font-size:11px;font-variant-numeric:tabular-nums;flex:none}
+ .ico{width:16px;height:16px;border-radius:4px;display:grid;place-items:center;font-size:8px;font-weight:700;color:#fff;flex:none}
+ .dot{width:6px;height:6px;border-radius:50%;flex:none}
+ .val{font-size:13.5px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+ .more{font-size:11px;color:#646d80;flex:none}
+ .note{font-size:12px;color:#9aa3b5;background:#141720;border-left:2px solid #5b8cff;padding:8px 12px;border-radius:0 8px 8px 0;margin:10px 0 0;width:380px}
+</style></head><body>
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-ref" viewBox="0 0 16 16"><path d="M8 2.6a5.4 5.4 0 1 1-5.1 3.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M8 .9v3.4l3-1.7z" fill="currentColor"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.4" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 1.4v2M8 12.6v2M1.4 8h2M12.6 8h2M3.3 3.3l1.4 1.4M11.3 11.3l1.4 1.4M12.7 3.3l-1.4 1.4M4.7 11.3l-1.4 1.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 16 16"><circle cx="10.2" cy="5.8" r="3.4" fill="currentColor"/><path d="M8.1 7.9 3.4 12.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-two" viewBox="0 0 16 16"><rect x="2" y="4.4" width="12" height="2.6" rx="1.3" fill="currentColor"/><rect x="2" y="9" width="7" height="2.6" rx="1.3" fill="currentColor" opacity=".55"/></symbol>
+  <symbol id="i-down" viewBox="0 0 16 16"><path d="M4 6.4 8 10.4l4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 12.6h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-up" viewBox="0 0 16 16"><path d="M3 11.4 8 6.4l5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-pillshape" viewBox="0 0 16 16"><rect x="1.6" y="5.2" width="12.8" height="5.6" rx="2.8" fill="currentColor"/></symbol>
+</svg>
+
+<h1>三形态按钮 · 现状 / 方案 A(文字) / 方案 B(优化矢量图标)</h1>
+<div class="lead">按真实尺寸渲染:面板标题栏 380px、紧凑条 380×46、胶囊自适应宽度(当前 132px)。鼠标悬停可看反馈。</div>
+
+<h2>① 面板(380 宽标题栏)</h2>
+<h3>现状 —— 文字符号 ⟳ ⚙ ▬ ✕,颜色偏灰、形状含糊</h3>
+<div class="win"><div class="bar panelbar"><div class="mark"></div><div class="tt">Grandettoken <small>4/4</small></div><div class="spacer"></div>
+<button class="ib">&#8635;</button><button class="ib">&#9881;</button><button class="ib on"><svg width="13" height="13"><use href="#i-pin"/></svg></button><button class="ib">&#9644;</button><button class="ib">&#10005;</button></div></div>
+
+<h3>方案 A · 文字按钮</h3>
+<div class="win"><div class="bar panelbar"><div class="mark"></div><div class="tt">Grandettoken</div><div class="spacer"></div>
+<button class="tb">刷新</button><button class="tb">设置</button><button class="tb on">置顶</button><button class="tb">紧凑</button><button class="tb">隐藏</button></div></div>
+
+<h3>方案 B · 优化矢量图标</h3>
+<div class="win"><div class="bar panelbar"><div class="mark"></div><div class="tt">Grandettoken <small>4/4</small></div><div class="spacer"></div>
+<button class="ib2"><svg width="16" height="16"><use href="#i-ref"/></svg></button><button class="ib2"><svg width="16" height="16"><use href="#i-gear"/></svg></button><button class="ib2 on"><svg width="16" height="16"><use href="#i-pin"/></svg></button><span class="sep"></span><button class="ib2"><svg width="16" height="16"><use href="#i-two"/></svg></button><button class="ib2"><svg width="16" height="16"><use href="#i-down"/></svg></button></div></div>
+<div class="note">A 版标题被压掉一截(「4/4」放不下);B 版标题与计数都保留,靠 16px 矢量图标表意,默认色从 #9aa3b5 提到 #c9d1e0。</div>
+
+<h2>② 紧凑条(380×46:chip + 切换按钮)</h2>
+<h3>现状</h3>
+<div class="win"><div class="bar bar46"><span class="chip"><i class="ico" style="background:#f5a623">OC</i><i class="dot" style="background:#f0554d"></i>1.3%</span><span class="chip"><i class="ico" style="background:#e8622c">4S</i><i class="dot" style="background:#f0b23c"></i>¥18</span><span class="chip"><i class="ico" style="background:#4d6bfe">DS</i><i class="dot" style="background:#3ecf8e"></i>¥36</span><span class="more">+1</span><span class="spacer"></span><button class="ib"><svg width="13" height="13"><use href="#i-up"/></svg></button><button class="ib">&#9679;</button></div></div>
+
+<h3>方案 A · 文字按钮(原排版:内边距 3×6 / 10.5px)</h3>
+<div class="win"><div class="bar bar46"><span class="chip"><i class="ico" style="background:#f5a623">OC</i><i class="dot" style="background:#f0554d"></i>1.3%</span><span class="chip"><i class="ico" style="background:#e8622c">4S</i><i class="dot" style="background:#f0b23c"></i>¥18</span><span class="more">+2</span><span class="spacer"></span><button class="tb">展开</button><button class="tb">胶囊</button></div></div>
+<h3>方案 A′ · 紧凑文字(内边距 2×5 / 10px)</h3>
+<div class="win"><div class="bar bar46"><span class="chip"><i class="ico" style="background:#f5a623">OC</i><i class="dot" style="background:#f0554d"></i>1.3%</span><span class="chip"><i class="ico" style="background:#e8622c">4S</i><i class="dot" style="background:#f0b23c"></i>¥18</span><span class="chip"><i class="ico" style="background:#4d6bfe">DS</i><i class="dot" style="background:#3ecf8e"></i>¥36</span><span class="more">+1</span><span class="spacer"></span><button class="tb2">展开</button><button class="tb2">胶囊</button></div></div>
+
+<h3>方案 B · 优化矢量图标</h3>
+<div class="win"><div class="bar bar46"><span class="chip"><i class="ico" style="background:#f5a623">OC</i><i class="dot" style="background:#f0554d"></i>1.3%</span><span class="chip"><i class="ico" style="background:#e8622c">4S</i><i class="dot" style="background:#f0b23c"></i>¥18</span><span class="chip"><i class="ico" style="background:#4d6bfe">DS</i><i class="dot" style="background:#3ecf8e"></i>¥36</span><span class="more">+1</span><span class="spacer"></span><button class="ib2"><svg width="16" height="16"><use href="#i-up"/></svg></button><button class="ib2"><svg width="16" height="16"><use href="#i-pillshape"/></svg></button></div></div>
+<div class="note">原排版(左)确实会吃掉一个 chip(可见渠道 3→2);<b>紧凑排版(下)</b>把内边距与字号各收一档后,
+三个 chip 与现状一样放得下,只多出约 10px 的按钮宽度。</div>
+
+<h2>③ 胶囊(宽度随内容自适应,当前 132px)</h2>
+<h3>现状</h3>
+<div style="width:132px"><div class="bar pillbar"><i class="dot" style="background:#3ecf8e"></i><span class="val">OC 96.0%</span><span class="spacer"></span><button class="ib"><svg width="13" height="13"><use href="#i-up"/></svg></button></div></div>
+
+<h3>方案 A · 文字按钮(紧凑排版:内边距 2×5、字号 10px)</h3>
+<div style="width:142px"><div class="bar pillbar"><i class="dot" style="background:#3ecf8e"></i><span class="val">OC 96.0%</span><span class="spacer"></span><button class="tb2">展开</button></div></div>
+<h3>方案 A′ · 单字按钮(最省)</h3>
+<div style="width:126px"><div class="bar pillbar"><i class="dot" style="background:#3ecf8e"></i><span class="val">OC 96.0%</span><span class="spacer"></span><button class="tb2">展</button></div></div>
+
+<h3>方案 B · 优化矢量图标</h3>
+<div style="width:132px"><div class="bar pillbar"><i class="dot" style="background:#3ecf8e"></i><span class="val">OC 96.0%</span><span class="spacer"></span><button class="ib2"><svg width="16" height="16"><use href="#i-up"/></svg></button></div></div>
+<div class="note">胶囊宽度是按内容量出来的。实测排版:<b>现状 132px</b>(▲ 图标按钮)→
+<b>A 版紧凑文字 142px</b>(+10px,「展开」两字)→ <b>A′ 版单字 126px</b>(比现在还窄 6px)。
+也就是说文字版并<b>不需要</b>大幅拉宽,之前那版预估过于保守;真正省位的写法是缩小内边距 + 单字标签。</div>
+
+<div class="note" style="border-left-color:#f0b23c;margin-top:22px">
+<b>修正后的结论:</b>文字版只要用<b>紧凑排版</b>(内边距 2×5、字号 10px、胶囊里用单字),
+宽度开销就只有 0~10px —— 紧凑条仍放得下 3 个 chip,胶囊从 132px 变成 126~142px。
+所以<b>「文字 + 紧凑排版」是可用的</b>,不必为了省位牺牲可读性;
+方案 B(矢量图标)仍然是"最小占用"的选项,两版都能选。
+</div>
+</body></html>

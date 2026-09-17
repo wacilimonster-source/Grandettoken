@@ -19,18 +19,13 @@
 
   <div class="tbar" data-tauri-drag-region>
     <div class="mark"></div>
-    <div class="tt" data-tauri-drag-region>Grandettoken <small id="cnt"></small></div>
+    <div class="tt" data-tauri-drag-region>Grandettoken</div>
     <div class="spacer" data-tauri-drag-region></div>
-    <button class="ib" id="btnR" title="立即刷新">&#8635;</button>
-    <button class="ib" id="btnS" title="设置与管理">&#9881;</button>
-    <button class="ib" id="btnP" title="窗口置顶">
-      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-        <circle cx="10.2" cy="5.8" r="3.1" fill="currentColor"/>
-        <path d="M8.1 7.9 3.2 12.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-      </svg>
-    </button>
-    <button class="ib" id="btnC" title="切换紧凑条">&#9644;</button>
-    <button class="ib" id="btnH" title="隐藏到托盘">&#10005;</button>
+    <button class="tb" id="btnR" title="立即刷新">刷新</button>
+    <button class="tb" id="btnS" title="设置与管理">设置</button>
+    <button class="tb" id="btnP" title="窗口置顶">置顶</button>
+    <button class="tb" id="btnC" title="切换紧凑条">紧凑</button>
+    <button class="tb" id="btnH" title="隐藏到托盘">隐藏</button>
   </div>
 
   <div class="sum" id="sum"></div>
@@ -93,6 +88,8 @@
           <option value="dayUsage">今日消耗高 → 低</option>
           <option value="custom">自定义顺序</option>
         </select></div>
+      <div class="field"><span>拖到屏幕边缘自动吸附</span>
+        <div class="sw" id="cfgDock"></div></div>
       <div class="field"><span>窗口置顶(所有形态)</span>
         <div class="sw" id="cfgPin"></div></div>
 
