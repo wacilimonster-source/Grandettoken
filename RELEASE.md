@@ -38,15 +38,23 @@ git push && git push --tags
 `.env` 文件**不起作用**,必须是真的环境变量:
 
 ```bash
-cd app/src-tauri
+cd G:/game/nw/Grandettoken
 export TAURI_SIGNING_PRIVATE_KEY="C:\\Users\\wacil\\.tauri\\tokenscope.key"
 # 必须显式给空密码!密钥未加密,但不设这个变量时 Tauri 会去等交互输入密码 ——
 # 在非交互环境(脚本 / AI 会话)里会永久挂住,日志最后一行停在
 # "Info Decrypting updater signing key, expect a prompt for password" 且 CPU 全程 0。
 # 实测踩过两次(第一次还误判成网络卡住)。
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
-cargo tauri build
+powershell -NoProfile -ExecutionPolicy Bypass -File build/build.ps1 bundle
 ```
+
+> ⚠ **这个空值必须从 bash 里 export。** 在 PowerShell 里写 `$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""`
+> 等于**删掉**这个变量(不是设成空串),签名步骤照样挂住 —— 实测:第一次 bundle 就是
+> 这么挂的,换成 bash export 后一分半就跑完。
+>
+> 挂住的识别:两次 `Get-Process cargo-tauri | Select CPU` 采样不变,
+> 且 `bundle/nsis/` 里只有 `setup.exe`、没有 `.sig`。
+> 处理:杀掉 cargo / cargo-tauri,删掉 `app/src-tauri/target/.build-lock`,重新跑。
 
 产出(在 `app/src-tauri/target/release/bundle/nsis/`):
 
