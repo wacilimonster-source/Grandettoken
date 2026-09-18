@@ -744,9 +744,9 @@ function fitCompact() {
   setCompactW(Math.min(maxW, Math.ceil(total())));
 }
 
-/** 重钳紧凑条窗口宽:变化 <6px 不动窗口(与胶囊同款防抖,数值抖动不牵窗)。 */
+/** 重钳紧凑条窗口宽:变宽立刻动(哪怕 1px,窄了 chip 会被裁),变窄 <6px 不动(数值抖动不牵窗)。 */
 function setCompactW(w) {
-  if (!w || Math.abs(w - compactW) < 6) return;
+  if (!w || !(w > compactW || compactW - w >= 6)) return;
   compactW = w;
   if (currentForm() === "compact") applyForm("compact", false); // 已排在几何队列里
 }
@@ -829,9 +829,11 @@ function renderPillFace() {
 }
 
 /**
- * 胶囊宽度随内容自适应:去掉图标后不再固定 200,能装下就行。
- * 用离屏 span 量文本实际宽度(带同款字体),再加圆点/按钮/内边距的固定开销。
- * 宽度变化小于 6px 就不动窗口,避免数值抖动时窗口一直跳。
+ * 胶囊宽度随内容自适应:能装下就行,不留多余空白。
+ * 用离屏 span 量文本实际宽度(带同款字体,面板形态下也量得到),再加
+ * 圆点/图标/按钮/内边距/边框的固定开销。
+ * 宽度缩小的变化 <6px 不动窗口(数值抖动不牵窗);增大只要 ≥1px 就立刻动 ——
+ * 宁可宽 1px,不能窄 1px(窄了就是截图里 "91…" 那种半截数字)。
  */
 function fitPill() {
   const el = $("pillV");
@@ -848,15 +850,23 @@ function fitPill() {
   probe.style.fontWeight = cs.fontWeight;
   probe.style.fontStyle = cs.fontStyle;
   probe.style.letterSpacing = cs.letterSpacing;
+  // .t 开着 tabular-nums(等宽数字比比例数字宽 ~5%)。漏拷这项探针会少测,
+  // 窗口天生比文字窄一截,"91.5%" 被省略号吃成 "91…"(实测踩过,勿再删)
+  probe.style.fontVariantNumeric = cs.fontVariantNumeric;
   probe.textContent = el.textContent || "";
   document.body.appendChild(probe);
   const textW = probe.getBoundingClientRect().width;
   probe.remove();
-  // 圆点 6 + 图标 26 + 间距 8×3 + 展开按钮 22 + 内边距 16 ≈ 102
-  // (方案 A:缩写文字换成官方图标,固定开销里去掉文字位、加上图标位)
+  // 圆点 6 + 图标 26 + 间距 8×4 + 展开按钮 22 + 内边距 16 + 边框/缓冲 ≈ 104
   const u = fsU();
-  const w = Math.max(Math.round(104 * u), Math.min(Math.round(240 * u), Math.ceil(textW) + Math.round(102 * u)));
-  if (Math.abs(w - pillW) >= 6) {
+  const cap = Math.round(280 * u);
+  let w = Math.max(Math.round(104 * u), Math.min(cap, Math.ceil(textW) + Math.round(104 * u)));
+  // 兜底:探针估算若被真实字体/DPI 打脸(当前窗口正把文字裁掉),按实测差额补够。
+  // 一次性补,不驻留余量 —— 数值变小后靠下面的收缩防抖自然窄回去。
+  if (currentForm() === "pill" && el.scrollWidth > el.clientWidth) {
+    w = Math.min(cap, Math.max(w, pillW + (el.scrollWidth - el.clientWidth) + 4));
+  }
+  if (w > pillW || pillW - w >= 6) {
     pillW = w;
     if (currentForm() === "pill") applyForm("pill", false);
   }
