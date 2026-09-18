@@ -1,4 +1,9 @@
 /**
+ * ⚠ 已过时(2026-09-18):本文件是设计阶段的 JS 原型,仅作 token-dashboard
+ * 原型页的数值参考。**权威实现是 app/core/src/providers.rs** —— 这里曾埋过一个
+ * 「业务失败恒为 true」的 bug(Rust 侧已修复并有回归测试),改渠道口径请改 Rust,
+ * 不要从本文件抄起。
+ *
  * 渠道适配器配置
  *
  * 两种 kind,决定卡片渲染方式:
@@ -78,7 +83,11 @@ const PROVIDERS = [
       const used = parseFloat(d.total_used ?? granted - available);
 
       return {
-        isValid: response?.code === true || response?.is_active !== false,
+        // 任一显式 false 即业务失败。之前写 `||`:正常响应没有 is_active 字段,
+        // 右侧恒真会吞掉 code:false,失败被当成功渲染 —— 权威实现在
+        // app/core/src/providers.rs 的 extract_4sapi,并配有回归测试。
+        isValid: (response?.code === undefined || response?.code === true) &&
+                 response?.is_active !== false,
         kind: "amount",
         remaining: round2(available / RATE),
         used: round2(used / RATE),

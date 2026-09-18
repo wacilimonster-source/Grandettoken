@@ -26,7 +26,7 @@ async fn get_channels(state: State<'_, AppState>) -> Result<Vec<ChannelView>, St
 
 #[tauri::command]
 fn get_config(state: State<'_, AppState>) -> Config {
-    state.config.lock().unwrap().clone()
+    lock_rw(&state.config).clone()
 }
 
 #[tauri::command]
@@ -34,7 +34,7 @@ fn set_config(state: State<'_, AppState>, config: Config) -> Result<(), String> 
     let store = state.store.lock().map_err(|e| e.to_string())?;
     config.save(&store)?;
     drop(store);
-    *state.config.lock().unwrap() = config;
+    *lock_rw(&state.config) = config;
     Ok(())
 }
 
@@ -151,15 +151,22 @@ fn window_cmd(app: tauri::AppHandle, action: String) -> Result<(), String> {
     Ok(())
 }
 
+/// 全局锁序约定:**先 store 后 config**。所有同时拿两把锁的命令都必须按这个
+/// 顺序,否则与 check_update / skip_update_version(store→config)交错时会 AB-BA 死锁。
+/// 锁一律走 `lock_rw` 毒化恢复:一次 panic 不该把后续所有命令永久卡死。
+fn lock_rw<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 /// 置顶的唯一写入口:窗口状态与配置一起改,不会出现"按钮亮了其实没置顶"。
 /// 折叠形态(紧凑条/胶囊/贴边)没有置顶按钮,靠设置页里的同一个开关控制。
 #[tauri::command]
 fn set_pin(app: tauri::AppHandle, state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
     let win = app.get_webview_window("main").ok_or("窗口不存在")?;
     win.set_always_on_top(enabled).map_err(|e| e.to_string())?;
-    let mut cfg = state.config.lock().map_err(|e| e.to_string())?;
-    cfg.always_on_top = enabled;
     let store = state.store.lock().map_err(|e| e.to_string())?;
+    let mut cfg = lock_rw(&state.config);
+    cfg.always_on_top = enabled;
     cfg.save(&store)
 }
 
@@ -171,7 +178,7 @@ async fn poll_loop(app: tauri::AppHandle) {
     loop {
         let (active_sec, idle_sec, backoff_sec) = {
             let state = app.state::<AppState>();
-            let c = state.config.lock().unwrap();
+            let c = lock_rw(&state.config);
             (
                 c.active_interval_sec,
                 c.idle_interval_sec,
@@ -268,7 +275,7 @@ async fn check_update(
     let current = env!("CARGO_PKG_VERSION").to_string();
 
     let (auto, last_check_at, skipped) = {
-        let cfg = state.config.lock().unwrap();
+        let cfg = lock_rw(&state.config);
         (
             cfg.auto_check_update,
             cfg.last_check_at,
@@ -293,7 +300,8 @@ async fn check_update(
     {
         let store = state.store.lock();
         if let Ok(s) = store {
-            let mut cfg = state.config.lock().unwrap();
+            // 锁序样板:这里 store→config,set_pin 等命令必须同序(见 lock_rw 注释)
+            let mut cfg = lock_rw(&state.config);
             cfg.last_check_at = Some(now_ts());
             let _ = cfg.save(&s);
         }
@@ -386,7 +394,7 @@ async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn skip_update_version(state: State<'_, AppState>, version: String) -> Result<(), String> {
     let store = state.store.lock().map_err(|e| e.to_string())?;
-    let mut cfg = state.config.lock().map_err(|e| e.to_string())?;
+    let mut cfg = lock_rw(&state.config);
     cfg.skipped_version = Some(version);
     cfg.save(&store)
 }

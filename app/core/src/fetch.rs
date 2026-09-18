@@ -620,9 +620,13 @@ impl Fetcher {
             // 有多个凭据候选时依次试:只有"服务器明确说这份凭据不行"(401/403)
             // 才换下一份 —— 网络不通时换凭据是白费功夫。
             let mut chosen: Option<appauth::Credential> = None;
+            // 最后一次实际尝试过的凭据:失败时也要拿它标"来源",否则界面会说
+            // "未检测到登录信息"—— 明明检测到了,只是 token 过期(见 bug 报告 #2)
+            let mut last_cred: Option<appauth::Credential> = None;
             let mut result = FetchResult::default();
             let mut used_url = None;
             for cred in creds.iter() {
+                last_cred = Some(cred.clone());
                 let (r, url, kind) = fetch_channel(&self.http, def, &cred.token, memo.as_deref()).await;
                 result = r;
                 used_url = url;
@@ -643,26 +647,34 @@ impl Fetcher {
                 }
             }
 
+            // 失败也要给界面一个"凭据是从哪读的",否则 App 型渠道的说明会退化成
+            // "未检测到登录信息",与真正的失败原因(token 过期)自相矛盾
+            let shown_cred = chosen.or_else(|| last_cred.clone());
             if result.valid {
                 successful.push((def.id, result.clone(), ts));
-                pending.push((i, def, result, false, ts, chosen));
+                pending.push((i, def, result, false, ts, shown_cred));
             } else {
                 // 失败降级:沿用上次成功值,标注时间,绝不显示成 0
-                let cached = self.cache.lock().ok().and_then(|c| c.get(def.id).cloned());
+                let cached = self
+                    .cache
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .get(def.id)
+                    .cloned();
                 match cached {
                     Some((mut prev, prev_ts)) => {
                         prev.error = result.error;
                         prev.valid = false;
-                        pending.push((i, def, prev, true, prev_ts, chosen));
+                        pending.push((i, def, prev, true, prev_ts, shown_cred));
                     }
-                    None => pending.push((i, def, result, false, ts, chosen)),
+                    None => pending.push((i, def, result, false, ts, shown_cred)),
                 }
             }
         }
 
         // ── 同步段:一次性锁库完成快照写入与消耗推算,期间不跨 await ──
         {
-            let s = store.lock().unwrap();
+            let s = store.lock().unwrap_or_else(|p| p.into_inner());
             for (id, result, ts) in &successful {
                 let kind = match result.kind {
                     Kind::Amount => "amount",

@@ -121,11 +121,25 @@ impl Store {
         let mut prev: Option<(i64, f64)> = None;
         for (ts, remaining) in rows {
             if let Some((pts, prem)) = prev {
-                if pts < from_ts && ts < from_ts {
-                    prev = Some((ts, remaining));
-                    continue;
+                if pts < from_ts {
+                    if ts < from_ts {
+                        prev = Some((ts, remaining));
+                        continue;
+                    }
+                    // 跨窗口起点的一对:基线→起点的下降发生在窗口外,不该记账。
+                    // 按时间线性折算基线余额到 from_ts,再与窗口首行求差。
+                    // (之前整段计入,"今日消耗"会把昨晚的花销背进今天)
+                    let span = ts - pts;
+                    let base = if span > 0 {
+                        let k = (from_ts - pts) as f64 / span as f64;
+                        prem - (prem - remaining) * k
+                    } else {
+                        prem
+                    };
+                    sum += (base - remaining).max(0.0);
+                } else {
+                    sum += (prem - remaining).max(0.0);
                 }
-                sum += (prem - remaining).max(0.0);
             }
             prev = Some((ts, remaining));
         }
@@ -298,6 +312,21 @@ mod tests {
         s.record("p", 5000, Some(10.0), None, None, "amount").unwrap();
         // 窗口起点 4000 之前没有快照 → 数据空洞,不能报 0
         assert_eq!(s.consumption_since("p", 4000, 6000).unwrap(), None);
+    }
+
+    /// 跨窗口起点的基线对:窗口外那段时间的下降不能记进窗口
+    /// (修复"今日消耗把昨晚花销背进今天"的越界计数)。
+    #[test]
+    fn baseline_pair_is_prorated_to_window_start() {
+        let s = mem();
+        // 0 时点余额 100,100 时点余额 80:线性掉 20。窗口从 50 起 → 只算后一半 10。
+        s.record("p", 0, Some(100.0), None, None, "amount").unwrap();
+        s.record("p", 100, Some(80.0), None, None, "amount").unwrap();
+        assert_eq!(s.consumption_since("p", 50, 200).unwrap(), Some(10.0));
+        // 窗口起点恰好等于基线时刻:退化为整段计入
+        assert_eq!(s.consumption_since("p", 0, 200).unwrap(), Some(20.0));
+        // 起点贴着窗口首行:只剩 0 段
+        assert_eq!(s.consumption_since("p", 99, 200).unwrap(), Some(0.2));
     }
 
     #[test]
