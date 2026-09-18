@@ -85,8 +85,12 @@ impl Store {
         Ok(())
     }
 
-    /// 指定时间窗口内的消耗推算值。窗口起点没有前置快照时返回 None,
-    /// 因为那时段的数据是空洞,报 0 会让人以为"没花钱"。
+    /// 指定时间窗口内的消耗推算值。
+    /// 窗口起点前有基线 → 精确到窗口(跨起点的基线对按时间折算);
+    /// 没有基线(软件那天还没装上/机器整段没开)→ 退化为「窗口内首快照起算」
+    /// 的**下限估算** —— 界面本来就标"推算",报一个偏小的真值比整格「——」有用
+    /// (踩过:装当周周一/月首没有快照,本周消耗一直显示数据不足)。
+    /// 窗口内不足两条快照才算真的无从推算,返回 None。
     pub fn consumption_since(
         &self,
         provider_id: &str,
@@ -111,10 +115,22 @@ impl Store {
             .filter_map(Result::ok)
             .collect();
 
-        // 窗口起点之前要有基线,否则无法判断窗口内的变化量
+        // 窗口起点之前要有基线;没有就退到窗口内首行起算(下限)
         let has_baseline = rows.iter().any(|(ts, _)| *ts <= from_ts);
         if !has_baseline {
-            return Ok(None);
+            let win: Vec<f64> = rows
+                .iter()
+                .filter(|(ts, _)| *ts >= from_ts)
+                .map(|(_, r)| *r)
+                .collect();
+            if win.len() < 2 {
+                return Ok(None);
+            }
+            let mut sum = 0.0;
+            for pair in win.windows(2) {
+                sum += (pair[0] - pair[1]).max(0.0);
+            }
+            return Ok(Some((sum * 100.0).round() / 100.0));
         }
 
         let mut sum = 0.0;
@@ -310,8 +326,20 @@ mod tests {
     fn consumption_is_none_without_baseline() {
         let s = mem();
         s.record("p", 5000, Some(10.0), None, None, "amount").unwrap();
-        // 窗口起点 4000 之前没有快照 → 数据空洞,不能报 0
+        // 窗口起点 4000 之前没有基线,窗口内也只有一条 → 真的无从推算
         assert_eq!(s.consumption_since("p", 4000, 6000).unwrap(), None);
+    }
+
+    /// 无窗口前基线(装软件当周/当月):从窗口内首快照起算下限,而不是整格「——」。
+    #[test]
+    fn missing_baseline_falls_back_to_window_floor() {
+        let s = mem();
+        // 快照从 3000 开始,窗口从 1000 起:100→90→充值 200→195
+        for (ts, rem) in [(3000, 100.0), (4000, 90.0), (5000, 200.0), (6000, 195.0)] {
+            s.record("p", ts, Some(rem), None, None, "amount").unwrap();
+        }
+        // 下限 = 窗口内相邻下降之和 = 10 + 0 + 5(3000 之前那段看不到,不算)
+        assert_eq!(s.consumption_since("p", 1000, 6000).unwrap(), Some(15.0));
     }
 
     /// 跨窗口起点的基线对:窗口外那段时间的下降不能记进窗口
@@ -383,7 +411,7 @@ mod tests {
         assert_eq!(s.consumed_in_window("p", 3500, 6000).unwrap(), 5.0);
         assert_eq!(s.first_ts_since("p", 3500).unwrap(), Some(4000));
 
-        // 对照:consumption_since 需要窗口起点之前有基线,这里是数据空洞 → None
-        assert_eq!(s.consumption_since("p", 1000, 6000).unwrap(), None);
+        // 对照:consumption_since 无窗口前基线时退化为窗口内下限估算(同为 15)
+        assert_eq!(s.consumption_since("p", 1000, 6000).unwrap(), Some(15.0));
     }
 }
