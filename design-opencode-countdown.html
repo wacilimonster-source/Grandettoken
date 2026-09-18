@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Grandettoken · OpenCode Go 周期重置倒计时 设计预览</title>
+<style>
+  :root{
+    --bg:#12141a; --bg2:#191c24; --bg3:#20242e;
+    --line:#2f3648; --line2:#3c445c;
+    --tx:#edf0f6; --tx2:#b6bfce; --tx3:#8d97ab;
+    --ok:#4ade9d; --warn:#f7c355; --bad:#ff6b63; --ac:#7fa2ff;
+  }
+  body{margin:0;background:#0a0c10;color:#dfe5f1;font:14px/1.7 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;padding:34px 26px 90px}
+  .wrap{max-width:1180px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 4px}
+  .sub{color:#7d879e;font-size:13px;margin-bottom:22px}
+  h2{font-size:16px;margin:38px 0 14px;padding-left:10px;border-left:3px solid var(--ac)}
+  .stage{display:flex;gap:30px;flex-wrap:wrap;align-items:flex-start}
+  .cap{font-size:12px;color:#7d879e;margin-bottom:10px;letter-spacing:.05em}
+  pre{background:#0b0e14;border:1px solid #262d3d;border-radius:8px;padding:12px 14px;overflow-x:auto;
+    font:12px/1.65 Consolas,monospace;color:#c9d4ea;margin:10px 0;max-width:820px}
+  pre .k{color:#7fa2ff} pre .s{color:#4ade9d} pre .c{color:#5d6b86}
+  .card{background:#10131a;border:1px solid #262d3d;border-radius:12px;padding:16px 18px;margin:10px 0;max-width:820px}
+  .card h3{margin:0 0 8px;font-size:14px}
+  .card ul{margin:6px 0;padding-left:20px;color:#9aa3b5}
+  .card li{margin:5px 0}
+  .card b{color:#dfe5f1}
+  .card code{background:#1a1f2c;border:1px solid #262d3d;border-radius:4px;padding:1px 5px;font-size:12px;color:#cdd6e8}
+  .num{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:6px;background:#7fa2ff2e;color:#b7ccff;font-size:12px;font-weight:700;margin-right:8px}
+  .scen{display:flex;gap:8px;margin:14px 0 18px;flex-wrap:wrap}
+  .scen button{border:1px solid #3c445c;background:#161b24;color:#9aa3b5;font:13px/1 inherit;font-family:inherit;
+    padding:8px 16px;border-radius:8px;cursor:pointer}
+  .scen button.on{background:#7fa2ff22;border-color:#7fa2ff66;color:#b7ccff;font-weight:600}
+
+  /* ═══ 挂件 Mock ═══ */
+  .mock{width:380px;flex:none;border-radius:12px;border:1px solid var(--line);background:var(--bg);
+    color:var(--tx);overflow:hidden;font:13px/1.5 "Segoe UI","Microsoft YaHei",sans-serif;
+    display:flex;flex-direction:column;box-shadow:0 18px 50px -18px #000c}
+  .m-tbar{display:flex;align-items:center;gap:9px;padding:9px 8px 9px 12px;background:linear-gradient(180deg,#1d2129,#171a21);border-bottom:1px solid var(--line)}
+  .m-mark{width:17px;height:17px;border-radius:5px;position:relative;flex:none;background:linear-gradient(135deg,#5b8cff,#8b5bff)}
+  .m-mark::after{content:"";position:absolute;inset:5px;border-radius:2px;background:#12141a}
+  .m-tt{font-size:12px;font-weight:600}
+  .m-sp{flex:1}
+  .m-tb{color:var(--tx2);font-size:11.5px;padding:3px 6px;border-radius:5px}
+  .m-row{border-bottom:1px solid #232937;padding:9px 12px 8px}
+  .m-r1{display:flex;align-items:center;gap:9px}
+  .m-ico{width:28px;height:28px;border-radius:8px;flex:none;display:grid;place-items:center;font-size:11px;font-weight:700;color:#12141a;background:#f5a623}
+  .m-nm{min-width:0;flex:1}
+  .m-n{font-size:13px;font-weight:500;display:flex;align-items:center;gap:5px}
+  .m-s{font-size:11.5px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .m-val{text-align:right;font-variant-numeric:tabular-nums}
+  .m-v{font-size:20px;font-weight:600;line-height:1.15}
+  .m-p{font-size:11.5px;color:var(--tx3)}
+  .m-dot{width:6px;height:6px;border-radius:50%;background:var(--ok);display:inline-block;flex:none}
+  .m-dot.w{background:var(--warn)} .m-dot.b{background:var(--bad)}
+  .m-wins{margin-top:8px;display:flex;flex-direction:column;gap:5px}
+  .m-win{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--tx3)}
+  .m-win .wl{flex:none;width:52px}
+  .m-win .wb{flex:1;height:4px;border-radius:3px;background:#303849;overflow:hidden}
+  .m-win .wb>i{display:block;height:100%;border-radius:3px}
+  .m-win .wv{flex:none;width:52px;text-align:right;font-weight:500;font-variant-numeric:tabular-nums}
+  .m-win .wt{flex:none;width:86px;text-align:right;font-variant-numeric:tabular-nums;color:var(--tx2)}
+  .m-win.tight .wl{color:var(--tx);font-weight:600}
+  .m-alert{margin-top:7px;font-size:11.5px;color:var(--bad);line-height:1.6}
+  .m-foot{display:flex;align-items:center;gap:8px;padding:7px 12px;background:#141720;border-top:1px solid var(--line);font-size:11.5px;color:var(--tx3)}
+  .m-detail{border-top:1px solid #232937;background:#151823;padding:10px 12px;font-size:11.5px;color:var(--tx2)}
+  .m-detail .drow{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px dashed #262d3d}
+  .m-detail .drow:last-child{border-bottom:0}
+  .m-detail .abs{color:var(--tx3);font-variant-numeric:tabular-nums}
+  .m-detail h5{margin:2px 0 6px;font-size:11px;color:var(--tx3);letter-spacing:.08em;font-weight:600}
+  .pill-demo{display:inline-flex;align-items:center;gap:8px;border-radius:999px;background:#12141af2;border:1px solid var(--line2);padding:7px 9px;font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}
+  .tip{display:inline-block;margin-left:10px;padding:8px 12px;background:#1c2230;border:1px solid var(--line2);border-radius:8px;font-size:12px;color:var(--tx2);vertical-align:middle;max-width:250px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>OpenCode Go · 周期重置倒计时</h1>
+<div class="sub">2026-09-18 设计预览(未改应用代码)· 研究结论 + 三场景交互演示(倒计时每秒跳动)</div>
+
+<h2>一、研究结论:数据早就到了,只差展示</h2>
+<div class="card">
+  <ul>
+    <li>真实响应(刚用你的 key 实测,只读账务接口):三个窗口<b>都带</b> <code>resetsAt</code>,ISO 8601 UTC 格式 —— 后端 <code>extract_opencode_go</code> 已解析进 <code>window.resetsAt</code> 传给前端,<b>前端从未渲染</b>。启用它零取数成本;</li>
+    <li>「本月」重置点是 <b>10-13 14:20:48Z</b>(带秒)—— 锚定<b>开通日</b>而非日历月,叫「本月」会误导,应叫「周期」;</li>
+    <li>发现一处现存不一致:后端主数值取「最紧张窗口」(本周 82%),前端大数字取「本月窗口」(91%)—— 本设计顺带统一;</li>
+    <li>rolling 的 resetsAt 随滑动窗口滚动(5 小时窗口的结束时刻),不是固定周期 —— 倒计时语义与其他两个不同,但展示方式可以统一。</li>
+  </ul>
+</div>
+<pre><span class="c">// 2026-09-18 16:5x 实测 GET https://opencode.ai/zen/go/v1/usage</span>
+{
+  "usage": {
+    "rolling": { "percent": 0,  "resetsAt": <span class="s">"2026-09-18T13:56:54.176Z"</span>, "status": "ok" },
+    "weekly":  { "percent": 18, "resetsAt": <span class="s">"2026-09-21T00:00:00.176Z"</span>, "status": "ok" },
+    "monthly": { "percent": 9,  "resetsAt": <span class="s">"2026-10-13T14:20:48.176Z"</span>, "status": "ok" }
+  }
+}</pre>
+
+<h2>二、交互演示(点场景切换)</h2>
+<div class="scen" id="scen">
+  <button data-s="live" class="on">A · 当前真实数据</button>
+  <button data-s="alert">B · 周期余量告急</button>
+  <button data-s="limited">C · 已限流</button>
+</div>
+<div class="stage">
+  <div>
+    <div class="cap">主面板行 + 展开详情</div>
+    <div class="mock">
+      <div class="m-tbar"><div class="m-mark"></div><div class="m-tt">Grandettoken</div><div class="m-sp"></div>
+        <span class="m-tb">刷新</span><span class="m-tb">设置</span><span class="m-tb">置顶</span></div>
+      <div class="m-row">
+        <div class="m-r1">
+          <div class="m-ico">OC</div>
+          <div class="m-nm">
+            <div class="m-n">OpenCode Go <span class="m-dot" id="dot"></span></div>
+            <div class="m-s" id="subline"></div>
+          </div>
+          <div class="m-val">
+            <div class="m-v" id="bignum">—</div>
+            <div class="m-p" id="subval"></div>
+          </div>
+        </div>
+        <div class="m-wins" id="wins"></div>
+        <div class="m-alert" id="alert" style="display:none"></div>
+      </div>
+      <div class="m-detail">
+        <h5>展开详情(新增区)</h5>
+        <div id="detail"></div>
+      </div>
+      <div class="m-foot"><span class="m-dot" id="fdot"></span><span id="fstat">1 正常</span><div class="m-sp"></div><span>设置与管理</span></div>
+    </div>
+  </div>
+
+  <div style="flex:1;min-width:340px;max-width:560px">
+    <div class="cap">胶囊形态 tooltip 同步带倒计时</div>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <div class="pill-demo"><span class="m-dot" id="pdot"></span><span id="pillv">OC 82%</span></div>
+      <div class="tip" id="ptip"></div>
+    </div>
+
+    <h2 style="margin-top:26px">三、设计规则</h2>
+    <div class="card">
+      <ul>
+        <li><b>主数值 = 最紧张的那个窗口</b>(剩余百分比最低 → 最先触发限流),大数字下方注明是哪个窗 + 倒计时:「本周窗 · 2天6小时后重置」—— 顺带修掉前后端口径不一致;</li>
+        <li><b>每条窗口迷你条右侧加倒计时</b>,档位化格式:&lt;1h「37 分钟后」/ &lt;24h「5.2 小时后」/ ≥1天「2 天 6 小时后」;60 秒轮询刷新,无需秒级跳动;</li>
+        <li><b>倒计时是中性信息,不抢状态色</b>(次级灰白)—— 重置快是好消息,别用红黄渲染;唯一例外:限流中且倒计时 &lt;1h 时变绿「马上恢复」;</li>
+        <li><b>组合预警(本设计最有价值的判断)</b>:最紧张窗口剩余 &lt; 标红阈值 <b>且</b> 距重置 &gt; 3 天 → 行内红字:「周期余量仅 x%,距重置还有 N 天 —— 省着用或等重置」;距重置 &lt; 3 天不加红字(熬一熬就好),避免天天喊狼来了;</li>
+        <li><b>展开详情</b>每窗一行:剩余% + 相对倒计时 + 本地绝对时间(ISO UTC → 本地时区);</li>
+        <li><b>命名</b>「本月」→「周期」(实测锚定开通日);<b>缺 resetsAt 兜底</b>:未公开接口不保证字段常在,缺失时倒计时列显示「—」,其余照旧;</li>
+        <li><b>实现面</b>:纯前端(app.js 渲染 + 解析 ISO 时间),Rust 与配置零改动 —— Window.resetsAt 已在通道里。</li>
+      </ul>
+    </div>
+
+    <h2>四、待裁决</h2>
+    <div class="card">
+      <ul>
+        <li><span class="num">1</span><b>大数字口径</b>:A 最紧张窗口+标注(推荐,上文即此)/ B 维持「本月/周期」窗不变,只加倒计时;</li>
+        <li><span class="num">2</span><b>组合预警阈值</b>:A 剩余&lt;标红线 且 距重置&gt;3 天才提示(推荐)/ B 只要剩余低于红线就带「距重置还有 N 天」后缀(更啰嗦但无阈值心智负担);</li>
+        <li><span class="num">3</span><b>「本月」是否改名「周期」</b>:A 改(推荐,符合实测)/ B 保持(用户语言更熟)。</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script>
+  const now = () => Date.now();
+  const SC = {
+    live:    { wins: [
+      { label:"5 小时", pct:0,  at: now() + 2*3600e3 + 22*60e3 },
+      { label:"本周",   pct:18, at: Date.parse("2026-09-21T00:00:00.176Z") },
+      { label:"周期",   pct:9,  at: Date.parse("2026-10-13T14:20:48.176Z") }], limited:false },
+    alert:   { wins: [
+      { label:"5 小时", pct:41, at: now() + 41*60e3 },
+      { label:"本周",   pct:66, at: now() + 2.3*86400e3 },
+      { label:"周期",   pct:98.7, at: now() + 25*86400e3 }], limited:false },
+    limited: { wins: [
+      { label:"5 小时", pct:100, at: now() + 37*60e3 },
+      { label:"本周",   pct:88,  at: now() + 2.3*86400e3 },
+      { label:"周期",   pct:71,  at: now() + 25*86400e3 }], limited:true },
+  };
+  let cur = "live";
+  const fmt = (ms) => {
+    if (ms <= 0) return "正在重置";
+    const m = Math.round(ms / 60000);
+    if (m < 60) return m + " 分钟后重置";
+    const h = ms / 3600e3;
+    if (h < 24) return h.toFixed(1) + " 小时后重置";
+    const d = Math.floor(h / 24), rh = Math.round(h % 24);
+    return rh === 24 ? (d + 1) + " 天后重置" : d + " 天 " + rh + " 小时后重置";
+  };
+  const fmtShort = (ms) => { const m = Math.round(ms/60000); if (m < 60) return m + " 分"; const h = ms/3600e3; if (h < 24) return h.toFixed(1) + " 小时"; return Math.floor(h/24) + " 天 " + Math.round((h%24)) + " 小时"; };
+  const tone = (rem) => rem < 15 ? "var(--bad)" : rem < 40 ? "var(--warn)" : "var(--ok)";
+  function render() {
+    const s = SC[cur];
+    const wins = s.wins.map(w => ({ ...w, rem: Math.max(0, 100 - w.pct), ms: w.at - now() }));
+    const tight = wins.slice().sort((a,b)=>a.rem-b.rem)[0];
+    const big = document.getElementById("bignum");
+    big.textContent = tight.rem.toFixed(1) + "%";
+    big.style.color = s.limited ? "var(--bad)" : tone(tight.rem);
+    document.getElementById("subval").textContent = tight.label + "窗 · " + fmt(tight.ms);
+    document.getElementById("dot").className = "m-dot " + (s.limited || tight.rem < 15 ? "b" : tight.rem < 40 ? "w" : "");
+    document.getElementById("fdot").className = document.getElementById("dot").className;
+    document.getElementById("subline").textContent = s.limited ? "已限流" : "";
+    document.getElementById("wins").innerHTML = wins.map(w => {
+      const isT = w.label === tight.label;
+      const lim = s.limited && isT;
+      return `<div class="m-win${isT ? " tight" : ""}">
+        <span class="wl">${w.label}</span>
+        <span class="wb"><i style="width:${w.rem}%;background:${lim ? "var(--bad)" : tone(w.rem)}"></i></span>
+        <b class="wv" style="color:${lim ? "var(--bad)" : tone(w.rem)}">${w.rem.toFixed(1)}%</b>
+        <span class="wt" ${lim && w.ms < 3600e3 ? 'style="color:var(--ok)"' : ""}>${lim && w.ms < 3600e3 ? "马上恢复" : fmtShort(w.ms)}</span>
+      </div>`;
+    }).join("");
+    const alert = document.getElementById("alert");
+    if (!s.limited && tight.rem < 15 && tight.ms > 3 * 86400e3) {
+      alert.style.display = "block";
+      alert.textContent = `周期余量仅 ${tight.rem.toFixed(1)}%,距重置还有 ${Math.round(tight.ms/86400e3)} 天 —— 省着用或等重置`;
+    } else alert.style.display = "none";
+    document.getElementById("detail").innerHTML = wins.map(w =>
+      `<div class="drow"><span>${w.label}窗 · 剩 ${w.rem.toFixed(1)}%</span><span class="abs">${fmt(w.ms)} · ${new Date(w.at).toLocaleString("zh-CN",{hour12:false})}</span></div>`).join("");
+    document.getElementById("pillv").textContent = "OC " + tight.rem.toFixed(1) + "%";
+    document.getElementById("pdot").className = document.getElementById("dot").className;
+    document.getElementById("ptip").textContent = "tooltip:" + (s.limited ? "已限流 · " : "") + tight.label + "窗剩 " + tight.rem.toFixed(1) + "% · " + fmt(tight.ms);
+    document.getElementById("fstat").textContent = s.limited ? "0 正常 · 1 预警" : "1 正常";
+  }
+  document.getElementById("scen").addEventListener("click", e => {
+    const b = e.target.closest("button"); if (!b) return;
+    cur = b.dataset.s;
+    document.querySelectorAll("#scen button").forEach(x => x.classList.toggle("on", x === b));
+    render();
+  });
+  setInterval(render, 1000); render();
+</script>
+</div>
+</body>
+</html>

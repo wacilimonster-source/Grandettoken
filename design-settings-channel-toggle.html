@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Grandettoken · 设置页改版 + 渠道显示开关 设计预览</title>
+<style>
+  :root{
+    --u:1;
+    --bg:#12141a; --bg2:#191c24; --bg3:#20242e;
+    --line:#2f3648; --line2:#3c445c;
+    --tx:#edf0f6; --tx2:#b6bfce; --tx3:#8d97ab;
+    --ok:#4ade9d; --warn:#f7c355; --bad:#ff6b63; --ac:#7fa2ff;
+  }
+  body{margin:0;background:#0a0c10;color:#dfe5f1;font:14px/1.7 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;padding:34px 26px 90px}
+  .wrap{max-width:1200px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 4px}
+  .sub{color:#7d879e;font-size:13px;margin-bottom:26px}
+  h2{font-size:16px;margin:40px 0 14px;padding-left:10px;border-left:3px solid var(--ac)}
+  .stage{display:flex;gap:34px;flex-wrap:wrap;align-items:flex-start}
+  .col{min-width:0}
+  .cap{font-size:12px;color:#7d879e;margin-bottom:10px;letter-spacing:.05em}
+
+  /* ═══ 挂件 Mock(与 0.1.6 真实样式同参)═══ */
+  .mock{width:380px;flex:none;border-radius:12px;border:1px solid var(--line);background:var(--bg);
+    color:var(--tx);overflow:hidden;font:calc(13px*var(--u))/1.5 "Segoe UI","Microsoft YaHei",sans-serif;
+    display:flex;flex-direction:column;box-shadow:0 18px 50px -18px #000c}
+  .m-tbar{display:flex;align-items:center;gap:9px;padding:9px 8px 9px 12px;background:linear-gradient(180deg,#1d2129,#171a21);border-bottom:1px solid var(--line)}
+  .m-mark{width:17px;height:17px;border-radius:5px;position:relative;flex:none;background:linear-gradient(135deg,#5b8cff,#8b5bff)}
+  .m-mark::after{content:"";position:absolute;inset:5px;border-radius:2px;background:#12141a}
+  .m-tt{font-size:12px;font-weight:600}
+  .m-sp{flex:1}
+  .m-tb{color:var(--tx2);font-size:11.5px;padding:3px 6px;border-radius:5px;white-space:nowrap}
+  .m-tb.on{color:#fff;background:var(--ac)}
+  .m-sum{display:flex;border-bottom:1px solid var(--line);background:#141720}
+  .m-sum .cell{flex:1;padding:7px 12px;border-right:1px solid #232937;font-size:11.5px}
+  .m-sum .cell:last-child{border-right:0}
+  .m-sum .lb{color:var(--tx3);letter-spacing:.06em;white-space:nowrap}
+  .m-sum .vv{font-size:13.5px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .m-sum .dl{font-size:11.5px;color:var(--tx3);margin-left:4px;font-weight:400}
+  .m-list{min-height:300px}
+  .m-row{border-bottom:1px solid #232937;padding:9px 12px 8px;display:flex;align-items:center;gap:9px}
+  .m-row.hide{display:none}
+  .m-ico{width:28px;height:28px;border-radius:8px;flex:none;display:grid;place-items:center;font-size:11px;font-weight:700;color:#fff}
+  .m-nm{min-width:0;flex:1}
+  .m-n{font-size:13px;font-weight:500;display:flex;align-items:center;gap:5px}
+  .m-s{font-size:11.5px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .m-val{text-align:right;font-variant-numeric:tabular-nums}
+  .m-v{font-size:20px;font-weight:600;line-height:1.15}
+  .m-p{font-size:11.5px;color:var(--tx3)}
+  .m-dot{width:6px;height:6px;border-radius:50%;background:var(--ok);display:inline-block;flex:none}
+  .m-dot.w{background:var(--warn)}.m-dot.b{background:var(--bad)}.m-dot.o{background:var(--tx3)}
+  .m-foot{display:flex;align-items:center;gap:8px;padding:7px 12px;background:#141720;border-top:1px solid var(--line);font-size:11.5px;color:var(--tx3)}
+  .m-foot .lk{color:var(--tx2)}
+
+  /* 管理页 */
+  .m-mhead{display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--line);background:#141720;font-size:11.5px;font-weight:600}
+  .m-back{color:var(--tx2);border:1px solid var(--line2);border-radius:5px;padding:1px 8px;font-size:11.5px}
+  .m-body{padding:12px 13px;max-height:520px;overflow-y:auto}
+  .m-h4{font-size:12px;color:var(--tx3);letter-spacing:.1em;font-weight:600;margin:14px 0 8px}
+  .m-h4:first-child{margin-top:0}
+  .m-hint{font-size:11.5px;color:var(--tx3);line-height:1.7;margin:-2px 0 10px}
+  .m-badge{display:inline-block;font-size:11px;color:#b7ccff;background:#7fa2ff1f;border:1px solid #7fa2ff55;border-radius:999px;padding:0 8px;margin-left:8px;letter-spacing:0;vertical-align:1px}
+
+  /* 渠道管理行(新) */
+  .crow{display:flex;align-items:center;gap:9px;padding:7px 0;border-bottom:1px solid #232937}
+  .crow:last-child{border-bottom:0}
+  .crow .ico2{width:26px;height:26px;border-radius:7px;flex:none;display:grid;place-items:center;font-size:10.5px;font-weight:700;color:#fff}
+  .crow .meta{flex:1;min-width:0}
+  .crow .nm2{font-size:12.5px;font-weight:500}
+  .crow .st2{font-size:11.5px;color:var(--tx3)}
+  .crow.off .ico2{filter:grayscale(1);opacity:.5}
+  .crow.off .nm2{color:var(--tx3)}
+  .eye{flex:none;width:30px;height:30px;border-radius:7px;border:1px solid var(--line2);background:var(--bg3);
+    color:var(--tx2);cursor:pointer;display:grid;place-items:center;font-size:14px;user-select:none}
+  .eye:hover{border-color:#55617d;color:var(--tx)}
+  .eye.off{color:var(--tx3);background:transparent;border-style:dashed}
+  .mv{display:flex;gap:3px;flex:none}
+  .mv span{width:24px;height:26px;border:1px solid var(--line2);background:var(--bg3);border-radius:6px;
+    display:grid;place-items:center;font-size:10px;color:var(--tx2);cursor:pointer}
+  .mv span.dis{opacity:.35}
+
+  /* 开关(沿用真实 .sw 视觉) */
+  .sw{width:32px;height:17px;border-radius:99px;background:var(--line2);position:relative;cursor:pointer;flex:none;transition:background .2s}
+  .sw::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:#98a2b6;transition:.2s}
+  .sw.on{background:#7fa2ff59}
+  .sw.on::after{left:17px;background:var(--ac)}
+  .field{display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid #232937;font-size:12px;gap:10px}
+  .field:last-child{border-bottom:0}
+  .field .lab{flex:1}
+  .field .tag{font-size:11px;color:var(--tx3)}
+
+  /* 说明区 */
+  .card{background:#10131a;border:1px solid #262d3d;border-radius:12px;padding:16px 18px;margin:10px 0;max-width:760px}
+  .card h3{margin:0 0 8px;font-size:14px}
+  .card ul{margin:6px 0;padding-left:20px;color:#9aa3b5}
+  .card li{margin:5px 0}
+  .card b{color:#dfe5f1}
+  .card code{background:#1a1f2c;border:1px solid #262d3d;border-radius:4px;padding:1px 5px;font-size:12px;color:#cdd6e8}
+  .num{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:6px;background:#7fa2ff2e;color:#b7ccff;font-size:12px;font-weight:700;margin-right:8px}
+  .pill-demo{display:inline-flex;align-items:center;gap:8px;border-radius:999px;background:#12141af2;border:1px solid var(--line2);padding:7px 9px;font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>设置页改版 · 渠道显示开关(含 Trae / WorkBuddy)</h1>
+<div class="sub">2026-09-18 设计预览 · 未改应用代码。右图开关直接点:<b>关掉 Trae / WorkBuddy,左图主面板、底栏计数、胶囊会实时联动</b>,体验隐藏后的完整效果。</div>
+
+<h2>一、核心交互:设置页「渠道管理」(由「渠道顺序」升级)</h2>
+<div class="stage">
+  <div class="col">
+    <div class="cap">主面板(380 宽)· 随右侧开关联动</div>
+    <div class="mock">
+      <div class="m-tbar"><div class="m-mark"></div><div class="m-tt">Grandettoken</div><div class="m-sp"></div>
+        <span class="m-tb">刷新</span><span class="m-tb on">设置</span><span class="m-tb">置顶</span></div>
+      <div class="m-sum">
+        <div class="cell"><div class="lb">今日消耗</div><div class="vv">¥12.40<span class="dl">推算</span></div></div>
+        <div class="cell"><div class="lb">本周消耗</div><div class="vv">¥5.38<span class="dl">推算</span></div></div>
+        <div class="cell"><div class="lb">本月消耗</div><div class="vv">¥312.05<span class="dl">3 渠道</span></div></div>
+      </div>
+      <div class="m-list" id="mainList"></div>
+      <div class="m-foot"><span class="m-dot" id="fdot"></span><span id="fstat">…</span><div class="m-sp"></div><span class="lk">设置与管理</span></div>
+    </div>
+    <div style="margin-top:14px">
+      <div class="cap">胶囊形态(自动模式取「最紧张」,同样跳过隐藏渠道)</div>
+      <div class="pill-demo"><span class="m-dot w"></span><span id="pillTxt">4S ¥74.20</span></div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="cap">设置与管理 · 改版后(点眼睛 = 显示/隐藏该渠道)</div>
+    <div class="mock">
+      <div class="m-mhead"><span class="m-back">←</span> 设置与管理</div>
+      <div class="m-body">
+        <div class="m-h4" style="margin-top:0">渠道管理 <span class="m-badge" id="visBadge"></span></div>
+        <div class="m-hint">眼睛 = 是否显示。<b style="color:#b6bfce">隐藏后停止取数</b>(不再发请求、不计入汇总/胶囊/底栏),
+          这里仍保留入口可随时打开。Trae / WorkBuddy 隐藏后不再读取本机登录态。</div>
+        <div id="crowList"></div>
+        <div class="m-hint" style="margin:8px 0 0">↑ ↓ 调整展示顺序(即原「渠道顺序」,并入本节)。</div>
+
+        <div class="m-h4">显示</div>
+        <div class="field"><span class="lab">字号</span><span class="tag">标准 ▾</span></div>
+        <div class="field"><span class="lab">渠道排序</span><span class="tag">剩余百分比升序 ▾</span></div>
+        <div class="field"><span class="lab">窗口置顶</span><div class="sw on"></div></div>
+        <div class="field"><span class="lab">边缘吸附</span><div class="sw"></div></div>
+
+        <div class="m-h4">密钥</div>
+        <div class="m-hint">保持现状;被隐藏渠道的密钥行加一枚「已隐藏」灰标,输入区照常可用(见下行示意)。</div>
+        <div class="field"><span class="lab"><b style="color:#b6bfce">WorkBuddy</b> · 已读取本机登录</span><span class="tag" style="border:1px dashed var(--line2);border-radius:999px;padding:1px 8px">已隐藏</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h2>二、设计规则(含边界)</h2>
+<div class="card">
+  <ul>
+    <li><b>语义</b>:「显示」是展示 + 取数双层开关 —— 隐藏即<b>不请求该渠道接口</b>(WorkBuddy/Trae 也不再读本机登录文件),比单纯藏 UI 更省、也更符合"我不想看它"的意图;</li>
+    <li><b>默认值</b>:全部显示。老用户升级后零变化,想收掉谁点谁;</li>
+    <li><b>入口唯一</b>:开关只放在「渠道管理」一节(原「渠道顺序」升级合并,不新增顶层分区);密钥区不重复放开关,只加「已隐藏」灰标,避免两处状态打架 —— 与置顶/吸附的「单一写入口」原则一致;</li>
+    <li><b>联动范围</b>:主列表、消耗汇总、胶囊轮播与自动选紧、底栏计数、额度申请行、托盘图标全部跳过隐藏渠道;快照照常落库(重新打开后历史不断档);</li>
+    <li><b>边界 · 全部隐藏</b>:主面板显示空态引导「所有渠道已隐藏 → 去设置」,胶囊显示「已隐藏 N 个渠道」灰点,不报故障;</li>
+    <li><b>边界 · 排序模式</b>:「自定义顺序」下隐藏项保留原位置(灰显),重新显示后顺序不跳位;</li>
+    <li><b>持久化</b>:config 新增 <code>hiddenChannels: string[]</code>(serde default 空数组,老配置自动兼容)。</li>
+  </ul>
+</div>
+
+<h2>三、待裁决(回复编号即可)</h2>
+<div class="card">
+  <ul>
+    <li><span class="num">1</span><b>开关范围</b>:A. 全部 6 个渠道都有眼睛(推荐,机制统一,顺手解决"我不想看 Hapi");B. 只给 Trae / WorkBuddy 两个 —— 严格按本次需求,但设置页出现两套渠道行样式;</li>
+    <li><span class="num">2</span><b>隐藏是否停止取数</b>:A. 停(推荐,上文默认);B. 只隐藏 UI、快照继续积累(重新打开后消耗曲线完整,但违背"关"的直觉,WorkBuddy 登录文件也继续被读);</li>
+    <li><span class="num">3</span><b>「渠道顺序」是否并入「渠道管理」</b>:A. 并入(推荐,一屏管完顺序+显隐);B. 保持独立小节,眼睛只出现在新节里。</li>
+  </ul>
+</div>
+
+<script>
+  const CH = [
+    {id:"4sapi", name:"4SAPI",       short:"4S", color:"#e8622c", st:"已配置 · 剩 37%",       v:"¥74.20",  tone:"w", vis:true},
+    {id:"oc",    name:"OpenCode Go", short:"OC", color:"#f5a623", st:"已限流",                 v:"1.3%",    tone:"b", vis:true},
+    {id:"ds",    name:"DeepSeek",    short:"DS", color:"#4d6bfe", st:"剩 89%",                  v:"¥256.00", tone:"",  vis:true},
+    {id:"trae",  name:"Trae",        short:"TR", color:"#6d5ef8", st:"505 分 · 近 30 天过期 5.28", v:"505 分", tone:"w", vis:true},
+    {id:"wb",    name:"WorkBuddy",   short:"WB", color:"#19b8c4", st:"6,075 分",               v:"6,075 分", tone:"", vis:true},
+  ];
+  const $ = id => document.getElementById(id);
+  function render(){
+    $("mainList").innerHTML = CH.filter(c=>c.vis).map(c=>`
+      <div class="m-row">
+        <div class="m-ico" style="background:${c.color}">${c.short}</div>
+        <div class="m-nm"><div class="m-n">${c.name} <span class="m-dot ${c.tone}"></span></div>
+          <div class="m-s">${c.st}</div></div>
+        <div class="m-val"><div class="m-v" style="color:${c.tone==='b'?'var(--bad)':c.tone==='w'?'var(--warn)':'var(--tx)'}">${c.v}</div></div>
+      </div>`).join("") || `<div style="padding:26px 16px;text-align:center;color:var(--tx3);border:1px dashed var(--line2);border-radius:10px;margin:14px">所有渠道已隐藏<br><span style="color:#b7ccff">去设置 → 渠道管理</span></div>`;
+    const on = CH.filter(c=>c.vis), off = CH.length-on.length;
+    $("fstat").textContent = on.length ? `${on.length} 正常 · ${off} 隐藏` : "全部隐藏";
+    $("fdot").className = "m-dot " + (on.length? (on.some(c=>c.tone==='b')?'b':on.some(c=>c.tone==='w')?'w':'') : 'o');
+    $("visBadge").textContent = `显示 ${on.length} / 隐藏 ${off}`;
+    const tight = on.filter(c=>c.tone==='b')[0] || on.filter(c=>c.tone==='w')[0] || on[0];
+    $("pillTxt").textContent = tight ? `${tight.short} ${tight.v}` : "已隐藏 " + off + " 个渠道";
+    $("crowList").innerHTML = CH.map((c,i)=>`
+      <div class="crow ${c.vis?'':'off'}">
+        <div class="ico2" style="background:${c.color}">${c.short}</div>
+        <div class="meta"><div class="nm2">${c.name}</div><div class="st2">${c.vis?c.st:'已隐藏 · 不再取数'}</div></div>
+        <div class="mv"><span class="${i===0?'dis':''}" title="上移">▲</span><span class="${i===CH.length-1?'dis':''}" title="下移">▼</span></div>
+        <button class="eye ${c.vis?'':'off'}" data-i="${i}" title="${c.vis?'点击隐藏':'点击显示'}">${c.vis?'👁':'–'}</button>
+      </div>`).join("");
+  }
+  $("crowList").addEventListener("click", e=>{
+    const b = e.target.closest(".eye"); if(!b) return;
+    const c = CH[+b.dataset.i]; c.vis = !c.vis; render();
+  });
+  render();
+</script>
+</div>
+</body>
+</html>

@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Grandettoken · 设置页信息架构重设计 预览</title>
+<style>
+  :root{
+    --bg:#12141a; --bg2:#191c24; --bg3:#20242e;
+    --line:#2f3648; --line2:#3c445c;
+    --tx:#edf0f6; --tx2:#b6bfce; --tx3:#8d97ab;
+    --ok:#4ade9d; --warn:#f7c355; --bad:#ff6b63; --ac:#7fa2ff;
+  }
+  body{margin:0;background:#0a0c10;color:#dfe5f1;font:14px/1.7 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;padding:34px 26px 90px}
+  .wrap{max-width:1240px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 4px}
+  .sub{color:#7d879e;font-size:13px;margin-bottom:24px}
+  h2{font-size:16px;margin:38px 0 14px;padding-left:10px;border-left:3px solid var(--ac)}
+  .stage{display:flex;gap:30px;flex-wrap:wrap;align-items:flex-start}
+  .cap{font-size:12px;color:#7d879e;margin-bottom:10px;letter-spacing:.05em}
+  .card{background:#10131a;border:1px solid #262d3d;border-radius:12px;padding:16px 18px;margin:10px 0;max-width:820px}
+  .card h3{margin:0 0 8px;font-size:14px}
+  .card ul{margin:6px 0;padding-left:20px;color:#9aa3b5}
+  .card li{margin:5px 0}
+  .card b{color:#dfe5f1}
+  .card code{background:#1a1f2c;border:1px solid #262d3d;border-radius:4px;padding:1px 5px;font-size:12px;color:#cdd6e8}
+  .num{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:6px;background:#7fa2ff2e;color:#b7ccff;font-size:12px;font-weight:700;margin-right:8px}
+  table{border-collapse:collapse;font-size:12.5px;width:100%;max-width:820px}
+  th,td{padding:7px 10px;border-bottom:1px solid #1d2330;text-align:left;vertical-align:top}
+  th{color:#7d879e;font-weight:600;background:#141824}
+  td .to{color:#4ade9d}
+
+  /* ═══ 挂件 Mock ═══ */
+  .mock{width:380px;height:640px;flex:none;border-radius:12px;border:1px solid var(--line);background:var(--bg);
+    color:var(--tx);overflow:hidden;display:flex;flex-direction:column;
+    font:13px/1.5 "Segoe UI","Microsoft YaHei",sans-serif;box-shadow:0 18px 50px -18px #000c}
+  .mhead{display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--line);background:#141720;flex:none}
+  .m-back{color:var(--tx2);border:1px solid var(--line2);border-radius:5px;padding:1px 8px;font-size:11.5px;cursor:pointer}
+  .mt{font-size:11.5px;font-weight:600}
+  /* 顶部页签 */
+  .tabs{display:flex;gap:3px;padding:8px 10px;border-bottom:1px solid var(--line);background:#151823;flex:none}
+  .tabs button{flex:1;border:1px solid transparent;background:transparent;color:var(--tx3);font:12px/1.4 inherit;font-family:inherit;
+    padding:5px 0;border-radius:7px;cursor:pointer;white-space:nowrap}
+  .tabs button:hover{color:var(--tx)}
+  .tabs button.on{background:#7fa2ff1f;border-color:#7fa2ff55;color:#b7ccff;font-weight:600}
+  .mbody{flex:1;overflow-y:auto;padding:12px 13px 18px}
+  .mbody h4{font-size:12px;color:var(--tx3);letter-spacing:.1em;font-weight:600;margin:16px 0 8px}
+  .mbody h4:first-child{margin-top:0}
+  .khint{font-size:11.5px;color:var(--tx3);line-height:1.7;margin:-2px 0 10px}
+
+  /* 渠道卡 */
+  .ccard{border:1px solid var(--line);border-radius:10px;background:var(--bg2);margin-bottom:9px;overflow:hidden}
+  .ccard.off{opacity:.62}
+  .cc-head{display:flex;align-items:center;gap:9px;padding:9px 11px;cursor:pointer}
+  .cc-head:hover{background:#ffffff07}
+  .ico{width:26px;height:26px;border-radius:7px;flex:none;display:grid;place-items:center;font-size:10.5px;font-weight:700;color:#fff}
+  .ccard.off .ico{filter:grayscale(1)}
+  .cmeta{flex:1;min-width:0}
+  .cname{font-size:12.5px;font-weight:500;display:flex;align-items:center;gap:6px}
+  .cst{font-size:11.5px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tag-hidden{font-size:10.5px;color:var(--tx3);border:1px dashed var(--line2);border-radius:999px;padding:0 7px;flex:none}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);display:inline-block}
+  .dot.w{background:var(--warn)} .dot.b{background:var(--bad)} .dot.o{background:var(--tx3)}
+  .eye{flex:none;width:28px;height:28px;border-radius:7px;border:1px solid var(--line2);background:var(--bg3);color:var(--tx2);cursor:pointer;display:grid;place-items:center;font-size:13px}
+  .eye.off{color:var(--tx3);background:transparent;border-style:dashed}
+  .caret{color:var(--tx3);font-size:9px;flex:none;transition:transform .2s;width:12px;text-align:center}
+  .ccard.open .caret{transform:rotate(90deg)}
+  .cc-body{display:none;border-top:1px solid var(--line);padding:10px 12px 12px;background:#151823}
+  .ccard.open .cc-body{display:block}
+  .kv-row{display:flex;gap:6px;align-items:center;margin-bottom:8px}
+  .kv-row input{flex:1;background:#0e1015;border:1px solid var(--line2);border-radius:6px;color:var(--tx);font-size:12px;padding:5px 8px;font-family:inherit;min-width:0}
+  .btn{border:1px solid var(--line2);background:var(--bg3);color:var(--tx2);font-size:12px;padding:4px 10px;border-radius:6px;cursor:pointer;font-family:inherit;flex:none}
+  .btn.p{background:#7fa2ff1a;border-color:#7fa2ff55;color:#b7ccff}
+  .btn.danger:hover{border-color:var(--bad);color:var(--bad)}
+  .ord{display:flex;gap:4px}
+  .ord span{width:26px;height:26px;border:1px solid var(--line2);background:var(--bg3);border-radius:6px;display:grid;place-items:center;font-size:10px;color:var(--tx2);cursor:pointer}
+  .mini{font-size:11.5px;color:var(--tx3);line-height:1.7}
+  .claim-in{margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)}
+  .claim-grid{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:12px;color:var(--tx3)}
+  .claim-grid input{width:64px;background:#0e1015;border:1px solid var(--line2);border-radius:6px;color:var(--tx);font-size:12px;padding:4px 7px;font-family:inherit}
+
+  /* 通用 field */
+  .field{display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid #232937;font-size:12.5px;gap:10px}
+  .field:last-child{border-bottom:0}
+  .field>span:first-child{flex:1;min-width:0}
+  .field .desc{display:block;font-size:11px;color:var(--tx3);font-weight:400}
+  .sel{background:var(--bg3);border:1px solid var(--line2);color:var(--tx2);border-radius:5px;font-size:12px;padding:3px 7px;font-family:inherit;flex:none}
+  .sw{width:32px;height:17px;border-radius:99px;background:var(--line2);position:relative;cursor:pointer;flex:none;transition:.2s}
+  .sw::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:#98a2b6;transition:.2s}
+  .sw.on{background:#7fa2ff59}
+  .sw.on::after{left:17px;background:var(--ac)}
+  .picks{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 2px}
+  .pick{border:1px solid var(--line2);background:var(--bg3);color:var(--tx3);font-size:12px;padding:4px 10px;border-radius:999px;cursor:pointer;font-family:inherit}
+  .pick.on{background:#7fa2ff1f;border-color:#7fa2ff55;color:#b7ccff}
+  .upcard{margin-top:6px;padding:10px 11px;border:1px solid var(--line2);border-radius:8px;background:#ffffff05;font-size:12px}
+  .usub{color:var(--tx3);font-size:11.5px}
+  .panel{display:none}
+  .panel.on{display:block}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>设置页信息架构重设计</h1>
+<div class="sub">2026-09-18 · 设计预览(未改应用代码)。现状问题:9 个分区一条长滚,「密钥 / 渠道顺序 / 额度申请」三处讲的都是同一批渠道,找东西全靠滚。新方案:<b>顶部 4 页签 + 渠道一卡一世界</b>。页签、展开、眼睛、开关全部可点。</div>
+
+<div class="stage">
+  <div>
+    <div class="cap">新版设置页(380 × 640,可滚动)</div>
+    <div class="mock">
+      <div class="mhead"><span class="m-back">←</span><span class="mt">设置与管理</span></div>
+      <div class="tabs" id="tabs">
+        <button data-p="ch" class="on">渠道</button>
+        <button data-p="disp">显示</button>
+        <button data-p="run">刷新与启动</button>
+        <button data-p="about">关于</button>
+      </div>
+
+      <!-- ══ 渠道 ══ -->
+      <div class="mbody panel on" data-p="ch">
+        <div class="khint">点渠道行展开密钥 / 额度设置;眼睛 = 显示与取数开关(隐藏后不再请求接口、不再读本机登录文件)。</div>
+        <div id="chList"></div>
+      </div>
+
+      <!-- ══ 显示 ══ -->
+      <div class="mbody panel" data-p="disp">
+        <h4>外观</h4>
+        <div class="field"><span>字号<span class="desc">含紧凑条 / 胶囊,窗口自动跟随</span></span>
+          <select class="sel"><option>标准</option><option selected>大</option><option>特大</option></select></div>
+        <div class="field"><span>渠道排序</span>
+          <select class="sel"><option>剩余百分比升序</option><option>余额高→低</option><option>今日消耗高→低</option><option>自定义(在「渠道」页 ↑↓)</option></select></div>
+        <div class="field"><span>窗口置顶<span class="desc">所有形态生效</span></span><div class="sw on" data-sw></div></div>
+        <div class="field"><span>拖到边缘自动吸附</span><div class="sw" data-sw></div></div>
+
+        <h4>预警阈值(剩余百分比)</h4>
+        <div class="field"><span>标黄</span><select class="sel"><option>50%</option><option selected>40%</option><option>30%</option><option>20%</option></select></div>
+        <div class="field"><span>标红</span><select class="sel"><option>20%</option><option selected>15%</option><option>10%</option><option>5%</option></select></div>
+
+        <h4>胶囊轮播</h4>
+        <div class="khint">不选 = 自动显示最紧张的一个;选中的每 5 秒轮播。渠道在「渠道」页隐藏后,这里的选择自动失效。</div>
+        <div class="picks"><span class="pick">4SAPI</span><span class="pick on">OpenCode Go</span><span class="pick">DeepSeek</span><span class="pick">Trae</span></div>
+      </div>
+
+      <!-- ══ 刷新与启动 ══ -->
+      <div class="mbody panel" data-p="run">
+        <h4>取数频率</h4>
+        <div class="field"><span>面板展开时</span><select class="sel"><option>30 秒</option><option selected>1 分钟</option><option>2 分钟</option><option>5 分钟</option></select></div>
+        <div class="field"><span>折叠 / 托盘时</span><select class="sel"><option>1 分钟</option><option selected>5 分钟</option><option>10 分钟</option><option>30 分钟</option></select></div>
+        <div class="field"><span>连续失败后</span><select class="sel"><option>5 分钟</option><option selected>15 分钟</option><option>30 分钟</option></select></div>
+        <h4>开机与更新</h4>
+        <div class="field"><span>开机自启<span class="desc">静默进托盘,不弹窗</span></span><div class="sw" data-sw></div></div>
+        <div class="field"><span>自动检查更新<span class="desc">每 24 小时最多问一次服务器</span></span><div class="sw on" data-sw></div></div>
+      </div>
+
+      <!-- ══ 关于 ══ -->
+      <div class="mbody panel" data-p="about">
+        <h4>版本</h4>
+        <div class="field"><span>Grandettoken 0.1.6<span class="desc" id="lastChk">上次检查:2026-09-18 16:12</span></span>
+          <button class="btn p" id="btnChk">检查更新</button></div>
+        <div class="upcard"><b style="color:#b7ccff">发现新版本 0.1.7</b> <span class="usub">今天 15:40</span>
+          <div class="usub" style="margin:4px 0 8px">修复本周/本月消耗显示;自动检查更新周期化…</div>
+          <div style="display:flex;gap:6px"><button class="btn p">立即更新</button><button class="btn">跳过此版本</button><button class="btn">稍后</button></div>
+        </div>
+        <h4>数据与隐私</h4>
+        <div class="khint" style="margin:0">密钥只存 Windows 凭据管理器,不进配置文件 / 数据库 / 日志;快照库在 <code style="font-size:11px">%APPDATA%\com.wacil.tokenscope</code>;Trae / WorkBuddy 只读本机登录凭据,不写回、不刷新,隐藏渠道后连读也不做。</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="flex:1;min-width:360px;max-width:820px">
+    <h2 style="margin-top:0">旧 → 新:9 个分区去哪了</h2>
+    <table>
+      <tr><th>现在的分区(一条长滚)</th><th>归到</th></tr>
+      <tr><td>密钥(6 行输入框)</td><td class="to">渠道页 → 卡片展开区</td></tr>
+      <tr><td>渠道顺序(↑↓)</td><td class="to">渠道页 → 卡片右侧 ↑↓(与显隐同卡)</td></tr>
+      <tr><td>额度申请(开关+额度+间隔+日期)</td><td class="to">渠道页 → 仅金额型卡片的展开区</td></tr>
+      <tr><td>刷新(3 个 select)</td><td class="to">刷新与启动页</td></tr>
+      <tr><td>胶囊显示(chips)</td><td class="to">显示页</td></tr>
+      <tr><td>显示(排序/吸附/置顶)</td><td class="to">显示页</td></tr>
+      <tr><td>阈值(标黄/标红)</td><td class="to">显示页</td></tr>
+      <tr><td>启动(自启)</td><td class="to">刷新与启动页</td></tr>
+      <tr><td>关于(检查更新/更新卡)</td><td class="to">关于页(数据与隐私说明集中在这)</td></tr>
+    </table>
+
+    <h2>关键决策与理由</h2>
+    <div class="card">
+      <ul>
+        <li><b>渠道一卡一世界</b>:密钥、显隐、排序、额度申请全收进同一张卡片 —— 用户心智里它们是"同一个渠道的设置",原来拆在三处是乱的根源;展开区默认收起,列表高度立刻减半;</li>
+        <li><b>顶部 4 页签</b>而不是继续手风琴:页签把"最长滚动路径"从 9 段压到 1 段内,380×560 一屏基本装完;手风琴全展开时又回到长滚;</li>
+        <li><b>眼睛 = 显示 + 取数</b>(沿用上轮设计,默认全部渠道都有);隐藏卡片灰 62%、状态行变「已隐藏 · 不再取数」;</li>
+        <li><b>危险操作后置</b>:删除密钥按钮只在展开区里,收起来不可能误触;开关全部即时生效,没有"保存设置"这种多余动作;</li>
+        <li><b>实现代价低</b>:纯前端重组(index.html 分区 + app.js 渲染函数搬家),config 字段一个不动,只新增 <code>hiddenChannels</code>;Rust 侧仅 <code>fetch_all</code> 跳过隐藏渠道 + 快照照旧。</li>
+      </ul>
+    </div>
+
+    <h2>待裁决</h2>
+    <div class="card">
+      <ul>
+        <li><span class="num">1</span><b>导航形式</b>:A 顶部 4 页签(推荐,上文即此方案)/ B 保持单页但改手风琴分组;</li>
+        <li><span class="num">2</span><b>渠道卡片排序控件</b>:A ↑↓ 收进展开区(列表更干净,推荐)/ B 常显在卡片右侧(上文即 B,可换);</li>
+        <li><span class="num">3</span><b>「刷新与启动」要不要拆</b>:A 保持合一(推荐,都是低频项)/ B 拆成「刷新」「启动」两页签(5 页签偏挤)。</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script>
+  const CH = [
+    {id:"4sapi", name:"4SAPI", short:"4S", color:"#e8622c", st:"已配置 · ••••3f7a", dot:"", vis:true, key:true, claim:true,
+     detail:"密钥输入 + 额度申请"},
+    {id:"oc", name:"OpenCode Go", short:"OC", color:"#f5a623", st:"已配置 · ••••d2c1 · 已限流", dot:"b", vis:true, key:true},
+    {id:"ds", name:"DeepSeek", short:"DS", color:"#4d6bfe", st:"已配置 · ••••8a02", dot:"", vis:true, key:true},
+    {id:"trae", name:"Trae", short:"TR", color:"#6d5ef8", st:"已读取本机登录 · TRAE SOLO CN", dot:"w", vis:true, key:false},
+    {id:"wb", name:"WorkBuddy", short:"WB", color:"#19b8c4", st:"已读取本机登录 · workbuddy-desktop.info", dot:"", vis:true, key:false},
+  ];
+  function renderCh(){
+    document.getElementById("chList").innerHTML = CH.map((c,i)=>`
+      <div class="ccard ${c.vis?'':'off'}" data-id="${c.id}">
+        <div class="cc-head" data-act="fold">
+          <div class="ico" style="background:${c.color}">${c.short}</div>
+          <div class="cmeta">
+            <div class="cname">${c.name} <span class="dot ${c.dot}"></span>${c.vis?'':'<span class="tag-hidden">已隐藏</span>'}</div>
+            <div class="cst">${c.vis?c.st:'已隐藏 · 不再取数(历史快照保留)'}</div>
+          </div>
+          <span class="eye ${c.vis?'':'off'}" data-act="eye" title="${c.vis?'隐藏(停止取数)':'显示'}">${c.vis?'👁':'–'}</span>
+          <span class="caret">▶</span>
+        </div>
+        <div class="cc-body">
+          ${c.key ? `
+            <div class="kv-row"><input placeholder="${c.vis?'已保存 · 留空则不修改':'粘贴 API Key'}"><button class="btn p">保存</button><button class="btn danger">删除</button></div>
+          ` : `
+            <div class="mini">凭据来自本机已登录的 ${c.name} 客户端,只读复用、不写回不刷新;失效时打开一次 ${c.name} 即可。隐藏本渠道后连读取也会停止。</div>
+          `}
+          ${c.claim ? `
+            <div class="claim-in">
+              <div class="field" style="border:0;padding:2px 0"><span>额度申请制<span class="desc">定期申请把余额补到固定上限,自动检测上次申请时间</span></span><div class="sw on" data-sw></div></div>
+              <div class="claim-grid">单次额度 <input value="200"> 元 · 最短间隔 <input value="14" style="width:44px"> 天 · 上次申请 <input value="2026-09-06" style="width:96px"></div>
+              <div style="display:flex;gap:6px;margin-top:8px"><button class="btn">记一次申请=今天</button><button class="btn">清除手动值</button></div>
+            </div>` : ``}
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px">
+            <span class="mini">在列表中的位置</span>
+            <span class="ord"><span ${i===0?'style="opacity:.35"':''}>▲</span><span ${i===CH.length-1?'style="opacity:.35"':''}>▼</span></span>
+          </div>
+        </div>
+      </div>`).join("");
+  }
+  renderCh();
+  document.getElementById("chList").addEventListener("click", e=>{
+    const card = e.target.closest(".ccard"); if(!card) return;
+    if(e.target.closest("[data-act=eye]")){ const c = CH.find(x=>x.id===card.dataset.id); c.vis=!c.vis; renderCh(); return; }
+    if(e.target.closest("[data-act=fold]")) card.classList.toggle("open");
+  });
+  document.getElementById("tabs").addEventListener("click", e=>{
+    const b = e.target.closest("button"); if(!b) return;
+    document.querySelectorAll("#tabs button").forEach(x=>x.classList.toggle("on", x===b));
+    document.querySelectorAll(".panel").forEach(p=>p.classList.toggle("on", p.dataset.p===b.dataset.p));
+  });
+  document.addEventListener("click", e=>{
+    const sw = e.target.closest("[data-sw]"); if(sw) sw.classList.toggle("on");
+    const pk = e.target.closest(".pick"); if(pk) pk.classList.toggle("on");
+  });
+  document.getElementById("btnChk").addEventListener("click", ()=>{
+    document.getElementById("lastChk").textContent = "上次检查:" + new Date().toLocaleString("zh-CN",{hour12:false});
+  });
+</script>
+</div>
+</body>
+</html>
