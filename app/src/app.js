@@ -1551,6 +1551,33 @@ bindSwitch("cfgPin", "alwaysOnTop", async (on) => {
   applyPinUI();
 });
 
+// ───────────── 快捷键录制 ─────────────
+// 存的是 Tauri accelerator 原始格式(KeyG/Digit1 这类 code 名),展示时美化
+const HK_KEY = /^(Key[A-Z]|Digit[0-9]|F([1-9]|1[0-2])|Space|Enter|Tab|Arrow(Up|Down|Left|Right)|Home|End|PageUp|PageDown|Minus|Equal|Comma|Period|Slash)$/;
+const hkLabel = (v) =>
+  (v || "").replace(/Key([A-Z])/g, "$1").replace(/Digit(\d)/g, "$1").replace("Arrow", "");
+async function saveHotkey(acc) {
+  const old = CFG.hotkey || "";
+  CFG.hotkey = acc;
+  $("cfgHotkey").value = hkLabel(acc) || "未设置";
+  try {
+    await invoke("set_config", { config: CFG });
+  } catch (err) {
+    // 注册失败(多半被别的程序占用):回滚界面,别让用户以为设上了
+    CFG.hotkey = old;
+    $("cfgHotkey").value = hkLabel(old) || "未设置";
+    alert("快捷键设置失败:" + err);
+  }
+}
+$("cfgHotkey").addEventListener("keydown", (e) => {
+  e.preventDefault();
+  e.stopPropagation(); // 别撞上文档级的 Esc 处理
+  if (e.key === "Escape") return saveHotkey("");
+  const mods = [e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Super"].filter(Boolean);
+  if (!mods.length) return; // 只按修饰键:继续等主键
+  if (HK_KEY.test(e.code)) saveHotkey(mods.join("+") + "+" + e.code);
+});
+
 function applyConfigToUI() {
   if (!CFG) return;
   const set = (id, v) => {
@@ -1564,6 +1591,8 @@ function applyConfigToUI() {
   set("cfgWarn", CFG.warnPercent);
   set("cfgCrit", CFG.critPercent);
   set("cfgFontScale", CFG.fontScale || "md");
+  const hk = $("cfgHotkey");
+  if (hk) hk.value = hkLabel(CFG.hotkey) || "未设置";
   $("cfgAutostart").classList.toggle("on", !!CFG.autostart);
   $("cfgAutoUpdate").classList.toggle("on", CFG.autoCheckUpdate !== false);
   renderAbout();
@@ -1820,9 +1849,9 @@ async function refresh() {
   } catch {
     CFG = {
       activeIntervalSec: 60, idleIntervalSec: 300, backoffIntervalSec: 900,
-      warnPercent: 40, critPercent: 15, notify: true, autostart: false,
-      collapseOnBlur: false, form: "panel", sort: "percent", pillChannels: [],
-      fontScale: "md", hiddenChannels: [],
+      warnPercent: 40, critPercent: 15, autostart: false,
+      form: "panel", sort: "percent", pillChannels: [],
+      fontScale: "md", hiddenChannels: [], hotkey: "",
       claimChannels: {
         "4sapi": { enabled: true, amount: 200, minIntervalDays: 14, manualLastAt: null, manualSetAt: null },
       },

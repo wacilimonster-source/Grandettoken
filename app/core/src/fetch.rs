@@ -562,6 +562,16 @@ fn placeholder(def: &providers::ProviderDef) -> ChannelView {
     }
 }
 
+/// 单渠道并发取数的产出:要么自带成品视图(占位/隐藏),
+/// 要么留 (result, stale, ts, cred) 给同步段组视图;success 记快照与缓存。
+struct FetchedOne {
+    i: usize,
+    def: &'static providers::ProviderDef,
+    view: Option<ChannelView>,
+    pending: Option<(FetchResult, bool, i64, Option<appauth::Credential>)>,
+    success: Option<(FetchResult, i64)>,
+}
+
 /// 取数器。持有 HTTP 客户端和上次成功结果的缓存,失败时用于降级显示。
 pub struct Fetcher {
     pub http: reqwest::Client,
@@ -592,126 +602,168 @@ impl Fetcher {
 
     /// 取全部渠道。
     ///
-    /// 结构上刻意分成两段:**await 段**只做网络请求,**同步段**才锁库读写。
-    /// 因为 `std::sync::MutexGuard` 不是 Send,一旦跨越 await 就会让整个
-    /// future 失去 Send,而 Tauri 的命令要求 future 是 Send。
+    /// 结构上刻意分成两段:**await 段**只做网络请求(全渠道**并发**),
+    /// **同步段**才锁库读写。因为 `std::sync::MutexGuard` 不是 Send,一旦跨越
+    /// await 就会让整个 future 失去 Send,而 Tauri 的命令要求 future 是 Send。
+    /// 并行化原因:单入口超时预算 8s、每渠道最多 4 入口 × 多凭据,串行时一个
+    /// 挂掉的域名会把整轮拖到分钟级;join_all 后整轮最坏 ≈ 单渠道最坏。
     pub async fn fetch_all(&self, store: &Arc<Mutex<Store>>) -> Vec<ChannelView> {
         let n = providers::PROVIDERS.len();
         let mut out: Vec<Option<ChannelView>> = (0..n).map(|_| None).collect();
-        let mut pending: Vec<(
-            usize,
-            &'static providers::ProviderDef,
-            FetchResult,
-            bool,
-            i64,
-            Option<appauth::Credential>,
-        )> = Vec::new();
-        let mut successful: Vec<(&'static str, FetchResult, i64)> = Vec::new();
 
         // ── await 段:纯网络,不碰数据库 ──
         // 隐藏渠道清单先读出来:隐藏 = 不发请求、不读本机登录凭据。
         // 仍返回一个占位视图(has_key 照实),管理页要靠它列出「已隐藏」卡片。
-        let hidden: Vec<String> = {
+        // Arc:并发时每渠道克隆一次指针,而不是把 Vec 移进每个 future。
+        let hidden: Arc<Vec<String>> = Arc::new({
             let s = store.lock().unwrap_or_else(|p| p.into_inner());
             Config::load(&s).hidden_channels
-        };
-        for (i, def) in providers::PROVIDERS.iter().enumerate() {
-            let creds = credentials(def);
-            if hidden.iter().any(|h| h == def.id) {
-                let mut v = placeholder(def);
-                v.has_key = !creds.is_empty();
-                v.hidden = true;
-                out[i] = Some(v);
-                continue;
-            }
-            if creds.is_empty() {
-                out[i] = Some(placeholder(def));
-                continue;
-            }
+        });
 
-            let memo = self
-                .url_memo
-                .lock()
-                .ok()
-                .and_then(|m| m.get(def.id).cloned());
-
-            // 有多个凭据候选时依次试:只有"服务器明确说这份凭据不行"(401/403)
-            // 才换下一份 —— 网络不通时换凭据是白费功夫。
-            let mut chosen: Option<appauth::Credential> = None;
-            // 最后一次实际尝试过的凭据:失败时也要拿它标"来源",否则界面会说
-            // "未检测到登录信息"—— 明明检测到了,只是 token 过期(见 bug 报告 #2)
-            let mut last_cred: Option<appauth::Credential> = None;
-            let mut result = FetchResult::default();
-            let mut used_url = None;
-            for cred in creds.iter() {
-                last_cred = Some(cred.clone());
-                let (r, url, kind) = fetch_channel(&self.http, def, &cred.token, memo.as_deref()).await;
-                result = r;
-                used_url = url;
-                if result.valid {
-                    chosen = Some(cred.clone());
-                    break;
-                }
-                if another_credential_may_help(kind) {
-                    continue;
-                }
-                break;
-            }
-            let ts = now_ts();
-
-            if let (true, Some(url)) = (result.valid, used_url.as_ref()) {
-                if let Ok(mut m) = self.url_memo.lock() {
-                    m.insert(def.id.to_string(), url.clone());
-                }
-            }
-
-            // 失败也要给界面一个"凭据是从哪读的",否则 App 型渠道的说明会退化成
-            // "未检测到登录信息",与真正的失败原因(token 过期)自相矛盾
-            let shown_cred = chosen.or_else(|| last_cred.clone());
-            if result.valid {
-                successful.push((def.id, result.clone(), ts));
-                pending.push((i, def, result, false, ts, shown_cred));
-            } else {
-                // 失败降级:沿用上次成功值,标注时间,绝不显示成 0
-                let cached = self
-                    .cache
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .get(def.id)
-                    .cloned();
-                match cached {
-                    Some((mut prev, prev_ts)) => {
-                        prev.error = result.error;
-                        prev.valid = false;
-                        pending.push((i, def, prev, true, prev_ts, shown_cred));
+        let fetched = futures::future::join_all(
+            providers::PROVIDERS
+                .iter()
+                .enumerate()
+                .map(|(i, def)| {
+                    let hidden = hidden.clone();
+                    async move {
+                    let creds = credentials(def);
+                    if hidden.iter().any(|h| h == def.id) {
+                        let mut v = placeholder(def);
+                        v.has_key = !creds.is_empty();
+                        v.hidden = true;
+                        return FetchedOne {
+                            i,
+                            def,
+                            view: Some(v),
+                            pending: None,
+                            success: None,
+                        };
                     }
-                    None => pending.push((i, def, result, false, ts, shown_cred)),
-                }
-            }
-        }
+                    if creds.is_empty() {
+                        return FetchedOne {
+                            i,
+                            def,
+                            view: Some(placeholder(def)),
+                            pending: None,
+                            success: None,
+                        };
+                    }
+
+                    let memo = self
+                        .url_memo
+                        .lock()
+                        .ok()
+                        .and_then(|m| m.get(def.id).cloned());
+
+                    // 有多个凭据候选时依次试:只有"服务器明确说这份凭据不行"(401/403)
+                    // 才换下一份 —— 网络不通时换凭据是白费功夫。
+                    let mut chosen: Option<appauth::Credential> = None;
+                    // 最后一次实际尝试过的凭据:失败时也要拿它标"来源",否则界面会说
+                    // "未检测到登录信息"—— 明明检测到了,只是 token 过期(见 bug 报告 #2)
+                    let mut last_cred: Option<appauth::Credential> = None;
+                    let mut result = FetchResult::default();
+                    let mut used_url = None;
+                    for cred in creds.iter() {
+                        last_cred = Some(cred.clone());
+                        let (r, url, kind) =
+                            fetch_channel(&self.http, def, &cred.token, memo.as_deref()).await;
+                        result = r;
+                        used_url = url;
+                        if result.valid {
+                            chosen = Some(cred.clone());
+                            break;
+                        }
+                        if another_credential_may_help(kind) {
+                            continue;
+                        }
+                        break;
+                    }
+                    let ts = now_ts();
+
+                    if let (true, Some(url)) = (result.valid, used_url.as_ref()) {
+                        if let Ok(mut m) = self.url_memo.lock() {
+                            m.insert(def.id.to_string(), url.clone());
+                        }
+                    }
+
+                    // 失败也要给界面一个"凭据是从哪读的",否则 App 型渠道的说明会退化成
+                    // "未检测到登录信息",与真正的失败原因(token 过期)自相矛盾
+                    let shown_cred = chosen.or_else(|| last_cred.clone());
+                    if result.valid {
+                        FetchedOne {
+                            i,
+                            def,
+                            view: None,
+                            pending: Some((result.clone(), false, ts, shown_cred)),
+                            success: Some((result, ts)),
+                        }
+                    } else {
+                        // 失败降级:沿用上次成功值,标注时间,绝不显示成 0
+                        let cached = self
+                            .cache
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .get(def.id)
+                            .cloned();
+                        let p = match cached {
+                            Some((mut prev, prev_ts)) => {
+                                prev.error = result.error;
+                                prev.valid = false;
+                                (prev, true, prev_ts, shown_cred)
+                            }
+                            None => (result, false, ts, shown_cred),
+                        };
+                        FetchedOne {
+                            i,
+                            def,
+                            view: None,
+                            pending: Some(p),
+                            success: None,
+                        }
+                    }
+                    }
+                }),
+        )
+        .await;
+
+        let cache_updates: Vec<(String, FetchResult, i64)> = fetched
+            .iter()
+            .filter_map(|f| {
+                f.success
+                    .as_ref()
+                    .map(|(r, ts)| (f.def.id.to_string(), r.clone(), *ts))
+            })
+            .collect();
 
         // ── 同步段:一次性锁库完成快照写入与消耗推算,期间不跨 await ──
         {
             let s = store.lock().unwrap_or_else(|p| p.into_inner());
-            for (id, result, ts) in &successful {
-                let kind = match result.kind {
-                    Kind::Amount => "amount",
-                    Kind::Percent => "percent",
-                    Kind::Points => "points",
-                };
-                // 注意顺序:先写快照再组视图 —— 申请制额度的跳升检测要用最新快照
-                let _ = s.record(id, *ts, result.remaining, result.used, result.total, kind);
+            for f in &fetched {
+                if let Some((res, ts)) = f.success.as_ref() {
+                    let kind = match res.kind {
+                        Kind::Amount => "amount",
+                        Kind::Percent => "percent",
+                        Kind::Points => "points",
+                    };
+                    // 注意顺序:先写快照再组视图 —— 申请制额度的跳升检测要用最新快照
+                    let _ = s.record(f.def.id, *ts, res.remaining, res.used, res.total, kind);
+                }
             }
             // 配置从库里读:前端改完设置立刻生效,不必等下一次轮询换内存态
             let cfg = Config::load(&s);
-            for (i, def, result, stale, ts, cred) in pending {
-                out[i] = Some(build_view(def, result, stale, ts, &s, &cfg, cred.as_ref()));
+            for f in fetched {
+                if let Some(v) = f.view {
+                    out[f.i] = Some(v);
+                } else if let Some((result, stale, ts, cred)) = f.pending {
+                    out[f.i] = Some(build_view(f.def, result, stale, ts, &s, &cfg, cred.as_ref()));
+                }
             }
         }
 
-        for (id, result, ts) in successful {
+        for (id, result, ts) in cache_updates {
             if let Ok(mut c) = self.cache.lock() {
-                c.insert(id.to_string(), (result, ts));
+                c.insert(id, (result, ts));
             }
         }
 

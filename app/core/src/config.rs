@@ -55,10 +55,11 @@ pub struct Config {
     pub warn_percent: f64,
     /// 低于此值标红
     pub crit_percent: f64,
-    pub notify: bool,
+    /// 全局快捷键(显示/隐藏面板),Tauri accelerator 格式如 "Alt+KeyG";
+    /// 空串 = 不注册。老配置缺字段时兜成空,不会抢占别人的热键。
+    pub hotkey: String,
     pub autostart: bool,
-    pub collapse_on_blur: bool,
-    /// 窗口置顶(全局开关)。折叠形态没有置顶按钮,所以置顶状态要能持久化;
+    /// 置顶(全局开关)。折叠形态没有置顶按钮,所以置顶状态要能持久化;
     /// 面板的 📌 按钮与设置项共用这一个值,避免两处状态打架。
     pub always_on_top: bool,
     /// panel | compact | pill(贴边不是独立形态,是这三种形态之上的吸附态)
@@ -97,9 +98,8 @@ impl Default for Config {
             backoff_interval_sec: 900,
             warn_percent: 40.0,
             crit_percent: 15.0,
-            notify: true,
+            hotkey: String::new(),
             autostart: false,
-            collapse_on_blur: false,
             always_on_top: true,
             form: "panel".into(),
             sort: "percent".into(),

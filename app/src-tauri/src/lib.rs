@@ -14,6 +14,8 @@ pub struct AppState {
     pub store: Arc<Mutex<Store>>,
     pub config: Mutex<Config>,
     pub fetcher: Arc<Fetcher>,
+    /// 当前已注册的全局快捷键(空 = 未注册)。换键时先注册新的、成功后再撤旧的。
+    pub hotkey: Mutex<Option<String>>,
 }
 
 #[tauri::command]
@@ -29,8 +31,37 @@ fn get_config(state: State<'_, AppState>) -> Config {
     lock_rw(&state.config).clone()
 }
 
+/// 按配置重注册全局快捷键(空串 = 只注销)。先注册新键、成功后才撤旧键:
+/// 新键被其它应用占用时保持现状,不会出现「旧键没了、新键也没有」。
+/// 行为回调挂在插件 Builder 的 with_handler 上(见 run())。
+fn apply_hotkey(app: &tauri::AppHandle, state: &AppState, want: &str) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    let want = want.trim().to_string();
+    let mut cur = lock_rw(&state.hotkey);
+    if cur.as_deref().unwrap_or("") == want.as_str() {
+        return Ok(()); // 没变,别动注册器
+    }
+    let manager = app.global_shortcut();
+    if want.is_empty() {
+        if let Some(old) = cur.take() {
+            let _ = manager.unregister(old.as_str());
+        }
+        return Ok(());
+    }
+    manager
+        .register(want.as_str())
+        .map_err(|e| format!("注册 {want} 失败(可能已被其它程序占用): {e}"))?;
+    if let Some(old) = cur.take() {
+        let _ = manager.unregister(old.as_str());
+    }
+    *cur = Some(want);
+    Ok(())
+}
+
 #[tauri::command]
-fn set_config(state: State<'_, AppState>, config: Config) -> Result<(), String> {
+fn set_config(app: tauri::AppHandle, state: State<'_, AppState>, config: Config) -> Result<(), String> {
+    // 先应用快捷键:注册失败(如被占用)就让整次保存失败,前端好回滚旧值
+    apply_hotkey(&app, &state, &config.hotkey)?;
     let store = state.store.lock().map_err(|e| e.to_string())?;
     config.save(&store)?;
     drop(store);
@@ -408,6 +439,25 @@ fn skip_update_version(state: State<'_, AppState>, version: String) -> Result<()
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                // 全插件共用这一个回调:按下的那一刻切换主窗口显隐(与托盘左键同语义)
+                .with_handler(|app, _shortcut, ev| {
+                    use tauri_plugin_global_shortcut::ShortcutState;
+                    if ev.state != ShortcutState::Pressed {
+                        return;
+                    }
+                    if let Some(w) = app.get_webview_window("main") {
+                        if w.is_visible().unwrap_or(false) {
+                            let _ = w.hide();
+                        } else {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                })
+                .build(),
+        )
         // 公钥与端点都在 tauri.conf.json 的 plugins.updater 里,插件自己读配置
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
@@ -431,9 +481,18 @@ pub fn run() {
 
             app.manage(AppState {
                 store: Arc::new(Mutex::new(store)),
-                config: Mutex::new(config),
+                config: Mutex::new(config.clone()),
                 fetcher: Arc::new(Fetcher::new()),
+                hotkey: Mutex::new(None),
             });
+
+            // 启动时注册已保存的全局快捷键;被占用只记日志,不拦启动
+            if !config.hotkey.is_empty() {
+                let st = app.state::<AppState>();
+                if let Err(e) = apply_hotkey(app.handle(), &st, &config.hotkey) {
+                    eprintln!("全局快捷键注册失败: {e}");
+                }
+            }
 
             let refresh = MenuItem::with_id(app, "refresh", "立即刷新", true, None::<&str>)?;
             let show = MenuItem::with_id(app, "show", "显示面板", true, None::<&str>)?;
