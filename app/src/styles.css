@@ -409,6 +409,12 @@ body.form-pill .list{display:none}
 .pill-body{display:none;align-items:center;gap:calc(8px*var(--u));padding:calc(7px*var(--u)) calc(7px*var(--u)) calc(7px*var(--u)) calc(9px*var(--u));flex:1;
   cursor:pointer;overflow:hidden}
 body.form-pill .pill-body{display:flex}
+/* 胶囊里的渠道图标:与列表行同一来源(官方标 → 字母块),失败/未配置灰化 */
+.pill-body .pico{width:calc(26px*var(--u));height:calc(26px*var(--u));border-radius:calc(7px*var(--u));flex:none;
+  display:grid;place-items:center;font-size:calc(10.5px*var(--u));font-weight:700;color:#fff;overflow:hidden}
+.pill-body .pico.logo{background:transparent;padding:0}
+.pill-body .pico.logo>img{width:100%;height:100%;object-fit:contain;display:block}
+.pill-body .pico.logo.off>img{filter:grayscale(1);opacity:.5}
 /* 胶囊里的展开按钮:之前只能靠"点哪都能展开"这个隐藏手势,加个看得见的入口 */
 .pill-body .ib{width:calc(22px*var(--u));height:calc(22px*var(--u));font-size:calc(11px*var(--u));color:var(--tx3)}
 .pill-body .ib:hover{color:var(--tx)}

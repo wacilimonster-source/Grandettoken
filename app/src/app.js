@@ -708,27 +708,34 @@ function renderPill(sorted) {
 
 function renderPillFace() {
   const dot = $("pillDot");
+  const icoBox = $("pillIco");
   const c = PILL.list[PILL.idx];
 
   if (!c) {
-    const withKey = PILL.sorted.filter((x) => x.hasKey);
+    const withKey = PILL.sorted.filter((x) => x.hasKey && !x.hidden);
     dot.className = "dot o";
+    icoBox.style.display = "none";
+    icoBox.innerHTML = "";
     $("pillV").textContent = withKey.length ? "取数失败" : "未配置";
     $("pill").title = withKey.length ? "渠道全部取数失败,点开面板看原因" : "尚未配置密钥";
     return;
   }
+
+  // 图标与列表行同源:官方标 → 字母块 → 失败/未配置灰化(design-pill-icon.html 方案 A)
+  icoBox.style.display = "contents";
+  icoBox.innerHTML = iconHtml(c, "pico", !c.hasKey || !c.valid);
 
   const tone = toneOf(c);
   dot.className =
     "dot" + (tone === "bad" ? " b" : tone === "warn" ? " w" : tone === "off" ? " o" : "");
   $("pillV").innerHTML =
     c.remaining === null
-      ? `${esc(c.short)} ——`
+      ? "——"
       : c.kind === "percent"
-        ? `${esc(c.short)} ${((remainRatio(c) ?? 0) * 100).toFixed(1)}<i>%</i>`
+        ? `${((remainRatio(c) ?? 0) * 100).toFixed(1)}<i>%</i>`
         : c.kind === "points"
-          ? `${esc(c.short)} ${points(c.remaining)}`
-          : `${esc(c.short)} ${money(c.remaining)}`;
+          ? points(c.remaining)
+          : money(c.remaining);
 
   const bits = [c.name];  // tooltip 是纯文本,不需要转义
   const r = remainRatio(c);
@@ -778,9 +785,10 @@ function fitPill() {
   document.body.appendChild(probe);
   const textW = probe.getBoundingClientRect().width;
   probe.remove();
-  // 圆点 6 + 间距 8×2 + 展开按钮 22 + 内边距 16 ≈ 76 —— 这些固定件都随字号长
+  // 圆点 6 + 图标 26 + 间距 8×3 + 展开按钮 22 + 内边距 16 ≈ 102
+  // (方案 A:缩写文字换成官方图标,固定开销里去掉文字位、加上图标位)
   const u = fsU();
-  const w = Math.max(Math.round(132 * u), Math.min(Math.round(240 * u), Math.ceil(textW) + Math.round(76 * u)));
+  const w = Math.max(Math.round(132 * u), Math.min(Math.round(240 * u), Math.ceil(textW) + Math.round(102 * u)));
   if (Math.abs(w - pillW) >= 6) {
     pillW = w;
     if (currentForm() === "pill") applyForm("pill", false);
