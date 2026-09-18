@@ -787,9 +787,30 @@ function fitPill() {
   }
 }
 
+/** 托盘缩写:两位优先(<1000 直接取整),千「k」万「w」各留一位小数。 */
+function trayAbbr(v) {
+  const a = Math.abs(v);
+  if (a < 1000) return String(Math.round(v));
+  if (a < 10000) return (v / 1000).toFixed(1) + "k";
+  return (v / 10000).toFixed(1) + "w";
+}
+
+/** 当前托盘渠道的概览数;拿不到可信数字(未配置/失败/关闭)返回 "" → 画回品牌样式。 */
+function trayNumber(c) {
+  if (!c || !c.hasKey || !c.valid) return "";
+  if (c.kind === "percent") {
+    const r = remainRatio(c);
+    return r === null ? "" : String(Math.round(r * 100));
+  }
+  if (c.remaining === null || c.remaining === undefined) return "";
+  return trayAbbr(c.remaining);
+}
+
 /**
- * 托盘角标:和胶囊同一套逻辑(同一个渠道、同一个轮播位、同一个状态色),
- * 托盘只有 16px,写数字看不清,所以角标是纯色点,数字放 tooltip。
+ * 托盘图标。两种画法(设置→显示→托盘数字切换):
+ *  - 数字式:状态色整底 + 白色粗体概览数(描深边保证任意底色可读)——扫一眼托盘要的就是这个;
+ *  - 品牌式:渐变方块 + 右下状态角点(无可信数字时的回退,也是开关关闭的样式)。
+ * 32×32 画布,系统按 DPI 缩到 16~24px;tooltip 永远带完整信息。
  */
 let trayKey = "";
 function drawTrayIcon() {
@@ -800,7 +821,8 @@ function drawTrayIcon() {
     : PILL.sorted.some((x) => x.hasKey && !x.hidden)
       ? "渠道全部取数失败"
       : "尚未配置密钥";
-  const key = tone + "|" + text;
+  const num = CFG && CFG.trayShowNumber !== false ? trayNumber(c) : "";
+  const key = tone + "|" + text + "|" + num;
   if (key === trayKey) return; // 内容没变就不重画、不跨进程传数据
   trayKey = key;
 
@@ -809,32 +831,50 @@ function drawTrayIcon() {
   cv.width = S;
   cv.height = S;
   const g = cv.getContext("2d");
-  const r = 8;
-  const grad = g.createLinearGradient(0, 0, S, S);
-  grad.addColorStop(0, "#5b8cff");
-  grad.addColorStop(1, "#8b5bff");
-  g.beginPath();
-  g.moveTo(r, 0);
-  g.arcTo(S, 0, S, S, r);
-  g.arcTo(S, S, 0, S, r);
-  g.arcTo(0, S, 0, 0, r);
-  g.arcTo(0, 0, S, 0, r);
-  g.closePath();
-  g.fillStyle = grad;
-  g.fill();
-  g.globalCompositeOperation = "destination-out"; // 中间挖空,和标题栏图标同款
-  g.beginPath();
-  if (g.roundRect) g.roundRect(10, 10, 12, 12, 3);
-  else g.rect(10, 10, 12, 12);
-  g.fill();
-  g.globalCompositeOperation = "source-over";
-  g.beginPath();
-  g.arc(22.5, 22.5, 7, 0, Math.PI * 2); // 右下角标
-  g.fillStyle = TONE_HEX[tone];
-  g.fill();
-  g.lineWidth = 2;
-  g.strokeStyle = "#12141a";
-  g.stroke();
+  const r = S * 0.22;
+  const roundRect = () => {
+    g.beginPath();
+    g.moveTo(r, 0);
+    g.arcTo(S, 0, S, S, r);
+    g.arcTo(S, S, 0, S, r);
+    g.arcTo(0, S, 0, 0, r);
+    g.arcTo(0, 0, S, 0, r);
+    g.closePath();
+  };
+  if (num) {
+    roundRect();
+    g.fillStyle = TONE_HEX[tone === "off" ? "off" : tone];
+    g.fill();
+    const fs = num.length >= 4 ? S * 0.34 : num.length === 3 ? S * 0.42 : S * 0.56;
+    g.font = `700 ${fs}px "Segoe UI",sans-serif`;
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    g.lineWidth = S * 0.07;
+    g.strokeStyle = "rgba(18,20,26,.8)";
+    g.strokeText(num, S / 2, S * 0.54);
+    g.fillStyle = "#fff";
+    g.fillText(num, S / 2, S * 0.54);
+  } else {
+    roundRect();
+    const grad = g.createLinearGradient(0, 0, S, S);
+    grad.addColorStop(0, "#5b8cff");
+    grad.addColorStop(1, "#8b5bff");
+    g.fillStyle = grad;
+    g.fill();
+    g.globalCompositeOperation = "destination-out"; // 中间挖空,和标题栏图标同款
+    g.beginPath();
+    if (g.roundRect) g.roundRect(10, 10, 12, 12, 3);
+    else g.rect(10, 10, 12, 12);
+    g.fill();
+    g.globalCompositeOperation = "source-over";
+    g.beginPath();
+    g.arc(22.5, 22.5, 7, 0, Math.PI * 2); // 右下角标
+    g.fillStyle = TONE_HEX[tone];
+    g.fill();
+    g.lineWidth = 2;
+    g.strokeStyle = "#12141a";
+    g.stroke();
+  }
 
   const rgba = Array.from(g.getImageData(0, 0, S, S).data);
   invoke("set_tray_icon", { rgba, size: S, tooltip: text }).catch(() => {});
@@ -1541,6 +1581,8 @@ $("cfgFontScale").addEventListener("change", () => {
 });
 bindSwitch("cfgAutostart", "autostart", (on) => invoke("set_autostart", { enabled: on }));
 bindSwitch("cfgAutoUpdate", "autoCheckUpdate");
+// 托盘余额数字:切换后强制重画(绕过 trayKey 缓存)
+bindSwitch("cfgTrayNum", "trayShowNumber", () => { trayKey = ""; drawTrayIcon(); });
 // 置顶走 set_pin:窗口与配置一起改,失败时 bindSwitch 会回滚开关
 // 吸附开关:关掉时如果正吸附着,立刻解除
 bindSwitch("cfgDock", "dockEnabled", async (on) => {
@@ -1595,6 +1637,7 @@ function applyConfigToUI() {
   if (hk) hk.value = hkLabel(CFG.hotkey) || "未设置";
   $("cfgAutostart").classList.toggle("on", !!CFG.autostart);
   $("cfgAutoUpdate").classList.toggle("on", CFG.autoCheckUpdate !== false);
+  $("cfgTrayNum").classList.toggle("on", CFG.trayShowNumber !== false);
   renderAbout();
 }
 
@@ -1851,7 +1894,7 @@ async function refresh() {
       activeIntervalSec: 60, idleIntervalSec: 300, backoffIntervalSec: 900,
       warnPercent: 40, critPercent: 15, autostart: false,
       form: "panel", sort: "percent", pillChannels: [],
-      fontScale: "md", hiddenChannels: [], hotkey: "",
+      fontScale: "md", hiddenChannels: [], hotkey: "", trayShowNumber: true,
       claimChannels: {
         "4sapi": { enabled: true, amount: 200, minIntervalDays: 14, manualLastAt: null, manualSetAt: null },
       },

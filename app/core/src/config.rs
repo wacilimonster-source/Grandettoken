@@ -83,6 +83,9 @@ pub struct Config {
     pub dock_enabled: bool,
     /// 是否自动检查更新。关掉后只能靠管理页里的「检查更新」按钮手动触发。
     pub auto_check_update: bool,
+    /// 托盘图标直接画余额概览数(74 / 1.2k / 82,底色=状态色)。
+    /// 默认开 —— 扫一眼托盘就是它的主要用途;关掉回到品牌角点样式。
+    pub tray_show_number: bool,
     /// 上次检查更新的 unix 秒。自动检查的节流依据(24 小时一次),
     /// 检查失败也写它 —— 不让网络故障变成重试风暴。
     pub last_check_at: Option<i64>,
@@ -113,6 +116,7 @@ impl Default for Config {
             channel_order: Vec::new(),
             dock_enabled: false,
             auto_check_update: true,
+            tray_show_number: true,
             last_check_at: None,
             skipped_version: None,
         }
