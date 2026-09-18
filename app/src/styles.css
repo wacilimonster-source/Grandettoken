@@ -326,6 +326,10 @@ body.view-manage #lkKeys{display:none}
 /* 撑不到下次申请 / 周期余量告急的提示(列表行内) */
 .claim-warn,.win-warn{font-size:max(11.5px,calc(11px*var(--u)));color:var(--warn);margin-top:calc(6px*var(--u));line-height:1.6}
 .win-warn{color:var(--bad)}
+/* 紧凑条里的警示角标:整句放不下(compact 已隐藏上面两行),只挂一枚 ⚠ */
+.wmark{display:none;font-size:max(10px,calc(9.5px*var(--u)));line-height:1;margin-left:calc(2px*var(--u))}
+.wmark.warn{color:var(--warn)} .wmark.bad{color:var(--bad)}
+body.form-compact .wmark{display:inline}
 .nm .s .cy{color:var(--ac)}
 .nm .s .ct{color:var(--tx3)}
 
@@ -370,6 +374,8 @@ body.form-compact .wins,
 body.form-compact .exps,
 body.form-compact .caret,
 body.form-compact .rbody,
+body.form-compact .claim-warn,
+body.form-compact .win-warn,
 body.form-compact .nm .s,
 body.form-compact .val .p{display:none}
 body.form-compact .ico{width:calc(16px*var(--u));height:calc(16px*var(--u));font-size:calc(8px*var(--u));border-radius:calc(4px*var(--u))}

@@ -396,6 +396,14 @@ function renderRow(c, i) {
         ))} 天,可能撑不到下次可申请</div>`
       : "";
 
+  // 紧凑条放不下整句警示(第二行会把 46px 的单行条撑爆)——折叠形态只在名称行
+  // 挂一枚 ⚠:黄=撑不到下次申请,红=周期余量告急;整句仍只在面板形态显示(CSS 控制)
+  const wmark = winWarn
+    ? '<span class="wmark bad" title="周期余量告急">⚠</span>'
+    : claimWarn
+      ? '<span class="wmark warn" title="余额可能撑不到下次可申请">⚠</span>'
+      : "";
+
   const src = c.stale
     ? `<div class="hint" style="color:var(--warn)">显示的是 ${relTime(c.updatedAt)} 的成功快照${
         c.error ? " · " + esc(c.error) : ""
@@ -407,7 +415,7 @@ function renderRow(c, i) {
       <div class="r1">
         ${iconHtml(c, "ico", noKey || failed)}
         <div class="nm">
-          <div class="n"><span class="nn">${esc(c.name)}</span>${dot}</div>
+          <div class="n"><span class="nn">${esc(c.name)}</span>${dot}${wmark}</div>
           <div class="s">${sub}</div>
         </div>
         <div class="val">
@@ -963,7 +971,7 @@ function formSize(form) {
   return [w, Math.round(base[1] * u)];
 }
 
-async function applyForm(form, remember = true) {
+async function applyFormInner(form, remember = true) {
   if (!SIZES[form]) form = "panel"; // 白名单:老配置里的 form 可能是个已废弃的名字
   // 切换到折叠形态时管理页没有意义(它的入口都在面板上),顺手关掉
   if (form !== "panel" && manageOpen()) closeManage();
@@ -995,12 +1003,39 @@ async function applyForm(form, remember = true) {
     await appWindow.setSize(new T.dpi.LogicalSize(w, h));
     await appWindow.setMinSize(new T.dpi.LogicalSize(w, h));
     await appWindow.setMaxSize(new T.dpi.LogicalSize(w, h));
+    // 收尾校验:类与尺寸必须成对落地。IPC 偶发丢失/交叠时这里兜底
+    // (踩过:轮询的胶囊重排与用户点展开并发,类=panel 但尺寸=46 → 窗口缩成顶栏)
+    const sf = (await appWindow.scaleFactor()) || 1;
+    const sz = await appWindow.outerSize();
+    if (Math.abs(sz.width - w * sf) > 2 || Math.abs(sz.height - h * sf) > 2) {
+      console.warn("窗口尺寸与形态不符,重设", { want: [w, h], got: [sz.width, sz.height], sf });
+      await appWindow.setMinSize(null);
+      await appWindow.setMaxSize(null);
+      await appWindow.setSize(new T.dpi.LogicalSize(w, h));
+      await appWindow.setMinSize(new T.dpi.LogicalSize(w, h));
+      await appWindow.setMaxSize(new T.dpi.LogicalSize(w, h));
+    }
     // 视口变化后重新量一次紧凑条,决定尾巴要收几个进 "+N"
     setTimeout(fitCompact, 150);
   } catch (e) {
     console.error("切换形态失败", e);
   }
   clampToMonitor();
+}
+
+// 形态/几何操作**全局串行**:applyForm 的类切换是同步的,但尺寸是 6 连 await 的 IPC——
+// 并发的两次(用户点击 × 轮询引发的 fitPill 自动重排、吸附的 dockLayout)一旦交叠,
+// 最终「类」来自后调用的、「尺寸」来自后落地的,就会错位成
+// class=panel + 窗口 46px 高(用户看到的"折叠后变成大窗口的顶栏")。
+// 一切改窗口几何的入口都排进同一条 promise 链,类与尺寸成对落地。
+let geomQueue = Promise.resolve();
+function enqueueGeom(fn) {
+  geomQueue = geomQueue.then(fn, fn); // 上一环失败也继续排,不让队列断死
+  return geomQueue;
+}
+
+function applyForm(form, remember = true) {
+  return enqueueGeom(() => applyFormInner(form, remember));
 }
 
 /** 把窗口夹进当前显示器:胶囊在屏幕角落时展开成面板会"长出"屏幕,看不全。 */
@@ -1073,7 +1108,7 @@ async function dockEnter(side, pos) {
 }
 
 /** 展开(true)/ 收起(false)。展开时贴边那一侧保持对齐,窗口不会跑到屏幕外。 */
-async function dockLayout(open) {
+async function dockLayoutNow(open) {
   const info = await monitorInfo();
   if (!info) return;
   const [w, h] = open ? formSize(currentForm()) : DOCK_SIZE;
@@ -1097,9 +1132,13 @@ async function dockLayout(open) {
   document.body.classList.toggle("dock-left", DOCK.side === "left");
   if (open) setTimeout(fitCompact, 150);
 }
+// 吸附的展开/收起同样走几何队列(见 enqueueGeom)
+function dockLayout(open) {
+  return enqueueGeom(() => dockLayoutNow(open));
+}
 
 /** 解除吸附。keepPos = 留在当前位置(拖着离开边缘时用),否则回到屏幕内可见处。 */
-async function dockExit(keepPos) {
+async function dockExitNow(keepPos) {
   if (!DOCK.on) return;
   DOCK.on = false;
   DOCK.open = false;
@@ -1127,6 +1166,10 @@ async function dockExit(keepPos) {
   }
   await invoke("set_pin", { enabled: !!(CFG && CFG.alwaysOnTop) }).catch(() => {});
   render();
+}
+// 解除吸附也走几何队列(见 enqueueGeom)
+function dockExit(keepPos) {
+  return enqueueGeom(() => dockExitNow(keepPos));
 }
 
 /** 松手判定:停止移动 250ms 后看窗口是不是贴着屏幕左/右边缘。 */
