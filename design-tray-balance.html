@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Grandettoken · 托盘余额直显 设计预览</title>
+<style>
+  :root{--bg:#0e1117;--panel:#161b24;--panel2:#1c2230;--line:#2a3245;
+    --tx:#edf0f6;--tx2:#b6bfce;--tx3:#8d97ab;
+    --ok:#4ade9d;--warn:#f7c355;--bad:#ff6b63;--ac:#7fa2ff}
+  body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.7 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:36px 22px 90px}
+  h1{font-size:22px;margin:0 0 6px}
+  .sub{color:var(--tx3);font-size:13px;margin-bottom:24px}
+  h2{font-size:16px;margin:36px 0 12px;padding-left:10px;border-left:3px solid var(--ac)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:10px 0;max-width:860px}
+  .card h3{margin:0 0 8px;font-size:14.5px}
+  .card ul{margin:6px 0;padding-left:20px;color:var(--tx2)}
+  .card li{margin:5px 0}
+  .card b{color:var(--tx)}
+  code{font:12px Consolas,monospace;background:var(--panel2);border:1px solid var(--line);padding:1px 5px;border-radius:4px;color:#cdd6e8}
+  table{border-collapse:collapse;width:100%;max-width:860px;font-size:13px}
+  th,td{padding:8px 11px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  th{color:var(--tx3);font-size:12px;background:var(--panel2)}
+  .rec{color:var(--ok);font-weight:700}
+  .num{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:6px;background:rgba(127,162,255,.18);color:#a8c0ff;font-size:12px;font-weight:700;margin-right:8px}
+
+  /* ── 任务栏 mock ── */
+  .taskbar{display:flex;align-items:center;justify-content:flex-end;gap:14px;
+    background:#1a1d24;border:1px solid #262b36;border-radius:10px;padding:8px 14px;max-width:860px}
+  .tb-clock{color:#cfd6e4;font-size:12px;text-align:right;line-height:1.35}
+  .tb-slot{display:flex;flex-direction:column;align-items:center;gap:4px}
+  .tb-ico{width:24px;height:24px;display:block;image-rendering:auto}
+  .tb-tip{position:relative;background:#252a36;border:1px solid #3a4152;border-radius:7px;
+    padding:6px 10px;font-size:12px;color:var(--tx2);white-space:nowrap;display:none}
+  .tb-slot:hover .tb-tip{display:block}
+  .tb-tip::after{content:"";position:absolute;top:100%;left:50%;transform:translateX(-50%);
+    border:5px solid transparent;border-top-color:#3a4152}
+  .zoom{display:flex;gap:26px;align-items:flex-end;margin-top:14px;flex-wrap:wrap}
+  .z-item{text-align:center}
+  .z-item canvas{background:#1a1d24;border:1px solid #262b36;border-radius:8px;display:block;margin:0 auto 6px}
+  .z-item .lb{font-size:11.5px;color:var(--tx3)}
+  .seg{display:flex;gap:4px;background:#12151d;border:1px solid var(--line);border-radius:9px;padding:3px;margin:12px 0 4px;flex-wrap:wrap}
+  .seg button{border:0;background:transparent;color:var(--tx2);font:12.5px/1.4 inherit;font-family:inherit;
+    padding:6px 13px;border-radius:6px;cursor:pointer}
+  .seg button.on{background:var(--ac);color:#fff}
+  .field{display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid #232937;font-size:12.5px;gap:10px;max-width:420px}
+  .field:last-child{border-bottom:0}
+  .field>span:first-child{flex:1}
+  .field .desc{display:block;font-size:11px;color:var(--tx3);font-weight:400}
+  .sw{width:32px;height:17px;border-radius:99px;background:#3a4152;position:relative;cursor:pointer;flex:none;transition:.2s}
+  .sw::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:#98a2b6;transition:.2s}
+  .sw.on{background:#7fa2ff59}
+  .sw.on::after{left:17px;background:var(--ac)}
+  .mock-set{background:#12141a;border:1px solid var(--line);border-radius:12px;padding:14px 16px;max-width:440px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>托盘图标直接显示余额 · 方案研究</h1>
+<div class="sub">2026-09-18 设计预览(未改应用代码)· 鼠标悬停任务栏图标可看 tooltip;下方可切换方案、看真实尺寸与 4× 放大效果</div>
+
+<h2>一、物理约束:先说清楚能做到什么程度</h2>
+<div class="card">
+  <ul>
+    <li>Windows 托盘(通知区)只接受<b>位图图标</b>,没有 macOS 菜单栏那种文字模式 —— 「显示余额」只能把数字<b>画进图标</b>;</li>
+    <li>图标实际显示尺寸只有 <b>16~24px</b>(随 DPI 缩放),经验上限是 <b>2~3 个粗体字符</b>;<code>¥74.20</code> 这种完整金额放不下,必须缩写;</li>
+    <li>缩写必然丢精度:「74」看不出是 74.2 还是 74.9。所以定位是<b>概览数字</b>,看详情仍靠 tooltip / 胶囊。</li>
+  </ul>
+</div>
+
+<h2>二、三个方案对比</h2>
+<table>
+  <tr><th></th><th>方案</th><th>托盘上显示</th><th>代价 / 风险</th></tr>
+  <tr><td class="rec">推荐 A</td><td><b>数字角标图标</b>:状态色底 + 2~3 字符概览数,跟随胶囊的渠道选择与 5s 轮播;tooltip 保留完整信息;设置可关</td>
+      <td>「74」「1.2k」「82」+ 状态色一眼可辨</td><td>16px 下可读性一般(见下方实尺演示);图标每 5s 重绘一次,开销可忽略</td></tr>
+  <tr><td>B</td><td>维持现状(渐变方块 + 角点),只把 tooltip 写丰富</td><td>无数字,只有颜色点</td><td>零成本,但必须悬停才看得到,不满足"直接显示"</td></tr>
+  <tr><td>C</td><td>放弃托盘,改用「窗口显示在任务栏 + 标题写金额」(去掉 skipTaskbar)</td><td>任务栏按钮标题「¥74 · Grandettoken」,字完全可读</td><td>常驻占一个任务栏位,与"低调挂件"定位冲突;改动大</td></tr>
+</table>
+
+<h2>三、方案 A 实际效果(真实尺寸 + 4× 放大)</h2>
+<div class="seg" id="scheme">
+  <button data-s="live" class="on">现状(角点式)</button>
+  <button data-s="num">A · 数字角标</button>
+  <button data-s="numk">A · 大额缩写</button>
+  <button data-s="pct">A · 配额型(百分比)</button>
+</div>
+<div class="taskbar">
+  <div class="tb-slot">
+    <canvas class="tb-ico" id="tb1" width="24" height="24"></canvas>
+    <div class="tb-tip" id="tip1"></div>
+  </div>
+  <div class="tb-slot">
+    <canvas class="tb-ico" id="tb2" width="24" height="24"></canvas>
+    <div class="tb-tip" id="tip2"></div>
+  </div>
+  <div class="tb-clock">17:42<br>2026/9/18</div>
+</div>
+<div class="zoom" id="zoom"></div>
+<div class="card" style="font-size:12.5px;color:var(--tx3)">
+  任务栏里那两个就是 <b style="color:var(--tx2)">24px 真实尺寸</b>(模拟 150% DPI;100% DPI 下更小一档);下方是 4× 放大。
+  第二个图标演示 <b style="color:var(--tx2)">5 秒轮播</b>——与胶囊共用同一套「选哪个渠道」逻辑,轮到哪张显示哪张的数字。
+</div>
+
+<h2>四、数字缩写规则(与界面口径一致)</h2>
+<div class="card">
+  <ul>
+    <li><b>金额型</b>:&lt;¥100 取整「74」;&lt;¥1万 一位小数千缩写「1.2k」;更大「2.4w」(中文习惯用万);</li>
+    <li><b>配额型</b>:直接是百分比数「82」(最紧张窗口,与胶囊同口径);</li>
+    <li><b>积分型</b>:同金额缩写规则「6.1k」;取整后仍超过 3 字符才升一档;</li>
+    <li>底色 = 状态色(绿/黄/红/灰),数字永远白色粗体 + 深色描边保证任意底色可读;</li>
+    <li>隐藏渠道跟随现有 hiddenChannels:被隐藏的渠道不参与托盘轮播。</li>
+  </ul>
+</div>
+
+<h2>五、设置项(新增一个开关)</h2>
+<div class="mock-set">
+  <div class="field"><span>托盘图标显示余额数字<span class="desc">数字为概览缩写;关闭则回到状态角点样式。跟随胶囊轮播,悬停看完整金额</span></span>
+    <div class="sw on" id="swNum" onclick="this.classList.toggle('on')"></div></div>
+</div>
+
+<h2>六、实现要点(确认后动代码)</h2>
+<div class="card">
+  <ul>
+    <li>现有 <code>drawTrayIcon()</code> 已是 canvas 32×32 → <code>set_tray_icon</code> IPC,<b>只换画法</b>:底色由「渐变+角点」改为「状态色整底」,中央绘制缩写数字;</li>
+    <li>缩写函数前端新增 <code>trayAbbr(v)</code>,与 <code>points/money</code> 并列;轮播节奏复用 PILL 的 5s 定时器,零新增计时器;</li>
+    <li>config 加 <code>tray_show_number: bool</code>(serde default true —— 既然专门来问,默认开);</li>
+    <li>Rust 侧零改动(图标字节流协议不变)。</li>
+  </ul>
+</div>
+
+<h2>七、待裁决</h2>
+<div class="card">
+  <ul>
+    <li><span class="num">1</span><b>方案选择</b>:A 数字角标(推荐)/ B 只加强 tooltip / C 任务栏标题;</li>
+    <li><span class="num">2</span><b>若选 A:底色风格</b>:a 状态色整底(数字最醒目,推荐)/ b 保留品牌渐变底、数字放右侧角标(品牌感强,数字更小);</li>
+    <li><span class="num">3</span><b>默认开关</b>:默认开(推荐)/ 默认关、想要的人自己开。</li>
+  </ul>
+</div>
+
+<script>
+  const TONE = { ok:"#4ade9d", warn:"#f7c355", bad:"#ff6b63", off:"#3a4356" };
+  const CASES = {
+    live: { style:"dot",  items:[ {v:"74", tone:"warn", full:"4SAPI ¥74.20 · 剩 37%"}, {v:"82", tone:"ok", full:"OpenCode Go 周期窗剩 82% · 25 天后重置"} ] },
+    num:  { style:"num",  items:[ {v:"74", tone:"warn", full:"4SAPI ¥74.20 · 剩 37%"}, {v:"82", tone:"ok", full:"OpenCode Go 周期窗剩 82% · 25 天后重置"} ] },
+    numk: { style:"num",  items:[ {v:"6.1k", tone:"ok", full:"WorkBuddy 6,075.5 分"}, {v:"2.4w", tone:"bad", full:"4SAPI ¥24,300 · 撑不到下次申请"} ] },
+    pct:  { style:"num",  items:[ {v:"82", tone:"ok", full:"OpenCode Go 周期窗剩 82%"}, {v:"1.3", tone:"bad", full:"OpenCode Go 周期窗剩 1.3% · 25 天后重置"} ] },
+  };
+  let cur = "live", rot = 0;
+
+  function draw(cv, item, style, px){
+    const g = cv.getContext("2d");
+    const S = cv.width;
+    g.clearRect(0,0,S,S);
+    const r = S * 0.25;
+    g.beginPath();
+    g.moveTo(r,0); g.arcTo(S,0,S,S,r); g.arcTo(S,S,0,S,r); g.arcTo(0,S,0,0,r); g.arcTo(0,0,S,0,r); g.closePath();
+    if (style === "dot"){
+      const grad = g.createLinearGradient(0,0,S,S);
+      grad.addColorStop(0,"#5b8cff"); grad.addColorStop(1,"#8b5bff");
+      g.fillStyle = grad; g.fill();
+      g.globalCompositeOperation = "destination-out";
+      g.fillRect(S*0.31,S*0.31,S*0.38,S*0.38);
+      g.globalCompositeOperation = "source-over";
+      g.beginPath(); g.arc(S*0.72,S*0.72,S*0.22,0,7); g.fillStyle = TONE[item.tone]; g.fill();
+    } else {
+      g.fillStyle = TONE[item.tone]; g.fill();
+      g.font = `700 ${item.v.length>3? S*0.34 : S*0.46}px "Segoe UI",sans-serif`;
+      g.textAlign="center"; g.textBaseline="middle";
+      g.lineWidth = S*0.06; g.strokeStyle = "rgba(18,20,26,.85)";
+      g.strokeText(item.v, S/2, S*0.56);
+      g.fillStyle = "#fff"; g.fillText(item.v, S/2, S*0.56);
+    }
+    if (px) cv.style.width = px + "px", cv.style.height = px + "px";
+  }
+  function render(){
+    const c = CASES[cur];
+    draw(document.getElementById("tb1"), c.items[0], c.style, 24);
+    draw(document.getElementById("tb2"), c.items[rot % c.items.length], c.style, 24);
+    document.getElementById("tip1").textContent = c.items[0].full;
+    document.getElementById("tip2").textContent = c.items[rot % c.items.length].full;
+    document.getElementById("zoom").innerHTML = c.items.map((it,i)=>
+      `<div class="z-item"><canvas id="z${i}" width="96" height="96"></canvas><div class="lb">${it.full}</div></div>`).join("");
+    c.items.forEach((it,i)=> draw(document.getElementById("z"+i), it, c.style));
+  }
+  document.getElementById("scheme").addEventListener("click", e=>{
+    const b = e.target.closest("button"); if(!b) return;
+    cur = b.dataset.s;
+    document.querySelectorAll("#scheme button").forEach(x=>x.classList.toggle("on", x===b));
+    render();
+  });
+  setInterval(()=>{ rot++; if(CASES[cur].style!=="dot") render(); }, 5000); // 轮播演示
+  render();
+</script>
+</div>
+</body>
+</html>

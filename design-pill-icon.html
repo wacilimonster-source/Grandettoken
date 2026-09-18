@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Grandettoken · 胶囊图标化 设计预览</title>
+<style>
+  :root{--bg:#0e1117;--panel:#161b24;--panel2:#1c2230;--line:#2a3245;
+    --tx:#edf0f6;--tx2:#b6bfce;--tx3:#8d97ab;
+    --ok:#4ade9d;--warn:#f7c355;--bad:#ff6b63;--ac:#7fa2ff}
+  body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.7 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  .wrap{max-width:980px;margin:0 auto;padding:36px 22px 90px}
+  h1{font-size:22px;margin:0 0 6px}
+  .sub{color:var(--tx3);font-size:13px;margin-bottom:22px}
+  h2{font-size:16px;margin:34px 0 12px;padding-left:10px;border-left:3px solid var(--ac)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:10px 0;max-width:880px}
+  .card ul{margin:6px 0;padding-left:20px;color:var(--tx2)}
+  .card li{margin:5px 0}
+  .card b{color:var(--tx)}
+  code{font:12px Consolas,monospace;background:var(--panel2);border:1px solid var(--line);padding:1px 5px;border-radius:4px;color:#cdd6e8}
+  .num{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:6px;background:rgba(127,162,255,.18);color:#a8c0ff;font-size:12px;font-weight:700;margin-right:8px}
+  table{border-collapse:collapse;width:100%;max-width:880px;font-size:13px}
+  th,td{padding:8px 11px;border-bottom:1px solid var(--line);text-align:left}
+  th{color:var(--tx3);font-size:12px;background:var(--panel2)}
+
+  .seg{display:flex;gap:4px;background:#12151d;border:1px solid var(--line);border-radius:9px;padding:3px;margin:10px 0 6px;flex-wrap:wrap}
+  .seg button{border:0;background:transparent;color:var(--tx2);font:12.5px/1.4 inherit;font-family:inherit;padding:6px 13px;border-radius:6px;cursor:pointer}
+  .seg button.on{background:var(--ac);color:#fff}
+  .cap{font-size:11.5px;color:var(--tx3);margin:14px 0 6px;letter-spacing:.04em}
+
+  /* 胶囊真实尺寸:高 46,圆角 999,底色同应用 */
+  .pillrow{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+  .pill{display:inline-flex;align-items:center;gap:8px;height:46px;border-radius:999px;
+    background:#12141af2;border:1px solid #3c445c;padding:0 7px 0 9px;
+    font:600 14px/1 "Segoe UI","Microsoft YaHei",sans-serif;color:var(--tx);
+    font-variant-numeric:tabular-nums;white-space:nowrap}
+  .pill .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);flex:none}
+  .pill .dot.w{background:var(--warn)} .pill .dot.b{background:var(--bad)} .pill .dot.o{background:var(--tx3)}
+  .pill .pico{width:26px;height:26px;border-radius:7px;flex:none;display:grid;place-items:center;
+    font-size:10.5px;font-weight:700;color:#fff;overflow:hidden}
+  .pill .pico img{width:100%;height:100%;object-fit:contain}
+  .pill .pico.off{filter:grayscale(1);opacity:.5}
+  .pill .up{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;color:var(--tx3);font-size:11px;flex:none}
+  .pill .v i{font-style:normal;font-size:inherit;font-weight:inherit;color:inherit}
+  .pill .short{color:var(--tx2);font-weight:600}
+  .lab{font-size:11px;color:var(--tx3);margin-top:5px;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>胶囊形态「图标化」设计</h1>
+<div class="sub">2026-09-18 设计稿(未改代码)· 现状:胶囊只显示「OC」两个字母 + 数字,而面板行里 OpenCode/Trae/WorkBuddy/DeepSeek 都是官方图标 —— 同一渠道两副面孔。下面每个方案都是 46px 真实尺寸。</div>
+
+<h2>一、三个方案(点标签切渠道,点状态切颜色)</h2>
+<div class="seg" id="chSeg">
+  <button data-c="oc" class="on">OpenCode Go(有官方标)</button>
+  <button data-c="trae">Trae(有官方标)</button>
+  <button data-c="4s">4SAPI(无官方标)</button>
+</div>
+<div class="seg" id="toneSeg">
+  <button data-t="ok" class="on">正常</button>
+  <button data-t="warn">预警</button>
+  <button data-t="bad">告急</button>
+  <button data-t="off">取数失败</button>
+</div>
+
+<div class="cap">现状:纯文字缩写(用户指出的问题)</div>
+<div class="pillrow"><div class="pill" id="pNow"></div></div>
+
+<div class="cap">方案 A(推荐):官方图标 + 数字,去掉缩写文字</div>
+<div class="pillrow"><div class="pill" id="pA"></div><div style="font-size:12px;color:var(--tx3)">← 无官方标的渠道(4SAPI/Hapi)自动退回彩色字母块,和面板行同一套 <code>iconHtml()</code> 逻辑</div></div>
+
+<div class="cap">方案 B:图标 + 缩写 + 数字(信息最全,最宽)</div>
+<div class="pillrow"><div class="pill" id="pB"></div></div>
+
+<div class="cap">方案 C:只画托盘同款数字小图标(最小,但和托盘重复且丢精度)</div>
+<div class="pillrow"><div class="pill" id="pC"></div></div>
+
+<h2>二、对比结论</h2>
+<table>
+  <tr><th>方案</th><th>宽度(实测模拟)</th><th>识别渠道</th><th>识别余额</th><th>判定</th></tr>
+  <tr><td>现状 缩写+数字</td><td>中</td><td class="bad">「OC」两字母,不熟就看不懂</td><td>清晰</td><td>要改的就是它</td></tr>
+  <tr><td><b>A 图标+数字</b></td><td>中(图标 26px 换掉文字,几乎不增宽)</td><td class="good">官方 logo 一眼认</td><td class="good">数字原样保留</td><td><b>推荐</b></td></tr>
+  <tr><td>B 图标+缩写+数字</td><td class="bad">最宽,特大字号下更易触到 240px 上限</td><td class="good">最强</td><td class="good">清晰</td><td>信息冗余(图标和缩写同一件事)</td></tr>
+  <tr><td>C 数字图标一个元素</td><td class="good">最窄</td><td class="bad">最差(数字图标≠渠道身份)</td><td class="bad">和托盘一样只剩概览数</td><td>不推荐:胶囊是"点开看"的入口,不是第二块托盘</td></tr>
+</table>
+
+<h2>三、A 方案的细节规则</h2>
+<div class="card">
+  <ul>
+    <li><b>图标来源与面板行完全同源</b>:<code>LOGOS</code> 表(官方 svg/png)→ 无官方标用品牌色字母块;素材加载失败自动回退字母块(与面板行为一致,零新增逻辑);</li>
+    <li><b>状态语义不动</b>:左侧 6px 状态点保留(绿/黄/红/灰),取数失败或未配置时图标灰化去色 —— 和面板行的 <code>iconHtml(c, "ico", off)</code> 同一语义;</li>
+    <li><b>数字格式不动</b>:金额「¥74.20」、积分「6,075.5」、配额「82.0%」照旧,tooltip 仍带渠道全名 + 剩百分之多少 + 倒计时;</li>
+    <li><b>宽度自适应已有机制</b>:<code>fitPill()</code> 量文字宽 + 固定开销 —— 开销系数从 76 调到约 102(去掉缩写文字、加 26px 图标 + 8px 间距),132~240px 钳位不变;</li>
+    <li>轮播/自动选紧/隐藏渠道过滤:全部不动,只换"脸"。</li>
+  </ul>
+</div>
+
+<h2>四、待裁决</h2>
+<div class="card">
+  <ul>
+    <li><span class="num">1</span>方案确认:A(推荐)?还是 B 想留着缩写?</li>
+    <li><span class="num">2</span>图标尺寸:26px(推荐,与行内一致、46 高胶囊留白舒服)/ 20px 更收敛?</li>
+  </ul>
+</div>
+
+<script>
+  const CH = {
+    oc:   {name:"OpenCode Go", short:"OC", color:"#f5a623", logo:"file:///G:/game/nw/Grandettoken/app/src/logos/opencode.svg",
+           val:'82.0<i>%</i>', full:"OpenCode Go 周期窗剩 82.0%"},
+    trae: {name:"Trae", short:"TR", color:"#6d5ef8", logo:"file:///G:/game/nw/Grandettoken/app/src/logos/trae.svg",
+           val:'505<i class="unit"> 分</i>', full:"Trae 505.28 分"},
+    "4s": {name:"4SAPI", short:"4S", color:"#e8622c", logo:null,
+           val:'¥74<i class="dec">.20</i>', full:"4SAPI ¥74.20 · 剩 37%"},
+  };
+  const TONE = {ok:"", warn:"w", bad:"b", off:"o"};
+  let ch = "oc", tn = "ok";
+  const up = '<span class="up">▲</span>';
+  function ico(off){
+    const c = CH[ch];
+    const cls = "pico" + (off ? " off" : "");
+    return c.logo
+      ? `<div class="${cls}" style="background:transparent"><img src="${c.logo}" alt="" onerror="this.parentNode.style.background='${c.color}';this.remove()"></div>`
+      : `<div class="${cls}" style="background:${c.color}">${c.short}</div>`;
+  }
+  function render(){
+    const c = CH[ch], off = tn === "off";
+    document.getElementById("pNow").innerHTML =
+      `<span class="dot ${TONE[tn]}"></span><span class="v" style="color:${off?'var(--tx3)':'var(--tx)'}"><span class="short">${c.short}</span> ${c.val}</span>${up}`;
+    document.getElementById("pA").innerHTML =
+      `<span class="dot ${TONE[tn]}"></span>${ico(off)}<span class="v" style="color:${off?'var(--tx3)':'var(--tx)'}">${c.val}</span>${up}`;
+    document.getElementById("pB").innerHTML =
+      `<span class="dot ${TONE[tn]}"></span>${ico(off)}<span class="v" style="color:${off?'var(--tx3)':'var(--tx)'}"><span class="short">${c.short}</span> ${c.val}</span>${up}`;
+    // C:托盘式数字图标(整底状态色+白字),无文字数字
+    const num = c.short === "OC" ? "82" : ch === "trae" ? "505" : "74";
+    const bg = {ok:"var(--ok)",warn:"var(--warn)",bad:"var(--bad)",off:"var(--tx3)"}[tn];
+    document.getElementById("pC").innerHTML =
+      `<div class="pico" style="background:${bg};color:#fff;font-size:${num.length>2?'9px':'12px'};border-radius:7px"><span style="text-shadow:0 0 2px rgba(18,20,26,.9)">${num}</span></div>${up}`;
+    [ "pNow","pA","pB","pC" ].forEach(id => document.getElementById(id).title = c.full);
+  }
+  document.getElementById("chSeg").addEventListener("click", e=>{const b=e.target.closest("button");if(!b)return;ch=b.dataset.c;
+    document.querySelectorAll("#chSeg button").forEach(x=>x.classList.toggle("on",x===b));render();});
+  document.getElementById("toneSeg").addEventListener("click", e=>{const b=e.target.closest("button");if(!b)return;tn=b.dataset.t;
+    document.querySelectorAll("#toneSeg button").forEach(x=>x.classList.toggle("on",x===b));render();});
+  render();
+</script>
+</div>
+</body>
+</html>

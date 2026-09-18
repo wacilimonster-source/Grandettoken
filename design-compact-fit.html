@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Grandettoken · 紧凑条/胶囊 贴内容布局 设计预览</title>
+<style>
+  :root{--u:1}
+  *{box-sizing:border-box}
+  body{margin:0;background:#0e1117;color:#edf0f6;font:14px/1.7 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:36px 22px 90px}
+  h1{font-size:22px;margin:0 0 6px}
+  .sub{color:#8d97ab;font-size:13px;margin-bottom:22px}
+  h2{font-size:16px;margin:34px 0 12px;padding-left:10px;border-left:3px solid #7fa2ff}
+  .card{background:#161b24;border:1px solid #2a3245;border-radius:12px;padding:16px 18px;margin:10px 0;max-width:920px}
+  .card ul{margin:6px 0;padding-left:20px;color:#b6bfce}
+  .card li{margin:5px 0}.card b{color:#edf0f6}
+  code{font:12px Consolas,monospace;background:#1c2230;border:1px solid #2a3245;padding:1px 5px;border-radius:4px;color:#cdd6e8}
+  .num{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:6px;background:rgba(127,162,255,.18);color:#a8c0ff;font-size:12px;font-weight:700;margin-right:8px}
+  .seg{display:flex;gap:4px;background:#12151d;border:1px solid #2a3245;border-radius:9px;padding:3px;margin:10px 0 6px;flex-wrap:wrap}
+  .seg button{border:0;background:transparent;color:#b6bfce;font:12.5px/1.4 inherit;font-family:inherit;padding:6px 13px;border-radius:6px;cursor:pointer}
+  .seg button.on{background:#7fa2ff;color:#fff}
+  .cap{font-size:11.5px;color:#8d97ab;margin:16px 0 6px}
+  .desk{background:linear-gradient(160deg,#2b3350,#1b2436 55%,#243040);border-radius:14px;padding:18px;max-width:920px;position:relative;overflow:hidden}
+  .guide{position:absolute;top:0;bottom:0;width:0;border-left:1px dashed rgba(255,255,255,.18)}
+  .guide span{position:absolute;top:2px;left:4px;font-size:10px;color:rgba(255,255,255,.35);white-space:nowrap}
+
+  /* 紧凑条(真实 46px 高) */
+  .cbar{display:inline-flex;align-items:center;gap:calc(10px*var(--u));height:calc(46px*var(--u));
+    background:#12141a;border:1px solid #2f3648;border-radius:calc(10px*var(--u));
+    padding:0 calc(4px*var(--u)) 0 calc(11px*var(--u));max-width:100%}
+  .chip{display:inline-flex;align-items:center;gap:calc(5px*var(--u));background:#20242e;
+    border-radius:calc(6px*var(--u));padding:calc(3px*var(--u)) calc(7px*var(--u));flex:none}
+  .chip .ico{width:calc(16px*var(--u));height:calc(16px*var(--u));border-radius:4px;flex:none;display:grid;place-items:center;
+    font-size:calc(8px*var(--u));font-weight:700;color:#fff}
+  .chip .nm{font-size:calc(11.5px*var(--u));color:#b6bfce;max-width:calc(72px*var(--u));overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .chip .v{font-size:calc(12.5px*var(--u));font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .dot{width:calc(5px*var(--u));height:calc(5px*var(--u));border-radius:50%;background:#4ade9d;flex:none;display:inline-block}
+  .dot.w{background:#f7c355}.dot.b{background:#ff6b63}.dot.o{background:#8d97ab}
+  .more{font-size:calc(11.5px*var(--u));color:#8d97ab;padding:0 calc(3px*var(--u));flex:none}
+  .cbtn{width:calc(22px*var(--u));height:calc(22px*var(--u));border-radius:6px;background:#20242e;color:#8d97ab;display:grid;place-items:center;font-size:calc(10px*var(--u));flex:none}
+  .v.ok{color:#edf0f6}.v.warn{color:#f7c355}.v.bad{color:#ff6b63}.v.off{color:#8d97ab}
+
+  /* 胶囊 */
+  .pill{display:inline-flex;align-items:center;gap:calc(8px*var(--u));height:calc(46px*var(--u));border-radius:999px;
+    background:#12141af2;border:1px solid #3c445c;padding:0 calc(7px*var(--u)) 0 calc(9px*var(--u));
+    font:600 calc(14px*var(--u))/1 "Segoe UI",sans-serif;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .pill .pico{width:calc(26px*var(--u));height:calc(26px*var(--u));border-radius:calc(7px*var(--u));flex:none;display:grid;place-items:center;font-size:calc(10.5px*var(--u));font-weight:700;color:#fff}
+  .cmp{display:flex;gap:20px;align-items:flex-end;flex-wrap:wrap}
+  .cmp .box{text-align:center}
+  .cmp .lb{font-size:11px;color:#8d97ab;margin-top:6px}
+  table{border-collapse:collapse;width:100%;max-width:920px;font-size:13px}
+  th,td{padding:7px 10px;border-bottom:1px solid #2a3245;text-align:left}
+  th{color:#8d97ab;font-size:12px;background:#1c2230}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>紧凑条 / 胶囊:贴内容布局 + 信息降级</h1>
+<div class="sub">2026-09-18 设计稿(未改代码)· 目标:内容尽量多展示、窗口贴合内容不留空白、各种数据长度/字号档位都不破相。所有演示为真实尺寸(46px 高),可切场景与档位。</div>
+
+<h2>一、现状两个问题(虚线 = 现在的固定 380px 宽)</h2>
+<div class="cap">现状:窗口永远 380 宽,两个渠道时右半全空;chip 只有图标+数字,能放下的名字被藏掉了</div>
+<div class="desk" id="deskNow"></div>
+
+<h2>二、方案:宽度贴合 + chip 三级信息降级</h2>
+<div class="seg" id="scenSeg">
+  <button data-s="two" class="on">2 个渠道</button>
+  <button data-s="four">4 个渠道</button>
+  <button data-s="six">6 个渠道(超载)</button>
+  <button data-s="pts">积分长数(6,075.5 分)</button>
+</div>
+<div class="seg" id="uSeg">
+  <button data-u="1" class="on">标准字号</button>
+  <button data-u="1.15">大</button>
+  <button data-u="1.3">特大</button>
+</div>
+<div class="cap">新:窗口贴内容(上限 380×字号倍数);空间够就把「名字」放回来,不够逐级降,超载才收 +N</div>
+<div class="desk" id="deskNew"></div>
+<div class="card" style="font-size:12.5px;color:#8d97ab" id="explain"></div>
+
+<h2>三、降级规则(兼容各类情况的核心)</h2>
+<table>
+  <tr><th>级别</th><th>chip 内容</th><th>触发条件</th><th>例子</th></tr>
+  <tr><td>L0</td><td>图标 + 名 + 数</td><td>贴内容宽度 ≤ 380×u 时装得下全部</td><td><span style="color:#b6bfce">[4S] 4SAPI ¥74.20</span></td></tr>
+  <tr><td>L1</td><td>图标 + 数(现状)</td><td>L0 超宽 → 从最宽的 chip 起逐个去名字</td><td><span style="color:#b6bfce">[4S] ¥74.20</span></td></tr>
+  <tr><td>L2</td><td>图标 + 缩写数</td><td>L1 仍超(长数字+特大字号)→ 小数舍掉(74.20→74,6,075.5→6.1k,82.0%→82%)</td><td><span style="color:#b6bfce">[WB] 6.1k</span></td></tr>
+  <tr><td>+N</td><td>收纳尾部</td><td>全降到 L2 还超 → 尾部渠道进徽标(现有机制)</td><td><span style="color:#b6bfce">… +2</span></td></tr>
+</table>
+<div class="card">
+  <ul>
+    <li><b>降级顺序先"去名字"后"舍小数"再"收 +N"</b>:名字是"谁"、小数是"精确到多少"——挂件场景里"谁"更重要、精确值点开面板就有;</li>
+    <li><b>窗口宽 = 内容宽</b>:和胶囊同一套路(量完再 setSize,走既有几何队列,不会触发折叠竞态);上限 380×u 保底,不再出现半排空白;</li>
+    <li><b>0 渠道/全隐藏</b>:紧凑条收成「未配置 + ⚙」最小 chip,不再空荡 380;</li>
+    <li><b>胶囊</b>:只改下限钳位 132→<b>104</b> ——「505」「8%」这类短数现在被撑到 132 宽、两头留白;上限实测维持 240 即可(要 15 位级数字才碰得到,本产品不会);其余逻辑不动;</li>
+    <li><b>兼容矩阵</b>:6 类渠道(金额/积分/%/失败/未配置/隐藏)× 3 字号 × 100%/150% DPI × 吸附展开态 × 拖到屏幕边缘(clampToMonitor)——宽度都是"量出来的",天然适配;</li>
+    <li><b>轮播/刷新时机</b>:数字变化导致宽度变化 ≥6px 才重钳窗口(沿用胶囊防抖阈值),不会抖。</li>
+  </ul>
+</div>
+
+<h2>四、胶囊前后对比(真实尺寸)</h2>
+<div class="cmp" id="pillCmp"></div>
+
+<h2>五、待裁决</h2>
+<div class="card">
+  <ul>
+    <li><span class="num">1</span><b>降级顺序</b>:名→小数→+N(推荐)还是你更想先保名字、宁可出横向滚动?</li>
+    <li><span class="num">2</span><b>L0 名字长度</b>:全名超宽截断省略号(宽度上限 ~72×u px,「OpenCode Go→OpenCode…」,推荐)/ 直接用缩写(「OC」)?</li>
+    <li><span class="num">3</span><b>胶囊钳位</b>:下限 132→104、上限维持 240(实测短数才吃钳位,长数碰不到上限)。若想让「8%」这类再贴一点,下限还可压到 ~96,你定。</li>
+  </ul>
+</div>
+
+<script>
+  const CH = {
+    two: [ {short:"4S",name:"4SAPI",color:"#e8622c",v:"¥74.20",vs:"¥74",tone:"warn"},
+           {short:"OC",name:"OpenCode Go",color:"#f5a623",v:"82.0%",vs:"82%",tone:"ok"} ],
+    four: [ {short:"4S",name:"4SAPI",color:"#e8622c",v:"¥74.20",vs:"¥74",tone:"warn"},
+            {short:"OC",name:"OpenCode Go",color:"#f5a623",v:"82.0%",vs:"82%",tone:"ok"},
+            {short:"DS",name:"DeepSeek",color:"#4d6bfe",v:"¥256.00",vs:"¥256",tone:"ok"},
+            {short:"TR",name:"Trae",color:"#6d5ef8",v:"505 分",vs:"505",tone:"w"} ],
+    six: [ {short:"4S",name:"4SAPI",color:"#e8622c",v:"¥74.20",vs:"¥74",tone:"warn"},
+           {short:"OC",name:"OpenCode Go",color:"#f5a623",v:"82.0%",vs:"82%",tone:"ok"},
+           {short:"DS",name:"DeepSeek",color:"#4d6bfe",v:"¥256.00",vs:"¥256",tone:"ok"},
+           {short:"HA",name:"Hapi",color:"#22a06b",v:"¥98.73",vs:"¥99",tone:"ok"},
+           {short:"TR",name:"Trae",color:"#6d5ef8",v:"505 分",vs:"505",tone:"ok"},
+           {short:"WB",name:"WorkBuddy",color:"#19b8c4",v:"6,075.5 分",vs:"6.1k",tone:"ok"} ],
+    pts: [ {short:"WB",name:"WorkBuddy",color:"#19b8c4",v:"6,075.5 分",vs:"6.1k",tone:"ok"},
+           {short:"TR",name:"Trae",color:"#6d5ef8",v:"505.28 分",vs:"505",tone:"warn"} ],
+  };
+  let scen = "two", u = 1;
+  const meas = (() => { const c = document.createElement("canvas").getContext("2d");
+    return (txt, font) => { c.font = font; return c.measureText(txt).width; }; })();
+
+  function chipHtml(ch, lvl){
+    const label = lvl === 0
+      ? `<span class="nm">${ch.name}</span><span class="v ${ch.tone}">${ch.v}</span>`
+      : `<span class="v ${ch.tone}">${lvl === 1 ? ch.v : ch.vs}</span>`;
+    return `<span class="chip"><span class="dot ${ch.tone==='warn'?'w':ch.tone==='bad'?'b':''}"></span><span class="ico" style="background:${ch.color}">${ch.short}</span>${label}</span>`;
+  }
+  function chipWidth(ch, lvl){
+    const f = `600 ${12.5*u}px "Segoe UI"`;
+    const valTxt = lvl === 2 ? ch.vs : ch.v;
+    let w = 7*2*u + 5*u + 16*u + 5*u + meas(valTxt, f) + 5 + 5*u + 5*u; // padding+dot+ico+gaps+value
+    if (lvl === 0) w += Math.min(meas(ch.name, `500 ${11.5*u}px "Segoe UI"`), 72*u) + 5*u; // 名字超 72×u 截断
+    return w;
+  }
+  function layout(items, maxW){
+    // 逐级降级:整排先按 L0 量 → 从最宽 chip 起逐个去名字(L1)→ 再逐个舍小数(L2)→ 尾部收 +N
+    const n = items.length, lv = new Array(n).fill(0), gap = 10*u, ovh = 60*u, moreW = 28*u;
+    let hidden = 0;
+    const total = () => {
+      let s = 0;
+      for (let i = 0; i < n - hidden; i++) s += chipWidth(items[i], lv[i]);
+      return s + Math.max(0, n - hidden - 1)*gap + ovh + (hidden ? moreW : 0);
+    };
+    const strip = target => {
+      while (total() > maxW){
+        let bi = -1, bw = 0;
+        for (let i = 0; i < n - hidden; i++) if (lv[i] === target){
+          const w = chipWidth(items[i], target); if (w > bw){ bw = w; bi = i; }
+        }
+        if (bi < 0) break;
+        lv[bi] = target + 1;
+      }
+    };
+    strip(0); strip(1);
+    while (n - hidden > 1 && total() > maxW) hidden++;
+    const shown = lv.slice(0, n - hidden);
+    const lvl = hidden ? "L2+溢出收纳" : shown.some(x=>x===2) ? "L1→L2 混合" : shown.some(x=>x===1) ? "L0→L1 混合" : "L0 全名";
+    return { chips: items.slice(0, n-hidden).map((c,i)=>({c, lv:shown[i]})), hidden, lvl, totalW: total() };
+  }
+  function renderDesk(host, items){
+    const maxW = 380*u;
+    const r = layout(items, maxW);
+    const chips = r.chips.map(({c,lv})=>chipHtml(c,lv)).join("");
+    const more = r.hidden ? `<span class="more">+${r.hidden}</span>` : "";
+    const w = Math.min(maxW, Math.ceil(r.totalW));
+    host.innerHTML =
+      `<div class="guide" style="left:${maxW}px"><span>380×u 上限</span></div>` +
+      `<div class="cbar" style="width:${w}px;--u:${u}">${chips}${more}<span class="cbtn">▲</span><span class="cbtn">●</span></div>` +
+      `<div style="font-size:11px;color:#8d97ab;margin-top:8px">级别 ${r.lvl} · 实宽 ${w}px / 上限 ${Math.ceil(maxW)}px</div>`;
+  }
+  function render(){
+    const items = CH[scen];
+    // 现状:固定 380、只有图标+数字(L1 样式)
+    const now = document.getElementById("deskNow");
+    const chipsNow = items.map(c=>chipHtml(c,1)).join("");
+    now.innerHTML = `<div class="guide" style="left:${380*u}px"><span>固定 380×u</span></div>` +
+      `<div class="cbar" style="width:${Math.ceil(380*u)}px;--u:${u}">${chipsNow}<span style="flex:1"></span><span class="cbtn">▲</span><span class="cbtn">●</span></div>` +
+      `<div style="font-size:11px;color:#8d97ab;margin-top:8px">内容约 ${Math.ceil(items.reduce((a,c)=>a+chipWidth(c,1),0)+10*u*(items.length-1)+30)}px,右边空白 ${Math.ceil(380*u - items.reduce((a,c)=>a+chipWidth(c,1),0)-10*u*(items.length-1)-30)}px</div>`;
+    renderDesk(document.getElementById("deskNew"), items);
+    document.getElementById("explain").textContent =
+      `当前场景「${{two:"2 个渠道",four:"4 个渠道",six:"6 个渠道",pts:"积分长数"}[scen]}」× 字号 ${u===1?"标准":u===1.15?"大":"特大"}:布局器自动选级,窗口宽贴合内容、上限 380×u。`;
+    // 胶囊对比
+    const pc = document.getElementById("pillCmp");
+    const pillCases = [
+      { label:"积分短数 505", v:"505", color:"#6d5ef8", short:"TR" },
+      { label:"低剩余百分 8%", v:"8%", color:"#f5a623", short:"OC" },
+      { label:"金额常规 ¥74.20", v:"¥74.20", color:"#e8622c", short:"4S" },
+    ];
+    pc.innerHTML = pillCases.map(p=>{
+      const textW = meas(p.v, `600 ${14*u}px "Segoe UI"`);
+      const cur = Math.max(132*u, Math.min(240*u, textW + 102*u));
+      const neu = Math.max(104*u, Math.min(240*u, textW + 102*u));
+      const mk = (w, tone) => `<div class="box"><div class="pill" style="width:${Math.ceil(w)}px;--u:${u}"><span class="dot"></span><span class="pico" style="background:${p.color}">${p.short}</span><span>${p.v}</span><span class="cbtn">▲</span></div><div class="lb">${tone} ${Math.ceil(w)}px</div></div>`;
+      return `<div style="margin-top:6px"><div style="font-size:11.5px;color:#b6bfce;margin-bottom:4px">${p.label}</div><div class="cmp" style="gap:10px">${mk(cur,"现状钳位132~240")}${mk(neu,"新钳位104~240")}</div></div>`;
+    }).join("");
+  }
+  document.getElementById("scenSeg").addEventListener("click", e=>{const b=e.target.closest("button");if(!b)return;scen=b.dataset.s;
+    document.querySelectorAll("#scenSeg button").forEach(x=>x.classList.toggle("on",x===b));render();});
+  document.getElementById("uSeg").addEventListener("click", e=>{const b=e.target.closest("button");if(!b)return;u=+b.dataset.u;
+    document.querySelectorAll("#uSeg button").forEach(x=>x.classList.toggle("on",x===b));render();});
+  render();
+</script>
+</div>
+</body>
+</html>

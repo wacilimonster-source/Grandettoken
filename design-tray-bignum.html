@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Grandettoken · 托盘大数字 方案对比稿</title>
+<style>
+  :root{--bg:#0e1117;--panel:#161b24;--panel2:#1c2230;--line:#2a3245;
+    --tx:#edf0f6;--tx2:#b6bfce;--tx3:#8d97ab;
+    --ok:#4ade9d;--warn:#f7c355;--bad:#ff6b63;--ac:#7fa2ff}
+  body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.7 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:36px 22px 90px}
+  h1{font-size:22px;margin:0 0 6px}
+  .sub{color:var(--tx3);font-size:13px;margin-bottom:22px}
+  h2{font-size:16px;margin:34px 0 12px;padding-left:10px;border-left:3px solid var(--ac)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:10px 0;max-width:900px}
+  .card h3{margin:0 0 8px;font-size:14.5px}
+  .card ul{margin:6px 0;padding-left:20px;color:var(--tx2)}
+  .card li{margin:5px 0}
+  .card b{color:var(--tx)}
+  table{border-collapse:collapse;width:100%;max-width:900px;font-size:13px}
+  th,td{padding:8px 11px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  th{color:var(--tx3);font-size:12px;background:var(--panel2)}
+  .good{color:var(--ok)} .risk{color:var(--warn)} .bad{color:var(--bad)}
+  .num{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:6px;background:rgba(127,162,255,.18);color:#a8c0ff;font-size:12px;font-weight:700;margin-right:8px}
+
+  /* 任务栏两色:深色 / 浅色(Windows 主题可切,浅色下白字方案会现原形) */
+  .bar{display:flex;align-items:center;gap:16px;border-radius:10px;padding:10px 16px;max-width:900px;margin-top:10px}
+  .bar.dark{background:#1a1d24;border:1px solid #262b36}
+  .bar.light{background:#e8eaef;border:1px solid #c9cdd8}
+  .bar .cap{font-size:11.5px;margin-left:auto}
+  .bar.dark .cap{color:#8d97ab} .bar.light .cap{color:#5d6472}
+  .slot{display:flex;flex-direction:column;align-items:center;gap:5px}
+  .slot canvas{width:24px;height:24px}
+  .slot .lb{font-size:10.5px}
+  .bar.dark .lb{color:#8d97ab} .bar.light .lb{color:#5d6472}
+  .zoomrow{display:flex;gap:30px;flex-wrap:wrap;margin-top:16px}
+  .z{text-align:center}
+  .z canvas{background:#1a1d24;border:1px solid #262b36;border-radius:10px;display:block;margin:0 auto 6px}
+  .z .lb{font-size:11.5px;color:var(--tx3)}
+  .seg{display:flex;gap:4px;background:#12151d;border:1px solid var(--line);border-radius:9px;padding:3px;margin:12px 0 4px;flex-wrap:wrap}
+  .seg button{border:0;background:transparent;color:var(--tx2);font:12.5px/1.4 inherit;font-family:inherit;padding:6px 13px;border-radius:6px;cursor:pointer}
+  .seg button.on{background:var(--ac);color:#fff}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>「整个图标就是大数字」好不好?—— 四个画法对比</h1>
+<div class="sub">2026-09-18 设计稿(未改代码)· 每行都是 24px 真实尺寸,深色/浅色任务栏各一行 —— 浅色行专治「白字透明底」的想当然</div>
+
+<h2>一、先回答:大方向对,但有两个前提</h2>
+<div class="card">
+  <ul>
+    <li><b class="good">好。</b>托盘的存在意义就是"扫一眼",数字越大信息越有效;品牌方块(现状)在这个尺寸下本来就看不清细节,牺牲它换可读性是划算的;</li>
+    <li><b class="risk">前提 1:不能真的"只有字"。</b>纯透明底白字在浅色任务栏上直接消失(下面第二行演示),而且任务栏里一堆小图标,没有底板就认不出哪个是自家 —— 需要一块<b>有色底板</b>;</li>
+    <li><b class="risk">前提 2:数字越大,缩写越狠。</b>底板占掉边距后,2 字符能画到图标高度 60%,4 字符("6.1k")只剩 36% —— 想要"大",缩写规则就得收紧到 2~3 字符,金额优先「74」而不是「74.2」。</li>
+  </ul>
+</div>
+
+<h2>二、四种画法(点标签切换数字内容看极限)</h2>
+<div class="seg" id="valSeg">
+  <button data-v="74" class="on">两位「74」</button>
+  <button data-v="1.2k">四位「1.2k」</button>
+  <button data-v="82%">带符号「82%」</button>
+</div>
+<div class="seg" id="styleSeg">
+  <button data-s="A" class="on">A 状态色整底 + 大白字(推荐)</button>
+  <button data-s="C">C 整底 + 底部品牌条</button>
+  <button data-s="B">B 透明底白字(反面教材)</button>
+  <button data-s="D">D 现状对比</button>
+</div>
+
+<div class="bar dark" id="barDark"></div>
+<div class="bar light" id="barLight"></div>
+
+<div class="zoomrow" id="zoom"></div>
+
+<h2>三、结论与取舍</h2>
+<table>
+  <tr><th>画法</th><th>深色栏</th><th>浅色栏</th><th>辨识度</th><th>判定</th></tr>
+  <tr><td><b>A 状态色整底 + 白字</b></td><td class="good">清晰</td><td class="good">清晰(色底托字)</td><td>形状=圆角方块 + 颜色语义,认得出</td><td class="good">推荐:数字最大、两主题通吃</td></tr>
+  <tr><td>C A + 底部渐变品牌条</td><td class="good">清晰</td><td class="good">清晰</td><td>多一层"这是我家的"信号</td><td>备选:数字高度让出 ~15%,16px 下值不值见裁决</td></tr>
+  <tr><td>B 透明底白字</td><td class="good">清晰</td><td class="bad">浅色下基本看不见</td><td>无底板,易和其它图标混淆</td><td class="bad">不推荐(除非描边加粗到糊)</td></tr>
+  <tr><td>D 现状(角点式)</td><td class="good">可</td><td class="good">可</td><td>品牌最强</td><td>但看不到余额,回到原点</td></tr>
+</table>
+
+<h2>四、待裁决</h2>
+<div class="card">
+  <ul>
+    <li><span class="num">1</span><b>画法</b>:A 整底大白字(推荐)/ C 加品牌条 —— 在浅色任务栏里 C 的渐变条能帮忙认图标,但数字小一圈;</li>
+    <li><span class="num">2</span><b>缩写收紧</b>:两位优先(「74」「82%」),四位「1.2k」字号明显掉档 —— 是否接受「1.2k」这类 4 字符只在 4 位数以上出现?</li>
+    <li><span class="num">3</span>上次的开关/默认值问题一并定:设置里可关(默认开)。</li>
+  </ul>
+</div>
+
+<script>
+  const TONE = { ok:"#4ade9d", warn:"#f7c355", bad:"#ff6b63", off:"#3a4356" };
+  let val = "74", style = "A", tone = "warn";
+  const fontFor = (v, S) => v.length >= 4 ? S * 0.34 : v.length === 3 ? S * 0.42 : S * 0.56;
+
+  function draw(cv, S){
+    const g = cv.getContext("2d");
+    cv.width = S; cv.height = S;
+    g.clearRect(0,0,S,S);
+    const r = S * 0.22;
+    if (style === "B"){
+      // 无底板:直接画字(深色栏靠描边可读,浅色栏翻车演示)
+      text(g, S); return;
+    }
+    if (style === "D"){
+      g.beginPath(); rr(g,0,0,S,S,r);
+      const grad = g.createLinearGradient(0,0,S,S);
+      grad.addColorStop(0,"#5b8cff"); grad.addColorStop(1,"#8b5bff");
+      g.fillStyle = grad; g.fill();
+      g.globalCompositeOperation = "destination-out";
+      g.fillRect(S*0.31,S*0.31,S*0.38,S*0.38);
+      g.globalCompositeOperation = "source-over";
+      g.beginPath(); g.arc(S*0.72,S*0.72,S*0.22,0,7); g.fillStyle = TONE[tone]; g.fill();
+      return;
+    }
+    // A / C:状态色整底
+    g.beginPath(); rr(g,0,0,S,S,r); g.fillStyle = TONE[tone]; g.fill();
+    if (style === "C"){
+      g.save(); g.beginPath(); rr(g,0,0,S,S,r); g.clip();
+      const grad = g.createLinearGradient(0,S,S,0);
+      grad.addColorStop(0,"#5b8cff"); grad.addColorStop(1,"#8b5bff");
+      g.fillStyle = grad; g.fillRect(0, S*0.82, S, S*0.18); g.restore();
+      text(g, S, S*0.40);
+    } else text(g, S);
+  }
+  function text(g, S, h){
+    g.font = `700 ${fontFor(val,S)}px "Segoe UI",sans-serif`;
+    g.textAlign = "center"; g.textBaseline = "middle";
+    g.lineWidth = S*0.07; g.strokeStyle = "rgba(18,20,26,.8)";
+    g.strokeText(val, S/2, (h||S*0.54));
+    g.fillStyle = "#fff"; g.fillText(val, S/2, (h||S*0.54));
+  }
+  function rr(g,x,y,w,h,r){ g.moveTo(x+r,y); g.arcTo(x+w,y,x+w,y+h,r); g.arcTo(x+w,y+h,x,y+h,r); g.arcTo(x,y+h,x,y,r); g.arcTo(x,y,x+w,y,r); g.closePath(); }
+
+  function render(){
+    const mk = (host) => {
+      ["ok","warn","bad"].forEach((t,i)=>{
+        tone = t;
+        const d = document.createElement("div"); d.className = "slot";
+        const cv = document.createElement("canvas"); d.appendChild(cv);
+        const lb = document.createElement("div"); lb.className = "lb";
+        lb.textContent = ["绿·正常","黄·预警","红·告急"][i];
+        d.appendChild(lb); host.appendChild(d);
+        draw(cv, 48); cv.style.width = "24px"; cv.style.height = "24px";
+      });
+    };
+    const dark = document.getElementById("barDark"), light = document.getElementById("barLight");
+    dark.innerHTML = ""; light.innerHTML = "";
+    mk(dark); mk(light);
+    const cap = document.createElement("span"); cap.className = "cap";
+    cap.textContent = "深色任务栏(Windows 默认)"; dark.appendChild(cap);
+    const cap2 = document.createElement("span"); cap2.className = "cap";
+    cap2.textContent = "浅色任务栏(B 方案在此现原形)"; light.appendChild(cap2);
+    tone = "warn";
+    const z = document.getElementById("zoom"); z.innerHTML = "";
+    [[96,"96px 放大(150% DPI 实际约 36px)"],[160,"160px 极限放大"]].forEach(([px,lb])=>{
+      const d = document.createElement("div"); d.className = "z";
+      const cv = document.createElement("canvas"); d.appendChild(cv);
+      const t = document.createElement("div"); t.className = "lb"; t.textContent = lb; d.appendChild(t);
+      z.appendChild(d); draw(cv, px);
+    });
+  }
+  document.getElementById("valSeg").addEventListener("click", e=>{ const b=e.target.closest("button"); if(!b)return; val=b.dataset.v;
+    document.querySelectorAll("#valSeg button").forEach(x=>x.classList.toggle("on",x===b)); render(); });
+  document.getElementById("styleSeg").addEventListener("click", e=>{ const b=e.target.closest("button"); if(!b)return; style=b.dataset.s;
+    document.querySelectorAll("#styleSeg button").forEach(x=>x.classList.toggle("on",x===b)); render(); });
+  render();
+</script>
+</div>
+</body>
+</html>
