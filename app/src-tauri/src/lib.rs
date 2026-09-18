@@ -319,9 +319,14 @@ async fn check_update(
     };
     Ok(match updater.check().await {
         Ok(Some(u)) => {
-            // 「跳过此版本」要尊重到底:手动点也不该把跳过的版本重新弹出来
+            // 「跳过此版本」要尊重到底:手动点也不该把跳过的版本重新弹出来。
+            // 但请求确实发出去了 —— checked_now 必须为真,前端据此才敢刷新
+            // 「上次检查时间」;设成 false 会让周期轮询把它当成"没问到"而跳过记账。
             if skipped.as_deref() == Some(u.version.as_str()) {
-                UpdateState::idle(&current)
+                UpdateState {
+                    checked_now: true,
+                    ..UpdateState::idle(&current)
+                }
             } else {
                 UpdateState {
                     current,

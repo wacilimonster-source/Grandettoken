@@ -1612,8 +1612,10 @@ async function checkUpdate(force) {
       // 踩过:用户刚看到「有新版本」,一次自动检查失败就把提示清空,再点就没反应了,
       // 看起来像应用坏了 —— 检查失败只是"这次没问到",不代表"没有新版本"。
       if (force) setMsg("检查失败:" + st.error, true);
-    } else {
-      // 真的问到了、确实没有新版本(或被「跳过此版本」):这时才清掉提示
+    } else if (st.checkedNow) {
+      // 真的问到了、确实没有新版本(或被「跳过此版本」):这时才清掉提示。
+      // 节流/关掉自动检查返回的 idle(checkedNow:false)什么都不代表 ——
+      // 现在每 10 分钟就会问一次,若这里不设闸,提示会被"没去问"反复清掉。
       UPD.info = null;
       UPDC.phase = null;
       renderUpdChip();
@@ -1749,7 +1751,9 @@ async function refresh() {
     render();
   });
 
-  // 启动 30 秒后再自动检查:避开启动时的取数高峰。节流在 Rust 侧(24 小时一次),
-  // 所以这里每天最多真的发一次请求;失败也静默。
+  // 启动 30 秒后先自动检查一次;之后每 10 分钟再问一次 —— 是否真发请求由
+  // Rust 侧 24 小时节流把关(最多每天一次)。之前只有启动那一次,
+  // 软件连开几天就再也不会重检(实测:上次检查时间永远停在开机那一刻)。
   setTimeout(() => checkUpdate(false), 30_000);
+  setInterval(() => checkUpdate(false), 10 * 60 * 1000);
 })();
