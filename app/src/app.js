@@ -11,7 +11,13 @@ let CFG = null;
 let sparkCache = {};   // { [id]: {24:[],168:[],720:[]} }
 let sparkHours = {};   // { [id]: 当前选中的区间 },渲染详情时据此标记选中项
 
-const emit = (ev, payload) => T.event.emit(ev, payload);
+// 字号档位:--u 倍率写到 :root,styles.css 全部尺寸都是 calc(Npx*var(--u));
+// 窗口尺寸走同一个倍率(见 formSize),否则大字会被固定高度的窗口裁切
+const FS_U = { md: 1, lg: 1.15, xl: 1.3 };
+const fsU = () => (CFG && FS_U[CFG.fontScale]) || 1;
+function applyFontScale() {
+  document.documentElement.style.setProperty("--u", String(fsU()));
+}
 
 // ───────────── 格式化 ─────────────
 /** HTML 转义:接口返回的错误文案、渠道名等会直接进 innerHTML。
@@ -132,7 +138,8 @@ function toneOf(c) {
 }
 
 const TONE_COLOR = { ok: "var(--ok)", warn: "var(--warn)", bad: "var(--bad)", off: "var(--tx3)" };
-const TONE_HEX = { ok: "#3ecf8e", warn: "#f0b23c", bad: "#f0554d", off: "#333a4a" };
+// 与 styles.css 的高对比色板保持一致(进度条/托盘角标是内联色,吃不到 CSS 变量)
+const TONE_HEX = { ok: "#4ade9d", warn: "#f7c355", bad: "#ff6b63", off: "#3a4356" };
 
 // 官方图标(素材出处见 app/src/logos/README.md)。没有官方标的渠道继续用字母方块。
 const LOGOS = {
@@ -149,7 +156,7 @@ const LOGOS = {
 function iconHtml(c, cls = "ico", off = false) {
   const src = LOGOS[c.id];
   if (!src) {
-    return `<div class="${cls}" style="background:${off ? "#333a4a" : c.color}">${esc(c.short)}</div>`;
+    return `<div class="${cls}" style="background:${off ? "#3c445c" : c.color}">${esc(c.short)}</div>`;
   }
   return `<div class="${cls} logo${off ? " off" : ""}"><img src="${src}" alt="${esc(c.short)}"></div>`;
 }
@@ -567,8 +574,9 @@ function render() {
   const withKey = CHANNELS.filter((c) => c.hasKey);
   const bad = withKey.filter((c) => !c.valid).length;
   const warn = withKey.filter((c) => c.valid && (c.limited || toneOf(c) === "bad")).length;
+  // 与行内同一套约定:失联=灰,预警=黄(之前 warn 用了红点,颜色梯度倒挂)
   $("fdot").className =
-    "dot" + (bad ? " o" : warn ? " b" : withKey.length ? "" : " o");
+    "dot" + (bad ? " o" : warn ? " w" : withKey.length ? "" : " o");
   $("fstat").textContent = !withKey.length
     ? "未配置渠道"
     : `${withKey.length - bad} 正常${warn ? ` · ${warn} 预警` : ""}${bad ? ` · ${bad} 失联` : ""}`;
@@ -697,10 +705,11 @@ function fitPill() {
   document.body.appendChild(probe);
   const textW = probe.getBoundingClientRect().width;
   probe.remove();
-  // 圆点 6 + 间距 8×2 + 展开按钮 22 + 内边距 16 ≈ 76
-  const w = Math.max(132, Math.min(240, Math.ceil(textW) + 76));
-  if (Math.abs(w - SIZES.pill[0]) >= 6) {
-    SIZES.pill = [w, 46];
+  // 圆点 6 + 间距 8×2 + 展开按钮 22 + 内边距 16 ≈ 76 —— 这些固定件都随字号长
+  const u = fsU();
+  const w = Math.max(Math.round(132 * u), Math.min(Math.round(240 * u), Math.ceil(textW) + Math.round(76 * u)));
+  if (Math.abs(w - pillW) >= 6) {
+    pillW = w;
     if (currentForm() === "pill") applyForm("pill", false);
   }
 }
@@ -860,22 +869,44 @@ function renderPillPick() {
 // ───────────── 形态切换 ─────────────
 // 每种形态都是固定尺寸:拖标题栏只能移动窗口,拉不动大小。
 // resizable(false) 去掉缩放宽边,min/max 双钳位兜底(即便有残留的缩放边框也拉不动)。
+// 这里是「标准档」基准;实际尺寸走 formSize(),按字号档位 × 倍率。
 const SIZES = {
   panel: [380, 560],
   compact: [380, 46],
   pill: [200, 46],
 };
+let pillW = 200; // 胶囊实测宽度(已是当前档位的最终逻辑像素),fitPill 维护
+
+/** 当前字号档位下某形态的窗口尺寸。 */
+function formSize(form) {
+  const u = fsU();
+  const base = SIZES[form] || SIZES.panel;
+  const w = form === "pill" ? pillW : Math.round(base[0] * u);
+  return [w, Math.round(base[1] * u)];
+}
 
 async function applyForm(form, remember = true) {
   if (!SIZES[form]) form = "panel"; // 白名单:老配置里的 form 可能是个已废弃的名字
   // 切换到折叠形态时管理页没有意义(它的入口都在面板上),顺手关掉
   if (form !== "panel" && manageOpen()) closeManage();
-  document.body.className =
-    "form-" + form + (manageOpen() ? " view-manage" : "");
-  // 紧凑条整条可拖(里面没有需要点击的东西);面板里行要能点开,所以禁用
+  // 只换 form-* 与 view-manage 类,**保留 docked / dock-left** ——
+  // 整体覆写 className 会在吸附期间抹掉竖条形态,还把 8px 窗口强拉回形态尺寸
+  document.body.classList.remove("form-panel", "form-compact", "form-pill");
+  document.body.classList.add("form-" + form);
+  document.body.classList.toggle("view-manage", manageOpen());
+  // 面板里行要能点开,所以禁用拖拽;紧凑条整条可拖(里面没有需要点击的东西)
   const list = $("list");
   if (list) list.setAttribute("data-tauri-drag-region", form === "compact" ? "deep" : "false");
-  const [w, h] = SIZES[form] || SIZES.panel;
+  if (remember && CFG) {
+    CFG.form = form;
+    invoke("set_config", { config: CFG }).catch(() => {});
+  }
+  // 吸附期间窗口几何归吸附逻辑管:展开态换完形态重新量一次,收起态压根不碰尺寸
+  if (DOCK.on) {
+    if (DOCK.open) dockLayout(true);
+    return;
+  }
+  const [w, h] = formSize(form);
   try {
     // 先解除上一形态的钳位,否则新尺寸会被旧 min/max 卡住
     await appWindow.setMinSize(null);
@@ -890,10 +921,6 @@ async function applyForm(form, remember = true) {
     setTimeout(fitCompact, 150);
   } catch (e) {
     console.error("切换形态失败", e);
-  }
-  if (remember && CFG) {
-    CFG.form = form;
-    invoke("set_config", { config: CFG }).catch(() => {});
   }
   clampToMonitor();
 }
@@ -971,7 +998,7 @@ async function dockEnter(side, pos) {
 async function dockLayout(open) {
   const info = await monitorInfo();
   if (!info) return;
-  const [w, h] = open ? SIZES[currentForm()] || SIZES.panel : DOCK_SIZE;
+  const [w, h] = open ? formSize(currentForm()) : DOCK_SIZE;
   const barW = Math.round(DOCK_SIZE[0] * info.sf);
   const x = DOCK.side === "right"
     ? info.right - (open ? Math.round(w * info.sf) : barW)
@@ -999,7 +1026,7 @@ async function dockExit(keepPos) {
   DOCK.on = false;
   DOCK.open = false;
   document.body.classList.remove("docked");
-  const [w, h] = SIZES[currentForm()] || SIZES.panel;
+  const [w, h] = formSize(currentForm());
   const info = await monitorInfo();
   try {
     markSelfMove();
@@ -1380,7 +1407,6 @@ function bindSelect(id, key, cast = Number) {
   const el = $(id);
   el.addEventListener("change", () => {
     CFG[key] = cast(el.value);
-    emit("config-changed", CFG);
     invoke("set_config", { config: CFG }).catch(() => {});
     if (key === "sort") render();
   });
@@ -1410,6 +1436,14 @@ bindSelect("cfgBackoff", "backoffIntervalSec");
 bindSelect("cfgSort", "sort", String);
 bindSelect("cfgWarn", "warnPercent");
 bindSelect("cfgCrit", "critPercent");
+// 字号:换档要同时写 --u、按新倍率重新钳窗口尺寸、重量紧凑条截断
+$("cfgFontScale").addEventListener("change", () => {
+  CFG.fontScale = $("cfgFontScale").value;
+  invoke("set_config", { config: CFG }).catch(() => {});
+  applyFontScale();
+  applyForm(currentForm());
+  render();
+});
 bindSwitch("cfgAutostart", "autostart", (on) => invoke("set_autostart", { enabled: on }));
 bindSwitch("cfgAutoUpdate", "autoCheckUpdate");
 // 置顶走 set_pin:窗口与配置一起改,失败时 bindSwitch 会回滚开关
@@ -1434,6 +1468,7 @@ function applyConfigToUI() {
   set("cfgSort", CFG.sort);
   set("cfgWarn", CFG.warnPercent);
   set("cfgCrit", CFG.critPercent);
+  set("cfgFontScale", CFG.fontScale || "md");
   $("cfgAutostart").classList.toggle("on", !!CFG.autostart);
   $("cfgAutoUpdate").classList.toggle("on", CFG.autoCheckUpdate !== false);
   renderAbout();
@@ -1449,36 +1484,84 @@ const fmtMB = (n) => (n / 1048576).toFixed(1) + " MB";
 
 // ───────────── 更新提示:标题旁的标签 + 覆盖卡片 ─────────────
 // 有新版才出现;自动检查失败一律静默。折叠形态不显示(宽度敏感)。
-const UPDC = { info: null, phase: null, pct: 0 };
+// 版本信息只存 UPD.info 一处(曾有两份副本,「跳过此版本」只清了一份,
+// 角标残留、覆盖层按钮失灵 —— 见 bug 报告 #3);UPDC 只放瞬时进度状态。
+const UPDC = { phase: null, pct: 0, rec: 0, total: 0 };
+
+const updBusy = () => UPDC.phase === "downloading" || UPDC.phase === "installing";
+const updProgressText = () =>
+  UPDC.total
+    ? UPDC.pct + "% · " + fmtMB(UPDC.rec) + " / " + fmtMB(UPDC.total)
+    : fmtMB(UPDC.rec);
 
 function renderUpdChip() {
   const chip = $("updChip");
   if (!chip) return;
   let text = "";
-  if (UPDC.phase === "ready" && UPDC.info) text = "新版本 " + UPDC.info.version;
+  if (UPDC.phase === "ready" && UPD.info) text = "新版本 " + UPD.info.version;
   else if (UPDC.phase === "downloading") text = "下载 " + UPDC.pct + "%";
+  else if (UPDC.phase === "installing") text = "安装中";
   else if (UPDC.phase === "failed") text = "重试";
   chip.textContent = text;
   chip.style.display = text ? "" : "none";
   chip.title = text ? "点开查看更新详情" : "";
 }
 
+/** 进度条有两个载体(管理页卡片 + 覆盖层),一起写,谁可见谁生效。 */
+function paintUpdBars() {
+  const show = updBusy();
+  const txt = UPDC.phase === "installing" ? "安装中…" : updProgressText();
+  for (const [bar, fill, label] of [
+    ["updBar", "updBarI", "updPct"],
+    ["ovBar", "ovBarI", "ovPct"],
+  ]) {
+    const b = $(bar);
+    if (!b) continue;
+    if (show) b.style.display = "block";
+    $(fill).style.width = UPDC.pct + "%";
+    $(label).textContent = txt;
+  }
+}
+
+function overlayUpdState() {
+  // 覆盖层打开时按当前 phase 重画:进度条、按钮可用性与文案
+  const busy = updBusy();
+  $("ovGo").disabled = busy;
+  $("ovSkip").disabled = busy;
+  $("ovGo").textContent = UPDC.phase === "failed" ? "重试更新" : "立即更新";
+  const msg = $("ovMsg");
+  if (busy) {
+    $("ovBar").style.display = "block";
+    msg.style.display = "none";
+    paintUpdBars();
+  } else {
+    $("ovBar").style.display = "none";
+    if (UPDC.phase === "failed") {
+      msg.textContent = "上次下载未完成,点「重试更新」继续";
+      msg.style.display = "block";
+    } else {
+      msg.style.display = "none";
+    }
+  }
+}
+
+const ovOpen = () => $("updOv").style.display !== "none";
+
 function openUpdOverlay() {
-  const st = UPDC.info;
+  const st = UPD.info;
   $("ovVer").textContent = st ? "发现新版本 " + st.version : "更新";
   $("ovDate").textContent = (st && st.date) || "";
   $("ovNotes").textContent = ((st && st.notes) || "").trim() || "(无更新说明)";
-  $("ovBar").style.display = "none";
-  $("ovMsg").style.display = "none";
   $("updOv").style.display = "";
+  overlayUpdState();
 }
 function closeUpdOverlay() { $("updOv").style.display = "none"; }
 
 $("updChip").addEventListener("click", openUpdOverlay);
 $("ovLater").addEventListener("click", closeUpdOverlay);
-// 「立即更新 / 跳过」复用管理页那套已经写好的流程(避免两份实现分叉)
-$("ovGo").addEventListener("click", () => { closeUpdOverlay(); $("btnUpdGo").click(); });
-$("ovSkip").addEventListener("click", () => { closeUpdOverlay(); $("btnUpdSkip").click(); });
+// 「立即更新 / 跳过」与管理页卡片共用同一个处理(避免两份实现分叉)
+$("ovGo").addEventListener("click", startInstall);
+$("ovSkip").addEventListener("click", () => $("btnUpdSkip").click());
 
 function setMsg(text, bad) {
   const el = $("updMsg");
@@ -1521,7 +1604,6 @@ async function checkUpdate(force) {
     renderAbout(st);
     if (st.available) {
       UPD.info = st;
-      UPDC.info = st;
       UPDC.phase = "ready";
       renderUpdChip();
       showCard(st);
@@ -1548,32 +1630,22 @@ function onUpdProgress(p) {
   // 标题旁的标签同步反映下载状态:卡片关掉也能看到进度
   const phase = (p && p.phase) || "";
   if (phase === "downloading" || phase === "started") {
-    const total = (p && p.total) || 0;
-    const rec = (p && p.received) || 0;
     UPDC.phase = "downloading";
-    UPDC.pct = total ? Math.min(100, Math.round((rec / total) * 100)) : 0;
+    UPDC.total = (p && p.total) || 0;
+    UPDC.rec = (p && p.received) || 0;
+    UPDC.pct = UPDC.total ? Math.min(100, Math.round((UPDC.rec / UPDC.total) * 100)) : 0;
+    paintUpdBars();
   } else if (phase === "failed") {
     UPDC.phase = "failed";
-  }
-  if (UPDC.phase) renderUpdChip();
-  if (!p) return;
-  const bar = $("updBar");
-  if (p.phase === "started") {
-    bar.style.display = "block";
-    $("updBarI").style.width = "0%";
-    $("updPct").textContent = "准备下载…";
-    setMsg("");
-  } else if (p.phase === "downloading") {
-    bar.style.display = "block";
-    const pct = p.total ? Math.round((p.received / p.total) * 100) : 0;
-    $("updBarI").style.width = pct + "%";
-    $("updPct").textContent = p.total
-      ? pct + "% · " + fmtMB(p.received) + " / " + fmtMB(p.total)
-      : fmtMB(p.received);
-  } else if (p.phase === "installing") {
+  } else if (phase === "installing") {
     // Windows 上 install 那一步会直接退出进程,不会再有后续事件
+    UPDC.phase = "installing";
     setMsg("正在安装,完成后会自动重启");
+    if (ovOpen()) overlayUpdState();
+  } else if (phase === "finished") {
+    UPDC.phase = null;
   }
+  renderUpdChip();
 }
 
 $("btnCheck").addEventListener("click", () => checkUpdate(true));
@@ -1581,19 +1653,42 @@ $("lkUpd").addEventListener("click", () => {
   openManage();
   if ($("updCard")) $("updCard").scrollIntoView({ block: "center" });
 });
-$("btnUpdGo").addEventListener("click", async () => {
+
+/** 下载安装。覆盖层与管理页卡片共用这一个入口。 */
+async function startInstall() {
   if (!UPD.info) return;
+  // 防重入:下载/安装进行中再点会并发第二次 download_and_install,
+  // 两路流写同一个临时文件,轻则进度乱、重则签名校验失败(bug 报告 #4)
+  if (updBusy()) return;
+  setMsg("");
+  UPDC.phase = "downloading";
+  UPDC.pct = 0;
+  UPDC.rec = 0;
+  UPDC.total = 0;
+  renderUpdChip();
+  if (ovOpen()) overlayUpdState(); // 按钮置灰、进度条出现
   try {
     await invoke("install_update");
   } catch (e) {
     setMsg("更新失败:" + e, true);
+    // 后端只在 promise 里报错、没有 failed 事件:这里自己落 phase,
+    // 角标才有机会从"下载 x%"变成"重试"(bug 报告 #5)
+    UPDC.phase = "failed";
+    renderUpdChip();
+    if (ovOpen()) overlayUpdState();
   }
-});
+}
+
+$("btnUpdGo").addEventListener("click", startInstall);
 $("btnUpdSkip").addEventListener("click", () => {
   if (!UPD.info) return;
   const v = UPD.info.version;
   invoke("skip_update_version", { version: v }).catch(() => {});
+  // 版本信息只有 UPD.info 一处,清它 + 清 phase,角标/卡片/覆盖层一起消失
   UPD.info = null;
+  UPDC.phase = null;
+  renderUpdChip();
+  closeUpdOverlay();
   hideCard();
   setMsg("已跳过 " + v + ",下次发布新版本再提醒");
 });
@@ -1630,12 +1725,14 @@ async function refresh() {
       activeIntervalSec: 60, idleIntervalSec: 300, backoffIntervalSec: 900,
       warnPercent: 40, critPercent: 15, notify: true, autostart: false,
       collapseOnBlur: false, form: "panel", sort: "percent", pillChannels: [],
+      fontScale: "md",
       claimChannels: {
         "4sapi": { enabled: true, amount: 200, minIntervalDays: 14, manualLastAt: null, manualSetAt: null },
       },
     };
   }
   applyConfigToUI();
+  applyFontScale();
   // 置顶以真实窗口状态为准(Rust 启动时按配置应用),避免按钮与实际不一致
   try {
     const real = await appWindow.isAlwaysOnTop();

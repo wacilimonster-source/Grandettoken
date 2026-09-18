@@ -65,6 +65,9 @@ pub struct Config {
     pub form: String,
     /// percent | balance | dayUsage
     pub sort: String,
+    /// 字号档位:md(标准) | lg(大) | xl(特大)。倍率映射在前端(FS_U),
+    /// 这里只存档位本身 —— 老配置缺字段时 serde default 兜成 md,行为不变。
+    pub font_scale: String,
     /// 胶囊形态固定显示哪些渠道(按顺序轮播);空 = 自动显示最紧张的一个
     pub pill_channels: Vec<String>,
     /// 申请制额度规则:渠道 id -> 规则
@@ -97,6 +100,7 @@ impl Default for Config {
             always_on_top: true,
             form: "panel".into(),
             sort: "percent".into(),
+            font_scale: "md".into(),
             pill_channels: Vec::new(),
             claim_channels: HashMap::from([(
                 "4sapi".to_string(),
@@ -139,6 +143,8 @@ mod tests {
         let c: Config = serde_json::from_str(old).unwrap();
         assert!(c.pill_channels.is_empty());
         assert_eq!(c.form, "compact");
+        // 老配置同样没有 fontScale:必须兜成「标准」,不能报错也不能变空串
+        assert_eq!(c.font_scale, "md");
     }
 
     #[test]
