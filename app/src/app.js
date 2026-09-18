@@ -58,18 +58,39 @@ function relTime(ts) {
 }
 
 /**
- * 配额型渠道的主窗口:固定看「本月」(订阅按自然月结),窗口缺失时退到最后一个。
- * 大数字与状态色都按它走 —— 5 小时 / 本周的波动不该左右整行的观感。
+ * 配额型渠道的主窗口:固定看「周期」窗(实测锚定开通日,旧称「本月」),
+ * 窗口缺失时退到最后一个。大数字与状态色都按它走 —— 5 小时 / 本周的波动不该左右整行的观感。
  */
 function mainWindow(c) {
   const wins = c.windows || [];
   if (!wins.length) return null;
-  return wins.find((w) => w.label === "本月") || wins[wins.length - 1];
+  return wins.find((w) => w.label === "周期") || wins[wins.length - 1];
+}
+
+/** ISO 8601(UTC)的 resetsAt → 毫秒;缺失/异常一律 null,绝不猜。 */
+function resetMs(w) {
+  if (!w || !w.resetsAt) return null;
+  const t = Date.parse(w.resetsAt);
+  return Number.isNaN(t) ? null : t;
+}
+
+/** 倒计时档位化:<1 小时用分钟,<24 小时用小时,更长按「天+小时」;short 用于窄列。 */
+function fmtReset(ms, short) {
+  if (ms === null) return short ? "—" : "重置时间未知";
+  const left = ms - Date.now();
+  if (left <= 0) return "正在重置";
+  const m = Math.round(left / 60000);
+  if (m < 60) return short ? m + " 分" : m + " 分钟后重置";
+  const h = left / 3600e3;
+  if (h < 24) return short ? h.toFixed(1) + " 小时" : h.toFixed(1) + " 小时后重置";
+  const d = Math.floor(h / 24), rh = Math.round(h % 24);
+  if (rh === 24) return short ? d + 1 + " 天" : d + 1 + " 天后重置";
+  return short ? d + " 天 " + rh + " 小时" : d + " 天 " + rh + " 小时后重置";
 }
 
 /**
  * 主展示比例 —— 状态色、排序、胶囊都按它算。
- * 配额型:本月窗剩余;金额型:剩余/分母(申请制用单次额度,其他用接口给的
+ * 配额型:周期窗剩余;金额型:剩余/分母(申请制用单次额度,其他用接口给的
  * 总额 —— 累计发放只增不减,拿它当分母会越算越低,没有决策价值)。
  * 充值型无 total 时返回 null,不画进度条也不参与百分比排序。
  */
@@ -238,8 +259,8 @@ function renderRow(c, i) {
   const pct = r === null ? null : Math.round(r * 100);
   const isPct = c.kind === "percent";
   const isPts = c.kind === "points";
-  // 配额型(OpenCode Go):大数字固定取「本月」窗的剩余(订阅按自然月结),
-  // 下面三行各带一条迷你条把 5 小时 / 本周 / 本月都摊开
+  // 配额型(OpenCode Go):大数字固定取「周期」窗的剩余(实测锚定开通日,旧称「本月」),
+  // 下面三行各带一条迷你条把 5 小时 / 本周 / 周期都摊开,右侧附重置倒计时
   const wins = isPct && c.windows && c.windows.length ? c.windows : [];
   const mw = wins.length ? mainWindow(c) : null;
 
@@ -286,10 +307,23 @@ function renderRow(c, i) {
   let subVal;
   if (noKey) subVal = c.authSource === "app" ? "需打开应用" : "待配置";
   else if (failed) subVal = c.stale ? "上次快照" : "失联";
-  else if (mw) subVal = `${mw.label}窗`;
+  else if (mw) subVal = `${mw.label}窗 · ${fmtReset(resetMs(mw), true)}`;
   else if (isPts) subVal = soon ? `最近 ${fmtDay(soon.at)} 到期` : "无近期到期";
   else if (pct !== null) subVal = `剩 ${pct}%`;
   else subVal = "";
+
+  // 组合预警(裁决②):周期余量低于标红线 **且** 距重置 >3 天才提示 ——
+  // 重置就在眼前的低余量不值得喊,避免天天狼来了
+  let winWarn = "";
+  if (isPct && mw && !failed) {
+    const ms = resetMs(mw);
+    const rem = Math.max(0, Math.min(100, mw.remainPercent));
+    if (ms !== null && rem < CFG.critPercent && ms - Date.now() > 3 * 86400e3) {
+      winWarn = `<div class="win-warn">周期余量仅 ${rem.toFixed(1)}%,距重置还有 ${Math.round(
+        (ms - Date.now()) / 86400e3
+      )} 天 —— 省着用或等重置</div>`;
+    }
+  }
 
   // 状态点
   let dot = "";
@@ -327,10 +361,15 @@ function renderRow(c, i) {
         const wr = Math.max(0, Math.min(100, w.remainPercent));
         const lim = w.status === "rate-limited";
         const wt = lim ? "bad" : wr < CFG.critPercent ? "bad" : wr < CFG.warnPercent ? "warn" : "ok";
+        const ms = resetMs(w);
+        // 倒计时是中性信息用次级色;唯一例外:限流中且 1 小时内重置 → 绿色「马上恢复」
+        const soon = lim && ms !== null && ms - Date.now() < 3600e3;
+        const cd = soon ? '<span class="wt ok">马上恢复</span>' : `<span class="wt">${fmtReset(ms, true)}</span>`;
         return `<div class="win">
           <span class="wl">${w.label}</span>
           <i class="wb"><i style="width:${wr}%;background:${TONE_HEX[wt]}"></i></i>
           <b class="wv" style="color:${lim ? "var(--bad)" : TONE_COLOR[wt]}">${wr.toFixed(1)}%</b>
+          ${cd}
         </div>`;
       })
       .join("")}</div>`;
@@ -380,6 +419,7 @@ function renderRow(c, i) {
       ${bar}
       ${useHtml}
       ${claimWarn}
+      ${winWarn}
     </div>
     <div class="rbody" data-body="${c.id}"></div>
   </div>`;
@@ -494,6 +534,19 @@ function renderDetail(c) {
         ""
       )}</div>`;
 
+  // 配额型:逐窗明细(剩余% + 相对倒计时 + 本地绝对时间)
+  const winKv =
+    c.kind === "percent" && (c.windows || []).length
+      ? `<div class="kv">${c.windows
+          .map((w) => {
+            const ms = resetMs(w);
+            const rem = Math.max(0, Math.min(100, w.remainPercent));
+            const abs = ms === null ? "重置时间未知" : `${fmtReset(ms, false)} · ${new Date(ms).toLocaleString("zh-CN", { hour12: false })}`;
+            return `<div><span>${esc(w.label)}窗 · 剩 ${rem.toFixed(1)}%</span><b>${abs}</b></div>`;
+          })
+          .join("")}</div>`
+      : "";
+
   const body = [];
   body.push(
     `<div class="seg">
@@ -513,6 +566,7 @@ function renderDetail(c) {
     );
   }
   body.push(kvHtml);
+  body.push(winKv);
   body.push(expHtml);
   body.push(sparkHtml);
   if (c.estimated && c.kind === "amount") {
@@ -674,6 +728,11 @@ function renderPillFace() {
   else if (c.remaining === null) bits.push("取数失败");
   else {
     if (r !== null) bits.push(`剩 ${Math.round(r * 100)}%`);
+    if (c.kind === "percent") {
+      const mw2 = mainWindow(c);
+      const ms2 = resetMs(mw2);
+      if (ms2 !== null) bits.push(`${mw2.label}窗 ${fmtReset(ms2, false)}`);
+    }
     if (c.kind === "points" && c.expiringSoon) {
       bits.push(`近 30 天过期 ${points(c.expiringSoon.amount)} 分`);
     }

@@ -131,6 +131,10 @@ body.form-compact .ico.logo>img{width:88%;height:88%}
   transition:width .5s cubic-bezier(.3,1,.4,1)}
 .win .wv{flex:none;width:calc(46px*var(--u));text-align:right;font-size:max(11.5px,calc(11.5px*var(--u)));font-weight:500;
   font-variant-numeric:tabular-nums}
+/* 重置倒计时:中性次级色(重置快是好事,不参与红黄告警语义) */
+.win .wt{flex:none;width:calc(62px*var(--u));text-align:right;color:var(--tx2);
+  font-size:max(11px,calc(11px*var(--u)));font-variant-numeric:tabular-nums;white-space:nowrap}
+.win .wt.ok{color:var(--ok)}
 
 .use{display:flex;margin-top:calc(7px*var(--u))}
 .use div{flex:1;font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);border-left:1px solid #2a3040;padding-left:calc(7px*var(--u))}
@@ -319,8 +323,9 @@ body.view-manage #lkKeys{display:none}
 .btn:disabled{opacity:.45;cursor:default;pointer-events:auto}
 .btn:disabled:hover{filter:none}
 
-/* 撑不到下次申请的提示(列表行内) */
-.claim-warn{font-size:max(11.5px,calc(11px*var(--u)));color:var(--warn);margin-top:calc(6px*var(--u));line-height:1.6}
+/* 撑不到下次申请 / 周期余量告急的提示(列表行内) */
+.claim-warn,.win-warn{font-size:max(11.5px,calc(11px*var(--u)));color:var(--warn);margin-top:calc(6px*var(--u));line-height:1.6}
+.win-warn{color:var(--bad)}
 .nm .s .cy{color:var(--ac)}
 .nm .s .ct{color:var(--tx3)}
 

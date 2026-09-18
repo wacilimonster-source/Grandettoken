@@ -201,7 +201,8 @@ pub fn extract_opencode_go(body: &Value) -> FetchResult {
     let windows: Vec<Window> = [
         win("rolling", "5 小时"),
         win("weekly", "本周"),
-        win("monthly", "本月"),
+        // 实测 resetsAt 锚定开通日(如 10-13)而非日历月,叫「周期」才准确
+        win("monthly", "周期"),
     ]
     .into_iter()
     .flatten()
