@@ -104,6 +104,7 @@ body{
 .nm{min-width:0;flex:1}
 .nm .n{font-size:calc(13px*var(--u));font-weight:500;white-space:nowrap;overflow:hidden;
   text-overflow:ellipsis;display:flex;align-items:center;gap:calc(5px*var(--u))}
+.nm .nsh{display:none} /* 紧凑条 L0 才亮出缩写名,面板里用全名 */
 .nm .s{font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);margin-top:calc(1px*var(--u));white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
 .val{text-align:right;flex:none;font-variant-numeric:tabular-nums}
@@ -384,15 +385,22 @@ body.form-compact .nm .s,
 body.form-compact .val .p{display:none}
 body.form-compact .ico{width:calc(16px*var(--u));height:calc(16px*var(--u));font-size:calc(8px*var(--u));border-radius:calc(4px*var(--u))}
 body.form-compact .nm{flex:none;min-width:0}
-/* chip 里不放渠道名(图标已经带缩写),只留状态点 + 数值,和设计稿一致 */
+/* 三级降级(裁决 A/B/A):默认 L0=缩写名+精确数;最宽的 chip 先起依次降级 ——
+   .lv1 去名字(全名本来就不进紧凑条)、.lv2 再去小数位/「分」字,还装不下才收 +N */
 body.form-compact .nm .nn{display:none}
+body.form-compact .nm .nsh{display:inline;font-size:max(10.5px,calc(10.5px*var(--u)));color:var(--tx2);margin-right:calc(4px*var(--u))}
+body.form-compact .row.lv1 .nsh,body.form-compact .row.lv2 .nsh{display:none}
 body.form-compact .nm .n{gap:0}
 body.form-compact .nm .n .dot{width:calc(5px*var(--u));height:calc(5px*var(--u))}
 body.form-compact .val .v{font-size:calc(12px*var(--u));font-weight:500}
-/* 金额型舍掉小数位,百分比型的 % 要留着;积分型的"分"字也一并省略,位置太窄 */
-body.form-compact .val .v .dec{display:none}
+/* 百分号是语义不是精度,L2 也保留;小数位与「分」字到 L2 才舍 */
 body.form-compact .val .v .pct{font-size:inherit}
-body.form-compact .val .v .unit{display:none}
+body.form-compact .row.lv2 .val .v .dec{display:none}
+body.form-compact .row.lv2 .val .v .unit{display:none}
+/* 空态:紧凑条放不下大引导卡,收成一条最小 chip,窗口跟着贴过去 */
+body.form-compact .list .empty{display:none}
+body.form-compact .cempty{flex:none;background:var(--bg3);border-radius:calc(6px*var(--u));
+  padding:calc(3px*var(--u)) calc(7px*var(--u));font-size:max(11.5px,calc(11.5px*var(--u)));color:var(--tx3);white-space:nowrap}
 /* 放不下的渠道收进 +N 徽标 */
 body.form-compact .more{flex:none;font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);padding:calc(3px*var(--u)) 2px;
   font-variant-numeric:tabular-nums}

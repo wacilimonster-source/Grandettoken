@@ -415,7 +415,7 @@ function renderRow(c, i) {
       <div class="r1">
         ${iconHtml(c, "ico", noKey || failed)}
         <div class="nm">
-          <div class="n"><span class="nn">${esc(c.name)}</span>${dot}${wmark}</div>
+          <div class="n"><span class="nn">${esc(c.name)}</span><span class="nsh">${esc(c.short)}</span>${dot}${wmark}</div>
           <div class="s">${sub}</div>
         </div>
         <div class="val">
@@ -658,30 +658,97 @@ function render() {
   refreshChCards();
 }
 
-/** 紧凑条:按重要度排在前面,尾部放不下的收进 "+N" 徽标(设计稿的截断规则)。 */
+// 紧凑条实测宽度(已是当前字号档的最终逻辑像素),fitCompact 维护、formSize 取用
+let compactW = 380;
+
+/**
+ * 紧凑条:宽度贴合内容(上限 380×字号倍率)+ 三级信息降级(裁决 A/B/A)。
+ * L0 缩写名+精确数 → 装不下就从最宽的 chip 起去名字(L1)→ 仍超就舍小数位(L2)
+ * → 还超才把尾部渠道收进 "+N"。chip 都是 flex:none,offsetWidth 即自然宽,
+ * 窗口当前多宽都不影响测量;量完交给 setCompactW 重钳。
+ */
 function fitCompact() {
   const list = $("list");
   const rows = [...list.querySelectorAll(".row")];
-  const badge = list.querySelector(".more");
-  // 先整体还原:切回面板时必须把紧凑条里藏掉的行放出来
-  rows.forEach((r) => (r.style.display = ""));
-  if (badge) badge.remove();
-  if (!document.body.classList.contains("form-compact") || !rows.length) return;
+  // 先整体还原:切回面板时必须把紧凑条里藏掉的行和降级类放出来
+  rows.forEach((r) => {
+    r.style.display = "";
+    r.classList.remove("lv1", "lv2");
+  });
+  list.querySelectorAll(".more,.cempty").forEach((el) => el.remove());
+  if (!document.body.classList.contains("form-compact")) return;
+  if (DOCK.on) return; // 吸附期间窗口几何归吸附逻辑管,量了也是 0
 
-  const more = document.createElement("div");
-  more.className = "more";
-  list.appendChild(more);
+  const u = fsU();
+  const maxW = Math.round(380 * u);
+  const gap = 10 * u;
+  // 列表左右留白(11+4) + 右侧按钮组 + 窗口两条竖边框
+  const chrome = Math.round(15 * u) + $("cctl").offsetWidth + 2;
+  const moreW = Math.round(28 * u);
+
+  if (!rows.length) {
+    // 空态(没配置 / 全隐藏):一条最小 chip 贴到内容宽,不再空荡 380
+    const ce = document.createElement("div");
+    ce.className = "cempty";
+    ce.textContent = $("fstat").textContent || "暂无渠道";
+    list.appendChild(ce);
+    setCompactW(Math.min(maxW, Math.ceil(ce.offsetWidth + gap + chrome)));
+    return;
+  }
+
+  // 三档各量一遍(读 offsetWidth 会强制回流,6 行 × 3 趟完全够快)
+  const wAt = (lv) => {
+    rows.forEach((r) => {
+      r.classList.remove("lv1", "lv2");
+      if (lv) r.classList.add("lv" + lv);
+    });
+    return rows.map((r) => r.offsetWidth);
+  };
+  const W = [wAt(0), wAt(1), wAt(2)];
+  rows.forEach((r) => r.classList.remove("lv1", "lv2"));
+
+  const lv = rows.map(() => 0);
   let hidden = 0;
-  for (let i = rows.length - 1; i >= 0 && list.scrollWidth > list.clientWidth; i--) {
-    rows[i].style.display = "none";
-    hidden += 1;
-    more.textContent = "+" + hidden;
-  }
+  const total = () => {
+    const n = rows.length - hidden;
+    let s = chrome + (n > 1 ? gap * (n - 1) : 0) + (hidden ? moreW : 0);
+    for (let i = 0; i < n; i++) s += W[lv[i]][i];
+    return s;
+  };
+  const strip = (from, to) => {
+    while (total() > maxW) {
+      let bi = -1, bw = 0;
+      for (let i = 0; i < rows.length - hidden; i++)
+        if (lv[i] === from && W[from][i] > bw) { bw = W[from][i]; bi = i; }
+      if (bi < 0) break;
+      lv[bi] = to;
+    }
+  };
+  strip(0, 1); // ① 去名字,从最宽的起
+  strip(1, 2); // ② 舍小数,从最宽的起
+  while (rows.length - hidden > 1 && total() > maxW) hidden++; // ③ 尾部收 +N
+
+  const n = rows.length - hidden;
+  rows.forEach((r, i) => {
+    r.classList.toggle("lv1", lv[i] === 1);
+    r.classList.toggle("lv2", lv[i] === 2);
+    r.style.display = i < n ? "" : "none";
+  });
   if (hidden) {
+    const more = document.createElement("div");
+    more.className = "more";
+    more.textContent = "+" + hidden;
     more.title = hidden + " 个渠道放不下,展开面板查看";
-  } else {
-    more.remove();
+    list.appendChild(more);
   }
+  setCompactW(Math.min(maxW, Math.ceil(total())));
+}
+
+/** 重钳紧凑条窗口宽:变化 <6px 不动窗口(与胶囊同款防抖,数值抖动不牵窗)。 */
+function setCompactW(w) {
+  if (!w || Math.abs(w - compactW) < 6) return;
+  compactW = w;
+  if (currentForm() === "compact") applyForm("compact", false); // 已排在几何队列里
 }
 
 // 胶囊显示哪些渠道:设置里选中的按顺序轮播;一个都没选就自动取最紧张的那个
@@ -788,7 +855,7 @@ function fitPill() {
   // 圆点 6 + 图标 26 + 间距 8×3 + 展开按钮 22 + 内边距 16 ≈ 102
   // (方案 A:缩写文字换成官方图标,固定开销里去掉文字位、加上图标位)
   const u = fsU();
-  const w = Math.max(Math.round(132 * u), Math.min(Math.round(240 * u), Math.ceil(textW) + Math.round(102 * u)));
+  const w = Math.max(Math.round(104 * u), Math.min(Math.round(240 * u), Math.ceil(textW) + Math.round(102 * u)));
   if (Math.abs(w - pillW) >= 6) {
     pillW = w;
     if (currentForm() === "pill") applyForm("pill", false);
@@ -1011,11 +1078,11 @@ const SIZES = {
 };
 let pillW = 200; // 胶囊实测宽度(已是当前档位的最终逻辑像素),fitPill 维护
 
-/** 当前字号档位下某形态的窗口尺寸。 */
+/** 当前字号档位下某形态的窗口尺寸。胶囊/紧凑条是实测贴合宽,面板固定基准×倍率。 */
 function formSize(form) {
   const u = fsU();
   const base = SIZES[form] || SIZES.panel;
-  const w = form === "pill" ? pillW : Math.round(base[0] * u);
+  const w = form === "pill" ? pillW : form === "compact" ? compactW : Math.round(base[0] * u);
   return [w, Math.round(base[1] * u)];
 }
 
