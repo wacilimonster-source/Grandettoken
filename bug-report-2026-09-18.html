@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Grandettoken Bug 扫描报告 · 2026-09-18</title>
+<style>
+  :root{
+    --bg:#0e1117; --panel:#161b24; --panel2:#1c2230; --line:#2a3245;
+    --tx:#dfe5f1; --tx2:#9aa5bc; --tx3:#6b7690;
+    --hi:#f0554d; --mid:#f0b23c; --low:#5b8cff; --ok:#3ecf8e;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);
+    font:14px/1.65 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:36px 22px 80px}
+  h1{font-size:24px;margin:0 0 6px}
+  .meta{color:var(--tx3);font-size:12.5px;margin-bottom:26px}
+  .stats{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0 30px}
+  .stat{flex:1;min-width:150px;background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;padding:14px 16px}
+  .stat b{display:block;font-size:26px;line-height:1.2}
+  .stat span{color:var(--tx3);font-size:12px}
+  .hi b{color:var(--hi)} .mid b{color:var(--mid)} .low b{color:var(--low)} .ok b{color:var(--ok)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:20px 22px;margin-bottom:22px}
+  .card h2{font-size:16.5px;margin:0 0 4px;display:flex;align-items:center;gap:10px}
+  .tag{font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;flex:none;letter-spacing:1px}
+  .t-hi{background:rgba(240,85,77,.15);color:var(--hi);border:1px solid rgba(240,85,77,.4)}
+  .t-mid{background:rgba(240,178,60,.13);color:var(--mid);border:1px solid rgba(240,178,60,.35)}
+  .t-low{background:rgba(91,140,255,.13);color:#86a6ff;border:1px solid rgba(91,140,255,.35)}
+  .loc{color:var(--tx3);font-size:12.5px;margin:2px 0 12px}
+  .loc code{color:var(--tx2)}
+  code{font:12.5px/1.5 Consolas,"Cascadia Mono",monospace;background:var(--panel2);
+    padding:1px 5px;border-radius:4px;color:#cdd6e8}
+  pre{background:#0b0e14;border:1px solid var(--line);border-radius:8px;
+    padding:12px 14px;overflow-x:auto;font:12px/1.6 Consolas,"Cascadia Mono",monospace;
+    color:#c9d4ea;margin:10px 0}
+  pre .del{color:#ff8a80} pre .add{color:#7ee2a8} pre .cm{color:#5d6b86}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:12px 0 4px}
+  @media(max-width:760px){.cols{grid-template-columns:1fr}}
+  .col{background:var(--panel2);border-radius:9px;padding:12px 14px;border:1px solid var(--line)}
+  .col h3{font-size:12.5px;margin:0 0 8px;letter-spacing:1px}
+  .col.bad h3{color:var(--hi)} .col.good h3{color:var(--ok)}
+  .col p{margin:0 0 8px;color:var(--tx2);font-size:13px}
+  .col p:last-child{margin-bottom:0}
+  .why{color:var(--tx2);font-size:13px;margin:6px 0 2px}
+  .fix{margin-top:10px;padding-top:10px;border-top:1px dashed var(--line);font-size:13px;color:var(--tx2)}
+  .fix b{color:var(--tx)}
+  .toc{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 22px;margin-bottom:30px}
+  .toc ol{margin:8px 0 0;padding-left:22px}
+  .toc li{margin:4px 0;font-size:13px}
+  .toc a{color:var(--tx2);text-decoration:none} .toc a:hover{color:var(--tx)}
+  .foot{color:var(--tx3);font-size:12px;margin-top:36px;border-top:1px solid var(--line);padding-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Grandettoken 全量 Bug 扫描报告</h1>
+<div class="meta">
+  扫描日期 2026-09-18 · 范围:app/core(Rust 逻辑层 4 模块)、app/src-tauri(Tauri 外壳)、
+  app/src(前端 app.js / index.html / styles.css)、根目录遗留 providers.js、build 脚本 ·
+  方法:逐文件人工审读 + 与上次报告(2026-09-17)已修复项去重
+</div>
+
+<div class="stats">
+  <div class="stat hi"><b>3</b><span>高危 · 应用冻死 / 核心提示错乱</span></div>
+  <div class="stat mid"><b>4</b><span>中危 · 更新流程 / 贴边态破坏</span></div>
+  <div class="stat low"><b>3</b><span>低危 · 数字口径 / 一致性</span></div>
+  <div class="stat ok"><b>≈5,600</b><span>审读代码行数</span></div>
+</div>
+
+<div class="toc">
+  <b style="font-size:13.5px">目录</b>
+  <ol>
+    <li><a href="#b1">[高] 命令间锁序相反,存在 AB-BA 死锁 → 整个应用冻死</a></li>
+    <li><a href="#b2">[高] 取数失败时凭据来源显示成「未检测到登录信息」,提示语拼出病句、引导方向反了</a></li>
+    <li><a href="#b3">[高] 「跳过此版本」后标题栏角标不清除,且角标里的按钮永久失灵</a></li>
+    <li><a href="#b4">[中] 更新覆盖层不反映下载进度,下载中可重复触发第二次下载安装</a></li>
+    <li><a href="#b5">[中] 下载失败后角标卡死在「下载 x%」—— failed 事件后端从不发、前端分支是死代码</a></li>
+    <li><a href="#b6">[中] 吸附(dock)期间任何 applyForm 会抹掉 docked 状态并强改窗口尺寸</a></li>
+    <li><a href="#b7">[中] 根目录遗留 providers.js 仍带已修复的 <code>||</code> 业务失败 bug,可能被当参考实现再抄回去</a></li>
+    <li><a href="#b8">[低] consumption_since 把窗口开始前的消耗混进「今日/本周消耗」(基线最多越界 24h)</a></li>
+    <li><a href="#b9">[低] 底栏「预警」状态点用红色,与行内约定(预警=黄)矛盾</a></li>
+    <li><a href="#b10">[低] emit("config-changed") 无人监听,死代码</a></li>
+  </ol>
+</div>
+
+<div class="card" id="fixes">
+  <h2>修复与复测(2026-09-18,全部 10 项已修复)</h2>
+  <table style="width:100%;border-collapse:collapse;font-size:13px">
+    <tr style="color:var(--tx3);text-align:left">
+      <th style="padding:6px 8px;border-bottom:1px solid var(--line)">#</th>
+      <th style="padding:6px 8px;border-bottom:1px solid var(--line)">修复位置</th>
+      <th style="padding:6px 8px;border-bottom:1px solid var(--line)">方式</th>
+      <th style="padding:6px 8px;border-bottom:1px solid var(--line)">复测</th>
+    </tr>
+    <tr><td style="padding:5px 8px;border-bottom:1px solid var(--line)">1</td><td style="padding:5px 8px;border-bottom:1px solid var(--line)"><code>src-tauri/src/lib.rs</code></td><td style="padding:5px 8px;border-bottom:1px solid var(--line)">统一锁序 store→config(set_pin 调序),新增 <code>lock_rw</code> 毒化恢复助手替换全部 <code>lock().unwrap()</code></td><td style="padding:5px 8px;border-bottom:1px solid var(--line)">✅ src-tauri cargo check(MSVC)通过</td></tr>
+    <tr><td style="padding:5px 8px;border-bottom:1px solid var(--line)">2</td><td style="padding:5px 8px;border-bottom:1px solid var(--line)"><code>core/src/fetch.rs</code></td><td style="padding:5px 8px;border-bottom:1px solid var(--line)">凭据循环记录 <code>last_cred</code>,失败/降级路径改传 <code>chosen.or(last_cred)</code>,来源说明不再退化为「未检测到」</td><td style="padding:5px 8px;border-bottom:1px solid var(--line)">✅ core cargo test 42/42 通过</td></tr>
+    <tr><td style="padding:5px 8px;border-bottom:1px solid var(--line)">3</td><td style="padding:5px 8px;border-bottom:1px solid var(--line)"><code>app/src/app.js</code></td><td style="padding:5px 8px;border-bottom:1px solid var(--line)">删除 <code>UPDC.info</code> 副本,版本信息单一来源 <code>UPD.info</code>;跳过时同时清 phase 并重画角标/覆盖层</td><td style="padding:5px 8px;border-bottom:1px solid var(--line)">✅ node --check 通过;全库 UPDC.info 引用清零</td></tr>
+    <tr><td style="padding:5px 8px;border-bottom:1px solid var(--line)">4</td><td style="padding:5px 8px;border-bottom:1px solid var(--line)"><code>app/src/app.js</code> + <code>styles.css</code></td><td style="padding:5px 8px;border-bottom:1px solid var(--line)"><code>startInstall</code> 防重入守卫;<code>paintUpdBars</code> 同时喂管理卡与覆盖层两条进度条;覆盖层 busy 时按钮禁用(<code>.btn:disabled</code>)</td><td style="padding:5px 8px;border-bottom:1px solid var(--line)">✅ node --check 通过;防重入+双进度载体就位</td></tr>
+    <tr><td style="padding:5px 8px;border-bottom:1px solid var(--line)">5</td><td style="padding:5px 8px;border-bottom:1px solid var(--line)"><code>app/src/app.js</code></td><td style="padding:5px 8px;border-bottom:1px solid var(--line)">安装 reject 时置 <code>phase="failed"</code> 激活角标「重试」;覆盖层按钮文案变「重试更新」并给出续传提示</td><td style="padding:5px 8px;border-bottom:1px solid var(--line)">✅ reject 路径置 failed 并重画角标(静态确认)</td></tr>
+    <tr><td style="padding:5px 8px;border-bottom:1px solid var(--line)">6</td><td style="padding:5px 8px;border-bottom:1px solid var(--line)"><code>app/src/app.js</code></td><td style="padding:5px 8px;border-bottom:1px solid var(--line)">applyForm 改 <code>classList</code> 操作保留 docked/dock-left;吸附期间不触碰窗口几何(展开态走 <code>dockLayout</code> 重量)</td><td style="padding:5px 8px;border-bottom:1px solid var(--line)">✅ applyForm 不再覆写 className(静态确认)</td></tr>
+    <tr><td style="padding:5px 8px;border-bottom:1px solid var(--line)">7</td><td style="padding:5px 8px;border-bottom:1px solid var(--line)"><code>providers.js</code></td><td style="padding:5px 8px;border-bottom:1px solid var(--line)"><code>||</code> 修正为与 Rust 同语义的「显式 false 即失败」,文件头加 SUPERSEDED 警示(原型页引用该文件,故修不删)</td><td style="padding:5px 8px;border-bottom:1px solid var(--line)">✅ node --check 通过;语义与 Rust extract_4sapi 对齐</td></tr>
+    <tr><td style="padding:5px 8px;border-bottom:1px solid var(--line)">8</td><td style="padding:5px 8px;border-bottom:1px solid var(--line)"><code>core/src/store.rs</code></td><td style="padding:5px 8px;border-bottom:1px solid var(--line)">跨窗口起点的基线对按时间线性折算,<code>from_ts</code> 之前的下降不再计入;新增 3 断言回归测试 <code>baseline_pair_is_prorated_to_window_start</code></td><td style="padding:5px 8px;border-bottom:1px solid var(--line)">✅ 新回归测试 3 断言全过</td></tr>
+    <tr><td style="padding:5px 8px;border-bottom:1px solid var(--line)">9</td><td style="padding:5px 8px;border-bottom:1px solid var(--line)"><code>app/src/app.js</code></td><td style="padding:5px 8px;border-bottom:1px solid var(--line)">底栏 warn 点改 <code>" w"</code>(黄),与行内约定一致</td><td style="padding:5px 8px;border-bottom:1px solid var(--line)">✅ 一行改动,静态确认</td></tr>
+    <tr><td style="padding:5px 8px;border-bottom:1px solid var(--line)">10</td><td style="padding:5px 8px;border-bottom:1px solid var(--line)"><code>app/src/app.js</code></td><td style="padding:5px 8px;border-bottom:1px solid var(--line)">删除 <code>emit</code> 定义与 <code>config-changed</code> 发送,配置写入收敛为 <code>set_config</code> 单通道</td><td style="padding:5px 8px;border-bottom:1px solid var(--line)">✅ grep 无 emit 残留</td></tr>
+  </table>
+  <p style="color:var(--tx3);font-size:12px;margin-top:10px"><b style="color:var(--ok)">复测结果(2026-09-18)全绿:</b>core <code>cargo test</code> 42/42 通过(MSVC 工具链,含新增 <code>baseline_pair_is_prorated_to_window_start</code>);<code>app/src-tauri</code> <code>cargo check</code> 无错误无警告;<code>node --check</code> 通过(app.js 与 providers.js);<code>grep</code> 确认 <code>UPDC.info</code>/<code>emit(</code> 无残留引用。#1 的并发交错、#2 的真实 token 过期、#4/#5 的下载中断属于运行时行为,静态审查与单测已覆盖逻辑,建议下次发版冒烟时按各卡片「验证方法」在真机过一遍。</p>
+</div>
+
+<!-- ═══════════════ B1 ═══════════════ -->
+<div class="card" id="b1">
+  <h2><span class="tag t-hi">高危 #1</span>命令间锁序相反:check_update / skip_update_version 与 set_pin 构成 AB-BA 死锁</h2>
+  <div class="loc">app/src-tauri/src/lib.rs:157-164(set_pin) · lib.rs:293-300(check_update) · lib.rs:387-392(skip_update_version)</div>
+  <p class="why">两个命令以相反顺序拿同一对互斥锁(<code>store</code> / <code>config</code>):</p>
+<pre><span class="cm">// set_pin:先 config,后 store</span>
+let mut cfg = state.config.lock()...;   <span class="cm">// 持有 config</span>
+let store = state.store.lock()...;      <span class="cm">// 再等 store   → A→B</span>
+
+<span class="cm">// check_update:先 store,后 config(且持锁跨越 await 之前的 save)</span>
+let store = state.store.lock();
+if let Ok(s) = store {
+    let mut cfg = state.config.lock().unwrap();  <span class="cm">// 持有 store 再等 config → B→A</span>
+    ...
+}</pre>
+  <div class="cols">
+    <div class="col bad">
+      <h3>异常表现(修复前)</h3>
+      <p>启动 30 秒后的自动更新检查(或手动「跳过此版本」)恰好与用户点「置顶」/设置页置顶开关并发时:两个命令各持一把锁互相等待,<b>永久死锁</b>。</p>
+      <p>连锁后果:store 被死锁方永久占用 → 后台 <code>poll_loop</code> 下一轮在 <code>store.lock().unwrap()</code> 上卡死,所有依赖取数的命令(get_channels / set_pin / get_series)全部挂起 —— <b>挂件界面不再刷新、按钮无响应,只能杀进程</b>。窗口置顶停在半途,出现「按钮亮了其实没置顶」。</p>
+    </div>
+    <div class="col good">
+      <h3>修复后的正确效果</h3>
+      <p>更新检查与置顶操作任意交错都各自完成:置顶即时生效并落库,更新检查正常返回/静默,轮询不中断。</p>
+    </div>
+  </div>
+  <div class="fix"><b>修复建议:</b> 统一全局锁序为「store → config」或「先取齐再释放」。最小改法是让 set_pin 对齐 check_update 的顺序:<pre style="margin:6px 0 0"><span class="del">- let mut cfg = state.config.lock()...;
+- let store = state.store.lock()...;</span>
+<span class="add">+ let store = state.store.lock()...;
++ let mut cfg = state.config.lock()...;</span></pre>更稳妥的做法是给 AppState 加一个 <code>fn with_saved_config(f)</code>,内部固定按 store→config 拿锁并保存,消灭手写顺序的机会。另建议把 <code>lock().unwrap()</code> 换成 <code>lock().map_err</code>,避免毒化 panic 把后台任务静默杀死。</div>
+</div>
+
+<!-- ═══════════════ B2 ═══════════════ -->
+<div class="card" id="b2">
+  <h2><span class="tag t-hi">高危 #2</span>取数失败时没把「实际用过的凭据」传给视图:登录态明明在,却报「未检测到登录信息」</h2>
+  <div class="loc">app/core/src/fetch.rs:622-637(chosen 只在成功时赋值) · fetch.rs:651-659(两条失败路径都传 None) · fetch.rs:400-415(auth_label 的 None 分支) → 前端 app.js:469-476、app.js:1100-1103</div>
+  <p class="why"><code>fetch_all</code> 里 <code>chosen</code> 只在取数成功那一刻赋值;失败降级(用缓存快照)和失败无缓存两条路径都把 <code>chosen=None</code> 传给 <code>build_view</code>,于是 <code>auth_label(def, None)</code> 走「未检测到」分支 —— 哪怕凭据找到了、token 只是过期。</p>
+  <div class="cols">
+    <div class="col bad">
+      <h3>异常表现(修复前)</h3>
+      <p>Trae token 过期是最常见状态(设计上不刷新)。此时:</p>
+      <p>① 行内错误提示说「登录状态已失效 · 打开一次 Trae 即可」,详情区却拼出病句:<br><i>「凭据来自本机已登录的 <b>未检测到 Trae 登录信息</b> · 只读复用…」</i> —— 两处互相打架;</p>
+      <p>② 管理页密钥行显示「凭据来自本机已登录的 未检测到 WorkBuddy 登录信息」,用户被引导去「登录」,而真正该做的只是「打开一次客户端续期」;</p>
+      <p>③ stale 快照路径同样中招:上次明明读到过 <code>storage.json</code>,失败后来源说明直接丢。</p>
+    </div>
+    <div class="col good">
+      <h3>修复后的正确效果</h3>
+      <p>只要凭据被读到过,失败时来源照常显示「Trae · TRAE SOLO CN」/「WorkBuddy · workbuddy-desktop.info」,与错误文案「打开一次 X 即可」一致;真正没找到凭据时才报「未检测到」。</p>
+    </div>
+  </div>
+  <div class="fix"><b>修复建议:</b> 在凭据循环里同时记录「最后一次实际尝试用的凭据」,失败路径传它:<pre style="margin:6px 0 0"><span class="add">+ let mut last_cred = None;
+  for cred in creds.iter() {
++     last_cred = Some(cred.clone());
+      ...
+  }
+  // 两条 pending.push 把 chosen 换成 `chosen.or(last_cred)`</span></pre>验证:临时改坏 storage.json 里的 token(或在无网环境),展开 Trae 行,详情第一句应含凭据文件名而不是「未检测到」。</div>
+</div>
+
+<!-- ═══════════════ B3 ═══════════════ -->
+<div class="card" id="b3">
+  <h2><span class="tag t-hi">高危 #3</span>「跳过此版本」只清了 UPD.info,没清 UPDC → 标题栏角标常驻、点开后按钮全失灵</h2>
+  <div class="loc">app/src/app.js:1592-1599(btnUpdSkip) · 对照 app.js:1454-1464(renderUpdChip 读 UPDC) · app.js:1584-1585(btnUpdGo 因 UPD.info=null 直接 return)</div>
+  <p class="why">更新信息存了两份:<code>UPD.info</code>(卡片流程用)与 <code>UPDC.info/phase</code>(角标 + 覆盖层用)。跳过时只重置了前者,并调 <code>hideCard()</code>;后者的 <code>phase === "ready"</code> 仍在,<code>renderUpdChip()</code> 压根没被调,角标「新版本 x.x.x」继续挂着。</p>
+  <div class="cols">
+    <div class="col bad">
+      <h3>异常表现(修复前)</h3>
+      <p>用户点「跳过此版本」→ 卡片消失,但标题栏角标「新版本 0.1.6」永远不消失(直到下次真检查到新版本);</p>
+      <p>角标还能点,弹出更新覆盖层(用残留的 UPDC.info),里面「立即更新」点了<b>毫无反应</b>—— <code>btnUpdGo</code> 里 <code>if (!UPD.info) return</code> 把它静默吞了;「跳过此版本」按钮同样失灵。</p>
+      <p>这正是该项目最忌讳的观感:「看起来像应用坏了」(同类问题在 0.1.5 修过一次检查失败清提示,这次是残留分支)。</p>
+    </div>
+    <div class="col good">
+      <h3>修复后的正确效果</h3>
+      <p>跳过 → 角标立即消失、覆盖层关闭;后续版本检查尊重 skipped_version;出现<b>另一个</b>更高版本时角标才再出现,且所有按钮可用。</p>
+    </div>
+  </div>
+  <div class="fix"><b>修复建议:</b> btnUpdSkip 里一并重置:<pre style="margin:6px 0 0"><span class="add">+ UPDC.info = null; UPDC.phase = null; renderUpdChip(); closeUpdOverlay();</span></pre>顺带把 UPD/UPDC 两份状态合并成一个来源,杜绝再次漏清(根因就是同一数据两处存放)。</div>
+</div>
+
+<!-- ═══════════════ B4 ═══════════════ -->
+<div class="card" id="b4">
+  <h2><span class="tag t-mid">中危 #4</span>更新覆盖层不反映下载进度;下载中再点「立即更新」会并发第二次下载</h2>
+  <div class="loc">app/src/app.js:1466-1474(openUpdOverlay 恒隐藏 ovBar) · app.js:1547-1577(onUpdProgress 只更新管理页的 updBar/updPct,从不写 ovBarI/ovPct) · app.js:1480、1584-1591(ovGo→btnUpdGo.click() 无 phase 守卫)</div>
+  <p class="why">进度事件有两个 UI 载体:管理页卡片(<code>#updBar</code>)和覆盖层(<code>#ovBar</code>)。<code>onUpdProgress</code> 只喂了前者;覆盖层的进度条、百分比元素从未被写入,且打开时不看 <code>UPDC.phase</code>。</p>
+  <div class="cols">
+    <div class="col bad">
+      <h3>异常表现(修复前)</h3>
+      <p>点角标弹出覆盖层 → 下载进行中再点角标:看到的仍是「立即更新 / 跳过 / 稍后」全套按钮、进度条缺失 —— 点「立即更新」会再次 <code>invoke("install_update")</code>,后端<b>第二次</b> <code>check() + download_and_install</code>,两路下载并发写同一临时文件,轻则浪费带宽、进度跳变,重则签名校验失败更新报废。</p>
+      <p>角标本身显示「下载 43%」,与覆盖层内容互相矛盾。</p>
+    </div>
+    <div class="col good">
+      <h3>修复后的正确效果</h3>
+      <p>phase=downloading 时打开覆盖层:进度条按 received/total 实时走、按钮禁用并显示「下载中…」;下载完成前无法重复触发。</p>
+    </div>
+  </div>
+  <div class="fix"><b>修复建议:</b> ① <code>onUpdProgress</code> 里同步更新 <code>ovBar/ovBarI/ovPct</code>;② <code>openUpdOverlay</code> 按 <code>UPDC.phase</code> 决定按钮态;③ <code>btnUpdGo</code> 开头加 <code>if (UPDC.phase === "downloading" || UPDC.phase === "installing") return;</code>。</div>
+</div>
+
+<!-- ═══════════════ B5 ═══════════════ -->
+<div class="card" id="b5">
+  <h2><span class="tag t-mid">中危 #5</span>下载失败后角标卡死「下载 x%」—— failed 事件协议后端从未实现,前端分支是死代码</h2>
+  <div class="loc">app/src-tauri/src/lib.rs:363-380(download_and_install 失败只 return Err,不 emit phase:"failed") · app/src/app.js:1555-1557(唯一消费 failed 的分支永远不会执行) · app.js:1586-1590(catch 只 setMsg,不改 UPDC.phase)</div>
+  <div class="cols">
+    <div class="col bad">
+      <h3>异常表现(修复前)</h3>
+      <p>下载到 43% 断网 → <code>install_update</code> reject → 管理页(若开着)出现一行「更新失败:…」,但标题栏角标<b>永久停在「下载 43%」</b> —— phase 从未被改写,「重试」这个设计好的入口从未出现过。用户只能等下次重启。</p>
+    </div>
+    <div class="col good">
+      <h3>修复后的正确效果</h3>
+      <p>失败 → 角标变「重试」,点击弹覆盖层可再次发起;重试成功后进度正常推进。</p>
+    </div>
+  </div>
+  <div class="fix"><b>修复建议:</b> 前端 catch 里补 <code>UPDC.phase = "failed"; renderUpdChip();</code>即可激活现有死分支(或后端在 map_err 前 emit,二选一,别两头都改)。</div>
+</div>
+
+<!-- ═══════════════ B6 ═══════════════ -->
+<div class="card" id="b6">
+  <h2><span class="tag t-mid">中危 #6</span>吸附状态下任何 applyForm:className 整体覆写丢掉 docked/dock-left,还把 8px 竖条强拉回形态尺寸</h2>
+  <div class="loc">app/src/app.js:873-874(<code>document.body.className = "form-" + form + …</code> 覆写) · app.js:879-888(setSize/min/max 无条件执行) · 触发路径:app.js:701-705(fitPill 在轮询 render 中触发) 、app.js:1603-1612(Esc 键)</div>
+  <p class="why">styles.css 注释(376-380 行)专门强调过 docked 规则的同级优先级坑,但 applyForm 用「整体赋值 className」绕过了所有防御 —— 赋值那一刻 <code>docked</code>、<code>dock-left</code> 双双丢失,窗口同时被钳回 SIZES[form]。</p>
+  <div class="cols">
+    <div class="col bad">
+      <h3>异常表现(修复前)</h3>
+      <p>胶囊形态吸附在屏幕右缘(8px 竖条)。轮询到数据、数值文本宽度变化 ≥6px 时 <code>fitPill → applyForm("pill", false)</code>:竖条瞬间按面板布局撑开(内容挤爆/溢出屏幕),CSS 侧 dock-body 被隐藏、pill-body 显示,而 <code>DOCK.on</code> 仍为 true —— 状态机与 DOM 脱节,鼠标移入展开/移出收回逻辑全部错乱,只能拖离边缘重新解除。吸附期间按 Esc 同理弹回面板。</p>
+    </div>
+    <div class="col good">
+      <h3>修复后的正确效果</h3>
+      <p>吸附期间 fitPill / Esc 不打断竖条形态:applyForm 用 <code>classList</code> 只替换 form-* 类、保留 dock 类;吸附中跳过窗口尺寸钳制,或先把 DOCK 状态一并清理再切形态。数值抖动不再让挂件「爆炸」。</p>
+    </div>
+  </div>
+  <div class="fix"><b>修复建议:</b> <code>document.body.classList.remove("form-panel","form-compact","form-pill"); classList.add("form-"+form);</code> 并在 <code>DOCK.on</code> 时让 applyForm 只改类不改尺寸(或先 <code>dockExit</code>)。</div>
+</div>
+
+<!-- ═══════════════ B7 ═══════════════ -->
+<div class="card" id="b7">
+  <h2><span class="tag t-mid">中危 #7</span>根目录遗留 providers.js 仍写着当年那个「恒为 true」的业务失败判断</h2>
+  <div class="loc">providers.js:81 · 对照 app/core/src/providers.rs:134-141(已修复并写了回归测试 four_s_api_business_failure_is_invalid)</div>
+<pre><span class="cm">// providers.js(遗留 JS 原型,未删)</span>
+<span class="del">isValid: response?.code === true || response?.is_active !== false,</span>  <span class="cm">// 正常响应没有 is_active → 右侧恒真 → code:false 被吞</span>
+<span class="cm">// providers.rs(现在的正确实现)</span>
+<span class="add">let valid = code_ok &amp;&amp; active_ok;   // 任一显式 false 即业务失败</span></pre>
+  <div class="cols">
+    <div class="col bad">
+      <h3>异常表现(潜在)</h3>
+      <p>该文件不参与运行(前端不用它、Rust 不依赖它),但它是仓库里唯一「可读的 extractor 参考」。0.1.5 修掉的正是它埋的雷:4SAPI 返回 <code>code:false</code>(业务失败/额度停用)会被判有效,失败值被当成真实余额渲染 —— 与项目第一原则「失败不降级成 0 / 不假成功」直接冲突。将来按它加新渠道、或按它重写 JS 工具时,bug 会原样复发。</p>
+    </div>
+    <div class="col good">
+      <h3>修复后的正确效果</h3>
+      <p>仓库里只有一份权威口径(Rust),或遗留文件顶部标注 SUPERSEDED + 同步修正 <code>&amp;&amp;</code>,参考实现不再携带已知错误。</p>
+    </div>
+  </div>
+  <div class="fix"><b>修复建议:</b> 删除 providers.js(历史设计稿已在 DESIGN.md / 旧报告留痕),或至少改成 <code>&amp;&amp;</code> 并加一行「本文件已过时,权威实现见 app/core/src/providers.rs」。</div>
+</div>
+
+<!-- ═══════════════ B8 ═══════════════ -->
+<div class="card" id="b8">
+  <h2><span class="tag t-low">低危 #8</span>consumption_since 的基线可越界窗口起点 24 小时,「今日消耗」会把昨晚的花销算进今天</h2>
+  <div class="loc">app/core/src/store.rs:96-131(SQL <code>ts &gt;= ?2 - 86400</code>;循环 124-128 对「基线→窗口首行」整段差值直接计入)</div>
+  <p class="why">允许基线早于窗口起点最多一天,但跨起点的相邻差值不拆分、不 clamp:23:50 的快照 100 元 → 00:10 的快照 80 元,这 20 元几乎全花在昨天,却整笔计入「今日消耗」。</p>
+  <div class="cols">
+    <div class="col bad">
+      <h3>异常表现(修复前)</h3>
+      <p>隔夜挂机 / 夜间批量任务后,清晨打开挂件:「今日消耗」虚高(最多带上前一整天),周/月同向偏差小一些。汇总区注释写着「推算」,但用户按今日预算决策时会误判。</p>
+    </div>
+    <div class="col good">
+      <h3>修复后的正确效果</h3>
+      <p>窗口首行只计入 <code>from_ts</code> 之后的那一段(按时间线性拆分,或保守地取「窗口首行 vs 基线中较晚的低者」),今日消耗不再背昨晚的账。</p>
+    </div>
+  </div>
+  <div class="fix"><b>修复建议:</b> 对跨起点的那一对快照,把基线余额按时间比例折算到 <code>from_ts</code> 再求差;同时加一条断言「窗口内无快照时结果 == 0 而非越界值」的单测。</div>
+</div>
+
+<!-- ═══════════════ B9 ═══════════════ -->
+<div class="card" id="b9">
+  <h2><span class="tag t-low">低危 #9</span>底栏状态点:有「预警」时亮红,行内同样的预警却是黄 —— 同一语义两种颜色</h2>
+  <div class="loc">app/src/app.js:570-571(<code>warn ? " b"</code> → .dot.b 红色) · 对照 renderRow 点逻辑 app.js:288-293(warn → " w" 黄)</div>
+  <div class="cols">
+    <div class="col bad">
+      <h3>异常表现(修复前)</h3>
+      <p>一个渠道剩 30%(warn 档,行内黄点),底栏绿条上却是红点 + 「1 正常 · 1 预警」—— 用户被红点诱导去点开一个其实不紧急的渠道;而「失联」(更严重)底栏反而用灰点,颜色梯度整体倒挂。</p>
+    </div>
+    <div class="col good">
+      <h3>修复后的正确效果</h3>
+      <p>底栏 warn → " w"(黄),bad/失联 → " o" 或红,与行内约定一致,一眼能分轻重。</p>
+    </div>
+  </div>
+  <div class="fix"><b>修复建议:</b> <code>"dot" + (bad ? " o" : warn ? " w" : …)</code>,并把行的 dot 与底栏 dot 的映射收敛成同一个 <code>dotClass(state)</code> 函数。</div>
+</div>
+
+<!-- ═══════════════ B10 ═══════════════ -->
+<div class="card" id="b10">
+  <h2><span class="tag t-low">低危 #10</span><code>emit("config-changed", CFG)</code> 发向一个不存在的事件接收方</h2>
+  <div class="loc">app/src/app.js:14(emit 定义) · app.js:1383(bindSelect 里唯一调用点) · app/src-tauri/src/lib.rs 全文无 <code>listen("config-changed")</code></div>
+  <div class="cols">
+    <div class="col bad">
+      <h3>异常表现(修复前)</h3>
+      <p>无可见故障,但制造了「后端会响应配置事件」的错觉:后来者可能在这里等一个永远不会到的订阅,或误删同时可用的 <code>set_config</code> 路径。每个下拉变更都白跑一次跨进程事件。</p>
+    </div>
+    <div class="col good">
+      <h3>修复后的正确效果</h3>
+      <p>配置写入只有 <code>invoke("set_config")</code> 一条通道;轮询循环每轮现读库配置(代码注释 fetch.rs:675 也明说了「配置从库里读,不等轮询换内存态」),两条通道只会打架,删掉反而更贴合既有设计。</p>
+    </div>
+  </div>
+  <div class="fix"><b>修复建议:</b> 删除 app.js:14 与 app.js:1383(顺带 <code>const listen</code> 仍被正常使用,保留)。</div>
+</div>
+
+<!-- ═══════════════ 结论 ═══════════════ -->
+<div class="card">
+  <h2>结论与处理记录</h2>
+  <p style="color:var(--tx2);font-size:13.5px">
+    10 项已全部修复并复测通过(见上方「修复与复测」表)。合入建议按此顺序读 diff:<br>
+    ① <b>#1(死锁)</b>:统一锁序 store→config + <code>lock_rw</code> 毒化恢复,一次改完;<br>
+    ② <b>#2</b> 与前端详情/管理页文案联动,建议一起回归 Trae/WorkBuddy 过期场景;<br>
+    ③ <b>#3/#4/#5</b> 已合并为一次更新 UI 重构:UPD/UPDC 单一信息源、覆盖层按 phase 渲染、失败落「重试」;<br>
+    ④ <b>#6</b> applyForm 改 classList 并让吸附期间几何归 dockLayout 管;<br>
+    ⑤ <b>#7</b> 原型页仍引用 providers.js,故采取「修正 + SUPERSEDED 警示」而非删除;#8~#10 小修。<br>
+    验证说明:本次复测在 MSVC 工具链下完成(core 42/42、shell cargo check 通过、node --check 通过)。
+  </p>
+</div>
+
+<div class="foot">
+  Grandettoken v0.1.5(main @ 4689e6d)· 扫描覆盖:app/core/src/{fetch,providers,appauth,store,config,secrets}.rs、
+  app/src-tauri/src/lib.rs、app/src/{app.js,index.html,styles.css}、providers.js、build/*.js ·
+  上一轮报告见 bug-report-2026-09-17.html(其中所列问题均已在 0.1.5 修复,本报告不含重复项)
+</div>
+
+</div>
+</body>
+</html>
