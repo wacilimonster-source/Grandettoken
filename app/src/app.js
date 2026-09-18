@@ -428,6 +428,7 @@ function renderRow(c, i) {
       ${useHtml}
       ${claimWarn}
       ${winWarn}
+      <span class="sweep"></span>
     </div>
     <div class="rbody" data-body="${c.id}"></div>
   </div>`;
@@ -588,7 +589,46 @@ function renderDetail(c) {
   return `<div class="rbody-in">${body.join("")}</div>`;
 }
 
-function render() {
+/**
+ * 数值翻页(动效 A/E 共用):el 的内容必须已是新值 ——
+ * 新值从下方 9px 淡入进入,旧值以幽灵层上移淡出,320ms 一次。
+ * host 提供 position:relative 与字体上下文(幽灵复制 el 的 class 吃同款样式)。
+ */
+function rollValue(el, oldText, host) {
+  if (!el || oldText == null || oldText === el.textContent) return;
+  el.classList.remove("roll-in");
+  void el.offsetWidth; // 同名 class 重挂必须先回流才能重播动画
+  el.classList.add("roll-in");
+  setTimeout(() => el.classList.remove("roll-in"), 360);
+  if (!oldText || !host) return;
+  const g = document.createElement("span");
+  g.className = el.className + " roll-ghost";
+  g.textContent = oldText;
+  g.style.left = el.offsetLeft + "px";
+  g.style.top = el.offsetTop + "px";
+  host.appendChild(g);
+  setTimeout(() => g.remove(), 380);
+}
+
+/** 动效 I:面板入场(行自上而下 30ms 节奏淡入)。只在「进入面板形态/从托盘唤出/启动首帧」放。 */
+function playEntrance() {
+  const l = $("list");
+  if (!l) return;
+  l.classList.remove("st-in");
+  void l.offsetWidth; // 同名 class 重挂必须先回流才能重播动画
+  l.classList.add("st-in");
+  setTimeout(() => l.classList.remove("st-in"), 700);
+}
+
+function render(opts) {
+  // updated=true 只由「数据刷新」调用方传(settings 变更等重渲染不放动效)
+  const updated = !!(opts && opts.updated);
+  // 动效 A/B:重建 DOM 前先把每行大数字的旧文本存下来,替换后对比才知道谁变了
+  const prevV = {};
+  document.querySelectorAll("#list .row").forEach((r) => {
+    const v = r.querySelector(".val .v");
+    if (v) prevV[r.dataset.id] = v.textContent;
+  });
   const sorted = sortChannels(CHANNELS);
   // 标题栏挤了 6 个按钮,计数用短写法,完整说法放 tooltip
   // 标题栏改文字按钮后不再放计数(放不下),底栏已有「N 正常 · M 预警」;
@@ -650,6 +690,27 @@ function render() {
   $("fstat").textContent = !withKey.length
     ? (hiddenN ? "渠道已全部隐藏" : "未配置渠道")
     : `${withKey.length - bad} 正常${warn ? ` · ${warn} 预警` : ""}${bad ? ` · ${bad} 失联` : ""}${hiddenN ? ` · ${hiddenN} 隐藏` : ""}`;
+
+  // 动效 A/B:数据刷新后,值真的变了的行 → 大数字翻页进入 + 一道微光;
+  // 值没变的行一动不动 —— 这是「刷新完成」的视觉回执,不是装饰
+  if (updated && currentForm() === "panel") {
+    let n = 0;
+    document.querySelectorAll("#list .row").forEach((r) => {
+      const id = r.dataset.id;
+      const v = r.querySelector(".val .v");
+      if (!v || !(id in prevV) || prevV[id] === v.textContent) return;
+      rollValue(v, prevV[id], v.closest(".val"));
+      const sw = r.querySelector(".sweep");
+      if (sw) {
+        const d = n++ * 60;
+        setTimeout(() => {
+          sw.classList.remove("go");
+          void sw.offsetWidth; // 重启动画要先强制一次回流
+          sw.classList.add("go");
+        }, d);
+      }
+    });
+  }
 
   renderPill(sorted);
   renderDock();
@@ -773,10 +834,32 @@ function renderPill(sorted) {
   renderPillFace();
 }
 
+let LAST_PILL = { id: null, text: "" };
+/** 胶囊翻页(动效 E):轮播换渠道/换数值时 200ms 纵向翻页 + 图标淡入;只在胶囊形态放 */
+function pillAnim(newId, lastText, lastId) {
+  const pv = $("pillV");
+  const text = pv.textContent;
+  if (currentForm() === "pill") {
+    if (lastText && text !== lastText) rollValue(pv, lastText, $("pill"));
+    if (lastId !== newId) {
+      const p = $("pillIco").querySelector(".pico");
+      if (p) {
+        p.classList.remove("ico-in");
+        void p.offsetWidth;
+        p.classList.add("ico-in");
+      }
+    }
+  }
+  LAST_PILL = { id: newId, text };
+}
+
 function renderPillFace() {
   const dot = $("pillDot");
   const icoBox = $("pillIco");
   const c = PILL.list[PILL.idx];
+  // 此刻 #pillV 里还是上一次的文本 —— 先存旧值才能做翻页对比
+  const lastText = $("pillV").textContent;
+  const lastId = LAST_PILL.id;
 
   if (!c) {
     const withKey = PILL.sorted.filter((x) => x.hasKey && !x.hidden);
@@ -785,6 +868,7 @@ function renderPillFace() {
     icoBox.innerHTML = "";
     $("pillV").textContent = withKey.length ? "取数失败" : "未配置";
     $("pill").title = withKey.length ? "渠道全部取数失败,点开面板看原因" : "尚未配置密钥";
+    pillAnim(null, lastText, lastId);
     return;
   }
 
@@ -826,6 +910,7 @@ function renderPillFace() {
 
   fitPill();
   drawTrayIcon();
+  pillAnim(c.id, lastText, lastId);
 }
 
 /**
@@ -1098,6 +1183,8 @@ function formSize(form) {
 
 async function applyFormInner(form, remember = true) {
   if (!SIZES[form]) form = "panel"; // 白名单:老配置里的 form 可能是个已废弃的名字
+  const prevForm = currentForm();
+  const changed = prevForm !== form;
   // 切换到折叠形态时管理页没有意义(它的入口都在面板上),顺手关掉
   if (form !== "panel" && manageOpen()) closeManage();
   // 只换 form-* 与 view-manage 类,**保留 docked / dock-left** ——
@@ -1105,6 +1192,15 @@ async function applyFormInner(form, remember = true) {
   document.body.classList.remove("form-panel", "form-compact", "form-pill");
   document.body.classList.add("form-" + form);
   document.body.classList.toggle("view-manage", manageOpen());
+  // 动效 D1:形态真的换了才给新内容一次淡入上浮(轮询重钳宽度的 applyForm 不重播)
+  // 动效 I:切到面板时,行自上而下错峰入场
+  if (changed) {
+    document.body.classList.remove("xf-in");
+    void document.body.offsetWidth;
+    document.body.classList.add("xf-in");
+    setTimeout(() => document.body.classList.remove("xf-in"), 260);
+    if (form === "panel") playEntrance();
+  }
   // 面板里行要能点开,所以禁用拖拽;紧凑条整条可拖(里面没有需要点击的东西)
   const list = $("list");
   if (list) list.setAttribute("data-tauri-drag-region", form === "compact" ? "deep" : "false");
@@ -1668,6 +1764,8 @@ bindSwitch("cfgAutostart", "autostart", (on) => invoke("set_autostart", { enable
 bindSwitch("cfgAutoUpdate", "autoCheckUpdate");
 // 托盘余额数字:切换后强制重画(绕过 trayKey 缓存)
 bindSwitch("cfgTrayNum", "trayShowNumber", () => { trayKey = ""; drawTrayIcon(); });
+// 告急呼吸(动效 G):全应用唯一循环动画,默认关;开关只拨 body.pulse 这个总闸
+bindSwitch("cfgPulse", "alertPulse", (on) => document.body.classList.toggle("pulse", !!on));
 // 置顶走 set_pin:窗口与配置一起改,失败时 bindSwitch 会回滚开关
 // 吸附开关:关掉时如果正吸附着,立刻解除
 bindSwitch("cfgDock", "dockEnabled", async (on) => {
@@ -1723,6 +1821,8 @@ function applyConfigToUI() {
   $("cfgAutostart").classList.toggle("on", !!CFG.autostart);
   $("cfgAutoUpdate").classList.toggle("on", CFG.autoCheckUpdate !== false);
   $("cfgTrayNum").classList.toggle("on", CFG.trayShowNumber !== false);
+  $("cfgPulse").classList.toggle("on", !!CFG.alertPulse);
+  document.body.classList.toggle("pulse", !!CFG.alertPulse);
   renderAbout();
 }
 
@@ -1965,7 +2065,7 @@ async function refresh() {
   try {
     const list = await invoke("get_channels");
     CHANNELS = list;
-    render();
+    render({ updated: true });
   } catch (e) {
     $("list").innerHTML = `<div class="empty"><b>取数失败</b>${esc(e)}</div>`;
   }
@@ -1997,10 +2097,19 @@ async function refresh() {
   // 紧凑条 / 胶囊。CFG.form 仍会记录用户的选择,只是不再用于启动恢复。
   await applyForm("panel", false);
   await refresh();
+  playEntrance(); // 启动首帧也来一次入场(上面 applyForm 没换形态,不会自动放)
 
   listen("channels-updated", (ev) => {
     CHANNELS = ev.payload;
-    render();
+    render({ updated: true });
+  });
+
+  // 从托盘/热键唤回窗口:面板形态重放入场一次(隐藏期间的 render 不放,回来才看得见)
+  window.addEventListener("focus", () => {
+    if (!document.hidden && currentForm() === "panel") playEntrance();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && currentForm() === "panel") playEntrance();
   });
 
   // 启动 30 秒后先自动检查一次;之后每 10 分钟再问一次 —— 是否真发请求由

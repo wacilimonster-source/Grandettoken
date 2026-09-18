@@ -86,6 +86,9 @@ pub struct Config {
     /// 托盘图标直接画余额概览数(74 / 1.2k / 82,底色=状态色)。
     /// 默认开 —— 扫一眼托盘就是它的主要用途;关掉回到品牌角点样式。
     pub tray_show_number: bool,
+    /// 红色告急的状态点做 2s 一次的红晕呼吸 —— 全产品唯一允许的自我循环动画,
+    /// 挂件 7×24 常开,循环即噪点,所以**默认关**,由设置里显式打开。
+    pub alert_pulse: bool,
     /// 上次检查更新的 unix 秒。自动检查的节流依据(24 小时一次),
     /// 检查失败也写它 —— 不让网络故障变成重试风暴。
     pub last_check_at: Option<i64>,
@@ -117,6 +120,7 @@ impl Default for Config {
             dock_enabled: false,
             auto_check_update: true,
             tray_show_number: true,
+            alert_pulse: false,
             last_check_at: None,
             skipped_version: None,
         }
@@ -155,6 +159,8 @@ mod tests {
         assert_eq!(c.font_scale, "md");
         // 老配置没有 hiddenChannels:默认全部显示
         assert!(c.hidden_channels.is_empty());
+        // 老配置没有 alertPulse:呼吸动画默认关
+        assert!(!c.alert_pulse);
     }
 
     #[test]

@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Grandettoken · 动效设计稿(高级而克制)</title>
+<style>
+  :root{
+    --bg:#0e1117; --bg2:#161b24; --bg3:#20242e; --line:#2f3648; --line2:#3c445c;
+    --tx:#edf0f6; --tx2:#b6bfce; --tx3:#8d97ab;
+    --ok:#4ade9d; --warn:#f7c355; --bad:#ff6b63; --ac:#7fa2ff;
+    /* 动效令牌:短、准、收得住 */
+    --t1:120ms; --t2:200ms; --t3:320ms;
+    --ease:cubic-bezier(.2,.8,.2,1); /* 快起慢停,无回弹 */
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.7 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:36px 22px 90px}
+  h1{font-size:22px;margin:0 0 6px}
+  .sub{color:var(--tx3);font-size:13px;margin-bottom:22px}
+  h2{font-size:16px;margin:36px 0 10px;padding-left:10px;border-left:3px solid var(--ac)}
+  .cap{font-size:11.5px;color:var(--tx3);margin:8px 0 10px}
+  .card{background:var(--bg2);border:1px solid #2a3245;border-radius:12px;padding:16px 18px;margin:10px 0;max-width:940px}
+  .card ul{margin:6px 0;padding-left:20px;color:#b6bfce}.card li{margin:5px 0}.card b{color:var(--tx)}
+  code{font:12px Consolas,monospace;background:#1c2230;border:1px solid #2a3245;padding:1px 5px;border-radius:4px;color:#cdd6e8}
+  .num{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:6px;background:rgba(127,162,255,.18);color:#a8c0ff;font-size:12px;font-weight:700;margin-right:8px}
+  .demo{background:linear-gradient(160deg,#2b3350,#1b2436 55%,#243040);border-radius:14px;padding:22px 18px;max-width:940px;margin:8px 0 4px}
+  .btn{border:1px solid var(--line2);background:var(--bg3);color:var(--tx2);border-radius:7px;padding:5px 12px;font:12.5px inherit;font-family:inherit;cursor:pointer;transition:background var(--t1) ease,color var(--t1) ease,transform var(--t1) ease}
+  .btn:hover{background:#272d3a;color:var(--tx)}
+  .btn:active{transform:scale(.96)}
+  .btn.p{background:var(--ac);border-color:var(--ac);color:#fff}
+  .btn.p:hover{filter:brightness(1.1)}
+  .rowbtns{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  table{border-collapse:collapse;width:100%;max-width:940px;font-size:13px}
+  th,td{padding:7px 10px;border-bottom:1px solid #2a3245;text-align:left}
+  th{color:var(--tx3);font-size:12px;background:#1c2230}
+  .ico{width:28px;height:28px;border-radius:8px;flex:none;display:grid;place-items:center;font-size:11px;font-weight:700;color:#fff}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);display:inline-block;flex:none}
+  .dot.w{background:var(--warn)}.dot.b{background:var(--bad)}
+
+  /* ── A 数值滚动(核心动效)── */
+  .valbox{display:inline-flex;flex-direction:column;height:26px;overflow:hidden;position:relative;width:96px}
+  .valbox span{display:block;height:26px;line-height:26px;font-size:20px;font-weight:600;font-variant-numeric:tabular-nums;transition:transform var(--t3) var(--ease)}
+  .valwrap .vb-lb{font-size:11px;color:var(--tx3)}
+  .valwrap{display:inline-block;margin:0 18px 0 0}
+
+  /* ── B 刷新微光 ── */
+  .prow{display:flex;align-items:center;gap:10px;background:var(--bg3);border-radius:8px;padding:8px 10px;margin:8px 0;position:relative;overflow:hidden;transition:background var(--t1) ease}
+  .prow:hover{background:#272d3a}
+  .prow .nm{font-size:13px;font-weight:500}
+  .prow .v{margin-left:auto;font-size:15px;font-weight:600;font-variant-numeric:tabular-nums}
+  .prow .bar{position:absolute;left:0;bottom:0;height:2px;width:100%;background:#171b24}
+  .prow .bar i{display:block;height:100%;background:var(--warn);transition:width 600ms var(--ease)}
+  .sweep{position:absolute;inset:0;pointer-events:none;transform:translateX(-100%);
+  background:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.07) 50%,transparent 70%)}
+  .sweep.go{animation:sweep 560ms var(--ease) 1}
+  @keyframes sweep{to{transform:translateX(100%)}}
+
+  /* ── C 展开/收起 ── */
+  .erow{background:var(--bg3);border-radius:8px;margin:8px 0;overflow:hidden}
+  .erow .head{display:flex;align-items:center;gap:10px;padding:9px 10px;cursor:pointer;user-select:none}
+  .erow .caret{margin-left:auto;color:var(--tx3);font-size:10px;transition:transform var(--t2) var(--ease)}
+  .erow.open .caret{transform:rotate(90deg)}
+  .ebody{display:grid;grid-template-rows:0fr;transition:grid-template-rows var(--t3) var(--ease)}
+  .erow.open .ebody{grid-template-rows:1fr}
+  .ebody>div{overflow:hidden}
+  .ebody .in{padding:2px 10px 10px;color:var(--tx2);font-size:12.5px}
+
+  /* ── D 形态切换 ── */
+  .win{border:1px solid var(--line2);border-radius:12px;background:#12141a;overflow:hidden;position:relative}
+  .win .stage{transition:opacity var(--t2) ease,transform var(--t2) var(--ease)}
+  .win .stage.hide{opacity:0;transform:scale(.985)}
+  .morph{transition:width var(--t3) var(--ease),height var(--t3) var(--ease)}
+  .chip{display:inline-flex;align-items:center;gap:5px;background:var(--bg3);border-radius:6px;padding:3px 7px;font-size:12px}
+  .pillx{display:inline-flex;align-items:center;gap:8px;height:46px;border-radius:999px;background:#12141af2;border:1px solid var(--line2);padding:0 8px 0 10px;font-weight:600;font-variant-numeric:tabular-nums}
+
+  /* ── E 胶囊轮播 ── */
+  .rot{height:26px;overflow:hidden;position:relative;width:88px;display:inline-block;vertical-align:bottom}
+  .rot .lay{position:absolute;inset:0;display:grid;place-items:center end;font-size:15px;font-weight:600;font-variant-numeric:tabular-nums;transition:transform var(--t2) var(--ease),opacity var(--t2) ease}
+  .rot .lay.out-up{transform:translateY(-100%);opacity:0}
+  .rot .lay.in-dn{transform:translateY(100%);opacity:0}
+
+  /* ── F 页签 ── */
+  .tabs{position:relative;display:flex;gap:2px;border-bottom:1px solid var(--line)}
+  .tabs button{border:0;background:transparent;color:var(--tx3);font:13px inherit;font-family:inherit;padding:8px 14px;cursor:pointer;transition:color var(--t1) ease}
+  .tabs button.on{color:var(--tx)}
+  .tind{position:absolute;bottom:-1px;height:2px;width:0;background:var(--ac);border-radius:2px;transition:transform var(--t2) var(--ease),width var(--t2) var(--ease)}
+  .tpanel{padding:12px 4px;color:var(--tx2);font-size:13px;animation:fadeup var(--t2) var(--ease)}
+
+  /* ── G 呼吸 ── */
+  @keyframes breathe{0%,100%{box-shadow:0 0 0 0 rgba(255,107,99,.45)}55%{box-shadow:0 0 0 5px rgba(255,107,99,0)}}
+  .dot.breathe{animation:breathe 2s ease-in-out infinite}
+
+  /* ── I 入场 ── */
+  @keyframes fadeup{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .stag>*{opacity:0}
+  .stag.go>*{animation:fadeup 240ms var(--ease) forwards}
+  .stag.go>*:nth-child(2){animation-delay:30ms}.stag.go>*:nth-child(3){animation-delay:60ms}
+  .stag.go>*:nth-child(4){animation-delay:90ms}.stag.go>*:nth-child(5){animation-delay:120ms}
+
+  .note{font-size:12px;color:var(--tx3);margin-top:8px}
+  .tag{display:inline-block;font-size:10.5px;border:1px solid var(--line2);border-radius:4px;padding:0 6px;color:var(--tx3);margin-left:6px;vertical-align:2px}
+  .tag.core{border-color:rgba(127,162,255,.5);color:#a8c0ff}
+  .tag.loop{border-color:rgba(247,195,85,.5);color:var(--warn)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>动效设计:让数字有呼吸,让状态有来路</h1>
+<div class="sub">2026-09-19 设计稿(未改代码)· 挂件 7×24 常开,动效的第一美德是<b style="color:#edf0f6">安静</b> —— 只在信息真正变化时动一下,其余时间一动不动。</div>
+
+<h2>四条铁律(克制的定义)</h2>
+<div class="card"><ul>
+  <li><b>短</b>:微交互 120ms、状态变化 200ms、入场/展开 320ms 封顶;超过这个时长就开始显得「表演」;</li>
+  <li><b>准</b>:只给「有语义的变化」做动效 —— 数值变了、展开了、轮播了、刷新了;纯装饰性动画一律不做;</li>
+  <li><b>稳</b>:只用 <code>transform / opacity</code> 合成器属性,不动 layout(不引发重排,低端机也满帧);曲线统一 <code>cubic-bezier(.2,.8,.2,1)</code>,快起慢停、<b>永不回弹</b>(回弹=玩具感);</li>
+  <li><b>静</b>:无任何常驻循环动画(唯一候选见 G 项,且默认关);尊重系统「减少动效」开关,开了就全部退化为瞬时切换。</li>
+</ul></div>
+
+<h2>A · 数值滚动 <span class="tag core">核心</span></h2>
+<div class="cap">产品 90% 的信息量在数字上 —— 动效的主角就应该是数字。旧值上移离场、新值从下方进入,320ms 一次,像翻页不像蹦迪。金额变化时另加 400ms 计数滚动(滚动条场景的高档做法,这里二选一,A1 位移更克制)。</div>
+<div class="demo">
+  <div class="rowbtns"><button class="btn p" id="rollBtn">模拟刷新:数值变化</button></div>
+  <div class="valwrap"><div class="vb-lb" style="font-size:11px;color:var(--tx3)">4SAPI</div>
+    <div class="valbox" id="vb1"><span>¥74.20</span><span>¥74.20</span></div></div>
+  <div class="valwrap"><div class="vb-lb" style="font-size:11px;color:var(--tx3)">OpenCode</div>
+    <div class="valbox" id="vb2"><span>82.0%</span><span>82.0%</span></div></div>
+  <div class="valwrap"><div class="vb-lb" style="font-size:11px;color:var(--tx3)">WorkBuddy</div>
+    <div class="valbox" id="vb3"><span>6,075.5</span><span>6,075.5</span></div></div>
+</div>
+
+<h2>B · 刷新微光 <span class="tag core">核心</span></h2>
+<div class="cap">一轮取数完成后,变化的行扫过一道 6% 透明度的白光(560ms,只此一次)。它回答的是「数据是新的吗」这个挂件上最重要的问题 —— 现在只能靠"更新于 x 分钟前"的文字。进度条宽度同时补一条 600ms 缓动(现状是瞬变)。</div>
+<div class="demo">
+  <div class="rowbtns"><button class="btn p" id="sweepBtn">模拟一轮刷新完成</button></div>
+  <div id="sweepRows">
+    <div class="prow"><span class="dot"></span><span class="ico" style="background:#e8622c">4S</span><span class="nm">4SAPI</span><span class="v" style="color:var(--warn)">¥74.20</span><span class="bar"><i style="width:37%"></i></span><span class="sweep"></span></div>
+    <div class="prow"><span class="dot"></span><span class="ico" style="background:#f5a623">OC</span><span class="nm">OpenCode Go</span><span class="v">82.0%</span><span class="bar"><i style="width:82%"></i></span><span class="sweep"></span></div>
+    <div class="prow"><span class="dot w"></span><span class="ico" style="background:#19b8c4">WB</span><span class="nm">WorkBuddy</span><span class="v" style="color:var(--warn)">6,075.5</span><span class="bar"><i style="width:64%"></i></span><span class="sweep"></span></div>
+  </div>
+</div>
+
+<h2>C · 行展开 / 收起 <span class="tag core">核心</span></h2>
+<div class="cap">详情区用 <code>grid-template-rows: 0fr→1fr</code> 做真高度过渡(320ms),箭头同步转 90°。这是现状最生硬的一处:现在是「啪」地整块出现。</div>
+<div class="demo">
+  <div class="erow" id="er1"><div class="head"><span class="dot"></span><span class="ico" style="background:#4d6bfe">DS</span><span class="nm">DeepSeek</span><span class="caret">&#9654;</span></div>
+    <div class="ebody"><div><div class="in">明细:近 24 小时消耗曲线、密钥来源、逐日对账…(展开有内容,收起是常态)</div></div></div></div>
+  <div class="erow open" id="er2"><div class="head"><span class="dot"></span><span class="ico" style="background:#6d5ef8">TR</span><span class="nm">Trae</span><span class="caret">&#9654;</span></div>
+    <div class="ebody"><div><div class="in">点击标题行切换。收起动画比展开快 40%(200ms/320ms)—— 离开要利落。</div></div></div></div>
+</div>
+
+<h2>D · 形态切换(面板 ↔ 紧凑条 ↔ 胶囊)<span class="tag">风险项</span></h2>
+<div class="cap">现状是「啪」地换一帧。两个方案:<b style="color:#edf0f6">D1 内容淡换(推荐)</b>——旧内容 120ms 淡出,新内容 200ms 淡入+1px 上浮,窗口尺寸一步到位,零 IPC 风险;<b style="color:#edf0f6">D2 窗口关键帧</b>——setSize 按缓动曲线跑 ~14 帧让窗口" morph ",观感更贵,但每帧都是 IPC,与几何队列/吸附逻辑冲突面大,低端机可能掉帧。先点 D1,再点 D2 对比。</div>
+<div class="demo">
+  <div class="rowbtns">
+    <button class="btn" id="d1btn">D1 内容淡换</button>
+    <button class="btn" id="d2btn">D2 窗口形变</button>
+    <button class="btn" id="dreset">重置为面板</button>
+  </div>
+  <div class="win" id="dwin" style="width:300px;height:150px">
+    <div class="stage" id="dstage" style="padding:12px">
+      <div style="display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line);padding-bottom:8px"><span class="dot"></span><span style="font-size:12.5px;color:var(--tx2)">Grandettoken</span><span style="margin-left:auto;font-size:11px;color:var(--tx3)">— 面板 —</span></div>
+      <div class="prow" style="margin-top:8px"><span class="dot"></span><span class="ico" style="background:#e8622c;width:20px;height:20px;font-size:9px">4S</span><span class="nm" style="font-size:12px">4SAPI</span><span class="v" style="font-size:13px;color:var(--warn)">¥74.20</span></div>
+      <div class="prow"><span class="dot"></span><span class="ico" style="background:#f5a623;width:20px;height:20px;font-size:9px">OC</span><span class="nm" style="font-size:12px">OpenCode</span><span class="v" style="font-size:13px">82.0%</span></div>
+    </div>
+  </div>
+  <div class="note" id="dnote">点 D1/D2 看两种方案的差别</div>
+</div>
+
+<h2>E · 胶囊轮播 <span class="tag core">核心</span></h2>
+<div class="cap">5 秒换渠道时数值+图标整体做 200ms 纵向翻页(旧的上移淡出、新的从下方进入),替代现在的硬切。窗口宽度变化仍走非对称防抖,轮播本身不动窗口。</div>
+<div class="demo">
+  <div class="rowbtns"><button class="btn p" id="rotBtn">模拟轮播切换</button></div>
+  <div class="pillx"><span class="dot"></span><span class="ico" id="rotIco" style="background:#f5a623;width:26px;height:26px;font-size:10.5px;border-radius:7px">OC</span><span class="rot" id="rotBox"><span class="lay" id="rotA">82.0%</span><span class="lay in-dn" id="rotB">¥256.00</span></span><span style="color:var(--tx3);font-size:11px">▲</span></div>
+</div>
+
+<h2>F · 设置页页签 <span class="tag">低成本</span></h2>
+<div class="cap">下划线指示条从旧页签滑到新页签(200ms,transform+width),内容 200ms 淡入上浮 6px。现状:页签切换零反馈,像是没点上。</div>
+<div class="demo">
+  <div class="tabs" id="tabs"><button class="on">渠道</button><button>显示</button><button>刷新与启动</button><button>关于</button><span class="tind" id="tind"></span></div>
+  <div class="tpanel" id="tpanel">点上面的页签看指示条滑动与内容淡入。</div>
+</div>
+
+<h2>G · 告急呼吸 <span class="tag loop">唯一循环,默认关</span></h2>
+<div class="cap">候选:仅当渠道处于<b>红色告急</b>(余量 &lt; 红线且 >3 天不重置)时,状态点做 2s 一次的红晕呼吸 —— 全产品唯一允许的自我循环。反方观点同样成立:7×24 挂件里任何循环都是噪点,「⚠ 角标 + 颜色」已经足够说话。<b style="color:#edf0f6">所以放这里由你裁决,默认不做。</b></div>
+<div class="demo" style="display:flex;align-items:center;gap:26px">
+  <span style="display:flex;align-items:center;gap:8px"><span class="dot b"></span>静止(现状)</span>
+  <span style="display:flex;align-items:center;gap:8px"><span class="dot b breathe" id="brt"></span>呼吸(候选)</span>
+  <button class="btn" id="brtBtn">暂停/继续</button>
+</div>
+
+<h2>H · 悬停与按压 <span class="tag core">核心(半项)</span></h2>
+<div class="cap">严格说不算"动效",是现状缺口:行 hover 背景 120ms 渐变(现在是硬切),按钮按压 scale(.96)。所有面板类应用的基本礼仪,成本几乎为零。</div>
+
+<h2>I · 面板入场 <span class="tag">低成本</span></h2>
+<div class="cap">仅面板形态:打开时行按 30ms 节奏自上而下淡入上浮(每行 240ms,总长 &lt;400ms)。只在「从托盘唤出/展开面板」时放一次,轮询刷新绝不重放。</div>
+<div class="demo">
+  <div class="rowbtns"><button class="btn p" id="stagBtn">重放入场</button></div>
+  <div class="stag" id="stag">
+    <div class="prow"><span class="dot"></span><span class="ico" style="background:#e8622c">4S</span><span class="nm">4SAPI</span><span class="v" style="color:var(--warn)">¥74.20</span></div>
+    <div class="prow"><span class="dot"></span><span class="ico" style="background:#f5a623">OC</span><span class="nm">OpenCode Go</span><span class="v">82.0%</span></div>
+    <div class="prow"><span class="dot"></span><span class="ico" style="background:#4d6bfe">DS</span><span class="nm">DeepSeek</span><span class="v">¥256.00</span></div>
+    <div class="prow"><span class="dot w"></span><span class="ico" style="background:#6d5ef8">TR</span><span class="nm">Trae</span><span class="v" style="color:var(--warn)">505.28</span></div>
+    <div class="prow"><span class="dot"></span><span class="ico" style="background:#19b8c4">WB</span><span class="nm">WorkBuddy</span><span class="v">6,075.5</span></div>
+  </div>
+</div>
+
+<h2>参数表(实现时落成 CSS 变量)</h2>
+<table>
+  <tr><th>令牌</th><th>值</th><th>用途</th></tr>
+  <tr><td><code>--t1</code></td><td>120ms ease-out</td><td>hover、按压、颜色渐变</td></tr>
+  <tr><td><code>--t2</code></td><td>200ms cubic-bezier(.2,.8,.2,1)</td><td>页签、轮播、箭头、收起</td></tr>
+  <tr><td><code>--t3</code></td><td>320ms cubic-bezier(.2,.8,.2,1)</td><td>展开、数值滚动、入场、D2 形变</td></tr>
+  <tr><td><code>stagger</code></td><td>30ms/行,总长封顶 400ms</td><td>入场节奏</td></tr>
+  <tr><td>降级</td><td><code>@media (prefers-reduced-motion: reduce)</code> 全部时长归零</td><td>系统开了「减少动效」就瞬时切换</td></tr>
+</table>
+
+<h2>成本与风险(诚实清单)</h2>
+<div class="card"><ul>
+  <li>A/B/C/E/F/H/I 全部是<b>纯 CSS/合成器动画</b>,不碰窗口 IPC、不碰几何队列,风险≈0;</li>
+  <li>D2 窗口形变每帧一次 setSize IPC,与吸附/防抖/收尾校验都有交互面,<b>建议二期再议</b>;</li>
+  <li>B 微光与 A 滚动要绑定「值真的变了」的判定(和旧值比较),刷新但数据没变时不放 —— 否则一周后只会剩下烦;</li>
+  <li>托盘图标是位图绘制,不适合动效,明确排除。</li>
+</ul></div>
+
+<h2>待裁决</h2>
+<div class="card">
+  <ul>
+    <li><span class="num">1</span><b>范围</b>:a 核心六件 A+B+C+E+H+I(F 页签顺手做掉,推荐)/ b 只做 A+C+E 三件最保守 / c 全要再加 D2?</li>
+    <li><span class="num">2</span><b>形态切换</b>:D1 内容淡换(推荐)/ D2 窗口形变(二期)/ 保持硬切不动?</li>
+    <li><span class="num">3</span><b>告急呼吸 G</b>:默认关、设置里给开关(推荐)/ 彻底不做?</li>
+  </ul>
+</div>
+
+<script>
+  // A 数值滚动
+  const vals = { vb1:["¥74.20","¥68.90","¥71.15"], vb2:["82.0%","76.5%","91.5%"], vb3:["6,075.5","6,075.5","5,980.0"] };
+  const vidx = { vb1:0, vb2:0, vb3:0 };
+  $("rollBtn").onclick = () => {
+    for (const id of ["vb1","vb2","vb3"]) {
+      const box = $(id); vidx[id] = (vidx[id]+1) % vals[id].length;
+      const next = vals[id][vidx[id]];
+      const a = box.children[0], b = box.children[1];
+      if (next === a.textContent) continue;
+      b.textContent = next;
+      b.style.transition = "none"; b.style.transform = "none"; // b 在盒下方(自然流 +26px)
+      void b.offsetWidth; b.style.transition = "";
+      a.style.transform = "translateY(-26px)";  // 旧值上移离场
+      b.style.transform = "translateY(-26px)";  // 新值从下方进入
+      setTimeout(() => {
+        a.textContent = next;
+        a.style.transition = "none"; b.style.transition = "none";
+        a.style.transform = "none"; b.style.transform = "none";
+        void a.offsetWidth;
+        a.style.transition = ""; b.style.transition = "";
+      }, 340);
+    }
+  };
+  // B 微光
+  $("sweepBtn").onclick = () => {
+    document.querySelectorAll("#sweepRows .sweep").forEach((s,i) => {
+      s.classList.remove("go"); void s.offsetWidth;
+      setTimeout(() => s.classList.add("go"), i*60);
+    });
+    const bars = document.querySelectorAll("#sweepRows .bar i");
+    bars[0].style.width = (20+Math.random()*60)+"%";
+    bars[1].style.width = (20+Math.random()*60)+"%";
+    bars[2].style.width = (20+Math.random()*60)+"%";
+  };
+  // C 展开
+  document.querySelectorAll(".erow .head").forEach(h => h.onclick = () => h.parentElement.classList.toggle("open"));
+  // D 形态切换
+  const dw = $("dwin"), ds = $("dstage");
+  function stageHtml(kind){
+    if (kind==="compact") return `<div style="display:flex;align-items:center;gap:10px;padding:10px">
+      <span class="chip"><span class="dot"></span><span class="ico" style="background:#e8622c;width:16px;height:16px;font-size:8px;border-radius:4px">4S</span>¥74.20</span>
+      <span class="chip"><span class="dot"></span><span class="ico" style="background:#f5a623;width:16px;height:16px;font-size:8px;border-radius:4px">OC</span>82.0%</span>
+      <span style="margin-left:auto;color:var(--tx3)">▲ ●</span></div>`;
+    if (kind==="pill") return `<div style="display:grid;place-items:center;height:100%"><span class="pillx"><span class="dot"></span><span class="ico" style="background:#e8622c;width:26px;height:26px;font-size:10.5px;border-radius:7px">4S</span>¥74.20 <span style="color:var(--tx3);font-size:11px">▲</span></span></div>`;
+    return `<div style="padding:12px">
+      <div style="display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line);padding-bottom:8px"><span class="dot"></span><span style="font-size:12.5px;color:var(--tx2)">Grandettoken</span><span style="margin-left:auto;font-size:11px;color:var(--tx3)">— 面板 —</span></div>
+      <div class="prow" style="margin-top:8px"><span class="dot"></span><span class="ico" style="background:#e8622c;width:20px;height:20px;font-size:9px">4S</span><span class="nm" style="font-size:12px">4SAPI</span><span class="v" style="font-size:13px;color:var(--warn)">¥74.20</span></div>
+      <div class="prow"><span class="dot"></span><span class="ico" style="background:#f5a623;width:20px;height:20px;font-size:9px">OC</span><span class="nm" style="font-size:12px">OpenCode</span><span class="v" style="font-size:13px">82.0%</span></div></div>`;
+  }
+  function swapTo(kind, morph){
+    ds.classList.add("hide");
+    const done = () => { ds.innerHTML = stageHtml(kind); ds.classList.remove("hide"); };
+    setTimeout(done, morph ? 130 : 120);
+    if (morph) {
+      const size = kind==="compact" ? [300,46] : kind==="pill" ? [210,46] : [300,150];
+      dw.style.width = size[0]+"px"; dw.style.height = size[1]+"px";
+      $("dnote").textContent = "D2:窗口尺寸沿缓动曲线过渡 —— 真实实现是每帧一次 setSize IPC,这就是风险所在";
+    } else {
+      dw.style.width = "300px"; dw.style.height = "150px";
+      $("dnote").textContent = "D1:窗口一步到位,只有内容淡出/淡入 —— 观感干净,实现零风险";
+    }
+  }
+  $("d1btn").onclick = () => { dw.classList.remove("morph"); swapTo("compact", false); setTimeout(()=>{ swapTo("pill", false); },900); setTimeout(()=>{ swapTo("panel", false); },1800); };
+  $("d2btn").onclick = () => { dw.classList.add("morph"); swapTo("compact", true); setTimeout(()=>{ swapTo("pill", true); },900); setTimeout(()=>{ swapTo("panel", true); },1800); };
+  $("dreset").onclick = () => { dw.classList.remove("morph"); ds.innerHTML = stageHtml("panel"); ds.classList.remove("hide"); dw.style.width="300px"; dw.style.height="150px"; };
+  // E 轮播
+  let rotOn = false;
+  $("rotBtn").onclick = () => {
+    rotOn = !rotOn;
+    const a = $("rotA"), b = $("rotB");
+    const from = rotOn ? a : b, to = rotOn ? b : a;
+    const ico = $("rotIco");
+    ico.style.transition = "opacity var(--t2) ease"; ico.style.opacity = ".2";
+    setTimeout(()=>{ ico.style.background = rotOn ? "#4d6bfe" : "#f5a623"; ico.textContent = rotOn ? "DS" : "OC"; ico.style.opacity = "1"; }, 200);
+    from.classList.remove("out-up"); to.classList.remove("out-up");
+    from.style.transform = "translateY(0)"; from.style.opacity = "1";
+    to.style.transform = "translateY(100%)"; to.style.opacity = "0";
+    requestAnimationFrame(() => {
+      from.style.transform = "translateY(-100%)"; from.style.opacity = "0";
+      to.style.transform = "translateY(0)"; to.style.opacity = "1";
+    });
+  };
+  // F 页签
+  const tabs = $("tabs"), tind = $("tind"), tpanel = $("tpanel");
+  const ttxt = ["渠道:一卡一渠道,密钥/排序/额度申请都在里面。","显示:字号三档、托盘数字开关、胶囊渠道选择。","刷新与启动:轮询间隔、全局快捷键、开机自启、贴边吸附。","关于:版本号、检查更新、更新说明。"];
+  function moveInd(btn, i){
+    tabs.querySelectorAll("button").forEach(b => b.classList.toggle("on", b===btn));
+    const r = btn.getBoundingClientRect(), pr = tabs.getBoundingClientRect();
+    tind.style.width = r.width + "px";
+    tind.style.transform = `translateX(${r.left - pr.left}px)`;
+    tpanel.classList.remove("tpanel"); void tpanel.offsetWidth; tpanel.classList.add("tpanel");
+    tpanel.textContent = ttxt[i] || "";
+  }
+  tabs.querySelectorAll("button").forEach((b,i) => b.onclick = () => moveInd(b,i));
+  window.addEventListener("load", () => { const first = tabs.querySelector("button.on"); if (first) moveInd(first, 0); $("stag").classList.add("go"); });
+  // G 呼吸
+  $("brtBtn").onclick = () => $("brt").classList.toggle("breathe");
+  // I 入场
+  $("stagBtn").onclick = () => { const s = $("stag"); s.classList.remove("go"); void s.offsetWidth; s.classList.add("go"); };
+  function $(id){ return document.getElementById(id); }
+</script>
+</div>
+</body>
+</html>

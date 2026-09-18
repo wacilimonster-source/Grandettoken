@@ -16,6 +16,9 @@
   --tx:#edf0f6; --tx2:#b6bfce; --tx3:#8d97ab;
   --ok:#4ade9d; --warn:#f7c355; --bad:#ff6b63; --ac:#7fa2ff;
   --r:12px;
+  /* 动效令牌:短、准、稳、静。曲线快起慢停,永不回弹 */
+  --t1:120ms; --t2:200ms; --t3:320ms;
+  --ease:cubic-bezier(.2,.8,.2,1);
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;overflow:hidden}
@@ -188,10 +191,10 @@ body.form-compact .ico.logo>img{width:88%;height:88%}
 .dot.w{background:var(--warn)} .dot.b{background:var(--bad)}
 .dot.o{background:var(--tx3)}
 
-/* ── 展开详情 ── */
-.rbody{max-height:0;overflow:hidden;transition:max-height .3s ease}
-.row.open .rbody{max-height:calc(340px*var(--u));overflow-y:auto}
-.rbody-in{padding:calc(4px*var(--u)) calc(13px*var(--u)) calc(13px*var(--u)) calc(49px*var(--u));background:#ffffff05}
+/* ── 展开详情(动效 C:grid 0fr→1fr 真高度过渡,展开 320ms / 收起 200ms)── */
+.rbody{display:grid;grid-template-rows:0fr;transition:grid-template-rows var(--t2) var(--ease)}
+.row.open .rbody{grid-template-rows:1fr;transition-duration:var(--t3)}
+.rbody-in{overflow:hidden;min-height:0;padding:calc(4px*var(--u)) calc(13px*var(--u)) calc(13px*var(--u)) calc(49px*var(--u));background:#ffffff05}
 .seg{display:flex;gap:calc(4px*var(--u));margin-bottom:calc(9px*var(--u))}
 .seg button{flex:1;font-size:max(11.5px,calc(11px*var(--u)));padding:calc(3px*var(--u)) 0;border:1px solid var(--line);
   background:var(--bg3);color:var(--tx3);border-radius:calc(5px*var(--u));cursor:pointer;font-family:inherit}
@@ -441,3 +444,60 @@ body.docked .foot,
 body.docked .manage,
 body.docked .cctl,
 body.docked .pill-body{display:none}
+
+/* ═════════ 动效层(设计稿 design-motion.html,裁决 A/D1/默认关)═════════
+   铁律:短(≤320ms)/ 只动有语义的变化 / 只用 transform+opacity / 无常驻循环
+   (唯一例外 G 呼吸,默认关)。prefers-reduced-motion 一键全静。 */
+
+/* A 数值滚动:新值从下方进,旧值(幽灵)上移淡出 —— 面板行与胶囊共用 */
+.val .v{position:relative}
+.v.roll-in,.t.roll-in{animation:rollIn var(--t3) var(--ease)}
+@keyframes rollIn{from{transform:translateY(9px);opacity:0}}
+.roll-ghost{position:absolute!important;pointer-events:none;color:var(--tx3)!important;white-space:nowrap;
+  animation:rollOut var(--t3) var(--ease) forwards}
+@keyframes rollOut{to{transform:translateY(-11px);opacity:0}}
+.pill-body .pico.ico-in{animation:icoIn var(--t2) ease}
+@keyframes icoIn{from{opacity:0}}
+
+/* B 刷新微光:一轮取数后,值变了的行扫过一道 6% 白光(一次性) */
+.rhead{position:relative;overflow:hidden}
+.sweep{position:absolute;inset:0;pointer-events:none;transform:translateX(-100%);
+  background:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.06) 50%,transparent 70%)}
+.sweep.go{animation:sweep 560ms var(--ease) 1}
+@keyframes sweep{to{transform:translateX(100%)}}
+
+/* D1 形态切换:新形态内容淡入上浮(窗口尺寸仍一步到位,零 IPC 风险) */
+body.xf-in .list,body.xf-in .pill-body{animation:fadeup var(--t2) var(--ease)}
+
+/* E 胶囊轮播:图标随数值一起翻页 */
+.pill-body{position:relative}
+.pill-body .pico{transition:opacity var(--t1) ease}
+
+/* F 设置页页签:芯片过渡 + 内容淡入 */
+.tabs button{transition:background var(--t1) ease,color var(--t1) ease,border-color var(--t1) ease}
+.mbody.panel.on{animation:fadeup var(--t2) var(--ease)}
+@keyframes fadeup{from{opacity:0;transform:translateY(6px)}}
+
+/* H 悬停与按压 */
+.rhead{transition:background var(--t1) ease}
+.btn,.ib,.tb,.seg button,.eye{transition:background var(--t1) ease,color var(--t1) ease,
+  border-color var(--t1) ease,filter var(--t1) ease}
+.btn:active,.ib:active,.tb:active,.seg button:active{transform:scale(.96)}
+
+/* I 面板入场:行自上而下 30ms 节奏淡入,只在「进入面板形态/从托盘唤出」时放一次 */
+#list.st-in .row{animation:fadeup 240ms var(--ease) both}
+#list.st-in .row:nth-child(2){animation-delay:30ms}
+#list.st-in .row:nth-child(3){animation-delay:60ms}
+#list.st-in .row:nth-child(4){animation-delay:90ms}
+#list.st-in .row:nth-child(5){animation-delay:120ms}
+#list.st-in .row:nth-child(6){animation-delay:150ms}
+
+/* G 告急呼吸:全产品唯一循环,默认关(alertPulse 开启才挂 body.pulse) */
+@keyframes breathe{0%,100%{box-shadow:0 0 0 0 rgba(255,107,99,.45)}55%{box-shadow:0 0 0 5px rgba(255,107,99,0)}}
+body.pulse .dot.b{animation:breathe 2s ease-in-out infinite}
+
+/* 系统「减少动效」:全部时长归零,只保留状态切换本身 */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;
+    transition-duration:.01ms!important}
+}
