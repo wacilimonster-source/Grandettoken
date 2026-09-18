@@ -70,6 +70,9 @@ pub struct Config {
     pub font_scale: String,
     /// 胶囊形态固定显示哪些渠道(按顺序轮播);空 = 自动显示最紧张的一个
     pub pill_channels: Vec<String>,
+    /// 被隐藏的渠道 id:主面板不显示、**不发请求**(App 型也不再读本机登录凭据),
+    /// 快照历史保留,随时可恢复。serde default 保证老配置自动兼容。
+    pub hidden_channels: Vec<String>,
     /// 申请制额度规则:渠道 id -> 规则
     pub claim_channels: HashMap<String, ClaimConfig>,
     /// 「自定义排序」下的渠道顺序(渠道 id 数组);未列入的渠道附在末尾
@@ -102,6 +105,7 @@ impl Default for Config {
             sort: "percent".into(),
             font_scale: "md".into(),
             pill_channels: Vec::new(),
+            hidden_channels: Vec::new(),
             claim_channels: HashMap::from([(
                 "4sapi".to_string(),
                 ClaimConfig::for_channel("4sapi"),
@@ -145,6 +149,16 @@ mod tests {
         assert_eq!(c.form, "compact");
         // 老配置同样没有 fontScale:必须兜成「标准」,不能报错也不能变空串
         assert_eq!(c.font_scale, "md");
+        // 老配置没有 hiddenChannels:默认全部显示
+        assert!(c.hidden_channels.is_empty());
+    }
+
+    #[test]
+    fn hidden_channels_roundtrip() {
+        let mut c = Config::default();
+        c.hidden_channels = vec!["trae".into(), "workbuddy".into()];
+        let back: Config = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+        assert_eq!(back.hidden_channels, vec!["trae".to_string(), "workbuddy".to_string()]);
     }
 
     #[test]

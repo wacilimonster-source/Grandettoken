@@ -56,6 +56,9 @@ pub struct ChannelView {
     pub updated_at: i64,
     /// 申请制额度状态;None = 该渠道没启用申请制(见 ClaimConfig)
     pub claim: Option<ClaimState>,
+    /// 用户隐藏了该渠道:不显示、不取数(见 Config::hidden_channels)。
+    /// 视图仍会返回,管理页要靠它列出「已隐藏」的卡片。
+    pub hidden: bool,
 }
 
 /// 申请制额度渠道(4SAPI 这类:定期申请,把余额补到固定上限)的展示状态。
@@ -515,6 +518,7 @@ fn build_view(
         stale,
         updated_at,
         claim: claim_for(def, cfg, store, result.remaining),
+        hidden: false,
     }
 }
 
@@ -554,6 +558,7 @@ fn placeholder(def: &providers::ProviderDef) -> ChannelView {
         stale: false,
         updated_at: 0,
         claim: None,
+        hidden: false,
     }
 }
 
@@ -604,8 +609,21 @@ impl Fetcher {
         let mut successful: Vec<(&'static str, FetchResult, i64)> = Vec::new();
 
         // ── await 段:纯网络,不碰数据库 ──
+        // 隐藏渠道清单先读出来:隐藏 = 不发请求、不读本机登录凭据。
+        // 仍返回一个占位视图(has_key 照实),管理页要靠它列出「已隐藏」卡片。
+        let hidden: Vec<String> = {
+            let s = store.lock().unwrap_or_else(|p| p.into_inner());
+            Config::load(&s).hidden_channels
+        };
         for (i, def) in providers::PROVIDERS.iter().enumerate() {
             let creds = credentials(def);
+            if hidden.iter().any(|h| h == def.id) {
+                let mut v = placeholder(def);
+                v.has_key = !creds.is_empty();
+                v.hidden = true;
+                out[i] = Some(v);
+                continue;
+            }
             if creds.is_empty() {
                 out[i] = Some(placeholder(def));
                 continue;

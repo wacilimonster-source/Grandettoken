@@ -226,6 +226,16 @@ body.view-manage #lkKeys{display:none}
 .mhead{display:flex;align-items:center;gap:calc(8px*var(--u));padding:calc(7px*var(--u)) calc(10px*var(--u));flex:none;
   border-bottom:1px solid var(--line);background:#141720}
 .mhead .mt{font-size:max(11.5px,calc(11.5px*var(--u)));font-weight:600;letter-spacing:.02em}
+/* 设置页四页签:渠道 / 显示 / 刷新与启动 / 关于 */
+.tabs{display:flex;gap:calc(3px*var(--u));padding:calc(8px*var(--u)) calc(10px*var(--u));flex:none;
+  border-bottom:1px solid var(--line);background:#151823}
+.tabs button{flex:1;border:1px solid transparent;background:transparent;color:var(--tx3);
+  font-size:max(11.5px,calc(12px*var(--u)));line-height:1.4;padding:calc(5px*var(--u)) 0;
+  border-radius:calc(7px*var(--u));cursor:pointer;font-family:inherit;white-space:nowrap}
+.tabs button:hover{color:var(--tx)}
+.tabs button.on{background:#7fa2ff1f;border-color:#7fa2ff55;color:#b7ccff;font-weight:600}
+.panel{display:none}
+.panel.on{display:block}
 .mbody{flex:1;overflow-y:auto;padding:calc(12px*var(--u)) calc(13px*var(--u)) calc(16px*var(--u))}
 .mbody h4{font-size:calc(12px*var(--u));color:var(--tx3);text-transform:uppercase;letter-spacing:.1em;
   margin:0 0 calc(9px*var(--u));font-weight:600}
@@ -265,50 +275,54 @@ body.view-manage #lkKeys{display:none}
 .pick:hover{border-color:#55617d;color:var(--tx)}
 .pick.on{background:#7fa2ff1f;border-color:#7fa2ff55;color:#b7ccff}
 
-/* 渠道顺序:一行一个渠道,两个小按钮调序 */
-.orow{display:flex;align-items:center;gap:calc(8px*var(--u));padding:calc(6px*var(--u)) 0;border-bottom:1px solid #232937}
-.orow:last-child{border-bottom:0}
-.orow .ico{width:calc(24px*var(--u));height:calc(24px*var(--u));font-size:calc(10px*var(--u));border-radius:calc(7px*var(--u))}
-.orow .kmeta{flex:1;min-width:0}
-.orow .btn.ord{padding:calc(3px*var(--u)) calc(7px*var(--u));font-size:calc(10px*var(--u));line-height:1}
-.orow .btn.ord:disabled{opacity:.35;cursor:default}
+/* ── 渠道卡(设置页「渠道」页签):显隐 + 排序 + 密钥 + 额度申请一卡收纳 ── */
+.ccard{border:1px solid var(--line);border-radius:calc(10px*var(--u));background:var(--bg2);
+  margin-bottom:calc(9px*var(--u));overflow:hidden}
+.ccard.off{opacity:.62}
+.cchead{display:flex;align-items:center;gap:calc(9px*var(--u));padding:calc(9px*var(--u)) calc(11px*var(--u));cursor:pointer}
+.cchead:hover{background:#ffffff07}
+.ccard .ico{width:calc(26px*var(--u));height:calc(26px*var(--u));font-size:calc(10.5px*var(--u));border-radius:calc(7px*var(--u))}
+.ccard.off .ico{filter:grayscale(1)}
+.ccmeta{flex:1;min-width:0}
+.ccname{font-size:calc(12.5px*var(--u));font-weight:500;display:flex;align-items:center;gap:calc(6px*var(--u))}
+.ccst{font-size:max(11.5px,calc(11.5px*var(--u)));color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ccst .kh{color:var(--tx3);font-variant-numeric:tabular-nums}
+.tagn{font-size:max(10.5px,calc(10.5px*var(--u)));color:var(--tx3);border:1px dashed var(--line2);
+  border-radius:999px;padding:0 calc(7px*var(--u));flex:none}
+.eye{flex:none;width:calc(28px*var(--u));height:calc(28px*var(--u));border-radius:calc(7px*var(--u));
+  border:1px solid var(--line2);background:var(--bg3);color:var(--tx2);cursor:pointer;
+  display:grid;place-items:center;font-size:calc(13px*var(--u));font-family:inherit}
+.eye:hover{border-color:#55617d;color:var(--tx)}
+.eye.off{color:var(--tx3);background:transparent;border-style:dashed}
+.ccaret{color:var(--tx3);font-size:calc(9px*var(--u));flex:none;width:calc(12px*var(--u));text-align:center;transition:transform .25s}
+.ccard.open .ccaret{transform:rotate(90deg)}
+.ccbody{display:none;border-top:1px solid var(--line);padding:calc(10px*var(--u)) calc(12px*var(--u)) calc(12px*var(--u));background:#151823}
+.ccard.open .ccbody{display:block}
+.ccbtns{display:flex;gap:calc(6px*var(--u));align-items:center;margin-top:calc(8px*var(--u))}
+.ccbtns input[type=password]{flex:1;min-width:0;background:#0e1015;border:1px solid var(--line2);
+  border-radius:calc(6px*var(--u));color:var(--tx);font-size:calc(12px*var(--u));padding:calc(5px*var(--u)) calc(8px*var(--u));font-family:inherit}
+.ccbtns input[type=password]:focus{outline:none;border-color:var(--ac)}
+.mini{font-size:max(11.5px,calc(11.5px*var(--u)));color:var(--tx3);line-height:1.7}
+.field .desc{display:block;font-size:max(11px,calc(11px*var(--u)));color:var(--tx3);font-weight:400}
+.claim-in{margin-top:calc(8px*var(--u));padding-top:calc(8px*var(--u));border-top:1px dashed var(--line)}
+.claim-grid{display:flex;gap:calc(6px*var(--u));flex-wrap:wrap;align-items:center;
+  font-size:calc(12px*var(--u));color:var(--tx3)}
+.claim-grid input{width:calc(64px*var(--u));background:#0e1015;border:1px solid var(--line2);
+  border-radius:calc(6px*var(--u));color:var(--tx);font-size:calc(12px*var(--u));padding:calc(4px*var(--u)) calc(7px*var(--u));font-family:inherit}
+.claim-grid input[type=date]{width:calc(128px*var(--u))}
+.claim-grid input:focus{outline:none;border-color:var(--ac)}
+.ccord{display:flex;align-items:center;justify-content:space-between;margin-top:calc(10px*var(--u));
+  padding-top:calc(8px*var(--u));border-top:1px dashed var(--line)}
+.ord{display:flex;gap:calc(4px*var(--u))}
+.ord .btn.ord{padding:calc(3px*var(--u)) calc(7px*var(--u));font-size:calc(10px*var(--u));line-height:1}
+.ord .btn.ord:disabled{opacity:.35;cursor:default}
 .btn:disabled{opacity:.45;cursor:default;pointer-events:auto}
 .btn:disabled:hover{filter:none}
-
-/* 额度申请:每渠道一行开关,开启后展开额度 / 间隔 / 上次申请 */
-.crow{padding:calc(9px*var(--u)) 0;border-bottom:1px solid #232937}
-.crow:last-child{border-bottom:0}
-.crow1{display:flex;align-items:center;gap:calc(9px*var(--u))}
-.crow1 .ico{width:calc(24px*var(--u));height:calc(24px*var(--u));font-size:calc(10px*var(--u));border-radius:calc(7px*var(--u))}
-/* 单列:两列时"最短间隔 + 输入 + 单位"会被挤到裁切,列表本身可滚动,不差这点高度 */
-.cfields{margin-top:calc(9px*var(--u));display:grid;grid-template-columns:1fr;gap:calc(7px*var(--u))}
-.cfields label{display:flex;align-items:center;gap:calc(6px*var(--u));font-size:calc(12px*var(--u));color:var(--tx3);
-  white-space:nowrap}
-.cfields label>span:first-child{flex:none;width:calc(52px*var(--u))}
-.cfields input{flex:1;min-width:0;background:#0e1015;border:1px solid var(--line2);
-  border-radius:calc(6px*var(--u));color:var(--tx);font-size:calc(12px*var(--u));padding:calc(4px*var(--u)) calc(7px*var(--u));font-family:inherit}
-.cfields input:focus{outline:none;border-color:var(--ac)}
-.cfields .cbtns{grid-column:1 / -1;display:flex;gap:calc(6px*var(--u))}
 
 /* 撑不到下次申请的提示(列表行内) */
 .claim-warn{font-size:max(11.5px,calc(11px*var(--u)));color:var(--warn);margin-top:calc(6px*var(--u));line-height:1.6}
 .nm .s .cy{color:var(--ac)}
 .nm .s .ct{color:var(--tx3)}
-
-/* 密钥行:上行 = 渠道 + 状态 + 删除,下行 = 输入 + 保存 */
-.krow{padding:calc(9px*var(--u)) 0;border-bottom:1px solid #232937}
-.krow:last-child{border-bottom:0}
-.krow1{display:flex;align-items:center;gap:calc(9px*var(--u));margin-bottom:calc(7px*var(--u))}
-.krow1 .ico{width:calc(24px*var(--u));height:calc(24px*var(--u));font-size:calc(10px*var(--u));border-radius:calc(7px*var(--u))}
-.kmeta{flex:1;min-width:0}
-.krow .kn{font-size:calc(12.5px*var(--u));font-weight:500;display:flex;align-items:center;gap:calc(6px*var(--u))}
-.krow .ks .kh{color:var(--tx3);font-variant-numeric:tabular-nums}
-.krow .ks{font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);margin-top:calc(1px*var(--u));white-space:nowrap;
-  overflow:hidden;text-overflow:ellipsis}
-.krow2{display:flex;gap:calc(6px*var(--u))}
-.krow2 input{flex:1;background:#0e1015;border:1px solid var(--line2);border-radius:calc(6px*var(--u));
-  color:var(--tx);font-size:calc(12px*var(--u));padding:calc(5px*var(--u)) calc(8px*var(--u));font-family:inherit;min-width:0}
-.krow2 input:focus{outline:none;border-color:var(--ac)}
 
 /* ── 底栏 ── */
 .foot{display:flex;align-items:center;gap:calc(8px*var(--u));padding:calc(7px*var(--u)) calc(12px*var(--u));background:#141720;

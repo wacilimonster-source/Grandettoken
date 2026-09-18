@@ -198,8 +198,8 @@ function sortChannels(list) {
 
 // ───────────── 渲染 ─────────────
 function renderSummary() {
-  // 汇总只累加金额型渠道 —— 百分比和金额不能相加
-  const am = CHANNELS.filter((c) => c.kind === "amount" && c.hasKey && c.remaining !== null);
+  // 汇总只累加金额型渠道 —— 百分比和金额不能相加;隐藏的渠道不参与
+  const am = CHANNELS.filter((c) => c.kind === "amount" && c.hasKey && c.remaining !== null && !c.hidden);
   const sum = (f) => {
     const vals = am.map((c) => c[f]).filter((v) => v !== null && v !== undefined);
     if (!vals.length) return null;
@@ -547,13 +547,21 @@ function render() {
 
   const openId = document.querySelector(".row.open")?.dataset.id;
 
-  // 展示区只显示已配置密钥的渠道(未配置的只在管理页里出现,用于配置);
-  // 一个都没配时给一张引导卡
-  const shown = sorted.filter((c) => c.hasKey);
+  // 展示区只显示已配置密钥、且未被隐藏的渠道(隐藏的只在管理页出现,用于恢复);
+  // 一个都没配时给一张引导卡,全被隐藏时给「去设置恢复」卡
+  const hiddenN = CHANNELS.filter((c) => c.hidden).length;
+  const shown = sorted.filter((c) => c.hasKey && !c.hidden);
   const configured = shown.length > 0;
   $("list").innerHTML = configured
     ? shown.map((c, i) => renderRow(c, i)).join("")
-    : `<div class="empty">
+    : hiddenN && CHANNELS.some((c) => c.hasKey && c.hidden)
+      ? `<div class="empty">
+           <div class="ek">&#128065;</div>
+           <b>已配置的渠道都被隐藏了</b>
+           到设置 → 渠道页点眼睛恢复显示;隐藏期间不再请求接口,历史快照保留
+           <div><button class="btn p" data-act="open-manage">去设置</button></div>
+         </div>`
+      : `<div class="empty">
          <div class="ek">&#128273;</div>
          <b>还没有可显示的渠道</b>
          填入至少一个 API Key,或在别的应用里登录一次(Trae / WorkBuddy 会直接读取)<br>密钥只写入 Windows 凭据管理器,界面保存后不回显
@@ -570,24 +578,22 @@ function render() {
     }
   }
 
-  // 底栏状态
-  const withKey = CHANNELS.filter((c) => c.hasKey);
+  // 底栏状态(隐藏渠道不计入,只报个数)
+  const withKey = CHANNELS.filter((c) => c.hasKey && !c.hidden);
   const bad = withKey.filter((c) => !c.valid).length;
   const warn = withKey.filter((c) => c.valid && (c.limited || toneOf(c) === "bad")).length;
   // 与行内同一套约定:失联=灰,预警=黄(之前 warn 用了红点,颜色梯度倒挂)
   $("fdot").className =
     "dot" + (bad ? " o" : warn ? " w" : withKey.length ? "" : " o");
   $("fstat").textContent = !withKey.length
-    ? "未配置渠道"
-    : `${withKey.length - bad} 正常${warn ? ` · ${warn} 预警` : ""}${bad ? ` · ${bad} 失联` : ""}`;
+    ? (hiddenN ? "渠道已全部隐藏" : "未配置渠道")
+    : `${withKey.length - bad} 正常${warn ? ` · ${warn} 预警` : ""}${bad ? ` · ${bad} 失联` : ""}${hiddenN ? ` · ${hiddenN} 隐藏` : ""}`;
 
   renderPill(sorted);
   renderDock();
   renderPillPick();
-  renderOrderRows();
-  refreshClaimRows();
   fitCompact();
-  refreshKeyStatuses();
+  refreshChCards();
 }
 
 /** 紧凑条:按重要度排在前面,尾部放不下的收进 "+N" 徽标(设计稿的截断规则)。 */
@@ -626,9 +632,9 @@ function renderPill(sorted) {
   const picked = (CFG && CFG.pillChannels) || [];
   PILL.auto = !picked.length;
   PILL.list = picked.length
-    ? picked.map((id) => CHANNELS.find((c) => c.id === id)).filter(Boolean)
+    ? picked.map((id) => CHANNELS.find((c) => c.id === id)).filter(Boolean).filter((c) => !c.hidden)
     : (() => {
-        const active = sorted.filter((c) => c.hasKey);
+        const active = sorted.filter((c) => c.hasKey && !c.hidden);
         const tight = active
           .filter((c) => c.valid)
           .sort((a, b) => (remainRatio(a) ?? 2) - (remainRatio(b) ?? 2))[0];
@@ -724,7 +730,7 @@ function drawTrayIcon() {
   const tone = c ? toneOf(c) : "off";
   const text = c
     ? `${c.name} ${($("pillV").textContent || "").trim()}`
-    : PILL.sorted.some((x) => x.hasKey)
+    : PILL.sorted.some((x) => x.hasKey && !x.hidden)
       ? "渠道全部取数失败"
       : "尚未配置密钥";
   const key = tone + "|" + text;
@@ -767,54 +773,94 @@ function drawTrayIcon() {
   invoke("set_tray_icon", { rgba, size: S, tooltip: text }).catch(() => {});
 }
 
-/** 管理页里的「额度申请」:每渠道一行开关,开启后展开额度/间隔/上次申请。 */
-function renderClaimRows() {
+/** 设置页「渠道」页签:一卡一渠道 —— 显隐、排序、密钥、额度申请全在卡里。
+    (旧版把这三件事拆在「密钥 / 渠道顺序 / 额度申请」三个分区,是"乱"的根源) */
+const cardOpen = new Set(); // 展开的卡片 id;轮询重建时保持,不让用户白收起
+
+function chDot(c) {
+  if (c.hidden || !c.hasKey || !c.valid) return "o";
+  if (c.limited || toneOf(c) === "bad") return "b";
+  if (toneOf(c) === "warn") return "w";
+  return "";
+}
+
+function renderChCards() {
+  const ids = currentOrderIds();
+  const list = ids.map((id) => CHANNELS.find((c) => c.id === id)).filter(Boolean);
   const map = (CFG && CFG.claimChannels) || {};
-  // 只有金额型渠道有"把余额补到某额度"这回事;配额型(OpenCode Go)不适用
-  $("claimList").innerHTML = CHANNELS.filter((c) => c.kind === "amount").map((c) => {
-    const cc = map[c.id] || null;
-    const on = !!(cc && cc.enabled);
-    const cl = c.claim;
+  $("chList").innerHTML = list
+    .map((c, i) => {
+      const isApp = c.authSource === "app";
+      const cc = map[c.id];
+      const on = !!(cc && cc.enabled);
+      let st;
+      if (c.hidden) st = "已隐藏 · 不再取数(历史快照保留)";
+      else if (!c.hasKey) st = isApp ? "未检测到登录" : "未配置";
+      else if (c.valid) st = isApp ? `已读取本机登录 · ${esc(c.authLabel)}` : `已配置<span class="kh" data-hint="${c.id}"></span>`;
+      else st = (isApp ? "已读取本机登录" : "已配置") + " · 取数失败";
 
-    let state = "未启用申请制额度";
-    if (on) {
-      if (!cl) state = "等待取数";
-      else if (cl.daysUntilEligible === null || cl.daysUntilEligible === undefined) {
-        state = "未记录申请时间";
-      } else {
-        state = cl.eligible ? "现在可申请" : `再等 ${cl.daysUntilEligible} 天可申请`;
-      }
-      const src = cl && cl.source === "auto" ? " · 自动检测" : cl && cl.source === "manual" ? " · 手动修正" : "";
-      state += src;
-    }
+      const keyBlock = isApp
+        ? `<div class="mini">凭据来自本机已登录的 ${esc(c.name)} 客户端,只读复用、不写回不刷新;` +
+          `失效时打开一次 ${esc(c.name)} 即可;隐藏本渠道后连读取也会停止。</div>`
+        : `<div class="ccbtns">
+            <input type="password" id="key-${c.id}" autocomplete="off" spellcheck="false"
+              placeholder="${c.hasKey ? "已保存 · 留空则不修改" : "粘贴 API Key"}">
+            <button class="btn p" data-act="savekey" data-id="${c.id}">保存</button>
+            ${c.hasKey ? `<button class="btn danger" data-act="delkey" data-id="${c.id}">删除</button>` : ""}
+          </div>`;
 
-    const fields = !on
-      ? ""
-      : `<div class="cfields">
-          <label><span>单次额度</span><input type="number" min="1" step="10" value="${cc.amount}"
-            data-act="claimamount" data-id="${c.id}"><span>元</span></label>
-          <label><span>最短间隔</span><input type="number" min="1" step="1" value="${cc.minIntervalDays}"
-            data-act="claimdays" data-id="${c.id}"><span>天</span></label>
-          <label><span>上次申请</span><input type="date" value="${toDateInput(cl && cl.lastClaimAt)}"
-            data-act="claimdate" data-id="${c.id}"></label>
-          <div class="cbtns">
-            <button class="btn" data-act="claimnow" data-id="${c.id}">记一次申请=今天</button>
-            <button class="btn" data-act="claimclear" data-id="${c.id}">清除手动值</button>
+      const claimBlock =
+        c.kind === "amount"
+          ? `<div class="claim-in">
+              <div class="field"><span>额度申请制<span class="desc">定期申请把余额补到固定上限;上次申请时间由快照跳升自动检测</span></span>
+                <div class="sw${on ? " on" : ""}" data-act="claimtoggle" data-id="${c.id}"></div></div>
+              ${on
+                ? `<div class="claim-grid">
+                    <label>单次额度<input type="number" min="1" step="10" value="${cc.amount}" data-act="claimamount" data-id="${c.id}">元</label>
+                    <label>最短间隔<input type="number" min="1" step="1" value="${cc.minIntervalDays}" data-act="claimdays" data-id="${c.id}">天</label>
+                    <label>上次申请<input type="date" value="${toDateInput(c.claim && c.claim.lastClaimAt)}" data-act="claimdate" data-id="${c.id}"></label>
+                    <div class="ccbtns">
+                      <button class="btn" data-act="claimnow" data-id="${c.id}">记一次申请=今天</button>
+                      <button class="btn" data-act="claimclear" data-id="${c.id}">清除手动值</button>
+                    </div>
+                  </div>`
+                : ""}
+            </div>`
+          : "";
+
+      return `<div class="ccard${c.hidden ? " off" : ""}${cardOpen.has(c.id) ? " open" : ""}" data-id="${c.id}">
+        <div class="cchead" data-act="chfold" data-id="${c.id}">
+          ${iconHtml(c, "ico", !c.hasKey || c.hidden)}
+          <div class="ccmeta">
+            <div class="ccname">${esc(c.name)}<span class="dot ${chDot(c)}"></span>${c.hidden ? '<span class="tagn">已隐藏</span>' : ""}</div>
+            <div class="ccst">${st}</div>
           </div>
-        </div>`;
-
-    return `<div class="crow" data-id="${c.id}">
-      <div class="crow1">
-        ${iconHtml(c, "ico", !on)}
-        <div class="kmeta">
-          <div class="kn">${esc(c.name)}</div>
-          <div class="ks">${state}</div>
+          <button class="eye${c.hidden ? " off" : ""}" data-act="chvis" data-id="${c.id}"
+            title="${c.hidden ? "显示(恢复取数)" : "隐藏(停止取数)"}">${c.hidden ? "–" : "👁"}</button>
+          <span class="ccaret">&#9654;</span>
         </div>
-        <div class="sw${on ? " on" : ""}" data-act="claimtoggle" data-id="${c.id}"></div>
-      </div>
-      ${fields}
-    </div>`;
-  }).join("");
+        <div class="ccbody">
+          ${keyBlock}
+          ${claimBlock}
+          <div class="ccord"><span class="mini">在列表中的位置</span>
+            <span class="ord">
+              <button class="btn ord" data-act="ordermove" data-id="${c.id}" data-dir="-1"${i === 0 ? " disabled" : ""} title="上移">&#9650;</button>
+              <button class="btn ord" data-act="ordermove" data-id="${c.id}" data-dir="1"${i === list.length - 1 ? " disabled" : ""} title="下移">&#9660;</button>
+            </span>
+          </div>
+        </div>
+      </div>`;
+    })
+    .join("");
+}
+
+/** 轮询刷新时更新渠道卡;正在输入就不重建,免得把输入内容冲掉。 */
+function refreshChCards() {
+  if (!manageOpen()) return;
+  const ae = document.activeElement;
+  if (ae && ae.closest && ae.closest("#chList") && (ae.tagName === "INPUT" || ae.tagName === "SELECT")) return;
+  renderChCards();
+  fillKeyHints();
 }
 
 /** 异步补每把 key 的尾号(IPC 一次一个,失败就留空,不影响其它信息)。 */
@@ -830,37 +876,10 @@ function fillKeyHints() {
   });
 }
 
-/** 轮询刷新时更新状态;输入框还聚焦着就不重建,免得打断编辑。 */
-function refreshClaimRows() {
-  if (!manageOpen()) return;
-  const ae = document.activeElement;
-  if (ae && ae.closest && ae.closest("#claimList")) return;
-  renderClaimRows();
-}
-
-/** 管理页里的「渠道顺序」:↑ ↓ 调整自定义排序,改完立即生效。 */
-function renderOrderRows() {
-  const ids = currentOrderIds();
-  $("orderList").innerHTML = CHANNELS.filter((c) => ids.includes(c.id))
-    .sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id))
-    .map((c, i) => `<div class="orow" data-id="${c.id}">
-        ${iconHtml(c, "ico", !c.hasKey)}
-        <div class="kmeta">
-          <div class="kn">${esc(c.name)}</div>
-          <div class="ks">${c.hasKey ? "已配置" : "未配置"}</div>
-        </div>
-        <button class="btn ord" data-act="ordermove" data-id="${c.id}" data-dir="-1"
-          ${i === 0 ? "disabled" : ""} title="上移">&#9650;</button>
-        <button class="btn ord" data-act="ordermove" data-id="${c.id}" data-dir="1"
-          ${i === CHANNELS.length - 1 ? "disabled" : ""} title="下移">&#9660;</button>
-      </div>`)
-    .join("");
-}
-
 /** 管理页里的胶囊渠道选择:点一下加入/移出轮播列表。 */
 function renderPillPick() {
   const sel = (CFG && CFG.pillChannels) || [];
-  $("cfgPill").innerHTML = CHANNELS.map(
+  $("cfgPill").innerHTML = CHANNELS.filter((c) => !c.hidden).map(
     (c) =>
       `<button class="pick${sel.includes(c.id) ? " on" : ""}" data-act="pillpick" data-id="${c.id}">${esc(c.name)}</button>`
   ).join("");
@@ -1112,60 +1131,15 @@ function renderDock() {
   body.title = c ? `${c.name} · 移入展开` : "移入展开";
 }
 
-// ───────────── 设置与管理(密钥与设置同页,与展示视图分开) ─────────────
+// ───────────── 设置与管理(四页签;渠道卡渲染见 renderChCards)─────────────
 const manageOpen = () => document.body.classList.contains("view-manage");
 
-function renderKeyRows() {
-  $("keyList").innerHTML = CHANNELS.map((c) => {
-    const isApp = c.authSource === "app";
-    const state = !c.hasKey
-      ? `<span class="dot o"></span>${isApp ? "未检测到登录" : "未配置"}`
-      : c.valid
-        ? `<span class="dot"></span>${isApp ? "已读取本机登录" : "已配置"}`
-        : `<span class="dot o"></span>${isApp ? "已读取 · 取数失败" : "已配置 · 取数失败"}`;
-    // 复用本机登录态的渠道没有密钥可填:直接把凭据来源和怎么恢复写清楚
-    const second = isApp
-      ? `<div class="khint" style="margin:0">凭据来自本机已登录的 ${esc(
-          c.authLabel
-        )}。本应用只读复用,不写回、不刷新;失效时打开一次 ${esc(c.name)} 再刷新即可。</div>`
-      : `<div class="krow2">
-        <input type="password" id="key-${c.id}" autocomplete="off" spellcheck="false"
-          placeholder="${c.hasKey ? "已保存 · 留空则不修改" : "粘贴 API Key"}">
-        <button class="btn p" data-act="savekey" data-id="${c.id}">保存</button>
-      </div>`;
-    return `<div class="krow" data-id="${c.id}">
-      <div class="krow1">
-        ${iconHtml(c, "ico", !c.hasKey)}
-        <div class="kmeta">
-          <div class="kn">${esc(c.name)}</div>
-          <div class="ks">${state}<span class="kh" data-hint="${c.id}"></span></div>
-        </div>
-        ${
-          !isApp && c.hasKey
-            ? `<button class="btn danger" data-act="delkey" data-id="${c.id}">删除</button>`
-            : ""
-        }
-      </div>
-      ${second}
-    </div>`;
-  }).join("");
-}
-
-/** 轮询刷新时更新状态;正在输入就不重建,免得把输入内容冲掉。 */
-function refreshKeyStatuses() {
-  if (!manageOpen()) return;
-  const typing = [...$("keyList").querySelectorAll("input")].some((i) => i.value);
-  if (!typing) renderKeyRows();
-}
-
 function openManage() {
-  // 这三块都只在管理页里出现,而轮询渲染会因为"页面没打开"跳过它们,
+  // 这些块只在管理页里出现,轮询 render 会因为"页面没打开"跳过它们,
   // 所以打开时主动建一次,不然第一次进来会是空的
-  renderKeyRows();
+  renderChCards();
   fillKeyHints();
   renderPillPick();
-  renderOrderRows();
-  renderClaimRows();
   renderAbout(UPD.last); // 版本号与上次检查时间
   document.body.classList.add("view-manage");
   $("btnS").classList.add("on");
@@ -1228,6 +1202,15 @@ $("btnR").addEventListener("click", async (e) => {
 });
 $("btnS").addEventListener("click", () => (manageOpen() ? closeManage() : openManage()));
 $("btnBack").addEventListener("click", closeManage);
+// 设置页页签:渠道 / 显示 / 刷新与启动 / 关于
+$("mTabs").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-p]");
+  if (!b) return;
+  for (const x of $("mTabs").children) x.classList.toggle("on", x === b);
+  document
+    .querySelectorAll("#manage .panel")
+    .forEach((p) => p.classList.toggle("on", p.dataset.p === b.dataset.p));
+});
 // 置顶:窗口状态与配置一起改(见 Rust 的 set_pin),按钮与设置项共用同一个值
 async function setPin(enabled) {
   try {
@@ -1336,13 +1319,23 @@ $("manage").addEventListener("change", async (e) => {
   await saveConfigAndRefresh();
 });
 
-// 密钥的保存 / 删除只在管理页里发生
+// 渠道卡上的操作:折叠/显隐/密钥保存删除/额度申请/排序/胶囊选择,全走 data-act
 $("manage").addEventListener("click", async (e) => {
   const act = e.target.closest("[data-act]");
   if (!act) return;
   const id = act.dataset.id;
   const a = act.dataset.act;
-  if (a === "savekey") {
+  if (a === "chfold") {
+    // 就地开合,不整页重建 —— 展开区里可能正填着密钥
+    const card = act.closest(".ccard");
+    card.classList.toggle("open");
+    card.classList.contains("open") ? cardOpen.add(id) : cardOpen.delete(id);
+  } else if (a === "chvis") {
+    const hid = CFG.hiddenChannels || (CFG.hiddenChannels = []);
+    const at = hid.indexOf(id);
+    at >= 0 ? hid.splice(at, 1) : hid.push(id);
+    await saveConfigAndRefresh(); // 隐藏即停止取数:重取一轮,汇总/胶囊/底栏同步
+  } else if (a === "savekey") {
     const input = $("key-" + id);
     const val = input ? input.value.trim() : "";
     if (!val) return;
@@ -1350,7 +1343,7 @@ $("manage").addEventListener("click", async (e) => {
       await invoke("set_key", { id, key: val });
       input.value = "";
       await refresh();
-      renderKeyRows();
+      renderChCards();
     } catch (err) {
       alert("保存失败:" + err);
     }
@@ -1359,7 +1352,7 @@ $("manage").addEventListener("click", async (e) => {
     try {
       await invoke("delete_key", { id });
       await refresh();
-      renderKeyRows();
+      renderChCards();
     } catch (err) {
       alert("删除失败:" + err);
     }
@@ -1369,7 +1362,7 @@ $("manage").addEventListener("click", async (e) => {
     cur.enabled = !cur.enabled;
     map[id] = cur;
     await saveConfigAndRefresh();
-    renderClaimRows();
+    renderChCards();
   } else if (a === "claimnow") {
     const cur = CFG.claimChannels[id];
     cur.manualLastAt = Math.floor(Date.now() / 1000);
@@ -1727,7 +1720,7 @@ async function refresh() {
       activeIntervalSec: 60, idleIntervalSec: 300, backoffIntervalSec: 900,
       warnPercent: 40, critPercent: 15, notify: true, autostart: false,
       collapseOnBlur: false, form: "panel", sort: "percent", pillChannels: [],
-      fontScale: "md",
+      fontScale: "md", hiddenChannels: [],
       claimChannels: {
         "4sapi": { enabled: true, amount: 200, minIntervalDays: 14, manualLastAt: null, manualSetAt: null },
       },
