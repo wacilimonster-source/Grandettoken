@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Grandettoken · Codex 剩余用量接入 技术研究</title>
+<style>
+  :root{--tx:#edf0f6;--tx2:#b6bfce;--tx3:#8d97ab;--ac:#7fa2ff;--ok:#4ade9d;--warn:#f7c355;--bad:#ff6b63;--line:#2f3648}
+  *{box-sizing:border-box}
+  body{margin:0;background:#0e1117;color:var(--tx);font:14px/1.7 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:36px 22px 90px}
+  h1{font-size:22px;margin:0 0 6px}
+  .sub{color:var(--tx3);font-size:13px;margin-bottom:22px}
+  h2{font-size:16px;margin:34px 0 12px;padding-left:10px;border-left:3px solid var(--ac)}
+  .card{background:#161b24;border:1px solid #2a3245;border-radius:12px;padding:16px 18px;margin:10px 0;max-width:940px}
+  .card ul{margin:6px 0;padding-left:20px;color:var(--tx2)}.card li{margin:5px 0}.card b{color:var(--tx)}
+  code{font:12px Consolas,monospace;background:#1c2230;border:1px solid #2a3245;padding:1px 5px;border-radius:4px;color:#cdd6e8}
+  pre{background:#1c2230;border:1px solid #2a3245;border-radius:8px;padding:12px 14px;font:12px/1.6 Consolas,monospace;color:#cdd6e8;overflow-x:auto;max-width:940px}
+  .num{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:6px;background:rgba(127,162,255,.18);color:#a8c0ff;font-size:12px;font-weight:700;margin-right:8px}
+  table{border-collapse:collapse;width:100%;max-width:940px;font-size:13px}
+  th,td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  th{color:var(--tx3);font-size:12px;background:#1c2230}
+  .ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+  .tag{display:inline-block;font-size:10.5px;border:1px solid var(--line);border-radius:4px;padding:0 6px;color:var(--tx3);margin-left:6px;vertical-align:2px}
+  .tag.meas{border-color:rgba(74,222,157,.5);color:var(--ok)}
+  .tag.src{border-color:rgba(127,162,255,.5);color:#a8c0ff}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Codex 剩余用量接入:技术研究</h1>
+<div class="sub">2026-09-19 · 回答两个问题:①怎么做;②「是不是直接查本地就行」——<b style="color:#edf0f6">凭据在本地,用量在云端</b>,和 Trae / WorkBuddy 完全同一套路,现有架构可直接容纳。</div>
+
+<h2>一、结论速览</h2>
+<div class="card"><ul>
+  <li><b>本机已实测</b><span class="tag meas">本机验证</span>:你机器上有 Codex CLI 的 ChatGPT 登录态(<code>~/.codex/auth.json</code>,今天 02:43 刚刷新过),<b>读凭据这一步零障碍</b>;</li>
+  <li><b>用量数字不在本地文件里</b> —— auth.json 只有 token,没有任何额度数据。余量必须拿 token 查 ChatGPT 后端接口 <code>wham/usage</code>(Codex CLI 自己每 60 秒就轮询这个接口拿限额信息,我们做的是同一件事的只读版);</li>
+  <li><b>形态对齐现有「配额型」渠道,但窗口长度随套餐变</b><span class="tag meas">实测</span>:接口返回 <code>rate_limit.primary_window</code>(+ 可选 <code>secondary_window</code>)。你这台 <b>free 计划实测是单个 30 天窗、used_percent=0</b>;Plus/Pro 预期才是「5 小时 + 每周」双窗(需付费账号实抓确认)。无论几窗、窗长多少,都映射到现成的 <code>Window{label,remainPercent,resetsAt}</code> —— 大数字、迷你条、倒计时、组合预警全部复用,标签按时长自动生成;</li>
+  <li><b>两个硬前提</b>:①网络 —— 本机 shell 直连 chatgpt.com 超时(你的 CLI 能通说明走的是系统代理/TUN,应用侧 reqwest 必须显式跟随系统代理,否则装上也是「取数失败」);②套餐 —— 本机账号 plan_type=<b>free</b>,Codex 免费额度极小甚至为零,接口大概率返回空/打满,建议用 Plus/Pro 账号验证;</li>
+  <li><b>工作量估计</b>:1~2 天(appauth 加一个读取器 + provider 定义 + 复用配额型渲染 + 代理适配 + 测试),不需要新依赖。</li>
+</ul></div>
+
+<h2>二、本机凭据实测(值已脱敏)</h2>
+<pre>~/.codex/auth.json
+{
+  "auth_mode": "chatgpt",            <span style="color:#8d97ab">// 另一种是 "apikey"(平台 Key 登录)</span>
+  "OPENAI_API_KEY": null,
+  "tokens": {
+    "access_token":  "&lt;JWT 1774 字符&gt;",   <span style="color:#8d97ab">// exp ≈ 签发后 10 天;claims 里有 chatgpt_plan_type / account_id</span>
+    "refresh_token": "&lt;211 字符&gt;",
+    "id_token":      "&lt;JWT 1718 字符&gt;",   <span style="color:#8d97ab">// 邮箱/姓名等身份声明,我们用不到</span>
+    "account_id":    "8828329f-…"          <span style="color:#8d97ab">// 请求头 ChatGPT-Account-ID 要用它</span>
+  },
+  "last_refresh": "2026-09-19T02:43:42Z"   <span style="color:#8d97ab">// CLI 自己会续期,我们只搭便车</span>
+}</pre>
+<div class="card"><ul>
+  <li><b>只读、不刷新、不回写</b> —— 与 Trae/WorkBuddy 同一铁律:ChatGPT OAuth 刷新会<b>轮换 refresh_token 并作废旧的</b>,我们刷一次就把用户 CLI 踢下线一次。token 过期就如实提示「打开 Codex CLI 随便跑一句重新登录」;</li>
+  <li>auth_mode=apikey 的机器(用平台 Key 登录 CLI)拿不到 OAuth tokens —— 那种情况走另一条路(见第六节)。</li>
+</ul></div>
+
+<h2>三、用量接口</h2>
+<div class="card"><ul>
+  <li><b>端点</b>:<code>GET https://chatgpt.com/backend-api/wham/usage</code><span class="tag src">来源佐证</span> —— Codex CLI 内置轮询器每 60s 打它(开源仓库 issue 里可查证),返回的 <code>rate_limit</code> 就是 CLI 弹「额度已用完,xx 后重置」提示的数据源;</li>
+  <li><b>请求头</b>:<code>Authorization: Bearer &lt;access_token&gt;</code> + <code>ChatGPT-Account-ID: &lt;account_id&gt;</code> + 常规浏览器/CLI User-Agent;</li>
+  <li><b>响应形状</b><span class="tag meas">经代理实抓,HTTP 200</span>:核心是 <code>rate_limit.primary_window</code> 与 <code>rate_limit.secondary_window</code>(可空),各含 <code>used_percent</code>(已用%)、<code>limit_window_seconds</code>(窗长)、<code>reset_after_seconds</code>、<code>reset_at</code>(unix 秒);另有 <code>rate_limit.allowed</code>/<code>limit_reached</code>、<code>credits.balance</code>(按量付费余额,订阅号为 null)、<code>plan_type</code>。映射:<code>remainPercent = 100 - used_percent</code>、<code>resetsAt = reset_at</code>、窗标签按 <code>limit_window_seconds</code> 生成(≤6h→「5 小时」、≤8d→「每周」、≤35d→「每月」);</li>
+  <li><b>本机实测</b>:走你的代理 <code>127.0.0.1:7897</code> 直连成功(HTTP 200,941 字节,见第七节响应)。<b>free 计划只有单个 30 天窗、used_percent=0、secondary_window=null</b> —— 即「本月额度」型,而非 5 小时型;付费计划的窗口结构仍建议实抓一次。</li>
+</ul></div>
+
+<h2>四、落到现有架构的改动面</h2>
+<table>
+  <tr><th>模块</th><th>改动</th><th>参照</th></tr>
+  <tr><td><code>appauth.rs</code></td><td><code>App::Codex</code> + 读 <code>~/.codex/auth.json</code>:auth_mode=chatgpt 且 tokens 未过期才产出凭据(source 显示「Codex CLI」)</td><td>Trae/WorkBuddy 读取器,更简单(明文 JSON,无解密)</td></tr>
+  <tr><td><code>providers.rs</code></td><td>新 ProviderDef <code>codex</code>(名称「Codex」、色、<code>AuthKind::App(Codex)</code>、kind=percent);extract 解析 rate_limits → 两个 Window(「5 小时」「每周」)+ 大数字取 primary</td><td>opencode 的多窗配额型</td></tr>
+  <tr><td><code>fetch.rs</code></td><td>无需改 —— App 型凭据候选、失败降级、窗口渲染全是现成通路</td><td>—</td></tr>
+  <tr><td>前端</td><td>零改动(配额型三件套:迷你条/倒计时/组合预警自动生效);渠道管理卡自动出现眼睛/显隐</td><td>—</td></tr>
+  <tr><td>网络</td><td>reqwest 客户端开 <code>system_proxy</code> feature(跟随系统代理)。这是<b>本渠道专属前提</b>,其他渠道域名都不需要</td><td>新增,约 5 行</td></tr>
+  <tr><td>素材</td><td>codex logo(官方标识素材,logos/ 目录加一份)</td><td>opencode.svg 的做法</td></tr>
+</table>
+
+<h2>五、风险与合规(诚实清单)</h2>
+<div class="card"><ul>
+  <li><b>非公开接口</b>:<code>wham/usage</code> 是 ChatGPT 后端内部 API,字段可能随时变、也可能哪天加 Cloudflare 盾 —— 和 WorkBuddy 逆向接口同级的风险,我们的失败降级(沿用上次快照+标注)正好兜住;</li>
+  <li><b>ToS 灰度</b>:拿 CLI 的会话 token 查自己的用量,行为与 CLI 本身一致、只读、低频(60s 轮询池,不比 CLI 更频繁)—— 但严格说属于「非官方客户端使用会话凭据」,自用无碍,<b>不适合写进公开宣传</b>;</li>
+  <li><b>代理依赖</b>:没有代理/梯子的环境这个渠道永远「失联」—— UI 上要说人话(错误文案:「需要能访问 chatgpt.com 的网络环境」);</li>
+  <li><b>free 计划噪声</b>:免费额度极小,可能常年 100% 或空数据,预警会一直亮 —— 属数据本身如此,不是 bug;</li>
+  <li><b>过期体验</b>:access_token 10 天有效,但只要你日常用 CLI 它就自动续;长期不用 CLI 后过期 → 界面提示「打开 Codex 重新登录一次」,与 Trae 的体验一致。</li>
+</ul></div>
+
+<h2>六、备选路线(不推荐但记录)</h2>
+<div class="card"><ul>
+  <li><b>官方 Usage API</b>(<code>api.openai.com/v1/usage</code>):只覆盖 <b>API Key 计费模式</b>(按 token 付费的开发者),ChatGPT 订阅的 Codex 额度它查不到。若哪天你用 <code>auth_mode=apikey</code> 登 CLI,可以做成第 7 个「Key 型」渠道,和 4SAPI 同类;</li>
+  <li><b>解析 CLI 本地日志/会话文件</b>:codex 的 rollout 日志里有 token 计数,但那是「消耗量」不是「限额余量」,口径不对,放弃;</li>
+  <li><b>让用户手填 Key</b>:兜底方案,失去「零配置」的灵魂,不建议。</li>
+</ul></div>
+
+<h2>七、实抓记录(2026-09-19,经本机代理 127.0.0.1:7897)</h2>
+<pre>GET https://chatgpt.com/backend-api/wham/usage   → HTTP 200 (941B)
+{
+  "user_id": "user-…(脱敏)", "account_id": "8828329f-…(脱敏)", "email": "wa…(脱敏)",
+  "plan_type": "free",
+  "rate_limit": {
+    "allowed": true, "limit_reached": false,
+    "primary_window": { "used_percent": 0, "limit_window_seconds": 2592000,
+                        "reset_after_seconds": 2592000, "reset_at": 1792378201 },
+    "secondary_window": null
+  },
+  "code_review_rate_limit": null, "additional_rate_limits": null, "model_usage": {},
+  "credits": { "has_credits": false, "balance": null, … },
+  "spend_control": { "reached": false, … },
+  "rate_limit_reset_credits": { "available_count": 0, … }
+}</pre>
+<div class="card"><ul>
+  <li>字段全部坐实;免费号单窗 30 天、0% 已用。<b>待补一次付费账号实抓</b>,确认 5h/每周双窗与 <code>code_review_rate_limit</code> 的形状(实现时按「数组化解析、缺哪个窗就少画哪个」写,天然兼容);</li>
+  <li>额外发现 <code>rate_limit_reset_credits.available_count</code>(可用「重置券」数)与 <code>credits.balance</code> —— 都是可展示但不必展示的信号,先不进 UI。</li>
+</ul></div>
+
+<h2>八、待裁决</h2>
+<div class="card">
+  <ul>
+    <li><span class="num">1</span><b>做不做</b>:字段已实抓坐实(第七节),现在只差你拍板 —— a 直接实现(推荐)/ b 先用付费号补抓一次双窗再做?</li>
+    <li><span class="num">2</span><b>口径</b>:大数字取「最紧的窗」,其余窗进迷你条(免费=单窗也成立,付费=5h/每周自动多窗,推荐)/ 固定取 primary?</li>
+    <li><span class="num">3</span><b>API Key 模式</b>:顺手把 auth_mode=apikey 的机器识别为「可填平台 Key 的 Key 型渠道」?(建议顺手做,成本极低)/ 先只做订阅 OAuth?</li>
+  </ul>
+</div>
+
+</div>
+</body>
+</html>

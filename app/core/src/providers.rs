@@ -619,6 +619,100 @@ pub fn workbuddy_body() -> String {
     )
 }
 
+/// Codex(ChatGPT 订阅)的用量。`wham/usage` 返回 `rate_limit.primary_window`
+/// (+ 可选 secondary_window),字段为本机实抓样本(见 codex-research.html)。
+/// 窗口标签按时长生成 —— 窗型由服务端按套餐决定,绝不能写死「5 小时」
+/// (OpenAI 2026-07 曾临时取消过 5 小时窗又恢复,结构是会变的)。
+pub fn extract_codex(body: &Value) -> FetchResult {
+    let rl = match body.get("rate_limit") {
+        Some(v) if v.is_object() => v,
+        _ => {
+            return FetchResult {
+                valid: false,
+                kind: Kind::Percent,
+                error: Some("响应无 rate_limit(登录态或接口结构变了)".into()),
+                ..Default::default()
+            }
+        }
+    };
+
+    let win = |key: &str| -> Option<Window> {
+        let w = rl.get(key)?;
+        let used = w.get("used_percent").and_then(num)?;
+        let secs = w.get("limit_window_seconds").and_then(num).unwrap_or(0.0);
+        Some(Window {
+            label: codex_window_label(secs),
+            percent: round1(used),
+            remain_percent: round1((100.0 - used).max(0.0)),
+            status: if used >= 100.0 { "rate-limited".into() } else { "ok".into() },
+            resets_at: w
+                .get("reset_at")
+                .and_then(num)
+                .filter(|s| *s > 0.0)
+                .and_then(|s| {
+                    chrono::DateTime::from_timestamp(s as i64, 0)
+                        .map(|d| d.to_rfc3339())
+                }),
+        })
+    };
+
+    let Some(primary) = win("primary_window") else {
+        return FetchResult {
+            valid: false,
+            kind: Kind::Percent,
+            error: Some("无可用配额窗口".into()),
+            ..Default::default()
+        };
+    };
+    let mut windows = vec![primary.clone()];
+    if let Some(s) = win("secondary_window") {
+        windows.push(s);
+    }
+
+    let limited = rl
+        .get("limit_reached")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let plan = body
+        .get("plan_type")
+        .and_then(|p| p.as_str())
+        .unwrap_or("")
+        .to_string();
+    let mut extra = Vec::new();
+    if !plan.is_empty() {
+        extra.push(("套餐".into(), plan));
+    }
+
+    // 裁决①:大数字固定取 primary 窗(不是最紧窗);副标题会写明窗名。
+    FetchResult {
+        valid: true,
+        kind: Kind::Percent,
+        remaining: Some(primary.remain_percent),
+        used: Some(primary.percent),
+        total: Some(100.0),
+        unit: "%".into(),
+        limited: limited || primary.status == "rate-limited",
+        windows,
+        extra,
+        ..Default::default()
+    }
+}
+
+/// 窗长 → 中文标签。阈值取整档上沿,服务端怎么改窗型都能落进合理名字。
+fn codex_window_label(secs: f64) -> String {
+    if secs <= 6.0 * 3600.0 {
+        "5 小时".into()
+    } else if secs <= 36.0 * 3600.0 {
+        "当日".into()
+    } else if secs <= 9.0 * 86_400.0 {
+        "本周".into()
+    } else if secs <= 35.0 * 86_400.0 {
+        "本月".into()
+    } else {
+        "周期".into()
+    }
+}
+
 pub const PROVIDERS: &[ProviderDef] = &[
     ProviderDef {
         id: "4sapi",
@@ -723,6 +817,23 @@ pub const PROVIDERS: &[ProviderDef] = &[
         unstable: true,
         default_kind: Kind::Points,
         extract: extract_workbuddy,
+    },
+    ProviderDef {
+        id: "codex",
+        name: "Codex",
+        short: "CX",
+        color: "#10a37f",
+        // ChatGPT 后端内部接口,Codex CLI 自身每 60s 轮询同一个地址。
+        // 实测只带 Authorization 即可(account-id 头可省);无备用入口。
+        url: "https://chatgpt.com/backend-api/wham/usage",
+        fallback_urls: &[],
+        extra_headers: &[],
+        auth: AuthKind::App(App::Codex),
+        auth_prefix: "Bearer ",
+        method: Method::Get,
+        unstable: true,
+        default_kind: Kind::Percent,
+        extract: extract_codex,
     },
 ];
 
@@ -964,4 +1075,80 @@ mod tests {
         assert_eq!(parse_beijing_time("  2026-09-18 15:34:49 "), Some(1789716889));
         assert_eq!(parse_beijing_time("2026/09/18"), None);
     }
+
+    /// 本机实抓的 free 号响应:单个 30 天窗、0% 已用。大数字取 primary。
+    #[test]
+    fn codex_free_single_month_window() {
+        let r = extract_codex(&json!({
+            "plan_type": "free",
+            "rate_limit": {
+                "allowed": true, "limit_reached": false,
+                "primary_window": {
+                    "used_percent": 0, "limit_window_seconds": 2592000,
+                    "reset_after_seconds": 2592000, "reset_at": 1792378201
+                },
+                "secondary_window": null
+            }
+        }));
+        assert!(r.valid);
+        assert_eq!(r.kind, Kind::Percent);
+        assert_eq!(r.windows.len(), 1);
+        assert_eq!(r.windows[0].label, "本月");
+        assert_eq!(r.windows[0].remain_percent, 100.0);
+        assert_eq!(r.remaining, Some(100.0));
+        assert!(!r.limited);
+        assert_eq!(r.extra[0], ("套餐".into(), "free".into()));
+        assert!(r.windows[0].resets_at.as_deref().unwrap().ends_with("+00:00"));
+    }
+
+    /// 付费号预期:5 小时 primary + 每周 secondary 两窗,大数字仍取 primary。
+    #[test]
+    fn codex_paid_two_windows_headline_is_primary() {
+        let r = extract_codex(&json!({
+            "plan_type": "plus",
+            "rate_limit": {
+                "allowed": true, "limit_reached": false,
+                "primary_window": { "used_percent": 76.5, "limit_window_seconds": 18000, "reset_at": 1792378201 },
+                "secondary_window": { "used_percent": 39.0, "limit_window_seconds": 604800, "reset_at": 1792378201 }
+            }
+        }));
+        assert!(r.valid);
+        assert_eq!(r.windows.len(), 2);
+        assert_eq!(r.windows[0].label, "5 小时");
+        assert_eq!(r.windows[1].label, "本周");
+        assert_eq!(r.remaining, Some(23.5));
+    }
+
+    #[test]
+    fn codex_rate_limited_marks_limited() {
+        let r = extract_codex(&json!({
+            "plan_type": "plus",
+            "rate_limit": {
+                "allowed": false, "limit_reached": true,
+                "primary_window": { "used_percent": 100, "limit_window_seconds": 18000, "reset_at": 1792378201 },
+                "secondary_window": null
+            }
+        }));
+        assert!(r.valid);
+        assert!(r.limited);
+        assert_eq!(r.windows[0].status, "rate-limited");
+        assert_eq!(r.windows[0].remain_percent, 0.0);
+    }
+
+    #[test]
+    fn codex_missing_rate_limit_is_invalid() {
+        let r = extract_codex(&json!({ "detail": "Not authenticated" }));
+        assert!(!r.valid);
+        assert!(r.error.is_some());
+    }
+
+    #[test]
+    fn codex_window_labels_scale_with_seconds() {
+        assert_eq!(codex_window_label(18000.0), "5 小时");
+        assert_eq!(codex_window_label(86_400.0), "当日");
+        assert_eq!(codex_window_label(604_800.0), "本周");
+        assert_eq!(codex_window_label(2_592_000.0), "本月");
+        assert_eq!(codex_window_label(9_000_000.0), "周期");
+    }
+
 }

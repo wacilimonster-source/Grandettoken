@@ -59,12 +59,13 @@ function relTime(ts) {
 
 /**
  * 配额型渠道的主窗口:固定看「周期」窗(实测锚定开通日,旧称「本月」),
- * 窗口缺失时退到最后一个。大数字与状态色都按它走 —— 5 小时 / 本周的波动不该左右整行的观感。
+ * 窗口缺失「周期」时退到数组首位(各渠道的主窗约定放在第一个)。大数字与状态色都按它走。
  */
 function mainWindow(c) {
   const wins = c.windows || [];
   if (!wins.length) return null;
-  return wins.find((w) => w.label === "周期") || wins[wins.length - 1];
+  // 「周期」是 OpenCode 的主窗标签;其他渠道由 Rust 把主窗放在数组首位(裁决①:Codex 固定 primary)
+  return wins.find((w) => w.label === "周期") || wins[0];
 }
 
 /** ISO 8601(UTC)的 resetsAt → 毫秒;缺失/异常一律 null,绝不猜。 */
@@ -168,6 +169,7 @@ const LOGOS = {
   deepseek: "logos/deepseek.png",
   trae: "logos/trae.svg",
   workbuddy: "logos/workbuddy.png",
+  codex: "logos/chatgpt.svg",
 };
 
 /**
@@ -292,7 +294,11 @@ function renderRow(c, i) {
   let sub;
   if (noKey) sub = c.authSource === "app" ? `未检测到 ${c.name} 登录信息` : "未配置密钥";
   else if (failed) sub = "取数失败";
-  else if (wins.length) sub = "";
+  else if (wins.length) {
+    // Codex 把套餐放在 extra 里(裁决②:副标题带 free/plus/pro 徽章);OpenCode 无此键,维持空白
+    const plan = (c.extra || []).find((e) => e[0] === "套餐");
+    sub = plan ? `ChatGPT 订阅 · <span class="plan">${esc(plan[1])}</span>` : "";
+  }
   else if (c.limited) sub = "已限流";
   else if (isPts) {
     sub = soon

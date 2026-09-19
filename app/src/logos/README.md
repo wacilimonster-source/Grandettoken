@@ -9,6 +9,7 @@
 | `deepseek.png` | DeepSeek | https://www.deepseek.com/favicon.ico(225×225 帧转 PNG) | 2026-09-17 |
 | `trae.svg` | Trae | 本机已安装的 TRAE SOLO CN 客户端自带素材 `resources/app/out/media/trae-logo.svg` | 2026-09-17 |
 | `workbuddy.png` | WorkBuddy | 本机已安装的 WorkBuddy 客户端 `Assets/Square44x44Logo.targetsize-256.png`(256×256) | 2026-09-17 |
+| `chatgpt.svg` | Codex | ChatGPT 官方结形标(白色描点路径,透明底;形状与 chatgpt.com 站内标一致) | 2026-09-19 |
 
 说明:
 

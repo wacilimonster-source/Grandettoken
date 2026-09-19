@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Grandettoken · Codex 渠道 产品设计</title>
+<style>
+  :root{--u:1;--bg:#12141a;--bg2:#191c24;--bg3:#20242e;--line:#2f3648;--line2:#3c445c;
+    --tx:#edf0f6;--tx2:#b6bfce;--tx3:#8d97ab;--ok:#4ade9d;--warn:#f7c355;--bad:#ff6b63;--ac:#7fa2ff}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#0e1117;color:var(--tx);font:14px/1.7 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:36px 22px 90px}
+  h1{font-size:22px;margin:0 0 6px}
+  .sub{color:var(--tx3);font-size:13px;margin-bottom:22px}
+  h2{font-size:16px;margin:34px 0 12px;padding-left:10px;border-left:3px solid var(--ac)}
+  .cap{font-size:11.5px;color:var(--tx3);margin:14px 0 6px}
+  .card{background:#161b24;border:1px solid #2a3245;border-radius:12px;padding:16px 18px;margin:10px 0;max-width:940px}
+  .card ul{margin:6px 0;padding-left:20px;color:#b6bfce}.card li{margin:5px 0}.card b{color:var(--tx)}
+  code{font:12px Consolas,monospace;background:#1c2230;border:1px solid #2a3245;padding:1px 5px;border-radius:4px;color:#cdd6e8}
+  .num{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:6px;background:rgba(127,162,255,.18);color:#a8c0ff;font-size:12px;font-weight:700;margin-right:8px}
+  table{border-collapse:collapse;width:100%;max-width:940px;font-size:13px}
+  th,td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  th{color:var(--tx3);font-size:12px;background:#1c2230}
+
+  /* ── 仿真实窗口(380 宽面板)── */
+  .win{width:380px;border:1px solid var(--line);border-radius:12px;background:var(--bg);overflow:hidden;margin:6px 0}
+  .tbar{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--line);font-size:12px;color:var(--tx2)}
+  .tbar .sp{margin-left:auto;color:var(--tx3);font-size:11px}
+  .row{border-bottom:1px solid #232937;padding:9px 12px 8px}
+  .r1{display:flex;align-items:center;gap:8px}
+  .ico{width:28px;height:28px;border-radius:8px;flex:none;display:grid;place-items:center;font-size:11px;font-weight:700;color:#fff;background:#10a37f}
+  .ico.off{background:#3c445c;filter:grayscale(1);opacity:.6}
+  .nm{min-width:0;flex:1}
+  .n{font-size:13px;font-weight:500;display:flex;align-items:center;gap:5px}
+  .s{font-size:11px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .val{text-align:right;font-variant-numeric:tabular-nums}
+  .v{font-size:20px;font-weight:600;line-height:1.1}
+  .p{font-size:11px;color:var(--tx3)}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);display:inline-block}
+  .dot.w{background:var(--warn)}.dot.b{background:var(--bad)}.dot.o{background:var(--tx3)}
+  .wins{margin-top:7px}
+  .winr{display:flex;align-items:center;gap:8px;margin-top:4px}
+  .wl{width:44px;font-size:11px;color:var(--tx3)}
+  .wb{flex:1;height:4px;border-radius:3px;background:#303849;overflow:hidden}
+  .wb i{display:block;height:100%;border-radius:3px}
+  .wv{width:46px;text-align:right;font-size:11.5px;font-weight:500;font-variant-numeric:tabular-nums}
+  .wt{width:62px;text-align:right;font-size:11px;color:var(--tx2);font-variant-numeric:tabular-nums}
+  .hint{font-size:11px;color:var(--tx3);margin-top:5px}
+  .plan{display:inline-block;font-size:9.5px;line-height:1.5;padding:0 5px;border-radius:4px;background:rgba(127,162,255,.16);color:#a8c0ff;vertical-align:1px}
+  .plan.free{background:#262b38;color:var(--tx3)}
+
+  /* 紧凑条 / 胶囊 */
+  .desk{background:linear-gradient(160deg,#2b3350,#1b2436 55%,#243040);border-radius:14px;padding:18px;max-width:940px}
+  .cbar{display:inline-flex;align-items:center;gap:10px;height:46px;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:0 4px 0 11px}
+  .chip{display:inline-flex;align-items:center;gap:5px;background:var(--bg3);border-radius:6px;padding:3px 7px;font-size:12.5px;font-variant-numeric:tabular-nums}
+  .chip .ci{width:16px;height:16px;border-radius:4px;display:grid;place-items:center;font-size:8px;font-weight:700;color:#fff;background:#10a37f}
+  .chip .cn{font-size:11.5px;color:var(--tx2)}
+  .pill{display:inline-flex;align-items:center;gap:8px;height:46px;border-radius:999px;background:#12141af2;border:1px solid var(--line2);padding:0 7px 0 9px;font-weight:600;font-variant-numeric:tabular-nums}
+  .pill .pi{width:26px;height:26px;border-radius:7px;display:grid;place-items:center;font-size:10.5px;font-weight:700;color:#fff;background:#10a37f}
+  .cbtn{width:22px;height:22px;border-radius:6px;background:var(--bg3);color:var(--tx3);display:grid;place-items:center;font-size:10px}
+
+  /* 设置卡 */
+  .ccard{background:var(--bg3);border:1px solid var(--line);border-radius:10px;padding:10px 12px;max-width:380px}
+  .crow{display:flex;align-items:center;gap:9px}
+  .ctag{font-size:10px;border:1px solid var(--line2);border-radius:4px;padding:0 6px;color:var(--tx3)}
+  .cst{font-size:11.5px;color:var(--tx2);margin-top:7px}
+  .cst b{color:var(--ok)}
+  .eye{margin-left:auto;color:var(--tx3);font-size:14px}
+  .btn{border:1px solid var(--line2);background:#262b38;color:var(--tx2);border-radius:6px;padding:3px 10px;font:12px inherit;font-family:inherit}
+  /* 官方 ChatGPT 标(裁决④):白色结形,透明底,与其他 logo 渠道同规则 */
+  .ico.logo,.ci.logo,.pi.logo{background:transparent}
+  .gi{width:82%;height:82%;fill:#fff;display:block}
+</style>
+</head>
+<body>
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg"><symbol id="gpt" viewBox="0 0 24 24"><path d="M22.28 9.82a5.98 5.98 0 0 0-.52-4.91 6.05 6.05 0 0 0-6.51-2.9A6.07 6.07 0 0 0 4.98 4.18a5.98 5.98 0 0 0-4 2.9 6.05 6.05 0 0 0 .75 7.1 5.98 5.98 0 0 0 .51 4.91 6.05 6.05 0 0 0 6.52 2.9A5.98 5.98 0 0 0 13.26 24a6.06 6.06 0 0 0 5.77-4.3 5.99 5.99 0 0 0 4-2.9 6.06 6.06 0 0 0-.75-7.1zM13.26 22.43a4.48 4.48 0 0 1-2.88-1.04l.14-.1 4.78-2.76a.38.38 0 0 0 .19-.33v-6.73l2.02 1.17a.08.08 0 0 1 .05.06v5.58a4.5 4.5 0 0 1-4.16 4.47zM5.47 17.42a4.47 4.47 0 0 1-.54-3.01l4.79 2.76a.38.38 0 0 0 .38 0l5.85-3.37v2.33a.09.09 0 0 1-.03.07l-4.83 2.79a4.5 4.5 0 0 1-6.62-1.57zm13.46-3.86a.38.38 0 0 0-.2-.33l-5.83-3.4V5.67a.09.09 0 0 1 .13-.07l4.82 2.79a4.49 4.49 0 0 1-.2 8.34zm2.02-1.28l-2.02-1.17V4.38a.38.38 0 0 0-.6-.31l-4.83 2.79.13.07a4.49 4.49 0 0 1 7.32 2.57v2.78zM6.99 9.27 2.22 6.5a.09.09 0 0 1-.05-.06V5.86a4.5 4.5 0 0 1 7.39-3.46l-.14.09-4.78 2.76a.38.38 0 0 0-.19.33v3.75zm1.12-3.06V2.88l2.93 1.7a.38.38 0 0 0 .38 0l2.92-1.7v3.33a.38.38 0 0 1-.19.33l-2.9 1.68a.38.38 0 0 1-.39 0l-2.9-1.68a.38.38 0 0 1-.19-.33z"/></symbol></svg>
+<div class="wrap">
+
+<h1>Codex 渠道:产品设计</h1>
+<div class="sub">2026-09-19 设计稿(未改代码)· 前置结论见 <code>codex-research.html</code>(凭据本地读、用量在线查、字段已实抓)。设计原则:<b style="color:#edf0f6">长得像第 7 个「配额型」渠道,而不是新物种</b> —— OpenCode Go 的三件套(大数字+窗口迷你条+重置倒计时)原样复用。</div>
+
+<h2>一、状态矩阵(设计上要覆盖的全部情况)</h2>
+<table>
+  <tr><th>状态</th><th>判定</th><th>行外观</th><th>副标题口径</th></tr>
+  <tr><td>已登录 · 免费号(你本机现状)</td><td>auth.json 有效 + <code>plan_type=free</code></td><td>单窗:大数字=剩余%,迷你条一条「本月」+ 重置日</td><td>「ChatGPT 订阅 · free」</td></tr>
+  <tr><td>已登录 · 付费号</td><td><code>plan_type=plus/pro</code></td><td>双窗:5 小时 + 每周,大数字取<b>最紧的窗</b></td><td>「ChatGPT 订阅 · Plus」</td></tr>
+  <tr><td>额度打满</td><td><code>limit_reached=true</code></td><td>大数字 0.0% 红色 + 组合预警规则照旧</td><td>「已达上限 · 2 小时 14 分后重置」</td></tr>
+  <tr><td>登录态过期</td><td>token exp 已过</td><td>灰化图标 + 「——」</td><td>「打开一次 Codex 自动续期」</td></tr>
+  <tr><td>未装/未登录</td><td>无 auth.json / auth_mode 无 tokens</td><td>灰化 + 「——」</td><td>「未检测到 Codex 登录信息」</td></tr>
+  <tr><td>网络不可达</td><td>连不上 chatgpt.com(无代理)</td><td>沿用上次快照 + 黄字 stale 提示</td><td>「需能访问 chatgpt.com 的网络」</td></tr>
+</table>
+
+<h2>二、面板行 · 真实尺寸(380px)</h2>
+<div class="cap">A 免费号(本机实测数据:单 30 天窗、0% 已用、10-19 重置)</div>
+<div class="win"><div class="tbar"><span class="dot"></span>Grandettoken<span class="sp">7/7</span></div>
+  <div class="row">
+    <div class="r1"><span class="ico logo"><svg class="gi"><use href="#gpt"/></svg></span>
+      <div class="nm"><div class="n">Codex<span class="dot"></span></div><div class="s">ChatGPT 订阅 · <span class="plan free">free</span></div></div>
+      <div class="val"><div class="v" style="color:var(--ok)">100.0<i style="font-style:normal">%</i></div><div class="p">月窗 · 10月19日重置</div></div>
+    </div>
+    <div class="wins"><div class="winr"><span class="wl">本月</span><i class="wb"><i style="width:100%;background:#4ade9d"></i></i><b class="wv" style="color:var(--ok)">100%</b><span class="wt">29天23时</span></div></div>
+  </div>
+</div>
+<div class="cap">B 付费号(预期形态:5 小时 + 每周双窗,大数字取最紧的 5h 窗)</div>
+<div class="win"><div class="tbar"><span class="dot"></span>Grandettoken<span class="sp">7/7</span></div>
+  <div class="row">
+    <div class="r1"><span class="ico logo"><svg class="gi"><use href="#gpt"/></svg></span>
+      <div class="nm"><div class="n">Codex<span class="dot w"></span></div><div class="s">ChatGPT 订阅 · <span class="plan">plus</span></div></div>
+      <div class="val"><div class="v" style="color:var(--warn)">23.5<i style="font-style:normal">%</i></div><div class="p">5小时窗 · 1时42分后重置</div></div>
+    </div>
+    <div class="wins">
+      <div class="winr"><span class="wl">5 小时</span><i class="wb"><i style="width:23.5%;background:#f7c355"></i></i><b class="wv" style="color:var(--warn)">23.5%</b><span class="wt">1时42分</span></div>
+      <div class="winr"><span class="wl">本周</span><i class="wb"><i style="width:61%;background:#4ade9d"></i></i><b class="wv" style="color:var(--ok)">61.0%</b><span class="wt">2天3时</span></div>
+    </div>
+  </div>
+</div>
+<div class="cap">C 异常态三连:打满 / 过期 / 无网络(灰化与 stale 沿用现有语言,不发明新样式)</div>
+<div class="win"><div class="tbar"><span class="dot w"></span>Grandettoken<span class="sp">7/7</span></div>
+  <div class="row">
+    <div class="r1"><span class="ico logo"><svg class="gi"><use href="#gpt"/></svg></span>
+      <div class="nm"><div class="n">Codex<span class="dot b"></span></div><div class="s">已达上限 · 2小时14分后重置</div></div>
+      <div class="val"><div class="v" style="color:var(--bad)">0.0<i style="font-style:normal">%</i></div><div class="p">5小时窗 · 马上恢复</div></div>
+    </div>
+    <div class="wins"><div class="winr"><span class="wl">5 小时</span><i class="wb"><i style="width:0%;background:#ff6b63"></i></i><b class="wv" style="color:var(--bad)">0%</b><span class="wt">2时14分</span></div>
+    <div class="winr"><span class="wl">本周</span><i class="wb"><i style="width:12%;background:#ff6b63"></i></i><b class="wv" style="color:var(--bad)">12.0%</b><span class="wt">2天3时</span></div></div>
+  </div>
+  <div class="row">
+    <div class="r1"><span class="ico logo" style="filter:grayscale(1);opacity:.5"><svg class="gi"><use href="#gpt"/></svg></span>
+      <div class="nm"><div class="n">Codex<span class="dot o"></span></div><div class="s">登录态过期 · 打开一次 Codex 自动续期</div></div>
+      <div class="val"><div class="v" style="color:var(--tx3)">——</div><div class="p">需打开应用</div></div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="r1"><span class="ico logo"><svg class="gi"><use href="#gpt"/></svg></span>
+      <div class="nm"><div class="n">Codex<span class="dot"></span></div><div class="s">ChatGPT 订阅 · <span class="plan free">free</span></div></div>
+      <div class="val"><div class="v" style="color:var(--ok)">100.0<i style="font-style:normal">%</i></div><div class="p">月窗 · 10月19日重置</div></div>
+    </div>
+    <div class="hint" style="color:var(--warn)">显示的是 3 小时前的成功快照 · chatgpt.com 不可达(本渠道需要代理网络)</div>
+  </div>
+</div>
+
+<h2>三、紧凑条与胶囊</h2>
+<div class="desk">
+  <div class="cbar">
+    <span class="chip"><span class="dot" style="background:#4ade9d"></span><span class="ci logo" style="background:transparent"><svg class="gi"><use href="#gpt"/></svg></span><span class="cn">CX</span>100.0%</span>
+    <span class="chip"><span class="dot" style="background:#4ade9d"></span><span class="ci" style="background:#f5a623">OC</span>82.0%</span>
+    <span class="cbtn">▲</span><span class="cbtn">●</span>
+  </div>
+  <div style="height:10px"></div>
+  <div class="pill"><span class="dot"></span><span class="pi logo" style="background:transparent"><svg class="gi"><use href="#gpt"/></svg></span>100.0<i style="font-style:normal">%</i><span class="cbtn" style="margin-left:2px">▲</span></div>
+</div>
+<div class="card"><ul>
+  <li>紧凑条 L0 缩写 = <b>「CX」</b>(与其他渠道缩写同规则);胶囊/紧凑条取大数字同口径(最紧窗);</li>
+  <li>图标:已按裁决④换 <b>ChatGPT 官方标(结形,白色透明底)</b>,实现时进 <code>logos/chatgpt.svg</code>;未登录/过期态压暗去色,与其他 logo 渠道同规则。</li>
+</ul></div>
+
+<h2>四、设置 → 渠道卡(App 型,零密钥)</h2>
+<div class="ccard">
+  <div class="crow"><span class="ico logo" style="width:22px;height:22px"><svg class="gi"><use href="#gpt"/></svg></span>
+    <b style="font-size:13px">Codex</b><span class="ctag">复用本机登录态</span><span class="eye">&#128065;</span></div>
+  <div class="cst">状态:<b>已检测到 Codex CLI 登录</b>(账号 wa***@gmail.com · 套餐 free)</div>
+  <div class="cst" style="color:var(--tx3)">本挂件只读那份登录凭据、只查用量,不写回也不刷新;额度数字需要能访问 chatgpt.com 的网络(代理/TUN 均可)。</div>
+  <div class="crow" style="margin-top:9px"><button class="btn">重新检测</button><span style="margin-left:auto;font-size:11px;color:var(--tx3)">隐藏渠道即停止取数</span></div>
+</div>
+
+<h2>五、口径细则(实现前锁死)</h2>
+<div class="card"><ul>
+  <li><b>窗标签按时长自动命名</b>:≤6h→「5 小时」、≤24h→「当日」、≤8d→「本周」、≤35d→「本月」(free 的 30 天窗就叫「本月」,别叫「周期」——那是 OpenCode 的锚定日语义,Codex 是滚动窗);</li>
+  <li><b>大数字 = 剩余最多语义下取「最紧的窗」</b>(used_percent 最大者),与 OpenCode 取「周期窗」不同 —— Codex 没有固定主窗,用户最该看到的是最快卡住他的那个;副标题注明是哪个窗;</li>
+  <li><b>组合预警沿用现规则</b>:剩余 &lt; crit 红线且距重置 &gt;3 天才喊;打满时(限流中)倒计时归零前显示「马上恢复」绿字逻辑不变;</li>
+  <li><b>plan_type 进副标题</b>(free/plus/pro 小徽章),<code>credits.balance</code> 与「重置券数」<b>不进 UI</b>(研究稿第七节,信号太杂);</li>
+  <li><b>过期文案与 Trae 区分</b>:Trae 说「打开一次 Trae」,Codex 说「打开一次 Codex 自动续期」—— 续期动作发生在用户的 CLI 里,我们不动;</li>
+  <li>网络失败与 401 分文案:401/403=「登录态过期」,连不上=「需要代理网络」,别混成一条「取数失败」。</li>
+</ul></div>
+
+<h2>六、裁决状态</h2>
+<div class="card">
+  <ul>
+    <li><span class="num">1</span><b>大数字口径</b>:<span style="color:var(--warn)">待定</span> —— 最紧窗(推荐,理由见对话:付费号「5h 刚重置 + 周窗将满」时固定 primary 会骗人)/ 固定 primary;</li>
+    <li><span class="num">2</span><b>套餐徽章</b>:<span style="color:var(--ok)">已定</span> —— 副标题带 free/plus/pro 小徽章;</li>
+    <li><span class="num">3</span><b>API Key 模式</b>:<span style="color:var(--ok)">已定</span> —— 先跑通订阅 OAuth,apikey 机器按「未检测到登录信息」处理;</li>
+    <li><span class="num">4</span><b>图标</b>:<span style="color:var(--ok)">已定</span> —— ChatGPT 官方标(本稿已全部换成实样)。</li>
+  </ul>
+</div>
+
+</div>
+</body>
+</html>

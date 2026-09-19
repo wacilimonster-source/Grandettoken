@@ -19,6 +19,7 @@ use std::path::PathBuf;
 pub enum App {
     Trae,
     WorkBuddy,
+    Codex,
 }
 
 impl App {
@@ -27,6 +28,7 @@ impl App {
         match self {
             App::Trae => "Trae",
             App::WorkBuddy => "WorkBuddy",
+            App::Codex => "Codex",
         }
     }
 }
@@ -67,6 +69,7 @@ pub fn candidates(app: App) -> Vec<Credential> {
     match app {
         App::Trae => trae_candidates(),
         App::WorkBuddy => workbuddy_candidates(),
+        App::Codex => codex_candidates(),
     }
 }
 
@@ -297,6 +300,45 @@ fn workbuddy_token_from_info(raw: &str) -> Option<String> {
     Some(token.to_string())
 }
 
+// ───────────── Codex ─────────────
+
+/// Codex CLI 的登录态文件(Windows 下在 %USERPROFILE%\.codex\auth.json)。
+/// 明文 JSON,无解密 —— 比 Trae/WorkBuddy 都简单,唯一门槛是 auth_mode。
+fn codex_candidates() -> Vec<Credential> {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from);
+    let Some(home) = home else {
+        return Vec::new();
+    };
+    let path = home.join(".codex").join("auth.json");
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let Some(token) = codex_token_from_storage(&raw) else {
+        return Vec::new();
+    };
+    vec![Credential {
+        token,
+        source: "CLI 登录态".into(),
+    }]
+}
+
+/// 只认 ChatGPT 订阅登录(auth_mode=chatgpt)。用平台 API Key 登 CLI 的机器
+/// 没有 OAuth tokens,查不到订阅额度 —— 按「未检测到登录信息」处理(裁决③)。
+/// 不在这里校验 exp:CLI 平时自动续期,真过期了 401 的文案会指路。
+fn codex_token_from_storage(raw: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(raw).ok()?;
+    if v.get("auth_mode").and_then(|m| m.as_str()) != Some("chatgpt") {
+        return None;
+    }
+    let token = v.get("tokens")?.get("access_token")?.as_str()?.trim();
+    if token.is_empty() {
+        return None;
+    }
+    Some(token.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,5 +408,24 @@ mod tests {
         assert!(is_backup_name("workbuddy-desktop.2026-06-09T09-04-37-611Z.info"));
         assert!(!is_backup_name("workbuddy-desktop.info"));
         assert!(!is_backup_name("workbuddy-desktop-ai.info"));
+    }
+
+    #[test]
+    fn codex_reads_chatgpt_oauth_only() {
+        let ok = r#"{"auth_mode":"chatgpt","OPENAI_API_KEY":null,
+            "tokens":{"access_token":"eyJhbC.x.y","refresh_token":"rt","account_id":"u-1"}}"#;
+        assert_eq!(codex_token_from_storage(ok).as_deref(), Some("eyJhbC.x.y"));
+
+        // 平台 Key 登录的 CLI:没有订阅额度可查,按未检测到处理(裁决③)
+        let key = r#"{"auth_mode":"apikey","OPENAI_API_KEY":"sk-x"}"#;
+        assert!(codex_token_from_storage(key).is_none());
+
+        // 空 token / 缺 tokens / 不是 JSON 一律 None,不 panic
+        assert!(
+            codex_token_from_storage(r#"{"auth_mode":"chatgpt","tokens":{"access_token":" "}}"#)
+                .is_none()
+        );
+        assert!(codex_token_from_storage(r#"{"auth_mode":"chatgpt"}"#).is_none());
+        assert!(codex_token_from_storage("{").is_none());
     }
 }

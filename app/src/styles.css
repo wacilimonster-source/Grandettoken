@@ -340,6 +340,9 @@ body.view-manage #lkKeys{display:none}
 body.form-compact .wmark{display:inline}
 .nm .s .cy{color:var(--ac)}
 .nm .s .ct{color:var(--tx3)}
+/* Codex 副标题里的套餐小徽章(free/plus/pro) */
+.nm .s .plan{display:inline-block;font-size:max(9.5px,calc(9.5px*var(--u)));line-height:1.5;
+  padding:0 5px;border-radius:4px;background:rgba(127,162,255,.16);color:#a8c0ff;vertical-align:1px}
 
 /* ── 底栏 ── */
 .foot{display:flex;align-items:center;gap:calc(8px*var(--u));padding:calc(7px*var(--u)) calc(12px*var(--u));background:#141720;
