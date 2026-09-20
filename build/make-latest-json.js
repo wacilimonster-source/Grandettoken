@@ -37,7 +37,7 @@ if (!fs.existsSync(sigPath)) {
 const tag = `v${version}`;
 const json = {
   version,
-  notes: process.argv.slice(2).join(' ') || `TokenScope ${version}`,
+  notes: process.argv.slice(2).join(' ') || `Grandettoken ${version}`,
   pub_date: new Date().toISOString(),
   platforms: {
     'windows-x86_64': {

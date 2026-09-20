@@ -137,6 +137,9 @@ mod autostart {
             // 路径可能含空格,必须加引号;--hidden 让开机自启直接进托盘不弹窗
             let cmd = format!("\"{}\" --hidden", exe.display());
             key.set_value(NAME, &cmd).map_err(|e| e.to_string())?;
+            // 开着自启也要清遗留键:绿色版(TokenScope)时代开过自启、后升级到安装版
+            // 的机器,否则注册表残留一个指向已删除 exe 的自启项,每次开机报错(报告 B7)
+            let _ = key.delete_value(LEGACY_NAME);
         } else {
             // 关掉时键可能本就不存在,删除报错属正常,忽略
             let _ = key.delete_value(NAME);
@@ -453,6 +456,9 @@ pub fn run() {
                         } else {
                             let _ = w.show();
                             let _ = w.set_focus();
+                            // 真正「隐藏 → 显示」的那一刻告知前端(重放入场动画)。
+                            // 前端不能靠 focus 事件区分 alt-tab 与唤回(报告 B8)
+                            let _ = app.emit("window-shown", ());
                         }
                     }
                 })
@@ -511,8 +517,12 @@ pub fn run() {
                     "quit" => app.exit(0),
                     "show" => {
                         if let Some(w) = app.get_webview_window("main") {
+                            let was = w.is_visible().unwrap_or(false);
                             let _ = w.show();
                             let _ = w.set_focus();
+                            if !was {
+                                let _ = app.emit("window-shown", ());
+                            }
                         }
                     }
                     "refresh" => {
@@ -535,6 +545,7 @@ pub fn run() {
                             } else {
                                 let _ = w.show();
                                 let _ = w.set_focus();
+                                let _ = app.emit("window-shown", ());
                             }
                         }
                     }

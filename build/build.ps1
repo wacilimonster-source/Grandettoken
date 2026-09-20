@@ -15,7 +15,6 @@ $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
 # when the toolchain sits under a non-ASCII directory (e.g. a Chinese repo path),
 # so it installs to the user profile instead of inside the repo.
 $mingwBin = Join-Path $env:USERPROFILE 'mingw64\bin'
-if (-not (Test-Path $mingwBin)) { $mingwBin = Join-Path $PSScriptRoot 'mingw64\bin' }
 $tauriDir = Join-Path $root 'app\src-tauri'
 
 foreach ($p in @($cargoBin, $mingwBin)) {
@@ -27,10 +26,13 @@ $env:CARGO_HOME  = Join-Path $env:USERPROFILE '.cargo'
 $env:RUSTUP_HOME = Join-Path $env:USERPROFILE '.rustup'
 
 # GNU binutils (ld, windres) cannot open files under non-ASCII paths: ld fails
-# on .o/.rlib inputs, windres fails on the exe icon. Fail fast here instead of
-# letting the linker produce cryptic errors halfway through the build.
-if ($root -match '[^\x00-\x7F]') {
-  throw "repo path is not ASCII: $root  (GNU ld/windres require an ASCII repo path)"
+# on .o/.rlib inputs, windres fails on the exe icon. The toolchain lives under
+# USERPROFILE, so that path matters just as much as the repo root - check both
+# and fail fast here instead of letting the linker produce cryptic errors.
+foreach ($p in @($root, $env:USERPROFILE)) {
+  if ($p -match '[^\x00-\x7F]') {
+    throw "path is not ASCII: $p  (GNU ld/windres require an ASCII repo path AND toolchain location)"
+  }
 }
 
 # MinGW's gcc is the linker for the *-pc-windows-gnu target.
@@ -76,8 +78,12 @@ if (Test-Path $lockFile) {
     throw "another build is running (lock: $lockFile, age $([math]::Round($age.TotalMinutes)) min). Wait for it, or delete the file if you are sure nothing else is building."
   }
   Write-Host "warn  stale build lock ($([math]::Round($age.TotalHours,1))h old) - taking over"
+  Remove-Item $lockFile -Force -EA SilentlyContinue
 }
-Set-Content -Path $lockFile -Value $PID -Encoding ASCII
+# Atomic take: New-Item without -Force fails when the file already exists, so two
+# processes starting together cannot both pass the stale check above (TOCTOU).
+try { New-Item -ItemType File -Path $lockFile -Value $PID -ErrorAction Stop | Out-Null }
+catch { throw "another build just took the lock: $lockFile" }
 
 Push-Location $tauriDir
 try {
@@ -89,7 +95,20 @@ try {
     'check'     { & cargo check --all-targets }
     'dev'       { & cargo run }
     'build'     { & cargo build --release }
-    'bundle'    { & cargo tauri build }
+    'bundle'    {
+      # Missing updater signing env vars = tauri-cli waits for a password in a
+      # non-interactive session and hangs forever (CPU 0), or produces a setup.exe
+      # with no .sig. Fail fast here; the working recipe is RELEASE.md step 3 -
+      # export the vars from bash. NOTE: in PowerShell, "$env:X = ''" DELETES the
+      # variable instead of setting an empty value (bitten twice, see RELEASE.md).
+      if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
+        throw "TAURI_SIGNING_PRIVATE_KEY is not set (path to the signing key). See RELEASE.md step 3: export it from bash, then run this script"
+      }
+      if ($null -eq $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) {
+        throw "TAURI_SIGNING_PRIVATE_KEY_PASSWORD is not set. Even an unencrypted key needs an explicit empty value (bash: export TAURI_SIGNING_PRIVATE_KEY_PASSWORD='') or signing hangs waiting for a password"
+      }
+      & cargo tauri build
+    }
     default     { throw "unknown task '$Task' (test|check|dev|build|bundle)" }
   }
   if ($LASTEXITCODE -ne 0) { throw "task '$Task' failed with exit code $LASTEXITCODE" }

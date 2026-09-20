@@ -75,7 +75,7 @@ body{
 .uchip:hover{background:#7fa2ff3d;color:#d4e0ff}
 /* 覆盖在列表上的更新卡 */
 .upd-ov{position:absolute;left:0;right:0;top:calc(80px*var(--u));bottom:calc(34px*var(--u));z-index:5;
-  background:#0e1015f2;backdrop-filter:blur(2px);display:flex;align-items:flex-start;padding:calc(12px*var(--u))}
+  background:#0e1015f2;display:flex;align-items:flex-start;padding:calc(12px*var(--u))}
 .upd-ov-in{width:100%;background:var(--bg2);border:1px solid var(--line);border-radius:calc(10px*var(--u));
   padding:calc(12px*var(--u));box-shadow:0 12px 30px -10px #000}
 
@@ -253,17 +253,17 @@ body.view-manage #lkKeys{display:none}
   border-bottom:1px solid #232937;font-size:calc(12px*var(--u));gap:calc(10px*var(--u))}
 .field:last-child{border-bottom:0}
 .field>span{flex:1;min-width:0}
-.sw{width:32px;height:17px;border-radius:99px;background:var(--line2);position:relative;
+.sw{width:calc(32px*var(--u));height:calc(17px*var(--u));border-radius:99px;background:var(--line2);position:relative;
   cursor:pointer;flex:none;transition:background .2s}
-.sw::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;
+.sw::after{content:"";position:absolute;top:calc(2px*var(--u));left:calc(2px*var(--u));width:calc(13px*var(--u));height:calc(13px*var(--u));
   border-radius:50%;background:#98a2b6;transition:.2s}
 .sw.on{background:#7fa2ff59}
-.sw.on::after{left:17px;background:var(--ac)}
+.sw.on::after{left:calc(17px*var(--u));background:var(--ac)}
 .sel{background:var(--bg3);border:1px solid var(--line2);color:var(--tx2);border-radius:calc(5px*var(--u));
   font-size:max(11.5px,calc(12px*var(--u)));padding:calc(3px*var(--u)) calc(6px*var(--u));font-family:inherit;flex:none}
 .sel:focus{outline:none;border-color:var(--ac)}
 /* 快捷键录制框:等待录入时给虚线提示,聚焦后实线 */
-.hk-rec{width:140px;text-align:center;cursor:pointer;font-variant-numeric:tabular-nums;border-style:dashed}
+.hk-rec{width:calc(140px*var(--u));text-align:center;cursor:pointer;font-variant-numeric:tabular-nums;border-style:dashed}
 .hk-rec:hover{border-color:#55617d;color:var(--tx)}
 .hk-rec:focus{border-style:solid;cursor:text}
 
@@ -274,11 +274,11 @@ body.view-manage #lkKeys{display:none}
 .ublk.bad{color:var(--bad)}
 .upcard{margin-top:calc(9px*var(--u));padding:calc(10px*var(--u)) calc(11px*var(--u));border:1px solid var(--line2);border-radius:calc(8px*var(--u));
   background:#ffffff05}
-.upcard .uhead{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:calc(6px*var(--u))}
-.upcard .unotes{font-size:max(11.5px,calc(11.5px*var(--u)));color:var(--tx2);line-height:1.7;white-space:pre-line;
+.upcard .uhead,.upd-ov .uhead{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:calc(6px*var(--u))}
+.upcard .unotes,.upd-ov .unotes{font-size:max(11.5px,calc(11.5px*var(--u)));color:var(--tx2);line-height:1.7;white-space:pre-line;
   max-height:calc(132px*var(--u));overflow-y:auto}
-.upcard .ubar{margin-top:calc(9px*var(--u))}
-.upcard .ubar .bar{margin:0 0 calc(3px*var(--u))}
+.upcard .ubar,.upd-ov .ubar{margin-top:calc(9px*var(--u))}
+.upcard .ubar .bar,.upd-ov .ubar .bar{margin:0 0 calc(3px*var(--u))}
 
 /* 胶囊显示渠道的多选芯片 */
 .picks{display:flex;flex-wrap:wrap;gap:calc(6px*var(--u))}

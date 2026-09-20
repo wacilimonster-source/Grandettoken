@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Grandettoken 全量 Bug 扫描报告 · 2026-09-20</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#ffffff; --line:#e3e6ec; --line2:#eef1f5;
+    --tx:#1c2029; --tx2:#5a6272; --tx3:#8b93a3;
+    --p0:#c0392b; --p0b:#fdf0ee; --p1:#b8730a; --p1b:#fdf7ea; --p2:#3d6fb5; --p2b:#eef4fc;
+    --p3:#6b7280; --p3b:#f3f4f6; --ok:#1f8a5c; --okb:#edf8f2;
+    --code:#f2f4f7;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--bg);color:var(--tx);
+    font:14px/1.7 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+    padding:40px 24px 72px;
+  }
+  .wrap{max-width:1020px;margin:0 auto}
+
+  header{margin-bottom:28px}
+  .kicker{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--tx3);font-weight:600}
+  h1{font-size:27px;line-height:1.3;margin:8px 0 10px;letter-spacing:-.3px}
+  .lede{color:var(--tx2);font-size:14.5px;max-width:78ch}
+  .meta{margin-top:16px;display:flex;flex-wrap:wrap;gap:8px}
+  .meta span{font-size:12px;color:var(--tx2);background:var(--card);border:1px solid var(--line);
+    border-radius:999px;padding:3px 11px}
+
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:26px 0 30px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px 17px}
+  .stat .n{font-size:26px;font-weight:700;letter-spacing:-.5px;line-height:1.1;font-variant-numeric:tabular-nums}
+  .stat .l{font-size:12px;color:var(--tx3);margin-top:5px}
+  .stat.s2 .n{color:var(--p2)} .stat.s3 .n{color:var(--p3)} .stat.sk .n{color:var(--ok)}
+
+  h2{font-size:17px;margin:38px 0 14px;padding-bottom:9px;border-bottom:1px solid var(--line);letter-spacing:-.2px}
+  h2 .hint{font-size:12.5px;font-weight:400;color:var(--tx3);margin-left:8px}
+
+  table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);
+    border-radius:12px;overflow:hidden;font-size:13px}
+  th{text-align:left;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--tx3);
+    font-weight:600;padding:10px 13px;background:#fafbfc;border-bottom:1px solid var(--line)}
+  td{padding:10px 13px;border-bottom:1px solid var(--line2);vertical-align:top}
+  tr:last-child td{border-bottom:0}
+  td.id{font-variant-numeric:tabular-nums;color:var(--tx3);white-space:nowrap;width:42px}
+  td.file{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:var(--tx2);white-space:nowrap}
+
+  .sev{display:inline-block;font-size:11px;font-weight:700;border-radius:5px;padding:1px 7px;white-space:nowrap}
+  .sev.p2{background:var(--p2b);color:var(--p2);border:1px solid #d3e2f6}
+  .sev.p3{background:var(--p3b);color:var(--p3);border:1px solid #e0e3ea}
+  .sev.ok{background:var(--okb);color:var(--ok);border:1px solid #cdeadd}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin:16px 0}
+  .card h3{font-size:16.5px;line-height:1.45;margin-bottom:4px;letter-spacing:-.2px}
+  .card .where{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--tx2);margin:2px 0 14px}
+  .card h4{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--tx3);margin:16px 0 6px}
+  .card p{margin:6px 0;color:var(--tx);max-width:88ch}
+  .card .dim{color:var(--tx2)}
+  pre{background:var(--code);border:1px solid var(--line2);border-radius:8px;padding:10px 13px;
+    font:12px/1.65 ui-monospace,Consolas,monospace;overflow-x:auto;margin:8px 0;color:#333a45}
+  pre b{color:var(--p0);font-weight:700}
+  code{font-family:ui-monospace,Consolas,monospace;font-size:.92em;background:var(--code);
+    border-radius:4px;padding:1px 5px}
+  .fix{background:var(--okb);border:1px solid #cdeadd;border-radius:10px;padding:12px 15px;margin-top:12px}
+  .fix h4{color:var(--ok);margin:0 0 6px}
+  .impact{background:#fffaf5;border:1px solid #f3e3cf;border-radius:10px;padding:12px 15px;margin-top:12px}
+  .impact h4{color:var(--p1);margin:0 0 6px}
+  .meas{background:#f5f8ff;border:1px solid #dbe6f8;border-radius:10px;padding:10px 14px;margin:8px 0;
+    font-size:13px;color:var(--tx2)}
+  .tag{display:inline-block;font-size:11.5px;font-weight:700;border-radius:6px;padding:2px 9px;margin-right:9px;
+    vertical-align:2px}
+  .t-hi{background:var(--p2b);color:var(--p2);border:1px solid #d3e2f6}
+  .t-mid{background:var(--p3b);color:var(--p3);border:1px solid #e0e3ea}
+  ul{margin:6px 0 6px 20px}
+  li{margin:4px 0}
+  .foot{margin-top:40px;color:var(--tx3);font-size:12.5px;line-height:1.8}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">Grandettoken · 全量代码审查(只读)</div>
+  <h1>全量 Bug 扫描报告 · 2026-09-20</h1>
+  <p class="lede">对当前工作树(HEAD = <code>7b169d2</code>,v0.1.13)的 Rust 逻辑层、Tauri 外壳、前端三件套、
+  构建与发布配置做的通读式审查。每条发现都核到行号并给出触发路径;四项关键结论另做了运行时实证。
+  2026-09-18 报告里的 10 项已修复,本轮不再重复上报(文末有抽验)。</p>
+  <div class="meta">
+    <span>审查范围:v0.1.13 全量(含 Codex 渠道 / 全局快捷键 / 动效层 / 渠道显隐)</span>
+    <span>方式:全文通读 + 行号级核实 + 运行时探针</span>
+    <span>性质:只读审查,未改动任何源码</span>
+  </div>
+</header>
+
+<div class="stats">
+  <div class="stat s2"><div class="n">4</div><div class="l">P2 · 影响明确应尽快修</div></div>
+  <div class="stat s3"><div class="n">12</div><div class="l">P3 · 边缘场景 / 防御性</div></div>
+  <div class="stat s3"><div class="n">9</div><div class="l">轻微 / 一致性(表)</div></div>
+  <div class="stat sk"><div class="n">0</div><div class="l">P0/P1 · 崩溃 / 数据丢失 / 注入</div></div>
+  <div class="stat sk"><div class="n">4/4</div><div class="l">上轮修复抽验仍为修复态</div></div>
+</div>
+
+<div class="card" id="fixes" style="border-color:#cdeadd;background:var(--okb)">
+  <h2 style="margin:0 0 12px;border:0;padding:0">修复与复测(2026-09-20,16 项 + 轻微 9 项全部修复)</h2>
+  <p style="margin:0 0 10px">以下发现的修复已全部落地并通过复测;<code>cargo test -p tokenscope-core</code> 50 项全绿(含新增断言)。
+  复测为运行时实证(CDP + 真实进程),不是仅静态检查。一条复测中发现的增量修复:
+  <b>B3+</b> <code>launch-debug.ps1</code> 自动选二进制时,<code>cargo build</code> 只更新 <code>tokenscope.exe</code> 而
+  <code>cargo tauri build</code> 产出 <code>Grandettoken.exe</code>,按名字优先会拿到<b>陈旧副本跑旧代码</b>(复测第一轮全红的根因,
+  RELEASE.md 记录过的坑)—— 已改为按修改时间取最新。</p>
+  <table style="font-size:12.5px">
+    <tr><th>项</th><th>复测方式与结果</th></tr>
+    <tr><td class="file">B1 覆盖层</td><td>CDP 注入 15 行 / 30 行说明:<code>white-space=pre-line</code> ✓、说明内部滚动(clipped)✓、按钮在窗口内且 elementFromPoint 可命中 ✓(修复前 30 行时 goHitTest=false)</td></tr>
+    <tr><td class="file">B2 胶囊</td><td>用真实配置(胶囊固定 trae + trae 已隐藏 —— 本机正是 B2 的活案例)实测:胶囊显示最紧张渠道 91.0%,tooltip 写明「固定显示的渠道已被隐藏,临时自动挑选」;配置已还原并与数据库比对一致</td></tr>
+    <tr><td class="file">B3 运维脚本</td><td>stop-app.ps1 对运行中的实例实测真正停止(修复前假报 "app stopped");win-style.ps1 无窗口时给出明确报错、有窗口时正常输出样式值</td></tr>
+    <tr><td class="file">B6 刷新反馈</td><td>点击后 spin 加上、800ms 后摘除,过程无任何未捕获异常(修复前永久残留 + 每次点击抛 TypeError)</td></tr>
+    <tr><td class="file">B8 入场动画</td><td>dispatch focus → 不再重放(st-in=false);<code>window-shown</code> 事件(Rust 在托盘/热键/菜单真正「隐藏→显示」时发出)→ 正常重放(st-in=true)</td></tr>
+    <tr><td class="file">B13 签名预检</td><td>不带签名环境变量跑 <code>build.ps1 bundle</code> → 立即 fail-fast 并给出正确设置方法(不再静默挂死)</td></tr>
+    <tr><td class="file">B12 清单默认值</td><td>不带参数生成 latest.json → notes 为 "Grandettoken 0.1.13"</td></tr>
+    <tr><td class="file">其余</td><td>B4/B7/B9/B10/B11/B14/B15/B16 与轻微表 a–i 为文档/脚本/防御性修复,静态核对;B7 的清理路径随探测实例启动(autostart::set)实际执行过,注册表无异常</td></tr>
+    <tr><td class="file">回归</td><td>紧凑 / 胶囊 / 面板三形态切换正常;列表 6 行、底栏「6 正常 · 1 隐藏」;core 单测 50/50</td></tr>
+  </table>
+</div>
+
+<h2>发现索引</h2>
+<table>
+  <tr><th>#</th><th>级别</th><th>位置</th><th>一句话</th></tr>
+  <tr><td class="id">B1</td><td><span class="sev p2">P2</span></td><td class="file">styles.css:277 / index.html:47</td><td>更新覆盖层样式作用域错位:长说明把「立即更新」推出窗口、换行被折叠(实测)</td></tr>
+  <tr><td class="id">B2</td><td><span class="sev p2">P2</span></td><td class="file">app.js:830/870</td><td>「胶囊固定渠道」被隐藏后,胶囊与托盘谎报「渠道全部取数失败」</td></tr>
+  <tr><td class="id">B3</td><td><span class="sev p2">P2</span></td><td class="file">stop-app / launch-debug / win-style.ps1</td><td>运维脚本仍按旧进程名 tokenscope 查找:停应用假成功(实测)、调试启动失效</td></tr>
+  <tr><td class="id">B4</td><td><span class="sev p2">P2</span></td><td class="file">RELEASE.md:81</td><td>发版文档第 5 步上传路径与实际产物路径不符,照做必失败</td></tr>
+  <tr><td class="id">B5</td><td><span class="sev p3">P3</span></td><td class="file">app.js:1963 / 2043</td><td>更新并发防护两条窄缝:下载中检查更新覆写状态、下载中可点「跳过此版本」</td></tr>
+  <tr><td class="id">B6</td><td><span class="sev p3">P3</span></td><td class="file">app.js:1528</td><td>刷新按钮脉冲反馈只第一次生效,且每次点击抛未捕获异常</td></tr>
+  <tr><td class="id">B7</td><td><span class="sev p3">P3</span></td><td class="file">lib.rs:135</td><td>开启自启时不清理遗留 TokenScope 注册表 Run 键</td></tr>
+  <tr><td class="id">B8</td><td><span class="sev p3">P3</span></td><td class="file">app.js:2113</td><td>每次 alt-tab 切回都重放入场动画(不止"从托盘唤回")</td></tr>
+  <tr><td class="id">B9</td><td><span class="sev p3">P3</span></td><td class="file">app.js:747</td><td>吸附+展开紧凑条时宽度自适应被跳过,数值变化后宽度冻结</td></tr>
+  <tr><td class="id">B10</td><td><span class="sev p3">P3</span></td><td class="file">app.js:295/316/375</td><td>renderRow 三处插值未经 esc()(当前值为内置常量,防御性)</td></tr>
+  <tr><td class="id">B11</td><td><span class="sev p3">P3</span></td><td class="file">styles.css:256/266</td><td>.sw 开关与 .hk-rec 输入框不随字号三档缩放</td></tr>
+  <tr><td class="id">B12</td><td><span class="sev p3">P3</span></td><td class="file">make-latest-json.js:40</td><td>更新清单默认 notes 仍用旧产品名 TokenScope</td></tr>
+  <tr><td class="id">B13</td><td><span class="sev p3">P3</span></td><td class="file">build.ps1:92</td><td>bundle 任务不预检签名环境变量,踩坑 = 静默挂死</td></tr>
+  <tr><td class="id">B14</td><td><span class="sev p3">P3</span></td><td class="file">PROGRESS.md:4/89/650</td><td>进展文档三处与现状矛盾(状态、交付形态、安装路径)</td></tr>
+  <tr><td class="id">B15</td><td><span class="sev p3">P3</span></td><td class="file">install-toolchain.ps1</td><td>新机初始化缺 tauri-cli,下载物无哈希校验</td></tr>
+  <tr><td class="id">B16</td><td><span class="sev p3">P3</span></td><td class="file">make-webview2-static.ps1:24</td><td>多版本 registry 共存时可能取错 webview2-com-sys 的静态库</td></tr>
+</table>
+
+<!-- ═══════════════ P2 ═══════════════ -->
+
+<div class="card" id="b1">
+  <h3><span class="tag t-hi">P2 #1</span>更新覆盖层样式作用域错位:长说明把「立即更新」推出窗口,换行全被折叠</h3>
+  <div class="where">app/src/styles.css:277-281 · app/src/index.html:45-49 · app/src/styles.css:77-80</div>
+  <p>覆盖层(标题旁更新标签点开的那个)里的 <code>.uhead / .unotes / .ubar</code> 是唯一样式规则,却写死在 <code>.upcard</code> 作用域下 —— 而覆盖层的 DOM 根本没有 <code>.upcard</code> 祖先(管理页卡片才有),三条规则一条都不命中:</p>
+  <pre>styles.css:277  .upcard .uhead { … }        /* 覆盖层里没有 .upcard 祖先 → 不命中 */
+styles.css:278  .upcard .unotes { … white-space:pre-line; max-height:…; overflow-y:auto }
+styles.css:280  .upcard .ubar  { … }</pre>
+  <p>同时 <code>.upd-ov</code> 是 <code>top/bottom</code> 固定盒,根元素 <code>overflow:hidden</code>,<code>.upd-ov-in</code> 自身没有任何 max-height / 滚动约束。</p>
+  <div class="meas">运行时实测(v0.1.13 真机,CDP 注入真实长度的更新说明):
+    <b>① 15 行 / 640 字</b>(与本项目历次发版同级):按钮仍在窗口内(bottom 374px &lt; 560px),但
+    <code>white-space = normal</code> —— 说明里的换行全部被折叠,段落挤成一团;<b>② 30 行 / 1,100 字</b>(大版本完整
+    changelog 的量级):卡片高 820px &gt; 窗口 560px,<code>elementFromPoint</code> 打不到「立即更新」按钮
+    (goHitTest: <b>false</b>)—— 按钮被推出窗口,不可点。</div>
+  <div class="impact"><h4>影响(修复前)</h4>
+    <ul>
+      <li>凡是带换行的更新说明,覆盖层里必然排版错乱(换行折叠),与管理页卡片(正常 pre-line)呈现不一致;</li>
+      <li>说明一长(大版本真实 changelog 的量级),「立即更新 / 跳过此版本 / 稍后」三个按钮整体被推出窗口可视区且窗口不可滚动 —— <b>更新流程在覆盖层里走不下去</b>,看起来像"点了没反应",用户只能自己去设置页找入口;</li>
+      <li>#ovVer/#ovDate 的 flex 排版、#ovBar 的边距同样退化。</li>
+    </ul></div>
+  <div class="fix"><h4>修复后效果</h4>
+    说明按原始换行分节展示(与管理页一致);超长时说明区内部滚动(max-height + overflow-y:auto),
+    三个按钮始终钉在可视区内可点 —— 任意长度的 release notes 都能直接在覆盖层完成升级,不再有"按钮消失"这条路。</div>
+  <p class="dim">建议:三条选择器改成 <code>.upcard .uhead, .upd-ov .uhead { … }</code>(unotes / ubar 同理),并给
+  <code>.upd-ov .unotes</code> 补 <code>max-height + overflow-y:auto</code>(或让 <code>.upd-ov-in</code> 自身限高滚动)。</p>
+</div>
+
+<div class="card" id="b2">
+  <h3><span class="tag t-hi">P2 #2</span>「胶囊固定显示」的渠道被隐藏后,胶囊与托盘谎报「渠道全部取数失败」</h3>
+  <div class="where">app/src/app.js:830-831 · 870-876(胶囊)· 996-999(托盘 tooltip)</div>
+  <pre>830  PILL.list = picked.length
+831    ? picked.map(id => CHANNELS.find(c => c.id === id)).filter(Boolean)<b>.filter(c => !c.hidden)</b>
+870  if (!c) {
+871    const withKey = PILL.sorted.filter(x => x.hasKey && !x.hidden);
+875    $("pillV").textContent = withKey.length ? <b>"取数失败"</b> : "未配置";
+876    $("pill").title = withKey.length ? <b>"渠道全部取数失败,点开面板看原因"</b> : "尚未配置密钥";</pre>
+  <p>触发:设置 → 胶囊轮播勾选渠道 A → 再在渠道页把 A 隐藏。A 被 831 行滤掉,<code>PILL.auto</code> 在 829 行已按
+  "picked 非空" 置 false,<b>自动兜底(挑最紧张渠道)不会生效</b>,列表为空 → 走 870 行兜底文案;而兜底文案只区分
+  "有没有配置过密钥",不区分"其实是被隐藏了"。</p>
+  <div class="impact"><h4>影响(修复前)</h4>
+    <ul>
+      <li>其余渠道取数完全正常时,胶囊正文显示「取数失败」、悬停提示「渠道全部取数失败」,托盘 tooltip 同样写「渠道全部取数失败」—— <b>与事实相反的故障告警</b>,用户会去排查一个不存在的故障;</li>
+      <li>该渠道同时从「胶囊显示」选择器里消失(renderPillPick 只画未隐藏渠道),既看不到也无法取消勾选;解除隐藏后又静默回到轮播,状态不可管理。</li>
+    </ul></div>
+  <div class="fix"><h4>修复后效果</h4>
+    固定渠道全部被隐藏时降级为自动模式:胶囊照常显示当前最紧张的渠道(这是其他所有地方对"隐藏"的一致处理),
+    tooltip 注明「固定渠道已隐藏,临时显示最紧张的」;不再出现假的故障告警。</div>
+  <p class="dim">建议:<code>picked.length && !PILL.list.length</code> 时置 <code>PILL.auto = true</code> 并按自动规则重选;
+    或在兜底分支区分「被隐藏」并给出明确文案。</p>
+</div>
+
+<div class="card" id="b3">
+  <h3><span class="tag t-hi">P2 #3</span>运维脚本仍按旧进程名 tokenscope 查找:停应用假成功、调试启动失效</h3>
+  <div class="where">build/stop-app.ps1:2-5 · build/launch-debug.ps1:4,9 · build/win-style.ps1:9-10</div>
+  <pre>stop-app.ps1:2    Get-Process <b>tokenscope</b> -EA SilentlyContinue | Stop-Process -Force …
+stop-app.ps1:5    if ($r) { 'still running' } else { <b>'app stopped'</b> }
+launch-debug.ps1:4 [string]$Exe = "…\target\release\<b>tokenscope.exe</b>"</pre>
+  <p>自 0.1.3 起 <code>mainBinaryName = "Grandettoken"</code>,打包后 target/release 里<b>只有</b> Grandettoken.exe
+  (本轮实测确认),进程名同样是 Grandettoken;三个脚本还在找 <code>tokenscope</code>。</p>
+  <div class="meas">运行时实测:Grandettoken.exe 运行中(pid 440)执行 <code>stop-app.ps1</code> → 输出
+    <b>"app stopped"</b>,随后 <code>tasklist</code> 确认进程<b>仍然存活</b>。</div>
+  <div class="impact"><h4>影响(修复前)</h4>
+    <ul>
+      <li>停应用"假成功" → 紧接着重新构建会在链接期撞上「exe 被占用」,报错离根因很远(PROGRESS.md 自己也警告过这个场景);</li>
+      <li><code>launch-debug.ps1</code> 按文档流程直接 Start-Process 失败(默认路径不存在),CDP 验证链路起不来;</li>
+      <li><code>win-style.ps1</code> 抛 "tokenscope is not running",连带 verify-form 的窗口样式检查整体 FAIL —— 布局明明是好的,却给人"验证失败"的假信号。</li>
+    </ul></div>
+  <div class="fix"><h4>修复后效果</h4>
+    三个脚本同时匹配 <code>Grandettoken, tokenscope</code> 两个名字(launch-debug 默认 Exe 按存在性先后探测):
+    停应用真停、调试启动真起、样式验证真做;"构建前先停应用"的流程重新可靠。</div>
+  <p class="dim">建议:<code>Get-Process Grandettoken, tokenscope</code>;或统一以 tauri.conf.json 的 mainBinaryName 为准。</p>
+</div>
+
+<div class="card" id="b4">
+  <h3><span class="tag t-hi">P2 #4</span>RELEASE.md 第 5 步上传路径错误,照文档发版必失败</h3>
+  <div class="where">RELEASE.md:81-83(与步骤 3 自相矛盾)</div>
+  <pre>gh release create v0.2.0 … \
+  <b>target/release/bundle/nsis/Grandettoken_0.2.0_x64-setup.exe</b> \   ← 相对路径
+  target/release/bundle/nsis/…sig  /  …/latest.json</pre>
+  <p>步骤 3 明确 <code>cd G:/game/nw/Grandettoken</code>(仓库根);这个 cwd 下不存在 <code>target/</code> 目录 ——
+  真实产物在 <code>app/src-tauri/target/release/bundle/nsis/</code>(第 3 步的"产出"段落自己写对了路径)。
+  (0.1.4 / 0.1.5 实际发版时是手动 <code>cd</code> 进 nsis 目录才传上去的,文档从未同步。)</p>
+  <div class="impact"><h4>影响(修复前)</h4>
+    照文档逐条复制执行,<code>gh</code> 直接报 "open …: The system cannot find the path",发版中断;
+    下一次发版(可能是紧急修复)还要现场踩一遍坑再猜路径。</div>
+  <div class="fix"><h4>修复后效果</h4>
+    按文档从仓库根逐条复制即可完成发版,三个资源一次传齐,不存在"文档和步骤打架"。</div>
+  <p class="dim">建议:第 5 步路径改为 <code>app/src-tauri/target/release/bundle/nsis/…</code>,或在步骤里显式 <code>cd</code>。</p>
+</div>
+
+<!-- ═══════════════ P3 ═══════════════ -->
+
+<div class="card" id="b5">
+  <h3><span class="tag t-mid">P3 #5</span>更新并发防护的两条窄缝</h3>
+  <div class="where">app/src/app.js:1963-1967 · 2043-2046</div>
+  <pre>checkUpdate:  if (st.available) { UPD.info = st; <b>UPDC.phase = "ready"</b>; renderUpdChip(); showCard(st); }
+btnUpdSkip:   $("btnUpdSkip").addEventListener("click", () => {
+                if (!UPD.info) return;   <b>/* 没有 updBusy() 防护 */</b></pre>
+  <p>0.1.13 已给「立即更新」入口加了 <code>updBusy()</code> 防重入(09-18 #4 的修复),但这条防线有两处绕行:
+  ① 下载进行中,一次手动/自动「检查更新」若返回 available(24h 节流跨过、或用户手点),<code>phase</code> 会被改写回
+  "ready",覆盖层的「立即更新」重新变为可点,再点即发起<b>第二次并发 download_and_install</b>(Rust 侧无锁,两路流写同一临时文件);
+  ② 下载中在管理页卡片点「跳过此版本」(该按钮未置灰,与覆盖层行为不一致):跳过被记录、状态被清,但后台下载照常进行、装完照常重启,下一个进度事件又把角标"复活"成「下载 x%」。</p>
+  <div class="impact"><h4>影响(修复前)</h4>
+    触发链较长(需要检查恰落在下载窗口内),但一旦发生:轻则进度错乱,重则两路下载写坏临时文件导致签名校验失败、更新失败;
+    "跳过"与"安装中"的状态互相矛盾,用户无法判断应用接下来会干什么。</div>
+  <div class="fix"><h4>修复后效果</h4>
+    下载/安装期间:检查更新只刷新信息、不动进行中的状态;「跳过此版本」在 busy 时不可点(两个入口行为一致);
+    并发下载在 UI 层不再可能发生,角标状态与后台行为始终一致。</div>
+  <p class="dim">建议:<code>UPDC.phase = "ready"</code> 前加 <code>if (!updBusy())</code>(或直接跳过 renderUpdChip/showCard);
+    btnUpdSkip 处理器加 <code>if (updBusy()) return</code>。</p>
+</div>
+
+<div class="card" id="b6">
+  <h3><span class="tag t-mid">P3 #6</span>刷新按钮脉冲反馈只第一次生效,且每次点击抛未捕获异常</h3>
+  <div class="where">app/src/app.js:1527-1531</div>
+  <pre>$("btnR").addEventListener("click", async (e) => {
+  e.currentTarget.classList.add("spin");
+  setTimeout(() => <b>e.currentTarget</b>.classList.remove("spin"), 720);  ← 派发结束后为 null
+  await refresh();
+});</pre>
+  <p>DOM 规范在事件派发结束后把 <code>currentTarget</code> 置 null:720ms 后回调里 <code>null.classList</code> 抛
+  TypeError(未捕获),<code>spin</code> 类永远摘不掉;而 <code>.tb.spin</code> 是一次性动画,类已存在时再 add 是 no-op。</p>
+  <div class="impact"><h4>影响(修复前)</h4>
+    点「刷新」的转圈/脉冲反馈<b>整轮会话只有第一次生效</b>,之后点了没动静(取数本身不受影响);
+    每次点击都向控制台留一条未捕获异常,排障时是噪音。</div>
+  <div class="fix"><h4>修复后效果</h4>
+    每次点刷新都有完整的反馈动画;控制台干净。</div>
+  <p class="dim">建议:进 setTimeout 前先 <code>const btn = $("btnR")</code> 存引用。</p>
+</div>
+
+<div class="card" id="b7">
+  <h3><span class="tag t-mid">P3 #7</span>开启自启时不清理遗留 TokenScope 注册表 Run 键</h3>
+  <div class="where">app/src-tauri/src/lib.rs:135-144</div>
+  <pre>if enabled {
+    … key.set_value(NAME, &cmd)?;          // 只写 Grandettoken
+} else {
+    let _ = key.delete_value(NAME);
+    let _ = key.delete_value(LEGACY_NAME); // 只有关掉才清遗留
+}</pre>
+  <div class="impact"><h4>影响(修复前)</h4>
+    绿色版(TokenScope 时代)开过自启、后升级到安装版且保持自启的用户:注册表残留一个指向已删除 exe 的
+    <code>TokenScope</code> Run 键,每次开机弹「找不到文件」或静默失败。本机注册表当前没有此残留(未踩过该路径),
+    但代码路径确实只在"关自启"时才清理。</div>
+  <div class="fix"><h4>修复后效果</h4>
+    开启自启时顺手删除遗留键:任何"绿色版 → 安装版"的升级路径都不留死链,开机不再有幽灵自启项。</div>
+  <p class="dim">建议:enabled 分支补 <code>let _ = key.delete_value(LEGACY_NAME);</code>。</p>
+</div>
+
+<div class="card" id="b8">
+  <h3><span class="tag t-mid">P3 #8</span>每次 alt-tab 切回都重放入场动画</h3>
+  <div class="where">app/src/app.js:2113-2120</div>
+  <pre>window.addEventListener("focus", () => {
+  if (!document.hidden && currentForm() === "panel") playEntrance();
+});</pre>
+  <p>注释的意图是「从托盘/热键唤回时放一次」,但 <code>focus</code> 事件无法区分"从隐藏恢复"与普通的窗口切换 ——
+  用户每次 alt-tab 切走再切回都命中。</p>
+  <div class="impact"><h4>影响(修复前)</h4>
+    频繁多任务时面板六行反复做 30ms 错峰淡入,喧闹;若恰与 60s 轮询重渲染撞在动画窗口内,新插入行还会再放一遍。
+    对一个 7×24 常开的挂件,这是违背本项目"循环即噪点"原则的动效滥用。</div>
+  <div class="fix"><h4>修复后效果</h4>
+    只有真正从隐藏恢复(托盘/热键唤回)时放一次入场;普通焦点切换零动画,与动效层的自我约束一致。</div>
+  <p class="dim">建议:由 Rust 侧托盘/热键的 show 路径显式带标记触发;或记录 <code>visibilitychange</code> 的
+    hidden→visible 时刻、配合窗口可见性判断。</p>
+</div>
+
+<div class="card" id="b9">
+  <h3><span class="tag t-mid">P3 #9</span>吸附 + 展开紧凑条时,宽度自适应被整体跳过</h3>
+  <div class="where">app/src/app.js:746-747</div>
+  <pre>if (!document.body.classList.contains("form-compact")) return;
+if (DOCK.on) return;  // 吸附期间窗口几何归吸附逻辑管,量了也是 0</pre>
+  <p>「量了也是 0」只对 8px 收起竖条成立;<b>吸附后展开的紧凑条(正常宽度)也被一起跳过</b> ——
+  而此时恰恰是能量测的。</p>
+  <div class="impact"><h4>影响(修复前)</h4>
+    吸附展开态下紧凑条宽度冻结在吸附前那次测量:数值变长(余额涨到千/万位)文字被裁,变短则窗口偏宽;
+    直到解除吸附才恢复自适应。</div>
+  <div class="fix"><h4>修复后效果</h4>
+    展开态(无论是否吸附)都随内容自适应;仅收起的 8px 竖条跳过测量。三形态 × 吸附组合的行为一致。</div>
+  <p class="dim">建议:<code>if (DOCK.on && !DOCK.open) return;</code>;DOCK.open 时把宽度落点改走
+    <code>dockLayout(true)</code>。</p>
+</div>
+
+<div class="card" id="b10">
+  <h3><span class="tag t-mid">P3 #10</span>renderRow 三处插值未经 esc()(防御性)</h3>
+  <div class="where">app/src/app.js:295 · 316 · 375</div>
+  <pre>295  sub = `未检测到 <b>${c.name}</b> 登录信息`;
+316  subVal = `<b>${mw.label}</b>窗 · ${fmtReset(resetMs(mw), true)}`;
+375  &lt;span class="wl"&gt;<b>${w.label}</b>&lt;/span&gt;</pre>
+  <p>这三个值今天都来自 Rust 内置渠道表(providers::PROVIDERS 的常量),<b>当前不可利用</b>;但同文件所有同类插值
+  都过了 <code>esc()</code>(同一个 <code>w.label</code> 在 renderDetail 里就是转义的),属于一致性缺口 ——
+  将来渠道名/窗口标签一旦改为可配置或由接口下发,这里就是现成的注入点。</p>
+  <div class="impact"><h4>影响(修复前)</h4>
+    无现实危害;存在"未来一个改动就引入 XSS"的隐性面,且审计时需要逐个记忆"哪些转义了哪些没有"。</div>
+  <div class="fix"><h4>修复后效果</h4>
+    转义规则全场一致,任何字段来源变化都不构成注入面;审计时不再有例外清单。</div>
+  <p class="dim">建议:三处补 <code>esc()</code>。</p>
+</div>
+
+<div class="card" id="b11">
+  <h3><span class="tag t-mid">P3 #11</span>.sw 开关与 .hk-rec 快捷键框不随字号三档缩放</h3>
+  <div class="where">app/src/styles.css:256-258 · 266</div>
+  <pre>.sw{width:32px;height:17px;…}   .sw::after{…13px…}   .hk-rec{width:140px;…}</pre>
+  <p>字号三档(标准/大/特大)用 <code>--u</code> 倍率缩放全站,这两处是仅剩的固定像素组件。</p>
+  <div class="impact"><h4>影响(修复前)</h4>
+    「大 / 特大」档下开关和快捷键输入框相对周边控件明显偏小,视觉比例失调,点击热区也偏小 ——
+    恰恰是视力需要大字号的用户更依赖的控件。</div>
+  <div class="fix"><h4>修复后效果</h4>
+    三档字号下所有控件等比一致,特大档下开关与快捷键框同样好认好点。</div>
+  <p class="dim">建议:尺寸改 <code>calc(32px * var(--u))</code> 等,并同步 ::after 的 13px/17px 与 left 偏移。</p>
+</div>
+
+<div class="card" id="b12">
+  <h3><span class="tag t-mid">P3 #12</span>更新清单默认 notes 仍用旧产品名 TokenScope</h3>
+  <div class="where">build/make-latest-json.js:40</div>
+  <pre>notes: process.argv.slice(2).join(' ') || <b>`TokenScope ${version}`</b>,</pre>
+  <div class="impact"><h4>影响(修复前)</h4>
+    发版时忘传说明参数,应用内更新卡显示「TokenScope x.y.z」,与 release 页标题(Grandettoken)不一致 ——
+    用户刚完成改名,又看到旧名字。</div>
+  <div class="fix"><h4>修复后效果</h4>
+    默认 <code>Grandettoken &lt;版本&gt;</code>,与产品名一致;或参数缺失时直接报错,把问题拦在发版现场。</div>
+</div>
+
+<div class="card" id="b13">
+  <h3><span class="tag t-mid">P3 #13</span>build.ps1 bundle 不预检签名环境变量,踩坑 = 静默挂死</h3>
+  <div class="where">build/build.ps1:92(<code>'bundle' { &amp; cargo tauri build }</code>)</div>
+  <div class="impact"><h4>影响(修复前)</h4>
+    环境没设 <code>TAURI_SIGNING_PRIVATE_KEY</code>,或在 PowerShell 里用 <code>$env:…PASSWORD = ""</code> 设空密码
+    (PowerShell 5.1 下等于删变量,RELEASE.md 记录过两次实测):tauri-cli 在非交互会话里等待密码输入,
+    <b>CPU 全程 0、无任何输出地挂死</b>,直到人想起去翻文档;另一种结局是产出无 .sig 的安装包,
+    直到 make-latest-json 才报错。</div>
+  <div class="fix"><h4>修复后效果</h4>
+    bundle 前预检:私钥路径变量缺失直接 fail-fast,并提示正确设置方式(bash export;PowerShell 空值的坑);
+    发版构建要么成功、要么立刻给出可执行的原因,不再有 25 分钟静默等待。</div>
+  <p class="dim">建议:bundle 分支前检查 <code>$env:TAURI_SIGNING_PRIVATE_KEY</code> 与密码变量,缺失时 throw 并附
+    RELEASE.md 的正确命令。</p>
+</div>
+
+<div class="card" id="b14">
+  <h3><span class="tag t-mid">P3 #14</span>PROGRESS.md 三处与现状矛盾</h3>
+  <div class="where">PROGRESS.md:4 · 89 · 650-651</div>
+  <div class="impact"><h4>影响(修复前)</h4>
+    顶部状态停在第 0.1.4;第 89 行仍写「单 exe、免安装、绿色运行」(绿色 exe 早已下线,现交付是 NSIS 安装包);
+    第 650 行安装路径写 <code>%LOCALAPPDATA%\TokenScope</code> + tokenscope.exe(实际
+    <code>%LOCALAPPDATA%\Grandettoken\Grandettoken.exe</code>)。按文档找卸载入口、判断交付形态都会走错。</div>
+  <div class="fix"><h4>修复后效果</h4>
+    顶部状态指向 v0.1.13,交付形态与安装路径和 RELEASE.md 一致;历史章节(追加调整)保留作日志。</div>
+  <p class="dim">建议:改顶部状态行;在"产物约束"段加一行指向「追加调整 12」的更正。</p>
+</div>
+
+<div class="card" id="b15">
+  <h3><span class="tag t-mid">P3 #15</span>install-toolchain.ps1 不装 tauri-cli,下载物无哈希校验</h3>
+  <div class="where">build/install-toolchain.ps1(全文无 tauri-cli;Get-File 存在即跳过)</div>
+  <div class="impact"><h4>影响(修复前)</h4>
+    新机器按"先跑初始化脚本再构建"的流程走完,<code>cargo tauri build</code> 报 "no such subcommand: tauri"
+    (RELEASE.md 把 tauri-cli 列为"已装的一次性项",脚本却没覆盖);另外 rustup-init / winlibs.zip
+    无 SHA-256 校验,损坏或被替换的压缩包会静默解压进工具链。</div>
+  <div class="fix"><h4>修复后效果</h4>
+    一键装齐 Rust + MinGW + tauri-cli(或缺失时明确提示);下载物校验通过才解压,新机初始化一次成功、供应链可控。</div>
+  <p class="dim">建议:脚本末尾补 <code>cargo install tauri-cli</code>(或存在性检测+提示);为 winlibs.zip 固定 SHA-256。</p>
+</div>
+
+<div class="card" id="b16">
+  <h3><span class="tag t-mid">P3 #16</span>make-webview2-static.ps1 多版本 registry 共存时可能取错静态库</h3>
+  <div class="where">build/make-webview2-static.ps1:24-26(<code>Select-Object -First 1</code>)</div>
+  <div class="impact"><h4>影响(修复前)</h4>
+    cargo registry 里同时有多个 <code>webview2-com-sys-*</code> 版本时(升级依赖后旧缓存未清),归档用的
+    WebView2LoaderStatic.lib 可能来自与 Cargo.lock 不同的版本 —— ABI 稳定所以当前概率低,但一旦单 exe
+    启动出问题,排查方向会被这个"错版本"带偏。</div>
+  <div class="fix"><h4>修复后效果</h4>
+    按 Cargo.lock 锁定的精确版本匹配目录,找不到才报错;归档内容与构建锁定的依赖永远一致。</div>
+</div>
+
+<h2>轻微 / 一致性(每条:问题 → 影响 → 修复后)</h2>
+<table>
+  <tr><th style="width:190px">位置</th><th>问题 → 影响 → 修复后效果</th></tr>
+  <tr><td class="file">build.ps1:18</td><td><b>死兜底</b> <code>build\mingw64\bin</code>:没有任何脚本会装到那里。→ 误导排障(以为还有第二个工具链位置)。→ 删除后工具链路径来源唯一。</td></tr>
+  <tr><td class="file">build.ps1:32</td><td><b>ASCII 路径检查只查仓库根</b>:<code>%USERPROFILE%</code> 本身含非 ASCII(中文用户名)时 GNU ld 照样挂,且命中不了这条友好提示。→ 对 USERPROFILE 也做一次检查/警告。</td></tr>
+  <tr><td class="file">build.ps1:73-80</td><td><b>构建锁"检查-写入"非原子</b>(TOCTOU):两个进程同时启动可双双通过。→ 概率极低;改用独占创建语义可彻底关闭。</td></tr>
+  <tr><td class="file">launch-debug.ps1:12,20</td><td><b>无条件覆盖</b>已有的 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS;大小写去重只兜 4 个代理变量(其他重复变量仍会触发 Start-Process 崩溃)。→ 改为拼接既有参数,崩溃面收窄。</td></tr>
+  <tr><td class="file">cdp-probe.js:41-44</td><td><b>目标页选择过宽</b>(<code>type==='page' || webSocketDebuggerUrl</code> 取第一个):多 target 时连到错误页面,读到误导性诊断数据。→ 只认 page 且匹配应用标题/URL。</td></tr>
+  <tr><td class="file">styles.css:77</td><td><b>.upd-ov 残留 backdrop-filter:blur(2px)</b>,与本文件"透明窗口弃用 backdrop-filter(合成层/暗块隐患)"的自我裁决矛盾。→ 覆盖层打开时有额外合成开销。→ 去掉,风格统一。</td></tr>
+  <tr><td class="file">providers.rs:702-714</td><td><b>codex_window_label 对缺失 limit_window_seconds(=0)落到「5 小时」</b>:服务端字段缺失时窗口名错误。→ 0 秒应落到兜底名「周期」。</td></tr>
+  <tr><td class="file">app.js:1289 vs 1436</td><td><b>注释漂移</b>:注释写"移出 0.7 秒收回",实际 1000ms。→ 改注释,防后人按注释调参。</td></tr>
+  <tr><td class="file">providers.js(根目录)</td><td><b>设计期残留副本</b>:恒真判断已修、头部已标"不要抄",但仍只有 4/7 渠道,存在被误抄为权威的风险。→ 建议删除(slimming 信号,非 bug)。</td></tr>
+</table>
+
+<h2>上轮(2026-09-18)修复项抽验 <span class="hint">10 项已修复,本轮不复报;抽验 4 项仍为修复态</span></h2>
+<table>
+  <tr><th>#</th><th>当时的发现</th><th>抽验结论</th></tr>
+  <tr><td class="id">#1</td><td>check_update / skip_update_version 与 set_pin 的 AB-BA 锁序死锁</td><td><span class="sev ok">仍修复</span> lib.rs:185-190 统一 <code>lock_rw</code> + "先 store 后 config" 锁序约定,check_update:332-337 / set_pin:198-201 / set_config:65-68 同序</td></tr>
+  <tr><td class="id">#4/#5</td><td>更新覆盖层不反映进度、并发下载;failed 分支死代码</td><td><span class="sev ok">仍修复</span> startInstall 统一入口 + <code>updBusy()</code> 防重入(app.js:2018-2022);失败落 <code>phase="failed"</code> → 角标变「重试」(app.js:2031-2038)。本轮 B5 是它剩下的两条窄缝</td></tr>
+  <tr><td class="id">#2</td><td>取数失败时凭据来源误报「未检测到登录信息」</td><td><span class="sev ok">仍修复</span> fetch.rs:664/692 保留 <code>last_cred</code>,失败也如实显示来源</td></tr>
+  <tr><td class="id">#8</td><td>consumption_since 基线可越界 24h,昨夜花销算进今日</td><td><span class="sev ok">仍修复</span> store.rs:145-155 基线对按时间线性折算,含单测 <code>baseline_pair_is_prorated_to_window_start</code></td></tr>
+</table>
+
+<h2>覆盖范围与方法</h2>
+<table>
+  <tr><th style="width:150px">类别</th><th>内容</th></tr>
+  <tr><td>全文通读</td><td>app/src/app.js(2126 行)、index.html、styles.css;app/core/src/{providers,fetch,appauth,config,store,secrets}.rs;app/src-tauri/src/lib.rs;build.ps1、make-latest-json.js、stop-app / launch-debug / win-style.ps1;tauri.conf.json、capabilities/default.json;RELEASE.md / PROGRESS.md(核对性阅读)</td></tr>
+  <tr><td>抽查</td><td>make-webview2-static.ps1、install-toolchain.ps1、gen-icons.js、cdp-probe / verify-form(诊断脚本只审"会误导人"的问题)、根目录 providers.js</td></tr>
+  <tr><td>排除</td><td>target/(构建产物)、Cargo.lock(生成物)、design-*.html(设计稿,非运行代码)、图标二进制素材、node_modules 类第三方代码</td></tr>
+  <tr><td>运行时实证</td><td>① stop-app.ps1 对运行中的 Grandettoken.exe 假报 "app stopped"(实测,进程未被动过);② target/release 仅存 Grandettoken.exe;③ 更新覆盖层两档实测:15 行说明可点但换行折叠、30 行说明按钮 <code>goHitTest=false</code> 不可点;④ 注册表 Run 键只读检查(本机当前无遗留 TokenScope 值 —— B7 的结论以代码路径为准)</td></tr>
+  <tr><td>未覆盖 / 残余风险</td><td>两处结论基于静态推演而非复现:B7(需要一台"绿色版开过自启后升级"的机器)与 B5 并发竞态(需要"下载窗口内恰好一次成功检查"的时序);Codex / OpenCode 的 resetsAt 双格式解析已核对(<code>Date.parse</code> 兼容两者),但未对两家服务端做字段变异测试</td></tr>
+</table>
+
+<div class="foot">
+  审查性质:只读 —— 未改动任何源码;本文件是本轮唯一产出。<br>
+  建议的修复顺序:B1 → B2 → B3 → B4(P2,四条都有明确触发路径)→ B5/B6/B7(交互正确性)→ 其余按顺手程度带走。
+  修复后建议回归:三形态 + 吸附组合切换、覆盖层完整更新流(检查 → 下载 → 安装)、发版全流程照 RELEASE.md 空跑一遍。
+</div>
+
+</div>
+</body>
+</html>

@@ -26,9 +26,17 @@ function Get-File($url, $out) {
 $rustup = Join-Path $dl 'rustup-init.exe'
 Get-File 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-gnu/rustup-init.exe' $rustup
 
-# 2. MinGW-w64 (WinLibs standalone zip)
+# 2. MinGW-w64 (WinLibs standalone zip). Pinned by SHA-256: a corrupted or
+#    swapped archive used to unpack straight into the toolchain silently.
 $zip = Join-Path $dl 'winlibs.zip'
-Get-File 'https://github.com/brechtsanders/winlibs_mingw/releases/download/14.2.0posix-19.1.1-12.0.0-ucrt-r2/winlibs-x86_64-posix-seh-gcc-14.2.0-mingw-w64ucrt-12.0.0-r2.zip' $zip
+$winlibsUrl = 'https://github.com/brechtsanders/winlibs_mingw/releases/download/14.2.0posix-19.1.1-12.0.0-ucrt-r2/winlibs-x86_64-posix-seh-gcc-14.2.0-mingw-w64ucrt-12.0.0-r2.zip'
+$winlibsSha256 = 'D41933CEF13113018418D7B596319C2ED59A567395BBB87AFE27A171E111D553'
+Get-File $winlibsUrl $zip
+$actual = (Get-FileHash $zip -Algorithm SHA256).Hash
+if ($actual -ne $winlibsSha256) {
+  throw "winlibs.zip SHA-256 mismatch: expected $winlibsSha256, got $actual. Delete build\dl\winlibs.zip and re-run; if a NEW release is intentional, update the pinned hash in this script deliberately."
+}
+Write-Host "ok    winlibs.zip SHA-256 verified"
 
 if (-not (Test-Path (Join-Path $mingw 'bin\gcc.exe'))) {
   Write-Host "unzip $zip"
@@ -62,6 +70,14 @@ Write-Host "=== verify ==="
 & (Join-Path $cargoBin 'rustc.exe') -V
 & (Join-Path $cargoBin 'cargo.exe') -V
 & (Join-Path $mingw 'bin\gcc.exe') --version | Select-Object -First 1
+# tauri-cli is required by `build.ps1 bundle`. Compiling it takes 10+ minutes, so
+# this script only CHECKS and tells the operator what to run - it does not build it.
+& (Join-Path $cargoBin 'cargo-tauri.exe') --version *> $null
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $cargoBin 'cargo-tauri.exe'))) {
+  Write-Warning "tauri-cli not installed - 'build.ps1 bundle' will fail. Run: cargo install tauri-cli --locked (10+ min, once)"
+} else {
+  Write-Host "ok    tauri-cli present"
+}
 Write-Host ""
 Write-Host "toolchain ready."
 Write-Host "CARGO_BIN=$cargoBin"

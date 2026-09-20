@@ -1,7 +1,8 @@
 # TokenScope 开发进展
 
-> 最后更新:2026-09-17
-> 状态:**v0.1.4 已合并到 main 并发版(Trae / WorkBuddy 积分渠道)**
+> 最后更新:2026-09-20
+> 状态:**v0.1.13 已发版(Trae / WorkBuddy 积分 + Codex 渠道 + 热键 / 动效层 / 渠道显隐);
+> 2026-09-20 全量扫描的缺陷已修复并通过复测(见 `bug-report-2026-09-20.html`),随下一个版本发布**
 
 ## Trae / WorkBuddy 积分(v0.1.4,2026-09-17)
 
@@ -86,7 +87,11 @@ Rust 侧完成并通过 14 个单元测试,release 编译通过(5.24 MB exe)。
 
 ## 产物约束(用户确认)
 
-**单 exe、免安装、绿色运行。** 现状与该约束的差距:功能与体积没问题
+> 更正(2026-09-20):交付形态早已改为 **NSIS 安装包**(per-user,`%LOCALAPPDATA%\Grandettoken`),
+> 绿色单 exe 已下线 —— 本段及下方「进行中」章节是当时的决策记录,保留作历史;
+> 现行发版流程见 RELEASE.md。
+
+**单 exe、免安装、绿色运行。**(历史决策,已被「追加调整 12」取代) 现状与该约束的差距:功能与体积没问题
 (5.24 MB、全部系统 DLL 依赖),唯一例外是 WebView2 加载器 ——
 Tauri 在 GNU 工具链下默认动态链接 `WebView2Loader.dll`(MSVC 工具链才静态链接),
 裸 exe 缺它会拒绝启动。解决路径见「进行中」章节;无论选哪条,产物都无需安装。
@@ -647,8 +652,9 @@ OpenCode Go 与 DeepSeek 换成**官方标**,4SAPI / Hapi 仍是字母方块。
 exe 正是靠它做到零 DLL 依赖,去掉反而要往安装目录塞 WebView2Loader.dll)。
 
 **安装包实测(静默安装 `/S`,退出码 0)**:
-- 实际安装路径:**`%LOCALAPPDATA%\TokenScope`**(不是 `Programs\TokenScope`,
-  文档里原先写错了,已改)。目录内容:`tokenscope.exe` 6.6MB + `uninstall.exe` 77KB。
+- 实际安装路径(当时还是 TokenScope;0.1.3 改名后为
+  **`%LOCALAPPDATA%\Grandettoken`** + `Grandettoken.exe`,历史记录保留):
+  不是 `Programs\TokenScope`,文档里原先写错了,已改。当时目录内容:`tokenscope.exe` 6.6MB + `uninstall.exe` 77KB。
 - **没有 `WebView2Loader.dll`** ✓ —— 静态链接在安装版布局里依然成立。
 - 注册表卸载项 ✓(DisplayName/DisplayVersion/InstallLocation/UninstallString 齐全)、
   开始菜单快捷方式 ✓(`Start Menu\Programs\TokenScope.lnk`)。

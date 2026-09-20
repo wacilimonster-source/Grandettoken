@@ -79,9 +79,9 @@ gh auth login            # 只第一次需要
 gh release create v0.2.0 \
   --title "Grandettoken 0.2.0 — 一句话亮点" \
   --notes "更新说明" \
-  target/release/bundle/nsis/Grandettoken_0.2.0_x64-setup.exe \
-  target/release/bundle/nsis/Grandettoken_0.2.0_x64-setup.exe.sig \
-  target/release/bundle/nsis/latest.json
+  app/src-tauri/target/release/bundle/nsis/Grandettoken_0.2.0_x64-setup.exe \
+  app/src-tauri/target/release/bundle/nsis/Grandettoken_0.2.0_x64-setup.exe.sig \
+  app/src-tauri/target/release/bundle/nsis/latest.json
 ```
 
 `gh` 没登录时,可以直接用它已经存在 Windows 凭据管理器里的凭据

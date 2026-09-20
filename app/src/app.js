@@ -292,7 +292,7 @@ function renderRow(c, i) {
   // 副标题只留"状态语义":渠道是否可用。其余说明文字一律不写
   // (未公开接口、哪个窗口最紧 —— 明细里都有,不必占一行)
   let sub;
-  if (noKey) sub = c.authSource === "app" ? `未检测到 ${c.name} 登录信息` : "未配置密钥";
+  if (noKey) sub = c.authSource === "app" ? `未检测到 ${esc(c.name)} 登录信息` : "未配置密钥";
   else if (failed) sub = "取数失败";
   else if (wins.length) {
     // Codex 把套餐放在 extra 里(裁决②:副标题带 free/plus/pro 徽章);OpenCode 无此键,维持空白
@@ -313,7 +313,7 @@ function renderRow(c, i) {
   let subVal;
   if (noKey) subVal = c.authSource === "app" ? "需打开应用" : "待配置";
   else if (failed) subVal = c.stale ? "上次快照" : "失联";
-  else if (mw) subVal = `${mw.label}窗 · ${fmtReset(resetMs(mw), true)}`;
+  else if (mw) subVal = `${esc(mw.label)}窗 · ${fmtReset(resetMs(mw), true)}`;
   else if (isPts) subVal = soon ? `最近 ${fmtDay(soon.at)} 到期` : "无近期到期";
   else if (pct !== null) subVal = `剩 ${pct}%`;
   else subVal = "";
@@ -372,7 +372,7 @@ function renderRow(c, i) {
         const soon = lim && ms !== null && ms - Date.now() < 3600e3;
         const cd = soon ? '<span class="wt ok">马上恢复</span>' : `<span class="wt">${fmtReset(ms, true)}</span>`;
         return `<div class="win">
-          <span class="wl">${w.label}</span>
+          <span class="wl">${esc(w.label)}</span>
           <i class="wb"><i style="width:${wr}%;background:${TONE_HEX[wt]}"></i></i>
           <b class="wv" style="color:${lim ? "var(--bad)" : TONE_COLOR[wt]}">${wr.toFixed(1)}%</b>
           ${cd}
@@ -744,7 +744,10 @@ function fitCompact() {
   });
   list.querySelectorAll(".more,.cempty").forEach((el) => el.remove());
   if (!document.body.classList.contains("form-compact")) return;
-  if (DOCK.on) return; // 吸附期间窗口几何归吸附逻辑管,量了也是 0
+  // 收起的 8px 竖条没法量;**展开态**(无论是否吸附)都要量 —— 之前整段跳过,
+  // 吸附展开后宽度冻结,数值变长被裁、变短则窗口偏宽(报告 B9)。
+  // 展开态量完的落点:setCompactW → applyForm → dockLayout(true),几何归吸附管。
+  if (DOCK.on && !DOCK.open) return;
 
   const u = fsU();
   const maxW = Math.round(380 * u);
@@ -820,22 +823,28 @@ function setCompactW(w) {
 
 // 胶囊显示哪些渠道:设置里选中的按顺序轮播;一个都没选就自动取最紧张的那个
 // (总额不能告诉你哪个 Key 要挂了,所以自动模式只挑最紧的)
-const PILL = { list: [], sorted: [], idx: 0, auto: true };
+const PILL = { list: [], sorted: [], idx: 0, auto: true, degraded: false };
 const PILL_ROTATE_MS = 5000;
 
 function renderPill(sorted) {
   PILL.sorted = sorted;
   const picked = (CFG && CFG.pillChannels) || [];
-  PILL.auto = !picked.length;
-  PILL.list = picked.length
+  const autoPick = () => {
+    const active = sorted.filter((c) => c.hasKey && !c.hidden);
+    const tight = active
+      .filter((c) => c.valid)
+      .sort((a, b) => (remainRatio(a) ?? 2) - (remainRatio(b) ?? 2))[0];
+    return tight ? [tight] : [];
+  };
+  // 固定列表里的渠道可能全被「隐藏」了(显隐功能):降级为自动挑选。
+  // 不能落进 renderPillFace 的「取数失败」兜底 —— 那是与事实相反的故障告警,
+  // 其余渠道明明取数正常(报告 B2);degraded 供 tooltip 说明实情。
+  const fixed = picked.length
     ? picked.map((id) => CHANNELS.find((c) => c.id === id)).filter(Boolean).filter((c) => !c.hidden)
-    : (() => {
-        const active = sorted.filter((c) => c.hasKey && !c.hidden);
-        const tight = active
-          .filter((c) => c.valid)
-          .sort((a, b) => (remainRatio(a) ?? 2) - (remainRatio(b) ?? 2))[0];
-        return tight ? [tight] : [];
-      })();
+    : [];
+  PILL.degraded = !!picked.length && !fixed.length;
+  PILL.auto = !fixed.length;
+  PILL.list = PILL.auto ? autoPick() : fixed;
   if (PILL.idx >= PILL.list.length) PILL.idx = 0;
   renderPillFace();
 }
@@ -910,7 +919,8 @@ function renderPillFace() {
     }
     if (c.limited) bits.push("已限流");
   }
-  if (PILL.auto) bits.push("自动:最紧张的一个");
+  if (PILL.degraded) bits.push("固定显示的渠道已被隐藏,临时自动挑选");
+  else if (PILL.auto) bits.push("自动:最紧张的一个");
   else if (PILL.list.length > 1) bits.push(`${PILL.idx + 1}/${PILL.list.length} 轮播`);
   $("pill").title = bits.join(" · ");
 
@@ -1286,7 +1296,7 @@ async function clampToMonitor() {
 
 // ───────────── 贴边(拖到屏幕边缘自动吸附) ─────────────
 // 没有按钮:把窗口拖到屏幕左/右边缘松手就吸附,收成 8×64 的纯色条(不显示任何
-// 数字)。鼠标移入 150ms 后展开成吸附前的形态,移出 0.7 秒收回;把窗口从边缘
+// 数字)。鼠标移入 150ms 后展开成吸附前的形态,移出 1 秒收回;把窗口从边缘
 // 拖走即解除吸附。吸附期间强制置顶 —— 否则鼠标移过去也看不见它。
 const DOCK_SIZE = [8, 64];
 const DOCK_SNAP_LOGICAL = 16;   // 松手时距边缘多少逻辑像素内算"贴边"
@@ -1524,9 +1534,12 @@ $("list").addEventListener("click", async (e) => {
   }
 });
 
-$("btnR").addEventListener("click", async (e) => {
-  e.currentTarget.classList.add("spin");
-  setTimeout(() => e.currentTarget.classList.remove("spin"), 720);
+$("btnR").addEventListener("click", async () => {
+  // currentTarget 在事件派发结束就被 DOM 置 null,不能进 setTimeout ——
+  // 之前 spin 类永远摘不掉,脉冲反馈整轮会话只有第一次生效(报告 B6)
+  const btn = $("btnR");
+  btn.classList.add("spin");
+  setTimeout(() => btn.classList.remove("spin"), 720);
   await refresh();
 });
 $("btnS").addEventListener("click", () => (manageOpen() ? closeManage() : openManage()));
@@ -1962,9 +1975,13 @@ async function checkUpdate(force) {
     renderAbout(st);
     if (st.available) {
       UPD.info = st;
-      UPDC.phase = "ready";
-      renderUpdChip();
-      showCard(st);
+      // 下载/安装进行中,不被一次成功的检查把状态改写回 ready —— 那会让覆盖层的
+      // 「立即更新」重新可点,再点就是第二次并发下载(报告 B5)。信息本体照常更新。
+      if (!updBusy()) {
+        UPDC.phase = "ready";
+        renderUpdChip();
+        showCard(st);
+      }
     } else if (st.error) {
       // 这次检查**没成功**(没网 / 被限流 / 清单拉不下来):不要把已经知道的新版本撤掉。
       // 踩过:用户刚看到「有新版本」,一次自动检查失败就把提示清空,再点就没反应了,
@@ -2042,6 +2059,9 @@ async function startInstall() {
 $("btnUpdGo").addEventListener("click", startInstall);
 $("btnUpdSkip").addEventListener("click", () => {
   if (!UPD.info) return;
+  // 下载/安装中不跳过:状态清了后台却还在装,下一个进度事件又把角标"复活",
+  // 跳过与安装互相打架(报告 B5;与覆盖层按钮 busy 置灰的行为对齐)
+  if (updBusy()) return;
   const v = UPD.info.version;
   invoke("skip_update_version", { version: v }).catch(() => {});
   // 版本信息只有 UPD.info 一处,清它 + 清 phase,角标/卡片/覆盖层一起消失
@@ -2110,12 +2130,11 @@ async function refresh() {
     render({ updated: true });
   });
 
-  // 从托盘/热键唤回窗口:面板形态重放入场一次(隐藏期间的 render 不放,回来才看得见)
-  window.addEventListener("focus", () => {
-    if (!document.hidden && currentForm() === "panel") playEntrance();
-  });
-  document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && currentForm() === "panel") playEntrance();
+  // 从托盘/热键唤回窗口:Rust 侧在「隐藏 → 显示」那一刻发 window-shown,这里重放入场。
+  // 不能监听 focus / visibilitychange —— 它们分不清"从托盘唤回"和普通 alt-tab,
+  // 每次切走再切回都会重播一遍(报告 B8)。
+  listen("window-shown", () => {
+    if (currentForm() === "panel") playEntrance();
   });
 
   // 启动 30 秒后先自动检查一次;之后每 10 分钟再问一次 —— 是否真发请求由

@@ -20,10 +20,25 @@ $ar   = Join-Path $mingwBin 'ar.exe'
 if (-not (Test-Path $gcc)) { throw "missing gcc: $gcc (run install-toolchain.ps1 first)" }
 
 # Locate WebView2LoaderStatic.lib inside the cargo registry checkout of webview2-com-sys.
+# Pick the EXACT version pinned by Cargo.lock - multiple cached versions can coexist
+# after dependency upgrades, and grabbing "the first one" may pack a stale lib.
+$lock  = Join-Path $root 'app\src-tauri\Cargo.lock'
+$wvVer = (Select-String -Path $lock -Pattern 'name = "webview2-com-sys"' -Context 0,1 |
+  ForEach-Object { ($_.Context.PostContext -join '') -replace '.*version = "([^"]+)".*','$1' } |
+  Select-Object -First 1)
 $regSrc = Join-Path $env:USERPROFILE '.cargo\registry\src'
-$lib = Get-ChildItem -Path $regSrc -Directory -Filter 'webview2-com-sys-*' -Recurse -Depth 1 -EA SilentlyContinue |
-  ForEach-Object { Join-Path $_.FullName 'x64\WebView2LoaderStatic.lib' } |
-  Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($wvVer) {
+  Write-Host "webview2-com-sys pinned by Cargo.lock: $wvVer"
+  $lib = Get-ChildItem -Path $regSrc -Directory -Filter "webview2-com-sys-$wvVer" -Recurse -Depth 1 -EA SilentlyContinue |
+    ForEach-Object { Join-Path $_.FullName 'x64\WebView2LoaderStatic.lib' } |
+    Where-Object { Test-Path $_ } | Select-Object -First 1
+  if (-not $lib) { throw "webview2-com-sys $wvVer is pinned by Cargo.lock but its WebView2LoaderStatic.lib is not in $regSrc (run: cargo fetch -p webview2-com-sys)" }
+} else {
+  Write-Host "warn  webview2-com-sys not found in Cargo.lock - falling back to first cached copy"
+  $lib = Get-ChildItem -Path $regSrc -Directory -Filter 'webview2-com-sys-*' -Recurse -Depth 1 -EA SilentlyContinue |
+    ForEach-Object { Join-Path $_.FullName 'x64\WebView2LoaderStatic.lib' } |
+    Where-Object { Test-Path $_ } | Select-Object -First 1
+}
 if (-not $lib) { throw "WebView2LoaderStatic.lib not found under $regSrc (build the project once so cargo fetches webview2-com-sys)" }
 Write-Host "static loader: $lib"
 

@@ -699,8 +699,11 @@ pub fn extract_codex(body: &Value) -> FetchResult {
 }
 
 /// 窗长 → 中文标签。阈值取整档上沿,服务端怎么改窗型都能落进合理名字。
+/// 0(字段缺失)落兜底名「周期」,不能猜成「5 小时」—— 那是编造服务端没给的信息。
 fn codex_window_label(secs: f64) -> String {
-    if secs <= 6.0 * 3600.0 {
+    if secs <= 0.0 {
+        "周期".into()
+    } else if secs <= 6.0 * 3600.0 {
         "5 小时".into()
     } else if secs <= 36.0 * 3600.0 {
         "当日".into()
@@ -1149,6 +1152,8 @@ mod tests {
         assert_eq!(codex_window_label(604_800.0), "本周");
         assert_eq!(codex_window_label(2_592_000.0), "本月");
         assert_eq!(codex_window_label(9_000_000.0), "周期");
+        // 字段缺失(limit_window_seconds 不在/为 0)必须落兜底名,不能猜「5 小时」
+        assert_eq!(codex_window_label(0.0), "周期");
     }
 
 }

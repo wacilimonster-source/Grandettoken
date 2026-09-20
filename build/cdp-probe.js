@@ -38,10 +38,14 @@ const EXPR = `JSON.stringify({
     process.exit(1);
   }
 
-  const pages = targets.filter((t) => t.type === 'page' || t.webSocketDebuggerUrl);
+  // Only real pages, and prefer the app's own page: with several debug targets
+  // attached, pages[0] can be an iframe/SW and the DOM reads are all garbage.
+  const pages = targets.filter((t) => t.type === 'page');
   console.log('targets:', targets.map((t) => `${t.type}:${t.title || ''}`).join(' | '));
 
-  const target = pages[0];
+  const target =
+    pages.find((t) => /tauri|grandettoken|tokenscope/i.test(`${t.title || ''} ${t.url || ''}`)) ||
+    pages[0];
   if (!target) { console.log('no debuggable target'); process.exit(1); }
 
   const ws = new WebSocket(target.webSocketDebuggerUrl);
