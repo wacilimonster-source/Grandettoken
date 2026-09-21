@@ -94,6 +94,11 @@ pub struct Config {
     pub last_check_at: Option<i64>,
     /// 用户在更新提示里选了「跳过此版本」的版本号。等于它就不提示。
     pub skipped_version: Option<String>,
+    /// 主窗口左上角物理坐标。拖停后由前端回写、setup 时恢复并夹回屏幕 ——
+    /// 之前每次开机/更新都落回系统级联位,配合 skipTaskbar 用户会"找不到挂件"
+    /// (扫描报告 O-6)。None = 从没存过,按配置文件的默认摆放。
+    pub win_x: Option<i32>,
+    pub win_y: Option<i32>,
 }
 
 impl Default for Config {
@@ -123,6 +128,8 @@ impl Default for Config {
             alert_pulse: false,
             last_check_at: None,
             skipped_version: None,
+            win_x: None,
+            win_y: None,
         }
     }
 }
@@ -133,6 +140,16 @@ impl Config {
             .get_setting("config")
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default()
+    }
+
+    /// 与 load 的区别:把「库里没这行」(返回默认,正常)和「JSON 解析失败」
+    /// (返回 Err)分开 —— 调用方要在解析失败时沿用上次的配置,而不是
+    /// unwrap_or_default 把隐藏渠道静默放开恢复取数(扫描报告 P2-11)。
+    pub fn try_load(store: &crate::store::Store) -> Result<Self, String> {
+        match store.get_setting("config") {
+            None => Ok(Self::default()),
+            Some(s) => serde_json::from_str(&s).map_err(|e| format!("配置解析失败: {e}")),
+        }
     }
 
     pub fn save(&self, store: &crate::store::Store) -> Result<(), String> {

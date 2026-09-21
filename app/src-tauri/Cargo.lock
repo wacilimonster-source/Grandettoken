@@ -4289,6 +4289,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauri-plugin-single-instance"
+version = "2.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "db817fe9295e19b7d8357e900af31edb93703dd9fb6de524b007b47b6afc63b0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "windows-sys 0.60.2",
+ "zbus",
+]
+
+[[package]]
 name = "tauri-plugin-updater"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4533,12 +4549,14 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 name = "tokenscope"
 version = "0.1.13"
 dependencies = [
+ "base64 0.22.1",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-global-shortcut",
  "tauri-plugin-opener",
+ "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "tokenscope-core",
  "tokio",
@@ -4560,6 +4578,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tokio",
 ]
 
 [[package]]

@@ -35,6 +35,23 @@ if (!fs.existsSync(sigPath)) {
 }
 
 const tag = `v${version}`;
+const exePath = path.join(nsisDir, exe);
+// 只信 .sig 存在不够:清单写的是 exe 的名字,exe 没打出来(或名字对不上)时
+// 清单照样生成得出,发出去就是"检测到新版,下载 404"(报告 O-11)。
+if (!fs.existsSync(exePath)) {
+  console.error(`找不到安装包 ${exePath} —— 清单不能生成`);
+  process.exit(1);
+}
+// 单 exe 交付的最后一道闸:同目录里若混进 WebView2Loader.dll,说明静态加载器
+// 那步没生效,发出去的包在别的机器上会报「找不到 DLL」。
+const strayDll = fs.readdirSync(nsisDir).filter((f) => /webview2loader\.dll$/i.test(f));
+if (strayDll.length) {
+  console.error(`bundle 目录里出现了 ${strayDll.join(', ')} —— 单 exe 交付被破坏,先跑 build/make-webview2-static.ps1`);
+  process.exit(1);
+}
+const crypto = require('crypto');
+const sha256 = crypto.createHash('sha256').update(fs.readFileSync(exePath)).digest('hex');
+
 const json = {
   version,
   notes: process.argv.slice(2).join(' ') || `Grandettoken ${version}`,
@@ -51,5 +68,6 @@ const out = path.join(nsisDir, 'latest.json');
 fs.writeFileSync(out, JSON.stringify(json, null, 2) + '\n');
 console.log(`version  = ${version}  (Cargo.toml 一致)`);
 console.log(`installer= ${exe}`);
+console.log(`sha256   = ${sha256}`);
 console.log(`url      = ${json.platforms['windows-x86_64'].url}`);
 console.log(`written  = ${out}`);

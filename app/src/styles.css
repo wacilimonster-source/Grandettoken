@@ -360,7 +360,6 @@ body.form-compact .wmark{display:inline}
    移入即展开成吸附前的形态。左右边缘都支持,靠 .dock-left 镜像。 */
 .dock-body{display:none;width:100%;height:100%;cursor:pointer;
   border-radius:4px 0 0 4px;transition:filter .15s}
-body.docked{display:flex;border:0;background:transparent;box-shadow:none}
 body.docked .dock-body{display:block}
 body.docked.dock-left .dock-body{border-radius:0 4px 4px 0}
 .dock-body:hover{filter:brightness(1.15)}
@@ -439,14 +438,22 @@ body.form-pill .pill-body{display:flex}
 /* ── 吸附态:隐藏除竖条以外的一切 ──
    必须放在所有形态规则之后:body.docked .x 与 body.form-compact .x 优先级相同(0-2-1),
    同优先级按源码顺序取后者 —— 写在中间时,紧凑条/胶囊的 display:flex 会反过来把内容
-   重新显示出来,窗口只有 8px 宽,竖条会被挤没(实测:从面板吸附正常,从紧凑条/胶囊吸附看不到竖条)。 */
+   重新显示出来,窗口只有 8px 宽,竖条会被挤没(实测:从面板吸附正常,从紧凑条/胶囊吸附看不到竖条)。
+   body.docked 自己的背景/边框也一样:写在 form-pill 之前时,胶囊那轮的
+   background:#12141af2 + border-radius:999px 会盖掉透明背景,8px 竖条变成一颗药丸
+   而且两侧各被圆角啃掉几像素(报告 P2-16 同族)。 */
+body.docked{display:flex;border:0;background:transparent;box-shadow:none}
 body.docked .tbar,
 body.docked .sum,
 body.docked .list,
 body.docked .foot,
 body.docked .manage,
 body.docked .cctl,
-body.docked .pill-body{display:none}
+body.docked .pill-body,
+/* 折叠形态下没有列表可覆盖:更新卡只在面板形态有意义(报告 P2-16) */
+body.docked .upd-ov,
+body.form-compact .upd-ov,
+body.form-pill .upd-ov{display:none}
 
 /* ═════════ 动效层(设计稿 design-motion.html,裁决 A/D1/默认关)═════════
    铁律:短(≤320ms)/ 只动有语义的变化 / 只用 transform+opacity / 无常驻循环

@@ -8,6 +8,7 @@ const $ = (id) => document.getElementById(id);
 
 let CHANNELS = [];
 let CFG = null;
+let VER = "";          // app_version 命令回来的版本号,关于页在首检之前也有的显示
 let sparkCache = {};   // { [id]: {24:[],168:[],720:[]} }
 let sparkHours = {};   // { [id]: 当前选中的区间 },渲染详情时据此标记选中项
 
@@ -58,14 +59,13 @@ function relTime(ts) {
 }
 
 /**
- * 配额型渠道的主窗口:固定看「周期」窗(实测锚定开通日,旧称「本月」),
- * 窗口缺失「周期」时退到数组首位(各渠道的主窗约定放在第一个)。大数字与状态色都按它走。
+ * 配额型渠道的主窗口:后端用 `main` 标出来(OpenCode = 「周期」窗,Codex = primary),
+ * 大数字与状态色都按它走。老数据没有这个标志时退回「周期」标签,再退到数组首位。
  */
 function mainWindow(c) {
   const wins = c.windows || [];
   if (!wins.length) return null;
-  // 「周期」是 OpenCode 的主窗标签;其他渠道由 Rust 把主窗放在数组首位(裁决①:Codex 固定 primary)
-  return wins.find((w) => w.label === "周期") || wins[0];
+  return wins.find((w) => w.main) || wins.find((w) => w.label === "周期") || wins[0];
 }
 
 /** ISO 8601(UTC)的 resetsAt → 毫秒;缺失/异常一律 null,绝不猜。 */
@@ -80,7 +80,8 @@ function fmtReset(ms, short) {
   if (ms === null) return short ? "—" : "重置时间未知";
   const left = ms - Date.now();
   if (left <= 0) return "正在重置";
-  const m = Math.round(left / 60000);
+  // 最少报 1 分:不到 30 秒的余量取整成 0,界面就成了"0 分后重置"却还在跳(报告 P2-15)
+  const m = Math.max(1, Math.round(left / 60000));
   if (m < 60) return short ? m + " 分" : m + " 分钟后重置";
   const h = left / 3600e3;
   if (h < 24) return short ? h.toFixed(1) + " 小时" : h.toFixed(1) + " 小时后重置";
@@ -306,7 +307,7 @@ function renderRow(c, i) {
       : c.expiring && c.expiring.length
         ? "30 天内无到期"
         : "近期无到期";
-  } else if (claim) sub = `本轮额度 ¥${claim.amount}${claimTail(claim)}`;
+  } else if (claim) sub = `本轮额度 ¥${esc(claim.amount)}${claimTail(claim)}`;
   else if (pct !== null) sub = `额度 ¥${c.total}`;
   else sub = ""; // 金额型拿到多少就是可用多少,不加说明
 
@@ -469,7 +470,7 @@ function renderDetail(c) {
   const claimKv = [];
   if (c.claim) {
     const cl = c.claim;
-    claimKv.push(["本轮额度", `¥${cl.amount}`]);
+    claimKv.push(["本轮额度", `¥${esc(cl.amount)}`]);
     claimKv.push([
       "上次申请",
       cl.lastClaimAt
@@ -491,7 +492,7 @@ function renderDetail(c) {
       claimKv.push(["预计可用", `约 ${Math.round(cl.daysOfBalance)} 天`]);
     }
     if (c.total !== null && c.total !== undefined) {
-      claimKv.push(["累计发放", `¥${c.total}`]);
+      claimKv.push(["累计发放", `¥${esc(c.total)}`]);
     }
   }
 
@@ -637,14 +638,7 @@ function render(opts) {
   });
   const sorted = sortChannels(CHANNELS);
   // 标题栏挤了 6 个按钮,计数用短写法,完整说法放 tooltip
-  // 标题栏改文字按钮后不再放计数(放不下),底栏已有「N 正常 · M 预警」;
-  // 元素可能不存在,这里做守卫
-  const cnt = $("cnt");
-  if (cnt) {
-    const withKeyN = CHANNELS.filter((c) => c.hasKey).length;
-    cnt.textContent = withKeyN + "/" + CHANNELS.length;
-    cnt.title = `已配置 ${withKeyN} / 共 ${CHANNELS.length} 个渠道`;
-  }
+  // 标题栏改文字按钮后不再放计数(放不下),底栏已有「N 正常 · M 预警」
 
   renderSummary();
 
@@ -727,6 +721,13 @@ function render(opts) {
 
 // 紧凑条实测宽度(已是当前字号档的最终逻辑像素),fitCompact 维护、formSize 取用
 let compactW = 380;
+// 换形态/吸附展开后都要重量一次,但只有"最后一次"有意义:两处裸 setTimeout
+// 交叠时前一次会拿着半更新 DOM 算出个错宽度再盖上来(报告 O-10)
+let fitCompactTimer = null;
+function scheduleFitCompact() {
+  clearTimeout(fitCompactTimer);
+  fitCompactTimer = setTimeout(fitCompact, 150);
+}
 
 /**
  * 紧凑条:宽度贴合内容(上限 380×字号倍率)+ 三级信息降级(裁决 A/B/A)。
@@ -883,6 +884,10 @@ function renderPillFace() {
     icoBox.innerHTML = "";
     $("pillV").textContent = withKey.length ? "取数失败" : "未配置";
     $("pill").title = withKey.length ? "渠道全部取数失败,点开面板看原因" : "尚未配置密钥";
+    // 这条分支以前直接 return:中文占位比原来的数字宽,不 fitPill 就被截成
+    // "取数失…";托盘也停在上一轮的数字上,该退回品牌图标时退不回去(报告 P1-4)
+    fitPill();
+    drawTrayIcon();
     pillAnim(null, lastText, lastId);
     return;
   }
@@ -973,9 +978,11 @@ function fitPill() {
   }
 }
 
-/** 托盘缩写:两位优先(<1000 直接取整),千「k」万「w」各留一位小数。 */
+/** 托盘缩写:10 以内留一位小数,两位优先(<1000 直接取整),千「k」万「w」各留一位小数。 */
 function trayAbbr(v) {
   const a = Math.abs(v);
+  // 小于 10 时取整会把"只剩 5.28"报成 5,把"只剩 0.4"报成 0 —— 越紧张越需要精度
+  if (a < 10) return v.toFixed(1);
   if (a < 1000) return String(Math.round(v));
   if (a < 10000) return (v / 1000).toFixed(1) + "k";
   return (v / 10000).toFixed(1) + "w";
@@ -1062,8 +1069,21 @@ function drawTrayIcon() {
     g.stroke();
   }
 
-  const rgba = Array.from(g.getImageData(0, 0, S, S).data);
-  invoke("set_tray_icon", { rgba, size: S, tooltip: text }).catch(() => {});
+  // 像素走 base64:4096 字节的 RGBA 若按数组过 IPC 会变成两万多字符的 JSON,
+  // 胶囊每几秒轮播一次就重发一遍(报告 O-9)。分块转 binary string 是为了
+  // 避开 fromCharCode 一次传几千年参数的栈溢出上限。
+  const px = g.getImageData(0, 0, S, S).data;
+  let bin = "";
+  for (let i = 0; i < px.length; i += 0x8000) {
+    bin += String.fromCharCode.apply(null, px.subarray(i, i + 0x8000));
+  }
+  const rgbaB64 = btoa(bin);
+  invoke("set_tray_icon", { rgbaB64, size: S, tooltip: text }).catch((e) => {
+    // 失败要清掉去重键:否则 trayKey 已记成这一帧,后面永远不再重试,
+    // 托盘就停在旧数字上(报告 O-9)
+    console.error("更新托盘图标失败", e);
+    trayKey = "";
+  });
 }
 
 /** 设置页「渠道」页签:一卡一渠道 —— 显隐、排序、密钥、额度申请全在卡里。
@@ -1109,8 +1129,8 @@ function renderChCards() {
                 <div class="sw${on ? " on" : ""}" data-act="claimtoggle" data-id="${c.id}"></div></div>
               ${on
                 ? `<div class="claim-grid">
-                    <label>单次额度<input type="number" min="1" step="10" value="${cc.amount}" data-act="claimamount" data-id="${c.id}">元</label>
-                    <label>最短间隔<input type="number" min="1" step="1" value="${cc.minIntervalDays}" data-act="claimdays" data-id="${c.id}">天</label>
+                    <label>单次额度<input type="number" min="1" step="10" value="${esc(cc.amount)}" data-act="claimamount" data-id="${c.id}">元</label>
+                    <label>最短间隔<input type="number" min="1" step="1" value="${esc(cc.minIntervalDays)}" data-act="claimdays" data-id="${c.id}">天</label>
                     <label>上次申请<input type="date" value="${toDateInput(c.claim && c.claim.lastClaimAt)}" data-act="claimdate" data-id="${c.id}"></label>
                     <div class="ccbtns">
                       <button class="btn" data-act="claimnow" data-id="${c.id}">记一次申请=今天</button>
@@ -1231,6 +1251,9 @@ async function applyFormInner(form, remember = true) {
   }
   const [w, h] = formSize(form);
   try {
+    // 改尺寸在 Windows 上会连带挪动窗口(被工作区/边缘约束顶开),那一发 moved
+    // 不是用户拖的:不标 selfMove 的话松手判定会把它当成"拖到边缘",切个形态就自己吸附上了(报告 P1-8)
+    markSelfMove();
     // 先解除上一形态的钳位,否则新尺寸会被旧 min/max 卡住
     await appWindow.setMinSize(null);
     await appWindow.setMaxSize(null);
@@ -1253,7 +1276,7 @@ async function applyFormInner(form, remember = true) {
       await appWindow.setMaxSize(new T.dpi.LogicalSize(w, h));
     }
     // 视口变化后重新量一次紧凑条,决定尾巴要收几个进 "+N"
-    setTimeout(fitCompact, 150);
+    scheduleFitCompact();
   } catch (e) {
     console.error("切换形态失败", e);
   }
@@ -1353,12 +1376,15 @@ async function dockLayoutNow(open) {
   const x = DOCK.side === "right"
     ? info.right - (open ? Math.round(w * info.sf) : barW)
     : info.left + (open ? 0 : 0);
+  // DOCK.y 是按 64px 竖条夹过的;展开成面板/紧凑条后同一个 y 会让窗口
+  // 垂到屏幕外(报告 P1-7),按当前高度再夹一次
+  const y = Math.max(info.top, Math.min(DOCK.y, Math.max(info.top, info.bottom - Math.round(h * info.sf))));
   try {
     markSelfMove();
     await appWindow.setMinSize(null);
     await appWindow.setMaxSize(null);
     await appWindow.setSize(new T.dpi.LogicalSize(w, h));
-    await appWindow.setPosition(new T.dpi.PhysicalPosition(x, DOCK.y));
+    await appWindow.setPosition(new T.dpi.PhysicalPosition(x, y));
     await appWindow.setMinSize(new T.dpi.LogicalSize(w, h));
     await appWindow.setMaxSize(new T.dpi.LogicalSize(w, h));
   } catch (e) {
@@ -1367,7 +1393,7 @@ async function dockLayoutNow(open) {
   DOCK.open = open;
   document.body.classList.toggle("docked", !open);
   document.body.classList.toggle("dock-left", DOCK.side === "left");
-  if (open) setTimeout(fitCompact, 150);
+  if (open) scheduleFitCompact();
 }
 // 吸附的展开/收起同样走几何队列(见 enqueueGeom)
 function dockLayout(open) {
@@ -1424,12 +1450,23 @@ function scheduleSettleCheck() {
     // 所以贴齐和探出都算 —— 只判"恰好贴齐"会漏掉绝大多数真实拖动。
     const nearRight = pos.x + size.width >= info.right - snap;
     const nearLeft = pos.x <= info.left + snap;
+    // 自由态下把落点记进配置(报告 O-6):吸附态不记,那坐标是布局算出来的。
+    // 停稳 250ms 才写,一次拖拽只落一次盘,不会拖动途中反复写库。
     if (!DOCK.on) {
+      if (CFG.winX !== pos.x || CFG.winY !== pos.y) {
+        CFG.winX = pos.x;
+        CFG.winY = pos.y;
+        invoke("save_window_pos", { x: pos.x, y: pos.y }).catch(() => {});
+      }
       // 开关关着就不吸附:挂件随手一拖就变竖条太意外,所以默认关闭
       if (!(CFG && CFG.dockEnabled)) return;
       if (nearRight || nearLeft) await dockEnter(nearRight ? "right" : "left", pos);
-    } else if (!nearRight && !nearLeft) {
-      await dockExit(true); // 拖离边缘 = 解除吸附,留在松手的位置
+    } else {
+      // 吸附中:把用户拖出来的竖直位置记下来。以前 DOCK.y 只在吸附那一刻算一次,
+      // 之后上下拖动竖条,松手后一展开又弹回原处(报告 P1-7)
+      const barH = Math.round(DOCK_SIZE[1] * info.sf);
+      DOCK.y = Math.max(info.top, Math.min(info.bottom - barH, pos.y));
+      if (!nearRight && !nearLeft) await dockExit(true); // 拖离边缘 = 解除吸附,留在松手的位置
     }
   }, DOCK_SETTLE_MS);
 }
@@ -1463,7 +1500,9 @@ function dockCancelHover() {
 /** 竖条只染色,不显示任何数字 —— 状态色是唯一信息。 */
 function renderDock() {
   const body = $("dockBody");
-  const c = PILL.list[0] || null; // 与胶囊同一套选择逻辑
+  // 跟着胶囊当前那一页走(轮播会换渠道),不是永远的第 0 个:
+  // 之前竖条常年显示第一个渠道的颜色,和胶囊/托盘报的不是同一个渠道(报告 P2-8)
+  const c = PILL.list[PILL.idx] || PILL.list[0] || null;
   if (!DOCK.on) return;
   const color = c ? TONE_HEX[toneOf(c)] : "#3a4152";
   body.style.background = `linear-gradient(180deg, ${color}, ${color}cc)`;
@@ -1500,10 +1539,13 @@ $("list").addEventListener("click", async (e) => {
     } else if (a === "range") {
       const h = Number(act.dataset.h);
       sparkHours[id] = h; // 记住选择,轮询重建详情时不会再跳回 24 小时
-      sparkCache[id] = await invoke("get_series", { id, hours: h });
+      const series = await invoke("get_series", { id, hours: h }).catch(() => null);
+      // await 期间用户可能已经切到别的区间:晚到的旧响应不许盖掉新查询的结果
+      if (series !== null && sparkHours[id] === h) sparkCache[id] = series;
+      const want = sparkHours[id];
       document
         .querySelectorAll(`.seg button[data-id="${id}"]`)
-        .forEach((b) => b.classList.toggle("on", b === act));
+        .forEach((b) => b.classList.toggle("on", Number(b.dataset.h) === want));
       const c = CHANNELS.find((x) => x.id === id);
       const body = document.querySelector(`.rbody[data-body="${id}"]`);
       if (c && body) body.innerHTML = renderDetail(c);
@@ -1520,8 +1562,7 @@ $("list").addEventListener("click", async (e) => {
   if (!was) {
     row.classList.add("open");
     const c = CHANNELS.find((x) => x.id === id);
-    const body = row.querySelector(".rbody");
-    if (c && body) {
+    if (c) {
       if (!sparkCache[id]) {
         try {
           sparkCache[id] = await invoke("get_series", { id, hours: 24 });
@@ -1529,7 +1570,11 @@ $("list").addEventListener("click", async (e) => {
           sparkCache[id] = [];
         }
       }
-      body.innerHTML = renderDetail(c);
+      // 等曲线这段时间里轮询可能把整行换成了新节点:手里那份 body 成了游离节点,
+      // 写进去永远看不见(点开是空白,再点一次才有图)。按当前 DOM 重新查一次。
+      const cur = document.querySelector(`.row[data-id="${id}"]`);
+      const cbody = cur && cur.classList.contains("open") ? cur.querySelector(".rbody") : null;
+      if (cbody) cbody.innerHTML = renderDetail(c);
     }
   }
 });
@@ -1545,13 +1590,19 @@ $("btnR").addEventListener("click", async () => {
 $("btnS").addEventListener("click", () => (manageOpen() ? closeManage() : openManage()));
 $("btnBack").addEventListener("click", closeManage);
 // 设置页页签:渠道 / 显示 / 刷新与启动 / 关于
+function showTab(name) {
+  const btns = [...$("mTabs").children];
+  const b = btns.find((x) => x.dataset.p === name);
+  if (!b) return;
+  for (const x of btns) x.classList.toggle("on", x === b);
+  document
+    .querySelectorAll("#manage .panel")
+    .forEach((p) => p.classList.toggle("on", p.dataset.p === name));
+}
 $("mTabs").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-p]");
   if (!b) return;
-  for (const x of $("mTabs").children) x.classList.toggle("on", x === b);
-  document
-    .querySelectorAll("#manage .panel")
-    .forEach((p) => p.classList.toggle("on", p.dataset.p === b.dataset.p));
+  showTab(b.dataset.p);
 });
 // 置顶:窗口状态与配置一起改(见 Rust 的 set_pin),按钮与设置项共用同一个值
 async function setPin(enabled) {
@@ -1614,6 +1665,8 @@ document.addEventListener("mouseenter", dockCancelCollapse);
 appWindow.onMoved(() => scheduleSettleCheck());
 // 胶囊轮播。不做"悬停暂停":挂件上的鼠标经常就停在胶囊附近,
 // 一暂停看起来就像轮播坏了(实测踩过);点击动作只是展开面板,内容变换无副作用。
+// 也**不**在 document.hidden 时短路:窗口收进托盘时,这个轮播就是托盘数字的轮播
+// 驱动(报告 O-10 建议加可见性判断,加了会让托盘停在第一个渠道上不再轮换)。
 setInterval(() => {
   if (PILL.list.length < 2) return;
   if (!document.body.className.includes("form-pill")) return;
@@ -1737,13 +1790,17 @@ $("manage").addEventListener("click", async (e) => {
   }
 });
 
-// 设置项
+// 设置项。第三个参数:改完立刻要重画界面的键(阈值改的是颜色,不重绘就等于没生效)
+const RERENDER_KEYS = new Set(["sort", "warnPercent", "critPercent"]);
 function bindSelect(id, key, cast = Number) {
   const el = $(id);
   el.addEventListener("change", () => {
+    // 下拉里找不到对应选项时 value 是空串,Number('') === 0 —— 阈值变 0 会
+    // 让所有渠道瞬间全红(老配置/手改 HTML 时踩过),这种变更直接忽略
+    if (el.value === "") return;
     CFG[key] = cast(el.value);
     invoke("set_config", { config: CFG }).catch(() => {});
-    if (key === "sort") render();
+    if (RERENDER_KEYS.has(key)) render();
   });
 }
 function bindSwitch(id, key, onChange) {
@@ -1888,7 +1945,8 @@ function paintUpdBars() {
   ]) {
     const b = $(bar);
     if (!b) continue;
-    if (show) b.style.display = "block";
+    // 不忙时必须收起:只写 block 不写 none,失败/完成后条子会永远挂在 87%
+    b.style.display = show ? "block" : "none";
     $(fill).style.width = UPDC.pct + "%";
     $(label).textContent = txt;
   }
@@ -1942,7 +2000,11 @@ function setMsg(text, bad) {
 }
 
 function renderAbout(st) {
-  if (st && st.current) $("uver").textContent = "Grandettoken " + st.current;
+  // #uver 是「Grandettoken」字面量后面的小后缀,只放版本号:再带一遍产品名会
+  // 渲染成 "GrandettokenGrandettoken 0.1.13"。后端首检之前 st 是空的,用 init
+  // 时问到的 VER 兜底,关于页不会一直空着(报告 P2-16)
+  const v = (st && st.current) || VER;
+  if (v) $("uver").textContent = " " + v;
   const last = CFG && CFG.lastCheckAt;
   $("usub").textContent =
     "上次检查:" + (last ? new Date(last * 1000).toLocaleString("zh-CN", { hour12: false }) : "从未");
@@ -2014,6 +2076,10 @@ function onUpdProgress(p) {
     paintUpdBars();
   } else if (phase === "failed") {
     UPDC.phase = "failed";
+    // 失败也要重画进度条:不然条子停在"下载 87%",而角标已经变成「重试」,
+    // 两处互相矛盾(报告 P2-16)
+    paintUpdBars();
+    if (ovOpen()) overlayUpdState();
   } else if (phase === "installing") {
     // Windows 上 install 那一步会直接退出进程,不会再有后续事件
     UPDC.phase = "installing";
@@ -2028,6 +2094,9 @@ function onUpdProgress(p) {
 $("btnCheck").addEventListener("click", () => checkUpdate(true));
 $("lkUpd").addEventListener("click", () => {
   openManage();
+  // 更新卡片在「关于」页签里。之前只 openManage 不切页签:默认停在「渠道」页,
+  // scrollIntoView 找不到隐藏的卡片,点角标看起来就是"没反应"(报告 P1-5)
+  showTab("about");
   if ($("updCard")) $("updCard").scrollIntoView({ block: "center" });
 });
 
@@ -2077,7 +2146,11 @@ listen("update-progress", (ev) => onUpdProgress(ev.payload));
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  if (manageOpen()) {
+  // 覆盖层最优先:它盖在所有内容上,Esc 却先去关设置页/收形态,
+  // 用户按半天 Esc 都关不掉眼前那个下载框(报告 P2-16)
+  if (ovOpen()) {
+    closeUpdOverlay();
+  } else if (manageOpen()) {
     closeManage();
   } else if (document.body.className.includes("form-panel")) {
     applyForm("pill");
@@ -2093,7 +2166,10 @@ async function refresh() {
     CHANNELS = list;
     render({ updated: true });
   } catch (e) {
-    $("list").innerHTML = `<div class="empty"><b>取数失败</b>${esc(e)}</div>`;
+    // 以前这里直接覆写 #list 就完了:紧凑条形态下条里一片空白、窗口留着旧宽度,
+    // 胶囊与托盘也停在旧值(报告 P2-14)。走同一条 render 收尾,只是把错误写进标题。
+    setMsg("取数失败:" + e, true);
+    render({ updated: false });
   }
 }
 
@@ -2113,6 +2189,21 @@ async function refresh() {
   }
   applyConfigToUI();
   applyFontScale();
+  // 版本号:等首检(最坏 30 秒)才显示,期间关于页是空的。直接问后端要(报告 P2-16)
+  invoke("app_version")
+    .then((v) => {
+      VER = v;
+      const el = $("uver");
+      if (el && !el.textContent) el.textContent = " " + v;
+    })
+    .catch(() => {});
+  // 启动期的非致命错误(配置坏了回落默认、快捷键被占用):后端只往 stderr 写过,
+  // 而绿色版从托盘启动时没人看得到控制台 —— 取回来显示在关于页的状态行上
+  invoke("take_startup_error")
+    .then((msg) => {
+      if (msg) setMsg(msg, true);
+    })
+    .catch(() => {});
   // 置顶以真实窗口状态为准(Rust 启动时按配置应用),避免按钮与实际不一致
   try {
     const real = await appWindow.isAlwaysOnTop();

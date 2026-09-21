@@ -56,11 +56,6 @@ const WORKBUDDY_AUTH_DIRS: &[&str] = &[
 /// 会被网关注册成 401 HTML(实测),所以这里按域名筛,宁可报"未检测到"。
 const WORKBUDDY_CN_DOMAINS: &[&str] = &["www.codebuddy.cn", "www.workbuddy.cn"];
 
-/// 按顺序尝试所有候选,取第一个可用的。
-pub fn first(app: App) -> Option<Credential> {
-    candidates(app).into_iter().next()
-}
-
 /// 可用凭据列表(按可信度排序,首个通常就是答案)。
 ///
 /// 返回多个是为了容错:Trae 可能装了多个版本、WorkBuddy 可能留着几份备份 `.info`,

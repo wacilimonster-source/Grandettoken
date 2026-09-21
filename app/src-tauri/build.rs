@@ -41,7 +41,29 @@ fn strip_crate_dll() {
     }
 }
 
+/// 版本号一致性:发版链里 Cargo.toml、tauri.conf.json、git tag、latest.json 四处
+/// 都要写同一个版本号,漏改任何一处都会打出「装的是 0.1.14、清单说自己 0.1.13」
+/// 这种最难查的包(报告里的构建断言项)。编译期直接失败,不留给人肉核对。
+fn assert_versions_match() {
+    let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") else { return };
+    let conf = PathBuf::from(&manifest_dir).join("tauri.conf.json");
+    println!("cargo:rerun-if-changed={}", conf.display());
+    let raw = match std::fs::read_to_string(&conf) {
+        Ok(s) => s,
+        // 配置文件读不到时 tauri_build 自己会报,这里不重复报错
+        Err(_) => return,
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else { return };
+    let Some(conf_version) = json.get("version").and_then(|v| v.as_str()) else { return };
+    let crate_version = env!("CARGO_PKG_VERSION");
+    assert_eq!(
+        conf_version, crate_version,
+        "tauri.conf.json 的 version({conf_version})与 Cargo.toml 的 version({crate_version})不一致"
+    );
+}
+
 fn main() {
+    assert_versions_match();
     if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("gnu") {
         strip_crate_dll();
         let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());

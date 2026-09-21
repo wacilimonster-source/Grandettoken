@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Grandettoken · 全量扫描报告 2026-09-22</title>
+<style>
+  :root{--tx:#edf0f6;--tx2:#b6bfce;--tx3:#8d97ab;--ac:#7fa2ff;--ok:#4ade9d;--warn:#f7c355;--bad:#ff6b63;--line:#2f3648}
+  *{box-sizing:border-box}
+  body{margin:0;background:#0e1117;color:var(--tx);font:14px/1.7 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  .wrap{max-width:1060px;margin:0 auto;padding:36px 22px 90px}
+  h1{font-size:22px;margin:0 0 6px}
+  .sub{color:var(--tx3);font-size:13px;margin-bottom:20px}
+  h2{font-size:16px;margin:34px 0 12px;padding-left:10px;border-left:3px solid var(--ac)}
+  .card{background:#161b24;border:1px solid #2a3245;border-radius:12px;padding:14px 18px;margin:10px 0;max-width:1000px}
+  .card ul{margin:4px 0;padding-left:20px;color:var(--tx2)}.card li{margin:4px 0}
+  code{font:12px Consolas,monospace;background:#1c2230;border:1px solid #2a3245;padding:1px 5px;border-radius:4px;color:#cdd6e8}
+  .bug{background:#161b24;border:1px solid #2a3245;border-left-width:4px;border-radius:10px;padding:12px 16px;margin:10px 0;max-width:1000px}
+  .bug.p1{border-left-color:var(--bad)}.bug.p2{border-left-color:var(--warn)}.bug.opt{border-left-color:#5d7bf0}
+  .bug h3{font-size:14px;margin:0 0 6px}
+  .sev{display:inline-block;font-size:10.5px;font-weight:700;border-radius:4px;padding:1px 7px;margin-right:8px;vertical-align:2px}
+  .sev.p1{background:rgba(255,107,99,.16);color:var(--bad)}
+  .sev.p2{background:rgba(247,195,85,.14);color:var(--warn)}
+  .sev.opt{background:rgba(127,162,255,.14);color:#a8c0ff}
+  .loc{font:11.5px Consolas,monospace;color:var(--tx3)}
+  .bug p{margin:5px 0;color:var(--tx2);font-size:13px}
+  .bug b.lb{color:var(--tx);font-weight:600}
+  .fix{color:var(--ok)!important}
+  table{border-collapse:collapse;width:100%;max-width:1000px;font-size:13px}
+  th,td{padding:6px 10px;border-bottom:1px solid var(--line);text-align:left}
+  th{color:var(--tx3);font-size:12px;background:#1c2230}
+  .num{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:6px;background:rgba(127,162,255,.18);color:#a8c0ff;font-size:12px;font-weight:700;margin-right:8px}
+  .stats{display:flex;gap:14px;flex-wrap:wrap;margin:14px 0}
+  .st{background:#161b24;border:1px solid #2a3245;border-radius:10px;padding:10px 18px;text-align:center}
+  .st b{display:block;font-size:22px}.st span{font-size:11.5px;color:var(--tx3)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Grandettoken 全量扫描报告(2026-09-22)</h1>
+<div class="sub">范围:core 7 文件 + src-tauri 壳 + 前端 app.js/styles.css/index.html + 发布脚本,全部逐行读;基线 = <code>f2a0c58</code>(09-20 扫描修复)之后的当前代码,重点覆盖其后的动效层、Codex 渠道、紧凑条贴合改动。每条 P0/P1 均由我二次核到行号确认;P2 标「待复核」的是依赖上游数据形态的推断。</div>
+
+<div class="stats">
+  <div class="st"><b style="color:var(--bad)">8</b><span>P1 缺陷(用户可见/违背承诺)</span></div>
+  <div class="st"><b style="color:var(--warn)">16</b><span>P2 缺陷(边界/一致性)</span></div>
+  <div class="st"><b style="color:#a8c0ff">12</b><span>可优化点(性能/工程)</span></div>
+  <div class="st"><b style="color:var(--ok)">0</b><span>P0 崩溃/XSS</span></div>
+</div>
+
+<h2>一、P1 缺陷</h2>
+
+<div class="bug p1"><h3><span class="sev p1">P1-1</span>隐藏渠道仍在每轮读本机登录凭据(违背裁决)</h3>
+<p><span class="loc">app/core/src/fetch.rs:630-631</span></p>
+<p><b class="lb">症状:</b>并发取数闭包里 <code>credentials(def)</code> 在 hidden 判定<b>之前</b>执行 —— 被隐藏的 Trae/WorkBuddy/Codex 每轮仍明文读 storage.json/auth.json、跑 AES 解密、查凭据管理器。</p>
+<p><b class="lb">后果:</b>直接违背 v0.1.7 裁决「隐藏 = 停止取数、<b>不读本机登录凭据</b>」和设置页文案承诺;还白做 7 次阻塞 IO。</p>
+<p class="fix"><b class="lb">修法:</b>hidden 检查提到 credentials() 之前;隐藏分支的 has_key 只对 Keyring 型查 secrets::get,App 型直接 false。</p></div>
+
+<div class="bug p1"><h3><span class="sev p1">P1-2</span>传输/解析失败回落 Amount 型,百分比渠道被渲染成金额卡</h3>
+<p><span class="loc">app/core/src/fetch.rs:291-297, 305-311</span></p>
+<p><b class="lb">症状:</b>连不上/响应非 JSON 时返回 <code>FetchResult{ valid:false, ..Default }</code>,kind 落成默认 Amount、unit 空。</p>
+<p><b class="lb">后果:</b>首次取数就失败(无缓存兜底)的 Codex/OpenCode 卡片显示「今日/本周/本月消耗」金额块,管理页给它开出「申请制额度 ¥」配置 —— 对百分比渠道配人民币额度。</p>
+<p class="fix"><b class="lb">修法:</b>这两个分支用 <code>def.default_kind</code> 与对应 unit。</p></div>
+
+<div class="bug p1"><h3><span class="sev p1">P1-3</span>「跳过此版本」会被下一次任意保存操作抹掉</h3>
+<p><span class="loc">app/src-tauri/src/lib.rs:68 + app/src/app.js:2066</span></p>
+<p><b class="lb">症状:</b><code>skip_update_version</code> 只写 Rust 侧 DB;前端内存 CFG.skippedVersion 仍是旧值(null)。此后任何一次 <code>set_config</code>(形态切换 remember=true 每次都发)整份覆盖落库。</p>
+<p><b class="lb">后果:</b>用户点了「跳过此版本」,下一次切形态/改设置 → 跳过记录被擦 → ≤10 分钟后同一版本重新弹更新提示,像失忆。</p>
+<p class="fix"><b class="lb">修法:</b>set_config 对 skipped_version/last_check_at 做「入参 None 保留现值」合并;或前端 skip 成功后同步本地 CFG。</p></div>
+
+<div class="bug p1"><h3><span class="sev p1">P1-4</span>渠道全部隐藏后,托盘数字与胶囊宽停在旧值</h3>
+<p><span class="loc">app/src/app.js:879-888</span></p>
+<p><b class="lb">症状:</b><code>renderPillFace()</code> 的「无可显示渠道」分支调完 pillAnim 就 return,绕过末尾的 <code>fitPill()</code> + <code>drawTrayIcon()</code>。</p>
+<p><b class="lb">后果:</b>把渠道全隐藏后,托盘仍画着旧渠道的余额数和状态色(挂件缩到托盘后这是用户唯一可见的信息面),胶囊宽/tooltip 也不再跟随。</p>
+<p class="fix"><b class="lb">修法:</b>该分支 return 前补 fitPill(); drawTrayIcon()。</p></div>
+
+<div class="bug p1"><h3><span class="sev p1">P1-5</span>底栏「有新版本」点开的是空白页签,更新卡片藏在「关于」里</h3>
+<p><span class="loc">app/src/app.js:2029-2031 + index.html:151(updCard 在 data-p="about")</span></p>
+<p><b class="lb">症状:</b>点击只 <code>openManage()</code> + <code>scrollIntoView</code>,不切页签;管理页默认落在「渠道」页,about 面板 display:none,scrollIntoView 对不可见元素是空操作。</p>
+<p><b class="lb">后果:</b>用户点「有新版本 x.y.z」看到的是渠道页,像坏链接。</p>
+<p class="fix"><b class="lb">修法:</b>抽出 showTab(name) 公共逻辑,点击时 openManage + showTab("about")。</p></div>
+
+<div class="bug p1"><h3><span class="sev p1">P1-6</span>改预警阈值后整页颜色不刷新,最长 30 分钟「不生效」</h3>
+<p><span class="loc">app/src/app.js:1746</span></p>
+<p><b class="lb">症状:</b><code>bindSelect</code> 只有 key==="sort" 触发 render();warnPercent/critPercent 改完只落库。</p>
+<p><b class="lb">后果:</b>行色、状态点、进度条、胶囊、托盘数字全按旧阈值显示;折叠态轮询 30 分钟一次,用户以为设置没生效。</p>
+<p class="fix"><b class="lb">修法:</b>重渲染白名单加这两个 key。</p></div>
+
+<div class="bug p1"><h3><span class="sev p1">P1-7</span>吸附态竖条:拖动不更新锚点 y,展开不按实际高度夹边界</h3>
+<p><span class="loc">app/src/app.js:1334(唯一赋值点)、1351/1361(用 DOCK.y 展开/收起)</span></p>
+<p><b class="lb">症状:</b>吸附后沿边缘上下拖动不会写回 DOCK.y;展开用的是收起态 64px 高夹过的 y。</p>
+<p><b class="lb">后果:</b>①下次 hover 展开/移出收起会把竖条瞬移回旧 y,像控件失灵;②竖条停在屏幕下半部时展开成 560px 面板,大半跑出屏幕外,看起来像挂件消失。</p>
+<p class="fix"><b class="lb">修法:</b>settle 判定在 DOCK.on 时刷新 DOCK.y;展开时按 formSize 实际高度重新夹 y。</p></p></div>
+
+<div class="bug p1"><h3><span class="sev p1">P1-8</span>轮询自动变宽可能「自己吸附到边缘」</h3>
+<p><span class="loc">app/src/app.js:1240-1266(applyFormInner 几何 6 连发无 markSelfMove)</span></p>
+<p><b class="lb">症状:</b>fitPill/fitCompact 引起的自动 setSize 走 applyForm,但只有末尾 clampToMonitor 调了 markSelfMove;Windows 上尺寸变化会派生 moved 事件 → scheduleSettleCheck 按位置判贴边。</p>
+<p><b class="lb">后果:</b>开着「拖到边缘自动吸附」时,胶囊数值变宽恰好贴到屏幕边缘 → 没人拖动它自己吸附成 8px 竖条。</p>
+<p class="fix"><b class="lb">修法:</b>几何操作前统一 markSelfMove(),或 settle 判定加「距上次真实用户拖动」闸门。</p></div>
+
+<h2>二、P2 缺陷(边界 / 一致性)</h2>
+
+<div class="bug p2"><h3><span class="sev p2">P2-1</span>Codex 副窗落进「周期」兜底档时,主窗语义被前端标签匹配劫持</h3>
+<p><span class="loc">app/core/src/providers.rs:705/715 + app/src/app.js:68</span></p>
+<p><b class="lb">症状:</b><code>codex_window_label</code> 对窗长 0/缺失/>35 天兜底叫「周期」,而 mainWindow() 优先找 label==="周期"。primary=「本月」+ secondary 落兜底档时,大数字取的是副窗 —— 裁决①(固定 primary)被标签语义静默推翻。</p>
+<p class="fix"><b class="lb">修法:</b>Window 加显式 <code>main: bool</code>(或前端对 percent 直接读 c.remaining);别让中文标签同时承载选择语义。</p></div>
+
+<div class="bug p2"><h3><span class="sev p2">P2-2</span>OpenCode 余量未钳位,上游 percent>100 时下发负余量</h3>
+<p><span class="loc">app/core/src/providers.rs:188(codex 在 647 有 .max(0.0),opencode 没有)</span></p>
+<p class="fix"><b class="lb">修法:</b>统一 <code>.max(0.0)</code>,percent 再 <code>.min(100.0)</code>;别依赖前端各处 Math.max 兜底。</p></div>
+
+<div class="bug p2"><h3><span class="sev p2">P2-3</span>Codex 与 OpenCode 的 limited 口径不一致</h3>
+<p><span class="loc">app/core/src/providers.rs:694 vs 233</span></p>
+<p><b class="lb">症状:</b>OpenCode 任一窗 rate-limited 即报警;Codex 只看 primary/limit_reached → 副窗打满时卡片不报警,明细里却写着 rate-limited。</p>
+<p class="fix"><b class="lb">修法:</b>统一「任一窗 rate-limited 或 limit_reached」。</p></div>
+
+<div class="bug p2"><h3><span class="sev p2">P2-4</span>Trae 余额计入已过期仍有剩余的包(待复核)</h3>
+<p><span class="loc">app/core/src/providers.rs:406-421</span></p>
+<p><b class="lb">症状:</b>remaining 累加不筛 <code>expire_time > now</code>,而 expiring 表排除了已过期 → 卡片余额可能比官方口径大,两行数字互相对不上。是否真有「过期但 left>0」的包取决于 API 行为,建议实测一次。</p>
+<p class="fix"><b class="lb">修法:</b>求和时跳过已过期,或 extra 注明口径。</p></div>
+
+<div class="bug p2"><h3><span class="sev p2">P2-5</span>WorkBuddy 多切片周期包只算第一期(待复核)</h3>
+<p><span class="loc">app/core/src/providers.rs:509-518</span></p>
+<p class="fix"><b class="lb">修法:</b>遍历求和;若实测恒为一期,加注释+断言。</p></div>
+
+<div class="bug p2"><h3><span class="sev p2">P2-6</span>到期时间字段无单位判据,单位一变就显示 1970/公元 5.8 万年</h3>
+<p><span class="loc">app/core/src/providers.rs:570-582(DeductionEndTime 盲除 1000)、648-654(codex reset_at 不判毫秒);ExpiredTime 只认字符串、数字被跳过</span></p>
+<p class="fix"><b class="lb">修法:</b>&gt;1e11 视为毫秒的统一判据;字符串/数字都走 num()。</p></div>
+
+<div class="bug p2"><h3><span class="sev p2">P2-7</span>4SAPI 兜底字段链漏 data.total_available;granted&lt;available 时产出负「已使用」</h3>
+<p><span class="loc">app/core/src/providers.rs:112-115, 130-132</span></p>
+<p class="fix"><b class="lb">修法:</b>兜底链补全;used 做 .max(0.0),granted<=0 时 total 留 None。</p></div>
+
+<div class="bug p2"><h3><span class="sev p2">P2-8</span>num() 接受 "NaN"/"inf" 字符串,NaN 可穿过 round 进序列化污染求和</h3>
+<p><span class="loc">app/core/src/providers.rs:87-93</span></p>
+<p class="fix"><b class="lb">修法:</b>加 is_finite() 过滤。</p></div>
+
+<div class="bug p2"><h3><span class="sev p2">P2-9</span>local_date_start 在 DST 时区 .single() 返回 None 时兜成「现在」,今日/本周窗口失真</h3>
+<p><span class="loc">app/core/src/fetch.rs:220-226</span></p>
+<p><b class="lb">症状:</b>零点恰逢 DST 跳变/重叠的时区(贝鲁特等)→ from 变成 now_ts,消耗窗口塌缩或被 -86400 容差放大成「近 24 小时」。</p>
+<p class="fix"><b class="lb">修法:</b>.single() 改 .earliest();兜底值改 now-86400 一类不放大语义。</p></div>
+
+<div class="bug p2"><h3><span class="sev p2">P2-10</span>失联降级后「已限流」徽标一直挂着(喊的是无法再确认的事实)</h3>
+<p><span class="loc">app/core/src/fetch.rs:711-714(stale 路径保留 prev.limited 与 rate-limited 窗)</span></p>
+<p class="fix"><b class="lb">修法:</b>stale 时清 limited 或文案带「上次」。</p></div>
+
+<div class="bug p2"><h3><span class="sev p2">P2-11</span>Config 解析失败整体静默回落 default:隐藏渠道会「复活」被取数</span></h3>
+<p><span class="loc">app/core/src/config.rs:131-136(且 fetch_all 每轮重新 load)</span></p>
+<p class="fix"><b class="lb">修法:</b>区分「键不存在」与「解析失败」;后者记日志并反映到管理页。</p></div>
+
+<div class="bug p2"><h3><span class="sev p2">P2-12</span>凭据管理器不可用与「没配密钥」混成同一个 None → 提示用户去重填,填了也白填</h3>
+<p><span class="loc">app/core/src/secrets.rs:24-26</span></p>
+<p class="fix"><b class="lb">修法:</b>返回 Result 并区分文案。</p></div>
+
+<div class="bug p2"><h3><span class="sev p2">P2-13</span>详情展开的异步回写可能落在已脱离文档的旧节点</h3>
+<p><span class="loc">app/src/app.js:1523-1533(body 在 await get_series 前捕获)</span></p>
+<p class="fix"><b class="lb">修法:</b>await 后判 isConnected 并按 data-id 重查 .rbody。</p></div>
+
+<div class="bug p2"><h3><span class="sev p2">P2-14</span>refresh() 的 catch 直接覆写 #list,绕过 render 全套收尾</h3>
+<p><span class="loc">app/src/app.js:2096-2098</span></p>
+<p><b class="lb">后果:</b>紧凑条形态下条内一片空白且窗口留旧宽;胶囊/托盘停旧值。</p>
+<p class="fix"><b class="lb">修法:</b>catch 里保留上次 CHANNELS 并 render({updated:false}),或补 fitCompact/pill/tray 收尾。</p></div>
+
+<div class="bug p2"><h3><span class="sev p2">P2-15</span>托盘缩写把 ¥0.4 画成「0」;倒计时 <30 秒显示「0 分」</h3>
+<p><span class="loc">app/src/app.js:979-983(trayAbbr)、84-86(fmtReset)</span></p>
+<p class="fix"><b class="lb">修法:</b>&lt;1 给「0.x」或回退品牌样式;倒计时 Math.max(1,...) 或「正在重置」。</p></div>
+
+<div class="bug p2"><h3><span class="sev p2">P2-16</span>更新覆盖层与形态/Esc 交互留了三处小洞</h3>
+<p><span class="loc">app/src/styles.css:77(.upd-ov 不在折叠形态隐藏表)、app.js:2079-2087(Esc 不先关覆盖层)、app.js:2015(failed 不重画进度条)、app.js:1945(版本号要等 30 秒首检才显示)</span></p>
+<p class="fix"><b class="lb">修法:</b>覆盖层入折叠隐藏表;Esc 优先 closeUpdOverlay;failed 统一 paint;init 即写版本。</p></div>
+
+<h2>三、可优化点</h2>
+
+<div class="bug opt"><h3><span class="sev opt">O-1</span>每轮同步段持库锁跑重 SQL:消耗 3 查 + 申请制 90 天全量扫描逐行比对</h3>
+<p><span class="loc">app/core/src/fetch.rs:740-762 + store.rs:205(last_jump_since 把 90 天行读进 Vec 再 windows(2))</span></p>
+<p class="fix"><b class="lb">修法:</b>差值求和/LAG 下推到 SQL;或按日聚合表。单轮持锁从数百 ms 降到 ms 级,get_series/设置保存不再被轮询卡。</p></div>
+
+<div class="bug opt"><h3><span class="sev opt">O-2</span>prune 只在启动跑一次,7×24 挂件快照无界增长</h3>
+<p><span class="loc">app/src-tauri/src/lib.rs:486</span></p>
+<p class="fix"><b class="lb">修法:</b>poll_loop 每日 prune 一次;DELETE 后文件不缩,必要时 incremental_vacuum。</p></div>
+
+<div class="bug opt"><h3><span class="sev opt">O-3</span>无 single-instance:自启 --hidden + 手动双击 = 双实例(双托盘、双轮询、配置互踩)</h3>
+<p><span class="loc">app/src-tauri/Cargo.toml(缺 tauri-plugin-single-instance)</span></p>
+<p class="fix"><b class="lb">修法:</b>加插件,第二实例只 show 已有窗口;顺带解决更新器安装时老进程占 exe。</p></div>
+
+<div class="bug opt"><h3><span class="sev opt">O-4</span>get_channels / poll_loop / 托盘刷新三路可并发跑整轮取数</h3>
+<p><span class="loc">app/src-tauri/src/lib.rs:24, 240, 253</span></p>
+<p class="fix"><b class="lb">修法:</b>Fetcher 加 in-flight 合并(AtomicBool/try_lock,后来者等同一结果)—— 账务接口限流礼貌性的最后一块。</p></div>
+
+<div class="bug opt"><h3><span class="sev opt">O-5</span>凭据读取(文件 IO+AES+keyring RPC)在 async 任务里同步执行且串行</h3>
+<p><span class="loc">app/core/src/fetch.rs:623-728</span></p>
+<p class="fix"><b class="lb">修法:</b>spawn_blocking 预读凭据再进 await 段;密钥库卡住不再拖垮整轮。</p></div>
+
+<div class="bug opt"><h3><span class="sev opt">O-6</span>窗口位置不持久:每次开机/更新后落在系统级联位,吸附态不恢复(skipTaskbar 下用户找不到窗口)</h3>
+<p><span class="loc">app/src-tauri/tauri.conf.json:12 + Config 无位置字段</span></p>
+<p class="fix"><b class="lb">修法:</b>outerPosition+form+dock 存进 Config,或接 window-state 插件。</p></div>
+
+<div class="bug opt"><h3><span class="sev opt">O-7</span>快照写入错误静默吞(<code>let _ = s.record</code>)+ 无 busy_timeout:双开/写者竞争时数据无声缺失</h3>
+<p><span class="loc">app/core/src/fetch.rs:750 + store.rs 连接配置</span></p>
+<p class="fix"><b class="lb">修法:</b>buss_timeout + 写失败计数并反映到界面/日志。</p></div>
+
+<div class="bug opt"><h3><span class="sev opt">O-8</span>锁纪律名存实亡:注释说「一律 lock_rw」,5 处裸 .lock();release panic=abort 让毒化恢复永远不触发</h3>
+<p><span class="loc">app/src-tauri/src/lib.rs:65/111/201/335/435 + Cargo.toml:43</span></p>
+<p class="fix"><b class="lb">修法:</b>统一 lock_rw;panic 策略与注释对齐。</p></div>
+
+<div class="bug opt"><h3><span class="sev opt">O-9</span>托盘图标每次数 KB JSON 数组过 IPC(胶囊轮播期约 5s 一次);失败还会把 trayKey 缓存成「已完成」永久停更</h3>
+<p><span class="loc">app/src/app.js:1065-1066 + lib.rs:168</span></p>
+<p class="fix"><b class="lb">修法:</b>传 base64 由 Rust 解码;Rust 校验长度;前端失败清 trayKey。</p></div>
+
+<div class="bug opt"><h3><span class="sev opt">O-10</span>胶囊轮播定时器不看窗口可见性;两处 setTimeout(fitCompact) 无 handle 可堆叠</h3>
+<p><span class="loc">app/src/app.js:1617, 1256/1370</span></p>
+<p class="fix"><b class="lb">修法:</b>document.hidden 短路;计时器存 handle 新切换时 clear。</p></div>
+
+<div class="bug opt"><h3><span class="sev opt">O-11</span>发布脚本两处只信「存在」不信「正确」:build.ps1 删 DLL 时机依赖 -L 顺序;make-latest-json 不断言 setup.exe 存在</h3>
+<p><span class="loc">build/build.ps1:54 + build/make-latest-json.js:32</span></p>
+<p class="fix"><b class="lb">修法:</b>bundle 后 objdump 断言导入表无 WebView2Loader.dll;清单同时断言 exe 存在并打印 sha256。</p></div>
+
+<div class="bug opt"><h3><span class="sev opt">O-12</span>杂项死代码与小口径:app.js:642 的 $("cnt")(index.html 已无此元素)、appauth.rs:60 first() 无调用方、fetch.rs 每轮两次 Config::load、renderDock 取 list[0] 注释却写「与胶囊同一套」、版本号 env! 与 conf 两处只在发版脚本对齐</h3>
+<p class="fix"><b class="lb">修法:</b>删死代码;load 一次传下去;统一口径或改注释;build.rs 断言版本一致。</p></div>
+
+<h2>四、排查过但确认不是问题(防重复报)</h2>
+<div class="card"><ul>
+  <li>4SAPI 无充值余额上涨 = 平台退款(09-18 实测定论);失败轮不写快照留「洞」= 刻意,且已有窗口下限估算兜底;</li>
+  <li>锁序 store→config 全路径一致,无 AB-BA;async 命令均不持 std Mutex 跨 await;core 无可达 panic 路径(release abort 也安全);</li>
+  <li>SQL 全参数化无注入;时间戳全链路 unix 秒无混用(仅 P2-6 两个未校验字段);serde 兼容含 alertPulse 逐字段核对;</li>
+  <li>前端所有远端字符串进 innerHTML 处都有 esc(),CSP 回落 'self' 兜底,<b>无 XSS</b>;</li>
+  <li>动效层只用 transform/opacity、reduced-motion 兜底、updated 标志隔离都按裁决落地;量宽探针含 fontVariantNumeric;几何全走队列;</li>
+  <li>capabilities 权限与 JS 实际调用逐条对齐,无缺无多;更新端点/签名/pubkey/平台键四项配置互洽;</li>
+  <li>快捷键「先注册新键再撤旧键、失败整体拒绝」按裁决执行中(save 失败不回滚注册是 P1-3 同族的窄边界,已并入 O-8 修锁纪律时一并处理)。</li>
+</ul></div>
+
+<h2>五、待裁决</h2>
+<p class="card"><b class="lb">已裁决(2026-09-22):</b>三项都取推荐档 —— ①a 全修;②按保守口径直接改
+  (P2-4 过期包不计入、P2-5 多切片求和),真机数据到手后再复核;③O-3 单实例 + O-6 窗口位置记忆本次一并做。
+  落地情况见第六节。</p>
+<div class="card">
+  <ul>
+    <li><span class="num">1</span><b>修复范围</b>:a 全修(P1 八项 + P2 十六项 + 优化里低风险的 O-2/3/4/5/9/12,推荐)/ b 只修 P1+P2 / c 只修 P1?</li>
+    <li><span class="num">2</span><b>待复核两项</b>(P2-4 Trae 过期包、P2-5 WorkBuddy 多切片):修前先用真实凭据跑一次只读实测定口径(推荐)/ 直接按保守口径改?</li>
+    <li><span class="num">3</span><b>O-3 单实例、O-6 窗口位置记忆</b>属于行为新增:本次一并做(推荐)/ 留待下版?</li>
+  </ul>
+</div>
+
+<h2>六、修复与复测(2026-09-22,随 v0.1.14 落地)</h2>
+<div class="card">
+  <p><b class="lb">范围裁决:</b>按「全修」执行 —— P1×8、P2×16 全部处理;优化项做了 O-2/3/4/5/6/7/8/9/10/11/12。
+  <b>O-1(重 SQL 下推到 SQLite)本次不动</b>:它要改消耗推算的算法本体,而这套窗口折算逻辑刚在 09-19 修过两轮、
+  只有真机长期数据能证明等价 —— 属于"收益 ms 级、风险是把数字算错",留作独立改动。</p>
+  <ul>
+    <li><span class="num">1</span><b>P1×8</b>:隐藏渠道不再先读凭据;失败结果带上渠道自身类型(首次取数失败的 Codex 不再画成金额卡);
+      保存设置不再抹掉「跳过此版本/上次检查时间/窗口位置」,且快捷键在落库失败时回滚;胶囊空态分支补回 fitPill + 托盘重画;
+      更新角标点击切到「关于」页签;预警/警示阈值改完立刻重绘;吸附竖条记住拖动后的竖直位置、展开按高度夹回屏幕内;
+      形态切换的 setSize 前先标 selfMove(不再"自己吸附")。</li>
+    <li><span class="num">2</span><b>P2×16</b>:主窗改由后端 <code>main</code> 标志指定(不再靠中文标签猜);余量统一钳位;
+      Codex 与 OpenCode 的「已限流」口径统一为任一窗被打满;Trae 过期包不计入余额;WorkBuddy 多切片求和;
+      时间戳 >1e11 判毫秒的统一规范化;4SAPI 兜底字段链补全 + 负已用钳零;num() 过滤 NaN/inf;
+      DST 区零点用 <code>earliest()</code> 且兜底不再放大窗口;失联时清掉「已限流」;
+      配置解析失败沿用上次成功的配置(隐藏渠道不会复活)并把原因显示到关于页;凭据管理器坏了与"没配密钥"分开报;
+      详情曲线 await 后按 data-id 重查节点;取数失败走正常 render 收尾;托盘 10 以内留一位小数、倒计时最少 1 分;
+      更新覆盖层进折叠隐藏表、Esc 优先关它、失败态重画进度条、版本号启动即显示。</li>
+    <li><span class="num">3</span><b>行为新增</b>:单实例(第二个实例只唤起已有窗口);窗口位置持久化并在恢复时夹进当前显示器
+      (拔副屏后窗口不会再"消失");快照库 busy_timeout=5s;每天清一次 90 天前快照;三路取数共用闸门(5 秒内复用结果);
+      凭据读取下沉 spawn_blocking;托盘像素改 base64 传输且失败后允许重试。</li>
+    <li><span class="num">4</span><b>构建断言</b>:build.rs 编译期断言 tauri.conf.json 与 Cargo.toml 版本号一致;
+      bundle 后用 objdump 断言导入表里没有 WebView2Loader.dll;make-latest-json 断言 setup.exe 存在、
+      扫残留 DLL 并打印 sha256。</li>
+  </ul>
+  <p><b class="lb">一处有意偏离报告建议:</b>O-10 提议"胶囊轮播定时器看 <code>document.hidden</code> 短路"。没做 ——
+  窗口收进托盘时这个轮播正是<b>托盘数字</b>的唯一驱动,加了判断托盘就会永远停在第一个渠道上。已在代码注释里写明原因。</p>
+  <p><b class="lb">复测结果:</b><code>cargo test</code>(core)50 项全绿(含新增的 Trae 过期包/时间规范化/授权换凭据用例);
+  <code>cargo check --all-targets</code>(src-tauri)零警告;app.js / make-latest-json.js 语法检查通过;build.ps1 语法解析通过。
+  前端改动另用 Tauri 桩页在浏览器里逐条断言过:P1-4(空态胶囊宽度 146→160 且托盘重画)、P1-5(点角标落在「关于」页签)、
+  P1-6(改预警阈值触发重绘,而改轮询间隔不触发)、P1-7(吸附展开 y 从 1000 夹回 520)、P1-8(切形态后 selfMove 生效)、
+  P2-13(轮询抢在曲线之前重建 DOM 后,图形仍落到活动节点)、P2-14(取数抛错时列表保留、消息变红)、
+  P2-15/16、O-6(save_window_pos 落盘一次)、O-9(4096 字节 → 5464 字符 base64)。</p>
+  <p><b class="lb">真机还需人工确认:</b>吸附竖条在双屏之间的拖动、开机自启后单实例与自启注册表的配合、
+  以及从托盘唤回时窗口位置恢复(需要拔一次副屏才算数)。</p>
+</div>
+
+</div>
+</body>
+</html>

@@ -12,6 +12,8 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 keyring = { version = "3", features = ["windows-native"] }
 chrono = { version = "0.4", features = ["serde"] }
 futures = "0.3"
+# fetch_all 的并发防护(gate)、结果去重与凭据 IO 下沉(spawn_blocking)
+tokio = { version = "1", features = ["rt", "sync", "time"] }
 # 解 Trae 客户端凭据(tc 容器:base64 + SHA-512 派生 + AES-128-CBC)。
 # 只用纯 Rust 实现,不引入 C 依赖 —— GNU 工具链下不需要额外的编译产物。
 aes = "0.8"

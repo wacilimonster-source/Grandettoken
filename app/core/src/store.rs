@@ -23,6 +23,9 @@ impl Store {
             std::fs::create_dir_all(dir).map_err(|e| format!("创建数据目录失败: {e}"))?;
         }
         let conn = Connection::open(path).map_err(|e| format!("打开数据库失败: {e}"))?;
+        // 双开或 WAL 写者竞争时,SQLite 默认立刻回 SQLITE_BUSY —— 之前快照就是
+        // 这样被静默吞掉的;等 5 秒锁再报错,把可恢复的冲突变成可恢复的等待(O-7)。
+        let _ = conn.busy_timeout(std::time::Duration::from_secs(5));
         let s = Self { conn };
         s.init_schema()?;
         Ok(s)

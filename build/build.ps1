@@ -108,6 +108,23 @@ try {
         throw "TAURI_SIGNING_PRIVATE_KEY_PASSWORD is not set. Even an unencrypted key needs an explicit empty value (bash: export TAURI_SIGNING_PRIVATE_KEY_PASSWORD='') or signing hangs waiting for a password"
       }
       & cargo tauri build
+      # Deleting the copied DLL is a bet on -L search order - it can lose silently
+      # and ship an exe with a runtime DLL dependency this machine happens to have.
+      # Assert against the real import table instead (report O-11).
+      $relDir = Join-Path $targetRoot 'release'
+      $exePath = Get-ChildItem -Path $relDir -Filter '*.exe' -File |
+        Where-Object { $_.Name -notmatch '^(cargo|rustc|build-script)' } |
+        Sort-Object Length -Descending | Select-Object -First 1
+      if (-not $exePath) { throw "cannot locate release exe under $relDir to verify imports" }
+      $objdump = Join-Path $mingwBin 'objdump.exe'
+      if (-not (Test-Path $objdump)) {
+        Write-Host "warn  objdump missing - skipped single-exe import check"
+      } else {
+        $bad = & $objdump -p $exePath.FullName 2>$null |
+          Select-String '^\s*DLL Name:.*WebView2Loader'
+        if ($bad) { throw "single-exe delivery broken: $($exePath.Name) still imports WebView2Loader.dll" }
+        Write-Host "ok    import table clean (no WebView2Loader.dll) - $($exePath.Name)"
+      }
     }
     default     { throw "unknown task '$Task' (test|check|dev|build|bundle)" }
   }

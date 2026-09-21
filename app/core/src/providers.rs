@@ -44,6 +44,10 @@ pub struct Window {
     /// "ok" | "rate-limited"
     pub status: String,
     pub resets_at: Option<String>,
+    /// 该渠道的「主窗」标记:前端大数字/托盘数按它取,不再靠中文标签猜
+    /// (扫描报告 P2-1:codex 兜底档也叫「周期」,标签承载选择语义会被劫持)。
+    #[serde(default)]
+    pub main: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -84,11 +88,25 @@ fn round1(n: f64) -> f64 {
 }
 
 /// f64 是 C 的 double,与 JS 的 Number 精度一致,直接复用原 extractor 的算术。
+/// is_finite 过滤是必须的:"NaN"/"inf" 是合法的 Rust parse 结果,一旦穿进
+/// round/求和,序列化成 null 或污染整条推算(扫描报告 P2-8)。
 fn num(v: &Value) -> Option<f64> {
     match v {
         Value::Number(n) => n.as_f64(),
         Value::String(s) => s.trim().parse::<f64>().ok(),
         _ => None,
+    }
+    .filter(|x| x.is_finite())
+}
+
+/// 时间戳统一化成 unix 秒:>1e11 判为毫秒。上游字段单位并不稳定
+/// (WorkBuddy 某版给毫秒、某版给秒;Codex reset_at 是秒),盲除会把到期
+/// 显示成 1970,盲收会显示成公元 5.8 万年(扫描报告 P2-6)。
+fn ts_norm(v: f64) -> i64 {
+    if v > 1e11 {
+        (v / 1000.0) as i64
+    } else {
+        v as i64
     }
 }
 
@@ -108,10 +126,12 @@ pub fn extract_4sapi(body: &Value) -> FetchResult {
     let available = path(body, &["data", "total_available"]).and_then(num);
 
     let (Some(granted), Some(available)) = (granted, available) else {
-        // 兜底:部分部署直接返回余额字段
+        // 兜底:部分部署直接返回余额字段(data.total_available 也在其中 ——
+        // 有的部署不返 total_granted 但余额就在 data 里,扫描报告 P2-7)
         let remaining = ["remaining", "balance"]
             .iter()
             .find_map(|k| body.get(*k).and_then(num))
+            .or_else(|| path(body, &["data", "total_available"]).and_then(num))
             .or_else(|| path(body, &["quota", "remaining"]).and_then(num));
         return FetchResult {
             valid: remaining.is_some(),
@@ -127,9 +147,11 @@ pub fn extract_4sapi(body: &Value) -> FetchResult {
         };
     };
 
+    // granted < available 只出现在「无限额度用 0/-1 标记」之类的部署写法,
+    // 直接相减会产出负「已使用」(扫描报告 P2-7)
     let used = path(body, &["data", "total_used"])
         .and_then(num)
-        .unwrap_or(granted - available);
+        .unwrap_or((granted - available).max(0.0));
 
     // 两者任一显式为 false 就是业务失败。之前写成 `||`,而正常响应里没有
     // is_active,右侧恒为 true —— 整个表达式永远为真,`code:false` 被吞掉,
@@ -142,7 +164,7 @@ pub fn extract_4sapi(body: &Value) -> FetchResult {
         kind: Kind::Amount,
         remaining: Some(round2(available / RATE)),
         used: Some(round2(used / RATE)),
-        total: Some(round2(granted / RATE)),
+        total: if granted > 0.0 { Some(round2(granted / RATE)) } else { None },
         unit: "CNY".into(),
         ..Default::default()
     }
@@ -185,7 +207,9 @@ pub fn extract_opencode_go(body: &Value) -> FetchResult {
         Some(Window {
             label: label.into(),
             percent: pct,
-            remain_percent: round1(100.0 - pct),
+            // 上游 percent 偶发 >100(超用),余量钳到 0 —— 别把负数发给界面,
+            // 前端各处的 Math.max 兜底不该是数据正确性的防线(扫描报告 P2-2)
+            remain_percent: round1((100.0 - pct).max(0.0)),
             status: w
                 .get("status")
                 .and_then(|s| s.as_str())
@@ -195,6 +219,7 @@ pub fn extract_opencode_go(body: &Value) -> FetchResult {
                 .get("resetsAt")
                 .and_then(|s| s.as_str())
                 .map(String::from),
+            main: label == "周期",
         })
     };
 
@@ -402,6 +427,7 @@ pub fn extract_trae(body: &Value) -> FetchResult {
     let mut granted = 0.0;
     let mut used = 0.0;
     let mut counted = 0usize;
+    let now = chrono::Utc::now().timestamp();
 
     for p in packs {
         // 免费订阅包没有 credits_limit(它靠 no_bonus_quota 之类的标志描述),
@@ -410,6 +436,14 @@ pub fn extract_trae(body: &Value) -> FetchResult {
         else {
             continue;
         };
+        // 已过期的包不计余额:之前只从到期表里排除它们、却仍算进总额,
+        // 卡片余额比官方口径大,两行数字互相对不上(扫描报告 P2-4)
+        if let Some(t) = p.get("expire_time").and_then(num) {
+            let t = t as i64;
+            if t > 0 && t <= now {
+                continue;
+            }
+        }
         let pack_used = path(p, &["usage", "credits_amount"]).and_then(num).unwrap_or(0.0);
         counted += 1;
         granted += limit;
@@ -420,6 +454,7 @@ pub fn extract_trae(body: &Value) -> FetchResult {
         let Some(at) = p.get("expire_time").and_then(num).filter(|t| *t > 0.0) else {
             continue;
         };
+        let at = ts_norm(at);
         if left < POINTS_EPS {
             continue;
         }
@@ -506,15 +541,22 @@ pub fn extract_workbuddy(body: &Value) -> FetchResult {
             continue;
         }
         // 切片包的额度在 SlicePeriodUsageDetails 里,主字段为 0。
-        let slice = a
-            .get("SlicePeriodUsageDetails")
-            .and_then(|v| v.as_array())
-            .and_then(|l| l.first());
+        // 多期切片要**求和** —— 之前只取 .first(),两期就漏一期(扫描报告 P2-5);
+        // 没有切片时退回主字段。
+        let slices = a.get("SlicePeriodUsageDetails").and_then(|v| v.as_array());
         let pick = |key: &str| -> Option<f64> {
-            slice
-                .and_then(|s| s.get(format!("SlicePeriodCapacity{}", key)))
-                .and_then(num)
-                .or_else(|| a.get(format!("CycleCapacity{}", key)).and_then(num))
+            match slices {
+                Some(list) if !list.is_empty() => {
+                    let mut acc: Option<f64> = None;
+                    for s in list {
+                        if let Some(v) = s.get(format!("SlicePeriodCapacity{}", key)).and_then(num) {
+                            *acc.get_or_insert(0.0) += v;
+                        }
+                    }
+                    acc.or_else(|| a.get(format!("CycleCapacity{}", key)).and_then(num))
+                }
+                _ => a.get(format!("CycleCapacity{}", key)).and_then(num),
+            }
         };
         let Some(size) = pick("SizePrecise") else {
             continue;
@@ -568,14 +610,19 @@ pub fn extract_workbuddy(body: &Value) -> FetchResult {
 /// 其次是 ExpiredTime,最后是 CycleEndTime(本周期结束),都是北京时间字符串。
 /// 与官方前端 `DeductionEndTime || ExpiredTime || CycleEndTime` 的取值顺序一致。
 fn wb_expiry_at(a: &Value) -> Option<i64> {
-    if let Some(ms) = a.get("DeductionEndTime").and_then(num).filter(|v| *v > 0.0) {
-        return Some((ms / 1000.0) as i64);
+    if let Some(t) = a.get("DeductionEndTime").and_then(num).filter(|v| *v > 0.0) {
+        return Some(ts_norm(t));
     }
     for key in ["ExpiredTime", "CycleEndTime"] {
-        if let Some(s) = a.get(key).and_then(|v| v.as_str()) {
+        let Some(v) = a.get(key) else { continue };
+        if let Some(s) = v.as_str() {
             if let Some(ts) = parse_beijing_time(s) {
                 return Some(ts);
             }
+        }
+        // 同名字段有的版本给字符串日期、有的给数字秒 —— 数字也要认(扫描报告 P2-6)
+        if let Some(t) = num(v).filter(|t| *t > 0.0) {
+            return Some(ts_norm(t));
         }
     }
     None
@@ -636,7 +683,7 @@ pub fn extract_codex(body: &Value) -> FetchResult {
         }
     };
 
-    let win = |key: &str| -> Option<Window> {
+    let win = |key: &str, is_main: bool| -> Option<Window> {
         let w = rl.get(key)?;
         let used = w.get("used_percent").and_then(num)?;
         let secs = w.get("limit_window_seconds").and_then(num).unwrap_or(0.0);
@@ -650,13 +697,13 @@ pub fn extract_codex(body: &Value) -> FetchResult {
                 .and_then(num)
                 .filter(|s| *s > 0.0)
                 .and_then(|s| {
-                    chrono::DateTime::from_timestamp(s as i64, 0)
-                        .map(|d| d.to_rfc3339())
+                    chrono::DateTime::from_timestamp(ts_norm(s), 0).map(|d| d.to_rfc3339())
                 }),
+            main: is_main,
         })
     };
 
-    let Some(primary) = win("primary_window") else {
+    let Some(primary) = win("primary_window", true) else {
         return FetchResult {
             valid: false,
             kind: Kind::Percent,
@@ -665,14 +712,17 @@ pub fn extract_codex(body: &Value) -> FetchResult {
         };
     };
     let mut windows = vec![primary.clone()];
-    if let Some(s) = win("secondary_window") {
+    if let Some(s) = win("secondary_window", false) {
         windows.push(s);
     }
 
-    let limited = rl
+    // 与 OpenCode 同口径:任一窗打满都算限流 —— 只看 primary 会漏报
+    // 「5 小时松、周窗已打满」的告急(扫描报告 P2-3)
+    let limit_reached = rl
         .get("limit_reached")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let limited = limit_reached || windows.iter().any(|w| w.status == "rate-limited");
     let plan = body
         .get("plan_type")
         .and_then(|p| p.as_str())
@@ -950,37 +1000,48 @@ mod tests {
     }
 
     /// Trae:逐笔到期。每笔的数量/已用/到期都要落到 expiring 里,按到期升序;
-    /// 没有 credits_limit 的免费订阅包要跳过(不能按 0 记一笔)。
+    /// 没有 credits_limit 的免费订阅包要跳过(不能按 0 记一笔);**已过期的包整笔排除**,
+    /// 否则卡片余额会比官方口径大(扫描报告 P2-4)。
+    /// 到期时间一律相对「现在」构造 —— 写成绝对时间戳的话,这个测试会随着日历过期。
     #[test]
     fn trae_fills_per_pack_expiry() {
+        let now = chrono::Utc::now().timestamp();
+        let day = 86_400;
         let body = json!({
             "usage_summary": { "total_amount": 850, "consumed_amount": 344.724 },
             "user_entitlement_pack_list": [
                 {   // 免费订阅包:没有 credits_limit,必须跳过
-                    "expire_time": 1790783999_i64,
+                    "expire_time": now + 30 * day,
                     "entitlement_base_info": { "quota": { "no_bonus_quota": true } }
                 },
                 {   // 已用完的签到包:剩余 0,不进到期表,但计入已用
-                    "expire_time": 1789716889_i64,
+                    "expire_time": now + 3 * day,
                     "usage": { "credits_amount": 150 },
                     "entitlement_base_info": {
                         "quota": { "credits_limit": 150 },
                         "product_extra": { "package_extra": { "package_name": "签到奖励" } }
                     }
                 },
-                {   // 还有 5.276 的签到包,9-18 到期
-                    "expire_time": 1789716889_i64,
+                {   // 还有 5.276 的签到包,3 天后到期
+                    "expire_time": now + 3 * day,
                     "usage": { "credits_amount": 194.724 },
                     "entitlement_base_info": {
                         "quota": { "credits_limit": 200 },
                         "product_extra": { "package_extra": { "package_name": "签到奖励" } }
                     }
                 },
-                {   // 500 分的每月赠送,9-30 到期
-                    "expire_time": 1790783999_i64,
+                {   // 500 分的每月赠送,12 天后到期
+                    "expire_time": now + 12 * day,
                     "entitlement_base_info": {
                         "quota": { "credits_limit": 500 },
                         "product_extra": { "package_extra": { "package_name": "每月登录赠送" } }
+                    }
+                },
+                {   // 昨天就过期了:一分都不该算进余额,也不占额度笔数
+                    "expire_time": now - day,
+                    "entitlement_base_info": {
+                        "quota": { "credits_limit": 40 },
+                        "product_extra": { "package_extra": { "package_name": "过期赠送" } }
                     }
                 }
             ]
@@ -988,16 +1049,17 @@ mod tests {
         let r = extract_trae(&body);
         assert!(r.valid, "{:?}", r.error);
         assert_eq!(r.kind, Kind::Points);
-        // 150 + 200 + 500 = 850 发放;已用 150 + 194.724 → 剩 505.276
+        // 150 + 200 + 500 = 850 发放;已用 150 + 194.724 → 剩 505.276(过期那笔 40 不算)
         assert_eq!(r.remaining, Some(505.28));
         assert_eq!(r.used, Some(344.72));
         assert!(r.total.is_none(), "积分型不设总额上限");
-        assert_eq!(r.expiring.len(), 2, "用完的那笔不进到期表");
-        assert_eq!(r.expiring[0].at, 1789716889); // 升序:9-18 在前
+        assert_eq!(r.expiring.len(), 2, "用完与已过期的那两笔都不进到期表");
+        assert_eq!(r.expiring[0].at, now + 3 * day); // 升序:近的在前
         assert_eq!(r.expiring[0].amount, 5.28);
         assert_eq!(r.expiring[0].label, "签到奖励");
-        assert_eq!(r.expiring[1].at, 1790783999);
+        assert_eq!(r.expiring[1].at, now + 12 * day);
         assert_eq!(r.expiring[1].amount, 500.0);
+        assert_eq!(r.extra[2].1, "3 笔", "过期包不占额度包数");
     }
 
     /// 结构不对必须报无效,而不是给一个"剩余 0"的假结果。

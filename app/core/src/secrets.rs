@@ -21,8 +21,16 @@ pub fn set(provider_id: &str, key: &str) -> Result<(), String> {
         .map_err(|e| format!("写入凭据失败: {e}"))
 }
 
-pub fn get(provider_id: &str) -> Option<String> {
-    entry(provider_id).ok()?.get_password().ok()
+/// Ok(None) = 服务正常但没配过这把 key;Err = 凭据管理器本身不可用
+/// (服务停了 / 组策略禁用)。之前两种混成 None,凭据库坏了界面也说"未配置密钥",
+/// 用户反复重填也填不进去(扫描报告 P2-12)。
+pub fn get(provider_id: &str) -> Result<Option<String>, String> {
+    let e = entry(provider_id)?;
+    match e.get_password() {
+        Ok(k) => Ok(Some(k)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(err) => Err(format!("读取凭据失败: {err}")),
+    }
 }
 
 pub fn delete(provider_id: &str) -> Result<(), String> {
@@ -35,12 +43,12 @@ pub fn delete(provider_id: &str) -> Result<(), String> {
 }
 
 pub fn exists(provider_id: &str) -> bool {
-    get(provider_id).is_some()
+    get(provider_id).ok().flatten().is_some()
 }
 
 /// 只回显尾部 4 位,用于界面确认"存的是哪把 key",不泄露完整密钥。
 pub fn masked(provider_id: &str) -> Option<String> {
-    let k = get(provider_id)?;
+    let k = get(provider_id).ok().flatten()?;
     let tail: String = k.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
     Some(format!("••••{}", tail))
 }

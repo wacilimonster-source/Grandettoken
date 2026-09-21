@@ -16,6 +16,9 @@ pub struct AppState {
     pub fetcher: Arc<Fetcher>,
     /// 当前已注册的全局快捷键(空 = 未注册)。换键时先注册新的、成功后再撤旧的。
     pub hotkey: Mutex<Option<String>>,
+    /// 启动期的非致命错误(快捷键被占用、配置损坏回落默认…)。之前只 eprintln,
+    /// 绿色版从托盘启动时没人看得到 stderr(报告 P2-14)。前端取走即清空,只提示一次。
+    pub startup_error: Mutex<Option<String>>,
 }
 
 #[tauri::command]
@@ -23,7 +26,8 @@ async fn get_channels(state: State<'_, AppState>) -> Result<Vec<ChannelView>, St
     // 先克隆 Arc 再 await:不让 State 的借用跨越 await 点
     let store = state.store.clone();
     let fetcher = state.fetcher.clone();
-    Ok(fetcher.fetch_all(&store).await)
+    // fetch_shared:与轮询/托盘刷新共用闸门,手动刷新不再叠加出一份并发请求(报告 O-4)
+    Ok(fetcher.fetch_shared(&store).await)
 }
 
 #[tauri::command]
@@ -60,12 +64,41 @@ fn apply_hotkey(app: &tauri::AppHandle, state: &AppState, want: &str) -> Result<
 
 #[tauri::command]
 fn set_config(app: tauri::AppHandle, state: State<'_, AppState>, config: Config) -> Result<(), String> {
+    // 前端提交的是它启动时那份配置的快照。更新流程(跳过版本/上次检查时间)和
+    // 窗口位置是后端单方面往前推的字段 —— 前端拿不到最新值,整份覆盖会把它们
+    // 抹回 None(报告 P1-3:跳过某版本后,下次保存设置让该版本又重新弹窗)。
+    let mut incoming = config;
+    {
+        let cur = lock_rw(&state.config);
+        if incoming.skipped_version.is_none() {
+            incoming.skipped_version = cur.skipped_version.clone();
+        }
+        if incoming.last_check_at.is_none() {
+            incoming.last_check_at = cur.last_check_at;
+        }
+        if incoming.win_x.is_none() {
+            incoming.win_x = cur.win_x;
+        }
+        if incoming.win_y.is_none() {
+            incoming.win_y = cur.win_y;
+        }
+    }
+
     // 先应用快捷键:注册失败(如被占用)就让整次保存失败,前端好回滚旧值
-    apply_hotkey(&app, &state, &config.hotkey)?;
-    let store = state.store.lock().map_err(|e| e.to_string())?;
-    config.save(&store)?;
+    let old_hotkey = lock_rw(&state.hotkey).clone();
+    if let Err(e) = apply_hotkey(&app, &state, &incoming.hotkey) {
+        return Err(e);
+    }
+    let store = lock_rw(&state.store);
+    if let Err(e) = incoming.save(&store) {
+        // 落库失败:把快捷键回滚,否则界面显示"保存失败"而快捷键却已经换了
+        if let Some(old) = old_hotkey {
+            let _ = apply_hotkey(&app, &state, &old);
+        }
+        return Err(e);
+    }
     drop(store);
-    *lock_rw(&state.config) = config;
+    *lock_rw(&state.config) = incoming;
     Ok(())
 }
 
@@ -107,12 +140,9 @@ fn delete_key(id: String) -> Result<(), String> {
 #[tauri::command]
 fn get_series(state: State<'_, AppState>, id: String, hours: i64) -> Vec<f64> {
     let from = now_ts() - hours * 3600;
-    state
-        .store
-        .lock()
-        .ok()
-        .and_then(|s| s.series(&id, from, 24).ok())
-        .unwrap_or_default()
+    // lock_rw:锁被毒化时也要出图,不能让取数线程的一次 panic 之后所有曲线都空掉
+    let s = lock_rw(&state.store);
+    s.series(&id, from, 24).unwrap_or_default()
 }
 
 /// 开机自启:写 HKCU 的 Run 键,不需要管理员权限。
@@ -164,9 +194,26 @@ fn set_autostart(enabled: bool) -> Result<(), String> {
 /// 托盘角标。前端用 canvas 画好 32×32 的 RGBA(图标同款造型 + 状态色角标),
 /// 这里换成托盘图标并把文字放进 tooltip —— 托盘图标只有 16px,数字放 tooltip,
 /// 和胶囊共用同一套渠道与轮播逻辑。
+///
+/// 像素走 base64 而不是 `Vec<u8>`:Tauri 把命令参数序列化成 JSON,4096 字节的
+/// RGBA 会变成两万多个字符的数组,每几秒轮播一次白耗流量(报告 O-9)。
+/// 尺寸不符直接报错:图标画错时宁可保留上一帧,也不要把花屏贴到托盘上。
 #[tauri::command]
-fn set_tray_icon(app: tauri::AppHandle, rgba: Vec<u8>, size: u32, tooltip: String) -> Result<(), String> {
+fn set_tray_icon(
+    app: tauri::AppHandle,
+    rgba_b64: String,
+    size: u32,
+    tooltip: String,
+) -> Result<(), String> {
+    use base64::Engine as _;
     let tray = app.tray_by_id("main").ok_or("托盘不存在")?;
+    let rgba = base64::engine::general_purpose::STANDARD
+        .decode(rgba_b64.as_bytes())
+        .map_err(|e| format!("托盘图标 base64 解码失败: {e}"))?;
+    let want = size as usize * size as usize * 4;
+    if size == 0 || rgba.len() != want {
+        return Err(format!("托盘图标尺寸不符: {size}x{size} 需要 {want} 字节,收到 {}", rgba.len()));
+    }
     let img = tauri::image::Image::new_owned(rgba, size, size);
     tray.set_icon(Some(img)).map_err(|e| e.to_string())?;
     tray.set_tooltip(Some(&tooltip)).map_err(|e| e.to_string())?;
@@ -198,16 +245,18 @@ fn lock_rw<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 fn set_pin(app: tauri::AppHandle, state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
     let win = app.get_webview_window("main").ok_or("窗口不存在")?;
     win.set_always_on_top(enabled).map_err(|e| e.to_string())?;
-    let store = state.store.lock().map_err(|e| e.to_string())?;
+    let store = lock_rw(&state.store);
     let mut cfg = lock_rw(&state.config);
     cfg.always_on_top = enabled;
     cfg.save(&store)
 }
 
-/// 后台轮询。四个渠道都是账务接口,查询余额不消耗 token,所以间隔可以压得比较短;
+/// 后台轮询。渠道都是账务接口,查询余额不消耗 token,所以间隔可以压得比较短;
 /// 唯一约束是对方的限流礼貌性,所以失败时退避。
 async fn poll_loop(app: tauri::AppHandle) {
     let mut failures = 0u32;
+    // 90 天清理原来只在启动时做一次:这台机器常年不重启的话快照表就一直长(报告 O-2)
+    let mut last_prune = now_ts();
 
     loop {
         let (active_sec, idle_sec, backoff_sec) = {
@@ -237,13 +286,26 @@ async fn poll_loop(app: tauri::AppHandle) {
             let state = app.state::<AppState>();
             (state.store.clone(), state.fetcher.clone())
         };
-        let views = fetcher.fetch_all(&store).await;
+
+        if now_ts() - last_prune >= 86_400 {
+            last_prune = now_ts();
+            let s = lock_rw(&store);
+            if let Err(e) = s.prune(now_ts() - 90 * 86_400) {
+                eprintln!("定期清理快照失败: {e}");
+            }
+        }
+
+        // 走 fetch_shared:用户点「立即刷新」撞上轮询时排队等结果,
+        // 而不是对同一批账务接口发出双份请求(报告 O-4)
+        let views = fetcher.fetch_shared(&store).await;
 
         if views.iter().any(|v| v.valid) {
             failures = 0;
-        } else {
+        } else if views.iter().any(|v| v.has_key) {
             failures += 1;
         }
+        // 一个渠道都没配凭据时不算失败:那是全新安装,退避到 5 分钟只会让
+        // 用户「填好 key 却半天看不到数字」
 
         let _ = app.emit("channels-updated", &views);
     }
@@ -254,7 +316,7 @@ async fn refresh_now(app: &tauri::AppHandle) {
         let state = app.state::<AppState>();
         (state.store.clone(), state.fetcher.clone())
     };
-    let views = fetcher.fetch_all(&store).await;
+    let views = fetcher.fetch_shared(&store).await;
     let _ = app.emit("channels-updated", &views);
 }
 
@@ -432,15 +494,82 @@ async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
 /// 记住「跳过此版本」。
 #[tauri::command]
 fn skip_update_version(state: State<'_, AppState>, version: String) -> Result<(), String> {
-    let store = state.store.lock().map_err(|e| e.to_string())?;
+    let store = lock_rw(&state.store);
     let mut cfg = lock_rw(&state.config);
     cfg.skipped_version = Some(version);
     cfg.save(&store)
 }
 
+/// 记住窗口位置(报告 O-6)。只在自由态下记 —— 吸附/紧凑条/胶囊的坐标是布局
+/// 算出来的,记下来反而会在下次启动覆盖正确的默认位置。
+/// 前端在拖动结束后调用一次,不做高频写盘。
+#[tauri::command]
+fn save_window_pos(state: State<'_, AppState>, x: i32, y: i32) -> Result<(), String> {
+    let store = lock_rw(&state.store);
+    let mut cfg = lock_rw(&state.config);
+    cfg.win_x = Some(x);
+    cfg.win_y = Some(y);
+    cfg.save(&store)
+}
+
+/// 把请求的窗口坐标夹进"至少有一条边露在外面"的范围。
+/// 多屏环境下用户拔掉副屏后,记下的坐标会落在屏幕外,窗口看起来像消失了。
+/// 至少要露出 KEEP_X × KEEP_Y 的可视区,保证还能拖回来。
+fn clamp_to_monitors(app: &tauri::AppHandle, x: i32, y: i32, w: i32, h: i32) -> (i32, i32) {
+    const KEEP_X: i32 = 80;
+    const KEEP_Y: i32 = 40;
+    let Ok(monitors) = app.available_monitors() else {
+        return (x, y);
+    };
+    if monitors.is_empty() {
+        return (x, y);
+    }
+    // 完全落在某个显示器内 → 原样返回
+    for m in &monitors {
+        let (mx, my) = (m.position().x, m.position().y);
+        let (mw, mh) = (m.size().width as i32, m.size().height as i32);
+        if x >= mx && y >= my && x + w <= mx + mw && y + h <= my + mh {
+            return (x, y);
+        }
+    }
+    // 否则挑第一个显示器夹:左上角不越过 (mx+mw-KEEP) 边界
+    let m = &monitors[0];
+    let (mx, my) = (m.position().x, m.position().y);
+    let (mw, mh) = (m.size().width as i32, m.size().height as i32);
+    let cx = x.clamp(mx, (mx + mw - KEEP_X).max(mx));
+    let cy = y.clamp(my, (my + mh - KEEP_Y).max(my));
+    (cx, cy)
+}
+
+/// 当前版本号(前端底部显示用)。之前硬编码在 index.html 里,发版必改且会忘(报告 P2-15)。
+#[tauri::command]
+fn app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// 取走启动期的非致命错误(配置损坏回落默认、快捷键注册失败)。
+/// 取走即清空 —— 提示一次就够,别每次刷新都弹。
+#[tauri::command]
+fn take_startup_error(state: State<'_, AppState>) -> Option<String> {
+    lock_rw(&state.startup_error).take()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 必须是第一个插件:第二个实例不再往下走,直接把已开实例的窗口唤到前台。
+        // 之前双开会出现两个托盘图标、两个轮询一起打账务接口,而且两套 SQLite
+        // 连接写同一个库(报告 O-3)。
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let was = w.is_visible().unwrap_or(false);
+                let _ = w.show();
+                let _ = w.set_focus();
+                if !was {
+                    let _ = app.emit("window-shown", ());
+                }
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -472,15 +601,32 @@ pub fn run() {
                 .app_data_dir()
                 .map_err(|e| format!("无法定位数据目录: {e}"))?;
             let store = Store::open(&dir.join("tokenscope.db"))?;
-            let config = Config::load(&store);
+            // 配置坏了不能静默用默认值:那会把用户的隐藏渠道、快捷键、轮询间隔
+            // 全部悄悄还原(报告 P2-14)。取默认值继续启动,但把原因留给前端提示。
+            let (config, mut startup_error) = match Config::try_load(&store) {
+                Ok(c) => (c, None),
+                Err(e) => (Config::default(), Some(e)),
+            };
 
             // 注册表与配置对齐:开机自启以配置为准,并刷新为当前 exe 路径,
             // 用户挪动 exe 后无需重新设置自启
             let _ = autostart::set(config.autostart);
 
-            // 置顶是持久化设置:启动时按配置应用,折叠形态没有置顶按钮也生效
+            // 置顶 + 上次位置是持久化设置:启动时按配置应用,折叠形态没有置顶按钮也生效
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.set_always_on_top(config.always_on_top);
+                // 恢复窗口位置(报告 O-6)。多屏环境下副屏拔掉后旧坐标落在屏幕外,
+                // 窗口"消失"又无从找回 —— 所以按当前可用显示器裁一遍。
+                if let (Some(x), Some(y)) = (config.win_x, config.win_y) {
+                    if let Ok(size) = w.outer_size() {
+                        let (cx, cy) =
+                            clamp_to_monitors(app.handle(), x, y, size.width as i32, size.height as i32);
+                        if cx != x || cy != y {
+                            eprintln!("窗口位置 ({x},{y}) 不在任何显示器内,已修正为 ({cx},{cy})");
+                        }
+                        let _ = w.set_position(tauri::PhysicalPosition::new(cx, cy));
+                    }
+                }
             }
 
             let _ = store.prune(now_ts() - 90 * 86400);
@@ -490,14 +636,23 @@ pub fn run() {
                 config: Mutex::new(config.clone()),
                 fetcher: Arc::new(Fetcher::new()),
                 hotkey: Mutex::new(None),
+                startup_error: Mutex::new(None),
             });
 
-            // 启动时注册已保存的全局快捷键;被占用只记日志,不拦启动
+            // 启动时注册已保存的全局快捷键;被占用不拦启动,但要把原因留给界面
+            // (之前只 eprintln,绿色版从托盘启动时没人看得到 stderr —— 报告 P2-14)
             if !config.hotkey.is_empty() {
                 let st = app.state::<AppState>();
                 if let Err(e) = apply_hotkey(app.handle(), &st, &config.hotkey) {
                     eprintln!("全局快捷键注册失败: {e}");
+                    startup_error = Some(match startup_error {
+                        Some(prev) => format!("{prev};另外 {e}"),
+                        None => e,
+                    });
                 }
+            }
+            if let Some(msg) = startup_error {
+                *lock_rw(&app.state::<AppState>().startup_error) = Some(msg);
             }
 
             let refresh = MenuItem::with_id(app, "refresh", "立即刷新", true, None::<&str>)?;
@@ -581,6 +736,9 @@ pub fn run() {
             check_update,
             install_update,
             skip_update_version,
+            save_window_pos,
+            app_version,
+            take_startup_error,
         ])
         .run(tauri::generate_context!())
         .expect("TokenScope 启动失败");

@@ -90,7 +90,9 @@ pub enum FailKind {
     Transport,
     /// 5xx、429、响应不是 JSON:换域名(可能是入口自身的问题或限流)
     Server,
-    /// 4xx(除 429):密钥/权限问题,换域名也是同一个答案
+    /// 401/403/407:服务器明确拒绝这份凭据 —— 换下一份凭据的信号
+    Auth,
+    /// 其余 4xx(404/400):路径或参数问题,换域名、换凭据都是同一答案
     Client,
     /// 业务失败(HTTP 200 但 code:false 之类):服务器明确答复了,不换
     Business,
@@ -109,7 +111,7 @@ impl FailKind {
 /// 几份登录态(Trae 装了多个版本、WorkBuddy 有几份 .info 备份),其中一份可能已作废。
 /// 网络不通、5xx、业务失败都跟身份无关,换凭据只是白等。
 pub fn another_credential_may_help(kind: Option<FailKind>) -> bool {
-    kind == Some(FailKind::Client)
+    kind == Some(FailKind::Auth)
 }
 
 /// 尝试顺序:上次成功的入口优先(避免每轮都先撞那个挂掉的),
@@ -217,12 +219,18 @@ pub fn now_ts() -> i64 {
 }
 
 /// 本地零点。按用户本地时区切,不按 UTC —— 否则跨时区时"今日消耗"会指错日子。
+/// DST 区用 earliest()(0 点被重复时取第一段);0 点根本不存在的区(哈瓦那等)
+/// 退回 UTC 对齐的今日零点 —— 兜成 now_ts 会把窗口塌成零长度、再被 -86400 容差
+/// 放大成"近 24 小时",数字静默偏大(扫描报告 P2-9)。
 fn local_date_start(y: i32, m: u32, d: u32) -> i64 {
     Local
         .with_ymd_and_hms(y, m, d, 0, 0, 0)
-        .single()
+        .earliest()
         .map(|x| x.timestamp())
-        .unwrap_or_else(now_ts)
+        .unwrap_or_else(|| {
+            let n = now_ts();
+            n - n.rem_euclid(86_400)
+        })
 }
 
 pub fn local_midnight_today() -> i64 {
@@ -290,6 +298,14 @@ async fn fetch_once(
             return (
                 FetchResult {
                     valid: false,
+                    // 失败结果也要带对类型:落进 Default 的 Amount 会让首次取数就
+                    // 失败的 Codex/OpenCode 被渲染成金额卡(扫描报告 P1-2)
+                    kind: def.default_kind,
+                    unit: match def.default_kind {
+                        Kind::Amount => "CNY".into(),
+                        Kind::Percent => "%".into(),
+                        Kind::Points => "credits".into(),
+                    },
                     error: Some(msg),
                     ..Default::default()
                 },
@@ -305,6 +321,12 @@ async fn fetch_once(
             return (
                 FetchResult {
                     valid: false,
+                    kind: def.default_kind,
+                    unit: match def.default_kind {
+                        Kind::Amount => "CNY".into(),
+                        Kind::Percent => "%".into(),
+                        Kind::Points => "credits".into(),
+                    },
                     error: Some(format!("响应不是合法 JSON (HTTP {})", status.as_u16())),
                     ..Default::default()
                 },
@@ -336,8 +358,10 @@ async fn fetch_once(
         let code = status.as_u16();
         Some(if code == 429 || code >= 500 {
             FailKind::Server
+        } else if matches!(code, 401 | 403 | 407) {
+            FailKind::Auth // 凭据被明确拒绝:换下一份登录态值得一试
         } else {
-            FailKind::Client // 401/403 等:密钥或权限问题,换域名也是同一答案
+            FailKind::Client // 404/400 等:路径/参数问题,换域名换凭据都没用
         })
     } else {
         Some(FailKind::Business) // HTTP 200 但业务失败
@@ -375,6 +399,7 @@ pub async fn fetch_channel(
     (
         last.unwrap_or(FetchResult {
             valid: false,
+            kind: def.default_kind,
             error: Some("没有可用的接口地址".into()),
             ..Default::default()
         }),
@@ -383,19 +408,23 @@ pub async fn fetch_channel(
     )
 }
 
-/// 取一个渠道的凭据候选(按可信度排序)。空的返回值 = 没有可用凭据。
-fn credentials(def: &providers::ProviderDef) -> Vec<appauth::Credential> {
+/// 取一个渠道的凭据候选(按可信度排序)。空的第一个返回值 = 没有可用凭据;
+/// 第二个返回值 = 凭据管理器本身坏了的说明文字(与"没配密钥"区分,P2-12)。
+fn credentials(def: &providers::ProviderDef) -> (Vec<appauth::Credential>, Option<String>) {
     match def.auth {
-        AuthKind::Keyring => secrets::get(def.id)
-            .map(|k| {
+        AuthKind::Keyring => match secrets::get(def.id) {
+            Ok(Some(k)) => (
                 vec![appauth::Credential {
                     token: k,
                     source: String::new(),
-                }]
-            })
-            .unwrap_or_default(),
+                }],
+                None,
+            ),
+            Ok(None) => (Vec::new(), None),
+            Err(e) => (Vec::new(), Some(e)),
+        },
         // 本机应用的登录态:可能有几份(多个安装 / 旧备份),按可信度依次试
-        AuthKind::App(app) => appauth::candidates(app),
+        AuthKind::App(app) => (appauth::candidates(app), None),
     }
 }
 
@@ -579,6 +608,11 @@ pub struct Fetcher {
     /// 每个渠道上次成功的入口地址。本轮先试它,避免每分钟都先撞挂掉的域名。
     /// 只存内存:重启后退回定义顺序,不往磁盘写状态。
     url_memo: Mutex<HashMap<String, String>>,
+    /// 上次成功解析的配置。DB 读不到/解析失败时沿用 —— 隐藏渠道不该被静默放开(P2-11)
+    cfg_cache: Mutex<Option<Config>>,
+    /// fetch_shared 的门 + 近期结果:手动刷新撞上轮询不再双份请求账务接口(O-4)
+    gate: tokio::sync::Mutex<()>,
+    last_run: Mutex<Option<(i64, Vec<ChannelView>)>>,
 }
 
 impl Default for Fetcher {
@@ -597,7 +631,28 @@ impl Fetcher {
                 .expect("HTTP 客户端初始化失败"),
             cache: Mutex::new(HashMap::new()),
             url_memo: Mutex::new(HashMap::new()),
+            cfg_cache: Mutex::new(None),
+            gate: tokio::sync::Mutex::new(()),
+            last_run: Mutex::new(None),
         }
+    }
+
+    /// get_channels / 托盘「立即刷新」共用的入口:5 秒内刚跑完一轮直接复用结果,
+    /// 并发调用在同一把门锁上排队 —— 账务接口有速率顾虑,双份轮询不礼貌(O-4)。
+    pub async fn fetch_shared(&self, store: &Arc<Mutex<Store>>) -> Vec<ChannelView> {
+        let _g = self.gate.lock().await;
+        {
+            let last = self.last_run.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some((ts, views)) = last.as_ref() {
+                if now_ts() - *ts < 5 {
+                    return views.clone();
+                }
+            }
+        }
+        let views = self.fetch_all(store).await;
+        *self.last_run.lock().unwrap_or_else(|p| p.into_inner()) =
+            Some((now_ts(), views.clone()));
+        views
     }
 
     /// 取全部渠道。
@@ -612,13 +667,26 @@ impl Fetcher {
         let mut out: Vec<Option<ChannelView>> = (0..n).map(|_| None).collect();
 
         // ── await 段:纯网络,不碰数据库 ──
-        // 隐藏渠道清单先读出来:隐藏 = 不发请求、不读本机登录凭据。
-        // 仍返回一个占位视图(has_key 照实),管理页要靠它列出「已隐藏」卡片。
-        // Arc:并发时每渠道克隆一次指针,而不是把 Vec 移进每个 future。
-        let hidden: Arc<Vec<String>> = Arc::new({
+        // 每轮开头读一次配置(隐藏清单与申请制规则都从它来;之前每轮 load 两遍,
+        // 报告 O-12)。解析失败绝不回落 default —— 那会把隐藏渠道静默"解除隐藏"
+        // 恢复取数(扫描报告 P2-11):沿用上次成功的配置,首轮无缓存才用默认并记日志。
+        let cfg: Arc<Config> = Arc::new({
             let s = store.lock().unwrap_or_else(|p| p.into_inner());
-            Config::load(&s).hidden_channels
+            let mut cache = self.cfg_cache.lock().unwrap_or_else(|p| p.into_inner());
+            match Config::try_load(&s) {
+                Ok(c) => {
+                    *cache = Some(c.clone());
+                    c
+                }
+                Err(e) => {
+                    eprintln!("{e},本轮沿用上次的配置");
+                    cache.clone().unwrap_or_default()
+                }
+            }
         });
+        // 隐藏 = 不发请求、不读本机登录凭据;仍返回占位视图,管理页要靠它列「已隐藏」卡片。
+        // Arc:并发时每渠道克隆一次指针,而不是把 Vec 移进每个 future。
+        let hidden: Arc<Vec<String>> = Arc::new(cfg.hidden_channels.clone());
 
         let fetched = futures::future::join_all(
             providers::PROVIDERS
@@ -627,10 +695,21 @@ impl Fetcher {
                 .map(|(i, def)| {
                     let hidden = hidden.clone();
                     async move {
-                    let creds = credentials(def);
+                    // 隐藏 = 不发请求、**也不读本机登录凭据**(裁决原文)。之前的顺序
+                    // 反了:credentials() 先跑,隐藏的 App 型渠道每轮仍读本地文件 + 跑 AES
+                    // + 查凭据管理器(扫描报告 P1-1)。
                     if hidden.iter().any(|h| h == def.id) {
                         let mut v = placeholder(def);
-                        v.has_key = !creds.is_empty();
+                        v.has_key = if matches!(def.auth, AuthKind::Keyring) {
+                            let id = def.id.to_string();
+                            tokio::task::spawn_blocking(move || {
+                                secrets::get(&id).ok().flatten().is_some()
+                            })
+                            .await
+                            .unwrap_or(false)
+                        } else {
+                            false // App 型:隐藏时连本地文件都不该碰
+                        };
                         v.hidden = true;
                         return FetchedOne {
                             i,
@@ -640,11 +719,20 @@ impl Fetcher {
                             success: None,
                         };
                     }
+                    // 文件 IO + AES + keyring RPC 都是阻塞调用:下沉到 spawn_blocking,
+                    // 凭据服务卡住不再拖垮 tokio worker 上的整轮取数(扫描报告 O-5)。
+                    let (creds, secret_err) = tokio::task::spawn_blocking(move || credentials(def))
+                        .await
+                        .unwrap_or_else(|_| (Vec::new(), Some("凭据读取异常".to_string())));
                     if creds.is_empty() {
+                        let mut v = placeholder(def);
+                        if let Some(e) = secret_err {
+                            v.error = Some(e);
+                        }
                         return FetchedOne {
                             i,
                             def,
-                            view: Some(placeholder(def)),
+                            view: Some(v),
                             pending: None,
                             success: None,
                         };
@@ -710,6 +798,9 @@ impl Fetcher {
                             Some((mut prev, prev_ts)) => {
                                 prev.error = result.error;
                                 prev.valid = false;
+                                // 失联后"已限流"已成无法再确认的旧事实,别再挂着报警
+                                // (扫描报告 P2-10);数值沿用快照并标注时间即可。
+                                prev.limited = false;
                                 (prev, true, prev_ts, shown_cred)
                             }
                             None => (result, false, ts, shown_cred),
@@ -747,11 +838,13 @@ impl Fetcher {
                         Kind::Points => "points",
                     };
                     // 注意顺序:先写快照再组视图 —— 申请制额度的跳升检测要用最新快照
-                    let _ = s.record(f.def.id, *ts, res.remaining, res.used, res.total, kind);
+                    if let Err(e) = s.record(f.def.id, *ts, res.remaining, res.used, res.total, kind) {
+                        // 写库失败以前是 let _ = 静默吞掉:消耗会悄悄偏小且无从排查(O-7)
+                        eprintln!("写入快照失败 {}: {e}", f.def.id);
+                    }
                 }
             }
-            // 配置从库里读:前端改完设置立刻生效,不必等下一次轮询换内存态
-            let cfg = Config::load(&s);
+            // 配置用本轮开头读好的那份(以前这里还会再 load 一遍,报告 O-12)
             for f in fetched {
                 if let Some(v) = f.view {
                     out[f.i] = Some(v);
@@ -924,12 +1017,13 @@ mod tests {
         assert_eq!(s.source, "none");
     }
 
-    /// 换域名重试的策略:网络/5xx/429 才值得换;密钥错与业务失败不换。
+    /// 换域名重试的策略:网络/5xx/429 才值得换;凭据被拒、其它 4xx 与业务失败不换。
     #[test]
     fn only_transport_and_server_failures_retry() {
         assert!(FailKind::Transport.retryable());
         assert!(FailKind::Server.retryable());
-        assert!(!FailKind::Client.retryable());   // 401/403:换域名也是同一答案
+        assert!(!FailKind::Auth.retryable());     // 401/403:换域名也是同一答案,该换凭据
+        assert!(!FailKind::Client.retryable());   // 404/400:路径问题,换域名同一答案
         assert!(!FailKind::Business.retryable()); // code:false:服务器已明确答复
     }
 
@@ -970,10 +1064,11 @@ mod tests {
         assert!(expiring_soon(&list[..1], now).is_none());
     }
 
-    /// 换凭据的判定:只有 401/403 值得换下一份登录态。
+    /// 换凭据的判定:只有服务器明确拒绝这份凭据(401/403/407)才换下一份登录态。
     #[test]
-    fn only_client_failures_try_another_credential() {
-        assert!(another_credential_may_help(Some(FailKind::Client)));
+    fn only_auth_failures_try_another_credential() {
+        assert!(another_credential_may_help(Some(FailKind::Auth)));
+        assert!(!another_credential_may_help(Some(FailKind::Client)));
         assert!(!another_credential_may_help(Some(FailKind::Transport)));
         assert!(!another_credential_may_help(Some(FailKind::Server)));
         assert!(!another_credential_may_help(Some(FailKind::Business)));
