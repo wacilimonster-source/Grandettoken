@@ -1,6 +1,6 @@
 [package]
 name = "tokenscope"
-version = "0.1.14"
+version = "0.1.15"
 description = "多平台 Token 余额监控"
 authors = ["wacil"]
 edition = "2021"
