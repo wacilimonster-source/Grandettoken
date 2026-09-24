@@ -164,6 +164,19 @@ const TONE_COLOR = { ok: "var(--ok)", warn: "var(--warn)", bad: "var(--bad)", of
 // 与 styles.css 的高对比色板保持一致(进度条/托盘角标是内联色,吃不到 CSS 变量)
 const TONE_HEX = { ok: "#4ade9d", warn: "#f7c355", bad: "#ff6b63", off: "#3a4356" };
 
+/**
+ * 状态点分层(U2):未配置 = off(空心灰环,没启用不是故障);
+ * 取数失败/失联 = st(灰点加斜杠);其余按阈值红黄绿。
+ * 列表行 / 胶囊 / 渠道卡共用,保证同一个渠道到处一个样。
+ */
+function dotCls(c) {
+  if (!c.hasKey) return "off";
+  if (!c.valid) return "st";
+  if (c.limited || toneOf(c) === "bad") return "b";
+  if (toneOf(c) === "warn") return "w";
+  return "";
+}
+
 // 官方图标(素材出处见 app/src/logos/README.md)。没有官方标的渠道继续用字母方块。
 const LOGOS = {
   "opencode-go": "logos/opencode.svg",
@@ -176,13 +189,15 @@ const LOGOS = {
 /**
  * 渠道图标。统一入口:列表行 / 密钥行 / 额度申请行都用它。
  * off = 未配置或取数失败 —— 字母方块变灰,官方标压暗去色,语义保持一致。
+ * 官方标同时内嵌一个字母方块副本(.ltr):紧凑条 16px 档位位图会糊,
+ * 由 CSS 切换到字母显示(U6),面板/管理页仍显示官方标。
  */
 function iconHtml(c, cls = "ico", off = false) {
   const src = LOGOS[c.id];
   if (!src) {
     return `<div class="${cls}" style="background:${off ? "#3c445c" : c.color}">${esc(c.short)}</div>`;
   }
-  return `<div class="${cls} logo${off ? " off" : ""}"><img src="${src}" alt="${esc(c.short)}"></div>`;
+  return `<div class="${cls} logo${off ? " off" : ""}" style="--cc:${off ? "#3c445c" : c.color}"><img src="${src}" alt="${esc(c.short)}"><span class="ltr">${esc(c.short)}</span></div>`;
 }
 
 /** 自定义排序下的完整顺序:配置里列出的 + 未列入的(附在末尾,新增渠道不会丢)。 */
@@ -231,25 +246,45 @@ function renderSummary() {
   };
   // 每格显式带上自己的字段名与注释文案 —— 不要拿"是否推算"去推字段名,
   // 那种写法今天恰好对,给今日/本周也加计数时就会读到错的字段
+  // prev* = 上一周期同时段(U8 环比):今日 vs 昨日同时段,以此类推
   const cells = [
-    { label: "今日消耗", field: "day", note: "推算" },
-    { label: "本周消耗", field: "week", note: "推算" },
-    { label: "本月消耗", field: "month", note: null },
+    { label: "今日消耗", field: "day", prev: "dayPrev", note: "推算", cmp: "对比昨日同时段" },
+    { label: "本周消耗", field: "week", prev: "weekPrev", note: "推算", cmp: "对比上周同时段" },
+    { label: "本月消耗", field: "month", prev: "monthPrev", note: null, cmp: "对比上月同时段" },
   ];
   if (!am.length) {
     $("sum").innerHTML = "";
     return;
   }
   $("sum").innerHTML = cells
-    .map(({ label, field, note: cellNote }) => {
+    .map(({ label, field, prev, note: cellNote, cmp }) => {
       const v = sum(field);
       const txt = v === null ? "——" : money(v);
       // 计数要按"真正参与了求和"的渠道数 —— 有的渠道这个窗口还没数据,
       // 用 am.length 会把没算进去的也算上,看起来像少加了钱
       const contributors = am.filter((c) => c[field] != null).length;
       const note = v === null ? "数据不足" : cellNote || `${contributors} 个渠道`;
-      return `<div class="cell"><div class="lb">${label}</div>
-        <div class="vv">${txt}<span class="dl">${note}</span></div></div>`;
+      // 环比只在"本期与上期都有数"的渠道集合上算,两边口径才对称;
+      // 上期合计为 0(或集合为空)时比例无意义,显示「——」而不是 0 或 ∞
+      let delta = "";
+      const both = am.filter((c) => c[field] != null && c[prev] != null);
+      if (both.length) {
+        const cur2 = both.reduce((a, c) => a + c[field], 0);
+        const prev2 = both.reduce((a, c) => a + c[prev], 0);
+        if (prev2 > 0) {
+          const p = ((cur2 - prev2) / prev2) * 100;
+          delta =
+            p > 0.5
+              ? `<span class="dl delta up">↑${Math.round(p)}%</span>`
+              : p < -0.5
+                ? `<span class="dl delta dn">↓${Math.round(-p)}%</span>`
+                : `<span class="dl delta na">±0%</span>`;
+        } else {
+          delta = `<span class="dl delta na">——</span>`;
+        }
+      }
+      return `<div class="cell" title="${cmp}"><div class="lb">${label}</div>
+        <div class="vv">${txt}<span class="dl">${note}</span>${delta}</div></div>`;
     })
     .join("");
 }
@@ -332,13 +367,9 @@ function renderRow(c, i) {
     }
   }
 
-  // 状态点
-  let dot = "";
-  if (noKey) dot = '<span class="dot o"></span>';
-  else if (failed) dot = '<span class="dot o"></span>';
-  else if (c.limited || tone === "bad") dot = '<span class="dot b"></span>';
-  else if (tone === "warn") dot = '<span class="dot w"></span>';
-  else dot = '<span class="dot"></span>';
+  // 状态点(U2 分层):未配置=空心环,失联=斜杠灰点 —— 两种灰色不再共用
+  const dcls = dotCls(c);
+  const dot = `<span class="dot${dcls ? " " + dcls : ""}"></span>`;
 
   // 第三段:金额型显示日/周/月;配额型显示三个限流窗口;积分型显示最近的几笔到期
   let useHtml;
@@ -417,7 +448,7 @@ function renderRow(c, i) {
       }</div>`
     : `<div class="hint">更新于 ${relTime(c.updatedAt)}</div>`;
 
-  return `<div class="row" data-id="${c.id}" data-i="${i}">
+  return `<div class="row" data-id="${c.id}" data-i="${i}" data-dtone="${dcls}">
     <div class="rhead">
       <div class="r1">
         ${iconHtml(c, "ico", noKey || failed)}
@@ -632,9 +663,12 @@ function render(opts) {
   const updated = !!(opts && opts.updated);
   // 动效 A/B:重建 DOM 前先把每行大数字的旧文本存下来,替换后对比才知道谁变了
   const prevV = {};
+  // M7:顺便记下每行上一轮的状态点,等下识别"刚刚跌破红线"的行
+  const prevDt = {};
   document.querySelectorAll("#list .row").forEach((r) => {
     const v = r.querySelector(".val .v");
     if (v) prevV[r.dataset.id] = v.textContent;
+    if (r.dataset.dtone !== undefined) prevDt[r.dataset.id] = r.dataset.dtone;
   });
   const sorted = sortChannels(CHANNELS);
   // 标题栏挤了 6 个按钮,计数用短写法,完整说法放 tooltip
@@ -684,9 +718,9 @@ function render(opts) {
   const withKey = CHANNELS.filter((c) => c.hasKey && !c.hidden);
   const bad = withKey.filter((c) => !c.valid).length;
   const warn = withKey.filter((c) => c.valid && (c.limited || toneOf(c) === "bad")).length;
-  // 与行内同一套约定:失联=灰,预警=黄(之前 warn 用了红点,颜色梯度倒挂)
+  // 与行内同一套约定:未配置=空心环,失联=斜杠灰点,预警=黄(之前 warn 用了红点,颜色梯度倒挂)
   $("fdot").className =
-    "dot" + (bad ? " o" : warn ? " w" : withKey.length ? "" : " o");
+    "dot" + (bad ? " st" : warn ? " w" : withKey.length ? "" : " off");
   $("fstat").textContent = !withKey.length
     ? (hiddenN ? "渠道已全部隐藏" : "未配置渠道")
     : `${withKey.length - bad} 正常${warn ? ` · ${warn} 预警` : ""}${bad ? ` · ${bad} 失联` : ""}${hiddenN ? ` · ${hiddenN} 隐藏` : ""}`;
@@ -698,16 +732,26 @@ function render(opts) {
     document.querySelectorAll("#list .row").forEach((r) => {
       const id = r.dataset.id;
       const v = r.querySelector(".val .v");
-      if (!v || !(id in prevV) || prevV[id] === v.textContent) return;
-      rollValue(v, prevV[id], v.closest(".val"));
-      const sw = r.querySelector(".sweep");
-      if (sw) {
-        const d = n++ * 60;
-        setTimeout(() => {
-          sw.classList.remove("go");
-          void sw.offsetWidth; // 重启动画要先强制一次回流
-          sw.classList.add("go");
-        }, d);
+      if (v && id in prevV && prevV[id] !== v.textContent) {
+        rollValue(v, prevV[id], v.closest(".val"));
+        const sw = r.querySelector(".sweep");
+        if (sw) {
+          const d = n++ * 60;
+          setTimeout(() => {
+            sw.classList.remove("go");
+            void sw.offsetWidth; // 重启动画要先强制一次回流
+            sw.classList.add("go");
+          }, d);
+        }
+      }
+      // M7:这一轮刚从非红跌进红线的行,状态点播一次 1.2s 红晕(只播一次,
+      // 持续低位不重复 —— 告警要闭环,但不打扰;阈值上调"回红"同理)
+      if (prevDt[id] !== undefined && prevDt[id] !== "b" && r.dataset.dtone === "b") {
+        const d = r.querySelector(".n .dot");
+        if (d) {
+          d.classList.add("breath1");
+          setTimeout(() => d.classList.remove("breath1"), 1300);
+        }
       }
     });
   }
@@ -809,7 +853,13 @@ function fitCompact() {
     const more = document.createElement("div");
     more.className = "more";
     more.textContent = "+" + hidden;
-    more.title = hidden + " 个渠道放不下,展开面板查看";
+    // I2:截断不再是信息黑洞 —— tooltip 列出被藏渠道,点击展开面板并定位过去
+    const names = rows
+      .slice(n)
+      .map((r) => (CHANNELS.find((c) => c.id === r.dataset.id) || {}).name)
+      .filter(Boolean);
+    more.title = names.join("、") + " —— 点击展开面板查看";
+    more.dataset.first = rows[n] ? rows[n].dataset.id : "";
     list.appendChild(more);
   }
   setCompactW(Math.min(maxW, Math.ceil(total())));
@@ -825,7 +875,9 @@ function setCompactW(w) {
 // 胶囊显示哪些渠道:设置里选中的按顺序轮播;一个都没选就自动取最紧张的那个
 // (总额不能告诉你哪个 Key 要挂了,所以自动模式只挑最紧的)
 const PILL = { list: [], sorted: [], idx: 0, auto: true, degraded: false };
-const PILL_ROTATE_MS = 5000;
+// 8 秒一换(原 5 秒偏赶);悬停不暂停但节奏 ×3 —— 指示点让"会变"可见,
+// 所以不需要暂停(暂停曾被误认为轮播坏了),只需要"别在用户盯着看时刚好切走"
+const PILL_ROTATE_MS = 8000;
 
 function renderPill(sorted) {
   PILL.sorted = sorted;
@@ -869,7 +921,18 @@ function pillAnim(newId, lastText, lastId) {
   LAST_PILL = { id: newId, text };
 }
 
+/** M5 轮播指示点:多于一个渠道才显示,当前页高亮 —— 「会变」可见,就不需要悬停暂停。 */
+function renderPillDots() {
+  const el = $("pillDots");
+  if (!el) return;
+  el.innerHTML =
+    PILL.list.length > 1
+      ? PILL.list.map((_, i) => `<i${i === PILL.idx ? ' class="on"' : ""}></i>`).join("")
+      : "";
+}
+
 function renderPillFace() {
+  renderPillDots();
   const dot = $("pillDot");
   const icoBox = $("pillIco");
   const c = PILL.list[PILL.idx];
@@ -879,7 +942,7 @@ function renderPillFace() {
 
   if (!c) {
     const withKey = PILL.sorted.filter((x) => x.hasKey && !x.hidden);
-    dot.className = "dot o";
+    dot.className = "dot " + (withKey.length ? "st" : "off");
     icoBox.style.display = "none";
     icoBox.innerHTML = "";
     $("pillV").textContent = withKey.length ? "取数失败" : "未配置";
@@ -896,9 +959,8 @@ function renderPillFace() {
   icoBox.style.display = "contents";
   icoBox.innerHTML = iconHtml(c, "pico", !c.hasKey || !c.valid);
 
-  const tone = toneOf(c);
-  dot.className =
-    "dot" + (tone === "bad" ? " b" : tone === "warn" ? " w" : tone === "off" ? " o" : "");
+  const pd = dotCls(c);
+  dot.className = "dot" + (pd ? " " + pd : "");
   $("pillV").innerHTML =
     c.remaining === null
       ? "——"
@@ -1091,7 +1153,8 @@ function drawTrayIcon() {
 const cardOpen = new Set(); // 展开的卡片 id;轮询重建时保持,不让用户白收起
 
 function chDot(c) {
-  if (c.hidden || !c.hasKey || !c.valid) return "o";
+  if (c.hidden || !c.hasKey) return "off";
+  if (!c.valid) return "st";
   if (c.limited || toneOf(c) === "bad") return "b";
   if (toneOf(c) === "warn") return "w";
   return "";
@@ -1126,7 +1189,7 @@ function renderChCards() {
         c.kind === "amount"
           ? `<div class="claim-in">
               <div class="field"><span>额度申请制<span class="desc">定期申请把余额补到固定上限;上次申请时间由快照跳升自动检测</span></span>
-                <div class="sw${on ? " on" : ""}" data-act="claimtoggle" data-id="${c.id}"></div></div>
+                <button class="sw${on ? " on" : ""}" role="switch" aria-checked="${on}" aria-label="额度申请制" data-act="claimtoggle" data-id="${c.id}"></button></div>
               ${on
                 ? `<div class="claim-grid">
                     <label>单次额度<input type="number" min="1" step="10" value="${esc(cc.amount)}" data-act="claimamount" data-id="${c.id}">元</label>
@@ -1201,20 +1264,23 @@ function renderPillPick() {
 // ───────────── 形态切换 ─────────────
 // 每种形态都是固定尺寸:拖标题栏只能移动窗口,拉不动大小。
 // resizable(false) 去掉缩放宽边,min/max 双钳位兜底(即便有残留的缩放边框也拉不动)。
-// 这里是「标准档」基准;实际尺寸走 formSize(),按字号档位 × 倍率。
+// 这里是「内容区」基准;窗口 = 内容 + 四周 CARD_MARGIN 透明边距(卡片阴影画在边距里,
+// 见 styles.css body 的注释);实际尺寸走 formSize(),内容按字号档位 × 倍率。
+const CARD_MARGIN = 10; // 逻辑 px,固定不随字号缩放
 const SIZES = {
   panel: [380, 560],
   compact: [380, 46],
   pill: [200, 46],
 };
-let pillW = 200; // 胶囊实测宽度(已是当前档位的最终逻辑像素),fitPill 维护
+let pillW = 200; // 胶囊实测内容宽(已是当前档位的最终逻辑像素),fitPill 维护
 
-/** 当前字号档位下某形态的窗口尺寸。胶囊/紧凑条是实测贴合宽,面板固定基准×倍率。 */
+/** 当前字号档位下某形态的**窗口**尺寸(内容 × 倍率 + 两侧透明边距)。 */
 function formSize(form) {
   const u = fsU();
   const base = SIZES[form] || SIZES.panel;
-  const w = form === "pill" ? pillW : form === "compact" ? compactW : Math.round(base[0] * u);
-  return [w, Math.round(base[1] * u)];
+  const cw = form === "pill" ? pillW : form === "compact" ? compactW : Math.round(base[0] * u);
+  const ch = Math.round(base[1] * u);
+  return [cw + CARD_MARGIN * 2, ch + CARD_MARGIN * 2];
 }
 
 async function applyFormInner(form, remember = true) {
@@ -1367,15 +1433,18 @@ async function dockEnter(side, pos) {
   }
 }
 
-/** 展开(true)/ 收起(false)。展开时贴边那一侧保持对齐,窗口不会跑到屏幕外。 */
+/** 展开(true)/ 收起(false)。展开时贴边那一侧保持对齐,窗口不会跑到屏幕外。
+    窗口含 10px 透明边距(卡片画在内部),展开时把窗口多探出一边距,
+    让卡片(而不是透明边)与屏幕边缘贴齐。 */
 async function dockLayoutNow(open) {
   const info = await monitorInfo();
   if (!info) return;
   const [w, h] = open ? formSize(currentForm()) : DOCK_SIZE;
   const barW = Math.round(DOCK_SIZE[0] * info.sf);
+  const mgn = Math.round(CARD_MARGIN * info.sf);
   const x = DOCK.side === "right"
-    ? info.right - (open ? Math.round(w * info.sf) : barW)
-    : info.left + (open ? 0 : 0);
+    ? info.right - (open ? Math.round(w * info.sf) - mgn : barW)
+    : info.left - (open ? mgn : 0);
   // DOCK.y 是按 64px 竖条夹过的;展开成面板/紧凑条后同一个 y 会让窗口
   // 垂到屏幕外(报告 P1-7),按当前高度再夹一次
   const y = Math.max(info.top, Math.min(DOCK.y, Math.max(info.top, info.bottom - Math.round(h * info.sf))));
@@ -1393,7 +1462,15 @@ async function dockLayoutNow(open) {
   DOCK.open = open;
   document.body.classList.toggle("docked", !open);
   document.body.classList.toggle("dock-left", DOCK.side === "left");
-  if (open) scheduleFitCompact();
+  document.body.classList.toggle("dock-open", open);
+  if (open) {
+    // M6:展开内容从贴边侧滑入 + 淡入 180ms,不再瞬变"砸"出来
+    document.body.classList.remove("dock-anim");
+    void document.body.offsetWidth;
+    document.body.classList.add("dock-anim");
+    setTimeout(() => document.body.classList.remove("dock-anim"), 240);
+    scheduleFitCompact();
+  }
 }
 // 吸附的展开/收起同样走几何队列(见 enqueueGeom)
 function dockLayout(open) {
@@ -1405,7 +1482,7 @@ async function dockExitNow(keepPos) {
   if (!DOCK.on) return;
   DOCK.on = false;
   DOCK.open = false;
-  document.body.classList.remove("docked");
+  document.body.classList.remove("docked", "dock-open", "dock-anim");
   const [w, h] = formSize(currentForm());
   const info = await monitorInfo();
   try {
@@ -1441,6 +1518,7 @@ function scheduleSettleCheck() {
   clearTimeout(DOCK.settleTimer);
   DOCK.settleTimer = setTimeout(async () => {
     if (DOCK.selfMove) return;
+    setDockPreview(null); // 拖动已停:预览线使命结束(吸上与否都收掉)
     const info = await monitorInfo();
     if (!info) return;
     const pos = await appWindow.outerPosition();
@@ -1529,6 +1607,21 @@ function closeManage() {
 
 // ───────────── 事件绑定 ─────────────
 $("list").addEventListener("click", async (e) => {
+  // I2:紧凑条的 +N 徽标 —— 展开面板,滚动到第一个被藏渠道并高亮 1 秒
+  const more = e.target.closest(".more");
+  if (more) {
+    e.stopPropagation();
+    const first = more.dataset.first;
+    applyForm("panel").then(() => {
+      const row = first && document.querySelector(`.row[data-id="${first}"]`);
+      if (row) {
+        row.scrollIntoView({ block: "center" });
+        row.classList.add("flash");
+        setTimeout(() => row.classList.remove("flash"), 1150);
+      }
+    });
+    return;
+  }
   const act = e.target.closest("[data-act]");
   if (act) {
     e.stopPropagation();
@@ -1579,14 +1672,34 @@ $("list").addEventListener("click", async (e) => {
   }
 });
 
+/** 轻量提示条(替代原生 alert/底栏回执):2.6 秒自动淡出不阻塞。bad=true 走红色边框。 */
+let toastTimer = null;
+function showToast(msg, bad) {
+  const t = $("toast");
+  if (!t) return;
+  t.textContent = String(msg ?? "");
+  t.classList.toggle("bad", !!bad);
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
+}
+
 $("btnR").addEventListener("click", async () => {
-  // currentTarget 在事件派发结束就被 DOM 置 null,不能进 setTimeout ——
-  // 之前 spin 类永远摘不掉,脉冲反馈整轮会话只有第一次生效(报告 B6)
+  // M2 真实进度:取数期间按钮持续脉冲(禁用),完成后才停 —— 动画结束 = 数据已更新,
+  // 不再固定 720ms 空转导致用户重复点(报告 B6 的后续修正)
   const btn = $("btnR");
-  btn.classList.add("spin");
-  setTimeout(() => btn.classList.remove("spin"), 720);
+  if (btn.classList.contains("loading")) return;
+  btn.classList.add("loading");
   await refresh();
+  btn.classList.remove("loading");
+  const bad = CHANNELS.filter((c) => c.hasKey && !c.hidden && !c.valid).length;
+  showToast(bad ? `${bad} 个渠道取数失败` : "已更新 · 刚刚", bad > 0);
 });
+// ───────────── 标题栏按钮 ─────────────
+// 排序不放标题栏:标题栏在默认面板宽(380 逻辑像素)下本来就不够宽,
+// 加一个排序键会把最右边的「隐藏」整个挤出窗口外(实测内容需 417px)。
+// 排序本身仍有两个入口:设置 → 显示的下拉,以及设置 → 渠道页的 ↑↓ 自定义顺序。
+
 $("btnS").addEventListener("click", () => (manageOpen() ? closeManage() : openManage()));
 $("btnBack").addEventListener("click", closeManage);
 // 设置页页签:渠道 / 显示 / 刷新与启动 / 关于
@@ -1611,7 +1724,7 @@ async function setPin(enabled) {
     CFG.alwaysOnTop = enabled;
     applyPinUI();
   } catch (e) {
-    alert("置顶设置失败:" + e);
+    showToast("置顶设置失败:" + e, true);
   }
 }
 
@@ -1621,9 +1734,15 @@ function applyPinUI() {
   btn.classList.toggle("on", on);
   btn.title = on ? "已置顶(点击取消)" : "窗口置顶";
   const dock = $("cfgDock");
-  if (dock) dock.classList.toggle("on", !!CFG.dockEnabled);
+  if (dock) {
+    dock.classList.toggle("on", !!CFG.dockEnabled);
+    dock.setAttribute("aria-checked", String(!!CFG.dockEnabled));
+  }
   const sw = $("cfgPin");
-  if (sw) sw.classList.toggle("on", on);
+  if (sw) {
+    sw.classList.toggle("on", on);
+    sw.setAttribute("aria-checked", String(on));
+  }
 }
 
 $("btnP").addEventListener("click", () => setPin(!CFG.alwaysOnTop));
@@ -1661,15 +1780,52 @@ document.addEventListener("mouseenter", dockCancelCollapse);
 // 不要用 body.matches(":hover") 判断:窗口会周期性重绘(轮询 render 替换 DOM),
 // 之后若没有任何鼠标事件,Chromium 不会重算 hover,那份"陈旧 false"会让光标
 // 明明还在窗口里也把窗口收走(实测踩过)。
-// 拖动判定:窗口一移动就重新计时,停稳 250ms 后看是否贴边
-appWindow.onMoved(() => scheduleSettleCheck());
+// 拖动判定:窗口一移动就重新计时,停稳 250ms 后看是否贴边;
+// 拖动途中(节流 100ms)维持「吸附预览线」—— 吸附阈值原本不可见,
+// 有了这条线,"离多近会吸上"从玄学变成看得见(仅吸附开关开启时)
+appWindow.onMoved(() => {
+  scheduleSettleCheck();
+  previewTick();
+});
+let previewAt = 0;
+function setDockPreview(side) {
+  document.body.classList.toggle("dock-prev-r", side === "right");
+  document.body.classList.toggle("dock-prev-l", side === "left");
+}
+async function previewTick() {
+  const now = Date.now();
+  if (now - previewAt < 100) return;
+  previewAt = now;
+  if (!CFG || !CFG.dockEnabled || DOCK.on || DOCK.selfMove) return setDockPreview(null);
+  try {
+    const info = await monitorInfo();
+    if (!info) return;
+    const pos = await appWindow.outerPosition();
+    const size = await appWindow.outerSize();
+    // 预览线比吸附阈值(16)宽:40 逻辑像素内就亮,给用户留出反应距离
+    const near = Math.round(40 * info.sf);
+    const nearR = pos.x + size.width >= info.right - near;
+    const nearL = pos.x <= info.left + near;
+    setDockPreview(nearR ? "right" : nearL ? "left" : null);
+  } catch {}
+}
+// I6:吸附展开态的显式收回按钮(移出鼠标 / Esc 之外的第三条出路)
+$("dockClose").addEventListener("click", () => {
+  if (DOCK.on && DOCK.open) dockLayout(false);
+});
 // 胶囊轮播。不做"悬停暂停":挂件上的鼠标经常就停在胶囊附近,
 // 一暂停看起来就像轮播坏了(实测踩过);点击动作只是展开面板,内容变换无副作用。
+// 折中:悬停时节奏延长 3 倍(每 3 拍才进一步),既不"像坏了"也不打断阅读。
 // 也**不**在 document.hidden 时短路:窗口收进托盘时,这个轮播就是托盘数字的轮播
 // 驱动(报告 O-10 建议加可见性判断,加了会让托盘停在第一个渠道上不再轮换)。
+let pillHover = false, pillTick = 0;
+$("pill").addEventListener("mouseenter", () => (pillHover = true));
+$("pill").addEventListener("mouseleave", () => (pillHover = false));
 setInterval(() => {
   if (PILL.list.length < 2) return;
   if (!document.body.className.includes("form-pill")) return;
+  pillTick++;
+  if (pillHover && pillTick % 3 !== 0) return;
   PILL.idx = (PILL.idx + 1) % PILL.list.length;
   renderPillFace();
 }, PILL_ROTATE_MS);
@@ -1739,17 +1895,36 @@ $("manage").addEventListener("click", async (e) => {
       input.value = "";
       await refresh();
       renderChCards();
+      fillKeyHints(); // 立刻回显尾号:确认"存的是哪把 key"
+      // I5 成功反馈:卡片绿色左边框亮 1.4s —— 之前只有失败才提示,存没存上靠猜
+      const card = document.querySelector(`.ccard[data-id="${id}"]`);
+      if (card) {
+        card.classList.add("saved");
+        setTimeout(() => card.classList.remove("saved"), 1400);
+      }
     } catch (err) {
-      alert("保存失败:" + err);
+      showToast("保存失败:" + err, true);
     }
   } else if (a === "delkey") {
-    if (!confirm("删除该渠道的密钥?余额数据会保留在本地。")) return;
+    // I3 行内确认:原生 confirm 在无边框透明置顶窗上风格脱节又阻塞
+    const card = act.closest(".ccard");
+    card.querySelectorAll(".cfrm").forEach((x) => x.remove());
+    const strip = document.createElement("div");
+    strip.className = "cfrm";
+    strip.innerHTML =
+      `确认删除该渠道的密钥?余额快照会保留。<button class="btn danger" data-act="delkey-yes" data-id="${esc(id)}">删除</button>` +
+      `<button class="btn" data-act="delkey-no">取消</button>`;
+    card.querySelector(".ccbody").appendChild(strip);
+  } else if (a === "delkey-no") {
+    act.closest(".cfrm").remove();
+  } else if (a === "delkey-yes") {
     try {
       await invoke("delete_key", { id });
       await refresh();
       renderChCards();
+      showToast("已删除密钥");
     } catch (err) {
-      alert("删除失败:" + err);
+      showToast("删除失败:" + err, true);
     }
   } else if (a === "claimtoggle") {
     const map = CFG.claimChannels || (CFG.claimChannels = {});
@@ -1808,6 +1983,7 @@ function bindSwitch(id, key, onChange) {
   el.addEventListener("click", async () => {
     CFG[key] = !CFG[key];
     el.classList.toggle("on", CFG[key]);
+    el.setAttribute("aria-checked", String(!!CFG[key]));
     invoke("set_config", { config: CFG }).catch(() => {});
     if (onChange) {
       try {
@@ -1816,8 +1992,9 @@ function bindSwitch(id, key, onChange) {
         // 系统操作失败则回滚开关与配置,不让界面骗人
         CFG[key] = !CFG[key];
         el.classList.toggle("on", CFG[key]);
+        el.setAttribute("aria-checked", String(!!CFG[key]));
         invoke("set_config", { config: CFG }).catch(() => {});
-        alert("操作失败:" + err);
+        showToast("操作失败:" + err, true);
       }
     }
   });
@@ -1867,7 +2044,7 @@ async function saveHotkey(acc) {
     // 注册失败(多半被别的程序占用):回滚界面,别让用户以为设上了
     CFG.hotkey = old;
     $("cfgHotkey").value = hkLabel(old) || "未设置";
-    alert("快捷键设置失败:" + err);
+    showToast("快捷键设置失败:" + err, true);
   }
 }
 $("cfgHotkey").addEventListener("keydown", (e) => {
@@ -1894,10 +2071,18 @@ function applyConfigToUI() {
   set("cfgFontScale", CFG.fontScale || "md");
   const hk = $("cfgHotkey");
   if (hk) hk.value = hkLabel(CFG.hotkey) || "未设置";
-  $("cfgAutostart").classList.toggle("on", !!CFG.autostart);
-  $("cfgAutoUpdate").classList.toggle("on", CFG.autoCheckUpdate !== false);
-  $("cfgTrayNum").classList.toggle("on", CFG.trayShowNumber !== false);
+  // 开关统一走 setSw:类与 aria-checked 一起落(role="switch" 的语义全靠它)
+  const setSw = (id, on) => {
+    const el = $(id);
+    if (!el) return;
+    el.classList.toggle("on", !!on);
+    el.setAttribute("aria-checked", String(!!on));
+  };
+  setSw("cfgAutostart", !!CFG.autostart);
+  setSw("cfgAutoUpdate", CFG.autoCheckUpdate !== false);
+  setSw("cfgTrayNum", CFG.trayShowNumber !== false);
   $("cfgPulse").classList.toggle("on", !!CFG.alertPulse);
+  $("cfgPulse").setAttribute("aria-checked", String(!!CFG.alertPulse));
   document.body.classList.toggle("pulse", !!CFG.alertPulse);
   renderAbout();
 }
@@ -1926,13 +2111,16 @@ function renderUpdChip() {
   const chip = $("updChip");
   if (!chip) return;
   let text = "";
-  if (UPDC.phase === "ready" && UPD.info) text = "新版本 " + UPD.info.version;
-  else if (UPDC.phase === "downloading") text = "下载 " + UPDC.pct + "%";
+  // 角标挤在标题栏里,它的宽度直接决定右侧按钮能不能放下:实测「新版本 0.1.15」
+  // 85px 会把「隐藏」整个推出窗口外。文案压到最短,版本号与进度细节进 tooltip。
+  if (UPDC.phase === "ready" && UPD.info) text = "新版本";
+  else if (UPDC.phase === "downloading") text = "↓" + UPDC.pct + "%";
   else if (UPDC.phase === "installing") text = "安装中";
   else if (UPDC.phase === "failed") text = "重试";
   chip.textContent = text;
   chip.style.display = text ? "" : "none";
-  chip.title = text ? "点开查看更新详情" : "";
+  const detail = [UPD.info && UPD.info.version ? "版本 " + UPD.info.version : "", updProgressText()].filter(Boolean).join(" · ");
+  chip.title = text ? "点开查看更新详情" + (detail ? "(" + detail + ")" : "") : "";
 }
 
 /** 进度条有两个载体(管理页卡片 + 覆盖层),一起写,谁可见谁生效。 */
@@ -2152,6 +2340,8 @@ document.addEventListener("keydown", (e) => {
     closeUpdOverlay();
   } else if (manageOpen()) {
     closeManage();
+  } else if (DOCK.on && DOCK.open) {
+    dockLayout(false); // I6:吸附展开态,Esc 收回为竖条(不退出吸附)
   } else if (document.body.className.includes("form-panel")) {
     applyForm("pill");
   } else {
@@ -2167,8 +2357,8 @@ async function refresh() {
     render({ updated: true });
   } catch (e) {
     // 以前这里直接覆写 #list 就完了:紧凑条形态下条里一片空白、窗口留着旧宽度,
-    // 胶囊与托盘也停在旧值(报告 P2-14)。走同一条 render 收尾,只是把错误写进标题。
-    setMsg("取数失败:" + e, true);
+    // 胶囊与托盘也停在旧值(报告 P2-14)。走同一条 render 收尾,只是把错误提示出来。
+    showToast("取数失败:" + e, true);
     render({ updated: false });
   }
 }

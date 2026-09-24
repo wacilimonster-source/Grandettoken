@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Grandettoken · UI 优化与动效产品设计(2026-09-23)</title>
+<style>
+  /* ── 文档自身样式(深色,贴合产品观感)── */
+  :root{
+    --bg:#0e1117; --bg2:#161b24; --bg3:#20242e; --line:#2a3245; --line2:#3c445c;
+    --tx:#edf0f6; --tx2:#b6bfce; --tx3:#8d97ab;
+    --ok:#3ecf8e; --warn:#f0b23c; --bad:#f0554d; --ac:#5b8cff;
+    --t1:120ms; --t2:240ms; --t3:320ms;
+    --ease:cubic-bezier(.2,.8,.2,1);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.75 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  .wrap{max-width:1020px;margin:0 auto;padding:40px 22px 100px}
+  h1{font-size:23px;margin:0 0 6px}
+  .sub{color:var(--tx3);font-size:13px;margin-bottom:8px}
+  .toc{display:flex;flex-wrap:wrap;gap:6px;margin:16px 0 8px}
+  .toc a{font-size:12px;color:var(--tx2);text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:3px 10px;transition:.15s}
+  .toc a:hover{color:var(--tx);border-color:var(--ac)}
+  h2{font-size:17px;margin:44px 0 6px;padding-left:10px;border-left:3px solid var(--ac)}
+  h2 .en{font-size:12px;color:var(--tx3);font-weight:400;margin-left:8px}
+  h3{font-size:14px;margin:26px 0 6px;color:var(--tx)}
+  .cap{font-size:12.5px;color:var(--tx2);margin:6px 0 12px;max-width:940px}
+  .cap b{color:var(--tx)}
+  .card{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:10px 0;max-width:940px}
+  .card ul{margin:6px 0;padding-left:20px;color:var(--tx2)}.card li{margin:5px 0}.card b{color:var(--tx)}
+  code{font:12px Consolas,monospace;background:#1c2230;border:1px solid var(--line);padding:1px 5px;border-radius:4px;color:#cdd6e8}
+  table{border-collapse:collapse;width:100%;max-width:940px;font-size:13px;margin:8px 0}
+  th,td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  th{color:var(--tx3);font-size:12px;background:#1c2230;font-weight:500}
+  .demo{background:linear-gradient(165deg,#262e46,#1a2233 55%,#212b3c);border-radius:14px;padding:22px 20px;max-width:940px;margin:10px 0 4px}
+  .demo.flat{background:#1a2030}
+  .btn{border:1px solid var(--line2);background:var(--bg3);color:var(--tx2);border-radius:7px;padding:5px 12px;font:12.5px inherit;font-family:inherit;cursor:pointer;transition:background var(--t1) ease,color var(--t1) ease,transform var(--t1) ease}
+  .btn:hover{background:#272d3a;color:var(--tx)}
+  .btn:active{transform:scale(.96)}
+  .btn.p{background:var(--ac);border-color:var(--ac);color:#fff}
+  .rowbtns{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+  .prio{display:inline-block;font-size:10.5px;font-weight:700;border-radius:4px;padding:0 7px;margin-left:8px;vertical-align:2px;letter-spacing:.5px}
+  .p0{background:#f0554d22;color:#ff8d86;border:1px solid #f0554d55}
+  .p1{background:#f0b23c1e;color:#f7c355;border:1px solid #f0b23c50}
+  .p2{background:#5b8cff1c;color:#a8c0ff;border:1px solid #5b8cff50}
+  .ok-mark{color:var(--ok)} .bad-mark{color:var(--bad)}
+  .vs{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .vs .pane{background:#12141a;border:1px solid var(--line);border-radius:10px;padding:14px;position:relative}
+  .vs .lb{position:absolute;top:-9px;left:12px;background:#1c2230;border:1px solid var(--line);font-size:10.5px;color:var(--tx3);padding:0 8px;border-radius:5px}
+  .vs .lb.new{border-color:#3ecf8e66;color:var(--ok)}
+  .num{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:6px;background:rgba(91,140,255,.18);color:#a8c0ff;font-size:12px;font-weight:700;margin-right:8px}
+  .note{font-size:12px;color:var(--tx3);margin-top:8px}
+
+  /* ══ 以下是「产品界面」仿真组件(模拟挂件真实 UI)══ */
+  .mock{background:#12141a;border:1px solid #282d3a;border-radius:12px;overflow:hidden;box-shadow:0 0 0 1px #ffffff08 inset}
+  .mock.shadowed{box-shadow:0 18px 48px -14px rgba(0,0,0,.6),0 0 0 1px #ffffff08 inset}
+  .m-tbar{display:flex;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(#191c24,#12141a);border-bottom:1px solid #1e2330}
+  .m-tbar .ttl{font-size:12.5px;color:var(--tx2);font-weight:600}
+  .m-tbar .cnt{font-size:11px;color:var(--tx3)}
+  .m-tbar .ib{margin-left:auto;width:24px;height:24px;display:grid;place-items:center;border-radius:6px;color:var(--tx3);font-size:12px;cursor:pointer;transition:background var(--t1),color var(--t1)}
+  .m-tbar .ib:hover{background:#20242e;color:var(--tx)}
+  .m-sum{display:flex;gap:14px;padding:7px 12px;border-bottom:1px solid #1e2330;font-size:10.5px}
+  .m-sum .k{color:#646d80}.m-sum .k.hi{color:#7b8499}
+  .m-sum .v{font-size:13.5px;font-weight:600;font-variant-numeric:tabular-nums}
+  .m-sum .delta{font-size:10.5px;font-variant-numeric:tabular-nums}
+  .row{position:relative;display:block;padding:9px 12px 8px;border-bottom:1px solid #1a1e28;cursor:pointer;transition:background var(--t1) ease;overflow:hidden}
+  .row:hover{background:#171b24}
+  .row .r1{display:flex;align-items:center;gap:9px}
+  .ico{width:28px;height:28px;border-radius:8px;flex:none;display:grid;place-items:center;font-size:10.5px;font-weight:700;color:#fff}
+  .ico.sm{width:20px;height:20px;font-size:9px;border-radius:6px}
+  .ico.xs{width:16px;height:16px;font-size:8px;border-radius:4px}
+  .nm{font-size:13px;font-weight:500}
+  .subt{font-size:11px;color:#646d80}
+  .subt.hi{color:#7b8499}
+  .val{margin-left:auto;text-align:right}
+  .val .v{font-size:20px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.1}
+  .val .v.sm2{font-size:15px}
+  .val .cal{font-size:11px;color:#646d80}
+  .val .cal.hi{color:#7b8499}
+  .pbar{height:4px;border-radius:2px;background:#1c212c;margin-top:7px;overflow:hidden}
+  .pbar i{display:block;height:100%;border-radius:2px;transition:width .5s cubic-bezier(.3,1,.4,1)}
+  .cells{display:flex;gap:6px;margin-top:7px}
+  .cell{flex:1;background:#181c26;border-radius:6px;padding:3px 7px;font-size:11px}
+  .cell .cl{color:#646d80}.cell .cl.hi{color:#7b8499}
+  .cell .cv{font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;float:right}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);display:inline-block;flex:none}
+  .dot.w{background:var(--warn)}.dot.b{background:var(--bad)}
+  /* 状态点新语义 */
+  .dot.off{background:transparent;border:1.5px solid #4a5266;width:5px;height:5px}
+  .dot.stale{position:relative;background:#646d80}
+  .dot.stale::after{content:"";position:absolute;left:50%;top:-2px;width:1.5px;height:10px;background:#0e1117;transform:translateX(-50%) rotate(45deg)}
+  @keyframes breatheOnce{0%{box-shadow:0 0 0 0 rgba(240,85,77,.5)}70%{box-shadow:0 0 0 6px rgba(240,85,77,0)}100%{box-shadow:0 0 0 0 rgba(240,85,77,0)}}
+  .dot.breath{animation:breatheOnce 1.2s ease-out 1}
+
+  /* 动效:数值滚动 */
+  .vscroll{display:inline-flex;flex-direction:column;height:24px;overflow:hidden;text-align:right}
+  .vscroll span{display:block;height:24px;line-height:24px;font-size:20px;font-weight:600;font-variant-numeric:tabular-nums;transition:transform var(--t3) var(--ease)}
+
+  /* 动效:刷新微光 */
+  .sweep{position:absolute;inset:0;pointer-events:none;transform:translateX(-100%);background:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.06) 50%,transparent 70%)}
+  .sweep.go{animation:sweepX 560ms var(--ease) 1}
+  @keyframes sweepX{to{transform:translateX(100%)}}
+
+  /* 动效:行展开 grid 0fr→1fr */
+  .ebody{display:grid;grid-template-rows:0fr;transition:grid-template-rows var(--t3) var(--ease)}
+  .row.open .ebody{grid-template-rows:1fr}
+  .ebody>div{overflow:hidden}
+  .ebody .in{padding:6px 2px 4px;font-size:12px;color:var(--tx2)}
+  .caret{color:#646d80;font-size:10px;transition:transform var(--t2) var(--ease)}
+  .row.open .caret{transform:rotate(90deg)}
+
+  /* 动效:刷新按钮 loading */
+  .rbtn{width:26px;height:26px;border-radius:7px;border:1px solid var(--line2);background:var(--bg3);color:var(--tx2);display:grid;place-items:center;cursor:pointer;font-size:13px;transition:.15s}
+  .rbtn:hover{color:var(--tx)}
+  .rbtn.loading{pointer-events:none;color:var(--ac)}
+  .rbtn.loading svg{animation:spin 720ms linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* 形态切换 D1 淡换 */
+  .fstage{transition:opacity var(--t1) ease,transform var(--t1) ease}
+  .fstage.hide{opacity:0;transform:translateY(3px) scale(.99)}
+
+  /* 胶囊轮播 */
+  .pill{display:inline-flex;align-items:center;gap:8px;height:46px;border-radius:999px;background:#12141a;border:1px solid #282d3a;padding:0 10px 0 12px;font-weight:600;position:relative}
+  .pill .rot{height:22px;overflow:hidden;position:relative;width:74px}
+  .pill .rot .lay{position:absolute;inset:0;display:flex;align-items:center;font-size:14px;font-variant-numeric:tabular-nums;transition:transform var(--t2) var(--ease),opacity var(--t2) ease}
+  .pill .dots{position:absolute;bottom:4px;left:50%;transform:translateX(-50%);display:flex;gap:3px}
+  .pill .dots i{width:3px;height:3px;border-radius:50%;background:#3c445c}
+  .pill .dots i.on{background:var(--ac)}
+
+  /* 贴边演示 */
+  .edgebox{position:relative;height:300px;background:repeating-linear-gradient(45deg,#141826,#141826 10px,#171c2a 10px,#171c2a 20px);border-radius:10px;overflow:hidden;border:1px solid var(--line)}
+  .edgebar{position:absolute;right:0;top:50%;transform:translateY(-50%);width:8px;height:64px;border-radius:4px 0 0 4px;background:linear-gradient(180deg,var(--warn),var(--bad));cursor:pointer}
+  .edgepanel{position:absolute;right:8px;top:50%;transform:translateY(-50%) translateX(14px);width:280px;background:#12141a;border:1px solid #282d3a;border-radius:12px 0 0 12px;opacity:0;pointer-events:none;transition:transform 180ms var(--ease),opacity 180ms ease}
+  .edgebox.open .edgepanel{transform:translateY(-50%) translateX(0);opacity:1;pointer-events:auto}
+  .edgebox.instant .edgepanel{transition:none}
+  .previewline{position:absolute;right:0;top:0;bottom:0;width:2px;background:var(--ac);box-shadow:0 0 8px var(--ac);opacity:0;transition:opacity var(--t1)}
+  .edgebox.pl .previewline{opacity:1}
+
+  /* 滚动条对比 */
+  .scrollcmp{height:120px;overflow-y:auto;background:#12141a;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12px;color:var(--tx2)}
+  .scrollcmp.styled::-webkit-scrollbar{width:8px}
+  .scrollcmp.styled::-webkit-scrollbar-thumb{background:#333a4a;border-radius:4px}
+  .scrollcmp.styled::-webkit-scrollbar-track{background:transparent}
+
+  /* 字号阶梯 */
+  .ladder{display:flex;align-items:flex-end;gap:18px;flex-wrap:wrap}
+  .ladder .step{text-align:center}
+  .ladder .step .s{font-weight:600;font-variant-numeric:tabular-nums}
+  .ladder .step .l{font-size:10.5px;color:var(--tx3);margin-top:2px}
+
+  /* token 色板 */
+  .swatches{display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:8px;max-width:940px}
+  .sw{background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:10.5px;color:var(--tx3)}
+  .sw i{display:block;height:26px;border-radius:5px;margin-bottom:6px;border:1px solid #ffffff10}
+
+  /* 排序指示 */
+  .sortind{font-size:11px;color:var(--tx2);border:1px solid var(--line);border-radius:6px;padding:1px 8px;cursor:pointer;user-select:none;transition:.15s}
+  .sortind:hover{border-color:var(--ac);color:var(--tx)}
+
+  /* 内联确认 */
+  .confirm-strip{display:flex;align-items:center;gap:10px;background:#f0554d14;border:1px solid #f0554d40;border-radius:8px;padding:7px 10px;font-size:12px;color:#ff9d97;margin-top:6px}
+
+  /* toast */
+  .toastline{position:relative;height:30px}
+  .toastmsg{position:absolute;left:0;top:0;font-size:11.5px;color:var(--ok);opacity:0;transition:opacity var(--t2),transform var(--t2)}
+  .toastmsg.show{opacity:1;transform:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>UI 优化与动效 · 产品设计</h1>
+<div class="sub">Grandettoken(常驻桌面余额挂件)· 2026-09-23 · 本稿是「改什么、为什么、改成什么样」的可交互设计说明,<b style="color:var(--tx)">尚未改代码</b>;每一项附仿真演示与实现落点。前置依据:<code>DESIGN.md §10</code> 优化清单、<code>design-motion.html</code> 动效稿(本稿把它并入第三部分并修订)。</div>
+<div class="toc">
+  <a href="#s1">一、设计原则</a><a href="#s2">二、设计令牌</a><a href="#s3">三、UI 优化(U1–U8)</a><a href="#s4">四、动效设计(M1–M7)</a><a href="#s5">五、交互补强(I1–I6)</a><a href="#s6">六、优先级与落地</a><a href="#s7">七、待裁决</a>
+</div>
+
+<!-- ══════════ 一、原则 ══════════ -->
+<h2 id="s1">一、设计原则 <span class="en">为什么这样改</span></h2>
+<div class="card"><ul>
+  <li><b>挂件不是应用。</b>它 7×24 挂在桌面上,设计的第一美德是<b>安静</b>:不闪、不跳、不抢焦点。所有 UI 与动效决策都先过这一关 —— 「一周后它还讨喜吗?」</li>
+  <li><b>信息正确性高于一切。</b>余额工具最危险的是误导(失败渲染成 0、未配置与失联同色、无分母硬画进度条)。本轮多项改动本质是把「语义」修对,不是换皮。</li>
+  <li><b>只给有语义的变化做动效。</b>数值变了、展开了、刷新了、轮播了才动;纯装饰一律不做。时长封顶 320ms,曲线统一 <code>cubic-bezier(.2,.8,.2,1)</code>,永不回弹。</li>
+  <li><b>改动可回退、可验证。</b>每一项都标注落点文件与风险;涉及窗口尺寸标定的(U4)必须同步 <code>build/verify-form.js</code> 期望值与 <code>win-style.ps1</code> 断言。</li>
+</ul></div>
+
+<!-- ══════════ 二、设计令牌 ══════════ -->
+<h2 id="s2">二、设计令牌层 <span class="en">先把"散"收拢,再谈改</span></h2>
+<div class="cap">现状只有颜色是 CSS 变量,字号 9 档散落、状态色靠 JS 里 <code>TONE_HEX</code> 拼内联样式。先把令牌补齐,后面所有改动才有"单一真源"。<span class="prio p1">P1</span> 落点:<code>styles.css :root</code> + <code>app.js</code> 删 <code>TONE_HEX</code> 改赋语义类 <code>.t-ok/.t-warn/.t-bad/.t-off</code>。</div>
+<div class="swatches">
+  <div class="sw"><i style="background:#12141a"></i>--bg #12141a<br>卡片底</div>
+  <div class="sw"><i style="background:#191c24"></i>--bg2 #191c24<br>标题栏渐变起</div>
+  <div class="sw"><i style="background:#20242e"></i>--bg3 #20242e<br>chip/按钮/输入框</div>
+  <div class="sw"><i style="background:#282d3a"></i>--line #282d3a<br>主描边</div>
+  <div class="sw"><i style="background:#e6e9f0"></i>--tx #e6e9f0<br>主文字</div>
+  <div class="sw"><i style="background:#9aa3b5"></i>--tx2 #9aa3b5<br>次要文字</div>
+  <div class="sw"><i style="background:#7b8499"></i><b style="color:var(--ok)">--tx3 #7b8499 新</b><br>标签/说明(4.91:1)</div>
+  <div class="sw"><i style="background:#3ecf8e"></i>--ok #3ecf8e<br>正常 9.2:1</div>
+  <div class="sw"><i style="background:#f0b23c"></i>--warn #f0b23c<br>预警 9.8:1</div>
+  <div class="sw"><i style="background:#f0554d"></i>--bad #f0554d<br>危险 5.4:1</div>
+  <div class="sw"><i style="background:#5b8cff"></i>--ac #5b8cff<br>强调/选中</div>
+</div>
+<table>
+  <tr><th>令牌组</th><th>取值</th><th>说明</th></tr>
+  <tr><td><code>--fs-*</code>(5 档)</td><td>11 / 12 / 13 / 15 / 20</td><td>标签 / 正文 / 强调(渠道名)/ 小标题 / 主数值;收敛自现状 9 档(见 U3)</td></tr>
+  <tr><td><code>--r-*</code>(4 档)</td><td>6 / 8 / 12 / 999</td><td>cell·chip / 图标容器·行 / 面板 / 胶囊</td></tr>
+  <tr><td><code>--sp-*</code>(6 档)</td><td>4 / 6 / 8 / 10 / 12 / 16</td><td>全部内外边距从这 6 个值里取</td></tr>
+  <tr><td><code>--dur-*</code>(3 档)</td><td>120 / 240 / 320 ms</td><td>反馈 / 展开收起·切换 / 入场·滚动</td></tr>
+  <tr><td><code>--ease-*</code>(2 档)</td><td>out:<code>cubic-bezier(.2,.8,.2,1)</code> · linear(仅 loading 旋转)</td><td>快起慢停,无回弹</td></tr>
+</table>
+
+<!-- ══════════ 三、UI 优化 ══════════ -->
+<h2 id="s3">三、UI 优化 <span class="en">U1–U8,每条附前后对照</span></h2>
+
+<!-- U1 -->
+<h3>U1 · 文字对比度达标 <span class="prio p0">P0</span></h3>
+<div class="cap"><code>--tx3:#646d80</code> 在卡片底上实测对比度 <b class="bad-mark">3.54:1</b>,低于 WCAG AA 小字门槛 4.5:1,而它承载的恰恰是最小最密的字(汇总标签、口径、cell 标签、底栏)。提到 <code>#7b8499</code> 后 <b class="ok-mark">4.91:1</b> 达标。一行改动,投入产出比全表最高。</div>
+<div class="demo flat"><div class="vs">
+  <div class="pane"><span class="lb">现状 3.54:1</span>
+    <div class="m-sum"><span><span class="k">今日 </span><span class="v">¥12.40</span></span><span><span class="k">本周 </span><span class="v">¥86.10</span></span><span><span class="k">本月 </span><span class="v">¥301.55</span></span></div>
+    <div class="row" style="border-bottom:0"><div class="r1"><span class="dot w"></span><span class="ico sm" style="background:#e8622c">4S</span><div><div class="nm">4SAPI</div><div class="subt">本轮额度 ¥200 · 再等 6 天可申请</div></div><div class="val"><div class="v" style="color:var(--warn)">¥74.20</div><div class="cal">剩 37%</div></div></div></div>
+  </div>
+  <div class="pane"><span class="lb new">改为 #7b8499 · 4.91:1</span>
+    <div class="m-sum"><span><span class="k hi">今日 </span><span class="v">¥12.40</span></span><span><span class="k hi">本周 </span><span class="v">¥86.10</span></span><span><span class="k hi">本月 </span><span class="v">¥301.55</span></span></div>
+    <div class="row" style="border-bottom:0"><div class="r1"><span class="dot w"></span><span class="ico sm" style="background:#e8622c">4S</span><div><div class="nm">4SAPI</div><div class="subt hi">本轮额度 ¥200 · 再等 6 天可申请</div></div><div class="val"><div class="v" style="color:var(--warn)">¥74.20</div><div class="cal hi">剩 37%</div></div></div></div>
+  </div>
+</div></div>
+
+<!-- U2 -->
+<h3>U2 · 状态点语义分层 <span class="prio p0">P0</span></h3>
+<div class="cap">现状灰点<b>同时表示「未配置密钥」和「取数失败」</b> —— 一个是没启用,一个是故障,恰恰是最需要区分的两种状态。拆成两种形状,顺带满足色盲可用性(不只靠颜色)。</div>
+<div class="demo flat"><div class="vs">
+  <div class="pane"><span class="lb">现状:两种状态一个点</span>
+    <div class="row" style="border-bottom:0"><div class="r1"><span class="dot" style="background:#646d80"></span><span class="ico sm" style="background:#333a4a;color:#8d97ab">HA</span><div><div class="nm" style="color:#9aa3b5">Hapi</div><div class="subt">未配置密钥</div></div></div></div>
+    <div class="row" style="border-bottom:0"><div class="r1"><span class="dot" style="background:#646d80"></span><span class="ico sm" style="background:#333a4a;color:#8d97ab">OC</span><div><div class="nm" style="color:#9aa3b5">OpenCode Go</div><div class="subt">取数失败 · 12 分钟前快照</div></div></div></div>
+  </div>
+  <div class="pane"><span class="lb new">新:空心环 = 未配置 · 斜线灰点 = 失联</span>
+    <div class="row" style="border-bottom:0"><div class="r1"><span class="dot off"></span><span class="ico sm" style="background:#333a4a;color:#8d97ab">HA</span><div><div class="nm" style="color:#9aa3b5">Hapi</div><div class="subt hi">未配置 · 去设置</div></div></div></div>
+    <div class="row" style="border-bottom:0"><div class="r1"><span class="dot stale"></span><span class="ico sm" style="background:#333a4a;color:#8d97ab">OC</span><div><div class="nm" style="color:#9aa3b5">OpenCode Go</div><div class="subt hi">失联 · 12 分钟前快照</div></div></div></div>
+  </div>
+</div></div>
+<div class="note">落点:<code>iconHtml</code> 与 <code>toneOf</code> 的 "off" 分支拆成 <code>unconfigured</code> / <code>stale</code> 两态;状态点补 <code>aria-label</code>。</div>
+
+<!-- U3 -->
+<h3>U3 · 字号阶梯收敛 <span class="prio p1">P1</span></h3>
+<div class="cap">现状 9 档,相邻差 0.5px 在 100% 缩放下不可分辨,却让「哪个用哪档」变成需要记忆的规则。收敛到 5 档,与令牌层一起落地。注意:渠道名/主数值/副标题保持现值(13/20/11),<b>被消灭的是 10.5、11.5、12.5、13.5 这四个中间档</b>,四渠道一屏的容量不受影响。</div>
+<div class="demo flat">
+  <div class="vs" style="margin-bottom:0">
+    <div class="pane"><span class="lb">现状 9 档</span>
+      <div class="ladder">
+        <div class="step"><div class="s" style="font-size:10.5px">10.5</div><div class="l">汇总标签</div></div>
+        <div class="step"><div class="s" style="font-size:11px">11</div><div class="l">副标题</div></div>
+        <div class="step"><div class="s" style="font-size:11.5px">11.5</div><div class="l">三窗数值</div></div>
+        <div class="step"><div class="s" style="font-size:12px">12</div><div class="l">cell 值</div></div>
+        <div class="step"><div class="s" style="font-size:12.5px">12.5</div><div class="l">杂项</div></div>
+        <div class="step"><div class="s" style="font-size:13px">13</div><div class="l">渠道名</div></div>
+        <div class="step"><div class="s" style="font-size:13.5px">13.5</div><div class="l">汇总值</div></div>
+        <div class="step"><div class="s" style="font-size:14px">14</div><div class="l">胶囊</div></div>
+        <div class="step"><div class="s" style="font-size:20px">20</div><div class="l">主数值</div></div>
+      </div>
+    </div>
+    <div class="pane"><span class="lb new">收敛 5 档</span>
+      <div class="ladder">
+        <div class="step"><div class="s" style="font-size:11px">11</div><div class="l">标签/副标题/底栏</div></div>
+        <div class="step"><div class="s" style="font-size:12px">12</div><div class="l">正文/cell 值</div></div>
+        <div class="step"><div class="s" style="font-size:13px">13</div><div class="l">渠道名/汇总值</div></div>
+        <div class="step"><div class="s" style="font-size:15px">15</div><div class="l">管理页分组标题</div></div>
+        <div class="step"><div class="s" style="font-size:20px">20</div><div class="l">主数值</div></div>
+      </div>
+      <div class="note">胶囊 14px 归入 13 档(宽度自适应机制已存在,不溢出)</div>
+    </div>
+  </div>
+</div>
+
+<!-- U4 -->
+<h3>U4 · 恢复卡片外阴影(留 10px 透明边距) <span class="prio p1">P1</span></h3>
+<div class="cap">窗口 <code>transparent:true + shadow:false</code> 让圆角外真透明,但卡片与桌面之间<b>没有层次</b>,浅色壁纸上边缘糊进背景。方案:窗口四周留 10px 透明边距,卡片画在内部加阴影。<b>风险:</b>改变固定尺寸标定(面板 380×560 → 400×580 窗口),必须同步 <code>verify-form.js</code> 与 <code>win-style.ps1</code>。</div>
+<div class="demo" style="display:flex;gap:26px;align-items:center">
+  <div style="text-align:center">
+    <div class="mock" style="width:180px">
+      <div class="m-tbar"><span class="ttl" style="font-size:11px">面板</span></div>
+      <div class="row" style="border-bottom:0"><div class="r1"><span class="dot w"></span><span class="ico xs" style="background:#e8622c">4S</span><span class="nm" style="font-size:11px">4SAPI</span><span class="val"><span class="v sm2" style="color:var(--warn)">¥74.20</span></span></div></div>
+    </div>
+    <div class="note">现状:无层次</div>
+  </div>
+  <div style="text-align:center">
+    <div class="mock shadowed" style="width:180px">
+      <div class="m-tbar"><span class="ttl" style="font-size:11px">面板</span></div>
+      <div class="row" style="border-bottom:0"><div class="r1"><span class="dot w"></span><span class="ico xs" style="background:#e8622c">4S</span><span class="nm" style="font-size:11px">4SAPI</span><span class="val"><span class="v sm2" style="color:var(--warn)">¥74.20</span></span></div></div>
+    </div>
+    <div class="note">新:<code>0 18px 48px -14px rgba(0,0,0,.55)</code></div>
+  </div>
+</div>
+
+<!-- U5 -->
+<h3>U5 · 滚动条统一 <span class="prio p0">P0</span></h3>
+<div class="cap">行详情 <code>.rbody</code> 超长时冒出系统浅色滚动条,深色卡片里一眼可见的瑕疵。抽统一规则覆盖所有可滚动容器,一行改动。</div>
+<div class="demo flat"><div class="vs">
+  <div class="pane"><span class="lb">现状:系统滚动条</span>
+    <div class="scrollcmp">行详情内容…<br>近 24 小时消耗柱图<br>数据来源说明<br>密钥与阈值入口<br>累计发放 ¥399.83<br>日均消耗 ¥12.3<br>预计可用 6 天<br>上次申请 09-17<br>更多明细行…<br>更多明细行…</div>
+  </div>
+  <div class="pane"><span class="lb new">新:统一 8px 深色 thumb</span>
+    <div class="scrollcmp styled">行详情内容…<br>近 24 小时消耗柱图<br>数据来源说明<br>密钥与阈值入口<br>累计发放 ¥399.83<br>日均消耗 ¥12.3<br>预计可用 6 天<br>上次申请 09-17<br>更多明细行…<br>更多明细行…</div>
+  </div>
+</div></div>
+
+<!-- U6 -->
+<h3>U6 · 小尺寸图标清晰度 <span class="prio p1">P1</span></h3>
+<div class="cap">DeepSeek 是 225×225 位图,缩到紧凑条 16px 容器(内缩 88% ≈ 14px)时鲸鱼细节糊成一团。方案:紧凑条这一档<b>回退为字母方块</b>(小尺寸下字母比图形更可辨识),面板/管理页 28px 档继续用官方标;DeepSeek 长期换官方 SVG 或出 16/24/32 预渲染三档。</div>
+<div class="demo flat" style="display:flex;gap:30px;align-items:center">
+  <div style="text-align:center">
+    <div style="display:inline-flex;gap:6px;background:#20242e;border-radius:10px;padding:6px 8px">
+      <span style="display:inline-flex;align-items:center;gap:4px;background:#181c26;border-radius:6px;padding:2px 6px;font-size:12px"><span class="ico xs" style="background:#4d6bfe;filter:blur(.6px);border-radius:50%"></span>¥256</span>
+      <span style="display:inline-flex;align-items:center;gap:4px;background:#181c26;border-radius:6px;padding:2px 6px;font-size:12px"><span class="ico xs" style="background:#131010;border:1px solid #333">OC</span>82%</span>
+    </div>
+    <div class="note">现状:14px 位图重采样发糊(示意)</div>
+  </div>
+  <div style="text-align:center">
+    <div style="display:inline-flex;gap:6px;background:#20242e;border-radius:10px;padding:6px 8px">
+      <span style="display:inline-flex;align-items:center;gap:4px;background:#181c26;border-radius:6px;padding:2px 6px;font-size:12px"><span class="ico xs" style="background:#4d6bfe">DS</span>¥256</span>
+      <span style="display:inline-flex;align-items:center;gap:4px;background:#181c26;border-radius:6px;padding:2px 6px;font-size:12px"><span class="ico xs" style="background:#131010;border:1px solid #333">OC</span>82%</span>
+    </div>
+    <div class="note">新:16px 档统一字母方块</div>
+  </div>
+</div>
+
+<!-- U7 -->
+<h3>U7 · 焦点态与开关语义 <span class="prio p0">P0</span></h3>
+<div class="cap">开关 <code>.sw</code> 是 <code>&lt;div&gt;</code>,键盘完全不可达;所有按钮无 <code>:focus-visible</code>。改为 <code>&lt;button role="switch" aria-checked&gt;</code>,统一 <code>outline:2px solid var(--ac); outline-offset:2px</code>。试着按 <b>Tab</b> 聚焦下面两个开关:</div>
+<div class="demo flat" style="display:flex;gap:30px;align-items:center">
+  <style>
+    .swx{width:36px;height:20px;border-radius:10px;background:#333a4a;position:relative;cursor:pointer;border:0;padding:0;transition:background var(--t2) var(--ease)}
+    .swx::after{content:"";position:absolute;left:3px;top:3px;width:14px;height:14px;border-radius:50%;background:#9aa3b5;transition:transform var(--t2) var(--ease),background var(--t2)}
+    .swx.on{background:var(--ac)}.swx.on::after{transform:translateX(16px);background:#fff}
+    .swx:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
+  </style>
+  <span style="display:flex;align-items:center;gap:10px;font-size:12.5px"><button class="swx on" role="switch" aria-checked="true" onclick="this.classList.toggle('on');this.setAttribute('aria-checked',this.classList.contains('on'))"></button>窗口置顶</span>
+  <span style="display:flex;align-items:center;gap:10px;font-size:12.5px"><button class="swx" role="switch" aria-checked="false" onclick="this.classList.toggle('on');this.setAttribute('aria-checked',this.classList.contains('on'))"></button>开机自启</span>
+  <span class="note" style="margin:0">点击或 Tab+空格 切换</span>
+</div>
+
+<!-- U8 -->
+<h3>U8 · 汇总条恢复环比 <span class="prio p0">P0</span></h3>
+<div class="cap">原型稿的 <code>↑12% / ↓4%</code> 环比被去掉了,只剩绝对值 —— 而「今天比昨天多花还是少花」正是余额监控最想知道的。恢复三期环比,数据不足显示「——」(与"取不到给 null"契约一致)。</div>
+<div class="demo flat"><div class="vs">
+  <div class="pane"><span class="lb">现状</span>
+    <div class="m-sum"><span><span class="k">今日 </span><span class="v">¥12.40</span></span><span><span class="k">本周 </span><span class="v">¥86.10</span></span><span><span class="k">本月 </span><span class="v">¥301.55</span></span><span style="margin-left:auto" class="k">推算 · 3 个渠道</span></div>
+  </div>
+  <div class="pane"><span class="lb new">新:带环比</span>
+    <div class="m-sum"><span><span class="k hi">今日 </span><span class="v">¥12.40</span> <span class="delta" style="color:var(--bad)">↑18%</span></span><span><span class="k hi">本周 </span><span class="v">¥86.10</span> <span class="delta" style="color:var(--ok)">↓6%</span></span><span><span class="k hi">本月 </span><span class="v">¥301.55</span> <span class="delta" style="color:#646d80">——</span></span><span style="margin-left:auto" class="k hi">推算 · 3 个渠道</span></div>
+    <div class="note">消耗涨 = 红,降 = 绿(费用语境,非股票语境);上月无基线 → 「——」</div>
+  </div>
+</div></div>
+
+<!-- ══════════ 四、动效设计 ══════════ -->
+<h2 id="s4">四、动效设计 <span class="en">M1–M7,全部可点按演示</span></h2>
+<div class="cap">并入并修订 <code>design-motion.html</code>:参数表对齐新令牌(<code>--dur-*</code> / <code>--ease-out</code>),D2 窗口形变明确<b>砍掉</b>(每帧一次 setSize IPC,与吸附/防抖冲突面大,收益不抵风险),新增 M6 贴边展开与 M7 阈值跌破反馈。</div>
+
+<!-- M1 -->
+<h3>M1 · 数值滚动 <span class="prio p1">P1</span></h3>
+<div class="cap">产品 90% 的信息量在数字上,动效的主角就该是数字。取数后<b>值真的变了</b>才播:旧值上移离场、新值下方进入,320ms。数据没变的刷新不播 —— 否则一周后只剩烦。</div>
+<div class="demo">
+  <div class="rowbtns"><button class="btn p" id="m1btn">模拟刷新:数值变化</button></div>
+  <div class="mock" style="max-width:360px">
+    <div class="row" style="border-bottom:0"><div class="r1"><span class="dot w"></span><span class="ico sm" style="background:#e8622c">4S</span><div><div class="nm">4SAPI</div><div class="subt hi">本轮额度 ¥200</div></div>
+      <div class="val"><div class="vscroll" id="m1a"><span style="color:var(--warn)">¥74.20</span><span style="color:var(--warn)">¥74.20</span></div><div class="cal hi">剩 37%</div></div></div></div>
+    <div class="row" style="border-bottom:0"><div class="r1"><span class="dot"></span><span class="ico sm" style="background:#131010;border:1px solid #333">OC</span><div><div class="nm">OpenCode Go</div><div class="subt hi">本月窗</div></div>
+      <div class="val"><div class="vscroll" id="m1b"><span>82.0%</span><span>82.0%</span></div><div class="cal hi">剩 82%</div></div></div></div>
+    <div class="row" style="border-bottom:0"><div class="r1"><span class="dot"></span><span class="ico sm" style="background:#19b8c4">WB</span><div><div class="nm">WorkBuddy</div><div class="subt hi">近 30 天将过期 500 分</div></div>
+      <div class="val"><div class="vscroll" id="m1c"><span>6,075.5</span><span>6,075.5</span></div><div class="cal hi">积分</div></div></div></div>
+  </div>
+</div>
+
+<!-- M2 -->
+<h3>M2 · 刷新:真实进度 + 微光确认 <span class="prio p0">P0</span></h3>
+<div class="cap">现状两个缺口:①按钮转 720ms 就停,但 4 个渠道串行取数可能几秒,动画结束 ≠ 数据已更新,用户会重复点;②取完没有任何"数据是新的"的信号。方案:取数期间按钮置 loading(禁用+持续转),完成后有变化的行扫一道 6% 透明微光(560ms,仅一次),底栏短暂显示「已更新 · 刚刚」。</div>
+<div class="demo">
+  <div class="rowbtns"><button class="btn p" id="m2btn">点我 = 点标题栏 ⟳</button></div>
+  <div class="mock" style="max-width:360px">
+    <div class="m-tbar"><span class="dot"></span><span class="ttl">Grandettoken</span><span class="cnt">3/3</span>
+      <button class="rbtn" id="m2spin" title="立即刷新"><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M13.5 8a5.5 5.5 0 1 1-1.61-3.89M13.5 2v3h-3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    </div>
+    <div id="m2rows">
+      <div class="row" style="border-bottom:0"><div class="r1"><span class="dot w"></span><span class="ico sm" style="background:#e8622c">4S</span><span class="nm">4SAPI</span><div class="val"><div class="v sm2" style="color:var(--warn)">¥74.20</div></div></div><span class="sweep"></span></div>
+      <div class="row" style="border-bottom:0"><div class="r1"><span class="dot"></span><span class="ico sm" style="background:#131010;border:1px solid #333">OC</span><span class="nm">OpenCode Go</span><div class="val"><div class="v sm2">82.0%</div></div></div><span class="sweep"></span></div>
+      <div class="row" style="border-bottom:0"><div class="r1"><span class="dot"></span><span class="ico sm" style="background:#4d6bfe">DS</span><span class="nm">DeepSeek</span><div class="val"><div class="v sm2">¥256.00</div></div></div><span class="sweep"></span></div>
+    </div>
+    <div class="toastline" style="padding:0 12px 8px"><span class="toastmsg" id="m2toast">✓ 已更新 · 刚刚</span></div>
+  </div>
+  <div class="note">演示流程:loading 1.2s(模拟取数)→ 变化的行依次扫微光(间隔 60ms)→ 底栏 toast 2s 淡出</div>
+</div>
+
+<!-- M3 -->
+<h3>M3 · 行展开 / 收起 <span class="prio p1">P1</span></h3>
+<div class="cap">现状 <code>max-height 0→340px</code> 配 <code>ease</code>:速度被内容高度拉扯,且 340 是魔法数。改 <code>grid-template-rows:0fr→1fr</code> 真高度过渡(展开 320ms / 收起 240ms,离开要利落),箭头同步转 90°。</div>
+<div class="demo">
+  <div class="mock" style="max-width:360px">
+    <div class="row open" id="m3a"><div class="r1"><span class="dot w"></span><span class="ico sm" style="background:#e8622c">4S</span><div><div class="nm">4SAPI</div><div class="subt hi">本轮额度 ¥200 · 再等 6 天可申请</div></div><div class="val"><div class="v sm2" style="color:var(--warn)">¥74.20</div></div><span class="caret">▶</span></div>
+      <div class="ebody"><div><div class="in">近 24 小时 / 近 7 天 / 近 30 天 · 迷你柱图 · KV 明细(上次申请、日均消耗、预计可用)…</div></div></div></div>
+    <div class="row" id="m3b"><div class="r1"><span class="dot"></span><span class="ico sm" style="background:#4d6bfe">DS</span><div><div class="nm">DeepSeek</div><div class="subt hi"></div></div><div class="val"><div class="v sm2">¥256.00</div></div><span class="caret">▶</span></div>
+      <div class="ebody"><div><div class="in">充值型渠道:无分母不画进度条,展开看消耗推算与柱图。</div></div></div></div>
+  </div>
+  <div class="note">点行头切换(单开,点开一行自动收起另一行)</div>
+</div>
+
+<!-- M4 -->
+<h3>M4 · 形态切换:内容淡换 <span class="prio p1">P1</span></h3>
+<div class="cap">窗口尺寸一步到位,旧内容 120ms 淡出、新内容 200ms 淡入 + 3px 上浮。观感干净,实现零 IPC 风险。原稿的 D2「窗口形变」方案<b>正式否决</b>:每帧一次 setSize IPC,与吸附判定/几何防抖冲突,低端机掉帧。</div>
+<div class="demo">
+  <div class="rowbtns">
+    <button class="btn" id="m4p">面板</button><button class="btn" id="m4c">紧凑条</button><button class="btn" id="m4l">胶囊</button>
+  </div>
+  <div style="min-height:170px" id="m4host">
+    <div class="fstage" id="m4stage"></div>
+  </div>
+</div>
+
+<!-- M5 -->
+<h3>M5 · 胶囊轮播:翻页 + 指示点 <span class="prio p1">P1</span></h3>
+<div class="cap">5s 硬切换成 200ms 纵向翻页(图标同步淡换)。补<b>轮播指示点</b>(底部 3px 圆点)——「会变」这件事可见了,就不需要悬停暂停;间隔放宽到 8s,鼠标移入延长 3 倍而非暂停(原"不暂停"决策保留,理由不变:指针常停在胶囊附近,一停就像坏了)。</div>
+<div class="demo">
+  <div class="rowbtns"><button class="btn p" id="m5btn">模拟轮播切换</button></div>
+  <span class="pill"><span class="dot w"></span><span class="ico" id="m5ico" style="background:#e8622c">4S</span>
+    <span class="rot"><span class="lay" id="m5a">¥74.20</span><span class="lay" id="m5b" style="transform:translateY(100%);opacity:0">82.0%</span></span>
+    <span style="color:var(--tx3);font-size:11px">▲</span>
+    <span class="dots"><i class="on"></i><i></i><i></i></span>
+  </span>
+</div>
+
+<!-- M6 -->
+<h3>M6 · 贴边:展开滑出 + 吸附预览线 <span class="prio p1">P1</span></h3>
+<div class="cap">两处:①贴边展开<b>现状是瞬变</b>,屏幕边缘突然砸出一大块;加 180ms「从边缘滑出 + 淡入」。②拖到边缘时界面无任何提示(可发现性为零);拖拽中窗口边缘进入阈值画一条 2px 高亮预览线。另外采纳 B2 分级:悬停 150ms 只出<b>轻量预览行</b>(约 240×64,最紧张渠道),<b>点击</b>才展开完整形态 —— 路过不遮挡。点竖条试试:</div>
+<div class="demo">
+  <div class="rowbtns">
+    <button class="btn" id="m6anim">带动效展开(推荐)</button>
+    <button class="btn" id="m6inst">现状:瞬变</button>
+    <button class="btn" id="m6pl">模拟:拖近边缘的预览线</button>
+    <button class="btn" id="m6close">收回</button>
+  </div>
+  <div class="edgebox" id="m6box">
+    <div class="previewline"></div>
+    <div class="edgepanel">
+      <div class="m-tbar" style="border-radius:12px 0 0 0"><span class="dot w"></span><span class="ttl">4SAPI</span><span class="cnt">最紧张</span><span class="ib" id="m6x">✕</span></div>
+      <div class="row" style="border-bottom:0"><div class="r1"><span class="dot w"></span><span class="ico sm" style="background:#e8622c">4S</span><div><div class="nm">4SAPI</div><div class="subt hi">再等 6 天可申请</div></div><div class="val"><div class="v sm2" style="color:var(--warn)">¥74.20</div><div class="cal hi">剩 37%</div></div></div></div>
+    </div>
+    <div class="edgebar" id="m6bar" title="贴边竖条"></div>
+  </div>
+  <div class="note">展开态补显式 ✕(收回为竖条,不退出吸附)—— 解决「进了设置页就收不回去」的卡死态;Esc 同效。</div>
+</div>
+
+<!-- M7 -->
+<h3>M7 · 阈值跌破:一次性呼吸 <span class="prio p1">P1</span></h3>
+<div class="cap">原稿 G 项「告急呼吸(2s 无限循环)」<b>否决</b>:7×24 挂件里任何循环都是噪点。改为<b>只在跌破阈值瞬间播一次</b> 1.2s 红晕(不循环),持续低位不重复;配套托盘角标,告警闭环但不打扰。</div>
+<div class="demo">
+  <div class="rowbtns"><button class="btn p" id="m7btn">模拟:4SAPI 跌破红线(15%)</button></div>
+  <div class="mock" style="max-width:360px">
+    <div class="row" style="border-bottom:0"><div class="r1"><span class="dot b" id="m7dot"></span><span class="ico sm" style="background:#e8622c">4S</span><div><div class="nm">4SAPI</div><div class="subt hi">剩 12% · 低于红线</div></div><div class="val"><div class="v sm2" style="color:var(--bad)">¥24.10</div><div class="cal hi">剩 12%</div></div></div></div>
+  </div>
+</div>
+
+<!-- 降级 -->
+<h3>降级与排除项</h3>
+<div class="card"><ul>
+  <li><code>@media (prefers-reduced-motion:reduce)</code>:全部时长归零,保留状态变化、去掉位移/缩放。</li>
+  <li>托盘图标是位图绘制,不做动效,明确排除。</li>
+  <li>所有滚动/微光/翻页绑定「值真的变了」判定,轮询无变化时一律静默。</li>
+</ul></div>
+
+<!-- ══════════ 五、交互补强 ══════════ -->
+<h2 id="s5">五、交互补强 <span class="en">不动结构,补 6 个高频缺口</span></h2>
+<div class="cap">从 DESIGN.md §10.2 里挑出与本轮 UI/动效同批落地收益最大的 6 条(其余条目维持原优先级不变)。</div>
+
+<h3>I1 · 排序入口前置 <span class="prio p0">P0</span></h3>
+<div class="cap">排序是高频操作却藏在管理页 3 步深。标题栏计数旁加可点击的排序指示,点击循环 4 种模式 —— 它是展示状态指示,不违反「展示区不放设置项」。</div>
+<div class="demo flat"><div class="mock" style="max-width:360px">
+  <div class="m-tbar"><span class="dot w"></span><span class="ttl">Grandettoken</span><span class="cnt">3/3</span><span class="sortind" id="i1sort" title="点击切换排序模式">↓ 剩余</span><span class="ib" style="margin-left:0">⟳</span><span class="ib">⚙</span></div>
+</div><div class="note">点上面的「↓ 剩余」试试:剩余 → 余额 → 今日消耗 → 自定义</div></div>
+
+<h3>I2 · +N 徽标可交互 <span class="prio p0">P0</span></h3>
+<div class="cap">紧凑条放不下的渠道收进 <code>+N</code>,纯文字、点了没反应 —— 信息可见不可达。点击 → 展开面板并滚动到第一个被隐藏渠道、高亮 1s;悬停 tooltip 列出被藏渠道。</div>
+
+<h3>I3 · 原生对话框换自绘 <span class="prio p0">P0</span></h3>
+<div class="cap">删除密钥的 <code>confirm()</code>、失败的 <code>alert()</code> 与无边框透明窗口风格完全脱节,还阻塞。改为行内确认条 + 行内红色 hint(3s 淡出):</div>
+<div class="demo flat"><div class="mock" style="max-width:360px;padding:10px 12px">
+  <div style="display:flex;align-items:center;gap:9px;font-size:12.5px"><span class="ico sm" style="background:#19b8c4">WB</span>WorkBuddy<span style="margin-left:auto;color:#8d97ab;font-size:11px">已配置 · ••••aTNN</span></div>
+  <div class="confirm-strip">确认删除该密钥?删除后立即停止取数。<button class="btn" style="border-color:#f0554d66;color:#ff8d86;padding:2px 10px">删除</button><button class="btn" style="padding:2px 10px">取消</button></div>
+</div></div>
+
+<h3>I4 · 窗口位置持久化 <span class="prio p0">P0</span></h3>
+<div class="cap">形态持久化了但位置没有,每次开机重摆 —— 常驻挂件从「能用」到「愿意一直开着」的关键一步。持久化物理坐标 + 显示器标识,启动校验可见区域,失效居中主屏。</div>
+
+<h3>I5 · 密钥保存成功反馈 <span class="prio p1">P1</span></h3>
+<div class="cap">保存成功只有静默清空。改为该行 1.2s 绿色左边框高亮 + 回显尾号(后端 <code>key_hint</code> 已实现,前端接上即可)。消除「存错 key 却以为是接口坏了」这类最难排查的问题。</div>
+
+<h3>I6 · 贴边展开态显式关闭 <span class="prio p0">P0</span></h3>
+<div class="cap">已并入 M6 演示(展开态 ✕ + Esc)。原 B3:吸附展开后进设置页,窗口永久卡在展开态,只能靠移出鼠标收回 —— 状态机补一条显式边。</div>
+
+<!-- ══════════ 六、优先级 ══════════ -->
+<h2 id="s6">六、优先级与落地顺序</h2>
+<table>
+  <tr><th>级别</th><th>条目</th><th>理由</th></tr>
+  <tr><td><span class="prio p0">P0</span></td><td>U1 对比度 · U2 状态点分层 · U5 滚动条 · U7 焦点态 · U8 汇总环比 · M2 刷新反馈 · I1 排序前置 · I2 +N · I3 自绘对话框 · I4 位置持久化 · I6 贴边关闭</td><td>低成本高收益,或影响信息正确性/可发现性</td></tr>
+  <tr><td><span class="prio p1">P1</span></td><td>令牌层 · U3 字号收敛 · U4 外阴影 · U6 图标 · M1 数值滚动 · M3 行展开 · M4 形态淡换 · M5 轮播 · M6 贴边动效 · M7 跌破呼吸 · I5 保存反馈</td><td>质感升级,需一定改动量</td></tr>
+  <tr><td><span class="prio p2">P2</span></td><td>浅色主题 · reduced-motion · +N tooltip 完善 · 管理页切换过渡 · 全局快捷键 Alt+T</td><td>打磨与合规,后排</td></tr>
+</table>
+<div class="card"><b>建议批次:</b><ul>
+  <li><b>第一批(纯打磨,不改结构)</b>:U1 → U5 → M2 → I2 → I3 → U7。全部局部改动,风险极低,用户立刻感知。</li>
+  <li><b>第二批(信息价值)</b>:U8 → I1 → U2 → I4 → I6。</li>
+  <li><b>第三批(动效与令牌)</b>:令牌层 → U3 → M1/M3/M4/M5 → M6/M7 → U6 → U4(最后做,要同步验证脚本)。</li>
+  <li><b>第四批</b>:浅色主题(须在 U1 之后,否则浅色系层级要重推)· P2 收尾。</li>
+</ul></div>
+
+<!-- ══════════ 七、待裁决 ══════════ -->
+<h2 id="s7">七、待裁决</h2>
+<div class="card"><ul>
+  <li><span class="num">1</span><b>范围</b>:a) 只做 P0 十一条(最稳)/ b) P0+P1 全要(推荐)/ c) 含 P2 一次到位?</li>
+  <li><span class="num">2</span><b>U4 外阴影</b>:接受尺寸标定变更(面板窗口 380×560→400×580,内容区不变)/ 暂缓?</li>
+  <li><span class="num">3</span><b>M5 轮播节奏</b>:8s + 指示点(推荐)/ 维持 5s 硬切?</li>
+  <li><span class="num">4</span><b>浅色主题</b>:本轮只做深色,浅色单独立项(推荐)/ 一并做?</li>
+  <li><span class="num">5</span><b>环比口径(U8)</b>:今日 vs 昨日同期、本周 vs 上周同期、本月 vs 上月同期 —— 确认按此口径?</li>
+</ul></div>
+
+<div class="note" style="margin-top:30px;border-top:1px solid var(--line);padding-top:14px">本稿落地后:已实施的条目从「待裁决/清单」移入 <code>DESIGN.md</code> 对应规范章节;<code>DESIGN.md §10</code> 与 <code>design-motion.html</code> 中已被本稿取代的内容标注「2026-09-23 稿已并」。</div>
+
+</div>
+
+<script>
+function $(id){return document.getElementById(id)}
+
+/* M1 数值滚动 */
+const m1vals={m1a:["¥74.20","¥68.90","¥71.15"],m1b:["82.0%","76.5%","82.0%"],m1c:["6,075.5","6,075.5","5,980.0"]};
+const m1idx={m1a:0,m1b:0,m1c:0};
+$("m1btn").onclick=()=>{
+  for(const id of["m1a","m1b","m1c"]){
+    const box=$(id);m1idx[id]=(m1idx[id]+1)%m1vals[id].length;
+    const next=m1vals[id][m1idx[id]];
+    const a=box.children[0],b=box.children[1];
+    if(next===a.textContent)continue;
+    b.textContent=next;
+    a.style.transform="translateY(-24px)";b.style.transform="translateY(-24px)";
+    setTimeout(()=>{
+      a.textContent=next;
+      a.style.transition="none";b.style.transition="none";
+      a.style.transform="none";b.style.transform="none";
+      void a.offsetWidth;a.style.transition="";b.style.transition="";
+    },340);
+  }
+};
+
+/* M2 刷新 loading + 微光 + toast */
+$("m2btn").onclick=()=>{
+  const spin=$("m2spin");
+  spin.classList.add("loading");
+  setTimeout(()=>{
+    spin.classList.remove("loading");
+    document.querySelectorAll("#m2rows .sweep").forEach((s,i)=>{
+      s.classList.remove("go");void s.offsetWidth;
+      setTimeout(()=>s.classList.add("go"),i*60);
+    });
+    const t=$("m2toast");t.classList.add("show");
+    setTimeout(()=>t.classList.remove("show"),2200);
+  },1200);
+};
+
+/* M3 行展开单开 */
+[["m3a","m3b"],["m3b","m3a"]].forEach(([a,b])=>{
+  $(a).querySelector(".r1").onclick=()=>{
+    const wasOpen=$(a).classList.contains("open");
+    $(b).classList.remove("open");
+    $(a).classList.toggle("open",!wasOpen);
+  };
+});
+
+/* M4 形态切换 D1 */
+const m4html={
+  panel:`<div class="mock" style="width:300px"><div class="m-tbar"><span class="dot w"></span><span class="ttl">Grandettoken</span><span class="cnt">3/3</span><span class="ib" style="margin-left:auto">⟳</span><span class="ib">⚙</span></div>
+    <div class="row" style="border-bottom:0"><div class="r1"><span class="dot w"></span><span class="ico sm" style="background:#e8622c">4S</span><span class="nm">4SAPI</span><div class="val"><div class="v sm2" style="color:var(--warn)">¥74.20</div></div></div></div>
+    <div class="row" style="border-bottom:0"><div class="r1"><span class="dot"></span><span class="ico sm" style="background:#131010;border:1px solid #333">OC</span><span class="nm">OpenCode Go</span><div class="val"><div class="v sm2">82.0%</div></div></div></div></div>`,
+  compact:`<div class="mock" style="width:300px;border-radius:10px"><div style="display:flex;align-items:center;gap:8px;padding:8px 10px">
+    <span style="display:inline-flex;align-items:center;gap:4px;background:#20242e;border-radius:6px;padding:3px 7px;font-size:12px"><span class="dot w"></span><span class="ico xs" style="background:#e8622c">4S</span>¥74</span>
+    <span style="display:inline-flex;align-items:center;gap:4px;background:#20242e;border-radius:6px;padding:3px 7px;font-size:12px"><span class="dot"></span><span class="ico xs" style="background:#131010;border:1px solid #333">OC</span>82%</span>
+    <span style="display:inline-flex;align-items:center;gap:4px;background:#20242e;border-radius:6px;padding:3px 7px;font-size:12px"><span class="dot"></span><span class="ico xs" style="background:#4d6bfe">DS</span>¥256</span>
+    <span style="margin-left:auto;color:var(--tx3);font-size:11px">▲ ●</span></div></div>`,
+  pill:`<span class="pill"><span class="dot w"></span><span class="ico" style="background:#e8622c">4S</span><span style="font-size:14px;font-variant-numeric:tabular-nums">¥74.20</span><span style="color:var(--tx3);font-size:11px">▲</span></span>`
+};
+function m4swap(kind){
+  const st=$("m4stage");
+  st.classList.add("hide");
+  setTimeout(()=>{st.innerHTML=m4html[kind];st.classList.remove("hide")},120);
+}
+$("m4p").onclick=()=>m4swap("panel");
+$("m4c").onclick=()=>m4swap("compact");
+$("m4l").onclick=()=>m4swap("pill");
+$("m4stage").innerHTML=m4html.panel;
+
+/* M5 胶囊轮播 */
+const m5data=[["#e8622c","4S","¥74.20"],["#131010","OC","82.0%"],["#4d6bfe","DS","¥256.00"]];
+let m5i=0;
+$("m5btn").onclick=()=>{
+  m5i=(m5i+1)%3;
+  const[c,t,v]=m5data[m5i];
+  const a=$("m5a"),b=$("m5b");
+  const from=a.style.opacity!=="0"?a:b, to=from===a?b:a;
+  to.textContent=v;
+  const ico=$("m5ico");
+  ico.style.transition="opacity var(--t2) ease";ico.style.opacity=".2";
+  setTimeout(()=>{ico.style.background=c;ico.textContent=t;ico.style.border=c==="#131010"?"1px solid #333":"0";ico.style.opacity="1"},200);
+  from.style.transform="translateY(-100%)";from.style.opacity="0";
+  to.style.transform="translateY(0)";to.style.opacity="1";
+  document.querySelectorAll(".pill .dots i").forEach((d,i)=>d.classList.toggle("on",i===m5i));
+};
+
+/* M6 贴边 */
+const m6box=$("m6box");
+$("m6anim").onclick=()=>{m6box.classList.remove("instant");m6box.classList.add("open")};
+$("m6inst").onclick=()=>{m6box.classList.add("instant");m6box.classList.add("open")};
+$("m6close").onclick=()=>m6box.classList.remove("open");
+$("m6x").onclick=()=>m6box.classList.remove("open");
+$("m6bar").onclick=()=>$("m6anim").click();
+$("m6pl").onclick=()=>{m6box.classList.add("pl");setTimeout(()=>m6box.classList.remove("pl"),1600)};
+
+/* M7 跌破呼吸一次 */
+$("m7btn").onclick=()=>{
+  const d=$("m7dot");
+  d.classList.remove("breath");void d.offsetWidth;d.classList.add("breath");
+};
+
+/* I1 排序指示循环 */
+const sorts=["↓ 剩余","↓ 余额","↓ 今日消耗","⇅ 自定义"];
+let si=0;
+$("i1sort").onclick=function(){si=(si+1)%4;this.textContent=sorts[si]};
+</script>
+</body>
+</html>

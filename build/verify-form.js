@@ -12,7 +12,9 @@
 const { execSync } = require('child_process');
 
 const PORT = Number(process.argv[2] || process.env.CDP_PORT || 9222);
-const EXPECT = { compact: [380, 46], pill: [200, 46], panel: [380, 560] };
+// 2026-09-23 起窗口 = 内容 + 四周 10px 透明边距(卡片阴影画在边距里):
+// 面板内容 380×560 → 窗口 400×580;紧凑条/胶囊内容高 46 → 窗口高 66。
+const EXPECT = { compact: [400, 66], pill: [220, 66], panel: [400, 580] };
 const WS_THICKFRAME = 0x00040000;
 const WS_MAXIMIZEBOX = 0x00010000;
 
@@ -123,11 +125,13 @@ async function cornerAlpha(send, evalJs) {
     })()`, true));
 
     const [ew, eh] = EXPECT[form];
-    // 胶囊宽度随内容自适应(去掉图标后不再固定 200),这里只卡高度与合理区间
+    // 胶囊/紧凑条宽度随内容自适应(窗口 = 内容 + 20px 边距),只卡高度与合理区间
     const sizeOk =
       form === 'pill'
-        ? near(state.h, eh) && state.w >= 130 && state.w <= 242
-        : near(state.w, ew) && near(state.h, eh);
+        ? near(state.h, eh) && state.w >= 150 && state.w <= 264
+        : form === 'compact'
+          ? near(state.h, eh) && state.w >= 150 && state.w <= 402
+          : near(state.w, ew) && near(state.h, eh);
     const classOk = state.bodyClass.includes('form-' + form);
     // 行可见性:面板必须显示全部行(紧凑条藏起来的行要还原);
     // 紧凑条若有隐藏行,数目必须和 "+N" 徽标对得上
@@ -165,7 +169,7 @@ async function cornerAlpha(send, evalJs) {
   console.log('=== form verification ===');
   for (const r of rows) {
     console.log(
-      `  ${r.form.padEnd(8)} body=${r.bodyClass.padEnd(18)} tbar=${r.tbar.padEnd(6)} window=${r.w}x${r.h} expected=${r.form === 'pill' ? '132~242' : r.ew}x${r.eh}  ` +
+      `  ${r.form.padEnd(8)} body=${r.bodyClass.padEnd(18)} tbar=${r.tbar.padEnd(6)} window=${r.w}x${r.h} expected=${r.form === 'pill' ? '150~264' : r.form === 'compact' ? '150~402' : r.ew}x${r.eh}  ` +
       `switch=${r.sizeOk && r.classOk ? 'PASS' : 'FAIL'}  resizable=${r.resizable ? 'YES(BAD)' : 'no'}  ` +
       `rows=${r.visible}/${r.rows}${r.badge ? ' (' + r.badge + ')' : ''} ${r.rowsOk ? 'PASS' : 'FAIL(rows)'}`
     );

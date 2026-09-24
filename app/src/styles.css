@@ -33,7 +33,11 @@ html{background:linear-gradient(transparent,transparent)}
 body{
   background:var(--bg);color:var(--tx);border-radius:var(--r);
   border:1px solid var(--line);
-  box-shadow:0 0 0 1px #ffffff08 inset;
+  /* 卡片悬浮感(2026-09-23):窗口四周留 10px 真透明边距,阴影画进边距里。
+     阴影外延必须 ≤10px,否则被窗口边界裁出硬边 —— 0 2px 8px -2px 的最远外延是
+     2+(8-2)=8px,安全;更大的"0 18px 48px"会伸到 50px+,必裁。 */
+  margin:10px;height:calc(100% - 20px);position:relative;
+  box-shadow:0 2px 8px -2px rgba(0,0,0,.6),0 0 0 1px #ffffff08 inset;
   font:calc(13px*var(--u))/1.5 "Segoe UI","Microsoft YaHei",sans-serif;
   display:flex;flex-direction:column;user-select:none;
 }
@@ -46,7 +50,10 @@ body{
 .mark{width:calc(17px*var(--u));height:calc(17px*var(--u));border-radius:calc(5px*var(--u));flex:none;position:relative;
   background:linear-gradient(135deg,#5b8cff,#8b5bff)}
 .mark::after{content:"";position:absolute;inset:calc(5px*var(--u));border-radius:calc(2px*var(--u));background:#12141a}
-.tt{font-size:calc(12px*var(--u));font-weight:600;letter-spacing:.02em;white-space:nowrap}
+/* 产品名可以让位:更新角标出现时标题栏是够不放不下右侧按钮的,标题是可牺牲的那个
+   (它只是装饰,窗口标题/任务栏里还有全名)。min-width:0 才允许 flex 子项缩到内容以下 */
+.tt{font-size:calc(12px*var(--u));font-weight:600;letter-spacing:.02em;white-space:nowrap;
+  min-width:0;overflow:hidden;text-overflow:ellipsis}
 .tt small{font-weight:400;color:var(--tx3);margin-left:calc(5px*var(--u));font-size:max(11.5px,calc(11px*var(--u)))}
 .spacer{flex:1}
 .ib{width:calc(24px*var(--u));height:calc(24px*var(--u));border:0;background:transparent;border-radius:calc(6px*var(--u));color:var(--tx2);
@@ -189,7 +196,19 @@ body.form-compact .ico.logo>img{width:88%;height:88%}
 .row.open .caret{transform:rotate(90deg)}
 .dot{display:inline-block;width:calc(6px*var(--u));height:calc(6px*var(--u));border-radius:50%;background:var(--ok);flex:none}
 .dot.w{background:var(--warn)} .dot.b{background:var(--bad)}
-.dot.o{background:var(--tx3)}
+/* 灰点分层(2026-09-23):未配置 = 空心环(没启用,不是故障);
+   取数失败/失联 = 灰点加斜杠(故障,需要被看见)。形状区分兼顾色盲可用性。 */
+.dot.off{background:transparent;border:calc(1.5px*var(--u)) solid #4a5266;
+  width:calc(5px*var(--u));height:calc(5px*var(--u))}
+.dot.st,.dot.o{position:relative;background:#8d97ab}
+.dot.st::after,.dot.o::after{content:"";position:absolute;left:50%;top:calc(-2px*var(--u));
+  width:calc(1.5px*var(--u));height:calc(10px*var(--u));background:var(--bg);
+  transform:translateX(-50%) rotate(45deg)}
+/* M7 跌破红线:一次性红晕(只播一次,不循环;循环呼吸由 alertPulse 开关另管) */
+@keyframes breatheOnce{0%{box-shadow:0 0 0 0 rgba(255,107,99,.5)}
+  70%{box-shadow:0 0 0 calc(6px*var(--u)) rgba(255,107,99,0)}
+  100%{box-shadow:0 0 0 0 rgba(255,107,99,0)}}
+.dot.breath1{animation:breatheOnce 1.2s ease-out 1}
 
 /* ── 展开详情(动效 C:grid 0fr→1fr 真高度过渡,展开 320ms / 收起 200ms)── */
 .rbody{display:grid;grid-template-rows:0fr;transition:grid-template-rows var(--t2) var(--ease)}
@@ -254,7 +273,7 @@ body.view-manage #lkKeys{display:none}
 .field:last-child{border-bottom:0}
 .field>span{flex:1;min-width:0}
 .sw{width:calc(32px*var(--u));height:calc(17px*var(--u));border-radius:99px;background:var(--line2);position:relative;
-  cursor:pointer;flex:none;transition:background .2s}
+  cursor:pointer;flex:none;transition:background .2s;border:0;padding:0;font-family:inherit}
 .sw::after{content:"";position:absolute;top:calc(2px*var(--u));left:calc(2px*var(--u));width:calc(13px*var(--u));height:calc(13px*var(--u));
   border-radius:50%;background:#98a2b6;transition:.2s}
 .sw.on{background:#7fa2ff59}
@@ -343,6 +362,12 @@ body.form-compact .wmark{display:inline}
 /* Codex 副标题里的套餐小徽章(free/plus/pro) */
 .nm .s .plan{display:inline-block;font-size:max(9.5px,calc(9.5px*var(--u)));line-height:1.5;
   padding:0 5px;border-radius:4px;background:rgba(127,162,255,.16);color:#a8c0ff;vertical-align:1px}
+
+/* 键盘可达性:所有可点元素统一焦点环(2026-09-23,开关已一并 <button role="switch"> 化) */
+.ib:focus-visible,.tb:focus-visible,.btn:focus-visible,.pick:focus-visible,.sw:focus-visible,
+.seg button:focus-visible,.eye:focus-visible,.sel:focus-visible,.hk-rec:focus-visible,
+.more:focus-visible,.tabs button:focus-visible{
+  outline:2px solid var(--ac);outline-offset:2px}
 
 /* ── 底栏 ── */
 .foot{display:flex;align-items:center;gap:calc(8px*var(--u));padding:calc(7px*var(--u)) calc(12px*var(--u));background:#141720;
@@ -442,7 +467,7 @@ body.form-pill .pill-body{display:flex}
    body.docked 自己的背景/边框也一样:写在 form-pill 之前时,胶囊那轮的
    background:#12141af2 + border-radius:999px 会盖掉透明背景,8px 竖条变成一颗药丸
    而且两侧各被圆角啃掉几像素(报告 P2-16 同族)。 */
-body.docked{display:flex;border:0;background:transparent;box-shadow:none}
+body.docked{display:flex;border:0;background:transparent;box-shadow:none;margin:0;height:100%}
 body.docked .tbar,
 body.docked .sum,
 body.docked .list,
@@ -511,3 +536,73 @@ body.pulse .dot.b{animation:breathe 2s ease-in-out infinite}
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;
     transition-duration:.01ms!important}
 }
+
+/* ═════════ 2026-09-23 设计稿落地(design-ui-motion-2026-09-23.html)═════════ */
+
+/* U6 小尺寸图标清晰度:紧凑条 16px 档位官方位图糊成一团,回退字母方块
+   (字母比图形更可辨识);面板/管理页的 28px 档继续用官方标 */
+.ico .ltr,.pico .ltr{display:none}
+body.form-compact .ico.logo{background:var(--cc)}
+body.form-compact .ico.logo>img{display:none}
+body.form-compact .ico.logo>.ltr{display:grid;place-items:center;width:100%;height:100%;color:#fff}
+
+/* U8 汇总条环比:费用语境 —— 消耗涨=红,降=绿;数据不足「——」中性灰 */
+.sum .delta{font-weight:600}
+.sum .delta.up{color:var(--bad)}
+.sum .delta.dn{color:var(--ok)}
+.sum .delta.na{color:var(--tx3);font-weight:400}
+
+/* M2 刷新真实进度:loading 期间持续脉冲,取数完成才停(不再固定 720ms 空转) */
+.tb.loading{animation:pulse 1s ease infinite;color:var(--ac);pointer-events:none}
+
+/* 轻量提示条:刷新回执 / 操作反馈,替代原生 alert */
+#toast{position:fixed;left:50%;bottom:calc(10px + 8px*var(--u));transform:translateX(-50%) translateY(6px);
+  background:var(--bg3);border:1px solid var(--line2);color:var(--tx);
+  padding:calc(5px*var(--u)) calc(12px*var(--u));border-radius:calc(8px*var(--u));
+  font-size:max(11.5px,calc(12px*var(--u)));white-space:nowrap;max-width:calc(100% - 48px);
+  overflow:hidden;text-overflow:ellipsis;opacity:0;pointer-events:none;z-index:60;
+  transition:opacity var(--t2) ease,transform var(--t2) var(--ease)}
+#toast.show{opacity:1;transform:translateX(-50%)}
+#toast.bad{border-color:#f0554d66;color:#ff8d86}
+
+/* I3 行内确认(替代原生 confirm):删除密钥这类破坏性动作在卡里就地确认 */
+.cfrm{display:flex;align-items:center;gap:calc(8px*var(--u));flex-wrap:wrap;
+  margin-top:calc(8px*var(--u));padding:calc(7px*var(--u)) calc(10px*var(--u));
+  border:1px solid #f0554d40;background:#f0554d14;border-radius:calc(8px*var(--u));
+  font-size:max(11.5px,calc(12px*var(--u)));color:#ff9d97}
+/* I5 密钥保存成功:卡片绿色左边框亮一下,确认"确实存上了" */
+.ccard{transition:box-shadow .5s ease}
+.ccard.saved{box-shadow:inset 3px 0 0 var(--ok)}
+
+/* I2 +N 徽标可交互:点击展开面板并定位到第一个被藏渠道 */
+body.form-compact .more{cursor:pointer;border-radius:calc(5px*var(--u))}
+body.form-compact .more:hover{color:var(--tx);background:var(--bg3)}
+.row.flash{animation:rowflash 1.1s ease}
+@keyframes rowflash{0%,55%{background:#7fa2ff26}100%{background:transparent}}
+
+/* M5 胶囊轮播指示点:「会变」可见,就不需要悬停暂停 */
+.pdots{position:absolute;bottom:calc(3px*var(--u));left:50%;transform:translateX(-50%);
+  display:flex;gap:3px;pointer-events:none}
+.pdots i{width:3px;height:3px;border-radius:50%;background:var(--line2)}
+.pdots i.on{background:var(--ac)}
+
+/* M6 贴边:拖拽近边缘的吸附预览线(画在窗口靠边缘一侧) */
+.prevline{position:fixed;top:0;bottom:0;width:2px;background:var(--ac);
+  box-shadow:0 0 8px var(--ac);display:none;z-index:55;pointer-events:none}
+body.dock-prev-r .prevline{display:block;right:0}
+body.dock-prev-l .prevline{display:block;left:0}
+/* M6 贴边展开:内容从边缘滑入 + 淡入(180ms),不再瞬变砸出来 */
+body.dock-anim .list,body.dock-anim .pill-body{animation:dockin 180ms var(--ease)}
+body.dock-anim.dock-left .list,body.dock-anim.dock-left .pill-body{animation:dockinL 180ms var(--ease)}
+@keyframes dockin{from{opacity:0;transform:translateX(12px)}}
+@keyframes dockinL{from{opacity:0;transform:translateX(-12px)}}
+/* I6 吸附展开态的显式收回按钮(移出/Esc 之外的第三条出路) */
+#dockClose{display:none;position:absolute;right:calc(8px*var(--u));bottom:calc(8px*var(--u));z-index:30;
+  background:var(--bg3);border:1px solid var(--line2);color:var(--tx2)}
+#dockClose:hover{color:var(--tx);border-color:#55617d}
+body.dock-open #dockClose{display:grid}
+/* 收起态 8px 竖条里提示条没地方放,也不该出现 */
+body.docked #toast{display:none}
+
+/* 管理页与展示页的切换过渡:120ms 淡入,空间关系更清楚 */
+body.view-manage .manage{animation:fadeup var(--t1) var(--ease)}

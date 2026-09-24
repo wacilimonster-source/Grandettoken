@@ -49,6 +49,11 @@ pub struct ChannelView {
     pub day: Option<f64>,
     pub week: Option<f64>,
     pub month: Option<f64>,
+    /// 上一周期「同时段」消耗(汇总条环比用):昨日 0 点到昨天此刻 / 上周同时段 /
+    /// 上月同时段。None = 基线不足,界面显示「——」而不是 0(与 day 同一契约)。
+    pub day_prev: Option<f64>,
+    pub week_prev: Option<f64>,
+    pub month_prev: Option<f64>,
     /// 消耗是否为本地快照推算值(充值型渠道接口不给累计消耗)
     pub estimated: bool,
     /// 本次取数失败,以上数值来自上次成功快照
@@ -256,6 +261,17 @@ pub fn local_week_start() -> i64 {
 pub fn local_month_start() -> i64 {
     let n = Local::now();
     local_date_start(n.year(), n.month(), 1)
+}
+
+/// 上月 1 号零点(环比「上月同期」窗口的起点)。
+pub fn local_prev_month_start() -> i64 {
+    let n = Local::now();
+    let (y, m) = if n.month() == 1 {
+        (n.year() - 1, 12)
+    } else {
+        (n.year(), n.month() - 1)
+    };
+    local_date_start(y, m, 1)
 }
 
 /// 单次尝试:一个地址、一次请求。返回结果与"这次失败值不值得换域名"。
@@ -494,24 +510,32 @@ fn build_view(
     // 成不成功无关。之前取数一失败就把三个窗口一起置 None,汇总里"今日/本周/本月"
     // 会整片显示"数据不足",明明本地有快照。
     let has_amount = result.kind == Kind::Amount && result.remaining.is_some();
-    let (day, week, month) = if has_amount {
+    let (day, week, month, day_prev, week_prev, month_prev) = if has_amount {
         let now = now_ts();
+        let today0 = local_midnight_today();
+        let week0 = local_week_start();
+        let month0 = local_month_start();
+        // 环比口径 = 上一周期的「同时段」:昨日 0 点到昨天此刻、上周同时段、
+        // 上月同时段 —— 拿整段上周期比会系统性偏大(它天然比本期多一段尾巴)
         (
+            store.consumption_since(def.id, today0, now).ok().flatten(),
+            store.consumption_since(def.id, week0, now).ok().flatten(),
+            store.consumption_since(def.id, month0, now).ok().flatten(),
             store
-                .consumption_since(def.id, local_midnight_today(), now)
+                .consumption_since(def.id, today0 - 86_400, now - 86_400)
                 .ok()
                 .flatten(),
             store
-                .consumption_since(def.id, local_week_start(), now)
+                .consumption_since(def.id, week0 - 7 * 86_400, now - 7 * 86_400)
                 .ok()
                 .flatten(),
             store
-                .consumption_since(def.id, local_month_start(), now)
+                .consumption_since(def.id, local_prev_month_start(), local_prev_month_start() + (now - month0))
                 .ok()
                 .flatten(),
         )
     } else {
-        (None, None, None)
+        (None, None, None, None, None, None)
     };
 
     let soon = expiring_soon(&result.expiring, now_ts());
@@ -543,6 +567,9 @@ fn build_view(
         day,
         week,
         month,
+        day_prev,
+        week_prev,
+        month_prev,
         estimated: result.kind == Kind::Amount,
         stale,
         updated_at,
@@ -583,6 +610,9 @@ fn placeholder(def: &providers::ProviderDef) -> ChannelView {
         day: None,
         week: None,
         month: None,
+        day_prev: None,
+        week_prev: None,
+        month_prev: None,
         estimated: false,
         stale: false,
         updated_at: 0,
@@ -876,6 +906,20 @@ mod tests {
         assert_eq!(d.day(), 1);
         assert_eq!(d.hour(), 0);
         assert_eq!(d.minute(), 0);
+    }
+
+    /// 上月起点:1 号零点,且早于本月起点;跨年时(1 月)要落到去年 12 月。
+    #[test]
+    fn prev_month_start_is_first_day_of_previous_month() {
+        let prev = local_prev_month_start();
+        let cur = local_month_start();
+        let p = Local.timestamp_opt(prev, 0).unwrap();
+        let c = Local.timestamp_opt(cur, 0).unwrap();
+        assert_eq!(p.day(), 1);
+        assert!(prev < cur);
+        let (py, pm) = (p.year(), p.month());
+        let (cy, cm) = (c.year(), c.month());
+        assert!((pm == cm - 1 && py == cy) || (cm == 1 && pm == 12 && py == cy - 1));
     }
 
     #[test]

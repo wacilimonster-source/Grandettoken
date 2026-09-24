@@ -86,7 +86,7 @@ const windowMock = {
         setAlwaysOnTop: async () => {},
         setPosition: async () => {},
         outerPosition: async () => ({ x: 0, y: 0 }),
-        outerSize: async () => ({ width: 380, height: 560 }),
+        outerSize: async () => ({ width: 400, height: 580 }),
         scaleFactor: async () => 1,
         isAlwaysOnTop: async () => false,
         onMoved: async () => () => {},

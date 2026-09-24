@@ -10,12 +10,19 @@
   <!-- 吸附后的竖条:只有一个色块,不显示任何数字;整块可拖动(拖离边缘即解除吸附) -->
   <div class="dock-body" id="dockBody" data-tauri-drag-region="deep" title="移入展开"></div>
 
+  <!-- 拖拽靠近屏幕边缘时的吸附预览线(在窗口贴边侧的 2px 高亮) -->
+  <div class="prevline" id="prevLine"></div>
+
+  <!-- 吸附展开态的显式收回按钮(移出鼠标/Esc 之外的第三条出路) -->
+  <button class="ib" id="dockClose" title="收回为竖条">&#10005;</button>
+
   <div class="pill-body" id="pill" data-tauri-drag-region="deep">
     <span class="dot" id="pillDot"></span>
     <div id="pillIco" style="display:contents"></div>
     <div class="t" id="pillV">——</div>
     <div class="spacer"></div>
     <button class="ib" id="btnPillUp" title="展开为面板">&#9650;</button>
+    <span class="pdots" id="pillDots"></span>
   </div>
 
   <div class="tbar" data-tauri-drag-region>
@@ -87,9 +94,9 @@
           <option value="xl">特大</option>
         </select></div>
       <div class="field"><span>托盘图标显示余额数字<span class="desc">概览缩写(74 / 1.2k / 82),底色即状态色;关闭回到品牌样式</span></span>
-        <div class="sw" id="cfgTrayNum"></div></div>
+        <button class="sw" id="cfgTrayNum" role="switch" aria-checked="true" aria-label="托盘图标显示余额数字"></button></div>
       <div class="field"><span>红色告急时呼吸提示<span class="desc">仅红色状态点 2 秒一次红晕,是全应用唯一的循环动画;默认关</span></span>
-        <div class="sw" id="cfgPulse"></div></div>
+        <button class="sw" id="cfgPulse" role="switch" aria-checked="false" aria-label="红色告急时呼吸提示"></button></div>
       <div class="field"><span>渠道排序</span>
         <select class="sel" id="cfgSort">
           <option value="percent">剩余百分比升序</option>
@@ -98,9 +105,9 @@
           <option value="custom">自定义(在「渠道」页 ↑↓)</option>
         </select></div>
       <div class="field"><span>窗口置顶(所有形态)</span>
-        <div class="sw" id="cfgPin"></div></div>
+        <button class="sw" id="cfgPin" role="switch" aria-checked="false" aria-label="窗口置顶"></button></div>
       <div class="field"><span>拖到屏幕边缘自动吸附</span>
-        <div class="sw" id="cfgDock"></div></div>
+        <button class="sw" id="cfgDock" role="switch" aria-checked="false" aria-label="拖到屏幕边缘自动吸附"></button></div>
 
       <h4>预警阈值(剩余百分比)</h4>
       <div class="field"><span>标黄</span>
@@ -139,9 +146,9 @@
         </select></div>
       <h4>开机与更新</h4>
       <div class="field"><span>开机自启(静默进托盘)</span>
-        <div class="sw" id="cfgAutostart"></div></div>
+        <button class="sw" id="cfgAutostart" role="switch" aria-checked="false" aria-label="开机自启"></button></div>
       <div class="field"><span>自动检查更新<span class="desc">每 24 小时最多问一次服务器</span></span>
-        <div class="sw" id="cfgAutoUpdate"></div></div>
+        <button class="sw" id="cfgAutoUpdate" role="switch" aria-checked="true" aria-label="自动检查更新"></button></div>
       <h4>快捷键</h4>
       <div class="field"><span>显示 / 隐藏面板<span class="desc">点框内按下组合键(如 Alt+G);Esc 清除 = 不启用</span></span>
         <input class="sel hk-rec" id="cfgHotkey" readonly placeholder="未设置"></div>
@@ -184,6 +191,9 @@
     <span style="color:var(--line2)">|</span>
     <span class="lk" id="lkQuit">退出</span>
   </div>
+
+  <!-- 轻量提示条:刷新回执 / 操作失败,替代原生 alert -->
+  <div id="toast" role="status"></div>
 
   <script src="app.js"></script>
 </body>
