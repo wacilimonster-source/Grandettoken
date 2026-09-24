@@ -150,6 +150,7 @@ fn get_series(state: State<'_, AppState>, id: String, hours: i64) -> Vec<f64> {
 /// `current_exe()` 重写一遍注册表 —— 路径永远指向当前这份 exe。
 #[cfg(windows)]
 mod autostart {
+    use std::path::{Path, PathBuf};
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
 
@@ -158,18 +159,35 @@ mod autostart {
     /// 改名前的键名:停用/同步时一并清掉,避免残留一个指向已删除 exe 的自启项
     const LEGACY_NAME: &str = "TokenScope";
 
+    /// 是不是从构建目录里跑的开发版(`.../target/release/xxx.exe`)。
+    fn in_build_tree(exe: &Path) -> bool {
+        let p = exe.display().to_string().to_lowercase();
+        p.contains(r"\target\release\") || p.contains(r"\target\debug\")
+    }
+
+    /// 注册自启键。**开发版直接报错**:把用户的开机项写到 target 目录里,一次
+    /// `cargo clean` 就让自启指向不存在的路径,而 Windows 只会静默失败 —— 用户看
+    /// 到的现象是"面板某天开机没出来"(本机踩过:键值指到 target/release/tokenscope.exe)。
     pub fn set(enabled: bool) -> Result<(), String> {
         let (key, _) = RegKey::predef(HKEY_CURRENT_USER)
             .create_subkey(RUN_KEY)
             .map_err(|e| e.to_string())?;
         if enabled {
+            // 开着自启就清遗留键:绿色版(TokenScope)时代开过自启、后升级到安装版的
+            // 机器,否则注册表残留一个指向已删除 exe 的自启项,每次开机报错(报告 B7)。
+            // 放在写自己的键之前:下面开发版那条 return Err 也要保证遗留键被清掉。
+            let _ = key.delete_value(LEGACY_NAME);
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            if in_build_tree(&exe) {
+                // 只拒写自己这条 `Grandettoken` 键 —— 它可能正指向一份安装版,开发版无权删
+                return Err(format!(
+                    "当前运行的是构建目录里的开发版,不会写入开机自启(那样路径会被 cargo clean 删掉)。请用已安装的版本开启:{}",
+                    exe.display()
+                ));
+            }
             // 路径可能含空格,必须加引号;--hidden 让开机自启直接进托盘不弹窗
             let cmd = format!("\"{}\" --hidden", exe.display());
             key.set_value(NAME, &cmd).map_err(|e| e.to_string())?;
-            // 开着自启也要清遗留键:绿色版(TokenScope)时代开过自启、后升级到安装版
-            // 的机器,否则注册表残留一个指向已删除 exe 的自启项,每次开机报错(报告 B7)
-            let _ = key.delete_value(LEGACY_NAME);
         } else {
             // 关掉时键可能本就不存在,删除报错属正常,忽略
             let _ = key.delete_value(NAME);
@@ -177,12 +195,55 @@ mod autostart {
         }
         Ok(())
     }
+
+    /// 旧版遗留的 TokenScope 自启项;它指向的文件**确实还在磁盘上**才算数
+    /// (只剩一个死键的话清掉就行,不必打扰用户)。
+    fn legacy_left() -> Option<String> {
+        let hk = RegKey::predef(HKEY_CURRENT_USER).open_subkey(RUN_KEY).ok()?;
+        let val: String = hk.get_value(LEGACY_NAME).ok()?;
+        let path = PathBuf::from(val.trim_matches('"').split(" --").next().unwrap_or(""));
+        if path.as_os_str().is_empty() || !path.exists() {
+            return None;
+        }
+        Some(format!(
+            "这台电脑上还有一份旧版({})。它每次开机都会自己把自启项写回来,新版本删不掉,所以开机会同时出现两个程序 —— 请卸载或改名那个旧目录。",
+            path.display()
+        ))
+    }
+
+    /// 开机时与注册表对齐(容忍失败),并把需要告知用户的问题返回出去。
+    pub fn sync(enabled: bool) -> Option<String> {
+        // 顺序要紧:legacy_left() 要在 set() 删掉那条键之前读
+        let notice = legacy_left();
+        let failed = match set(enabled) {
+            Ok(()) => None,
+            // 开发版跳过写入是一种"正当失败",其它注册表错误同样值得让用户看到
+            Err(e) => Some(if in_self_build_tree() {
+                e
+            } else {
+                format!("开机自启同步失败:{e}")
+            }),
+        };
+        match (notice, failed) {
+            (Some(a), Some(b)) => Some(format!("{a} 另外 {b}")),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        }
+    }
+
+    fn in_self_build_tree() -> bool {
+        std::env::current_exe().map(|p| in_build_tree(&p)).unwrap_or(false)
+    }
 }
 
 #[cfg(not(windows))]
 mod autostart {
     pub fn set(_enabled: bool) -> Result<(), String> {
         Err("开机自启仅支持 Windows".into())
+    }
+    pub fn sync(_enabled: bool) -> Option<String> {
+        None
     }
 }
 
@@ -237,6 +298,15 @@ fn window_cmd(app: tauri::AppHandle, action: String) -> Result<(), String> {
 /// 锁一律走 `lock_rw` 毒化恢复:一次 panic 不该把后续所有命令永久卡死。
 fn lock_rw<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// 往"启动期非致命问题"这条串上再接一条。多条都要让用户看到,
+/// 而不是后面那条把前面那条悄悄顶掉。
+fn note(prev: Option<String>, msg: String) -> Option<String> {
+    Some(match prev {
+        Some(p) => format!("{p};另外 {msg}"),
+        None => msg,
+    })
 }
 
 /// 置顶的唯一写入口:窗口状态与配置一起改,不会出现"按钮亮了其实没置顶"。
@@ -609,8 +679,11 @@ pub fn run() {
             };
 
             // 注册表与配置对齐:开机自启以配置为准,并刷新为当前 exe 路径,
-            // 用户挪动 exe 后无需重新设置自启
-            let _ = autostart::set(config.autostart);
+            // 用户挪动 exe 后无需重新设置自启。构建目录里的开发版不写键,
+            // 旧版残留的自启项要让用户看得见(光靠新版删会被旧版开机时写回来)。
+            if let Some(msg) = autostart::sync(config.autostart) {
+                startup_error = note(startup_error, msg);
+            }
 
             // 置顶 + 上次位置是持久化设置:启动时按配置应用,折叠形态没有置顶按钮也生效
             if let Some(w) = app.get_webview_window("main") {
@@ -645,10 +718,7 @@ pub fn run() {
                 let st = app.state::<AppState>();
                 if let Err(e) = apply_hotkey(app.handle(), &st, &config.hotkey) {
                     eprintln!("全局快捷键注册失败: {e}");
-                    startup_error = Some(match startup_error {
-                        Some(prev) => format!("{prev};另外 {e}"),
-                        None => e,
-                    });
+                    startup_error = note(startup_error, e);
                 }
             }
             if let Some(msg) = startup_error {
