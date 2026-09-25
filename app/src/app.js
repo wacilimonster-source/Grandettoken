@@ -921,18 +921,24 @@ function pillAnim(newId, lastText, lastId) {
   LAST_PILL = { id: newId, text };
 }
 
-/** M5 轮播指示点:多于一个渠道才显示,当前页高亮 —— 「会变」可见,就不需要悬停暂停。 */
-function renderPillDots() {
-  const el = $("pillDots");
-  if (!el) return;
-  el.innerHTML =
-    PILL.list.length > 1
-      ? PILL.list.map((_, i) => `<i${i === PILL.idx ? ' class="on"' : ""}></i>`).join("")
-      : "";
+/** B 光环(2026-09-25,design-pill-restyle-5.html 方案 B):状态染到整颗胶囊
+ *  (body 的 st-* 类,只在 form-pill 下有样式)+ 发丝条常驻显示剩余百分比。
+ *  状态与状态点(dotCls)同源,单一事实来源;灰态 = 无数据,细分语义仍由点承担
+ *  (off 空心环 / st 斜杠)。比率拿不到时发丝条清 0 只留轨道。M5 轮播点已退役。 */
+const AURA_OF = { "": "ok", w: "warn", b: "bad", off: "fail", st: "fail", o: "fail" };
+function applyPillAura(state, ratio) {
+  document.body.classList.remove("st-ok", "st-warn", "st-bad", "st-fail");
+  document.body.classList.add("st-" + state);
+  const fill = $("pillHair") && $("pillHair").firstElementChild;
+  if (fill) {
+    fill.style.width =
+      ratio === null || ratio === undefined
+        ? "0%"
+        : Math.min(100, Math.max(0, ratio * 100)).toFixed(1) + "%";
+  }
 }
 
 function renderPillFace() {
-  renderPillDots();
   const dot = $("pillDot");
   const icoBox = $("pillIco");
   const c = PILL.list[PILL.idx];
@@ -947,6 +953,7 @@ function renderPillFace() {
     icoBox.innerHTML = "";
     $("pillV").textContent = withKey.length ? "取数失败" : "未配置";
     $("pill").title = withKey.length ? "渠道全部取数失败,点开面板看原因" : "尚未配置密钥";
+    applyPillAura("fail", null);
     // 这条分支以前直接 return:中文占位比原来的数字宽,不 fitPill 就被截成
     // "取数失…";托盘也停在上一轮的数字上,该退回品牌图标时退不回去(报告 P1-4)
     fitPill();
@@ -961,6 +968,7 @@ function renderPillFace() {
 
   const pd = dotCls(c);
   dot.className = "dot" + (pd ? " " + pd : "");
+  applyPillAura(AURA_OF[pd] || "fail", remainRatio(c));
   $("pillV").innerHTML =
     c.remaining === null
       ? "——"

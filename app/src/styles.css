@@ -580,12 +580,8 @@ body.form-compact .more:hover{color:var(--tx);background:var(--bg3)}
 .row.flash{animation:rowflash 1.1s ease}
 @keyframes rowflash{0%,55%{background:#7fa2ff26}100%{background:transparent}}
 
-/* M5 胶囊轮播指示点:「会变」可见,就不需要悬停暂停 */
-.pdots{position:absolute;bottom:calc(3px*var(--u));left:50%;transform:translateX(-50%);
-  display:flex;gap:3px;pointer-events:none}
-.pdots i{width:3px;height:3px;border-radius:50%;background:var(--line2)}
-.pdots i.on{background:var(--ac)}
-
+/* M5 轮播指示点已随 2026-09-25 方案 B「光环」退役:底部让位给发丝进度条,
+   页序改由胶囊 tooltip 的「N/M 轮播」承担(design-pill-restyle-5.html) */
 /* M6 贴边:拖拽近边缘的吸附预览线(画在窗口靠边缘一侧) */
 .prevline{position:fixed;top:0;bottom:0;width:2px;background:var(--ac);
   box-shadow:0 0 8px var(--ac);display:none;z-index:55;pointer-events:none}
@@ -606,3 +602,33 @@ body.docked #toast{display:none}
 
 /* 管理页与展示页的切换过渡:120ms 淡入,空间关系更清楚 */
 body.view-manage .manage{animation:fadeup var(--t1) var(--ease)}
+
+/* ═════════ 2026-09-25 设计稿落地(design-pill-restyle-5.html 方案 B「光环」)═════════ */
+
+/* B 光环:状态染到整颗胶囊 —— 描边 + 6px 微光随状态色(绿=宽裕/黄=警戒/红=告急/灰=无数据)。
+   光晕外延 6px ≤ 窗口 10px 透明边距,不会被裁出硬边(阴影预算见 body 注释);
+   灰态不带光:取数失败/未配置是「没有数据」,不是又一种告警。
+   st-* 类常驻在 body 上,规则全部挂在 form-pill 下 —— 面板/紧凑条形态不受影响。 */
+body.form-pill{transition:border-color 400ms ease,box-shadow 400ms ease}
+body.form-pill.st-ok{border-color:#2e6b52;
+  box-shadow:0 0 6px rgba(74,222,157,.28),0 0 0 1px #ffffff08 inset,0 2px 8px -2px rgba(0,0,0,.6)}
+body.form-pill.st-warn{border-color:#6b5a2e;
+  box-shadow:0 0 6px rgba(247,195,85,.30),0 0 0 1px #ffffff08 inset,0 2px 8px -2px rgba(0,0,0,.6)}
+body.form-pill.st-bad{border-color:#6b3230;
+  box-shadow:0 0 6px rgba(255,107,99,.35),0 0 0 1px #ffffff08 inset,0 2px 8px -2px rgba(0,0,0,.6)}
+/* 吸附 8px 竖条不吃光环:吸附时 body 同时挂着 docked 与 form-pill st-*,
+   st-* 的优先级(0-2-1)高于 body.docked(0-1,1),不显式压回去竖条会隔着窗口边缘发亮
+   (P2-16 同族教训:docked 的背景/边框必须赢过各形态规则) */
+body.docked.st-ok,body.docked.st-warn,body.docked.st-bad,body.docked.st-fail{
+  border:0;background:transparent;box-shadow:none}
+
+/* B 发丝进度条:剩余百分比常驻在胶囊底部,与列表行 .bar 同款 500ms 缓动。
+   比率拿不到(充值型无 total / 取数失败)时清 0 只留轨道 —— 「没有数据」和「数据很多」形状可分。
+   pointer-events:none 不挡拖拽(.pill-body 整体是 data-tauri-drag-region="deep") */
+.pill-body .hair{position:absolute;left:16px;right:16px;bottom:5px;height:2px;border-radius:2px;
+  background:rgba(255,255,255,.08);pointer-events:none;overflow:hidden}
+.pill-body .hair i{display:block;height:100%;border-radius:2px;background:var(--ok);width:0;
+  transition:width .5s cubic-bezier(.3,1,.4,1),background 400ms ease}
+body.form-pill.st-warn .pill-body .hair i{background:var(--warn)}
+body.form-pill.st-bad .pill-body .hair i{background:var(--bad)}
+body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}

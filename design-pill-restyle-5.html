@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Grandettoken · 胶囊样式优化五版方案(2026-09-25)</title>
+<style>
+  /* ── 文档自身样式(与既有 design-*.html 同族)── */
+  :root{
+    --bg:#0e1117; --bg2:#161b24; --bg3:#20242e; --line:#2a3245; --line2:#3c445c;
+    --tx:#edf0f6; --tx2:#b6bfce; --tx3:#8d97ab;
+    --ok:#4ade9d; --warn:#f7c355; --bad:#ff6b63; --ac:#7fa2ff;
+    --t1:120ms; --t2:200ms; --t3:320ms;
+    --ease:cubic-bezier(.2,.8,.2,1);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.75 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  .wrap{max-width:1020px;margin:0 auto;padding:40px 22px 100px}
+  h1{font-size:23px;margin:0 0 6px}
+  .sub{color:var(--tx3);font-size:13px;margin-bottom:8px}
+  .toc{display:flex;flex-wrap:wrap;gap:6px;margin:16px 0 8px}
+  .toc a{font-size:12px;color:var(--tx2);text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:3px 10px;transition:.15s}
+  .toc a:hover{color:var(--tx);border-color:var(--ac)}
+  h2{font-size:17px;margin:46px 0 6px;padding-left:10px;border-left:3px solid var(--ac)}
+  h2 .en{font-size:12px;color:var(--tx3);font-weight:400;margin-left:8px}
+  h3{font-size:14px;margin:24px 0 6px;color:var(--tx)}
+  .cap{font-size:12.5px;color:var(--tx2);margin:6px 0 12px;max-width:940px}
+  .cap b{color:var(--tx)}
+  .card{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:10px 0;max-width:940px}
+  .card ul{margin:6px 0;padding-left:20px;color:var(--tx2)}.card li{margin:5px 0}.card b{color:var(--tx)}
+  code{font:12px Consolas,monospace;background:#1c2230;border:1px solid var(--line);padding:1px 5px;border-radius:4px;color:#cdd6e8}
+  table{border-collapse:collapse;width:100%;max-width:940px;font-size:13px;margin:8px 0}
+  th,td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  th{color:var(--tx3);font-size:12px;background:#1c2230;font-weight:500}
+  .demo{background:linear-gradient(165deg,#262e46,#1a2233 55%,#212b3c);border-radius:14px;padding:26px 20px;max-width:940px;margin:10px 0 4px}
+  .btn{border:1px solid var(--line2);background:var(--bg3);color:var(--tx2);border-radius:7px;padding:5px 12px;font:12.5px inherit;font-family:inherit;cursor:pointer;transition:background var(--t1) ease,color var(--t1) ease,transform var(--t1) ease}
+  .btn:hover{background:#272d3a;color:var(--tx)}
+  .btn:active{transform:scale(.96)}
+  .btn.p{background:var(--ac);border-color:var(--ac);color:#fff}
+  .rowbtns{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+  .prio{display:inline-block;font-size:10.5px;font-weight:700;border-radius:4px;padding:0 7px;margin-left:8px;vertical-align:2px;letter-spacing:.5px}
+  .p0{background:#f0554d22;color:#ff8d86;border:1px solid #f0554d55}
+  .p1{background:#f0b23c1e;color:#f7c355;border:1px solid #f0b23c50}
+  .p2{background:#5b8cff1c;color:#a8c0ff;border:1px solid #5b8cff50}
+  .ok-mark{color:var(--ok)} .bad-mark{color:var(--bad)}
+  .num{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:6px;background:rgba(91,140,255,.18);color:#a8c0ff;font-size:12px;font-weight:700;margin-right:8px}
+  .note{font-size:12px;color:var(--tx3);margin-top:8px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;max-width:940px}
+  @media (max-width:760px){.grid2{grid-template-columns:1fr}}
+
+  /* ══ 胶囊仿真组件(模拟挂件真实 UI,与 styles.css 同参数)══
+     底色 #12141af2、描边 --line2、全圆角;窗口外 10px 真透明边距在演示里由舞台 padding 代替 */
+  .stage{position:relative}
+  .cpill{display:inline-flex;align-items:center;gap:8px;height:46px;min-width:200px;
+    padding:7px 7px 7px 9px;border-radius:999px;position:relative;
+    background:#12141af2;border:1px solid var(--line2);color:var(--tx);
+    font-family:"Segoe UI","Microsoft YaHei",sans-serif;cursor:pointer;overflow:hidden;
+    box-shadow:0 2px 8px -2px rgba(0,0,0,.6),0 0 0 1px #ffffff08 inset}
+  .cpill .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);flex:none}
+  .cpill .dot.w{background:var(--warn)} .cpill .dot.b{background:var(--bad)}
+  .cpill .dot.st{position:relative;background:#8d97ab}
+  .cpill .dot.st::after{content:"";position:absolute;left:50%;top:-2px;width:1.5px;height:10px;background:#12141a;transform:translateX(-50%) rotate(45deg)}
+  .cpill .dot.off{background:transparent;border:1.5px solid #4a5266;width:5px;height:5px}
+  .cpill .pico{width:26px;height:26px;border-radius:7px;flex:none;display:grid;place-items:center;
+    font-size:10.5px;font-weight:700;color:#fff}
+  .cpill .t{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .cpill .t i{font-style:normal}
+  .cpill .sp{flex:1}
+  .cpill .ib{width:22px;height:22px;border:0;background:transparent;border-radius:6px;color:var(--tx3);
+    cursor:pointer;display:grid;place-items:center;font-size:11px;flex:none;font-family:inherit;transition:color var(--t1) ease,background var(--t1) ease}
+  .cpill .ib:hover{background:#ffffff12;color:var(--tx)}
+  .cpill .pdots{position:absolute;bottom:3px;left:50%;transform:translateX(-50%);display:flex;gap:3px;pointer-events:none}
+  .cpill .pdots i{width:3px;height:3px;border-radius:50%;background:var(--line2)}
+  .cpill .pdots i.on{background:var(--ac)}
+
+  /* 数值滚动(现状 A:新值自下入,旧值幽灵上出) */
+  .rollwrap{position:relative}
+  .roll-in{animation:rollIn var(--t3) var(--ease)}
+  @keyframes rollIn{from{transform:translateY(9px);opacity:0}}
+  .roll-ghost{position:absolute;left:0;top:0;pointer-events:none;color:var(--tx3);white-space:nowrap;animation:rollOut var(--t3) var(--ease) forwards}
+  @keyframes rollOut{to{transform:translateY(-11px);opacity:0}}
+  .ico-in{animation:icoIn var(--t2) ease}
+  @keyframes icoIn{from{opacity:0}}
+
+  /* M7 一次性红晕(现状,演示里挂在胶囊整体上演示「边界一圈」的做法) */
+  @keyframes breatheOnce{0%{box-shadow:0 0 0 0 rgba(255,107,99,.5)}
+    70%{box-shadow:0 0 0 6px rgba(255,107,99,0)}100%{box-shadow:0 0 0 0 rgba(255,107,99,0)}}
+
+  /* ══ 方案 A 凝练:数值随状态染色 + 悬停浮起 ══ */
+  .pa .t{transition:color 400ms ease}
+  .pa.st-ok  .t{color:var(--tx)}          /* 正常:数值保持主文字色,不抢戏 */
+  .pa.st-warn .t{color:var(--warn)}
+  .pa.st-bad .t{color:var(--bad)}
+  .pa.st-fail .t{color:var(--tx3)}
+  .pa{transition:transform var(--t1) var(--ease),box-shadow var(--t1) ease,border-color 400ms ease}
+  .pa:hover{transform:translateY(-1px);box-shadow:0 2px 8px -2px rgba(0,0,0,.75),0 0 0 1px #ffffff10 inset}
+  .pa:active{transform:scale(.97)}
+  .pa.st-bad.breath{animation:breatheOnce 1.2s ease-out 1}
+
+  /* ══ 方案 B 光环:描边+微光随状态染色,底部发丝进度条 ══ */
+  .pb{transition:border-color 400ms ease,box-shadow 400ms ease}
+  /* 光晕外延 6px ≤ 窗口 10px 透明边距,不会被裁(铁律) */
+  .pb.st-ok  {border-color:#2e6b52;box-shadow:0 0 6px rgba(74,222,157,.28),0 0 0 1px #ffffff08 inset,0 2px 8px -2px rgba(0,0,0,.6)}
+  .pb.st-warn{border-color:#6b5a2e;box-shadow:0 0 6px rgba(247,195,85,.30),0 0 0 1px #ffffff08 inset,0 2px 8px -2px rgba(0,0,0,.6)}
+  .pb.st-bad {border-color:#6b3230;box-shadow:0 0 6px rgba(255,107,99,.35),0 0 0 1px #ffffff08 inset,0 2px 8px -2px rgba(0,0,0,.6)}
+  .pb.st-fail{border-color:var(--line2);box-shadow:0 2px 8px -2px rgba(0,0,0,.6),0 0 0 1px #ffffff08 inset}
+  .pb .hair{position:absolute;left:16px;right:16px;bottom:5px;height:2px;border-radius:2px;background:rgba(255,255,255,.08);pointer-events:none}
+  .pb .hair i{display:block;height:100%;border-radius:2px;background:var(--ok);width:74%;
+    transition:width .5s cubic-bezier(.3,1,.4,1),background 400ms ease}
+  .pb.st-warn .hair i{background:var(--warn)}
+  .pb.st-bad  .hair i{background:var(--bad)}
+  .pb.st-fail .hair i{width:0;background:var(--tx3)}
+
+  /* ══ 方案 C 仪表:图标外一圈环形剩余 ══ */
+  .pc .ringwrap{width:30px;height:30px;flex:none;position:relative;display:grid;place-items:center}
+  .pc svg{position:absolute;inset:0;transform:rotate(-90deg)}
+  .pc .track{fill:none;stroke:rgba(255,255,255,.09);stroke-width:2.5}
+  .pc .arc{fill:none;stroke:var(--ok);stroke-width:2.5;stroke-linecap:round;
+    stroke-dasharray:81.68;stroke-dashoffset:21.1;transition:stroke-dashoffset .5s cubic-bezier(.3,1,.4,1),stroke 400ms ease}
+  .pc.st-warn .arc{stroke:var(--warn)} .pc.st-bad .arc{stroke:var(--bad)}
+  .pc.st-fail .arc{stroke:var(--tx3);stroke-dashoffset:81.68;opacity:.35}
+  .pc .pico{margin:0}
+  .pc .dot{display:none}   /* 状态点由环接管,省出 6px+间距 */
+  .pc .pico,.pc .t{transition:opacity var(--t2) ease}
+
+  /* ══ 方案 D 磁带:整面方向性滑动 + 悬停进度点 ══ */
+  .pd .face{display:inline-flex;align-items:center;gap:8px;min-width:0;
+    transition:transform var(--t2) var(--ease),opacity var(--t2) var(--ease)}
+  .pd .face.out-l{transform:translateX(-14px);opacity:0}
+  .pd .face.out-r{transform:translateX(14px);opacity:0}
+  .pd{transition:transform var(--t1) var(--ease),box-shadow var(--t1) ease}
+  .pd:hover{transform:scale(1.02);box-shadow:0 2px 10px -2px rgba(0,0,0,.75),0 0 0 1px #ffffff10 inset}
+  .pd:active{transform:scale(.97)}
+  /* 悬停时当前点展开为进度点:填充走完 = 该页剩余时间(非悬停时绝不动画) */
+  .pd .pdots i{transition:width var(--t1) var(--ease)}
+  .pd.hov .pdots i.on{width:12px;border-radius:2px;overflow:hidden;position:relative}
+  .pd.hov .pdots i.on::after{content:"";position:absolute;inset:0;background:var(--ac);animation:pgfill linear forwards;animation-duration:var(--pg,8s)}
+  @keyframes pgfill{from{transform:translateX(-100%)}to{transform:translateX(0)}}
+
+  /* ══ 方案 E 双行:渠道名常显 + 逐位滚动 ══ */
+  .pe{height:58px;border-radius:16px;gap:9px;padding:8px 7px 8px 10px;min-width:210px}
+  .pe .col{display:flex;flex-direction:column;justify-content:center;min-width:0;flex:1;line-height:1.25}
+  .pe .nmrow{display:flex;align-items:center;gap:6px;min-width:0}
+  .pe .nm{font-size:10.5px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pe .dchip{font-size:9.5px;line-height:1.4;border-radius:4px;padding:0 5px;white-space:nowrap;font-variant-numeric:tabular-nums}
+  .pe .dchip.up{background:#ff6b6322;color:#ff9d97}
+  .pe .dchip.dn{background:#4ade9d1e;color:#6fe0b3}
+  .pe .t{font-size:15.5px;letter-spacing:-.2px}
+  /* 逐位滚动(odometer):数字位在列内上滑,分隔符不动 */
+  .pe .odo{display:inline-flex}
+  .pe .od{display:inline-block;height:1.25em;overflow:hidden}
+  .pe .od .coli{display:flex;flex-direction:column;transition:transform var(--t3) var(--ease)}
+  .pe .od .coli i{font-style:normal;display:block;height:1.25em;line-height:1.25em}
+  .pe .od.go .coli{transform:translateY(-1.25em)}
+
+  /* 演示辅助 */
+  .stateTag{display:inline-block;font-size:11px;color:var(--tx3);min-width:64px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>胶囊样式优化 · 五版方案</h1>
+  <div class="sub">Grandettoken (TokenScope) v0.1.15 · 2026-09-25 · 产品设计稿,仅供裁决,未动代码 · 每版含可交互演示</div>
+
+  <div class="toc">
+    <a href="#base">0 基线与铁律</a>
+    <a href="#pa">A 凝练</a>
+    <a href="#pb">B 光环</a>
+    <a href="#pc">C 仪表</a>
+    <a href="#pd">D 磁带</a>
+    <a href="#pe">E 双行</a>
+    <a href="#cmp">对比与推荐</a>
+    <a href="#land">落地清单</a>
+  </div>
+
+  <!-- ═══════════════ 0 基线 ═══════════════ -->
+  <h2 id="base">0 · 现状基线与本次优化的边界<span class="en">baseline</span></h2>
+  <p class="cap">胶囊现状(<code>styles.css</code> 形态 3):<b>状态点 6px → 渠道图标 26px → 数值 14px → ▲ 展开 → 轮播点(底部居中)</b>。
+  已有动效:数值滚动 A(320ms)、图标淡入 E(200ms)、指示点 M5、跌破红线一次性红晕 M7、告急呼吸 G(默认关)、形态切换淡入 D1、悬停轮播减速 ×3。
+  窗口宽由 <code>fitPill()</code> 按文字实测自适应(上限 280·u,±6px 防抖)。</p>
+
+  <div class="demo">
+    <div class="rowbtns">
+      <button class="btn" data-base-st="ok">正常</button>
+      <button class="btn" data-base-st="warn">警戒</button>
+      <button class="btn" data-base-st="bad">告急</button>
+      <button class="btn" data-base-st="fail">失败</button>
+      <button class="btn" data-base-roll>数值刷新</button>
+      <button class="btn" data-base-page>下一渠道</button>
+    </div>
+    <div class="stage">
+      <div class="cpill" id="basePill">
+        <span class="dot" id="baseDot"></span>
+        <div class="pico" id="baseIco" style="background:#5b8cff">4S</div>
+        <div class="t rollwrap" id="baseV">$74.25</div>
+        <div class="sp"></div>
+        <button class="ib" title="展开为面板">▲</button>
+        <span class="pdots" id="baseDots"><i class="on"></i><i></i><i></i></span>
+      </div>
+      <div class="note" id="baseTag">当前:正常 · $74.25</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <b>五版方案共同遵守的铁律</b>(摘自 <code>styles.css</code> 动效层注释,新动效不得越界):
+    <ul>
+      <li><b>短</b>:时长 ≤ 320ms(一次性扫光类可到 560ms,先例如 B 微光);曲线 <code>cubic-bezier(.2,.8,.2,1)</code> 快起慢停,永不回弹。</li>
+      <li><b>只动有语义的变化</b>:轮播翻页、刷新数值、状态升降级、悬停反馈;不做装饰性循环。</li>
+      <li><b>只用 transform + opacity 做位移</b>;颜色/阴影允许过渡(按钮已有先例)。</li>
+      <li><b>无常驻循环</b>:唯一例外是 G 呼吸(默认关)。方案 D 的「悬停进度点」是第二个条件循环 —— 仅悬停期间存在,松手即停,见该节裁决点。</li>
+      <li><b>透明窗口两条硬约束</b>:① 不用 backdrop-filter(采不到桌面,纯空转);② 任何阴影/光晕外延 ≤ 10px(窗口四周只有 10px 真透明边距,超出会被裁出硬边,代码注释里实测踩过)。</li>
+      <li><b>prefers-reduced-motion</b>:全局规则已兜底,新动效自动被压平,无需逐条处理。</li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════ A ═══════════════ -->
+  <h2 id="pa">方案 A ·「凝练」<span class="en">polish — 在现有骨架上把状态读出来</span><span class="prio p2">成本 低 · 风险 极低</span></h2>
+  <p class="cap">不动布局、不加元素。三处微调:<b>① 数值随状态染色</b>(告急时整个数字变红,而不是只靠 6px 小点 —— 胶囊唯一的大面积像素就是数字本身,让语义长在信息上);
+  <b>② 悬停浮起 1px + 阴影加深</b>,给「这是一颗可按的东西」的实体感;<b>③ 状态降级到红时,红晕从状态点扩散到整颗胶囊一次性波纹</b>(复用 M7 曲线,仍只播一次)。
+  失败态数值转灰,与点语义一致。</p>
+
+  <div class="demo">
+    <div class="rowbtns">
+      <button class="btn" data-pa-st="ok">正常</button>
+      <button class="btn" data-pa-st="warn">警戒</button>
+      <button class="btn" data-pa-st="bad">告急(看红晕+数字变红)</button>
+      <button class="btn" data-pa-st="fail">失败</button>
+      <button class="btn" data-pa-roll>数值刷新</button>
+      <span class="stateTag" id="paTag">把鼠标悬到胶囊上感受浮起 / 按下</span>
+    </div>
+    <div class="stage">
+      <div class="cpill pa st-ok" id="paPill">
+        <span class="dot" id="paDot"></span>
+        <div class="pico" id="paIco" style="background:#5b8cff">4S</div>
+        <div class="t rollwrap" id="paV">$74.25</div>
+        <div class="sp"></div>
+        <button class="ib">▲</button>
+        <span class="pdots"><i class="on"></i><i></i><i></i></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <b>动效规格</b>
+    <table>
+      <tr><th>触发</th><th>对象</th><th>变化</th><th>时长 / 曲线</th></tr>
+      <tr><td>状态升降级</td><td>数值颜色</td><td>主文字色 ↔ warn/bad/灰 交叉淡变</td><td>400ms ease</td></tr>
+      <tr><td>跌破红线(M7 扩展)</td><td>整颗胶囊</td><td>一圈红色波纹扩散(原只给 6px 点)</td><td>1.2s × 1 次,ease-out</td></tr>
+      <tr><td>悬停 / 按压</td><td>整颗胶囊</td><td>translateY(-1px)+阴影加深 / scale(.97)</td><td>120ms --ease</td></tr>
+      <tr><td>数值刷新</td><td>数值</td><td>沿用现有 rollIn/ghost</td><td>320ms(不变)</td></tr>
+    </table>
+    <ul>
+      <li><b>优点</b>:几乎零风险;可读性收益最大的一处(数字变红)直接命中「告急扫一眼可见」;无新设置项,老用户无感升级。</li>
+      <li><b>代价</b>:视觉变化幅度小,「换了新皮肤」的感觉弱;波纹挂在胶囊上时注意与拖拽区不冲突(box-shadow 动画不参与命中测试,<span class="ok-mark">无影响</span>)。</li>
+      <li><b>取色已验</b>:<code>#f7c355 / #ff6b63</code> 在 <code>#12141a</code> 上对比度 ≥ 7:1,满足 AA。</li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════ B ═══════════════ -->
+  <h2 id="pb">方案 B ·「光环」<span class="en">aura — 状态变成环境光,剩%常驻</span><span class="prio p1">成本 中 · 风险 低</span></h2>
+  <p class="cap">状态不再只住在小点上,而是染到<b>整颗胶囊的描边 + 一圈 6px 微光</b>:绿=宽裕、黄=警戒、红=告急、灰=失联。
+  隔着半米看轮廓就知道要不要管它。底部加一条 <b>2px 发丝进度条</b>常驻显示剩余百分比(与列表行的 bar 同款 500ms 缓动),刷新时你能看见它涨/退。
+  代价:发丝条与 M5 轮播点抢底部空间 —— <b>轮播点退役</b>,页序由 tooltip 的「2/3 轮播」承担。</p>
+
+  <div class="demo">
+    <div class="rowbtns">
+      <button class="btn" data-pb-st="ok">正常 74%</button>
+      <button class="btn" data-pb-st="warn">警戒 28%</button>
+      <button class="btn" data-pb-st="bad">告急 9%</button>
+      <button class="btn" data-pb-st="fail">失败</button>
+      <button class="btn" data-pb-jit>模拟刷新 ±3%</button>
+      <span class="stateTag" id="pbTag">看描边/微光颜色与发丝条宽度</span>
+    </div>
+    <div class="stage">
+      <div class="cpill pb st-ok" id="pbPill">
+        <span class="dot" id="pbDot"></span>
+        <div class="pico" id="pbIco" style="background:#5b8cff">4S</div>
+        <div class="t rollwrap" id="pbV">$74.25</div>
+        <div class="sp"></div>
+        <button class="ib">▲</button>
+        <div class="hair"><i id="pbHair"></i></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <b>动效规格</b>
+    <table>
+      <tr><th>触发</th><th>对象</th><th>变化</th><th>时长 / 曲线</th></tr>
+      <tr><td>状态升降级</td><td>描边 + 微光 + 发丝条颜色</td><td>三态色交叉淡变</td><td>400ms ease</td></tr>
+      <tr><td>刷新取数</td><td>发丝条宽度</td><td>0→100% 按真实 remainRatio 重设</td><td>500ms cubic-bezier(.3,1,.4,1)(与列表 bar 同参数)</td></tr>
+      <tr><td>跌破红线</td><td>微光层</td><td>红晕一次性脉冲(可沿用 M7,不新增)</td><td>1.2s × 1</td></tr>
+    </table>
+    <ul>
+      <li><b>优点</b>:「扫一眼读状态」这个胶囊核心使命完成度最高;发丝条是唯一能把<b>剩余百分比</b>做成常驻图形语言的地方(数字可以裁剪,条不会);实现全在 CSS + <code>renderPillFace</code> 里已有的 <code>remainRatio()</code>。</li>
+      <li><b>代价</b>:微光在浅色壁纸上可能显脏 → 光晕强度压在 0.28~0.35,且外延 6px,窗口 10px 边距内安全;<b>M5 轮播点退役</b>是一处回退,多渠道轮播时「会变」提示变弱(悬停减速 ×3 仍在),需要裁决接受。</li>
+      <li><b>失败态</b>:描边回默认灰、发丝条清空 —— 「没有数据」与「数据很多」形状可分。</li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════ C ═══════════════ -->
+  <h2 id="pc">方案 C ·「仪表」<span class="en">gauge — 环形剩余,点退役</span><span class="prio p1">成本 中 · 风险 中</span></h2>
+  <p class="cap">把渠道图标装进一枚 <b>30px 环形仪表</b>:环的弧长 = 剩余百分比,环色 = 状态色。数字照旧,状态点退役(环接管语义,省出 6px + 一段间距,胶囊反而能收窄 ~10px)。
+  刷新时弧长伸缩,翻页时环与图标一起 200ms 淡入(现有 icoIn 扩展到环)。这是五版里「仪器感」最强的一版。</p>
+
+  <div class="demo">
+    <div class="rowbtns">
+      <button class="btn" data-pc-st="ok">正常 74%</button>
+      <button class="btn" data-pc-st="warn">警戒 28%</button>
+      <button class="btn" data-pc-st="bad">告急 9%</button>
+      <button class="btn" data-pc-st="fail">失败(环隐去)</button>
+      <button class="btn" data-pc-page>下一渠道(环+图标淡入)</button>
+      <span class="stateTag" id="pcTag">SVG 环 · dashoffset 500ms</span>
+    </div>
+    <div class="stage">
+      <div class="cpill pc st-ok" id="pcPill">
+        <div class="ringwrap">
+          <svg viewBox="0 0 30 30" width="30" height="30">
+            <circle class="track" cx="15" cy="15" r="13"></circle>
+            <circle class="arc" id="pcArc" cx="15" cy="15" r="13"></circle>
+          </svg>
+          <div class="pico" id="pcIco" style="background:#5b8cff">4S</div>
+        </div>
+        <div class="t rollwrap" id="pcV">$74.25</div>
+        <div class="sp"></div>
+        <button class="ib">▲</button>
+        <span class="pdots"><i class="on"></i><i></i><i></i></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <b>动效规格</b>
+    <table>
+      <tr><th>触发</th><th>对象</th><th>变化</th><th>时长 / 曲线</th></tr>
+      <tr><td>刷新取数</td><td>环弧长</td><td>stroke-dashoffset 按真实比率重设</td><td>500ms cubic-bezier(.3,1,.4,1)</td></tr>
+      <tr><td>状态升降级</td><td>环色</td><td>ok/warn/bad 交叉淡变</td><td>400ms ease</td></tr>
+      <tr><td>轮播翻页</td><td>环 + 图标 + 数值</td><td>一起淡入(icoIn 扩展)</td><td>200ms ease</td></tr>
+      <tr><td>失败 / 无比率</td><td>环</td><td>弧隐去只留轨道,opacity .35 —— 与灰点语义一致</td><td>200ms</td></tr>
+    </table>
+    <ul>
+      <li><b>优点</b>:信息密度与装饰感平衡最好;「环满=新周期」对配额型渠道(OpenCode 周期窗)语义直白;状态点退役后胶囊能收窄,小屏更省地。</li>
+      <li><b>代价 / 风险</b>:① <b>余额型渠道可能没有可信比率</b>(<code>remainRatio()</code> 对部分渠道为 null)→ 环隐去退回灰点,规则要写进 <code>renderPillFace</code>;② 26px 位图官方标在环内再缩一档,小尺寸清晰度问题(U6 同族)需要实测,字母块无此问题;③ SVG 注入点与 <code>iconHtml</code> 的组装方式要小改。</li>
+      <li><b>实现注</b>:SVG stroke-dashoffset 过渡在 WebView2(Chromium)上稳定,不需要 @property。</li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════ D ═══════════════ -->
+  <h2 id="pd">方案 D ·「磁带」<span class="en">ticker — 纯动效/交互版,外观零变化</span><span class="prio p1">成本 中 · 风险 低</span></h2>
+  <p class="cap">外观一个像素都不改,全部预算花在<b>手感</b>:① 轮播翻页从「数值上滚 + 图标单独淡入」升级为<b>整面(图标+数值)方向性滑动</b> —— 去下一页向左滑、回来向右滑,空间连续;
+  ② <b>悬停时当前指示点展开成 12px 进度点</b>,填充走完即翻页(与悬停减速 ×3 对齐)—— 悬停才出现的循环,松手即静,不破铁律;③ 悬停整颗微放大 1.02 + 阴影加深,按压 .97。</p>
+
+  <div class="demo">
+    <div class="rowbtns">
+      <button class="btn" data-pd-page>下一渠道(整面左滑)</button>
+      <button class="btn" data-pd-prev>上一渠道(整面右滑)</button>
+      <button class="btn" data-pd-roll>数值刷新(沿用上滚)</button>
+      <span class="stateTag" id="pdTag">把鼠标悬到胶囊上:看进度点 + 微放大</span>
+    </div>
+    <div class="stage">
+      <div class="cpill pd" id="pdPill">
+        <span class="dot" id="pdDot"></span>
+        <div class="face" id="pdFace">
+          <div class="pico" id="pdIco" style="background:#5b8cff">4S</div>
+          <div class="t rollwrap" id="pdV">$74.25</div>
+        </div>
+        <div class="sp"></div>
+        <button class="ib">▲</button>
+        <span class="pdots" id="pdDots"><i class="on"></i><i></i><i></i></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <b>动效规格</b>
+    <table>
+      <tr><th>触发</th><th>对象</th><th>变化</th><th>时长 / 曲线</th></tr>
+      <tr><td>翻页(方向感知)</td><td>.face(图标+数值)</td><td>旧面 translateX(∓14px)+淡出 → 新面从 ±14px 淡入</td><td>出 200ms / 进 220ms,--ease</td></tr>
+      <tr><td>同页数值刷新</td><td>数值</td><td>沿用 rollIn/ghost(不与滑动叠加)</td><td>320ms(不变)</td></tr>
+      <tr><td>悬停</td><td>整颗 + 当前点</td><td>scale(1.02)+阴影加深;点展开为进度点,填充时长 = JS 精确剩余 ms</td><td>120ms / 填充线性</td></tr>
+      <tr><td>按压</td><td>整颗</td><td>scale(.97)</td><td>120ms</td></tr>
+    </table>
+    <ul>
+      <li><b>裁决点</b>:进度点是<b>第二个条件循环动画</b>(仅悬停期间存在)。与铁律「无常驻循环」不冲突的理由:不悬停时零动画;它表达的是真实剩余时间(语义),且替代的正是「悬停暂停」这个被否掉的交互。若不想开先例,可砍掉进度点,只保留方向性滑动与悬停缩放。</li>
+      <li><b>优点</b>:零视觉风险(不喜欢可以只当动效包合入);方向感知让「轮播在前进」终于有空间感;实现集中在 <code>pillAnim()</code> 一个函数内。</li>
+      <li><b>代价</b>:翻页期间旧值幽灵(rollOut)与整面滑动要互斥 —— 同一次翻页里二选一,规则要写死,否则两层动画打架;<code>fitPill</code> 在滑动结束后量宽(量的是终态文本,时序天然安全)。</li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════ E ═══════════════ -->
+  <h2 id="pe">方案 E ·「双行」<span class="en">duo — 渠道名常显 + 逐位滚动,信息密度最大</span><span class="prio p0">成本 高 · 风险 中</span></h2>
+  <p class="cap">胶囊长高一档(46 → 58px):<b>第一行渠道名 10.5px + 今日趋势角标</b>(▼$2.10,涨=红/降=绿,沿用汇总条 U8 语义),<b>第二行数值 15.5px</b>。
+  轮播多渠道时终于知道「现在这颗是谁」,不用悬停猜。数值更新升级为<b>逐位滚动(odometer)</b>:只有变了的数字位在列内上滑,「$74.25 → $71.90」你能看见是 7→7、4→1,而不是整串翻面。</p>
+
+  <div class="demo">
+    <div class="rowbtns">
+      <button class="btn" data-pe-roll>数值刷新(逐位滚动)</button>
+      <button class="btn" data-pe-page>下一渠道(名字跟着换)</button>
+      <button class="btn" data-pe-st>切换 告急/正常</button>
+      <span class="stateTag" id="peTag">58px 高 · 名字常显 · 趋势角标</span>
+    </div>
+    <div class="stage">
+      <div class="cpill pe" id="pePill">
+        <span class="dot" id="peDot"></span>
+        <div class="pico" id="peIco" style="background:#5b8cff">4S</div>
+        <div class="col">
+          <div class="nmrow"><span class="nm" id="peNm">4SAPI</span><span class="dchip up" id="peD">▼ 2.10 今日</span></div>
+          <div class="t" id="peV">$74.25</div>
+        </div>
+        <div class="sp"></div>
+        <button class="ib">▲</button>
+        <span class="pdots"><i class="on"></i><i></i><i></i></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <b>动效规格</b>
+    <table>
+      <tr><th>触发</th><th>对象</th><th>变化</th><th>时长 / 曲线</th></tr>
+      <tr><td>数值刷新</td><td>每个数字位</td><td>列内上滑到新值(odometer);分隔符/货币符不动</td><td>320ms --ease</td></tr>
+      <tr><td>轮播翻页</td><td>名字行 + 图标</td><td>淡入(icoIn)+ 名字切换</td><td>200ms</td></tr>
+      <tr><td>趋势变化</td><td>角标</td><td>文字换内容,颜色淡变</td><td>400ms</td></tr>
+    </table>
+    <ul>
+      <li><b>优点</b>:信息增益最大 —— 渠道名常显解决轮播「这是谁」、趋势角标解决「今天烧得快不快」两个真实问题;odometer 是五版里观感最惊艳的一段,且只动 transform。</li>
+      <li><b>代价 / 风险</b>:① <b>动窗口几何</b>:<code>PILL.pill</code> 尺寸 46→58,<code>fitPill</code> 的行高/探针要跟着改,字号档位(lg/xl)联动的三档高度都要验;② odometer 要处理小数位增减(74.2→1,075 位数变化时整列重建,退化成 rollIn);③ 桌面上 58px 的常驻件存在感明显变强,「小巧」这个卖点被稀释 —— 这是产品取舍不是技术问题;<b>建议单独一批落地</b>,或先做 A/B/D 之后作为二期。</li>
+      <li><b>数据依赖</b>:趋势需要「今日消耗」对比昨日 —— <code>sum</code> 区已有今日数,昨日基线要确认快照库里存没存,没有则角标首期显示「今日 $x.x」不带箭头。</li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════ 对比 ═══════════════ -->
+  <h2 id="cmp">对比与推荐<span class="en">verdict</span></h2>
+  <table>
+    <tr><th>方案</th><th>一句话</th><th>状态可读性<br>(扫一眼)</th><th>新信息</th><th>动效量</th><th>成本</th><th>主要风险</th><th>新设置</th></tr>
+    <tr><td><b>A 凝练</b></td><td>数字随状态变色 + 悬停浮起</td><td>★★★☆</td><td>无</td><td>低</td><td>低</td><td>几乎无</td><td>无</td></tr>
+    <tr><td><b>B 光环</b></td><td>描边微光随状态 + 底部发丝剩%</td><td>★★★★★</td><td>剩%常驻</td><td>低</td><td>中</td><td>M5 轮播点退役</td><td>无</td></tr>
+    <tr><td><b>C 仪表</b></td><td>图标外一圈环形剩余</td><td>★★★★</td><td>剩%环形</td><td>中</td><td>中</td><td>余额型无比率 / 位图缩小发糊</td><td>无</td></tr>
+    <tr><td><b>D 磁带</b></td><td>方向性整面滑动 + 悬停进度点</td><td>★★☆(不变)</td><td>无</td><td>高</td><td>中</td><td>条件循环需裁决</td><td>无</td></tr>
+    <tr><td><b>E 双行</b></td><td>名字+趋势两行,逐位滚动</td><td>★★★★</td><td>名字+趋势</td><td>高</td><td>高</td><td>动窗口几何 / 常驻感变强</td><td>无</td></tr>
+  </table>
+
+  <div class="card">
+    <b>推荐组合</b>:<span class="num">1</span><b>A + B + D 打包为一期</b> —— A 的数字染色与 B 的状态描边是同一个语义(状态)的两层表达,叠加不冲突;
+    B 的发丝条给出常驻剩%;D 的方向性滑动把轮播手感补齐。三者都不动窗口几何,<code>fitPill</code> 零改动风险。
+    <ul>
+      <li><b>C</b> 作为可替换单件:如果你更喜欢「仪表感」,可用 C 换掉 B 的发丝条(两者都在表达剩%,不必同屏)。</li>
+      <li><b>E</b> 建议二期:信息增益真实,但要动窗口高度与三档字号联动,且 58px 常驻件的「小巧感」取舍需要你拍板。</li>
+      <li><b>若只选一个</b>:选 B。胶囊存在的理由就是「不打扰但一眼可知」,光环是五版里对这句话回答得最直接的。</li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════ 落地 ═══════════════ -->
+  <h2 id="land">落地清单(任选方案都适用)<span class="en">checklist</span></h2>
+  <div class="card">
+    <ul>
+      <li><b>改动面</b>:样式进 <code>styles.css</code> 动效层之后的新段落(沿用「设计稿落地」注释分节惯例);逻辑只碰 <code>renderPillFace / pillAnim / fitPill</code>,<b>不碰</b> <code>applyForm</code> 的几何队列与托盘逻辑。</li>
+      <li><b>状态源</b>:全部复用 <code>dotCls(c)</code> 与 <code>remainRatio(c)</code>,不新增后端字段(E 的趋势除外,需确认昨日快照)。</li>
+      <li><b>拖拽安全</b>:胶囊整体是 <code>data-tauri-drag-region="deep"</code>,所有新增子元素(环/发丝条/进度点)必须 <code>pointer-events:none</code>,▲ 与既有按钮除外。</li>
+      <li><b>阴影预算</b>:任何新 box-shadow 外延 ≤ 10px(窗口透明边距);本稿所有光晕已按 6px 设计。</li>
+      <li><b>reduced-motion</b>:全局 <code>@media (prefers-reduced-motion)</code> 已兜底,新动画零额外代码。</li>
+      <li><b>验收方式</b>:与 2026-09-23 批次相同 —— 设计稿裁决 → 实现 → <code>bug-report</code> 式截图对照验收,四个状态(正常/警戒/告急/失败)+ 翻页 + 刷新各截一张。</li>
+    </ul>
+  </div>
+
+  <p class="note">本文档所有演示为纯 HTML/CSS/JS 仿真,参数取自 <code>styles.css</code> 现值;与真实差异仅在字体渲染与 DPI。确认方案后我按上述清单落代码。</p>
+</div>
+
+<script>
+"use strict";
+/* ── 共用:演示数据与工具 ── */
+const CH = [
+  { s: "4S", bg: "#5b8cff", name: "4SAPI",   ok: "$74.25", warn: "28.4%", bad: "9.2%"  },
+  { s: "OC", bg: "#e8843c", name: "OpenCode", ok: "41.5%",  warn: "22.0%", bad: "6.8%"  },
+  { s: "WB", bg: "#2fa879", name: "WorkBuddy", ok: "$18.40", warn: "$6.12", bad: "$0.94" }
+];
+const DOT = { ok: "dot", warn: "dot w", bad: "dot b", fail: "dot st" };
+const DOTBASE = { ok: "", warn: "", bad: "", fail: "" };
+let basePage = 0, baseState = "ok";
+let paPage = 0, paState = "ok";
+let pbPage = 0, pbState = "ok", pbPct = 74;
+let pcPage = 0, pcState = "ok";
+let pdPage = 0;
+let pePage = 0, peState = "ok";
+
+function rollTo(el, newText) {
+  const old = el.textContent;
+  if (old === newText) return;
+  const ghost = document.createElement("span");
+  ghost.className = "roll-ghost";
+  ghost.textContent = old;
+  el.appendChild(ghost);
+  const live = document.createElement("span");
+  live.className = "roll-in";
+  live.textContent = newText;
+  el.textContent = "";
+  el.appendChild(live);
+  el.appendChild(ghost);
+  setTimeout(() => ghost.remove(), 400);
+}
+function q(id) { return document.getElementById(id); }
+
+/* ══ 0 基线 ══ */
+function baseFace(page, st) {
+  const c = CH[page % 3];
+  q("baseIco").textContent = c.s;
+  q("baseIco").style.background = c.bg;
+  q("baseV").textContent = st === "fail" ? "取数失败" : c[st];
+  q("baseDot").className = st === "fail" ? "dot st" : DOT[st];
+  const dots = q("baseDots");
+  dots.innerHTML = [0, 1, 2].map(i => `<i${i === page % 3 ? ' class="on"' : ""}></i>`).join("");
+  q("baseTag").textContent = "当前:" + ({ ok: "正常", warn: "警戒", bad: "告急", fail: "失败" })[st]
+    + " · " + c.name + " · " + q("baseV").textContent;
+}
+document.querySelectorAll("[data-base-st]").forEach(b => b.addEventListener("click", () => {
+  baseState = b.dataset.baseSt; baseFace(basePage, baseState);
+}));
+document.querySelector("[data-base-roll]").addEventListener("click", () => {
+  const c = CH[basePage % 3];
+  rollTo(q("baseV"), c[baseState === "fail" ? "ok" : baseState]);
+});
+document.querySelector("[data-base-page]").addEventListener("click", () => {
+  basePage = (basePage + 1) % 3;
+  const p = q("baseIco");
+  p.classList.remove("ico-in"); void p.offsetWidth; p.classList.add("ico-in");
+  baseFace(basePage, baseState);
+});
+
+/* ══ A 凝练 ══ */
+function paFace() {
+  const c = CH[paPage % 3];
+  q("paIco").textContent = c.s; q("paIco").style.background = c.bg;
+  q("paV").textContent = c[paState === "fail" ? "ok" : paState];
+  q("paDot").className = DOT[paState];
+  q("paPill").className = "cpill pa st-" + paState;
+}
+document.querySelectorAll("[data-pa-st]").forEach(b => b.addEventListener("click", () => {
+  paState = b.dataset.paSt; paFace();
+  if (paState === "bad") {
+    const p = q("paPill");
+    p.classList.remove("breath"); void p.offsetWidth; p.classList.add("breath");
+  }
+}));
+document.querySelector("[data-pa-roll]").addEventListener("click", () => {
+  const c = CH[paPage % 3];
+  const cur = c.ok[0] === "$" ? "$" : "";
+  rollTo(q("paV"), cur + (parseFloat(c.ok.replace(/[^0-9.]/g, "")) - Math.random() * 3).toFixed(2));
+});
+paFace();
+
+/* ══ B 光环 ══ */
+function pbFace() {
+  const c = CH[pbPage % 3];
+  q("pbIco").textContent = c.s; q("pbIco").style.background = c.bg;
+  q("pbV").textContent = pbState === "fail" ? "取数失败" : c[pbState];
+  q("pbDot").className = DOT[pbState];
+  q("pbPill").className = "cpill pb st-" + pbState;
+  q("pbHair").style.width = (pbState === "fail" ? 0 : pbPct) + "%";
+  q("pbTag").textContent = "剩 " + (pbState === "fail" ? "——" : pbPct + "%") + " · 描边/微光 = " +
+    ({ ok: "绿", warn: "黄", bad: "红", fail: "灰" })[pbState];
+}
+document.querySelectorAll("[data-pb-st]").forEach(b => b.addEventListener("click", () => {
+  pbState = b.dataset.pbSt;
+  pbPct = ({ ok: 74, warn: 28, bad: 9, fail: 0 })[pbState];
+  pbFace();
+}));
+document.querySelector("[data-pb-jit]").addEventListener("click", () => {
+  if (pbState === "fail") return;
+  pbPct = Math.max(2, Math.min(97, pbPct + (Math.random() > .5 ? -3 : 3)));
+  pbFace();
+});
+pbFace();
+
+/* ══ C 仪表 ══ */
+const CIRC = 81.68;
+function pcFace() {
+  const c = CH[pcPage % 3];
+  q("pcIco").textContent = c.s; q("pcIco").style.background = c.bg;
+  q("pcV").textContent = pcState === "fail" ? "取数失败" : c[pcState];
+  q("pcPill").className = "cpill pc st-" + pcState;
+  const pct = ({ ok: 74.2, warn: 28.4, bad: 9.2, fail: 0 })[pcState];
+  q("pcArc").style.strokeDashoffset = (CIRC * (1 - pct / 100)).toFixed(1);
+  q("pcTag").textContent = "环 = 剩 " + (pcState === "fail" ? "——" : pct + "%");
+}
+document.querySelectorAll("[data-pc-st]").forEach(b => b.addEventListener("click", () => {
+  pcState = b.dataset.pcSt; pcFace();
+}));
+document.querySelector("[data-pc-page]").addEventListener("click", () => {
+  pcPage = (pcPage + 1) % 3;
+  const w = q("pcPill").querySelector(".ringwrap");
+  w.classList.remove("ico-in"); void w.offsetWidth; w.classList.add("ico-in");
+  pcFace();
+});
+pcFace();
+
+/* ══ D 磁带 ══ */
+const pdFaceEl = q("pdFace");
+let pdBusy = false;
+function pdSwap(dir, page) {
+  const c = CH[page % 3];
+  pdFaceEl.classList.add(dir < 0 ? "out-l" : "out-r");
+  setTimeout(() => {
+    q("pdIco").textContent = c.s; q("pdIco").style.background = c.bg;
+    q("pdV").textContent = c.ok;
+    pdFaceEl.classList.remove("out-l", "out-r");
+    pdFaceEl.style.transition = "none";
+    pdFaceEl.style.transform = "translateX(" + (dir < 0 ? 14 : -14) + "px)";
+    pdFaceEl.style.opacity = "0";
+    void pdFaceEl.offsetWidth;
+    pdFaceEl.style.transition = "";
+    pdFaceEl.style.transform = "translateX(0)";
+    pdFaceEl.style.opacity = "1";
+  }, 200);
+}
+function pdDots() {
+  q("pdDots").innerHTML = [0, 1, 2].map(i => `<i${i === pdPage ? ' class="on"' : ""}></i>`).join("");
+}
+document.querySelector("[data-pd-page]").addEventListener("click", () => {
+  if (pdBusy) return; pdBusy = true;
+  pdPage = (pdPage + 1) % 3; pdDots(); pdSwap(-1, pdPage);
+  setTimeout(() => pdBusy = false, 430);
+});
+document.querySelector("[data-pd-prev]").addEventListener("click", () => {
+  if (pdBusy) return; pdBusy = true;
+  pdPage = (pdPage + 2) % 3; pdDots(); pdSwap(1, pdPage);
+  setTimeout(() => pdBusy = false, 430);
+});
+document.querySelector("[data-pd-roll]").addEventListener("click", () => {
+  rollTo(q("pdV"), "$" + (60 + Math.random() * 20).toFixed(2));
+});
+q("pdPill").addEventListener("mouseenter", () => {
+  q("pdPill").classList.add("hov");
+  q("pdPill").style.setProperty("--pg", "8s");
+});
+q("pdPill").addEventListener("mouseleave", () => q("pdPill").classList.remove("hov"));
+pdDots();
+
+/* ══ E 双行(逐位滚动)══ */
+function odoTo(el, newText) {
+  const old = el.textContent;
+  if (old === newText) { return; }
+  if (old.replace(/[0-9]/g, "").length !== newText.replace(/[0-9]/g, "").length) {
+    rollTo(el, newText); return;   // 位数变了,退化成整串滚动
+  }
+  const frag = document.createElement("span");
+  frag.className = "odo";
+  let hasAnim = false;
+  for (let i = 0; i < newText.length; i++) {
+    const nc = newText[i], oc = old[i];
+    if (/[0-9]/.test(nc) && nc !== oc) {
+      hasAnim = true;
+      const od = document.createElement("span"); od.className = "od";
+      const col = document.createElement("span"); col.className = "coli";
+      col.innerHTML = "<i>" + oc + "</i><i>" + nc + "</i>";
+      od.appendChild(col); frag.appendChild(od);
+    } else {
+      frag.appendChild(document.createTextNode(nc));
+    }
+  }
+  el.textContent = "";
+  el.appendChild(frag);
+  if (hasAnim) {
+    requestAnimationFrame(() => requestAnimationFrame(() => frag.classList.add("go")));
+    setTimeout(() => { el.textContent = newText; }, 400);
+  } else {
+    el.textContent = newText;
+  }
+}
+function peFace() {
+  const c = CH[pePage % 3];
+  q("peIco").textContent = c.s; q("peIco").style.background = c.bg;
+  q("peNm").textContent = c.name;
+  q("peV").textContent = c[peState === "fail" ? "bad" : peState];
+  q("peDot").className = DOT[peState];
+  q("peD").className = "dchip " + (peState === "bad" ? "up" : "dn");
+  q("peD").textContent = peState === "bad" ? "▲ 8.40 今日" : "▼ 2.10 今日";
+}
+document.querySelector("[data-pe-roll]").addEventListener("click", () => {
+  const v = (50 + Math.random() * 45).toFixed(2);
+  odoTo(q("peV"), "$" + v);
+});
+document.querySelector("[data-pe-page]").addEventListener("click", () => {
+  pePage = (pePage + 1) % 3;
+  const p = q("peIco");
+  p.classList.remove("ico-in"); void p.offsetWidth; p.classList.add("ico-in");
+  peFace();
+});
+document.querySelector("[data-pe-st]").addEventListener("click", () => {
+  peState = peState === "bad" ? "ok" : "bad"; peFace();
+});
+peFace();
+</script>
+</body>
+</html>
