@@ -376,6 +376,17 @@ pub enum AuthKind {
     Keyring,
     /// 本机已登录应用的凭据(只读复用,用户不用填任何东西)
     App(App),
+    /// **挂件内网页登录拿到的令牌**,存放位置与 Keyring 相同(Windows 凭据管理器),
+    /// 区别只在界面与文案:用户交出来的不是平台 API Key,而是一次登录。
+    ///
+    /// WorkBuddy 为什么走这条:桌面端 5.6.2 起把本机凭据文件里的 `auth.accessToken`
+    /// 写成 `{"$wbEncrypted":1,"envelope":…}` 的 AES-GCM 信封,静态钥编译期内置、
+    /// 本机不可解(2026-10-02 取证),复用客户端登录态那条路彻底断了。而网页控制台
+    /// (www.workbuddy.cn)打的正是同一个 `get-user-resource` 接口、用的正是
+    /// `Authorization: Bearer <token>`,令牌从登录跳转的 URL 参数进
+    /// `sessionStorage["growth-center-token"]` —— 所以让挂件开一个登录窗,把页面
+    /// 自己发出去的那个 Bearer 接住即可(裁决 1A/3B:只认这份令牌,不再兜底读文件)。
+    WebSession,
 }
 
 /// 请求方式。
@@ -864,7 +875,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
             ("Origin", "https://www.workbuddy.cn"),
             ("Referer", "https://www.workbuddy.cn/profile/plans-usage"),
         ],
-        auth: AuthKind::App(App::WorkBuddy),
+        auth: AuthKind::WebSession,
         auth_prefix: "Bearer ",
         method: Method::PostJson(workbuddy_body),
         unstable: true,

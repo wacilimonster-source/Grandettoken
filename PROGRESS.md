@@ -1,8 +1,44 @@
 # TokenScope 开发进展
 
-> 最后更新:2026-09-23
-> 状态:**v0.1.13 已发版(Trae / WorkBuddy 积分 + Codex 渠道 + 热键 / 动效层 / 渠道显隐);
-> 2026-09-20 全量扫描的缺陷已修复并通过复测(见 `bug-report-2026-09-20.html`),随下一个版本发布**
+> 最后更新:2026-10-02
+> 状态:**v0.1.17 已发版(WorkBuddy 凭据改走挂件内网页登录)**;
+> 更早:v0.1.13(Trae / WorkBuddy 积分 + Codex 渠道 + 热键 / 动效层 / 渠道显隐)、
+> 2026-09-20 全量扫描缺陷修复(见 `bug-report-2026-09-20.html`)
+
+## WorkBuddy 凭据改道:挂件内网页登录(2026-10-02,v0.1.17)
+
+方案与取证见 `design-workbuddy-web-login.html`。用户裁决:**1A 2A 3B 4A 5A 6A 7B**。
+
+**为什么必须改**:`C:\Users\wacil\AppData\Local\CodeBuddyExtension\Data\Public\auth\workbuddy-desktop.info`
+里 `auth.accessToken` 从明文字符串变成 `{"$wbEncrypted":1,"envelope":…}`(AES-256-GCM,
+`{suite,keyId,nonce,authTag,ciphertext}`),`keyId = sha256(32B 静态钥) 前 16 位` = `9127dea1b44020a7`;
+静态钥编译期内置在客户端安装包(`atRestSecretKey`,`at-rest-crypto` 包),用户目录里既无明文也无
+DPAPI 密文(全盘扫过 `.workbuddy` + 两个 WorkBuddy 数据目录,12 万个文件)→ 本机不可解。
+生效时刻:凭据文件与 `~/.workbuddy/keyblob` 同为 2026-10-01 21:06,库里面板最后一笔成功快照是 21:01。
+同目录 6 月备份那份仍是明文,实测打两个域名都 **401**,已是废票。
+**与"装了国内版+国际版两个客户端"无关**:国际版写独立文件 `workbuddy-desktop-ai.info`
+(`domain=www.workbuddy.ai`),原本就被域名白名单排除,两版互不覆盖。
+
+**改成什么**(`AuthKind::WebSession`,只给 WorkBuddy 用,裁决 5A):
+- 挂件开独立窗口(560×780、置顶)加载 `www.workbuddy.cn` 登录页;页面自己的令牌来源已核实:
+  跳转参数 `?token=` → `sessionStorage["growth-center-token"]` → 请求拦截器加
+  `Authorization: Bearer …`(见 `download.codebuddy.cn/web/usercenter/…/config-wXDbhNun.js`)。
+- 注入脚本(与页面脚本同时安装)钩 `fetch` / `XMLHttpRequest.setRequestHeader`,并轮询 URL 参数与
+  sessionStorage,任一路径先抓到 Bearer 就跳哨兵地址 `https://tokenscope-capture.invalid/c?t=…`;
+  `on_navigation` 拦下解析(**`.invalid` 是保留顶级域,导航也被取消,令牌不出网**)。
+- 解析与合法性判定在 `app/core/src/weblogin.rs`(主机名整串相等、拒绝变形域名、
+  长度/控制字符/空格校验、剥 `Bearer ` 前缀)—— src-tauri 不挂测试,所以这段放 core 才守得住。
+- 令牌存 Windows 凭据管理器条目 `workbuddy`(与手动粘贴同一个槽位,裁决 4A);取数失败 401/403 的
+  文案改成「网页登录已过期 · 在挂件里重新登录一次即可」,不再说"打开一次 WorkBuddy"(裁决 2A)。
+- **不再读本机 `.info`**(裁决 3B):`appauth` 里的 WorkBuddy 扫描路径、`.info` 备份排序、
+  CN 域名白名单与两个单测一并删除;Trae / Codex 的本机登录态复用不受影响。
+
+**验证**:core `cargo check` 无告警、**55 项单测全绿**(新增 weblogin 4 项 + 凭据来源文案 2 项);
+src-tauri `cargo check` 无告警;注入脚本用 lib.rs 原文抽出后在真实浏览器里跑四种场景
+(fetch 头 / XHR 头 / sessionStorage / URL 参数)全部正确跳到哨兵地址并带上令牌,
+「主机不在名单内」与「页面根本没有令牌」两种情况确认不跳;前端用 `__TAURI__` 桩在浏览器里
+验过未登录 / 已登录 / 已过期三种卡片状态与登录按钮的 invoke、事件回流、toast 文案,零 console 报错。
+**尚需真机**:用真实登录拿到的令牌打 `get-user-resource` 是否 200、令牌实际能用多少天。
 
 ## UI 优化第二轮(2026-09-23,设计稿 `design-ui-motion-2026-09-23.html`)
 
@@ -70,7 +106,7 @@ fast-forward 合并进 main 并随 v0.1.4 发版。**分支保留在本地与 or
 | 平台 | 凭据来源 | 接口 | 逐笔到期 |
 |---|---|---|---|
 | Trae(SOLO CN) | `%APPDATA%\TRAE SOLO CN\User\globalStorage\storage.json` 的 `iCubeAuthInfo://icube.cloudide`(`tc` 容器,需解密) | `POST api.trae.cn/trae/api/v2/pay/user_current_entitlement_list` | ✅ 每个额度包一条:数量 `quota.credits_limit`、已用 `usage.credits_amount`、到期 `expire_time` |
-| WorkBuddy | `%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\*.info`(明文 JSON) | `POST www.workbuddy.cn/billing/meter/get-user-resource` | ✅ 每个包一条:`CycleCapacitySizePrecise` / `RemainPrecise`,到期取 `DeductionEndTime ‖ ExpiredTime ‖ CycleEndTime` |
+| WorkBuddy | **现状(0.1.17 起)**:挂件内网页登录拿到的 Bearer 令牌,存 Windows 凭据管理器条目 `workbuddy`。下表是 **0.1.4~0.1.16 的历史做法**,客户端 5.6.2 起该文件里的 accessToken 已改加密存储,不再可读:`%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\*.info`(明文 JSON) | `POST www.workbuddy.cn/billing/meter/get-user-resource` | ✅ 每个包一条:`CycleCapacitySizePrecise` / `RemainPrecise`,到期取 `DeductionEndTime ‖ ExpiredTime ‖ CycleEndTime` |
 
 ### 实机验收数据(2026-09-17,与官方口径交叉核对一致)
 
@@ -104,8 +140,10 @@ fast-forward 合并进 main 并随 v0.1.4 发版。**分支保留在本地与 or
 
 ### 已知边界 / 未做
 
-- **未做** WorkBuddy 的 DPAPI 兜底(`state.vscdb` 的 Safe Storage):明文 `.info` 在本机一直存在,
-  再引 `windows-sys` + `aes-gcm` 两条依赖、且无法端到端验证,收益不成立;真读不到就提示"打开一次 WorkBuddy"。
+- ~~**未做** WorkBuddy 的 DPAPI 兜底(`state.vscdb` 的 Safe Storage):明文 `.info` 在本机一直存在,
+  再引 `windows-sys` + `aes-gcm` 两条依赖、且无法端到端验证,收益不成立;真读不到就提示"打开一次 WorkBuddy"。~~
+  **2026-10-02 作废**:客户端 5.6.2 起明文 `.info` 不再存在,那句提示也把人往错方向带 ——
+  WorkBuddy 已改走挂件内网页登录(见本文顶部 v0.1.17 一节),`appauth` 里的 WorkBuddy 扫描路径已删除。
 - 两个渠道都标 `unstable: true`(未公开接口),失败静默降级沿用上次快照。
 
 ### 发版之后的两处改动(2026-09-17,未发版)

@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Grandettoken · WorkBuddy 读数中断诊断 + 网页登录恢复方案（未改代码）</title>
+<style>
+  :root{
+    --bg:#12141a; --bg2:#191c24; --bg3:#20242e;
+    --line:#2f3648; --line2:#3c445c;
+    --tx:#edf0f6; --tx2:#b6bfce; --tx3:#8d97ab;
+    --ok:#4ade9d; --warn:#f7c355; --bad:#ff6b63; --ac:#7fa2ff; --wb:#19b8c4;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#0a0c10;color:#dfe5f1;font:14px/1.75 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;padding:34px 26px 90px}
+  .wrap{max-width:1180px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 6px}
+  .sub{color:#7d879e;font-size:13px;margin-bottom:24px}
+  h2{font-size:16px;margin:42px 0 14px;padding-left:10px;border-left:3px solid var(--ac)}
+  h3{font-size:14px;margin:24px 0 8px;color:#cdd5e4}
+  p{margin:8px 0}
+  code{font-family:"Cascadia Mono",Consolas,monospace;font-size:12.5px;background:#1b1f28;border:1px solid #262c38;border-radius:4px;padding:1px 5px;color:#9fd0ff}
+  .hand{border:1px solid #3d5a8a;background:linear-gradient(180deg,#152034,#111a29);border-radius:10px;padding:16px 18px;margin:0 0 30px}
+  .hand b{color:#9fc4ff}
+  .say{background:#141a24;border:1px solid var(--line);border-left:3px solid var(--wb);border-radius:8px;padding:14px 16px;margin:12px 0}
+  .say .lab{font-size:12px;color:#7d879e;letter-spacing:.06em;margin-bottom:6px}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#1a1f28;color:#b6bfce;font-weight:600}
+  td .snip{font-family:Consolas,monospace;font-size:12px;color:#8fd0a0;white-space:pre-wrap;word-break:break-all}
+  .bad{color:var(--bad)} .ok{color:var(--ok)} .warn{color:var(--warn)} .dim{color:var(--tx3)}
+  ol.q{margin:10px 0 0;padding-left:0;list-style:none;counter-reset:q}
+  ol.q>li{counter-increment:q;border:1px solid var(--line);border-radius:8px;padding:12px 14px 12px 46px;margin:10px 0;background:#15181f;position:relative}
+  ol.q>li::before{content:counter(q);position:absolute;left:14px;top:12px;width:22px;height:22px;border-radius:6px;background:#232a38;color:#9fc4ff;
+    display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px}
+  ol.q b{color:#e6ebf5}
+  .opt{margin:4px 0;padding-left:14px;color:var(--tx2)}
+  .opt b{color:var(--tx)}
+  .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:20px;border:1px solid #3d5a8a;color:#9fc4ff;margin-left:6px;vertical-align:1px}
+
+  /* ── 面具 mock ── */
+  .stage{display:flex;gap:26px;flex-wrap:wrap;align-items:flex-start;margin-top:14px}
+  .mock{width:368px;flex:none;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--tx);
+    font:13px/1.5 "Segoe UI","Microsoft YaHei",sans-serif;box-shadow:0 18px 50px -18px #000c;overflow:hidden}
+  .m-tbar{display:flex;align-items:center;gap:9px;padding:9px 12px;background:linear-gradient(180deg,#1d2129,#171a21);border-bottom:1px solid var(--line)}
+  .m-mark{width:17px;height:17px;border-radius:5px;background:linear-gradient(135deg,#5b8cff,#8b5bff);position:relative;flex:none}
+  .m-mark::after{content:"";position:absolute;inset:5px;border-radius:2px;background:#12141a}
+  .m-tt{font-size:12px;font-weight:600}
+  .m-body{padding:12px}
+  .card{border:1px solid var(--line);background:var(--bg2);border-radius:9px;padding:10px 11px;margin-bottom:9px}
+  .card.wb{border-color:#215a60}
+  .crow{display:flex;align-items:center;gap:8px}
+  .cico{width:20px;height:20px;border-radius:5px;background:#0e2b2f;border:1px solid #1f5257;color:#4fd6e0;
+    display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex:none}
+  .cname{font-weight:600;font-size:12.5px}
+  .cbig{font-size:19px;font-weight:650;letter-spacing:.2px;margin:4px 0 2px}
+  .csub{font-size:11.5px;color:var(--tx3)}
+  .csrc{font-size:11px;color:#6f7b90;margin-top:5px}
+  .btnrow{display:flex;gap:7px;margin-top:9px;flex-wrap:wrap}
+  .btn{font:12px/1 inherit;padding:7px 11px;border-radius:7px;border:1px solid var(--line2);background:#222834;color:#dfe6f2;cursor:pointer}
+  .btn.p{background:linear-gradient(135deg,#1d6f7a,#2a7fbf);border-color:#2b8b95;color:#fff;font-weight:600}
+  .btn.g{background:#1b1f28}
+  .inp{width:100%;font:12px/1 inherit;padding:7px 9px;border-radius:7px;border:1px solid var(--line2);background:#11141b;color:var(--tx);margin-top:8px}
+  .hint{font-size:11.5px;color:var(--tx3);margin-top:7px}
+  .hint.err{color:#ffb4b0}
+  .hint.good{color:#8ee9b8}
+  .switch{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 14px}
+  .sw{padding:6px 12px;border-radius:20px;border:1px solid var(--line2);background:#171b22;color:var(--tx2);cursor:pointer;font-size:12.5px}
+  .sw.on{background:#22304a;border-color:#4b6fa8;color:#cfe0ff}
+  .flow{background:#11141b;border:1px solid var(--line);border-radius:9px;padding:14px 16px;margin:14px 0}
+  .step{display:flex;gap:10px;margin:9px 0}
+  .step .n{width:20px;height:20px;flex:none;border-radius:50%;background:#1d3a3d;border:1px solid #2b7d85;color:#6fdbe4;
+    display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700}
+  ul{margin:6px 0 6px 18px;padding:0}
+  li{margin:4px 0}
+  .foot{margin-top:44px;color:#6b7688;font-size:12px;border-top:1px solid var(--line);padding-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>WorkBuddy 读数中断：诊断 + 「挂件内网页登录」恢复方案</h1>
+<div class="sub">2026-10-02 · 只做了现状调研与真机取证，<b>代码一行未改</b>。裁决后我再动手实现。</div>
+
+<div class="hand">
+  <b>交接框 · 现在停在哪</b>
+  <p style="margin:6px 0 4px">停在<b>方案待裁决</b>。诊断部分已经做实（含真机取证 + 真接口实测），实现路径也已核实到 Tauri 具体 API。</p>
+  <p style="margin:0">一句指令即可解锁下一步：<code>1A 2A 3A …</code>（按下面编号逐项裁决）或<code>按这个方案写代码</code>（全部照推荐项执行）。发版另说，我不会自己推。</p>
+  <p style="margin:8px 0 0" class="dim">有一项<b>必须真机才能验</b>（登录后抓到的令牌到底能不能打接口、能用多少天），我在第五节单独列出来了，实现时会在你机器上跑一次才算完成。</p>
+</div>
+
+<div class="say">
+  <div class="lab">说人话版结论</div>
+  <p style="margin:0"><b>跟装了国际版没关系，卸掉国际版也不会恢复。</b>真正的原因是国内版 WorkBuddy 客户端在 <b>10 月 1 日 21:06 那次自己升级后，把登录令牌加密了才存盘</b>。我们挂件只会读明文，读到密文就直接跳过这份凭据，等于没有凭据。目录里唯一一份还是明文的令牌是今年 6 月的备份，我拿它<b>真打了一次接口，两个域名都回 401</b>，已经是一张废票。</p>
+</div>
+
+<h2>一、证据（每条都能在你机器上复核）</h2>
+<table>
+<tr><th style="width:26%">事实</th><th style="width:38%">在哪看</th><th>可搜片段 / 实测值</th></tr>
+<tr>
+  <td>国内版凭据的令牌已变成加密信封，不再是字符串</td>
+  <td><code>C:\Users\wacil\AppData\Local\CodeBuddyExtension\Data\Public\auth\workbuddy-desktop.info</code></td>
+  <td><span class="snip">"accessToken":{"$wbEncrypted":1,"envelope":"eyJzdWl0ZSI6MSwia2V5SWQiOiI5…"</span><br>
+      domain 仍是 <span class="ok">www.codebuddy.cn</span>（国内版没错，白名单认它）；文件改写时间 <b>10-01 21:06</b></td>
+</tr>
+<tr>
+  <td>挂件要求这里是明文字符串，密文一律跳过</td>
+  <td><code>app/core/src/appauth.rs:291</code></td>
+  <td><span class="snip">let token = auth.get("accessToken")?.as_str()?.trim();</span><br>对象不是字符串 → <code>as_str()</code> 返回 None → 整份凭据被丢弃</td>
+</tr>
+<tr>
+  <td>唯一明文令牌已作废</td>
+  <td>同目录 <code>workbuddy-desktop.2026-06-09T09-04-37-611Z.info</code>（1287 字符明文）</td>
+  <td><span class="snip">POST www.workbuddy.cn/billing/meter/get-user-resource → HTTP 401 Authorization Required (openresty)</span><br><span class="snip">POST www.codebuddy.cn/… → 同样 HTTP 401</span></td>
+</tr>
+<tr>
+  <td>国际版不背锅：它写<b>另一个文件</b>，两版互不覆盖</td>
+  <td>同目录 <code>workbuddy-desktop-ai.info</code>；<code>appauth.rs:57</code> 的白名单</td>
+  <td><span class="snip">"domain":"www.workbuddy.ai"</span> → 被 <span class="snip">WORKBUDDY_CN_DOMAINS = ["www.codebuddy.cn","www.workbuddy.cn"]</span> 正确排除；国际版那份同样是加密的</td>
+</tr>
+<tr>
+  <td>断供时间与升级时间对得上</td>
+  <td><code>%APPDATA%\com.wacil.tokenscope\tokenscope.db</code> 的 snapshots 表</td>
+  <td><span class="snip">workbuddy 最后成功 2026-10-01 21:01（剩余 5062.54）</span>；同刻 <code>~/.workbuddy/keyblob</code> 新建（10-01 21:06）；其他渠道（Trae/Codex/4SAPI/Hapi…）到最后一次刷新仍是当天正常出数</td>
+</tr>
+<tr>
+  <td>解密密钥本机拿不到（所以别指望我们解开密文）</td>
+  <td>客户端安装包 <code>C:\Program Files\WorkBuddy\resources\app.asar</code> 内 <code>at-rest-crypto</code></td>
+  <td>信封用 <span class="snip">keyId 9127dea1b44020a7</span>，它 = <span class="snip">sha256(32 字节钥) 前 16 位</span>；那把钥是<span class="bad">编译期打进安装包的静态钥</span>，全盘扫 <code>~/.workbuddy</code> + 两个 Roaming/Local WorkBuddy 目录共 12 万个文件，<b>没有明文也没有可解的 DPAPI 密文</b>。逆向它 = 每次客户端升级都可能失效，我不建议走。</td>
+</tr>
+</table>
+
+<div class="say">
+  <div class="lab">现在界面上是什么（这也是个隐患）</div>
+  <p style="margin:0 0 6px">因为那份 6 月废票还在，挂件会走「有凭据但取数失败」这条路，显示 <span class="bad">登录状态已失效 · 打开一次 WorkBuddy 即可</span>，数值沿用 10-01 的 5062.54 旧快照。——<b>你照它说的去做（打开客户端）是无效的</b>，打开只会让客户端把令牌再加密写一遍。这个提示本身就是误导，无论走哪条修复路都要先把它改掉。</p>
+  <p class="dim" style="margin:0">如果你看到的其实是「未检测到 WorkBuddy 登录信息」，那说明那份废票已被客户端清掉，结论不变。</p>
+</div>
+
+<h2>二、恢复方案：在挂件里登录一次 WorkBuddy 网页账号</h2>
+
+<p>WorkBuddy 网页控制台（<code>www.workbuddy.cn/profile/plans-usage</code>）打的<b>就是我们现在这个接口</b>，鉴权头也是 <code>Authorization: Bearer &lt;token&gt;</code>。我从它的前端包里挖清楚了令牌怎么来的：</p>
+
+<div class="flow">
+  <div class="step"><div class="n">1</div><div>用户在挂件里点<b>「登录 WorkBuddy 账号」</b>→ 挂件开一个独立小窗，加载 <code>https://www.workbuddy.cn/login?platform=usercenter&amp;redirect_uri=…plans-usage</code>（网页登录入口，微信扫码 / 手机号，跟你在浏览器里登录一样）。</div></div>
+  <div class="step"><div class="n">2</div><div>登录成功后站点会带着令牌跳回控制台。我实测它的取法：<span class="snip">?token=…</span> 这个 URL 参数被读进 <span class="snip">sessionStorage["growth-center-token"]</span>，之后每个请求由拦截器加上 <span class="snip">headers.Authorization = `Bearer ${token}`</span>（来自 <code>download.codebuddy.cn/web/usercenter/…/config-wXDbhNun.js</code>）。</div></div>
+  <div class="step"><div class="n">3</div><div>挂件在这个窗口上<b>预先注入一段脚本</b>（用 Tauri 的 <code>initialization_script</code>，源码 <code>tauri-2.11.5/src/webview/webview_window.rs:945</code> 已确认存在），钩住页面的 <code>fetch</code> 与 <code>XMLHttpRequest.setRequestHeader</code>，第一个 <code>Bearer</code> 令牌一出现就拿到。URL 参数、sessionStorage 两种取法作为备用判据。</div></div>
+  <div class="step"><div class="n">4</div><div>脚本把令牌交给挂件：走一次<b>哨兵跳转</b> <code>https://tokenscope-capture.invalid/?t=&lt;token&gt;</code>。挂件的导航监听（<code>on_navigation</code>，<code>webview_window.rs:266</code>）看到这个地址就<b>拦下不发</b>（域名是造不出来的 <code>.invalid</code>，令牌不会出网），解析出来存好。</div></div>
+  <div class="step"><div class="n">5</div><div>令牌写入 <b>Windows 凭据管理器</b>（复用现成的 <code>secrets</code> 模块 + <code>keyring 3</code>），窗口自动关闭，卡片立刻开始出数。不进配置文件、不进数据库、不进日志——和其它渠道的密钥一个待遇。</div></div>
+  <div class="step"><div class="n">6</div><div>以后每轮取数：优先用这份令牌；报 <b>401/403</b> 时提示「登录已过期，点这里重新登录一次」并一键重开窗口，而不是再让你去开客户端。</div></div>
+</div>
+
+<h3>凭据优先级（改造后）</h3>
+<table>
+<tr><th style="width:30%">来源</th><th>什么时候用它</th></tr>
+<tr><td>① 网页登录令牌 / 手动粘贴令牌<br><span class="dim">（同一个存放位置）</span></td><td>有就先用它。这是国内版 5.6.2+ 唯一稳的路。</td></tr>
+<tr><td>② 本机客户端明文 <code>.info</code></td><td>没有①时兜底。装旧版客户端、或哪天厂商把加密关掉的用户照样全自动可用，也保住 Trae / Codex 的现有逻辑不动。</td></tr>
+<tr><td>③ 都没有</td><td>提示改成真话：<b>「WorkBuddy 客户端已改为加密存储令牌，点这里登录一次网页账号」</b>，不再说"打开一次 WorkBuddy 即可"。</td></tr>
+</table>
+
+<h2>三、界面效果预览（点按钮切状态）</h2>
+<div class="switch" id="sw">
+  <div class="sw on" data-s="0">① 当前坏状态</div>
+  <div class="sw" data-s="1">② 待登录</div>
+  <div class="sw" data-s="2">③ 登录窗口打开中</div>
+  <div class="sw" data-s="3">④ 已登录·出数</div>
+  <div class="sw" data-s="4">⑤ 令牌过期</div>
+</div>
+
+<div class="stage">
+  <div class="mock">
+    <div class="m-tbar"><div class="m-mark"></div><div class="m-tt">Grandettoken</div><div class="dim" style="font-size:11px;margin-left:auto">设置与管理 › 渠道</div></div>
+    <div class="m-body" id="mbody"></div>
+  </div>
+  <div style="max-width:520px">
+    <p class="hint" id="why" style="margin-top:0"></p>
+    <p class="dim">同一张卡上其余元素（显隐开关、排序、额度申请）完全不动，只在展开区里加一行凭据操作。胶囊、托盘数字、面板都不改结构——数值来源变了而已。</p>
+  </div>
+</div>
+
+<h2>四、待你编号裁决</h2>
+<ol class="q">
+  <li><b>登录窗口形态</b>
+    <div class="opt"><b>A.</b> 挂件自己开独立小窗（默认 560×760，带标题栏），抓到令牌自动关闭 <span class="tag">推荐</span></div>
+    <div class="opt"><b>B.</b> 只调系统浏览器打开登录页，令牌靠你手动复制粘回挂件（等于放弃自动捕获）</div>
+    <div class="dim">说明：内嵌 iframe 那条不通——登录页禁止被第三方站点内嵌；系统浏览器里的令牌挂件读不到，所以 B 一定会退化成手动粘贴。</div>
+  </li>
+  <li><b>令牌有效期怎么提醒</b>
+    <div class="opt"><b>A.</b> 只在真取到 401/403 时提示重新登录 <span class="tag">推荐</span></div>
+    <div class="opt"><b>B.</b> 额外解析 JWT 的 <code>exp</code>，到期前 3 天在卡片上挂黄标</div>
+    <div class="dim">网页令牌的寿命要实测才知道（桌面端那份是 55 天）。A 最省代码，B 多约 30 行。</div>
+  </li>
+  <li><b>本机明文 <code>.info</code> 兜底留不留</b>
+    <div class="opt"><b>A.</b> 留：网页令牌优先，读不到再看本地文件 <span class="tag">推荐</span></div>
+    <div class="opt"><b>B.</b> 不留：WorkBuddy 只认网页令牌，路径更少更好排查</div>
+  </li>
+  <li><b>要不要同时留一个「手动粘贴令牌」输入框</b>
+    <div class="opt"><b>A.</b> 要 <span class="tag">推荐</span>（登录窗口哪天被登录墙/风控/改版卡住，你还能自己从浏览器 DevTools 取令牌自救，挂件不至于完全瘫痪）</div>
+    <div class="opt"><b>B.</b> 不要，只留一个登录按钮，界面更干净</div>
+  </li>
+  <li><b>这套登录+粘贴只对 WorkBuddy 开，还是 Trae / Codex 一起开</b>
+    <div class="opt"><b>A.</b> 只 WorkBuddy（Trae、Codex 现在还能读本机明文，没必要动） <span class="tag">推荐</span></div>
+    <div class="opt"><b>B.</b> 三个复用本机登录的渠道都加，防它们以后也加密</div>
+    <div class="dim">B 多花的时间不多，但会改动另外两个<b>当前工作正常</b>的渠道，冒烟面变大。</div>
+  </li>
+  <li><b>检测到国际版那份要不要说明</b>
+    <div class="opt"><b>A.</b> 保持静默忽略（现在就是这样） <span class="tag">推荐</span></div>
+    <div class="opt"><b>B.</b> 在凭据说明里加一句「另检测到国际版登录信息，按你的设置忽略」</div>
+  </li>
+  <li><b>这次改完的交付边界</b>
+    <div class="opt"><b>A.</b> 修复 + 本地提交，<b>不发版</b>，等你说发版再走链路 <span class="tag">推荐</span></div>
+    <div class="opt"><b>B.</b> 直接发版 0.1.17（bump、commit、tag、push、签名构建、GitHub Release 一条龙）</div>
+  </li>
+</ol>
+
+<h2>五、必须真机验的部分（我在这台机器上跑，但要你配合登录一次）</h2>
+<table>
+<tr><th style="width:38%">待验证</th><th>怎么验 / 验不过怎么办</th></tr>
+<tr><td>哨兵跳转能不能被 <code>on_navigation</code> 收到</td><td>Tauri 2.11.5 的 API 与签名我已核对源码；这一步是<b>行为级</b>验证，实现后第一次点登录就能看出来。收不到就改成注入脚本轮询 + 窗口标题传参的备用通道。</td></tr>
+<tr><td>抓到的网页令牌打 <code>get-user-resource</code> 是否 200</td><td>抓完立刻用挂件同款请求跑一次。若网页令牌被绑定 referer/一次性使用，就走<b>备选路</b>：网页控制台有「访问密钥」页（<code>www.workbuddy.cn/keys</code>），能创建 <b>7 天 / 30 天 / 1 年 / 永久</b> 的密钥——官方给的凭据，最干净，但它标注"为 CodeBuddyCLI 提供安全访问"，能不能打积分接口同样要实测。备选路一旦成立，方案 1 步的登录窗就可以省掉，你只需粘一次密钥。</td></tr>
+<tr><td>令牌实际能用多少天</td><td>抓到后解 JWT <code>exp</code>（或对照 401 出现时间）。决定裁决项 2 值不值。</td></tr>
+<tr><td>数值口径是否仍与官方一致</td><td>出数后与网页「套餐与用量」页逐项对（剩余/已用/笔数），像 0.1.4 那次验收一样。</td></tr>
+<tr><td>国际版会不会串号</td><td>登录窗只加载 <code>.cn</code> 域名，接口也只打 <code>.cn</code>；抓来的令牌天然属于国内版账号。会在验收里核一遍读数与你国内版客户端一致。</td></tr>
+</table>
+
+<div class="foot">
+  取证与核对方式：直读你机器上的凭据文件与 <code>~/.workbuddy/keyblob</code>；用 6 月那份明文令牌对两个域名各发一次真实请求（只读取数，无写操作）；查 <code>tokenscope.db</code> 快照序列定位断供时刻；从 <code>app.asar</code> 与网页控制台 JS 包反查加密方案与令牌来源。仓库代码只做了行号级引用核对，未做任何修改。
+</div>
+
+<script>
+const states=[
+ {cls:'bad',html:`
+  <div class="card wb">
+    <div class="crow"><div class="cico">WB</div><div class="cname">WorkBuddy</div><span class="bad" style="margin-left:auto;font-size:11px">取数失败</span></div>
+    <div class="cbig">5,062.54 <span style="font-size:12px;color:#8d97ab">分</span></div>
+    <div class="csub">近 30 天将过期 480 分 · 数字停在 10-01 21:01</div>
+    <div class="hint err">登录状态已失效 · 打开一次 WorkBuddy 即可 <span style="color:#8d97ab">← 就是这句把人带坑里</span></div>
+    <div class="csrc">来源：WorkBuddy · workbuddy-desktop.2026-06-09T09-04-37-611Z</div>
+  </div>`, why:'现状：数值是 10-01 的旧快照，提示把人往错方向引——照做（打开客户端）只会让它把令牌重新加密写一遍。'},
+ {cls:'warn',html:`
+  <div class="card wb">
+    <div class="crow"><div class="cico">WB</div><div class="cname">WorkBuddy</div><span class="warn" style="margin-left:auto;font-size:11px">待登录</span></div>
+    <div class="cbig" style="color:#6b7688">—</div>
+    <div class="csub">尚无可用凭据，未开始取数</div>
+    <div class="hint">WorkBuddy 客户端 5.6+ 已把本机令牌改为加密存储，挂件读不到；登录一次网页账号即可恢复，只读国内版账号。</div>
+    <div class="btnrow"><div class="btn p">登录 WorkBuddy 账号</div><div class="btn g">手动粘贴令牌</div></div>
+  </div>`, why:'新提示说真话，并给出两个动作：登录一次，或从浏览器粘一份令牌自救。文案随裁决项 6 走。'},
+ {cls:'warn',html:`
+  <div class="card wb">
+    <div class="crow"><div class="cico">WB</div><div class="cname">WorkBuddy</div><span class="warn" style="margin-left:auto;font-size:11px">登录中…</span></div>
+    <div class="cbig" style="color:#6b7688">—</div>
+    <div class="csub">已在独立窗口打开 www.workbuddy.cn 登录页</div>
+    <div class="hint">用你平时的方式登录（微信扫码 / 手机号）。挂件在窗口里等令牌出现，抓到就自动关窗，<b>不需要你复制任何东西</b>。</div>
+    <div class="btnrow"><div class="btn g">取消登录</div></div>
+  </div>`, why:'登录期间挂件照常运行，其他渠道不受影响。令牌经哨兵地址交接，全程不出本机网络。'},
+ {cls:'ok',html:`
+  <div class="card wb">
+    <div class="crow"><div class="cico">WB</div><div class="cname">WorkBuddy</div><span class="ok" style="margin-left:auto;font-size:11px">正常</span></div>
+    <div class="cbig">5,124.86 <span style="font-size:12px;color:#8d97ab">分</span></div>
+    <div class="csub">近 30 天将过期 480 分 · 本周期发放 8,300 / 已用 3,175.14</div>
+    <div class="hint good">已登录，凭据存在 Windows 凭据管理器</div>
+    <div class="csrc">来源：WorkBuddy · 网页登录令牌（10-02 02:40 起用）</div>
+  </div>`, why:'读数恢复实时。来源一栏写清是网页登录令牌，与旧版客户端本机登录区分开，排障时一眼能认出用的是哪条路。'},
+ {cls:'bad',html:`
+  <div class="card wb">
+    <div class="crow"><div class="cico">WB</div><div class="cname">WorkBuddy</div><span class="bad" style="margin-left:auto;font-size:11px">登录已过期</span></div>
+    <div class="cbig">5,124.86 <span style="font-size:12px;color:#8d97ab">分</span></div>
+    <div class="csub">数字停在最后一次成功 · 服务器拒绝当前令牌</div>
+    <div class="hint err">网页登录令牌已失效 · 重新登录一次即可（不会动你客户端的登录状态）</div>
+    <div class="btnrow"><div class="btn p">重新登录</div></div>
+  </div>`, why:'401/403 才走这条。明确说这只影响挂件里的这份令牌，与桌面客户端无关；重新登录只要几秒。'}
+];
+const body=document.getElementById('mbody'), why=document.getElementById('why');
+function paint(i){body.innerHTML=states[i].html;why.textContent=states[i].why;}
+document.getElementById('sw').addEventListener('click',e=>{
+  const t=e.target.closest('.sw'); if(!t)return;
+  document.querySelectorAll('.sw').forEach(s=>s.classList.remove('on'));
+  t.classList.add('on'); paint(+t.dataset.s);
+});
+paint(0);
+</script>
+</div>
+</body>
+</html>

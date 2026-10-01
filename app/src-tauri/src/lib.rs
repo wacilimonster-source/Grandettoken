@@ -103,12 +103,13 @@ fn set_config(app: tauri::AppHandle, state: State<'_, AppState>, config: Config)
 }
 
 /// 只回显尾 4 位,用于确认每个渠道存的到底是哪把 key(存错 key 却以为是接口坏了,
-/// 是最难排查的一类问题)。不回显完整密钥。复用本机应用登录态的渠道没有密钥可回显。
+/// 是最难排查的一类问题)。不回显完整密钥。复用本机应用登录态的渠道没有密钥可回显;
+/// 网页登录型(WorkBuddy)存的就是令牌本身,同样值得回显尾 4 位。
 #[tauri::command]
 fn key_hint(id: String) -> Option<String> {
     if !matches!(
         providers::find(&id).map(|d| d.auth),
-        Some(providers::AuthKind::Keyring)
+        Some(providers::AuthKind::Keyring | providers::AuthKind::WebSession)
     ) {
         return None;
     }
@@ -135,6 +136,174 @@ fn delete_key(id: String) -> Result<(), String> {
         return Err(format!("{} 没有本应用保存的密钥(用的是 {} 的登录态)", def.name, app.label()));
     }
     secrets::delete(&id)
+}
+
+// ───────────── WorkBuddy 网页登录 ─────────────
+//
+// WorkBuddy 桌面端 5.6.2 起把本机凭据文件里的 accessToken 写成 AES-GCM 信封
+// (实测 {"$wbEncrypted":1,"envelope":…},静态钥编译期内置、本机不可解 —— 2026-10-02 取证),
+// 以前那套"只读复用客户端登录态"彻底读不到了。改走网页:www.workbuddy.cn 控制台打的
+// 还是同一个 get-user-resource、还是 Authorization: Bearer <token>,所以这里开一个登录窗,
+// 把页面自己发出去的那个 Bearer 接住,存进 Windows 凭据管理器。用户不用复制任何东西。
+//
+// 令牌在页面里的三种存在形态都盯着(抓前端包核实过):请求头的 Authorization、
+// 登录跳转的 ?token= 参数、sessionStorage["growth-center-token"] —— 谁先到算谁的。
+// 交接走"哨兵跳转",解析规则与拒绝条件都在 core 的 weblogin 里(那边有单测)。
+
+/// 登录窗 label:同一时刻只允许一个
+const WB_LOGIN_LABEL: &str = "wb-login";
+/// 挂件内登录/手动粘贴的令牌都存这个条目(与其它渠道的密钥同一个机制)
+const WB_CHANNEL_ID: &str = "workbuddy";
+/// 只认国内版域名。国际版(www.workbuddy.ai)是同名不同栈,不在考虑范围内(裁决 6A)。
+const WB_SITE_HOSTS: &str = r#"["www.workbuddy.cn","www.codebuddy.cn"]"#;
+/// 登录后回到的用量页(令牌就是在这个页的请求头里发出去的)
+const WB_LOGIN_URL: &str = "https://www.workbuddy.cn/login?platform=usercenter&state=0&redirect_uri=https%3A%2F%2Fwww.workbuddy.cn%2Fprofile%2Fplans-usage";
+
+/// 成功抓到令牌后置位,用于区分"用户自己关掉了窗口"和"抓到了我们主动关窗" ——
+/// 前者要让界面把「登录中」状态收回去,后者不该再报一次取消。
+static WB_LOGIN_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 注入脚本:在页面自己的任何脚本之前跑,所以能拦到全部请求头。
+/// 用占位符替换,避免 JS 里满屏大括号和 format! 打架。
+fn wb_inject_script() -> String {
+    r#"(function () {
+  if (window.__tsWbHook) return;
+  window.__tsWbHook = 1;
+  var SITE_HOSTS = __TS_SITE_HOSTS__;
+  var CAP = "https://__TS_HOST__/c?t=";
+  var sent = false;
+  function onSite() {
+    try {
+      var h = location.hostname || "";
+      for (var i = 0; i < SITE_HOSTS.length; i++) if (h === SITE_HOSTS[i]) return true;
+    } catch (e) {}
+    return false;
+  }
+  function take(v) {
+    if (sent || !v) return;
+    var t = String(v).trim();
+    if (!t || !onSite()) return;
+    sent = true;
+    // 这次跳转会立刻被挂件的导航监听拦掉并取消:页面照常活着,
+    // 而 .invalid 是保留顶级域,就算漏过去也解析不到,令牌不会出网。
+    try { location.replace(CAP + encodeURIComponent(t)); } catch (e) { sent = false; }
+  }
+  function authOf(h) {
+    if (!h) return "";
+    try {
+      if (typeof h.get === "function") { var g = h.get("Authorization"); if (g) return g; }
+      if (Array.isArray(h)) {
+        for (var i = 0; i < h.length; i++) {
+          var p = h[i];
+          if (Array.isArray(p) && /^authorization$/i.test(String(p[0]))) return String(p[1]);
+        }
+        return "";
+      }
+      if (typeof h === "object") {
+        for (var k in h) if (/^authorization$/i.test(k)) return String(h[k]);
+      }
+    } catch (e) {}
+    return "";
+  }
+  var of = window.fetch;
+  if (of) {
+    window.fetch = function (a, b) {
+      try {
+        var v = authOf(b && b.headers) || authOf(a && a.headers);
+        if (v) take(v);
+      } catch (e) {}
+      return of.apply(this, arguments);
+    };
+  }
+  if (window.XMLHttpRequest && window.XMLHttpRequest.prototype) {
+    var os = XMLHttpRequest.prototype.setRequestHeader;
+    XMLHttpRequest.prototype.setRequestHeader = function (k, v) {
+      try { if (/^authorization$/i.test(String(k))) take(String(v)); } catch (e) {}
+      return os.apply(this, arguments);
+    };
+  }
+  function sniff() {
+    try {
+      var m = /[?&]token=([^&#]+)/.exec(location.search || "");
+      if (m) { take(decodeURIComponent(m[1])); return; }
+      var t = window.sessionStorage && window.sessionStorage.getItem("growth-center-token");
+      if (t) take(t);
+    } catch (e) {}
+  }
+  sniff();
+  window.addEventListener("DOMContentLoaded", sniff);
+  setInterval(sniff, 700);
+})();"#.replace("__TS_SITE_HOSTS__", WB_SITE_HOSTS)
+        .replace("__TS_HOST__", tokenscope_core::weblogin::CAPTURE_HOST)
+}
+
+/// 令牌到手:落进凭据管理器 → 关窗 → 通知界面 → 立刻刷一轮。
+/// 返回 false = 没收下(内容不合格或凭据库写不进去),界面要给出原因。
+fn wb_finish_login(app: &tauri::AppHandle, raw: &str) -> bool {
+    let Some(token) = tokenscope_core::weblogin::sanitize_token(raw) else {
+        let _ = app.emit(
+            "workbuddy-login",
+            serde_json::json!({"ok": false, "reason": "抓到的内容不像有效令牌,请关掉窗口再登录一次"}),
+        );
+        return false;
+    };
+    if let Err(e) = secrets::set(WB_CHANNEL_ID, &token) {
+        let _ = app.emit(
+            "workbuddy-login",
+            serde_json::json!({"ok": false, "reason": e}),
+        );
+        return false;
+    }
+    // 先置位再关窗:Destroyed 监听靠这个标志区分"抓成功"与"用户自己关了"
+    WB_LOGIN_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
+    if let Some(w) = app.get_webview_window(WB_LOGIN_LABEL) {
+        let _ = w.close();
+    }
+    let _ = app.emit("workbuddy-login", serde_json::json!({"ok": true}));
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move { refresh_now(&handle).await });
+    true
+}
+
+/// 打开 WorkBuddy 登录窗。已经开着就把它拉到前台(不重复开第二个)。
+#[tauri::command]
+fn workbuddy_login(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window(WB_LOGIN_LABEL) {
+        let _ = w.show();
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    WB_LOGIN_DONE.store(false, std::sync::atomic::Ordering::Relaxed);
+    let url: tauri::Url = WB_LOGIN_URL
+        .parse()
+        .map_err(|e| format!("登录地址有问题: {e}"))?;
+    let nav_handle = app.clone();
+    tauri::WebviewWindowBuilder::new(&app, WB_LOGIN_LABEL, tauri::WebviewUrl::External(url))
+        .title("登录 WorkBuddy 账号（国内版）")
+        .inner_size(560.0, 780.0)
+        .min_inner_size(420.0, 560.0)
+        .resizable(true)
+        // 面板是置顶的,登录窗不置顶就会被压在下面,用户看不见
+        .always_on_top(true)
+        .initialization_script(wb_inject_script())
+        .on_navigation(move |nav| {
+            // 哨兵域名的导航一律不放行(它本来也解析不到);其余导航 —— 登录页、
+            // SSO、跳回控制台 —— 全部放行。解析与拒绝规则在 core::weblogin(有单测)。
+            let is_capture = nav
+                .host_str()
+                .map(|h| h.eq_ignore_ascii_case(tokenscope_core::weblogin::CAPTURE_HOST))
+                .unwrap_or(false);
+            if !is_capture {
+                return true;
+            }
+            if let Some(token) = tokenscope_core::weblogin::token_from_url(nav.as_str()) {
+                wb_finish_login(&nav_handle, &token);
+            }
+            false
+        })
+        .build()
+        .map(|_| ())
+        .map_err(|e| format!("登录窗口打不开: {e}"))
 }
 
 #[tauri::command]
@@ -791,12 +960,28 @@ pub fn run() {
 
             Ok(())
         })
+        // WorkBuddy 登录窗被用户自己关掉(没抓到令牌)时,要让界面把「登录中」收回去,
+        // 否则会一直卡在等令牌的样子。抓到令牌那一次是我们主动关窗的,由 WB_LOGIN_DONE
+        // 标位区分,不该再报一次"已取消"。
+        .on_window_event(|window, event| {
+            if window.label() != WB_LOGIN_LABEL || !matches!(event, tauri::WindowEvent::Destroyed) {
+                return;
+            }
+            if WB_LOGIN_DONE.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
+            let _ = window.emit(
+                "workbuddy-login",
+                serde_json::json!({ "ok": false, "cancelled": true }),
+            );
+        })
         .invoke_handler(tauri::generate_handler![
             get_channels,
             get_config,
             set_config,
             set_key,
             delete_key,
+            workbuddy_login,
             get_series,
             set_autostart,
             set_pin,

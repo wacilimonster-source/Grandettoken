@@ -9,3 +9,4 @@ pub mod fetch;
 pub mod providers;
 pub mod secrets;
 pub mod store;
+pub mod weblogin;

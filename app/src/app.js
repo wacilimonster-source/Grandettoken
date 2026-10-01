@@ -11,6 +11,9 @@ let CFG = null;
 let VER = "";          // app_version 命令回来的版本号,关于页在首检之前也有的显示
 let sparkCache = {};   // { [id]: {24:[],168:[],720:[]} }
 let sparkHours = {};   // { [id]: 当前选中的区间 },渲染详情时据此标记选中项
+// WorkBuddy 网页登录窗口已打开、正在等令牌:按钮期间置真,防止连点开出第二个窗口
+// (Rust 侧也会把已开的那个拉到前台,但界面要给出"进行中"的样子)
+let WB_LOGGING = false;
 
 // 字号档位:--u 倍率写到 :root,styles.css 全部尺寸都是 calc(Npx*var(--u));
 // 窗口尺寸走同一个倍率(见 formSize),否则大字会被固定高度的窗口裁切
@@ -328,7 +331,15 @@ function renderRow(c, i) {
   // 副标题只留"状态语义":渠道是否可用。其余说明文字一律不写
   // (未公开接口、哪个窗口最紧 —— 明细里都有,不必占一行)
   let sub;
-  if (noKey) sub = c.authSource === "app" ? `未检测到 ${esc(c.name)} 登录信息` : "未配置密钥";
+  // web = 挂件内网页登录型(WorkBuddy):没登录时说"未登录 X",不是"未检测到登录"
+  // —— 后者会让人以为打开客户端就能修好,而桌面端 5.6.2 起把令牌加密存了(读不到)。
+  if (noKey)
+    sub =
+      c.authSource === "app"
+        ? `未检测到 ${esc(c.name)} 登录信息`
+        : c.authSource === "web"
+        ? `未登录 ${esc(c.name)}`
+        : "未配置密钥";
   else if (failed) sub = "取数失败";
   else if (wins.length) {
     // Codex 把套餐放在 extra 里(裁决②:副标题带 free/plus/pro 徽章);OpenCode 无此键,维持空白
@@ -347,7 +358,8 @@ function renderRow(c, i) {
   else sub = ""; // 金额型拿到多少就是可用多少,不加说明
 
   let subVal;
-  if (noKey) subVal = c.authSource === "app" ? "需打开应用" : "待配置";
+  if (noKey)
+    subVal = c.authSource === "app" ? "需打开应用" : c.authSource === "web" ? "待登录" : "待配置";
   else if (failed) subVal = c.stale ? "上次快照" : "失联";
   else if (mw) subVal = `${esc(mw.label)}窗 · ${fmtReset(resetMs(mw), true)}`;
   else if (isPts) subVal = soon ? `最近 ${fmtDay(soon.at)} 到期` : "无近期到期";
@@ -480,6 +492,19 @@ function renderDetail(c) {
     <span class="lk" data-act="open-manage" data-id="${c.id}">设置与管理</span> 里配置。</div>`;
 
   if (noKey) {
+    // 网页登录型渠道(WorkBuddy):说清为什么不能自动读 —— 桌面客户端把令牌加密了,
+    // 只能在本挂件里登录一次网页账号。别让人去开客户端,那没用。
+    if (c.authSource === "web") {
+      return `<div class="rbody-in">
+        <div class="hint" style="margin:0 0 8px">还没登录 ${esc(
+          c.name
+        )} 账号。它的积分没有开放 API Key,而桌面客户端 5.6.2 起把本机存的令牌改成加密存储,` +
+        `本挂件已读不到;在 <span class="lk" data-act="open-manage" data-id="${c.id}">设置与管理</span> 里点一次「登录 ${esc(
+          c.name
+        )} 账号」即可,登录后自动关窗,不用你复制任何东西。</div>
+        ${manageLink}
+      </div>`;
+    }
     // 复用本机登录态的渠道:没有"密钥"可填,只能引导用户去客户端登录一次
     if (c.authSource === "app") {
       return `<div class="rbody-in">
@@ -567,6 +592,11 @@ function renderDetail(c) {
         )} · 只读复用,不写回、不刷新;失效时打开一次 ${esc(
           c.name
         )} 即可(刷新会顶掉客户端手里的登录态,把你挤下线)。</div>`
+      : c.authSource === "web"
+      ? `<div class="hint" style="margin:0 0 8px">凭据是你在本挂件里登录 ${esc(
+          c.name
+        )} 网页账号时拿到的令牌,只写入 Windows 凭据管理器;` +
+        `失效时重新登录一次即可,<b>不影响你桌面客户端的登录状态</b>。</div>`
       : "";
 
   const spark = sparkCache[c.id] || [];
@@ -700,7 +730,7 @@ function render(opts) {
       : `<div class="empty">
          <div class="ek">&#128273;</div>
          <b>还没有可显示的渠道</b>
-         填入至少一个 API Key,或在别的应用里登录一次(Trae / WorkBuddy 会直接读取)<br>密钥只写入 Windows 凭据管理器,界面保存后不回显
+         填入至少一个 API Key,在别的应用里登录一次(Trae / Codex 会直接读取),或点一次「登录 WorkBuddy 账号」<br>密钥与登录令牌只写入 Windows 凭据管理器,界面保存后不回显
          <div><button class="btn p" data-act="open-manage">去配置密钥</button></div>
        </div>`;
 
@@ -980,7 +1010,8 @@ function renderPillFace() {
 
   const bits = [c.name];  // tooltip 是纯文本,不需要转义
   const r = remainRatio(c);
-  if (!c.hasKey) bits.push(c.authSource === "app" ? "未检测到登录" : "未配置密钥");
+  if (!c.hasKey)
+    bits.push(c.authSource === "app" ? "未检测到登录" : c.authSource === "web" ? "未登录" : "未配置密钥");
   else if (c.remaining === null) bits.push("取数失败");
   else {
     if (r !== null) bits.push(`剩 ${Math.round(r * 100)}%`);
@@ -1175,15 +1206,37 @@ function renderChCards() {
   $("chList").innerHTML = list
     .map((c, i) => {
       const isApp = c.authSource === "app";
+      // web = 挂件内网页登录(WorkBuddy):桌面客户端把令牌加密了,只能登录网页账号拿
+      const isWeb = c.authSource === "web";
       const cc = map[c.id];
       const on = !!(cc && cc.enabled);
       let st;
       if (c.hidden) st = "已隐藏 · 不再取数(历史快照保留)";
-      else if (!c.hasKey) st = isApp ? "未检测到登录" : "未配置";
-      else if (c.valid) st = isApp ? `已读取本机登录 · ${esc(c.authLabel)}` : `已配置<span class="kh" data-hint="${c.id}"></span>`;
-      else st = (isApp ? "已读取本机登录" : "已配置") + " · 取数失败";
+      else if (!c.hasKey) st = isApp ? "未检测到登录" : isWeb ? "未登录" : "未配置";
+      else if (c.valid)
+        st = isApp
+          ? `已读取本机登录 · ${esc(c.authLabel)}`
+          : isWeb
+          ? `已登录 · ${esc(c.authLabel)}<span class="kh" data-hint="${c.id}"></span>`
+          : `已配置<span class="kh" data-hint="${c.id}"></span>`;
+      else st = (isApp ? "已读取本机登录" : isWeb ? "已登录" : "已配置") + " · 取数失败" + (isWeb ? "(令牌可能已过期)" : "");
 
-      const keyBlock = isApp
+      const keyBlock = isWeb
+        ? `<div class="ccbtns">
+            <button class="btn p" data-act="wblogin" data-id="${c.id}"${WB_LOGGING ? " disabled" : ""}>${
+          c.hasKey ? "重新登录 WorkBuddy 账号" : "登录 WorkBuddy 账号"
+        }</button>
+          </div>
+          <div class="ccbtns">
+            <input type="password" id="key-${c.id}" autocomplete="off" spellcheck="false"
+              placeholder="${c.hasKey ? "也可粘贴令牌 · 留空则不修改" : "或在浏览器里取令牌粘贴到这里(登录窗口不通时自救)"}">
+            <button class="btn" data-act="savekey" data-id="${c.id}">保存</button>
+            ${c.hasKey ? `<button class="btn danger" data-act="delkey" data-id="${c.id}">清除登录</button>` : ""}
+          </div>
+          <div class="mini">点「登录」会开一个独立窗口加载 www.workbuddy.cn 登录页(微信扫码 / 手机号)。` +
+          `挂件从页面自己发出的请求里接住令牌,存进 Windows 凭据管理器后自动关窗 —— 不用你复制任何东西,` +
+          `也不会动你桌面客户端的登录状态。国内版桌面端 5.6.2 起把本机令牌改为加密存储,已无法自动读取。</div>`
+        : isApp
         ? `<div class="mini">凭据来自本机已登录的 ${esc(c.name)} 客户端,只读复用、不写回不刷新;` +
           `失效时打开一次 ${esc(c.name)} 即可;隐藏本渠道后连读取也会停止。</div>`
         : `<div class="ccbtns">
@@ -1894,6 +1947,17 @@ $("manage").addEventListener("click", async (e) => {
     const at = hid.indexOf(id);
     at >= 0 ? hid.splice(at, 1) : hid.push(id);
     await saveConfigAndRefresh(); // 隐藏即停止取数:重取一轮,汇总/胶囊/底栏同步
+  } else if (a === "wblogin") {
+    // 打开 WorkBuddy 网页登录窗。令牌由 Rust 侧从窗口导航里接住,前端只负责状态与提示,
+    // 结果走 workbuddy-login 事件(成功/取消/失败都从那里回)。
+    try {
+      await invoke("workbuddy_login");
+      WB_LOGGING = true;
+      renderChCards();
+      showToast("登录窗口已打开 · 完成登录后会自动关窗");
+    } catch (err) {
+      showToast("打不开登录窗口:" + err, true);
+    }
   } else if (a === "savekey") {
     const input = $("key-" + id);
     const val = input ? input.value.trim() : "";
@@ -1916,11 +1980,15 @@ $("manage").addEventListener("click", async (e) => {
   } else if (a === "delkey") {
     // I3 行内确认:原生 confirm 在无边框透明置顶窗上风格脱节又阻塞
     const card = act.closest(".ccard");
+    const ch = CHANNELS.find((x) => x.id === id);
+    const what = ch && ch.authSource === "web" ? "登录令牌" : "密钥";
     card.querySelectorAll(".cfrm").forEach((x) => x.remove());
     const strip = document.createElement("div");
     strip.className = "cfrm";
     strip.innerHTML =
-      `确认删除该渠道的密钥?余额快照会保留。<button class="btn danger" data-act="delkey-yes" data-id="${esc(id)}">删除</button>` +
+      `确认删除该渠道的${what}?余额快照会保留。` +
+      (ch && ch.authSource === "web" ? "删除后需要重新登录一次才能取数。" : "") +
+      `<button class="btn danger" data-act="delkey-yes" data-id="${esc(id)}">删除</button>` +
       `<button class="btn" data-act="delkey-no">取消</button>`;
     card.querySelector(".ccbody").appendChild(strip);
   } else if (a === "delkey-no") {
@@ -2417,6 +2485,18 @@ async function refresh() {
   listen("channels-updated", (ev) => {
     CHANNELS = ev.payload;
     render({ updated: true });
+  });
+
+  // WorkBuddy 网页登录的三种结果都走这个事件:抓到令牌 / 用户自己关了窗 / 失败。
+  // 成功时 Rust 已经立刻刷过一轮(channels-updated 会带出新数值),这里只管按钮与提示。
+  listen("workbuddy-login", (ev) => {
+    WB_LOGGING = false;
+    const p = ev.payload || {};
+    if (p.ok) showToast("已登录 WorkBuddy · 读数已刷新");
+    else if (p.cancelled) showToast("已取消登录");
+    else showToast(p.reason || "登录没成功,请再试一次", true);
+    renderChCards();
+    fillKeyHints();
   });
 
   // 从托盘/热键唤回窗口:Rust 侧在「隐藏 → 显示」那一刻发 window-shown,这里重放入场。

@@ -20,3 +20,6 @@ aes = "0.8"
 sha2 = "0.10"
 base64 = "0.22"
 generic-array = "0.14"
+# 解网页登录哨兵回调 URL 的 query(§weblogin)。已在依赖树里(url/reqwest 带进来的),
+# 这里只是把它变成直接依赖,不新增任何编译产物。
+form_urlencoded = "1"

@@ -41,7 +41,8 @@ pub struct ChannelView {
     pub extra: Vec<(String, String)>,
     pub error: Option<String>,
     pub limited: bool,
-    /// 凭据来源:"keyring"(用户填的密钥) / "app"(复用本机应用的登录态)
+    /// 凭据来源:"keyring"(用户填的密钥) / "app"(复用本机应用的登录态) /
+    /// "web"(挂件内网页登录拿到的令牌,界面要给它一个登录入口)
     pub auth_source: String,
     /// 凭据来源的说明文字,直接显示在界面上
     pub auth_label: String,
@@ -113,7 +114,7 @@ impl FailKind {
 /// 值得换"下一份凭据"再试吗?
 ///
 /// 只有服务器明确答复"这份凭据不行"(401/403)才是换凭据的信号:本机可能留着
-/// 几份登录态(Trae 装了多个版本、WorkBuddy 有几份 .info 备份),其中一份可能已作废。
+/// 几份登录态(Trae 装了多个版本),其中一份可能已作废。
 /// 网络不通、5xx、业务失败都跟身份无关,换凭据只是白等。
 pub fn another_credential_may_help(kind: Option<FailKind>) -> bool {
     kind == Some(FailKind::Auth)
@@ -360,11 +361,12 @@ async fn fetch_once(
         result.valid = false;
         result.error = Some(format!("HTTP {}", status.as_u16()));
     }
-    // 复用本机登录态的渠道:401/403 不是"配置错了",而是那份登录态过期了 ——
-    // 用户能做的只有去客户端里重新登录一次,直接把话说清楚。
+    // 复用登录态的渠道:401/403 不是"配置错了",而是那份凭据过期了 ——
+    // 用户能做的只有重新登录一次,直接把话说清楚,并且要说对方向:
+    // 本机登录型渠道(Trae/Codex)去开客户端;网页登录型(WorkBuddy)回挂件重新登录。
     if !status.is_success() && (status.as_u16() == 401 || status.as_u16() == 403) {
-        if let AuthKind::App(app) = def.auth {
-            result.error = Some(format!("登录状态已失效 · 打开一次 {} 即可", app.label()));
+        if let Some(msg) = expired_credential_msg(def) {
+            result.error = Some(msg);
         }
     }
 
@@ -428,7 +430,9 @@ pub async fn fetch_channel(
 /// 第二个返回值 = 凭据管理器本身坏了的说明文字(与"没配密钥"区分,P2-12)。
 fn credentials(def: &providers::ProviderDef) -> (Vec<appauth::Credential>, Option<String>) {
     match def.auth {
-        AuthKind::Keyring => match secrets::get(def.id) {
+        // Keyring 与 WebSession 都躺在 Windows 凭据管理器里,只是交给我们的东西不同:
+        // 前者是用户从平台复制的 API Key,后者是挂件内网页登录(或手动粘贴)拿到的令牌。
+        AuthKind::Keyring | AuthKind::WebSession => match secrets::get(def.id) {
             Ok(Some(k)) => (
                 vec![appauth::Credential {
                     token: k,
@@ -444,10 +448,30 @@ fn credentials(def: &providers::ProviderDef) -> (Vec<appauth::Credential>, Optio
     }
 }
 
+/// 服务器明确说"这份凭据不行"(401/403)时的用户指引。密钥型返回 None ——
+/// 那是密钥本身错了,由 HTTP 码/业务响应自己说话,不能瞎指"重新登录"。
+///
+/// 两条指引的方向不一样,别混:本机登录型渠道(Trae/Codex)去开一次客户端就行;
+/// 网页登录型(WorkBuddy)**不能**让它去开桌面客户端 —— 桌面端 5.6.2 起把本机
+/// 凭据文件里的 accessToken 改成加密信封(2026-10-02 取证),开多少次都读不到,
+/// 只有挂件里那次网页登录有用。
+pub fn expired_credential_msg(def: &providers::ProviderDef) -> Option<String> {
+    match def.auth {
+        AuthKind::App(app) => Some(format!("登录状态已失效 · 打开一次 {} 即可", app.label())),
+        AuthKind::WebSession => Some("网页登录已过期 · 在挂件里重新登录一次即可".into()),
+        AuthKind::Keyring => None,
+    }
+}
+
 /// 凭据来源的说明文字,直接显示在界面上。
 fn auth_label(def: &providers::ProviderDef, cred: Option<&appauth::Credential>) -> String {
     match def.auth {
         AuthKind::Keyring => "Windows 凭据管理器".into(),
+        // 网页登录:不碰本机客户端的任何文件,有令牌就是登录过,没有就是没登录。
+        AuthKind::WebSession => match cred {
+            Some(_) => "网页登录令牌".into(),
+            None => format!("未登录 {} 账号", def.name),
+        },
         AuthKind::App(app) => match cred {
             Some(c) => {
                 let src = c.source.trim_end_matches(".info");
@@ -561,6 +585,7 @@ fn build_view(
         limited: result.limited,
         auth_source: match def.auth {
             AuthKind::Keyring => "keyring".into(),
+            AuthKind::WebSession => "web".into(),
             AuthKind::App(_) => "app".into(),
         },
         auth_label: auth_label(def, cred),
@@ -604,6 +629,7 @@ fn placeholder(def: &providers::ProviderDef) -> ChannelView {
         limited: false,
         auth_source: match def.auth {
             AuthKind::Keyring => "keyring".into(),
+            AuthKind::WebSession => "web".into(),
             AuthKind::App(_) => "app".into(),
         },
         auth_label: auth_label(def, None),
@@ -730,7 +756,7 @@ impl Fetcher {
                     // + 查凭据管理器(扫描报告 P1-1)。
                     if hidden.iter().any(|h| h == def.id) {
                         let mut v = placeholder(def);
-                        v.has_key = if matches!(def.auth, AuthKind::Keyring) {
+                        v.has_key = if matches!(def.auth, AuthKind::Keyring | AuthKind::WebSession) {
                             let id = def.id.to_string();
                             tokio::task::spawn_blocking(move || {
                                 secrets::get(&id).ok().flatten().is_some()
@@ -898,6 +924,46 @@ impl Fetcher {
 mod tests {
     use super::*;
     use chrono::Timelike;
+
+    /// WorkBuddy 改走网页登录(裁决 1A/3B)之后的界面口径:来源说"网页登录令牌",
+    /// 没登录时说"未登录 WorkBuddy 账号",auth_source 用新的 "web" 让前端出登录按钮。
+    #[test]
+    fn web_session_channel_reports_login_state_not_local_files() {
+        let def = providers::find("workbuddy").expect("workbuddy 渠道存在");
+        assert_eq!(def.auth, AuthKind::WebSession);
+        assert_eq!(placeholder(def).auth_source, "web");
+        assert_eq!(auth_label(def, None), "未登录 WorkBuddy 账号");
+        let cred = appauth::Credential {
+            token: "t".into(),
+            source: String::new(),
+        };
+        assert_eq!(auth_label(def, Some(&cred)), "网页登录令牌");
+        // 过期指引必须指回挂件,不能再让人去开桌面客户端(那条路已被加密存储堵死)
+        assert_eq!(
+            expired_credential_msg(def).as_deref(),
+            Some("网页登录已过期 · 在挂件里重新登录一次即可")
+        );
+    }
+
+    /// 另外两类渠道不能被这次改造带偏:本机登录型仍说"打开一次 X",密钥型不瞎指路。
+    #[test]
+    fn other_auth_kinds_keep_their_own_wording() {
+        let trae = providers::find("trae").expect("trae 渠道存在");
+        assert_eq!(placeholder(trae).auth_source, "app");
+        assert_eq!(auth_label(trae, None), "未检测到 Trae 登录信息");
+        assert_eq!(
+            expired_credential_msg(trae).as_deref(),
+            Some("登录状态已失效 · 打开一次 Trae 即可")
+        );
+
+        let codex = providers::find("codex").expect("codex 渠道存在");
+        assert_eq!(placeholder(codex).auth_source, "app");
+
+        let ds = providers::find("deepseek").expect("deepseek 渠道存在");
+        assert_eq!(placeholder(ds).auth_source, "keyring");
+        assert_eq!(auth_label(ds, None), "Windows 凭据管理器");
+        assert_eq!(expired_credential_msg(ds), None);
+    }
 
     #[test]
     fn month_start_is_first_day() {

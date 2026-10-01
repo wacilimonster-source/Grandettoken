@@ -1,12 +1,16 @@
-//! 本机已登录应用凭据的只读复用(Trae / WorkBuddy)。
+//! 本机已登录应用凭据的只读复用(Trae / Codex)。
 //!
 //! 这两个平台的积分没有开放 API Key,只能拿客户端自己的登录态去查。所以这里
 //! 直接读客户端已经写在磁盘上的凭据文件 —— **只读,不写回,不刷新**。
 //!
-//! 为什么不刷新:两家的刷新都会轮换 refreshToken(新 token 发下来、旧的作废),
+//! 为什么不刷新:他们的刷新都会轮换 refreshToken(新 token 发下来、旧的作废),
 //! 我们刷完客户端手里那份就成了废票,用户下次打开 IDE 会被登出。为了一个挂件
-//! 把用户踢下线是不能接受的。token 过期就如实报"打开一次 Trae / WorkBuddy 即可",
+//! 把用户踢下线是不能接受的。token 过期就如实报"打开一次 Trae / Codex 即可",
 //! 由用户在客户端里正常续期,我们只是搭个便车。
+//!
+//! WorkBuddy 曾经也走这条路,但桌面端 5.6.2(2026-10-01 实测)起把
+//! `auth.accessToken` 改成了 `{"$wbEncrypted":1,"envelope":…}` 的 AES-GCM 信封,
+//! 静态钥编译期内置、本机拿不到,所以这条路已经废了 —— 见 `providers::AuthKind::WebSession`。
 //!
 //! 凭据本身(accessToken)只在本进程内存里流转,不落盘、不进日志、不进数据库。
 
@@ -14,11 +18,10 @@ use base64::Engine;
 use sha2::{Digest, Sha512};
 use std::path::PathBuf;
 
-/// 需要复用凭据的本机应用。
+/// 需要复用本机登录态的应用。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum App {
     Trae,
-    WorkBuddy,
     Codex,
 }
 
@@ -27,7 +30,6 @@ impl App {
     pub fn label(self) -> &'static str {
         match self {
             App::Trae => "Trae",
-            App::WorkBuddy => "WorkBuddy",
             App::Codex => "Codex",
         }
     }
@@ -46,24 +48,13 @@ const TRAE_STORAGE_KEY: &str = "iCubeAuthInfo://icube.cloudide";
 /// Trae 的安装目录名,按优先级排列。SOLO CN 是带订阅的那套,优先用它。
 const TRAE_DIRS: &[&str] = &["TRAE SOLO CN", "Trae CN", "TRAE SOLO", "Trae"];
 
-/// WorkBuddy 凭据目录(桌面端/IDE 插件共用这个位置)。
-const WORKBUDDY_AUTH_DIRS: &[&str] = &[
-    r"CodeBuddyExtension\Data\Public\auth",
-    r"WorkBuddy\Data\Public\auth",
-];
-
-/// 只有中国版域名能用我们调的那套接口。国际版(.ai)是同名不同栈,凭据打过去
-/// 会被网关注册成 401 HTML(实测),所以这里按域名筛,宁可报"未检测到"。
-const WORKBUDDY_CN_DOMAINS: &[&str] = &["www.codebuddy.cn", "www.workbuddy.cn"];
-
 /// 可用凭据列表(按可信度排序,首个通常就是答案)。
 ///
-/// 返回多个是为了容错:Trae 可能装了多个版本、WorkBuddy 可能留着几份备份 `.info`,
-/// 其中一份的 token 可能已经作废。取数失败时可以顺着往下试下一份。
+/// 返回多个是为了容错:Trae 可能装了多个版本,其中一份的 token 可能已经作废。
+/// 取数失败时可以顺着往下试下一份。
 pub fn candidates(app: App) -> Vec<Credential> {
     match app {
         App::Trae => trae_candidates(),
-        App::WorkBuddy => workbuddy_candidates(),
         App::Codex => codex_candidates(),
     }
 }
@@ -72,10 +63,6 @@ pub fn candidates(app: App) -> Vec<Credential> {
 
 fn appdata() -> Option<PathBuf> {
     std::env::var_os("APPDATA").map(PathBuf::from)
-}
-
-fn localappdata() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
 }
 
 fn trae_candidates() -> Vec<Credential> {
@@ -215,86 +202,6 @@ const FIXED_SALT: [u8; 64] = {
     out
 };
 
-// ───────────── WorkBuddy ─────────────
-
-fn workbuddy_candidates() -> Vec<Credential> {
-    let Some(local) = localappdata() else {
-        return Vec::new();
-    };
-    let mut found: Vec<(bool, std::time::SystemTime, String, String)> = Vec::new();
-
-    for sub in WORKBUDDY_AUTH_DIRS {
-        let dir = local.join(sub);
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for e in entries.flatten() {
-            let path = e.path();
-            let name = e.file_name().to_string_lossy().to_string();
-            if !name.ends_with(".info") {
-                continue;
-            }
-            let Ok(raw) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            let Some(token) = workbuddy_token_from_info(&raw) else {
-                continue;
-            };
-            let mtime = e
-                .metadata()
-                .and_then(|m| m.modified())
-                .unwrap_or(std::time::UNIX_EPOCH);
-            found.push((is_backup_name(&name), mtime, name, token));
-        }
-    }
-
-    // 备份文件排在后面:它们带着更老的 token,但 expiresAt 反而可能更晚
-    // (实测本机一份 6 月备份写着 2027-06 到期,拿它请求是 401),不能只看到期时间。
-    found.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
-    found
-        .into_iter()
-        .map(|(_, _, name, token)| Credential {
-            token,
-            source: name,
-        })
-        .collect()
-}
-
-/// 备份文件名形如 `workbuddy-desktop.2026-06-09T09-04-37-611Z.info`(带 ISO 时间戳)。
-fn is_backup_name(name: &str) -> bool {
-    let bytes = name.as_bytes();
-    let mut i = 0;
-    while i + 3 < bytes.len() {
-        // 找 "YYYY-MM-DDT" 这个形状:4 位数字 + '-' + 2 位 + '-'
-        if bytes[i].is_ascii_digit()
-            && bytes.get(i + 1).map_or(false, u8::is_ascii_digit)
-            && bytes.get(i + 2).map_or(false, u8::is_ascii_digit)
-            && bytes.get(i + 3).map_or(false, u8::is_ascii_digit)
-            && bytes.get(i + 4) == Some(&b'-')
-        {
-            return true;
-        }
-        i += 1;
-    }
-    false
-}
-
-/// 明文 JSON:`auth.accessToken` + `auth.domain`。域名必须是中国版,否则打我们的
-/// 接口只会拿到网关注册的 401。
-fn workbuddy_token_from_info(raw: &str) -> Option<String> {
-    let v: serde_json::Value = serde_json::from_str(raw).ok()?;
-    let auth = v.get("auth")?;
-    let domain = auth.get("domain").and_then(|d| d.as_str()).unwrap_or("");
-    if !WORKBUDDY_CN_DOMAINS.contains(&domain) {
-        return None;
-    }
-    let token = auth.get("accessToken")?.as_str()?.trim();
-    if token.is_empty() {
-        return None;
-    }
-    Some(token.to_string())
-}
-
 // ───────────── Codex ─────────────
 
 /// Codex CLI 的登录态文件(Windows 下在 %USERPROFILE%\.codex\auth.json)。
@@ -378,31 +285,6 @@ mod tests {
         assert!(trae_token_from_storage(r#"{"a":1}"#).is_none());
         // 不是 JSON
         assert!(trae_token_from_storage("<<<").is_none());
-    }
-
-    #[test]
-    fn workbuddy_reads_cn_token_only() {
-        let cn = r#"{"auth":{"accessToken":"tok-cn","domain":"www.codebuddy.cn"}}"#;
-        assert_eq!(workbuddy_token_from_info(cn).as_deref(), Some("tok-cn"));
-
-        let wb = r#"{"auth":{"accessToken":"tok-wb","domain":"www.workbuddy.cn"}}"#;
-        assert_eq!(workbuddy_token_from_info(wb).as_deref(), Some("tok-wb"));
-
-        // 国际版:同名不同栈,拿它的 token 打中国版接口只会 401,直接跳过
-        let ai = r#"{"auth":{"accessToken":"tok-ai","domain":"www.workbuddy.ai"}}"#;
-        assert!(workbuddy_token_from_info(ai).is_none());
-
-        // 缺字段
-        assert!(workbuddy_token_from_info(r#"{"auth":{}}"#).is_none());
-        assert!(workbuddy_token_from_info("not json").is_none());
-    }
-
-    /// 备份文件(文件名带 ISO 时间戳)必须被识别出来 —— 它们里面的 token 往往是废票。
-    #[test]
-    fn backup_files_are_detected() {
-        assert!(is_backup_name("workbuddy-desktop.2026-06-09T09-04-37-611Z.info"));
-        assert!(!is_backup_name("workbuddy-desktop.info"));
-        assert!(!is_backup_name("workbuddy-desktop-ai.info"));
     }
 
     #[test]
