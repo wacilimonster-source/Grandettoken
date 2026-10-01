@@ -79,7 +79,7 @@
 <div class="wrap">
 
 <h1>WorkBuddy 读数中断：诊断 + 「挂件内网页登录」恢复方案</h1>
-<div class="sub">2026-10-02 · 只做了现状调研与真机取证，<b>代码一行未改</b>。裁决后我再动手实现。</div>
+<div class="sub">2026-10-02 · 诊断与取证。<b>本方案已按裁决 1A 2A 3B 4A 5A 6A 7B 实施并发版 v0.1.17</b>（实施结果见文末第六节）。</div>
 
 <div class="hand">
   <b>交接框 · 现在停在哪</b>
@@ -220,6 +220,22 @@
 <tr><td>数值口径是否仍与官方一致</td><td>出数后与网页「套餐与用量」页逐项对（剩余/已用/笔数），像 0.1.4 那次验收一样。</td></tr>
 <tr><td>国际版会不会串号</td><td>登录窗只加载 <code>.cn</code> 域名，接口也只打 <code>.cn</code>；抓来的令牌天然属于国内版账号。会在验收里核一遍读数与你国内版客户端一致。</td></tr>
 </table>
+
+<h2>六、实施结果回填（2026-10-02，v0.1.17 已发版）</h2>
+<p>裁决 <code>1A 2A 3B 4A 5A 6A 7B</code> 全部照做，commit <code>d68764b</code> / tag <code>v0.1.17</code>，
+Release 已挂三个文件（setup.exe + .sig + latest.json），<code>releases/latest</code> 已确认指向 v0.1.17。</p>
+<table>
+<tr><th style="width:34%">与本页方案的偏差</th><th>说明</th></tr>
+<tr><td>哨兵地址的解析逻辑挪进了 core</td><td>新增 <code>app/core/src/weblogin.rs</code>（主机名整串相等、拒绝 <code>.invalid.attacker.example</code> 这类变形域名、长度/控制字符/空格校验、剥 <code>Bearer </code> 前缀）。原因：src-tauri 不挂测试，规则放那儿就守不住。行为没变，只是多了 4 项单测。</td></tr>
+<tr><td>令牌捕获从"一路"变"三路"</td><td>除请求头拦截（fetch + XHR）外，URL 的 <code>?token=</code> 与 <code>sessionStorage</code> 也各自轮询，谁先到算谁的。多一道保险，不改变用户动作。</td></tr>
+<tr><td><b>用户可感知：WorkBuddy 在没登录时会从面板列表里消失</b></td><td>这是沿用"未配置凭据的渠道不进列表"的既有规则（Trae/Codex 也一样），不是新决定。之前你能看到它，是因为手里还有一张废票（废票仍算"有凭据"）。登录一次就回来了，历史快照不丢。</td></tr>
+<tr><td>取消登录也会给提示</td><td>登录窗被你自己关掉时，界面收到「已取消登录」并恢复按钮；抓到令牌则是「已登录 WorkBuddy · 读数已刷新」。</td></tr>
+</table>
+<p><b>已自测通过</b>：core 检查零告警、55 项单测全绿；src-tauri 检查零告警；release 构建成功（4,490,312 字节安装包 + 签名，静态加载器断言行已打印）；
+注入脚本用 <code>lib.rs</code> 原文抽出来在真实浏览器里跑了 fetch / XHR / sessionStorage / URL 参数四种场景，都正确把令牌交给哨兵地址，
+"主机不在名单"和"页面根本没有令牌"两种情况确认不会误交；前端用 Tauri 桩验过未登录 / 已登录 / 已过期三张卡与登录按钮的调用链，控制台零报错。</p>
+<p class="bad" style="color:#ffb4b0"><b>还差你一次真机登录</b>：抓到的令牌能不能打 <code>get-user-resource</code>（200 还是 401）、实际能用多少天、数值与网页「套餐与用量」是否逐项对得上。
+这三条只能登录后才知道。万一接口不收这份令牌，备选路已在第五节写好：用 <code>www.workbuddy.cn/keys</code> 建一份"访问密钥"（可选永久有效）贴进卡片的输入框。</p>
 
 <div class="foot">
   取证与核对方式：直读你机器上的凭据文件与 <code>~/.workbuddy/keyblob</code>；用 6 月那份明文令牌对两个域名各发一次真实请求（只读取数，无写操作）；查 <code>tokenscope.db</code> 快照序列定位断供时刻；从 <code>app.asar</code> 与网页控制台 JS 包反查加密方案与令牌来源。仓库代码只做了行号级引用核对，未做任何修改。
