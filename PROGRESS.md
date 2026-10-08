@@ -1,9 +1,102 @@
 # TokenScope 开发进展
 
-> 最后更新:2026-10-02
-> 状态:**v0.1.17 已发版(WorkBuddy 凭据改走挂件内网页登录)**;
-> 更早:v0.1.13(Trae / WorkBuddy 积分 + Codex 渠道 + 热键 / 动效层 / 渠道显隐)、
-> 2026-09-20 全量扫描缺陷修复(见 `bug-report-2026-09-20.html`)
+> 最后更新:2026-10-08
+> 状态:**v0.1.19 已构建(WorkBuddy 登录改抓浏览器会话 Cookie,尚未发版)**;
+> 同日 v0.1.18 修掉登录窗空白死锁;更早:v0.1.17(WorkBuddy 改走挂件内网页登录)、
+> v0.1.16(胶囊光环)、v0.1.13(Trae / WorkBuddy 积分 + Codex 渠道 + 热键 / 动效层 / 渠道显隐)
+
+## WorkBuddy 登录:真正要抄的是会话 Cookie,不是令牌(2026-10-08,v0.1.19)
+
+**症状**(用户扫码登录成功后的反馈):二维码扫过、账号也登进去了,但登录窗停在页面上
+"没反应",挂件一直没有数;手动关掉窗口则提示「已取消登录」。
+
+**根因**:v0.1.17 抓令牌的**前提本身是错的**。设计阶段是从 usercenter 的 JS 包里读到
+`Authorization: Bearer` 逻辑的,但真机上把控制台的请求全看了一遍(CDP 抓完整请求头):
+`/console/*`、`/billing/meter/*` 全都**没有 Authorization 头**,`sessionStorage` 里也
+**没有** `growth-center-token`;认证全在 httpOnly 的 `session` / `session_2` 两个 Cookie 上。
+于是三条抓取路(fetch/XHR 头、URL 参数、sessionStorage)一条都不可能命中 —— 挂件永远等不到
+令牌,用户看到的就是"登录成功了却没反应"。
+
+**还有第二道门**:网关(openresty)按 **User-Agent** 分流。同一批 Cookie,
+浏览器 UA → 200,挂件客户端 UA(`TokenScope/0.1`)→ 401。用 curl 逐项对照过:
+`browser UA + 两个 Cookie` 是 200 且 `TotalDosage` 正确,`session` 与 `session_2`
+**缺任何一个都 401**(只带其中一个也 401),加不加 `tgw_l7_route`/设备号都不影响。
+
+**改成什么**(v0.1.19):
+- 登录窗**不再注入任何脚本、不再拦导航**:on_navigation 只当信号用(记下"页面已经落到
+  个人中心/控制台"),一律放行。页面是第三方的,挂件只负责看它走到哪儿。
+- 观察者每秒问一次:会话可用吗?**判据是"用这份会话真打一次接口能不能通"**,不是
+  "cookie 罐里有没有东西"(没登录的访客也可能有 session Cookie)。通了就关窗报「已登录」,
+  验不过且确实刚登录完才报原因(改用访问密钥那条备选路)。
+- **什么都不落盘**:会话就住在 WebView2 的 profile 里(登录窗与主窗口共用一份),
+  取数时现读(`WebviewWindow::cookies_for_url`,httpOnly 也读得到)。两个理由:
+  Windows 凭据管理器的 blob 上限实测只有约 1280 字符(2000 字符就报
+  `longer than platform limit of 2560`),而这两个 Cookie 加起来近 6 KB;**而且**平台一旦
+  轮换 Cookie,存下来的副本会静默失效 —— 现读天然跟着新的走。
+- 「清除登录」现在会一并删掉 profile 里的会话 Cookie(否则按钮点了等于没点),并作废
+  取数的 5 秒结果复用;`set_key` 同样作废(换完密钥立刻刷新不会再端上旧结果)。
+
+**顺带修掉一个会崩掉整个挂件的地雷**:`cookies_for_url` 这类调用内部是**阻塞派发**
+(worker 线程发消息给主线程,再 `rx.recv().unwrap()` 等回信)。目标窗口正在销毁时回信
+永远不来,unwrap 直接 panic —— 而 release 是 `panic = "abort"`,一次派发失败 = 挂件原地消失。
+实测踩到过(刚关掉登录窗就去读它的 Cookie,日志里留下 `RecvError`)。现在所有要碰 webview
+的调用都改成"投递到主线程 + 自己带超时地等",拿不到就当没读到、退回"未登录",绝不 panic;
+观察者也因此改成读主窗口(它从启动活到退出),并且不去问那个可能正在销毁的登录窗
+(用户关窗靠 Destroyed 事件置位,落地判定靠 on_navigation 置位)。
+
+**验证**(debug 构建真机跑,CDP 全程观察):
+- 已登录状态再点「登录」:窗口 1.2 秒内自己关掉,toast「已登录 WorkBuddy · 读数已刷新」,
+  渠道显示 `浏览器网页会话` + 真实读数(剩余 5462.54 credits / 已用 2637.46);
+- 清除登录 → profile 里两个会话 Cookie 消失、渠道变「未登录 WorkBuddy 账号」;
+- 此时点「登录」:窗口停在登录页(确认是未登录态),用户按 X 关掉 → toast「已取消登录」、
+  按钮恢复可点;**日志零 panic**;
+- 把会话 Cookie 原样写回 profile → 读数立刻回来(证明"现读"这条路不依赖任何本地副本);
+- core 55 项单测全绿(weblogin 的 Cookie 拼装/前缀校验/落地路径判定共 4 组),`cargo check` 零告警。
+
+**尚需真机**:会话有效期(实测两个 Cookie 都是 7 天后到期,所以大约每周要重登一次);
+以及真实扫码登录那条路(v0.1.18 的死锁修掉之后,第一次登录就是用户自己扫码完成的)。
+
+## WorkBuddy 登录窗打开后全白、整个挂件卡死(2026-10-08,v0.1.18)
+
+**症状**(用户真机反馈 —— 正是 v0.1.17 设计稿里留的那条"还差你一次真机登录"):点
+「登录 WorkBuddy 账号」后窗口壳出来了,里面**一片空白**,什么也没加载;此后连"刷新"之类的
+按钮也全都没反应,挂件像死了一样。
+
+**根因**:`workbuddy_login` 是**同步**命令,而 Tauri 的同步命令在主线程上就地执行 ——
+这条命令又恰恰是在 WebView2 的 `WebMessageReceived` 回调里被调起的(它是前端 invoke 进来的)。
+在 COM 回调里再同步创建第二个 webview,`CreateCoreWebView2Controller` 的完成回调就再也
+送不回主线程:wry 卡在 `wait_with_pump` 死等,主线程从此不再处理任何消息
+(**所以无关命令 `get_channels` 也一起超时**,界面看着像卡死),而新 webview 的页面
+永远停在 `about:blank`。
+
+**取证方式**(`--remote-debugging-port` + CDP,逐层排除):
+- 窗口树:登录窗有 wry 的容器 `WRY_WEBVIEW`(560×700),但**没有** WebView2 的
+  `Chrome_WidgetWin_1` / `Chrome_RenderWidgetHostHWND`(主窗口两样都有)→ 控制器没建完;
+- `/json/list`:invoke 之后多出一个 `about:blank` 目标,之后 40 秒不动,`workbuddy.cn` 目标
+  始终不出现;对它发起 CDP `Page.navigate` 也一直不返回;
+- 主窗口 JS 还活着(`1+1` 能算、DOM 完好),但任何 invoke 都超时 → 排除"前端卡死",
+  定位到 Rust 侧主线程。
+- 排除项:CSP(只作用于 tauri 自定义协议,不碰外部页面)、站点可达性(直接 curl 登录页
+  200 + CDN 带 `Access-Control-Allow-Origin: *`)、注入脚本(根本没跑到)。
+
+**修法**:`workbuddy_login` 改成 `async fn`。async 命令跑在 async runtime 的线程上,
+窗口创建因而变成一条投进事件循环的消息,执行的上下文与"启动时按 tauri.conf.json 建主窗口"
+完全一样 —— 那条路一直是通的。**这条 async 不能改回同步**,`lib.rs` 里留了注释说明原因。
+
+**验证**(debug 构建真机跑,CDP 全程观察):
+- 命令立即返回;登录页真正加载出来(标题 `WorkBuddy - AI Agent 办公新范式`,微信登录 /
+  手机号 / 邮箱 / SSO 全在,截图核对);
+- 注入脚本在真实页面里生效(`__tsWbHook=1`,fetch 与 XHR 包装都在);
+- 抓取链路两条**实测都通**:①sessionStorage 令牌;②请求头 `Authorization: Bearer …`。
+  都走到哨兵地址 → `on_navigation` 拦下 → 写进凭据管理器(`key_hint` 回显掩码尾号)→
+  窗口自动关闭 → 渠道状态变「已登录」(hasKey=true)。
+- 取消链路:模拟用户按 X 关窗 → 主窗口收到 `{"ok":false,"cancelled":true}`,
+  按钮从「登录中(禁用)」恢复可点;未抓到令牌时凭据槽位保持空;
+- 点按钮的真实路径(设置 → 「登录 WorkBuddy 账号」→ 关窗)整条跑通,页面 console 零报错;
+- 测试注入的假令牌已 `delete_key` 删除,槽位确认回到空。
+
+**尚需真机**:用真实登录(扫码/手机号)拿到的令牌打 `get-user-resource` 是否 200 ——
+这条只有你自己的账号能验。
 
 ## WorkBuddy 凭据改道:挂件内网页登录(2026-10-02,v0.1.17)
 

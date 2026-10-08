@@ -4547,7 +4547,7 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tokenscope"
-version = "0.1.17"
+version = "0.1.19"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -4570,7 +4570,6 @@ dependencies = [
  "aes",
  "base64 0.22.1",
  "chrono",
- "form_urlencoded",
  "futures",
  "generic-array",
  "keyring",

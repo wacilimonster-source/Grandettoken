@@ -593,9 +593,9 @@ function renderDetail(c) {
           c.name
         )} 即可(刷新会顶掉客户端手里的登录态,把你挤下线)。</div>`
       : c.authSource === "web"
-      ? `<div class="hint" style="margin:0 0 8px">凭据是你在本挂件里登录 ${esc(
+      ? `<div class="hint" style="margin:0 0 8px">登录状态来自你在挂件里登录的 ${esc(
           c.name
-        )} 网页账号时拿到的令牌,只写入 Windows 凭据管理器;` +
+        )} 网页账号(会话存在挂件的浏览器里,不写凭据库、也不碰桌面客户端);` +
         `失效时重新登录一次即可,<b>不影响你桌面客户端的登录状态</b>。</div>`
       : "";
 
@@ -1229,13 +1229,14 @@ function renderChCards() {
           </div>
           <div class="ccbtns">
             <input type="password" id="key-${c.id}" autocomplete="off" spellcheck="false"
-              placeholder="${c.hasKey ? "也可粘贴令牌 · 留空则不修改" : "或在浏览器里取令牌粘贴到这里(登录窗口不通时自救)"}">
+              placeholder="${c.hasKey ? "也可粘贴访问密钥 · 留空则不修改" : "或粘贴访问密钥(登录窗口不通时自救)"}">
             <button class="btn" data-act="savekey" data-id="${c.id}">保存</button>
             ${c.hasKey ? `<button class="btn danger" data-act="delkey" data-id="${c.id}">清除登录</button>` : ""}
           </div>
           <div class="mini">点「登录」会开一个独立窗口加载 www.workbuddy.cn 登录页(微信扫码 / 手机号)。` +
-          `挂件从页面自己发出的请求里接住令牌,存进 Windows 凭据管理器后自动关窗 —— 不用你复制任何东西,` +
-          `也不会动你桌面客户端的登录状态。国内版桌面端 5.6.2 起把本机令牌改为加密存储,已无法自动读取。</div>`
+          `登录成功后窗口自己关掉,挂件接着用这份浏览器会话取数 —— 不用你复制任何东西,` +
+          `也不会动你桌面客户端的登录状态。会话约 7 天到期,到点了再登一次就行。` +
+          `国内版桌面端 5.6.2 起把本机令牌改为加密存储,已无法自动读取。</div>`
         : isApp
         ? `<div class="mini">凭据来自本机已登录的 ${esc(c.name)} 客户端,只读复用、不写回不刷新;` +
           `失效时打开一次 ${esc(c.name)} 即可;隐藏本渠道后连读取也会停止。</div>`
@@ -1981,13 +1982,13 @@ $("manage").addEventListener("click", async (e) => {
     // I3 行内确认:原生 confirm 在无边框透明置顶窗上风格脱节又阻塞
     const card = act.closest(".ccard");
     const ch = CHANNELS.find((x) => x.id === id);
-    const what = ch && ch.authSource === "web" ? "登录令牌" : "密钥";
+    const what = ch && ch.authSource === "web" ? "登录会话" : "密钥";
     card.querySelectorAll(".cfrm").forEach((x) => x.remove());
     const strip = document.createElement("div");
     strip.className = "cfrm";
     strip.innerHTML =
       `确认删除该渠道的${what}?余额快照会保留。` +
-      (ch && ch.authSource === "web" ? "删除后需要重新登录一次才能取数。" : "") +
+      (ch && ch.authSource === "web" ? "删除后需要重新登录一次才能取数(会一并清掉浏览器里的登录会话)。" : "") +
       `<button class="btn danger" data-act="delkey-yes" data-id="${esc(id)}">删除</button>` +
       `<button class="btn" data-act="delkey-no">取消</button>`;
     card.querySelector(".ccbody").appendChild(strip);

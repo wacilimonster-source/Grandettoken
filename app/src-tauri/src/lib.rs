@@ -117,7 +117,7 @@ fn key_hint(id: String) -> Option<String> {
 }
 
 #[tauri::command]
-fn set_key(id: String, key: String) -> Result<(), String> {
+fn set_key(app: tauri::AppHandle, id: String, key: String) -> Result<(), String> {
     let def = providers::find(&id).ok_or_else(|| format!("未知渠道: {id}"))?;
     if let providers::AuthKind::App(app) = def.auth {
         return Err(format!(
@@ -126,158 +126,258 @@ fn set_key(id: String, key: String) -> Result<(), String> {
             app.label()
         ));
     }
-    secrets::set(&id, &key)
+    secrets::set(&id, &key)?;
+    // 与删除同理:刚换过凭据就别再复用 5 秒内的旧结果,否则"保存了却还显示未配置/旧数值"
+    app.state::<AppState>().fetcher.invalidate();
+    Ok(())
 }
 
 #[tauri::command]
-fn delete_key(id: String) -> Result<(), String> {
+async fn delete_key(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let def = providers::find(&id).ok_or_else(|| format!("未知渠道: {id}"))?;
     if let providers::AuthKind::App(app) = def.auth {
         return Err(format!("{} 没有本应用保存的密钥(用的是 {} 的登录态)", def.name, app.label()));
     }
-    secrets::delete(&id)
+    // 网页登录型的会话住在浏览器 profile 里,不在凭据管理器 —— 一并清掉。
+    // 不清的话这个按钮点了等于没点:下一轮取数照样读得到 Cookie(2026-10-08)。
+    // 这条命令因此必须是 async:清 Cookie 要同步问 webview,不能占着主线程等。
+    if matches!(def.auth, providers::AuthKind::WebSession) {
+        wb_clear_session(&app);
+    }
+    secrets::delete(&id)?;
+    // 凭据刚变过:作废"5 秒内复用上次结果",否则紧接着的刷新还会把旧结果(带旧凭据
+    // 取到的那份)端上来,用户看到"清掉了却还显示已登录"。
+    app.state::<AppState>().fetcher.invalidate();
+    Ok(())
 }
 
 // ───────────── WorkBuddy 网页登录 ─────────────
 //
 // WorkBuddy 桌面端 5.6.2 起把本机凭据文件里的 accessToken 写成 AES-GCM 信封
 // (实测 {"$wbEncrypted":1,"envelope":…},静态钥编译期内置、本机不可解 —— 2026-10-02 取证),
-// 以前那套"只读复用客户端登录态"彻底读不到了。改走网页:www.workbuddy.cn 控制台打的
-// 还是同一个 get-user-resource、还是 Authorization: Bearer <token>,所以这里开一个登录窗,
-// 把页面自己发出去的那个 Bearer 接住,存进 Windows 凭据管理器。用户不用复制任何东西。
+// 以前那套"只读复用客户端登录态"彻底读不到了,改走挂件内网页登录。
 //
-// 令牌在页面里的三种存在形态都盯着(抓前端包核实过):请求头的 Authorization、
-// 登录跳转的 ?token= 参数、sessionStorage["growth-center-token"] —— 谁先到算谁的。
-// 交接走"哨兵跳转",解析规则与拒绝条件都在 core 的 weblogin 里(那边有单测)。
+// **真正要抄的不是令牌,是会话 Cookie**(2026-10-08 真机取证,第一版去抓 Bearer 白做了):
+// 控制台自己打 /billing/meter/* 时既没有 Authorization 头、sessionStorage 里也没有
+// growth-center-token,认证全在 httpOnly 的 session / session_2 两个 Cookie 上;
+// 而网关(openresty)还按 User-Agent 分流 —— 同一批 Cookie,浏览器 UA 200、客户端 UA 401。
+// 所以这里的流程是:
+//   1) 登录窗停在「个人中心 / 控制台」= 服务端确实认了这份会话(没认会被挡回 /login/);
+//   2) 从 webview 的 Cookie 罐里现读(httpOnly 也读得到;登录窗与主窗口共用同一个 profile);
+//   3) **先用挂件自己的 HTTP 栈真打一次接口**,通了才关窗报「已登录」(见 Fetcher::probe);
+//   4) 什么都不落盘:会话留在浏览器 profile 里,取数时现读,平台轮换 Cookie 也能跟上
+//      (Windows 凭据管理器也放不下 —— 实测 blob 上限约 1280 字符,两个 Cookie 近 6 KB)。
+// 判定规则(哪些 Cookie 算会话、落在什么路径才算登录完成)都在 core::weblogin,那边有单测。
 
 /// 登录窗 label:同一时刻只允许一个
 const WB_LOGIN_LABEL: &str = "wb-login";
-/// 挂件内登录/手动粘贴的令牌都存这个条目(与其它渠道的密钥同一个机制)
+/// 只有这条路走网页登录;手动粘贴的密钥仍存这个条目(Windows 凭据管理器)
 const WB_CHANNEL_ID: &str = "workbuddy";
-/// 只认国内版域名。国际版(www.workbuddy.ai)是同名不同栈,不在考虑范围内(裁决 6A)。
-const WB_SITE_HOSTS: &str = r#"["www.workbuddy.cn","www.codebuddy.cn"]"#;
-/// 登录后回到的用量页(令牌就是在这个页的请求头里发出去的)
+/// 登录页。redirect_uri 就是登录完成后回落的用量页 —— 也是判"登录完成"的路径之一。
 const WB_LOGIN_URL: &str = "https://www.workbuddy.cn/login?platform=usercenter&state=0&redirect_uri=https%3A%2F%2Fwww.workbuddy.cn%2Fprofile%2Fplans-usage";
+/// 读/删会话 Cookie 时用的地址(只要域名对得上,path 随便给一个能命中的)
+const WB_SESSION_URL: &str = "https://www.workbuddy.cn/";
 
-/// 成功抓到令牌后置位,用于区分"用户自己关掉了窗口"和"抓到了我们主动关窗" ——
+/// 成功抓到会话后置位,用于区分"用户自己关掉了窗口"和"我们主动关窗" ——
 /// 前者要让界面把「登录中」状态收回去,后者不该再报一次取消。
 static WB_LOGIN_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// 注入脚本:在页面自己的任何脚本之前跑,所以能拦到全部请求头。
-/// 用占位符替换,避免 JS 里满屏大括号和 format! 打架。
-fn wb_inject_script() -> String {
-    r#"(function () {
-  if (window.__tsWbHook) return;
-  window.__tsWbHook = 1;
-  var SITE_HOSTS = __TS_SITE_HOSTS__;
-  var CAP = "https://__TS_HOST__/c?t=";
-  var sent = false;
-  function onSite() {
-    try {
-      var h = location.hostname || "";
-      for (var i = 0; i < SITE_HOSTS.length; i++) if (h === SITE_HOSTS[i]) return true;
-    } catch (e) {}
-    return false;
-  }
-  function take(v) {
-    if (sent || !v) return;
-    var t = String(v).trim();
-    if (!t || !onSite()) return;
-    sent = true;
-    // 这次跳转会立刻被挂件的导航监听拦掉并取消:页面照常活着,
-    // 而 .invalid 是保留顶级域,就算漏过去也解析不到,令牌不会出网。
-    try { location.replace(CAP + encodeURIComponent(t)); } catch (e) { sent = false; }
-  }
-  function authOf(h) {
-    if (!h) return "";
-    try {
-      if (typeof h.get === "function") { var g = h.get("Authorization"); if (g) return g; }
-      if (Array.isArray(h)) {
-        for (var i = 0; i < h.length; i++) {
-          var p = h[i];
-          if (Array.isArray(p) && /^authorization$/i.test(String(p[0]))) return String(p[1]);
-        }
-        return "";
-      }
-      if (typeof h === "object") {
-        for (var k in h) if (/^authorization$/i.test(k)) return String(h[k]);
-      }
-    } catch (e) {}
-    return "";
-  }
-  var of = window.fetch;
-  if (of) {
-    window.fetch = function (a, b) {
-      try {
-        var v = authOf(b && b.headers) || authOf(a && a.headers);
-        if (v) take(v);
-      } catch (e) {}
-      return of.apply(this, arguments);
-    };
-  }
-  if (window.XMLHttpRequest && window.XMLHttpRequest.prototype) {
-    var os = XMLHttpRequest.prototype.setRequestHeader;
-    XMLHttpRequest.prototype.setRequestHeader = function (k, v) {
-      try { if (/^authorization$/i.test(String(k))) take(String(v)); } catch (e) {}
-      return os.apply(this, arguments);
-    };
-  }
-  function sniff() {
-    try {
-      var m = /[?&]token=([^&#]+)/.exec(location.search || "");
-      if (m) { take(decodeURIComponent(m[1])); return; }
-      var t = window.sessionStorage && window.sessionStorage.getItem("growth-center-token");
-      if (t) take(t);
-    } catch (e) {}
-  }
-  sniff();
-  window.addEventListener("DOMContentLoaded", sniff);
-  setInterval(sniff, 700);
-})();"#.replace("__TS_SITE_HOSTS__", WB_SITE_HOSTS)
-        .replace("__TS_HOST__", tokenscope_core::weblogin::CAPTURE_HOST)
+/// 登录窗已经销毁(用户自己关的,或者我们收尾时关的)。观察者靠它收工 ——
+/// 有了这个标志,就不必去问那个可能正在销毁的窗口(问它会 panic,见 on_main_with_timeout)。
+static WB_LOGIN_CLOSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// 页面是否已经落到"登录完成"的路径上(判定规则在 core::weblogin)。由 on_navigation
+/// 在主线程上置位 —— 那里拿到 URL 不需要任何跨线程派发,比事后去问窗口安全得多。
+static WB_LANDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 把一段"要碰 webview"的代码投到主线程去跑,不等结果(关闭窗口这类不需要回信)。
+fn on_main(app: &tauri::AppHandle, f: impl FnOnce() + Send + 'static) {
+    let _ = app.run_on_main_thread(f);
 }
 
-/// 令牌到手:落进凭据管理器 → 关窗 → 通知界面 → 立刻刷一轮。
-/// 返回 false = 没收下(内容不合格或凭据库写不进去),界面要给出原因。
-fn wb_finish_login(app: &tauri::AppHandle, raw: &str) -> bool {
-    let Some(token) = tokenscope_core::weblogin::sanitize_token(raw) else {
-        let _ = app.emit(
-            "workbuddy-login",
-            serde_json::json!({"ok": false, "reason": "抓到的内容不像有效令牌,请关掉窗口再登录一次"}),
-        );
-        return false;
-    };
-    if let Err(e) = secrets::set(WB_CHANNEL_ID, &token) {
-        let _ = app.emit(
-            "workbuddy-login",
-            serde_json::json!({"ok": false, "reason": e}),
-        );
-        return false;
+/// 把一段"要碰 webview"的代码投到主线程去跑,带**自己的**超时把结果等回来。
+///
+/// 为什么不能直接在外壳里调 `cookies_for_url`:它内部走的是**阻塞派发** ——
+/// 从 worker 线程发消息给主线程,然后在 `rx.recv().unwrap()` 上等回信。目标 webview
+/// 正在销毁、或者应用正在退出时,那条回信永远不会来,`unwrap` 直接 panic;而 release
+/// 是 `panic = "abort"`,一次派发失败等于整个挂件原地消失(2026-10-08 踩到:刚关掉
+/// 登录窗就去读 Cookie,日志里留下 RecvError panic)。
+/// 这里改成"投递任务 + 自己带超时地等",拿不到就当作没读到,让这一轮取数退回"未登录",
+/// 绝不让挂件崩。投递本身在主线程上是就地执行,不存在回信问题。
+fn on_main_with_timeout<T: Send + 'static>(
+    app: &tauri::AppHandle,
+    f: impl FnOnce() -> T + Send + 'static,
+    timeout: std::time::Duration,
+) -> Option<T> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(f());
+    })
+    .ok()?;
+    rx.recv_timeout(timeout).ok()
+}
+
+/// 从 webview 的 Cookie 罐里取会话。
+///
+/// **只读主窗口**:它从启动活到退出,而登录窗随时可能被用户关掉(读一个正在销毁的
+/// 窗口会走到上面那个 panic 上去)。Cookie 是按 profile 存的,主窗口读到的和登录窗
+/// 读到的是同一份 —— 2026-10-08 实测(httpOnly 的 session / session_2 都读得到)。
+fn wb_session_of(app: &tauri::AppHandle, id: &str) -> Option<String> {
+    if id != WB_CHANNEL_ID {
+        return None; // 只有 WorkBuddy 走这条路
     }
-    // 先置位再关窗:Destroyed 监听靠这个标志区分"抓成功"与"用户自己关了"
-    WB_LOGIN_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
-    if let Some(w) = app.get_webview_window(WB_LOGIN_LABEL) {
-        let _ = w.close();
-    }
-    let _ = app.emit("workbuddy-login", serde_json::json!({"ok": true}));
     let handle = app.clone();
-    tauri::async_runtime::spawn(async move { refresh_now(&handle).await });
-    true
+    on_main_with_timeout(
+        app,
+        move || {
+            let w = handle.get_webview_window("main")?;
+            let url: tauri::Url = WB_SESSION_URL.parse().ok()?;
+            let jar = w.cookies_for_url(url).ok()?;
+            tokenscope_core::weblogin::cookie_credential(jar.iter().map(|c| (c.name(), c.value())))
+        },
+        std::time::Duration::from_secs(3),
+    )
+    .flatten()
+}
+
+/// 清掉宿主浏览器里的 WorkBuddy 会话(「清除登录」用)。
+/// 会话不在凭据库里,不清这里那个按钮点了等于没点:下一轮取数照样读得到 Cookie。
+fn wb_clear_session(app: &tauri::AppHandle) {
+    let handle = app.clone();
+    let _ = on_main_with_timeout(
+        app,
+        move || {
+            let Some(w) = handle.get_webview_window("main") else {
+                return;
+            };
+            let Ok(url) = WB_SESSION_URL.parse::<tauri::Url>() else {
+                return;
+            };
+            let Ok(jar) = w.cookies_for_url(url) else {
+                return;
+            };
+            for c in jar {
+                if tokenscope_core::weblogin::is_session_cookie(c.name()) {
+                    let _ = w.delete_cookie(c);
+                }
+            }
+        },
+        std::time::Duration::from_secs(3),
+    );
+}
+
+/// 会话可用吗:用挂件自己的 HTTP 栈真打一次接口(见 Fetcher::probe)。
+/// 不验证就报成功的话,一份被平台拒掉的会话会变成"状态显示已登录、却一直取不到数"。
+async fn wb_session_works(app: &tauri::AppHandle, session: &str) -> bool {
+    let fetcher = app.state::<AppState>().fetcher.clone();
+    match providers::find(WB_CHANNEL_ID) {
+        Some(def) => fetcher.probe(def, session).await,
+        None => false,
+    }
+}
+
+/// 收尾:关窗 → 通知界面 → 立刻刷一轮。会话本身不用搬走 —— 它就在浏览器 profile 里,
+/// 取数时现读(见文件顶部第 4 条)。
+async fn wb_finish_login(app: &tauri::AppHandle) {
+    // 先置位再关窗:Destroyed 监听靠这个标志区分"登录成功"与"用户自己关了"
+    WB_LOGIN_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
+    let handle = app.clone();
+    on_main(app, move || {
+        if let Some(w) = handle.get_webview_window(WB_LOGIN_LABEL) {
+            let _ = w.close();
+        }
+    });
+    let _ = app.emit("workbuddy-login", serde_json::json!({"ok": true}));
+    app.state::<AppState>().fetcher.invalidate(); // 作废"5 秒内复用上次结果",否则这次刷新拿的还是旧结果
+    refresh_now(app).await;
+}
+
+/// 登录窗开着的时候盯着它,直到会话可用或者窗口被用户关掉。
+///
+/// 为什么轮询而不是拦导航:控制台是 SPA,登录落地那一跳可能走 pushState,不触发导航
+/// 事件;1.2 秒一次的开销只是读一次 Cookie,而且**只有**会话内容变了、或者页面落到了
+/// 「个人中心 / 控制台」,才发真请求去验一次。
+///
+/// 判"能不能收工"靠**验证**,不靠"cookie 罐里有没有东西":没登录的访客也可能有
+/// session Cookie。反过来,已经登录过的人再点一次「登录」,页面会停在「选择账号」上
+/// 等人点 —— 那时会话其实已经可用,验证一过就直接收工,不让用户对着一个"没反应"的
+/// 窗口发呆(2026-10-08 真机踩到)。
+///
+/// 两条状态都由主线程侧的钩子置位(窗口事件、导航事件),**不去碰登录窗的任何 API**:
+/// 那类调用是阻塞派发,窗口正在销毁时会让挂件 panic-abort(见 on_main_with_timeout)。
+fn spawn_login_watcher(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let mut tried = String::new();
+        let mut probes = 0u32;
+        let mut ticks = 0u32;
+        loop {
+            if WB_LOGIN_CLOSED.load(std::sync::atomic::Ordering::Relaxed) {
+                return; // 用户自己把窗口关了
+            }
+            let landed = WB_LANDED.load(std::sync::atomic::Ordering::Relaxed);
+            // 读 Cookie 是阻塞调用(要同步问 webview),下沉到 spawn_blocking:
+            // 别占着 tokio worker(与取数那边同一个理由,报告 O-5)。
+            let probe_app = app.clone();
+            let session = tokio::task::spawn_blocking(move || wb_session_of(&probe_app, WB_CHANNEL_ID))
+                .await
+                .ok()
+                .flatten();
+            if let Some(session) = session {
+                let fresh = session != tried;
+                if fresh {
+                    tried = session.clone();
+                    probes = 0;
+                }
+                // 新会话立刻验;同一份会话每 ~6 秒补验一次(用户可能刚点完「选择账号」,
+                // Cookie 没变但账号上下文变了),最多 10 次,不对着平台一直打。
+                if fresh || (probes < 10 && ticks % 5 == 0) {
+                    probes += 1;
+                    if wb_session_works(&app, &session).await {
+                        wb_finish_login(&app).await;
+                        return;
+                    }
+                    // 验不过:确实落到登录完成页、又刚换了会话(用户刚登录完)才说话;
+                    // 还停在登录页说明人家正要登录,别抢着报错。
+                    if landed && fresh {
+                        let _ = app.emit(
+                            "workbuddy-login",
+                            serde_json::json!({
+                                "ok": false,
+                                "reason": "登录是成功了,但挂件用这份会话取数被平台拒绝。可改用访问密钥:在 www.workbuddy.cn/keys 建一份,贴进卡片的输入框。"
+                            }),
+                        );
+                    }
+                }
+            }
+            ticks += 1;
+            tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+        }
+    });
 }
 
 /// 打开 WorkBuddy 登录窗。已经开着就把它拉到前台(不重复开第二个)。
+///
+/// **这条命令必须是 async**,别改成同步的:同步命令由 Tauri 在主线程上就地执行,
+/// 而它是在 WebView2 的 WebMessageReceived 回调里被调用的 —— 在 COM 回调里再同步
+/// 建一个 webview,CreateCoreWebView2Controller 的完成回调就再也送不到主线程上
+/// (2026-10-08 实测:窗口壳出来了、页面停在 about:blank、之后连别的 IPC 一起冻死)。
+/// async 命令跑在 async runtime 的线程上,窗口创建被当成一条消息投进事件循环,
+/// 与启动时建主窗口走的是同一种上下文 —— 那条路是通的。
 #[tauri::command]
-fn workbuddy_login(app: tauri::AppHandle) -> Result<(), String> {
+async fn workbuddy_login(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(w) = app.get_webview_window(WB_LOGIN_LABEL) {
         let _ = w.show();
         let _ = w.set_focus();
         return Ok(());
     }
     WB_LOGIN_DONE.store(false, std::sync::atomic::Ordering::Relaxed);
+    WB_LANDED.store(false, std::sync::atomic::Ordering::Relaxed);
+    WB_LOGIN_CLOSED.store(false, std::sync::atomic::Ordering::Relaxed);
     let url: tauri::Url = WB_LOGIN_URL
         .parse()
         .map_err(|e| format!("登录地址有问题: {e}"))?;
-    let nav_handle = app.clone();
+    // 不注入任何脚本、不拦任何导航:登录页是第三方的,挂件只负责看它走到哪儿。
+    // on_navigation 只当信号用(记下"已经落到个人中心了"),一律放行。
     tauri::WebviewWindowBuilder::new(&app, WB_LOGIN_LABEL, tauri::WebviewUrl::External(url))
         .title("登录 WorkBuddy 账号（国内版）")
         .inner_size(560.0, 780.0)
@@ -285,25 +385,16 @@ fn workbuddy_login(app: tauri::AppHandle) -> Result<(), String> {
         .resizable(true)
         // 面板是置顶的,登录窗不置顶就会被压在下面,用户看不见
         .always_on_top(true)
-        .initialization_script(wb_inject_script())
-        .on_navigation(move |nav| {
-            // 哨兵域名的导航一律不放行(它本来也解析不到);其余导航 —— 登录页、
-            // SSO、跳回控制台 —— 全部放行。解析与拒绝规则在 core::weblogin(有单测)。
-            let is_capture = nav
-                .host_str()
-                .map(|h| h.eq_ignore_ascii_case(tokenscope_core::weblogin::CAPTURE_HOST))
-                .unwrap_or(false);
-            if !is_capture {
-                return true;
+        .on_navigation(|nav| {
+            if tokenscope_core::weblogin::is_post_login(nav.as_str()) {
+                WB_LANDED.store(true, std::sync::atomic::Ordering::Relaxed);
             }
-            if let Some(token) = tokenscope_core::weblogin::token_from_url(nav.as_str()) {
-                wb_finish_login(&nav_handle, &token);
-            }
-            false
+            true
         })
         .build()
-        .map(|_| ())
-        .map_err(|e| format!("登录窗口打不开: {e}"))
+        .map_err(|e| format!("登录窗口打不开: {e}"))?;
+    spawn_login_watcher(app.clone());
+    Ok(())
 }
 
 #[tauri::command]
@@ -881,6 +972,14 @@ pub fn run() {
                 startup_error: Mutex::new(None),
             });
 
+            // 网页登录型渠道的会话来源:每轮取数时现从 webview 的 Cookie 罐里读。
+            // 回调会在取数路径的 spawn_blocking 里被调用(见 set_web_credential_source
+            // 的注释),里面那次 webview 派发是阻塞的 —— 只能在非主线程上调,符合。
+            let session_app = app.handle().clone();
+            app.state::<AppState>()
+                .fetcher
+                .set_web_credential_source(Box::new(move |id| wb_session_of(&session_app, id)));
+
             // 启动时注册已保存的全局快捷键;被占用不拦启动,但要把原因留给界面
             // (之前只 eprintln,绿色版从托盘启动时没人看得到 stderr —— 报告 P2-14)
             if !config.hotkey.is_empty() {
@@ -960,13 +1059,15 @@ pub fn run() {
 
             Ok(())
         })
-        // WorkBuddy 登录窗被用户自己关掉(没抓到令牌)时,要让界面把「登录中」收回去,
-        // 否则会一直卡在等令牌的样子。抓到令牌那一次是我们主动关窗的,由 WB_LOGIN_DONE
-        // 标位区分,不该再报一次"已取消"。
+        // WorkBuddy 登录窗被用户自己关掉(没抓到会话)时,要让界面把「登录中」收回去,
+        // 否则会一直卡在等令牌的样子。抓到会话那一次是我们主动关窗的,由 WB_LOGIN_DONE
+        // 标位区分,不该再报一次"已取消"。观察者也靠 WB_LOGIN_CLOSED 收工 ——
+        // 它因此不用去问一个正在销毁的窗口(那种调用会 panic,见 on_main_with_timeout)。
         .on_window_event(|window, event| {
             if window.label() != WB_LOGIN_LABEL || !matches!(event, tauri::WindowEvent::Destroyed) {
                 return;
             }
+            WB_LOGIN_CLOSED.store(true, std::sync::atomic::Ordering::Relaxed);
             if WB_LOGIN_DONE.swap(false, std::sync::atomic::Ordering::Relaxed) {
                 return;
             }

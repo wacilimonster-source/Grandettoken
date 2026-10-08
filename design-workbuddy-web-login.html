@@ -79,7 +79,9 @@
 <div class="wrap">
 
 <h1>WorkBuddy 读数中断：诊断 + 「挂件内网页登录」恢复方案</h1>
-<div class="sub">2026-10-02 · 诊断与取证。<b>本方案已按裁决 1A 2A 3B 4A 5A 6A 7B 实施并发版 v0.1.17</b>（实施结果见文末第六节）。</div>
+<div class="sub">2026-10-02 · 诊断与取证。<b>本方案已按裁决 1A 2A 3B 4A 5A 6A 7B 实施并发版 v0.1.17</b>（实施结果见文末第六节）。
+<b>2026-10-08 两次补正：真机第一次试撞上"登录窗全白 + 整个挂件卡死"（第七节，v0.1.18）；
+死锁修掉后扫码登录成功却抓不到东西 —— 因为抓 Bearer 令牌的前提本身就是错的，网页端用的是会话 Cookie（第八节，v0.1.19）。</b></div>
 
 <div class="hand">
   <b>交接框 · 现在停在哪</b>
@@ -236,6 +238,49 @@ Release 已挂三个文件（setup.exe + .sig + latest.json），<code>releases/
 "主机不在名单"和"页面根本没有令牌"两种情况确认不会误交；前端用 Tauri 桩验过未登录 / 已登录 / 已过期三张卡与登录按钮的调用链，控制台零报错。</p>
 <p class="bad" style="color:#ffb4b0"><b>还差你一次真机登录</b>：抓到的令牌能不能打 <code>get-user-resource</code>（200 还是 401）、实际能用多少天、数值与网页「套餐与用量」是否逐项对得上。
 这三条只能登录后才知道。万一接口不收这份令牌，备选路已在第五节写好：用 <code>www.workbuddy.cn/keys</code> 建一份"访问密钥"（可选永久有效）贴进卡片的输入框。</p>
+
+<h2>七、真机第一次跑就翻出的死锁（2026-10-08，v0.1.18）</h2>
+<p><b>症状</b>：点「登录 WorkBuddy 账号」，窗口壳出来了，里面<b>全白</b>，而且此后整个挂件像死了 —— 连「刷新」都没反应。
+第六节那句"还差你一次真机登录"验收的正是这里：<b>静态检查和浏览器里的桩测都不可能发现它</b>，
+因为问题不在注入脚本、不在前端、也不在站点可达性，而在<b>窗口是怎么被创建出来的</b>。</p>
+<table>
+<tr><th style="width:26%">环节</th><th>结论</th></tr>
+<tr><td>调用方式</td><td><code>workbuddy_login</code> 当时是<b>同步</b>命令；Tauri 的同步命令在主线程上就地执行，而它又是从 WebView2 的 <code>WebMessageReceived</code>（前端 invoke）里调起的。</td></tr>
+<tr><td>卡在哪</td><td>在 COM 回调里同步创建第二个 webview，<code>CreateCoreWebView2Controller</code> 的完成回调再也送不回主线程；wry 卡在 <code>wait_with_pump</code> 死等，主线程从此不处理任何消息。</td></tr>
+<tr><td>为什么"全白"</td><td>新 webview 的页面永远停在 <code>about:blank</code>：浏览器进程里已有它的目标，但连 CDP 手工 <code>Page.navigate</code> 都推不动。</td></tr>
+<tr><td>为什么"整个挂件死了"</td><td>主线程被占死，之后任何 invoke 都不再被处理 —— 用一条无关命令 <code>get_channels</code> 也超时即可证明，不是前端卡住。</td></tr>
+<tr><td>取证依据</td><td>窗口树：登录窗有 wry 的 <code>WRY_WEBVIEW</code> 容器，却没有 WebView2 的 <code>Chrome_WidgetWin_1</code> / 渲染窗口（主窗口两样都有）。<code>/json/list</code>：invoke 后多出一个 <code>about:blank</code> 目标，40 秒不动，<code>workbuddy.cn</code> 目标始终不出现。</td></tr>
+<tr><td>修法</td><td>命令改成 <code>async fn</code>：async 命令跑在 async runtime 线程上，窗口创建变成投进事件循环的一条消息，上下文与"启动时按配置建主窗口"一致（那条路一直是通的）。<code>lib.rs</code> 里留了注释禁止改回同步。</td></tr>
+</table>
+<p>修完在真机上重跑：登录页正常加载（微信 / 手机号 / 邮箱 / SSO 都在），注入脚本生效（<code>__tsWbHook=1</code>，fetch 与 XHR 包装都在）；
+抓取链路两条都实测通了（sessionStorage 令牌、请求头 <code>Authorization: Bearer …</code>）—— 都是跳到哨兵地址、被拦下、写进凭据库、窗口自动关、渠道变「已登录」；
+用户关窗则主窗口收到 <code>{"ok":false,"cancelled":true}</code> 且按钮恢复可点；测试注入的假令牌已删除，槽位回到空。<b>仍然只剩上面那一条：真实令牌能不能被 <code>get-user-resource</code> 接受。</b></p>
+
+<h2>八、扫码登录成功却"没反应"：抓令牌的前提就是错的（2026-10-08，v0.1.19）</h2>
+<p>第七节把死锁修掉之后，用户真机扫码登录成功了 —— 然后窗口停在页面上"没反应"，手动关掉则提示「已取消登录」。
+用 CDP 把控制台的请求逐条看下来，答案很直接：<b>这个流程里根本没有 Bearer 令牌可抓</b>。</p>
+<table>
+<tr><th style="width:30%">本页第三节的假设</th><th>真机实测</th></tr>
+<tr><td>控制台请求带 <code>Authorization: Bearer …</code></td><td><b>没有</b>。<code>/console/*</code>、<code>/billing/meter/*</code> 的完整请求头里都没有 Authorization。</td></tr>
+<tr><td>令牌存在 <code>sessionStorage["growth-center-token"]</code></td><td><b>没有</b>。登录后 sessionStorage 里只有 <code>9c412d6095037d16</code> 与 <code>one-obs.login.attempt</code>。</td></tr>
+<tr><td>登录跳转带 <code>?token=</code></td><td><b>没有</b>。落地是 <code>/login/</code> →（点一次账号）→ <code>/profile/plans-usage</code>。</td></tr>
+<tr><td>（新发现）认证在哪</td><td>httpOnly 的 <code>session</code> 与 <code>session_2</code> 两个 Cookie。<b>缺任何一个都 401</b>；只带其中一个也 401。</td></tr>
+<tr><td>（新发现）还有第二道门</td><td>网关按 <b>User-Agent</b> 分流：同一批 Cookie，浏览器 UA 200、客户端 UA（<code>TokenScope/0.1</code>）401。curl 逐项对照过。</td></tr>
+</table>
+<p><b>改法</b>（v0.1.19）：登录窗不再注入脚本、不再拦导航（页面是第三方的，挂件只负责看它走到哪儿）；
+观察者每秒判一次"这份会话能不能真打通接口"，通了就关窗报「已登录」；
+<b>会话不落盘</b> —— 它住在 WebView2 的 profile 里，取数时现读。两个理由：凭据管理器的 blob 上限实测只有约
+1280 字符（两个 Cookie 近 6 KB），而且平台一旦轮换 Cookie，存下来的副本会静默失效。
+「清除登录」会一并删掉 profile 里的会话，并作废取数的 5 秒结果复用。</p>
+<p><b>顺带拆掉一颗会崩掉整个挂件的地雷</b>：<code>cookies_for_url</code> 内部是阻塞派发（worker 线程发消息给主线程，
+再 <code>rx.recv().unwrap()</code> 等回信）。目标窗口正在销毁时回信永远不来，unwrap 直接 panic，
+而 release 是 <code>panic = "abort"</code> —— 一次派发失败等于挂件原地消失（实测踩到：刚关掉登录窗就去读它的 Cookie，
+日志里留下 <code>RecvError</code>）。现在所有要碰 webview 的调用都改成"投递到主线程 + 自己带超时地等"，
+拿不到就当没读到、退回"未登录"，绝不 panic。</p>
+<p><b>验证</b>：已登录时点「登录」→ 窗口 1.2 秒自动关、读数照常（剩余 5462.54 credits）；
+清除登录 → 会话 Cookie 消失、渠道变「未登录」；此时点「登录」窗口停在登录页，按 X 关掉 → 「已取消登录」、
+按钮恢复、<b>日志零 panic</b>；把会话 Cookie 原样写回 → 读数立刻回来（证明不依赖任何本地副本）。
+<b>会话有效期实测 7 天</b>（两个 Cookie 的 expires 都是 10-15），所以大约每周要重登一次。</p>
 
 <div class="foot">
   取证与核对方式：直读你机器上的凭据文件与 <code>~/.workbuddy/keyblob</code>；用 6 月那份明文令牌对两个域名各发一次真实请求（只读取数，无写操作）；查 <code>tokenscope.db</code> 快照序列定位断供时刻；从 <code>app.asar</code> 与网页控制台 JS 包反查加密方案与令牌来源。仓库代码只做了行号级引用核对，未做任何修改。

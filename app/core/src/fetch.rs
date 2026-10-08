@@ -8,6 +8,7 @@ use crate::config::{ClaimConfig, Config};
 use crate::providers::{self, AuthKind, Expiring, FetchResult, Kind, Method};
 use crate::store::Store;
 use crate::secrets;
+use crate::weblogin;
 use chrono::{Datelike, Duration, Local, TimeZone, Weekday};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -15,6 +16,13 @@ use std::sync::{Arc, Mutex};
 
 /// 距到期多久算"近期"。界面上的"近 30 天将过期"用的就是它。
 pub const EXPIRING_SOON_DAYS: i64 = 30;
+
+/// Cookie 型凭据要冒充的浏览器 UA。见 fetch_once 里的注释:网关按 UA 分流,
+/// 非浏览器 UA 一律 401。版本号写死没关系(网关只看"像不像浏览器"),
+/// 但别改成 `TokenScope/…`。
+const BROWSER_UA: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) \
+     Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0";
 
 /// 传给界面的一行。
 #[derive(Debug, Clone, Serialize)]
@@ -289,14 +297,29 @@ async fn fetch_once(
             .header("Content-Type", "application/json")
             .body(body()),
     }
-    .header(
-        "Authorization",
-        format!("{}{}", def.auth_prefix, key.trim()),
-    )
     .header("Accept", "application/json")
     // 单次尝试的预算:4 个入口最坏 32 秒,还收在 60 秒轮询周期内。
     // 用客户端的 20 秒默认值会让"某个域名挂着"直接拖垮整轮取数。
     .timeout(std::time::Duration::from_secs(8));
+
+    // 网页登录型的凭据有两种形态(见 core::weblogin):
+    // - `cookie:session=…; session_2=…` —— 宿主浏览器登录后留下的会话
+    // - 其余一律当令牌,走 `Authorization: Bearer …`(手动粘贴的访问密钥)
+    //
+    // Cookie 这条路**必须冒充浏览器 UA**:网关(openresty)按 UA 分流,同一批 Cookie
+    // 用浏览器 UA 200、用客户端 UA 401(2026-10-08 实测,两种各打一次)。
+    // 客户端默认那个 `TokenScope/0.1` 恰好是被拒的一类,所以这台机器上要靠逐请求覆盖。
+    match weblogin::cookie_header(key) {
+        Some(cookie) => {
+            req = req.header("Cookie", cookie).header("User-Agent", BROWSER_UA);
+        }
+        None => {
+            req = req.header(
+                "Authorization",
+                format!("{}{}", def.auth_prefix, key.trim()),
+            );
+        }
+    }
 
     for (k, v) in def.extra_headers {
         req = req.header(*k, *v);
@@ -428,21 +451,38 @@ pub async fn fetch_channel(
 
 /// 取一个渠道的凭据候选(按可信度排序)。空的第一个返回值 = 没有可用凭据;
 /// 第二个返回值 = 凭据管理器本身坏了的说明文字(与"没配密钥"区分,P2-12)。
-fn credentials(def: &providers::ProviderDef) -> (Vec<appauth::Credential>, Option<String>) {
+///
+/// `web_src` = 网页登录型渠道的会话来源(外壳注入的"现从 webview 的 Cookie 罐里取",
+/// 见 Fetcher::set_web_credential_source)。顺序上**手动粘贴的密钥排在它前面**:
+/// 用户明确填进去的东西优先,填错了下一轮就会退回来用宿主的会话(401 时换候选)。
+fn credentials(
+    def: &providers::ProviderDef,
+    web_src: Option<&(dyn Fn(&str) -> Option<String> + Send + Sync)>,
+) -> (Vec<appauth::Credential>, Option<String>) {
     match def.auth {
-        // Keyring 与 WebSession 都躺在 Windows 凭据管理器里,只是交给我们的东西不同:
-        // 前者是用户从平台复制的 API Key,后者是挂件内网页登录(或手动粘贴)拿到的令牌。
-        AuthKind::Keyring | AuthKind::WebSession => match secrets::get(def.id) {
-            Ok(Some(k)) => (
-                vec![appauth::Credential {
+        // Keyring 与 WebSession 都躺在 Windows 凭据管理器里;网页登录型还可能有一份
+        // "宿主浏览器的会话"(不落盘)。
+        AuthKind::Keyring | AuthKind::WebSession => {
+            let mut out: Vec<appauth::Credential> = Vec::new();
+            let mut err = None;
+            match secrets::get(def.id) {
+                Ok(Some(k)) => out.push(appauth::Credential {
                     token: k,
                     source: String::new(),
-                }],
-                None,
-            ),
-            Ok(None) => (Vec::new(), None),
-            Err(e) => (Vec::new(), Some(e)),
-        },
+                }),
+                Ok(None) => {}
+                Err(e) => err = Some(e),
+            }
+            if matches!(def.auth, AuthKind::WebSession) {
+                if let Some(session) = web_src.and_then(|f| f(def.id)) {
+                    out.push(appauth::Credential {
+                        token: session,
+                        source: String::new(),
+                    });
+                }
+            }
+            (out, err)
+        }
         // 本机应用的登录态:可能有几份(多个安装 / 旧备份),按可信度依次试
         AuthKind::App(app) => (appauth::candidates(app), None),
     }
@@ -467,9 +507,12 @@ pub fn expired_credential_msg(def: &providers::ProviderDef) -> Option<String> {
 fn auth_label(def: &providers::ProviderDef, cred: Option<&appauth::Credential>) -> String {
     match def.auth {
         AuthKind::Keyring => "Windows 凭据管理器".into(),
-        // 网页登录:不碰本机客户端的任何文件,有令牌就是登录过,没有就是没登录。
+        // 网页登录:不碰本机客户端的任何文件,也不写自己的凭据库 —— 会话就住在
+        // 挂件的浏览器 profile 里(登录窗那个 webview 与主窗口共用一份)。
+        // 两种形态分开报:会话是登录窗登出来的,令牌是用户自己粘的。
         AuthKind::WebSession => match cred {
-            Some(_) => "网页登录令牌".into(),
+            Some(c) if weblogin::cookie_header(&c.token).is_some() => "浏览器网页会话".into(),
+            Some(_) => "手动粘贴的密钥".into(),
             None => format!("未登录 {} 账号", def.name),
         },
         AuthKind::App(app) => match cred {
@@ -669,6 +712,11 @@ pub struct Fetcher {
     /// fetch_shared 的门 + 近期结果:手动刷新撞上轮询不再双份请求账务接口(O-4)
     gate: tokio::sync::Mutex<()>,
     last_run: Mutex<Option<(i64, Vec<ChannelView>)>>,
+    /// 网页登录型渠道的会话来源。外壳在启动时装一个"去 webview 的 Cookie 罐里现取"
+    /// 的回调:会话留在 WebView2 的 profile 里(平台自己管过期与轮换),挂件不存副本 ——
+    /// 一个是凭据管理器放不下(实测 blob 上限约 1280 字符,而两个会话 Cookie 近 6 KB),
+    /// 另一个是平台一旦轮换 Cookie,存下来的副本会静默失效。
+    web_cred_src: Mutex<Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>>>,
 }
 
 impl Default for Fetcher {
@@ -690,8 +738,36 @@ impl Fetcher {
             cfg_cache: Mutex::new(None),
             gate: tokio::sync::Mutex::new(()),
             last_run: Mutex::new(None),
+            web_cred_src: Mutex::new(None),
         }
     }
+
+    /// 装上网页登录型渠道的会话来源(见字段注释)。**回调是阻塞的**(要同步问 webview 的
+    /// Cookie 罐),只能在非主线程上被调用 —— 取数路径本来就跑在 async worker 上,安全。
+    pub fn set_web_credential_source(
+        &self,
+        f: Box<dyn Fn(&str) -> Option<String> + Send + Sync>,
+    ) {
+        *self
+            .web_cred_src
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = Some(Arc::from(f));
+    }
+
+    /// 作废"5 秒内复用上次结果"的窗口。登录刚完成 / 密钥刚改过时必须调一次,
+    /// 否则那一次刷新会拿旧结果回给界面,用户看到的是"已经登录了但还没有数"。
+    pub fn invalidate(&self) {
+        *self.last_run.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    }
+
+    /// 用一份**还没生效**的凭据试打一次:网页登录抓到会话之后,先证明这份会话真能取数,
+    /// 再决定要不要关窗、报"已登录"。不验证就报成功的话,一份被平台拒掉的会话会变成
+    /// "状态显示已登录、却一直取不到数"—— 用户只能靠猜。
+    pub async fn probe(&self, def: &providers::ProviderDef, credential: &str) -> bool {
+        let (result, _, _) = fetch_channel(&self.http, def, credential, None).await;
+        result.valid
+    }
+
 
     /// get_channels / 托盘「立即刷新」共用的入口:5 秒内刚跑完一轮直接复用结果,
     /// 并发调用在同一把门锁上排队 —— 账务接口有速率顾虑,双份轮询不礼貌(O-4)。
@@ -743,6 +819,12 @@ impl Fetcher {
         // 隐藏 = 不发请求、不读本机登录凭据;仍返回占位视图,管理页要靠它列「已隐藏」卡片。
         // Arc:并发时每渠道克隆一次指针,而不是把 Vec 移进每个 future。
         let hidden: Arc<Vec<String>> = Arc::new(cfg.hidden_channels.clone());
+        // 网页登录型的会话来源(外壳注入)。每轮取一次,每渠道克隆一个指针。
+        let web_src: Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>> =
+            self.web_cred_src
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone();
 
         let fetched = futures::future::join_all(
             providers::PROVIDERS
@@ -750,6 +832,7 @@ impl Fetcher {
                 .enumerate()
                 .map(|(i, def)| {
                     let hidden = hidden.clone();
+                    let web_src = web_src.clone();
                     async move {
                     // 隐藏 = 不发请求、**也不读本机登录凭据**(裁决原文)。之前的顺序
                     // 反了:credentials() 先跑,隐藏的 App 型渠道每轮仍读本地文件 + 跑 AES
@@ -777,9 +860,13 @@ impl Fetcher {
                     }
                     // 文件 IO + AES + keyring RPC 都是阻塞调用:下沉到 spawn_blocking,
                     // 凭据服务卡住不再拖垮 tokio worker 上的整轮取数(扫描报告 O-5)。
-                    let (creds, secret_err) = tokio::task::spawn_blocking(move || credentials(def))
-                        .await
-                        .unwrap_or_else(|_| (Vec::new(), Some("凭据读取异常".to_string())));
+                    // 网页登录的会话来源也是阻塞的(要同步问 webview 的 Cookie 罐),
+                    // 正好一起待在这个阻塞任务里。
+                    let web_src = web_src.clone();
+                    let (creds, secret_err) =
+                        tokio::task::spawn_blocking(move || credentials(def, web_src.as_deref()))
+                            .await
+                            .unwrap_or_else(|_| (Vec::new(), Some("凭据读取异常".to_string())));
                     if creds.is_empty() {
                         let mut v = placeholder(def);
                         if let Some(e) = secret_err {
@@ -925,19 +1012,25 @@ mod tests {
     use super::*;
     use chrono::Timelike;
 
-    /// WorkBuddy 改走网页登录(裁决 1A/3B)之后的界面口径:来源说"网页登录令牌",
-    /// 没登录时说"未登录 WorkBuddy 账号",auth_source 用新的 "web" 让前端出登录按钮。
+    /// WorkBuddy 改走网页登录(裁决 1A/3B)之后的界面口径:没登录时说"未登录 WorkBuddy
+    /// 账号",auth_source 用 "web" 让前端出登录按钮。凭据的两种形态分开报 ——
+    /// 会话是从宿主浏览器 profile 里现取的,cookie 前缀是它的标志(2026-10-08)。
     #[test]
     fn web_session_channel_reports_login_state_not_local_files() {
         let def = providers::find("workbuddy").expect("workbuddy 渠道存在");
         assert_eq!(def.auth, AuthKind::WebSession);
         assert_eq!(placeholder(def).auth_source, "web");
         assert_eq!(auth_label(def, None), "未登录 WorkBuddy 账号");
-        let cred = appauth::Credential {
-            token: "t".into(),
+        let session = appauth::Credential {
+            token: "cookie:session=A; session_2=B".into(),
             source: String::new(),
         };
-        assert_eq!(auth_label(def, Some(&cred)), "网页登录令牌");
+        assert_eq!(auth_label(def, Some(&session)), "浏览器网页会话");
+        let pasted = appauth::Credential {
+            token: "eyJhbGciOi.abc".into(),
+            source: String::new(),
+        };
+        assert_eq!(auth_label(def, Some(&pasted)), "手动粘贴的密钥");
         // 过期指引必须指回挂件,不能再让人去开桌面客户端(那条路已被加密存储堵死)
         assert_eq!(
             expired_credential_msg(def).as_deref(),
