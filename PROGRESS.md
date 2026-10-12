@@ -1004,6 +1004,135 @@ CARGO_TARGET_DIR:构建直接在仓库里跑,产物落在 `app/src-tauri/target`
 
 ---
 
+---
+
+## 4SAPI 可用模型查询 + 一键配置到客户端(2026-10-12,v0.1.20 发布)
+
+设计稿 [`design-4sapi-models.html`](design-4sapi-models.html),已实现口径见 `DESIGN.md` 第 12 节。
+这里记取证过程、踩坑与实测结果。
+
+### 取证(全部可复核)
+
+**4SAPI 侧**(真接口,经代理 127.0.0.1:7897):
+
+| 端点 | 实测 |
+|---|---|
+| `GET /api/pricing` | 200 · 103 588 B · **160 个模型** · 无需密钥 · 含 `group_ratio`/`usable_group`/`vendors`/`pricing_version` |
+| `GET /api/status` | `quota_per_unit=500000`、`quota_display_type=CNY`、`display_in_currency=true` |
+| `GET /v1/models` | 无 key → 401 `{"error":{"message":"Invalid token",…,"type":"new_api_error"}}` → 标准 OpenAI 兼容层 |
+| `GET /api/user/self` | 无 key → 401(另一套错误体,`AUTH_UNAUTHORIZED`) |
+
+**单价公式**不是猜的:从站点 pricing 页的 JS bundle(`index.076be96f81.js`)里抠出原文
+`let e = 2 * t.model_ratio * d;` + `补全价格 = 2 * model_ratio * completion_ratio * 分组倍率`,
+配合 `quota_per_unit=500000`(与挂件 4SAPI 渠道的「500000 积分 = ¥1」同一个数)确定口径为
+**元/百万 token**。34 个模型是 `billing_expr` 阶梯计价(只标徽标,不给确定价),12 个按次计费。
+
+**四个客户端的落点**(本机真文件;密钥字段只记长度):
+
+| 客户端 | 落点 | 关键字段 |
+|---|---|---|
+| Trae CN / SOLO CN | `%APPDATA%\<安装>\User\globalStorage\state.vscdb` 的 `ItemTable` | 两条 `*model_list_map` + `*recent_user_selection_by_agent_label` |
+| WorkBuddy | `~/.workbuddy/models.json` + `settings.json` 的 `model` | 条目 12 字段,`apiKey` 明文;BOM + 2 空格 |
+| WorkBuddy AI | `~/.workbuddy-ai/models.json`(当前是 `[]`) | 同结构;`settings.json` 里还没有 `model` 键 |
+| ZCode | `~/.zcode/v2/config.json` + `provider_config.json` | provider 定义 + `providerRules`/`providerModelRules`(`schemaVersion:1`) |
+
+**Trae 的 modelId 口径用三个真样本破译**(单测里对着样本回归):
+
+```text
+内置:   solo_agent_lite_1__DeepSeek-V4-Flash-Official_null
+自定义: solo_agent_3_custom_openai_compatible_custom_openai_compatible//claude-sonnet-5_2607458050
+→ <agentLabel>_<config_source>_<provider>_<name>_<custom_model_id 或 null>
+```
+
+中段就是条目里的 `config_source`(内置=1、自定义=3)。顺手证伪了一个猜测:`custom_model_id`
+**不是**模型名的哈希 —— crc32 / fnv1a32 / djb2 / java-hash / adler32 全试过,都不等于现成样本
+`2607458050`(它是应用自己分配的号,所以新条目按"比现有最大值大且不冲突"生成)。
+
+**WorkBuddy 的 `custom-local:` 前缀**来自服务端特性开关:在 `app.asar` 里找到
+`const shouldPrefixId = !!ctx.current.productFeatures?.[ProductFeature.CustomModelIdPrefix];`,
+而它同时给模型加了 `aliases: [原 id]`。既然是开关决定的,就只能**现读现学**(见 `learn_prefix`):
+当前选中值带前缀 → 照此写;是裸 id 且命中我们写的条目 → 不加前缀;是内置模型 → 学不到就不写。
+
+### 踩坑
+
+1. **`json!` 的递归上限**:Trae 的自定义模型条目是 40 个字段的字面量,`json_internal!` 每键展开一层,
+   撞上默认 128 的 recursion limit → `core/src/lib.rs` 加 `#![recursion_limit = "256"]`。
+2. **`split_at(len - 1)` 在中文 tag 上 panic**:`"多模态"` 的最后一个字符占 3 字节,按字节切会落在字符中间。
+   改成先按字节判(末尾必须是 ASCII、前面全是 ASCII 数字)再切片,并顺手把 `2K/4K`(分辨率)排除在
+   上下文标签之外。
+3. **`clip.exe` 要 UTF-16LE**:按控制台代码页解释字节流,中文标签走 UTF-8 会被切坏;
+   密钥经 stdin 送,不进命令行(进程命令行对其它程序可见)。
+4. **测试读回带 BOM 的文件不能用 `from_str`**:我们写 WorkBuddy 的文件时照原样保留 BOM(原文件有),
+   而 `serde_json::from_str` 不吃 BOM —— 测试统一走 `read_json`(它会剥)。
+5. **`set_config` 会抹掉后端学到的 `selection_prefix`**:前端手里那份是旧快照,整份覆盖等于清空。
+   与 `skipped_version` / `win_x` 同一类坑,已加合并(后端已知的键以库里为准)。
+6. **`tasklist` 的判定不能看提示文案**:中文系统的"没有运行的任务…"与英文不同;
+   改成按 CSV 首列(进程名整串、忽略大小写)比对。两个 WorkBuddy 共用 `WorkBuddy.exe`,
+   分不清跑的是哪一个 → 只要有一个在跑,两个都判为"正在运行"(保守方向)。
+7. **`serde_json` 要开 `preserve_order`**:默认 `BTreeMap` 会把写回客户端配置的键序按字母重排,
+   等于把我们没打算动的部分也"改"了一遍。`indexmap 2.14.2` 已在锁文件里,离线可用。
+8. **`rustup default` 变成了 msvc,release 链接直接炸**(2026-10-12 本轮实测):
+   ```
+   liblibsqlite3_sys-*.rlib(...sqlite3.o) : error LNK2019: 无法解析的外部符号 ___chkstk_ms
+   G:\...\target\release\deps\tokenscope.exe : fatal error LNK1120: 1 个无法解析的外部命令
+   ```
+   `LNK2019/LNK1120` 是 **MSVC 链接器**的报错格式,而 `___chkstk_ms` 是 MinGW 运行库符号 ——
+   就是说:sqlite3.o 是 MinGW gcc 编的,最后却交给 MSVC 的 `link.exe` 去链。
+   根因是 `rustup default` 指向了 `stable-x86_64-pc-windows-msvc`(本机两套工具链都装着,
+   gnu 那套是历史默认;别的项目把默认改掉了)。**本项目只能走 GNU**(见 README 的
+   WebView2Loader 静态链接那段)。修法二选一,都不用动全局配置:
+   ```powershell
+   cargo +stable-x86_64-pc-windows-gnu build --release   # 单次指定
+   rustup default stable-x86_64-pc-windows-gnu           # 或把默认改回来
+   ```
+   注意 `build/build.ps1` 只设 PATH/CC/CXX,**不指定工具链** —— 它默认 `rustup default` 是 gnu。
+   本机默认被改掉之后,`build.ps1 build` 会以同样的方式失败。
+9. **非 async 的 Tauri 命令跑在主线程上 —— 一次卡住,整个挂件不响应**(本轮最贵的一课):
+   模型页的命令一开始全写成普通 `fn`,里面却在起 `tasklist` 探进程、读客户端配置、读凭据管理器。
+   真机现象:点了一次「写入预告」之后,界面<b>所有</b>新命令都不再返回(连 `inject_state` 也超时),
+   而且 WorkBuddy 渠道那一行从面板上消失了 —— 因为它的会话读取(`wb_session_of`)要回主线程取
+   Cookie,主线程被占住就直接超时,渠道退化成"没有凭据"。
+   排查路径也值得记:后端 <code>get_model_catalog</code> 单独调用 9 秒内就返回了,
+   价目表/可用集合都是真的,而界面停在「正在取…」——**"后端成功 + 前端抛异常"与"请求还没回来"
+   在截图上完全一样**。后来拿 CDP 直接 evaluate `renderModels()` 才看到 `timeAgo is not defined`
+   (前端改名了但没同步调用点),再往后是三个命令依次超时,才定位到主线程被占。
+   修法两条:命令改 `async fn` + 把阻塞段放进 `tokio::task::spawn_blocking`;`tasklist` 加 5 秒超时
+   (超时就杀掉并退化为"未运行")。这跟取数路径早就写下的那条教训是同一条
+   —— 文件 IO / keygen RPC / 进程探测都不是主线程该干的活。
+
+### 单测
+
+`cargo test`(core)= **91 passed**。本轮新增 65 个,覆盖:
+
+- 价目表解析(缺字段 / 脏数字 NaN / 阶梯 / 按次 / 中文 tag 不 panic / 图像分辨率不算上下文)
+- 单价换算(站点公式对拍、分组回退并标明、分组表缺失时不给价)
+- 可用集合 join(`usable: null` 与 `false` 是两种状态)
+- 缓存往返与入口域名优先级(只认"密钥被接受过"的域名)
+- 四客户端写入:幂等不重复、撞名更新且保留用户起的名字、BOM 保留、结构不认就拒写、
+  ZCode 复用同一个 provider、`deletedModels` 解禁、Trae 每个 agent 组各一条、
+  备份 → 校验 → 回滚逐字节一致、备份只留 5 份、台账只留 20 条
+- Trae modelId 口径对着**两个真样本**回归;`custom_model_id` 不冲突
+- 目标在跑 → 拒写(硬规矩进单测,不只写在文档里)
+
+### 发版(v0.1.20)
+
+- 两处版本号同步(`app/src-tauri/Cargo.toml` + `tauri.conf.json`)= 0.1.20;
+  `build/make-latest-json.js` 断言通过,`latest.json` 的 url 指向
+  `releases/download/v0.1.20/Grandettoken_0.1.20_x64-setup.exe`。
+- `build/build.ps1 bundle`(签名私钥 + **显式空密码**从 bash export,踩坑见 RELEASE.md)→
+  安装包 4.60 MB + `.sig` 424 B;构建脚本尾部自带断言 `import table clean (no WebView2Loader.dll)` 通过。
+- **`build.ps1` 本轮加了一行 `RUSTUP_TOOLCHAIN`**:把工具链钉死成
+  `stable-x86_64-pc-windows-gnu`。原因是本机 `rustup default` 已被别的项目改成 msvc,
+  不钉的话 `bundle` / `build` 会以 `LNK2019 ___chkstk_ms` 失败(见踩坑 8)。
+
+### 还没真机验的部分(诚实清单)
+
+1. **写入后客户端真能跑起该模型**:条目格式与用户手配的逐字段对齐,但"发一条最小请求"会产生真实
+   计费,所以不由挂件代跑 —— 留给用户点一次。
+2. **WorkBuddy / WB AI 的选中项写入**:前缀学到之前只写条目。第一次在客户端里选中后,
+   `inject_state` 会读到并记住口径,之后才自动写选中项。
+3. **Trae 的选中项**:实验开关默认关(口径已破译并有单测回归,但客户端认不认只有真机能验)。
+
 ## 尚未实现 / 待验证
 
 - ~~布局修复的运行时验证~~ ✅ 已完成(2026-09-16):`build/verify-form.js`

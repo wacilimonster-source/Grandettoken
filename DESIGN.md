@@ -34,7 +34,10 @@
 - **不做多账户聚合面板/团队共享**。单机单用户。
 - **不做汇率换算**。各接口标注的 USD 实际结算为人民币,统一按 ¥ 展示并直接求和。
 - **不做历史账单导出**(原型稿底栏曾有此入口,已确认不做)。
-- **不做余额不足的"代申请/代充值"**。只展示状态,不代替用户执行外部动作。
+- **不做余额不足的"代申请/代充值"**。只展示状态,不代替用户执行**平台侧**外部动作。
+  > 2026-10-12 收紧措辞:模型一键配置(第 12 节)会在**本机**写客户端配置文件 —— 那类动作
+  > 由用户逐次显式发起、有备份可回滚、后果在本地,和"替你向平台申请/充值"性质不同,
+  > 不该被同一条禁令盖住,故单列契约。
 
 ---
 
@@ -386,7 +389,11 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 | 10 | 申请制额度状态机(倒计时/手动优先/撑不到预警) | ✅ | `fetch.rs` |
 | 11 | 本地零点 / 周一起算 / 月初起算 | ✅ | `fetch.rs` |
 | 12 | 设置项(`Config`)+ 容器级 `serde(default)` 老库兼容 | ✅ | `config.rs` |
-| 13 | 26 个单元测试 | ✅ | 各模块 `#[cfg(test)]` |
+| 13 | 26 个单元测试(2026-10-12 起为 91 个) | ✅ | 各模块 `#[cfg(test)]` |
+| 14 | 4SAPI 价目表解析 + 可用集合 + 单价换算 + 缓存 | ✅ | `models.rs` |
+| 15 | 四客户端写入契约(备份 / 读回校验 / 回滚 / 幂等 / 结构不认就放弃) | ✅ | `inject.rs` |
+| 16 | Trae modelId 口径还原(用真样本回归) | ✅ | `inject.rs` `trae_model_id` |
+| 17 | WorkBuddy 选中项前缀的现读现学 | ✅ | `inject.rs` `learn_prefix` |
 
 ### 8.2 外壳 `app/src-tauri`
 
@@ -399,6 +406,7 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 | 18 | 全局置顶唯一写入口(窗口状态与配置一起改) | ✅ | `set_pin` |
 | 19 | ACL 权限集(形态切换 / 贴边移动 / 拖拽所需) | ✅ | `capabilities/default.json` |
 | 20 | 固定尺寸窗口样式(无 `WS_THICKFRAME` / `WS_MAXIMIZEBOX`) | ✅ | `tauri.conf.json` + `win-style.ps1` 断言 |
+| 21 | 模型页命令组(取清单 / 预告 / 写入 / 状态 / 回滚 / 复制三件套 / 开目录) | ✅ | `src/lib.rs` |
 
 ### 8.3 前端 `app/src`
 
@@ -424,6 +432,11 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 | 38 | 官方图标 + 字母方块回退 + `off` 态去色 | ✅ | `iconHtml` |
 | 39 | 置顶按钮与设置项双向同步 | ✅ | `applyPinUI` |
 | 40 | `Esc` 分级回退 | ✅ | `keydown` |
+| 41 | 「模型」页签(搜索 / 过滤芯片 / 分组切换 / 单价 / 四客户端按钮) | ✅ | `renderModels` |
+| 42 | 写入预告 —— 确认前看到文件、动作、明文密钥、备份位置与阻塞原因 | ✅ | `renderModelSheet` |
+| 43 | 写入结果与一键回滚 / 打开备份目录 | ✅ | `injectGo` / `mdlrollback` |
+| 44 | 客户端状态条(装没装 / 在不在跑 / 写了几条 / 选中的是哪个) | ✅ | `mdlClientChip` |
+| 45 | 4SAPI 行展开里的「可用模型 → 去挑模型」入口 | ✅ | `renderDetail` |
 
 ### 8.4 工具链 `build/`
 
@@ -705,6 +718,102 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 4. **第四轮(新能力)**:B5 点击穿透 → B2 吸附预览与分级展开 → B1 吸附预览线 → B4 轮播指示点 → A2 浅色主题 → B10/B17 告警闭环。
 
 > **交叉提醒**:A6 会改变固定尺寸的标定值,`build/verify-form.js` 里的 `EXPECT` 与 `win-style.ps1` 的断言必须同步更新;A2 浅色主题落地前,先完成 A4 的对比度修正,否则浅色下的层级关系需要重新推导一遍。
+
+---
+
+## 12. 4SAPI 可用模型查询 + 一键配置到客户端(2026-10-12 落地,v0.1.20 发布)
+
+设计稿与取证过程见 [`design-4sapi-models.html`](design-4sapi-models.html),这里只记已实现的口径。
+
+### 12.1 模型清单从哪来
+
+两个**元数据接口**(不产生 token 计费,与"取数不消耗 token"同一条原则):
+
+| 端点 | 作用 | 关键实测 |
+|---|---|---|
+| `GET /api/pricing` | 公开价目表:名称/中文说明/标签/厂商/倍率/支持分组/接口类型 | 160 个模型、约 103 KB、无需密钥 |
+| `GET /v1/models` | **这把 key 能调哪些**(网关按所属分组过滤) | 认 `Authorization: Bearer`;无 key → 401 |
+
+- **可用性的定义**:`/v1/models` 返回 = 可用。取不到时整页退成"价目表浏览",不把 160 个都说成可用
+  (`usable: null` 与 `usable: false` 是两种状态)。
+- **入口域名**只有一个来源:`providers::four_s_api_hosts()`(从 4SAPI 渠道定义的主/备地址推导),
+  写进客户端时优先用**实测接受过这把密钥**的域名(`ModelCache::best_host`)。
+- **缓存**:落 SQLite settings 的单独一行(不进 `Config` —— 那份配置会被前端整份往返),24 小时自动刷
+  一次 + 手动刷新;失败显示上次快照并如实报错。
+
+### 12.2 单价口径(与站点自己的前端逐行一致)
+
+```text
+输入单价(¥/百万 token) = 2 × model_ratio × 分组倍率
+输出单价                = 输入单价 × completion_ratio
+按次计费(quota_type=1) = model_price ¥/次
+```
+
+- 折算依据:站点 `/api/status` 声明 `quota_per_unit=500000`、`quota_display_type=CNY` ——
+  与 4SAPI 余额渠道的「500000 积分 = ¥1」同一个数,**模型单价与面板余额是同一种货币**。
+- 公式原文取自站点 pricing 页的 JS(`2 * t.model_ratio * d`,2026-10-12 取证),不是猜的。
+- **阶梯计价**(34 个模型,`billing_expr`)只给徽标与原文表达式,单价带 `*`,不假装是确定价。
+- 所选分组不含该模型时,退回"含有它的、倍率最低的分组"并**在行内标明是哪个分组**。
+- 分组倍率是站点声明的,不是我们算的 —— 口径行写清用的是哪个分组,分组可切。
+- 默认只显示能当编码/对话模型用的(`supported_endpoint_types` 含 openai/anthropic 且 tags 不含
+  图像/视频/音频/向量),「显示全部」开关能放回 160 个。
+
+### 12.3 四个客户端写入契约(缺一不写)
+
+共同前提:**① 目标进程不在运行 ② 先备份 ③ 只增改自己写的那条 ④ 写完读回校验,不过就回滚**。
+
+| 客户端 | 落点 | 形态 | 选中项 |
+|---|---|---|---|
+| WorkBuddy | `~/.workbuddy/models.json`(+ `settings.json` 的 `model`) | 明文 JSON 数组(带 BOM、2 空格) | 学到前缀才写 |
+| WorkBuddy AI | `~/.workbuddy-ai/models.json`(同结构) | 同上 | 学到前缀才写 |
+| ZCode | `~/.zcode/v2/config.json` + `provider_config.json` | 两份 JSON(`schemaVersion` 不是 1 就放弃) | 不需要(会话级) |
+| Trae | `%APPDATA%` 下各安装的 `User/globalStorage/state.vscdb` | SQLite 的 `ItemTable` | 实验开关(默认关) |
+
+- 备份在 `<配置目录>/backup-inject/<时间戳>/`,含 SQLite 的 `-wal/-shm`,保留最近 5 份,可一键回滚。
+- **两个 WorkBuddy 共用进程名 `WorkBuddy.exe`**:只要有一个在跑,两个都判为"正在运行"(保守方向)。
+- 幂等:同模型写两次不产生重复条目;ZCode 复用同一个 provider id(名字为 `4SAPI` 的那条);
+  Trae 更新时保留原 `custom_model_id`。
+- 认不出来就放弃:结构/版本号与取证时不符 → 不写、不改、不猜。
+- 撞名(同 id 属于别家服务)不回避但必须点明:预告里写出"原本指向 xxx,将被覆盖"。
+
+### 12.4 Trae 的 modelId 口径(用真样本破译)
+
+```text
+内置:   <agent>_1__<显示名>_null
+自定义: <agent>_3_custom_openai_compatible_custom_openai_compatible//<模型>_<custom_model_id>
+即     <agentLabel>_<config_source>_<provider>_<name>_<custom_model_id 或 null>
+```
+
+`custom_model_id` 是**应用自己分配的数字**,不是模型名的哈希(crc32/fnv1a/djb2/java-hash/adler32
+全试过,都不等),所以新条目按"比现有最大值大且不冲突"生成。模型条目在**每个 agent 组**各一份;
+写新条目优先克隆同组已有的自定义条目(版本差异靠它吸收),没有才用内置模板。
+
+### 12.5 WorkBuddy 的选中项前缀
+
+`custom-local:` 前缀加不加由服务端特性开关 `ProductFeature.CustomModelIdPrefix` 决定
+(2026-10-12 从 `app.asar` 取证)。所以**现读现学**:当前选中值带前缀 → 照此写;是裸 id 且命中我们
+写的条目 → 不加前缀;是内置模型 → 学不到(不猜)。学不到就只写条目,并提示"在客户端里选一次"。
+学到的口径存 `Config.selection_prefix`(后端从文件读到的证据,前端整份覆盖不会抹掉它)。
+
+### 12.7 实现注意(踩过的坑,别再踩)
+
+- **模型页的命令必须是 `async fn` + `spawn_blocking`**:非 async 的 Tauri 命令跑在主线程上,
+  而这条路上有 `tasklist` 进程探测、客户端文件 IO、凭据管理器读取 —— 全是阻塞活。
+  真机踩过一次:一次卡住 → 所有命令排队不返回,连主线程上取 WorkBuddy Cookie 的路径都跟着超时。
+- **`tasklist` 带 5 秒超时**:超时杀掉并退化为"未运行";真正的保护始终是"先备份 + 读回校验"。
+- **价目表按字节判、再切片**:`split_at(len - 1)` 遇到中文 tag(`多模态`)会 panic。
+- **写回客户端配置要保留键序**:`serde_json` 开 `preserve_order`(indexmap 已在锁文件里)。
+- **WorkBuddy 的 `models.json` 带 BOM**:读要剥、写要照原样保留。
+- **前端渲染异常不许把界面留在"正在取…"里**:`renderModels` 外面套了 try/catch,
+  出错就把原因写在口径行上(否则"后端成功 + 前端抛异常"会被误读成"请求没回来")。
+
+### 12.6 安全
+
+- 密钥只从 Windows 凭据管理器**现读现写**:不回前端(「复制三件套」由后端拼字符串)、不进数据库、
+  不进日志、不进备份(备份只备份客户端自己的文件)。
+- 明文目的地逐个客户端写明(WorkBuddy 的 `apiKey`、Trae 的 `ak`、ZCode 的 `options.apiKey`)——
+  这是本功能最大的信任成本,界面不藏。
+- 「复制三件套」写系统剪贴板(经 `clip.exe` 的 stdin,密钥不进命令行),界面说明"对其他程序可见"。
 
 ---
 

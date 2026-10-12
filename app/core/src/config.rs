@@ -99,6 +99,21 @@ pub struct Config {
     /// (扫描报告 O-6)。None = 从没存过,按配置文件的默认摆放。
     pub win_x: Option<i32>,
     pub win_y: Option<i32>,
+    /// 写进客户端的 4SAPI 入口(如 `https://4sapi.com/v1`)。None = 用挂件实测可用的域名。
+    /// 用户手配的三个客户端里写的是三个不同域名(.org/.cn/.com),所以这里显式可配。
+    pub model_base_url: Option<String>,
+    /// 模型页价格口径用的分组。None = 站点 auto_groups 的首个(「一key官方中转全模型」)。
+    /// 分组是**站点声明**的倍率,我们只负责照它折算,不替用户猜分组。
+    pub model_group: Option<String>,
+    /// 模型页是否显示全部类型。默认关 = 只显示能当编码/对话模型用的(排掉图像/视频/音频/向量)。
+    pub model_show_all: bool,
+    /// 学到的「选中项前缀」口径(client id → 前缀)。WorkBuddy 的 `custom-local:` 前缀
+    /// 由服务端特性开关决定,只能从它自己的选中值里现读现学;学不到就不写选中项
+    /// (见 `inject::learn_prefix`)。
+    pub selection_prefix: HashMap<String, String>,
+    /// Trae 的「选中项」写入。默认关:条目写入是确定性的,选中项的口径虽然已破译,
+    /// 但客户端认不认只有真机能验,所以留成显式开关。
+    pub trae_auto_select: bool,
 }
 
 impl Default for Config {
@@ -130,6 +145,11 @@ impl Default for Config {
             skipped_version: None,
             win_x: None,
             win_y: None,
+            model_base_url: None,
+            model_group: None,
+            model_show_all: false,
+            selection_prefix: HashMap::new(),
+            trae_auto_select: false,
         }
     }
 }
@@ -201,8 +221,7 @@ mod tests {
 
     /// 老配置里没有 claimChannels,加载后必须拿到"4SAPI 默认开启申请制"。
     #[test]
-    fn missing_claim_channels_defaults_to_four_s_api_enabled() {
-        let old = r#"{"activeIntervalSec":60,"form":"panel","sort":"percent"}"#;
+    fn missing_claim_channels_defaults_to_four_s_api_enabled() {        let old = r#"{"activeIntervalSec":60,"form":"panel","sort":"percent"}"#;
         let c: Config = serde_json::from_str(old).unwrap();
         let s = c.claim_channels.get("4sapi").expect("4sapi 应有默认规则");
         assert!(s.enabled);
@@ -213,8 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn claim_channels_roundtrip() {
-        let mut c = Config::default();
+    fn claim_channels_roundtrip() {        let mut c = Config::default();
         c.claim_channels.insert(
             "hapi".into(),
             ClaimConfig {
@@ -232,5 +250,31 @@ mod tests {
         assert_eq!(h.amount, 100.0);
         assert_eq!(h.min_interval_days, 7);
         assert_eq!(h.manual_last_at, Some(1_700_000_000));
+    }
+
+    /// 模型相关的新字段:老配置缺字段要能兜默认(入口跟随实测、分组跟随站点、
+    /// 默认不显示全部类型、Trae 选中项开关默认关),学到的前缀要能往返。
+    #[test]
+    fn model_fields_default_and_roundtrip() {
+        let old = r#"{"activeIntervalSec":60,"form":"panel","sort":"percent"}"#;
+        let c: Config = serde_json::from_str(old).unwrap();
+        assert!(c.model_base_url.is_none());
+        assert!(c.model_group.is_none());
+        assert!(!c.model_show_all);
+        assert!(!c.trae_auto_select, "Trae 选中项是实验开关,默认必须关");
+        assert!(c.selection_prefix.is_empty());
+
+        let mut c2 = Config::default();
+        c2.model_base_url = Some("https://4sapi.cn/v1".into());
+        c2.model_group = Some("国产全模型".into());
+        c2.selection_prefix
+            .insert("workbuddy".into(), "custom-local:".into());
+        let back: Config = serde_json::from_str(&serde_json::to_string(&c2).unwrap()).unwrap();
+        assert_eq!(back.model_base_url.as_deref(), Some("https://4sapi.cn/v1"));
+        assert_eq!(back.model_group.as_deref(), Some("国产全模型"));
+        assert_eq!(
+            back.selection_prefix.get("workbuddy").map(String::as_str),
+            Some("custom-local:")
+        );
     }
 }

@@ -40,3 +40,8 @@ credentials.json
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# ── AI 代理的工作目录(memory / plans / rollout 之类,不是项目文件)──
+.workbuddy/
+.workbuddy-ai/
+.zcode/

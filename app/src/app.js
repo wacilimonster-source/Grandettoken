@@ -652,6 +652,12 @@ function renderDetail(c) {
     );
   }
   if (authHint) body.push(authHint);
+  if (c.id === "4sapi" && !noKey) {
+    const n = MDL.view ? MDL.view.usableCount || MDL.view.total : 0;
+    body.push(`<div class="hint" style="margin:0 0 8px">4SAPI 可用模型${
+      n ? " " + n + " 个" : ""
+    } —— <span class="lk" data-act="open-models">去「模型」页挑一个,一键配到 Trae / WorkBuddy / WorkBuddy AI / ZCode</span>。</div>`);
+  }
   body.push(manageLink);
 
   return `<div class="rbody-in">${body.join("")}</div>`;
@@ -1691,6 +1697,10 @@ $("list").addEventListener("click", async (e) => {
     const a = act.dataset.act;
     if (a === "open-manage") {
       openManage();
+    } else if (a === "open-models") {
+      openManage();
+      showTab("mdl");
+      ensureModels();
     } else if (a === "range") {
       const h = Number(act.dataset.h);
       sparkHours[id] = h; // 记住选择,轮询重建详情时不会再跳回 24 小时
@@ -1757,6 +1767,13 @@ $("btnR").addEventListener("click", async () => {
   const bad = CHANNELS.filter((c) => c.hasKey && !c.hidden && !c.valid).length;
   showToast(bad ? `${bad} 个渠道取数失败` : "已更新 · 刚刚", bad > 0);
 });
+// 模型页:搜索框与「重新取价目表」按钮
+$("mdlQ").addEventListener("input", () => {
+  MDL.q = $("mdlQ").value || "";
+  renderModels();
+});
+$("mdlR").addEventListener("click", () => loadModels(true));
+
 // ───────────── 标题栏按钮 ─────────────
 // 排序不放标题栏:标题栏在默认面板宽(380 逻辑像素)下本来就不够宽,
 // 加一个排序键会把最右边的「隐藏」整个挤出窗口外(实测内容需 417px)。
@@ -1778,6 +1795,8 @@ $("mTabs").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-p]");
   if (!b) return;
   showTab(b.dataset.p);
+  // 模型页签才去取清单:没打开就不打扰接口(价目表一天一次的手动/自动刷新)
+  if (b.dataset.p === "mdl") ensureModels();
 });
 // 置顶:窗口状态与配置一起改(见 Rust 的 set_pin),按钮与设置项共用同一个值
 async function setPin(enabled) {
@@ -1905,6 +1924,14 @@ $("manage").addEventListener("change", async (e) => {
   if (!el) return;
   const id = el.dataset.id;
   const a = el.dataset.act;
+  if (a === "mdlgroup") {
+    // 只换价格口径:价目表里就有分组倍率,不必重新联网(缓存不新鲜时后端自己会刷)
+    CFG.modelGroup = el.value;
+    invoke("set_config", { config: CFG }).catch(() => {});
+    MDL.view = null;
+    loadModels(false);
+    return;
+  }
   const cur = CFG.claimChannels && CFG.claimChannels[id];
   if (!cur) return;
   if (a === "claimamount") {
@@ -1938,6 +1965,65 @@ $("manage").addEventListener("click", async (e) => {
   if (!act) return;
   const id = act.dataset.id;
   const a = act.dataset.act;
+  // ── 模型页:过滤芯片 / 写入预告 / 写入 / 复制三件套 / 回滚 / 开目录 ──
+  if (a === "mdlfilter") {
+    const f = act.dataset.f;
+    MDL.f[f] = !MDL.f[f];
+    act.classList.toggle("on", MDL.f[f]);
+    // 「只看编码/对话」= !modelShowAll,顺手持久化,下次打开还是这个口径
+    if (f === "chat") {
+      CFG.modelShowAll = !MDL.f.chat;
+      invoke("set_config", { config: CFG }).catch(() => {});
+    }
+    renderModels();
+    return;
+  }
+  if (a === "mdlcli") {
+    await openModelSheet(act.dataset.c, id);
+    return;
+  }
+  if (a === "mdlclistate") {
+    MDL.sheet = { kind: "client", client: id };
+    renderModelSheet();
+    return;
+  }
+  if (a === "injectgo") {
+    await injectGo();
+    return;
+  }
+  if (a === "mdlclose") {
+    MDL.sheet = null;
+    renderModelSheet();
+    return;
+  }
+  if (a === "mdlcopy") {
+    try {
+      const msg = await invoke("copy_model_bundle", { model: id });
+      showToast(msg + " · 已复制到剪贴板");
+    } catch (err) {
+      showToast("复制失败:" + err, true);
+    }
+    return;
+  }
+  if (a === "mdlrollback") {
+    try {
+      const msg = await invoke("inject_rollback", { backup: id });
+      showToast(msg);
+      MDL.sheet = null;
+      loadInjects();
+    } catch (err) {
+      showToast("回滚失败:" + err, true);
+    }
+    return;
+  }
+  if (a === "openpath") {
+    try {
+      await invoke("open_path", { path: id });
+    } catch (err) {
+      showToast("打开失败:" + err, true);
+    }
+    return;
+  }
   if (a === "chfold") {
     // 就地开合,不整页重建 —— 展开区里可能正填着密钥
     const card = act.closest(".ccard");
@@ -2426,6 +2512,359 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+
+// ───────────── 4SAPI 可用模型 + 一键配置到客户端 ─────────────
+// 设计见 design-4sapi-models.html。三条纪律落在界面上:
+//   ① 价目表与可用集合都是元数据接口,不产生 token 计费;
+//   ② 写入一律「先备份 → 写 → 读回校验」,目标在跑就拒写(判定在 Rust 侧);
+//   ③ 明文密钥会写进客户端自己的配置文件 —— 每次都要你在预告里看清落到哪个文件
+//      才执行;挂件不留副本(「复制三件套」也由后端拼字符串,密钥不回前端)。
+const MDL = {
+  view: null,                        // get_model_catalog 的返回
+  clients: [],                       // inject_state 的客户端状态
+  log: [],                           // 写入台账(不含密钥)
+  q: "",                             // 搜索词
+  f: { chat: true, usable: false, done: false }, // 过滤芯片
+  sheet: null,                       // 当前展开的预告 / 结果 / 客户端详情
+  loading: false,
+};
+const CLIENT_NAME = {
+  trae: "Trae",
+  workbuddy: "WorkBuddy",
+  "workbuddy-ai": "WorkBuddy AI",
+  zcode: "ZCode",
+};
+
+/** 单价显示。价目表口径是元/百万 token;按次计费的是元/次。 */
+function mdlMoney(v) {
+  if (v === null || v === undefined) return "—";
+  if (v >= 100) return "¥" + v.toFixed(0);
+  if (v >= 1) return "¥" + v.toFixed(2);
+  return "¥" + v.toFixed(3);
+}
+function mdlPriceText(r) {
+  const p = r.price || {};
+  if (p.perCall !== null && p.perCall !== undefined) return mdlMoney(p.perCall) + " / 次";
+  if (p.input === null || p.input === undefined) return "价目表未给单价";
+  const out = p.output === null || p.output === undefined ? "—" : mdlMoney(p.output);
+  return "入 " + mdlMoney(p.input) + " · 出 " + out + " / 百万 token" + (p.tiered ? " *" : "");
+}
+/** 「贵」用状态色标出来 —— 选哪个模型直接决定余额能撑多久,和余额是同一类判断。 */
+function mdlPriceTone(r) {
+  const p = r.price || {};
+  const v = p.input === null || p.input === undefined ? null : p.input;
+  if (v === null) return "";
+  if (v >= 100) return "bad";
+  if (v >= 20) return "warn";
+  return "";
+}
+
+function mdlConfiguredIds() {
+  const set = new Set();
+  for (const c of MDL.clients) for (const m of c.models || []) set.add(m);
+  return set;
+}
+function mdlDoneFor(clientId, modelId) {
+  const c = MDL.clients.find((x) => x.client === clientId);
+  return !!(c && (c.models || []).includes(modelId));
+}
+function mdlVisibleRows() {
+  if (!MDL.view) return [];
+  const q = MDL.q.trim().toLowerCase();
+  const done = mdlConfiguredIds();
+  const out = [];
+  for (const r of MDL.view.rows || []) {
+    // 默认只显示能当编码/对话模型用的(图像/视频/音频/向量排掉),开关一开全显示
+    if (MDL.f.chat && !r.chat) continue;
+    if (MDL.f.usable && r.usable !== true) continue;
+    if (MDL.f.done && !done.has(r.id)) continue;
+    if (q) {
+      const hay = (
+        r.id + " " + (r.vendor || "") + " " + (r.tags || []).join(" ") + " " + (r.description || "")
+      ).toLowerCase();
+      if (!hay.includes(q)) continue;
+    }
+    out.push(r);
+  }
+  // 已配置的置顶,其余按名字 —— 不做「热度排序」这类没有数据支撑的排序
+  out.sort((a, b) => {
+    const da = done.has(a.id) ? 0 : 1;
+    const db = done.has(b.id) ? 0 : 1;
+    return da - db || a.id.localeCompare(b.id);
+  });
+  return out;
+}
+
+function mdlClientChip(c) {
+  const n = (c.models || []).length;
+  const st = !c.installed ? "未装" : c.running ? "运行中" : n ? n + " 条" : "未配";
+  return (
+    '<div class="mcli-c' + (c.installed ? "" : " off") + '" data-act="mdlclistate" data-id="' +
+    esc(c.client) + '" title="' + esc(c.label + " · " + (c.files || []).join(" / ")) + '">' +
+    "<b>" + esc(c.short) + "</b><span>" + esc(st) + "</span></div>"
+  );
+}
+
+function mdlRowHtml(r) {
+  const done = mdlDoneFor;
+  const bits = [];
+  if (r.context) bits.push(r.context);
+  for (const t of r.tags || []) if (t !== r.context) bits.push(t);
+  if (r.vendor) bits.push(r.vendor);
+  if ((r.groups || []).length) bits.push(r.groups.length + " 个分组可用");
+  const badges = [];
+  if (r.tiered) badges.push('<span class="tagd">阶梯</span>');
+  if (r.usable === false) badges.push('<span class="tagd bad">当前 key 不可用</span>');
+  const p = r.price || {};
+  if (p.basisGroup) badges.push('<span class="tagd warn">价按「' + esc(p.basisGroup) + '」分组</span>');
+  const btns = ["trae", "workbuddy", "workbuddy-ai", "zcode"]
+    .map((id) => {
+      const st = MDL.clients.find((x) => x.client === id);
+      const installed = st ? st.installed : false;
+      const running = st ? st.running : false;
+      const on = done(id, r.id);
+      const cls = on ? " on" : running ? " run" : installed ? "" : " no";
+      const tip = installed
+        ? (on ? "已配置 · 再点一次可更新" : "写入 " + st.label) + (running ? "(正在运行 · 需先退出)" : "")
+        : "没检测到配置文件";
+      return (
+        '<button class="cdot' + cls + '" data-act="mdlcli" data-id="' + esc(r.id) + '" data-c="' + id +
+        '" title="' + esc(tip) + '"' + (installed ? "" : " disabled") + ">" +
+        esc(st ? st.short : "?") + "</button>"
+      );
+    })
+    .join("");
+  const anyDone = ["trae", "workbuddy", "workbuddy-ai", "zcode"].some((id) => done(id, r.id));
+  return (
+    '<div class="mrow' + (anyDone ? " done" : "") + '">' +
+    '<div class="mtop"><span class="mname">' + esc(r.id) + '</span><span class="cdots">' + btns + "</span></div>" +
+    '<div class="mtags">' + esc(bits.join(" · ")) + badges.join("") + "</div>" +
+    '<div class="mprice ' + mdlPriceTone(r) + '">' + esc(mdlPriceText(r)) + "</div>" +
+    "</div>"
+  );
+}
+
+/** 渲染异常不许把界面留在「正在取…」上:真机第一次自检就踩过这个坑
+    —— 后端早返回了,前端渲染抛异常,用户看到的是永远在加载。 */
+function renderModels() {
+  try {
+    renderModelsInner();
+  } catch (err) {
+    const meta = $("mdlMeta");
+    if (meta) meta.innerHTML = '<div class="mdlwarn">模型页渲染出错:' + esc(err && err.message) + "</div>";
+    console.error("renderModels", err);
+  }
+}
+
+function renderModelsInner() {
+  const meta = $("mdlMeta");
+  const list = $("mdlList");
+  if (!meta || !list) return;
+  const v = MDL.view;
+  $("mdlCli").innerHTML = MDL.clients.map(mdlClientChip).join("");
+  if (!v) {
+    meta.textContent = MDL.loading ? "正在取 4SAPI 的价目表…" : "还没取到价目表";
+    list.innerHTML = "";
+    return;
+  }
+  const groups = (v.groups || [])
+    .map((g) => '<option value="' + esc(g.name) + '"' + (g.name === v.group ? " selected" : "") + ">" +
+      esc(g.name) + " ×" + g.ratio + "</option>")
+    .join("");
+  const rows = mdlVisibleRows();
+  const gnote = (v.groups || []).find((g) => g.name === v.group);
+  meta.innerHTML =
+    '<div class="mrow1"><span>分组 <select class="sel mini" id="mdlGroup" data-act="mdlgroup">' + groups + "</select></span>" +
+    '<span class="dim">写进客户端:<b>' + esc(v.baseUrl) + "</b></span></div>" +
+    '<div class="mrow1"><span class="dim">' + rows.length + " / " + v.total + " 个模型 · 价目表 " +
+    (v.fetchedAt ? relTime(v.fetchedAt) : "未取到") +
+    (v.usableAt ? " · 可用集合 " + relTime(v.usableAt) : "") +
+    (v.hasKey ? "" : " · 未配密钥(只显示价目表)") + "</span>" +
+    (v.usableCount ? '<span class="ok">可用 ' + v.usableCount + "</span>" : "") + "</div>" +
+    (gnote && gnote.note ? '<div class="mdlnote">' + esc(gnote.note) + "</div>" : "") +
+    (v.error ? '<div class="mdlwarn">' + esc(v.error) +
+      (v.fetchedAt ? " · 下列是上次成功取回的价目表" : "") + "</div>" : "");
+  list.innerHTML = rows.length
+    ? rows.map(mdlRowHtml).join("")
+    : '<div class="empty">没有符合条件的模型' +
+      (MDL.f.chat ? "(「只看编码/对话」排掉了图像/视频/音频/向量模型)" : "") + "</div>";
+}
+
+/** 写入预告 / 写入结果 / 客户端详情 —— 三种内容共用一个底部面板。 */
+function renderModelSheet() {
+  const box = $("mdlSheet");
+  if (!box) return;
+  const s = MDL.sheet;
+  if (!s) {
+    box.innerHTML = "";
+    return;
+  }
+  if (s.kind === "client") {
+    const c = MDL.clients.find((x) => x.client === s.client);
+    if (!c) {
+      box.innerHTML = "";
+      return;
+    }
+    const recent = MDL.log.filter((r) => r.client === s.client).slice(0, 3);
+    box.innerHTML =
+      '<div class="sheet">' +
+      '<div class="srow"><span class="sk">客户端</span><span class="sv">' + esc(c.label) + " · " +
+      (c.installed ? (c.running ? "正在运行" : "未运行") : "没检测到配置文件") + "</span></div>" +
+      '<div class="srow"><span class="sk">配置</span><span class="sv">' + esc((c.files || []).join("  ·  ")) + "</span></div>" +
+      '<div class="srow"><span class="sk">已写入</span><span class="sv">' +
+      ((c.models || []).length ? esc(c.models.join("、")) : "还没有") + "</span></div>" +
+      '<div class="srow"><span class="sk">选中</span><span class="sv">' +
+      (c.selected ? esc(c.selected) : "读不到(它自己的选中项)") + "</span></div>" +
+      '<div class="srow"><span class="sk">备注</span><span class="sv">' + esc(c.note || "—") + "</span></div>" +
+      '<div class="acts" style="margin-top:8px">' +
+      '<button class="btn" data-act="openpath" data-id="' + esc((c.roots || [])[0] || "") + '">打开配置目录</button>' +
+      '<button class="btn" data-act="mdlclose">关闭</button></div>' +
+      (recent.length
+        ? '<div class="mdlsub">最近写入</div>' +
+          recent
+            .map(
+              (r) => '<div class="srow"><span class="sk">' + esc(r.stamp) + '</span><span class="sv">' +
+                esc(r.model) + (r.added ? " · 新增 " + r.added : "") + (r.updated ? " · 更新 " + r.updated : "") +
+                (r.selected ? " · 已选中" : "") + " " +
+                '<button class="btn s" data-act="mdlrollback" data-id="' + esc(r.backupPath) + '">回滚</button>' +
+                '<button class="btn s" data-act="openpath" data-id="' + esc(r.backupPath) + '">打开备份</button>' +
+                "</span></div>"
+            )
+            .join("")
+        : "") +
+      "</div>";
+    return;
+  }
+
+  // 写入预告 / 结果
+  const head = '<div class="mstop"><b>' + (s.reports ? "写入结果" : "写入预告") + "</b>" +
+    '<span class="dim">' + esc(s.model) + " → " + esc(CLIENT_NAME[s.client] || s.client) + "</span></div>";
+  if (s.error) {
+    box.innerHTML = '<div class="sheet">' + head + '<div class="mdlwarn">' + esc(s.error) + "</div>" +
+      '<div class="acts" style="margin-top:8px">' +
+      '<button class="btn" data-act="mdlcopy" data-id="' + esc(s.model) + '">复制三件套</button>' +
+      '<button class="btn" data-act="mdlclose">关闭</button></div></div>';
+    return;
+  }
+  if (!s.previews) {
+    box.innerHTML = '<div class="sheet">' + head + '<div class="dim">正在生成写入预告…</div></div>';
+    return;
+  }
+  if (s.reports) {
+    box.innerHTML = '<div class="sheet">' + head +
+      s.reports
+        .map(
+          (r) => '<div class="mdlok"><b>✓ ' + esc(r.label) + "</b> · " +
+            (r.added ? "新增 " + r.added + " 条" : "") + (r.updated ? "更新 " + r.updated + " 条" : "") +
+            (r.added + r.updated === 0 ? "没有改动(内容一致)" : "") +
+            '<div class="srow"><span class="sk">生效</span><span class="sv">' + esc(r.effect) + "</span></div>" +
+            (r.selected ? '<div class="srow"><span class="sk">选中</span><span class="sv">已写入选中项</span></div>' : "") +
+            '<div class="srow"><span class="sk">备份</span><span class="sv">' + esc(r.backup) +
+            '<button class="btn s" data-act="openpath" data-id="' + esc(r.backupPath) + '">打开</button>' +
+            '<button class="btn s" data-act="mdlrollback" data-id="' + esc(r.backupPath) + '">回滚这次写入</button>' +
+            "</span></div>" +
+            (r.notes || []).map((n) => '<div class="mdlnote">' + esc(n) + "</div>").join("") +
+            "</div>"
+        )
+        .join("") +
+      '<div class="acts" style="margin-top:8px">' +
+      '<button class="btn" data-act="mdlcopy" data-id="' + esc(s.model) + '">复制三件套</button>' +
+      '<button class="btn p" data-act="mdlclose">完成</button></div></div>';
+    return;
+  }
+  const blocked = s.previews.find((p) => p.blocked);
+  const changed = s.previews.some((p) => p.changed);
+  const writesSecret = s.previews.some((p) => p.writesSecret);
+  const writesSel = s.previews.some((p) => p.writesSelection);
+  box.innerHTML = '<div class="sheet">' + head +
+    s.previews
+      .map(
+        (p) => '<div class="mdlprev">' +
+          '<div class="srow"><span class="sk">目标</span><span class="sv">' + esc(p.label) + " · " +
+          esc(p.files.join("  ·  ")) + "</span></div>" +
+          '<div class="srow"><span class="sk">动作</span><span class="sv">' + esc(p.action) + "</span></div>" +
+          '<div class="srow"><span class="sk">选中</span><span class="sv">' +
+          (p.writesSelection ? "顺带写入客户端自己的选中项" : "不改选中项") + "</span></div>" +
+          (p.notes || []).map((n) => '<div class="mdlnote">' + esc(n) + "</div>").join("") +
+          (p.blocked ? '<div class="mdlwarn">' + esc(p.blocked) + "</div>" : "") +
+          "</div>"
+      )
+      .join("") +
+    (writesSecret
+      ? '<div class="mdlwarn">会把 4SAPI 密钥<b>明文</b>写进上面那个客户端自己的配置文件' +
+        "(它们本来就这么存)。挂件不保存副本、不写日志、不进备份。</div>"
+      : "") +
+    (!writesSel && !blocked
+      ? '<div class="mdlnote">选中项这次不写:写入后在客户端里选一次,挂件会记住口径,以后就能直接帮你选。</div>'
+      : "") +
+    '<div class="acts" style="margin-top:8px">' +
+    (blocked
+      ? '<button class="btn p" disabled>写入(已禁用)</button>'
+      : changed
+      ? '<button class="btn p" data-act="injectgo">写入</button>'
+      : '<button class="btn" disabled>内容一致 · 无需写入</button>') +
+    '<button class="btn" data-act="mdlcopy" data-id="' + esc(s.model) + '">复制三件套</button>' +
+    '<button class="btn" data-act="mdlclose">取消</button></div></div>';
+}
+
+async function loadModels(force) {
+  MDL.loading = true;
+  if (!MDL.view) renderModels();
+  try {
+    MDL.view = await invoke("get_model_catalog", { force: !!force });
+  } catch (e) {
+    showToast("取模型清单失败:" + e, true);
+  } finally {
+    MDL.loading = false;
+    renderModels();
+  }
+}
+async function loadInjects() {
+  try {
+    const ov = await invoke("inject_state");
+    MDL.clients = ov.clients || [];
+    MDL.log = ov.log || [];
+  } catch (e) {
+    MDL.clients = [];
+  }
+  renderModels();
+  renderModelSheet();
+}
+/** 打开某个模型的写入预告(纯读,还没有任何写盘动作)。 */
+async function openModelSheet(client, model) {
+  MDL.sheet = { kind: "write", client, model };
+  renderModelSheet();
+  try {
+    MDL.sheet.previews = await invoke("inject_preview", { client, model });
+  } catch (e) {
+    MDL.sheet.error = String(e);
+  }
+  renderModelSheet();
+}
+/** 确认写入:预告别过之后才走到这里。 */
+async function injectGo() {
+  const s = MDL.sheet;
+  if (!s || !s.model) return;
+  try {
+    s.reports = await invoke("inject_apply", { client: s.client, model: s.model });
+    showToast("已写入 " + (CLIENT_NAME[s.client] || s.client));
+  } catch (e) {
+    s.error = String(e);
+  }
+  renderModelSheet();
+  loadInjects(); // 状态条与台账跟着更新
+}
+/** 打开模型页签时才去取清单(没打开就不打扰接口)。 */
+async function ensureModels() {
+  // 过滤口径持久化在配置里(默认只显示编码/对话模型)
+  MDL.f.chat = !CFG.modelShowAll;
+  const chip = document.querySelector('#mdlF .pick[data-f="chat"]');
+  if (chip) chip.classList.toggle("on", MDL.f.chat);
+  if (!MDL.clients.length) await loadInjects();
+  if (!MDL.view) await loadModels(false);
+  renderModels();
+}
+
 // ───────────── 启动 ─────────────
 async function refresh() {
   try {
@@ -2452,6 +2891,8 @@ async function refresh() {
       claimChannels: {
         "4sapi": { enabled: true, amount: 200, minIntervalDays: 14, manualLastAt: null, manualSetAt: null },
       },
+      modelShowAll: false, modelGroup: null, modelBaseUrl: null,
+      selectionPrefix: {}, traeAutoSelect: false,
     };
   }
   applyConfigToUI();

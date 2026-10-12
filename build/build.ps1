@@ -24,6 +24,12 @@ foreach ($p in @($cargoBin, $mingwBin)) {
 $env:Path = "$cargoBin;$mingwBin;$env:Path"
 $env:CARGO_HOME  = Join-Path $env:USERPROFILE '.cargo'
 $env:RUSTUP_HOME = Join-Path $env:USERPROFILE '.rustup'
+# Pin the GNU toolchain for this process tree. The project only builds with
+# *-pc-windows-gnu (MSVC would need the WebView2 loader as a separate DLL, see
+# PROGRESS), but `rustup default` can be pointed at msvc by other projects on
+# this machine - then linking fails with `LNK2019 ___chkstk_ms` from sqlite3.o.
+# RUSTUP_TOOLCHAIN is inherited by cargo, cargo-tauri and every child cargo run.
+$env:RUSTUP_TOOLCHAIN = 'stable-x86_64-pc-windows-gnu'
 
 # GNU binutils (ld, windres) cannot open files under non-ASCII paths: ld fails
 # on .o/.rlib inputs, windres fails on the exe icon. The toolchain lives under

@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Grandettoken · 4SAPI 可用模型查询 + 一键配置到 Trae / WorkBuddy / WorkBuddy AI / ZCode（产品设计，未写代码）</title>
+<style>
+  :root{
+    --bg:#12141a; --bg2:#191c24; --bg3:#20242e;
+    --line:#2f3648; --line2:#3c445c;
+    --tx:#edf0f6; --tx2:#b6bfce; --tx3:#8d97ab;
+    --ok:#4ade9d; --warn:#f7c355; --bad:#ff6b63; --ac:#7fa2ff;
+    --s4:#e8622c; --tr:#6d5ef8; --wb:#19b8c4; --wba:#4c8dff; --zc:#8b5bff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#0a0c10;color:#dfe5f1;font:14px/1.75 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;padding:34px 26px 90px}
+  .wrap{max-width:1180px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 6px}
+  .sub{color:#7d879e;font-size:13px;margin-bottom:24px}
+  h2{font-size:16px;margin:42px 0 14px;padding-left:10px;border-left:3px solid var(--ac)}
+  h3{font-size:14px;margin:24px 0 8px;color:#cdd5e4}
+  h4{font-size:13px;margin:18px 0 6px;color:#b9c3d6}
+  p{margin:8px 0}
+  code{font-family:"Cascadia Mono",Consolas,monospace;font-size:12.5px;background:#1b1f28;border:1px solid #262c38;border-radius:4px;padding:1px 5px;color:#9fd0ff}
+  pre{background:#11141b;border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow:auto;font-family:"Cascadia Mono",Consolas,monospace;font-size:12px;color:#a8b6cc;line-height:1.6}
+  pre b{color:#8fd0a0;font-weight:600}
+  .hand{border:1px solid #3d5a8a;background:linear-gradient(180deg,#152034,#111a29);border-radius:10px;padding:16px 18px;margin:0 0 30px}
+  .hand b{color:#9fc4ff}
+  .say{background:#141a24;border:1px solid var(--line);border-left:3px solid var(--s4);border-radius:8px;padding:14px 16px;margin:12px 0}
+  .say .lab{font-size:12px;color:#7d879e;letter-spacing:.06em;margin-bottom:6px}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#1a1f28;color:#b6bfce;font-weight:600}
+  .bad{color:var(--bad)} .ok{color:var(--ok)} .warn{color:var(--warn)} .dim{color:var(--tx3)}
+  ol.q{margin:10px 0 0;padding-left:0;list-style:none;counter-reset:q}
+  ol.q>li{counter-increment:q;border:1px solid var(--line);border-radius:8px;padding:12px 14px 12px 46px;margin:10px 0;background:#15181f;position:relative}
+  ol.q>li::before{content:counter(q);position:absolute;left:14px;top:12px;width:22px;height:22px;border-radius:6px;background:#232a38;color:#9fc4ff;
+    display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px}
+  ol.q b{color:#e6ebf5}
+  .opt{margin:4px 0;padding-left:14px;color:var(--tx2)}
+  .opt b{color:var(--tx)}
+  .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:20px;border:1px solid #3d5a8a;color:#9fc4ff;margin-left:6px;vertical-align:1px}
+  .tag.w{border-color:#7a6234;color:#f7c355}
+  .tag.d{border-color:#3a4256;color:#8d97ab}
+  ul{margin:6px 0 6px 18px;padding:0}
+  li{margin:4px 0}
+  .foot{margin-top:44px;color:#6b7688;font-size:12px;border-top:1px solid var(--line);padding-top:14px}
+
+  /* ── mock ── */
+  .stage{display:flex;gap:26px;flex-wrap:wrap;align-items:flex-start;margin-top:14px}
+  .mock{width:392px;flex:none;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--tx);
+    font:13px/1.5 "Segoe UI","Microsoft YaHei",sans-serif;box-shadow:0 18px 50px -18px #000c;overflow:hidden}
+  .m-tbar{display:flex;align-items:center;gap:9px;padding:9px 12px;background:linear-gradient(180deg,#1d2129,#171a21);border-bottom:1px solid var(--line)}
+  .m-mark{width:17px;height:17px;border-radius:5px;background:linear-gradient(135deg,#5b8cff,#8b5bff);position:relative;flex:none}
+  .m-mark::after{content:"";position:absolute;inset:5px;border-radius:2px;background:#12141a}
+  .m-tt{font-size:12px;font-weight:600}
+  .m-tabs{display:flex;gap:4px;padding:7px 10px 0;border-bottom:1px solid var(--line);background:#15181f}
+  .m-tab{font-size:11.5px;padding:5px 9px;border-radius:6px 6px 0 0;color:var(--tx3);border:1px solid transparent;border-bottom:none}
+  .m-tab.on{background:var(--bg);color:var(--tx);border-color:var(--line)}
+  .m-body{padding:10px 11px;min-height:392px}
+  .m-foot{display:flex;align-items:center;gap:8px;padding:8px 12px;border-top:1px solid var(--line);background:#15181f;font-size:11px;color:var(--tx3)}
+  .search{display:flex;gap:6px}
+  .inp{flex:1;font:12px/1 inherit;padding:7px 9px;border-radius:7px;border:1px solid var(--line2);background:#11141b;color:var(--tx)}
+  .btn{font:12px/1 inherit;padding:7px 10px;border-radius:7px;border:1px solid var(--line2);background:#222834;color:#dfe6f2;cursor:default;white-space:nowrap}
+  .btn.p{background:#2b3f66;border-color:#4b6fa8;color:#eaf1ff;font-weight:600}
+  .btn.s{padding:5px 8px;font-size:11px}
+  .btn.off{opacity:.45}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+  .pick{font-size:11px;padding:3px 8px;border-radius:20px;border:1px dashed var(--line2);color:var(--tx3)}
+  .pick.on{border-style:solid;border-color:#4b6fa8;background:#22304a;color:#cfe0ff}
+  .meta{display:flex;justify-content:space-between;font-size:11px;color:var(--tx3);margin:2px 0 9px}
+  .mcli{display:flex;gap:5px;border:1px solid var(--line);background:#15181f;border-radius:8px;padding:7px 9px;margin-bottom:9px;font-size:11.5px}
+  .mcli div{flex:1;text-align:center;color:var(--tx3)}
+  .mcli div b{display:block;color:var(--tx2);font-size:12px;font-weight:600}
+  .mcli .n{color:var(--ok)}
+  .mrow{border:1px solid var(--line);background:var(--bg2);border-radius:9px;padding:8px 10px;margin-bottom:7px}
+  .mrow.hi{border-color:#6b5327}
+  .mtop{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+  .mname{font-weight:600;font-size:12.5px;font-family:"Cascadia Mono",Consolas,monospace}
+  .mtags{font-size:10.5px;color:var(--tx3);margin-top:2px}
+  .mprice{font-size:11px;color:var(--tx2);margin-top:3px}
+  .mprice .in{color:var(--ok)} .mprice .out{color:var(--warn)}
+  .cdots{display:flex;gap:4px;align-items:center}
+  .cdot{width:22px;height:20px;border-radius:6px;border:1px solid var(--line2);background:#1b1f27;color:#8d97ab;
+    display:flex;align-items:center;justify-content:center;font-size:9.5px;font-weight:700}
+  .cdot.on{background:#16321f;border-color:#2f6b43;color:#7ce9a8}
+  .cdot.run{border-color:#7a6234;color:#f7c355}
+  .cdot.no{opacity:.35}
+  .sheet{border:1px solid #3d5a8a;background:#151d2b;border-radius:9px;padding:10px 11px;margin-top:8px}
+  .kv{display:flex;gap:8px;font-size:11.5px;margin:4px 0}
+  .kv .k{flex:none;width:52px;color:var(--tx3)}
+  .kv .v{color:var(--tx2)}
+  .kv .v em{color:#9fd0ff;font-style:normal;font-family:Consolas,monospace;font-size:11px}
+  .warnbox{border:1px solid #6b5327;background:#241d12;border-radius:7px;padding:7px 9px;font-size:11px;color:#f0c67a;margin-top:7px}
+  .okbox{border:1px solid #2f6b43;background:#132219;border-radius:7px;padding:7px 9px;font-size:11px;color:#8ee9b8;margin-top:7px}
+  .swrow{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 14px}
+  .sw{padding:6px 12px;border-radius:20px;border:1px solid var(--line2);background:#171b22;color:var(--tx2);cursor:pointer;font-size:12.5px}
+  .sw.on{background:#22304a;border-color:#4b6fa8;color:#cfe0ff}
+  .swwrap{display:none} .swwrap.on{display:block}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>4SAPI 可用模型查询 + 一键配置到 Trae / WorkBuddy / WorkBuddy AI / ZCode</h1>
+<div class="sub">2026-10-12 · 产品设计 + <b>已实现并已发版(v0.1.20)</b>（见第十二节实施结果回填）。取证全部来自本机真文件与真接口，每条都能复核。</div>
+
+<div class="hand">
+  <b>交接框 · 现在停在哪</b>
+  <p style="margin:6px 0 4px">停在<b>设计待裁决</b>。你要的两件事都摸清了底：4SAPI 的模型清单怎么拿（含单价换算口径，已和站点自己的前端逐行对齐），以及四个客户端各把模型配置存在哪、长什么样（四个都本机取证到位，非推测）。</p>
+  <p style="margin:0">一句指令就能解锁下一步：<code>1A 2A 3A …</code>（按第九节逐项裁决）或 <code>按这个方案写代码</code>（全部照推荐项执行）。发版另说，我不会自己推。</p>
+  <p style="margin:8px 0 0" class="dim">有 6 项<b>必须真机才能定</b>（最要紧的两条：WorkBuddy 的“选中项”键前缀、Trae 的 modelId 中段），第十节单列，实现时在你机器上跑探针才算数。</p>
+</div>
+
+<div class="say">
+  <div class="lab">说人话版结论</div>
+  <p style="margin:0 0 6px"><b>① 模型清单不用求人：站点自带一份公开价目表，160 个模型，不用密钥就能拉。</b>再配你的密钥拉一次 <code>/v1/models</code>，就知道这 160 个里<b>你这把 key 真能调哪些</b>。两条合起来，就是“可用模型”的完整答案。</p>
+  <p style="margin:0 0 6px"><b>② 单价能直接折成 ¥，和你面板上的余额同一个货币。</b>站点自己的前端算的是 <code>单价 = 2 × 模型倍率 × 分组倍率</code>（每百万 token），而它的换算常量（<code>quota_per_unit=500000</code>）跟挂件现有的 4SAPI 渠道用的 <code>500000 积分 = ¥1</code> 是同一个数。所以“这个模型我还能跑多少”将来能直接算，不需要新口径。</p>
+  <p style="margin:0 0 6px"><b>③ 但“配置到客户端”不是一个功能，是四份完全不同的写入契约。</b>WorkBuddy 是明文 JSON、ZCode 是两份 JSON、Trae 是 SQLite 的 ItemTable。四条路都得守着同一套规矩：<b>先备份 → 写完读回校验 → 目标程序没在跑</b>。任何一条做不到，就退回“把三件套（地址/模型名/密钥）摆出来让你自己粘”。</p>
+  <p style="margin:0"><b>④ 必须把一件事说明白：</b>把模型配进客户端，等于把你的 4SAPI 密钥<b>明文写进那些程序自己的配置文件</b>（它们本来就这么存，你已有的 4SAPI 条目就是明文）。挂件自己的原则是“密钥只进凭据管理器”，所以这一步要逐客户端点确认，界面上写明落到哪个文件的哪一行，而且<b>挂件永远不留副本</b>。</p>
+</div>
+
+<h2>一、取证：4SAPI 侧（接口事实）</h2>
+
+<p>三个端点，全部实测于 2026-10-12。前两个不需要密钥，第三个要你的 key。</p>
+
+<table>
+<tr><th style="width:210px">端点</th><th>作用</th><th>实测</th></tr>
+<tr>
+  <td><code>GET /api/pricing</code></td>
+  <td>公开价目表：模型名、中文说明、标签、厂商、倍率、支持的分组、支持的接口类型</td>
+  <td class="ok">200 · 103 KB · <b>160 个模型</b> · 无需密钥</td>
+</tr>
+<tr>
+  <td><code>GET /api/status</code></td>
+  <td>站点常量：换算单位、计价货币、导航开关</td>
+  <td class="ok">200 · <code>quota_per_unit=500000</code>、<code>quota_display_type=CNY</code>、<code>display_in_currency=true</code></td>
+</tr>
+<tr>
+  <td><code>GET /v1/models</code></td>
+  <td>OpenAI 兼容列表，<b>按 key 所属分组过滤</b> —— 这才是“我这把 key 能用哪些”</td>
+  <td class="warn">无 key 实测 401 <code>{"error":{"message":"Invalid token",…,"type":"new_api_error"}}</code> —— 是标准 new-api 网关，认 <code>Authorization: Bearer</code></td>
+</tr>
+</table>
+
+<pre># 三条都能在你这台机器上复核（站点公开接口，不产生 token 计费）
+curl https://4sapi.com/api/pricing                    # 160 个模型 + 分组 + 倍率
+curl https://4sapi.com/api/status | grep quota_per_unit
+curl -H <b>"Authorization: Bearer &lt;你的 4SAPI Key&gt;"</b> https://4sapi.com/v1/models</pre>
+
+<h3>1.1 价目表里每个模型带了什么</h3>
+
+<table>
+<tr><th style="width:230px">字段</th><th>含义</th><th>界面怎么用</th></tr>
+<tr><td><code>model_name</code></td><td>模型 id（就是要写进客户端的那串）</td><td>主标题 + 搜索主键</td></tr>
+<tr><td><code>description</code></td><td>中文说明（站点自己写的）</td><td>行展开里的说明文字</td></tr>
+<tr><td><code>tags</code></td><td>逗号串：<code>1M,多模态,文本</code> / <code>256K,文本</code> / <code>图像,2K</code></td><td>上下文长度徽标 + 类型过滤</td></tr>
+<tr><td><code>vendor_id</code> → <code>vendors[]</code></td><td>厂商（OpenAI / Anthropic / Moonshot / 腾讯 / 阿里 / MiniMax… 共 52 家）</td><td>分组折叠 + 厂商芯片过滤</td></tr>
+<tr><td><code>model_ratio</code> + <code>completion_ratio</code></td><td>输入/输出倍率</td><td><b>单价</b>（见下）</td></tr>
+<tr><td><code>quota_type</code></td><td><code>0</code>=按 token 计费（148 个）· <code>1</code>=按次计费（12 个，走 <code>model_price</code>）</td><td>按次计费的显示“¥X/次”</td></tr>
+<tr><td><code>cache_ratio</code> / <code>create_cache_ratio</code></td><td>缓存命中 / 写缓存倍率</td><td>展开详情里的一行</td></tr>
+<tr><td><code>billing_mode</code> + <code>billing_expr</code></td><td><b>34 个模型是按上下文长度分档的阶梯计价</b>，表达式如 <code>len&lt;200000 ? tier("Short",p*1.25+c*2.5+cr*0.2) : tier("Long",…)</code></td><td>打「阶梯」徽标，<b>不假装能算准</b>；展开显示站点原文</td></tr>
+<tr><td><code>supported_endpoint_types</code></td><td><code>openai</code> 159 · <code>gemini</code> 55 · <code>anthropic</code> 28 · <code>openai-response</code> 24 · <code>image-generation</code> 8 …</td><td><b>默认只显示能当对话/编码模型用的</b>（含 openai 或 anthropic）</td></tr>
+<tr><td><code>enable_groups</code></td><td>这个模型在哪些分组里可用（站点共 25 个分组，各带倍率）</td><td>选中分组不含该模型时黄字提示</td></tr>
+<tr><td><code>pricing_version</code></td><td>整份价目表的指纹（哈希）</td><td><b>缓存的失效依据</b>：指纹没变就不重拉</td></tr>
+</table>
+
+<h3>1.2 单价换算口径（已与站点自己的前端对齐）</h3>
+
+<p>站点 pricing 页的 JS 里，模型价格是这么算的（原文摘录）：</p>
+
+<pre>let e = 2 * t.model_ratio * d;   // d = 分组倍率 → “输入价格 … / 1M Tokens”
+补全价格 = 2 * model_ratio * completion_ratio * 分组倍率      // 同为每 1M Tokens</pre>
+
+<p>货币符号取自 <code>quota_display_type</code>，本站实测为 <code>CNY</code>（符号 <code>¥</code>）。所以：</p>
+
+<pre><b>输入单价(¥/百万 token) = 2 × model_ratio × 分组倍率
+输出单价(¥/百万 token) = 输入单价 × completion_ratio</b>
+按次计费(quota_type=1)   = model_price ¥/次</pre>
+
+<table>
+<tr><th>模型（真取回的数据）</th><th>倍率</th><th>标签</th><th>单价 @ 一key分组(×2)</th></tr>
+<tr><td><code>claude-sonnet-5</code></td><td>1.0 / 5.0</td><td>1M,多模态,文本</td><td>入 ¥4.00 · 出 ¥20.00</td></tr>
+<tr><td><code>gpt-5.3-codex</code></td><td>0.875 / 8.0</td><td>1M,文本,多模态</td><td>入 ¥3.50 · 出 ¥28.00</td></tr>
+<tr><td><code>gemini-3.6-flash</code></td><td>0.375 / 5.0</td><td>1M,多模态,文本</td><td>入 ¥1.50 · 出 ¥7.50</td></tr>
+<tr><td><code>grok-4.7</code></td><td>37.5 / 1.0</td><td>500K,文本 <span class="tag d">阶梯计价</span></td><td class="warn">入 ¥150.00* · 出 ¥150.00*</td></tr>
+</table>
+
+<p class="dim">最后一行的 <code>*</code> = 该模型是 34 个阶梯计价模型之一（按上下文长度分档，站点原文：<code>len &lt; 200000 ? tier("Short",…) : tier("Long",…)</code>）—— 倍率只是某一档的值，所以单价后面永远跟着星号与徽标。而 <code>gemini-3.6-flash</code> 的 ¥1.50 和 <code>grok-4.7</code> 的 ¥150.00 摆在同一列里，价差 100 倍，这就是为什么价格列不能藏在第二屏：“选哪个模型”和“余额还能撑几天”本来就是同一件事。</p>
+
+<p><b>分组倍率从哪来？</b>站点有 25 个分组，各自倍率写在 <code>group_ratio</code> 里（<code>claude-官方</code>5 · <code>gpt-官方</code>5 · <code>default</code>2 · <code>一key官方中转全模型</code>2 · <code>claude-code</code>1 · 国产组 0.8…），另有 <code>usable_group</code> 给出每组的说明原文（站点自己写的“官方 28.5% 折扣”之类）。界面默认取 <code>auto_groups[0]</code>（<code>一key官方中转全模型</code>，×2），并在口径行里写清“按哪个分组估算、可以在下拉里改”，<b>不代替你猜你的分组</b>。</p>
+
+<div class="warnbox">
+  <b>两条不许越界的口径纪律</b>（沿用挂件“不误报”的第一原则）：
+  <ul style="margin:6px 0 0">
+    <li>阶梯计价的 34 个模型，倍率只是“某一档”的值 —— 一律打「阶梯」徽标，单价后加 <code>*</code>，展开里给出站点原文表达式，不给出“确定价”。</li>
+    <li>分组倍率是<b>站点声明的</b>，不是我们算出来的。界面显示“站点价目表：入 ¥4.00/百万 · 分组 ×2”，而不是“你每百万要花 4 块”。</li>
+  </ul>
+</div>
+
+<h3>1.3 顺带确认的：现有 4SAPI 渠道没被改动</h3>
+<p><code>GET /api/usage/token</code>（挂件已经在用的余额接口）与上面三个互不相干，本次设计<b>不碰取数路径</b>：模型查询是独立的一条只读链路，失败不影响余额显示，余额取数失败也不影响模型页。</p>
+
+<h2>二、取证：四个客户端把模型配置存在哪（本机真文件）</h2>
+
+<p>这是本设计最花时间的一块，也是“能不能做”的分水岭。四个客户端一个都不是“改个 JSON 就完事”，字段名与嵌套结构全部来自本机真文件（密钥字段只记长度，不记内容）。</p>
+
+<table>
+<tr><th style="width:96px">客户端</th><th style="width:150px">进程 / 安装</th><th>模型配置落点</th><th style="width:150px">选中项</th><th style="width:96px">现状</th></tr>
+<tr>
+  <td><b>Trae CN</b></td>
+  <td>未运行<br><code>%LOCALAPPDATA%\Programs\Trae CN\</code></td>
+  <td><b>SQLite</b>：<code>%APPDATA%\Trae CN\User\globalStorage\state.vscdb</code><br>表 <code>ItemTable</code>，两条并列的键：<br><code>3739861422447896:AI.agent.model.model_list_map</code>（269 KB / 10 个 agent 组）<br><code>3739861422447896_AI.agent.model.model_list_map</code>（139 KB / 7 个 agent 组）</td>
+  <td><code>…recent_user_selection_by_agent_label</code></td>
+  <td class="ok">已实测有自定义条目</td>
+</tr>
+<tr>
+  <td><b>Trae SOLO CN</b></td>
+  <td>同上的另一套安装</td>
+  <td>同结构、同键名前缀、独立 DB（<code>%APPDATA%\TRAE SOLO CN\…</code>）</td>
+  <td>另有 <code>session_selected_model</code></td>
+  <td class="warn">有模型表，无自定义条目</td>
+</tr>
+<tr>
+  <td><b>WorkBuddy</b></td>
+  <td><b>运行中</b>（今天活着）<br><code>…\Programs\WorkBuddy\</code></td>
+  <td><b>明文 JSON</b>：<code>~/.workbuddy/models.json</code>（数组，一条 = 一个模型）<br><code>~/.workbuddy/settings.json</code> → 选中项键 <code>model</code></td>
+  <td><code>settings.json.model = "custom-local:…"</code></td>
+  <td class="ok">已有 3 条自定义（含 4SAPI）</td>
+</tr>
+<tr>
+  <td><b>WorkBuddy AI</b></td>
+  <td>v5.7.6 数据目录在<br><code>~/.workbuddy-ai</code></td>
+  <td>同结构：<code>~/.workbuddy-ai/models.json</code>（现在是 <code>[]</code>）<br><code>settings.json</code> 里<b>没有</b> <code>model</code> 键</td>
+  <td class="bad">未取证（见第十节）</td>
+  <td class="warn">空壳，等第一次写入</td>
+</tr>
+<tr>
+  <td><b>ZCode</b></td>
+  <td><b>运行中</b>（就是当前这个）</td>
+  <td><b>两份 JSON</b>：<br><code>~/.zcode/v2/config.json</code> → <code>provider.&lt;uuid&gt;.{name,kind,options.{apiKey,baseURL},models{}}</code><br><code>~/.zcode/v2/provider_config.json</code> → <code>providerConfigRules.providerRules[].config.{access,api,personalModelIds,modelOrder}</code></td>
+  <td>会话级选择，配置里只需 provider 定义</td>
+  <td class="ok">现有一个自定义 provider（OG）</td>
+</tr>
+</table>
+
+<h3>2.1 四个客户端的条目模板（真文件节选，密钥已隐去）</h3>
+
+<h4>WorkBuddy · <code>~/.workbuddy/models.json</code>（数组元素）</h4>
+<pre>{
+  "id": "claude-sonnet-5",              // 模型 id
+  "name": "4S-claude-sonnet-5",         // 显示名（你手动加了 4S- 前缀）
+  "vendor": "Custom",
+  "url": "https://4sapi.cn/v1",         // ← 注意：这里写的是 .cn
+  "apiKey": "&lt;明文密钥，51 字符&gt;",
+  "supportsToolCall": true, "supportsImages": true, "supportsReasoning": true,
+  "useCustomProtocol": false,
+  "reasoning": { "supportedEfforts": ["low","medium","high","xhigh","max"] },
+  "maxInputTokens": 300000
+}</pre>
+
+<h4>Trae · <code>state.vscdb</code> ItemTable 里的自定义模型条目（每个 agent 组一份）</h4>
+<pre>{
+  "name": "custom_openai_compatible//claude-sonnet-5",
+  "display_name": "claude-sonnet-5",
+  "provider": "custom_openai_compatible",
+  "base_url": "https://4sapi.org/v1/chat/completions",   // ← 这里写的又是 .org
+  "is_custom_base_url": true, "config_source": 3, "custom_model_id": "2607458050",
+  "ak": "&lt;明文密钥，108 字符&gt;", "sk": null, "auth_type": 0,
+  "model_type": "chat_model", "selectable": true, "status": true,
+  "multimodal": true, "client_connect": true, "is_preset": false,
+  "icon": { "dark": "…default-custom-dark.svg", "light": "…default-custom-light.svg" },
+  "features": { "provider": {"enable": true, "data": {"provider_name": "custom_openai_compatible"}}, … }
+}
+// 选中项（同一个 DB）
+"3739861422447896:AI.agent.model.recent_user_selection_by_agent_label"
+  = {"solo_agent":{"modelId":"solo_agent_<b>3</b>_custom_openai_compatible_custom_openai_compatible//claude-sonnet-5_2607458050","mode":0}}</pre>
+
+<h4>ZCode · <code>~/.zcode/v2/config.json</code> + <code>provider_config.json</code></h4>
+<pre>// config.json
+"provider": { "&lt;新 uuid&gt;": {
+  "name": "4SAPI", "kind": "openai-compatible",
+  "options": { "apiKey": "&lt;明文&gt;", "baseURL": "https://4sapi.com/v1", "apiKeyRequired": true },
+  "enabled": true, "source": "custom",
+  "models": { "claude-sonnet-5": { "limit": {"context":1000000,"output":128000},
+                                   "modalities": {"input":["text","image"],"output":["text"]},
+                                   "zcode": {"modalitiesConfigured": true} } } } }
+
+// provider_config.json
+{ "schemaVersion": 1, "config": {
+  "providerConfigRules": { "providerRules": [ {
+      "providerId": "&lt;新 uuid&gt;", "providerName": "4SAPI",
+      "config": { "group": "standard-personal",
+                  "access": {"type":"api-key","apiKey":"&lt;明文&gt;"},
+                  "api": {"type":"openai-chat-completions","baseURL":"https://4sapi.com/v1"},
+                  "personalModelIds": ["claude-sonnet-5"], "modelOrder": ["claude-sonnet-5"] } } ] },
+  "modelConfigRules": { "providerModelRules": [ {"modelId":"claude-sonnet-5","providerId":"&lt;新 uuid&gt;",
+                          "config":{"properties":{"contextWindow":1000000}}} ], "manualProviderModelRules": [] } } }</pre>
+
+<div class="warnbox">
+  <b>取证顺带挖出来的一件事</b>：你现在三处写着<b>三个不同的域名</b> —— Trae 里是 <code>4sapi.org</code>、WorkBuddy 里是 <code>4sapi.cn</code>、挂件余额渠道主地址是 <code>4sapi.com</code>（备 <code>.cn/.ai/.org</code>）。这次设计统一成一条规矩：<b>写进客户端的地址 = 挂件实测能取数的那个入口</b>（复用现有的 last-good 域名记忆），并在写入预告里明确显示写的是哪个域名。
+</div>
+
+<h3>2.2 界面侧现成的扩展点（不改架构就能挂上去）</h3>
+<ul>
+  <li>管理页已是<b>四个页签</b>（渠道 / 显示 / 刷新与启动 / 关于），加第五个页签是既定扩展方式（<code>index.html</code> 的 <code>.mbody.panel[data-p]</code> + <code>.tabs</code>）。</li>
+  <li>多选芯片 <code>.picks/.pick</code>、分段控件 <code>.seg</code>、小徽标 <code>.tagn</code> 现成可复用（胶囊渠道选择就是 <code>.pick</code>）。</li>
+  <li>事件一律走 <code>data-act</code> 委托（<code>#manage</code> 上两个监听器），新动作只需加一个 <code>data-act</code> 分支。</li>
+  <li>所有插值都过 <code>esc()</code>；窗口固定尺寸不可拖大，长列表只能靠内层滚动（<code>.mbody{overflow-y:auto}</code>）—— 模型列表必须自带搜索，不能靠翻。</li>
+</ul>
+
+<h2>三、产品设计</h2>
+
+<h3>3.1 三个用户故事</h3>
+<table>
+<tr><th style="width:130px">场景</th><th>用户想干的事</th><th>现在的成本</th><th>设计后</th></tr>
+<tr>
+  <td><b>挑模型</b></td>
+  <td>“4SAPI 里有没有 <code>claude-sonnet-5</code>？多少钱？我这把 key 能用吗？”</td>
+  <td>开浏览器 → 登录 → 翻价目表 → 再翻控制台看分组</td>
+  <td>挂件「模型」页签：搜索框输入 → 直接看到“能用 + 单价 + 分组”</td>
+</tr>
+<tr>
+  <td><b>配到客户端</b></td>
+  <td>“让 ZCode 用 4SAPI 的这个模型”</td>
+  <td>手写 JSON / 进应用里手填 地址+模型名+密钥 三件套，四处各来一遍</td>
+  <td>点该行的 <code>ZC</code> 按钮 → 确认（写明落到哪个文件、密钥明文）→ 完成</td>
+</tr>
+<tr>
+  <td><b>换/修</b></td>
+  <td>“换了模型 / 换了 key，四个客户端都要跟着改”</td>
+  <td>四个地方重新来一遍；漏一个就是“模型能选但报 401”</td>
+  <td>行上直接改；「同步到所有已配置客户端」一次改完</td>
+</tr>
+</table>
+
+<h3>3.2 入口与信息架构</h3>
+
+<pre>展示面（不动）
+ └ 4SAPI 行 · 展开详情 → 新增一行「可用模型 160 个 · 去挑模型 →」    ← 「4SAPI 渠道查询可用模型」的入口
+
+配置面（管理页，新增第 2 个页签）
+ 渠道 | <b>模型</b> | 显示 | 刷新与启动 | 关于
+        ├ 顶部：搜索（模型名/厂商/标签） + 刷新 + 「只看编码对话模型」过滤芯片
+        ├ 口径行：分组 ▾（默认 一key官方中转全模型 ×2）· 价目表 6 分钟前 · N 个可用
+        ├ 客户端条：T / WB / WBA / ZC 四个状态（已配几条 · 在不在跑 · 点开看落到哪个文件）
+        └ 模型列表：每行 = 名称 + 标签徽标 + 单价 + <b>四个客户端按钮</b>
+              └ 点客户端按钮 → 写入预告（文件路径 / 会改什么 / 密钥明文披露 / 备份位置 / 目标在跑就拒写）
+                    └ 写入结果：新增|更新了几条 · 重启即生效 · [打开备份目录] [回滚这次写入]</pre>
+
+<h3>3.3 界面原型</h3>
+<div class="swrow">
+  <div class="sw on" data-m="m1">① 模型页签</div>
+  <div class="sw" data-m="m2">② 写入预告</div>
+  <div class="sw" data-m="m3">③ 写入结果 / 拒写</div>
+</div>
+
+<div class="stage">
+  <div class="swwrap on" id="m1">
+    <div class="mock">
+      <div class="m-tbar"><div class="m-mark"></div><div class="m-tt">Grandettoken</div>
+        <div style="margin-left:auto;font-size:11px;color:#8d97ab">← 返回</div></div>
+      <div class="m-tabs"><div class="m-tab">渠道</div><div class="m-tab on">模型</div><div class="m-tab">显示</div><div class="m-tab">刷新与启动</div><div class="m-tab">关于</div></div>
+      <div class="m-body">
+        <div class="search"><div class="inp">sonnet</div><div class="btn">⟳ 刷新</div></div>
+        <div class="chips">
+          <div class="pick on">只看编码/对话</div>
+          <div class="pick">支持工具调用</div>
+          <div class="pick">多模态</div>
+        </div>
+        <div class="meta"><span>分组 一key官方中转全模型 ▾ · 站点价目表 6 分钟前</span><span>160 个可用</span></div>
+        <div class="mcli">
+          <div class="n"><b>Trae</b>2 条</div>
+          <div class="n"><b>WB</b>1 条</div>
+          <div><b>WB AI</b>未配</div>
+          <div><b>ZCode</b>1 条</div>
+        </div>
+        <div class="mrow">
+          <div class="mtop"><span class="mname">claude-sonnet-5</span>
+            <span class="cdots"><span class="cdot on">T</span><span class="cdot on">WB</span><span class="cdot">WBA</span><span class="cdot on">ZC</span></span></div>
+          <div class="mtags">1M · 多模态 · 文本 · Anthropic · 支持 openai/anthropic · 7 个分组可用</div>
+          <div class="mprice">入 <span class="in">¥4.00</span> · 出 <span class="out">¥20.00</span> / 百万 token</div>
+        </div>
+        <div class="mrow">
+          <div class="mtop"><span class="mname">gpt-5.3-codex</span>
+            <span class="cdots"><span class="cdot">T</span><span class="cdot">WB</span><span class="cdot">WBA</span><span class="cdot">ZC</span></span></div>
+          <div class="mtags">1M · 多模态 · 文本 · gpt 官方编程模型</div>
+          <div class="mprice">入 <span class="in">¥3.50</span> · 出 <span class="out">¥28.00</span> / 百万 token</div>
+        </div>
+        <div class="mrow hi">
+          <div class="mtop"><span class="mname">grok-4.7</span>
+            <span class="cdots"><span class="cdot">T</span><span class="cdot run">WB</span><span class="cdot">WBA</span><span class="cdot">ZC</span></span></div>
+          <div class="mtags">500K · 文本 · Grok 官方分组 <span class="tag d">阶梯</span> · 在 一key分组 里可用</div>
+          <div class="mprice">入 <span class="bad">¥150.00*</span> · 出 <span class="bad">¥150.00*</span> / 百万 token</div>
+        </div>
+        <div class="mrow" style="opacity:.55">
+          <div class="mtop"><span class="mname">glm-5.3</span>
+            <span class="cdots"><span class="cdot on">T</span><span class="cdot">WB</span><span class="cdot">WBA</span><span class="cdot on">ZC</span></span></div>
+          <div class="mtags">1M · 文本 · 国产全模型分组（倍率 ×0.8）</div>
+          <div class="mprice">入 <span class="in">¥6.40</span> · 出 <span class="out">¥22.40</span> / 百万 token <span class="warn">· 价按「国产全模型」分组</span></div>
+          <div class="warnbox" style="margin-top:5px">当前分组（一key官方中转全模型）不含此模型。价格按含有它的分组折算，并标明是哪个分组 —— <b>不显示一个本分组用不上的价</b>。</div>
+        </div>
+      </div>
+      <div class="m-foot"><span class="cdot on" style="width:16px;height:14px">T</span> 已配 2 &nbsp;·&nbsp; <span style="color:#f7c355">WB 在运行</span> &nbsp;·&nbsp; 密钥永不经挂件落盘</div>
+    </div>
+  </div>
+
+  <div class="swwrap" id="m2">
+    <div class="mock">
+      <div class="m-tbar"><div class="m-mark"></div><div class="m-tt">写入预告 · claude-sonnet-5 → ZCode</div></div>
+      <div class="m-body">
+        <div class="sheet">
+          <div class="kv"><span class="k">目标</span><span class="v"><em>~/.zcode/v2/provider_config.json</em> + <em>config.json</em></span></div>
+          <div class="kv"><span class="k">动作</span><span class="v">新增 provider「4SAPI」1 个 · 模型 1 条（不动现有的 OG provider）</span></div>
+          <div class="kv"><span class="k">地址</span><span class="v"><em>https://4sapi.com/v1</em>（挂件实测可用的入口）</span></div>
+          <div class="kv"><span class="k">模型</span><span class="v"><em>claude-sonnet-5</em> · 上下文 1M</span></div>
+          <div class="kv"><span class="k">备份</span><span class="v"><em>~/.zcode/v2/backup-inject/2026-10-12T15-40-12/</em></span></div>
+        </div>
+        <div class="warnbox"><b>会把这把 4SAPI 密钥明文写进上面那个文件。</b>ZCode 的自定义 provider 本来就这么存（你现有的 OG provider 也是明文）。挂件不保存副本、不写日志。</div>
+        <div class="warnbox" style="border-color:#6b5327"><b>ZCode 正在运行。</b>它的配置是内存态落盘，边跑边写会被覆盖。<b>先退出 ZCode 再点写入。</b></div>
+        <div class="search" style="margin-top:10px">
+          <div class="btn p off">写入（ZCode 运行中，已禁用）</div>
+          <div class="btn">复制三件套</div>
+        </div>
+        <div class="dim" style="font-size:11px;margin-top:8px">「复制三件套」= 把 地址 / 模型名 / 密钥 放进剪贴板，你自己到 ZCode 界面里粘 —— 任何时候都能用，不依赖写入通道。</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="swwrap" id="m3">
+    <div class="mock">
+      <div class="m-tbar"><div class="m-mark"></div><div class="m-tt">写入结果 · claude-sonnet-5 → WorkBuddy</div></div>
+      <div class="m-body">
+        <div class="okbox"><b>✓ 已写入</b> · <em>~/.workbuddy/models.json</em> 新增 1 条 · 读回校验通过<br>
+          <span class="dim">显示名为 <code>4S-claude-sonnet-5</code>（沿用你手动加的 4S- 前缀习惯）</span></div>
+        <div class="sheet" style="margin-top:9px">
+          <div class="kv"><span class="k">生效</span><span class="v">下次启动 WorkBuddy 时出现在模型列表里</span></div>
+          <div class="kv"><span class="k">选中</span><span class="v"><span class="warn">未改动</span> · 待真机确认 <code>model</code> 键的前缀口径后再开放自动选中</span></div>
+          <div class="kv"><span class="k">备份</span><span class="v"><em>~/.workbuddy/backup-inject/2026-10-12T15-40-31/models.json</em></span></div>
+        </div>
+        <div class="search" style="margin-top:10px">
+          <div class="btn">打开备份目录</div>
+          <div class="btn">回滚这次写入</div>
+          <div class="btn p">再配到 ZCode</div>
+        </div>
+      </div>
+    </div>
+    <div class="mock" style="margin-top:14px">
+      <div class="m-tbar"><div class="m-mark"></div><div class="m-tt">写入被拒 · claude-sonnet-5 → WorkBuddy</div></div>
+      <div class="m-body">
+        <div class="warnbox" style="margin-top:0"><b>WorkBuddy 正在运行，本次写入被拒绝</b>，没有任何改动。<span class="dim">（这是另一条分支的结果，不是上面那张卡的后半段）</span></div>
+        <div class="sheet" style="margin-top:9px">
+          <div class="kv"><span class="k">为什么</span><span class="v">Electron 应用的 settings 是内存态，边跑边改会在退出时被覆盖 —— 你会看到“明明是写进去了，重启后没了”</span></div>
+          <div class="kv"><span class="k">怎么办</span><span class="v">退出 WorkBuddy 后回来再点一次；或改用「复制三件套」自己粘</span></div>
+        </div>
+        <div class="search" style="margin-top:10px">
+          <div class="btn p off">写入（运行中，已禁用）</div>
+          <div class="btn">复制三件套</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="flex:1;min-width:260px">
+    <h4>原型说明</h4>
+    <ul>
+      <li><b>四个客户端按钮就是主操作</b>：<span class="cdot on" style="display:inline-flex;width:20px;height:18px;font-size:9px">T</span> 实心绿 = 已配置；空心 = 未配置；<span class="cdot run" style="display:inline-flex;width:20px;height:18px;font-size:9px">WB</span> 黄框 = 配置过但目标在运行（点了会拒写并说原因）；灰淡 = 未检测到该客户端。</li>
+      <li><b>单价并列在行内</b>，超过阈值染黄/染红（与余额用同一套状态色）—— 因为“哪个模型烧最快”和“哪个渠道先没钱”是同一类判断。</li>
+      <li><b>不弹新窗口</b>：写入预告就长在列表下方（沿用「删除密钥」用内联 <code>.cfrm</code> 确认、不用 <code>confirm()</code> 的既定做法）。</li>
+      <li><b>页脚常驻一句密钥契约</b>：“密钥永不经挂件落盘”，任何时候都看得见。</li>
+    </ul>
+  </div>
+</div>
+
+<h3>3.4 交互与状态语义</h3>
+
+<table>
+<tr><th style="width:150px">环节</th><th>规则</th></tr>
+<tr><td>默认过滤</td><td>只显示 <code>supported_endpoint_types</code> 含 <code>openai</code> 或 <code>anthropic</code> 的模型（覆盖 159/160），并默认<b>排除</b> <code>tags</code> 含「图像 / 视频 / 音频 / 向量 / 图像生成」的条目。<b>提供「显示全部 160 个」芯片</b>，不偷偷藏东西。</td></tr>
+<tr><td>搜索</td><td>命中 <code>model_name</code>（不分大小写子串）、厂商名、标签、说明。搜索框非空时忽略折叠状态，平铺结果。</td></tr>
+<tr><td>排序</td><td>默认：已配置到任一客户端的模型置顶 → 其余按厂商分组（组内按名称）。不做“热度排序”这类没有数据支撑的排序。</td></tr>
+<tr><td>“可用”的定义</td><td><code>/v1/models</code> 返回 = 这把 key 的分组能调。<b>没拿到 key 时</b>整页降级为“价目表浏览”并置顶一条提示「配置 4SAPI 密钥后可知哪些能用」，<b>不把 160 个都说成“可用”</b>。</td></tr>
+<tr><td>价格缺失</td><td>拿不到倍率（如按次计费）→ 显示“¥X/次”；阶梯计价 → 加 <code>*</code> + 「阶梯」徽标。绝不用 0 或空白顶替。</td></tr>
+<tr><td>分组不含</td><td>所选分组不在模型的 <code>enable_groups</code> 里 → 黄字提示，并且价格<b>改按含有它的分组折算并标明是哪个分组</b>。绝不显示一个本分组用不上的价。</td></tr>
+<tr><td>客户端状态</td><td>四态：<b>未检测到安装</b>（置灰，仅“复制三件套”可用）/ <b>已安装未配置</b> / <b>已配置 N 条</b>（点开看落到哪个文件、哪次写的）/ <b>已配置但目标在运行</b>（黄）。状态来自读文件 + 进程探测，不来自缓存猜测。</td></tr>
+<tr><td>写入三步</td><td>①点客户端按钮 → ②看预告（目标文件 / 改什么 / <b>密钥明文</b> / 备份路径 / 前提是否满足）→ ③确认写入 → 读回校验 → 结果条（新增几条、怎么生效、可否回滚）。<b>没有“静默写入”这条路。</b></td></tr>
+<tr><td>撞名</td><td>同名模型已存在且内容一致 → 显示「已配置」不重复写；内容不同 → 预告里写明“更新现有条目”，并列出差异（地址/密钥变化）。</td></tr>
+<tr><td>批量</td><td>「同步到所有已配置客户端」= 把当前选中的 地址/密钥 覆盖到所有已配过 4SAPI 的客户端（换 key 场景）。同样逐客户端走预告。</td></tr>
+<tr><td>失败文案</td><td>四类分开说，不混成“写入失败”：<br>· 目标在运行 → “先退出 X”（并给出退出按钮/说明，不代杀进程）<br>· 文件被占用/无权限 → 报原样错误 + 备份路径<br>· 结构不认识（版本变了）→ <b>放弃写入并原样保留文件</b>，提示“X 的配置格式已更新，本次不写”<br>· 读回校验不过 → 自动回滚到备份并如实说明。</td></tr>
+</table>
+
+<h2>四、四个客户端的写入契约</h2>
+
+<p>共同前提四条（缺一不写）：<b>① 目标进程不在运行；② 先备份（含 SQLite 的 -wal/-shm）；③ 只增改自己写的那条，不动内置/账号/其它 provider；④ 写完读回校验，不过就回滚。</b></p>
+
+<h3>4.1 WorkBuddy — <code>~/.workbuddy/models.json</code>（最简，优先做）</h3>
+<table>
+<tr><th style="width:120px">项</th><th>内容</th></tr>
+<tr><td>写入</td><td><code>models.json</code> 数组里 upsert 一条：<code>id</code>=模型 id · <code>name</code>=<code>4S-&lt;id&gt;</code> · <code>vendor</code>="Custom" · <code>url</code>=<code>https://&lt;实测可用域名&gt;/v1</code> · <code>apiKey</code>=凭据管理器里的 4SAPI 密钥 · <code>supportsToolCall/Images/Reasoning</code>=true · <code>maxInputTokens</code>=按模型上下文推（1M 就 1000000，256K 就 256000）</td></tr>
+<tr><td>生效</td><td>下次启动在模型列表可见</td></tr>
+<tr><td>选中项</td><td><code>settings.json.model</code> 现在是 <code>"custom-local:…"</code>，前缀口径 <b>未取证</b> → P1 <b>只写条目</b>；真机探针确认后再开放自动选中（见第十节 · 2）</td></tr>
+<tr><td>风险</td><td>Electron 运行中写会被内存态覆盖 → 拒写；文件是明文 JSON，格式漂移风险低，但字段缺失要按现有条目补齐（照抄你现有那条的字段集）</td></tr>
+</table>
+
+<h3>4.2 WorkBuddy AI — <code>~/.workbuddy-ai/models.json</code>（同结构，但选中落点未知）</h3>
+<p>文件现在是 <code>[]</code>，写入即“第一条”。结构照抄 WorkBuddy 的那套（两版客户端 5.7.6/5.7.7 同源）。<b>选中项一律不写</b>：它的 <code>settings.json</code> 里连 <code>model</code> 键都还没有，硬写一个键进去属于“猜另一个程序的配置格式”，违反本次设计的第 3 条前提。界面照实说：“条目已写入，请在 WorkBuddy AI 的模型列表里选一次”（并在探针取证后升级为可自动选中）。</p>
+
+<h3>4.3 ZCode — <code>config.json</code> + <code>provider_config.json</code></h3>
+<table>
+<tr><th style="width:120px">项</th><th>内容</th></tr>
+<tr><td>写入</td><td>新 uuid 的 <code>provider.&lt;uuid&gt;</code>（<code>kind:"openai-compatible"</code>、<code>options.{apiKey,baseURL}</code>、<code>models</code> 里放本次选的模型）<br>+ <code>providerRules</code> 追加一条（<code>access.type="api-key"</code>、<code>api.type="openai-chat-completions"</code>、<code>personalModelIds/modelOrder</code>）<br>+ <code>providerModelRules</code> 追加一条（<code>contextWindow</code>）</td></tr>
+<tr><td>不动</td><td>现有 <code>OG</code> provider（<code>b9d2c3e6-…</code>，本会话正在用它）与所有 <code>builtin:*</code>。同一个模型重复写入 = upsert，不追加重复 id</td></tr>
+<tr><td>生效</td><td>重启 ZCode 后在模型选择器里出现。选中是会话级的，配置里不需要写</td></tr>
+<tr><td>风险</td><td>ZCode 当前<b>正在运行</b>（写时必须先退出）；<code>provider_config.json</code> 带 <code>schemaVersion:1</code> → 遇到未知版本号<b>直接放弃</b>并提示</td></tr>
+</table>
+
+<h3>4.4 Trae（CN / SOLO CN 两套都写）— SQLite，最重的一条</h3>
+<table>
+<tr><th style="width:120px">项</th><th>内容</th></tr>
+<tr><td>写入</td><td>对每个存在的安装（<code>Trae CN</code> / <code>TRAE SOLO CN</code>），在 <code>state.vscdb</code> 的 ItemTable 里：<br>· 两条 <code>*model_list_map</code> 的<b>每个 agent 组</b>末尾追加自定义条目（字段照抄你现有的那条，<code>custom_model_id</code> 新生成，<code>base_url</code> 写 <code>&lt;域名&gt;/v1/chat/completions</code>）<br>· <code>recent_user_selection_by_agent_label</code>：<b>P2 实验性开关</b>（默认关），见下</td></tr>
+<tr><td>不动</td><td>内置模型列表、<code>__$__targetStorageMarker</code>、<code>storage.json</code> 里的登录态。只碰 <code>ItemTable</code> 里这几个 model 键</td></tr>
+<tr><td>生效</td><td>重启 Trae 后出现在模型列表末尾（“自定义”分组）</td></tr>
+<tr><td>备份</td><td>连带 <code>state.vscdb-wal/-shm</code> 一起复制到 <code>backup-inject/&lt;时间戳&gt;/</code>（该目录本来就有一份 <code>state.vscdb.backup</code>，说明官方也认同“整库备份”这条思路）</td></tr>
+<tr><td>选中项风险</td><td>modelId 形如 <code>&lt;agent&gt;_<b>3</b>_custom_openai_compatible_custom_openai_compatible//&lt;model&gt;_&lt;custom_model_id&gt;</code>。首尾两段都能确定，<b>中段那个 <code>3</code> 的口径未定</b>（疑似条目里的 <code>config_source:3</code>）。所以默认不写选中；等探针跑出第二个样本再定</td></tr>
+<tr><td>写坏了的后果</td><td>SQLite 写坏 = Trae 掉模型列表（登录态在 <code>storage.json</code>，不受影响）。所以：<b>写入用事务、失败立即回滚、写前强制备份</b>，并且拒绝在 Trae 运行时碰它</td></tr>
+</table>
+
+<h2>五、代码契约（实现时照这个落）</h2>
+
+<h3>5.1 逻辑层（<code>app/core</code>，可独立跑测试）</h3>
+<pre>core/src/models.rs   ← 新增。纯解析 + 纯计算，全部可单测
+  · extract_pricing(&Value) -&gt; Catalog        // 160 条：名称/说明/标签/厂商/倍率/分组/接口类型/阶梯
+  · extract_models(&Value) -&gt; Vec&lt;String&gt;      // /v1/models 的 id 列表（可用集合）
+  · join_catalog(catalog, usable) -&gt; Vec&lt;ModelRow&gt;   // 可用性 + 过滤 + 分组归属
+  · price_of(row, group_ratio) -&gt; Price       // 2×ratio×group / ×completion_ratio / 按次 / 阶梯标记
+
+core/src/inject.rs   ← 新增。四份写入契约 + 备份 + 校验，纯逻辑（不依赖 Tauri）
+  · detect() -&gt; [ClientSite; 4]              // 路径存在性 + 进程名
+  · plan(site, model, base_url, key) -&gt; Plan  // 人可读的写入预告（给界面直接渲染）
+  · apply(plan) -&gt; Report                     // 备份 → 写 → 读回校验 → 失败回滚
+  · rollback(stamp) -&gt; Report
+  · Json 类（WB/WBA/ZCode）与 Sqlite 类（Trae）各一份实现，共用 upsert/备份/校验框架</pre>
+
+<h3>5.2 Tauri 命令（<code>app/src-tauri/src/lib.rs</code>，沿用现有命令风格）</h3>
+<table>
+<tr><th style="width:190px">命令</th><th>作用</th><th>备注</th></tr>
+<tr><td><code>get_model_catalog(force)</code></td><td>返回价目表 + 可用集合 + 缓存时间</td><td>非 force 时命中缓存（<code>pricing_version</code> 变了才重拉）；无 key 也能返回价目表</td></tr>
+<tr><td><code>inject_preview(site, model)</code></td><td>写入预告（Plan）</td><td>纯读，绝不写盘；含“目标在跑”的判定</td></tr>
+<tr><td><code>inject_apply(site, model)</code></td><td>执行写入</td><td>内部再校验一次“目标没在跑”（防预告与执行之间启动）</td></tr>
+<tr><td><code>inject_state()</code></td><td>四客户端状态 + 已写入的 4SAPI 模型清单</td><td>读文件 + 进程探测，实时算</td></tr>
+<tr><td><code>inject_rollback(stamp)</code></td><td>回滚一次写入</td><td>从备份目录恢复</td></tr>
+<tr><td><code>open_path(p)</code></td><td>打开备份/配置目录</td><td>用 tauri-plugin-opener（已在依赖里）</td></tr>
+<tr><td><code>copy_text(s)</code></td><td>“复制三件套”</td><td>clipboard；前端不直接读密钥，由后端拼好字符串</td></tr>
+</table>
+
+<h3>5.3 Config 新增字段（<code>config.rs</code>，容器级 <code>serde(default)</code> 保证老库兼容）</h3>
+<pre>modelBaseUrl: Option&lt;String&gt;,        // 写进客户端的 4SAPI 入口（默认取实测可用的域名）
+modelGroup: Option&lt;String&gt;,          // 价格口径用的分组（默认 auto_groups[0]）
+modelShowAll: bool,                  // 「显示全部 160 个」开关
+modelCache: Option&lt;ModelCache&gt;,      // 价目表缓存（含 pricingVersion + 取回时间 + 原文）
+injectLog: Vec&lt;InjectRecord&gt;,       // 每次写入：时间/客户端/模型/备份戳/结果（不含密钥）</pre>
+
+<h3>5.4 缓存与刷新</h3>
+<ul>
+  <li><b>价目表</b>（103 KB）：落盘缓存于 SQLite settings；打开模型页时若距上次 &gt; 24h 自动刷新，否则用缓存 + 显示“N 分钟前”；<code>pricing_version</code> 变了则整份替换。<b>不做定时轮询</b>（这是元数据，不是余额，没有理由每分钟拉）。</li>
+  <li><b>可用集合</b>（<code>/v1/models</code>）：跟模型页一起取，不进轮询。</li>
+  <li>口径：两个接口都不产生 token 计费（与现有“取数不消耗 token”同一条原则），但仍按“礼貌性”限流 —— 一天一次自动 + 手动随时。</li>
+</ul>
+
+<h3>5.5 前端落点</h3>
+<pre>index.html  · 管理页加 <b>模型</b> 页签 + <code>.mbody.panel[data-p="mdl"]</code> 骨架（列表容器/搜索框/分组下拉/客户端条/结果条）
+app.js      · renderModels() / renderModelRow() / renderInjectSheet() / refreshInjectState()
+            · data-act: <b>mdlpick · mdlfilter · mdlclient · injectgo · injectrollback · openpath · copy3</b>
+            · invoke: get_model_catalog / inject_preview / inject_apply / inject_state / inject_rollback / open_path / copy_text
+styles.css  · .mrow .mname .mtags .mprice .cdot .mcli .sheet .kv（沿用现有变量与圆角/状态色）
+渠道行展开  · 4SAPI 行详情加一行「可用模型 160 个 · 去挑模型 →」（data-act="open-manage" + 定位到模型页签）</pre>
+
+<h3>5.6 测试要求（沿用 core 的既有纪律）</h3>
+<ul>
+  <li><code>models.rs</code>：价目表解析（含缺字段、阶梯、按次、脏数字 NaN/inf）、价格换算（三组倍率对拍）、可用集合与价目表的 join（有 key/无 key/模型不在价目表里）。</li>
+  <li><code>inject.rs</code>：upsert 幂等（同模型写两次只有一条）、撞名更新、备份→写→校验→回滚全链路（用临时目录 + 内存 SQLite），未知 <code>schemaVersion</code> 必须拒绝、目标“在跑”必须拒绝。</li>
+  <li><b>绝不用真配置做测试</b>：全部指向 <code>tempdir</code>；真机验收单独跑。</li>
+</ul>
+
+<h2>六、安全与信任契约（六条，写进 DESIGN.md）</h2>
+<ol>
+  <li><b>只增改自己写的那条</b>：自定义模型条目。不碰账号、登录态、内置模型、其它 provider。</li>
+  <li><b>密钥外流必须显式同意</b>：明文目的地逐个客户端写明（<code>~/.workbuddy/models.json</code> 的 <code>apiKey</code>、Trae 的 <code>ak</code>、ZCode 的 <code>apiKey</code>）。挂件自身：只从 Windows 凭据管理器现读现写，<b>不落盘、不进数据库、不进日志、不进备份</b>（备份只备份目标客户端的文件）。</li>
+  <li><b>先备份，再写，写完读回校验，不过就回滚</b>：备份留在客户端自己的目录下（<code>backup-inject/&lt;时间戳&gt;/</code>），保留最近 5 份，界面给出路径与一键回滚。</li>
+  <li><b>目标在跑就拒写</b>：Trae（SQLite 被占用 + 内存态覆盖）、WorkBuddy/WB AI/ZCode（内存态落盘）四家一律。不代杀进程，只给指引。</li>
+  <li><b>认不出来就放弃</b>：目标配置结构/版本号与取证时不符 → 不写、不改、不猜，如实报“格式已更新”。</li>
+  <li><b>出网只到 4SAPI 自己的域名</b>；新增的两个接口都是元数据接口，不产生 token 计费；不引入任何遥测。</li>
+</ol>
+
+<div class="say">
+  <div class="lab">与 DESIGN.md 现有“非目标”的关系（必须显式表态）</div>
+  <p style="margin:0">DESIGN.md 1.4 写着「不做余额不足的代申请/代充值 —— 只展示状态，不代替用户执行外部动作」。本功能<b>确实在写别人的文件</b>，属于这一类动作的第一次出现。建议把那条非目标<b>收紧成</b>：</p>
+  <pre style="margin:8px 0 0">不做<b>平台侧</b>的外部动作（代申请额度、代充值、代改账号）。
+本机客户端配置写入 = 用户逐次显式发起、可备份可回滚的<b>本地文件操作</b>，单列第六节契约。</pre>
+  <p class="dim" style="margin:8px 0 0">理由：不做代申请是为了“不替你承担后果”；而“把这把 key 配到我的编辑器里”后果就在本地、可回滚、且是你主动要的 —— 两者的风险性质不同，不该用同一条禁令盖住。这条改写要你点头（第 9 节 · 5）。</p>
+</div>
+
+<h2>七、明确不做（非目标）</h2>
+<ul>
+  <li><b>不做模型试跑/连通性测试。</b>发一条最小请求确实能验证“这把 key 真能调这个模型”，但那会<b>产生真实计费</b>。用 <code>/v1/models</code> 的 200/401 回答“key 有没有效、这批模型能不能调”已经足够，零计费。</li>
+  <li><b>不做客户端的模型增删管理。</b>挂件只负责自己写进去的那条（改/删/回滚），不接管客户端里其它模型的排序与清理。</li>
+  <li><b>不做 4SAPI 的充值/申请/分组切换代理。</b>（沿用原非目标）</li>
+  <li><b>不写 Claude Code / Codex CLI / OpenCode</b>（虽然本机有 <code>~/.cc-switch</code> 与 <code>~/.codex/config.toml</code>）—— 本轮四个客户端之外的，列 P3 候选，不扩大战线。</li>
+  <li><b>不做“自动选中”。</b>除了真机取证通过的客户端，一律“写入条目 + 你去点一次”。猜另一个程序的内存态键 = 埋一个“看着配好了其实没生效”的坑。</li>
+</ul>
+
+<h2>八、分期与验收</h2>
+<table>
+<tr><th style="width:76px">期</th><th>内容</th><th>验收标准（可复核）</th></tr>
+<tr>
+  <td><b>P0</b><br><span class="dim">只读</span></td>
+  <td>模型页签：价目表 + 可用集合 + 搜索/过滤 + 单价口径 + 缓存；渠道行展开加“可用模型”入口</td>
+  <td>· 无 key 也能列出 160 个（标“价目表浏览”<br>· 配好 key 后能标出“可用”集合<br>· 单价与站点 pricing 页显示的数字逐条一致（抽 5 个模型对拍）<br>· 断网/401 时页面不空、不误报“0 个可用”</td>
+</tr>
+<tr>
+  <td><b>P1</b><br><span class="dim">JSON 三份</span></td>
+  <td>WorkBuddy / WorkBuddy AI / ZCode 写入 + 备份 + 读回校验 + 回滚 + 「复制三件套」</td>
+  <td>· 写入后重启客户端，模型出现在列表里且能真跑一次<br>· 目标在跑时拒写且文案指路<br>· 回滚后文件与写入前<b>逐字节一致</b>（<code>fc /b</code> 可验）<br>· 同模型连写两次不产生重复条目</td>
+</tr>
+<tr>
+  <td><b>P2</b><br><span class="dim">Trae</span></td>
+  <td>Trae CN / SOLO CN 的 SQLite 写入（条目）+ 选中项实验开关（默认关）</td>
+  <td>· 写入后重启 Trae，模型出现在自定义分组里<br>· 备份含 -wal/-shm，回滚后 Trae 能正常打开且模型列表还原<br>· 探针确认 modelId 中段口径后，选中开关才允许打开</td>
+</tr>
+<tr>
+  <td><b>P3</b><br><span class="dim">可选</span></td>
+  <td>批量同步 key；把 Hapi / OpenCode Go 也作为写入来源；「余额还能跑多少 token」；Claude Code / Codex CLI</td>
+  <td>各自单独立项，不在本轮承诺里</td>
+</tr>
+</table>
+
+<h2>九、待你编号裁决</h2>
+<ol class="q">
+  <li><b>模型入口放哪？</b>
+    <div class="opt"><b>A（推荐）</b>：管理页新增第 2 个页签「模型」（渠道 | 模型 | 显示 | 刷新与启动 | 关于）。与现有四页签结构一致，展示面完全不动。</div>
+    <div class="opt">B：展示面单独开一个「模型」形态（第五种形态）—— <span class="bad">不推荐</span>：形态系统已有四态，再加一个会连带窗口尺寸/吸附/托盘一整套回归。</div>
+  </li>
+  <li><b>价格显示到什么程度？</b>
+    <div class="opt"><b>A（推荐）</b>：行内显示「入 ¥x · 出 ¥y / 百万 token」+ 口径行（分组、倍率、价目表时间戳），阶梯计价加 <code>*</code> 与徽标。</div>
+    <div class="opt">B：只显示倍率（×2 / ×5），不折 ¥ —— 更保险，但“这个模型烧钱快”这层意思就没了。</div>
+  </li>
+  <li><b>写入范围？</b>
+    <div class="opt"><b>A（推荐）</b>：只写「自定义模型条目」，选中项一律不自动写（除探针取证通过的客户端）；Trae 的选中留实验开关。</div>
+    <div class="opt">B：条目 + 选中一起写（Trae 也写）—— 少一次点击，但一旦口径猜错就是“看着配好了其实没生效”，排查成本高于收益。</div>
+  </li>
+  <li><b>目标在运行时？</b>
+    <div class="opt"><b>A（推荐）</b>：拒绝写入，文案指明“先退出 X”。</div>
+    <div class="opt">B：允许写入 + 提示“重启可能覆盖”。—— <span class="bad">不推荐</span>：Trae 在跑时写 SQLite 更容易直接把库写坏。</div>
+  </li>
+  <li><b>DESIGN.md 1.4 的“不代替用户执行外部动作”怎么改？</b>
+    <div class="opt"><b>A（推荐）</b>：按第六节的措辞收紧为“不做平台侧动作”，本地配置写入单列契约。</div>
+    <div class="opt">B：保持原样不动，本功能视为例外并单独标注。</div>
+  </li>
+  <li><b>密钥写法？</b>
+    <div class="opt"><b>A（推荐）</b>：从凭据管理器现读、明文写入客户端（逐客户端确认 + 界面披露），挂件不留副本。</div>
+    <div class="opt">B：还需要你手工粘一次（挂件不读密钥，只写占位符）。—— 更保守，但“一键配置”就只剩半键。</div>
+  </li>
+  <li><b>先做几个客户端？</b>
+    <div class="opt"><b>A（推荐）</b>：P1 一次做三个 JSON 客户端（WB / WB AI / ZCode），Trae 单独 P2 —— 三个 JSON 共用一套备份/校验框架，先验证框架再碰 SQLite。</div>
+    <div class="opt">B：四个一起做，Trae 同步上。</div>
+  </li>
+  <li><b>WorkBuddy AI 的选中项要不要“猜着写”？</b>
+    <div class="opt"><b>A（推荐）</b>：不猜。只写条目 + 提示去应用里选一次；探针取证后再升级。</div>
+    <div class="opt">B：照 WorkBuddy 的 <code>model</code> 键格式试写（<code>settings.json</code> 里现在连这个键都没有）。</div>
+  </li>
+</ol>
+
+<h2>十、必须真机验的部分（实现时在你机器上跑，我会把结果回填进这份文档）</h2>
+<table>
+<tr><th style="width:34px">#</th><th>要验什么</th><th>怎么验</th><th>验不过怎么办</th></tr>
+<tr><td>1</td><td><code>/v1/models</code> 的真实响应（字段、是否按分组过滤、有无额外包装）</td><td>用你已配好的 4SAPI 密钥打一次（零计费）</td><td>退回只做价目表浏览（P0 仍然成立）</td></tr>
+<tr><td>2</td><td><b>WorkBuddy <code>settings.json.model</code> 的前缀口径</b>（现在看到的是 <code>custom-local:</code>，远程自定义模型该是 <code>custom:</code> 还是别的）</td><td><b>探针法</b>：写入一个明显标识的探针条目 → 你在 WorkBuddy 里选中它一次 → 回读 <code>settings.json</code> 拿到真前缀 → 删掉探针</td><td>降级为“只写条目 + 你去选一次”（第 9 节 · 8A）</td></tr>
+<tr><td>3</td><td>WorkBuddy AI 的选中项落点（同探针法；它的 <code>models.json</code> 现在是空数组）</td><td>同上，在 WB AI 里点一次</td><td>同上</td></tr>
+<tr><td>4</td><td>Trae 的 modelId 中段 <code>3</code> 是什么（现只有一个样本）</td><td>在 Trae 里手动切换一次模型 / 再加一个自定义模型，产生第二、第三个样本</td><td>Trae 的选中开关保持关闭，只写条目</td></tr>
+<tr><td>5</td><td>写入后四个客户端真机重启是否真能跑起该模型</td><td>每个客户端发一条最小对话（<b>这一步会产生真实计费</b>，由你决定做不做）</td><td>已知：条目格式与现有的手配条目逐字段对齐时，风险最低</td></tr>
+<tr><td>6</td><td>备份/回滚的完整性（尤其 Trae 的 <code>-wal/-shm</code>）</td><td>写入 → 回滚 → <code>fc /b</code> 逐字节比对；再开一次 Trae</td><td>回滚不可靠就砍掉回滚入口，只保留备份目录 + 手工恢复说明</td></tr>
+</table>
+
+<h2>十一、代码落点清单</h2>
+<pre>app/core/src/models.rs        新增  ~200 行 + 单测（价目表/可用集合/单价换算）
+app/core/src/inject.rs        新增  ~450 行 + 单测（四份契约 + 备份/校验/回滚）
+app/core/src/providers.rs     微改  复用 4sapi 的域名与 last-good 记忆（取可用入口）
+app/core/src/config.rs        微改  5.3 的五个字段 + 老库兼容测试
+app/core/src/lib.rs           微改  mod models; mod inject;
+app/src-tauri/src/lib.rs      +7    5.2 的命令注册
+app/src/index.html            +1 tab + 骨架
+app/src/app.js                +~260 renderModels / renderInjectSheet / 7 个 data-act / 7 个 invoke
+app/src/styles.css            +~80  .mrow/.mprice/.cdot/.mcli/.sheet/.kv
+app/README.md                 +1 节  新两个模块与“写入契约”的说明
+DESIGN.md                     +1 节  第六节契约 + 1.4 非目标改写
+PROGRESS.md                   发版后回填实施结果</pre>
+
+<h2>十二、实施结果回填(2026-10-12 同一轮落地并发布 v0.1.20)</h2>
+
+<div class="say">
+  <div class="lab">这一节是事后补的</div>
+  <p style="margin:0">按第九节的推荐项全做了(<b>1A 2A 3A 4A 5A 6A 7A 8A</b>)。代码落点见第十一节,
+  实现细节与踩坑进 <code>PROGRESS.md</code>,长期口径进 <code>DESIGN.md</code> 第 12 节。下面只写两件事:
+  <b>和这份设计稿不一样的地方</b>,以及<b>真机跑出来的结果</b>。</p>
+</div>
+
+<h3>12.1 与设计稿的偏差</h3>
+<table>
+<tr><th style="width:120px">项</th><th style="width:250px">设计稿</th><th>实现</th><th style="width:230px">原因</th></tr>
+<tr>
+  <td>过滤芯片</td>
+  <td>「只看编码/对话」「支持工具调用」「多模态」</td>
+  <td>「只看编码/对话」「只看可用」「只看已配置」</td>
+  <td><b>价目表里没有"支持工具调用"这个字段</b> —— 不做一个兑现不了的过滤(多模态也不是过滤项,它是行内标签)</td>
+</tr>
+<tr>
+  <td>Trae 的 modelId 中段</td>
+  <td>标为"第九节 · 4 待真机验",只允许先不写选中项</td>
+  <td><b>当轮就破译完了</b>:中段 = 条目里的 <code>config_source</code>(内置 1 / 自定义 3),两个方向的真样本都进了单测</td>
+  <td>SOLO CN 那份库里有一条<b>内置</b>模型的选中样本(<code>solo_agent_lite_1__DeepSeek-V4-Flash-Official_null</code>),和自定义那条一对照就出来了 —— 不需要再攒样本</td>
+</tr>
+<tr>
+  <td>WorkBuddy 的选中前缀</td>
+  <td>要"写探针条目 → 你在客户端里点一次 → 回读 settings.json"</td>
+  <td><b>探针过程省掉了</b>:改成"现读现学" —— 读它当前的选中值就能判断开关状态</td>
+  <td>在 <code>app.asar</code> 里找到 <code>shouldPrefixId = !!productFeatures[CustomModelIdPrefix]</code> 这段,证据比探针直接,且不用你配合</td>
+</tr>
+<tr>
+  <td>「显示全部 160 个」</td>
+  <td>一个独立芯片</td>
+  <td>取消勾选「只看编码/对话」即可,并持久化进配置(<code>modelShowAll</code>)</td>
+  <td>同一件事不必放两个控件</td>
+</tr>
+<tr>
+  <td>分组切换</td>
+  <td>芯片组</td>
+  <td>口径行里的一个下拉(25 个分组带 ×倍率)</td>
+  <td>25 个分组用芯片会撑爆 380px 的面板</td>
+</tr>
+<tr>
+  <td>「复制三件套」</td>
+  <td>后端拼字符串 + 写剪贴板</td>
+  <td>同设计,但实现在 Rust 侧经 <code>clip.exe</code> 的 <b>stdin</b>(UTF-16LE)写入</td>
+  <td>密钥不进命令行(命令行对其它进程可见);中文标签走 UTF-8 会被 clip 的代码页切坏</td>
+</tr>
+</table>
+
+<h3>12.2 真机跑出来的结果</h3>
+<ul>
+  <li><b>价目表与可用集合都取到了真的</b>:模型页首次打开即返回
+    <code>host=4sapi.com</code>、<code>baseUrl=https://4sapi.com/v1</code>、
+    价目表指纹 <code>a42d372c…</code>(与不依赖挂件的 curl 取回一致)、
+    <code>hasKey=true</code>、分组自动落在 <code>一key官方中转全模型</code>。
+    第十节的第 1 项(「<code>/v1/models</code> 真实响应」)<b>验掉了</b>。</li>
+  <li><b>客户端状态条读到真的</b>:四个客户端里 Trae 判为"未运行"、另外三个判为"运行中"
+    (WorkBuddy / WorkBuddy AI / ZCode 当时确实在跑),Trae 显示 3 条已写入的模型 —— 与库里的真数据对得上。</li>
+  <li><b>拒写规矩当场生效</b>:对 WorkBuddy 发起写入预告时,面板上直接把确认按钮置灰,并写明
+    "WorkBuddy 正在运行 —— 它的配置是内存态落盘,边跑边写会在退出时被覆盖。先退出它再点写入"
+    (ZCode 同理)。这正是设计里最想守住的那条。</li>
+  <li><b>可写的目标会给出真正的预告</b>:对 Trae(当时没运行)给出的预告里,两条安装
+    (<code>Trae CN</code> 与 <code>TRAE SOLO CN</code>)各一行 —— 目标文件、动作
+    ("在模型表(每个 agent 组各一条)里新增/更新这条自定义模型")、"选中项不写"的原因、
+    以及"会把密钥明文写进哪个文件"的披露都在按钮之前可见。</li>
+  <li><b>「复制三件套」实测通了</b>:三行文本
+    <code>接入地址:https://4sapi.com/v1</code> / <code>模型名称:claude-sonnet-5</code> /
+    <code>API Key:…</code> 进了系统剪贴板(回读校验过、密钥只核对了长度与前缀,没落进任何日志)。</li>
+  <li><b>不动现有行为</b>:整个过程里 7 个渠道全部保持"正常",余额取数与轮询没有受影响
+    (模型查询是独立链路,不碰取数路径)。</li>
+  <li><code>cargo test</code>(core)= <b>91 passed</b>(本轮新增 65 个);<code>cargo check --all-targets</code> 干净;
+    release 构建通过。</li>
+</ul>
+
+<h3>12.3 真机自检顺手挖出的一个坑(已修)</h3>
+<div class="warnbox">
+  第一次真机打开模型页,界面停在「正在取 4SAPI 的价目表…」不动 —— 但后端<b>其实早就返回了</b>
+  (<code>get_model_catalog</code> 被单独调用时 9 秒内就回了完整数据)。
+  真正的原因是前端 <code>renderModels()</code> 里引用了一个不存在的函数名而抛异常,
+  而调用方的 <code>try/finally</code> 只把"加载中"的标记复位、异常本身被吞在未处理的 Promise 里,
+  <b>于是界面永远停在加载态</b>。
+  <p style="margin:8px 0 0">修法两条:一是把函数名对齐(<code>relTime</code>),
+  二是给 <code>renderModels</code> 套一层 try/catch —— 渲染出错就把错误写在口径行上,
+  <b>不许把界面留在"正在取"里</b>。这条经验值得记住:后端成功 + 前端抛异常,
+  表现出来和"请求还没回来"一模一样,只看截图是分不出来的。</p>
+  <p style="margin:8px 0 0">顺着这条线还挖出更贵的一个:<b>非 async 的 Tauri 命令跑在主线程上</b>,
+  而模型页的命令要起 <code>tasklist</code> 探进程、读客户端配置、读凭据管理器。
+  真机表现是——点过一次"写入预告"之后,<b>所有</b>新命令都不再返回(连 <code>inject_state</code> 也超时),
+  而且 WorkBuddy 渠道那一行从面板上消失了(它读会话 Cookie 要回主线程,主线程被占住就超时,
+  渠道退化成"没有凭据")。修法:五条命令全部改成 <code>async fn</code> +
+  阻塞段放进 <code>tokio::task::spawn_blocking</code>,并给 <code>tasklist</code> 加 5 秒超时。
+  这跟项目早就写在取数路径上的那条教训是同一条。</p>
+</div>
+
+<h3>12.4 仍然没真机验的(不装作验过)</h3>
+<table>
+<tr><th style="width:30px">#</th><th>要验什么</th><th>为什么没验</th></tr>
+<tr><td>1</td><td><b>"点一次写入"的完整链路</b>(Trae 是当前唯一不占用的目标)</td>
+<td>写入会改另一个程序的配置文件,规矩是"用户逐次显式确认",所以这一步留给你点。
+   <b>预告本身已真机验过</b>(Trae 那条给出了两个安装的完整预告且按钮可用),
+   写入路径由单测覆盖同一段代码(备份 / 读回校验 / 回滚 / 幂等)。三个正在运行的客户端
+   本来就会被拒写 —— 那是设计行为,不是缺陷。</td></tr>
+<tr><td>2</td><td>写入后客户端<b>真能跑起该模型</b>(发一条最小请求)</td>
+<td>会产生真实 token 计费 —— 挂件不去花这个钱,留给你用的时候顺便验。</td></tr>
+<tr><td>3</td><td>WorkBuddy / WB AI 的<b>选中项</b>自动写入</td>
+<td>要先"学到前缀"。第一次在客户端里手动选一次之后,<code>inject_state</code> 会把口径记住,
+   之后才会自动写选中项 —— 这条路径等你的第一次手动选择。</td></tr>
+<tr><td>4</td><td>Trae 的选中项自动写入(实验开关)</td>
+<td>口径已破译且有单测回归,但"客户端认不认写进去的选中项"只有真机能答。开关默认关,
+   打开前请先在 Trae 里手动确认过一次。</td></tr>
+</table>
+
+<div class="foot">
+  取证时间：2026-10-12 · 4SAPI 三个端点实测于本机（经代理 127.0.0.1:7897）；四个客户端的配置结构取自本机真文件（Trae CN / TRAE SOLO CN 的 <code>state.vscdb</code>、<code>~/.workbuddy</code>、<code>~/.workbuddy-ai</code>、<code>~/.zcode/v2</code>），密钥字段只记长度不记内容。<br>
+  本文件只描述设计，未改动任何代码与任何客户端配置。
+</div>
+
+<script>
+  document.querySelectorAll(".sw").forEach(function(b){
+    b.addEventListener("click", function(){
+      var id=b.dataset.m;
+      document.querySelectorAll(".swrow > .sw").forEach(function(o){o.classList.remove("on")});
+      b.classList.add("on");
+      ["m1","m2","m3"].forEach(function(k){
+        var el=document.getElementById(k);
+        if(el) el.classList.toggle("on", k===id);
+      });
+    });
+  });
+</script>
+</div>
+</body>
+</html>

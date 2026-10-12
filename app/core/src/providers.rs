@@ -90,7 +90,9 @@ fn round1(n: f64) -> f64 {
 /// f64 是 C 的 double,与 JS 的 Number 精度一致,直接复用原 extractor 的算术。
 /// is_finite 过滤是必须的:"NaN"/"inf" 是合法的 Rust parse 结果,一旦穿进
 /// round/求和,序列化成 null 或污染整条推算(扫描报告 P2-8)。
-fn num(v: &Value) -> Option<f64> {
+///
+/// `pub(crate)`:模型价目表的解析(`models.rs`)用同一套脏数字处理,不另写一份。
+pub(crate) fn num(v: &Value) -> Option<f64> {
     match v {
         Value::Number(n) => n.as_f64(),
         Value::String(s) => s.trim().parse::<f64>().ok(),
@@ -905,6 +907,34 @@ pub fn find(id: &str) -> Option<&'static ProviderDef> {
     PROVIDERS.iter().find(|p| p.id == id)
 }
 
+/// 4SAPI 的入口域名(按渠道定义的主地址 + 备用地址推导,避免域名在两处各写一遍)。
+/// 模型查询与「写进客户端」的地址都从这里取 —— 域名只有一个来源。
+pub fn four_s_api_hosts() -> Vec<String> {
+    let def = find("4sapi").expect("4sapi 渠道一定在表里");
+    std::iter::once(def.url)
+        .chain(def.fallback_urls.iter().copied())
+        .filter_map(url_host)
+        .collect()
+}
+
+/// "https://4sapi.com/api/usage/token" → "4sapi.com"
+pub fn url_host(url: &str) -> Option<String> {
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let host = rest
+        .split('/')
+        .next()?
+        .rsplit('@')
+        .next()?
+        .split(':')
+        .next()?
+        .trim();
+    if host.is_empty() {
+        None
+    } else {
+        Some(host.to_ascii_lowercase())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1216,6 +1246,17 @@ mod tests {
         let r = extract_codex(&json!({ "detail": "Not authenticated" }));
         assert!(!r.valid);
         assert!(r.error.is_some());
+    }
+
+    #[test]
+    fn four_s_api_hosts_come_from_the_channel_definition() {
+        let hosts = four_s_api_hosts();
+        assert_eq!(hosts[0], "4sapi.com");
+        assert!(hosts.contains(&"4sapi.cn".to_string()));
+        assert!(hosts.contains(&"4sapi.org".to_string()));
+        assert_eq!(hosts.len(), 4, "主地址 + 三个备用,域名只在这一处维护");
+        assert_eq!(url_host("https://a.example:8443/x/y"), Some("a.example".to_string()));
+        assert_eq!(url_host("not a url"), Some("not a url".to_string()));
     }
 
     #[test]

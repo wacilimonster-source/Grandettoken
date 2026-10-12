@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Grandettoken · GitHub 仓库优化方案（只出方案，未动代码/仓库）</title>
+<style>
+  :root{
+    --bg:#12141a; --bg2:#191c24; --bg3:#20242e;
+    --line:#2f3648; --line2:#3c445c;
+    --tx:#edf0f6; --tx2:#b6bfce; --tx3:#8d97ab;
+    --ok:#4ade9d; --warn:#f7c355; --bad:#ff6b63; --ac:#7fa2ff; --wb:#19b8c4;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#0a0c10;color:#dfe5f1;font:14px/1.75 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;padding:34px 26px 90px}
+  .wrap{max-width:1180px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 6px}
+  .sub{color:#7d879e;font-size:13px;margin-bottom:24px}
+  h2{font-size:16px;margin:42px 0 14px;padding-left:10px;border-left:3px solid var(--ac)}
+  h3{font-size:14px;margin:24px 0 8px;color:#cdd5e4}
+  p{margin:8px 0}
+  code{font-family:"Cascadia Mono",Consolas,monospace;font-size:12.5px;background:#1b1f28;border:1px solid #262c38;border-radius:4px;padding:1px 5px;color:#9fd0ff}
+  .hand{border:1px solid #3d5a8a;background:linear-gradient(180deg,#152034,#111a29);border-radius:10px;padding:16px 18px;margin:0 0 30px}
+  .hand b{color:#9fc4ff}
+  .say{background:#141a24;border:1px solid var(--line);border-left:3px solid var(--wb);border-radius:8px;padding:14px 16px;margin:12px 0}
+  .say .lab{font-size:12px;color:#7d879e;letter-spacing:.06em;margin-bottom:6px}
+  .say.red{border-left-color:var(--bad)}
+  .say.red .lab{color:#ffb4b0}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#1a1f28;color:#b6bfce;font-weight:600}
+  td .snip{font-family:Consolas,monospace;font-size:12px;color:#8fd0a0;white-space:pre-wrap;word-break:break-all}
+  .bad{color:var(--bad)} .ok{color:var(--ok)} .warn{color:var(--warn)} .dim{color:var(--tx3)}
+  ol.q{margin:10px 0 0;padding-left:0;list-style:none;counter-reset:q}
+  ol.q>li{counter-increment:q;border:1px solid var(--line);border-radius:8px;padding:12px 14px 12px 46px;margin:10px 0;background:#15181f;position:relative}
+  ol.q>li::before{content:counter(q);position:absolute;left:14px;top:12px;width:22px;height:22px;border-radius:6px;background:#232a38;color:#9fc4ff;
+    display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px}
+  ol.q b{color:#e6ebf5}
+  .opt{margin:4px 0;padding-left:14px;color:var(--tx2)}
+  .opt b{color:var(--tx)}
+  .pick{color:var(--ok);font-weight:700}
+  .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:20px;border:1px solid #3d5a8a;color:#9fc4ff;margin-left:6px;vertical-align:1px}
+  .tag.p0{border-color:#7a3d3d;color:#ffb4b0}
+  .tag.p1{border-color:#6b5a2a;color:#ffd88a}
+  .tag.p2{border-color:#3d5a8a;color:#9fc4ff}
+  ul{margin:6px 0 6px 18px;padding:0}
+  li{margin:4px 0}
+  .foot{margin-top:44px;color:#6b7688;font-size:12px;border-top:1px solid var(--line);padding-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>GitHub 仓库优化方案</h1>
+<div class="sub">2026-10-11 · <b>只做调研与方案，未改任何仓库内容、未改代码</b>。裁决后再动手。</div>
+
+<div class="hand">
+  <b>交接框 · 一句话现状</b><br>
+  这个仓库现在的功能链是健康的（19 个 release、每个三件套齐全、更新链路实测通），<b>病在"门面"和"自动化"</b>：
+  别人点进 <code>github.com/wacilimonster-source/Grandettoken</code> 看不到一句介绍（无描述、无 topics、无许可证、无根 README），
+  首页直接铺着 20 个内部文档（bug 报告 / 设计稿 / 原型 / AI 工作日志）；
+  发版靠 <code>RELEASE.md</code> 里 5 步手工流程（那套流程自己已经记了 3 个踩坑），没有任何 CI。<br>
+  下面按 <b>P0 门面 / P1 自动化 / P2 治理</b> 排，每条给证据；结尾是 6 个待裁决点，回「1A 2B 3A…」即可开工。
+</div>
+
+<h2>一、现状核查（2026-10-11 实测，不含推测）</h2>
+
+<h3>1. 仓库元数据（走 GitHub API 读的原始值）</h3>
+<table>
+<tr><th style="width:22%">项</th><th style="width:34%">当前值</th><th>说明</th></tr>
+<tr><td>description</td><td class="bad">null</td><td>GitHub 搜索结果、推荐卡片、分享链接的副标题都空着</td></tr>
+<tr><td>topics</td><td class="bad">[]</td><td>没有标签就进不了任何"tauri / windows-widget / token-monitor"这类发现路径</td></tr>
+<tr><td>homepage</td><td class="bad">null</td><td>可以填 Releases 页或仓库 README</td></tr>
+<tr><td>license</td><td class="bad">none</td><td>法律上等于<b>保留所有权利</b>：别人可以读，但无权使用/修改/分发（GitHub 页面还会挂个"无许可证"提示）</td></tr>
+<tr><td>stars / forks / watchers</td><td>0 / 0 / 0</td><td>仓库 2026-09-16 建，25 天内 19 个版本，没有对外传播过一次</td></tr>
+<tr><td>Issues / Wiki / Projects</td><td>开 / 开 / 开</td><td>Issues 0 条、Wiki 空、Projects 空 —— 三个标签页全是空的</td></tr>
+<tr><td>Discussions</td><td>关</td><td>保持关闭合理</td></tr>
+<tr><td>main 分支保护</td><td class="bad">未保护</td><td><code>branches/main/protection</code> 返回 404</td></tr>
+<tr><td>体积</td><td>824 KB / <code>.git</code> 1.7 MB</td><td>不大，没有大文件问题</td></tr>
+</table>
+
+<h3>2. 仓库内容（<code>git ls-files</code> 共 77 个文件）</h3>
+<table>
+<tr><th style="width:26%">类别</th><th style="width:12%">数量</th><th>具体</th></tr>
+<tr><td>代码 / 构建</td><td>~40</td><td><code>app/</code>（core + src-tauri + 前端）、<code>build/</code> 工具链脚本 ✓ 健康</td></tr>
+<tr><td><b>根目录内部文档</b></td><td class="warn">20</td><td>4 份 <code>bug-report-*.html</code>、13 份 <code>design-*.html</code>、<code>token-dashboard-prototype.html</code>、<code>codex-research.html</code>、<code>product-optimization-2026-09.html</code>、<code>tbar-buttons.html</code></td></tr>
+<tr><td>工程文档</td><td>4</td><td><code>DESIGN.md</code> / <code>DESIGN-INSTALLER-UPDATE.md</code> / <code>PROGRESS.md</code> / <code>RELEASE.md</code></td></tr>
+<tr><td><b>AI 工作日志（公开）</b></td><td class="warn">1</td><td><code>.workbuddy-ai/memory/2026-09-17.md</code> —— 整份内部工作笔记：缺陷编号、复现手法、事故复盘（含"PAT 曾明文出现在对话里"这类记录）</td></tr>
+<tr><td>根 README / LICENSE / CHANGELOG / .github</td><td class="bad">0 / 0 / 0 / 0</td><td>GitHub 首页没有任何入口说明；唯一的 README 在 <code>app/README.md</code>（要翻目录才看得到），标题还写着旧名 TokenScope</td></tr>
+<tr><td>本地工具目录（未跟踪）</td><td>2</td><td><code>.zcode/</code>、<code>.workbuddy/</code> 每次 <code>git status</code> 都冒出来（未进 .gitignore）</td></tr>
+</table>
+
+<h3>3. 发布与更新链路（这块是好的，方案不能碰坏它）</h3>
+<table>
+<tr><th style="width:26%">项</th><th>实测</th></tr>
+<tr><td>Releases</td><td class="ok">19 个（v0.1.0 → v0.1.19），每个都是 <code>setup.exe + .sig + latest.json</code> 三件套，无缺件</td></tr>
+<tr><td><code>releases/latest</code></td><td class="ok">指向 v0.1.19；<code>latest.json</code> 的签名与本地 <code>.sig</code> 逐字符一致（10-08 发版时核过）</td></tr>
+<tr><td>更新端点</td><td><code>github.com/.../releases/latest/download/latest.json</code>（应用内固定，见 <code>tauri.conf.json</code>）</td></tr>
+<tr><td>发版流程</td><td>全手工 5 步（版本两处 → commit/tag/push → bundle → make-latest-json → gh release create）；<code>RELEASE.md</code> 自己记了 3 个坑：空密码环境变量在 PowerShell 里会被"删掉"、私有仓库会让更新链路失效、少传任一资产更新就断</td></tr>
+<tr><td>密钥扫描</td><td class="ok">按他们自己的 <code>build/scan-secrets.ps1</code> 的口径复扫 77 个入库文本文件：PAT / sk- / JWT / AWS / 私钥 / Bearer / 密码赋值 <b>0 命中</b> —— 没有需要紧急清理的泄密</td></tr>
+<tr><td>签名私钥</td><td>在 <code>C:\Users\wacil\.tauri\tokenscope.key</code>，未入库 ✓（丢了所有已装用户就再也收不到更新）</td></tr>
+</table>
+
+<h2>二、问题清单（按影响排序）</h2>
+<table>
+<tr><th style="width:8%">档</th><th style="width:30%">问题</th><th>影响 / 证据</th></tr>
+<tr><td><span class="tag p0">P0</span></td><td>仓库首页没有一句"这是什么"</td><td>无 description / topics / 根 README / LICENSE。任何从 Release 链接进来的人（包括未来的你自己换机器）看到的是一堆 bug-report / design-*.html，得自己猜怎么装、怎么用</td></tr>
+<tr><td><span class="tag p0">P0</span></td><td>内部工作文档与公开门面混在一起</td><td>20 份内部文档 + 1 份 AI 工作日志直接躺在根目录。这些内容本身没泄密（密钥扫描 0 命中），但把"门面"挤没了；<code>.workbuddy-ai/memory/2026-09-17.md</code> 里的"事故复盘/给 AI 的教训"尤其不像该给外人看的第一屏</td></tr>
+<tr><td><span class="tag p0">P0</span></td><td>没有许可证</td><td><code>license: none</code>。如果本意是"公开给人用/参考"，现在的状态是相反的（默认保留所有权利）；GitHub 也会给访问者一个"无许可证"的提示</td></tr>
+<tr><td><span class="tag p1">P1</span></td><td>发版全靠手工 5 步</td><td>19 次发版 = 19 次手工；流程里两处已知会挂人的坑（空密码变量、少传资产）。任何一次疏忽就是"用户收不到更新"或"清单指向不存在的文件"</td></tr>
+<tr><td><span class="tag p1">P1</span></td><td>没有 CI</td><td>77 个文件、55 项单测，push 时没有任何自动化验证；<code>cargo test</code> / <code>cargo check</code> 只在你本地跑。单测是纯逻辑（<code>app/core</code>），搬上 runner 的成本很低</td></tr>
+<tr><td><span class="tag p1">P1</span></td><td>发坏了没有回滚预案</td><td><code>RELEASE.md</code> 只写了怎么发，没写"发出去发现坏了怎么办"。更新端点永久指向 latest，坏版本会被所有已装用户拉走，且没有降级通道</td></tr>
+<tr><td><span class="tag p2">P2</span></td><td>命名不统一</td><td>仓库/产品叫 Grandettoken，<code>app/README.md</code> 与历史文档写 TokenScope（改名前的旧名）。外人会以为这是两个项目</td></tr>
+<tr><td><span class="tag p2">P2</span></td><td>依赖无自动提醒、main 无保护、空标签页占位</td><td>没有 Dependabot；main 未保护（误 force-push 无拦阻）；Wiki/Projects 空着但开着</td></tr>
+<tr><td><span class="tag p2">P2</span></td><td>没有 issue 反馈入口</td><td>Issues 开着但 0 条 —— 真有人报"某渠道失效"时，缺一个"请附版本/渠道/面板截图"的模板</td></tr>
+</table>
+
+<h2>三、方案</h2>
+
+<h3>A. 门面（P0，约半天）</h3>
+<ul>
+<li><b>根 README.md</b>（中英文按裁决）：一句话定位 + 当前版本截图（<code>build/shot-panel-0923.png</code> 是 9 月的，实施时用现在这版重新截）+ <b>下载入口</b>（直接链 Releases）+ 安装/更新说明（per-user 免管理员、自动更新走 latest.json）+ 渠道与额度模型表（从 <code>app/README.md</code> 提上来）+ 数据位置与隐私一句（数据库在 <code>%APPDATA%</code>、密钥在凭据管理器、不采集任何东西）+ 已知边界（WorkBuddy 网页会话约 7 天、Trae/Codex 读本机登录态）。</li>
+<li><b>仓库元数据</b>：description（一句话：常驻桌面的多平台 AI 额度监控小组件）、topics（<code>tauri</code> <code>rust</code> <code>windows</code> <code>desktop-widget</code> <code>token-usage</code> <code>ai-tools</code>）、homepage 指 Release 页；关掉空的 Wiki/Projects 标签页。</li>
+<li><b>LICENSE</b>：见裁决 1。</li>
+<li><b>命名统一</b>：README 标题用产品名 Grandettoken，正文加一句"早期叫 TokenScope，旧的文档与凭据条目仍用旧名"，把 <code>app/README.md</code> 与根 README 合并（<code>app/README.md</code> 保留为开发者视角的模块说明）。</li>
+</ul>
+
+<h3>B. 仓库结构（P0/P2，约半天）</h3>
+<ul>
+<li><b>文档归位</b>：新建 <code>docs/</code>，把 20 份 <code>design-*.html</code> / <code>bug-report-*.html</code> / 原型 / 研究稿按前缀搬进去（<code>docs/design/</code>、<code>docs/report/</code>）；根目录只留 <code>README.md</code> / <code>LICENSE</code> / <code>RELEASE.md</code> / 两个 DESIGN + PROGRESS（或一并进 <code>docs/</code>，见裁决 3）。<br>
+<span class="dim">代价与做法：<code>PROGRESS.md</code> 与部分代码注释里引用了这些文件名（如 <code>app.js:954</code> 提到 <code>design-pill-restyle-5.html</code>），搬迁时用脚本统一改成 <code>docs/design/…</code> 并 grep 复核 0 处旧路径残留；<b>历史 commit 不受影响</b>（旧版本里的路径本来就指旧版）。</span></li>
+<li><b>停止跟踪工具目录</b>：<code>.workbuddy-ai/</code>（AI 工作日志）、<code>.workbuddy/</code>、<code>.zcode/</code> 加进 <code>.gitignore</code>；已在库里的那份 AI 日志按裁决 4 处理。</li>
+</ul>
+
+<h3>C. 自动化（P1，1~2 天，含一次 CI 可行性验证）</h3>
+<ul>
+<li><b>CI 检查</b>（push / PR）：<code>windows-latest</code> + GNU 工具链 + mingw，跑 <code>app/core</code> 的 <code>cargo test</code>（55 项）与 src-tauri 的 <code>cargo check --all-targets</code>。公开仓库的 Actions 分钟数免费。<br>
+<span class="dim">注意：本项目是 <b>Windows-GNU 非官方路径</b>（Tauri 官方只覆盖 MSVC），release 构建还依赖 <code>build/make-webview2-static.ps1</code> 生成的静态加载器归档（<code>build/webview2-static/out/</code> 是 gitignore 的，CI 里要现生成）。所以这一项在实施时要先跑一次 spike：core 测试几乎肯定能上；src-tauri 的 check 若被工具链卡住，就先只上 core 测试 + 把结论写进 RELEASE.md。</span></li>
+<li><b>发版自动化</b>（tag 触发）：三种做法，推荐 <b>C2</b>——
+  <div class="opt"><b>C2.<span class="pick"> 推荐</span></b> 普通 workflow，直接复用现有三件套：装工具链（rust GNU target + mingw）→ 跑 <code>build/build.ps1 bundle</code>（它已带 PATH/CC 装配与<b>单 exe 导入表断言</b>）→ <code>node build/make-latest-json.js</code> → <code>gh release create</code> 传三件套（<code>permissions: contents: write</code> + 内置 <code>GITHUB_TOKEN</code>）。好处：每一段都是你手工跑过的命令，出问题能在本地原样复现。</div>
+  <div class="opt"><b>C1.</b> 用官方 <code>tauri-apps/tauri-action</code>：<code>tauriScript</code> 指包装脚本、<code>projectPath</code> 指 <code>app/src-tauri</code>、<code>uploadUpdaterJson: true</code> 由它生成 latest.json。少写一段 YAML，但它是为 JS 工程设计的（本项目没有 package.json），单 exe 断言仍要自己补一步，等于把 <code>build.ps1</code> 的逻辑拆成两处。</div>
+  <div class="opt"><b>C3.</b> 保持手工，只把回滚预案与"发版前自检清单"补进 <code>RELEASE.md</code>。</div>
+  <p class="dim" style="margin:6px 0 0">签名私钥进 Actions Secret：<code>gh secret set TAURI_SIGNING_PRIVATE_KEY &lt; C:\Users\wacil\.tauri\tokenscope.key</code>（值不回显、不进聊天记录），密码项显式设空串；版本号四处一致里，Cargo.toml / tauri.conf.json 两处由 <code>build.rs</code> 编译期断言，tag 与 latest.json 由 workflow 同源生成。C1/C2 的密钥用法相同。</p></li>
+<li><b>回滚预案</b>（写进 RELEASE.md）——<b>先说清楚：默认没有降级通道。</b>实测 <code>tauri-plugin-updater 2.11.0</code>（<code>updater.rs:576</code>）：无自定义比较器时判据就是 <code>release.version &gt; current_version</code>，<b>把 latest.json 指回旧版本号不会让任何人降级</b>。所以发坏了只有两条路：
+  <div class="opt"><b>①</b> <b>止损</b>：立刻把坏 Release 转成 <b>prerelease</b> 或删除 —— <code>releases/latest</code> 会跳过它，<b>还没更新的人不会中</b>（已更新的人停在坏版本）。</div>
+  <div class="opt"><b>②</b> <b>救回</b>：发一个<b>版本号更高</b>的修复版（坏了的是 0.1.20 就发 0.1.21），已更新的人靠它回来。</div>
+  <div class="opt"><b>因此真正的闸门在发版前</b>：RELEASE.md 加一份自检清单（本机覆盖安装一次、更新弹窗点一遍、面板出一个真数），比任何回滚都便宜；能落成 <code>build/preflight.ps1</code> 更好。</div>
+  <p class="dim" style="margin:6px 0 0">备选（不建议现在做）：给应用装自定义 <code>version_comparator</code> 换取降级能力 —— 那会改应用的更新语义，收益不抵风险。</p></li>
+</ul>
+
+<h3>D. 治理与安全（P2，半小时）</h3>
+<ul>
+<li><b>红线（写进 README/CONTRIBUTING 级别的说明）</b>：仓库必须保持 <b>public</b>（私有仓库的资源需鉴权，更新插件拉不到）；release 资产名必须保持 <code>Grandettoken_&lt;版本&gt;_x64-setup.exe / .sig / latest.json</code> 三件套且 <code>releases/latest</code> 永远指向最新可用版 —— 这两条是已装用户的更新命脉，任何"重命名/整理发布"的优化都得绕开它们。</li>
+<li><b>Dependabot</b>：cargo + github-actions 两条，周更 PR（rustls / reqwest / tauri 这些值得跟）。</li>
+<li><b>main 分支保护</b>：只加"要求 CI 通过"这一条，不要求 review（单人项目会卡自己）。</li>
+<li><b>Issue 模板</b>：一个 bug 模板（版本号 / 渠道 / 面板截图 / 是否刚更新过），一个"渠道失效"模板（哪个渠道、报什么文案、<code>key_hint</code> 尾号）。</li>
+</ul>
+
+<h2>四、待裁决</h2>
+<ol class="q">
+<li><b>许可证怎么给？</b>
+  <div class="opt"><b>A.</b> <span class="pick">推荐</span> MIT（保留版权声明，别人能自由使用/参考；和个人工具定位最省事）</div>
+  <div class="opt"><b>B.</b> 自定义"源码公开、保留所有权利"（一段短声明，明确只读、不可再分发）</div>
+  <div class="opt"><b>C.</b> 暂不处理，只做其余项</div></li>
+<li><b>README 用什么语言？</b>
+  <div class="opt"><b>A.</b> <span class="pick">推荐</span> 中文为主（受众是你自己和中文用户；截图、说明都省事）</div>
+  <div class="opt"><b>B.</b> 中英双语（英文在前，方便被 star / 被推荐）</div>
+  <div class="opt"><b>C.</b> 英文为主</div></li>
+<li><b>文档搬到哪一步？</b>
+  <div class="opt"><b>A.</b> <span class="pick">推荐</span> 全量进 <code>docs/</code>（design / report / research / prototype 四类），根目录只留 README / LICENSE / RELEASE / DESIGN / PROGRESS</div>
+  <div class="opt"><b>B.</b> 更彻底：连 <code>PROGRESS.md</code> / <code>DESIGN.md</code> / <code>RELEASE.md</code> 一起进 <code>docs/</code>，根目录只有 README / LICENSE</div>
+  <div class="opt"><b>C.</b> 只搬 bug 报告与研究稿，设计稿留根目录</div></li>
+<li><b>那份 AI 工作日志（<code>.workbuddy-ai/memory/2026-09-17.md</code>，已在公开仓库里）怎么办？</b>
+  <div class="opt"><b>A.</b> <span class="pick">推荐</span> 停止跟踪 + 进 .gitignore（它已经是仓库历史的一部分，公开可查；<b>不在历史里抹除</b> —— 改写历史要 force-push，会牵连 tags/release，风险大于收益）</div>
+  <div class="opt"><b>B.</b> 移进 <code>docs/notes/</code> 保留（当作开发日志的一部分，反正内容没泄密）</div>
+  <div class="opt"><b>C.</b> 连历史一起清（我需要你明确知道这要 force-push 并重建 tag，且 Release 资产要重新核对）</div></li>
+<li><b>CI 做到哪一步？</b>
+  <div class="opt"><b>A.</b> <span class="pick">推荐</span> 先落 core 测试 + src-tauri check（含一次 GNU/MSVC 工具链 spike，结论写文档）</div>
+  <div class="opt"><b>B.</b> 只跑 core 测试（最稳，5 分钟能上）</div>
+  <div class="opt"><b>C.</b> 先不做 CI，只做发版自动化</div></li>
+<li><b>发版自动化要不要上？（需要把签名私钥放进 GitHub Secret）</b>
+  <div class="opt"><b>A.</b> <span class="pick">推荐</span> 全自动：push tag → 构建+签名+发布+更新清单，一条链跑完</div>
+  <div class="opt"><b>B.</b> 半自动：Actions 只负责构建产物并留出下载，<code>gh release create</code> 仍手工（私钥仍要进 Secret）</div>
+  <div class="opt"><b>C.</b> 保持手工，只把回滚预案和两个坑补进 <code>RELEASE.md</code></div></li>
+</ol>
+
+<h2>五、明确不做的（避免越做越重）</h2>
+<ul>
+<li><b>不把仓库改成私有</b>：会让所有已装用户彻底收不到更新（<code>RELEASE.md</code> 已写明），这是硬约束不是偏好。</li>
+<li><b>不做 GUI 冒烟 CI</b>：Tauri + WebView2 在 runner 上跑不出可靠结论（本机都踩过"反复强杀把 WebView2 搞崩"），收益远不及成本；窗口/形态验证继续靠 <code>build/verify-form.js</code> 那套本地脚本。</li>
+<li><b>不引入 wiki / discussions / 贡献指南 / 行为准则</b>：单人项目，维护不动的东西等于负债。</li>
+<li><b>不动 release 资产名与 tag 命名规则</b>（更新命脉，见 D 的红线）。</li>
+<li><b>不改写 git 历史</b>（除非裁决 4C）。</li>
+</ul>
+
+<h2>六、实施顺序与验收</h2>
+<table>
+<tr><th style="width:6%">步</th><th style="width:34%">做什么</th><th>验收方式</th></tr>
+<tr><td>1</td><td>仓库元数据 + LICENSE（裁决 1/2 决定文案）</td><td>匿名 <code>curl</code> 读 <code>api.github.com/repos/…</code>：description / topics / license 都有值</td></tr>
+<tr><td>2</td><td>根 README（含新截图、下载入口、渠道表、数据与隐私、已知边界）</td><td>用无头浏览器渲染 README 的 Markdown 预览截图核对：图片能显示、三个链接可点、版本号与当前 release 一致</td></tr>
+<tr><td>3</td><td><code>docs/</code> 归位 + 引用改写 + <code>.gitignore</code> 补工具目录</td><td><code>git ls-files</code> 根目录只剩约定的 6 个文件；<code>grep -rn</code> 旧文件名 0 处残留；<code>git status</code> 干净（不再冒出 .zcode/.workbuddy）</td></tr>
+<tr><td>4</td><td>CI（core 测试 + check）</td><td>一次真实 push 触发 workflow 全绿；再故意改坏一个断言验证它真能红</td></tr>
+<tr><td>5</td><td>发版自动化 + 回滚预案 + RELEASE.md 重写</td><td>用 <b>0.1.20 或下一个版本</b>走一遍：tag → workflow → release 三件套齐全、<code>latest.json</code> 签名与本地 <code>.sig</code> 一致、装机实测能收到更新；再演练一次"删 Release 看 latest 是否回退"</td></tr>
+<tr><td>6</td><td>Dependabot / 分支保护 / Issue 模板</td><td>Dependabot 首轮 PR 出现；直接 push 一个坏提交被 CI 拦下；开 issue 页能看到两个模板</td></tr>
+</table>
+<p><b>顺序理由</b>：1~3 是纯文档与文件移动，零风险、当天能验收；4~5 碰构建与密钥，放后面且各自独立；6 最后（分支保护必须等 CI 绿了再加，否则会把自己锁在门外）。</p>
+
+<div class="foot">
+调研方式：<code>gh api</code> 读仓库元数据与 release 列表；<code>git ls-files</code> 清点入库文件；按 <code>build/scan-secrets.ps1</code> 的口径复扫 77 个入库文本文件（PAT / sk- / JWT / AWS / 私钥 / Bearer / 密码赋值 0 命中）；
+读 <code>build.rs</code>、<code>RELEASE.md</code>、<code>tauri.conf.json</code>、<code>make-latest-json.js</code> 核对更新链路的硬依赖。本次<b>未修改仓库任何文件、未改任何仓库设置</b>。
+</div>
+
+</div>
+</body>
+</html>

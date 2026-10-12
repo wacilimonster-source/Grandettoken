@@ -8,7 +8,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{Emitter, Manager, State};
 use tokenscope_core::config::Config;
 use tokenscope_core::fetch::{now_ts, ChannelView, Fetcher};
-use tokenscope_core::{providers, secrets, store::Store};
+use tokenscope_core::{inject, models, providers, secrets, store::Store};
 
 pub struct AppState {
     pub store: Arc<Mutex<Store>>,
@@ -82,6 +82,13 @@ fn set_config(app: tauri::AppHandle, state: State<'_, AppState>, config: Config)
         if incoming.win_y.is_none() {
             incoming.win_y = cur.win_y;
         }
+        // 选中项口径是后端从客户端文件里读出来的(前端手里永远是旧的):
+        // 整份覆盖会把刚学会的抹掉,所以后端已知的键以库里为准。
+        let mut merged = cur.selection_prefix.clone();
+        for (k, v) in &incoming.selection_prefix {
+            merged.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+        incoming.selection_prefix = merged;
     }
 
     // 先应用快捷键:注册失败(如被占用)就让整次保存失败,前端好回滚旧值
@@ -884,6 +891,451 @@ fn take_startup_error(state: State<'_, AppState>) -> Option<String> {
     lock_rw(&state.startup_error).take()
 }
 
+// ─────────────── 4SAPI 可用模型 + 一键配置到客户端 ───────────────
+//
+// 设计与取证见 `design-4sapi-models.html`。三条纪律:
+//   1. 模型清单是**元数据接口**,不产生 token 计费(与余额取数同一条原则);
+//   2. 写进客户端一律「先备份 → 写 → 读回校验」,目标在跑就拒写(规矩在 core::inject 里);
+//   3. 密钥只从凭据管理器**现读现写**,不回前端、不落盘、不进日志。
+
+/// 模型页要的整份视图。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogView {
+    /// 价目表取数的域名
+    host: String,
+    /// 要写进客户端的接入地址(挂件实测可用的那个)
+    base_url: String,
+    version: String,
+    fetched_at: i64,
+    /// 可用集合的取回时间;0 = 从没取到过(界面据此把「可用」退成「未知」)
+    usable_at: i64,
+    has_key: bool,
+    group: String,
+    groups: Vec<models::Group>,
+    total: usize,
+    chat_count: usize,
+    usable_count: usize,
+    rows: Vec<models::RowView>,
+    /// 刷新失败时的真实原因(界面显示上次快照并用它说明)
+    error: Option<String>,
+}
+
+/// 客户端状态 + 写入台账。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InjectOverview {
+    clients: Vec<inject::ClientState>,
+    log: Vec<inject::InjectRecord>,
+}
+
+/// 写进客户端的接入地址:用户指定 > 实测可用的域名 > 主域名。
+fn four_s_api_base(cfg: &Config, cache: Option<&models::ModelCache>) -> String {
+    if let Some(u) = cfg.model_base_url.as_deref() {
+        let t = u.trim().trim_end_matches('/');
+        if !t.is_empty() {
+            return t.to_string();
+        }
+    }
+    match cache {
+        Some(c) => c.base_url(),
+        None => "https://4sapi.com/v1".to_string(),
+    }
+}
+
+/// 入口顺序:配置里指定的域名优先,其次上次成功的(可用集合 > 价目表),最后默认顺序。
+fn host_order(cfg: &Config, cache: Option<&models::ModelCache>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |h: String| {
+        if !h.is_empty() && !out.iter().any(|x| x == &h) {
+            out.push(h);
+        }
+    };
+    if let Some(base) = cfg.model_base_url.as_deref() {
+        if let Some(h) = providers::url_host(base) {
+            push(h);
+        }
+    }
+    if let Some(c) = cache {
+        if c.usable_at > 0 {
+            push(c.usable_host.clone());
+        }
+        push(c.host.clone());
+    }
+    for h in providers::four_s_api_hosts() {
+        push(h);
+    }
+    out
+}
+
+/// 一个模型写进客户端时的全部信息。上下文/多模态从价目表缓存里取;
+/// 缓存里没有就留空 —— 不编造能力上限。
+///
+/// **这里是阻塞活**(凭据管理器 / 读缓存),调用方负责把它放进 `spawn_blocking` ——
+/// 见 `inject_preview` 上面那段注释。
+fn model_spec_with(
+    store: &Arc<Mutex<Store>>,
+    cfg: &Config,
+    model: &str,
+) -> Result<inject::ModelSpec, String> {
+    let model = model.trim();
+    if model.is_empty() {
+        return Err("没有指定模型".into());
+    }
+    let key = match secrets::get("4sapi") {
+        Ok(Some(k)) if !k.trim().is_empty() => k,
+        Ok(_) => return Err("还没配置 4SAPI 密钥:先在「渠道」页签里填一次".into()),
+        Err(e) => return Err(e),
+    };
+    let cache = {
+        let s = lock_rw(store);
+        models::ModelCache::load(&s)
+    };
+    let row = cache
+        .as_ref()
+        .and_then(|c| c.catalog().ok())
+        .and_then(|cat| cat.find(model).cloned());
+    let context = row
+        .as_ref()
+        .and_then(|r| r.context.as_deref())
+        .and_then(models::context_tokens);
+    let multimodal = row.as_ref().map(|r| r.multimodal).unwrap_or(false);
+    let base = four_s_api_base(&cfg, cache.as_ref());
+    Ok(inject::ModelSpec::new(
+        model, &base, &key, context, multimodal,
+    ))
+}
+
+fn inject_opts(cfg: &Config, client: inject::Client) -> inject::Opts {
+    inject::Opts {
+        // 学到的口径才写选中项;没学到就只写条目(core::inject::learn_prefix)
+        selection_prefix: cfg.selection_prefix.get(client.id()).cloned(),
+        trae_auto_select: cfg.trae_auto_select,
+    }
+}
+
+/// 取 4SAPI 的可用模型:公开价目表 + 这把 key 能调的集合。
+/// 两者都是元数据,不产生 token 计费;缓存一天,失败时退回上次快照并如实报错。
+#[tauri::command]
+async fn get_model_catalog(state: State<'_, AppState>, force: bool) -> Result<CatalogView, String> {
+    let store = state.store.clone();
+    let cfg = lock_rw(&state.config).clone();
+    let client = state.fetcher.http.clone();
+    let now = now_ts();
+
+    let mut cache = {
+        let s = lock_rw(&store);
+        models::ModelCache::load(&s)
+    };
+    let hosts = host_order(&cfg, cache.as_ref());
+    let mut error: Option<String> = None;
+
+    let needs_catalog = force || cache.as_ref().map(|c| c.stale(now)).unwrap_or(true);
+    if needs_catalog {
+        match models::fetch_catalog(&client, &hosts).await {
+            Ok(f) => {
+                let c = cache.get_or_insert_with(Default::default);
+                c.version = f.catalog.version.clone();
+                c.fetched_at = now;
+                c.pricing = f.raw.to_string();
+                c.host = f.host;
+            }
+            // 失败不把价目表清空:显示上次快照 + 真实原因(与余额取数同一契约)
+            Err(e) => error = Some(e),
+        }
+    }
+
+    let key = secrets::get("4sapi")
+        .ok()
+        .flatten()
+        .filter(|k| !k.trim().is_empty());
+    let needs_usable = cache
+        .as_ref()
+        .map(|c| force || c.usable_at <= 0 || now - c.usable_at > models::CACHE_TTL_SEC)
+        .unwrap_or(true);
+    if let (Some(k), true) = (key.as_ref(), needs_usable) {
+        match models::fetch_usable(&client, &hosts, k).await {
+            Ok((ids, host)) => {
+                if let Some(c) = cache.as_mut() {
+                    c.usable = ids;
+                    c.usable_at = now;
+                    c.usable_host = host;
+                }
+            }
+            Err(e) => {
+                if error.is_none() {
+                    error = Some(e);
+                }
+            }
+        }
+    }
+
+    if let Some(c) = cache.as_ref() {
+        let s = lock_rw(&store);
+        if let Err(e) = c.save(&s) {
+            eprintln!("模型缓存写入失败: {e}");
+        }
+    }
+
+    let Some(cache) = cache else {
+        return Ok(CatalogView {
+            host: String::new(),
+            base_url: four_s_api_base(&cfg, None),
+            version: String::new(),
+            fetched_at: 0,
+            usable_at: 0,
+            has_key: key.is_some(),
+            group: String::new(),
+            groups: Vec::new(),
+            total: 0,
+            chat_count: 0,
+            usable_count: 0,
+            rows: Vec::new(),
+            error: error.or_else(|| Some("还没有价目表缓存".into())),
+        });
+    };
+
+    let mut catalog = cache.catalog()?;
+    if cache.usable_known() {
+        // 只有**成功取到过**才打「不可用」标记:一次网络失败不该让 160 个模型全变红
+        catalog.mark_usable(&cache.usable);
+    }
+    let group = cfg
+        .model_group
+        .clone()
+        .filter(|g| !g.trim().is_empty())
+        .unwrap_or_else(|| catalog.default_group());
+    let rows = models::row_views(&catalog, &group);
+    Ok(CatalogView {
+        host: cache.host.clone(),
+        base_url: four_s_api_base(&cfg, Some(&cache)),
+        version: cache.version.clone(),
+        fetched_at: cache.fetched_at,
+        usable_at: cache.usable_at,
+        has_key: key.is_some(),
+        group,
+        groups: catalog.groups.clone(),
+        total: catalog.rows.len(),
+        chat_count: catalog.chat_count(),
+        usable_count: catalog.rows.iter().filter(|r| r.usable == Some(true)).count(),
+        rows,
+        error,
+    })
+}
+
+/// 写入预告(纯读,绝不写盘)。
+///
+/// `async` + `spawn_blocking` 不是风格问题:**非 async 的 Tauri 命令跑在主线程上**,
+/// 而这条路上要起 `tasklist` 探进程、读客户端配置、读凭据管理器 —— 全是阻塞活。
+/// 真机实测过一次卡住:整个挂件不再响应任何命令(WebView 的 IPC 一起排队),
+/// 连 WorkBuddy 渠道的会话读取都跟着超时。项目里早有同一条教训(取数路径的
+/// 文件 IO / keyring 都下沉 spawn_blocking),这里照同一套办。
+#[tauri::command]
+async fn inject_preview(
+    state: State<'_, AppState>,
+    client: String,
+    model: String,
+) -> Result<Vec<inject::Preview>, String> {
+    let c = inject::Client::parse(&client).ok_or_else(|| format!("未知客户端: {client}"))?;
+    let store = state.store.clone();
+    let cfg = lock_rw(&state.config).clone();
+    tokio::task::spawn_blocking(move || {
+        let spec = model_spec_with(&store, &cfg, &model)?;
+        Ok(inject::preview(c, &spec, &inject_opts(&cfg, c)))
+    })
+    .await
+    .map_err(|e| format!("写入预告失败: {e}"))?
+}
+
+/// 执行写入。规矩(备份/校验/拒写运行中的目标)全在 core::inject 里。
+#[tauri::command]
+async fn inject_apply(
+    state: State<'_, AppState>,
+    client: String,
+    model: String,
+) -> Result<Vec<inject::Report>, String> {
+    let c = inject::Client::parse(&client).ok_or_else(|| format!("未知客户端: {client}"))?;
+    let store = state.store.clone();
+    let cfg = lock_rw(&state.config).clone();
+    tokio::task::spawn_blocking(move || {
+        let spec = model_spec_with(&store, &cfg, &model)?;
+        let reports = inject::apply(c, &spec, &inject_opts(&cfg, c))?;
+        // 记账:只记「写到哪、备份在哪、写了几条」——密钥不在其中
+        {
+            let s = lock_rw(&store);
+            for r in &reports {
+                let _ = inject::push_log(
+                    &s,
+                    inject::InjectRecord {
+                        stamp: r.stamp.clone(),
+                        at: now_ts(),
+                        client: r.client.clone(),
+                        label: r.label.clone(),
+                        model: spec.id.clone(),
+                        backup: r.backup.clone(),
+                        backup_path: r.backup_path.clone(),
+                        added: r.added,
+                        updated: r.updated,
+                        selected: r.selected,
+                    },
+                );
+            }
+        }
+        Ok(reports)
+    })
+    .await
+    .map_err(|e| format!("写入失败: {e}"))?
+}
+
+/// 四客户端状态 + 已写入的模型 + 台账。顺手把「选中项前缀口径」学下来并持久化:
+/// 那是从客户端自己的文件里读出来的证据,不猜(见 core::inject::learn_prefix)。
+#[tauri::command]
+async fn inject_state(state: State<'_, AppState>) -> Result<InjectOverview, String> {
+    let store = state.store.clone();
+    let cfg = lock_rw(&state.config).clone();
+    let scanned = tokio::task::spawn_blocking(move || {
+        let list = inject::state(&cfg.selection_prefix);
+        let mut learned = cfg.selection_prefix.clone();
+        let mut dirty = false;
+        for st in &list {
+            if let Some(p) = &st.learned_prefix {
+                if learned.get(&st.client) != Some(p) {
+                    learned.insert(st.client.clone(), p.clone());
+                    dirty = true;
+                }
+            }
+        }
+        let log = {
+            let s = lock_rw(&store);
+            inject::load_log(&s)
+        };
+        (list, log, learned, dirty)
+    })
+    .await;
+    let Ok((clients, log, learned, dirty)) = scanned else {
+        return Ok(InjectOverview {
+            clients: Vec::new(),
+            log: Vec::new(),
+        });
+    };
+    if dirty {
+        // 学到的口径写回配置。两把锁分开拿、各拿各的(不嵌套,避免与 set_config 互等)。
+        let updated = {
+            let mut c = lock_rw(&state.config);
+            c.selection_prefix = learned;
+            c.clone()
+        };
+        let store2 = state.store.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            let s = lock_rw(&store2);
+            updated.save(&s)
+        })
+        .await;
+    }
+    Ok(InjectOverview { clients, log })
+}
+
+/// 回滚一次写入:把备份目录里的文件放回原处。目标在跑就拒回滚(同写入的规矩)。
+#[tauri::command]
+async fn inject_rollback(state: State<'_, AppState>, backup: String) -> Result<String, String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let path = std::path::PathBuf::from(backup.trim());
+        if !path.is_dir() {
+            return Err(format!("备份目录不存在: {}", path.display()));
+        }
+        let log = {
+            let s = lock_rw(&store);
+            inject::load_log(&s)
+        };
+        let abs = path.to_string_lossy().to_string();
+        if let Some(c) = inject::log_owner(&log, &abs) {
+            if inject::process_running(c.process()) {
+                return Err(format!(
+                    "{} 正在运行,先退出它再回滚(否则回滚会被它的内存态覆盖)",
+                    c.label()
+                ));
+            }
+        }
+        inject::restore(&path)
+    })
+    .await
+    .map_err(|e| format!("回滚失败: {e}"))?
+}
+
+/// 「复制三件套」。密钥由后端拼进字符串,**不回前端**。
+/// 注意:写入剪贴板对其他程序(含剪贴板历史)可见 —— 界面必须写明这一点。
+#[tauri::command]
+async fn copy_model_bundle(state: State<'_, AppState>, model: String) -> Result<String, String> {
+    let store = state.store.clone();
+    let cfg = lock_rw(&state.config).clone();
+    tokio::task::spawn_blocking(move || {
+        let spec = model_spec_with(&store, &cfg, &model)?;
+        let text = format!(
+            "接入地址:{}\n模型名称:{}\nAPI Key:{}",
+            spec.base_url, spec.id, spec.key
+        );
+        copy_to_clipboard(&text)?;
+        Ok(format!("已复制:{} + 模型名 + 密钥", spec.base_url))
+    })
+    .await
+    .map_err(|e| format!("复制失败: {e}"))?
+}
+
+/// 用系统 `clip.exe` 写剪贴板(经 stdin,密钥不进命令行)。
+/// 输入按 UTF-16LE:clip 按控制台代码页解释字节流,中文标签走 UTF-8 会被切坏。
+fn copy_to_clipboard(text: &str) -> Result<(), String> {
+    use std::io::Write;
+    let mut child = std::process::Command::new("clip")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("调用 clip.exe 失败: {e}"))?;
+    {
+        let mut si = child.stdin.take().ok_or("拿不到 clip 的标准输入")?;
+        let utf16: Vec<u8> = text.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+        si.write_all(&utf16)
+            .map_err(|e| format!("写入剪贴板失败: {e}"))?;
+    }
+    let st = child
+        .wait()
+        .map_err(|e| format!("clip.exe 未正常结束: {e}"))?;
+    if !st.success() {
+        return Err("clip.exe 返回失败".into());
+    }
+    Ok(())
+}
+
+/// 在资源管理器里打开一个目录(备份目录 / 客户端配置目录)。
+/// 界面上的路径是 `~/…` 缩写(见 `inject::pretty`),这里先展开成真实路径再打开 ——
+/// 否则资源管理器会去找一个叫 `~` 的目录。
+#[tauri::command]
+async fn open_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        use tauri_plugin_opener::OpenerExt;
+        let raw = path.trim();
+        let expanded = match raw.strip_prefix('~') {
+            Some(rest) => {
+                let home = std::env::var("USERPROFILE")
+                    .or_else(|_| std::env::var("HOME"))
+                    .map_err(|_| "拿不到用户目录,无法展开 ~".to_string())?;
+                format!("{}{}", home, rest.replace('/', "\\"))
+            }
+            None => raw.to_string(),
+        };
+        let target = std::path::PathBuf::from(&expanded);
+        if !target.exists() {
+            return Err(format!("路径不存在: {raw}"));
+        }
+        app.opener()
+            .open_path(expanded, None::<&str>)
+            .map_err(|e| format!("打开失败: {e}"))
+    })
+    .await
+    .map_err(|e| format!("打开失败: {e}"))?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1095,6 +1547,13 @@ pub fn run() {
             save_window_pos,
             app_version,
             take_startup_error,
+            get_model_catalog,
+            inject_preview,
+            inject_apply,
+            inject_state,
+            inject_rollback,
+            copy_model_bundle,
+            open_path,
         ])
         .run(tauri::generate_context!())
         .expect("TokenScope 启动失败");

@@ -632,3 +632,81 @@ body.docked.st-ok,body.docked.st-warn,body.docked.st-bad,body.docked.st-fail{
 body.form-pill.st-warn .pill-body .hair i{background:var(--warn)}
 body.form-pill.st-bad .pill-body .hair i{background:var(--bad)}
 body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
+
+/* ── 模型页:4SAPI 可用模型 + 一键配置到客户端(design-4sapi-models.html)── */
+.mdl-q{display:flex;gap:calc(6px*var(--u));margin:calc(-2px*var(--u)) 0 calc(8px*var(--u))}
+.mdl-q .inp{flex:1;min-width:0;background:var(--bg3);border:1px solid var(--line2);border-radius:calc(5px*var(--u));
+  color:var(--tx);font-family:inherit;font-size:max(11.5px,calc(12px*var(--u)));padding:calc(5px*var(--u)) calc(8px*var(--u))}
+.mdl-q .inp:focus{outline:none;border-color:var(--ac)}
+.mdl-q .inp::placeholder{color:var(--tx3)}
+.chips{display:flex;flex-wrap:wrap;gap:calc(6px*var(--u));margin-bottom:calc(8px*var(--u))}
+.mdl-meta{font-size:max(10.5px,calc(11px*var(--u)));color:var(--tx3);line-height:1.7;margin-bottom:calc(8px*var(--u))}
+.mdl-meta .mrow1{display:flex;justify-content:space-between;gap:calc(8px*var(--u));align-items:baseline}
+.mdl-meta .mrow1 b{color:var(--tx2);font-weight:500;font-family:Consolas,monospace}
+.mdl-meta .ok{color:var(--ok)}
+.sel.mini{font-size:max(10.5px,calc(11px*var(--u)));padding:calc(1px*var(--u)) calc(3px*var(--u))}
+
+/* 客户端状态条:一眼看出四家装没装、在不在跑、写了几条 */
+.mcli{display:flex;gap:calc(5px*var(--u));margin-bottom:calc(9px*var(--u))}
+.mcli-c{flex:1;min-width:0;cursor:pointer;text-align:center;border:1px solid var(--line);background:#15181f;
+  border-radius:calc(7px*var(--u));padding:calc(6px*var(--u)) calc(5px*var(--u));
+  transition:border-color var(--t1) ease,background var(--t1) ease}
+.mcli-c:hover{border-color:#55617d;background:var(--bg3)}
+.mcli-c b{display:block;color:var(--tx2);font-size:max(11px,calc(11.5px*var(--u)));font-weight:600}
+.mcli-c span{color:var(--tx3);font-size:max(10px,calc(10px*var(--u)))}
+.mcli-c.off{opacity:.45}
+
+/* 模型行:名称 + 四个客户端按钮 + 标签 + 单价 */
+.mrow{border:1px solid var(--line);background:var(--bg2);border-radius:calc(9px*var(--u));
+  padding:calc(7px*var(--u)) calc(9px*var(--u));margin-bottom:calc(6px*var(--u))}
+.mrow.done{border-color:#2f6b43}
+.mtop{display:flex;justify-content:space-between;align-items:baseline;gap:calc(8px*var(--u))}
+.mname{font-family:Consolas,monospace;font-weight:600;color:var(--tx);
+  font-size:max(11.5px,calc(12.5px*var(--u)));word-break:break-all}
+.mtags{font-size:max(10px,calc(10.5px*var(--u)));color:var(--tx3);line-height:1.6;margin-top:calc(2px*var(--u))}
+.mprice{font-size:max(10.5px,calc(11px*var(--u)));color:var(--tx2);margin-top:calc(3px*var(--u));
+  font-variant-numeric:tabular-nums}
+.mprice.warn{color:var(--warn)}
+.mprice.bad{color:var(--bad)}
+.tagd{display:inline-block;margin-left:calc(5px*var(--u));padding:0 calc(4px*var(--u));
+  border:1px dashed var(--line2);border-radius:calc(4px*var(--u));color:var(--tx3);
+  font-size:max(9.5px,calc(10px*var(--u)));vertical-align:1px}
+.tagd.warn{border-color:#7a6234;color:var(--warn)}
+.tagd.bad{border-color:#6b3230;color:var(--bad)}
+.cdots{display:flex;gap:calc(4px*var(--u));flex:none}
+.cdot{width:calc(24px*var(--u));height:calc(19px*var(--u));padding:0;cursor:pointer;font-family:inherit;
+  border:1px solid var(--line2);border-radius:calc(5px*var(--u));background:#1b1f27;color:#8d97ab;
+  font-size:max(9px,calc(9.5px*var(--u)));font-weight:700;line-height:1;
+  transition:background var(--t1) ease,border-color var(--t1) ease,color var(--t1) ease}
+.cdot:hover{border-color:#55617d;color:var(--tx2)}
+.cdot.on{background:#16321f;border-color:#2f6b43;color:#7ce9a8}
+.cdot.run{border-color:#7a6234;color:var(--warn)}
+.cdot.no{opacity:.35;cursor:default}
+.cdot:disabled{cursor:default}
+.cdot:active:not(:disabled){transform:scale(.94)}
+
+/* 写入预告 / 结果 / 客户端详情:长在列表下方,不弹新窗口(沿用删除密钥的内联确认) */
+.sheet{border:1px solid #3d5a8a;background:#151d2b;border-radius:calc(9px*var(--u));
+  padding:calc(9px*var(--u)) calc(10px*var(--u));margin:calc(8px*var(--u)) 0}
+.mstop{display:flex;justify-content:space-between;align-items:baseline;gap:calc(8px*var(--u));
+  margin-bottom:calc(6px*var(--u))}
+.mstop b{color:#cfe0ff;font-size:max(11.5px,calc(12px*var(--u)))}
+.srow{display:flex;gap:calc(7px*var(--u));align-items:baseline;margin:calc(3px*var(--u)) 0;
+  font-size:max(10.5px,calc(11px*var(--u)))}
+.srow .sk{flex:none;width:calc(35px*var(--u));color:var(--tx3)}
+.srow .sv{flex:1;min-width:0;color:var(--tx2);word-break:break-all}
+.srow .sv b{color:var(--tx);font-weight:600}
+.mdlnote{font-size:max(10px,calc(10.5px*var(--u)));color:var(--tx3);line-height:1.65;margin:calc(3px*var(--u)) 0}
+.mdlwarn{border:1px solid #6b5327;background:#241d12;border-radius:calc(6px*var(--u));
+  padding:calc(6px*var(--u)) calc(8px*var(--u));color:#f0c67a;margin:calc(5px*var(--u)) 0;
+  font-size:max(10.5px,calc(11px*var(--u)))}
+.mdlwarn b{color:#ffd894}
+.mdlok{border:1px solid #2f6b43;background:#132219;border-radius:calc(6px*var(--u));
+  padding:calc(6px*var(--u)) calc(8px*var(--u));color:#8ee9b8;margin:calc(5px*var(--u)) 0;
+  font-size:max(10.5px,calc(11px*var(--u)))}
+.mdlsub{color:var(--tx3);letter-spacing:.06em;margin:calc(8px*var(--u)) 0 calc(3px*var(--u));
+  font-size:max(10px,calc(10.5px*var(--u)))}
+.mdlprev{padding-bottom:calc(5px*var(--u));border-bottom:1px solid var(--line)}
+.mdlprev:last-of-type{border-bottom:0;padding-bottom:0}
+.btn.s{font-size:max(10px,calc(10.5px*var(--u)));padding:calc(2px*var(--u)) calc(6px*var(--u));
+  margin-left:calc(4px*var(--u))}
