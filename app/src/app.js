@@ -2524,7 +2524,8 @@ const MDL = {
   clients: [],                       // inject_state 的客户端状态
   log: [],                           // 写入台账(不含密钥)
   q: "",                             // 搜索词
-  f: { chat: true, usable: false, done: false }, // 过滤芯片
+  // 过滤芯片:默认「只看能用上的」= 这把密钥能调的 + 已经写进客户端的
+  f: { useful: true, chat: true },
   sheet: null,                       // 当前展开的预告 / 结果 / 客户端详情
   loading: false,
 };
@@ -2573,11 +2574,15 @@ function mdlVisibleRows() {
   const q = MDL.q.trim().toLowerCase();
   const done = mdlConfiguredIds();
   const out = [];
+  // 可用集合没取到(没配密钥 / 请求失败)时**不做可用过滤** ——
+  // 拿不到「哪些能用」就把 160 个都藏起来,是最糟的一种"猜"
+  const knowUsable = (MDL.view.usableAt || 0) > 0;
   for (const r of MDL.view.rows || []) {
+    // 「能用上的」= 这把 key 能调,或已经写进某个客户端
+    // (已配置的也可能不在当前 key 的分组里 —— 比如换过密钥,所以是并集不是交集)
+    if (MDL.f.useful && knowUsable && !(r.usable === true || done.has(r.id))) continue;
     // 默认只显示能当编码/对话模型用的(图像/视频/音频/向量排掉),开关一开全显示
     if (MDL.f.chat && !r.chat) continue;
-    if (MDL.f.usable && r.usable !== true) continue;
-    if (MDL.f.done && !done.has(r.id)) continue;
     if (q) {
       const hay = (
         r.id + " " + (r.vendor || "") + " " + (r.tags || []).join(" ") + " " + (r.description || "")
@@ -2672,22 +2677,32 @@ function renderModelsInner() {
       esc(g.name) + " ×" + g.ratio + "</option>")
     .join("");
   const rows = mdlVisibleRows();
+  const done = mdlConfiguredIds(); // 口径行要报「已配置几个」
   const gnote = (v.groups || []).find((g) => g.name === v.group);
   meta.innerHTML =
     '<div class="mrow1"><span>分组 <select class="sel mini" id="mdlGroup" data-act="mdlgroup">' + groups + "</select></span>" +
     '<span class="dim">写进客户端:<b>' + esc(v.baseUrl) + "</b></span></div>" +
-    '<div class="mrow1"><span class="dim">' + rows.length + " / " + v.total + " 个模型 · 价目表 " +
-    (v.fetchedAt ? relTime(v.fetchedAt) : "未取到") +
+    '<div class="mrow1"><span class="dim">显示 ' + rows.length + " / " + v.total +
+    (v.usableCount ? " · 可用 " + v.usableCount : "") +
+    " · 已配置 " + done.size +
+    " · 价目表 " + (v.fetchedAt ? relTime(v.fetchedAt) : "未取到") +
     (v.usableAt ? " · 可用集合 " + relTime(v.usableAt) : "") +
-    (v.hasKey ? "" : " · 未配密钥(只显示价目表)") + "</span>" +
-    (v.usableCount ? '<span class="ok">可用 ' + v.usableCount + "</span>" : "") + "</div>" +
+    (MDL.f.useful ? "" : "(已关掉「只看能用上的」)") + "</span>" +
+    (v.usableAt ? "" : '<span class="warn">' + (v.hasKey ? "可用集合没取到" : "未配密钥") + "</span>") +
+    "</div>" +
     (gnote && gnote.note ? '<div class="mdlnote">' + esc(gnote.note) + "</div>" : "") +
     (v.error ? '<div class="mdlwarn">' + esc(v.error) +
       (v.fetchedAt ? " · 下列是上次成功取回的价目表" : "") + "</div>" : "");
   list.innerHTML = rows.length
     ? rows.map(mdlRowHtml).join("")
-    : '<div class="empty">没有符合条件的模型' +
-      (MDL.f.chat ? "(「只看编码/对话」排掉了图像/视频/音频/向量模型)" : "") + "</div>";
+    : '<div class="empty">' +
+      ((MDL.view.usableAt || 0) === 0
+        ? "可用集合还没取到" + (MDL.view.hasKey ? "(刷新试试)" : ":先在「渠道」页签填 4SAPI 密钥") +
+          " —— 关掉「只看能用上的」可以先浏览全部 " + MDL.view.total + " 个模型的价目表"
+        : "这把密钥能调的模型里没有符合条件的" +
+          (MDL.f.chat ? "(「只看编码/对话」排掉了图像/视频/音频/向量模型)" : "") +
+          " —— 关掉「只看能用上的」看全部 " + MDL.view.total + " 个") +
+      "</div>";
 }
 
 /** 写入预告 / 写入结果 / 客户端详情 —— 三种内容共用一个底部面板。 */
@@ -2856,10 +2871,13 @@ async function injectGo() {
 }
 /** 打开模型页签时才去取清单(没打开就不打扰接口)。 */
 async function ensureModels() {
-  // 过滤口径持久化在配置里(默认只显示编码/对话模型)
+  // 「只看编码/对话」持久化在配置里(modelShowAll);
+  // 「只看能用上的」是每次打开的默认口径 —— 想浏览全部价目表就临时点掉它
   MDL.f.chat = !CFG.modelShowAll;
   const chip = document.querySelector('#mdlF .pick[data-f="chat"]');
   if (chip) chip.classList.toggle("on", MDL.f.chat);
+  const chipU = document.querySelector('#mdlF .pick[data-f="useful"]');
+  if (chipU) chipU.classList.toggle("on", !!MDL.f.useful);
   if (!MDL.clients.length) await loadInjects();
   if (!MDL.view) await loadModels(false);
   renderModels();

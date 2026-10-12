@@ -102,7 +102,7 @@
 <div class="wrap">
 
 <h1>4SAPI 可用模型查询 + 一键配置到 Trae / WorkBuddy / WorkBuddy AI / ZCode</h1>
-<div class="sub">2026-10-12 · 产品设计 + <b>已实现并已发版(v0.1.20)</b>（见第十二节实施结果回填）。取证全部来自本机真文件与真接口，每条都能复核。</div>
+<div class="sub">2026-10-12 · 产品设计 + <b>已实现并已发版(v0.1.20 / 默认口径收紧见 v0.1.21)</b>（见第十二节实施结果回填）。取证全部来自本机真文件与真接口，每条都能复核。</div>
 
 <div class="hand">
   <b>交接框 · 现在停在哪</b>
@@ -475,7 +475,10 @@ curl -H <b>"Authorization: Bearer &lt;你的 4SAPI Key&gt;"</b> https://4sapi.co
 
 <table>
 <tr><th style="width:150px">环节</th><th>规则</th></tr>
-<tr><td>默认过滤</td><td>只显示 <code>supported_endpoint_types</code> 含 <code>openai</code> 或 <code>anthropic</code> 的模型（覆盖 159/160），并默认<b>排除</b> <code>tags</code> 含「图像 / 视频 / 音频 / 向量 / 图像生成」的条目。<b>提供「显示全部 160 个」芯片</b>，不偷偷藏东西。</td></tr>
+<tr><td>默认过滤</td><td>只显示 <code>supported_endpoint_types</code> 含 <code>openai</code> 或 <code>anthropic</code> 的模型（覆盖 159/160），并默认<b>排除</b> <code>tags</code> 含「图像 / 视频 / 音频 / 向量 / 图像生成」的条目。<b>提供「显示全部 160 个」芯片</b>，不偷偷藏东西。
+  <div style="margin-top:6px;color:#f0c67a">2026-10-12 收紧（v0.1.21，按用户要求）：再加一层默认口径「<b>只看能用上的</b>」= 这把密钥能调的 <b>∪</b> 已经配到客户端的。
+  理由见 12.5：160 个里绝大多数与这份密钥无关，铺出来只是噪音；而"已配置但现在调不了"的那种（换过密钥）恰恰最需要被看见，
+  所以是并集、且给它们标「当前 key 不可用」。可用集合没取到时<b>不做这层过滤</b> —— 拿不到"哪些能用"就把全部藏掉，是最糟的一种猜。</div></td></tr>
 <tr><td>搜索</td><td>命中 <code>model_name</code>（不分大小写子串）、厂商名、标签、说明。搜索框非空时忽略折叠状态，平铺结果。</td></tr>
 <tr><td>排序</td><td>默认：已配置到任一客户端的模型置顶 → 其余按厂商分组（组内按名称）。不做“热度排序”这类没有数据支撑的排序。</td></tr>
 <tr><td>“可用”的定义</td><td><code>/v1/models</code> 返回 = 这把 key 的分组能调。<b>没拿到 key 时</b>整页降级为“价目表浏览”并置顶一条提示「配置 4SAPI 密钥后可知哪些能用」，<b>不把 160 个都说成“可用”</b>。</td></tr>
@@ -768,6 +771,21 @@ PROGRESS.md                   发版后回填实施结果</pre>
   <li><code>cargo test</code>(core)= <b>91 passed</b>(本轮新增 65 个);<code>cargo check --all-targets</code> 干净;
     release 构建通过。</li>
 </ul>
+
+<h3>12.5 v0.1.21:默认口径收紧为「能用上的」</h3>
+<div class="say">
+  <div class="lab">用户一句话,一次小改</div>
+  <p style="margin:0">原话:"只看模型里只看当前密钥可用的和已配置的,不需要看全部的"。于是默认过滤从
+  "128 个编码/对话模型"收成 <b>可用(18)∪ 已配置(3)= 20 个</b>,口径行写明
+  <code>显示 20 / 160 · 可用 18 · 已配置 3</code>;两个芯片变成「只看能用上的」「只看编码/对话」(都默认开),
+  想浏览全部价目表就把前者点掉。</p>
+</div>
+<table>
+<tr><th style="width:150px">决定</th><th>理由</th></tr>
+<tr><td>并集,不是交集</td><td>已配置的条目可能不在当前密钥的分组里(换过密钥/换过分组)。交集会把这种"当初配了、现在用不了"的项藏起来 —— 那正是最该被看见的一类。</td></tr>
+<tr><td>可用集合没取到 → 不过滤</td><td>没配密钥或请求失败时 <code>usableAt=0</code>,此时按"可用"过滤等于把 160 个全藏掉。宁可摊开价目表 + 在口径行标「未配密钥 / 可用集合没取到」。</td></tr>
+<tr><td>「能用上的」不持久化</td><td>它是"每次打开都该是这个口径"的默认值;临时点掉只为浏览,不必跨重启记住(「只看编码/对话」沿用原来的持久化)。</td></tr>
+</table>
 
 <h3>12.3 真机自检顺手挖出的一个坑(已修)</h3>
 <div class="warnbox">
