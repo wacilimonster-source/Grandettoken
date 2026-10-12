@@ -1176,6 +1176,7 @@ async fn inject_apply(
                         backup_path: r.backup_path.clone(),
                         added: r.added,
                         updated: r.updated,
+                        removed: r.removed,
                         selected: r.selected,
                     },
                 );
@@ -1185,6 +1186,48 @@ async fn inject_apply(
     })
     .await
     .map_err(|e| format!("写入失败: {e}"))?
+}
+
+/// 取消写入:把这条模型从客户端里删掉(写入的逆操作)。
+/// 规矩完全一样:目标没运行、先备份、只动我们写的条目、写完读回校验,不过就回滚。
+#[tauri::command]
+async fn inject_remove(
+    state: State<'_, AppState>,
+    client: String,
+    model: String,
+) -> Result<Vec<inject::Report>, String> {
+    let c = inject::Client::parse(&client).ok_or_else(|| format!("未知客户端: {client}"))?;
+    let store = state.store.clone();
+    let cfg = lock_rw(&state.config).clone();
+    tokio::task::spawn_blocking(move || {
+        // 取消写入也要一个 spec:按 base_url / 名字认出"这条是不是我们写的"
+        let spec = model_spec_with(&store, &cfg, &model)?;
+        let reports = inject::remove(c, &spec)?;
+        {
+            let s = lock_rw(&store);
+            for r in &reports {
+                let _ = inject::push_log(
+                    &s,
+                    inject::InjectRecord {
+                        stamp: r.stamp.clone(),
+                        at: now_ts(),
+                        client: r.client.clone(),
+                        label: r.label.clone(),
+                        model: spec.id.clone(),
+                        backup: r.backup.clone(),
+                        backup_path: r.backup_path.clone(),
+                        added: 0,
+                        updated: 0,
+                        removed: r.removed,
+                        selected: false,
+                    },
+                );
+            }
+        }
+        Ok(reports)
+    })
+    .await
+    .map_err(|e| format!("取消写入失败: {e}"))?
 }
 
 /// 四客户端状态 + 已写入的模型 + 台账。顺手把「选中项前缀口径」学下来并持久化:
@@ -1550,6 +1593,7 @@ pub fn run() {
             get_model_catalog,
             inject_preview,
             inject_apply,
+            inject_remove,
             inject_state,
             inject_rollback,
             copy_model_bundle,

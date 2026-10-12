@@ -1140,6 +1140,25 @@ CARGO_TARGET_DIR:构建直接在仓库里跑,产物落在 `app/src-tauri/target`
   第一次复位没生效 —— `set_config` 落库成功了,但页面内存里仍是旧值,要改**页面里那个 `CFG`** 才立刻生效)。
   已复位为 `false`,真机复查:芯片两个都亮、口径行 `显示 20 / 160 · 可用 18 · 已配置 3`、行数 20。
 
+### v0.1.22(2026-10-12,取消写入)
+
+用户口径(澄清后):"需要支持把模型配置写入 trae workbuddy workbuddyai zcode,或者从其中删除。
+不需要支持 codex 和 opencode。"即目标还是那四个,要的是写入的逆操作。
+
+- 先问后做:机器上没有字面叫 "agent" 的东西,而 `codex.exe` / `OpenCode.exe` 都在跑、
+  OpenCode 里还躺着一份被 `disabled_providers` 停用的手配 4sapi provider —— 差点就往那两个方向做了。
+  问清之后确认"agent"指的是这四个客户端里的删除动作。**这次的教训:名词对不上就先问,别猜着写契约。**
+- 实现:`inject::remove()` + 各客户端 `remove_*_site()`,与写入共用同一套规矩
+  (目标没运行 / 先备份 / 只动我们的条目 / 读回校验,不过就回滚)。
+  WorkBuddy 类删条目 + 选中项指向它时删 `model` 键;ZCode 删模型、摘 personalModelIds/modelOrder,
+  最后一个模型时连 provider 与 providerRule 一起收;Trae 每个 agent 组各删一条 + 摘指向它的选中项。
+- 幂等:本来就没有 → 不写盘、不建备份目录,回执「本来就没有」。单测里连这一点都断言了
+  (包括 `backup` 为空)。
+- 新增 4 个单测(95 passed):删条目+清选中、选中项属于别家时不乱清、ZCode 删到最后收 provider、
+  Trae 跨组删+摘选中+幂等。
+- 预告新增 `configured` / `removal` 两个字段,界面据此渲染「当前状态:已配置」与「取消写入」按钮。
+  真机只读实测(未点删除):Trae CN 报 17 条(17 个 agent 组)且选中项正指向它,SOLO CN 报 17 条但未指向它。
+
 ### 还没真机验的部分(诚实清单)
 
 1. **写入后客户端真能跑起该模型**:条目格式与用户手配的逐字段对齐,但"发一条最小请求"会产生真实

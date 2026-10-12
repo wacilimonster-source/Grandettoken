@@ -130,6 +130,11 @@ build/
 3. **只增改自己写的那条** —— 不碰账号、登录态、内置模型、别人的 provider;
 4. **写完读回校验** —— 不过就自动回滚到备份并如实报错。
 
+**取消写入**(写入的逆操作)走同一套规矩:`inject::remove()` 只把这一条删掉 ——
+其余条目与用户的手改都不动(这与「回滚这次写入」把整个文件盖回备份是两件事,两个都保留)。
+Trae 是每个 agent 组各一条;客户端的选中项若正指向这条模型会一并清掉并在预告里说明;
+ZCode 删到最后一个模型时连 provider 与它的 providerRule 一起收走。
+
 四份契约在 `core/src/inject.rs`,每个客户端一张表:WorkBuddy 是明文 JSON 数组(带 BOM、2 空格),
 ZCode 是两份 JSON(`schemaVersion` 不是 1 就放弃),Trae 是 SQLite 的 `ItemTable`(按后缀找键名,
 键前缀是区域/租户号,会随版本变)。

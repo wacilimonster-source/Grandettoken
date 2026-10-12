@@ -351,6 +351,10 @@ pub struct Preview {
     pub writes_secret: bool,
     /// 会不会写选中项
     pub writes_selection: bool,
+    /// 这个客户端当前有没有这条模型(有 → 界面同时给出「取消写入」)
+    pub configured: bool,
+    /// 取消写入会动到什么;None = 当前没有,不用给这个按钮
+    pub removal: Option<Removal>,
     /// 非空 = 不能写,界面把确认按钮禁掉并显示这条
     pub blocked: Option<String>,
     /// 附注(更新时会列出差异、以及生效方式)
@@ -369,6 +373,8 @@ pub struct Report {
     pub backup_path: String,
     pub added: usize,
     pub updated: usize,
+    /// 取消写入时移掉了几条
+    pub removed: usize,
     pub selected: bool,
     /// 生效方式(重启客户端等)
     pub effect: String,
@@ -390,6 +396,8 @@ pub struct InjectRecord {
     pub backup_path: String,
     pub added: usize,
     pub updated: usize,
+    /// 取消写入时移掉了几条
+    pub removed: usize,
     pub selected: bool,
 }
 
@@ -569,7 +577,10 @@ fn stamp_now() -> String {
 struct SiteOutcome {
     added: usize,
     updated: usize,
+    removed: usize,
     selected: bool,
+    /// 取消写入时顺带把客户端的选中项也清了
+    clears_selection: bool,
     /// 已存在且内容一致,没动盘
     same: bool,
     /// 同 id 的条目原本指向别的服务(界面要在预告里点出来)
@@ -1341,6 +1352,565 @@ fn find_our_custom_id(maps: &[(String, Value)], model: &str) -> Option<String> {
     None
 }
 
+// 取消写入(移除条目)的公共描述 + 各客户端实现
+// ───────────────────────── 取消写入 ─────────────────────────
+
+/// 「取消写入」的预告:要移除哪一条、会不会顺带清掉客户端的选中项。
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Removal {
+    /// 人话描述要移除什么(界面直接显示,含条目名与指向的地址)
+    pub what: String,
+    /// 会顺带清掉客户端自己的「选中项」(它正指向这条模型时)
+    pub clears_selection: bool,
+    /// 要移掉几条(WorkBuddy=1;Trae=每个 agent 组各一条)
+    pub count: usize,
+}
+
+/// ZCode 的「4SAPI」provider id(source=custom 且 name=4SAPI 的那条)。
+fn zcode_pid(cfg: &Value) -> Option<String> {
+    cfg.get("provider")
+        .and_then(|p| p.as_object())
+        .and_then(|m| {
+            m.iter()
+                .find(|(_, v)| {
+                    v.get("name").and_then(|n| n.as_str()) == Some("4SAPI")
+                        && v.get("source").and_then(|s| s.as_str()) == Some("custom")
+                })
+                .map(|(k, _)| k.clone())
+        })
+}
+
+/// WorkBuddy 类:有没有我们写的这一条,以及移除它会动到什么。
+fn wb_removal(site: &Site, spec: &ModelSpec) -> (bool, Option<Removal>) {
+    let models = read_json(&site.root.join("models.json")).ok().flatten();
+    let entry = models
+        .as_ref()
+        .and_then(|v| v.as_array())
+        .and_then(|a| {
+            a.iter().find(|e| {
+                e.get("id").and_then(|i| i.as_str()) == Some(spec.id.as_str())
+            })
+        });
+    let Some(e) = entry else {
+        return (false, None);
+    };
+    let name = e
+        .get("name")
+        .and_then(|n| n.as_str())
+        .unwrap_or(spec.id.as_str());
+    let url = e.get("url").and_then(|u| u.as_str()).unwrap_or("");
+    let cur = read_json(&site.root.join("settings.json"))
+        .ok()
+        .flatten()
+        .and_then(|s| {
+            s.get(WB_SELECTION_KEY)
+                .and_then(|m| m.as_str())
+                .map(String::from)
+        });
+    let clears = cur
+        .as_deref()
+        .map(|v| v == spec.id || v == format!("{WB_PREFIX}{}", spec.id))
+        .unwrap_or(false);
+    (
+        true,
+        Some(Removal {
+            what: format!("models.json 里的条目「{name}」({url})"),
+            clears_selection: clears,
+            count: 1,
+        }),
+    )
+}
+
+/// ZCode:模型在不在我们的 provider 里,以及移除后会剩下什么。
+fn zcode_removal(site: &Site, spec: &ModelSpec) -> (bool, Option<Removal>) {
+    let cfg = match read_json(&site.root.join("config.json")) {
+        Ok(Some(v)) => v,
+        _ => return (false, None),
+    };
+    let Some(pid) = zcode_pid(&cfg) else {
+        return (false, None);
+    };
+    let models = cfg
+        .get("provider")
+        .and_then(|p| p.get(&pid))
+        .and_then(|p| p.get("models"))
+        .and_then(|m| m.as_object());
+    let Some(models) = models else {
+        return (false, None);
+    };
+    if !models.contains_key(&spec.id) {
+        return (false, None);
+    }
+    let left = models.len().saturating_sub(1);
+    let what = if left == 0 {
+        format!(
+            "provider「4SAPI」下的「{}」—— 这是它最后一个模型,连 provider 一起移除",
+            spec.id
+        )
+    } else {
+        format!(
+            "provider「4SAPI」下的「{}」(provider 留下,还剩 {left} 个模型)",
+            spec.id
+        )
+    };
+    (
+        true,
+        Some(Removal {
+            what,
+            clears_selection: false, // ZCode 的选中是会话级的,配置文件里没有
+            count: 1,
+        }),
+    )
+}
+
+/// Trae:每个 agent 组各有一条,数一数;顺带看选中项指不指向它。
+fn trae_removal(db: &Path, spec: &ModelSpec) -> (bool, Option<Removal>) {
+    let Ok(conn) = rusqlite::Connection::open_with_flags(
+        db,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) else {
+        return (false, None);
+    };
+    let mut keys: Vec<String> = Vec::new();
+    if let Ok(mut stmt) =
+        conn.prepare("SELECT key FROM ItemTable WHERE key LIKE '%AI.agent.model.model_list_map'")
+    {
+        if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
+            keys = rows.flatten().collect();
+        }
+    }
+    let mut count = 0usize;
+    let mut groups = 0usize;
+    for k in &keys {
+        let Ok(raw) = conn.query_row("SELECT value FROM ItemTable WHERE key = ?1", [k], |r| {
+            r.get::<_, String>(0)
+        }) else {
+            continue;
+        };
+        let Ok(v) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        if let Some(obj) = v.as_object() {
+            for arr in obj.values() {
+                if let Some(list) = arr.as_array() {
+                    let n = list
+                        .iter()
+                        .filter(|e| trae_is_ours(e, &spec.id))
+                        .count();
+                    if n > 0 {
+                        count += n;
+                        groups += 1;
+                    }
+                }
+            }
+        }
+    }
+    if count == 0 {
+        return (false, None);
+    }
+    let mut clears = false;
+    if let Some((mk, raw)) = selection_row(&conn) {
+        let _ = mk;
+        if let Ok(sel) = serde_json::from_str::<Value>(&raw) {
+            if let Some(obj) = sel.as_object() {
+                clears = obj.values().any(|e| {
+                    e.get("modelId")
+                        .and_then(|m| m.as_str())
+                        .map(|m| m.contains(&format!("custom_openai_compatible//{}_", spec.id)))
+                        .unwrap_or(false)
+                });
+            }
+        }
+    }
+    (
+        true,
+        Some(Removal {
+            what: format!("{count} 条自定义模型条目(分属 {groups} 个 agent 组)"),
+            clears_selection: clears,
+            count,
+        }),
+    )
+}
+
+/// 一条 Trae 条目是不是我们要找的那条自定义模型。
+fn trae_is_ours(e: &Value, model: &str) -> bool {
+    e.get("provider").and_then(|p| p.as_str()) == Some("custom_openai_compatible")
+        && e.get("display_name").and_then(|d| d.as_str()) == Some(model)
+}
+
+/// Trae 的选中项那一行(键名 + 值)。
+fn selection_row(conn: &rusqlite::Connection) -> Option<(String, String)> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT key, value FROM ItemTable \
+             WHERE key LIKE '%recent_user_selection_by_agent_label'",
+        )
+        .ok()?;
+    let mut rows = stmt.query([]).ok()?;
+    let row = rows.next().ok()??;
+    Some((row.get(0).ok()?, row.get(1).ok()?))
+}
+
+fn remove_workbuddy_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, String> {
+    let models_path = site.root.join("models.json");
+    let settings_path = site.root.join("settings.json");
+    let Some(models) = read_json(&models_path)? else {
+        return Err(format!("{} 不存在或是空的", pretty(&models_path)));
+    };
+    let Value::Array(mut arr) = models else {
+        return Err(format!(
+            "{} 不是数组(结构可能已变,本次不写)",
+            pretty(&models_path)
+        ));
+    };
+
+    let mut outcome = SiteOutcome::default();
+    let before = arr.len();
+    arr.retain(|e| {
+        e.get("id").and_then(|i| i.as_str()) != Some(spec.id.as_str())
+    });
+    outcome.removed = before - arr.len();
+    if outcome.removed == 0 {
+        return Ok(outcome); // 本来就没有 —— 不写盘,连备份都不必做
+    }
+
+    // 选中项正指向它才清:删掉 model 键(回到"没选"的状态,与写入前一致)
+    let mut settings_new: Option<Value> = None;
+    if let Some(mut s) = read_json(&settings_path)? {
+        if s.is_object() {
+            let cur = s
+                .get(WB_SELECTION_KEY)
+                .and_then(|m| m.as_str())
+                .map(String::from);
+            if let Some(cur) = cur {
+                if cur == spec.id || cur == format!("{WB_PREFIX}{}", spec.id) {
+                    if let Some(o) = s.as_object_mut() {
+                        o.remove(WB_SELECTION_KEY);
+                    }
+                    settings_new = Some(s);
+                    outcome.clears_selection = true;
+                }
+            }
+        }
+    }
+
+    let stamp = stamp_now();
+    let models_next = Value::Array(arr);
+    let settings_for_write = settings_new.clone();
+    let models_for_check = models_path.clone();
+    let settings_for_check = settings_path.clone();
+    let id = spec.id.clone();
+    outcome.backup = commit(
+        site,
+        &[models_path.clone(), settings_path.clone()],
+        &stamp,
+        move || {
+            write_json(&models_path, &models_next, has_bom(&models_path), 2)?;
+            if let Some(s) = settings_for_write {
+                write_json(&settings_path, &s, has_bom(&settings_path), 2)?;
+            }
+            Ok(())
+        },
+        move || {
+            let gone = read_json(&models_for_check)
+                .ok()
+                .flatten()
+                .and_then(|v| {
+                    v.as_array().map(|a| {
+                        !a.iter().any(|e| {
+                            e.get("id").and_then(|i| i.as_str()) == Some(id.as_str())
+                        })
+                    })
+                })
+                .unwrap_or(false);
+            let sel_ok = read_json(&settings_for_check)
+                .ok()
+                .flatten()
+                .and_then(|s| {
+                    s.get(WB_SELECTION_KEY)
+                        .and_then(|m| m.as_str())
+                        .map(|v| v != id && v != format!("{WB_PREFIX}{id}"))
+                })
+                .unwrap_or(true);
+            gone && sel_ok
+        },
+    )?;
+    outcome
+        .notes
+        .push(format!("备份:{}", pretty(&outcome.backup)));
+    Ok(outcome)
+}
+
+fn remove_zcode_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, String> {
+    let cfg_path = site.root.join("config.json");
+    let rules_path = site.root.join("provider_config.json");
+    let Some(mut cfg) = read_json(&cfg_path)? else {
+        return Err(format!("{} 读不出来", pretty(&cfg_path)));
+    };
+    let Some(mut rules) = read_json(&rules_path)? else {
+        return Err(format!("{} 读不出来", pretty(&rules_path)));
+    };
+    let schema = rules
+        .get("schemaVersion")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    if schema != 1 {
+        return Err(format!(
+            "provider_config.json 的 schemaVersion={schema}(我们只认 1),结构可能已变,本次不写"
+        ));
+    }
+
+    let mut outcome = SiteOutcome::default();
+    let Some(pid) = zcode_pid(&cfg) else {
+        return Ok(outcome); // 没有我们的 provider → 没什么可删
+    };
+
+    let mut left = 0usize;
+    if let Some(models) = cfg
+        .get_mut("provider")
+        .and_then(|p| p.get_mut(&pid))
+        .and_then(|p| p.get_mut("models"))
+        .and_then(|m| m.as_object_mut())
+    {
+        if models.remove(&spec.id).is_some() {
+            outcome.removed += 1;
+        }
+        left = models.len();
+    }
+
+    // providerRules:把这条模型从 personalModelIds / modelOrder 里摘掉;模型空了连 provider 一起收走
+    if let Some(list) = rules
+        .get_mut("config")
+        .and_then(|c| c.get_mut("providerConfigRules"))
+        .and_then(|c| c.get_mut("providerRules"))
+        .and_then(|r| r.as_array_mut())
+    {
+        if let Some(i) = list
+            .iter()
+            .position(|r| r.get("providerId").and_then(|v| v.as_str()) == Some(pid.as_str()))
+        {
+            if left == 0 {
+                list.remove(i);
+            } else if let Some(cfgobj) = list[i].get_mut("config").and_then(|c| c.as_object_mut()) {
+                for key in ["personalModelIds", "modelOrder"] {
+                    if let Some(a) = cfgobj.get_mut(key).and_then(|v| v.as_array_mut()) {
+                        a.retain(|v| v.as_str() != Some(spec.id.as_str()));
+                    }
+                }
+            }
+        }
+    }
+
+    // providerModelRules:按 (modelId, providerId) 摘掉
+    if let Some(list) = rules
+        .get_mut("config")
+        .and_then(|c| c.get_mut("modelConfigRules"))
+        .and_then(|c| c.get_mut("providerModelRules"))
+        .and_then(|r| r.as_array_mut())
+    {
+        list.retain(|r| {
+            !(r.get("modelId").and_then(|v| v.as_str()) == Some(spec.id.as_str())
+                && r.get("providerId").and_then(|v| v.as_str()) == Some(pid.as_str()))
+        });
+    }
+
+    // 模型空了:provider 定义也一并移除(留一个空 provider 只会在选择器里碍事)
+    if left == 0 {
+        if let Some(p) = cfg.get_mut("provider").and_then(|p| p.as_object_mut()) {
+            p.remove(&pid);
+        }
+    }
+
+    if outcome.removed == 0 {
+        return Ok(outcome);
+    }
+
+    let stamp = stamp_now();
+    let (id, pid_for_check) = (spec.id.clone(), pid.clone());
+    let cfg_check = cfg_path.clone();
+    outcome.backup = commit(
+        site,
+        &[cfg_path.clone(), rules_path.clone()],
+        &stamp,
+        move || {
+            write_json(&cfg_path, &cfg, has_bom(&cfg_path), 2)?;
+            write_json(&rules_path, &rules, has_bom(&rules_path), 2)?;
+            Ok(())
+        },
+        move || {
+            let after = read_json(&cfg_check).ok().flatten();
+            match after {
+                Some(v) => match zcode_pid(&v) {
+                    // provider 还在:模型必须已经不在它下面
+                    Some(p) => v
+                        .get("provider")
+                        .and_then(|pr| pr.get(&p))
+                        .and_then(|pr| pr.get("models"))
+                        .and_then(|m| m.as_object())
+                        .map(|m| !m.contains_key(&id))
+                        .unwrap_or(true),
+                    // provider 收了:确认连我们的那条规则也没了(pid 不再出现)
+                    None => {
+                        let _ = &pid_for_check;
+                        !v.to_string().contains("4SAPI")
+                    }
+                },
+                None => false,
+            }
+        },
+    )?;
+    outcome
+        .notes
+        .push(format!("备份:{}", pretty(&outcome.backup)));
+    if left == 0 {
+        outcome
+            .notes
+            .push("这是它最后一个模型:provider「4SAPI」也一并移除了".into());
+    }
+    Ok(outcome)
+}
+
+fn remove_trae_site(db: &Path, spec: &ModelSpec) -> Result<SiteOutcome, String> {
+    let conn = rusqlite::Connection::open(db)
+        .map_err(|e| format!("打开 {} 失败(Trae 可能正在运行?): {e}", pretty(db)))?;
+    let keys: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT key FROM ItemTable WHERE key LIKE '%AI.agent.model.model_list_map'")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+    if keys.is_empty() {
+        return Err("没找到 Trae 的模型表(版本可能变了),本次不写".into());
+    }
+
+    let mut outcome = SiteOutcome::default();
+    for k in &keys {
+        let raw: String = conn
+            .query_row("SELECT value FROM ItemTable WHERE key = ?1", [k], |r| {
+                r.get(0)
+            })
+            .map_err(|e| format!("读 {k} 失败: {e}"))?;
+        let mut v: Value = serde_json::from_str(&raw)
+            .map_err(|e| format!("解析 {k} 失败(结构可能已变,本次不写): {e}"))?;
+        let mut changed = false;
+        if let Some(obj) = v.as_object_mut() {
+            for arr in obj.values_mut() {
+                if let Some(list) = arr.as_array_mut() {
+                    let before = list.len();
+                    list.retain(|e| !trae_is_ours(e, &spec.id));
+                    let removed = before - list.len();
+                    if removed > 0 {
+                        outcome.removed += removed;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if changed {
+            let text = serde_json::to_string(&v).map_err(|e| e.to_string())?;
+            conn.execute(
+                "UPDATE ItemTable SET value = ?1 WHERE key = ?2",
+                rusqlite::params![text, k.as_str()],
+            )
+            .map_err(|e| format!("写 {k} 失败: {e}"))?;
+        }
+    }
+
+    // 选中项正指向这条模型就把它摘掉(那个 agent 回到"没选"的状态)
+    if let Some((k, raw)) = selection_row(&conn) {
+        if let Ok(mut sel) = serde_json::from_str::<Value>(&raw) {
+            let mut changed = false;
+            if let Some(obj) = sel.as_object_mut() {
+                let hit: Vec<String> = obj
+                    .iter()
+                    .filter(|(_, e)| {
+                        e.get("modelId")
+                            .and_then(|m| m.as_str())
+                            .map(|m| m.contains(&format!("custom_openai_compatible//{}_", spec.id)))
+                            .unwrap_or(false)
+                    })
+                    .map(|(a, _)| a.clone())
+                    .collect();
+                for a in hit {
+                    obj.remove(&a);
+                    changed = true;
+                    outcome.clears_selection = true;
+                }
+            }
+            if changed {
+                let text = serde_json::to_string(&sel).map_err(|e| e.to_string())?;
+                conn.execute(
+                    "UPDATE ItemTable SET value = ?1 WHERE key = ?2",
+                    rusqlite::params![text, k.as_str()],
+                )
+                .map_err(|e| format!("写选中项失败: {e}"))?;
+            }
+        }
+    }
+
+    Ok(outcome)
+}
+
+/// 取消写入:把这条模型从客户端里删掉。规矩与写入完全一样
+/// (目标没运行 / 先备份 / 只动我们的条目 / 写完读回校验,不过就回滚)。
+pub fn remove(client: Client, spec: &ModelSpec) -> Result<Vec<Report>, String> {
+    let list = sites_of(client);
+    if list.is_empty() {
+        return Err(format!("没检测到 {} 的配置", client.label()));
+    }
+    let mut out = Vec::new();
+    for site in list {
+        if let Some(msg) = blocked_by_running(&site) {
+            return Err(msg);
+        }
+        site_readable(&site).map_err(|e| format!("{}: {e}", site.label))?;
+        let stamp = stamp_now();
+        let (client_id, label) = (client.id().to_string(), site.label.clone());
+        let o = match client {
+            Client::Workbuddy | Client::WorkbuddyAi => remove_workbuddy_site(&site, spec)?,
+            Client::Zcode => remove_zcode_site(&site, spec)?,
+            Client::Trae => {
+                let db = site.root.join("state.vscdb");
+                match remove_trae_site(&db, spec) {
+                    Ok(o) => o,
+                    Err(e) => {
+                        let dir = backup(&site.root, &site.files, &stamp)?;
+                        let _ = restore(&dir);
+                        return Err(format!("{}: {e}", site.label));
+                    }
+                }
+            }
+        };
+        out.push(Report {
+            client: client_id,
+            label,
+            stamp,
+            backup: pretty(&o.backup),
+            backup_path: o.backup.to_string_lossy().to_string(),
+            added: 0,
+            updated: 0,
+            removed: o.removed,
+            selected: false,
+            effect: format!("重启 {} 后这条模型不再出现在列表里", site.label),
+            notes: {
+                let mut n = o.notes;
+                if o.removed == 0 {
+                    n.push("本来就没有这条(可能已经删过了)".into());
+                }
+                if o.clears_selection {
+                    n.push("它的「选中项」正指向这条模型,已一并清掉".into());
+                }
+                n
+            },
+        });
+    }
+    Ok(out)
+}
+
 // ───────────────────────── 对外:预览 / 写入 / 状态 ─────────────────────────
 
 /// 文件在不在、结构认不认。认不出来就别写(宁可不写,也不替用户改坏)。
@@ -1448,6 +2018,9 @@ pub fn preview(client: Client, spec: &ModelSpec, opts: &Opts) -> Vec<Preview> {
                             "同名条目已存在(现在指向 {old_url}),写入会把它改成上面的地址与密钥。"
                         ));
                     }
+                    let (configured, removal) = wb_removal(&site, spec);
+                    p.configured = configured;
+                    p.removal = removal;
                     let learned = opts
                         .selection_prefix
                         .clone()
@@ -1463,15 +2036,7 @@ pub fn preview(client: Client, spec: &ModelSpec, opts: &Opts) -> Vec<Preview> {
                 }
                 Client::Zcode => {
                     let cfg = read_json(&site.root.join("config.json")).ok().flatten();
-                    let pid = cfg.as_ref().and_then(|c| {
-                        c.get("provider").and_then(|p| p.as_object()).and_then(|m| {
-                            m.iter()
-                                .find(|(_, v)| {
-                                    v.get("name").and_then(|n| n.as_str()) == Some("4SAPI")
-                                })
-                                .map(|(k, _)| k.clone())
-                        })
-                    });
+                    let pid = cfg.as_ref().and_then(zcode_pid);
                     let has_model = pid
                         .as_ref()
                         .map(|id| {
@@ -1490,6 +2055,9 @@ pub fn preview(client: Client, spec: &ModelSpec, opts: &Opts) -> Vec<Preview> {
                     };
                     p.changed = true;
                     p.writes_selection = false; // ZCode 的选中是会话级的,配置里不存
+                    let (configured, removal) = zcode_removal(&site, spec);
+                    p.configured = configured;
+                    p.removal = removal;
                     p.notes
                         .push("选中不需要写:ZCode 的模型选择是按会话存的。".into());
                 }
@@ -1497,6 +2065,9 @@ pub fn preview(client: Client, spec: &ModelSpec, opts: &Opts) -> Vec<Preview> {
                     p.action = "在模型表(每个 agent 组各一条)里新增/更新这条自定义模型".into();
                     p.changed = true;
                     p.writes_selection = opts.trae_auto_select;
+                    let (configured, removal) = trae_removal(&site.root.join("state.vscdb"), spec);
+                    p.configured = configured;
+                    p.removal = removal;
                     if !opts.trae_auto_select {
                         p.notes.push(
                             "选中项不写(实验开关默认关):重启 Trae 后在模型列表里选一次。".into(),
@@ -1537,6 +2108,7 @@ pub fn apply(client: Client, spec: &ModelSpec, opts: &Opts) -> Result<Vec<Report
                     backup_path: o.backup.to_string_lossy().to_string(),
                     added: o.added,
                     updated: o.updated,
+                    removed: 0,
                     selected: o.selected,
                     effect: format!("下次启动 {} 时出现在模型列表里", site.label),
                     notes: {
@@ -1563,6 +2135,7 @@ pub fn apply(client: Client, spec: &ModelSpec, opts: &Opts) -> Result<Vec<Report
                     backup_path: o.backup.to_string_lossy().to_string(),
                     added: o.added,
                     updated: o.updated,
+                    removed: 0,
                     selected: o.selected,
                     effect: "重启 ZCode 后出现在模型选择器里".into(),
                     notes: o.notes,
@@ -1586,6 +2159,7 @@ pub fn apply(client: Client, spec: &ModelSpec, opts: &Opts) -> Result<Vec<Report
                     backup_path: o.backup.to_string_lossy().to_string(),
                     added: o.added,
                     updated: o.updated,
+                    removed: 0,
                     selected: o.selected,
                     effect: format!("重启 {} 后出现在自定义模型里", site.label),
                     notes: o.notes,
@@ -2271,6 +2845,181 @@ mod tests {
             &json!({"url":"https://opencode.ai/zen/go/v1","name":"GO-x"}),
             &hosts
         ));
+    }
+
+/// 取消写入:WorkBuddy 删条目;选中项指向它时一并清掉;再删一次是「本来就没有」(不写盘)。
+    #[test]
+    fn workbuddy_remove_entry_and_clear_selection() {
+        let root = tmpdir("wb-rm");
+        std::fs::write(root.join("models.json"), "[]").unwrap();
+        std::fs::write(root.join("settings.json"), "{}").unwrap();
+        let site = site_at(&root, Client::Workbuddy);
+        let opts = Opts {
+            selection_prefix: Some(WB_PREFIX.to_string()),
+            ..Default::default()
+        };
+        write_workbuddy_site(&site, &spec(), &hosts(), &opts).unwrap();
+        let s = read_v(&root.join("settings.json"));
+        assert_eq!(s[WB_SELECTION_KEY], "custom-local:claude-sonnet-5");
+
+        // 预告要说清会删哪一条、会顺带清选中项
+        let (configured, removal) = wb_removal(&site, &spec());
+        assert!(configured);
+        let r = removal.unwrap();
+        assert!(r.what.contains("4S-claude-sonnet-5"), "{}", r.what);
+        assert!(r.what.contains("https://4sapi.com/v1"));
+        assert!(r.clears_selection);
+        assert_eq!(r.count, 1);
+
+        let o = remove_workbuddy_site(&site, &spec()).unwrap();
+        assert_eq!(o.removed, 1);
+        assert!(o.clears_selection);
+        assert!(read_v(&root.join("models.json")).as_array().unwrap().is_empty());
+        assert!(read_v(&root.join("settings.json")).get(WB_SELECTION_KEY).is_none());
+
+        // 幂等:再删一次什么都不动
+        let o2 = remove_workbuddy_site(&site, &spec()).unwrap();
+        assert_eq!(o2.removed, 0);
+        assert!(o2.backup.as_os_str().is_empty(), "没改动就不该建备份目录");
+    }
+
+    /// 选中项指向别人时不许乱清(只清指向这条模型的)。
+    #[test]
+    fn workbuddy_remove_keeps_foreign_selection() {
+        let root = tmpdir("wb-rm-sel");
+        std::fs::write(root.join("models.json"), "[]").unwrap();
+        std::fs::write(root.join("settings.json"), "{\"model\":\"custom-local:other\"}").unwrap();
+        let site = site_at(&root, Client::Workbuddy);
+        write_workbuddy_site(&site, &spec(), &hosts(), &Opts::default()).unwrap();
+        let (_, removal) = wb_removal(&site, &spec());
+        assert!(!removal.unwrap().clears_selection);
+        let o = remove_workbuddy_site(&site, &spec()).unwrap();
+        assert_eq!(o.removed, 1);
+        assert!(!o.clears_selection);
+        let s = read_v(&root.join("settings.json"));
+        assert_eq!(s[WB_SELECTION_KEY], "custom-local:other", "别人的选中项不动");
+    }
+
+    /// ZCode:删掉模型;它是最后一个时连 provider 与规则一起收走。
+    #[test]
+    fn zcode_remove_model_then_provider() {
+        let root = tmpdir("zcode-rm");
+        std::fs::write(root.join("config.json"), r#"{"provider":{}}"#).unwrap();
+        std::fs::write(
+            root.join("provider_config.json"),
+            r#"{"schemaVersion":1,"config":{"providerConfigRules":{"providerRules":[]},"modelConfigRules":{"providerModelRules":[],"manualProviderModelRules":[]}}}"#,
+        )
+        .unwrap();
+        let site = site_at(&root, Client::Zcode);
+        write_zcode_site(&site, &spec()).unwrap();
+        let s2 = ModelSpec::new("glm-5.3", "https://4sapi.com/v1", "sk-test-123", Some(1_000_000), false);
+        write_zcode_site(&site, &s2).unwrap();
+
+        let (configured, removal) = zcode_removal(&site, &spec());
+        assert!(configured);
+        assert!(removal.unwrap().what.contains("还剩 1 个模型"), "预告要说清 provider 会留下");
+
+        let o = remove_zcode_site(&site, &spec()).unwrap();
+        assert_eq!(o.removed, 1);
+        let cfg = read_v(&root.join("config.json"));
+        let pid = zcode_pid(&cfg).expect("provider 还在");
+        assert!(cfg["provider"][&pid]["models"].get(&spec().id).is_none());
+        assert!(cfg["provider"][&pid]["models"].get("glm-5.3").is_some(), "别的模型不动");
+        let rules = read_v(&root.join("provider_config.json"));
+        let rule = &rules["config"]["providerConfigRules"]["providerRules"][0];
+        assert_eq!(rule["config"]["personalModelIds"].as_array().unwrap().len(), 1);
+        assert_eq!(rule["config"]["personalModelIds"][0], "glm-5.3");
+        assert!(rules["config"]["modelConfigRules"]["providerModelRules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["modelId"] != "claude-sonnet-5"));
+
+        // 删最后一个:provider 与它的规则一起消失
+        let (_, r2) = zcode_removal(&site, &s2);
+        assert!(r2.unwrap().what.contains("最后一个模型"));
+        let o2 = remove_zcode_site(&site, &s2).unwrap();
+        assert_eq!(o2.removed, 1);
+        let cfg2 = read_v(&root.join("config.json"));
+        assert!(zcode_pid(&cfg2).is_none(), "空 provider 不该留下");
+        let rules2 = read_v(&root.join("provider_config.json"));
+        assert!(rules2["config"]["providerConfigRules"]["providerRules"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+
+    /// Trae:每个 agent 组各删一条;选中项指向它时把那个 agent 的选中也摘掉。
+    #[test]
+    fn trae_remove_from_every_group_and_clear_selection() {
+        let root = tmpdir("trae-rm");
+        let db = root.join("state.vscdb");
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            conn.execute("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)", [])
+                .unwrap();
+            let map = json!({
+                "solo_agent": [
+                    {"config_source":1,"provider":"","display_name":"Doubao-Seed","selectable":true}
+                ],
+                "assistant": []
+            });
+            conn.execute(
+                "INSERT INTO ItemTable (key, value) VALUES (?1, ?2)",
+                rusqlite::params![
+                    "3739861422447896:AI.agent.model.model_list_map",
+                    serde_json::to_string(&map).unwrap()
+                ],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO ItemTable (key, value) VALUES (?1, ?2)",
+                rusqlite::params![
+                    "3739861422447896:AI.agent.model.recent_user_selection_by_agent_label",
+                    r#"{"solo_agent":{"modelId":"solo_agent_1__Doubao-Seed_null","mode":0}}"#
+                ],
+            )
+            .unwrap();
+        }
+        let opts = Opts {
+            trae_auto_select: true,
+            ..Default::default()
+        };
+        trae_write(&db, &spec(), &opts).unwrap();
+        let (configured, removal) = trae_removal(&db, &spec());
+        assert!(configured);
+        let r = removal.unwrap();
+        assert_eq!(r.count, 2, "两个 agent 组各一条");
+        assert!(r.clears_selection, "选中项正指向它");
+
+        let o = remove_trae_site(&db, &spec()).unwrap();
+        assert_eq!(o.removed, 2);
+        assert!(o.clears_selection);
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let raw: String = conn
+            .query_row(
+                "SELECT value FROM ItemTable WHERE key LIKE '%model_list_map'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let v: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["solo_agent"].as_array().unwrap().len(), 1, "只剩内置那条");
+        assert_eq!(v["assistant"].as_array().unwrap().len(), 0);
+        let sel: String = conn
+            .query_row(
+                "SELECT value FROM ItemTable WHERE key LIKE '%selection%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let sv: Value = serde_json::from_str(&sel).unwrap();
+        assert!(sv.as_object().unwrap().is_empty(), "指向它的选中项要摘掉");
+
+        // 幂等
+        let o2 = remove_trae_site(&db, &spec()).unwrap();
+        assert_eq!(o2.removed, 0);
+        assert_eq!((o2.clears_selection, o2.backup.as_os_str().is_empty()), (false, true));
     }
 
     /// 台账:新的在前、最多 20 条、能按备份路径找回它属于哪个客户端。

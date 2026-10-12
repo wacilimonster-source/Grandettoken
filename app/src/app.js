@@ -1991,6 +1991,10 @@ $("manage").addEventListener("click", async (e) => {
     await injectGo();
     return;
   }
+  if (a === "injectrm") {
+    await injectRemove();
+    return;
+  }
   if (a === "mdlclose") {
     MDL.sheet = null;
     renderModelSheet();
@@ -2630,7 +2634,7 @@ function mdlRowHtml(r) {
       const on = done(id, r.id);
       const cls = on ? " on" : running ? " run" : installed ? "" : " no";
       const tip = installed
-        ? (on ? "已配置 · 再点一次可更新" : "写入 " + st.label) + (running ? "(正在运行 · 需先退出)" : "")
+        ? (on ? "已配置 · 点开可更新或取消写入" : "写入 " + st.label) + (running ? "(正在运行 · 需先退出)" : "")
         : "没检测到配置文件";
       return (
         '<button class="cdot' + cls + '" data-act="mdlcli" data-id="' + esc(r.id) + '" data-c="' + id +
@@ -2727,7 +2731,16 @@ function renderModelSheet() {
       (c.installed ? (c.running ? "正在运行" : "未运行") : "没检测到配置文件") + "</span></div>" +
       '<div class="srow"><span class="sk">配置</span><span class="sv">' + esc((c.files || []).join("  ·  ")) + "</span></div>" +
       '<div class="srow"><span class="sk">已写入</span><span class="sv">' +
-      ((c.models || []).length ? esc(c.models.join("、")) : "还没有") + "</span></div>" +
+      ((c.models || []).length
+        ? c.models
+            .map(
+              (m) =>
+                '<button class="btn s" data-act="mdlcli" data-c="' + esc(c.client) + '" data-id="' +
+                esc(m) + '" title="点开看这条的状态 / 取消写入">' + esc(m) + "</button>"
+            )
+            .join(" ")
+        : "还没有 —— 去上面的模型列表里挑一个") +
+      "</span></div>" +
       '<div class="srow"><span class="sk">选中</span><span class="sv">' +
       (c.selected ? esc(c.selected) : "读不到(它自己的选中项)") + "</span></div>" +
       '<div class="srow"><span class="sk">备注</span><span class="sv">' + esc(c.note || "—") + "</span></div>" +
@@ -2740,7 +2753,7 @@ function renderModelSheet() {
             .map(
               (r) => '<div class="srow"><span class="sk">' + esc(r.stamp) + '</span><span class="sv">' +
                 esc(r.model) + (r.added ? " · 新增 " + r.added : "") + (r.updated ? " · 更新 " + r.updated : "") +
-                (r.selected ? " · 已选中" : "") + " " +
+                (r.removed ? " · 移除 " + r.removed : "") + (r.selected ? " · 已选中" : "") + " " +
                 '<button class="btn s" data-act="mdlrollback" data-id="' + esc(r.backupPath) + '">回滚</button>' +
                 '<button class="btn s" data-act="openpath" data-id="' + esc(r.backupPath) + '">打开备份</button>' +
                 "</span></div>"
@@ -2752,7 +2765,8 @@ function renderModelSheet() {
   }
 
   // 写入预告 / 结果
-  const head = '<div class="mstop"><b>' + (s.reports ? "写入结果" : "写入预告") + "</b>" +
+  const head = '<div class="mstop"><b>' +
+    (s.reports ? (s.mode === "remove" ? "取消写入结果" : "写入结果") : "写入预告") + "</b>" +
     '<span class="dim">' + esc(s.model) + " → " + esc(CLIENT_NAME[s.client] || s.client) + "</span></div>";
   if (s.error) {
     box.innerHTML = '<div class="sheet">' + head + '<div class="mdlwarn">' + esc(s.error) + "</div>" +
@@ -2771,7 +2785,8 @@ function renderModelSheet() {
         .map(
           (r) => '<div class="mdlok"><b>✓ ' + esc(r.label) + "</b> · " +
             (r.added ? "新增 " + r.added + " 条" : "") + (r.updated ? "更新 " + r.updated + " 条" : "") +
-            (r.added + r.updated === 0 ? "没有改动(内容一致)" : "") +
+            (r.removed ? "移除 " + r.removed + " 条" : "") +
+            (r.added + r.updated + r.removed === 0 ? "没有改动(本来就没有,或内容一致)" : "") +
             '<div class="srow"><span class="sk">生效</span><span class="sv">' + esc(r.effect) + "</span></div>" +
             (r.selected ? '<div class="srow"><span class="sk">选中</span><span class="sv">已写入选中项</span></div>' : "") +
             '<div class="srow"><span class="sk">备份</span><span class="sv">' + esc(r.backup) +
@@ -2791,6 +2806,7 @@ function renderModelSheet() {
   const changed = s.previews.some((p) => p.changed);
   const writesSecret = s.previews.some((p) => p.writesSecret);
   const writesSel = s.previews.some((p) => p.writesSelection);
+  const removals = s.previews.filter((p) => p.removal);
   box.innerHTML = '<div class="sheet">' + head +
     s.previews
       .map(
@@ -2809,8 +2825,22 @@ function renderModelSheet() {
       ? '<div class="mdlwarn">会把 4SAPI 密钥<b>明文</b>写进上面那个客户端自己的配置文件' +
         "(它们本来就这么存)。挂件不保存副本、不写日志、不进备份。</div>"
       : "") +
-    (!writesSel && !blocked
+    (!writesSel && !blocked && !removals.length
       ? '<div class="mdlnote">选中项这次不写:写入后在客户端里选一次,挂件会记住口径,以后就能直接帮你选。</div>'
+      : "") +
+    (removals.length
+      ? '<div class="mdlsub">当前状态:已配置</div>' +
+        removals
+          .map(
+            (p) =>
+              '<div class="mdlprev"><div class="srow"><span class="sk">会移除</span><span class="sv">' +
+              esc(p.label) + " · " + esc(p.removal.what) + "</span></div>" +
+              (p.removal.clearsSelection
+                ? '<div class="mdlnote">它的「选中项」正指向这条模型,会一并清掉(回到"没选"的状态)。</div>'
+                : "") +
+              '<div class="mdlnote">其它条目、以及你在客户端里做过的其它改动都不动;移除前照样先备份。</div></div>'
+          )
+          .join("")
       : "") +
     '<div class="acts" style="margin-top:8px">' +
     (blocked
@@ -2818,6 +2848,9 @@ function renderModelSheet() {
       : changed
       ? '<button class="btn p" data-act="injectgo">写入</button>'
       : '<button class="btn" disabled>内容一致 · 无需写入</button>') +
+    (removals.length && !blocked
+      ? '<button class="btn danger" data-act="injectrm">取消写入(移除这条)</button>'
+      : "") +
     '<button class="btn" data-act="mdlcopy" data-id="' + esc(s.model) + '">复制三件套</button>' +
     '<button class="btn" data-act="mdlclose">取消</button></div></div>';
 }
@@ -2847,7 +2880,7 @@ async function loadInjects() {
 }
 /** 打开某个模型的写入预告(纯读,还没有任何写盘动作)。 */
 async function openModelSheet(client, model) {
-  MDL.sheet = { kind: "write", client, model };
+  MDL.sheet = { kind: "write", mode: "write", client, model };
   renderModelSheet();
   try {
     MDL.sheet.previews = await invoke("inject_preview", { client, model });
@@ -2869,6 +2902,22 @@ async function injectGo() {
   renderModelSheet();
   loadInjects(); // 状态条与台账跟着更新
 }
+/** 取消写入:把这条模型从客户端里删掉(确认过预告之后才走到这里)。 */
+async function injectRemove() {
+  const s = MDL.sheet;
+  if (!s || !s.model) return;
+  s.mode = "remove";
+  try {
+    s.reports = await invoke("inject_remove", { client: s.client, model: s.model });
+    const n = s.reports.reduce((a, r) => a + (r.removed || 0), 0);
+    showToast(n ? "已从 " + (CLIENT_NAME[s.client] || s.client) + " 移除 " + n + " 条" : "本来就没有这条");
+  } catch (e) {
+    s.error = String(e);
+  }
+  renderModelSheet();
+  loadInjects(); // 按钮状态与客户端条跟着更新
+}
+
 /** 打开模型页签时才去取清单(没打开就不打扰接口)。 */
 async function ensureModels() {
   // 「只看编码/对话」持久化在配置里(modelShowAll);
