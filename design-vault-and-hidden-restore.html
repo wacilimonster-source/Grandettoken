@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Grandettoken · 隐藏渠道恢复 + 密钥查看/复制 + 本地密钥箱（产品设计，未写代码）</title>
+<style>
+  :root{
+    --bg:#12141a; --bg2:#191c24; --bg3:#20242e;
+    --line:#2f3648; --line2:#3c445c;
+    --tx:#edf0f6; --tx2:#b6bfce; --tx3:#8d97ab;
+    --ok:#4ade9d; --warn:#f7c355; --bad:#ff6b63; --ac:#7fa2ff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#0a0c10;color:#dfe5f1;font:14px/1.75 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;padding:34px 26px 90px}
+  .wrap{max-width:1180px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 6px}
+  .sub{color:#7d879e;font-size:13px;margin-bottom:24px}
+  h2{font-size:16px;margin:42px 0 14px;padding-left:10px;border-left:3px solid var(--ac)}
+  h3{font-size:14px;margin:24px 0 8px;color:#cdd5e4}
+  h4{font-size:13px;margin:18px 0 6px;color:#b9c3d6}
+  p{margin:8px 0}
+  code{font-family:"Cascadia Mono",Consolas,monospace;font-size:12.5px;background:#1b1f28;border:1px solid #262c38;border-radius:4px;padding:1px 5px;color:#9fd0ff}
+  pre{background:#11141b;border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow:auto;font-family:"Cascadia Mono",Consolas,monospace;font-size:12px;color:#a8b6cc;line-height:1.6}
+  .hand{border:1px solid #3d5a8a;background:linear-gradient(180deg,#152034,#111a29);border-radius:10px;padding:16px 18px;margin:0 0 30px}
+  .hand b{color:#9fc4ff}
+  .say{background:#141a24;border:1px solid var(--line);border-left:3px solid var(--ac);border-radius:8px;padding:14px 16px;margin:12px 0}
+  .say .lab{font-size:12px;color:#7d879e;letter-spacing:.06em;margin-bottom:6px}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#1a1f28;color:#b6bfce;font-weight:600}
+  .bad{color:var(--bad)} .ok{color:var(--ok)} .warn{color:var(--warn)} .dim{color:var(--tx3)}
+  ol.q{margin:10px 0 0;padding-left:0;list-style:none;counter-reset:q}
+  ol.q>li{counter-increment:q;border:1px solid var(--line);border-radius:8px;padding:12px 14px 12px 46px;margin:10px 0;background:#15181f;position:relative}
+  ol.q>li::before{content:counter(q);position:absolute;left:14px;top:12px;width:22px;height:22px;border-radius:6px;background:#232a38;color:#9fc4ff;
+    display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px}
+  ol.q b{color:#e6ebf5}
+  .opt{margin:4px 0;padding-left:14px;color:var(--tx2)}
+  .opt b{color:var(--tx)}
+  ul{margin:6px 0 6px 18px;padding:0}
+  li{margin:4px 0}
+  .foot{margin-top:44px;color:#6b7688;font-size:12px;border-top:1px solid var(--line);padding-top:14px}
+  /* mock */
+  .stage{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start;margin-top:14px}
+  .mock{width:380px;flex:none;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--tx);
+    font:13px/1.5 "Segoe UI","Microsoft YaHei",sans-serif;box-shadow:0 18px 50px -18px #000c;overflow:hidden}
+  .m-tbar{display:flex;align-items:center;gap:9px;padding:9px 12px;background:linear-gradient(180deg,#1d2129,#171a21);border-bottom:1px solid var(--line)}
+  .m-mark{width:17px;height:17px;border-radius:5px;background:linear-gradient(135deg,#5b8cff,#8b5bff);position:relative;flex:none}
+  .m-mark::after{content:"";position:absolute;inset:5px;border-radius:2px;background:#12141a}
+  .m-tt{font-size:12px;font-weight:600}
+  .m-tabs{display:flex;gap:4px;padding:7px 10px 0;border-bottom:1px solid var(--line);background:#15181f;flex-wrap:wrap}
+  .m-tab{font-size:11.5px;padding:5px 9px;border-radius:6px 6px 0 0;color:var(--tx3);border:1px solid transparent;border-bottom:none}
+  .m-tab.on{background:var(--bg);color:var(--tx);border-color:var(--line)}
+  .m-body{padding:10px 11px;min-height:300px}
+  .btn{font:12px/1 inherit;padding:6px 9px;border-radius:7px;border:1px solid var(--line2);background:#222834;color:#dfe6f2;cursor:default;white-space:nowrap;display:inline-block}
+  .btn.p{background:#2b3f66;border-color:#4b6fa8;color:#eaf1ff;font-weight:600}
+  .btn.danger{border-color:#6b3230;color:#ffb4b0}
+  .btn.s{padding:3px 7px;font-size:11px}
+  .card{border:1px solid var(--line);background:var(--bg2);border-radius:9px;padding:8px 10px;margin-bottom:7px}
+  .card.off{opacity:.55}
+  .crow{display:flex;align-items:center;gap:8px}
+  .cico{width:26px;height:26px;border-radius:7px;background:#e8622c;color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex:none}
+  .cname{font-weight:600;font-size:12.5px}
+  .cst{font-size:11px;color:var(--tx3)}
+  .tagn{font-size:10px;color:var(--tx3);border:1px dashed var(--line2);border-radius:4px;padding:0 4px;margin-left:5px}
+  .eye{margin-left:auto;width:26px;height:22px;border-radius:6px;border:1px solid var(--line2);background:#1b1f27;color:var(--tx3);
+    display:flex;align-items:center;justify-content:center;font-size:11px}
+  .restorebar{display:flex;align-items:center;gap:8px;justify-content:space-between;border:1px solid #7a6234;background:#241d12;
+    border-radius:8px;padding:7px 9px;font-size:11.5px;color:#f0c67a;margin-bottom:8px}
+  .krow{display:flex;align-items:center;gap:6px;border:1px solid var(--line);background:#15181f;border-radius:8px;
+    padding:6px 8px;margin-bottom:6px;font-size:11.5px}
+  .krow .k1{font-family:Consolas,monospace;color:var(--tx2);flex:1;min-width:0;word-break:break-all}
+  .krow .idx{color:var(--tx3);font-size:10px;width:14px;flex:none}
+  .reveal{font-family:Consolas,monospace;color:#8ee9b8;word-break:break-all;background:#132219;border:1px solid #2f6b43;border-radius:7px;padding:6px 8px;font-size:11px}
+  .warnbox{border:1px solid #6b5327;background:#241d12;border-radius:7px;padding:7px 9px;font-size:11px;color:#f0c67a;margin:7px 0}
+  .note{font-size:10.5px;color:var(--tx3);line-height:1.6;margin:4px 0}
+  .pf{display:flex;align-items:center;gap:6px;margin:10px 0 5px}
+  .pf b{font-size:12px}
+  .pf span{font-size:10.5px;color:var(--tx3)}
+  .inp{width:100%;font:12px/1.4 inherit;padding:6px 8px;border-radius:7px;border:1px solid var(--line2);background:#11141b;color:var(--tx)}
+  .search{font:12px/1 inherit;padding:6px 9px;border-radius:7px;border:1px solid var(--line2);background:#11141b;color:var(--tx3);margin-bottom:8px;display:block}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>隐藏渠道恢复 + 密钥查看/复制 + 本地密钥箱</h1>
+<div class="sub">2026-10-13 · 产品设计（<b>未写代码</b>）。前两项是修复与补齐,第三项是一个新小工具。取证来源:本仓库代码 + 本机真文件;凡是没能在真机上复核的,下面都标了「待真机确认」。</div>
+
+<div class="hand">
+  <b>三件事,一句话各说清</b>
+  <p style="margin:6px 0 4px">
+  <b>① 隐藏渠道恢复</b>:入口其实在(渠道卡右边的眼睛),但隐藏后它变成一个「–」破折号,既不像"恢复"也不像按钮 ——
+  先按<b>可发现性</b>修(隐藏时给一条整行的「已隐藏 · 恢复」),同时把"万一卡片真的不在列表里"的兜底也补上。</p>
+  <p style="margin:0 0 4px">
+  <b>② 看/复制已保存的密钥</b>:现在只回显尾 4 位(`key_hint`),前端拿不到明文。补两个动作:
+  <b>「复制」(明文不回前端)</b>与<b>「显示」(明文回前端一次,8 秒自动隐)</b>。</p>
+  <p style="margin:0">
+  <b>③ 本地密钥箱</b>:按平台分组、一个平台可存多把。**密文进 Windows 凭据管理器,SQLite 只存索引**(平台/标签/尾号/时间),
+  所以列表渲染<b>不需要解密</b>;只有你点「查看/复制」才读那一把。不导出、不进日志、不参与任何自动取数或写入。</p>
+</div>
+
+<h2>一、① 隐藏渠道恢复:先查真因</h2>
+
+<div class="say">
+  <div class="lab">代码取证(本仓库,2026-10-13)</div>
+  <p style="margin:0 0 6px">隐藏这件事的链路是通的:<code>renderChCards()</code> 遍历的是 <b>全部渠道</b>(<code>currentOrderIds()</code> → <code>CHANNELS</code>),
+  隐藏的那条照样渲染卡片,并带 <code>已隐藏</code> 标签;眼睛按钮的处理 <code>chvis</code> 也就是把 id 从 <code>hiddenChannels</code> 里摘掉再重取一轮
+  —— <b>功能上应该能恢复</b>。</p>
+  <p style="margin:0">问题出在<b>它长什么样</b>:隐藏后那个按钮的文案从 <code>👁</code> 变成 <code>–</code>(一个破折号),提示语只在 hover 时才出现
+  (<code>title="显示(恢复取数)"</code>)。所以"没法恢复"最可能是<b>找不到入口</b>,而不是点不动。
+  <span class="warn">待真机确认</span>:这一步我没能在你机器上复核(挂件当时是正常模式、没开调试端口,我没有为了这个再打断它)。
+  真机上只需看一眼:进「设置 → 渠道」,那条隐藏渠道的卡片在不在、那个 <code>–</code> 点下去是否恢复。</p>
+</div>
+
+<h3>1.1 三处一起改(不管真因是哪个都覆盖)</h3>
+<table>
+<tr><th style="width:130px">改哪</th><th>现在</th><th>改成</th><th>解决什么</th></tr>
+<tr><td>渠道卡上的隐藏/显示</td>
+  <td><code>👁</code> / <code>–</code> 一个 26×22 的小方块</td>
+  <td>隐藏时按钮上直接写<b>「恢复」</b>两个字(<code>.btn.s</code>),卡片整条加一层黄色描边;显示时保持 <code>👁</code> 图标不变</td>
+  <td>恢复入口一眼可见,不用 hover 猜</td></tr>
+<tr><td>渠道页顶部</td>
+  <td>没有汇总</td>
+  <td>有隐藏时出现一条:<b>「已隐藏 2 个(Trae、Hapi) · 全部恢复」</b>,点「全部恢复」一次清空 <code>hiddenChannels</code></td>
+  <td>藏了好几个时不用逐个找</td></tr>
+<tr><td>展示面的空态卡片</td>
+  <td>「已配置的渠道都被隐藏了 → 去设置」(只打开管理页)</td>
+  <td>按钮改成<b>「去恢复」</b>:打开管理页 → 渠道页签 → <b>滚动到第一条隐藏渠道并高亮 1 秒</b>(复用 <code>.flash</code> 与 <code>+N</code> 徽标已有的做法)</td>
+  <td>从"自己去翻"变成"直接指到那一条"</td></tr>
+</table>
+
+<h3>1.2 兜底:万一卡片真的不在列表里</h3>
+<p>还有一种可能(待真机确认):<b>隐藏 + 当前没有可用凭据</b>时,App 型渠道的占位视图 <code>hasKey=false</code>
+(隐藏时刻意不读本机登录凭据),若卡片渲染上有任何依赖 <code>hasKey</code> 的分支,那条就会"看起来消失"。
+所以上面第 2 条(顶部「已隐藏 N 个 · 全部恢复」)既是便利,也是<b>兜底</b> —— 它从 <code>CFG.hiddenChannels</code> 直接算,
+不依赖任何渠道视图,只要配置里还有 id 就给得出恢复入口。</p>
+
+<h2>二、② 查看 / 复制已保存的密钥</h2>
+
+<div class="say">
+  <div class="lab">先说清楚这条与现有契约的关系</div>
+  <p style="margin:0">产品的既有规矩是<b>「密钥永不回前端」</b>(Rust 现读现写,界面保存后不回显,只给尾 4 位)。
+  你要的"看/复制"必然要破这一条 —— 破得<b>有边界</b>就不算破:明文只在<b>你明确点「显示」那一次</b>回前端并渲染,
+  <b>8 秒后自动隐</b>;「复制」这条路<b>根本不回前端</b>(后端读出来直接进剪贴板,沿用「复制三件套」那套 <code>clip.exe</code> + UTF-16LE)。
+  两条都不会写进日志、数据库或任何文件。</p>
+</div>
+
+<table>
+<tr><th style="width:110px">动作</th><th>行为</th><th>明文去哪</th><th>为什么这样设计</th></tr>
+<tr><td><b>复制</b><br><span class="dim">推荐默认动作</span></td>
+  <td>点一下就把这把密钥送进系统剪贴板,界面<b>只弹一行 toast</b>(不渲染明文)</td>
+  <td>凭据管理器 → 后端内存 → 剪贴板</td>
+  <td>日常 90% 的场景就是"我要粘到别处";这条路径前端拿不到明文,破口最小</td></tr>
+<tr><td><b>显示</b></td>
+  <td>明文渲染在那一行里,<b>8 秒倒计时后自动隐</b>;再点一次立即隐</td>
+  <td>凭据管理器 → 后端 → webview 一次性渲染</td>
+  <td>你要"看一眼确认是不是那把"时用;自动隐藏避免截图/录屏/路过的人</td></tr>
+<tr><td>尾号回显</td><td>保持现状(<code>••••3f7a</code>)</td><td>—</td><td>不用点就能确认"是不是那把新换的"</td></tr>
+</table>
+
+<p><b>三个细则</b>:① 「显示」只影响当前这一行,切页签/刷新/轮询重建都<b>立刻收回</b>(明文不留在 DOM 里过夜);
+② 剪贴板写入会提示"剪贴板对其他程序可见"(与「复制三件套」同一句);
+③ 密钥型渠道(Trae/Codex 这类复用本机登录态的)没有可复制的密钥,按钮不出现。</p>
+
+<h2>三、③ 本地密钥箱(新工具)</h2>
+
+<h3>3.1 需求与不做什么</h3>
+<table>
+<tr><th style="width:150px">要的</th><th>不做的</th></tr>
+<tr><td>按平台分组、<b>一个平台多把密钥</b>;每条可带标签与备注</td>
+  <td><b>不导出</b>(明文导出等于把密钥写进文件;要迁移就手动重录)</td></tr>
+<tr><td>平时<b>加密存放</b>,只有人点「查看/复制」才出现明文</td>
+  <td><b>不自动使用</b>:不参与余额取数、不参与模型写入、不自动填任何输入框</td></tr>
+<tr><td>查看是<b>显式动作</b>,带倒计时自动隐藏</td>
+  <td><b>不做多设备同步/云</b>(与本产品"无遥测、无云同步"一致)</td></tr>
+<tr><td>增 / 改 / 删(删要内联确认)</td>
+  <td><b>不设主密码</b>(取舍见 3.3)</td></tr>
+</table>
+
+<h3>3.2 存在哪:密文进凭据管理器,索引进 SQLite</h3>
+<pre>Windows 凭据管理器                          SQLite(可备份、可分享)
+┌────────────────────────────┐            ┌──────────────────────────────┐
+│ 服务名  TokenScope:vault    │            │ vault_items                  │
+│ 账户名  &lt;条目 id&gt;          │            │  id / platform / label       │
+│ 内容    密钥明文(由当前     │            │  hint(尾 4 位) / note        │
+│          Windows 账户的     │            │  created_at / updated_at     │
+│          DPAPI 保护)        │            └──────────────────────────────┘
+└────────────────────────────┘              ↑ 列表界面只读这张表,**不解密**
+        ↑ 只有「查看 / 复制」读它</pre>
+
+<table>
+<tr><th style="width:120px">项</th><th>取舍</th></tr>
+<tr><td>为什么用凭据管理器</td>
+  <td>它<b>本来就是加密的</b>(DPAPI 绑当前 Windows 账户),而且这是本产品已经在用的唯一密钥存放处 ——
+    不新引加密库、不自己写 AES/HMAC。对照:自建 AES-GCM 需要新增依赖(锁文件里没有 <code>aes-gcm</code>/<code>hmac</code>),
+    手写 CBC+MAC 更是"自己造加密",两个都不值得。</td></tr>
+<tr><td>条目上限</td>
+  <td>凭据管理器单条 blob 上限约 2.5 KB(实测过的经验值 ~1280 字符),密钥都是几十字符,够用;数量上没有硬门槛。</td></tr>
+<tr><td>索引为什么可以明文</td>
+  <td>平台名、标签、尾 4 位、备注<b>不是秘密</b>;列表因此不需要解密就能渲染 —— 这一点很关键:
+    "看一眼列表"和"取出明文"被彻底分开。</td></tr>
+<tr><td>删条目</td><td>先删凭据管理器里那条,再删索引;任一步失败都不留"半条"(失败会把索引一起回滚)。</td></tr>
+</table>
+
+<div class="warnbox"><b>必须写进界面的两句</b>:① 密钥箱<b>保护的是"这台机器 + 这个 Windows 账户"</b> ——
+换成别人登录这台电脑、或你关掉 Windows 登录保护,它就不再安全;② 复制到剪贴板后,
+剪贴板历史/其他程序都看得到。两句都放在密钥箱页脚的一行小字里,不藏在 README。</div>
+
+<h3>3.3 界面(管理页新开第 6 个页签「密钥箱」)</h3>
+<div class="stage">
+  <div class="mock">
+    <div class="m-tbar"><div class="m-mark"></div><div class="m-tt">Grandettoken</div><div style="margin-left:auto;font-size:11px;color:#8d97ab">← 返回</div></div>
+    <div class="m-tabs"><div class="m-tab">渠道</div><div class="m-tab">模型</div><div class="m-tab">显示</div><div class="m-tab">刷新与启动</div><div class="m-tab on">密钥箱</div><div class="m-tab">关于</div></div>
+    <div class="m-body">
+      <input class="search" value="" placeholder="搜索平台 / 标签 / 备注…">
+      <div class="pf"><b>4SAPI</b><span>2 把</span><span style="margin-left:auto" class="btn s">+ 新增</span></div>
+      <div class="krow"><span class="idx">1</span><span class="k1">主号 · ••••3f7a<br><span class="dim">充值用的那个 · 08-12 建</span></span>
+        <span class="btn s">复制</span><span class="btn s">显示</span><span class="btn s">改</span><span class="btn s">删</span></div>
+      <div class="krow"><span class="idx">2</span><span class="k1">备用号 · ••••91c2<br><span class="dim">公司机器上那份</span></span>
+        <span class="btn s">复制</span><span class="btn s">显示</span><span class="btn s">改</span><span class="btn s">删</span></div>
+      <div class="pf"><b>Hapi</b><span>1 把</span><span style="margin-left:auto" class="btn s">+ 新增</span></div>
+      <div class="krow"><span class="idx">1</span><span class="k1">默认 · ••••0a4d<br><span class="dim">—</span></span>
+        <span class="btn s">复制</span><span class="btn s">显示</span><span class="btn s">改</span><span class="btn s">删</span></div>
+      <div class="note" style="margin-top:10px">密钥平时加密存放(Windows 凭据管理器,绑当前 Windows 账户);
+        这里只显示平台、标签与尾号 —— 点「显示」才会取出明文,8 秒后自动隐。复制走系统剪贴板,对其他程序可见。</div>
+    </div>
+  </div>
+
+  <div class="mock">
+    <div class="m-tbar"><div class="m-mark"></div><div class="m-tt">Grandettoken</div><div style="margin-left:auto;font-size:11px;color:#8d97ab">← 返回</div></div>
+    <div class="m-tabs"><div class="m-tab on">渠道</div><div class="m-tab">模型</div><div class="m-tab">显示</div><div class="m-tab">刷新与启动</div><div class="m-tab">密钥箱</div><div class="m-tab">关于</div></div>
+    <div class="m-body">
+      <div class="restorebar"><span><b>已隐藏 2 个</b>(Trae、Hapi)—— 隐藏期间不取数,快照保留</span><span class="btn s">全部恢复</span></div>
+      <div class="card off">
+        <div class="crow"><div class="cico" style="background:#333a4a">TR</div>
+          <div><div class="cname">Trae<span class="tagn">已隐藏</span></div><div class="cst">已隐藏 · 不再取数(历史快照保留)</div></div>
+          <span class="eye" style="width:auto;padding:0 8px">恢复</span></div>
+      </div>
+      <div class="card off">
+        <div class="crow"><div class="cico" style="background:#333a4a">HA</div>
+          <div><div class="cname">Hapi<span class="tagn">已隐藏</span></div><div class="cst">已隐藏 · 不再取数(历史快照保留)</div></div>
+          <span class="eye" style="width:auto;padding:0 8px">恢复</span></div>
+      </div>
+      <div class="card">
+        <div class="crow"><div class="cico">4S</div>
+          <div><div class="cname">4SAPI<span class="dot" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#4ade9d;margin-left:5px"></span></div>
+            <div class="cst">已配置 · 剩 100%</div></div>
+          <span class="eye">👁</span></div>
+        <div style="margin-top:6px">
+          <div class="krow"><span class="k1">密钥 · ••••3f7a</span><span class="btn s">复制</span><span class="btn s">显示</span><span class="btn s">删除</span></div>
+          <div class="reveal" style="margin-top:4px">sk-4sapi-9f2c…完整明文…(8 秒后自动隐)</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="flex:1;min-width:250px">
+    <h4>两张原型说明</h4>
+    <ul>
+      <li><b>左:密钥箱</b> —— 按平台分组、组内按建立时间倒序;每行四个动作(复制/显示/改/删);搜索跨平台匹配标签与备注。</li>
+      <li><b>右:渠道页的两处修复</b> —— 顶部「已隐藏 2 个 · 全部恢复」;隐藏卡片上的按钮直接写「恢复」,整条降透明度保持"它是停用的"这层语义。</li>
+      <li>渠道卡里那行密钥:尾号 + <b>复制 / 显示 / 删除</b>;<code>显示</code>点开后是绿框里的明文,带倒计时自动隐。</li>
+      <li>不需要新颜色、新形状:全部复用现有 <code>.btn / .krow / .tagn / .restorebar</code> 这套变量,窗口仍是 380 宽。</li>
+    </ul>
+  </div>
+</div>
+
+<h3>3.4 数据与代码契约</h3>
+<table>
+<tr><th style="width:150px">层</th><th>改什么</th></tr>
+<tr><td><code>core/store.rs</code></td>
+  <td>新表 <code>vault_items(id TEXT PRIMARY KEY, platform TEXT, label TEXT, hint TEXT, note TEXT, created_at INTEGER, updated_at INTEGER)</code>
+    + 索引 <code>(platform, created_at DESC)</code>;方法:<code>vault_upsert/vault_list/vault_delete/vault_get</code>。
+    <b>表里没有密钥字段</b> —— 这点写进注释,免得以后有人顺手加一个。</td></tr>
+<tr><td><code>core/secrets.rs</code></td>
+  <td>扩一个命名空间:现有 <code>set/get/delete(provider_id)</code> 之外加 <code>vault_set/get/delete(id)</code>(服务名 <code>TokenScope:vault</code>)。
+    密码箱里的 <code>hint</code>(尾 4 位)与渠道卡用的是同一个掩码规则。</td></tr>
+<tr><td><code>core/vault.rs</code>(新)</td>
+  <td>纯逻辑:平台/标签的校验(非空、同平台内标签不重复)、排序、搜索匹配、掩码。可挂单测。</td></tr>
+<tr><td><code>src-tauri/lib.rs</code></td>
+  <td>命令:<code>vault_list</code> / <code>vault_save(条目)</code> / <code>vault_delete(id)</code> / <code>vault_reveal(id)</code>(一次性返回明文)/
+    <code>vault_copy(id)</code>(后端直接进剪贴板,不回前端)。全部 <code>async + spawn_blocking</code>(凭据读写是阻塞活)。
+    渠道密钥复用同一条路:<code>key_reveal(id)</code> / <code>key_copy(id)</code>。</td></tr>
+<tr><td>前端</td>
+  <td>管理页第 6 页签「密钥箱」;渠道卡的隐藏/显示按钮改造 + 顶部恢复条;渠道卡里加密钥的复制/显示。倒计时用现成的 <code>setTimeout</code>,不留驻。</td></tr>
+<tr><td>不动</td>
+  <td>密钥箱<b>不接入</b>取数与模型写入;<code>hidden_channels</code> 的语义与落库方式不变。</td></tr>
+</table>
+
+<h2>四、分期与验收</h2>
+<table>
+<tr><th style="width:70px">期</th><th>内容</th><th>验收(可复核)</th></tr>
+<tr><td><b>V1</b></td><td>隐藏渠道恢复三处改造(按钮写「恢复」+ 顶部「已隐藏 N 个」条 + 空态直达并高亮)</td>
+  <td>· 隐藏任意一个 → 渠道页顶部出现恢复条,卡片上按钮写「恢复」<br>· 点「恢复」后回到展示面,该渠道重新取数(行回来了)<br>· 全部隐藏时,空态按钮点下去直接滚到第一条隐藏渠道并闪一下</td></tr>
+<tr><td><b>V2</b></td><td>渠道密钥的「复制 / 显示」(含 8 秒自动隐)</td>
+  <td>· 点「复制」后到别处粘出来的是完整密钥,而界面里从头到尾没出现过明文<br>· 点「显示」8 秒后自动消失;切页签/轮询重建也立刻消失<br>· Trae/Codex 这类无密钥渠道不出现这两个按钮</td></tr>
+<tr><td><b>V3</b></td><td>密钥箱:新页签 + 增/改/删 + 复制/显示 + 搜索</td>
+  <td>· 同平台存两把,列表按时间倒序,尾号正确<br>· 关掉应用再开,列表与"复制/显示"仍然可用(密文在凭据管理器里)<br>· 把 SQLite 拷到别的机器,列表能看但<b>取不出明文</b>(复现方式:换 Windows 账户或用 `runas` 试一次)<br>· 删除后再点复制 → 明确报"这条已经不存在"</td></tr>
+<tr><td><b>V4</b><span class="dim">可选</span></td><td>「把某把密钥填入渠道」(需点两次 + 明示),以及密钥箱的导入(仍然不导出)</td>
+  <td>单独裁决后再做</td></tr>
+</table>
+
+<h2>五、待你编号裁决</h2>
+<ol class="q">
+  <li><b>隐藏恢复的改造范围?</b>
+    <div class="opt"><b>A(推荐)</b>:三处一起改(按钮写「恢复」+ 顶部「已隐藏 N 个 · 全部恢复」+ 空态直达高亮)。</div>
+    <div class="opt">B:只把按钮文案改成「恢复」(最小改动),顶部汇总与空态直达不做。</div>
+  </li>
+  <li><b>渠道密钥的默认动作?</b>
+    <div class="opt"><b>A(推荐)</b>:两个都要 —— <b>复制</b>为主(明文不回前端),<b>显示</b>为次(8 秒自动隐)。</div>
+    <div class="opt">B:只给「复制」(明文永不回前端,显示一律不做)。</div>
+  </li>
+  <li><b>「显示」的自动隐藏时长?</b>
+    <div class="opt"><b>A(推荐)</b>:8 秒;再点一次立即隐。</div>
+    <div class="opt">B:5 秒;C:不自动隐(点一次显、再点一次隐)。</div>
+  </li>
+  <li><b>密钥箱放哪?</b>
+    <div class="opt"><b>A(推荐)</b>:管理页新开第 6 个页签「密钥箱」(在「关于」之前)。</div>
+    <div class="opt">B:并入「关于」页签的下半部分(不加页签,但那个页签会变长)。</div>
+  </li>
+  <li><b>密钥箱要不要主密码?</b>
+    <div class="opt"><b>A(推荐)</b>:不要 —— 边界就是 Windows 账户。加了主密码,忘了就等于全部密钥永久丢失,风险大于收益。</div>
+    <div class="opt">B:加一层可选主密码(要设计"找回=全丢"的提示与二次确认)。</div>
+  </li>
+  <li><b>密钥箱与渠道/客户端的关系?</b>
+    <div class="opt"><b>A(推荐)</b>:本期<b>纯记事本</b> —— 只存、看、复制,不自动填任何地方(与你说的"只允许人工查看复制"一致)。</div>
+    <div class="opt">B:同时支持"一键填入某渠道的密钥"(多一步显式确认),列入 V4。</div>
+  </li>
+  <li><b>「1 个平台多把密钥」怎么定"当前用哪把"?</b>
+    <div class="opt"><b>A(推荐)</b>:**不设"当前"** —— 密钥箱不知道也不猜哪把在用,避免出现"显示的那把其实不是渠道里那把"的错位。渠道自己在「渠道」页里管自己那把。</div>
+    <div class="opt">B:标一个"主用"标记(好看,但会和渠道页的真实状态打架)。</div>
+  </li>
+</ol>
+
+<h2>六、必须真机确认的部分</h2>
+<table>
+<tr><th style="width:34px">#</th><th>要确认什么</th><th>怎么确认</th></tr>
+<tr><td>1</td><td><b>隐藏渠道那条卡片在不在渠道页里、那个 <code>–</code> 能不能点</b>(决定 V1 是"改可发现性"还是"修真 bug")</td>
+  <td>挂件切到正常模式也能看:进「设置 → 渠道」,看隐藏那条的卡片与右边按钮;<b>点一下</b>看是否恢复取数</td></tr>
+<tr><td>2</td><td>凭据管理器存 <code>TokenScope:vault</code> 命名空间的条目能不能正常读写删(与现有 <code>TokenScope</code> 服务名并存)</td>
+  <td>V3 实现时用真机试一条(写→读→删),再跑一次「拷库到别的账户取不出明文」的反证</td></tr>
+<tr><td>3</td><td>密钥箱里存长密钥(>1000 字符)会不会撞凭据管理器上限</td>
+  <td>拿一把超长字符串试一次;若撞上限,就在界面上把上限写死(报"太长了")</td></tr>
+</table>
+
+<div class="foot">
+  取证来源:本仓库 <code>app/src/app.js</code>(<code>renderChCards</code> / <code>chvis</code> / <code>refreshChCards</code> 的实际代码)、
+  <code>core/src/secrets.rs</code>(现有 keyring 封装)、<code>core/Cargo.lock</code>(可用加密依赖:<code>aes 0.8</code> / <code>sha2</code> / <code>zeroize</code>,
+  <b>没有</b> <code>aes-gcm</code>/<code>hmac</code>/<code>cbc</code>)。<br>
+  本文件只描述设计,未改动任何代码、未改动任何渠道配置。
+</div>
+
+</div>
+</body>
+</html>

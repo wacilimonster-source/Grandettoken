@@ -750,3 +750,21 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 .cklog{font-size:max(10px,calc(10.5px*var(--u)));color:var(--tx3);line-height:1.8;
   padding:0 0 calc(4px*var(--u));font-variant-numeric:tabular-nums}
 .cklog .ckd{color:var(--tx2);margin-right:2px}
+
+/* ── 隐藏渠道恢复 + 密钥看/复制(v0.1.27)── */
+.eye.off{width:auto;padding:0 calc(9px*var(--u));font-size:max(11px,calc(11.5px*var(--u)));
+  color:#f0c67a;border-color:#7a6234}
+.restorebar{display:flex;align-items:center;gap:calc(8px*var(--u));justify-content:space-between;
+  border:1px solid #7a6234;background:#241d12;border-radius:calc(8px*var(--u));
+  padding:calc(7px*var(--u)) calc(9px*var(--u));margin-bottom:calc(9px*var(--u));
+  font-size:max(11px,calc(11.5px*var(--u)));color:#f0c67a;line-height:1.5}
+.restorebar .btn.s{flex:none}
+.ccard.flash{animation:rowflash 1.1s ease}
+.krow{display:flex;align-items:center;gap:calc(6px*var(--u));border:1px solid var(--line);
+  background:#15181f;border-radius:calc(8px*var(--u));padding:calc(6px*var(--u)) calc(8px*var(--u));
+  margin-top:calc(7px*var(--u));font-size:max(11px,calc(11.5px*var(--u)))}
+.krow .k1{flex:1;min-width:0;color:var(--tx2);word-break:break-all}
+.krow .khint{font-family:Consolas,monospace;color:var(--tx3)}
+.reveal{font-family:Consolas,monospace;font-size:max(10.5px,calc(11px*var(--u)));color:#8ee9b8;
+  word-break:break-all;background:#132219;border:1px solid #2f6b43;border-radius:calc(7px*var(--u));
+  padding:calc(6px*var(--u)) calc(8px*var(--u))}

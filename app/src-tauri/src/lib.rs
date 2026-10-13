@@ -106,6 +106,9 @@ fn set_config(app: tauri::AppHandle, state: State<'_, AppState>, config: Config)
     }
     drop(store);
     *lock_rw(&state.config) = incoming;
+    // 配置变了(隐藏渠道 / 间隔 / 阈值…)就作废"5 秒内复用上次结果"的窗口 ——
+    // 否则保存后立刻取数会拿到旧视图,界面看起来像"点了没反应"(用户实测:隐藏渠道恢复)。
+    state.fetcher.invalidate();
     Ok(())
 }
 
@@ -1702,6 +1705,31 @@ async fn copy_model_bundle(
     .map_err(|e| format!("复制失败: {e}"))?
 }
 
+/// 渠道密钥的明文(用户点「显示」时一次性返回)。**这是产品里唯一把密钥回前端的路径**,
+/// 所以只有用户显式点击才会走到这里;界面侧 8 秒自动收回,不留驻。密钥型渠道以外没有可取的。
+#[tauri::command]
+async fn key_reveal(id: String) -> Result<String, String> {
+    let def = providers::find(&id).ok_or_else(|| format!("未知渠道: {id}"))?;
+    if !matches!(def.auth, providers::AuthKind::Keyring) {
+        return Err(format!("{} 没有可复制的密钥(用的是本机登录态或网页会话)", def.name));
+    }
+    match secrets::get(&id) {
+        Ok(Some(k)) if !k.trim().is_empty() => Ok(k),
+        Ok(_) => Err(format!("{} 还没有保存密钥", def.name)),
+        Err(e) => Err(e),
+    }
+}
+
+/// 复制渠道密钥:明文**不回前端**,后端读出来直接进剪贴板(与「复制三件套」同一条路)。
+#[tauri::command]
+async fn key_copy(id: String) -> Result<String, String> {
+    let key = key_reveal(id.clone()).await?;
+    let def = providers::find(&id).expect("上面校验过");
+    tokio::task::spawn_blocking(move || copy_to_clipboard(&key).map(|_| format!("已复制 {} 的密钥", def.name)))
+        .await
+        .map_err(|e| format!("复制失败: {e}"))?
+}
+
 /// 用系统 `clip.exe` 写剪贴板(经 stdin,密钥不进命令行)。
 /// 输入按 UTF-16LE:clip 按控制台代码页解释字节流,中文标签走 UTF-8 会被切坏。
 fn copy_to_clipboard(text: &str) -> Result<(), String> {
@@ -1988,6 +2016,8 @@ pub fn run() {
             open_path,
             checkin_state,
             checkin_now,
+            key_reveal,
+            key_copy,
         ])
         .run(tauri::generate_context!())
         .expect("TokenScope 启动失败");

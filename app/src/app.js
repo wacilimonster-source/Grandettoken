@@ -732,8 +732,10 @@ function render(opts) {
       ? `<div class="empty">
            <div class="ek">&#128065;</div>
            <b>已配置的渠道都被隐藏了</b>
-           到设置 → 渠道页点眼睛恢复显示;隐藏期间不再请求接口,历史快照保留
-           <div><button class="btn p" data-act="open-manage">去设置</button></div>
+           隐藏期间不再请求接口,历史快照保留
+           <div><button class="btn p" data-act="open-manage" data-first="${
+             (CHANNELS.find((c) => c.hidden && c.hasKey) || {}).id || ""
+           }">去恢复</button></div>
          </div>`
       : `<div class="empty">
          <div class="ek">&#128273;</div>
@@ -1208,10 +1210,25 @@ function chDot(c) {
 }
 
 function renderChCards() {
+  // 重绘前把已显示的密钥收回:明文不许留在 DOM 里过夜
+  clearTimeout(revealTimer);
+  document.querySelectorAll(".reveal-box").forEach((b) => {
+    b.dataset.on = "0";
+    b.innerHTML = "";
+  });
   const ids = currentOrderIds();
   const list = ids.map((id) => CHANNELS.find((c) => c.id === id)).filter(Boolean);
   const map = (CFG && CFG.claimChannels) || {};
-  $("chList").innerHTML = list
+  // 顶部恢复条:从**配置**里算,不依赖渠道视图 —— 万一某条卡片被渲染分支吞掉,
+  // 这里仍然给得出恢复入口(兜底);点一下全部恢复。
+  const hidIds = ((CFG && CFG.hiddenChannels) || []).filter((x) => CHANNELS.some((c) => c.id === x));
+  const hidNames = hidIds.map((x) => (CHANNELS.find((c) => c.id === x) || {}).name || x);
+  const restoreBar = hidIds.length
+    ? `<div class="restorebar" data-id="__all"><span><b>已隐藏 ${hidIds.length} 个</b>(${esc(
+        hidNames.join("、")
+      )})—— 隐藏期间不取数,历史快照保留</span><span class="btn s" data-act="chshowall">全部恢复</span></div>`
+    : "";
+  $("chList").innerHTML = restoreBar + list
     .map((c, i) => {
       const isApp = c.authSource === "app";
       // web = 挂件内网页登录(WorkBuddy):桌面客户端把令牌加密了,只能登录网页账号拿
@@ -1282,12 +1299,20 @@ function renderChCards() {
             <div class="ccst">${st}</div>
           </div>
           <button class="eye${c.hidden ? " off" : ""}" data-act="chvis" data-id="${c.id}"
-            title="${c.hidden ? "显示(恢复取数)" : "隐藏(停止取数)"}">${c.hidden ? "–" : "👁"}</button>
+            title="${c.hidden ? "恢复显示(重新开始取数)" : "隐藏(停止取数,历史快照保留)"}">${c.hidden ? "恢复" : "👁"}</button>
           <span class="ccaret">&#9654;</span>
         </div>
         <div class="ccbody">
           ${keyBlock}
-          ${claimBlock}
+          ${
+        c.hasKey && c.authSource === "keyring"
+          ? `<div class="krow"><span class="k1">密钥 · <span class="khint" data-hint="${c.id}">••••</span></span>
+               <button class="btn s" data-act="keycopy" data-id="${c.id}" title="复制整把密钥(明文不回界面)">复制</button>
+               <button class="btn s" data-act="keyreveal" data-id="${c.id}" title="显示明文,8 秒后自动隐">显示</button></div>
+             <div class="reveal-box" data-rev="${c.id}"></div>`
+          : ""
+      }
+      ${claimBlock}
       ${CHECKIN_ON.has(c.id) ? '<div class="ckwrap" data-id="' + esc(c.id) + '">' + ckRowHtml(c.id) + "</div>" : ""}
           <div class="ccord"><span class="mini">在列表中的位置</span>
             <span class="ord">
@@ -1701,6 +1726,19 @@ $("list").addEventListener("click", async (e) => {
     const a = act.dataset.act;
     if (a === "open-manage") {
       openManage();
+      // 空态卡的「去恢复」带 data-first:直接滚到那条隐藏渠道并闪一下,不用自己翻
+      const first = act.dataset.first;
+      if (first) {
+        showTab("ch");
+        requestAnimationFrame(() => {
+          const card = document.querySelector(`#chList .ccard[data-id="${first}"]`);
+          if (card) {
+            card.scrollIntoView({ block: "center" });
+            card.classList.add("flash");
+            setTimeout(() => card.classList.remove("flash"), 1150);
+          }
+        });
+      }
     } else if (a === "open-models") {
       openManage();
       showTab("mdl");
@@ -1919,7 +1957,13 @@ setInterval(() => {
 
 /** 存配置 + 立刻重取一次:申请状态是后端按配置算的,不重取看不到变化。 */
 async function saveConfigAndRefresh() {
-  await invoke("set_config", { config: CFG }).catch(() => {});
+  // **不许吞错**:以前这里 catch(() => {}) 一吞,保存失败时界面只会"回到原状",
+  // 看起来就是"点了没反应"(用户实测:隐藏渠道点「–」恢复不动)。
+  try {
+    await invoke("set_config", { config: CFG });
+  } catch (e) {
+    showToast("保存设置失败:" + e, true);
+  }
   await refresh();
 }
 
@@ -2070,10 +2114,52 @@ $("manage").addEventListener("click", async (e) => {
     const card = act.closest(".ccard");
     card.classList.toggle("open");
     card.classList.contains("open") ? cardOpen.add(id) : cardOpen.delete(id);
+  } else if (a === "keycopy") {
+    try {
+      const msg = await invoke("key_copy", { id });
+      showToast(msg + " · 剪贴板对其他程序可见");
+    } catch (e) {
+      showToast("复制失败:" + e, true);
+    }
+  } else if (a === "keyreveal") {
+    const box = document.querySelector(`.reveal-box[data-rev="${id}"]`);
+    if (!box) return;
+    if (box.dataset.on === "1") {
+      // 再点一次立即收回(明文不留在界面上)
+      box.dataset.on = "0";
+      box.innerHTML = "";
+      clearTimeout(revealTimer);
+      return;
+    }
+    try {
+      const key = await invoke("key_reveal", { id });
+      box.dataset.on = "1";
+      box.innerHTML = `<div class="reveal" style="margin-top:4px">${esc(key)}</div>
+        <div class="note">8 秒后自动隐;切页签/刷新也会收回</div>`;
+      clearTimeout(revealTimer);
+      revealTimer = setTimeout(() => {
+        box.dataset.on = "0";
+        box.innerHTML = "";
+      }, 8000);
+    } catch (e) {
+      showToast("取密钥失败:" + e, true);
+    }
+  } else if (a === "chshowall") {
+    CFG.hiddenChannels = [];
+    for (const c of CHANNELS) c.hidden = false;
+    render();
+    refreshChCards();
+    await saveConfigAndRefresh();
   } else if (a === "chvis") {
     const hid = CFG.hiddenChannels || (CFG.hiddenChannels = []);
     const at = hid.indexOf(id);
     at >= 0 ? hid.splice(at, 1) : hid.push(id);
+    // **先本地翻一次**:取数有 5 秒去重窗口(fetch_shared),保存后立刻重取可能拿到旧视图,
+    // 卡片会原地不动 —— 那就是用户看到的"没反应"。这里先按意图画出结果,下一轮取数再对齐。
+    const cc = CHANNELS.find((x) => x.id === id);
+    if (cc) cc.hidden = at < 0;
+    render();
+    refreshChCards();
     await saveConfigAndRefresh(); // 隐藏即停止取数:重取一轮,汇总/胶囊/底栏同步
   } else if (a === "wblogin") {
     // 打开 WorkBuddy 网页登录窗。令牌由 Rust 侧从窗口导航里接住,前端只负责状态与提示,
@@ -2559,6 +2645,7 @@ document.addEventListener("keydown", (e) => {
 //   ① 独立开关、默认关 —— 关掉就一个请求都不发;
 //   ② **不把"点了按钮"说成"领到了"**:数额只显示平台自己给的字段,拿不到就不写数字;
 //   ③ 签到状态**不参与余额渲染** —— 签到失败永远不可能让余额显示成 0。
+let revealTimer = null; // 「显示」的 8 秒倒计时;任何重绘都先收回明文
 let CK = {};            // 渠道 id → checkin_state 的那一条
 let CK_LOG = false;     // 「领积分」正在跑
 const CHECKIN_ON = new Set(["trae", "workbuddy"]);
