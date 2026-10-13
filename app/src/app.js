@@ -2064,7 +2064,9 @@ async function saveCfg(what) {
   // 统一的配置提交:失败一定要说清楚,并把界面退回提交前的值(报告 P2-32)。
   // saveConfigAndRefresh 的注释早就立过这条纪律,但另外几处 set_config 用的还是
   // .catch(() => {}) —— 失败静默,重启后设置悄悄回滚。
-  const backup = CFG;
+  // 快照必须是**拷贝**:调用方都是原地改 CFG 的字段(CFG.sort = …、数组 splice),
+  // 只存引用的话失败时"回滚"回去的还是改过的对象,等于没回滚。
+  const backup = JSON.parse(JSON.stringify(CFG));
   try {
     await invoke("set_config", { config: CFG });
     return true;
@@ -3587,14 +3589,23 @@ async function loadInjects() {
 /** 打开某个模型 × 某个客户端的弹层(纯读,还没有任何写盘动作)。 */
 async function openModelSheet(client, model, source) {
   const src = source || MDL.src;
-  MDL.sheet = { kind: "write", mode: "write", client, model, source: src };
+  const sheet = { kind: "write", mode: "write", client, model, source: src };
+  MDL.sheet = sheet;
   renderModelSheet();
+  // 预告要读客户端配置,可能跑一两秒。这期间用户按 Esc 或点遮罩会把 MDL.sheet 置空,
+  // 于是"await 之后再取 MDL.sheet"会撞上 null 直接抛 TypeError(实测:关掉弹层后
+  // inject_preview 才回来,报 "Cannot set properties of null (setting 'error')")。
+  // 先把这个对象存进局部变量,回来时只对"还是当前弹层"的结果落账。
+  let previews, failure = "";
   try {
-    MDL.sheet.previews = await invoke("inject_preview", { client, source: src, model });
-    MDL.sheet.sourceName = (MDL.sources.find((s) => s.id === src) || {}).name || "";
+    previews = await invoke("inject_preview", { client, source: src, model });
   } catch (e) {
-    MDL.sheet.error = String(e);
+    failure = String(e);
   }
+  if (MDL.sheet !== sheet) return;
+  sheet.previews = previews;
+  sheet.sourceName = (MDL.sources.find((s) => s.id === src) || {}).name || "";
+  if (failure) sheet.error = failure;
   renderModelSheet();
 }
 /** 确认写入:预告看过之后才走到这里。 */

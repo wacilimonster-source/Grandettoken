@@ -18,11 +18,15 @@ if (-not $Exe) {
   # Sort on the FILE's timestamp, not on the path string: `Join-Path` emits strings, and
   # Sort-Object on a missing property silently keeps the array order, which made this
   # whole branch a no-op that always picked Grandettoken.exe (report G-3).
-  $cands = @('Grandettoken.exe', 'tokenscope.exe') |
+  # Wrap in @() and index on Count: with exactly ONE match PowerShell collapses the
+  # pipeline to a plain string, and $cands[0] then returns its FIRST CHARACTER -
+  # $Exe became "G", Test-Path failed and the script threw "no app binary found"
+  # even though the exe was right there (hit when only Grandettoken.exe exists).
+  $cands = @(@('Grandettoken.exe', 'tokenscope.exe') |
     ForEach-Object { Join-Path $releaseDir $_ } |
     Where-Object { Test-Path $_ } |
-    Sort-Object { (Get-Item $_).LastWriteTime } -Descending
-  if ($cands) { $Exe = $cands[0] }
+    Sort-Object { (Get-Item $_).LastWriteTime } -Descending)
+  if ($cands.Count) { $Exe = $cands[0] }
 }
 if (-not $Exe -or -not (Test-Path $Exe)) {
   throw "no app binary found in $releaseDir (build first: build.ps1 build)"

@@ -69,7 +69,7 @@
 <b>复核标记图例:</b><span class="tag v-ok">✅ 我已核到行号</span><span class="tag v-run">⚠ 依赖真机/上游数据</span><span class="tag v-no">⏳ 子代理报告,我未二次核</span>
 </div>
 
-<div class="nav"><a href="#p0">P0</a><a href="#p1">P1</a><a href="#p2">P2</a><a href="#p3">P3</a><a href="#opt">可优化</a><a href="#green">假绿链</a><a href="#ok">不是 bug</a><a href="#smoke">真机冒烟</a><a href="#cover">覆盖率</a><a href="#contract">契约核对</a><a href="#order">修复顺序</a><a href="#fixed">修复台账</a></div>
+<div class="nav"><a href="#p0">P0</a><a href="#p1">P1</a><a href="#p2">P2</a><a href="#p3">P3</a><a href="#opt">可优化</a><a href="#green">假绿链</a><a href="#ok">不是 bug</a><a href="#smoke">真机冒烟</a><a href="#cover">覆盖率</a><a href="#contract">契约核对</a><a href="#order">修复顺序</a><a href="#fixed">修复台账</a><a href="#retest">复测/实机</a></div>
 
 <h2>〇、先说最要紧的一类:界面显示的数 ≠ 后端字段的真实含义</h2>
 <p style="color:var(--tx2);font-size:12.5px;margin:0 0 8px">这一类不会崩、不会报错,但会让用户按错的信息做决定(什么时候申请、要不要充值、该不该重新登录)。逐条追到了字段出处:</p>
@@ -731,10 +731,61 @@
 <tr><td>P3-23 去掉 <code>updater:default</code></td><td>删掉后<b>自动更新链路在本机无法验证</b>(要真构建+签名+发布)。收益是收窄一层理论攻击面,风险是弄坏所有人的更新 —— 建议留到能整链验证时再动。</td></tr>
 <tr><td>O-11 仓库分区</td><td>把 docs/ 与 tools/ 分开要 <code>git mv</code> 一批文件,纯搬运但会搅历史;单独一次做更清楚。</td></tr>
 <tr><td>O-1 消耗查询合并</td><td>收益最大的一笔性能改动(每轮 ~9 次范围扫描并成 1 次),但要在 store.rs 新写一个多窗口聚合函数并搬现有 pro-rate 逻辑。今天没感到明显卡顿,建议与 P2-29 的差量渲染同批做。</td></tr>
-<tr><td>真机冒烟 16 条</td><td><b>本轮全程没启动过程序</b>,所有界面现象都是静态推演。P0-1/P0-2/P0-5 三条各一分钟就能当场证实,建议先点这三条再决定发布。</td></tr>
+<tr><td>真机冒烟 16 条</td><td><b>本节写作时</b>本轮全程没启动过程序,所有界面现象都是静态推演。复测阶段已把 0.1.29 的成品 exe 真跑起来走查了一遍,结果与仍然没验到的项见第十四节。</td></tr>
 </table>
 
-<div class="note"><b>没提交任何东西。</b>22 个文件的改动都留在工作区(<code>git diff --stat</code> 见上),你可以按批次审、要求回滚单条,或者让我在你冒烟通过后再整理成一次提交。</div>
+<div class="note"><b>写作本节时未提交。</b>之后复测通过,已按 RELEASE.md 提交并发版(第十四节记的是发版前的实机走查与当场抓出的三个新缺陷)。</div>
+
+<h2 id="retest">十四、复测与实机走查(发版前)</h2>
+
+<p>复测分两层:静态基线重跑一遍,然后把 <b>0.1.29 的成品 exe 真启动起来</b>,用 WebView2 的 CDP 端口直接读活的 DOM(工具是既有的 <code>build/launch-debug.ps1</code> + <code>build/cdp-probe.js</code>,临时脚本用完即删)。这一层是第十三节末尾那条"没启动过程序"的补课 —— 结果证明值得补:三个缺陷只有真跑才会现形。</p>
+
+<h3>A. 静态基线</h3>
+<table>
+<tr><th style="width:230px">检查</th><th>结果</th></tr>
+<tr><td><code>cargo test</code>(core)</td><td class="c"><b>122 passed / 0 failed</b></td></tr>
+<tr><td><code>cargo check --all-targets</code>(壳层)</td><td class="c">0 warning(src-tauri 自身 0 个测试,逻辑都在 core)</td></tr>
+<tr><td><code>node --check</code> + <code>probe-frontend.js</code></td><td class="c">5 个 JS 全过;模拟里 <code>app.js</code> 跑完无 console 输出,终态 <code>form-panel st-fail</code>(桩里无凭据,符合预期)</td></tr>
+<tr><td><code>scan-secrets.ps1</code></td><td class="c">扫 85 个纳入版本的文件 → CLEAN</td></tr>
+<tr><td>数据库迁移(活库取证)</td><td class="c"><code>PRAGMA user_version = 1</code>;<code>checkin_log.attempts/detail</code>、<code>vault_items.hint/note</code>、<code>snapshots.kind</code> 六列都在 —— P2-17 的补列在你的真库上确实跑过了</td></tr>
+<tr><td>链接器提示</td><td class="c"><code>linker stderr: corrupt .drectve at end of def file</code> ×4。来自依赖库的 <code>.drectve</code> 段,不是本仓库代码;产物能跑、导入表干净(<code>no WebView2Loader.dll</code>)。<b>未追根</b>,记在这里备查。</td></tr>
+</table>
+
+<h3>B. 实机走查(活的 0.1.29)</h3>
+<table>
+<tr><th style="width:230px">验到的</th><th>实测值</th></tr>
+<tr><td>取数与渲染</td><td class="c">7 个渠道全部出真数:OpenCode Go 11.0%(周期窗 · 1.7 小时)、DeepSeek ¥36.32、4SAPI ¥200.00 剩 100%(本轮额度 ¥200 · 现在可申请)、Hapi ¥54.05、WorkBuddy 5,862.54 分、Trae 3,220.27 分、Codex 100.0%(本月窗)。底栏「7 正常」,告急色只落在 OC/TR 两张卡上</td></tr>
+<tr><td>设置页六个页签</td><td class="c">渠道/模型/显示/刷新与启动/密钥箱/关于逐个切换,<b>零异常、零 console 报错</b>;页签高亮与可见面板始终一一对应(只一个 <code>.on</code>)</td></tr>
+<tr><td>模型页</td><td class="c">4SAPI 清单 161 个、显示 18 · 可用 18 · 已配置 1;四个客户端状态卡 T/WB/WBA/ZC 全部「运行中」;价格按 ¥高→低排</td></tr>
+<tr><td>签到区块</td><td class="c">「Trae 关着 —— 一个请求都不发」「WorkBuddy 关着 —— 一个请求都不发」+ 今日(10-13)already +100 的历史行,与 P0-6 的闸门一致</td></tr>
+<tr><td>Esc 层级(P2-16/P2-31)</td><td class="c">开着写入弹层按 Esc:第 1 下只关弹层(设置页留着),第 2 下才关设置页,第 3 下才收形态 —— 逐级正确</td></tr>
+<tr><td>三种形态</td><td class="c">面板 400×580 → 紧凑条 h=67 → 胶囊 164×67 → 回面板 580 且 7 行齐全;<code>body.className</code> 在 <code>form-panel / form-compact / form-pill</code> 之间干净切换,不留残类</td></tr>
+<tr><td>自动更新链路</td><td class="c">关于页点「检查更新」→ 6 秒内回「已是最新版本」,上次检查时间刷新为 20:46:42。<b>端点、签名公钥、版本比较在真机上是通的</b></td></tr>
+<tr><td>密钥箱</td><td class="c">空箱态渲染正常;「新增一把密钥」开表单 → 「取消」收回,未落盘</td></tr>
+<tr><td>崩溃面</td><td class="c">stdout/stderr 全空,没有 <code>startup-error.log</code>;整轮走查 <code>Runtime.exceptionThrown</code> 只抓到下面 1 条(已修)</td></tr>
+</table>
+
+<h3>C. 走查当场抓出的三个新缺陷(都已修)</h3>
+<table>
+<tr><th style="width:150px">条目</th><th>现象 → 根因 → 处置</th></tr>
+<tr><td>R-1 写入预告竞态<br><span class="tag v-run">实机抓到</span></td><td>点模型卡上的客户端徽标 → 弹层显示「正在生成写入预告…」→ 期间按 Esc → 控制台抛 <code>TypeError: Cannot set properties of null (setting 'error')</code>(<code>openModelSheet</code>)。<b>根因:</b>预告要读客户端配置,耗时 1~2 秒;<code>await</code> 回来后代码又去取一次全局 <code>MDL.sheet</code>,而 Esc/点遮罩已经把它置成 <code>null</code> —— 第十三节给 Esc 链加的"先关弹层"恰好把这条路径变得可达。<b>处置:</b>弹层对象先存进局部变量,回来时判 <code>MDL.sheet !== sheet</code> 就作废,不再往已废弃的弹层落账,也不重画。</td></tr>
+<tr><td>R-2 <code>saveCfg</code> 的回滚是假的<br><span class="tag v-run">顺藤摸到</span></td><td>修 R-1 时顺手读第十三节写的 P2-32 修复,发现 <code>const backup = CFG</code> 存的是<b>引用</b>:调用方全是原地改 <code>CFG.sort = …</code>、<code>pillChannels.splice(…)</code>,失败时 <code>CFG = backup</code> 回去的还是改过的那个对象。表现是"提示保存失败,但界面仍显示新值,重启后悄悄变回去"。<b>处置:</b>快照改成深拷贝(<code>JSON.parse(JSON.stringify(CFG))</code>),注释里写明为什么必须是拷贝。<code>saveConfigAndRefresh</code> 那条不受影响(它失败后靠 <code>refresh()</code> 从后端取回真值)。</td></tr>
+<tr><td>R-3 <code>launch-debug.ps1</code> 单候选时自毁</td><td>第一次想启动成品 exe 时脚本直接抛「no app binary found」,而 exe 明明在。<b>根因:</b>PowerShell 管道只匹配到<b>一个</b>候选时会塌成字符串,于是 <code>$cands[0]</code> 取到的是路径的<b>第一个字符</b> <code>'G'</code> —— 之前一直没暴露是因为目录里同时有 <code>tokenscope.exe</code> 和 <code>Grandettoken.exe</code> 两个候选(数组形态正常);这轮只有改名后的那一个。<b>处置:</b>外面套 <code>@()</code> 强制成数组、判 <code>.Count</code>。这条属于第十三节 G-3 的同类(挑二进制的分支自己会坏),已一并修掉。</td></tr>
+</table>
+
+<h3>D. 仍然没验到的(发版后要靠你点)</h3>
+<table>
+<tr><th style="width:230px">项</th><th>为什么这次没验 / 怎么验</th></tr>
+<tr><td>真写一次盘(P0-1/P0-2/P0-4)</td><td>四个客户端走查时<b>全部在运行</b>,前置条件①直接拦住 —— 这是设计如此,但也意味着"备份→事务写→读回校验→回滚"这条链的真机路径没走到底。验法:退出 Trae → 模型页点一个模型写入 → 看回执与 <code>%LOCALAPPDATA%\Grandettoken-backup</code>(或备份目录提示的路径)。</td></tr>
+<tr><td>取消写入 / 回滚按钮(P1-5/P2-6)</td><td>同上,要有已写入的条目才有点得动的按钮。</td></tr>
+<tr><td>覆盖安装与自动更新落地(P1-15)</td><td>本机跑的是 <code>target\release</code> 里的开发版,关于页也明确说了它不写自启。真验要用旧的已安装版本点「立即更新」,走完下载→静默安装→重启。</td></tr>
+<tr><td>签到真的发请求(P0-6 的 M1/M2)</td><td>两个渠道都是关着的,闸门"不发请求"这一半已被实机确认("一个请求都不发" + 零网络异常);"开着时按退避重试"要真开一天才有数据。</td></tr>
+<tr><td>密钥箱存/删(P1-11/P2-14)</td><td>箱子是空的。存一把再删,能顺带确认密文进的是凭据管理器 <code>TokenScope:vault</code>、SQLite 只多索引。</td></tr>
+<tr><td>开机自启、托盘数字、红色呼吸</td><td>属于肉眼活;走查里没动这些开关(避免改你的真配置)。</td></tr>
+<tr><td>系统代理那条(P2-12)</td><td>仍然没取证,仍然没动代码。走查时应用是直连出去的(签到/取数都成功),但这不能证明注册表代理场景。</td></tr>
+</table>
+
+<div class="note"><b>结论:</b>静态基线 + 实机走查通过,发版按 RELEASE.md 走完;上面 D 表里的项不是"没修",而是"这台机器上这一步没真跑"。走查用的临时脚本与截图都放在 <code>app/src-tauri/target/</code>(已忽略目录),不入库。</div>
 
 </div>
 </body>
