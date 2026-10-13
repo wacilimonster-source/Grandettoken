@@ -1329,10 +1329,17 @@ async fn copy_model_bundle(state: State<'_, AppState>, model: String) -> Result<
 /// 输入按 UTF-16LE:clip 按控制台代码页解释字节流,中文标签走 UTF-8 会被切坏。
 fn copy_to_clipboard(text: &str) -> Result<(), String> {
     use std::io::Write;
-    let mut child = std::process::Command::new("clip")
-        .stdin(std::process::Stdio::piped())
+    let mut cmd = std::process::Command::new("clip");
+    cmd.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // GUI 程序默认会给子进程配一个新的控制台窗口 —— clip.exe 也会闪一下黑框
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("调用 clip.exe 失败: {e}"))?;
     {

@@ -151,6 +151,12 @@ pub fn pretty(p: &Path) -> String {
 /// 检测本机装有的写入目标。没装的不返回(界面据「四客户端里缺哪个」显示未安装)。
 pub fn sites() -> Vec<Site> {
     let mut out = Vec::new();
+    // 同一轮里同名进程只探一次:两个 WorkBuddy 共用 `WorkBuddy.exe`,
+    // 每轮最多起 3 个 tasklist 而不是 4 个(少一次子进程,少一分闪窗与等待)。
+    let mut probed: HashMap<&'static str, bool> = HashMap::new();
+    let is_running = |p: &'static str, probed: &mut HashMap<&'static str, bool>| {
+        *probed.entry(p).or_insert_with(|| process_running(p))
+    };
 
     if let Some(roaming) = appdata() {
         for dir in TRAE_DIRS {
@@ -170,7 +176,7 @@ pub fn sites() -> Vec<Site> {
             out.push(Site {
                 client: Client::Trae,
                 label: dir.to_string(),
-                running: process_running(Client::Trae.process()),
+                running: is_running(Client::Trae.process(), &mut probed),
                 process: Client::Trae.process().to_string(),
                 root,
                 files,
@@ -184,7 +190,7 @@ pub fn sites() -> Vec<Site> {
             out.push(Site {
                 client: Client::Workbuddy,
                 label: Client::Workbuddy.label().to_string(),
-                running: process_running(Client::Workbuddy.process()),
+                running: is_running(Client::Workbuddy.process(), &mut probed),
                 process: Client::Workbuddy.process().to_string(),
                 root: wb_root.clone(),
                 files: vec![wb_root.join("models.json"), wb_root.join("settings.json")],
@@ -195,7 +201,7 @@ pub fn sites() -> Vec<Site> {
             out.push(Site {
                 client: Client::WorkbuddyAi,
                 label: Client::WorkbuddyAi.label().to_string(),
-                running: process_running(Client::WorkbuddyAi.process()),
+                running: is_running(Client::WorkbuddyAi.process(), &mut probed),
                 process: Client::WorkbuddyAi.process().to_string(),
                 root: wba_root.clone(),
                 files: vec![wba_root.join("models.json"), wba_root.join("settings.json")],
@@ -206,7 +212,7 @@ pub fn sites() -> Vec<Site> {
             out.push(Site {
                 client: Client::Zcode,
                 label: Client::Zcode.label().to_string(),
-                running: process_running(Client::Zcode.process()),
+                running: is_running(Client::Zcode.process(), &mut probed),
                 process: Client::Zcode.process().to_string(),
                 root: zc_root.clone(),
                 files: vec![
@@ -224,6 +230,23 @@ pub fn sites_of(client: Client) -> Vec<Site> {
     sites().into_iter().filter(|s| s.client == client).collect()
 }
 
+/// Windows 起子进程的创建标志:不要控制台窗口。
+///
+/// 挂件是 GUI 程序,默认给每个子进程配一个新控制台 —— 用户实测(2026-10-12):
+/// **打开模型页会闪过好几个黑框**。凡是自己起的子进程(tasklist / clip)都带上这个标志。
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// 给子进程加上"别弹窗"的创建标志(Win 专有;其它平台原样返回)。
+fn quiet(cmd: &mut Command) -> &mut Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 /// 目标进程在不在跑。走 `tasklist`,按 CSV 首列整串比对 —— 认名字不认本地化提示文案
 /// (中文系统上「没有运行的任务…」与英文系统不同,拿文案判会翻车)。
 ///
@@ -232,6 +255,7 @@ pub fn sites_of(client: Client) -> Vec<Site> {
 pub fn process_running(process: &str) -> bool {
     let mut cmd = Command::new("tasklist");
     cmd.args(["/FI", &format!("IMAGENAME eq {process}"), "/NH", "/FO", "CSV"]);
+    quiet(&mut cmd);
     match run_with_timeout(cmd, 5) {
         Some(out) => tasklist_has(&out, process),
         None => false, // 拿不到进程表时不阻塞用户;真正的保护是「先备份 + 读回校验」

@@ -1924,14 +1924,6 @@ $("manage").addEventListener("change", async (e) => {
   if (!el) return;
   const id = el.dataset.id;
   const a = el.dataset.act;
-  if (a === "mdlgroup") {
-    // 只换价格口径:价目表里就有分组倍率,不必重新联网(缓存不新鲜时后端自己会刷)
-    CFG.modelGroup = el.value;
-    invoke("set_config", { config: CFG }).catch(() => {});
-    MDL.view = null;
-    loadModels(false);
-    return;
-  }
   const cur = CFG.claimChannels && CFG.claimChannels[id];
   if (!cur) return;
   if (a === "claimamount") {
@@ -2528,8 +2520,8 @@ const MDL = {
   clients: [],                       // inject_state 的客户端状态
   log: [],                           // 写入台账(不含密钥)
   q: "",                             // 搜索词
-  // 过滤芯片:默认「只看能用上的」= 这把密钥能调的 + 已经写进客户端的
-  f: { useful: true, chat: true },
+  // 芯片只剩「只看编码/对话」;「只列能用上的」是固定规则(见 mdlVisibleRows)
+  f: { chat: true },
   sheet: null,                       // 当前展开的预告 / 结果 / 客户端详情
   loading: false,
 };
@@ -2578,14 +2570,15 @@ function mdlVisibleRows() {
   const q = MDL.q.trim().toLowerCase();
   const done = mdlConfiguredIds();
   const out = [];
-  // 可用集合没取到(没配密钥 / 请求失败)时**不做可用过滤** ——
-  // 拿不到「哪些能用」就把 160 个都藏起来,是最糟的一种"猜"
+  // 固定规则:列表 = 「这把 key 能调的」∪「已经配到客户端的」。
+  // 不可用、也没配过的模型永远不出现(用户口径:「不要列出来不可用的」)。
+  // 取不到可用集合(没配密钥 / 请求失败)时**只列已配置的** ——
+  // 不知道能不能用就当"能用"铺出来,是更糟的一种猜。
   const knowUsable = (MDL.view.usableAt || 0) > 0;
   for (const r of MDL.view.rows || []) {
-    // 「能用上的」= 这把 key 能调,或已经写进某个客户端
-    // (已配置的也可能不在当前 key 的分组里 —— 比如换过密钥,所以是并集不是交集)
-    if (MDL.f.useful && knowUsable && !(r.usable === true || done.has(r.id))) continue;
-    // 默认只显示能当编码/对话模型用的(图像/视频/音频/向量排掉),开关一开全显示
+    const useful = knowUsable ? r.usable === true || done.has(r.id) : done.has(r.id);
+    if (!useful) continue;
+    // 类型过滤:默认只显示能当编码/对话模型用的(图像/视频/音频/向量排掉)
     if (MDL.f.chat && !r.chat) continue;
     if (q) {
       const hay = (
@@ -2620,12 +2613,11 @@ function mdlRowHtml(r) {
   if (r.context) bits.push(r.context);
   for (const t of r.tags || []) if (t !== r.context) bits.push(t);
   if (r.vendor) bits.push(r.vendor);
-  if ((r.groups || []).length) bits.push(r.groups.length + " 个分组可用");
+  // 页面里不再出现「分组」字样:不列、不标、不解释(用户口径)
+  const unusable = r.usable === false;
   const badges = [];
   if (r.tiered) badges.push('<span class="tagd">阶梯</span>');
-  if (r.usable === false) badges.push('<span class="tagd bad">当前 key 不可用</span>');
-  const p = r.price || {};
-  if (p.basisGroup) badges.push('<span class="tagd warn">价按「' + esc(p.basisGroup) + '」分组</span>');
+  if (unusable) badges.push('<span class="tagd bad">不可用</span>');
   const btns = ["trae", "workbuddy", "workbuddy-ai", "zcode"]
     .map((id) => {
       const st = MDL.clients.find((x) => x.client === id);
@@ -2648,7 +2640,9 @@ function mdlRowHtml(r) {
     '<div class="mrow' + (anyDone ? " done" : "") + '">' +
     '<div class="mtop"><span class="mname">' + esc(r.id) + '</span><span class="cdots">' + btns + "</span></div>" +
     '<div class="mtags">' + esc(bits.join(" · ")) + badges.join("") + "</div>" +
-    '<div class="mprice ' + mdlPriceTone(r) + '">' + esc(mdlPriceText(r)) + "</div>" +
+    // 不可用的那几行不给单价:它的价本来就不属于你这把 key 的分组,
+    // 显示出来只会误导(要显示就得写清按哪个分组 —— 而那正是要拿掉的东西)
+    (unusable ? "" : '<div class="mprice ' + mdlPriceTone(r) + '">' + esc(mdlPriceText(r)) + "</div>") +
     "</div>"
   );
 }
@@ -2676,25 +2670,21 @@ function renderModelsInner() {
     list.innerHTML = "";
     return;
   }
-  const groups = (v.groups || [])
-    .map((g) => '<option value="' + esc(g.name) + '"' + (g.name === v.group ? " selected" : "") + ">" +
-      esc(g.name) + " ×" + g.ratio + "</option>")
-    .join("");
   const rows = mdlVisibleRows();
   const done = mdlConfiguredIds(); // 口径行要报「已配置几个」
-  const gnote = (v.groups || []).find((g) => g.name === v.group);
   meta.innerHTML =
-    '<div class="mrow1"><span>分组 <select class="sel mini" id="mdlGroup" data-act="mdlgroup">' + groups + "</select></span>" +
-    '<span class="dim">写进客户端:<b>' + esc(v.baseUrl) + "</b></span></div>" +
-    '<div class="mrow1"><span class="dim">显示 ' + rows.length + " / " + v.total +
+    '<div class="mrow1"><span class="dim">写进客户端:<b>' + esc(v.baseUrl) + "</b></span>" +
+    '<span class="dim">单价按站点自动分组折算</span></div>' +
+    '<div class="mrow1"><span class="dim">显示 ' + rows.length +
     (v.usableCount ? " · 可用 " + v.usableCount : "") +
-    " · 已配置 " + done.size +
-    " · 价目表 " + (v.fetchedAt ? relTime(v.fetchedAt) : "未取到") +
-    (v.usableAt ? " · 可用集合 " + relTime(v.usableAt) : "") +
-    (MDL.f.useful ? "" : "(已关掉「只看能用上的」)") + "</span>" +
-    (v.usableAt ? "" : '<span class="warn">' + (v.hasKey ? "可用集合没取到" : "未配密钥") + "</span>") +
-    "</div>" +
-    (gnote && gnote.note ? '<div class="mdlnote">' + esc(gnote.note) + "</div>" : "") +
+    " · 已配置 " + done.size + "</span>" +
+    '<span class="dim">价目表 ' + (v.fetchedAt ? relTime(v.fetchedAt) : "未取到") +
+    (v.usableAt ? " · 可用集合 " + relTime(v.usableAt) : "") + "</span></div>" +
+    (v.usableAt
+      ? ""
+      : '<div class="mdlwarn">' +
+        (v.hasKey ? "可用集合没取到(刷新试试)" : "未配 4SAPI 密钥") +
+        ":按「不列不可用模型」的规则,这里只显示你已经配到客户端的那几条</div>") +
     (v.error ? '<div class="mdlwarn">' + esc(v.error) +
       (v.fetchedAt ? " · 下列是上次成功取回的价目表" : "") + "</div>" : "");
   list.innerHTML = rows.length
@@ -2702,10 +2692,10 @@ function renderModelsInner() {
     : '<div class="empty">' +
       ((MDL.view.usableAt || 0) === 0
         ? "可用集合还没取到" + (MDL.view.hasKey ? "(刷新试试)" : ":先在「渠道」页签填 4SAPI 密钥") +
-          " —— 关掉「只看能用上的」可以先浏览全部 " + MDL.view.total + " 个模型的价目表"
-        : "这把密钥能调的模型里没有符合条件的" +
+          " —— 按规则这里只显示已配置到客户端的那几条"
+        : "没有符合条件的模型" +
           (MDL.f.chat ? "(「只看编码/对话」排掉了图像/视频/音频/向量模型)" : "") +
-          " —— 关掉「只看能用上的」看全部 " + MDL.view.total + " 个") +
+          " —— 只列这把密钥能调的、以及已经配到客户端的") +
       "</div>";
 }
 
@@ -2925,8 +2915,6 @@ async function ensureModels() {
   MDL.f.chat = !CFG.modelShowAll;
   const chip = document.querySelector('#mdlF .pick[data-f="chat"]');
   if (chip) chip.classList.toggle("on", MDL.f.chat);
-  const chipU = document.querySelector('#mdlF .pick[data-f="useful"]');
-  if (chipU) chipU.classList.toggle("on", !!MDL.f.useful);
   if (!MDL.clients.length) await loadInjects();
   if (!MDL.view) await loadModels(false);
   renderModels();
