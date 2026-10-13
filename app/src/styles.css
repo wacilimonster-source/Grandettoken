@@ -200,8 +200,8 @@ body.form-compact .ico.logo>img{width:88%;height:88%}
    取数失败/失联 = 灰点加斜杠(故障,需要被看见)。形状区分兼顾色盲可用性。 */
 .dot.off{background:transparent;border:calc(1.5px*var(--u)) solid #4a5266;
   width:calc(5px*var(--u));height:calc(5px*var(--u))}
-.dot.st,.dot.o{position:relative;background:#8d97ab}
-.dot.st::after,.dot.o::after{content:"";position:absolute;left:50%;top:calc(-2px*var(--u));
+.dot.st{position:relative;background:#8d97ab}
+.dot.st::after{content:"";position:absolute;left:50%;top:calc(-2px*var(--u));
   width:calc(1.5px*var(--u));height:calc(10px*var(--u));background:var(--bg);
   transform:translateX(-50%) rotate(45deg)}
 /* M7 跌破红线:一次性红晕(只播一次,不循环;循环呼吸由 alertPulse 开关另管) */
@@ -241,6 +241,10 @@ body.form-compact .ico.logo>img{width:88%;height:88%}
 .hint{font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);margin-top:calc(7px*var(--u));line-height:1.7}
 .hint a,.hint .lk{color:var(--tx2);cursor:pointer}
 .hint a:hover,.hint .lk:hover{color:var(--ac)}
+/* 行尾的"数据是什么时候的"(报告 P1-12):产品纪律是"失败时继续显示上次成功快照并标注
+   时间",但收起态以前根本没把这一行画出来。紧凑条里由上面 form-compact 规则收起。 */
+.rhint{font-size:max(10.5px,calc(10px*var(--u)));color:var(--tx3);margin-top:calc(2px*var(--u));line-height:1.45;opacity:.9}
+.rhint.stale{color:var(--warn);opacity:1}
 
 /* ── 空态(未配置任何密钥时的引导卡) ── */
 .empty{margin:auto calc(14px*var(--u));width:calc(100% - 28px*var(--u));padding:calc(20px*var(--u)) calc(16px*var(--u));text-align:center;
@@ -418,7 +422,8 @@ body.form-compact .rbody,
 body.form-compact .claim-warn,
 body.form-compact .win-warn,
 body.form-compact .nm .s,
-body.form-compact .val .p{display:none}
+body.form-compact .val .p,
+body.form-compact .rhead .rhint{display:none}
 body.form-compact .ico{width:calc(16px*var(--u));height:calc(16px*var(--u));font-size:calc(8px*var(--u));border-radius:calc(4px*var(--u))}
 body.form-compact .nm{flex:none;min-width:0}
 /* 三级降级(裁决 A/B/A):默认 L0=缩写名+精确数;最宽的 chip 先起依次降级 ——

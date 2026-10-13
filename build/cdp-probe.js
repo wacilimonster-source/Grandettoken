@@ -53,24 +53,35 @@ const EXPR = `JSON.stringify({
 
   ws.addEventListener('open', () => send(1, 'Runtime.evaluate', { expression: EXPR, returnByValue: true }));
 
+  // 退出码要两个方向都对:以前拿到结果也不退出(15 秒后被超时器拉成 exit 1 = 成功报失败),
+  // 而 CDP 回错误却不置码(事件循环空了以 0 退出 = 失败报成功)。报告 G-5。
+  const timer = setTimeout(() => { console.log('timeout'); process.exit(1); }, 15000);
+  const finish = (code) => { clearTimeout(timer); try { ws.close(); } catch {} process.exit(code); };
+
   ws.addEventListener('message', (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.id !== 1) return;
+    if (msg.error) {
+      console.log('CDP error:', JSON.stringify(msg.error));
+      finish(1);
+      return;
+    }
     if (msg.result && msg.result.result) {
       const val = msg.result.result.value;
       try {
         const o = JSON.parse(val);
         console.log('\n=== live DOM state ===');
         for (const [k, v] of Object.entries(o)) console.log(`  ${k.padEnd(14)} ${JSON.stringify(v)}`);
+        finish(0);
       } catch {
-        console.log('raw:', val, JSON.stringify(msg.result));
+        console.log('raw (not JSON, cannot assert):', val, JSON.stringify(msg.result));
+        finish(1);
       }
-    } else {
-      console.log('CDP error:', JSON.stringify(msg));
+      return;
     }
-    ws.close();
+    console.log('CDP reply has no value:', JSON.stringify(msg).slice(0, 300));
+    finish(1);
   });
 
-  ws.addEventListener('error', (e) => { console.log('ws error', e.message || e); process.exit(1); });
-  setTimeout(() => { console.log('timeout'); process.exit(1); }, 15000);
+  ws.addEventListener('error', (e) => { console.log('ws error', e.message || e); finish(1); });
 })();

@@ -126,8 +126,9 @@ pub fn trae_device_id_from_storage(storage_json: &str) -> Option<String> {
 }
 
 /// Trae `tc` 容器:base64 → [6 字节头][32 字节随机密钥][密文]。
-/// key/iv 由"随机密钥 + 固定盐"的 SHA-512 双重派生;明文前 64 字节是
-/// SHA-512(其余明文)的校验和,真实内容从第 65 字节开始。
+/// key/iv 由"随机密钥 + 固定盐"的 SHA-512 双重派生;明文前 64 字节是校验和,
+/// 真实内容从第 65 字节开始。**校验和目前只丢弃、不比对** —— 它到底覆盖哪段字节还没
+/// 取证(按"其余明文"算与交叉验证向量不符),比对范围确认后再加(见 decrypt_tc 内注释)。
 /// 算法与公开实现(trae-daily-checkin / Trae-AutoCheckin)逐行对齐,并有一份
 /// OpenSSL 生成的交叉验证向量在下面单测里守着。
 fn decrypt_tc(b64: &str) -> Option<String> {
@@ -151,6 +152,11 @@ fn decrypt_tc(b64: &str) -> Option<String> {
     if plain.len() <= 64 {
         return None;
     }
+    // 报告 P3-10 指出:注释说前 64 字节是 SHA-512 校验和,实现却直接丢掉不比对。
+    // 这里**不猜**着加校验:按 `&plain[64..]` 算的校验和与 node/crypto 生成的交叉验证
+    // 向量对不上(说明覆盖范围不是"去掉 64 字节头之后的明文")。真加上会把现在能读的
+    // 凭据全判成坏数据 → 三个渠道一起取不到数。要先按公开实现/真机取证确认覆盖范围,
+    // 在那之前保持"直接丢头 + 靠 JSON 解析兜底",并把注释改成实话(见上)。
     // 尾部是 PKCS7 填充(也可能是 0),按公开实现的做法宽容处理:先去填充再去空白
     let body = strip_padding(&plain[64..]);
     String::from_utf8(body).ok()

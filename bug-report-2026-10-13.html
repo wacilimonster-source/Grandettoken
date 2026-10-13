@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Grandettoken · 全量代码体检报告 2026-10-13</title>
+<style>
+  :root{--tx:#edf0f6;--tx2:#b6bfce;--tx3:#8d97ab;--ac:#7fa2ff;--ok:#4ade9d;--warn:#f7c355;--bad:#ff6b63;--line:#2f3648}
+  *{box-sizing:border-box}
+  body{margin:0;background:#0e1117;color:var(--tx);font:14px/1.75 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:36px 22px 90px}
+  h1{font-size:22px;margin:0 0 6px}
+  .sub{color:var(--tx3);font-size:13px;margin-bottom:18px}
+  h2{font-size:16px;margin:36px 0 12px;padding-left:10px;border-left:3px solid var(--ac)}
+  h3{font-size:13.5px;margin:22px 0 8px;color:var(--tx2)}
+  .bug{background:#161b24;border:1px solid #2a3245;border-left-width:4px;border-radius:10px;padding:12px 16px;margin:10px 0;max-width:1010px}
+  .bug.p0{border-left-color:#ff3b5c}.bug.p1{border-left-color:var(--bad)}.bug.p2{border-left-color:var(--warn)}.bug.opt{border-left-color:#5d7bf0}
+  .bug h4{font-size:14px;margin:0 0 6px}
+  .sev{display:inline-block;font-size:10.5px;font-weight:700;border-radius:4px;padding:1px 7px;margin-right:8px;vertical-align:2px}
+  .sev.p0{background:rgba(255,59,92,.18);color:#ff8fa0}
+  .sev.p1{background:rgba(255,107,99,.16);color:var(--bad)}
+  .sev.p2{background:rgba(247,195,85,.14);color:var(--warn)}
+  .sev.opt{background:rgba(127,162,255,.14);color:#a8c0ff}
+  .loc{font:11.5px Consolas,monospace;color:var(--tx3)}
+  .bug p{margin:5px 0;color:var(--tx2);font-size:13px}
+  .bug b.lb{color:var(--tx);font-weight:600}
+  .fix{color:var(--ok)!important}
+  .ev{background:#10151d;border:1px solid #262d3d;border-radius:6px;padding:7px 10px;margin:7px 0 2px;font:11.5px/1.6 Consolas,monospace;color:#9fb0cc;white-space:pre-wrap;word-break:break-all}
+  .tag{display:inline-block;font-size:10.5px;border-radius:4px;padding:0 6px;margin-left:6px;vertical-align:1px;border:1px solid #334}
+  .tag.v-ok{color:var(--ok);border-color:rgba(74,222,157,.35)}
+  .tag.v-run{color:var(--warn);border-color:rgba(247,195,85,.3)}
+  .tag.v-no{color:var(--tx3)}
+  table{border-collapse:collapse;width:100%;max-width:1010px;font-size:12.5px;margin:8px 0}
+  th,td{padding:6px 9px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  th{color:var(--tx3);font-size:12px;background:#1c2230}
+  td.c{white-space:nowrap;color:var(--tx3);font:11.5px Consolas,monospace}
+  .stats{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0}
+  .st{background:#161b24;border:1px solid #2a3245;border-radius:10px;padding:10px 18px;text-align:center}
+  .st b{display:block;font-size:22px}.st span{font-size:11.5px;color:var(--tx3)}
+  .note{background:#14191f;border:1px dashed #2f3648;border-radius:9px;padding:10px 14px;color:var(--tx2);font-size:12.5px;max-width:1010px}
+  code{font:12px Consolas,monospace;background:#1c2230;border:1px solid #2a3245;padding:1px 5px;border-radius:4px;color:#cdd6e8}
+  .nav{position:sticky;top:0;background:rgba(14,17,23,.94);border-bottom:1px solid var(--line);padding:8px 0;margin-bottom:10px;font-size:12px;z-index:5}
+  .nav a{color:var(--ac);text-decoration:none;margin-right:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Grandettoken 全量代码体检报告(2026-10-13)</h1>
+<div class="sub">
+基线 = 当前 <code>main</code> 分支 <code>ee15d39</code>(v0.1.28)。范围 = 项目<b>全部代码</b>:<code>app/core/src/</code> 12 个 Rust 模块(9268 行)+ <code>app/src-tauri/</code>(壳 2176 行、main、build.rs、tauri.conf.json、capabilities)+ <code>app/src/</code>(app.js 3559 行、index.html 239 行、styles.css 781 行)+ <code>build/</code> 13 个脚本 + <code>.gitignore/.gitattributes</code>。逐行读完,无抽样(覆盖率明细见第九节)。<br>
+方法:七路分组逐行审 → <b>每条高危项我本人重读到行号二次核实</b> → 再用客观手段交叉验证(<code>cargo check</code>、<code>cargo test</code>、常量与调用点全库检索、设计文档承诺对照)。
+</div>
+
+<div class="stats">
+  <div class="st"><b style="color:#ff8fa0">6</b><span>P0 会丢数据 / 会发错包 / 违背用户明示</span></div>
+  <div class="st"><b style="color:var(--bad)">16</b><span>P1 用户可见的错误</span></div>
+  <div class="st"><b style="color:var(--warn)">38</b><span>P2 边界与承诺不符</span></div>
+  <div class="st"><b style="color:var(--tx3)">39</b><span>P3 边角(成表)</span></div>
+  <div class="st"><b style="color:#a8c0ff">14</b><span>可优化点</span></div>
+  <div class="st"><b style="color:var(--ok)">0</b><span>编译错误 / 测试失败</span></div>
+</div>
+
+<div class="note">
+<b>三条客观实测结果(报告里所有"跑过"的说法只有这三条):</b>
+① <code>cargo check --all-targets</code>(gnu 工具链 + MinGW):通过,<b>0 条 rustc 警告</b>,24.24s(缓存命中);
+② <code>cargo test</code>(core):<b>114 passed / 0 failed</b>;
+③ <code>cargo test</code>(src-tauri):<b>0 个测试</b>——壳层完全没有测试。<br>
+所以"编译干净、单测全绿"与"下面 40 条真问题"同时成立:现有测试覆盖的是<b>解析与合并逻辑</b>,而事故集中在<b>备份/回滚/退避/单位/锁</b>这些没有测试的地方(第四节单独列)。<br>
+<b>复核标记图例:</b><span class="tag v-ok">✅ 我已核到行号</span><span class="tag v-run">⚠ 依赖真机/上游数据</span><span class="tag v-no">⏳ 子代理报告,我未二次核</span>
+</div>
+
+<div class="nav"><a href="#p0">P0</a><a href="#p1">P1</a><a href="#p2">P2</a><a href="#p3">P3</a><a href="#opt">可优化</a><a href="#green">假绿链</a><a href="#ok">不是 bug</a><a href="#smoke">真机冒烟</a><a href="#cover">覆盖率</a><a href="#contract">契约核对</a><a href="#order">修复顺序</a><a href="#fixed">修复台账</a></div>
+
+<h2>〇、先说最要紧的一类:界面显示的数 ≠ 后端字段的真实含义</h2>
+<p style="color:var(--tx2);font-size:12.5px;margin:0 0 8px">这一类不会崩、不会报错,但会让用户按错的信息做决定(什么时候申请、要不要充值、该不该重新登录)。逐条追到了字段出处:</p>
+<table>
+<tr><th style="width:210px">界面显示</th><th style="width:250px">后端字段的真实含义</th><th>条目</th></tr>
+<tr><td>渠道行「额度 ¥4800」+「剩 21%」+ 进度条 + 红黄告警色 + 胶囊「最紧」挑选</td><td><code>ChannelView.total</code> = 接口 <code>data.total_granted</code> = <b>累计发放,只增不减</b>,不是额度上限。后端自己的注释:「累计发放只增不减,拿它当分母会越算越低,没有决策价值」(config.rs:11-12)</td><td class="c">P1-11</td></tr>
+<tr><td>收起的行里没有任何时间提示</td><td>后端老老实实给了 <code>stale</code> 与 <code>updatedAt</code>,前端<b>算好了字符串却没插进模板</b>(死变量)。「失败时继续显示上次成功快照并标注时间」这条产品纪律在收起态等于没做</td><td class="c">P1-12</td></tr>
+<tr><td>托盘上的裸数字「91」</td><td>配额型那一帧是<b>剩余百分比</b>,金额型那一帧是<b>人民币余额</b>。同一个数字位子上两种单位,而胶囊和列表行都带 <code>%</code>/<code>¥</code>,只有托盘不带;tooltip 里反倒写着「OpenCode Go 91.1%」——图标与 tooltip 自相矛盾</td><td class="c">P3-25</td></tr>
+<tr><td>「复制三件套」得到的接入地址与密钥</td><td>因为前端没传来源,后端<b>永远回落成 4SAPI 的地址 + 4SAPI 的密钥</b>,模型名却是用户正在看的 Hapi / OpenCode Go 那个</td><td class="c">P0-5</td></tr>
+<tr><td>签到区「今天还没签 · 领积分」</td><td>后端 <code>CheckinState</code> 早已算出今天领过、以及<b>现在能不能点</b>(<code>can_try=false</code>);前端一个字段都没用,于是按钮一直亮着</td><td class="c">P0-6</td></tr>
+<tr><td>「本月已领 N 分」</td><td>后端字段序列化成 <code>monthCredits</code>,前端读的是 <code>month_credits</code> → 恒 <code>undefined</code> → <b>这句话从来没显示过</b>,哪怕天天领到了</td><td class="c">P2-27</td></tr>
+<tr><td>「写入 Trae 成功 · 备份:」<b>(冒号后空白)</b></td><td>Trae 这条路根本没建备份,上报的是空字符串。界面把"没有备份"渲染成了"备份看不见"</td><td class="c">P0-2</td></tr>
+</table>
+
+<h2 id="p0">一、P0:会造成不可逆损失,或把错误的包发到用户手上</h2>
+
+<div class="bug p0"><h4><span class="sev p0">P0-1</span>「取消写入」会连带删掉用户自己配的、或另一个来源配的模型<span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">app/core/src/inject.rs:1637-1640(删除判据)· 对照 1434-1451(写入侧有"是我们写的"判据)· 2290(状态页按 id 去重)</span></p>
+<p><b class="lb">现象:</b>在模型页点「取消写入」,回执写着「移除 1 条」,但 WorkBuddy 的模型列表里<b>少掉的不止一条</b>——用户手工配的、或 Hapi / OpenCode Go 另一个来源配的同名模型一起被清掉。</p>
+<p><b class="lb">后果:</b>这是<b>删掉别人数据</b>的不可逆损失。唯一的补救是去 <code>~/.workbuddy/backup-inject/&lt;时间戳&gt;/</code> 手工把 JSON 抄回去;普通用户不会知道要去那里,也不看得懂。</p>
+<p><b class="lb">根因:</b>删除用的判据是「只要 id 相同就 retain 掉」:<span class="ev">    arr.retain(|e| {
+        e.get("id").and_then(|i| i.as_str()) != Some(spec.id.as_str())
+    });</span>而写入侧(<code>wb_removal</code> 走 <code>wb_is_ours</code>)和状态侧(ZCode/Trae 分支按 id+来源)都带归属判断。另外 <code>wb_is_ours</code> 把「url 命中该来源的上游域名」当成「挂件写的」,所以用户自己在 opencode.ai 上配的条目,在来源=OpenCode Go 时也被认成我们的,写入时被静默覆盖、取消时被静默删除。同一族问题:2290 行的去重键只用 id,多来源下「已配置」徽标会串台(ZCode/Trae 分支用的是 id+来源,行为不一致)。</p>
+<p class="fix"><b class="lb">修复后的正确效果:</b>取消写入只删预告里列出的那一条(同 id 且同来源),回执条数与预告一致;用户自配的别家同 id 条目原样保留。做法:用与 <code>wb_removal</code> 相同的定位取首个命中下标后 <code>remove(i)</code>,并把 2290 的去重键改成 <code>(id, source)</code>。</p>
+<p><b class="lb">依据(不是我加的规矩,是项目自己写的):</b>inject.rs 模块头第 8 行「③ 只增改自己写的那条 —— 不碰账号、登录态、内置模型、别人的 provider」;PROGRESS.md:1152 也写着取消写入与写入「共用同一套规矩」。</p></div>
+
+<div class="bug p0"><h4><span class="sev p0">P0-2</span>给 Trae 写模型:既不备份、也不读回校验、也没有事务;失败时"先写坏再备份"<span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">app/core/src/inject.rs:2229-2252(apply 的 Trae 分支)· 1945-1955(remove 同构)· 1201-1358(trae_write 本体)· 对照 643-664(commit=备份→写→校验→回滚)</span></p>
+<p><b class="lb">现象:</b>Trae 写入成功后,结果卡里「备份」那一栏是<b>空白</b>,旁边的「打开备份目录」「回滚这次写入」两个按钮点了分别报错;底部历史里 Trae 那几行的备份列也是空的、点不动。</p>
+<p><b class="lb">后果:</b>一旦这次写入把 Trae 的模型表写坏(或写到一半失败),用户在 Trae 里丢的是自定义模型整块,而 <code>state.vscdb</code> 装的是 Trae <b>整个 globalStorage</b>——挂件却一个还原点都没留下,也没有任何一键还原入口。</p>
+<p><b class="lb">根因(三条):</b><br>
+① <code>outcome.backup = commit(...)</code> 在全文件只出现在 <b>798 / 1030 / 1671 / 1800</b> 四处,全是 WorkBuddy 与 ZCode;<b>Trae 的两条路绕开了 commit</b>,直接调 <code>trae_write</code> / <code>remove_trae_site</code>,它们从不建备份,返回的 <code>backup</code> 是空的 <code>PathBuf</code>,于是 2243-2244 行把空串当备份路径上报。<br>
+② 失败分支的顺序是<b>反的</b>:<span class="ev">                Err(e) => {
+                    // trae_write 中途失败时它自己的 UPDATE 可能已写了一半 → 整库盖回备份
+                    let dir = backup(&amp;site.root, &amp;site.files, &amp;stamp)?;
+                    let _ = restore(&amp;dir);</span>先执行了若干条 <code>UPDATE</code>,<b>之后</b>才备份——拷进备份目录的是"已经写坏的文件",紧接着又把它盖回去,语义上是空操作;而且 <code>let _ =</code> 把回滚失败也吞了。<br>
+③ <code>trae_write</code> 从 1207 行开库到 1295 行逐条 <code>UPDATE</code> 全程<b>没有事务</b>,中途失败即半套状态落盘;成功路径也没有第④条契约要求的读回校验。</p>
+<p class="fix"><b class="lb">修复后的正确效果:</b>Trae 与另外三家走同一条 <code>commit(site, files, stamp, write, verify)</code>:写入前在 <code>backup-inject/&lt;时间戳&gt;/</code> 落 <code>state.vscdb</code>(含 <code>-wal/-shm</code>)快照,回执里备份栏是真实目录、两个按钮可用,失败先恢复写入前状态再报错。依据:design-4sapi-models.html:496「共同前提四条(缺一不写)」与 :527「写入用事务、失败立即回滚、写前强制备份」。</p></div>
+
+<div class="bug p0"><h4><span class="sev p0">P0-3</span>发版脚本会在构建失败时报"成功",并把上一次的旧安装包当新包上传<span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">build/build.ps1:116 → 121-124 → 129-132 → 137</span></p>
+<p><b class="lb">现象:</b>挂件还在后台跑就执行 <code>build.ps1 bundle</code>(链接期 <code>os error 5</code>,极常见)、或 <code>cargo tauri build</code> 因任何原因失败:脚本照样打印那行 <code>ok import table clean (no WebView2Loader.dll)</code>,并以退出码 0 结束。接着按 RELEASE.md 生成 <code>latest.json</code> 并上传,发出去的是<b>上一次的旧包</b>。</p>
+<p><b class="lb">后果:</b>用户点"自动更新"装到的是旧版本;挂件后端与清单声明的版本对不上;而所有检查都是绿的,没人会怀疑。<b>这是本次报告里影响面最大的一条</b>——它不是某个功能坏,而是"发布流程本身的信任"坏。</p>
+<p><b class="lb">根因:</b><code>$ErrorActionPreference='Stop' <b>不拦 native 命令</b></code>。137 行那句兜底 <code>if ($LASTEXITCODE -ne 0)</code> 看到的退出码,已经被 129 行的 <code>&amp; $objdump -p</code>(另一个 native 命令)覆写成 objdump 自己的 0,<b>116 行 cargo 的退出码丢失</b>;同时 121-123 行找目标 exe 用的是「体积最大的那个」,<b>不比时间戳</b>,所以陈旧产物也能把断言"验"过去。<span class="ev">      &amp; cargo tauri build
+      ...
+        $bad = &amp; $objdump -p $exePath.FullName 2&gt;$null |
+  if ($LASTEXITCODE -ne 0) { throw "task '$Task' failed with exit code $LASTEXITCODE" }</span></p>
+<p class="fix"><b class="lb">修复后的正确效果:</b><code>cargo tauri build</code> 一失败脚本立刻非 0 中止;导入表断言只可能针对<b>本次构建产出</b>的 exe(记录脚本启动时间,校验 exe 的 <code>LastWriteTime</code> 晚于它)。</p></div>
+
+<div class="bug p0"><h4><span class="sev p0">P0-4</span>「取消写入」在 Hapi / OpenCode Go 来源下几乎必然误判失败并自动回滚,表现为"删不掉"<span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">app/core/src/inject.rs:1822-1825(校验闭包)· 同族硬编码文案 1502 / 1507 / 1837 / 2137-2139</span></p>
+<p><b class="lb">现象:</b>在 Hapi 或 OpenCode Go 来源下点「取消写入」,弹红字「读回校验没过,已回滚到写入前的备份…」——模型条目其实删掉了,但被自动盖回去,界面上模型还在,反复点都删不掉,用户完全看不懂原因。</p>
+<p><b class="lb">根因:</b>当 provider 被整体收走时,校验写的是「整个 config.json 的文本里不能再出现 <code>"4SAPI"</code> 字样」:<span class="ev">                    None => {
+                        let _ = &amp;pid_for_check;
+                        !v.to_string().contains("4SAPI")
+                    }</span>来源名被<b>硬编码成了 4SAPI</b>,而真实来源名是 <code>spec.source_name</code>(<code>Hapi</code> / <code>OpenCode Go</code>,见 models.rs:55-88)。本产品主渠道就是 4SAPI,用户只要配过它,文件里必然还有 "4SAPI" → 校验恒 false → commit 判失败并 <code>restore()</code>。更糟的是 1823 行把真正该用来判断的 <code>pid_for_check</code> 用 <code>let _ =</code> 丢弃不用——意图明显是"按 pid 查",写歪了。</p>
+<p class="fix"><b class="lb">修复后的正确效果:</b>取消 Hapi/OpenCode Go 的最后一个模型正常成功,回执「移除 1 条」并提示 provider 已收走;校验按 pid 是否还在 <code>provider</code> 与 rules 里出现来判定。顺带把四处「provider「4SAPI」」文案改成真实来源名。</p></div>
+
+<div class="bug p0"><h4><span class="sev p0">P0-5</span>「复制三件套」把 <b>4SAPI 的地址和 4SAPI 的密钥</b>复制走,而用户看的是别的来源<span class="tag v-ok">✅ 前后端两侧我都核到行号</span></h4>
+<p><span class="loc">app/src/app.js:2100(调用点)· 三个按钮 3294 / 3321 / 3374(只带 data-id,不带来源)· app/src-tauri/src/lib.rs:1833-1853(默认值在 1842)</span></p>
+<p><b class="lb">现象:</b>在模型页把来源切到 <b>Hapi</b> 或 <b>OpenCode Go</b>,选中一个模型,点「复制三件套」→ 粘出来的是 <code>接入地址:https://4sapi.com/v1 · 模型名称:&lt;hapi 的模型&gt; · API Key:&lt;4SAPI 的密钥&gt;</code>。若 4SAPI 没配密钥,toast 直接说「还没配置 4SAPI 密钥:先在「渠道」页签里填一次」——用户要填的其实是 Hapi 的 key。同一个弹层里「写入」按钮是好的(它传了来源),所以表现成"<b>写入能用、复制不认</b>"的诡异分裂。</p>
+<p><b class="lb">后果:</b>把这份三件套粘进任何程序 = <b>用 4SAPI 的余额去跑别家的模型名</b>,钱花在用户以为没花的地方;而且他完全看不出密钥串了台(剪贴板里看不出是谁的 key)。这是"密钥被静默替换"类问题,不是显示问题。</p>
+<p><b class="lb">根因:</b>命令签名是 <code>source: Option&lt;String&gt;</code>,缺省时<span class="ev">        let src = source.clone().unwrap_or_else(|| "4sapi".to_string());</span>把「前端没传」当成了「就是要 4sapi」。前端只发了 <code>{ model: id }</code>,而同一页的 <code>inject_preview / inject_apply / inject_remove</code> 都正确带了 <code>source</code>。同一条默认逻辑在 lib.rs 出现 4 次(1660 / 1680 / 1725 / 1842),而 <code>"4sapi"</code> 字面量全文件共 8 处,没收进常量。</p>
+<p class="fix"><b class="lb">修复后的正确效果:</b>复制出的三元组永远属于当前所选来源;未配该来源密钥时,报错说的是该来源的名字。改法:前端 <code>invoke("copy_model_bundle", { model: id, source: MDL.src })</code>(更稳是把来源写进按钮的 <code>data-src</code>);后端把 <code>source</code> 改成必填 <code>String</code>,缺省即报错,别静默猜。</p></div>
+
+<div class="bug p0"><h4><span class="sev p0">P0-6</span>把渠道「隐藏」之后,签到照旧读本机登录凭据、照旧每天对外发请求<span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">app/src-tauri/src/lib.rs:1137-1139(run_checkin 入口)· 1229-1235(checkin_now 手动)· 1249-1263(节拍器)· 反证:app/core/src/fetch.rs:821-823 + 842(取数有这道闸门)、app/core/src/checkin.rs(全文 0 处 hidden)</span></p>
+<p><b class="lb">现象:</b>在渠道卡上把 Trae / WorkBuddy「隐藏」之后,挂件每天北京时间 00:23 后仍然会去读 <code>%APPDATA%</code> 里 Trae 的 <code>storage.json</code>(含 AES 解密)、从 WebView2 的 Cookie 罐现取 WorkBuddy 会话,并向平台发签到 POST。手动「领积分」那条路更彻底:<b>连开关状态都不看</b>——只要按钮渲染出来,点下去就发请求。</p>
+<p><b class="lb">后果:</b>直接违背项目自己的红线。取数路径的注释写得明明白白:<span class="ev">        // 隐藏 = 不发请求、不读本机登录凭据;仍返回占位视图,管理页要靠它列「已隐藏」卡片。</span>同一个"隐藏"开关在取数侧被严格遵守,在签到侧形同不存在。用户以为"这个渠道我关掉了、挂件不会再碰它",实际上每天还在替他在平台留一条领取记录。</p>
+<p><b class="lb">根因(三道闸门全缺):</b><br>
+① <code>run_checkin</code> 的第一行就是取凭据,前面没有任何判断:<span class="ev">async fn run_checkin(app: &amp;tauri::AppHandle, id: &amp;str, manual: bool) -&gt; Result&lt;checkin::Outcome, String&gt; {
+    let def = checkin::find(id).ok_or_else(|| format!("未知签到渠道: {id}"))?;
+    let cred = checkin_credential(app, def)?;</span><br>
+② 节拍器 <code>spawn_checkin_ticker</code> 判了 <code>enabled/auto</code>,<b>没判 <code>hidden_channels</code></b>——全库 grep:<code>hidden_channels</code> 在 lib.rs 里只出现在一句注释里,从不参与判断。<br>
+③ 后端专门为界面算了一个「现在能不能点」的闸门字段 <code>can_try</code>(lib.rs:1127),外加 <code>needs_user / next_try_at / last_try_at</code>;前端对这四个字段的引用数是 <b>0</b>(已 grep)。所以退避中 / 今日已签 / 开关关着这三种状态下,「领积分」按钮照样是亮的,连点即每次都发 status→claim→回查最多 3 个请求,突破「当天 5 次」的上限。</p>
+<p class="fix"><b class="lb">修复后的正确效果:</b>渠道在隐藏清单里 → 签到既不读凭据也不发请求,节拍器静默跳过,手动命令返回「该渠道已隐藏,签到已暂停」;<code>enabled=false</code> 时 <code>run_checkin</code> 直接拒绝;退避未到时按钮置灰并写明「08:12 后可重试」。改法:<code>run_checkin</code> 入口加两道闸门(<code>hidden_channels.contains(id)</code> 与 <code>checkin[id].enabled</code>),<code>checkin_now</code> 复用现成的 <code>next_try_at</code> 判定;前端把 <code>canTry</code> 用起来。</p></div>
+
+<h2 id="p1">二、P1:用户会看到错的数、错的提示,或整片数字消失</h2>
+
+<div class="bug p1"><h4><span class="sev">P1-11</span>关掉「额度申请制」后,4SAPI 那一行把<b>累计发放</b>当额度上限显示,并据此染红、排序、挑最紧渠道<span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">app/src/app.js:102-111(<code>remainRatio</code>)· 357(<code>额度 ¥${c.total}</code>)· 366(<code>剩 N%</code>)· 438(进度条宽)· 159-163(阈值染色)· 929(胶囊 autoPick)· 1107(托盘数字);后端出处 app/core/src/providers.rs:127/169、app/core/src/config.rs:10-13</span></p>
+<p><span class="ev">  const denom = c.claim &amp;&amp; c.claim.amount &gt; 0 ? c.claim.amount : c.total;
+  else if (pct !== null) sub = `额度 ¥${c.total}`;</span><b class="lb">现象:</b>用户在 设置→渠道→展开→「额度申请制」把这个开关关掉,4SAPI 行立刻变成「额度 ¥4800 · 剩 21%」,进度条一小截、状态点变红、底栏多出一个「1 预警」、自动挑最紧的胶囊也跳到它。<b>但 4800 是他从注册以来累计被发放过的总额</b>,只会一直涨;这个 21% 会随着每一次充值/发放单调下滑,与他还能用多少钱毫无关系。</p>
+<p><b class="lb">后果:</b>用户会以为"额度快用完了"而去做本不必要的事(去申请、去充值、或把这条排到最后)。而且同一个数字在详情里标的是「累计发放」、在行里标的是「额度」——两处两种口径,更没法自洽。</p>
+<p><b class="lb">根因:</b>后端注释<b>明确禁止</b>这么做:「接口给的累计发放只增不减,拿它当分母会越算越低,没有决策价值」(config.rs:11-12),而前端在没有 <code>claim.amount</code> 时正好退回 <code>c.total</code> 作分母,并用它染色/排序/挑最紧。</p>
+<p class="fix"><b class="lb">修复后的正确效果:</b>分母只接受 <code>claim.amount</code>;拿不到分母就返回 <code>null</code> → 不画进度条、不参与百分比排序、不参与胶囊"最紧"挑选、不参与红黄染色,行副标题不再出现「额度 ¥…」(改「累计发放」或直接不显示)。<b>改一处 <code>remainRatio</code> 即可,五条链路都从它出。</b></p></div>
+
+<div class="bug p1"><h4><span class="sev">P1-12</span>「这是几小时前的旧数据」这句话,前端算好了却<b>从未画到界面上</b><span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">app/src/app.js:457-461(算出 <code>src</code>)与 463-484(返回模板里没有 <code>${src}</code>)· 363(<code>subVal</code> 只在"取数失败且 stale"时给两个字)</span></p>
+<p><span class="ev">  const src = c.stale
+    ? `&lt;div class="hint" style="color:var(--warn)"&gt;显示的是 ${relTime(c.updatedAt)} 的成功快照${
+        c.error ? " · " + esc(c.error) : ""
+      }&lt;/div&gt;`
+    : `&lt;div class="hint"&gt;更新于 ${relTime(c.updatedAt)}&lt;/div&gt;`;</span><b class="lb">现象:</b>收起状态下<b>永远看不到「更新于 X 分钟前」,也永远看不到「显示的是 2 小时前的成功快照」</b>。机器整夜睡眠、接口失联两小时,早上打开面板,数字旁边没有任何"这是旧数据"的痕迹——只有把那行点开、滚到最底下才可能看到一行灰字。我在文件里检索过:唯一的 <code>${src}</code> 出现在 <code>iconHtml</code> 的 <code>&lt;img src&gt;</code>(203 行),与这个变量无关。</p>
+<p><b class="lb">后果:</b>这是本产品最核心的信任承诺("失败时继续显示上次成功快照并标注时间")在<b>主界面收起态等于没落地</b>。用户把 2 小时前的余额当成实时余额去做申请/充值判断。</p>
+<p class="fix"><b class="lb">修复后的正确效果:</b>把 <code>${src}</code> 插进模板(放在 <code>${winWarn}</code> 之后);紧凑形态用 CSS 收起(已有 <code>body.form-compact .claim-warn</code> 一类先例,styles.css:418-419)。若刻意不想占行,就删掉这个死变量并在 <code>subVal</code> 里补 stale 分支——别留着"算了但没用"。</p></div>
+
+<div class="bug p1"><h4><span class="sev">P1-13</span>改一下字号就把「今天已领 +100 分」抹回「今天还没签」,当天退避计数一起清零<span class="tag v-ok">✅ 后端合并白名单我已核;前端单点快照亦已核</span></h4>
+<p><span class="loc">app/src-tauri/src/lib.rs:66-113(<code>set_config</code> 的保护字段只有 5 个)· app/src/app.js:3483(<code>CFG</code> 全文件<b>只赋值一次</b>)· 1407/2056/2312/2321/2335/2345/2354/2369/2968(9 处把整份 <code>CFG</code> 提交)· lib.rs:1173-1207(后端写 <code>cfg.checkin</code>)</span></p>
+<p><b class="lb">现象:</b>早上挂件自动把 Trae 的积分领了,签到行写「今日已领 +100 分」;用户随手改字号(或阈值、排序、置顶、胶囊轮播、渠道显隐——任一设置项)→ 签到行立刻倒退成「今天还没签」并重新给出「领积分」按钮。他再点一次,挂件对平台又发一轮 status→claim→status;在限流那天,「第 2/5 次」的退避计数也被清零回「第 1/5 次」,<b>当天重试次数超过后端设计的 5 次上限</b>。而「本月已领」是靠 SQLite 流水算的,不受影响 → 卡片两处自相矛盾。</p>
+<p><b class="lb">根因:</b><code>set_config</code> 已经为同类问题打了五次补丁——<span class="ev">        if incoming.skipped_version.is_none() {   // ← 报告 P1-3 就是为这个加的
+        if incoming.last_check_at.is_none() {
+        if incoming.win_x.is_none() {
+        if incoming.win_y.is_none() {
+        incoming.selection_prefix = merged;       // ← 后端单边字段,以库里为准</span>保护名单正好五个,<b><code>checkin</code> 不在里面</b>。前端 <code>CFG</code> 是开机时那一份快照(<code>get_config</code> 全文件只在 3483 行调用一次),提交时整份覆盖,后端 <code>#[serde(default)]</code> 又让缺字段静默回落默认值——不报错,只倒退。这与 09-22 报告里 P1-3「跳过此版本被下一次保存抹掉」<b>是同一个坑的第六次复发</b>,只是这次落在签到上。</p>
+<p class="fix"><b class="lb">修复后的正确效果:</b>改任何设置都不影响当天已落盘的签到进度。首选后端照 <code>selection_prefix</code> 的写法按渠道合并(只接受前端提交 <code>enabled/auto</code>,其余七个状态字段以库里为准);更彻底是加 <code>set_checkin_flags</code> 细粒度命令,别再往返整份 <code>Config</code>(见 P2-32 的竞态根因)。</p></div>
+
+<div class="bug p1"><h4><span class="sev">P1-14</span>七个命令在主线程做阻塞活(写库 / 凭据管理器 RPC / 注册表);其中 <code>key_hint</code> 每轮对每个渠道各发一次 RPC<span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">app/src-tauri/src/lib.rs:118-127(<code>fn key_hint</code>,非 async → keyring 读 RPC)· 129-143(<code>fn set_key</code> → keyring 写)· 65-113(<code>fn set_config</code> → SQLite 写,且 99-100 持库锁)· 410-416(<code>fn get_series</code> → 范围扫描+分桶)· 584-592 / 835-841 / 846-853(<code>set_pin / skip_update_version / save_window_pos</code> → SQLite 写)· 520-523(<code>set_autostart</code> → HKCU 注册表写);纪律出处 lib.rs:152-153、1644-1648</span></p>
+<p><b class="lb">现象:</b>主线程就是 Tauri 的事件循环——这些命令跑起来期间整个面板 IPC 排队、托盘菜单不响应、胶囊动画停住。具体能感到的是:粘贴一把长密钥保存时面板僵一下;点开渠道详情看曲线时整卡数百毫秒(60 秒采样 × 多渠道 × 90 天保留 ≈ 十万级快照表上做范围扫描);每轮渲染还会对每个已配密钥的渠道各起一次凭据管理器 RPC(6 次压在一条线程上)。最隐蔽的连锁是:WorkBuddy 会话读取只有 <b>3 秒</b>预算,而那次读取要等主线程空出来——主线程正卡在 SQLite/keyring 上时超时到点,界面显示「未登录 WorkBuddy 账号 · 在渠道卡上登录一次」,<b>用户明明登录着,于是再点一次登录,白跑一整轮探活</b>。</p>
+<p><b class="lb">根因:</b>项目自己的注释写着「非 async 的 Tauri 命令跑在主线程上……真机实测过一次卡住:整个挂件不再响应任何命令」,并据此把 <code>delete_key</code>、<code>inject_*</code>、<code>vault_*</code> 都改成了 async + <code>spawn_blocking</code>。<b>同一批 <code>secrets::*</code> / <code>Store::*</code> 调用在上述七个命令里仍是同步形态</b>——补了一部分,没补全。</p>
+<p class="fix"><b class="lb">修复后的正确效果:</b>凡触碰 SQLite / keyring / 注册表 / 子进程的命令一律 <code>async fn</code> + <code>spawn_blocking</code>(照 <code>vault_list</code> 的现成写法);主线程只做窗口与托盘。前端侧再给 <code>fillKeyHints</code> 加缓存:尾号只在进入渠道页签、或保存/删除密钥之后取一次。<b>另:P1-7(密钥箱持库锁跨 RPC)是同一个病根的第十二个位置,一并改。</b></p></div>
+
+<div class="bug p1"><h4><span class="sev">P1-15</span>「立即更新」与取数 / 签到 / 客户端写入毫无协调;下载进度每个数据块发一次事件<span class="tag v-ok">✅ 函数体我已读(无任何闸门)</span><span class="tag v-run">⚠ 安装即退出的时机依赖插件行为</span></h4>
+<p><span class="loc">app/src-tauri/src/lib.rs:794-832(<code>install_update</code>)· 协调缺失的对照面:596-651(<code>poll_loop</code>)、1240-1273(签到节拍器)、1669-1753(注入写入)</span></p>
+<p><b class="lb">现象两条:</b>① 下载几十 MB 时,回调里<b>每个 chunk 都 emit 一条 <code>update-progress</code></b>(无节流、无最小间隔),前端每次都要重绘进度条与胶囊,面板和托盘在这段时间明显顿、胶囊轮播跳格。<span class="ev">                let _ = h1.emit(
+                    "update-progress",
+                    serde_json::json!({ "phase": "downloading", "received": received, "total": total }),
+                );</span>② 更要紧的:整个函数<b>没有任何"忙"标志</b>,下载/安装期间轮询、签到、客户端配置写入照常进行。而 Windows 上 install 这一步会直接结束进程——如果正好赶上 <code>inject::apply</code> 处于「<b>已经落盘、还没写台账</b>」的那一瞬间(记账在写入返回之后才做,lib.rs:1684-1704),客户端配置文件就停在半写状态,挂件重启后<b>没有任何记录能把它回滚</b>。叠上 P0-2(Trae 根本没有备份)与 P1-5(写第二个文件失败不回滚),这是本报告里最坏的一条组合。</p>
+<p class="fix"><b class="lb">修复后的正确效果:</b>点「立即更新」先进入维护态:停轮询与签到节拍、等在途的 <code>inject_apply/remove</code> 与 <code>vault_save</code> 收尾再下载;进度事件按 ≤5 次/秒或每 1% 发一次;安装前落一条「准备更新到 vX」,重启后能核对上次有没有留下半成品。<b>顺带修事件契约:后端从不发 <code>phase:"failed"</code>,而前端有这个分支;在 Windows 上 <code>"finished"</code> 永远发不出去(进程已退)——前端要按"没收到 finished 也可能是成功"处理。</b></p></div>
+
+<div class="bug p1"><h4><span class="sev">P1-16</span>配置那行 JSON 一旦损坏,挂件按默认值继续跑,并且<b>下一次保存会把还能手工救回的原文覆盖掉</b><span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">app/src-tauri/src/lib.rs:1988-1993(启动回落 default)与 2021-2027(这份 default 被 <code>manage</code> 进状态)· 写回路径 65-113 / 584-592 / 835-841 / 846-853;取数侧对照 app/core/src/fetch.rs:805-818</span></p>
+<p><b class="lb">先说清楚:这不是"违反了红线"。</b>取数侧的红线执行得很好——解析失败时<b>沿用上次成功的配置</b>,只有"首轮且内存里没有缓存"才用默认并记一行日志:<span class="ev">                Err(e) => {
+                    eprintln!("{e},本轮沿用上次的配置");
+                    cache.clone().unwrap_or_default()</span>启动侧也是<b>有意的取舍</b>:注释写着「配置坏了不能静默用默认值……取默认值继续启动,但把原因留给前端提示」,并且真留了 <code>take_startup_error</code>。</p>
+<p><b class="lb">真缺口(这条是新的,不是老事重提):</b>那句提示只说「配置解析失败」,用户读完不知道<b>此刻所有渠道都在发请求</b>(因为 <code>hidden_channels</code> 落回空表);更糟的是,这份内存里的默认配置随后会被<b>整份 UPSERT 写回库</b>——用户随手拖一下窗口(<code>save_window_pos</code>)、点一次置顶(<code>set_pin</code>)、改一个设置(<code>set_config</code>)都会触发。那行"只是格式坏掉、内容还可能手工救回来"的 JSON 就此永久丢失:隐藏清单、快捷键、申请制规则全没了,而且没有任何提示指向真正原因。</p>
+<p class="fix"><b class="lb">修复后的正确效果:</b>损坏态下<b>拒绝任何配置写回</b>(返回「原配置仍在库里未覆盖,可先导出/手工修复」),取数闸门关掉(全渠道显示占位 + 真实原因),并把提示文案改成用户能行动的话:「配置读取失败,当前按默认设置运行:<b>你隐藏的渠道正在对外发请求</b>。修复前请勿保存任何设置。」</p></div>
+
+<h2 id="p1b">二·补:P1-11 ~ P1-16 是壳层与前端审出的六条,危害最直接所以排在前面<span class="tag v-ok">✅</span></h2>
+<p style="color:var(--tx3);font-size:12px;margin:-4px 0 10px">编号按"发现分组"排,不按严重度递增;下面 P1-1~P1-10 是后端与发版链那一批。</p>
+
+<div class="bug p1"><h4><span class="sev">P1-1</span>4SAPI 兜底分支把「积分」当「元」显示,数值差 50 万倍<span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">app/core/src/providers.rs:130-149(兜底)对照 125-128、167-169(主路径)</span></p>
+<p><b class="lb">现象:</b>卡片余额从 <code>¥93.50</code> 变成 <code>¥46,750,000</code>,而且<b>不报任何错</b>(该分支 <code>valid: remaining.is_some()</code> 为真)。托盘大数字、告警色、申请制倒计时全跟着错。</p>
+<p><b class="lb">后果:</b>错值会被 <code>store.record</code> 写进快照表污染历史,之后 <code>last_jump_since</code> 把它识别成一次 +¥4600 万的"申请跳升"(P2-4),「今日/本周/本月消耗」整段作废。</p>
+<p><b class="lb">根因:</b>同一个函数里两条路径单位不一致。主路径明确按 <code>RATE = 500_000.0</code> 换算(<code>round2(available / RATE)</code>),兜底路径取的<b>正是主路径认定为积分的同一个字段</b>,却不除 RATE 直接当元:<span class="ev">    let available = path(body, &amp;["data", "total_available"]).and_then(num);
+            .or_else(|| path(body, &amp;["data", "total_available"]).and_then(num))
+            unit: "CNY".into(),</span>触发条件就是注释写明的场景:「有的部署不返 total_granted 但余额就在 data 里」——此时 <code>let (Some(granted), Some(available)) = ...</code> 解构失败进兜底。<code>["remaining","balance"]</code>、<code>quota.remaining</code> 同样没有单位归一。</p>
+<p class="fix"><b class="lb">修复后的正确效果:</b>兜底路径同单位;拿不准单位的字段宁可报「无法确定余额单位」并<b>不写快照</b>。建议加一条防线:<code>remaining &gt; 1e5</code>(元)视为单位可疑 → <code>valid=false</code>。</p></div>
+
+<div class="bug p1"><h4><span class="sev">P1-2</span>签到退避的"1200 秒封顶"失效:当天第 6 次起变成全天每 5 分钟硬撞<span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">app/core/src/checkin.rs:179-181 + 170-176 · app/src-tauri/src/lib.rs:1181-1185 + 1257 + 1243</span></p>
+<p><b class="lb">现象:</b>网络抖动或被 Trae 限流(9074)一整天时,挂件每 5 分钟就往 <code>api.trae.cn</code> 发一轮(status + claim + 回查三连),签到流水被同一天的失败记录刷屏(<code>recent_checkins</code> 的 LIMIT 400 很快塞满),而限流恰恰<b>按出口 IP 计</b>——高频重试让 9074 更不可能解除。</p>
+<p><b class="lb">根因:</b>两个函数的意图互相抵消。<code>next_delay</code> 对 <code>BACKOFF_SEC=[120,300,600,900,1200]</code> 做了 clamp,注释写「1200 封顶」;而 <code>should_retry</code> 要求 <code>attempts &lt; 5</code>:<span class="ev">pub fn should_retry(outcome: &amp;Outcome, attempts: i64) -> bool {
+    outcome.retryable() &amp;&amp; attempts &lt; 5
+}
+        entry.next_try_at = if out.retryable() &amp;&amp; checkin::should_retry(&amp;out, entry.attempts) {
+            Some(now + checkin::next_delay(entry.attempts))
+        } else {
+            None
+        };</span>第 6 次起 <code>next_try_at</code> 被置 <code>None</code>,而节拍器的判断是 <code>next_try_at.map(|t| t &gt; now).unwrap_or(false)</code> —— <b><code>None</code> 被解释成"不在退避中"</b>,于是每 300 秒的 tick 一律放行,比设计里的 1200 秒激进 4 倍。<code>done_for_day</code>(236-241)只对 claimed/already/inactive/auth/shape 收口,<code>Retry</code> 会一直放行。</p>
+<p class="fix"><b class="lb">修复后的正确效果:</b>超过 5 次仍按 1200 秒间隔重试(或明确当天放弃,二者必居其一),全天请求次数不超过退避表定义。依据:design-auto-checkin-2026-10-13.html:265「退避 [120,300,600,900,1200] 秒<b>封顶</b>,当天内继续」,checkin.rs:585 的 <code>next_delay(9)==1200</code> 单测也证明作者要的是封顶不是放弃。</p></div>
+
+<div class="bug p1"><h4><span class="sev">P1-3</span>OpenCode Go 缺 <code>percent</code> 字段被当"已消耗 0%",显示「剩余 100%」<span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">app/core/src/providers.rs:206-226(208 行)</span></p>
+<p><b class="lb">现象:</b>OpenCode Go 看起来是"最省"的渠道——大数字 <code>100.0%</code>、状态色正常,实际可能早就限流了。该接口是未公开的,字段哪天改名就会<b>静默骗人</b>。</p>
+<p><b class="lb">根因:</b><span class="ev">        let pct = w.get("percent").and_then(num).unwrap_or(0.0);</span>把"没有数据"折叠成"消耗 0%"。同一函数里 <code>resets_at</code> 用的是 <code>Option</code>(缺失→界面上「—」,正确),唯独 <code>percent</code> 不是——违反了本文件自己写的契约(providers.rs:7-9「所有取不到的值一律 None,不要用 0 顶替」)。这个假 0 还会参与 <code>tightest</code> 的最大值比较,写进快照。</p>
+<p class="fix"><b class="lb">修复后的正确效果:</b>窗口存在但 percent 缺失 → <code>remain_percent=None</code>,界面渲染「—」;三个窗都取不到 percent → 整渠道 <code>valid:false</code> + 「无可用配额窗口」,沿用上次的成功快照并标注"数据来自 X 分钟前"。最小改法:<code>win()</code> 里 percent 取不到就 <code>return None</code>,让已有的"窗口为空即失败"分支接住。</p></div>
+
+<div class="bug p1"><h4><span class="sev">P1-4</span>本机凭据一时读不到 → 整片数字变成「—」,而不是沿用上次快照<span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">app/core/src/fetch.rs:872-884(占位分支)对照 934-960(失败降级分支)</span></p>
+<p><b class="lb">现象:</b>托盘/面板上的余额突然变成「—」,提示「未检测到 Codex 登录信息 / 未登录 WorkBuddy 账号」。但真实原因往往只是<b>瞬时的</b>:Codex 正在写 <code>auth.json</code>(文件被占)、Windows 凭据管理器 RPC 卡了一下、问 webview 要 cookie 时 3 秒超时。</p>
+<p><b class="lb">根因:</b><span class="ev">                    if creds.is_empty() {
+                        let mut v = placeholder(def);
+                        if let Some(e) = secret_err { v.error = Some(e); }
+                        return FetchedOne { ..., pending: None, success: None };</span>这个分支<b>完全不查 <code>self.cache</code></b>;而紧接下面的取数失败分支(936-952)会读缓存、置 <code>stale=true</code>、保留数值。文件第 3-4 行的原则正是"失败时继续显示上次成功快照并标注时间",这条路径绕过了它。</p>
+<p class="fix"><b class="lb">修复后的正确效果:</b>缓存里有上次成功值就带 <code>stale</code> + 具体原因(「凭据管理器读取失败:…」)继续显示数字;只有从未成功过的渠道才显示「—」。</p></div>
+
+<div class="bug p1"><h4><span class="sev">P1-5</span>写入两个配套文件时,第二个失败不回滚第一个 → 客户端留下"半套"配置<span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">app/core/src/inject.rs:654-656(commit 用 <code>write()?</code>)· 802-807(WorkBuddy 两文件)· 1034-1037、1804-1807(ZCode 两文件)</span></p>
+<p><b class="lb">现象:</b>提示「写临时文件失败 / 替换 … 失败」,用户以为什么都没发生;实际 ZCode 的 <code>config.json</code> 已经多了 provider(或模型被删了一条),而 <code>provider_config.json</code> 还是旧的。重启 ZCode 后看到一个没有可用规则的 provider。<span class="ev">    let dir = backup(&amp;site.root, files, stamp)?;
+    write()?;
+    if !verify() {</span></p>
+<p><b class="lb">根因:</b>回滚只挂在「读回校验不过」这一支;<code>write()</code> 自身失败用 <code>?</code> 直接返回,<b>既不盖回已落盘的第一个文件,错误文案里也没有备份路径</b>。ZCode 的两份文件必须成套(provider ↔ providerRules),WorkBuddy 的是条目 ↔ 选中项配对,半途即不一致。第二个文件被占用/只读/被杀软拦是常见组合。</p>
+<p class="fix"><b class="lb">修复后的正确效果:</b>任一文件写失败 → 全部按已建好的备份盖回,错误文案给出备份路径与"已恢复,未产生半成品"。</p></div>
+
+<div class="bug p1"><h4><span class="sev">P1-6</span>多站点写入"部分成功"对用户不可见、也无法回滚<span class="tag v-no">⏳ 未二次核(结构已看)</span></h4>
+<p><span class="loc">app/core/src/inject.rs:2175-2180 + 2187/2214/2230(apply 循环内 <code>return Err</code>)· 1935-1955(remove 同构)· app/src-tauri/src/lib.rs:1682-1704(push_log 在 Err 时不执行)</span></p>
+<p><b class="lb">现象:</b>Trae 有 CN + SOLO CN 两套安装时最常见:点「写入」只弹一句「TRAE SOLO CN 正在运行…」,用户以为整件事没做;实际上<b>第一套已经写进去了</b>,而且这一次写入的台账记录一条没落,「上次写到哪」列表里看不到它,也没有对应回滚入口。</p>
+<p class="fix"><b class="lb">修复后的正确效果:</b>要么整体成功/整体回滚,要么如实返回「已写入 A,B 因在运行未写」并照常记账。建议 <code>apply/remove</code> 返回带失败项的 <code>Vec&lt;Report&gt;</code> 而不是提前 <code>return Err</code>。</p></div>
+
+<div class="bug p1"><h4><span class="sev">P1-7</span>保存/删除密钥箱时会把整个面板冻住<span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">app/src-tauri/src/lib.rs:942(取库锁)→ 966(凭据管理器写)→ 981(写索引)· 对照 411-415(主线程同步命令 <code>get_series</code> 等同一把锁)</span></p>
+<p><b class="lb">现象:</b>保存或删除密钥箱条目时(凭据管理器服务被组策略禁用或卡住时可达数十秒),<b>托盘面板、消耗曲线、签到页全部无响应</b>。<span class="ev">        let s = lock_rw(&amp;store);
+        let all = s.vault_list()?;
+        ...
+            secrets::vault_set(&amp;id, &amp;key)?;</span></p>
+<p><b class="lb">根因:</b><code>Arc&lt;Mutex&lt;Store&gt;&gt;</code> 的持锁区间<b>跨越了外部 RPC</b>:从 942 行拿锁一直到函数结束,中间 966 行是凭据管理器写。锁被 RPC 拖住时,任何要同一把锁的命令(含非 async 命令,按项目自己的结论它们跑在主线程)只能排队。secrets.rs:74-76 的注释自己就承认「凭据库坏」是现实场景。</p>
+<p class="fix"><b class="lb">修复后的正确效果:</b>任何一条命令慢或失败都不冻结界面。做法:锁内只做索引校验并克隆所需数据,<b>放锁后再做 RPC</b>,最后重新取锁写索引(失败回滚逻辑不变);或 <code>get_series</code> 一类改 async。</p></div>
+
+<div class="bug p1"><h4><span class="sev">P1-8</span>Trae 两套安装共用一个进程名:SOLO 在跑也照样往它库里写<span class="tag v-run">⚠ 需真机核对 exe 名</span></h4>
+<p><span class="loc">app/core/src/inject.rs:102-108(<code>Client::Trae =&gt; "Trae CN.exe"</code>)· 137(<code>TRAE_DIRS = ["Trae CN", "TRAE SOLO CN"]</code>)· 176-184(两个目录都用同一个 process)</span></p>
+<p><b class="lb">现象:</b>开着 <b>TRAE SOLO CN</b> 时点「写入 Trae」,挂件不拦、不提示"正在运行",直接写它的 <code>state.vscdb</code>;结果 SOLO 里看不到新模型(退出时被内存态覆盖),运气差时模型表错乱。反向:另一套没在跑的 Trae CN 也可能被误判"正在运行"而不让写。</p>
+<p><b class="lb">根因:</b>进程探测是<b>按客户端</b>而不是<b>按站点</b>的,两套各自独立的 DB 共用同一个 exe 名去探进程。对照作者对 WorkBuddy/WorkBuddy AI 共用进程名的小心处理(100-101 注释、2316 提示),这里是反方向的坑:两套安装 ≠ 同一个进程名。</p>
+<p class="fix"><b class="lb">修复后的正确效果:</b>每个 Trae 安装按自己的 exe 名探测;真在跑的那套在预告里 <code>blocked</code> 并被拒绝,另一套仍可写。做法:<code>TRAE_DIRS</code> 扩成 <code>[(目录名, 进程名)]</code>,<code>Site.process</code> 逐站填。</p></div>
+
+<div class="bug p1"><h4><span class="sev">P1-9</span>构建验证脚本自身"永远成功"(两条假绿链,详见第六节)<span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">build/verify-push.js(全文无 <code>process.exit(1)</code> 的失败路径)· build/launch-debug.ps1:18-22(<code>Sort-Object</code> 排的是字符串)· build/probe-frontend.js:24-28(<code>classList</code> 被重复键覆盖)</span></p>
+<p><b class="lb">后果一句话:</b>"验证 token 没落盘"的脚本发现 token 落盘时<b>仍以 0 退出</b>;"永远选陈旧 exe"的调试启动器使整条 E2E 断言可能是在<b>测旧包</b>;而喂给前端探针的假 DOM 里 <code>classList.contains()</code> 恒 <code>false</code>,探针报出的"故障/通过"都不完全可信。这三条的共同风险是:<b>你以为验过了,其实没有。</b></p></div>
+
+<div class="bug p1"><h4><span class="sev">P1-10</span>429 / 网关 HTML 错误页被误判成「接口结构变了」:打断用户、置灰开关、当天不再签<span class="tag v-run">⚠ 依赖网关行为</span></h4>
+<p><span class="loc">app/core/src/checkin.rs:498-510(HTTP 层只特判 401/403/404/5xx)· 114-116 · 236-241(<code>shape</code> 前缀算当天完结)</span></p>
+<p><b class="lb">现象:</b>限流时段(00:00–00:10)网关回一帧 429 HTML 时,界面弹"接口结构变了"级别的通知、签到开关被<b>置灰</b>、当天不再自动签;稍后重试本来就能成。WorkBuddy 主域 4xx 非 JSON 时还会直接 <code>return</code>,备用域名一个都不试。<span class="ev">                last = if status.is_server_error() {
+                    Outcome::Retry(format!("HTTP {}", status.as_u16()))
+                } else {
+                    Outcome::BadShape(format!("HTTP {} · 响应不是 JSON", status.as_u16()))
+                };</span></p>
+<p class="fix"><b class="lb">修复后的正确效果:</b>429 与非确定的 4xx 映射为 <code>Retry</code>(走退避、可继续回退域名、不打扰用户);只有"JSON 解得出但结构完全认不出"才用 <code>BadShape</code>。</p></div>
+
+<h2 id="p2">三、P2:边界条件、口径不一致、界面承诺与实情不符</h2>
+
+<div class="bug p2"><h4><span class="sev p2">P2-1</span>「余额上涨」被算成一次申请:申请倒计时被顶回去 <span class="tag v-run">⚠ 依赖跳升幅度</span></h4>
+<p><span class="loc">fetch.rs:148 <code>CLAIM_JUMP_MIN_DELTA = 20.0</code> · fetch.rs:560-563 · store.rs:259-266</span></p>
+<p><b class="lb">现象:</b>明明 14 天已到、可以去申请,卡片却显示"再等 N 天可申请"(从一次<b>预扣退还</b>的时间起算),用户白等。<b>根因:</b>判据只有下限没有上限,也不要求"跳升后落在额度线上":<code>pair[1].1 - pair[0].1 &gt;= min_delta</code>。而平台事实是"4SAPI 无充值时余额上涨 = 失败请求退还预扣"(项目已确认的平台事实)——一次大请求的退还完全可能 ≥¥20。机器休眠后首轮会把多天差值合成一个跳升,误判面更大。</p>
+<p class="fix"><b class="lb">修法:</b><code>last_jump_since</code> 加 <code>target</code>(=<code>cfg.amount</code>)参数,要求跳升后落在额度带内(<code>|after - amount| &lt;= amount*0.15</code>),并要求相邻两条快照间隔 &lt; 30 分钟。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-2</span>DeepSeek/Hapi 的「账户当前不可用」被当成取数失败,且不给任何文案 <span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">providers.rs:291-295(<code>valid: is_available</code>)、334(<code>valid: isValid</code>)· fetch.rs:396-409、936-952(<code>prev.error = result.error</code>)</span></p>
+<p><b class="lb">现象:</b>余额真耗尽/账号被停用时,卡片不显示 <code>¥0.00</code> 与"余额已用尽",而是继续挂着<b>上一次的旧余额</b>,提示只有"数据来自上次快照"、没有原因;同时这次被判失败 → 不写快照(fetch.rs:979-981 只在 <code>success</code> 时写),于是"0 余额"这个事实永远进不了历史,"今日消耗"偏小。轮询侧还会把它计入 failures 而退避到 900 秒。</p>
+<p class="fix"><b class="lb">修法:</b>服务器对<b>状态</b>的答复(配额型业务事实)要当成功取数写快照、显示真实数字;<code>valid=false</code> 时至少补一句 <code>error</code> 文案;「凭据无效/接口结构变了」才算失败。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-3</span>WorkBuddy 备用域名带着主域名的 Origin/Referer → 403 被误报成「网页登录已过期」 <span class="tag v-run">⚠ 需实测备用域反应</span></h4>
+<p><span class="loc">providers.rs:871-879(静态 Origin)· fetch.rs:324(所有域名共用同一份头)· fetch.rs:390-403、910-912</span></p>
+<p><b class="lb">现象:</b>主域抖动时本轮改打 <code>www.codebuddy.cn</code> 拿到 403,界面提示「网页登录已过期 · 在挂件里重新登录一次即可」;用户重登仍失败,永远不知道真因是跨域头不对。<b>根因:</b><span class="ev">        url: "https://www.workbuddy.cn/billing/meter/get-user-resource",
+        fallback_urls: &amp;["https://www.codebuddy.cn/billing/meter/get-user-resource"],
+            ("Origin", "https://www.workbuddy.cn"),</span>而 <code>extra_headers</code> 在全库只有一处应用(fetch.rs:324 的循环),对回退链每个地址都发同一份。本仓库自己的注释(providers.rs:855「一旦发错就是 403」)说明这类网关确实校验 Origin。两种结果都必须修:<b>要么 403 骗人,要么会话 cookie 被发到与登录域不同的 host(泄露)</b>。</p>
+<p class="fix"><b class="lb">修法:</b>头按实际请求 URL 生成(<code>headers_for(url)</code>)或给 <code>ProviderDef</code> 加 <code>fallback_headers</code>;若 codebuddy.cn 没实测过同账同接口,直接把 <code>fallback_urls</code> 清空。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-4</span>「上月同期」环比窗口按固定秒数平移,月末会跨进本月 <span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">fetch.rs:601-604</span></p>
+<p><span class="ev">            store.consumption_since(def.id, local_prev_month_start(), local_prev_month_start() + (now - month0))</span><b>现象:</b>本月 29–31 号时「本月消耗 · 环比上月」系统性偏大/偏小(↑↓ 百分比不真实),2 月尤其明显。<b>根因:</b>把本月"已过秒数"硬加到上月 1 号上——3 月 31 日时终点落到 <b>3 月 3 日</b>,窗口跨进本月,把本月消耗算进了上月基线;而且该表达式调用 <code>local_prev_month_start()</code> 两次,跨零点时两次结果不同。</p>
+<p class="fix"><b class="lb">修法:</b>终点钳到上月底 <code>.min(local_month_start() - 1)</code>,并取一次 <code>prev0</code> 复用;更严谨是按"上月同日(min(当月 day, 上月天数))"逐字段构造。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-5</span>配置读取把「数据库出错」吞成「没有这条设置」→ 配置可能被静默重置为默认 <span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">store.rs:303-311 · config.rs:165-180 · models.rs:693-697</span></p>
+<p><b class="lb">现象:</b>某次读库异常(损坏、磁盘抖动)后,<b>隐藏渠道被解除隐藏并恢复对外发请求</b>、开机自启/签到开关/窗口位置回默认、模型缓存当作不存在重新拉取,而界面没有任何"存储异常"提示。<span class="ev">            .query_row(...).ok()
+              None =&gt; Ok(Self::default()),</span><b>根因:</b><code>get_setting</code> 用 <code>.ok()</code> 把 <code>SQLITE_CORRUPT</code>/<code>SQLITE_IOERR</code> 全折叠成 <code>None</code>,而 <code>try_load</code> 把 <code>None</code> 解释成"库里没这行 → 返回默认(正常)"。项目此前专门修过 JSON 解析失败那一支(P2-11 的教训就是「解析失败绝不回落 default——那会把隐藏渠道静默解除隐藏」),<b>同一条红线在 DB 错误这一支还漏着</b>。</p>
+<p class="fix"><b class="lb">修法:</b><code>get_setting</code> 改返回 <code>Result&lt;Option&lt;String&gt;&gt;</code>,只对 <code>QueryReturnedNoRows</code> 给 <code>None</code>,其余错误上抛;调用方沿用上次配置或明确报错。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-6</span>回滚自身不是原子操作,且失败被吞、文案无条件说「已回滚」 <span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">inject.rs:656-661(<code>let _ = restore(&amp;dir);</code> + 硬编码文案)· 601-618(<code>restore</code> 用 <code>fs::copy</code>)· lib.rs:1812-1825(回滚前"目标在跑就拒"的判定依赖台账命中)</span></p>
+<p><b class="lb">现象:</b>两种错觉。(a) 弹「已回滚到写入前的备份」,但回滚其实失败了(目标被占用/权限不足),坏内容仍在客户端配置里,用户以为安全了;(b) 点「回滚这次写入」时客户端正在运行,回滚会把它自己的配置文件<b>截断成半截文件</b>(先清空目标再逐块拷),此时原文件已被破坏。台账只留 20 条、Trae 的备份路径又是空的(P0-2),匹配不上 owner 时<b>不做任何进程检查</b>就直接盖。</p>
+<p class="fix"><b class="lb">修法:</b><code>restore</code> 内部改为每文件 temp+rename;<code>commit</code> 收集 restore 结果拼进错误消息(要么整批成功要么如实说"回滚未完成,备份仍在 X");从备份目录路径前缀反推所属客户端,而不是只查台账。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-7</span>界面上写着「密钥不进备份」,但备份目录里躺着多份历史明文密钥 <span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">inject.rs:12-14(模块承诺)· app.js:3345 附近同款文案 · 563-579(<code>backup</code> 原样拷贝)· 40/582-597(只按数量清理,不按时间过期)</span></p>
+<p><b class="lb">现象:</b>用户在 <code>~/.workbuddy/backup-inject/&lt;时间戳&gt;/models.json</code>、<code>~/.zcode/v2/backup-inject/*/config.json</code>、Trae 的 <code>state.vscdb</code> 备份里能翻出<b>最多 5 份历史明文 API Key</b>。换过一次 4SAPI 密钥后,旧密钥仍散落几个目录;卸载挂件后这些目录原样留在主目录,没有任何清理入口。而界面承诺是「不进备份」。</p>
+<p><b class="lb">根因:</b>备份"照原样拷目标文件"本身没错(回滚需要),错的是<b>无条件承诺</b>:备份拷的就是含 <code>apiKey</code>/<code>ak</code> 的文件,且清理只按数量不按时间,密钥轮换后旧快照不会失效,产品里也没有"清除全部备份"的动作。<span class="ev">//! 密钥处理:只从 Windows 凭据管理器**现读现写**,不在挂件任何地方留副本
+//! (不进数据库、不进日志、不进备份 —— 备份只备份目标客户端自己的文件)。</span></p>
+<p class="fix"><b class="lb">修法:</b>把承诺改成事实(预告里写明"备份目录会含历史明文密钥,保留最近 5 份,位于 X"),并提供「清除全部备份」动作;换密钥后提示一次。同步修 inject.rs:12-14 与前端文案。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-8</span>备份只留 5 份、台账却留 20 条:较早的记录点就报错 <span class="tag v-ok">✅ 常量已核</span></h4>
+<p><span class="loc">inject.rs:40 <code>KEEP_BACKUPS=5</code> · 455 <code>LOG_KEEP=20</code> · 582-597 <code>prune_backups</code> 静默删</span></p>
+<p><b class="lb">现象:</b>历史列表能看到十来条,但只有最近几条的「回滚」按得动;点稍早的那条 → 「回滚失败:备份目录不存在」,用户既不知道备份被自动清过,也不知道是哪次清的。反向也成立:<code>let _ = std::fs::remove_dir_all(old)</code> 失败被吞,备份会超 5 份,注释"免得天天写把用户目录撑大"的目的落空;而且 <code>prune_backups</code> 只判 <code>is_dir()</code>,用户在 <code>backup-inject/</code> 里<b>自建的目录会被当成旧备份删掉</b>。</p>
+<p class="fix"><b class="lb">修法:</b>两个上限对齐(或给过期记录标灰并写明"备份已清理");只清理名字匹配 <code>%Y%m%d-%H%M%S</code> 的目录;删除失败收集成提示。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-9</span>Trae 每次写入都整库改写,重复点击没有幂等保护 <span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">inject.rs:1241-1296(循环末尾无条件 UPDATE)· 1212(LIKE 模式)· 对照 1860-1890(<code>remove_trae_site</code> 有 <code>changed</code> 判断)、788-791(WorkBuddy 有 <code>same</code> 判定)</span></p>
+<p><span class="ev">            .prepare("SELECT key FROM ItemTable WHERE key LIKE '%AI.agent.model.model_list_map'")
+        conn.execute("UPDATE ItemTable SET value = ?1 WHERE key = ?2",</span><b>现象:</b>即使内容完全没变,每次点「写入 Trae」都会整库改写一遍(文件时间戳变、产生新 <code>-wal</code>);配合 P0-2(无备份),写坏了没有任何还原点。<b>根因:</b>写入路径没有 <code>changed</code>/<code>same</code> 判定(另两家有);取键的 SQL 里 SQLite 的 <code>_</code> 是<b>单字符通配符</b>,命中范围比注释意图更宽,而命中后只要求"能解析成 JSON object 且成员是 array"就 push,不校验它确实是模型表。</p>
+<p class="fix"><b class="lb">修法:</b>加 <code>changed</code> 位,无变化跳过 UPDATE;取键后按字面量精确复核(<code>contains</code> 或 <code>LIKE ... ESCAPE</code>)。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-10</span>ZCode 写入是整对象替换,用户自配的额外参数会消失 <span class="tag v-run">⚠ 取决于用户是否配过</span></h4>
+<p><span class="loc">inject.rs:926-933(<code>options</code>)· 981-988(<code>access</code>)· 对照 696-702(WorkBuddy 明确做了"用户自己加的字段原样保留")</span></p>
+<p><b class="lb">现象:</b>用户在 ZCode 的 4SAPI provider 上自己加过自定义 header / organization / 超时 / 代理等参数,点一次「写入」后这些参数消失,只剩挂件写的三个字段,表现为某些模型突然不鉴权或走错组织。<b>根因:</b><code>obj.insert("options", json!({...}))</code> 替换整个对象而非合并字段。同一产品里 WB 讲了保留、ZCode 没讲,行为不一致。</p>
+<p class="fix"><b class="lb">修法:</b>取 <code>obj.get_mut("options")</code> 后只逐键覆盖 <code>apiKey</code>/<code>baseURL</code>;<code>access</code> 同理;预告里写明改了哪两个字段。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-11</span>接入地址填成完整端点时,四家落地的 URL 全部拼错 <span class="tag v-run">⚠ 取决于用户填法</span></h4>
+<p><span class="loc">inject.rs:349(只去尾斜杠)· 355-358(无条件追加)· 对照 lib.rs:1349-1357 把配置值原样当"到 /v1 为止"</span></p>
+<p><b class="lb">现象:</b>设置里把「写进客户端的接入地址」填成厂商文档常见的 <code>https://4sapi.com/v1/chat/completions</code> 后:WorkBuddy/ZCode 得到带 <code>/chat/completions</code> 的错值,Trae 得到 <code>.../chat/completions/chat/completions</code>,四个客户端的模型全部点不动/404,而界面只会显示"写入成功"。<b>根因:</b><code>ModelSpec::new</code> 不规范化 base,<code>chat_completions_url()</code> 直接 <code>format!("{}/chat/completions", base_url)</code>。</p>
+<p class="fix"><b class="lb">修法:</b>构造时剥掉尾部 <code>/chat/completions</code> 得到 <code>/v1</code> 形态(或检测已含后缀就不再追加),并在预告里回显规范化结果。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-12</span>取数客户端是否跟随 Windows 系统代理——与项目既有结论冲突,需当场定论 <span class="tag v-run">⚠ 需真机验证</span></h4>
+<p><span class="loc">fetch.rs:731-745(<code>Client::builder()</code> 只设 timeout/UA)· providers.rs:892-894(chatgpt.com 无备用入口)</span></p>
+<p><b class="lb">子代理结论:</b>reqwest 0.12 只读 <code>HTTP_PROXY/HTTPS_PROXY</code> 等环境变量,<b>不读注册表里的系统代理</b>,所以"只在系统设置/IE 选项里配了代理"的用户,Codex 卡会长期显示「无法连接(检查网络或代理)」。<br>
+<b class="lb">冲突点(重要):</b>本项目既有实测记录写的是「reqwest 0.12 默认 feature 已跟随系统代理,无需代码改动」,且 v0.1.12 真机确认过"无代理时显示无法连接属预期"。<b>两条不能同时成立。</b>我倾向的解释:那台机器上的代理工具是 TUN 模式或注入了环境变量,所以看起来"跟随了系统代理"。<br>
+<b class="lb">建议:</b>先做 10 分钟真机取证(只在系统代理里配、清空 env 变量,看 Codex 卡状态),再决定要不要显式读注册表或加一个设置项。<b>不要在取证前改代码。</b></p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-13</span>签到流水与统计的三处口径隐患 <span class="tag v-no">⏳ 部分未二次核</span></h4>
+<p><span class="loc">checkin.rs:134-141 + lib.rs:1107/1115(<code>&amp;today[..7]</code> 对空串会 panic)· store.rs:391-413(<code>checkin_of_day</code> 全库零调用,判"今天签过"走配置的 <code>done_for_day</code>,双轨)· lib.rs:1192-1207(流水与配置两次写都是 <code>if let Err</code> 记日志不回滚)</span></p>
+<p><b class="lb">说明:</b>UTC+8 定长偏移下 <code>beijing_day</code> 实际不会失败,但它的兜底是 <code>unwrap_or_default()</code> 返回<b>空串</b>,而调用方按"必为 YYYY-MM-DD"直接切前 7 字符——一旦走到兜底就是<b>打开面板即 panic</b>(全模块唯一的硬 panic 路径)。另外"哪天签过"这件事同时记在流水表和配置里,两轨可以不一致。</p>
+<p class="fix"><b class="lb">修法:</b><code>today.get(..7)</code> 判长度;二选一做权威判源(建议流水),否则删掉 <code>checkin_of_day</code>。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-14</span>密钥箱删除会留下「索引没了、密文永久躺在凭据管理器」的孤儿 <span class="tag v-ok">✅ 顺序已核</span></h4>
+<p><span class="loc">lib.rs:997-1006(先删索引后删凭据,失败只 <code>eprintln!</code>)· secrets.rs:39-45</span></p>
+<p><b class="lb">现象:</b>条目从界面消失(符合直觉),但若 keyring 删除瞬时失败,那把密钥的密文<b>永远留在</b> Windows 凭据管理器 <code>TokenScope:vault</code> 下——UI 再也列不出也删不掉(<code>vault_reveal</code> 会先校验索引存在),用户手动开凭据管理器也看不懂该删哪条。<span class="ev">        // 先删索引(用户视角"这条没了"),再删凭据;凭据删失败也不该把索引变回来
+        if let Err(e) = secrets::vault_delete(&amp;id) {
+            eprintln!("删密钥箱凭据失败({id}): {e}");</span></p>
+<p class="fix"><b class="lb">修法:</b>删除失败时把 id 记入待清理表,下次启动重试;或直接返回错误让用户知情。反方向(索引在、密文丢)已处理。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-15</span>「凭据库坏了」被重新吞成「未配置密钥」——P2-12 修过的坑从回显路径复发 <span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">secrets.rs:95-103 · lib.rs:119-127(<code>key_hint</code>)</span></p>
+<p><span class="ev">pub fn masked(provider_id: &amp;str) -&gt; Option&lt;String&gt; { let k = get(provider_id).ok().flatten()?;</span><b>现象:</b>凭据管理器服务停用/组策略禁用时,<code>get()</code> 会正确报"读取凭据失败",但界面回显走 <code>masked</code>,错误被吞成 <code>None</code> → 显示「未配置密钥」,用户反复重填(而写入其实也在失败)。<b>根因:</b><code>Err</code> 与 <code>Ok(None)</code> 再次混同,而 secrets.rs:74-76 的注释恰好描述过这个事故。附带:<code>secrets::exists</code> 全库零调用(已 grep 确认),是下一个误用点。</p>
+<p class="fix"><b class="lb">修法:</b><code>masked</code>/<code>exists</code> 返回 <code>Result</code>;<code>key_hint</code> 把"凭据库不可用"与"没配过"分开呈现;删掉 <code>exists</code>。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-16</span>登录判定认可的域名集合 ≠ 取 cookie 的域名集合 <span class="tag v-run">⚠ 需真机</span></h4>
+<p><span class="loc">weblogin.rs:17(<code>SITE_HOSTS</code> 含 codebuddy.cn)· 102-106 · lib.rs:189(<code>WB_SESSION_URL</code> 只有 workbuddy.cn)· 244-245</span></p>
+<p><b class="lb">现象:</b>登录窗导航到 <code>www.codebuddy.cn/console/…</code> 时会被判「登录完成」,但取会话只从 workbuddy.cn 的 cookie 罐读;若 cookie 落在 <code>.codebuddy.cn</code> 域,则永远读不到 → 界面显示「看着登录了却永远取不到数」——正是 weblogin.rs:12-14 注释自称要防的那类最难排查的问题。<b>次要点:</b><code>is_post_login</code> 只按 <code>"://"</code> 切分,不校验 scheme,<code>http://</code> 也算登录完成。</p>
+<p class="fix"><b class="lb">修法:</b>对 <code>SITE_HOSTS</code> 逐个 <code>cookies_for_url</code> 试读;加 <code>starts_with("https://")</code>。另注:同名 host-only 与 domain 级 cookie 并存时取的是罐子顺序的第一条,可能挑错那份(后果是 401 不是泄露),可一并按域名+path 择优。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-17</span>数据库没有任何版本化迁移机制:旧库形状与代码假设不符要等运行期才炸 <span class="tag v-ok">✅ 机制确认缺失</span></h4>
+<p><span class="loc">store.rs:43-100(只有 <code>CREATE TABLE IF NOT EXISTS</code>)· 359-361/377-385(按列名写、按位置读)</span></p>
+<p><b class="lb">现象:</b>升级后可能出现"签到流水写不进(界面'这个月领了多少'恒 0)"或"读流水整行错位"。<b>根因:</b><code>IF NOT EXISTS</code> 对已存在的表零作用——既不补列也不校验形状。git 历史显示 <code>checkin_log</code>(v0.1.26)与 <code>vault_items</code>(v0.1.28)都是整表新增,所以<b>现在</b>没出事;但 beta/dev 装机若曾以不同列集合建过这两张表,正式版不会自愈。没有 <code>PRAGMA user_version</code>、没有 <code>ALTER TABLE</code> 通道——下一次加列(比如给 snapshots 加 source)必然踩雷。</p>
+<p class="fix"><b class="lb">修法:</b>启动时按 <code>PRAGMA table_info</code> 检测缺列做 <code>ALTER TABLE ADD COLUMN</code>,再写 <code>user_version</code>;升级失败明确报错而不是留半套 schema。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-18</span>迷你柱图:3 小时前的旧数据被拉伸铺满 24 格;没数据时画成"真实零消耗" <span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">store.rs:270-301(286-291)· lib.rs:411-415</span></p>
+<p><span class="ev">        if rows.len() &lt; 2 { return Ok(vec![0.0; buckets]); }
+        let now = rows.last().unwrap().0;
+        let span = (now - from_ts).max(1) as f64;</span><b>现象:</b>24 小时曲线里,数据其实停在 3 小时前,这 3 小时的消费会被拉伸铺满 24 格,趋势看着像"一直在花";渠道从没取到过数时,画出一条与"真实零消耗"一模一样的平线,而不是"数据不足"。<b>根因:</b>归一基准用的是"最后一条快照"而不是请求窗口终点;<code>&lt;2</code> 条时返回全 0,而返回值不携带"没数据"信息(而 fetch.rs 一路的 <code>Option</code> 语义是刻意区分"数据不足"的,两处纪律不一致)。</p>
+<p class="fix"><b class="lb">修法:</b><code>series</code> 加 <code>to_ts</code> 参数按真实窗口归一;空数据返回空 Vec,前端画"数据不足"。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-19</span>WorkBuddy 不校验业务 code;积分包超过 200 笔时静默漏报 <span class="tag v-run">⚠ 取决于数据量</span></h4>
+<p><span class="loc">providers.rs:528-542、594-602、674-680(<code>PageSize:200</code>)</span></p>
+<p><b class="lb">现象:</b>平台回 <code>code!=0</code> 但 <code>Accounts</code> 是空数组时(权限/风控类答复),用户看到的是「无可用的积分包」——一个听起来像账户正常的假结论,于是被引导去积分商城而不是重新登录。积分包多于 200 笔时,靠后的到期记录整批消失,「近 30 天将过期」直接漏报。<b>根因:</b>extractor 只在 <code>Accounts</code> <b>缺失</b>时读 <code>msg</code>;存在(哪怕是 <code>[]</code>)就当成功。违反了本项目对签到侧立的规矩「HTTP 200 不代表成功,必须看 code」。</p>
+<p class="fix"><b class="lb">修法:</b>读数组之前先看 <code>code</code>;分页处比较响应里的总数字段与 <code>accounts.len()</code>,不等就写明"仅显示前 200 笔"。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-20</span>OpenCode 的主数语义两处打架:大数走「周期」窗,<code>remaining</code> 走最紧窗 <span class="tag v-no">⏳ 未二次核</span></h4>
+<p><span class="loc">providers.rs:224(<code>main: label == "周期"</code>)· 247-258(<code>tightest</code>)</span></p>
+<p><b class="lb">现象:</b>同一渠道在"依赖 <code>c.remaining</code> 的路径"(窗口缺失时的回退、快照历史、报表)与主界面显示不同的数。<b>根因:</b>主窗由<b>中文标签字符串相等</b>推出——正是该字段注释(providers.rs:48-50)声称要避免的"标签承载选择语义"。哪天「周期」改名「每月」,<code>main</code> 静默消失,前端回落到 <code>wins[0]</code>(5 小时窗),托盘数的含义当天就变。</p>
+<p class="fix"><b class="lb">修法:</b><code>main: key == "monthly"</code>(<code>win()</code> 同时持有 key 与 label);<code>remaining/used</code> 取 main 窗的值,最紧窗另存到 <code>extra</code> 展示。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-21</span>进程探测失败被解释成"客户端没在运行" <span class="tag v-run">⚠ 取决于机器环境</span></h4>
+<p><span class="loc">inject.rs:255-263 · 266-295(<code>run_with_timeout</code> 等结束后才读 stdout)</span></p>
+<p><span class="ev">    match run_with_timeout(cmd, 5) {
+        Some(out) => tasklist_has(&amp;out, process),
+        None => false, // 拿不到进程表时不阻塞用户;真正的保护是「先备份 + 读回校验」
+    }</span><b>现象:</b>进程列表很长、或 <code>tasklist</code> 被杀软/策略拖慢、或输出超过管道缓冲(Windows 常见 4 KB)时,挂件永远显示四个客户端"未运行",于是用户在客户端开着的情况下点「写入」——正是模块开头第 6 行声明要绝对避免的场景。<b>根因:</b><code>run_with_timeout</code> 先把 stdout 设成 piped,却在 <code>try_wait</code> 轮询到进程退出<b>之后</b>才读;子进程写满管道会阻塞,循环只会等,5 秒后 kill 返回 <code>None</code>,落进 <code>None =&gt; false</code>。<b>而注释兜底的"先备份+读回校验"对 Trae 恰好两条都没有(P0-2),这层退化的兜底是空的。</b>284 行的 <code>eprintln!</code> 已经自陈「进程探测退化为『未运行』」,说明这是已知代价——只是它把风险转嫁给了 Trae 这条没有备份的路径。</p>
+<p class="fix"><b class="lb">修法:</b>边等边读(291-292 行是等 <code>child</code> 结束后才 <code>read_to_string</code>);<code>process_running</code> 返回 <code>Option&lt;bool&gt;</code>,把"探测失败"当需要提示的状态而不是"没在跑"。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-22</span>坏掉的备用入口永远排在第一位;多凭据时单轮耗时能超出轮询周期 <span class="tag v-ok">✅ memo 生命周期已核</span></h4>
+<p><span class="loc">fetch.rs:301-303(预算注释)· 709-711 · 917-921(只在成功时 insert,全库无 remove)· 425-438 · 900-914</span></p>
+<p><b class="lb">现象:</b>某个备用入口挂掉后,若它正好是 <code>last_good</code>,则<b>每一轮</b>都要先等满 8 秒超时才切下一个域名;Trae/Codex 本机有多份登录态时,"每凭据 × 每域名"叠加,整轮可能跑到 30–60 秒以上,托盘刷新明显迟钝。<b>根因:</b>全库 grep 确认 <code>url_memo</code> 只有 711/739/887/918 四处,即<b>声明、初始化、读、写</b>——没有任何删除;注释「4 个入口最坏 32 秒,还收在 60 秒轮询周期内」只算了单凭据,而实际是 <code>for cred in creds</code> 套整条域名链;也没有整轮 deadline。</p>
+<p class="fix"><b class="lb">修法:</b>传输层失败且没用到 memo 地址时 <code>remove</code>;给每渠道每轮一个时间帽,超时即以 stale 快照出图。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-23</span>系统时钟回拨会让界面永久不再更新(无提示) <span class="tag v-ok">✅ 表达式已核</span></h4>
+<p><span class="loc">fetch.rs:776-790(781 行)</span></p>
+<p><span class="ev">            if let Some((ts, views)) = last.as_ref() {
+                if now_ts() - *ts &lt; 5 {</span><b>现象:</b>用户手动改系统时间、或 NTP 向前校正后,托盘/面板数字"卡住不动",点立即刷新也没用(要等时间重新走到 <code>ts+5</code> 之后才恢复),且没有任何提示。<b>根因:</b>用墙钟 <code>i64</code> 相减;时钟倒退时差值为负,<code>负数 &lt; 5</code> 恒真 → 永久复用。</p>
+<p class="fix"><b class="lb">修法:</b>改用单调时钟 <code>std::time::Instant</code>,或最小改动 <code>&amp;&amp; *ts &lt;= now_ts()</code> 并把负差按"窗口已过期"处理。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-24</span>响应体无大小上限;证书类错误被归成"换个域名试试" <span class="tag v-no">⏳ 未二次核</span></h4>
+<p><span class="loc">fetch.rs:328-355 · 104-106(FailKind 分类)</span></p>
+<p><b class="lb">现象:</b>某入口返回超大 HTML/错误页时被完整读进内存再解析(卡顿);企业网关证书拦截/系统时钟错时,表现为"对四个 4SAPI 域名逐个重试 8 秒",用户等 32 秒后只看到「无法连接(检查网络或代理)」,不知道是证书问题——而证书问题换域名是同一个答案。</p>
+<p class="fix"><b class="lb">修法:</b><code>Content-Length</code>/<code>bytes()</code> 设 2 MB 上限;证书错误走独立分类(<code>retryable=false</code>)并给可行动文案。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-25</span>Trae 的"已过期包"过滤没走时间戳归一,与到期表用的单位不一致 <span class="tag v-ok">✅ 我已核到行号</span><span class="tag v-run">⚠ 现网该字段仍为秒</span></h4>
+<p><span class="loc">providers.rs:453-459(裸 <code>t as i64</code> 比较)对照 466-470(<code>ts_norm</code>)</span></p>
+<p><span class="ev">        if let Some(t) = p.get("expire_time").and_then(num) {
+            let t = t as i64;
+            if t &gt; 0 &amp;&amp; t &lt;= now { continue; }</span><b>现象:</b>若 Trae 某版把 <code>expire_time</code> 改成毫秒(本仓库已因 WorkBuddy 同类问题专门写过 <code>ts_norm</code>,说明上游单位确实不稳),已过期的包会被当成有效包计入余额,卡片比官方口径偏大——就是 v0.1.x 修过的那个现象换一种形式复发。<b>今天不出错</b>,属防御性不一致。</p>
+<p class="fix"><b class="lb">修法:</b>同一字段读一次、归一一次,过滤过期与生成到期表共用。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-26</span>无限额度用 -1 标记的部署会产出负余额(<code>¥-0.00</code>) <span class="tag v-run">⚠ 取决于部署写法</span></h4>
+<p><span class="loc">providers.rs:152-169</span></p>
+<p><b class="lb">现象:</b>卡片显示 <code>¥-0.00</code>,进度条拿到负分子,排序/告警色按负比例算,该渠道被排到最前并标红。<b>根因:</b>注释承认「granted &lt; available 只出现在无限额度用 0/-1 标记之类的部署写法」,但只对 <code>used</code> 做了 <code>.max(0.0)</code>,<code>remaining</code> 对 <code>available = -1</code> 得到 <code>-0.0</code> 直接发出。</p>
+<p class="fix"><b class="lb">修法:</b>识别无限额度标记时 <code>remaining/total = None</code>,在 <code>extra</code> 写明「无限」,不发负数。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-27</span>「本月已领 N 分」从来没显示过:前端读 <code>month_credits</code>,后端序列化出来是 <code>monthCredits</code> <span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">app/src/app.js:2925 · app/src-tauri/src/lib.rs:1055-1078(<code>CheckinState</code> 带 <code>#[serde(rename_all="camelCase")]</code>)、1075/1114/1130</span></p>
+<p><span class="ev">        (s &amp;&amp; s.month_credits ? " · 本月已领 " + s.month_credits + " 分" : "") +</span><b class="lb">现象:</b>设置→刷新与启动→每日签到里,那一行永远只有「每天 00:23 后自动领,失败当天退避重试」,后面那句「· 本月已领 700 分」<b>从来不出现</b>,哪怕他这个月天天领到了。用户会以为签到积分根本没到账。</p>
+<p><b class="lb">根因:</b>字段名大小写口径不一致。同一个函数里 <code>s.enabled / s.auto / s.log</code> 都写对了 camelCase,<b>只有这一个字段漏了</b>——典型的"契约靠手写"的后果。前端对 <code>undefined</code> 短路成空串,所以不报错、静默少一句。</p>
+<p class="fix"><b class="lb">修法:</b>改成 <code>s.monthCredits</code> 并走 <code>points()</code> 格式化。建议顺带加一条自检:全文件搜"带下划线的字段读法"应命中 0 处。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-28</span>点一下别的渠道的「恢复」眼睛,刚粘进输入框、还没保存的密钥就被清空 <span class="tag v-no">⏳ 子代理逐行核过,我未二次核</span></h4>
+<p><span class="loc">app/src/app.js:1330-1336(<code>refreshChCards</code> 的重建守卫)· 1256/1269(<code>&lt;input id="key-${c.id}"&gt;</code>)· 2215-2231(<code>chvis/chshowall</code>)</span></p>
+<p><b class="lb">现象:</b>在设置→渠道里把 DeepSeek 展开、粘一长串 API Key 进输入框,然后想起旁边 Hapi 被隐藏了,顺手点一下 Hapi 卡上的「恢复」——回来时 DeepSeek 的输入框<b>空的</b>,粘的密钥一个字都不剩,得回剪贴板再粘一次。</p>
+<p><b class="lb">根因:</b>守卫只放行「焦点正停在 <code>#chList</code> 内的 INPUT/SELECT」;点眼睛之后 <code>activeElement</code> 是那个 <code>&lt;button class="eye"&gt;</code>,标签名不匹配 → 放行 → <code>renderChCards()</code> 对整个 <code>#chList</code> 做 innerHTML 覆写,输入框是新建元素、值为空。<span class="ev">  if (ae &amp;&amp; ae.closest &amp;&amp; ae.closest("#chList") &amp;&amp; (ae.tagName === "INPUT" || ae.tagName === "SELECT")) return;</span></p>
+<p class="fix"><b class="lb">修法:</b>重建前把 <code>[id^="key-"]</code> 的值存进草稿 map 并回填;或把守卫放宽成"#chList 内有任何非空输入就不重建,只更新状态文本";或让显隐动作做定点 DOM 更新。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-29</span>每轮取数把展开的详情整块重建:翻到第 14 笔的滚动位置、正选中的文本一起没了 <span class="tag v-no">⏳ 同上</span></h4>
+<p><span class="loc">app/src/app.js:729-730(<code>#list</code> 全量 innerHTML)· 747-755(展开行 <code>body.innerHTML = renderDetail(c)</code>)· styles.css:174(<code>.extab</code> 是 168px 的可滚动小表)</span></p>
+<p><b class="lb">现象:</b>点开某渠道,在「逐笔到期」小表里翻到第 14 笔找那笔快过期的积分;面板每 60 秒一轮取数(折叠 5 分钟),到点就:小表回到第 1 笔、刚选中准备复制的文本没了。得重新点开、重新翻。全文件没有任何 <code>scrollTop</code> 的保存/恢复。</p>
+<p class="fix"><b class="lb">修法:</b>最小改动是 <code>render()</code> 首尾存/恢复 <code>#list</code> 与 <code>.extab</code> 的 <code>scrollTop</code>;正解是轮询走"按 id 原位更新数值节点",详情只在字段真变了时重建。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-30</span><code>clampToMonitor()</code> 没被 await,绕过了「几何操作必须串行」这条既定纪律 <span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">app/src/app.js:1445(<code>clampToMonitor();</code>)· 1464(它是 <code>async</code>,内部 3 个 await + <code>setPosition</code>)· 1448-1450(纪律原文)</span></p>
+<p><b class="lb">现象:</b>把贴在屏幕右下角的胶囊展开成面板时,面板有一瞬间跳到别的位置、或被顶出屏幕边缘一截;快速连点「紧凑 ⇄ 面板」时窗口尺寸与内容对不上(偶尔出现"窗口是面板尺寸、内容却是顶栏"的残影)。这正是项目历史上「表单折叠竞态」的同类现象。</p>
+<p><b class="lb">根因:</b>队列纪律原文写着「<b>一切改窗口几何的入口都排进同一条 promise 链,类与尺寸成对落地</b>」,而 <code>applyFormInner</code> 作为队列体,最后一行 <code>clampToMonitor();</code> <b>没加 await 就 resolve 了</b>——队列以为这一环完成,开始跑下一环(比如 <code>dockLayout</code>),而 <code>clampToMonitor</code> 还在拿<b>上一环尚未落地时</b>的尺寸算夹回坐标,并把它写到队尾之后才落地。<span class="ev">  clampToMonitor();
+}</span></p>
+<p class="fix"><b class="lb">修法:</b>加 <code>await</code> 即自动归队;或按 <code>dockLayout/dockExit</code> 已有的写法拆成 <code>clampToMonitorNow()</code> + 包一层的 <code>clampToMonitor(){return enqueueGeom(clampToMonitorNow)}</code>。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-31</span>按 Esc 关错层:关掉的是整个设置页,几分钟前那个「写入确认」弹层留在原地等下次开门 <span class="tag v-no">⏳ 同上</span></h4>
+<p><span class="loc">app/src/app.js:2693-2708(Esc 链只认 <code>#updOv</code>)· 3213-3223 与 3408(<code>#mdlOv</code> 与 <code>MDL.sheet</code>)· 1700-1703(<code>closeManage</code> 不清 <code>MDL.sheet</code>)</span></p>
+<p><b class="lb">现象:</b>在模型页点「写入」,确认弹层盖住整个设置页;改主意按 Esc → <b>整个设置页被关掉</b>回到面板。再点「设置」,页面直接开在模型页签,而那个「写入 · gpt-xxx」的确认弹层<b>凭空又站在那儿,「写入」按钮还能点</b>。弹层也没有背景点击关闭、没有焦点收拢,Tab 会跑到被遮住的底层按钮上。</p>
+<p><b class="lb">后果:</b>用户可能在毫无上下文的情况下点下去一次他早就不想做的写入。</p>
+<p class="fix"><b class="lb">修法:</b>Esc 链最前面加 <code>#mdlOv</code> 分支;<code>closeManage()</code> 里把 <code>MDL.sheet</code> 与 <code>VAULT_EDIT</code> 一起作废;给遮罩自身加点击关闭(判 <code>e.target === ov</code>)。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-32</span>11 处提交设置里有 7 处把失败吞干净;开启签到那处则是"成功 toast 和失败 toast 同屏打脸" <span class="tag v-ok">✅ 调用点我已核</span></h4>
+<p><span class="loc">app/src/app.js:1407 / 2056 / 2312 / 2321 / 2335 / 2345 / 2354 / 2369(<code>.catch(() =&gt; {})</code>)· 2968(先 toast 失败、再继续 toast 成功)· 正确范例:1966-1975 的 <code>saveConfigAndRefresh</code></span></p>
+<p><b class="lb">现象:</b>改字号 / 阈值 / 排序 / 胶囊选择 / 显隐 时如果写库失败,界面"咔"地生效了、<b>重启后回到老值</b>,全程零提示。<code>ckSetEnabled</code> 那处更直白:先弹「保存失败:…」,紧接着又弹「已开启 Trae 签到」,两句话互相打脸,用户不知道开关到底有没有生效。</p>
+<p><b class="lb">根因:</b><code>await invoke(...).catch(e =&gt; showToast(...))</code> 这个写法把异常<b>在 await 处吃成了 fulfilled</b>,后面的成功 toast 与 <code>loadCheckin()</code> 照跑;其余七处连 toast 都不发。<span class="ev">    invoke("set_config", { config: CFG }).catch(() => {});</span>项目自己在 <code>saveConfigAndRefresh</code> 的注释里立过规矩「不许吞错:以前这里 catch(() =&gt; {}) 一吞,保存失败时界面只会『回到原状』」——<b>只有那一条遵守了</b>。</p>
+<p class="fix"><b class="lb">修法:</b>抽一个 <code>saveCfg()</code>(try/catch + 红 toast + 回滚 <code>CFG</code> + 重渲染),11 处统一过去;成功 toast 只在 <code>await</code> 成功后发。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-33</span>主渲染路径没有兜底:后端成功 + 前端抛异常 = 整块列表空白,还被报成「取数失败」 <span class="tag v-no">⏳ 子代理核过</span></h4>
+<p><span class="loc">app/src/app.js:699(<code>render()</code> 无 try/catch)· 3469-3478(<code>refresh()</code> 的 try 把 <code>render()</code> 也包进去了)· 正确范例:3141-3149 的 <code>renderModels</code></span></p>
+<p><b class="lb">现象:</b>某次升级后后端多返回/改了一种形状,用户打开面板就是<b>整块列表空白</b>或停在上一轮旧数字,底栏仍写「1 正常」,重启也没用。而同一个人如果在模型页遇到同类问题,会看到一条「模型页渲染出错:…」的黄框——因为那里加了保护。</p>
+<p><b class="lb">根因:</b><code>app.js:3140</code> 的注释自己就记着这个坑:「渲染异常不许把界面留在『正在取…』上(真机踩过:后端成功 + 前端抛异常,看着像在加载)」,并给 <code>renderModels</code> 包了 try/catch;但 <code>render/renderRow/renderDetail/renderSummary/fitCompact/renderPillFace</code> 这条主路径一个都没包。而且 <code>refresh()</code> 的 try 里包含了 <code>render()</code>,渲染抛错会被<b>当成取数失败</b>再 toast 一次「取数失败:…」,信息还是错的。</p>
+<p class="fix"><b class="lb">修法:</b>给 <code>render()</code> 包同款 try/catch(catch 里把 <code>#list</code> 换成「渲染出错:原因」并 toast);把 <code>render()</code> 挪出 <code>refresh()</code> 的 try;可再按行 try,让坏的那行单独降级。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-34</span>金额型比例不钳位:改小「单次额度」后出现「剩 125%」,负余额时进度条宽度是非法值 <span class="tag v-ok">✅ 分母表达式我已核</span></h4>
+<p><span class="loc">app/src/app.js:102-111 · 300 / 366(「剩 N%」)· 437-439(<code>width:${pct}%</code>)· 1027(胶囊 tooltip)</span></p>
+<p><b class="lb">现象:</b>把 4SAPI 的「单次额度」从 300 改成 200(或平台手动多充一笔),余额还有 ¥250 → 那行立刻显示「剩 125%」,进度条被 <code>.bar{overflow:hidden}</code> 裁平成"看着像满格",tooltip 也写 125%。用户不知道 125% 是"超出本轮额度",只当程序算错了。<b>根因:</b>percent 分支做了 <code>Math.max(0, Math.min(100, …))</code> 钳位,amount 分支 <code>return c.remaining / denom;</code> <b>完全不钳</b>,既可 &gt;1 也可为负(负数会产出 <code>width:-20%</code> 这种非法 CSS,浏览器忽略 → 进度条退回默认宽度,与"0%"看起来一样)。</p>
+<p class="fix"><b class="lb">修法:</b>渲染层统一钳到 [0,1];「超出本轮额度」这种真信息用文字说明,而不是让条子溢出。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-35</span>模型页客户端列表检测失败时,界面说「这台机器没装 Trae/WorkBuddy/ZCode」 <span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">app/src-tauri/src/lib.rs:1780-1785</span></p>
+<p><span class="ev">    let Ok((clients, log, learned, dirty)) = scanned else {
+        return Ok(InjectOverview {
+            clients: Vec::new(),
+            log: Vec::new(),
+        });
+    };</span><b class="lb">现象:</b>模型页的「客户端」区直接空掉,看起来像"没装任何客户端",用户去重装客户端、甚至重装挂件。真实原因(<code>spawn_blocking</code> 任务 panic/被取消、探进程的 <code>tasklist</code> 异常)<b>完全没有出口,因为命令返回的是 <code>Ok</code></b>。同文件 <code>vault_list</code> 用的是 <code>map_err</code>,说明正确写法就在旁边。</p>
+<p class="fix"><b class="lb">修法:</b>改成 <code>Err(e) =&gt; return Err(...)</code>,界面显示「检测客户端状态失败:&lt;原因&gt; · 这是挂件的探测环节坏了,不代表你没装客户端」,并保留上一次成功的列表。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-36</span>「回滚这次写入」接受任意目录,且台账查不到就<b>不做任何运行中检查</b>(fail-open) <span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">app/src-tauri/src/lib.rs:1804-1829 · 落地点 app/core/src/inject.rs:601-619(<code>restore</code> 把目录里的文件拷进"它的上一级")</span></p>
+<p><span class="ev">        let path = std::path::PathBuf::from(backup.trim());
+        if !path.is_dir() {
+        if let Some(c) = inject::log_owner(&amp;log, &amp;abs) {
+            if inject::process_running(c.process()) {</span><b class="lb">两层问题:</b>① 路径来自前端,只做了存在性检查,于是这条命令等于「给 webview 一个把任意目录里的文件覆盖到另一个目录」的原语——面板一旦被注入(将来加了任何富文本渲染出 XSS),就能把攻击者准备的 <code>settings.json</code> / MCP 配置写进 Trae、WorkBuddy、ZCode 的配置目录,而这些客户端的配置项本身能拉起本地命令。② 台账匹配不到时(<b>P0-2 让 Trae 的备份路径恒为空、P2-8 让 20 条以外的记录没有备份、1687 行 <code>let _ = push_log</code> 写失败静默</b>)直接跳过"目标在跑就别回滚"这道保护,用户点回滚提示成功、客户端里配置却没变回来。</p>
+<p class="fix"><b class="lb">修法:</b>只允许回滚<b>台账里登记过</b>的 <code>backup_path</code>,且必须落在某客户端 <code>&lt;root&gt;/backup-inject/&lt;stamp&gt;</code> 结构下,否则拒了(「这条备份不在挂件台账里,出于安全不执行」);台账写入失败要拼进返回文案,告诉用户"这次以后可能回滚不了"。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-37</span>「未登录 WorkBuddy · 去登录」这条界面路径是死代码:后端两个调用点都把原因写成了 <code>None</code> <span class="tag v-ok">✅ 我已核到行号</span></h4>
+<p><span class="loc">app/src-tauri/src/lib.rs:1104(形参)· 1221 与 1235(两处都传 <code>None</code>)· 1097-1098(那句文案已经写好)· 前端消费点 app/src/app.js:2854</span></p>
+<p><span class="ev">            .map(|d| checkin_state_of(d.id, &amp;cfg, &amp;store, None))
+  if (s.note) return { text: s.note, btn: "去登录", act: "cklogin", warn: true };</span><b class="lb">现象:</b>WorkBuddy 没登录时,签到区本该直接显示「未登录 WorkBuddy 账号 · 在渠道卡上登录一次」并给「去登录」按钮。实际 <code>note</code> 永远是 <code>None</code> → 界面落到兜底文案「今天还没签 · 领积分」,用户点下去才在 toast 里看到一句红字,而且<b>没有可用的登录入口</b>——于是他反复点,每点一次最多打 3 个请求(与 P0-6 的"没有闸门"叠加)。<b>根因:</b>探测凭据这一步发生在 <code>run_checkin</code> 里,而列表渲染时跳过了它。</p>
+<p class="fix"><b class="lb">修法:</b>列表命令里对每个渠道试一次 <code>checkin_credential</code> 的 <code>err()</code> 当 <code>note</code>(注意要 <code>spawn_blocking</code> 包 <code>wb_session_of</code>,别在主线程/async 里直调),或让 <code>run_checkin</code> 失败时把错误写进 <code>entry.last_message</code> 并由 <code>checkin_state_of</code> 读出来。</p></div>
+
+<div class="bug p2"><h4><span class="sev p2">P2-38</span>启动失败是「双击什么都没发生」:没有窗口、没有图标、没有对话框 <span class="tag v-ok">✅ profile 与子系统标志我已核</span></h4>
+<p><span class="loc">app/src-tauri/src/lib.rs:1983-1987(<code>app_data_dir</code> 与 <code>Store::open(...)?</code>)· 2100(<code>TrayIconBuilder…build(app)?</code>)· 2175(<code>.run(…).expect("TokenScope 启动失败")</code>)· <code>src-tauri/Cargo.toml:49 panic = "abort"</code> · <code>main.rs:2 windows_subsystem = "windows"</code></span></p>
+<p><span class="ev">            let store = Store::open(&amp;dir.join("tokenscope.db"))?;
+        .expect("TokenScope 启动失败");</span><b class="lb">现象:</b>双击 <code>Grandettoken.exe</code> 后进程秒退,窗口、托盘图标、错误框一个都没有。最常见成因是 <code>tokenscope.db</code> 被上一个没退干净的实例或杀软占住(<code>Connection::open</code> 直接返回 Err)。用户只能重装,而重装又要覆盖同一个库文件。<b>根因:</b>release 是 GUI 子系统 + <code>panic="abort"</code>,<code>?</code> 与 <code>expect</code> 的信息只进 stderr,<b>stderr 没人看得见</b>。P2-14 当年已经为"非致命错误"修过一次(<code>take_startup_error</code>),致命这条漏了。</p>
+<p class="fix"><b class="lb">修法:</b>把启动期三步包成守卫:失败时弹一个系统消息框,或至少写 <code>%APPDATA%\com.wacil.tokenscope\startup-error.log</code>,文案带具体原因与建议(「数据文件被占用,请检查是否还有 Grandettoken.exe 在运行」)。</p></div>
+
+<h2 id="p3">四、P3:边角问题(成表;每条都可自行按位置复核)</h2>
+<table>
+<tr><th style="width:56px">ID</th><th style="width:170px">位置</th><th>用户/维护者会看到什么 → 根因 → 修法</th></tr>
+<tr><td>P3-1</td><td class="c">inject.rs:2290</td><td>多来源时「已配置」徽标串台:WorkBuddy 分支按 id 去重,而 ZCode/Trae 分支按 id+来源。改 <code>(id, source)</code>。</td></tr>
+<tr><td>P3-2</td><td class="c">inject.rs:140-149</td><td>账户 <code>wacil</code> 与 <code>wacilon</code> 并存时,目标路径显示成 <code>~on/.workbuddy/models.json</code> 这种怪串:<code>pretty</code> 用字符串前缀替换没要求分隔符。在 <code>Path</code> 上 <code>strip_prefix</code>。</td></tr>
+<tr><td>P3-3</td><td class="c">inject.rs:809-822</td><td>"只是换密钥"时读回校验形同虚设(只断言 id+url 相同,而这两项写前就这样),apiKey 与 settings 选中项都没纳入断言。校验强度不足,漏检概率低。</td></tr>
+<tr><td>P3-4</td><td class="c">inject.rs:548-550</td><td>用户用软链把 <code>~/.workbuddy/models.json</code> 指到同步盘时,一次写入把软链换成普通文件,同步断开;<code>with_extension("json.tmp-inject")</code> 语义误用;权限/占用类失败不带原始错误说明。temp 名改按文件名拼,失败按 <code>raw_os_error()</code> 映射中文原因。</td></tr>
+<tr><td>P3-5</td><td class="c">inject.rs:620-622 + 563-579</td><td>极快连点两次「写入」会复用同一秒的备份目录名,台账第一条记录指向"第二次写入之后"的状态,用户回滚回到错误时间点。<code>stamp_now</code> 加唯一后缀;inject 命令加按站点粒度的锁。</td></tr>
+<tr><td>P3-6</td><td class="c">inject.rs:2060 + 前端 3302-3317</td><td>什么都没改时也渲染「备份」空栏 + 两个点不动的按钮;什么都不写也声明"会写密钥"。按 <code>backupPath</code> 非空才渲染,<code>writes_secret</code> 按 <code>changed</code> 收口。</td></tr>
+<tr><td>P3-7</td><td class="c">inject.rs:557-561, 798-807</td><td>刷新/打开模型页偶发停顿:同一份文件一次写入里被读三遍(<code>has_bom</code> 为取 3 字节读整文件)、每轮起最多 3 个 <code>tasklist</code> 子进程。<code>has_bom</code> 改 <code>take(3)</code>;探测结果同轮复用。</td></tr>
+<tr><td>P3-8</td><td class="c">appauth.rs:84/98/105 + 133-157</td><td>Trae 文件被占用/写到一半,与"真的没登录"显示同一句话「没检测到 Trae 登录信息 · 打开一次 Trae 即可」:整条链 <code>.ok()?</code> 吞掉 io/解析错误。另:<code>decrypt_tc</code> 的注释写明"明文前 64 字节是 SHA-512 校验和",实现却直接 <code>&amp;plain[64..]</code> 丢弃、<b>从不比对</b>——坏数据只靠"解出来的 JSON 恰好能 parse"兜底。</td></tr>
+<tr><td>P3-9</td><td class="c">lib.rs:1084-1086</td><td>同时装了 TRAE SOLO CN 与 Trae CN、旧安装 token 已失效时,签到永远报"凭据失效"且当天不再自动试:只取 <code>candidates()</code> 的<b>第一个</b>,而 appauth.rs:58 注释承诺"取数失败时可以顺着往下试下一份"。</td></tr>
+<tr><td>P3-10</td><td class="c">checkin.rs:294-297</td><td>claim 成功但响应不回显 <code>checked_in</code> 时判 <code>BadShape</code>(置灰开关、当天完结)。多数情况被"领后回查"兜住。<code>data.did_checked_in</code> 也没进嵌套兜底链(顶层两个别名、嵌套只认一个)。</td></tr>
+<tr><td>P3-11</td><td class="c">vault.rs:59-81</td><td>密钥箱 id 由「时间戳+pid+固定键 SipHash」生成,不是密码学随机,且写凭据管理器前不检查 target 是否已占用 → 理论同值即互相覆盖。建议换 OS CSPRNG(uuid v4/getrandom)。</td></tr>
+<tr><td>P3-12</td><td class="c">config.rs:165-170</td><td>「损坏即静默重置默认」的 <code>Config::load</code> 仍留在库里(全库 grep 确认<b>零调用</b>,启动与取数都走 <code>try_load</code>,P2-11 修得干净)。风险是任何后来者顺手用 <code>load()</code> 就把隐藏渠道/签到开关清零。另:配置字段(<code>active_interval_sec</code>、<code>warn_percent</code>)零范围校验;未知字段 <code>load→save</code> 一次往返即丢。</td></tr>
+<tr><td>P3-13</td><td class="c">store.rs:85-95, 449-450</td><td>密钥箱没有 <code>UNIQUE(platform, label)</code>,重名只靠应用层在锁内查全表判重:双开同时保存会写出两行,之后任何保存都被"已经有一个叫「主号」的了"挡住,用户分不清哪条真。且 <code>ORDER BY ... COLLATE NOCASE</code> 用不上 <code>idx_vault_platform</code>。</td></tr>
+<tr><td>P3-14</td><td class="c">store.rs:324-329</td><td><code>prune</code> 只清 snapshots;<code>checkin_log</code> 永久增长,DELETE 也不回收文件空间(无 VACUUM/incremental_vacuum)。库到了高水位只增不缩。</td></tr>
+<tr><td>P3-15</td><td class="c">store.rs:148/215/256/283/388/412/466/520</td><td>八处 <code>filter_map(Result::ok)</code> 把"坏行"当"没有行"丢:数据损坏表现为"数字偏小"而不是报错,也没有日志(与写库失败以前静默吞掉同类)。</td></tr>
+<tr><td>P3-16</td><td class="c">models.rs:558 vs 48/62</td><td><code>fetch_catalog</code> 硬编码 <code>/api/pricing</code>,绕过自己的 <code>SourceDef.pricing_path</code> 字段(现在恰好一致)。将来给第二个来源加价目表时,改了字段不生效。</td></tr>
+<tr><td>P3-17</td><td class="c">models.rs:112-117</td><td>按子串 <code>url.contains(host)</code> 判断"这条是谁写的":<code>https://fake-4sapi.com.example.cn/v1</code> 会被认成我们的 4SAPI 条目并算进管理/回滚范围。改为解析 authority 后精确后缀匹配。</td></tr>
+<tr><td>P3-18</td><td class="c">fetch.rs:665-668</td><td>占位视图对 Percent 渠道把 <code>unit</code> 给成 "credits"(漏 <code>Percent =&gt; "%"</code>),与同文件另两处三臂 match 不一致。当前 UI 按 kind 渲染所以看不出来,但 unit 已进 JSON 契约。</td></tr>
+<tr><td>P3-19</td><td class="c">build.ps1:53-58 + make-webview2-static.ps1:35,42</td><td>全新克隆的自举死锁:任何 task 都先要求静态归档存在,而归档的输入只能由本项目一次 cargo 拉取产生,且 out/ 被 .gitignore 排除 → 新机器上要手工绕过脚本先 <code>cargo fetch</code>,文档没写这一步。</td></tr>
+<tr><td>P3-20</td><td class="c">install-toolchain.ps1:75-77</td><td>恰好在"tauri-cli 缺失"的新机器上脚本崩:调用不存在的 exe 抛终止性 CommandNotFound,<code>*&gt;</code> 只并流不拦异常,<b>走不到它自己准备好的 <code>Write-Warning</code> 指引</b>。先 <code>Test-Path</code> 再调用。</td></tr>
+<tr><td>P3-21</td><td class="c">install-toolchain.ps1:15-23, 41-48</td><td>下载中断留下的半截 <code>rustup-init.exe</code> 因"存在即跳过"会永久生效(winlibs.zip 有 SHA-256 兜底,好);<code>Move-Item -Force</code> 在目标目录已存在但缺 gcc 时会嵌成 <code>mingw64\mingw64</code> 并照常打印 ok。</td></tr>
+<tr><td>P3-22</td><td class="c">make-latest-json.js:12, 30-44</td><td>发布清单三处信任缺口:① <code>tag = v${version}</code> 只拼字符串,不校验 tag 真存在/是否与 HEAD 一致 → 忘推 tag 时发出去的资源全 404;② 版本号未 bump 的重发:产物名只含版本号,叠上 P0-3 就把同版本旧包当新包上传;③ <code>REPO</code> 与 tauri.conf.json 的 endpoint、RELEASE.md 三处各写一遍。另:算出的 sha256 只 console.log,不落盘供上传后核对。</td></tr>
+<tr><td>P3-23</td><td class="c">capabilities/default.json:15</td><td><code>updater:default</code> 是未使用的权限:前端是无打包器静态页(app.js:2450 注释自证拿不到插件),更新全走自定义 Rust 命令,但 ACL 仍把 <code>check/download/install</code> 授权给 webview。删掉这条,ACL 面与实际调用一一对应。</td></tr>
+<tr><td>P3-24</td><td class="c">lib.rs:411-416, 532-552, 1915-1939</td><td>来自前端的参数一律不夹紧:<code>get_series</code> 的 <code>hours</code> 直接乘进时间窗(传成负数或超大值 = 在<b>主线程</b>全表扫描,面板与托盘一起顿;且 <code>id</code> 不校验是否命中渠道也照样扫)、<code>set_tray_icon</code> 的 <code>size</code> 用 <code>size*size*4</code> 在极大值时回绕(畸形尺寸交给 <code>Shell_NotifyIcon</code> → 图标一块花)、<code>open_path</code> 接受任意存在路径就交给资源管理器。现在前端传的都是固定值所以没爆,属"契约上没有护栏"。→ 全部夹紧 + 白名单 + 未知 id 返回可读文案。</td></tr>
+<tr><td>P3-25</td><td class="c">app.js:1093-1111(对照 1016 / 313)</td><td>托盘数字把两种单位塞进同一个位子:OpenCode 那一帧「91」是<b>剩余百分比</b>,DeepSeek 那一帧「91」是<b>人民币余额</b>,积分型显示「0.6w」。列表行和胶囊都带 <code>%</code>/<code>¥</code>,只有托盘不带,而 tooltip 又写「OpenCode Go 91.1%」→ 图标与自己的 tooltip 矛盾。设置里那句说明把两种单位混在一串例子里,等于没解释。→ percent 分支保留 <code>%</code>,说明文案按渠道类型分别举例。</td></tr>
+<tr><td>P3-26</td><td class="c">app.js:389 + 42-45</td><td>积分到期行可能出现「剩 null 天」:<code>daysUntil</code> 对 <code>0</code> 返回 <code>null</code>,过滤写的是 <code>daysUntil(e.at) &gt;= 0</code> —— JS 里 <code>null &gt;= 0</code> 为 <b>true</b>,无到期时间的那笔通过了过滤。<code>renderDetail</code>(568)已经防了,<b>只有行内这一处漏</b>。→ 改 <code>e.at &gt; 0 &amp;&amp; …</code>,或让 <code>daysUntil</code> 返回 <code>undefined</code>。</td></tr>
+<tr><td>P3-27</td><td class="c">app.js:1523 / 1603 / 1852-1860 · lib.rs:584-592</td><td>置顶有三条写入口,状态会背离:吸附成竖条期间挂件<b>必定强制置顶</b>(<code>dockEnter</code> 直接调 <code>appWindow.setAlwaysOnTop(true)</code>,不写配置、不改 UI),而设置里「窗口置顶」开关仍显示「关」;用户此时把它开→关,竖条立刻可能被别的窗口压住看不见。另外 <code>set_pin</code> 是"先动窗口后写库",写库失败不回滚 → 恰好是它注释里声称不可能出现的"按钮不亮但其实置顶了"。→ 吸附期间开关置灰并注明,或统一走 <code>set_pin</code>;写库失败撤回窗口操作。</td></tr>
+<tr><td>P3-28</td><td class="c">app.js:1016</td><td>胶囊用 <code>remainRatio(c) ?? 0</code> 把"拿不到比例"折算成"0%"。<b>当前不可达</b>(配额型有 <code>remaining</code> 时后端保证至少一个窗口),属潜伏不一致——同一条数据在列表行走「——」分支。而 providers.rs 的总纪律正是"取不到的值不要用 0 顶替,0 会被界面渲染成已耗尽"。→ <code>rr === null</code> 时显示「——」。</td></tr>
+<tr><td>P3-29</td><td class="c">app.js:1499-1503 + 1414-1441</td><td>偶发"挂件自己吸到屏幕边变成 8px 竖条":<code>markSelfMove()</code> 只维持 <b>600ms</b>,而它要掩护的是 <code>setMinSize→setMaxSize→setResizable→setSize→…→scaleFactor→outerSize</code> 这串最多 12 个 IPC 往返;最后一发 <code>setSize</code> 触发的 <code>moved</code> 完全可能落在 600ms 之后 → 结算检查把它当成"用户拖到边缘"。低 DPI/远程桌面/负载高时更易复现。这是 P1-8 同族坑的残留窗口。→ 用令牌/计数在整串 IPC <b>完成后</b>再解除,600ms 只当兜底超时。</td></tr>
+<tr><td>P3-30</td><td class="c">app.js:33 / 319 / 427 / 545 / 1019</td><td>金额排版三处各写一遍(<code>money</code> 与行内自己拆整数小数、427 行的局部 <code>f</code> 是同逻辑的第二/第三份拷贝),全都无千分位:¥1234567.89 位数一多就数错,而积分显示却带千分位「6,075.5 分」——同一屏两种排版。<code>toFixed(2)</code> 还受 IEEE-754 影响(<code>1.005.toFixed(2)==="1.00"</code>),汇总"先求和后格式化"与逐项四舍五入不满足可加性,偶尔出现「明细相加 ≠ 汇总」。→ 统一 <code>toLocaleString</code>,删掉重复实现。</td></tr>
+<tr><td>P3-31</td><td class="c">app.js:253-292 · styles.css:93-99</td><td>汇总条三格口径不统一:「今日消耗」「本周消耗」下面写「推算」,「本月消耗」下面写「3 个渠道」——同一条上三种说法,用户以为是三种东西;而 <code>contributors</code> 算了却只有 month 用。<code>title</code> 被「对比昨日同时段」独占,特大字号档位下(<code>--u:1.3</code> + <code>nowrap</code> + ellipsis)金额被截成「¥1234…」,鼠标移上去 tooltip 还是没有数值。→ 三段口径统一,tooltip 带上完整值与渠道数。</td></tr>
+<tr><td>P3-32</td><td class="c">app.js:1404 + 893-904 + 1402 注释</td><td>紧凑条上点「+2」(溢出渠道徽标)经常变成<b>拖着窗口走了一下</b>:紧凑态把整棵 <code>#list</code> 标成 <code>data-tauri-drag-region="deep"</code>,而 <code>.more</code> 是 <code>div</code> 不是按钮。代码注释自己写着「紧凑条整条可拖(<b>里面没有需要点击的东西</b>)」,后来加的这个特性正好推翻了这条前提。→ 在 <code>.row/.more</code> 上单独设 <code>"false"</code>,或把 deep 只留给空白垫层。</td></tr>
+<tr><td>P3-33</td><td class="c">app.js:463 / 968 / 2215-2220 / 801-802 / styles.css:203-206,373-376</td><td>死代码与"算了但没用":<code>data-i</code> 全文件零读取;<code>AURA_OF</code> 与 CSS 里的 <code>.dot.o</code> 都留着 <code>o</code> 这个键而 <code>dotKind</code> 永不返回它;<code>.more:focus-visible</code> 画了焦点环但 <code>.more</code> 是 <code>div</code>、永远拿不到焦点(写了等于没写);<code>chshowall</code> 一次动作跑 <code>render()</code> 三遍 + 多一次 <code>get_channels</code>;<code>relTime()</code> 只在渲染时算一次,折叠态 5 分钟一轮 → 「更新于 刚刚」能挂着 5 分钟不动;<code>window_cmd</code> 的 hide/quit 没有 catch,失败就是"点了没反应"。</td></tr>
+<tr><td>P3-34</td><td class="c">lib.rs:94-106</td><td>第一次设置快捷键、紧接着落库失败时,<b>不回滚注销</b>:回滚分支写的是 <code>if let Some(old) = old_hotkey { apply_hotkey(old) }</code>,<code>None</code>(原先没注册)这一路什么都不做,而"注销全部"的正确调用是 <code>apply_hotkey(…, "")</code>(49-54 行专门有这个分支)。结果:界面显示快捷键为空,可那个组合键已经被挂件全局抢走,别的应用按它没反应,用户不知道该去再点一次。→ <code>old_hotkey.as_deref().unwrap_or("")</code>。</td></tr>
+<tr><td>P3-35</td><td class="c">lib.rs:1171-1208 与 1786-1798(对照 65-113/584-592/835-841/846-853)</td><td>配置是唯一一块共享可变状态,却有 <b>7 个写入方</b>,全部走「快照 → 改一个字段 → <code>save(整份)</code>」,没有版本号/CAS:① 手动「领积分」与节拍器撞上时,后写的整份把先写的 <code>attempts/next_try_at</code> 抹掉 → 当天退避计数丢;② <code>inject_state</code>(模型页每次进来都调)把学到的前缀写库时不再看内存当前值 → 若这期间用户保存过设置,库里被"几毫秒前的快照"盖回去:<b>刚隐藏的渠道又出现、又恢复对外请求</b>(与 P1-16 同后果,但触发条件只是"打开模型页 + 改设置"的时间重叠)。→ 抽 <code>with_config_mut</code> 在同一把锁内完成改+序列化,或给 Config 加 rev。</td></tr>
+<tr><td>P3-36</td><td class="c">lib.rs:1209(<code>let _ = manual;</code>)· config.rs:120-121 · 全仓 grep</td><td>设计承诺「连续几天失败才提示」没接线:<code>checkin_notify</code> 这个配置项<b>在全仓没有任何读取方</b>(只有定义/默认值/单测三处),<code>manual</code> 形参被 <code>let _ =</code> 丢掉,自动签到失败只 <code>eprintln</code> —— 而绿色版从托盘启动时 stderr 永远没人看(与 P2-14 同一模式)。现象:面板上「本月已领」停在上个月的值,用户以为积分还在进。→ 要么按设计接上系统通知,要么删掉这个字段并在设计稿记「已废弃」;<b>留着最坏,因为它在设置契约里对用户可见。</b></td></tr>
+<tr><td>P3-37</td><td class="c">lib.rs:596-652(612-622)· 对照 app.js:3550</td><td>藏在托盘两小时后点开面板,看到的仍是<b>两小时前的数字</b>,最长再等 5 分钟:轮询是单个长睡任务、只在轮首读 <code>visible</code>,而 <code>window-shown</code> 的四个发射点都没顺带刷一轮(<code>Fetcher::invalidate/refresh_now</code> 现成可用,别的场景都在用)。笔记本合盖再开同理:<code>tokio::time::sleep</code> 是单调时钟,唤醒后既不补一轮也不缩短等待 → 用户第一反应是"这玩意死了"。→ 显示瞬间走一次 <code>fetch_shared</code>(5 秒内已刷过会复用,不叠加请求);或把长睡切成 10 秒小片以判唤醒补偿。</td></tr>
+<tr><td>P3-38</td><td class="c">lib.rs:736-744</td><td>「24 小时才真检查一次更新」的节流可以静默失效:这里用了裸 <code>state.store.lock()</code> + <code>if let Ok(s)</code>(全文件其它地方都走 <code>lock_rw</code> 防中毒)。锁一旦毒化,整个写段被跳过,<b>内存里的 <code>last_check_at</code> 也没更新</b>(赋值在 if-let 内部)→ 前端每 10 分钟一次的 <code>checkUpdate(false)</code> 每次都真的往 GitHub 发清单请求,正是 734-735 行注释说要避免的"请求风暴";库里时间戳也永远停在旧值。落库失败用的是 <code>let _ =</code>,静默。→ 统一 <code>lock_rw</code>,并把"内存先置上"与"持久化成不成"分开。</td></tr>
+<tr><td>P3-39</td><td class="c">lib.rs:193-201, 318-366, 376-408, 2124-2136</td><td>WorkBuddy 登录的三个状态位是<b>进程级全局</b> <code>AtomicBool</code>,与"一次登录会话"不对应:关掉登录窗后立刻再点一次,若上一轮的 <code>Destroyed</code> 事件在新轮把 <code>WB_LOGIN_CLOSED</code> 置回 false 之后才落地,新的观察者第一眼就认为"窗口已被关"直接 return —— 新窗停在「登录中」,用户登录成功也不会自动关窗/自动刷新(正是 v0.1.19 修过的"登录窗没反应"家族);同一枚迟到事件还会 emit 一次 <code>cancelled</code> 把新窗状态收回去。另外只要登录窗一直开着不关,观察者每 1.2 秒就往主线程投一次 Cookie 读取 + <code>spawn_blocking</code>(一晚上约 3000 次空转),退出条件只有 <code>WB_LOGIN_CLOSED</code>,没有超时。→ 加 <code>session_id</code> 自增比对 + 最大存活时间。</td></tr>
+</table>
+
+<h2 id="opt">五、可优化点(不影响正确性,但影响响应速度与维护成本)</h2>
+<table>
+<tr><th style="width:56px">ID</th><th style="width:170px">位置</th><th>现状 → 建议</th></tr>
+<tr><td>O-1</td><td class="c">fetch.rs:589-605 + store.rs:133-149</td><td>每轮取数在<b>同一把库锁内</b>对高度重叠的快照区间做约 9 次范围扫描(每渠道 6 次 <code>consumption_since</code> + <code>last_jump_since</code> 等),每次把整段行收进 Vec。60 秒采样 × 90 天保留 ≈ 单渠道 13 万行,面板会"轮询一次卡一下"。→ 加 <code>consumption_multi(provider_id, windows)</code>:扫一遍最宽窗口,在同一次顺序扫描里分段累加(现有 pro-rate 逻辑原样搬)。</td></tr>
+<tr><td>O-2</td><td class="c">fetch.rs:338-353 与 365-376</td><td>两段失败用的 <code>FetchResult{...}</code> 构造完全同构;kind→unit 的映射在全文件写三遍。→ 抽 <code>unit_for(kind)</code> 与 <code>error_result(def, msg)</code>。</td></tr>
+<tr><td>O-3</td><td class="c">fetch.rs:867</td><td><code>let web_src = web_src.clone();</code> 多余(836 行已克隆进每个 future)。→ 直接 move。</td></tr>
+<tr><td>O-4</td><td class="c">fetch.rs:610</td><td>同一轮里取两次 <code>now_ts()</code>(583 行已取过 <code>now</code>),视图里存在两个"现在"。→ 复用同一个时刻。</td></tr>
+<tr><td>O-5</td><td class="c">providers.rs:727, 757, 487-491</td><td><code>vec![primary.clone()]</code> 可先取字段再 move;<code>limited || primary.status == "rate-limited"</code> 后半句被前者覆盖(死条件);<code>at as i64</code> 多余转换(<code>ts_norm</code> 已返回 i64)。</td></tr>
+<tr><td>O-6</td><td class="c">providers.rs extract_trae / extract_workbuddy</td><td>两个 extractor 的骨架(累加器四件套 + <code>counted==0</code> 早退 + 排序 + extra 三行)重复约 40 行。→ 抽 <code>PackAccumulator</code> + <code>finish(unit)</code>。</td></tr>
+<tr><td>O-7</td><td class="c">store.rs(全)</td><td>没有版本化迁移见 P2-17;另外 <code>idx_checkin_lookup(channel, ts)</code> 对 <code>checkin_of_day</code> 那种按 <code>(channel, day)</code> 的查询只能前缀过滤,若保留该函数需补表达式索引(<code>substr(day,1,7)</code> 同理)。</td></tr>
+<tr><td>O-8</td><td class="c">app/src-tauri/src/lib.rs</td><td><b>src-tauri 一个测试都没有</b>(实测 <code>cargo test</code> 输出 0 tests),而壳层正是"主线程/锁/调度/命令契约"的聚集地(见 P1-7)。core 的 114 个测试集中在解析与合并逻辑,<b>inject 的备份/回滚只测了 JSON 路径,Trae 的备份/回滚零覆盖</b>(2613 起的测试模块可查)——这与 P0-1/P0-2 恰好落在没测试的地方是一致的。</td></tr>
+<tr><td>O-9</td><td class="c">app/core/Cargo.lock vs src-tauri/Cargo.lock</td><td>core 有独立锁,<code>build.ps1 test</code> 用 core 锁、发布构建用 src-tauri 锁,同一份代码在两套依赖解析下被测试与交付(实测当前 rusqlite/keyring/reqwest 一致,但无机制阻止漂移)。→ core 并进 workspace,单锁。</td></tr>
+<tr><td>O-10</td><td class="c">app/src-tauri/Cargo.lock:3275, 3315</td><td>reqwest <b>0.12.28 与 0.13.5 两个版本一起静态链进 exe</b>(core 用 0.12,tauri-plugin-updater 2.11 用 0.13),包体吃掉 opt-level="s" 省下的量,漏洞面翻倍。→ core 对齐到 0.13。</td></tr>
+<tr><td>O-11</td><td class="c">build/ 目录</td><td>一次性诊断脚本(<code>verify-ui-0923.js</code>、<code>cdp-probe.js</code>、<code>probe-frontend.js</code>)与发版必经脚本(<code>build.ps1</code>、<code>make-latest-json.js</code>)平级混放,截图 <code>shot-panel-0923.png</code> 入库;根目录 25+ 个 <code>design-*.html</code>/<code>bug-report-*.html</code> 与代码混放。→ 分 <code>tools/</code> 与 <code>docs/</code>,日期产物不入库。</td></tr>
+<tr><td>O-12</td><td class="c">lib.rs:1458-1640(1502-1507 与 1579-1584)</td><td><code>get_model_catalog</code> <b>每次调用</b>都把整份缓存序列化写回 SQLite(约 100 KB 价目表原文,尺寸证据在 models.rs:644-646),条件只判"缓存存在",不判本轮是否真的更新过(<code>needs_catalog/need/needs_usable</code> 三个现成布尔没用)。切一次来源芯片、打开一次模型页、点一次强制刷新 = 一次 100 KB 序列化 + UPSERT + WAL 落盘,期间 <code>lock_rw(&amp;store)</code> 被占,主线程命令(P1-14)排队。另外 1424-1427 的 <code>model_spec_with</code> 每次全量 <code>ModelCache::load</code> + 重解析,可改按 model 定向查。→ 用 <code>dirty</code> 标志包住写盘。</td></tr>
+<tr><td>O-13</td><td class="c">app.js:3098-3138 · 3038-3044 · 1814-1817</td><td>模型页搜索框<b>无防抖</b>:每敲一个字符全量重建 160 行 innerHTML;而且 <code>mdlRowHtml</code> 每行都重算一次 <code>mdlConfiguredIds()</code>(遍历 4 个客户端建 Set)+ 4 次 <code>MDL.clients.find</code>,而 <code>mdlVisibleRows</code> 早就算过一个 <code>done</code>。输入发涩、光标偶尔抖。→ <code>done</code> 与客户端索引算一次传进去;input 挂 150ms 防抖(<code>scheduleFitCompact</code> 已有同款写法可参考)。</td></tr>
+<tr><td>O-14</td><td class="c">app.js:1055-1090 · 822-906 · 1955-1962</td><td>窗口隐藏到托盘后仍在做布局测量:<code>fitPill</code> 每次 <code>createElement→appendChild→getBoundingClientRect→remove</code> 强制一次 layout,<code>fitCompact</code> 更重(读 6 行 × 3 趟 <code>offsetWidth</code>),两者都不判可见性。反向的真隐患要实测:托盘轮播靠一个 <code>setInterval</code>,若 WebView2 对隐藏窗口做了 timer throttling,<b>轮播会停摆、托盘数字永远停在第一个渠道</b>(代码注释明确指望它一直跑)。→ 隐藏时跳过量宽(保留 <code>renderPillFace</code>+<code>drawTrayIcon</code>),显示时补测一次。</td></tr>
+</table>
+
+<h2 id="green">六、"验证链自己会坏"——六条假绿(单独一节,因为它们会让其它问题的检出率失真)</h2>
+<table>
+<tr><th style="width:56px">ID</th><th style="width:170px">位置</th><th>它以为在验什么 / 实际在做什么</th></tr>
+<tr><td>G-1</td><td class="c">build/build.ps1:116-137</td><td>见 <b>P0-3</b>:验"单 exe 交付没坏",实际在<b>失败时仍报成功并验陈旧产物</b>。<span class="tag v-ok">✅ 我已核到行号</span></td></tr>
+<tr><td>G-2</td><td class="c">build/verify-push.js:16-27, 54</td><td>验"token 没落盘 + 提交已推上 GitHub"。实际:<b>全文没有一条失败退出路径</b>——<code>hits&gt;0</code>(打印 WARNING)时仍退出 0;<code>cr.status</code> 完全不检查;<code>tj.tree || []</code> 把 404 吞成"0 个文件"。任何 CI/脚本化调用都会当它通过。对照同目录 verify-form.js:199 是有 <code>process.exit(ok?0:1)</code> 的——<b>这个脚本是唯一漏的</b>。<span class="tag v-ok">✅ 我已通读全文</span></td></tr>
+<tr><td>G-3</td><td class="c">build/launch-debug.ps1:18-22</td><td>验"跑的是最新构建"。实际"选最新二进制"是<b>死代码</b>:管道里流的是 <code>Join-Path</code> 产出的<b>字符串</b>,<code>Sort-Object LastWriteTime</code> 在字符串上取不到该属性(非 Strict 模式静默当 null,不排序),于是只要 <code>Grandettoken.exe</code> 存在(数组首位)就永远选它——<b>哪怕本次只重编了 tokenscope.exe</b>。第 16-17 行的注释正好警告过这个风险。<span class="tag v-ok">✅ 我已核到行号</span></td></tr>
+<tr><td>G-4</td><td class="c">build/probe-frontend.js:24-28, 143</td><td>用假 DOM 在无 Tauri 宿主下跑 app.js。实际:<code>makeEl</code> 的对象字面量里 <code>classList</code>(25 行)与 <code>style</code>(24 行)被 28 行的<b>重复键整体覆盖</b>,替成 <code>contains: () =&gt; false</code> 的空壳,11-20 行认真写的 <code>makeClassList</code> 成了死代码;探针头部 <code>final body.className</code> 恒为 "form-panel";app.js 里所有依赖 <code>classList.contains(...)</code> 的分支被强制走另一侧。另:退出码只看 THROWN/UNHANDLED,app.js 用 <code>console.error</code> 报告的失败不影响结果。<b>结论:前端探针的"通过/失败"两个方向都不可全信。</b><span class="tag v-ok">✅ 我已核到行号</span></td></tr>
+<tr><td>G-5</td><td class="c">build/cdp-probe.js:68-75</td><td>两个方向都错:成功打印后不退出,进程挂 15 秒后打印 timeout 并 <code>exit 1</code>(<b>成功被标成失败</b>);CDP 返回错误时只 console.log 不置码,事件循环空后<b>以 0 退出</b>(失败被标成成功)。另外 verify-form.js:26 / verify-ui-0923.js:8 用的朴素 <code>targets.find(type==='page')</code> 选页逻辑,正是 cdp-probe 注释里指出可能选中 iframe/SW 的那种。</td></tr>
+<tr><td>G-6</td><td class="c">build/scan-secrets.ps1:7-15, 20-28</td><td>验"仓库里没有密钥"。漏检清单:① 扩展名白名单让 <code>.key/.pem/.pfx</code>/无扩展名文件<b>根本不进扫描集</b>(而 .gitignore 忽略它们的前提是"忽略生效",一旦 <code>git add -f</code> 就失明);② 无 GitHub PAT(<code>ghp_…</code>/<code>github_pat_</code>)、无 <code>AKIA…</code>、无 JWT、<b>无任何 base64 高熵模式</b>——而本项目全栈用 base64(minisign 私钥以 <code>dW50cnVzdGVk</code> 开头,任何一条模式都不匹配,可整段漏过);③ <code>password</code> 模式要求带引号,YAML 无引号形态漏检;④ 只扫工作区,不扫 git 历史。它自身的失败退出码(exit 1)是对的,问题只在覆盖率。</td></tr>
+</table>
+
+<h2 id="ok">七、检查过、确认没问题(排除清单,别重复返工)</h2>
+<div class="bug opt" style="border-left-color:#4ade9d">
+<ul>
+<li><b>前后端契约这一整类是干净的</b>:35 条命令 + 5 个事件逐一对得上,无漏注册、无改名残留(注册表 2137-2173 我逐行数过确实是 35 条)→ 详见第十节。<span class="tag v-ok">✅ 我已数过</span></li>
+<li><b>本地存储这一整块不存在"解析失败白屏"风险</b>:全文件 <code>localStorage / sessionStorage / JSON.parse</code> 命中数 = <b>0</b>(实测 grep),偏好一律走 <code>get_config/set_config</code>;首屏无缓存时有「正在取数…」空态。<span class="tag v-ok">✅ 我已实测 grep</span></li>
+<li><b>XSS 没有可用路径,且 CSP 兜住了</b>:30+ 处 innerHTML 的接口可控字段(渠道名、错误文案、窗口标签、模型名、价格文案、备份路径、流水 outcome)逐条走 <code>esc()</code>(全文件 104 次调用);未转义的只有 <code>c.id</code> 与 <code>c.color</code>,二者都来自 <code>providers.rs</code> 硬编码表、不经网络。CSP 实测为 <code>default-src 'self' ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'; img-src 'self' data:</code> —— 无 <code>script-src</code> 即回退 <code>'self'</code>,不含 <code>unsafe-inline/unsafe-eval</code>,所以即便 HTML 结构被撑破也执行不了脚本、<code>invoke</code> 拿不到。<span class="tag v-ok">✅ CSP 与 esc 计数我已实测;字段逐条追溯为子代理结论</span></li>
+<li><b>渲染只在顶层绑定监听器</b>:<code>#list / #manage / #mTabs / #pill / #dockBody / document / appWindow.onMoved</code> 都是模块顶层一次性绑定 + <code>data-act</code> 委托,轮询换 innerHTML 不会重复挂监听器 → <b>"点一次执行 N 次"这一类不存在</b>。<span class="tag v-no">⏳ 子代理核过</span></li>
+<li><b>几何串行队列整体成立</b>:<code>applyForm / dockLayout / dockExit</code> 三个入口都走 <code>enqueueGeom</code>,队列用 <code>then(fn, fn)</code> 保证上一环失败不断链;量宽只在差值 ≥6px 时才牵窗。<b>唯一漏网就是 P2-30 那一个没加 await 的调用。</b><span class="tag v-ok">✅ 纪律原文与漏网处我都核过</span></li>
+<li><b>SQL 无注入面</b>:store.rs 全部 24 条语句都是 <code>?N</code> 参数绑定,唯一的 <code>format!</code> 只拼 LIKE 的模式值(仍走绑定);models.rs 不产 SQL。<span class="tag v-ok">✅ 复核过结论方向</span></li>
+<li><b>密钥没有进 SQLite</b>:<code>vault_items</code> 表根本没有密钥列,只有尾 4 位掩码 hint;密文在凭据管理器服务 <code>TokenScope:vault</code> 下,与渠道密钥服务 <code>TokenScope</code> 隔离;错误消息不带 key;<code>vault_copy</code> 明文只进剪贴板不回前端。"只允许人工查看/复制"这条约束成立。<b>唯一例外是备份目录里的明文残留,见 P2-7。</b></li>
+<li><b>凭据不出现在 URL / 日志 / 错误文案</b>:七个凭据模块 + 取数层全库 grep 无 <code>println!/dbg!</code> 输出 token/cookie/key;密钥只进 Authorization/Cookie 头。</li>
+<li><b>时区纪律在线</b>:<code>date(...,'localtime')</code> 在全库 Rust 代码<b>零命中</b>(项目老坑没复发);日/周/月切分用 chrono 显式 epoch 且处理了 DST;<code>ts_norm</code> 统一秒/毫秒;Codex 的 <code>reset_at</code> 输出带 <code>+00:00</code> 的显式 UTC。</li>
+<li><b>失败绝不降级成 0 / 快照只写成功</b>:降级分支只替换 error/valid/limited 三个字段,数值沿用上次成功快照并带 stale;<code>record</code> 只在 <code>success</code> 时写库(fetch.rs:986,与"取数只在成功时写快照"的平台事实一致)。<b>例外见 P1-4(凭据读不到那条路径没走这里)。</b></li>
+<li><b>4SAPI 余额上涨不是 bug</b>:四个入口返回同一本账,备用入口切换不会造成数值跳变(代码只是 attempt_order 去重排序);无充值时上涨是平台对失败请求退还预扣。→ 别再照这条改代码。</li>
+<li><b>Codex 窗标签严格动态</b>:<code>codex_window_label(secs)</code> 按 <code>limit_window_seconds</code> 分档,字段缺失落兜底名而不是猜"5 小时";secondary 为 null 时自然不 push(free 号单窗成立)。符合"窗型必须动态"的平台约束。</li>
+<li><b>OpenCode monthly 叫「周期」是对的</b>(实测锚定开通日),<code>resetsAt</code> 缺失确实兜成 None→「—」。<b>唯独 percent 例外,见 P1-3。</b></li>
+<li><b>写入原子性与编码假设站得住</b>:<code>write_json</code> 同目录 temp + rename,失败清 temp;serde_json 显式开了 <code>preserve_order</code>(写回客户端文件不会把用户没打算动的键按字母重排——我专门去 Cargo.toml 核了);BOM 保留、空文件当合法初态、非 UTF-8 在读阶段就失败(且失败发生在备份之前,不留改动)。</li>
+<li><b>结构不认就拒写</b>:models.json 不是数组、<code>schemaVersion != 1</code>、找不到 Trae 的 model_list_map 键,都走 Err 且在写盘前退;运行中目标在 apply/remove/preview 三条路上都复检。</li>
+<li><b>Trae 设备号纪律符合实测</b>:从 <code>iCubeAuthInfo://icube-dc:</code> 的 key 名取号并卡"12–20 位纯十进制",UUID/hex 一律拒;拿不到设备号直接拒发请求(不会拿假号去撞 9074);claim 走 <code>direct_client()</code> 显式 <code>no_proxy()</code> 绕开按 IP 的限流。<b>判因只看 code 不看文案</b>(9074→Retry、9095→Already 不是失败、1001/1002/401→AuthNeeded),10001 的国区/国际版同码反义按文案+域名分支。每日额度没有硬编码 200(前端两处 200 是 4SAPI 申请制 <code>ClaimConfig.amount</code>,与签到无关)。</li>
+<li><b>weblogin 的域名伪装防御有测试</b>:主机名整串相等比较,<code>www.workbuddy.cn.attacker.example</code>、<code>…@attacker.example</code> 两类伪装在单测里;cookie 头拒 <code>\r\n</code> 注入、要求 session+session_2 齐。唯一问题是域名集合与取 jar 的集合不耦合,见 P2-16。</li>
+<li><b>并发结构基本安全</b>:WAL + <code>busy_timeout(5s)</code> 抗双开;<code>fetch_all</code> 刻意分"await 段不碰库 / 同步段持锁",<code>std::sync::MutexGuard</code> 不跨 await(future 保持 Send);阻塞型凭据 IO 与 webview cookie 读取都在 <code>spawn_blocking</code>。<b>例外是密钥箱那把锁跨 RPC,见 P1-7。</b></li>
+<li><b>发版版本号没有三处失同步</b>:tauri.conf.json=<code>0.1.28</code>、src-tauri/Cargo.toml=<code>0.1.28</code>、最新 tag=<code>v0.1.28</code>,且 build.rs 有编译期 <code>assert_versions_match</code> + make-latest-json.js 生成期再断言(双重闸门);<code>core/Cargo.toml=0.1.0</code> 是逻辑库自身版本,刻意不跟版。<b>latest.json 的字段与 tauri-plugin-updater 契约匹配</b>(version/notes/pub_date/platforms.windows-x86_64.{signature,url},sig 取文件内容并 trim)。</li>
+<li><b>capabilities 极窄</b>:窗口白名单只有 <code>main</code>,逐条对照前端实际调用后没有多余权限;无 shell/fs/http/devtools 放行;CSP 与"无内联 script、大量 <code>style=</code>"的前端形态兼容。<b>唯一多余的是 <code>updater:default</code>,见 P3-23。</b></li>
+<li><b>工具链钉死</b>:build.ps1 显式设 <code>RUSTUP_TOOLCHAIN</code> 并继承给子进程(直接消除 gnu/msvc 混用坑)、非 ASCII 路径提前 throw、MinGW 按 SHA-256 pin。<code>tasklist</code> 探测走 CSV 首列整串比较,不依赖中文提示文案,且带 <code>CREATE_NO_WINDOW</code>(v0.1.23 那个闪窗 bug 的修法是对的)。</li>
+</ul>
+</div>
+
+<h2 id="smoke">八、真机冒烟清单(静态读不出结论的,必须点一遍)</h2>
+<table>
+<tr><th style="width:56px">#</th><th style="width:220px">验什么</th><th>怎么验 / 现在读代码得到的预期</th></tr>
+<tr><td>1</td><td class="c">P0-2 Trae 无备份</td><td>模型页对 Trae 点「写入」→ 看结果卡「备份」那一栏是空白还是目录。<b>静态结论:空白、两个按钮点了报错。</b>这是最快能证实的一条。</td></tr>
+<tr><td>2</td><td class="c">P0-1 取消写入删多</td><td>在 WorkBuddy 的 models.json 里手工加一条<b>同 id、url 指向 opencode.ai</b> 的条目(或先用 OpenCode Go 来源配一条同 id),再点「取消写入」→ 数条目少了几条。<b>注意先自己复制一份 models.json 再试</b>,因为它可能真删。</td></tr>
+<tr><td>3</td><td class="c">P0-4 Hapi/OpenCode 删不掉</td><td>在配过 4SAPI 的机器上,切到 Hapi 来源点「取消写入」。<b>预期:红字"读回校验没过,已回滚",模型还在。</b></td></tr>
+<tr><td>4</td><td class="c">P1-8 TRAE SOLO CN 的真实进程名</td><td>开着 SOLO 时跑 <code>tasklist /FO CSV | grep -i trae</code>,看它的 exe 名是不是也叫 <code>Trae CN.exe</code>。<b>若同名,P1-8 只剩"反向误拦"的次要面;若不同名,则是确凿的漏拦。</b></td></tr>
+<tr><td>5</td><td class="c">P2-12 系统代理</td><td>只在 Windows「设置→网络→代理」里开,确认 shell 里没有 <code>*_proxy</code> 环境变量,然后看 Codex 卡。<b>能连上 → 现有项目记忆对,撤掉这条;连不上 → 需要显式读注册表代理。</b></td></tr>
+<tr><td>6</td><td class="c">P2-3 WorkBuddy 备用域名</td><td>把 hosts 里 <code>www.workbuddy.cn</code> 暂时指向 127.0.0.1 制造回退,看是否 403 并弹「网页登录已过期」。<b>这个也顺带验 P2-16(登录判定域与取 cookie 域不一致)。</b></td></tr>
+<tr><td>7</td><td class="c">P1-2 签到退避</td><td>把某个渠道的 <code>attempts</code> 手动写成 6(或等一天自然攒够),观察后续 tick 是不是每 5 分钟发一轮。<b>静态结论:是。</b></td></tr>
+<tr><td>8</td><td class="c">P1-7 面板冻结</td><td>保存密钥箱条目时立刻去点消耗曲线/图表。<b>正常机器上凭据管理器很快,感知不到;要复现得让 keyring 卡住。</b></td></tr>
+<tr><td>9</td><td class="c">P0-3 发版假绿</td><td>挂件在后台运行时跑 <code>build.ps1 bundle</code>,看它是否仍然打印 <code>ok import table clean</code> 并以 0 结束。<b>静态结论:是。这条一旦证实,P3-22 的资源校验要一起补。</b></td></tr>
+<tr><td>10</td><td class="c">P2-4 环比跨月</td><td>本月 29–31 号打开 4SAPI 展开区看「本月 · 环比上月」。<b>静态结论:上月同期基线跨进了本月,环比数值系统性偏差。</b></td></tr>
+<tr><td>11</td><td class="c">P0-6 隐藏渠道仍签到</td><td>把 Trae「隐藏」,同时保持它的签到开关为「开」→ 等 00:23 之后(或在别的渠道卡上点一次「领积分」验证手动路径),看签到流水里当天有没有新记录、看 Trae 的 <code>storage.json</code> 访问时间有没有变。<b>静态结论:照样读本机凭据、照样对外发请求。</b>这条是最该先做的,因为它验证的是"用户说停了却没停"。</td></tr>
+<tr><td>12</td><td class="c">P0-5 复制三件套串来源</td><td>切到 Hapi 或 OpenCode Go,选中一个模型点「复制三件套」,粘到记事本看<b>接入地址与密钥是不是 4SAPI 的</b>(拿渠道页那把 key 的尾 4 位对比)。<b>静态结论:是的,永远是 4SAPI。</b>同一次操作里再点「写入」对照——写入是对的,所以只有复制坏。</td></tr>
+<tr><td>13</td><td class="c">P1-12 旧数据标注从未渲染</td><td>收起状态下看任意一行有没有「更新于 X 分钟前」;再把网络断掉两小时后打开面板,看有没有"显示的是…成功快照"。<b>静态结论:收起行两者都没有,只能点开到最底下。</b></td></tr>
+<tr><td>14</td><td class="c">P2-27 / P1-13 签到两处</td><td>① 设置→每日签到,看有没有「· 本月已领 N 分」(<b>静态结论:永远没有</b>)。② 先确认今天已自动领过,然后<b>改一次字号</b>,回来看签到行是否倒退成「今天还没签」。<b>静态结论:会倒退,且当天退避计数清零。</b></td></tr>
+<tr><td>15</td><td class="c">P2-28 / P2-31 前端交互两处</td><td>① 在一个渠道的密钥框粘一半,去点另一个渠道的「恢复」眼睛 → 看粘贴内容是否被清空。② 在模型页打开「写入」确认弹层后按 Esc → 看关的是弹层还是整个设置页,重开设置页看那个过期弹层是否还在。</td></tr>
+<tr><td>16</td><td class="c">P1-14 主线程僵一下</td><td>点开某渠道详情看 90 天曲线时连续拖标题栏/点置顶,感觉是否掉帧;再把系统时间往前调 10 分钟模拟时钟跳变,看面板是否停更(对应 P2-23)。<b>静态结论:7 个同步命令在主线程做库/keyring/注册表活。</b></td></tr>
+</table>
+
+<h2 id="cover">九、覆盖率声明(诚实版)</h2>
+<table>
+<tr><th style="width:230px">文件</th><th style="width:70px">行数</th><th style="width:80px">逐行</th><th>说明</th></tr>
+<tr><td class="c">app/core/src/inject.rs</td><td class="c">3167</td><td>是</td><td>含 2447-3167 的测试模块;Trae 的备份/回滚无测试覆盖(P0-2 的旁证)</td></tr>
+<tr><td class="c">app/core/src/fetch.rs</td><td class="c">1284</td><td>是</td><td>含单测 1012-1284</td></tr>
+<tr><td class="c">app/core/src/providers.rs</td><td class="c">1273</td><td>是</td><td>含单测 938-1273</td></tr>
+<tr><td class="c">app/core/src/models.rs</td><td class="c">1097</td><td>是</td><td>含单测</td></tr>
+<tr><td class="c">app/core/src/store.rs</td><td class="c">642</td><td>是</td><td>含单测</td></tr>
+<tr><td class="c">app/core/src/checkin.rs</td><td class="c">676</td><td>是</td><td>含单测</td></tr>
+<tr><td class="c">app/core/src/config.rs</td><td class="c">315</td><td>是</td><td></td></tr>
+<tr><td class="c">app/core/src/appauth.rs</td><td class="c">343</td><td>是</td><td></td></tr>
+<tr><td class="c">app/core/src/weblogin.rs / secrets.rs / vault.rs / lib.rs</td><td class="c">198/103/144/20</td><td>是</td><td></td></tr>
+<tr><td class="c">app/src-tauri/src/lib.rs</td><td class="c">2176</td><td>是</td><td>命令全量清单与线程/阻塞审计见 <b>第十节</b></td></tr>
+<tr><td class="c">app/src/app.js</td><td class="c">3559</td><td>是</td><td>前后端 invoke/事件契约逐条核对见 <b>第十节</b></td></tr>
+<tr><td class="c">app/src/index.html / styles.css</td><td class="c">239 / 781</td><td>是</td><td>含 CSP 兼容、字号档位、折叠态残影等布局复核</td></tr>
+<tr><td class="c">build/*.ps1(7)</td><td class="c">452</td><td>是</td><td></td></tr>
+<tr><td class="c">build/*.js(7)</td><td class="c">848</td><td>是</td><td></td></tr>
+<tr><td class="c">tauri.conf.json / capabilities/default.json / build.rs / 两份 Cargo.toml+lock / .gitignore / .gitattributes</td><td class="c">全读</td><td>是</td><td>版本号四处对照见第七节;双锁漂移见 O-9</td></tr>
+</table>
+<table>
+<tr><th style="width:230px">没做 / 做不了</th><th>说明</th></tr>
+<tr><td class="c">运行程序做 UI 冒烟</td><td>本次全程只读代码 + 只跑了 <code>cargo check</code>/<code>cargo test</code>;<b>没有启动挂件、没有点过任何界面</b>。所以第八节那 10 条必须真机做,本报告不能替代它。</td></tr>
+<tr><td class="c">真打外部接口</td><td>没有向 4SAPI/OpenCode/Codex/Trae/WorkBuddy 发过任何请求(那需要真实凭据,且会产生账务副作用)。所有"上游字段/错误码"类结论都标了 <span class="tag v-run">⚠</span>。</td></tr>
+<tr><td class="c">访问凭据管理器/注册表/第三方登录文件</td><td>未触碰。凭据与密钥箱结论全部来自静态阅读。</td></tr>
+<tr><td class="c">cargo clippy</td><td>本机 gnu 工具链未装 clippy 组件;<b>为了不改你的工具链而放弃</b>,改跑 <code>cargo check --all-targets</code>(0 警告)。需要 clippy 的话我可以再装(或走 msvc + vcvars)。</td></tr>
+<tr><td class="c">文档类 HTML(25 个 design-*/bug-report-*)</td><td>只按需要引用了与本次结论直接冲突/相关的段落(design-4sapi-models.html:496/527、design-auto-checkin:242/265、PROGRESS.md:1152),没有全量通读——它们不是代码。</td></tr>
+</table>
+
+<h2 id="contract">十、前后端契约全量核对(35 条命令 + 5 个事件,一条不漏)</h2>
+<p style="color:var(--tx2);font-size:12.5px;margin:0 0 8px">两位审查者各自独立数出 <code>generate_handler!</code> 里 <b>35 条</b>命令(我逐行数过 2137-2173,确实是 35 条),与前端 <code>invoke</code> 的 35 个命令名一一对应:<b>没有漏注册、没有多余注册、没有改名残留</b>。参数名 camelCase→snake_case 由 Tauri 宏自动映射(已用 <code>set_tray_icon</code> 的 <code>rgbaB64→rgba_b64</code> 验证)。前端<b>没有任何 emit</b>,所以不存在"前端发、后端没接"的方向。下面是这 35 条按"有没有问题"分的结果——</p>
+<table>
+<tr><th style="width:120px">分组</th><th style="width:230px">命令</th><th>结论</th></tr>
+<tr><td>契约正确、写法规范</td><td class="c">get_channels / get_config / delete_key / workbuddy_login / set_autostart / set_tray_icon / window_cmd / check_update / app_version / take_startup_error / inject_preview / inject_apply / inject_remove / inject_rollback / open_path / key_reveal / key_copy / vault_list / vault_save / vault_delete / vault_reveal / vault_copy / get_series / skip_update_version / save_window_pos / set_pin / set_key / checkin_state / checkin_now / get_model_catalog</td><td>命令名与参数都对得上。<b>但"对得上"不等于"没问题"</b>:其中 8 条的问题在别处(见下表与 P1/P2/P3)。示例中最好的两条是 <code>inject_preview/apply</code>——阻塞段全部进了 <code>spawn_blocking</code>,可以照它们改其它命令。</td></tr>
+<tr><td>在主线程做阻塞活(非 async)</td><td class="c">key_hint · set_key · set_config · get_series · set_pin · skip_update_version · save_window_pos · set_autostart</td><td><b>P1-14</b>。这 8 条里有 7 条碰 SQLite / 凭据管理器 RPC / 注册表;<code>key_hint</code> 尤其密(每轮渲染 × 每个已配密钥渠道各一次 RPC)。项目自己已把 <code>delete_key</code>、<code>inject_*</code>、<code>vault_*</code> 改成 async,这一批是漏网的。</td></tr>
+<tr><td>async,但阻塞活没下沉</td><td class="c">checkin_now · checkin_state · get_model_catalog</td><td><span class="tag v-no">⏳ 子代理核过,我未二次核</span> <code>checkin_now</code> 直接在 async 上下文里跑 <code>appauth::candidates</code>(读第三方文件 + AES 解密)与 WorkBuddy 的 webview Cookie 读取;<code>checkin_state</code> 直接跑 2 渠道 × 2 次 SQLite 聚合;<code>get_model_catalog</code> 在 worker 上直接 keyring 读 + 100 KB 写盘(O-12)。它们不卡主线程,但会占住 tokio worker。</td></tr>
+<tr><td>参数不校验</td><td class="c">get_series(hours/id) · set_tray_icon(size) · open_path(任意路径) · key_hint/set_key/get_series(未知 id)</td><td><b>P3-24</b>。"未知渠道 id"与"没配密钥"在界面上是同一句话(<b>P2-15</b> 的第三、四个位置)。</td></tr>
+<tr><td>事件(5 个)</td><td class="c">channels-updated / update-progress / workbuddy-login / window-shown / checkin-updated</td><td>名字与后端 <code>emit</code> <b>逐字一致</b>,前端分支覆盖完整。<b>两个瑕疵:</b>① <code>update-progress</code> 的 <code>failed</code> 后端从不发、<code>finished</code> 在 Windows 上永远发不到(进程已退)→ 已并入 <b>P1-15</b>;② 5 个 <code>listen</code> 注册在 <code>init()</code> 末尾,启动头 1~5 秒里点托盘「立即刷新」会丢一次 <code>channels-updated</code>(60 秒后自补,影响极小,列此备案)。</td></tr>
+<tr><td>capability 权限面</td><td class="c">capabilities/default.json</td><td>实际用到的窗口 API 与授权条目比对后:<b>无缺失权限、无多余窗口写权限</b>;<code>windows:["main"]</code> 使第三方登录窗 <code>wb-login</code> 拿不到任何 IPC 权限(边界是对的)。唯一多余的是 <code>updater:default</code>(<b>P3-23</b>)。</td></tr>
+</table>
+<div class="note">这一节的价值不在"找到了什么",而在"排除了什么":<b>命令名/参数名/事件名这一整类最容易出错、也最难查的契约问题,经两条独立路径核对后是干净的。</b>本项目的真问题全部落在下一层——同一个命令的<b>语义</b>用错(P0-5 的默认来源、P2-27 的字段大小写)、以及<b>该不该执行</b>没判(P0-6 的隐藏/开关/退避三道闸门)。</div>
+
+<h2 id="order">十一、修复顺序建议(按"用户可感知 / 风险 / 不做的后果"排,不是按技术难度)</h2>
+<table>
+<tr><th style="width:70px">批次</th><th style="width:150px">条目</th><th>为什么是这一批 / 不做的后果</th></tr>
+<tr><td>第 1 批<br>(改动一行却危害最直接)</td><td class="c">P0-5 · P0-6 · P0-3 + G-1/G-2/G-3</td><td><b>P0-5 是补一个参数,P0-6 是补两道闸门,P0-3/G 系列是补退出码检查。</b>这四组都是"改动面极小、后果很大"的:type 一个 <code>source</code> 就止住了"把 4SAPI 的密钥复制到别的来源";判一次 <code>hidden</code> 就守住了"用户说关掉就别碰他的登录凭据";查一次退出码才不会把旧包当新包发给所有已装用户。<b>P0-3 不修,后面所有修复都无法被信任地交付。</b></td></tr>
+<tr><td>第 2 批<br>(会丢用户数据 / 写坏客户端)</td><td class="c">P0-1 · P0-2 · P1-5 · P1-6 · P1-15 · P2-6 · P2-8 · P2-36</td><td>全是"写坏/删多了没法还原"这一族:P0-1 删掉用户自配的模型、P0-2 写坏 Trae 整库却没有还原点、P1-5/P1-6 留下半成品且台账不记、P1-15 让"更新时装包退出"正好落在半写瞬间、P2-36 让回滚这道最后防线 fail-open。<b>不做的后果是出事只能人工去备份目录捞,而用户不知道要去捞。</b>P0-1/P0-2 都是"正确写法就在同一个文件里,只是 Trae/删除这条路绕过去了",改动面小。</td></tr>
+<tr><td>第 3 批<br>(显示的数在骗人)</td><td class="c">P1-1 · P1-3 · P1-4 · P1-11 · P1-12 · P1-13 · P2-2 · P2-19 · P2-27 · P2-34 · P3-25 · P3-28</td><td>数值/状态/单位错但不破坏数据:积分当元显示、缺字段显示 100%、瞬时读不到凭据导致整片数字消失、<b>累计发放被当额度上限</b>(P1-11)、<b>"这是旧数据"这句话根本没渲染</b>(P1-12)、<b>改字号把当天签到进度抹掉</b>(P1-13)。<b>不做的后果是用户按错的数做决定:什么时候申请、要不要充值、该不该重新登录。</b>P1-11/P1-12/P2-27 三条各只改几行,性价比最高。</td></tr>
+<tr><td>第 4 批<br>(对平台的行为变差)</td><td class="c">P1-2 · P1-10 · P2-1 · P0-6 的前端闸门</td><td>签到退避失效 + 429 误判 = 越被限流撞得越凶,还可能把开关置灰、当天不再签;退还预扣误判成申请会让用户白等;前端不读 <code>canTry</code> 让连点突破"当天 5 次"。<b>风险是账号侧被更严格限流、错过签到日,且流水被刷屏后用户看不出哪天真签过。</b></td></tr>
+<tr><td>第 5 批<br>(稳定性与承诺)</td><td class="c">P1-7 · P1-14 · P1-16 · P2-3 · P2-5 · P2-7 · P2-14 · P2-15 · P2-16 · P2-17 · P2-32 · P2-33 · P2-35 · P2-37 · P2-38 · P3-35 · P3-36</td><td>面板冻结与主线程阻塞(P1-7/P1-14)、配置损坏后默认值把可救回的原文覆盖掉(P1-16)、配置静默重置(含解除隐藏)、备份里留明文密钥与界面承诺不符、凭据库故障被吞成"未配置"、保存失败被吞(P2-32)、检测失败被说成"你没装客户端"(P2-35)、启动失败无声(P2-38)。<b>单条都不致命,合起来是"用户信任"的账:</b>承诺与实情不符的那几条可以靠改文案立刻诚实,之后再改实现。</td></tr>
+<tr><td>第 6 批</td><td class="c">其余 P2 · P3 全表 · O 全表</td><td>边界与工程债。其中 <b>O-8(壳层零测试 + Trae 备份/回滚零覆盖)</b>建议插队做在第 2 批同一次改动里——正好那批全是写入/回滚,补测试的成本最低;<b>O-12/O-13</b> 两条与 <b>P1-12/P2-29</b> 同源,可一次改完。</td></tr>
+</table>
+
+<h2>十二、本轮合并说明(哪些结论来自谁,以及我核了什么)</h2>
+<div class="note">
+① <b>七路分组全部落地</b>:inject.rs / fetch+providers / models+store / appauth+checkin+weblogin+secrets+vault+config / 构建与配置 / app.js+index.html+styles.css / src-tauri 壳。前七节里 <b>P1-11~P1-16、P2-27~P2-38、P3-24~P3-39、O-12~O-14、第十节</b>均来自最后两路(壳层与前端)。<br>
+② <b>重复项已合并,没有计两次</b>:壳层的 SH-6 与后端的 P1-7 是同一条(密钥箱持库锁跨 RPC);SH-16 与 FE-16 是同一条(前端吞保存失败);SH-3 与 FE-1 是同一条(set_config 整份覆盖);SH-4 与 FE-2 是同一条(P0-5);SH-1 与 FE-15 合成 P0-6;SH-9 与后端 P3-9 同族。<br>
+③ <b>我对壳层报告做了一处更正</b>:它把"启动时配置解析失败回落默认值"报成违反红线。实际取数侧红线执行得很好(<code>fetch.rs:805-818</code> 沿用上次成功配置),启动侧也是<b>有意取舍并留了提示</b>(<code>lib.rs:1988-1989</code>)。真缺口是"默认值会被下一次保存整份写回库,毁掉还能手工救回的原文"——已按这个口径写成 <b>P1-16</b>,而不是照抄它的结论。<br>
+④ <b>还有一条与项目既有记录冲突、必须当场定论的</b>:P2-12(reqwest 到底跟不跟 Windows 系统代理)。子代理从依赖清单推断"不跟",而项目 9 月的实测记录写"跟"。两边我都列了,建议按第八节第 5 条先取证再改代码。
+</div>
+
+<h2 id="fixed">十三、本轮修复台账(2026-10-13 同日,报告之后)</h2>
+<p style="color:var(--tx2);font-size:12.5px;margin:0 0 8px">
+<b>验证结果(修完之后重跑,不是我口头说):</b>core <code>cargo test</code> = <b>122 passed / 0 failed</b>(比修前多 8 条新回归测试);强制重查后 core 与壳层 <b>0 编译警告</b>;全部改动 JS <code>node --check</code> 通过;修好的前端探针 <code>probe-frontend.js</code> 跑通 app.js 全流程并以 0 退出;<code>scan-secrets.ps1</code> 扫 85 个受版本控制的文件结果 CLEAN。<b>规模:22 个文件,+2220 / −445。</b>
+</p>
+
+<h3>A. 已修完</h3>
+<table>
+<tr><th style="width:150px">条目</th><th>改了什么(可直接按位置复核)</th></tr>
+<tr><td>P0-1</td><td class="c">inject.rs <code>remove_workbuddy_site</code>:改为「首个 id 命中<b>且</b> <code>wb_is_ours</code> 命中」的下标删除,读回校验同样带上来源判据。回归测试 <code>workbuddy_remove_only_ours_not_foreign_same_id</code></td></tr>
+<tr><td>P0-2</td><td class="c">Trae 的写入/取消写入改走同一条 <code>commit()</code>(备份含 -wal/-shm → 事务内写 → 读回校验 → 不过就回滚);<code>trae_write</code>/<code>remove_trae_site</code> 全部 UPDATE 收进一个事务。测试:<code>trae_apply_via_commit_backs_up_before_writing</code>(并断言备份里<b>不含</b>本次改动)、<code>trae_commit_rolls_back_when_verify_fails</code>、<code>trae_write_uses_one_transaction</code></td></tr>
+<tr><td>P0-3</td><td class="c">build.ps1:<code>cargo tauri build</code> 的退出码在下一条 native 命令覆写前先取走并立即 throw;断言对象只接受<b>本次运行之后</b>产出的 exe($started + LastWriteTime)</td></tr>
+<tr><td>P0-4</td><td class="c"><code>remove_zcode_site</code> 校验改为「本来源 pid 在两份文件里都不再出现」,四处写死的「4SAPI」文案改用 <code>spec.source_name</code>。测试:<code>zcode_remove_other_source_last_model_with_4sapi_present</code></td></tr>
+<tr><td>P0-5</td><td class="c">前端 <code>copy_model_bundle</code> 带上 <code>MDL.sheet.source</code>;后端新增 <code>need_source()</code>,四处 <code>unwrap_or_else(|| "4sapi")</code> 全部换成"缺参数就明确报错"</td></tr>
+<tr><td>P0-6</td><td class="c"><code>run_checkin</code> 入口加 hidden + enabled 两道闸门;节拍器再判 hidden;<code>checkin_now</code> 判 <code>done_for_day</code> 与 <code>next_try_at</code> 并回"约 N 分钟后再试";前端 <code>ckText</code>/<code>ckrun</code> 真正读 <code>canTry</code>,不能点时按钮置灰</td></tr>
+<tr><td>P1-1 ~ P1-5<br>P1-7 ~ P1-16</td><td class="c">单位兜底除 RATE + 单位可疑不显示;退避封顶改由 <code>next_delay</code> 一处表达(删掉 <code>should_retry</code>);OpenCode 缺 percent 不再当 0%、主窗改由 <code>key=="monthly"</code> 决定;凭据读不到时沿用上次快照;写失败也回滚且如实报告回滚结果;多站点部分成功可见并照常记账(<code>Report.error</code>);密钥箱不再持库锁跨 RPC;Trae 进程名按安装目录探测;429 归入"稍后再试";<code>remainRatio</code> 分母只认本轮额度并钳位;「显示的是…成功快照」真的渲染出来了 + 紧凑条 CSS 收起;<code>set_config</code> 按渠道合并、后端签到进度不再被覆盖;六个纯 IO 命令改 async + <code>spawn_blocking</code>(<code>key_hint/set_key/get_series/save_window_pos/skip_update_version/set_autostart</code>);更新与取数/签到/写入互相避让 + 进度事件 200ms 节流;配置损坏时置 <code>CONFIG_BROKEN</code> 并拒绝一切写回、提示文案说清后果</td></tr>
+<tr><td>P1-6</td><td class="c"><code>apply/remove</code> 改为逐站点收错误;<code>push_log</code> 只记真写了盘的条目,写台账失败会拼进回执</td></tr>
+<tr><td>P1-9 / G-1~G-5</td><td class="c">四条假绿全堵:<code>verify-push.js</code> 泄漏或未推上时 exit 1;<code>launch-debug.ps1</code> 真按文件时间戳挑二进制;<code>probe-frontend.js</code> 的假 classList 恢复成真集合(并补 <code>documentElement</code>/className 联动/缺的全局对象);<code>cdp-probe.js</code> 成功 exit 0、失败 exit 1</td></tr>
+<tr><td>P2 大部分</td><td class="c">P2-1 退还不再算申请(带新测试)、P2-2/P2-3(Origin 跟着实际入口走)、P2-4、P2-5(<code>get_setting</code> 分 Err/None + 删掉危险的 <code>Config::load</code>)、P2-6(回滚 temp+rename、失败如实说)、P2-7(承诺改成事实:备份里确有明文密钥)、P2-8(只清时间戳形状的备份目录 + 台账标 <code>backupOk</code>)、P2-9(Trae 内容一致就不写、取键按字面量复核)、P2-10(ZCode 逐键合并、保住用户自配字段)、P2-11(接入地址收口)、P2-13、P2-14(密文删不掉时明确告知去哪清)、P2-15、P2-16(判定域与取 cookie 域一致、只认 https、清除也覆盖两域)、P2-17(补 <code>PRAGMA user_version</code> 迁移)、P2-18、P2-19(code!=0 不再被说成"无积分包"、分页截断会声明)、P2-20、P2-21、P2-22(坏入口不再常驻第一)、P2-23、P2-24(2MB 上限 + 证书类不再逐域名硬撞)、P2-25、P2-26、P2-27、P2-28(未保存的密钥草稿不再被清空)、P2-30、P2-31、P2-32(11 处 set_config 统一走 <code>saveCfg</code>,失败回滚并提示)、P2-33、P2-34、P2-35、P2-36、P2-37、P2-38(启动失败落 startup-error.log 并带建议)</td></tr>
+<tr><td>P3 多数</td><td class="c"><code>pretty()</code> 按路径组件、临时文件名不再误用 <code>with_extension</code>、Windows 错误码翻成人话、备份目录名同秒唯一化、WB 徽标按 (id,来源)、参数夹紧(曲线区间/托盘尺寸)、<code>open_path</code> 白名单、价格路径与来源归属按权威口径、密钥箱/配置的 <code>Err</code> 不再折叠、<code>checkin_notify</code> 接上面板事件、键盘 Tab+Enter 可达、汇总条与金额排版、若干死代码清理</td></tr>
+</table>
+
+<h3>B. 部分完成(说清差在哪)</h3>
+<table>
+<tr><th style="width:150px">条目</th><th>已做 / 未做</th></tr>
+<tr><td>P2-29 轮询打断用户操作</td><td><b>已做:</b>列表与「逐笔到期」小表的滚动位置在重绘后恢复。<b>未做:</b>文本选区 —— 那要求把全量 innerHTML 换成按 id 差量更新,是一次结构改造(与 O-1 同批做最划算)。</td></tr>
+<tr><td>P2-22 单轮耗时帽</td><td><b>已做:</b>失败入口从"上次成功地址"里摘掉。<b>未做:</b>每渠道每轮的总时间预算(需要把 budget 一路传进凭据×域名两层循环)。</td></tr>
+<tr><td>P3-7 重复 IO</td><td><b>已做:</b><code>has_bom</code> 只读 3 字节。<b>未做:</b>把"解析+探 BOM+读回校验"合成一次读取(要改 <code>read_json</code> 返回结构,牵动四家写入)。</td></tr>
+<tr><td>P1-14 主线程</td><td><b>已做:</b>6 个纯 IO 命令 async 化。<b>刻意留:</b><code>set_pin</code> 的窗口操作与 <code>set_config</code> 的热键注册仍在主线程 —— 这两类调用是线程亲和的;改为"先落库、窗口失败则撤回配置"的顺序问题(P3-27)已修。</td></tr>
+</table>
+
+<h3>C. 我没动，以及为什么</h3>
+<table>
+<tr><th style="width:150px">条目</th><th>不动的理由</th></tr>
+<tr><td>P2-12 系统代理</td><td>子代理结论(不跟注册表代理)与项目 9 月的实测记录(跟)直接冲突。<b>在真机取证前改代码 = 拿三个渠道的可用性赌一个推测。</b>取证办法见第八节第 5 条。</td></tr>
+<tr><td>P3-10 <code>decrypt_tc</code> 校验和</td><td>我试过按注释所述(前 64 字节 = 其余明文的 SHA-512)加校验,<b>交叉验证向量直接失败</b> → 说明覆盖范围不是这个。强行加上会把现在能读的 Trae 凭据全判成坏数据。已把注释改成实话,校验等待取证。</td></tr>
+<tr><td>O-10 reqwest 0.12/0.13 共存</td><td>要把 core 升到 0.13,是<b>依赖升级</b>:按约定我不擅自改依赖(可能引入行为变化,且这里没法真机验自动更新)。</td></tr>
+<tr><td>O-9 两份 Cargo.lock 合一</td><td>并入 workspace 会改构建结构与 <code>build.ps1 test</code> 的含义,属于要你先认可的工程决定,不是 bug 修复。</td></tr>
+<tr><td>P3-13 <code>vault_items</code> 加 UNIQUE</td><td>SQLite 加表级约束要重建表。现在有迁移通道了(本轮 P2-17 补的),建议随下一个需要动表结构的版本一起做。</td></tr>
+<tr><td>P3-11 <code>vault::new_id</code> 随机源</td><td>换成密码学随机要引 <code>getrandom</code>/<code>uuid</code> 依赖(同上,依赖不擅自加)。现状碰撞概率极低。</td></tr>
+<tr><td>P3-25 托盘数字单位</td><td>改的是 32px 图标里怎么排 <code>91%</code>(字号/留位),属于视觉决定 —— 等你看一眼现在的效果再定,我不想凭猜改丑。</td></tr>
+<tr><td>P3-23 去掉 <code>updater:default</code></td><td>删掉后<b>自动更新链路在本机无法验证</b>(要真构建+签名+发布)。收益是收窄一层理论攻击面,风险是弄坏所有人的更新 —— 建议留到能整链验证时再动。</td></tr>
+<tr><td>O-11 仓库分区</td><td>把 docs/ 与 tools/ 分开要 <code>git mv</code> 一批文件,纯搬运但会搅历史;单独一次做更清楚。</td></tr>
+<tr><td>O-1 消耗查询合并</td><td>收益最大的一笔性能改动(每轮 ~9 次范围扫描并成 1 次),但要在 store.rs 新写一个多窗口聚合函数并搬现有 pro-rate 逻辑。今天没感到明显卡顿,建议与 P2-29 的差量渲染同批做。</td></tr>
+<tr><td>真机冒烟 16 条</td><td><b>本轮全程没启动过程序</b>,所有界面现象都是静态推演。P0-1/P0-2/P0-5 三条各一分钟就能当场证实,建议先点这三条再决定发布。</td></tr>
+</table>
+
+<div class="note"><b>没提交任何东西。</b>22 个文件的改动都留在工作区(<code>git diff --stat</code> 见上),你可以按批次审、要求回滚单条,或者让我在你冒烟通过后再整理成一次提交。</div>
+
+</div>
+</body>
+</html>

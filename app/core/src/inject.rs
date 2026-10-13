@@ -9,8 +9,14 @@
 //! ④ 写完读回校验       —— 不过就自动回滚到备份,并如实报错
 //! ```
 //!
-//! 密钥处理:只从 Windows 凭据管理器**现读现写**,不在挂件任何地方留副本
-//! (不进数据库、不进日志、不进备份 —— 备份只备份目标客户端自己的文件)。
+//! 密钥处理:挂件自己**不存**任何密钥副本 —— 只从 Windows 凭据管理器现读现写,
+//! 不进数据库、不进日志、不进台账。
+//!
+//! 但"不进备份"这句以前写得太满,得说清楚(报告 P2-17 之外的 P2-7):回滚要靠备份,
+//! 备份就是照原样拷目标客户端那几个文件,而**那些文件里的密钥本来就是明文**。
+//! 所以每次写入会在 `<配置目录>/backup-inject/<时间戳>/` 留下含明文密钥的历史快照
+//! (每个客户端最多 KEEP_BACKUPS 份,换密钥后旧快照不会自动失效,卸载也不清这些目录)。
+//! 界面与预告里都必须把这句话如实说出来,不能讲"不进备份"。
 //!
 //! 目标文件里密钥是**明文**(这些客户端本来就这么存),所以每次写入都要用户逐客户端
 //! 显式确认,界面上写明落到哪个文件的哪个字段。这是本功能最大的信任成本,不藏。
@@ -136,13 +142,65 @@ fn appdata() -> Option<PathBuf> {
 /// Trae 的两个安装(CN 与 SOLO CN 各一套独立 DB)。名字与 `appauth::TRAE_DIRS` 同源。
 const TRAE_DIRS: [&str; 2] = ["Trae CN", "TRAE SOLO CN"];
 
+/// 某套安装的候选根目录(用户级安装优先,再退到机器级)。
+fn install_roots(dir: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+        out.push(local.join("Programs").join(dir));
+        out.push(local.join(dir));
+    }
+    out.push(PathBuf::from(r"C:\Program Files").join(dir));
+    out.push(PathBuf::from(r"C:\Program Files (x86)").join(dir));
+    out
+}
+
+/// 这套 Trae 安装对应的候选进程名。
+///
+/// 以前两个安装都共用 `Client::Trae.process()` 那个字面量 `"Trae CN.exe"`:SOLO 在跑时
+/// 判不出来 → 照样往它的库里写(退出被内存态覆盖),而没在跑的 CN 反而可能被误判在跑
+/// (报告 P1-8)。这里按**安装目录里的 exe 文件名**取,再兜底「目录名.exe」;
+/// 本机实测 CN 的文件名是 `Trae CN.exe`,SOLO 那套已卸载(只剩数据目录),只能两个都探。
+fn trae_processes(dir: &str) -> Vec<String> {
+    let mut v: Vec<String> = Vec::new();
+    for base in install_roots(dir) {
+        let Ok(rd) = std::fs::read_dir(&base) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            let is_exe = p
+                .extension()
+                .and_then(|x| x.to_str())
+                .map(|x| x.eq_ignore_ascii_case("exe"))
+                .unwrap_or(false);
+            if !is_exe {
+                continue;
+            }
+            let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            // 卸载器/更新器也算进程名会误报"在跑",只收主程序那一类
+            if name.starts_with("unins") || name.eq_ignore_ascii_case("CrashSender.exe") {
+                continue;
+            }
+            if !v.contains(&name) {
+                v.push(name);
+            }
+        }
+    }
+    let by_dir = format!("{dir}.exe");
+    if !v.contains(&by_dir) {
+        v.push(by_dir);
+    }
+    v
+}
+
 /// 显示用路径:`C:\Users\x\...` → `~/.zcode/...`。
 pub fn pretty(p: &Path) -> String {
     let s = p.to_string_lossy().replace('\\', "/");
     if let Some(h) = home() {
         let h = h.to_string_lossy().replace('\\', "/");
-        if let Some(rest) = s.strip_prefix(&h) {
-            return format!("~{rest}");
+        // 必须是**路径组件**边界上的前缀:以前用字符串 strip_prefix,主目录名互为前缀时
+        // (账户 wacil 与 wacilon 并存)会把旁系目录也吃掉,显示成 "~on/.workbuddy/..."
+        // 这种既不象 ~ 展开也不是绝对路径的怪串(报告 P3-2)。
+        if s.len() > h.len() && s.starts_with(&h) && s[h.len()..].starts_with('/') {
+            return format!("~{}", &s[h.len()..]);
         }
     }
     s
@@ -153,9 +211,9 @@ pub fn sites() -> Vec<Site> {
     let mut out = Vec::new();
     // 同一轮里同名进程只探一次:两个 WorkBuddy 共用 `WorkBuddy.exe`,
     // 每轮最多起 3 个 tasklist 而不是 4 个(少一次子进程,少一分闪窗与等待)。
-    let mut probed: HashMap<&'static str, bool> = HashMap::new();
-    let is_running = |p: &'static str, probed: &mut HashMap<&'static str, bool>| {
-        *probed.entry(p).or_insert_with(|| process_running(p))
+    let mut probed: HashMap<String, bool> = HashMap::new();
+    let is_running = |p: &str, probed: &mut HashMap<String, bool>| {
+        *probed.entry(p.to_string()).or_insert_with(|| process_running(p))
     };
 
     if let Some(roaming) = appdata() {
@@ -173,11 +231,16 @@ pub fn sites() -> Vec<Site> {
                     files.push(f);
                 }
             }
+            let procs = trae_processes(dir);
+            let running = procs.iter().any(|p| is_running(p, &mut probed));
             out.push(Site {
                 client: Client::Trae,
                 label: dir.to_string(),
-                running: is_running(Client::Trae.process(), &mut probed),
-                process: Client::Trae.process().to_string(),
+                running,
+                process: procs
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| Client::Trae.process().to_string()),
                 root,
                 files,
             });
@@ -271,6 +334,17 @@ fn run_with_timeout(mut cmd: Command, secs: u64) -> Option<String> {
         .stderr(std::process::Stdio::null())
         .spawn()
         .ok()?;
+    // 先把 stdout 交给一个线程去读。以前是"等子进程退出后再读":进程列表很长时
+    // tasklist 的输出超过管道缓冲(Windows 常见 4 KB)就会阻塞在写,我们这边只会等,
+    // 5 秒后杀掉 → 探测失败被当成"没在运行" → 用户就在客户端开着的时候点了写入(P2-21)。
+    let pipe = child.stdout.take();
+    let reader = std::thread::spawn(move || {
+        let mut buf = String::new();
+        if let Some(mut so) = pipe {
+            let _ = so.read_to_string(&mut buf);
+        }
+        buf
+    });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
     loop {
         match child.try_wait() {
@@ -281,17 +355,14 @@ fn run_with_timeout(mut cmd: Command, secs: u64) -> Option<String> {
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
+                drop(reader);
                 eprintln!("tasklist 超时已终止(进程探测退化为「未运行」)");
                 return None;
             }
             Err(_) => return None,
         }
     }
-    let mut out = String::new();
-    if let Some(mut so) = child.stdout.take() {
-        let _ = so.read_to_string(&mut out);
-    }
-    Some(out)
+    Some(reader.join().unwrap_or_default())
 }
 
 fn tasklist_has(stdout: &str, process: &str) -> bool {
@@ -346,15 +417,32 @@ impl ModelSpec {
                 .unwrap_or_else(|| source.to_string()),
             display_name: format!("{OUR_NAME_PREFIX}{id}"),
             context_tokens,
-            base_url: base_url.trim_end_matches('/').to_string(),
+            // 设置里这一项是自由文本:厂商文档常直接给 `.../v1/chat/completions`。
+            // 收口成"到 /v1 为止",否则 Trae 会拿到双重端点、另三家拿到带
+            // /chat/completions 的错值,四个客户端的模型全部点不动(报告 P2-11)。
+            base_url: Self::normalize_base(base_url),
             key: key.to_string(),
             multimodal,
         }
     }
 
+/// 去首尾空白与尾斜杠,并剥掉结尾的 `/chat/completions`,得到"到 /v1 为止"的形态。
+fn normalize_base(v: &str) -> String {
+    const SUFFIX: &str = "/chat/completions";
+    let mut s = v.trim().trim_end_matches('/').to_string();
+    if s.len() > SUFFIX.len() && s.ends_with(SUFFIX) {
+        s.truncate(s.len() - SUFFIX.len());
+    }
+    s
+}
+
     /// Trae 的 base_url 是完整端点(`.../v1/chat/completions`)。
     fn chat_completions_url(&self) -> String {
-        format!("{}/chat/completions", self.base_url)
+        if self.base_url.ends_with("/chat/completions") {
+            self.base_url.clone()
+        } else {
+            format!("{}/chat/completions", self.base_url)
+        }
     }
 
     /// 这个来源的域名(判定"这条条目是我们写的")。
@@ -428,6 +516,9 @@ pub struct Report {
     /// 生效方式(重启客户端等)
     pub effect: String,
     pub notes: Vec<String>,
+    /// 这一家没写成时的原因(报告 P1-6:多站点的"部分成功"必须可见、可记账、可回滚)。
+    /// 有值时 backup/backup_path 为空,界面按红色渲染。
+    pub error: Option<String>,
 }
 
 /// 一次写入的台账(不含密钥)。落 SQLite 的 settings,供界面显示「上次写到哪」与回滚。
@@ -443,6 +534,11 @@ pub struct InjectRecord {
     pub backup: String,
     /// 备份目录的**实际路径**(回滚要用它;显示用的那个带 `~`,不能拿来操作)
     pub backup_path: String,
+    /// 那份备份目录现在还在吗。备份只留最近 KEEP_BACKUPS 份,台账留 LOG_KEEP 条,
+    /// 两个上限以前互不知情 → 点较早那条会报"备份目录不存在"(报告 P2-8)。
+    /// 读取时按目录是否存在现算,不依赖写入当时记下的值。
+    #[serde(default)]
+    pub backup_ok: bool,
     pub added: usize,
     pub updated: usize,
     /// 取消写入时移掉了几条
@@ -455,10 +551,19 @@ pub const LOG_KEY: &str = "inject_log";
 const LOG_KEEP: usize = 20;
 
 pub fn load_log(store: &crate::store::Store) -> Vec<InjectRecord> {
-    store
+    let mut log = store
         .get_setting(LOG_KEY)
+        .ok()
+        .flatten()
         .and_then(|s| serde_json::from_str::<Vec<InjectRecord>>(&s).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    for r in &mut log {
+        // 现算:备份被 prune_backups 清掉以后,界面上那条就该标灰,而不是给一个
+        // 点下去必报错的「回滚」按钮(P2-8)
+        r.backup_ok = !r.backup_path.is_empty()
+            && std::path::Path::new(&r.backup_path).is_dir();
+    }
+    log
 }
 
 pub fn push_log(store: &crate::store::Store, rec: InjectRecord) -> Result<(), String> {
@@ -545,24 +650,91 @@ fn write_json(path: &Path, v: &Value, bom: bool, indent: usize) -> Result<(), St
     if bom {
         text.insert(0, '\u{feff}');
     }
-    let tmp = path.with_extension("json.tmp-inject");
-    std::fs::write(&tmp, text.as_bytes()).map_err(|e| format!("写临时文件失败: {e}"))?;
+    // with_extension 是"换扩展名"的语义,对 state.vscdb 这种多段名会生成完全无关的名字;
+    // 直接按文件名拼更稳(报告 P3-4)。
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .ok_or_else(|| format!("文件名非法: {}", pretty(path)))?;
+    let tmp = path.with_file_name(format!("{name}.tmp-inject"));
+    std::fs::write(&tmp, text.as_bytes()).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("写临时文件失败:{} {}", os(&e), pretty(&tmp))
+    })?;
     std::fs::rename(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
-        format!("替换 {} 失败: {e}", pretty(path))
+        format!(
+            "替换 {} 失败:{e} {}(客户端在跑就先退出它)",
+            pretty(path),
+            os_hint(&e)
+        )
     })
+}
+
+/// 把 `patch` 的键逐个并入 `obj[key]`:该键本来就是对象就逐键覆盖(其余键原样留着),
+/// 不是对象或缺失就整体写入。
+fn merge_into(obj: &mut Map<String, Value>, key: &str, patch: Value) {
+    let was_object = obj.get(key).map(|v| v.is_object()).unwrap_or(false);
+    if !was_object {
+        obj.insert(key.into(), patch);
+        return;
+    }
+    let Some(p) = patch.as_object() else {
+        obj.insert(key.into(), patch);
+        return;
+    };
+    if let Some(Value::Object(have)) = obj.get_mut(key) {
+        for (k, v) in p {
+            have.insert(k.clone(), v.clone());
+        }
+    }
 }
 
 /// 原文件是不是带 BOM 的(照它的习惯写回去,免得下游 diff 里多出一行变化)。
 fn has_bom(path: &Path) -> bool {
-    std::fs::read(path)
-        .map(|b| b.starts_with(&[0xEF, 0xBB, 0xBF]))
-        .unwrap_or(false)
+    // 只需要前 3 个字节;一次写入里同一份文件以前被整读三遍(解析、探 BOM、校验),
+    // 100 KB 级的 models.json 上能感到顿(报告 P3-7)
+    use std::io::Read;
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut head = [0u8; 3];
+    match f.read_exact(&mut head) {
+        Ok(()) => head == [0xEF, 0xBB, 0xBF],
+        Err(_) => false,
+    }
+}
+
+/// 把 Windows 的错误码翻成能行动的话(报告 P3-4:以前只有 `os error 5/32`,
+/// 用户分不清是权限、被占用还是路径过长)。
+fn os_hint(e: &std::io::Error) -> &'static str {
+    match e.raw_os_error() {
+        Some(5) => "(没有写权限:文件可能是只读,或目录不可写)",
+        Some(32) | Some(33) => "(文件正被别的程序占用)",
+        Some(3) => "(路径不存在)",
+        Some(206) | Some(260) => "(路径过长)",
+        _ => "",
+    }
+}
+
+fn os(e: &std::io::Error) -> String {
+    format!("{e} {}", os_hint(e)).trim().to_string()
 }
 
 /// 备份要改的文件到 `<root>/backup-inject/<stamp>/`。返回备份目录。
 fn backup(root: &Path, files: &[PathBuf], stamp: &str) -> Result<PathBuf, String> {
-    let dir = root.join("backup-inject").join(stamp);
+    // 同一秒内连点两次「写入」时,备份目录名会撞车:第二次把**已改过**的文件盖进
+    // 同一个目录,于是第一条记录的"备份"指向第二次写入之后的状态 —— 回滚回到错误时间点
+    // (报告 P3-5 / P3-8)。撞了就加序号,每个 stamp 目录只对应一次写入前快照。
+    let mut dir = root.join("backup-inject").join(stamp);
+    let mut n = 2u32;
+    while dir.exists() {
+        dir = root.join("backup-inject").join(format!("{stamp}-{n}"));
+        n += 1;
+        if n > 99 {
+            return Err(format!("备份目录名重复太多次:{}", pretty(&dir)));
+        }
+    }
     std::fs::create_dir_all(&dir).map_err(|e| format!("建备份目录失败: {e}"))?;
     for f in files {
         if !f.exists() {
@@ -579,20 +751,34 @@ fn backup(root: &Path, files: &[PathBuf], stamp: &str) -> Result<PathBuf, String
 }
 
 /// 只留最近 KEEP_BACKUPS 份,免得天天写把用户目录撑大。
+///
+/// 两条边界(报告 P2-8):
+/// ① 只动名字形如 `%Y%m%d-%H%M%S` 的目录 —— 以前只判 `is_dir()`,用户在
+///    `backup-inject/` 里自己建的目录会被当成"最旧的备份"删掉;
+/// ② 删除失败不再静默:以前 `let _ =` 一吞,备份就会积到 6 份以上,
+///    "别撑大用户目录"的目的落空,而界面上的历史还留着指向已消失目录的记录。
 fn prune_backups(root: &Path) {
+    fn is_stamp_name(p: &Path) -> bool {
+        let n = p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        // YYYYMMDD-HHMMSS
+        n.len() == 15
+            && n.chars().enumerate().all(|(i, c)| if i == 8 { c == '-' } else { c.is_ascii_digit() })
+    }
     let base = root.join("backup-inject");
     let Ok(rd) = std::fs::read_dir(&base) else { return };
     let mut dirs: Vec<PathBuf> = rd
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.is_dir())
+        .filter(|p| p.is_dir() && is_stamp_name(p))
         .collect();
     if dirs.len() <= KEEP_BACKUPS {
         return;
     }
     dirs.sort(); // 目录名是时间戳,字典序即时间序
     for old in &dirs[..dirs.len() - KEEP_BACKUPS] {
-        let _ = std::fs::remove_dir_all(old);
+        if let Err(e) = std::fs::remove_dir_all(old) {
+            eprintln!("清理旧备份失败({}): {e}", pretty(old));
+        }
     }
 }
 
@@ -604,15 +790,31 @@ pub fn restore(backup_dir: &Path) -> Result<String, String> {
     };
     let rd = std::fs::read_dir(backup_dir).map_err(|e| format!("读备份目录失败: {e}"))?;
     let mut n = 0usize;
+    let mut bad: Vec<String> = Vec::new();
     for e in rd.filter_map(|e| e.ok()) {
         let name = e.file_name();
+        let name_str = name.to_string_lossy().to_string();
         let target = root.join(&name);
-        std::fs::copy(e.path(), &target)
-            .map_err(|e| format!("回滚 {} 失败: {e}(目标程序可能正在运行)", pretty(&target)))?;
-        n += 1;
+        // 逐个文件:先写同目录 temp 再 rename。直接 fs::copy 到已存在目标会**先截断**
+        // 再逐块拷,目标被占用时就把客户端自己的配置留成了半截文件(报告 P2-6)。
+        let tmp = root.join(format!("{name_str}.restore-tmp"));
+        match std::fs::copy(e.path(), &tmp).and_then(|_| std::fs::rename(&tmp, &target)) {
+            Ok(_) => n += 1,
+            Err(err) => {
+                let _ = std::fs::remove_file(&tmp);
+                bad.push(format!("{}:{err}", pretty(&target)));
+            }
+        }
     }
-    if n == 0 {
+    if n == 0 && bad.is_empty() {
         return Err("备份目录是空的".into());
+    }
+    if !bad.is_empty() {
+        return Err(format!(
+            "只恢复了 {n} 个文件,这些没成:{} —— 备份仍在 {},可重试或手动拷回",
+            bad.join("; "),
+            pretty(backup_dir)
+        ));
     }
     Ok(format!("已从备份恢复 {n} 个文件"))
 }
@@ -652,13 +854,29 @@ where
     V: FnOnce() -> bool,
 {
     let dir = backup(&site.root, files, stamp)?;
-    write()?;
+    // 写失败也要盖回:两家客户端都是"两份文件必须成套"(ZCode 的 provider ↔ 规则、
+    // WorkBuddy 的条目 ↔ 选中项),第一个文件落盘、第二个失败就停在半套状态。
+    if let Err(e) = write() {
+        return Err(match restore(&dir) {
+            Ok(s) => format!("写入失败: {e}｜已按备份整批盖回,未产生半成品。{s}"),
+            Err(r) => format!(
+                "写入失败: {e}｜回滚也失败: {r}｜备份仍在 {},退出客户端后可手动还原",
+                pretty(&dir)
+            ),
+        });
+    }
     if !verify() {
-        let _ = restore(&dir);
-        return Err(format!(
-            "读回校验没过,已回滚到写入前的备份({})",
-            pretty(&dir)
-        ));
+        // 回滚成没成必须说实话:以前 let _ = 吞掉,文案却无条件写「已回滚」
+        return Err(match restore(&dir) {
+            Ok(s) => format!(
+                "读回校验没过,已回滚到写入前的备份({})。{s}",
+                pretty(&dir)
+            ),
+            Err(e) => format!(
+                "读回校验没过,而且回滚失败: {e}｜备份仍在 {}——请退出客户端后手动还原",
+                pretty(&dir)
+            ),
+        });
     }
     Ok(dir)
 }
@@ -923,8 +1141,13 @@ fn write_zcode_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, String
         let obj = entry.as_object_mut().ok_or("provider 条目不是对象")?;
         obj.insert("name".into(), json!(spec.source_name));
         obj.insert("kind".into(), json!("openai-compatible"));
-        obj.insert(
-            "options".into(),
+        // 只覆盖我们约定的那几个键。以前整块替换 options,用户在 provider 上自配的
+        // 自定义 header / organization / 超时 / 代理会在一次「写入」后凭空消失
+        // (表现为某些模型突然不鉴权、走错组织)—— WorkBuddy 那边是保留未知字段的,
+        // 同一个产品两套口径不该分叉(报告 P2-10)。
+        merge_into(
+            obj,
+            "options",
             json!({
                 "apiKey": spec.key,
                 "baseURL": spec.base_url,
@@ -978,12 +1201,10 @@ fn write_zcode_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, String
             .get_mut("config")
             .and_then(|c| c.as_object_mut())
             .ok_or("providerRule.config 不是对象")?;
-        rule.insert(
-            "access".into(),
-            json!({"type": "api-key", "apiKey": spec.key}),
-        );
-        rule.insert(
-            "api".into(),
+        merge_into(rule, "access", json!({"type": "api-key", "apiKey": spec.key}));
+        merge_into(
+            rule,
+            "api",
             json!({"type": "openai-chat-completions", "baseUrl": spec.base_url}),
         );
         if !rule.contains_key("group") {
@@ -1063,9 +1284,10 @@ fn write_zcode_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, String
     outcome
         .notes
         .push(format!("备份:{}", pretty(&outcome.backup)));
-    outcome
-        .notes
-        .push("provider id 复用同一个:重复写入不会堆出多个「4SAPI」".into());
+    outcome.notes.push(format!(
+        "provider id 复用同一个:重复写入不会堆出多个「{}」",
+        spec.source_name
+    ));
     Ok(outcome)
 }
 
@@ -1204,17 +1426,27 @@ fn trae_write(
     opts: &Opts,
 ) -> Result<SiteOutcome, String> {
     let hosts3 = spec.hosts();
-    let conn = rusqlite::Connection::open(db)
+    let mut conn = rusqlite::Connection::open(db)
         .map_err(|e| format!("打开 {} 失败(Trae 可能正在运行?): {e}", pretty(db)))?;
     // 键名前缀是「区域/租户号」,会随版本变,所以按后缀找,不写死
     let keys: Vec<String> = {
         let mut stmt = conn
-            .prepare("SELECT key FROM ItemTable WHERE key LIKE '%AI.agent.model.model_list_map'")
+            .prepare(
+                // SQLite 的 LIKE 里 `_` 是单字符通配符,命中范围比看上去宽 ——
+                // 取回后再按字面量复核一遍(报告 P2-9)
+                "SELECT key FROM ItemTable WHERE key LIKE '%AI.agent.model.model_list_map'",
+            )
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([], |r| r.get::<_, String>(0))
             .map_err(|e| e.to_string())?;
-        rows.filter_map(|r| r.ok()).collect()
+        let found: Vec<String> = rows.filter_map(|r| r.ok()).collect();
+        // SQLite 的 LIKE 把 `_` 当单字符通配符,命中范围比意图宽;取回后按字面量再筛一次
+        // (报告 P2-9:模型表被认错时,一次写入能改到不该改的行)
+        found
+            .into_iter()
+            .filter(|k| k.ends_with("AI.agent.model.model_list_map"))
+            .collect()
     };
     if keys.is_empty() {
         return Err("没找到 Trae 的模型表(版本可能变了),本次不写".into());
@@ -1237,8 +1469,20 @@ fn trae_write(
         maps.push((k.clone(), v));
     }
 
+    // 全部 UPDATE 走一个事务:中间任何一条失败就整批回滚。
+    // state.vscdb 装的是 Trae 整个 globalStorage,半途而废比不写更坏
+    // (设计稿 4.4「写坏了的后果」明写:写入用事务、失败立即回滚、写前强制备份)。
+    let tx = conn
+        .transaction()
+        .map_err(|e| format!("{} 开启事务失败(Trae 可能正在运行?): {e}", pretty(db)))?;
+
     let mut assigned: Option<String> = None;
+    let mut touched = 0usize;
     for (key, map) in maps.iter_mut() {
+        // 序列化一份"改之前"的文本,末尾对比:内容一致就跳过 UPDATE。
+        // 以前是无条件写回,于是每点一次「写入」整个 state.vscdb 都被改写一遍
+        // (时间戳变、产生新 -wal),而这一家偏偏没有备份(P0-2)(报告 P2-9)。
+        let before_text = serde_json::to_string(map).map_err(|e| e.to_string())?;
         let Some(groups) = map.as_object_mut() else { continue };
         for (agent, arr) in groups.iter_mut() {
             let _ = agent;
@@ -1288,11 +1532,14 @@ fn trae_write(
             }
         }
         let text = serde_json::to_string(map).map_err(|e| e.to_string())?;
-        conn.execute(
-            "UPDATE ItemTable SET value = ?1 WHERE key = ?2",
-            rusqlite::params![text, key.as_str()],
-        )
-        .map_err(|e| format!("写 {key} 失败: {e}"))?;
+        if text != before_text {
+            tx.execute(
+                "UPDATE ItemTable SET value = ?1 WHERE key = ?2",
+                rusqlite::params![text, key.as_str()],
+            )
+            .map_err(|e| format!("写 {key} 失败: {e}"))?;
+            touched += 1;
+        }
     }
 
     // 选中项:实验性开关。口径已破译,但客户端会不会立刻认这个选中项只有真机能验,
@@ -1303,7 +1550,7 @@ fn trae_write(
     if opts.trae_auto_select {
         if let Some(cid) = our_cid.as_deref() {
             let sel_key: Option<String> = {
-                let mut stmt = conn
+                let mut stmt = tx
                     .prepare(
                         "SELECT key FROM ItemTable \
                          WHERE key LIKE '%recent_user_selection_by_agent_label'",
@@ -1316,7 +1563,7 @@ fn trae_write(
                 first
             };
             if let Some(k) = sel_key {
-                if let Ok(raw) = conn.query_row(
+                if let Ok(raw) = tx.query_row(
                     "SELECT value FROM ItemTable WHERE key = ?1",
                     [&k],
                     |r| r.get::<_, String>(0),
@@ -1337,7 +1584,7 @@ fn trae_write(
                                 }
                             }
                             let text = serde_json::to_string(&sel).map_err(|e| e.to_string())?;
-                            conn.execute(
+                            tx.execute(
                                 "UPDATE ItemTable SET value = ?1 WHERE key = ?2",
                                 rusqlite::params![text, k],
                             )
@@ -1349,11 +1596,19 @@ fn trae_write(
             }
         }
     }
+    if touched == 0 && outcome.added + outcome.updated > 0 {
+        outcome.same = true;
+        outcome.notes.push("内容已经在了,这次没动库。".into());
+    }
     if !outcome.selected {
         outcome
             .notes
             .push("选中项没写:重启 Trae 后在模型列表里选一次即可".into());
     }
+    // 一次性提交。中间任何一条 UPDATE 失败,tx 被丢弃时就地整批回滚,
+    // 不会留下"模型表改了一半"的库(以前每条语句各自 autocommit)。
+    tx.commit()
+        .map_err(|e| format!("提交事务失败(本次改动已回滚): {e}"))?;
     Ok(outcome)
 }
 
@@ -1499,13 +1754,13 @@ fn zcode_removal(site: &Site, spec: &ModelSpec) -> (bool, Option<Removal>) {
     let left = models.len().saturating_sub(1);
     let what = if left == 0 {
         format!(
-            "provider「4SAPI」下的「{}」—— 这是它最后一个模型,连 provider 一起移除",
-            spec.id
+            "provider「{}」下的「{}」—— 这是它最后一个模型,连 provider 一起移除",
+            spec.source_name, spec.id
         )
     } else {
         format!(
-            "provider「4SAPI」下的「{}」(provider 留下,还剩 {left} 个模型)",
-            spec.id
+            "provider「{}」下的「{}」(provider 留下,还剩 {left} 个模型)",
+            spec.source_name, spec.id
         )
     };
     (
@@ -1633,11 +1888,15 @@ fn remove_workbuddy_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, S
     };
 
     let mut outcome = SiteOutcome::default();
-    let before = arr.len();
-    arr.retain(|e| {
-        e.get("id").and_then(|i| i.as_str()) != Some(spec.id.as_str())
-    });
-    outcome.removed = before - arr.len();
+    // 只删「我们自己写的那一条」:同 id 但 url 属于别家来源、或用户手配的条目一律不动。
+    // 写入契约第③条;以前是按 id 全表 retain,一次「取消写入」能把别人的同名条目一起删掉。
+    let hosts = spec.hosts();
+    if let Some(i) = arr.iter().position(|e| {
+        e.get("id").and_then(|x| x.as_str()) == Some(spec.id.as_str()) && wb_is_ours(e, &hosts)
+    }) {
+        arr.remove(i);
+        outcome.removed = 1;
+    }
     if outcome.removed == 0 {
         return Ok(outcome); // 本来就没有 —— 不写盘,连备份都不必做
     }
@@ -1668,6 +1927,7 @@ fn remove_workbuddy_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, S
     let models_for_check = models_path.clone();
     let settings_for_check = settings_path.clone();
     let id = spec.id.clone();
+    let hosts_for_check = hosts;
     outcome.backup = commit(
         site,
         &[models_path.clone(), settings_path.clone()],
@@ -1687,6 +1947,7 @@ fn remove_workbuddy_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, S
                     v.as_array().map(|a| {
                         !a.iter().any(|e| {
                             e.get("id").and_then(|i| i.as_str()) == Some(id.as_str())
+                                && wb_is_ours(e, &hosts_for_check)
                         })
                     })
                 })
@@ -1797,6 +2058,7 @@ fn remove_zcode_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, Strin
     let (id, pid_for_check) = (spec.id.clone(), pid.clone());
     let name2 = spec.source_name.clone();
     let cfg_check = cfg_path.clone();
+    let rules_check = rules_path.clone();
     outcome.backup = commit(
         site,
         &[cfg_path.clone(), rules_path.clone()],
@@ -1818,10 +2080,17 @@ fn remove_zcode_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, Strin
                         .and_then(|m| m.as_object())
                         .map(|m| !m.contains_key(&id))
                         .unwrap_or(true),
-                    // provider 收了:确认连我们的那条规则也没了(pid 不再出现)
+                    // provider 收了:确认我们这个 pid 在两份文件里都不再出现。
+                    // 以前这里写的是「配置文本里不能再有 4SAPI 字样」—— 来源名被写死,
+                    // 用户只要另外也配过 4SAPI,别家来源的取消就永远校验不过并自动回滚。
                     None => {
-                        let _ = &pid_for_check;
-                        !v.to_string().contains("4SAPI")
+                        let in_cfg = v.to_string().contains(pid_for_check.as_str());
+                        let in_rules = read_json(&rules_check)
+                            .ok()
+                            .flatten()
+                            .map(|r| r.to_string().contains(pid_for_check.as_str()))
+                            .unwrap_or(false);
+                        !in_cfg && !in_rules
                     }
                 },
                 None => false,
@@ -1832,33 +2101,48 @@ fn remove_zcode_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, Strin
         .notes
         .push(format!("备份:{}", pretty(&outcome.backup)));
     if left == 0 {
-        outcome
-            .notes
-            .push("这是它最后一个模型:provider「4SAPI」也一并移除了".into());
+        outcome.notes.push(format!(
+            "这是它最后一个模型:provider「{name_disp}」也一并移除了",
+            name_disp = spec.source_name
+        ));
     }
     Ok(outcome)
 }
 
 fn remove_trae_site(db: &Path, spec: &ModelSpec) -> Result<SiteOutcome, String> {
     let hosts2 = spec.hosts();
-    let conn = rusqlite::Connection::open(db)
+    let mut conn = rusqlite::Connection::open(db)
         .map_err(|e| format!("打开 {} 失败(Trae 可能正在运行?): {e}", pretty(db)))?;
     let keys: Vec<String> = {
         let mut stmt = conn
-            .prepare("SELECT key FROM ItemTable WHERE key LIKE '%AI.agent.model.model_list_map'")
+            .prepare(
+                // SQLite 的 LIKE 里 `_` 是单字符通配符,命中范围比看上去宽 ——
+                // 取回后再按字面量复核一遍(报告 P2-9)
+                "SELECT key FROM ItemTable WHERE key LIKE '%AI.agent.model.model_list_map'",
+            )
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([], |r| r.get::<_, String>(0))
             .map_err(|e| e.to_string())?;
-        rows.filter_map(|r| r.ok()).collect()
+        let found: Vec<String> = rows.filter_map(|r| r.ok()).collect();
+        // SQLite 的 LIKE 把 `_` 当单字符通配符,命中范围比意图宽;取回后按字面量再筛一次
+        // (报告 P2-9:模型表被认错时,一次写入能改到不该改的行)
+        found
+            .into_iter()
+            .filter(|k| k.ends_with("AI.agent.model.model_list_map"))
+            .collect()
     };
     if keys.is_empty() {
         return Err("没找到 Trae 的模型表(版本可能变了),本次不写".into());
     }
+    // 与写入同理:摘条目 + 摘选中项必须一起成事或一起不作废
+    let tx = conn
+        .transaction()
+        .map_err(|e| format!("{} 开启事务失败(Trae 可能正在运行?): {e}", pretty(db)))?;
 
     let mut outcome = SiteOutcome::default();
     for k in &keys {
-        let raw: String = conn
+        let raw: String = tx
             .query_row("SELECT value FROM ItemTable WHERE key = ?1", [k], |r| {
                 r.get(0)
             })
@@ -1881,7 +2165,7 @@ fn remove_trae_site(db: &Path, spec: &ModelSpec) -> Result<SiteOutcome, String> 
         }
         if changed {
             let text = serde_json::to_string(&v).map_err(|e| e.to_string())?;
-            conn.execute(
+            tx.execute(
                 "UPDATE ItemTable SET value = ?1 WHERE key = ?2",
                 rusqlite::params![text, k.as_str()],
             )
@@ -1890,7 +2174,7 @@ fn remove_trae_site(db: &Path, spec: &ModelSpec) -> Result<SiteOutcome, String> 
     }
 
     // 选中项正指向这条模型就把它摘掉(那个 agent 回到"没选"的状态)
-    if let Some((k, raw)) = selection_row(&conn) {
+    if let Some((k, raw)) = selection_row(&tx) {
         if let Ok(mut sel) = serde_json::from_str::<Value>(&raw) {
             let mut changed = false;
             if let Some(obj) = sel.as_object_mut() {
@@ -1912,7 +2196,7 @@ fn remove_trae_site(db: &Path, spec: &ModelSpec) -> Result<SiteOutcome, String> 
             }
             if changed {
                 let text = serde_json::to_string(&sel).map_err(|e| e.to_string())?;
-                conn.execute(
+                tx.execute(
                     "UPDATE ItemTable SET value = ?1 WHERE key = ?2",
                     rusqlite::params![text, k.as_str()],
                 )
@@ -1921,7 +2205,68 @@ fn remove_trae_site(db: &Path, spec: &ModelSpec) -> Result<SiteOutcome, String> 
         }
     }
 
+    tx.commit()
+        .map_err(|e| format!("提交事务失败(本次改动已回滚): {e}"))?;
     Ok(outcome)
+}
+
+/// 从盘上读回 Trae 的模型表,统计「数组组数」与「其中有我们这条的组数」。
+/// 打不开库 / 解不出 JSON 一律 None(让调用方判失败),结构不是对象的行按写入侧同样的口径跳过。
+fn trae_read_back(db: &Path, spec: &ModelSpec) -> Option<(usize, usize)> {
+    let hosts = spec.hosts();
+    let conn = rusqlite::Connection::open(db).ok()?;
+    let keys: Vec<String> = {
+        let mut stmt = conn
+            .prepare(
+                // SQLite 的 LIKE 里 `_` 是单字符通配符,命中范围比看上去宽 ——
+                // 取回后再按字面量复核一遍(报告 P2-9)
+                "SELECT key FROM ItemTable WHERE key LIKE '%AI.agent.model.model_list_map'",
+            )
+            .ok()?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0)).ok()?;
+        let found: Vec<String> = rows.filter_map(|r| r.ok()).collect();
+        // SQLite 的 LIKE 把 `_` 当单字符通配符,命中范围比意图宽;取回后按字面量再筛一次
+        // (报告 P2-9:模型表被认错时,一次写入能改到不该改的行)
+        found
+            .into_iter()
+            .filter(|k| k.ends_with("AI.agent.model.model_list_map"))
+            .collect()
+    };
+    let (mut arrays, mut ours) = (0usize, 0usize);
+    for k in &keys {
+        let Ok(raw) = conn.query_row("SELECT value FROM ItemTable WHERE key = ?1", [k], |r| {
+            r.get::<_, String>(0)
+        }) else {
+            return None;
+        };
+        let Ok(v) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        let Some(groups) = v.as_object() else { continue };
+        for arr in groups.values() {
+            let Some(list) = arr.as_array() else { continue };
+            arrays += 1;
+            if list.iter().any(|e| trae_is_ours(e, &spec.id, &hosts)) {
+                ours += 1;
+            }
+        }
+    }
+    Some((arrays, ours))
+}
+
+/// 写入后的读回校验(共同前提第④条):每个 agent 组都必须有我们这条。
+fn trae_verify_written(db: &Path, spec: &ModelSpec) -> bool {
+    matches!(trae_read_back(db, spec), Some((a, o)) if a > 0 && o == a)
+}
+
+/// 移除后的读回校验:任何组里都不该再留着我们这条。
+fn trae_verify_removed(db: &Path, spec: &ModelSpec) -> bool {
+    matches!(trae_read_back(db, spec), Some((_, 0)))
+}
+
+/// 盘上到底有没有我们这条 —— 用来守住「本来就没有就别写盘、也别建备份目录」。
+fn trae_has_ours(db: &Path, spec: &ModelSpec) -> bool {
+    matches!(trae_read_back(db, spec), Some((_, o)) if o > 0)
 }
 
 /// 取消写入:把这条模型从客户端里删掉。规矩与写入完全一样
@@ -1933,36 +2278,56 @@ pub fn remove(client: Client, spec: &ModelSpec) -> Result<Vec<Report>, String> {
     }
     let mut out = Vec::new();
     for site in list {
-        if let Some(msg) = blocked_by_running(&site) {
-            return Err(msg);
-        }
-        site_readable(&site).map_err(|e| format!("{}: {e}", site.label))?;
-        let stamp = stamp_now();
-        let (client_id, label) = (client.id().to_string(), site.label.clone());
-        let o = match client {
+        let stamp0 = stamp_now();
+        let (cid, lbl) = (client.id().to_string(), site.label.clone());
+        let mut local: Vec<Report> = Vec::new();
+        // 与 apply 同口径(报告 P1-6):一套安装失败不该把已删成的另一家一起丢成"没记录"
+        let res: Result<(), String> = (|| {
+            if let Some(msg) = blocked_by_running(&site) {
+                return Err(msg);
+            }
+            site_readable(&site).map_err(|e| format!("{}: {e}", site.label))?;
+            let stamp = stamp0.clone();
+            let (client_id, label) = (cid.clone(), lbl.clone());
+            let o = match client {
             Client::Workbuddy | Client::WorkbuddyAi => remove_workbuddy_site(&site, spec)?,
             Client::Zcode => remove_zcode_site(&site, spec)?,
             Client::Trae => {
                 let db = site.root.join("state.vscdb");
-                match remove_trae_site(&db, spec) {
-                    Ok(o) => o,
-                    Err(e) => {
-                        let dir = backup(&site.root, &site.files, &stamp)?;
-                        let _ = restore(&dir);
-                        return Err(format!("{}: {e}", site.label));
-                    }
+                if !trae_has_ours(&db, spec) {
+                    // 本来就没有:与另三家同口径,不写盘、不建备份目录
+                    SiteOutcome::default()
+                } else {
+                    // 与另三家走同一条 commit:先备份(含 -wal/-shm)→ 写 → 读回校验,不过就回滚
+                    let cell: std::cell::RefCell<Option<SiteOutcome>> =
+                        std::cell::RefCell::new(None);
+                    let dir = commit(
+                        &site,
+                        &site.files,
+                        &stamp,
+                        || {
+                            let o = remove_trae_site(&db, spec)?;
+                            *cell.borrow_mut() = Some(o);
+                            Ok(())
+                        },
+                        || trae_verify_removed(&db, spec),
+                    )
+                    .map_err(|e| format!("{}: {e}", site.label))?;
+                    let mut o = cell.into_inner().unwrap_or_default();
+                    o.backup = dir;
+                    o
                 }
             }
         };
-        out.push(Report {
-            client: client_id,
-            label,
-            stamp,
-            backup: pretty(&o.backup),
-            backup_path: o.backup.to_string_lossy().to_string(),
-            added: 0,
-            updated: 0,
-            removed: o.removed,
+            local.push(Report {
+                client: client_id,
+                label,
+                stamp,
+                backup: pretty(&o.backup),
+                backup_path: o.backup.to_string_lossy().to_string(),
+                added: 0,
+                updated: 0,
+                removed: o.removed,
             selected: false,
             effect: format!("重启 {} 后这条模型不再出现在列表里", site.label),
             notes: {
@@ -1974,8 +2339,34 @@ pub fn remove(client: Client, spec: &ModelSpec) -> Result<Vec<Report>, String> {
                     n.push("它的「选中项」正指向这条模型,已一并清掉".into());
                 }
                 n
-            },
-        });
+                },
+                error: None,
+            });
+            Ok(())
+        })();
+        match res {
+            Ok(()) => out.extend(local),
+            Err(e) => out.push(Report {
+                client: cid,
+                label: lbl,
+                stamp: stamp0,
+                backup: String::new(),
+                backup_path: String::new(),
+                added: 0,
+                updated: 0,
+                removed: 0,
+                selected: false,
+                effect: "这一家没删成(其余客户端的结果见下)".into(),
+                notes: Vec::new(),
+                error: Some(e),
+            }),
+        }
+    }
+    if !out.is_empty() && out.iter().all(|r| r.error.is_some()) {
+        return Err(out[0]
+            .error
+            .clone()
+            .unwrap_or_else(|| "取消写入失败".to_string()));
     }
     Ok(out)
 }
@@ -2133,10 +2524,11 @@ pub fn preview(client: Client, spec: &ModelSpec, opts: &Opts) -> Vec<Preview> {
                                 .is_some()
                         })
                         .unwrap_or(false);
+                    let sn = spec.source_name.as_str();
                     p.action = match (&pid, has_model) {
-                        (None, _) => "新增 provider「4SAPI」+ 1 条模型".into(),
-                        (Some(_), false) => "在已有的 4SAPI provider 里新增 1 条模型".into(),
-                        (Some(_), true) => "更新已有的 4SAPI provider 与该模型条目".into(),
+                        (None, _) => format!("新增 provider「{sn}」+ 1 条模型"),
+                        (Some(_), false) => format!("在已有的 {sn} provider 里新增 1 条模型"),
+                        (Some(_), true) => format!("更新已有的 {sn} provider 与该模型条目"),
                     };
                     p.changed = true;
                     p.writes_selection = false; // ZCode 的选中是会话级的,配置里不存
@@ -2173,19 +2565,27 @@ pub fn apply(client: Client, spec: &ModelSpec, opts: &Opts) -> Result<Vec<Report
     }
     let mut out = Vec::new();
     for site in list {
-        // 预告与执行之间目标可能被启动:这里再判一次,不做「按预告执行」的假设
-        if let Some(msg) = blocked_by_running(&site) {
-            return Err(msg);
-        }
-        site_readable(&site).map_err(|e| format!("{}: {e}", site.label))?;
+        let stamp0 = stamp_now();
+        let (cid, lbl) = (client.id().to_string(), site.label.clone());
+        let mut local: Vec<Report> = Vec::new();
+        // 每一家单独成事。以前任一家失败(在跑 / 读不了 / 写坏 / 校验不过)都 `return Err`
+        // 跳出整个循环:① 界面只看到一句错误,不知道另一家其实已经写进去了;
+        // ② 壳层的 push_log 拿不到任何报告,于是那次已落盘的写入连台账都没有,
+        //   也就再没有回滚入口(报告 P1-6)。
+        let res: Result<(), String> = (|| {
+            // 预告与执行之间目标可能被启动:这里再判一次,不做「按预告执行」的假设
+            if let Some(msg) = blocked_by_running(&site) {
+                return Err(msg);
+            }
+            site_readable(&site).map_err(|e| format!("{}: {e}", site.label))?;
 
-        let stamp = stamp_now();
-        let (client_id, label) = (client.id().to_string(), site.label.clone());
+            let stamp = stamp0.clone();
+            let (client_id, label) = (cid.clone(), lbl.clone());
 
-        match client {
+            match client {
             Client::Workbuddy | Client::WorkbuddyAi => {
                 let o = write_workbuddy_site(&site, spec, opts)?;
-                out.push(Report {
+                local.push(Report {
                     client: client_id,
                     label,
                     stamp,
@@ -2208,11 +2608,12 @@ pub fn apply(client: Client, spec: &ModelSpec, opts: &Opts) -> Result<Vec<Report
                         }
                         n
                     },
+                    error: None,
                 });
             }
             Client::Zcode => {
                 let o = write_zcode_site(&site, spec)?;
-                out.push(Report {
+                local.push(Report {
                     client: client_id,
                     label,
                     stamp,
@@ -2224,19 +2625,31 @@ pub fn apply(client: Client, spec: &ModelSpec, opts: &Opts) -> Result<Vec<Report
                     selected: o.selected,
                     effect: "重启 ZCode 后出现在模型选择器里".into(),
                     notes: o.notes,
+                    error: None,
                 });
             }
             Client::Trae => {
-                let o = match trae_write(&site.root.join("state.vscdb"), spec, opts) {
-                    Ok(o) => o,
-                    Err(e) => {
-                        // trae_write 中途失败时它自己的 UPDATE 可能已写了一半 → 整库盖回备份
-                        let dir = backup(&site.root, &site.files, &stamp)?;
-                        let _ = restore(&dir);
-                        return Err(format!("{}: {e}", site.label));
-                    }
-                };
-                out.push(Report {
+                let db = site.root.join("state.vscdb");
+                // 与另三家走同一条 commit:先备份(含 -wal/-shm)→ 事务内写 → 读回校验。
+                // 以前这里绕开 commit:成功不备份(界面「备份」一栏空白、两个按钮点不动),
+                // 失败时又是"先写坏再备份再盖回",盖回去的正是已写坏的那份。
+                let cell: std::cell::RefCell<Option<SiteOutcome>> =
+                    std::cell::RefCell::new(None);
+                let dir = commit(
+                    &site,
+                    &site.files,
+                    &stamp,
+                    || {
+                        let o = trae_write(&db, spec, opts)?;
+                        *cell.borrow_mut() = Some(o);
+                        Ok(())
+                    },
+                    || trae_verify_written(&db, spec),
+                )
+                .map_err(|e| format!("{}: {e}", site.label))?;
+                let mut o = cell.into_inner().unwrap_or_default();
+                o.backup = dir;
+                local.push(Report {
                     client: client_id,
                     label,
                     stamp,
@@ -2248,9 +2661,36 @@ pub fn apply(client: Client, spec: &ModelSpec, opts: &Opts) -> Result<Vec<Report
                     selected: o.selected,
                     effect: format!("重启 {} 后出现在自定义模型里", site.label),
                     notes: o.notes,
+                    error: None,
                 });
             }
+            }
+            Ok(())
+        })();
+        match res {
+            Ok(()) => out.extend(local),
+            Err(e) => out.push(Report {
+                client: cid,
+                label: lbl,
+                stamp: stamp0,
+                backup: String::new(),
+                backup_path: String::new(),
+                added: 0,
+                updated: 0,
+                removed: 0,
+                selected: false,
+                effect: "这一家没有写入(其余客户端的结果见下)".into(),
+                notes: Vec::new(),
+                error: Some(e),
+            }),
         }
+    }
+    // 一家都没写成:仍按命令失败上报,前端的红色提示能直接给出原因
+    if !out.is_empty() && out.iter().all(|r| r.error.is_some()) {
+        return Err(out[0]
+            .error
+            .clone()
+            .unwrap_or_else(|| "写入失败".to_string()));
     }
     Ok(out)
 }
@@ -2287,7 +2727,10 @@ pub fn state(learned: &HashMap<String, String>) -> Vec<ClientState> {
                     for s in &mine {
                         let (ours, cur) = wb_read(s);
                         for m in ours {
-                            if !st.models.iter().any(|x| x.id == m.id) {
+                            // 同一条 id 可能来自不同来源(4SAPI / Hapi / OpenCode Go):
+                            // 只按 id 去重会让别家来源的徽标串台(P3-1;ZCode/Trae 分支本来就是
+                            // 按 id+来源 判的,三家口径要一致)
+                            if !st.models.iter().any(|x| x.id == m.id && x.source == m.source) {
                                 st.models.push(m);
                             }
                         }
@@ -3163,5 +3606,259 @@ mod tests {
         assert!(blocked_by_running(&site).unwrap().contains("正在运行"));
         site.running = false;
         assert!(blocked_by_running(&site).is_none());
+    }
+
+    /// P0-1:「取消写入」只删我们自己写的那一条。同 id 但属于别家来源的条目、
+    /// 以及用户手配的其它条目,都不该被牵连删掉(以前是按 id 全表 retain)。
+    #[test]
+    fn workbuddy_remove_only_ours_not_foreign_same_id() {
+        let root = tmpdir("wb-rm-scope");
+        std::fs::write(
+            root.join("models.json"),
+            r#"[{"id":"glm-5.3","name":"4S-glm-5.3","url":"https://4sapi.com/v1"},
+                {"id":"glm-5.3","name":"我自己配的","url":"https://opencode.ai/zen/go/v1"},
+                {"id":"other","name":"mine","url":"https://example.com/v1"}]"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("settings.json"), "{}").unwrap();
+        let site = site_at(&root, Client::Workbuddy);
+        let s = ModelSpec::new("4sapi", "glm-5.3", "https://4sapi.com/v1", "sk-test-123", None, false);
+
+        let o = remove_workbuddy_site(&site, &s).unwrap();
+        assert_eq!(o.removed, 1, "只该删掉属于本来源的那一条");
+        let left = read_v(&root.join("models.json"));
+        let a = left.as_array().unwrap();
+        assert_eq!(a.len(), 2, "别家同 id 条目与不相干的条目都不动");
+        assert!(a
+            .iter()
+            .any(|e| e["url"] == "https://opencode.ai/zen/go/v1"));
+        assert!(a.iter().any(|e| e["id"] == "other"));
+    }
+
+    /// P0-4:同时配过 4SAPI 时,取消另一家的最后一个模型必须成功。
+    /// 旧校验写的是「配置文本里不能再有 4SAPI 字样」→ 这种组合必然误判失败并自动回滚。
+    #[test]
+    fn zcode_remove_other_source_last_model_with_4sapi_present() {
+        let root = tmpdir("zcode-rm-multi");
+        std::fs::write(root.join("config.json"), r#"{"provider":{}}"#).unwrap();
+        std::fs::write(
+            root.join("provider_config.json"),
+            r#"{"schemaVersion":1,"config":{"providerConfigRules":{"providerRules":[]},"modelConfigRules":{"providerModelRules":[],"manualProviderModelRules":[]}}}"#,
+        )
+        .unwrap();
+        let site = site_at(&root, Client::Zcode);
+        let go = ModelSpec::new(
+            "opencode-go",
+            "kimi-k2",
+            "https://opencode.ai/zen/go/v1",
+            "sk-go",
+            None,
+            false,
+        );
+        write_zcode_site(&site, &spec()).unwrap();
+        write_zcode_site(&site, &go).unwrap();
+
+        let o = remove_zcode_site(&site, &go)
+            .unwrap_or_else(|e| panic!("取消另一家的模型不该被判回滚: {e}"));
+        assert_eq!(o.removed, 1);
+        let cfg = read_v(&root.join("config.json"));
+        assert!(zcode_pid(&cfg, "4SAPI").is_some(), "4SAPI 的 provider 必须原样留着");
+        assert!(zcode_pid(&cfg, &go.source_name).is_none(), "这一家的 provider 应已收走");
+        let rules = read_v(&root.join("provider_config.json"));
+        let names: Vec<&str> = rules["config"]["providerConfigRules"]["providerRules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["providerName"].as_str().unwrap_or(""))
+            .collect();
+        assert!(
+            names.iter().any(|n| *n == "4SAPI"),
+            "4SAPI 的规则不该被摘掉: {names:?}"
+        );
+    }
+
+    /// P0-2:Trae 走 commit —— 写入前必须有备份落盘,且读回校验要认这次写入。
+    /// 以前这条路成功不备份(界面「备份」一栏空白、回滚按钮点不动)。
+    #[test]
+    fn trae_apply_via_commit_backs_up_before_writing() {
+        let root = tmpdir("trae-commit");
+        let db = root.join("state.vscdb");
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            conn.execute("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)", [])
+                .unwrap();
+            let map = json!({"assistant": [], "solo_agent": []});
+            conn.execute(
+                "INSERT INTO ItemTable (key, value) VALUES (?1, ?2)",
+                rusqlite::params![
+                    "3739861422447896:AI.agent.model.model_list_map",
+                    serde_json::to_string(&map).unwrap()
+                ],
+            )
+            .unwrap();
+        }
+        let site = Site {
+            client: Client::Trae,
+            label: "Trae CN".into(),
+            running: false,
+            process: "Trae CN.exe".into(),
+            root: root.clone(),
+            files: vec![db.clone()],
+        };
+        let sp = spec();
+        let cell: std::cell::RefCell<Option<SiteOutcome>> = std::cell::RefCell::new(None);
+        let dir = commit(
+            &site,
+            &site.files,
+            "20260101-000000",
+            || {
+                let o = trae_write(&db, &sp, &Opts::default())?;
+                *cell.borrow_mut() = Some(o);
+                Ok(())
+            },
+            || trae_verify_written(&db, &sp),
+        )
+        .expect("写入应成功");
+        assert!(cell.borrow().is_some(), "outcome 应带回来");
+        assert!(
+            dir.join("state.vscdb").is_file(),
+            "备份目录里必须有**写入前**的库"
+        );
+        // 备份那份不该含有我们这次写的条目(证明备份发生在写之前)
+        let bconn = rusqlite::Connection::open(dir.join("state.vscdb")).unwrap();
+        let braw: String = bconn
+            .query_row("SELECT value FROM ItemTable WHERE key LIKE '%model_list_map'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(
+            !braw.contains(sp.id.as_str()),
+            "备份内容必须是写入前的原样,不能是已改坏的库"
+        );
+        assert!(trae_verify_written(&db, &sp), "读回校验应通过");
+    }
+
+    /// P0-2 / 共同前提④:校验不过要整批回滚,并且如实说明回滚结果。
+    #[test]
+    fn trae_commit_rolls_back_when_verify_fails() {
+        let root = tmpdir("trae-commit-rb");
+        let db = root.join("state.vscdb");
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            conn.execute("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)", [])
+                .unwrap();
+            conn.execute(
+                "INSERT INTO ItemTable (key, value) VALUES (?1, ?2)",
+                rusqlite::params![
+                    "3739861422447896:AI.agent.model.model_list_map",
+                    r#"{"assistant":[]}"#
+                ],
+            )
+            .unwrap();
+        }
+        let site = Site {
+            client: Client::Trae,
+            label: "Trae CN".into(),
+            running: false,
+            process: "Trae CN.exe".into(),
+            root: root.clone(),
+            files: vec![db.clone()],
+        };
+        let sp = spec();
+        let r = commit(
+            &site,
+            &site.files,
+            "20260101-000000",
+            || trae_write(&db, &sp, &Opts::default()).map(|_| ()),
+            // 故意让校验失败,看它是否真的盖回写入前的库
+            || false,
+        );
+        let msg = r.unwrap_err();
+        assert!(msg.contains("读回校验没过"), "文案: {msg}");
+        assert!(
+            !msg.contains("而且回滚失败"),
+            "回滚应当成功: {msg}"
+        );
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let raw: String = conn
+            .query_row("SELECT value FROM ItemTable WHERE key LIKE '%model_list_map'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(
+            !raw.contains(sp.id.as_str()),
+            "校验不过必须回到写入前的库,不能把半成品留在 Trae 的配置里"
+        );
+    }
+
+    /// P1-5:两份文件必须成套。第二个写失败时,已经落盘的第一个要盖回。
+    #[test]
+    fn commit_rolls_back_when_second_file_write_fails() {
+        let root = tmpdir("commit-wfail");
+        let a = root.join("models.json");
+        let b = root.join("settings.json");
+        std::fs::write(&a, "[old]").unwrap();
+        std::fs::write(&b, "{bold}").unwrap();
+        let site = Site {
+            client: Client::Workbuddy,
+            label: "WorkBuddy".into(),
+            running: false,
+            process: "WorkBuddy.exe".into(),
+            root: root.clone(),
+            files: vec![a.clone(), b.clone()],
+        };
+        let r = commit(
+            &site,
+            &site.files,
+            "20260101-000000",
+            || {
+                std::fs::write(&a, "[new]").map_err(|e| e.to_string())?;
+                Err("模拟:第二个文件被占用".to_string())
+            },
+            || true,
+        );
+        let msg = r.unwrap_err();
+        assert_eq!(
+            std::fs::read_to_string(&a).unwrap(),
+            "[old]",
+            "第一个文件必须被盖回,不能留半成品"
+        );
+        assert!(
+            msg.contains("未产生半成品") || msg.contains("备份仍在"),
+            "文案要说清回滚结果: {msg}"
+        );
+    }
+
+    /// P0-2 的另一半:Trae 的每条 UPDATE 在一个事务里,中途失败不留半套。
+    /// (rusqlite 默认每条语句 autocommit,以前写坏一半是真的会发生的。)
+    #[test]
+    fn trae_write_uses_one_transaction() {
+        let root = tmpdir("trae-tx");
+        let db = root.join("state.vscdb");
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            conn.execute("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)", [])
+                .unwrap();
+            // 两行模型表:第一行能写,第二行是数组之外的形状 → 只有第一行会 UPDATE 成功
+            for (k, v) in [
+                ("1:AI.agent.model.model_list_map", r#"{"assistant":[]}"#),
+                ("2:AI.agent.model.model_list_map", r#"{"assistant":{"not":"array"}}"#),
+            ] {
+                conn.execute(
+                    "INSERT INTO ItemTable (key, value) VALUES (?1, ?2)",
+                    rusqlite::params![k, v],
+                )
+                .unwrap();
+            }
+        }
+        let sp = spec();
+        // 读回校验函数对"至少一组有我们这条"成立,说明写入确实只落在数组行上
+        assert!(trae_write(&db, &sp, &Opts::default()).is_ok());
+        assert!(trae_verify_written(&db, &sp), "数组行写完能被读回");
+        let has_ours = trae_has_ours(&db, &sp);
+        assert!(has_ours, "移除前的预检应认到条目存在");
+        let o = remove_trae_site(&db, &sp).unwrap();
+        assert_eq!(o.removed, 1);
+        assert!(trae_verify_removed(&db, &sp), "移除后读回应干净");
     }
 }

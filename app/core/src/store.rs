@@ -28,7 +28,86 @@ impl Store {
         let _ = conn.busy_timeout(std::time::Duration::from_secs(5));
         let s = Self { conn };
         s.init_schema()?;
+        s.migrate()?;
         Ok(s)
+    }
+
+    /// 版本化迁移。`CREATE TABLE IF NOT EXISTS` 对**已存在**的表零作用 —— 既不补列
+    /// 也不校验形状,老库要等运行期报 "no such column" 才发现(报告 P2-17)。
+    fn migrate(&self) -> Result<(), String> {
+        const WANT: i64 = 1;
+        let cur: i64 = self
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap_or(0);
+        if cur >= WANT {
+            return Ok(());
+        }
+        for (table, cols) in [
+            (
+                "checkin_log",
+                [
+                    ("attempts", "INTEGER NOT NULL DEFAULT 0"),
+                    ("detail", "TEXT"),
+                ]
+                .as_slice(),
+            ),
+            (
+                "vault_items",
+                [
+                    ("hint", "TEXT NOT NULL DEFAULT ''"),
+                    ("note", "TEXT NOT NULL DEFAULT ''"),
+                ]
+                .as_slice(),
+            ),
+            (
+                "snapshots",
+                [("kind", "TEXT NOT NULL DEFAULT 'amount'")].as_slice(),
+            ),
+        ] {
+            if !self.table_exists(table)? {
+                continue;
+            }
+            for (col, decl) in cols {
+                self.add_column_if_missing(table, col, decl)?;
+            }
+        }
+        self.conn
+            .execute_batch(&format!("PRAGMA user_version = {WANT};"))
+            .map_err(|e| format!("写数据库版本号失败: {e}"))?;
+        Ok(())
+    }
+
+    fn table_exists(&self, table: &str) -> Result<bool, String> {
+        let n: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?1",
+                params![table],
+                |r| r.get(0),
+            )
+            .map_err(|e| format!("查表 {table} 失败: {e}"))?;
+        Ok(n > 0)
+    }
+
+    fn add_column_if_missing(&self, table: &str, col: &str, decl: &str) -> Result<(), String> {
+        let mut stmt = self
+            .conn
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .map_err(|e| format!("读 {table} 列信息失败: {e}"))?;
+        let names: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .map_err(|e| format!("读 {table} 列信息失败: {e}"))?
+            .filter_map(|r| r.ok())
+            .collect();
+        if names.iter().any(|n| n == col) {
+            return Ok(());
+        }
+        // 表名/列名都是本文件里的字面量,不是外部输入
+        self.conn
+            .execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {col} {decl};"))
+            .map_err(|e| format!("给 {table} 补列 {col} 失败: {e}"))?;
+        Ok(())
     }
 
     /// 测试用:内存库,不落盘,给跨模块的组装逻辑(如申请制状态)当输入。
@@ -37,6 +116,7 @@ impl Store {
         let conn = Connection::open_in_memory().map_err(|e| format!("打开数据库失败: {e}"))?;
         let s = Self { conn };
         s.init_schema()?;
+        s.migrate()?;
         Ok(s)
     }
 
@@ -240,6 +320,8 @@ impl Store {
         provider_id: &str,
         from_ts: i64,
         min_delta: f64,
+        target: f64,
+        max_gap: i64,
     ) -> Result<Option<i64>, String> {
         let mut stmt = self
             .conn
@@ -256,18 +338,35 @@ impl Store {
             .filter_map(Result::ok)
             .collect();
 
-        // 顺序扫描,取最后一次跳升
+        // 顺序扫描,取最后一次**像申请的**跳升。
+        // 只看涨幅会把平台的预扣退还(一次能涨几十元)记成"用户申请过了",
+        // 于是申请倒计时被顶回去、用户白等(P2-1)。
         let mut last = None;
         for pair in rows.windows(2) {
-            if pair[1].1 - pair[0].1 >= min_delta {
-                last = Some(pair[1].0);
+            if pair[1].1 - pair[0].1 < min_delta {
+                continue;
             }
+            // 落在额度线附近才算申请到账(target<=0 = 调用方没给额度,退回旧口径)
+            if target > 0.0 && (pair[1].1 - target).abs() > target * 0.15 {
+                continue;
+            }
+            // 相邻两条隔太久(合盖多日后醒来第一轮)的差值不是一次跳升
+            if max_gap > 0 && pair[1].0 - pair[0].0 > max_gap {
+                continue;
+            }
+            last = Some(pair[1].0);
         }
         Ok(last)
     }
 
     /// 用于展开区的迷你柱图。按小时分桶取窗口内最低余额,再转成差值曲线。
-    pub fn series(&self, provider_id: &str, from_ts: i64, buckets: usize) -> Result<Vec<f64>, String> {
+    pub fn series(
+        &self,
+        provider_id: &str,
+        from_ts: i64,
+        to_ts: i64,
+        buckets: usize,
+    ) -> Result<Vec<f64>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -283,12 +382,15 @@ impl Store {
             .filter_map(Result::ok)
             .collect();
 
+        // 少于两条推不出任何差值:返回空数组,让界面画"数据不足"。
+        // 以前回落到全 0,画出来与"真实零消耗"一模一样,分不出来(P2-18)
         if rows.len() < 2 {
-            return Ok(vec![0.0; buckets]);
+            return Ok(Vec::new());
         }
 
-        let now = rows.last().unwrap().0;
-        let span = (now - from_ts).max(1) as f64;
+        // 归一基准是**请求窗口的终点**,不是最后一条快照:否则数据停在 3 小时前,
+        // 这 3 小时的消耗会被拉伸铺满 24 格,趋势看着像"一直在花"(P2-18)
+        let span = (to_ts - from_ts).max(1) as f64;
         let mut out = vec![0.0f64; buckets];
         for pair in rows.windows(2) {
             let (t0, r0) = (pair[0].0, pair[0].1);
@@ -300,14 +402,20 @@ impl Store {
         Ok(out)
     }
 
-    pub fn get_setting(&self, key: &str) -> Option<String> {
-        self.conn
-            .query_row(
-                "SELECT value FROM settings WHERE key = ?1",
-                params![key],
-                |r| r.get(0),
-            )
-            .ok()
+    /// Ok(None) = 库里真没有这一行;Err = 存储出问题(损坏 / IO 错)。
+    /// 以前用 `.ok()` 把两者折叠成 None,于是 `Config::try_load` 把"读坏了"当成
+    /// "没配过"而回落默认值 —— 隐藏渠道被静默解除隐藏、恢复对外发请求(P2-5;
+    /// 同一条红线 JSON 解析那一支早在 P2-11 修过)。
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>, String> {
+        match self.conn.query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            params![key],
+            |r| r.get::<_, String>(0),
+        ) {
+            Ok(v) => Ok(Some(v)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(format!("读取设置 {key} 失败: {e}")),
+        }
     }
 
     pub fn set_setting(&self, key: &str, value: &str) -> Result<(), String> {
@@ -321,11 +429,21 @@ impl Store {
         Ok(())
     }
 
-    /// 清理 90 天前的快照,避免库无限增长。
+    /// 清理旧数据:快照按 90 天,签到流水按 400 天(月统计只看本月,留一年多足够
+    /// 回答"哪几天断了",又不会让它无限长 —— 以前这张表**没有任何清理路径**,P3-14)。
     pub fn prune(&self, before_ts: i64) -> Result<usize, String> {
-        self.conn
+        let n = self
+            .conn
             .execute("DELETE FROM snapshots WHERE ts < ?1", params![before_ts])
-            .map_err(|e| format!("清理旧快照失败: {e}"))
+            .map_err(|e| format!("清理旧快照失败: {e}"))?;
+        let log_before = before_ts - 300 * 86_400; // 快照的 90 天之外再多留 300 天
+        self.conn
+            .execute(
+                "DELETE FROM checkin_log WHERE ts < ?1",
+                params![log_before],
+            )
+            .map_err(|e| format!("清理旧签到流水失败: {e}"))?;
+        Ok(n)
     }
 }
 
@@ -586,9 +704,9 @@ mod tests {
     fn settings_roundtrip() {
         let s = mem();
         s.set_setting("interval", "300").unwrap();
-        assert_eq!(s.get_setting("interval").as_deref(), Some("300"));
+        assert_eq!(s.get_setting("interval").unwrap().as_deref(), Some("300"));
         s.set_setting("interval", "60").unwrap();
-        assert_eq!(s.get_setting("interval").as_deref(), Some("60"));
+        assert_eq!(s.get_setting("interval").unwrap().as_deref(), Some("60"));
     }
 
     #[test]
@@ -606,11 +724,11 @@ mod tests {
             s.record("p", ts, Some(rem), None, None, "amount").unwrap();
         }
         // 只认最近的跳升
-        assert_eq!(s.last_jump_since("p", 0, 20.0).unwrap(), Some(5000));
+        assert_eq!(s.last_jump_since("p", 0, 20.0, 200.0, 0).unwrap(), Some(5000));
         // 阈值高于实际跳升(45)-> 只剩第一次(181.01)
-        assert_eq!(s.last_jump_since("p", 0, 182.0).unwrap(), None);
+        assert_eq!(s.last_jump_since("p", 0, 182.0, 200.0, 0).unwrap(), None);
         // 窗口把第一次跳升切掉
-        assert_eq!(s.last_jump_since("p", 2500, 20.0).unwrap(), Some(5000));
+        assert_eq!(s.last_jump_since("p", 2500, 20.0, 200.0, 0).unwrap(), Some(5000));
     }
 
     #[test]
@@ -620,8 +738,26 @@ mod tests {
             s.record("p", ts, Some(rem), None, None, "amount").unwrap();
         }
         // 5 元的抖动在 20 元阈值下不算申请
-        assert_eq!(s.last_jump_since("p", 0, 20.0).unwrap(), None);
-        assert_eq!(s.last_jump_since("p", 0, 4.0).unwrap(), Some(4000));
+        assert_eq!(s.last_jump_since("p", 0, 20.0, 0.0, 0).unwrap(), None);
+        assert_eq!(s.last_jump_since("p", 0, 4.0, 0.0, 0).unwrap(), Some(4000));
+    }
+
+    /// 平台对失败请求退还预扣,一次能涨几十元 —— 只看涨幅会把它记成"用户申请过",
+    /// 于是申请倒计时被顶回去、用户白等(报告 P2-1)。
+    #[test]
+    fn refunds_far_below_the_quota_line_are_not_applications() {
+        let s = mem();
+        for (ts, rem) in [
+            (1000, 12.0),
+            (2000, 60.0), // 涨 48 元,但离 200 的额度线很远 -> 是退还,不是申请
+            (3000, 40.0),
+            (4000, 198.0), // 这才是一次申请
+        ] {
+            s.record("p", ts, Some(rem), None, None, "amount").unwrap();
+        }
+        assert_eq!(s.last_jump_since("p", 0, 20.0, 200.0, 0).unwrap(), Some(4000));
+        // 隔太久的两条(休眠后第一跳)也不算跳升
+        assert_eq!(s.last_jump_since("p", 0, 20.0, 200.0, 500).unwrap(), None);
     }
 
     #[test]

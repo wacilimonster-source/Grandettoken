@@ -105,9 +105,13 @@ function remainRatio(c) {
     if (!w) return null;
     return Math.max(0, Math.min(100, w.remainPercent)) / 100;
   }
-  const denom = c.claim && c.claim.amount > 0 ? c.claim.amount : c.total;
+  // 分母只认「本轮额度」(claim.amount)。后端的 total 是**累计发放**,只增不减 ——
+  // 拿它当分母会越算越低,ClaimConfig 的注释明令禁止(报告 P1-11:关掉申请制后
+  // 4SAPI 行会显示「额度 ¥4800 · 剩 21%」并因此染红、被胶囊挑成最紧渠道)。
+  const denom = c.claim && c.claim.amount > 0 ? c.claim.amount : null;
   if (c.remaining === null || denom === null || denom === undefined || !denom) return null;
-  return c.remaining / denom;
+  // 余额可能超出本轮额度(改小过 amount、平台多充),钳到 [0,1] 再给进度条用
+  return Math.max(0, Math.min(1, c.remaining / denom));
 }
 
 /** 申请周期状态:可申请 / 还要等几天 / 未记录。 */
@@ -354,7 +358,8 @@ function renderRow(c, i) {
         ? "30 天内无到期"
         : "近期无到期";
   } else if (claim) sub = `本轮额度 ¥${esc(claim.amount)}${claimTail(claim)}`;
-  else if (pct !== null) sub = `额度 ¥${c.total}`;
+  // 以前没开申请制时这里显示「额度 ¥{c.total}」:c.total 是**累计发放**(只增不减),
+  // 不是额度上限 → "剩 21%" 会随每次充值一路下滑,与还能用多少钱毫无关系(报告 P1-11)。
   else sub = ""; // 金额型拿到多少就是可用多少,不加说明
 
   let subVal;
@@ -386,7 +391,7 @@ function renderRow(c, i) {
   // 第三段:金额型显示日/周/月;配额型显示三个限流窗口;积分型显示最近的几笔到期
   let useHtml;
   if (isPts) {
-    const list = (c.expiring || []).filter((e) => daysUntil(e.at) >= 0);
+    const list = (c.expiring || []).filter((e) => e.at > 0 && daysUntil(e.at) >= 0);
     const head = list.slice(0, 3);
     useHtml = head.length
       ? `<div class="exps">${head
@@ -455,13 +460,13 @@ function renderRow(c, i) {
       : "";
 
   const src = c.stale
-    ? `<div class="hint" style="color:var(--warn)">显示的是 ${relTime(c.updatedAt)} 的成功快照${
+    ? `<div class="rhint stale">显示的是 ${relTime(c.updatedAt)} 的成功快照${
         c.error ? " · " + esc(c.error) : ""
       }</div>`
-    : `<div class="hint">更新于 ${relTime(c.updatedAt)}</div>`;
+    : `<div class="rhint">更新于 ${relTime(c.updatedAt)}</div>`;
 
-  return `<div class="row" data-id="${c.id}" data-i="${i}" data-dtone="${dcls}">
-    <div class="rhead">
+  return `<div class="row" data-id="${c.id}" data-dtone="${dcls}">
+    <div class="rhead" tabindex="0" role="button" aria-expanded="${open ? "true" : "false"}">
       <div class="r1">
         ${iconHtml(c, "ico", noKey || failed)}
         <div class="nm">
@@ -478,6 +483,7 @@ function renderRow(c, i) {
       ${useHtml}
       ${claimWarn}
       ${winWarn}
+      ${src}
       <span class="sweep"></span>
     </div>
     <div class="rbody" data-body="${c.id}"></div>
@@ -696,7 +702,43 @@ function playEntrance() {
   setTimeout(() => l.classList.remove("st-in"), 700);
 }
 
+/** 渲染异常不许把界面留在「正在取…」或整块空白上,也不许被误报成"取数失败"。
+ *  后端成功 + 前端抛异常时,用户只看到空白与一句错的提示(报告 P2-33;
+ *  renderModels 早就为同一个坑包过一层,主路径漏了)。 */
 function render(opts) {
+  // 轮询会把 #list 与展开行的详情整块重建,新建元素的 scrollTop 天生是 0:
+  // 用户翻到第 14 笔的「逐笔到期」小表会跳回第一笔(报告 P2-29)。
+  // 数值照旧翻页,只把滚动位置补回来(选区随锚节点被移除,需要更细的差量渲染才能保住)。
+  const listEl = $("list");
+  const listTop = listEl ? listEl.scrollTop : 0;
+  const exps = [];
+  if (listEl) {
+    listEl.querySelectorAll(".extab").forEach((t) => {
+      const row = t.closest(".row");
+      if (row && row.dataset.id) exps.push([row.dataset.id, t.scrollTop]);
+    });
+  }
+  try {
+    renderInner(opts);
+  } catch (err) {
+    const box = $("list");
+    if (box) {
+      box.innerHTML =
+        '<div class="empty">界面渲染出错:' + esc(String((err && err.message) || err)) + "</div>";
+    }
+    showToast("渲染出错:" + ((err && err.message) || err), true);
+    return;
+  }
+  if (listEl) {
+    listEl.scrollTop = listTop;
+    exps.forEach(function (pair) {
+      const t = listEl.querySelector('.row[data-id="' + pair[0] + '"] .extab');
+      if (t) t.scrollTop = pair[1];
+    });
+  }
+}
+
+function renderInner(opts) {
   // updated=true 只由「数据刷新」调用方传(settings 变更等重渲染不放动效)
   const updated = !!(opts && opts.updated);
   // 动效 A/B:重建 DOM 前先把每行大数字的旧文本存下来,替换后对比才知道谁变了
@@ -965,7 +1007,7 @@ function pillAnim(newId, lastText, lastId) {
  *  (body 的 st-* 类,只在 form-pill 下有样式)+ 发丝条常驻显示剩余百分比。
  *  状态与状态点(dotCls)同源,单一事实来源;灰态 = 无数据,细分语义仍由点承担
  *  (off 空心环 / st 斜杠)。比率拿不到时发丝条清 0 只留轨道。M5 轮播点已退役。 */
-const AURA_OF = { "": "ok", w: "warn", b: "bad", off: "fail", st: "fail", o: "fail" };
+const AURA_OF = { "": "ok", w: "warn", b: "bad", off: "fail", st: "fail" };
 function applyPillAura(state, ratio) {
   document.body.classList.remove("st-ok", "st-warn", "st-bad", "st-fail");
   document.body.classList.add("st-" + state);
@@ -1209,12 +1251,20 @@ function chDot(c) {
   return "";
 }
 
+/** 未保存的密钥输入草稿:重绘 #chList 前存、重建后回填(报告 P2-28)。 */
+const keyDraft = {};
+
 function renderChCards() {
   // 重绘前把已显示的密钥收回:明文不许留在 DOM 里过夜
   clearTimeout(revealTimer);
   document.querySelectorAll(".reveal-box").forEach((b) => {
     b.dataset.on = "0";
     b.innerHTML = "";
+  });
+  // 点别的卡上的「恢复」眼睛也会整块重建 #chList,新建输入框的 value 是空的 ——
+  // 用户刚粘进去、还没点保存的那串密钥就这么没了(报告 P2-28)
+  document.querySelectorAll('#chList [id^="key-"]').forEach((el) => {
+    keyDraft[el.id.slice(4)] = el.value;
   });
   const ids = currentOrderIds();
   const list = ids.map((id) => CHANNELS.find((c) => c.id === id)).filter(Boolean);
@@ -1254,6 +1304,7 @@ function renderChCards() {
           </div>
           <div class="ccbtns">
             <input type="password" id="key-${c.id}" autocomplete="off" spellcheck="false"
+              value="${esc(keyDraft[c.id] || '')}"
               placeholder="${c.hasKey ? "也可粘贴访问密钥 · 留空则不修改" : "或粘贴访问密钥(登录窗口不通时自救)"}">
             <button class="btn" data-act="savekey" data-id="${c.id}">保存</button>
             ${c.hasKey ? `<button class="btn danger" data-act="delkey" data-id="${c.id}">清除登录</button>` : ""}
@@ -1267,6 +1318,7 @@ function renderChCards() {
           `失效时打开一次 ${esc(c.name)} 即可;隐藏本渠道后连读取也会停止。</div>`
         : `<div class="ccbtns">
             <input type="password" id="key-${c.id}" autocomplete="off" spellcheck="false"
+              value="${esc(keyDraft[c.id] || '')}"
               placeholder="${c.hasKey ? "已保存 · 留空则不修改" : "粘贴 API Key"}">
             <button class="btn p" data-act="savekey" data-id="${c.id}">保存</button>
             ${c.hasKey ? `<button class="btn danger" data-act="delkey" data-id="${c.id}">删除</button>` : ""}
@@ -1342,8 +1394,14 @@ function fillKeyHints() {
       const hint = await invoke("key_hint", { id: c.id });
       const el = document.querySelector(`.kh[data-hint="${c.id}"]`);
       if (el && hint) el.textContent = " · " + hint;
-    } catch {
-      /* 拿不到就不显示,不打扰 */
+    } catch (e) {
+      // 凭据管理器坏了 ≠ 没配密钥:把故障如实写出来,否则用户会以为密钥丢了而反复重填
+      // (报告 P2-15)。后端现在区分了这两种情况,这里只负责把它显示出来。
+      const el = document.querySelector(`.kh[data-hint="${c.id}"]`);
+      if (el) {
+        el.textContent = " · 凭据库读取失败:" + String(e);
+        el.classList.add("err");
+      }
     }
   });
 }
@@ -1404,7 +1462,7 @@ async function applyFormInner(form, remember = true) {
   if (list) list.setAttribute("data-tauri-drag-region", form === "compact" ? "deep" : "false");
   if (remember && CFG) {
     CFG.form = form;
-    invoke("set_config", { config: CFG }).catch(() => {});
+    saveCfg();
   }
   // 吸附期间窗口几何归吸附逻辑管:展开态换完形态重新量一次,收起态压根不碰尺寸
   if (DOCK.on) {
@@ -1442,7 +1500,13 @@ async function applyFormInner(form, remember = true) {
   } catch (e) {
     console.error("切换形态失败", e);
   }
-  clampToMonitor();
+  // 必须 await:applyFormInner 本身在几何队列里,不加 await 就等于让队列提前认为这一环
+  // 完成,而 clampToMonitor 还在拿"上一环未落地时"的尺寸算坐标、并排到队尾之后才落地
+  // —— 违反下面那条"一切改窗口几何的入口都排进同一条链"的纪律(报告 P2-30)。
+  await clampToMonitor();
+  // 600ms 的掩护窗口要从**最后一次**几何 IPC 之后重新起算:不然尾部那次 setSize
+  // 触发的 moved 会落在窗口之外,被当成"用户自己拖到屏幕边"→ 挂件自己吸成竖条(P3-29)
+  markSelfMove();
 }
 
 // 形态/几何操作**全局串行**:applyForm 的类切换是同步的,但尺寸是 6 连 await 的 IPC——
@@ -1698,11 +1762,44 @@ function openManage() {
   $("btnS").classList.add("on");
 }
 function closeManage() {
+  // 关掉设置页时把过期的弹层与编辑态一起作废:否则重开设置页会直接停在
+  // 几分钟前那个「写入 · 确认」弹层上,而且还能点(报告 P2-31)
+  MDL.sheet = null;
+  renderModelSheet();
+  VAULT_EDIT = null;
   document.body.classList.remove("view-manage");
   $("btnS").classList.remove("on");
 }
 
+// 模型弹层:点在遮罩空白处也能关(它既没有背景关闭、也没有焦点收拢,
+// Tab 还会跑到被遮住的底层按钮上 —— 报告 P2-31)。
+if ($("mdlOv")) {
+  $("mdlOv").addEventListener("click", (e) => {
+    if (e.target === $("mdlOv") && MDL.sheet) {
+      MDL.sheet = null;
+      renderModelSheet();
+    }
+  });
+}
+
 // ───────────── 事件绑定 ─────────────
+// 键盘兜底:行头/徽标/链接都是 div 或 span,光加 tabindex 不够,
+// 还要让 Enter/Space 走同一条 data-act 委托(报告 P3-19:只用键盘的人进不去这个挂件)
+function keyActivate(e) {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const t = e.target;
+  if (!t || !t.closest) return;
+  // 原生控件自己会响应 Enter/Space,再点一次就是双发(开关被连点两下)
+  if (t.tagName === "BUTTON" || t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "A") return;
+  const hit = t.closest("[data-act],.rhead");
+  if (!hit || hit === document.body) return;
+  e.preventDefault();
+  hit.click();
+}
+
+$("list").addEventListener("keydown", keyActivate);
+$("manage").addEventListener("keydown", keyActivate);
+
 $("list").addEventListener("click", async (e) => {
   // I2:紧凑条的 +N 徽标 —— 展开面板,滚动到第一个被藏渠道并高亮 1 秒
   const more = e.target.closest(".more");
@@ -1963,6 +2060,22 @@ setInterval(() => {
 // 胶囊整块是拖动区(见 index.html),展开只走 ▲ 按钮,避免和拖动抢手势
 
 /** 存配置 + 立刻重取一次:申请状态是后端按配置算的,不重取看不到变化。 */
+async function saveCfg(what) {
+  // 统一的配置提交:失败一定要说清楚,并把界面退回提交前的值(报告 P2-32)。
+  // saveConfigAndRefresh 的注释早就立过这条纪律,但另外几处 set_config 用的还是
+  // .catch(() => {}) —— 失败静默,重启后设置悄悄回滚。
+  const backup = CFG;
+  try {
+    await invoke("set_config", { config: CFG });
+    return true;
+  } catch (e) {
+    showToast("保存" + (what || "设置") + "失败:" + e, true);
+    CFG = backup;
+    render();
+    return false;
+  }
+}
+
 async function saveConfigAndRefresh() {
   // **不许吞错**:以前这里 catch(() => {}) 一吞,保存失败时界面只会"回到原状",
   // 看起来就是"点了没反应"(用户实测:隐藏渠道点「–」恢复不动)。
@@ -2034,6 +2147,11 @@ $("manage").addEventListener("click", async (e) => {
   }
   if (a === "ckrun") {
     if (CK_LOG) return;
+    // 后端闸门(报告 P0-6):退避未到 / 今天已处理完时,点下去不该再发请求
+    if (CK[id] && CK[id].canTry === false) {
+      showToast("现在还不能领:" + ckHold(CK[id]), true);
+      return;
+    }
     await ckRun(id);
     return;
   }
@@ -2053,7 +2171,7 @@ $("manage").addEventListener("click", async (e) => {
     // 「只看编码/对话」= !modelShowAll,顺手持久化,下次打开还是这个口径
     if (f === "chat") {
       CFG.modelShowAll = !MDL.f.chat;
-      invoke("set_config", { config: CFG }).catch(() => {});
+      saveCfg();
     }
     renderModels();
     return;
@@ -2097,7 +2215,10 @@ $("manage").addEventListener("click", async (e) => {
   }
   if (a === "mdlcopy") {
     try {
-      const msg = await invoke("copy_model_bundle", { model: id });
+      const msg = await invoke("copy_model_bundle", {
+        model: id,
+        source: MDL.sheet && MDL.sheet.source,
+      });
       showToast(msg + " · 已复制到剪贴板");
     } catch (err) {
       showToast("复制失败:" + err, true);
@@ -2309,7 +2430,7 @@ $("manage").addEventListener("click", async (e) => {
     if (i < 0 || j < 0 || j >= ids.length) return;
     [ids[i], ids[j]] = [ids[j], ids[i]];
     CFG.channelOrder = ids; // 未列入的渠道先落到数组里,顺序不会因为新增渠道而乱
-    await invoke("set_config", { config: CFG }).catch(() => {});
+    await saveCfg();
     render(); // 排序是前端算的,不用重新取数
   } else if (a === "pillpick") {
     const sel = CFG.pillChannels || (CFG.pillChannels = []);
@@ -2318,7 +2439,7 @@ $("manage").addEventListener("click", async (e) => {
     else sel.push(id);
     act.classList.toggle("on", at < 0);
     PILL.idx = 0;
-    invoke("set_config", { config: CFG }).catch(() => {});
+    saveCfg();
     render(); // 胶囊内容立即跟着变
   }
 });
@@ -2332,7 +2453,7 @@ function bindSelect(id, key, cast = Number) {
     // 让所有渠道瞬间全红(老配置/手改 HTML 时踩过),这种变更直接忽略
     if (el.value === "") return;
     CFG[key] = cast(el.value);
-    invoke("set_config", { config: CFG }).catch(() => {});
+    saveCfg();
     if (RERENDER_KEYS.has(key)) render();
   });
 }
@@ -2342,7 +2463,7 @@ function bindSwitch(id, key, onChange) {
     CFG[key] = !CFG[key];
     el.classList.toggle("on", CFG[key]);
     el.setAttribute("aria-checked", String(!!CFG[key]));
-    invoke("set_config", { config: CFG }).catch(() => {});
+    saveCfg();
     if (onChange) {
       try {
         await onChange(CFG[key]);
@@ -2351,7 +2472,7 @@ function bindSwitch(id, key, onChange) {
         CFG[key] = !CFG[key];
         el.classList.toggle("on", CFG[key]);
         el.setAttribute("aria-checked", String(!!CFG[key]));
-        invoke("set_config", { config: CFG }).catch(() => {});
+        saveCfg();
         showToast("操作失败:" + err, true);
       }
     }
@@ -2366,7 +2487,7 @@ bindSelect("cfgCrit", "critPercent");
 // 字号:换档要同时写 --u、按新倍率重新钳窗口尺寸、重量紧凑条截断
 $("cfgFontScale").addEventListener("change", () => {
   CFG.fontScale = $("cfgFontScale").value;
-  invoke("set_config", { config: CFG }).catch(() => {});
+  saveCfg();
   applyFontScale();
   applyForm(currentForm());
   render();
@@ -2694,7 +2815,13 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   // 覆盖层最优先:它盖在所有内容上,Esc 却先去关设置页/收形态,
   // 用户按半天 Esc 都关不掉眼前那个下载框(报告 P2-16)
-  if (ovOpen()) {
+  if (MDL.sheet) {
+    // 模型弹层(「写入 · 确认」)盖在设置页之上,Esc 第一优先级该关的是它。
+    // 以前这条链只认 #updOv,于是 Esc 关掉的是整个设置页,而那个确认弹层留在原地
+    // 等下次打开设置页时凭空出现、按钮还能点(报告 P2-31)。
+    MDL.sheet = null;
+    renderModelSheet();
+  } else if (ovOpen()) {
     closeUpdOverlay();
   } else if (manageOpen()) {
     closeManage();
@@ -2841,11 +2968,22 @@ let CK = {};            // 渠道 id → checkin_state 的那一条
 let CK_LOG = false;     // 「领积分」正在跑
 const CHECKIN_ON = new Set(["trae", "workbuddy"]);
 
+/** 退避没到 / 今天已处理完:按钮留着但点不动,并写明还要等多久(报告 P0-6)。 */
+function ckHold(s) {
+  const left = s && s.nextTryAt ? Math.ceil((s.nextTryAt * 1000 - Date.now()) / 1000) : 0;
+  if (left > 0) return (left >= 60 ? Math.round(left / 60) + " 分钟" : left + " 秒") + "后再试";
+  return "今天已处理";
+}
+
 /** 状态 → 一行字 + 一个按钮。八种状态照设计稿 7.2 的表。 */
 function ckText(s) {
   if (!s) return null;
   const n = s.credits === null || s.credits === undefined ? "" : " +" + s.credits;
   const o = s.outcome || "";
+  // 后端把"现在到底能不能点"算好了(can_try = 开关开 && 今天没完结 && 不在退避中)。
+  // 以前前端不读它,退避中连点 N 次 = 对平台发 N×3 个请求,越限流撞得越凶。
+  const canRun = s.canTry !== false;
+  const run = (label, cls) => (canRun ? { btn: label, act: "ckrun", cls } : { btn: ckHold(s), disabled: true });
   if (!s.enabled) {
     // 关着也要把最近一次已知状态带上:上一轮手动验过/刚关掉的人,不该看不到"其实今天已领"
     const tail = o.startsWith("claimed") || o.startsWith("already") ? " · 今天已领" + n + " 分" : "";
@@ -2854,14 +2992,22 @@ function ckText(s) {
   if (s.note) return { text: s.note, btn: "去登录", act: "cklogin", warn: true };
   if (o.startsWith("claimed")) return { text: "今日已领" + n + " 分 · 已触发到账核对" };
   if (o.startsWith("already")) return { text: "今日已领" + n + " 分(平台侧显示已签到)" };
-  if (o === "retry:ready") return { text: "今日可领" + n, btn: "领积分", act: "ckrun", cls: "p" };
-  if (o === "retry:device") return { text: "太挤了,今天还会自动再试(第 " + (s.attempts || 1) + "/5 次)", btn: "重试", act: "ckrun" };
-  if (o.startsWith("retry")) return { text: "上次没成功,今天还会再试(第 " + (s.attempts || 1) + "/5 次)", btn: "重试", act: "ckrun" };
+  if (o === "retry:ready") return Object.assign({ text: "今日可领" + n }, run("领积分", "p"));
+  if (o === "retry:device")
+    return Object.assign(
+      { text: "太挤了,今天还会自动再试(第 " + (s.attempts || 1) + "/5 次)" },
+      run("重试", "")
+    );
+  if (o.startsWith("retry"))
+    return Object.assign(
+      { text: "上次没成功,今天还会再试(第 " + (s.attempts || 1) + "/5 次)" },
+      run("重试", "")
+    );
   if (o.startsWith("auth")) return { text: "凭据失效 —— 打开一次客户端 / 在渠道卡上登录一次", btn: "去登录", act: "cklogin", warn: true };
   if (o.startsWith("inactive")) return { text: "加油站本期已结束(等下一期)" };
   if (o.startsWith("shape")) return { text: "签到接口有变动,已暂停自动签到 · 余额显示不受影响", warn: true };
-  if (o.startsWith("failed")) return { text: "上次没成功:" + (s.lastMessage || o.slice(7)), btn: "重试", act: "ckrun" };
-  return { text: "今天还没签", btn: "领积分", act: "ckrun", cls: "p" };
+  if (o.startsWith("failed")) return Object.assign({ text: "上次没成功:" + (s.lastMessage || o.slice(7)) }, run("重试", ""));
+  return Object.assign({ text: "今天还没签" }, run("领积分", "p"));
 }
 
 function ckRowHtml(id) {
@@ -2872,7 +3018,11 @@ function ckRowHtml(id) {
   return (
     '<div class="ckrow' + (t.warn ? " warn" : "") + '" data-id="' + esc(id) + '">' +
     "<span>" + esc(t.text) + "</span>" +
-    (t.btn ? '<button class="btn s ' + (t.cls || "") + '" data-act="' + t.act + '" data-id="' + esc(id) + '">' + esc(t.btn) + "</button>" : "") +
+    (t.btn
+      ? '<button class="btn s ' + (t.cls || "") + '" data-act="' + (t.act || "") + '" data-id="' + esc(id) + '"' +
+        (t.disabled ? " disabled" : "") +
+        ">" + esc(t.btn) + "</button>"
+      : "") +
     "</div>"
   );
 }
@@ -2922,7 +3072,7 @@ function renderCheckinSet() {
       '<div class="field"><span>' + esc(s ? s.name : id) +
         '<span class="desc">' +
         (on ? (auto ? "每天 00:23 后自动领,失败当天退避重试" : "只保留手动「领积分」按钮") : "关着 —— 一个请求都不发") +
-        (s && s.month_credits ? " · 本月已领 " + s.month_credits + " 分" : "") +
+        (s && s.monthCredits ? " · 本月已领 " + points(s.monthCredits) + " 分" : "") +
         "</span></span>" +
         '<button class="sw' + (on ? " on" : "") + '" role="switch" aria-checked="' + on +
         '" data-act="ckenable" data-id="' + esc(id) + '" aria-label="' + esc((s ? s.name : id) + " 签到") + '"></button></div>' +
@@ -2965,7 +3115,7 @@ async function ckSetEnabled(id, on, auto) {
     on === null ? {} : { enabled: on },
     auto === null || auto === undefined ? {} : { auto }
   );
-  await invoke("set_config", { config: CFG }).catch((e) => showToast("保存失败:" + e, true));
+  if (!(await saveCfg("签到设置"))) return;
   if (on) {
     showToast("已开启 " + (CK[id] ? CK[id].name : id) + " 签到");
   }
@@ -2983,6 +3133,7 @@ const MDL = {
   src: "",                   // 当前来源
   sources: [],               // 后端给的来源表 [{id,name,hasPrice,listPublic}]
   clients: [],               // inject_state 的客户端状态
+  stateError: "",            // inject_state 失败原因(与"没装客户端"分开显示)
   log: [],                   // 写入台账(不含密钥)
   q: "",                     // 搜索词
   f: { chat: true },         // 芯片只剩「只看编码/对话」;「只列能用上的」是固定规则
@@ -3166,7 +3317,12 @@ function renderModelsInner() {
     .join("");
   const srcEl = $("mdlSrc");
   if (srcEl) srcEl.innerHTML = chips;
-  $("mdlCli").innerHTML = MDL.clients.map(mdlClientChip).join("");
+  // 空列表有两种意思:"探测环节坏了"与"这台机器真没装客户端",必须分开说(P2-35)
+  $("mdlCli").innerHTML = MDL.clients.length
+    ? MDL.clients.map(mdlClientChip).join("")
+    : MDL.stateError
+      ? '<span class="dim">检测客户端失败:' + esc(MDL.stateError) + "</span>"
+      : '<span class="dim">没检测到可写入的客户端(Trae / WorkBuddy / ZCode)</span>';
 
   const v = mdlView();
   if (!v) {
@@ -3269,8 +3425,10 @@ function renderModelSheet() {
                 esc(r.model) + (r.added ? " · 新增 " + r.added : "") +
                 (r.updated ? " · 更新 " + r.updated : "") +
                 (r.removed ? " · 移除 " + r.removed : "") +
-                '<button class="btn s" data-act="openpath" data-id="' + esc(r.backupPath) + '">备份</button>' +
-                '<button class="btn s" data-act="mdlrollback" data-id="' + esc(r.backupPath) + '">回滚</button>' +
+                (r.backupOk
+                  ? '<button class="btn s" data-act="openpath" data-id="' + esc(r.backupPath) + '">备份</button>' +
+                    '<button class="btn s" data-act="mdlrollback" data-id="' + esc(r.backupPath) + '">回滚</button>'
+                  : '<span class="dim"> · 备份已清理(只保留最近几份),这条回滚不了</span>') +
                 "</span></div>"
             )
             .join("")
@@ -3302,21 +3460,38 @@ function renderModelSheet() {
   if (s.reports) {
     box.innerHTML =
       head +
+      (s.reports.some((r) => r.error)
+        ? '<div class="mdlwarn">有几家没写成,原因见下。已写成的那些照常可以回滚。</div>'
+        : "") +
       s.reports
-        .map(
-          (r) =>
+        .map((r) => {
+          // 没写成的那一家:给原因,不给"打开备份/回滚"两个必然报错的按钮(报告 P1-6 / P3-6)
+          if (r.error) {
+            return (
+              '<div class="okbox"><b>✕ ' + esc(r.label) + "</b> · 这一家没写成" +
+              '<div class="mdlwarn">' + esc(r.error) + "</div>" +
+              (r.notes || []).map((n) => '<div class="note">' + esc(n) + "</div>").join("") +
+              "</div>"
+            );
+          }
+          const hasBk = !!r.backupPath;
+          return (
             '<div class="okbox"><b>✓ ' + esc(r.label) + "</b> · " +
             (r.added ? "新增 " + r.added + " 条" : "") + (r.updated ? "更新 " + r.updated + " 条" : "") +
             (r.removed ? "移除 " + r.removed + " 条" : "") +
             (r.added + r.updated + r.removed === 0 ? "没有改动(本来就没有,或内容一致)" : "") +
             '<div class="srow"><span class="sk">生效</span><span class="sv">' + esc(r.effect) + "</span></div>" +
             (r.selected ? '<div class="srow"><span class="sk">选中</span><span class="sv">已写入选中项</span></div>' : "") +
-            '<div class="srow"><span class="sk">备份</span><span class="sv">' + esc(r.backup) +
-            '<button class="btn s" data-act="openpath" data-id="' + esc(r.backupPath) + '">打开</button>' +
-            '<button class="btn s" data-act="mdlrollback" data-id="' + esc(r.backupPath) + '">回滚这次写入</button>' +
-            "</span></div></div>" +
+            (hasBk
+              ? '<div class="srow"><span class="sk">备份</span><span class="sv">' + esc(r.backup) +
+                '<button class="btn s" data-act="openpath" data-id="' + esc(r.backupPath) + '">打开</button>' +
+                '<button class="btn s" data-act="mdlrollback" data-id="' + esc(r.backupPath) + '">回滚这次写入</button>' +
+                "</span></div>"
+              : '<div class="srow"><span class="sk">备份</span><span class="sv">本次没动文件,无需备份</span></div>') +
+            "</div>" +
             (r.notes || []).map((n) => '<div class="note">' + esc(n) + "</div>").join("")
-        )
+          );
+        })
         .join("") +
       '<div class="acts"><button class="btn" data-act="mdlcopy" data-id="' + esc(s.model) + '">复制三件套</button>' +
       '<button class="btn p" data-act="mdlclose">完成</button></div>';
@@ -3342,7 +3517,11 @@ function renderModelSheet() {
     (writesSecret
       ? '<div class="mdlwarn">会把这把 ' + esc(s.sourceName || "") +
         ' 密钥<b>明文</b>写进上面那个客户端自己的配置文件(它们本来就这么存)。' +
-        "挂件不保存副本、不写日志、不进备份。</div>"
+        "挂件自己不存副本:密钥不进数据库、不进日志、不进写入台账。" +
+        "<b>但回滚要靠备份</b> —— 备份是照原样拷那个客户端那几个文件,而里面的密钥本来就是明文," +
+        "所以 <code>backup-inject/&lt;时间戳&gt;/</code> 下会留下含明文密钥的历史快照" +
+        "(每个客户端最多 5 份;换密钥后旧快照不自动失效)。想清掉就去模型页的「打开配置目录」。"+
+        "</div>"
       : "") +
     (!writesSel && !blocked && !removals.length
       ? '<div class="note">选中项这次不写:写入后在客户端里选一次,挂件会记住口径,以后就能直接帮你选。</div>'
@@ -3398,7 +3577,10 @@ async function loadInjects() {
     MDL.log = ov.log || [];
   } catch (e) {
     MDL.clients = [];
+    // 后端现在会把"探测环节坏了"与"你没装客户端"分开说,这里别再把它吞成空列表
+    MDL.stateError = String(e);
   }
+  if (MDL.clients.length) MDL.stateError = "";
   renderModels();
   renderModelSheet();
 }
@@ -3466,16 +3648,19 @@ async function ensureModels(source) {
 
 // ───────────── 启动 ─────────────
 async function refresh() {
+  // render() 挪出 try:渲染抛错以前会被当成"取数失败"再 toast 一次,信息是错的(P2-33)
+  let list;
   try {
-    const list = await invoke("get_channels");
-    CHANNELS = list;
-    render({ updated: true });
+    list = await invoke("get_channels");
   } catch (e) {
     // 以前这里直接覆写 #list 就完了:紧凑条形态下条里一片空白、窗口留着旧宽度,
     // 胶囊与托盘也停在旧值(报告 P2-14)。走同一条 render 收尾,只是把错误提示出来。
     showToast("取数失败:" + e, true);
     render({ updated: false });
+    return;
   }
+  CHANNELS = list;
+  render({ updated: true });
 }
 
 (async function init() {
@@ -3527,6 +3712,15 @@ async function refresh() {
     loadCheckin();
   });
 
+  listen("checkin-alert", (ev) => {
+    // 后端只在"需要用户动手"(凭据失效 / 接口结构变了)时发这条;绿色版从托盘启动时
+    // stderr 永远没人看得到(报告 P2-14 / P3-36)。
+    const d = (ev && ev.payload) || {};
+    showToast(
+      (d.name || "签到渠道") + "需要处理:" + (d.message || "去渠道卡重新登录一次"),
+      true
+    );
+  });
   listen("channels-updated", (ev) => {
     CHANNELS = ev.payload;
     render({ updated: true });

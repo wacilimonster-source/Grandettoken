@@ -8,6 +8,9 @@
 param([Parameter(Position=0)][string]$Task = 'check')
 
 $ErrorActionPreference = 'Stop'
+# When this run started: used to prove the artifact we assert on is from THIS run,
+# not a leftover exe from an earlier version (report P0-3 / G-1).
+$started = Get-Date
 
 $root     = Split-Path -Parent $PSScriptRoot
 $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
@@ -114,14 +117,22 @@ try {
         throw "TAURI_SIGNING_PRIVATE_KEY_PASSWORD is not set. Even an unencrypted key needs an explicit empty value (bash: export TAURI_SIGNING_PRIVATE_KEY_PASSWORD='') or signing hangs waiting for a password"
       }
       & cargo tauri build
+      # cargo is a NATIVE command: $ErrorActionPreference='Stop' does not catch it, and
+      # every later native command (objdump below) OVERWRITES $LASTEXITCODE. Without this
+      # capture a failed build printed "ok import table clean" and exited 0 (report P0-3).
+      $buildExit = $LASTEXITCODE
+      if ($buildExit -ne 0) { throw "cargo tauri build failed with exit code $buildExit" }
       # Deleting the copied DLL is a bet on -L search order - it can lose silently
       # and ship an exe with a runtime DLL dependency this machine happens to have.
       # Assert against the real import table instead (report O-11).
       $relDir = Join-Path $targetRoot 'release'
+      # Only an artifact produced by THIS run may be asserted on, otherwise a stale exe
+      # from the previous version passes the check and gets uploaded as the new release.
       $exePath = Get-ChildItem -Path $relDir -Filter '*.exe' -File |
         Where-Object { $_.Name -notmatch '^(cargo|rustc|build-script)' } |
+        Where-Object { $_.LastWriteTime -gt $started } |
         Sort-Object Length -Descending | Select-Object -First 1
-      if (-not $exePath) { throw "cannot locate release exe under $relDir to verify imports" }
+      if (-not $exePath) { throw "cannot find a release exe newer than this run started under $relDir (build produced no fresh artifact)" }
       $objdump = Join-Path $mingwBin 'objdump.exe'
       if (-not (Test-Path $objdump)) {
         Write-Host "warn  objdump missing - skipped single-exe import check"

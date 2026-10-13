@@ -9,11 +9,19 @@
 const fs = require('fs');
 const path = require('path');
 
-const REPO = 'wacilimonster-source/Grandettoken';
 const root = path.join(__dirname, '..');
 const src = path.join(root, 'app', 'src-tauri');
 const conf = JSON.parse(fs.readFileSync(path.join(src, 'tauri.conf.json'), 'utf8'));
 const version = conf.version;
+// 仓库名从更新端点里取,不再第三处硬编码:改名时 endpoint 与清单必须一起改,
+// 分两处写迟早有一处忘(P3-22)。
+const endpoint = ((conf.plugins || {}).updater || {}).endpoints?.[0] || '';
+const repoFromEndpoint = (endpoint.match(/https:\/\/github\.com\/([^/]+\/[^/]+)\//) || [])[1];
+if (!repoFromEndpoint) {
+  console.error('无法从 tauri.conf.json 的 plugins.updater.endpoints 推出仓库名,检查端点写法:', endpoint);
+  process.exit(1);
+}
+const REPO = repoFromEndpoint;
 const nsisDir = path.join(src, 'target', 'release', 'bundle', 'nsis');
 
 // 版本号两处必须一致:Cargo.toml 是 Rust 侧 env!("CARGO_PKG_VERSION") 的来源,
@@ -35,6 +43,14 @@ if (!fs.existsSync(sigPath)) {
 }
 
 const tag = `v${version}`;
+// tag 没打(或打错)时清单照样生成得出,发出去就是 releases/download/vX.Y.Z/... 404,
+// 老用户点更新直接失败(RELEASE.md 第 2 步在生成清单之前,所以这里可以硬校验)。
+try {
+  require('child_process').execSync(`git rev-parse --verify refs/tags/${tag}`, { stdio: 'pipe' });
+} catch {
+  console.error(`本地没有 tag ${tag} —— 先按 RELEASE.md 打 tag 再生成清单,否则发布资源全是 404`);
+  process.exit(1);
+}
 const exePath = path.join(nsisDir, exe);
 // 只信 .sig 存在不够:清单写的是 exe 的名字,exe 没打出来(或名字对不上)时
 // 清单照样生成得出,发出去就是"检测到新版,下载 404"(报告 O-11)。

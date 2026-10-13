@@ -283,6 +283,49 @@ pub fn local_prev_month_start() -> i64 {
     local_date_start(y, m, 1)
 }
 
+/// 取不到数时的统一失败结果:带上渠道本来的类型,别让 Default 的 Amount 把
+/// 百分比渠道渲染成金额卡(扫描报告 P1-2)。
+fn err_result(
+    def: &providers::ProviderDef,
+    msg: String,
+    fail: Option<FailKind>,
+) -> (FetchResult, Option<FailKind>) {
+    (
+        FetchResult {
+            valid: false,
+            kind: def.default_kind,
+            unit: unit_for(def.default_kind).to_string(),
+            error: Some(msg),
+            ..Default::default()
+        },
+        fail,
+    )
+}
+
+/// kind → 单位只在这里定义一份(以前在三个地方各写一遍,漏了 Percent)。
+pub fn unit_for(k: Kind) -> &'static str {
+    match k {
+        Kind::Amount => "CNY",
+        Kind::Percent => "%",
+        Kind::Points => "credits",
+    }
+}
+
+/// 把 Origin/Referer 改写成与实际请求入口同域(报告 P2-3)。
+/// 备用入口的网关看到别家的 Origin 会直接 403,而 403 会被界面说成"网页登录已过期"。
+fn same_origin_header(url: &str, header: &str) -> Option<String> {
+    let rest = url.split_once("://")?.1;
+    let host = rest.split('/').next()?;
+    if host.is_empty() {
+        return None;
+    }
+    Some(if header.eq_ignore_ascii_case("origin") {
+        format!("https://{host}")
+    } else {
+        format!("https://{host}/")
+    })
+}
+
 /// 单次尝试:一个地址、一次请求。返回结果与"这次失败值不值得换域名"。
 async fn fetch_once(
     client: &reqwest::Client,
@@ -322,57 +365,59 @@ async fn fetch_once(
     }
 
     for (k, v) in def.extra_headers {
-        req = req.header(*k, *v);
+        // 跨域名回退时 Origin/Referer 必须跟着走,别把主域的头发给备用域(P2-3)
+        let val = match k.as_ref() {
+            "Origin" | "Referer" => same_origin_header(url, k).unwrap_or_else(|| v.to_string()),
+            _ => v.to_string(),
+        };
+        req = req.header(*k, val);
     }
 
     let resp = match req.send().await {
         Ok(r) => r,
         Err(e) => {
-            let msg = if e.is_timeout() {
-                "请求超时".to_string()
+            let text = e.to_string().to_lowercase();
+            let (msg, kind) = if text.contains("certificate") || text.contains("cert") {
+                // 证书/时钟问题换域名是同一个答案,别把四个入口各撞 8 秒(P2-24)
+                ("HTTPS 证书校验失败(检查代理拦截或系统时间)".to_string(), FailKind::Business)
+            } else if e.is_timeout() {
+                ("请求超时".to_string(), FailKind::Transport)
             } else if e.is_connect() {
-                "无法连接(检查网络或代理)".to_string()
+                ("无法连接(检查网络或代理)".to_string(), FailKind::Transport)
             } else {
-                format!("请求失败: {e}")
+                (format!("请求失败: {e}"), FailKind::Transport)
             };
-            return (
-                FetchResult {
-                    valid: false,
-                    // 失败结果也要带对类型:落进 Default 的 Amount 会让首次取数就
-                    // 失败的 Codex/OpenCode 被渲染成金额卡(扫描报告 P1-2)
-                    kind: def.default_kind,
-                    unit: match def.default_kind {
-                        Kind::Amount => "CNY".into(),
-                        Kind::Percent => "%".into(),
-                        Kind::Points => "credits".into(),
-                    },
-                    error: Some(msg),
-                    ..Default::default()
-                },
-                Some(FailKind::Transport),
-            );
+            return err_result(def, msg, Some(kind));
         }
     };
 
     let status = resp.status();
-    let body: serde_json::Value = match resp.json().await {
+    // 上限 2 MB:入口被网关换成大 HTML 时不要整包读进内存再解析(P2-24)
+    const MAX_BODY: usize = 2_000_000;
+    let raw = match resp.bytes().await {
+        Ok(b) => {
+            if b.len() > MAX_BODY {
+                return err_result(
+                    def,
+                    format!("响应过大({} 字节),已丢弃", b.len()),
+                    Some(FailKind::Server),
+                );
+            }
+            b
+        }
+        // 连接中断属于传输类 → 值得换下一个入口(以前 None 会让整条回退链就地停下)
+        Err(e) => return err_result(def, format!("读取响应失败: {e}"), Some(FailKind::Transport)),
+    };
+    let body: serde_json::Value = match serde_json::from_slice(&raw) {
         Ok(v) => v,
         Err(_) => {
-            return (
-                FetchResult {
-                    valid: false,
-                    kind: def.default_kind,
-                    unit: match def.default_kind {
-                        Kind::Amount => "CNY".into(),
-                        Kind::Percent => "%".into(),
-                        Kind::Points => "credits".into(),
-                    },
-                    error: Some(format!("响应不是合法 JSON (HTTP {})", status.as_u16())),
-                    ..Default::default()
-                },
+            // 可能是入口返回的错误页 —— 换个域名值得一试
+            return err_result(
+                def,
+                format!("响应不是合法 JSON (HTTP {})", status.as_u16()),
                 // 可能是入口返回的错误页 —— 换个域名值得一试
                 Some(FailKind::Server),
-            )
+            );
         }
     };
 
@@ -557,8 +602,18 @@ fn claim_for(def: &providers::ProviderDef, cfg: &Config, store: &Store, remainin
         return None;
     }
     let now = now_ts();
+    // 只有"补到本轮额度线附近"的量级变化才算一次申请,并且相邻两条快照不能隔太久
+    // (合盖多日后第一轮会把几天的差值合成一个"跳升")—— P2-1
     let auto_at = store
-        .last_jump_since(def.id, now - CLAIM_LOOKBACK_SEC, CLAIM_JUMP_MIN_DELTA)
+        .last_jump_since(
+            def.id,
+            now - CLAIM_LOOKBACK_SEC,
+            CLAIM_JUMP_MIN_DELTA,
+            ccfg.amount,
+            // 2 小时:既要挡住"合盖几天后第一跳把几天的差值合成一次跳升"(那是几小时~几天),
+            // 又不能紧到把正常补跑后的真申请也否掉(30 分钟太敏感)
+            2 * 3600,
+        )
         .ok()
         .flatten();
     let burn = seven_day_burn(store, def.id, now);
@@ -584,6 +639,8 @@ fn build_view(
         let today0 = local_midnight_today();
         let week0 = local_week_start();
         let month0 = local_month_start();
+        // 只取一次:跨零点时两次调用可能差一个月份(P2-4)
+        let prev0 = local_prev_month_start();
         // 环比口径 = 上一周期的「同时段」:昨日 0 点到昨天此刻、上周同时段、
         // 上月同时段 —— 拿整段上周期比会系统性偏大(它天然比本期多一段尾巴)
         (
@@ -599,7 +656,10 @@ fn build_view(
                 .ok()
                 .flatten(),
             store
-                .consumption_since(def.id, local_prev_month_start(), local_prev_month_start() + (now - month0))
+                // 终点必须钳在上月之内:以前把"本月已过秒数"直接加到上月 1 号上,
+                // 于是 3 月 31 日时窗口落到 3 月 3 日,本月的消耗被算进"上月同期"基线
+                // (短月尤其明显)。同时只取一次 prev_month_start,免得跨零点两次不等。
+                .consumption_since(def.id, prev0, (prev0 + (now - month0)).min(month0 - 1))
                 .ok()
                 .flatten(),
         )
@@ -607,7 +667,9 @@ fn build_view(
         (None, None, None, None, None, None)
     };
 
-    let soon = expiring_soon(&result.expiring, now_ts());
+    // 同一个视图里只用一个"现在":上面 583 行那个 now 出了块作用域,这里取一次复用
+    let now2 = now_ts();
+    let soon = expiring_soon(&result.expiring, now2);
 
     ChannelView {
         id: def.id.into(),
@@ -778,7 +840,9 @@ impl Fetcher {
         {
             let last = self.last_run.lock().unwrap_or_else(|p| p.into_inner());
             if let Some((ts, views)) = last.as_ref() {
-                if now_ts() - *ts < 5 {
+                // 必须同时要求 *ts <= now_ts():用墙钟做减法,系统时间被往前校正后
+                // 差值为负、恒小于 5,界面就"永久不再更新"了(报告 P2-23)
+                if *ts <= now_ts() && now_ts() - *ts < 5 {
                     return views.clone();
                 }
             }
@@ -870,10 +934,33 @@ impl Fetcher {
                             .await
                             .unwrap_or_else(|_| (Vec::new(), Some("凭据读取异常".to_string())));
                     if creds.is_empty() {
-                        let mut v = placeholder(def);
-                        if let Some(e) = secret_err {
-                            v.error = Some(e);
+                        // 「读不到凭据」经常是瞬时的:Codex 正在写 auth.json(文件被占)、
+                        // 凭据管理器 RPC 卡一下、问 webview 要 Cookie 时 3 秒超时。
+                        // 这种时候不该把已有的数字抹成「——」—— 沿用上次成功快照并标注时间,
+                        // 与"取数失败"走同一条口径(报告 P1-4;本文件头第 3-4 行的原则)。
+                        let reason = secret_err.unwrap_or_else(|| {
+                            format!("没检测到 {} 的登录凭据(可能只是瞬时读不到)", def.name)
+                        });
+                        let cached = self
+                            .cache
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .get(def.id)
+                            .cloned();
+                        if let Some((mut prev, prev_ts)) = cached {
+                            prev.valid = false;
+                            prev.limited = false;
+                            prev.error = Some(reason);
+                            return FetchedOne {
+                                i,
+                                def,
+                                view: None,
+                                pending: Some((prev, true, prev_ts, None)),
+                                success: None,
+                            };
                         }
+                        let mut v = placeholder(def);
+                        v.error = Some(reason);
                         return FetchedOne {
                             i,
                             def,
@@ -914,7 +1001,16 @@ impl Fetcher {
                     }
                     let ts = now_ts();
 
-                    if let (true, Some(url)) = (result.valid, used_url.as_ref()) {
+                    if !result.valid {
+            // 这个入口已经不行了却还被记在"上次成功地址"上,于是每一轮都先等满 8 秒
+            // 超时才切下一个(P2-22)。失败且确实发了请求时就把备忘清掉,回到定义顺序。
+            if used_url.is_some() {
+                if let Ok(mut m) = self.url_memo.lock() {
+                    m.remove(def.id);
+                }
+            }
+        }
+        if let (true, Some(url)) = (result.valid, used_url.as_ref()) {
                         if let Ok(mut m) = self.url_memo.lock() {
                             m.insert(def.id.to_string(), url.clone());
                         }

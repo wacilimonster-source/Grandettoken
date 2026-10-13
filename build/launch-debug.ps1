@@ -15,10 +15,13 @@ if (-not $Exe) {
   # Pick the NEWEST of the two possible outputs: `cargo build` only updates
   # tokenscope.exe, while `cargo tauri build` (re)names Grandettoken.exe - the
   # other one is then a STALE copy, and launching it runs old code silently.
+  # Sort on the FILE's timestamp, not on the path string: `Join-Path` emits strings, and
+  # Sort-Object on a missing property silently keeps the array order, which made this
+  # whole branch a no-op that always picked Grandettoken.exe (report G-3).
   $cands = @('Grandettoken.exe', 'tokenscope.exe') |
     ForEach-Object { Join-Path $releaseDir $_ } |
     Where-Object { Test-Path $_ } |
-    Sort-Object LastWriteTime -Descending
+    Sort-Object { (Get-Item $_).LastWriteTime } -Descending
   if ($cands) { $Exe = $cands[0] }
 }
 if (-not $Exe -or -not (Test-Path $Exe)) {

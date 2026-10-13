@@ -128,22 +128,29 @@ pub fn extract_4sapi(body: &Value) -> FetchResult {
     let available = path(body, &["data", "total_available"]).and_then(num);
 
     let (Some(granted), Some(available)) = (granted, available) else {
-        // 兜底:部分部署直接返回余额字段(data.total_available 也在其中 ——
-        // 有的部署不返 total_granted 但余额就在 data 里,扫描报告 P2-7)
-        let remaining = ["remaining", "balance"]
+        // 兜底:部分部署不返 total_granted,而余额就在 data.total_available。
+        // **它和主路径是同一个积分字段**(50 万积分 = 1 元),所以必须同样除以 RATE。
+        // 以前这条直接把积分当元返回:¥93.50 会变成 ¥46,750,000,而且 valid 为真,
+        // 于是错值被写进快照、还会被"申请跳升"检测当成一次 +¥4600 万的申请(报告 P1-1)。
+        let points = path(body, &["data", "total_available"]).and_then(num);
+        // 顶层 remaining/balance 这类字段没有任何来源说明单位,按元/按积分都可能错
+        // 50 万倍 —— 宁可当取不到(保留上次成功数值并说明原因),也不猜给界面看。
+        let ambiguous = ["remaining", "balance"]
             .iter()
             .find_map(|k| body.get(*k).and_then(num))
-            .or_else(|| path(body, &["data", "total_available"]).and_then(num))
             .or_else(|| path(body, &["quota", "remaining"]).and_then(num));
+        let remaining = points.map(|v| round2(v / RATE)).filter(|v| *v <= 100_000.0);
         return FetchResult {
             valid: remaining.is_some(),
             kind: Kind::Amount,
             remaining,
             unit: "CNY".into(),
-            error: if remaining.is_none() {
-                Some("无可识别的余额字段".into())
-            } else {
+            error: if remaining.is_some() {
                 None
+            } else if ambiguous.is_some() {
+                Some("余额字段单位无法确定(积分还是元?),本次不显示".into())
+            } else {
+                Some("无可识别的余额字段".into())
             },
             ..Default::default()
         };
@@ -161,10 +168,25 @@ pub fn extract_4sapi(body: &Value) -> FetchResult {
     let code_ok = body.get("code").and_then(|c| c.as_bool()).unwrap_or(true);
     let active_ok = path(body, &["is_active"]).and_then(|c| c.as_bool()).unwrap_or(true);
 
+    // 「无限额度」在部分部署里写成 0 / -1 标记,直接换算会产出 ¥-0.00 这种负余额
+    // (报告 P2-26):进度条拿到负分子、排序与告警色跟着错。
+    if available < 0.0 || granted < 0.0 {
+        return FetchResult {
+            valid: code_ok && active_ok,
+            kind: Kind::Amount,
+            remaining: None,
+            used: None,
+            total: None,
+            unit: "CNY".into(),
+            extra: vec![("额度".into(), "无限(平台以 -1 标记)".into())],
+            ..Default::default()
+        };
+    }
+
     FetchResult {
         valid: code_ok && active_ok,
         kind: Kind::Amount,
-        remaining: Some(round2(available / RATE)),
+        remaining: Some(round2((available / RATE).max(0.0))),
         used: Some(round2(used / RATE)),
         total: if granted > 0.0 { Some(round2(granted / RATE)) } else { None },
         unit: "CNY".into(),
@@ -205,7 +227,10 @@ pub fn extract_opencode_go(body: &Value) -> FetchResult {
 
     let win = |key: &str, label: &str| -> Option<Window> {
         let w = usage.get(key)?;
-        let pct = w.get("percent").and_then(num).unwrap_or(0.0);
+        // percent 取不到 = **这个窗口没有数据**,不能折叠成"已消耗 0%":那样界面会显示
+        // 「剩余 100%」,而这个未公开接口哪天改字段就静默骗人(报告 P1-3)。
+        // 同函数里 resets_at 缺失走 None(界面显示「—」)才是本文件的既定口径。
+        let pct = w.get("percent").and_then(num)?;
         Some(Window {
             label: label.into(),
             percent: pct,
@@ -221,7 +246,9 @@ pub fn extract_opencode_go(body: &Value) -> FetchResult {
                 .get("resetsAt")
                 .and_then(|s| s.as_str())
                 .map(String::from),
-            main: label == "周期",
+            // 主窗由**结构键**决定,不由中文标签决定:标签哪天改名(「周期」→「每月」)
+            // 靠字符串相等挑主窗就会静默失效,托盘数的含义当天就变(报告 P2-20)
+            main: key == "monthly",
         })
     };
 
@@ -288,11 +315,19 @@ pub fn extract_deepseek(body: &Value) -> FetchResult {
         extra.push(("充值余额".to_string(), format!("¥{:.2}", t)));
     }
 
+    // is_available=false 是服务器对**账户状态**的答复(余额耗尽 / 停用),不是"这次取数失败"。
+    // 以前把它塞进 valid,连带三个后果:卡片继续挂着上一次的旧余额却不报原因、这次不写快照
+    // ("0 余额"这个事实永远进不了历史、今日消耗偏小)、还被计入轮询失败退避到 900 秒(报告 P1-4)。
+    let unavailable = body.get("is_available").and_then(|v| v.as_bool()) == Some(false);
+    if unavailable {
+        extra.push((
+            "账户状态".into(),
+            "当前不可用(余额耗尽或已停用)".into(),
+        ));
+    }
+
     FetchResult {
-        valid: body
-            .get("is_available")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true),
+        valid: true,
         kind: Kind::Amount,
         remaining: total_balance.map(round2),
         used: None,
@@ -330,18 +365,25 @@ pub fn extract_hapi(body: &Value) -> FetchResult {
         };
     };
 
+    // 与 DeepSeek 同理:isValid=false 是账户状态,不是取数失败(报告 P1-4)
+    let unavailable = d.get("isValid").and_then(|v| v.as_bool()) == Some(false);
+    let mut extra = vec![
+        ("原始积分".into(), format!("{:.2}", balance)),
+        ("换算".into(), "20 积分 = ¥1".into()),
+        ("消耗来源".into(), "本地流水推算".into()),
+    ];
+    if unavailable {
+        extra.push(("账户状态".into(), "当前不可用(余额耗尽或已停用)".into()));
+    }
+
     FetchResult {
-        valid: d.get("isValid").and_then(|v| v.as_bool()).unwrap_or(true),
+        valid: true,
         kind: Kind::Amount,
         remaining: Some(round2(balance / 20.0)),
         used: None,
         total: None,
         unit: "CNY".into(),
-        extra: vec![
-            ("原始积分".into(), format!("{:.2}", balance)),
-            ("换算".into(), "20 积分 = ¥1".into()),
-            ("消耗来源".into(), "本地流水推算".into()),
-        ],
+        extra,
         ..Default::default()
     }
 }
@@ -451,9 +493,12 @@ pub fn extract_trae(body: &Value) -> FetchResult {
         };
         // 已过期的包不计余额:之前只从到期表里排除它们、却仍算进总额,
         // 卡片余额比官方口径大,两行数字互相对不上(扫描报告 P2-4)
-        if let Some(t) = p.get("expire_time").and_then(num) {
-            let t = t as i64;
-            if t > 0 && t <= now {
+        // 与下面生成到期表时同一份归一化:WorkBuddy 那边就因为上游给毫秒值踩过坑,
+        // 专门的 ts_norm 就在隔壁。这里以前拿**裸值**和秒级 now 比,一旦 Trae 改成毫秒
+        // 就永远判不出过期,余额会比官方口径偏大(报告 P2-25)。
+        let expires_at = p.get("expire_time").and_then(num).filter(|t| *t > 0.0).map(ts_norm);
+        if let Some(at) = expires_at {
+            if at <= now {
                 continue;
             }
         }
@@ -464,10 +509,7 @@ pub fn extract_trae(body: &Value) -> FetchResult {
         let left = (limit - pack_used).max(0.0);
         remaining += left;
 
-        let Some(at) = p.get("expire_time").and_then(num).filter(|t| *t > 0.0) else {
-            continue;
-        };
-        let at = ts_norm(at);
+        let Some(at) = expires_at else { continue };
         if left < POINTS_EPS {
             continue;
         }
@@ -526,6 +568,22 @@ pub fn extract_trae(body: &Value) -> FetchResult {
 /// WorkBuddy(腾讯 CodeBuddy 的积分)。逐笔在 get-user-resource 的
 /// Accounts 数组里:数量/剩余是字符串小数,到期时间三种字段各有各的格式。
 pub fn extract_workbuddy(body: &Value) -> FetchResult {
+    // HTTP 200 不代表成功,必须看业务 code —— 这条规矩在签到侧立过(checkin.rs),
+    // 取数侧以前漏了:code!=0 而 Accounts 恰好是 [] 时,界面会说"无可用的积分包",
+    // 听起来像账户正常,于是用户去积分商城转一圈而不是重新登录(报告 P2-19)。
+    if let Some(c) = body.get("code").and_then(num).filter(|c| *c != 0.0) {
+        let msg = body
+            .get("msg")
+            .and_then(|m| m.as_str())
+            .unwrap_or("接口返回业务错误");
+        return FetchResult {
+            valid: false,
+            kind: Kind::Points,
+            unit: "credits".into(),
+            error: Some(format!("{msg}(code {})", c as i64)),
+            ..Default::default()
+        };
+    }
     let accounts = path(body, &["data", "Response", "Data", "Accounts"]).and_then(|v| v.as_array());
     let Some(accounts) = accounts else {
         let msg = body
@@ -602,6 +660,21 @@ pub fn extract_workbuddy(body: &Value) -> FetchResult {
     }
     expiring.sort_by_key(|e| e.at);
 
+    // 请求里写死 PageSize=200:真超过就得说明,否则"近 30 天将过期"会静默漏报
+    let mut extra = vec![
+        ("本周期发放".into(), format!("{:.0} 积分", granted)),
+        ("已使用".into(), format!("{:.2} 积分", used)),
+        ("积分包".into(), format!("{} 笔", counted)),
+    ];
+    if let Some(total) = path(body, &["data", "Response", "Data", "TotalCount"]).and_then(num) {
+        if total > accounts.len() as f64 {
+            extra.push((
+                "统计范围".into(),
+                format!("积分包共 {} 笔,只统计了前 {} 笔", total as i64, accounts.len()),
+            ));
+        }
+    }
+
     FetchResult {
         valid: true,
         kind: Kind::Points,
@@ -610,11 +683,7 @@ pub fn extract_workbuddy(body: &Value) -> FetchResult {
         total: None,
         unit: "credits".into(),
         expiring,
-        extra: vec![
-            ("本周期发放".into(), format!("{:.0} 积分", granted)),
-            ("已使用".into(), format!("{:.2} 积分", used)),
-            ("积分包".into(), format!("{} 笔", counted)),
-        ],
+        extra,
         ..Default::default()
     }
 }
@@ -1171,7 +1240,34 @@ mod tests {
     fn workbuddy_reports_business_error() {
         let r = extract_workbuddy(&json!({ "code": 10085, "msg": "请求不合法,如有疑问请联系客服" }));
         assert!(!r.valid);
-        assert_eq!(r.error.as_deref(), Some("请求不合法,如有疑问请联系客服"));
+        assert_eq!(
+            r.error.as_deref(),
+            // 带上 code:平台的文案会说谎(9074 那类),code 才是能查的东西
+            Some("请求不合法,如有疑问请联系客服(code 10085)")
+        );
+    }
+
+    /// code!=0 且 Accounts 是空数组:要说"业务错误",不能说"无可用的积分包"。
+    /// 后者听起来像账户状态正常,于是用户去积分商城转一圈,而不是重新登录(P2-19)。
+    #[test]
+    fn workbuddy_empty_accounts_with_error_code_is_not_no_packs() {
+        let r = extract_workbuddy(&json!({
+            "code": 401,
+            "msg": "登录已过期",
+            "data": { "Response": { "Data": { "Accounts": [] } } }
+        }));
+        assert!(!r.valid);
+        assert!(
+            r.error.as_deref().unwrap_or("").contains("登录已过期"),
+            "该说业务原因,实际:{:?}",
+            r.error
+        );
+        // 而 code=0 且真的没有包,才说"无可用的积分包"
+        let ok = extract_workbuddy(&json!({
+            "code": 0,
+            "data": { "Response": { "Data": { "Accounts": [] } } }
+        }));
+        assert_eq!(ok.error.as_deref(), Some("无可用的积分包"));
     }
 
     #[test]

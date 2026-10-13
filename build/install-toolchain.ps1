@@ -72,8 +72,17 @@ Write-Host "=== verify ==="
 & (Join-Path $mingw 'bin\gcc.exe') --version | Select-Object -First 1
 # tauri-cli is required by `build.ps1 bundle`. Compiling it takes 10+ minutes, so
 # this script only CHECKS and tells the operator what to run - it does not build it.
-& (Join-Path $cargoBin 'cargo-tauri.exe') --version *> $null
-if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $cargoBin 'cargo-tauri.exe'))) {
+# Calling a path that does not exist raises a terminating CommandNotFound, and with
+# $ErrorActionPreference='Stop' that kills the script right here - on exactly the
+# machine where cargo-tauri is missing, so the helpful Write-Warning below is never
+# reached (report P3-20). Check existence first.
+$tauriCli = Join-Path $cargoBin 'cargo-tauri.exe'
+if (Test-Path $tauriCli) {
+  & $tauriCli --version *> $null
+} else {
+  $LASTEXITCODE = 1
+}
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $tauriCli)) {
   Write-Warning "tauri-cli not installed - 'build.ps1 bundle' will fail. Run: cargo install tauri-cli --locked (10+ min, once)"
 } else {
   Write-Host "ok    tauri-cli present"

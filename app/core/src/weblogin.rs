@@ -84,6 +84,11 @@ pub fn is_session_cookie(name: &str) -> bool {
 /// 主机名做**整串相等**比较,不是后缀匹配:`www.workbuddy.cn.attacker.example/profile`
 /// 这种拼接必须挡掉,否则一个长得像的站点就能让挂件以为登录完成了。
 pub fn is_post_login(url: &str) -> bool {
+    // 只认 https:会话 cookie 落在 http 页上等于把会话走明文,而且 http 的重定向页
+    // 不该被当成"登录完成"(报告 P2-16 的次要点)
+    if !url.starts_with("https://") {
+        return false;
+    }
     let Some(rest) = url.split_once("://").map(|(_, r)| r) else {
         return false;
     };

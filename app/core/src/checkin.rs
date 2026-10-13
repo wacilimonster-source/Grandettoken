@@ -175,10 +175,10 @@ pub fn next_delay(attempts: i64) -> i64 {
     BACKOFF_SEC[i]
 }
 
-/// 今天还要不要再试。
-pub fn should_retry(outcome: &Outcome, attempts: i64) -> bool {
-    outcome.retryable() && attempts < 5
-}
+// 这里原来还有一个 `should_retry(outcome, attempts) = retryable && attempts < 5`。
+// 它与 next_delay 的「1200 秒封顶」互相抵消:第 6 次起调用方把 next_try_at 置成 None,
+// 节拍器把 None 读成"不在退避中",于是当天改成每 5 分钟硬撞(报告 P1-2)。
+// 现在"该不该继续当天重试"只由 next_delay 的封顶退避表达一处。
 
 /// 签到渠道的配置(每渠道一份)。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -276,6 +276,9 @@ pub fn parse_trae(body: &serde_json::Value, claiming: bool) -> Outcome {
         .or_else(|| body.get("did_checked_in"))
         .and_then(|v| v.as_bool())
         .or_else(|| path_bool(body, &["data", "checked_in"]))
+        // 顶层有两个别名(checked_in / did_checked_in),嵌套变体以前只兜了一个:
+        // 只读 data.checked_in 会把"已签"读成"未签",从而重复领取(报告 P3-12)
+        .or_else(|| path_bool(body, &["data", "did_checked_in"]))
         .or_else(|| path_bool(body, &["result", "checked_in"]))
         .unwrap_or(false);
     let enable = body
@@ -498,13 +501,17 @@ pub async fn call(
         let body: serde_json::Value = match serde_json::from_str(&text) {
             Ok(v) => v,
             Err(_) => {
-                last = if status.is_server_error() {
+                // 网关/nginx 限流与维护页返回的是 HTML。429 与 5xx 都属于「稍后再试」,
+                // 不是「接口结构变了」:BadShape 会弹通知、把开关置灰、并把当天判成完结
+                // (done_for_day 认 shape 前缀),而稍后重试本来就能成(报告 P1-10)。
+                let later = status.is_server_error() || status.as_u16() == 429;
+                last = if later {
                     Outcome::Retry(format!("HTTP {}", status.as_u16()))
                 } else {
                     Outcome::BadShape(format!("HTTP {} · 响应不是 JSON", status.as_u16()))
                 };
-                if status.is_server_error() {
-                    continue; // 5xx 值得换域名
+                if later {
+                    continue; // 5xx / 429 值得换下一个域名并留到下一轮退避
                 }
                 return last;
             }

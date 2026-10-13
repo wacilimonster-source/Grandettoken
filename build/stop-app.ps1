@@ -7,3 +7,7 @@ Get-Process -Name $names -EA SilentlyContinue | Stop-Process -Force -EA Silently
 Start-Sleep -Seconds 1
 $r = Get-Process -Name $names -EA SilentlyContinue
 if ($r) { Write-Output 'still running' } else { Write-Output 'app stopped' }
+# Callers link files into the release dir right after this; a leftover instance makes
+# the linker fail. Exit non-zero so `build.ps1` can notice instead of building on top
+# of a running app (report P3-31 - the message alone was easy to ignore).
+if ($r) { exit 1 }

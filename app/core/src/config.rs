@@ -117,7 +117,9 @@ pub struct Config {
     /// 每日签到(Trae / WorkBuddy 加油站):渠道 id → 配置。**默认关**,
     /// 首次要在渠道卡上点一次「开启签到」才发请求(设计稿裁决 3A)。
     pub checkin: HashMap<String, crate::checkin::CheckinCfg>,
-    /// 签到出问题时要不要弹系统通知。成功的静默,只有连续失败才提示(裁决 6A)。
+    /// 签到出问题时要不要提示。成功的静默,只有需要用户动手时才提示(裁决 6A)。
+    /// 系统通知要额外引一个通知插件,当前没引;现在走"面板里常驻一条警告"
+    /// (run_checkin 在 needs_user 时 emit `checkin-alert`),这个开关先管住那条提示。
     pub checkin_notify: bool,
 }
 
@@ -162,20 +164,49 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn load(store: &crate::store::Store) -> Self {
-        store
-            .get_setting("config")
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+    /// 唯一的读取入口。三条口径分开:库里没这行 = 新装,返回默认;
+    /// 有但解析失败 = 返回 Err,调用方沿用上次成功的配置 —— 绝不能
+    /// unwrap_or_default 把隐藏渠道静默解除隐藏(扫描报告 P2-11);
+    /// 读不出这一行(库损坏 / IO 错)= 同样返回 Err(P2-5,以前被 `.ok()` 折叠成"没这行")。
+    ///
+    /// 以前这里还有一个 `load()`(坏了就静默回落默认值)—— 全库零调用者,
+    /// 但任何后来者顺手一用就把用户的隐藏清单与签到开关清零,故删除(P3-12)。
+    pub fn try_load(store: &crate::store::Store) -> Result<Self, String> {
+        match store.get_setting("config")? {
+            None => Ok(Self::default()),
+            Some(s) => {
+                let mut c: Self =
+                    serde_json::from_str(&s).map_err(|e| format!("配置解析失败: {e}"))?;
+                c.sanitize();
+                Ok(c)
+            }
+        }
     }
 
-    /// 与 load 的区别:把「库里没这行」(返回默认,正常)和「JSON 解析失败」
-    /// (返回 Err)分开 —— 调用方要在解析失败时沿用上次的配置,而不是
-    /// unwrap_or_default 把隐藏渠道静默放开恢复取数(扫描报告 P2-11)。
-    pub fn try_load(store: &crate::store::Store) -> Result<Self, String> {
-        match store.get_setting("config") {
-            None => Ok(Self::default()),
-            Some(s) => serde_json::from_str(&s).map_err(|e| format!("配置解析失败: {e}")),
+    /// 配置是库里的一行 JSON,可能被旧版本写过、也被人手工编辑过。把数值收进
+    /// "还能正常工作"的区间:0 秒间隔会把轮询变成忙循环、warn < crit 会让状态色
+    /// 永远一个样、NaN 的额度会让百分比分母塌掉(报告 P3-15)。
+    /// 只夹取值,不改用户的意图(开了的开关不会因此被关掉)。
+    pub fn sanitize(&mut self) {
+        self.active_interval_sec = self.active_interval_sec.clamp(15, 3600);
+        self.idle_interval_sec = self.idle_interval_sec.clamp(30, 7200);
+        self.backoff_interval_sec = self.backoff_interval_sec.clamp(60, 7200);
+        self.warn_percent = self.warn_percent.clamp(1.0, 100.0);
+        self.crit_percent = self.crit_percent.clamp(0.5, 100.0).min(self.warn_percent);
+        for c in self.claim_channels.values_mut() {
+            if !c.amount.is_finite() || c.amount <= 0.0 {
+                c.amount = 200.0;
+            }
+            c.min_interval_days = c.min_interval_days.clamp(1, 365);
+        }
+        if self.font_scale != "lg" && self.font_scale != "xl" {
+            self.font_scale = "md".into();
+        }
+        if self.form != "compact" && self.form != "pill" {
+            self.form = "panel".into();
+        }
+        if self.sort != "balance" && self.sort != "dayUsage" && self.sort != "custom" {
+            self.sort = "percent".into();
         }
     }
 

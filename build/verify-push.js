@@ -23,7 +23,7 @@ const REPO = 'Grandettoken';
 
   const tr = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/git/trees/main?recursive=1`, { headers: H });
   const tj = await tr.json();
-  const blobs = (tj.tree || []).filter((x) => x.type === 'blob');
+  const blobs = (tr.status === 200 && Array.isArray(tj.tree) ? tj.tree : []).filter((x) => x.type === 'blob');
   console.log('files on GitHub:', blobs.length);
   console.log('');
   console.log('--- tree ---');
@@ -52,4 +52,15 @@ const REPO = 'Grandettoken';
   walk(ROOT);
   console.log(`scanned ${scanned} text files; token occurrences: ${hits}`);
   console.log(hits === 0 ? 'CLEAN - token is not stored anywhere on disk.' : 'WARNING - token found on disk!');
+  // 这个脚本是用来"确认没泄漏、确实推上去了"的,发现泄漏却以 0 退出等于反向造假(报告 G-2)。
+  const ok = hits === 0 && cr.status === 200 && tr.status === 200 && blobs.length > 0;
+  if (!ok) {
+    console.log('FAIL - ' + [
+      hits > 0 ? 'token found on disk (' + hits + ')' : '',
+      cr.status !== 200 ? 'commit lookup HTTP ' + cr.status : '',
+      tr.status !== 200 ? 'tree lookup HTTP ' + tr.status : '',
+      blobs.length === 0 ? 'no files on GitHub' : '',
+    ].filter(Boolean).join('; '));
+  }
+  process.exit(ok ? 0 : 1);
 })();

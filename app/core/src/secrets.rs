@@ -92,12 +92,6 @@ pub fn delete(provider_id: &str) -> Result<(), String> {
     }
 }
 
-pub fn exists(provider_id: &str) -> bool {
-    get(provider_id).ok().flatten().is_some()
-}
-
-/// 只回显尾部 4 位,用于界面确认"存的是哪把 key",不泄露完整密钥。
-pub fn masked(provider_id: &str) -> Option<String> {
-    let k = get(provider_id).ok().flatten()?;
-    Some(mask_of(&k))
-}
+// exists() 与 masked() 已删除(报告 P2-15):两者都用 .ok().flatten() 把
+// "凭据管理器本身坏了"吞成 None/false,让界面把故障报成"未配置密钥"。
+// 需要回显尾号的地方请直接 get() 再 mask_of(),Err 要有它自己的文案。

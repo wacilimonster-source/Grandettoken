@@ -110,9 +110,33 @@ pub fn source_hosts(id: &str) -> Vec<String> {
 
 /// 这条客户端条目(看它的 url)属于哪个来源。认不出来返回 None。
 pub fn source_of_url(url: &str) -> Option<&'static str> {
+    // 只比主机名。以前是 `url.contains(host)`:URL 里任何位置出现这串字符都算这家的条目,
+    // 于是别人手配的 https://fake-4sapi.com.example.cn/v1、或查询串里恰好带这串的,
+    // 都会被认成"挂件写的",被算进管理/回滚范围(报告 P3-17)
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let authority = rest
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(rest)
+        .rsplit('@')
+        .next()
+        .unwrap_or(rest);
+    let host = authority
+        .split(':')
+        .next()
+        .unwrap_or(authority)
+        .to_ascii_lowercase();
+    if host.is_empty() {
+        return None;
+    }
     SOURCES
         .iter()
-        .find(|d| source_hosts(d.id).iter().any(|h| url.contains(h.as_str())))
+        .find(|d| {
+            source_hosts(d.id).iter().any(|h| {
+                let h = h.to_ascii_lowercase();
+                host == h || host.ends_with(&format!(".{h}"))
+            })
+        })
         .map(|d| d.id)
 }
 
@@ -555,7 +579,18 @@ pub async fn fetch_catalog(
 ) -> Result<FetchedCatalog, String> {
     let mut last = String::from("没有可用的入口地址");
     for host in hosts {
-        let url = format!("https://{host}/api/pricing");
+        // 路径取自 SourceDef.pricing_path:以前这里又把 "/api/pricing" 抄了一遍,
+        // 改字段不生效、界面只会说"价目表取回失败"(报告 P3-16)
+        let def = SOURCES.iter().find(|d| {
+            source_hosts(d.id)
+                .iter()
+                .any(|h| h.eq_ignore_ascii_case(host))
+        });
+        let Some(path) = def.map(|d| d.pricing_path).unwrap_or(None) else {
+            last = format!("{host} 这个来源没有公开价目表");
+            continue;
+        };
+        let url = format!("https://{host}{path}");
         match get_json(client, &url, None).await {
             Ok(v) => match parse_catalog(&v) {
                 Ok(catalog) => {
@@ -692,7 +727,7 @@ impl SourceCache {
 impl ModelCache {
     pub fn load(store: &crate::store::Store) -> Option<Self> {
         store
-            .get_setting(CACHE_KEY)
+            .get_setting(CACHE_KEY).ok().flatten()
             .and_then(|s| serde_json::from_str(&s).ok())
     }
 
