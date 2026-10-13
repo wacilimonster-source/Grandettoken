@@ -11,6 +11,7 @@ pub mod appauth;
 pub mod checkin;
 pub mod config;
 pub mod fetch;
+pub mod fx;
 pub mod inject;
 pub mod models;
 pub mod providers;

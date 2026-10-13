@@ -976,6 +976,17 @@ pub fn find(id: &str) -> Option<&'static ProviderDef> {
     PROVIDERS.iter().find(|p| p.id == id)
 }
 
+/// 订阅型套餐的**固定期费**(美元)。只有 OpenCode Go 一家:它是 $10/期的包月,
+/// 接口只回百分比用量、不回金额,所以"今日/本周/本月消耗"要靠这个数按天摊出来
+/// (2026-10-14 产品口径:按天算、周期按实际重置间隔自动学、汇率每月自动取)。
+/// 返回 None = 该渠道是按量计费的余额型,消耗由快照差值算,不该再加一笔。
+pub fn plan_usd(id: &str) -> Option<f64> {
+    match id {
+        "opencode-go" => Some(10.0),
+        _ => None,
+    }
+}
+
 /// 4SAPI 的入口域名(按渠道定义的主地址 + 备用地址推导,避免域名在两处各写一遍)。
 /// 模型查询与「写进客户端」的地址都从这里取 —— 域名只有一个来源。
 pub fn four_s_api_hosts() -> Vec<String> {

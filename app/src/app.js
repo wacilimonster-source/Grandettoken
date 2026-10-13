@@ -246,6 +246,15 @@ function sortChannels(list) {
 function renderSummary() {
   // 汇总只累加金额型渠道 —— 百分比和金额不能相加;隐藏的渠道不参与
   const am = CHANNELS.filter((c) => c.kind === "amount" && c.hasKey && c.remaining !== null && !c.hidden);
+  // 订阅型套餐(OpenCode Go $10/期)是另一笔:它不是余额差值,但这个周期确实掏了这笔钱。
+  // 后端按天摊好(周期长度从真实重置里学,汇率每月自动取),这里只管加进三格并说明口径。
+  const plans = CHANNELS.filter((c) => !c.hidden && c.plan);
+  const planSum = (f) => plans.reduce((a, c) => a + (c.plan[f] || 0), 0);
+  const p0 = plans.length ? plans[0].plan : null;
+  const planTip = p0
+    ? ` · 含套餐 $${p0.usd.toFixed(0)}/期 按天摊 ¥${p0.perDay.toFixed(2)}/天` +
+      `(周期 ${p0.days.toFixed(1)} 天${p0.learned ? "·实测" : "·按上一期推"},汇率 ${p0.rate}·${p0.rateMonth})`
+    : "";
   const sum = (f) => {
     const vals = am.map((c) => c[f]).filter((v) => v !== null && v !== undefined);
     if (!vals.length) return null;
@@ -259,38 +268,48 @@ function renderSummary() {
     { label: "本周消耗", field: "week", prev: "weekPrev", note: "推算", cmp: "对比上周同时段" },
     { label: "本月消耗", field: "month", prev: "monthPrev", note: null, cmp: "对比上月同时段" },
   ];
-  if (!am.length) {
+  if (!am.length && !plans.length) {
     $("sum").innerHTML = "";
     return;
   }
   $("sum").innerHTML = cells
     .map(({ label, field, prev, note: cellNote, cmp }) => {
       const v = sum(field);
-      const txt = v === null ? "——" : money(v);
+      const add = plans.length ? planSum(field) : 0;
+      // 金额型这一格没数时,套餐那一笔仍然要显示(否则"今日"会因为一家接口挂了而空掉)
+      const total = v === null ? (add > 0 ? add : null) : v + add;
+      const txt = total === null ? "——" : money(total);
       // 计数要按"真正参与了求和"的渠道数 —— 有的渠道这个窗口还没数据,
       // 用 am.length 会把没算进去的也算上,看起来像少加了钱
       const contributors = am.filter((c) => c[field] != null).length;
-      const note = v === null ? "数据不足" : cellNote || `${contributors} 个渠道`;
+      let note = "数据不足";
+      if (total !== null) {
+        if (contributors) note = (cellNote || `${contributors} 个渠道`) + (add > 0 ? " +套餐" : "");
+        else if (add > 0) note = "仅套餐摊销";
+      }
       // 环比只在"本期与上期都有数"的渠道集合上算,两边口径才对称;
+      // 套餐那一笔两边都加(它是按天摊的,所以只会让比例更平,不会凭空造出涨幅);
       // 上期合计为 0(或集合为空)时比例无意义,显示「——」而不是 0 或 ∞
       let delta = "";
       const both = am.filter((c) => c[field] != null && c[prev] != null);
-      if (both.length) {
-        const cur2 = both.reduce((a, c) => a + c[field], 0);
-        const prev2 = both.reduce((a, c) => a + c[prev], 0);
-        if (prev2 > 0) {
-          const p = ((cur2 - prev2) / prev2) * 100;
-          delta =
-            p > 0.5
-              ? `<span class="dl delta up">↑${Math.round(p)}%</span>`
-              : p < -0.5
-                ? `<span class="dl delta dn">↓${Math.round(-p)}%</span>`
-                : `<span class="dl delta na">±0%</span>`;
-        } else {
-          delta = `<span class="dl delta na">——</span>`;
-        }
+      let cur2 = both.reduce((a, c) => a + c[field], 0);
+      let prev2 = both.reduce((a, c) => a + c[prev], 0);
+      if (add > 0) {
+        cur2 += add;
+        prev2 += planSum(prev);
       }
-      return `<div class="cell" title="${cmp}"><div class="lb">${label}</div>
+      if ((both.length || add > 0) && prev2 > 0) {
+        const p = ((cur2 - prev2) / prev2) * 100;
+        delta =
+          p > 0.5
+            ? `<span class="dl delta up">↑${Math.round(p)}%</span>`
+            : p < -0.5
+              ? `<span class="dl delta dn">↓${Math.round(-p)}%</span>`
+              : `<span class="dl delta na">±0%</span>`;
+      } else if (total !== null) {
+        delta = `<span class="dl delta na">——</span>`;
+      }
+      return `<div class="cell" title="${cmp}${planTip}"><div class="lb">${label}</div>
         <div class="vv">${txt}<span class="dl">${note}</span>${delta}</div></div>`;
     })
     .join("");

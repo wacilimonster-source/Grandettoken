@@ -5,12 +5,13 @@
 
 use crate::appauth::{self};
 use crate::config::{ClaimConfig, Config};
+use crate::fx::{self, FxRate};
 use crate::providers::{self, AuthKind, Expiring, FetchResult, Kind, Method};
 use crate::store::Store;
 use crate::secrets;
 use crate::weblogin;
 use chrono::{Datelike, Duration, Local, TimeZone, Weekday};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -63,6 +64,11 @@ pub struct ChannelView {
     pub day_prev: Option<f64>,
     pub week_prev: Option<f64>,
     pub month_prev: Option<f64>,
+    /// 订阅型套餐(OpenCode Go $10/期)按天摊出来的消耗。None = 该渠道没有套餐成本,
+    /// 或**一次都没取到过汇率**(宁可少加一笔,不拿猜出来的数当"花掉的钱")。
+    /// 汇总条把这三格与上面的 day/week/month 相加,所以这里单独一套字段,
+    /// 界面上才能既写"3 个渠道"又写"含套餐"。
+    pub plan: Option<PlanCost>,
     /// 消耗是否为本地快照推算值(充值型渠道接口不给累计消耗)
     pub estimated: bool,
     /// 本次取数失败,以上数值来自上次成功快照
@@ -94,6 +100,225 @@ pub struct ClaimState {
     pub days_of_balance: Option<f64>,
     /// 余额可能撑不到下次可申请日
     pub shortage_risk: bool,
+}
+
+/// 订阅型套餐($10/期)折成人民币后**按天摊**出来的三份消耗。
+///
+/// 口径:每天固定 `usd × 汇率 ÷ 周期天数`,今日/本周/本月各按"该窗口已经过的秒数"
+/// 计,上期同时段同式。所以它的环比天然接近 ±0% —— 这是诚实的:订阅成本不随用量波动,
+/// 把它当"消耗"只是为了让汇总条等于**这个周期你真掏出去的钱**。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanCost {
+    pub day: f64,
+    pub week: f64,
+    pub month: f64,
+    pub day_prev: f64,
+    pub week_prev: f64,
+    pub month_prev: f64,
+    /// 套餐原价(美元)
+    pub usd: f64,
+    /// 一个周期多少天(学到的或先按 30 估的)
+    pub days: f64,
+    /// 折算用的汇率与它所属的月份(界面上要能回答"这个 ¥ 数哪来的")
+    pub rate: f64,
+    pub rate_month: String,
+    /// days 是从连续两次真实重置学到的(true),还是还没跨过重置、先按 30 天估(false)
+    pub learned: bool,
+    /// 摊到每天是多少钱(界面直接显示,不再让人心算)
+    pub per_day: f64,
+}
+
+/// 周期长度学习的记忆体。存在 settings 里(键见 [`CYCLE_KEY_PREFIX`])。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CycleMemo {
+    /// 最近一次看到的"周期窗重置"时刻(UTC 秒)
+    pub last_reset: i64,
+    /// 学到的周期长度(天);None = 还没观察到第二次重置
+    pub days: Option<f64>,
+}
+
+/// 没学到周期之前的假设。OpenCode Go 是包月,30 天最接近真值;
+/// 一旦观察到真的跨期重置, [`learn_cycle`] 会用实际间隔替换它。
+pub const ASSUMED_CYCLE_DAYS: f64 = 30.0;
+
+/// 从"连续两次周期窗重置的间隔"学周期长度。
+///
+/// 同一周期内 `resets_at` 不该变,所以:
+/// - 没变 / 变小(时钟被往前校正、服务端小幅调表)→ 原样返回,绝不改锚点;
+/// - 只往前挪几天(< 3 天)→ 当成服务端微调,也原样返回,否则会学出个"3 天周期";
+/// - 真的跨了一次重置 → 间隔落在 7~45 天才采信(账单周期可能是 28/30/31 天),
+///   区间外(改套餐、补历史数据)保留旧值,只把锚点挪到新重置时刻。
+pub fn learn_cycle(prev: Option<CycleMemo>, reset: i64) -> CycleMemo {
+    let Some(p) = prev else {
+        return CycleMemo {
+            last_reset: reset,
+            days: None,
+        };
+    };
+    let gap = reset - p.last_reset;
+    if gap < 3 * 86_400 {
+        return p;
+    }
+    let days = gap as f64 / 86_400.0;
+    CycleMemo {
+        last_reset: reset,
+        days: if (7.0..=45.0).contains(&days) {
+            Some(days)
+        } else {
+            p.days
+        },
+    }
+}
+
+/// 摊销计算。窗口起点全部由调用方给(和本地快照消耗用同一把尺子:本地零点/周一/月初),
+/// 否则"今日消耗"这一格里会混进两种日起点。
+pub fn plan_cost(
+    usd: f64,
+    days: f64,
+    rate: &FxRate,
+    learned: bool,
+    now: i64,
+    today0: i64,
+    week0: i64,
+    month0: i64,
+    prev0: i64,
+) -> PlanCost {
+    let days = if days.is_finite() && days > 0.0 { days } else { ASSUMED_CYCLE_DAYS };
+    let per_day = usd * rate.rate / days;
+    let span = |a: i64, b: i64| (b.max(a) - a) as f64 / 86_400.0;
+    PlanCost {
+        day: per_day * span(today0, now),
+        week: per_day * span(week0, now),
+        month: per_day * span(month0, now),
+        day_prev: per_day * span(today0 - 86_400, now - 86_400),
+        week_prev: per_day * span(week0 - 7 * 86_400, now - 7 * 86_400),
+        // 终点钳在上月之内:与金额型渠道同一处理(报告 P2-4),短月不会串期
+        month_prev: per_day * span(prev0, (prev0 + (now - month0)).min(month0 - 1)),
+        usd,
+        days,
+        rate: rate.rate,
+        rate_month: rate.month.clone(),
+        learned,
+        per_day,
+    }
+}
+
+/// 周期记忆体的 settings 键前缀(每个订阅渠道各一份,以后加第二家不用改结构)。
+pub const CYCLE_KEY_PREFIX: &str = "plan_cycle:";
+
+pub fn cycle_key(id: &str) -> String {
+    format!("{CYCLE_KEY_PREFIX}{id}")
+}
+
+/// 读周期记忆。库里是坏 JSON 时按"没有"处理(与汇率缓存同一口径:缓存不该阻断取数)。
+pub fn load_cycle(store: &Store, id: &str) -> Option<CycleMemo> {
+    store
+        .get_setting(&cycle_key(id))
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str(&s).ok())
+}
+
+pub fn save_cycle(store: &Store, id: &str, memo: &CycleMemo) -> Result<(), String> {
+    let txt = serde_json::to_string(memo).map_err(|e| format!("序列化周期失败: {e}"))?;
+    store.set_setting(&cycle_key(id), &txt)
+}
+
+/// 周期窗的重置时刻:优先「主窗」的 `resets_at`(RFC3339)。没有就返回 None ——
+/// 宁可不学,也不能拿 5 小时窗或周窗的间隔去当包月周期。
+fn main_window_reset(v: &ChannelView) -> Option<i64> {
+    let w = v.windows.iter().find(|w| w.main).or(v.windows.first())?;
+    let txt = w.resets_at.as_ref()?;
+    chrono::DateTime::parse_from_rfc3339(txt)
+        .ok()
+        .map(|d| d.timestamp())
+}
+
+/// 给订阅型渠道挂上按天摊销的消耗。`cycles` 与 `views` 都按 PROVIDERS 的下标对齐。
+///
+/// - 隐藏的渠道不挂(汇总条本来就不算它,挂上等于偷偷把用户关掉的东西加回钱);
+/// - 一次都没取到汇率就不挂,界面会显示"套餐未折算"而不是拿猜的数当花掉的钱;
+/// - 取数失败/沿用旧快照也照挂 —— 订阅费是时间过的,不是 token 用的,
+///   跟这一轮网络成不成功无关(与"消耗不因取数失败而清零"同一条纪律,P1-4)。
+fn attach_plan_costs(
+    views: &mut [Option<ChannelView>],
+    store: &Store,
+    cycles: &[Option<CycleMemo>],
+    rate: Option<&FxRate>,
+) {
+    let now = now_ts();
+    // 与金额型渠道同一把尺子:本地零点 / 本地周一 / 本地月初,否则"今日"这一格里
+    // 会混进两种日起点
+    let (today0, week0, month0, prev0) = (
+        local_midnight_today(),
+        local_week_start(),
+        local_month_start(),
+        local_prev_month_start(),
+    );
+    for (idx, slot) in views.iter_mut().enumerate() {
+        let Some(v) = slot else { continue };
+        if v.hidden {
+            continue;
+        }
+        let Some(usd) = providers::plan_usd(&v.id) else {
+            continue;
+        };
+        let Some(rate) = rate else {
+            // 一次都没取到汇率:明说"没折进合计",而不是默默少一笔让人以为合计是对的
+            v.extra
+                .push(("套餐".into(), format!("${usd:.0}/期 · 未折进消耗(汇率还没取到)")));
+            continue;
+        };
+        let reset = main_window_reset(v);
+        let before = cycles.get(idx).copied().flatten();
+        let memo = match (before, reset) {
+            (m, Some(reset)) => {
+                let fresh = learn_cycle(m, reset);
+                if Some(fresh) != m {
+                    if let Err(e) = save_cycle(store, &v.id, &fresh) {
+                        eprintln!("写入周期记忆失败 {}: {e}", v.id);
+                    }
+                }
+                Some(fresh)
+            }
+            (m, None) => m,
+        };
+        // 周期长度三级口径:真实观测学到的 > 从重置日往前推一个整月 > 30 天兜底
+        let (days, note) = match memo.and_then(|m| m.days) {
+            Some(d) => (d, ""),
+            None => match reset.and_then(inferred_cycle_days) {
+                Some(d) => (d, "(按上一期长度)"),
+                None => (ASSUMED_CYCLE_DAYS, "(周期按 30 天估)"),
+            },
+        };
+        let p = plan_cost(usd, days, rate, note.is_empty(), now, today0, week0, month0, prev0);
+        let ds = if (days - days.round()).abs() < 0.05 {
+            format!("{}", days.round() as i64)
+        } else {
+            format!("{days:.1}")
+        };
+        v.extra.push((
+            format!("套餐摊销{note}"),
+            format!(
+                "¥{:.2}/天 · ${:.0}/{ds} 天 · 汇率 {:.2}({})",
+                p.per_day, p.usd, p.rate, p.rate_month
+            ),
+        ));
+        v.plan = Some(p);
+    }
+}
+
+/// 没学到周期时的第一版估计:套餐是**按月**订的,所以"重置时刻往前推一个整月"
+/// 就是本期的长度(11-03 重置 → 10-03 起 → 31 天;3-03 重置 → 2-03 起 → 28/29 天)。
+/// 比一律按 30 天估准,而且**第一天就准** —— 不用等整整一个月观察到真实重置;
+/// 真实观测([`learn_cycle`])一旦拿到会覆盖它。
+pub fn inferred_cycle_days(reset: i64) -> Option<f64> {
+    use chrono::{Months, Utc};
+    let end = Utc.timestamp_opt(reset, 0).single()?;
+    let start = end.checked_sub_months(Months::new(1))?;
+    let days = (end - start).num_seconds() as f64 / 86_400.0;
+    (7.0..=45.0).contains(&days).then_some(days)
 }
 
 /// 一次尝试的失败类型 —— 它决定"要不要换个域名再试"。
@@ -702,6 +927,8 @@ fn build_view(
         day_prev,
         week_prev,
         month_prev,
+        // 套餐摊销要等本轮汇率与周期记忆都到位,统一在 fetch_all 的同步段挂上
+        plan: None,
         estimated: result.kind == Kind::Amount,
         stale,
         updated_at,
@@ -746,6 +973,7 @@ fn placeholder(def: &providers::ProviderDef) -> ChannelView {
         day_prev: None,
         week_prev: None,
         month_prev: None,
+        plan: None,
         estimated: false,
         stale: false,
         updated_at: 0,
@@ -885,6 +1113,23 @@ impl Fetcher {
         // 隐藏 = 不发请求、不读本机登录凭据;仍返回占位视图,管理页要靠它列「已隐藏」卡片。
         // Arc:并发时每渠道克隆一次指针,而不是把 Vec 移进每个 future。
         let hidden: Arc<Vec<String>> = Arc::new(cfg.hidden_channels.clone());
+        // 订阅套餐要用的两份缓存:美元牌价(每月一次)与周期记忆(跨期才更新)。
+        // 单独一次短锁读出来 —— 下面的 refresh 会 await,不能带着 MutexGuard 跨过去。
+        let plan_ids: Vec<&'static str> = providers::PROVIDERS
+            .iter()
+            .map(|d| d.id)
+            .filter(|id| providers::plan_usd(id).is_some())
+            .collect();
+        let (fx_cached, cycle_cached): (Option<FxRate>, Vec<Option<CycleMemo>>) = {
+            let s = store.lock().unwrap_or_else(|p| p.into_inner());
+            (
+                fx::load(&s),
+                plan_ids.iter().map(|id| load_cycle(&s, id)).collect(),
+            )
+        };
+        // 当月已有牌价时这个 await 是纯内存返回,不打网络;只有跨月后的第一轮才会
+        // 真去试两个公开接口(每个 6 秒上限)。
+        let fx_now = fx::refresh(&self.http, fx_cached.clone(), now_ts()).await;
         // 网页登录型的会话来源(外壳注入)。每轮取一次,每渠道克隆一个指针。
         let web_src: Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>> =
             self.web_cred_src
@@ -1093,6 +1338,15 @@ impl Fetcher {
                     out[f.i] = Some(build_view(f.def, result, stale, ts, &s, &cfg, cred.as_ref()));
                 }
             }
+            // 牌价只在"跨月取到了新数"那一轮落库,不是每轮都写
+            if let Some(f) = fx_now.as_ref() {
+                if fx_cached.as_ref() != Some(f) {
+                    if let Err(e) = fx::save(&s, f) {
+                        eprintln!("写入汇率缓存失败: {e}");
+                    }
+                }
+            }
+            attach_plan_costs(&mut out, &s, &cycle_cached, fx_now.as_ref());
         }
 
         for (id, result, ts) in cache_updates {
@@ -1109,6 +1363,215 @@ impl Fetcher {
 mod tests {
     use super::*;
     use chrono::Timelike;
+
+    fn test_rate() -> FxRate {
+        FxRate {
+            rate: 7.0,
+            month: "2026-10".into(),
+            src: "test".into(),
+        }
+    }
+
+    /// $10 / 10 天周期 / 汇率 7 → 每天 7 元。它只跟"过了多久"有关,与用了多少 token 无关。
+    #[test]
+    fn plan_cost_accrues_with_elapsed_time_only() {
+        let d = 86_400.0;
+        let today0 = 1_000_000;
+        let c = plan_cost(
+            10.0,
+            10.0,
+            &test_rate(),
+            false,
+            today0 + (0.5 * d) as i64, // 今天过了半天
+            today0,
+            today0 - 3 * d as i64, // 本周已过 3.5 天
+            today0 - 5 * d as i64, // 本月已过 5.5 天
+            today0 - 35 * d as i64,
+        );
+        assert!((c.per_day - 7.0).abs() < 1e-9);
+        assert!((c.day - 3.5).abs() < 1e-6, "半天 → 3.5 元");
+        assert!((c.week - 24.5).abs() < 1e-3);
+        assert!((c.month - 38.5).abs() < 1e-3);
+        // 上期"同时段"长度与本期一样,所以订阅这一块的环比天然接近 ±0%
+        assert!((c.day_prev - c.day).abs() < 1e-6);
+        assert!((c.week_prev - c.week).abs() < 1e-3);
+        assert!(!c.learned);
+        assert_eq!(c.rate_month, "2026-10");
+    }
+
+    /// 上月只有 28 天、本月已过 29 天:上月同期必须钳在 28 天之内,
+    /// 否则多出来的一天会把基线抬高,"本月环比"凭空少一截(报告 P2-4 同款坑)。
+    #[test]
+    fn plan_cost_prev_month_never_leaks_into_this_month() {
+        let d = 86_400.0;
+        let month0 = 40 * d as i64;
+        let prev0 = month0 - 28 * d as i64;
+        let now = month0 + 29 * d as i64;
+        let c = plan_cost(
+            10.0,
+            10.0,
+            &test_rate(),
+            true,
+            now,
+            now - 3_600,
+            month0 - 7 * d as i64,
+            month0,
+            prev0,
+        );
+        assert!(
+            c.month_prev < c.per_day * 28.0 + 1e-6,
+            "上月同期不该超过上月本身的长度: {:?}",
+            c.month_prev
+        );
+        assert!(c.month_prev > c.per_day * 27.0);
+    }
+
+    #[test]
+    fn cycle_length_is_learned_only_from_a_real_reset() {
+        let d = 86_400i64;
+        let a = learn_cycle(None, 100);
+        assert_eq!(a.days, None, "只看到一次重置,还学不到长度");
+        assert_eq!(learn_cycle(Some(a), 100), a, "同一周期内重复观察不该改动任何东西");
+        assert_eq!(
+            learn_cycle(Some(a), 100 + 2 * d),
+            a,
+            "服务端调表 2 天不足以断定跨了一期,否则会学出个「2 天周期」"
+        );
+        let b = learn_cycle(Some(a), 100 + 30 * d);
+        assert_eq!(b.days, Some(30.0));
+        assert_eq!(
+            learn_cycle(Some(b), 100),
+            b,
+            "时钟被往前校正时重置时刻会倒退,这时必须原样返回"
+        );
+        let c = learn_cycle(Some(b), 100 + 130 * d);
+        assert_eq!(c.days, Some(30.0), "100 天的间隔像改了套餐,保留旧周期只挪锚点");
+        assert_eq!(c.last_reset, 100 + 130 * d);
+    }
+
+    /// 没跨过真实重置之前,用"重置日往前推一个整月"当本期长度 —— 第一天就准。
+    #[test]
+    fn cycle_length_is_inferred_from_the_reset_date() {
+        assert!(
+            (inferred_cycle_days(1_793_664_000).unwrap() - 31.0).abs() < 1e-9,
+            "11-03 重置 → 10-03 起算,31 天"
+        );
+        assert!(
+            (inferred_cycle_days(1_804_032_000).unwrap() - 28.0).abs() < 1e-9,
+            "3-03 重置 → 2-03 起算,平年 28 天"
+        );
+        assert!(
+            (inferred_cycle_days(1_709_596_800).unwrap() - 29.0).abs() < 1e-9,
+            "2024 闰年 2 月是 29 天"
+        );
+        assert!(inferred_cycle_days(i64::MIN).is_none(), "荒谬时间戳不该 panic 也不该出数");
+    }
+
+    /// 周期长度三级口径:学到的 > 从重置日推的 > 30 天兜底。
+    #[test]
+    fn attach_prefers_observed_cycle_over_inference() {
+        let s = Store::open_memory().unwrap();
+        let def = providers::find("opencode-go").unwrap();
+        let mut v = placeholder(def);
+        v.windows = vec![providers::Window {
+            label: "周期".into(),
+            percent: 10.0,
+            remain_percent: 90.0,
+            status: "ok".into(),
+            resets_at: Some("2026-11-03T00:00:00+00:00".into()),
+            main: true,
+        }];
+
+        let mut observed = vec![Some(v.clone())];
+        attach_plan_costs(
+            &mut observed,
+            &s,
+            &[Some(CycleMemo {
+                last_reset: 1,
+                days: Some(10.0),
+            })],
+            Some(&test_rate()),
+        );
+        let p = observed[0].as_ref().unwrap().plan.clone().unwrap();
+        assert!((p.days - 10.0).abs() < 1e-9, "已经学到的优先用");
+        assert!(p.learned);
+
+        let mut inferred = vec![Some(v)];
+        attach_plan_costs(&mut inferred, &s, &[None], Some(&test_rate()));
+        let p = inferred[0].as_ref().unwrap().plan.clone().unwrap();
+        assert!(
+            (p.days - 31.0).abs() < 1e-9,
+            "没学到时按重置日往前推一个整月,而不是 30 天"
+        );
+        assert!(!p.learned, "推出来的必须标明不是实测");
+        assert!(inferred[0].as_ref().unwrap().extra.iter().any(|(k, _)| k == "套餐摊销(按上一期长度)"));
+    }
+
+    #[test]
+    fn plan_cost_needs_a_rate_and_skips_hidden_and_usage_based_channels() {
+        let s = Store::open_memory().unwrap();
+        let def = providers::find("opencode-go").expect("opencode-go 渠道存在");
+
+        let mut none = vec![Some(placeholder(def))];
+        attach_plan_costs(&mut none, &s, &[None], None);
+        assert!(
+            none[0].as_ref().unwrap().plan.is_none(),
+            "一次汇率都没取到时不许拿猜的数往合计里加钱"
+        );
+
+        let mut got = vec![Some(placeholder(def))];
+        attach_plan_costs(&mut got, &s, &[None], Some(&test_rate()));
+        let p = got[0].as_ref().unwrap().plan.clone().expect("有汇率就该挂上");
+        assert!((p.usd - 10.0).abs() < 1e-9);
+        assert!((p.days - ASSUMED_CYCLE_DAYS).abs() < 1e-9);
+        assert!(!p.learned, "没跨过真实重置前必须标明周期是按 30 天估的");
+        assert!(p.day > 0.0);
+
+        let mut hidden_view = placeholder(def);
+        hidden_view.hidden = true;
+        let mut hid = vec![Some(hidden_view)];
+        attach_plan_costs(&mut hid, &s, &[None], Some(&test_rate()));
+        assert!(
+            hid[0].as_ref().unwrap().plan.is_none(),
+            "隐藏的渠道不进合计,挂上等于偷偷把用户关掉的东西算回钱"
+        );
+
+        let mut amount = vec![Some(placeholder(providers::find("4sapi").unwrap()))];
+        attach_plan_costs(&mut amount, &s, &[None], Some(&test_rate()));
+        assert!(amount[0].as_ref().unwrap().plan.is_none());
+    }
+
+    /// 观察到一次重置先只记锚点;下一次跨期才学出周期,并且落库(重启后还记得)。
+    #[test]
+    fn learned_cycle_survives_across_rounds() {
+        let s = Store::open_memory().unwrap();
+        let def = providers::find("opencode-go").unwrap();
+        let mk = |reset: &str| {
+            let mut v = placeholder(def);
+            v.windows = vec![providers::Window {
+                label: "周期".into(),
+                percent: 50.0,
+                remain_percent: 50.0,
+                status: "ok".into(),
+                resets_at: Some(reset.into()),
+                main: true,
+            }];
+            v
+        };
+        let mut first = vec![Some(mk("2026-11-03T00:00:00+00:00"))];
+        attach_plan_costs(&mut first, &s, &[None], Some(&test_rate()));
+        let m1 = load_cycle(&s, "opencode-go").expect("第一次观察就该落锚点");
+        assert_eq!(m1.days, None);
+
+        let mut second = vec![Some(mk("2026-12-03T00:00:00+00:00"))];
+        attach_plan_costs(&mut second, &s, &[Some(m1)], Some(&test_rate()));
+        let m2 = load_cycle(&s, "opencode-go").unwrap();
+        let days = m2.days.expect("跨了一次真实重置,该学到周期长度");
+        assert!((days - 30.0).abs() < 0.2, "11-03 → 12-03 是 30 天,实测学到 {days}");
+        let p = second[0].as_ref().unwrap().plan.clone().unwrap();
+        assert!(p.learned);
+        assert!((p.days - days).abs() < 1e-9);
+    }
 
     /// WorkBuddy 改走网页登录(裁决 1A/3B)之后的界面口径:没登录时说"未登录 WorkBuddy
     /// 账号",auth_source 用 "web" 让前端出登录按钮。凭据的两种形态分开报 ——
