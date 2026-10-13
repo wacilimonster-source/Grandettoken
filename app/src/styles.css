@@ -213,7 +213,13 @@ body.form-compact .ico.logo>img{width:88%;height:88%}
 /* ── 展开详情(动效 C:grid 0fr→1fr 真高度过渡,展开 320ms / 收起 200ms)── */
 .rbody{display:grid;grid-template-rows:0fr;transition:grid-template-rows var(--t2) var(--ease)}
 .row.open .rbody{grid-template-rows:1fr;transition-duration:var(--t3)}
-.rbody-in{overflow:hidden;min-height:0;padding:calc(4px*var(--u)) calc(13px*var(--u)) calc(13px*var(--u)) calc(49px*var(--u));background:#ffffff05}
+.rbody-in{overflow:hidden;min-height:0;padding:calc(4px*var(--u)) calc(13px*var(--u)) calc(13px*var(--u)) calc(49px*var(--u));background:#ffffff05;
+  transition:padding var(--t2) var(--ease)}
+/* 折叠态必须真的收到 0:上下内边距(4 + 13 = 17px)会把 `0fr` 的轨道撑到 17px ——
+   折叠后留下一道 17px 的残影,里面是详情顶部被切断的内容(用户实测:展开又折叠之后
+   那排「近 24 小时 / 近 7 天 / 近 30 天」剩半截,行也比没展开过的高 17px)。
+   折叠时把上下内边距归零(一起过渡,不跳),左右内边距不影响高度,保留用于对齐。 */
+.row:not(.open) .rbody-in{padding-top:0;padding-bottom:0}
 .seg{display:flex;gap:calc(4px*var(--u));margin-bottom:calc(9px*var(--u))}
 .seg button{flex:1;font-size:max(11.5px,calc(11px*var(--u)));padding:calc(3px*var(--u)) 0;border:1px solid var(--line);
   background:var(--bg3);color:var(--tx3);border-radius:calc(5px*var(--u));cursor:pointer;font-family:inherit}
