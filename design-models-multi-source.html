@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Grandettoken · 模型页多来源（4SAPI / Hapi / OpenCode Go）+ 写入交互重做（产品设计，未写代码）</title>
+<style>
+  :root{
+    --bg:#12141a; --bg2:#191c24; --bg3:#20242e;
+    --line:#2f3648; --line2:#3c445c;
+    --tx:#edf0f6; --tx2:#b6bfce; --tx3:#8d97ab;
+    --ok:#4ade9d; --warn:#f7c355; --bad:#ff6b63; --ac:#7fa2ff;
+    --s4:#e8622c; --hapi:#22a06b; --go:#f5a623;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#0a0c10;color:#dfe5f1;font:14px/1.75 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;padding:34px 26px 90px}
+  .wrap{max-width:1180px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 6px}
+  .sub{color:#7d879e;font-size:13px;margin-bottom:24px}
+  h2{font-size:16px;margin:42px 0 14px;padding-left:10px;border-left:3px solid var(--ac)}
+  h3{font-size:14px;margin:24px 0 8px;color:#cdd5e4}
+  h4{font-size:13px;margin:18px 0 6px;color:#b9c3d6}
+  p{margin:8px 0}
+  code{font-family:"Cascadia Mono",Consolas,monospace;font-size:12.5px;background:#1b1f28;border:1px solid #262c38;border-radius:4px;padding:1px 5px;color:#9fd0ff}
+  pre{background:#11141b;border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow:auto;font-family:"Cascadia Mono",Consolas,monospace;font-size:12px;color:#a8b6cc;line-height:1.6}
+  pre b{color:#8fd0a0;font-weight:600}
+  .hand{border:1px solid #3d5a8a;background:linear-gradient(180deg,#152034,#111a29);border-radius:10px;padding:16px 18px;margin:0 0 30px}
+  .hand b{color:#9fc4ff}
+  .say{background:#141a24;border:1px solid var(--line);border-left:3px solid var(--ac);border-radius:8px;padding:14px 16px;margin:12px 0}
+  .say .lab{font-size:12px;color:#7d879e;letter-spacing:.06em;margin-bottom:6px}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#1a1f28;color:#b6bfce;font-weight:600}
+  .bad{color:var(--bad)} .ok{color:var(--ok)} .warn{color:var(--warn)} .dim{color:var(--tx3)}
+  ol.q{margin:10px 0 0;padding-left:0;list-style:none;counter-reset:q}
+  ol.q>li{counter-increment:q;border:1px solid var(--line);border-radius:8px;padding:12px 14px 12px 46px;margin:10px 0;background:#15181f;position:relative}
+  ol.q>li::before{content:counter(q);position:absolute;left:14px;top:12px;width:22px;height:22px;border-radius:6px;background:#232a38;color:#9fc4ff;
+    display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px}
+  ol.q b{color:#e6ebf5}
+  .opt{margin:4px 0;padding-left:14px;color:var(--tx2)}
+  .opt b{color:var(--tx)}
+  .tagd{display:inline-block;margin-left:5px;padding:0 4px;border:1px dashed var(--line2);border-radius:4px;color:var(--tx3);font-size:10px;vertical-align:1px}
+  .tagd.bad{border-color:#6b3230;color:var(--bad)}
+  .tagd.ok{border-color:#2f6b43;color:#7ce9a8}
+  ul{margin:6px 0 6px 18px;padding:0}
+  li{margin:4px 0}
+  .foot{margin-top:44px;color:#6b7688;font-size:12px;border-top:1px solid var(--line);padding-top:14px}
+
+  /* ── mock:与真机界面同一套尺寸/色板(380 宽) ── */
+  .stage{display:flex;gap:26px;flex-wrap:wrap;align-items:flex-start;margin-top:14px}
+  .mock{width:380px;flex:none;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--tx);
+    font:13px/1.5 "Segoe UI","Microsoft YaHei",sans-serif;box-shadow:0 18px 50px -18px #000c;overflow:hidden;position:relative}
+  .m-tbar{display:flex;align-items:center;gap:9px;padding:9px 12px;background:linear-gradient(180deg,#1d2129,#171a21);border-bottom:1px solid var(--line)}
+  .m-mark{width:17px;height:17px;border-radius:5px;background:linear-gradient(135deg,#5b8cff,#8b5bff);position:relative;flex:none}
+  .m-mark::after{content:"";position:absolute;inset:5px;border-radius:2px;background:#12141a}
+  .m-tt{font-size:12px;font-weight:600}
+  .m-tabs{display:flex;gap:4px;padding:7px 10px 0;border-bottom:1px solid var(--line);background:#15181f}
+  .m-tab{font-size:11.5px;padding:5px 9px;border-radius:6px 6px 0 0;color:var(--tx3);border:1px solid transparent;border-bottom:none}
+  .m-tab.on{background:var(--bg);color:var(--tx);border-color:var(--line)}
+  .m-body{padding:10px 11px;min-height:380px}
+  .srcrow{display:flex;gap:6px;margin-bottom:8px}
+  .src{flex:1;text-align:center;font-size:11.5px;padding:5px 0;border-radius:7px;border:1px solid var(--line2);background:#171b22;color:var(--tx3)}
+  .src.on{background:#22304a;border-color:#4b6fa8;color:#cfe0ff}
+  .src i{display:block;font-style:normal;font-size:10px;color:var(--tx3)}
+  .mdl-q{display:flex;gap:6px;margin-bottom:7px}
+  .inp{flex:1;font:12px/1 inherit;padding:6px 9px;border-radius:7px;border:1px solid var(--line2);background:#11141b;color:var(--tx)}
+  .btn{font:12px/1 inherit;padding:6px 9px;border-radius:7px;border:1px solid var(--line2);background:#222834;color:#dfe6f2;cursor:default;white-space:nowrap}
+  .btn.p{background:#2b3f66;border-color:#4b6fa8;color:#eaf1ff;font-weight:600}
+  .btn.danger{border-color:#6b3230;color:#ffb4b0}
+  .btn.s{padding:3px 7px;font-size:11px}
+  .chips{display:flex;gap:6px;margin-bottom:7px}
+  .pick{font-size:11px;padding:3px 8px;border-radius:20px;border:1px solid #4b6fa8;background:#22304a;color:#cfe0ff}
+  .pick.off{border-color:var(--line2);background:#171b22;color:var(--tx3)}
+  .meta{font-size:10.5px;color:var(--tx3);line-height:1.7;margin-bottom:8px;display:flex;justify-content:space-between}
+  .mcli{display:flex;gap:5px;margin-bottom:8px}
+  .mcli div{flex:1;text-align:center;border:1px solid var(--line);background:#15181f;border-radius:7px;padding:6px 4px}
+  .mcli b{display:block;color:var(--tx2);font-size:11.5px}
+  .mcli span{color:var(--tx3);font-size:10px}
+  .mrow{border:1px solid var(--line);background:var(--bg2);border-radius:9px;padding:7px 9px;margin-bottom:6px}
+  .mrow.done{border-color:#2f6b43}
+  .mtop{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+  .mname{font-family:Consolas,monospace;font-weight:600;font-size:12.5px}
+  .mtags{font-size:10.5px;color:var(--tx3);margin-top:2px}
+  .mprice{font-size:11px;color:var(--tx2);margin-top:3px;font-variant-numeric:tabular-nums}
+  .mprice.hi{color:var(--warn)} .mprice.max{color:var(--bad)}
+  .cdots{display:flex;gap:4px}
+  .cdot{width:24px;height:19px;border-radius:5px;border:1px solid var(--line2);background:#1b1f27;color:#8d97ab;font-size:9.5px;font-weight:700;
+    display:flex;align-items:center;justify-content:center}
+  .cdot.on{background:#16321f;border-color:#2f6b43;color:#7ce9a8}
+  .cdot.run{border-color:#7a6234;color:var(--warn)}
+  .empty{padding:14px;text-align:center;color:var(--tx3);font-size:11.5px}
+  /* 弹层:面板内覆盖(复用更新提示那套 .upd-ov 的机制) */
+  .ov{position:absolute;inset:0;background:#0b0d12d0;backdrop-filter:blur(1.5px);display:flex;align-items:flex-end}
+  .ov-in{width:100%;max-height:86%;overflow-y:auto;background:#151d2b;border-top:1px solid #3d5a8a;border-radius:12px 12px 0 0;padding:12px 13px 13px}
+  .ov-h{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:8px}
+  .ov-h b{font-size:13px;color:#cfe0ff}
+  .kv{display:flex;gap:8px;font-size:11.5px;margin:4px 0;align-items:baseline}
+  .kv .k{flex:none;width:44px;color:var(--tx3)}
+  .kv .v{flex:1;min-width:0;color:var(--tx2);word-break:break-all}
+  .kv em{color:#9fd0ff;font-style:normal;font-family:Consolas,monospace;font-size:11px}
+  .warnbox{border:1px solid #6b5327;background:#241d12;border-radius:7px;padding:7px 9px;font-size:11px;color:#f0c67a;margin:7px 0}
+  .note{font-size:10.5px;color:var(--tx3);line-height:1.6;margin:4px 0}
+  .okbox{border:1px solid #2f6b43;background:#132219;border-radius:7px;padding:7px 9px;font-size:11px;color:#8ee9b8;margin:7px 0}
+  .acts{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}
+  .swwrap{display:none} .swwrap.on{display:block}
+  .swrow{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 14px}
+  .sw{padding:6px 12px;border-radius:20px;border:1px solid var(--line2);background:#171b22;color:var(--tx2);cursor:pointer;font-size:12.5px}
+  .sw.on{background:#22304a;border-color:#4b6fa8;color:#cfe0ff}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>模型页多来源（4SAPI / Hapi / OpenCode Go）+ 写入交互重做</h1>
+<div class="sub">2026-10-13 · 产品设计（<b>未写代码</b>）。接口事实全部来自本机实测，可复核；UI 原型是静态稿，尺寸与真机一致（380 宽）。</div>
+
+<div class="hand">
+  <b>这一轮要解决的</b>
+  <p style="margin:6px 0 4px">① Hapi 也能看模型、也能配到客户端;② OpenCode Go 同样;
+  ③ 写入/取消写入的确认框从列表底部挪到<b>弹层</b>(现在要点完滚到底才看得见,体验差);
+  ④ 模型列表按<b>价格由高到低</b>排。</p>
+  <p style="margin:0">其中 ① ② 需要把模型页从「4SAPI 专用」改成<b>多来源</b> —— 这是本轮唯一的结构性改动,其余三条都是它之上或独立的小改。</p>
+  <p style="margin:8px 0 0" class="dim">取证结论:两条新来源<b>都能列模型</b>(Hapi 需密钥、Go 公开);但<b>价格只有 4SAPI 有</b> —— Hapi 没有公开价目表,Go 是订阅制不按 token 计价。第 ④ 条因此要分来源说明(见第五节)。</p>
+</div>
+
+<div class="say">
+  <div class="lab">说人话版结论</div>
+  <p style="margin:0 0 6px"><b>① 两条来源都能列模型,而且比预想的好拿。</b>OpenCode Go 的 <code>/zen/go/v1/models</code>
+  <b>公开</b>(实测 200,38 个模型,不用密钥);Hapi 的 <code>/v1/models</code> 存在但要密钥(实测 401,
+  错误体明说要 Bearer / x-api-key)。Hapi 那个站不是 new-api,<code>/api/pricing</code> 是 404 —— <b>它没有公开价目表</b>。</p>
+  <p style="margin:0 0 6px"><b>② 「价格由高到低」只有 4SAPI 能严格做到。</b>4SAPI 有价目表(160 个模型,倍率齐全);
+  Hapi 的价目表在它自己控制台的接口里(<code>/api/v1/groups/rates</code>,实测 401 —— 认的是登录态,
+  <b>认不认 API key 待实现期用你的密钥试一次</b>);OpenCode Go 是<b>订阅制</b>(按 5 小时/周/周期限流),
+  根本不按 token 计价,给它编个"单价"就是撒谎。所以:有价格的按价格降序,没价格的整体排在末尾并标明原因。</p>
+  <p style="margin:0 0 6px"><b>③ 写入确认改成弹层,位置固定不用滚。</b>现在那块确认面板长在列表末尾,点完行内小按钮
+  还得滚到底才看得见 —— 这也是你说的"体验不好"。改成复用「更新提示」那套覆盖层:标题写清
+  <code>模型 → 客户端</code>,内容可滚,按钮固定在底部,关闭即回到原位置。</p>
+  <p style="margin:0"><b>④ 一个坑要提前说:同一个模型名可能同时存在于多个来源。</b>比如 <code>gpt-6-luna</code>
+  在 4SAPI、Hapi、Go 里都有。现在"已配置"的判定只认 4SAPI 的域名,多来源之后必须<b>按来源分别判定</b>
+  (客户端条目里的 url 决定它来自哪个来源) —— 否则会出现"在 Hapi 页显示已配置,其实配的是 4SAPI"这种假绿。</p>
+</div>
+
+<h2>一、取证:Hapi 与 OpenCode Go(本机实测,可复核)</h2>
+
+<p>命令都在下面,不花一分钱(全是只读的元数据接口;带密钥的那两条要你的密钥,零计费)。</p>
+
+<pre>curl -s https://opencode.ai/zen/go/v1/models          <b># 200 · 38 个模型 · 公开</b>
+curl -s https://opencode.ai/zen/v1/models             # 200 · 83 个模型 · 公开(Zen 按量付费的另一套)
+curl -s https://ai.yuchuantest.com/v1/models          <b># 401 · 要密钥</b>
+curl -s https://ai.yuchuantest.com/api/pricing        # 404 · 没有公开价目表(不是 new-api)
+curl -s https://ai.yuchuantest.com/api/v1/groups/rates # 401 · 它自己控制台的价目接口</pre>
+
+<table>
+<tr><th style="width:150px">来源</th><th style="width:230px">模型列表</th><th style="width:190px">价格</th><th>实测细节</th></tr>
+<tr>
+  <td><b>4SAPI</b><br><span class="dim">已有</span></td>
+  <td><code>/v1/models</code> 要密钥<br><code>/api/pricing</code> 公开</td>
+  <td class="ok">有(160 个模型,倍率齐全)</td>
+  <td>已实现:单价 = 2 × 模型倍率 × 分组倍率,元/百万 token</td>
+</tr>
+<tr>
+  <td><b>Hapi</b><br><span class="dim">本轮新增</span></td>
+  <td><code>/v1/models</code> <b>要密钥</b></td>
+  <td class="bad">没有公开价目表</td>
+  <td>401 的原话:<code>API key is required in Authorization header (Bearer scheme), x-api-key header, or x-goog-api-key header</code>
+    —— 三种头都认,我们按现有的 <code>Bearer</code> 走。列表响应体结构待实现期用密钥实测(匿名只能看到 401)。</td>
+</tr>
+<tr>
+  <td><b>OpenCode Go</b><br><span class="dim">本轮新增</span></td>
+  <td><code>/zen/go/v1/models</code> <b>公开</b></td>
+  <td class="bad">订阅制,不按 token 计价</td>
+  <td>38 个模型,标准 OpenAI 列表(<code>id/object/created/owned_by</code>),<b>没有 tags/上下文字段</b>;
+    含 <code>claude-haiku-5-5</code>、<code>gpt-6-luna</code>、<code>kimi-k3</code>、<code>glm-5.3</code>、<code>qwen3.8-max</code> 等</td>
+</tr>
+</table>
+
+<div class="say">
+  <div class="lab">顺手发现两件事</div>
+  <p style="margin:0 0 4px"><b>一、Zen 与 Go 是两套模型清单。</b>Zen(按量付费)83 个、含若干 <code>-free</code> 免费模型;
+  Go(你订阅的那套)38 个。你挂件里的渠道是 <b>Go</b>,所以本轮只做 Go 的 38 个 ——
+  Zen 要不要也做成第四个来源,见第七节待裁决第 6 条。</p>
+  <p style="margin:0"><b>二、Go 的列表公开意味着"没配密钥也能先看有什么模型"</b> —— 这与 4SAPI 的价目表一样,
+  界面上可以直接列出来(写进客户端时才需要密钥)。Hapi 则必须先配密钥才看得到列表。</p>
+</div>
+
+<h2>二、产品设计:模型页改成多来源</h2>
+
+<h3>2.1 结构:一个来源芯片条 + 每个来源自己的列表</h3>
+
+<pre>设置与管理 › 模型
+  ┌ 来源芯片  [ 4SAPI ] [ Hapi ] [ OpenCode Go ]   ← 新增;当前来源高亮
+  ├ 搜索 + 「只看编码/对话」
+  ├ 口径行:写进客户端 https://…/v1 · 单价口径(该来源有什么写什么)
+  ├ 客户端条:T / WB / WBA / ZC(状态与来源无关)
+  └ 列表:该来源的模型 + 四个客户端按钮
+       └ 点按钮 → <b>弹层</b>(写入 / 取消写入 / 复制三件套)</pre>
+
+<table>
+<tr><th style="width:120px">来源</th><th>列表规则(沿用 v0.1.23 的固定规则)</th><th>写进客户端的地址</th></tr>
+<tr><td>4SAPI</td><td>该 key 能调的 ∪ 已配置(4SAPI 来源的条目)</td><td><code>https://4sapi.com/v1</code>(实测可用的那个域名)</td></tr>
+<tr><td>Hapi</td><td>该 key 能调的 ∪ 已配置(Hapi 来源的条目);<b>没配密钥时列表为空 + 提示</b></td><td><code>https://ai.yuchuantest.com/v1</code></td></tr>
+<tr><td>OpenCode Go</td><td>列表公开 → <b>没配密钥也能看全部 38 个</b>;配了密钥则再叠「已配置」</td><td><code>https://opencode.ai/zen/go/v1</code></td></tr>
+</table>
+
+<h3>2.2 原型①:多来源模型页(以 4SAPI 为例,价格降序)</h3>
+
+<div class="stage">
+  <div class="mock">
+    <div class="m-tbar"><div class="m-mark"></div><div class="m-tt">Grandettoken</div><div style="margin-left:auto;font-size:11px;color:#8d97ab">← 返回</div></div>
+    <div class="m-tabs"><div class="m-tab">渠道</div><div class="m-tab on">模型</div><div class="m-tab">显示</div><div class="m-tab">刷新与启动</div><div class="m-tab">关于</div></div>
+    <div class="m-body">
+      <div class="srcrow">
+        <div class="src on">4SAPI<i>160 个</i></div>
+        <div class="src">Hapi<i>—</i></div>
+        <div class="src">Go<i>38 个</i></div>
+      </div>
+      <div class="mdl-q"><div class="inp">搜索模型 / 厂商 / 标签…</div><div class="btn">⟳</div></div>
+      <div class="chips"><span class="pick">只看编码/对话</span></div>
+      <div class="meta"><span>写进客户端 <b>https://4sapi.com/v1</b> · 单价按站点自动分组折算</span></div>
+      <div class="meta"><span>显示 20 · 可用 18 · 已配置 3</span><span>价格 ¥高→低</span></div>
+      <div class="mcli">
+        <div><b>T</b><span>3 条</span></div><div><b>WB</b><span>运行中</span></div>
+        <div><b>WBA</b><span>运行中</span></div><div><b>ZC</b><span>运行中</span></div>
+      </div>
+      <div class="mrow"><div class="mtop"><span class="mname">claude-opus-5</span>
+        <span class="cdots"><span class="cdot">T</span><span class="cdot">WB</span><span class="cdot">WBA</span><span class="cdot">ZC</span></span></div>
+        <div class="mtags">1M · 多模态 · 文本 · Anthropic · 7 个分组可用</div>
+        <div class="mprice">入 ¥10.00 · 出 ¥50.00 / 百万 token</div></div>
+      <div class="mrow done"><div class="mtop"><span class="mname">claude-sonnet-5<span class="tagd ok">已配置</span></span>
+        <span class="cdots"><span class="cdot on">T</span><span class="cdot">WB</span><span class="cdot">WBA</span><span class="cdot">ZC</span></span></div>
+        <div class="mtags">1M · 多模态 · 文本 · Anthropic</div>
+        <div class="mprice">入 ¥4.00 · 出 ¥20.00 / 百万 token</div></div>
+      <div class="mrow"><div class="mtop"><span class="mname">claude-haiku-5-5</span>
+        <span class="cdots"><span class="cdot">T</span><span class="cdot">WB</span><span class="cdot">WBA</span><span class="cdot">ZC</span></span></div>
+        <div class="mtags">200K · 文本 · 多模态 · Anthropic</div>
+        <div class="mprice">入 ¥2.00 · 出 ¥10.00 / 百万 token</div></div>
+      <div class="mrow"><div class="mtop"><span class="mname">claude-haiku-4-5</span>
+        <span class="cdots"><span class="cdot">T</span><span class="cdot">WB</span><span class="cdot">WBA</span><span class="cdot">ZC</span></span></div>
+        <div class="mtags">200K · 文本 · 多模态 · Anthropic</div>
+        <div class="mprice">入 ¥1.00 · 出 ¥5.00 / 百万 token</div></div>
+      <div class="mrow"><div class="mtop"><span class="mname">gpt-5.6-luna<span class="tagd bad">不可用</span></span>
+        <span class="cdots"><span class="cdot on">T</span><span class="cdot">WB</span><span class="cdot">WBA</span><span class="cdot">ZC</span></span></div>
+        <div class="mtags">1M · 文本 · 多模态 · OpenAI · 已配置</div></div>
+      <div class="empty">… 按单价从高到低继续</div>
+    </div>
+  </div>
+  <div style="flex:1;min-width:260px">
+    <h4>原型说明</h4>
+    <ul>
+      <li><b>来源芯片</b>三个:4SAPI / Hapi / Go,当前来源高亮;芯片上带该来源的模型数(拿不到就写 <code>—</code>,
+        不编)。切换来源 = 换一整套列表与口径行,搜索词与「只看编码/对话」在来源间保持。</li>
+      <li><b>排序</b>:有价格的来源按 <b>单价降序</b>(高 → 低,最烧钱的在最上面);价格相同按名称。
+        没价格的来源(Go)整列排在末尾,内部按「已配置优先 + 名称」。</li>
+      <li><b>「已配置」不再是置顶条件,改成行内绿色徽标</b> —— 严格按价格排就不能再插队;
+        徽标 + 实心绿按钮两处都标,仍然一眼能认出。</li>
+      <li><b>不可用的行不给单价</b>(沿用 v0.1.23 的口径:它的价不属于你这把 key),只留「不可用」徽标。</li>
+      <li>4SAPI 的「分组」仍然不出现在界面上(沿用 v0.1.23);Hapi / Go 没有分组这个概念。</li>
+    </ul>
+  </div>
+</div>
+
+<h3>2.3 表壳:Go 与 Hapi 的样子</h3>
+<table>
+<tr><th style="width:110px">来源</th><th>口径行</th><th>列表里每行长什么样</th><th>没配密钥时</th></tr>
+<tr><td><b>Hapi</b></td><td>写进客户端 <code>https://ai.yuchuantest.com/v1</code> · 单价口径:站点未提供(<span class="dim">若探针发现 <code>/api/v1/groups/rates</code> 认这把 key,再改成显示单价</span>)</td><td>模型名 + 「已配置」徽标(有就标);<b>无价格行</b>(如实留空,不写 ¥0)</td><td>列表为空 + 一行提示「先在「渠道」页签填 Hapi 密钥」</td></tr>
+<tr><td><b>Go</b></td><td>写进客户端 <code>https://opencode.ai/zen/go/v1</code> · <b>订阅制:不按 token 计价</b></td><td>模型名 + 已配置徽标;无价格行;口径行说明「用多少看 5 小时/周/周期三个窗口」</td><td><b>照样列出 38 个</b>(列表公开),只是写入按钮点下去会提示先配密钥</td></tr>
+</table>
+
+<h2>三、交互重做:写入 / 取消写入 改成弹层</h2>
+
+<div class="say">
+  <div class="lab">现在的问题(你的原话:相关设置在最下方,体验不好)</div>
+  <p style="margin:0">点行右侧的小按钮之后,确认面板被渲染在<b>整个列表的下方</b>(<code>#mdlSheet</code> 排在 <code>#mdlList</code> 之后)。
+  列表有 20 行、面板只有 560px 高,所以要么先滚到底才看得见、要么以为"点了没反应";
+  而且滚下去之后<b>你已经看不到点的是哪一行</b>,确认的对象和上下文脱节。</p>
+</div>
+
+<table>
+<tr><th style="width:190px">方案</th><th>做法</th><th>评价</th></tr>
+<tr><td><b>A. 面板内弹层</b><br><span class="dim">推荐</span></td>
+  <td>复用「更新提示」那套覆盖层(<code>.upd-ov</code>):半透明底 + 贴底的卡片,标题写清 <code>模型 → 客户端</code>,
+    内容可滚,按钮固定在底部;写完在同一层里出结果与回滚入口。</td>
+  <td class="ok">位置固定、不依赖滚动;与"要你确认才动手"的语义最搭;弹层里能同时容纳写入预告 + 取消写入 + 密钥披露。
+    代价:要在弹层里自己滚(内容比更新提示长)。</td></tr>
+<tr><td>B. 就地展开</td><td>在点的那一行下方插入确认区,行内展开。</td>
+  <td>上下文最近,但列表高度会跳动、按钮可能被顶出可视区,而且点的是行右侧小按钮、插入区在行下方,视线要再找一次。</td></tr>
+<tr><td>C. 保持内联 + 自动滚动</td><td>面板还在列表下方,但点完自动滚到底并高亮。</td>
+  <td>改动最小,但仍受"面板在底部"的限制;长列表滚下去会把行的上下文丢在屏幕外。</td></tr>
+</table>
+
+<h3>3.1 原型②:弹层(写入 / 取消写入都在这里)</h3>
+<div class="swrow">
+  <div class="sw on" data-m="ov1">写入(未配置)</div>
+  <div class="sw" data-m="ov2">已配置 → 取消写入</div>
+  <div class="sw" data-m="ov3">写入结果 · 回滚</div>
+</div>
+
+<div class="stage">
+  <div class="swwrap on" id="ov1">
+    <div class="mock" style="min-height:420px">
+      <div class="m-tbar"><div class="m-mark"></div><div class="m-tt">Grandettoken</div><div style="margin-left:auto;font-size:11px;color:#8d97ab">← 返回</div></div>
+      <div class="m-tabs"><div class="m-tab">渠道</div><div class="m-tab on">模型</div><div class="m-tab">显示</div><div class="m-tab">刷新与启动</div><div class="m-tab">关于</div></div>
+      <div class="m-body" style="filter:blur(1px);opacity:.35">
+        <div class="srcrow"><div class="src on">4SAPI<i>160 个</i></div><div class="src">Hapi</div><div class="src">Go<i>38 个</i></div></div>
+        <div class="mrow"><div class="mtop"><span class="mname">gpt-5.6-luna</span><span class="cdots"><span class="cdot on">T</span><span class="cdot">WB</span><span class="cdot">WBA</span><span class="cdot">ZC</span></span></div></div>
+        <div class="mrow"><div class="mtop"><span class="mname">claude-sonnet-5</span><span class="cdots"><span class="cdot on">T</span><span class="cdot">WB</span><span class="cdot">WBA</span><span class="cdot">ZC</span></span></div></div>
+      </div>
+      <div class="ov">
+        <div class="ov-in">
+          <div class="ov-h"><b>写入 · claude-sonnet-5 → ZCode</b><span class="dim" style="font-size:11px">✕</span></div>
+          <div class="kv"><span class="k">目标</span><span class="v"><em>~/.zcode/v2/provider_config.json</em> + <em>config.json</em></span></div>
+          <div class="kv"><span class="k">动作</span><span class="v">新增 provider「4SAPI」1 个 · 模型 1 条(不动现有的 OG provider)</span></div>
+          <div class="kv"><span class="k">地址</span><span class="v"><em>https://4sapi.com/v1</em></span></div>
+          <div class="kv"><span class="k">选中</span><span class="v">不需要写(ZCode 的模型选择是会话级的)</span></div>
+          <div class="warnbox">会把这把 4SAPI 密钥<b>明文</b>写进上面那个客户端自己的配置文件(它们本来就这么存)。
+            挂件不保存副本、不写日志、不进备份。</div>
+          <div class="warnbox">ZCode 正在运行 —— 它的配置是内存态落盘,边跑边写会被覆盖。<b>先退出它再点写入。</b></div>
+          <div class="acts">
+            <button class="btn p" style="opacity:.45">写入(ZCode 运行中,已禁用)</button>
+            <button class="btn">复制三件套</button>
+            <button class="btn">取消</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="swwrap" id="ov2">
+    <div class="mock" style="min-height:420px">
+      <div class="m-tbar"><div class="m-mark"></div><div class="m-tt">Grandettoken</div><div style="margin-left:auto;font-size:11px;color:#8d97ab">← 返回</div></div>
+      <div class="m-tabs"><div class="m-tab">渠道</div><div class="m-tab on">模型</div><div class="m-tab">显示</div><div class="m-tab">刷新与启动</div><div class="m-tab">关于</div></div>
+      <div class="m-body" style="filter:blur(1px);opacity:.35">
+        <div class="srcrow"><div class="src on">4SAPI<i>160 个</i></div><div class="src">Hapi</div><div class="src">Go<i>38 个</i></div></div>
+        <div class="mrow done"><div class="mtop"><span class="mname">claude-sonnet-5</span><span class="cdots"><span class="cdot on">T</span></span></div></div>
+      </div>
+      <div class="ov">
+        <div class="ov-in">
+          <div class="ov-h"><b>claude-sonnet-5 → Trae</b><span class="dim" style="font-size:11px">✕</span></div>
+          <div class="kv"><span class="k">当前</span><span class="v"><span style="color:#7ce9a8">已配置</span> · 2026-10-13 10:2x 写入</span></div>
+          <div class="kv"><span class="k">动作</span><span class="v">内容一致,不必重写(要改地址/密钥才需要「重新写入」)</span></div>
+          <div class="note" style="font-weight:600;color:#cdd5e4;margin-top:8px">当前状态:已配置</div>
+          <div class="kv"><span class="k">会移除</span><span class="v">Trae CN · 17 条自定义模型条目(分属 17 个 agent 组)</span></div>
+          <div class="note">它的「选中项」正指向这条模型,会一并清掉(回到"没选"的状态)。其它条目与你的手改都不动;移除前照样先备份。</div>
+          <div class="acts">
+            <button class="btn danger">取消写入(移除这条)</button>
+            <button class="btn">重新写入</button>
+            <button class="btn">复制三件套</button>
+            <button class="btn">取消</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="swwrap" id="ov3">
+    <div class="mock" style="min-height:420px">
+      <div class="m-tbar"><div class="m-mark"></div><div class="m-tt">Grandettoken</div><div style="margin-left:auto;font-size:11px;color:#8d97ab">← 返回</div></div>
+      <div class="m-tabs"><div class="m-tab">渠道</div><div class="m-tab on">模型</div><div class="m-tab">显示</div><div class="m-tab">刷新与启动</div><div class="m-tab">关于</div></div>
+      <div class="m-body" style="filter:blur(1px);opacity:.35">
+        <div class="srcrow"><div class="src on">4SAPI<i>160 个</i></div><div class="src">Hapi</div><div class="src">Go<i>38 个</i></div></div>
+      </div>
+      <div class="ov">
+        <div class="ov-in">
+          <div class="ov-h"><b>写入结果 · claude-sonnet-5 → WorkBuddy</b><span class="dim" style="font-size:11px">✕</span></div>
+          <div class="okbox"><b>✓ 已写入</b> · <em>~/.workbuddy/models.json</em> 新增 1 条 · 读回校验通过</div>
+          <div class="kv"><span class="k">生效</span><span class="v">下次启动 WorkBuddy 时出现在模型列表里</span></div>
+          <div class="kv"><span class="k">备份</span><span class="v"><em>backup-inject/2026-10-13T10-40-12/</em>
+            <button class="btn s">打开</button><button class="btn s">回滚这次写入</button></span></div>
+          <div class="acts">
+            <button class="btn">复制三件套</button>
+            <button class="btn p">完成</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="flex:1;min-width:240px">
+    <h4>弹层的规矩</h4>
+    <ul>
+      <li><b>标题永远是「模型 → 客户端」</b>,关闭按钮在右上;点遮罩不关(避免误触丢确认上下文)。</li>
+      <li><b>按钮固定在底部</b>,内容区自己滚 —— 预告再长也不会把按钮挤出屏幕。</li>
+      <li><b>已配置时给两条动作</b>:「取消写入(移除这条)」(danger)与「重新写入」;未配置时只有「写入」。</li>
+      <li>阻塞原因(目标在跑 / 结构不认识 / 没配密钥)写在按钮正上方,确认按钮置灰。</li>
+      <li>写完在同一个弹层里出结果 + 备份路径 + 回滚入口;关闭即回到列表原位置(滚动位置不跳)。</li>
+      <li>Esc 关闭;打开弹层时列表不再接收点击(遮罩挡住)。</li>
+    </ul>
+  </div>
+</div>
+
+<h2>四、排序与价格口径</h2>
+
+<table>
+<tr><th style="width:130px">来源</th><th>排序</th><th>价格显示</th><th>为什么</th></tr>
+<tr><td><b>4SAPI</b></td><td class="ok">单价降序(高 → 低)</td><td>入/出 ¥/百万 token</td><td>有站点价目表;最烧钱的排最前,和"哪个会先没钱"是同一眼</td></tr>
+<tr><td><b>Hapi</b></td><td>无价格 → <b>排在末尾</b>,内部按「已配置优先 + 名称」</td><td>不显示价格行</td><td>站点没有公开价目表;实现期先用你的密钥试一次它控制台的价目接口,认就显示、不认就留空</td></tr>
+<tr><td><b>OpenCode Go</b></td><td>无价格 → <b>排在末尾</b>,内部按「已配置优先 + 名称」</td><td>不显示价格行,口径行注明「订阅制,不按 token 计价」</td><td>订阅制按 5 小时/周/周期限流,给模型编一个"单价"就是撒谎</td></tr>
+</table>
+
+<p><b>不变量(沿用前几轮的口径纪律)</b>:价格只从站点声明里来,没拿到就不显示、不折算、不猜;
+不可用(不符合"能用上的"规则)的行永远不出现;同一个来源内,单价相同的按名称排,保证顺序稳定可复现。</p>
+
+<h2>五、数据与代码契约(实现时照这个落)</h2>
+
+<table>
+<tr><th style="width:150px">层</th><th>改什么</th></tr>
+<tr><td><code>core/models.rs</code></td>
+  <td>把「4SAPI 专用」抽成<b>来源定义</b>:<code>SourceDef { id, 名字, 列表 URL, 列表是否公开, 价格 URL(可选), 域名(判定用), base_url(写进客户端) }</code>;
+    <code>ModelCache</code> 按来源分桶(现在只有一个 <code>host</code>/<code>usable_host</code> 字段);<code>Catalog</code> 的解析保持现状(4SAPI 有倍率,Hapi/Go 只有 id 列表 → 走一个"仅有 id"的轻量分支)</td></tr>
+<tr><td><code>core/inject.rs</code></td>
+  <td>「已配置」的判定要带来源:客户端条目的 <code>url</code> 命中<b>哪个来源的域名</b>就属于哪个来源;
+    <code>ClientState.models</code> 从 <code>Vec&lt;String&gt;</code> 改成带来源的列表(id + 来源 + 地址),前端的绿点据此按来源点亮</td></tr>
+<tr><td><code>src-tauri/lib.rs</code></td>
+  <td>命令加一个来源参数:<code>get_model_catalog(source, force)</code>、<code>inject_preview/apply/remove(client, source, model)</code>、
+    <code>copy_model_bundle(source, model)</code>;Sites/日志不变。<b>仍然全部 async + spawn_blocking</b>(v0.1.23 的教训)</td></tr>
+<tr><td>前端 <code>app.js</code></td>
+  <td>来源切换状态 + 按来源渲染;列表排序规则;确认区从 <code>#mdlSheet</code> 改成覆盖层组件(<code>.ov</code>);渠道行入口扩展到 Hapi / Go</td></tr>
+<tr><td><code>index.html / styles.css</code></td>
+  <td>来源芯片条、弹层样式(复用 <code>.upd-ov</code> 的骨架)</td></tr>
+<tr><td>不动的</td><td>写入/取消写入的<b>四条规矩</b>(目标没运行 / 先备份 / 只动我们的条目 / 读回校验)与四份客户端契约 —— 来源只是决定"写哪个地址、用哪把密钥"</td></tr>
+</table>
+
+<h2>六、分期与验收</h2>
+<table>
+<tr><th style="width:76px">期</th><th>内容</th><th>验收(可复核)</th></tr>
+<tr><td><b>P1</b><br><span class="dim">纯前端</span></td><td>写入/取消写入改弹层(第二节那张原型①②③三种状态)</td>
+  <td>· 点任意客户端按钮,确认区立刻出现在视口内(不需要滚动)<br>· 列表滚动位置在开关弹层前后不变<br>· 长预告(两个安装的 Trae)也能滚完并摸到底部按钮</td></tr>
+<tr><td><b>P2</b><br><span class="dim">排序</span></td><td>4SAPI 按单价降序;「已配置」从置顶改为徽标</td>
+  <td>· 列表首行是当前来源里单价最高的可用模型<br>· 已配置的模型不再插队,但行内有绿色徽标<br>· 单价相同时顺序稳定(多次打开一致)</td></tr>
+<tr><td><b>P3</b><br><span class="dim">多来源</span></td><td>来源芯片 + Hapi + OpenCode Go 的列表 / 写入 / 取消写入</td>
+  <td>· Go:不配密钥也能列出 38 个;写入按钮点下去提示先配密钥<br>· Hapi:没配密钥时列表空但有明确指引;配了之后列出该 key 能调的模型<br>· 同一个模型(如 <code>gpt-6-luna</code>)在两个来源页各自判定"已配置",互不串台<br>· 在 Hapi 页写入 → 客户端条目的 url 是 <code>ai.yuchuantest.com/v1</code>;在 4SAPI 页写入 → 是 <code>4sapi.com/v1</code></td></tr>
+<tr><td><b>P4</b><br><span class="dim">可选</span></td><td>Hapi 价格探针(/api/v1/groups/rates 认不认 API key);Zen(83 个)作为第四个来源</td>
+  <td>探针只读、零计费;认就显示单价并参与价格排序,不认就维持"无价格"</td></tr>
+</table>
+
+<h2>七、待你编号裁决</h2>
+<ol class="q">
+  <li><b>来源切换的形态?</b>
+    <div class="opt"><b>A(推荐)</b>:三个芯片并排,当前来源高亮,芯片顺带显示模型数。一眼看到"有哪几个来源"。</div>
+    <div class="opt">B:下拉框(省地方,但要展开才知道有谁)。</div>
+  </li>
+  <li><b>排序后「已配置」还置顶吗?</b>
+    <div class="opt"><b>A(推荐)</b>:不置顶 —— 严格按价格排,改用行内绿色徽标 + 实心绿按钮来认。</div>
+    <div class="opt">B:已配置的仍置顶,其余按价格排(排序就不纯粹了,但常用模型一直在最上面)。</div>
+  </li>
+  <li><b>无价格的来源(Hapi / Go)怎么排?</b>
+    <div class="opt"><b>A(推荐)</b>:整体排在末尾,内部按「已配置优先 + 名称」,并在口径行写明为什么没有价格。</div>
+    <div class="opt">B:换个排序键(如按名称全场混排) —— 与第 4 条的要求冲突,不推荐。</div>
+  </li>
+  <li><b>Go 的 38 个里那些 <code>-free</code> / <code>-contributor</code> 后缀的模型? </b>
+    <div class="opt"><b>A(推荐)</b>:一个都不藏,原样列出(它们是订阅里能用的真模型)。</div>
+    <div class="opt">B:把 <code>-free</code> 之类的按标签折叠起来。</div>
+  </li>
+  <li><b>弹层确认(第三节方案 A)?</b>
+    <div class="opt"><b>A(推荐)</b>:改用面板内覆盖层(点遮罩不关、Esc 关、按钮固定底部)。</div>
+    <div class="opt">B:就地展开;C:内联+自动滚动。</div>
+  </li>
+  <li><b>要不要顺手把 Zen(83 个,含免费模型)也做成第四个来源?</b>
+    <div class="opt"><b>A(推荐)</b>:先不做 —— 你订阅的是 Go,Zen 是按量付费的另一套账,等你要了再加(接口已经验证公开可取)。</div>
+    <div class="opt">B:一起做(多一个芯片,多一套写入地址与密钥)。</div>
+  </li>
+  <li><b>Hapi 的价格探针允许吗?</b>
+    <div class="opt"><b>A(推荐)</b>:允许实现期用你的 Hapi 密钥调一次 <code>/api/v1/groups/rates</code>(只读、零计费)。
+      认 → 列表带单价并参与价格排序;不认 → 就按"无价格"处理,不改口径。</div>
+    <div class="opt">B:不试,直接按无价格做。</div>
+  </li>
+</ol>
+
+<h2>八、必须真机验的部分(实现期在你机器上跑,结果回填本文档)</h2>
+<table>
+<tr><th style="width:34px">#</th><th>要验什么</th><th>怎么验</th></tr>
+<tr><td>1</td><td>Hapi <code>/v1/models</code> 的真实响应(字段、是否有 metadata、数量)</td><td>用你已配好的 Hapi 密钥打一次(零计费)</td></tr>
+<tr><td>2</td><td>Hapi 价目接口认不认 API key(<code>/api/v1/groups/rates</code>)</td><td>同上,一次 GET;看 401 还是 200</td></tr>
+<tr><td>3</td><td>Go 列表里哪些能真跑(以及 <code>opencode-go</code> 渠道那把 key 在 Go 网关上是同一把)</td><td>不主动试跑(会产生订阅额度消耗);只验证列表与写入</td></tr>
+<tr><td>4</td><td>写入后四个客户端里 URL 是否指向对应来源(4SAPI vs Hapi vs Go 三个地址互不串)</td><td>写入三次(每次一个来源)→ 重启客户端看模型列表;或先只做只读的预告核对</td></tr>
+<tr><td>5</td><td>弹层在四种形态下都不被裁切(面板 / 紧凑条 / 胶囊 / 贴边展开)</td><td>CDP 逐形态截图;紧凑条与胶囊下模型页本来就不可见,确认不被误开</td></tr>
+</table>
+
+<h2>九、实施结果回填(2026-10-13,同轮落地 v0.1.25)</h2>
+<div class="say">
+  <div class="lab">按 1A–7A 全做;P4(探针与 Zen)按 6A/7A 留到以后</div>
+  <p style="margin:0">P1 弹层、P2 价格降序、P3 多来源,一轮做完;下面是<b>真机实测</b>与<b>与设计稿的偏差</b>。</p>
+</div>
+<h3>9.1 真机实测(0.1.25 二进制)</h3>
+<table>
+<tr><th style="width:110px">来源</th><th>芯片</th><th>列表</th><th>口径行</th></tr>
+<tr><td>4SAPI</td><td>160 个(高亮)</td><td>18 行 = 可用 18 ∪ 已配置 1;首行 <code>claude-opus-4-6</code> 入 ¥10.00,末行 <code>claude-haiku-4-5</code> 入 ¥1.00</td>
+  <td><code>写进客户端 https://4sapi.com/v1 · 单价按站点自动分组折算 · 显示 18 · 可用 18 · 已配置 1 · 价格 ¥高→低</code></td></tr>
+<tr><td>OpenCode Go</td><td>38 个</td><td>38 行(公开列表,没配密钥也能列),无价格行</td>
+  <td><code>写进客户端 https://opencode.ai/zen/go/v1 · 订阅制:不按 token 计价 · 按 已配置 → 名称</code></td></tr>
+<tr><td>Hapi</td><td><b>14 个</b></td><td>14 行,用这把密钥真取到:<code>gpt-6-luna</code> / <code>codex-auto-review</code> / <code>gpt-5.5</code> / <code>gpt-5.6-*</code> / <code>gpt-image-2.5-*</code> …</td>
+  <td><code>写进客户端 https://ai.yuchuantest.com/v1 · 该来源不提供单价</code></td></tr>
+</table>
+<p class="dim">Hapi 那条同时消掉了第八节「必须真机验」的第 1 项:<code>/v1/models</code> 认这把密钥,返回 14 个模型。
+列表里出现 <code>gpt-image-2.5-*</code> 这类图像模型 —— 说明 Hapi 的列表不做类型区分,我们把它们当"对话模型"放行
+(<code>chat=true</code>):拿不到类型信息 ≠ 不是对话模型。第 2 项(Hapi 价目接口认不认 API key)仍未试,按 7A 留到 P4。</p>
+
+<h3>9.2 与设计稿的偏差</h3>
+<table>
+<tr><th style="width:150px">项</th><th style="width:250px">设计稿</th><th>实现</th><th style="width:220px">原因</th></tr>
+<tr><td>来源芯片的模型数</td><td>芯片上写"该来源的模型数"</td><td>写,但只有<b>取过的来源</b>才有数字,没取过的写 <code>—</code></td><td>不为了显示一个数字去请求另一个来源(切过去才取)</td></tr>
+<tr><td>已配置的显示</td><td>行内绿色徽标</td><td>徽标 + 保留绿色描边(原来的 <code>.done</code> 样式)</td><td>徽标管"是什么",描边帮扫视;两者都在,成本为零</td></tr>
+<tr><td>ZCode 的 provider</td><td>没写</td><td>每个来源一个 provider,名字用来源名(<code>4SAPI</code> / <code>Hapi</code> / <code>OpenCode Go</code>)</td><td>不然三家会互相覆盖同一个 provider</td></tr>
+<tr><td>「不可用」徽标</td><td>只留标记</td><td>一样;并额外在"可用集合没取到"时说明只列已配置的</td><td>与 v0.1.23 的规则一致</td></tr>
+</table>
+
+<h3>9.3 仍然没做 / 没验</h3>
+<ul>
+  <li><b>Hapi 单价探针</b>(<code>/api/v1/groups/rates</code> 认不认 API key):按 7A 留到 P4,现在 Hapi 一律"无价格"。</li>
+  <li><b>Zen(83 个)作为第四个来源</b>:按 6A 本期不做,接口已验证公开可取。</li>
+  <li><b>写入到客户端的真机验证</b>:预告是只读的,已验;真正写进客户端那一步仍留给用户点(与 0.1.22 同一口径)。</li>
+</ul>
+
+<div class="foot">
+  实测时间:2026-10-13(经代理 127.0.0.1:7897)。接口事实:OpenCode Go/Zen 的 <code>/v1/models</code> 公开可取(38 / 83 个模型);
+  Hapi 的 <code>/v1/models</code> 与 <code>/api/v1/groups/*</code> 需认证(<code>/api/pricing</code> 不存在,它不是 new-api)。
+  本文件只描述设计,未改动任何代码、未改动任何客户端配置。
+</div>
+
+<script>
+  document.querySelectorAll(".sw").forEach(function(b){
+    b.addEventListener("click", function(){
+      var id=b.dataset.m;
+      document.querySelectorAll(".swrow .sw").forEach(function(o){o.classList.remove("on")});
+      b.classList.add("on");
+      ["ov1","ov2","ov3"].forEach(function(k){
+        var el=document.getElementById(k);
+        if(el) el.classList.toggle("on", k===id);
+      });
+    });
+  });
+</script>
+</div>
+</body>
+</html>

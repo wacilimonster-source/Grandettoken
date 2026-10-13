@@ -716,3 +716,24 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 .mdlprev:last-of-type{border-bottom:0;padding-bottom:0}
 .btn.s{font-size:max(10px,calc(10.5px*var(--u)));padding:calc(2px*var(--u)) calc(6px*var(--u));
   margin-left:calc(4px*var(--u))}
+
+/* ── 模型页:来源芯片 + 写入弹层(v0.1.25)── */
+.manage{position:relative}
+.srcbar{display:flex;gap:calc(5px*var(--u));margin:calc(-2px*var(--u)) 0 calc(8px*var(--u))}
+.srcbar-i{flex:1;min-width:0;text-align:center;cursor:pointer;padding:calc(5px*var(--u)) calc(4px*var(--u));
+  border:1px solid var(--line);background:#15181f;border-radius:calc(7px*var(--u));color:var(--tx3);
+  font-size:max(11px,calc(11.5px*var(--u)));transition:border-color var(--t1) ease,background var(--t1) ease,color var(--t1) ease}
+.srcbar-i:hover{border-color:#55617d;color:var(--tx2)}
+.srcbar-i.on{background:#22304a;border-color:#4b6fa8;color:#cfe0ff}
+.srcbar-i i{display:block;font-style:normal;font-size:max(10px,calc(10px*var(--u)));color:var(--tx3)}
+.srcbar-i.on i{color:#9fb6e6}
+.tagd.ok{border-color:#2f6b43;color:#7ce9a8}
+
+/* 弹层:面板内覆盖(复用更新提示那套机制),按钮固定底部、内容自己滚 */
+.modl-ov{position:absolute;inset:0;z-index:40;display:flex;align-items:flex-end;
+  background:#0b0d12cc;backdrop-filter:blur(1.5px)}
+.modl-in{width:100%;max-height:86%;overflow-y:auto;background:#151d2b;border-top:1px solid #3d5a8a;
+  border-radius:calc(12px*var(--u)) calc(12px*var(--u)) 0 0;padding:calc(11px*var(--u)) calc(12px*var(--u)) calc(12px*var(--u));
+  box-shadow:0 -12px 34px -14px #000c}
+.modl-in::-webkit-scrollbar{width:8px}
+.modl-in::-webkit-scrollbar-thumb{background:var(--line2);border-radius:9px;border:2px solid #151d2b}

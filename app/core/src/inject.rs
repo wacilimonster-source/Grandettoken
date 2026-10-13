@@ -313,6 +313,11 @@ fn tasklist_has(stdout: &str, process: &str) -> bool {
 #[derive(Debug, Clone)]
 pub struct ModelSpec {
     pub id: String,
+    /// 来源 id("4sapi" / "hapi" / "opencode-go")。同一个模型名可能存在于多个来源,
+    /// 写进去的地址与"哪条算我们写的"都由它决定。
+    pub source: String,
+    /// 来源的界面名(写进 ZCode 的 provider 名)
+    pub source_name: String,
     /// 客户端里显示的名字(`4S-<id>`;用户手配的也是这个口径)
     pub display_name: String,
     /// 上下文窗口(来自价目表 tags);未知就 None —— 不编造
@@ -326,6 +331,7 @@ pub struct ModelSpec {
 
 impl ModelSpec {
     pub fn new(
+        source: &str,
         id: &str,
         base_url: &str,
         key: &str,
@@ -334,6 +340,10 @@ impl ModelSpec {
     ) -> Self {
         Self {
             id: id.to_string(),
+            source: source.to_string(),
+            source_name: crate::models::find_source(source)
+                .map(|d| d.name.to_string())
+                .unwrap_or_else(|| source.to_string()),
             display_name: format!("{OUR_NAME_PREFIX}{id}"),
             context_tokens,
             base_url: base_url.trim_end_matches('/').to_string(),
@@ -346,6 +356,21 @@ impl ModelSpec {
     fn chat_completions_url(&self) -> String {
         format!("{}/chat/completions", self.base_url)
     }
+
+    /// 这个来源的域名(判定"这条条目是我们写的")。
+    fn hosts(&self) -> Vec<String> {
+        crate::models::source_hosts(&self.source)
+    }
+}
+
+/// 客户端里已经配好的条目:哪个模型、来自哪个来源。
+/// **多来源之后必须带来源** —— 同名模型在几个来源里都有,只看 id 会串台。
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfiguredModel {
+    pub id: String,
+    /// 来源 id;认不出域名时是空串(客户端里手工配的别家条目)
+    pub source: String,
 }
 
 /// 写入选项。
@@ -464,8 +489,8 @@ pub struct ClientState {
     /// 配置根目录(显示用)
     pub roots: Vec<String>,
     pub files: Vec<String>,
-    /// 我们认得出的、已经写进去的 4SAPI 模型 id
-    pub models: Vec<String>,
+    /// 我们认得出的、已经写进去的模型(带来源)
+    pub models: Vec<ConfiguredModel>,
     /// 客户端当前选中的模型(读得到才给)
     pub selected: Option<String>,
     /// 选中项前缀口径(学到的;None = 还没学会 → 只写条目不写选中)
@@ -694,9 +719,9 @@ fn wb_is_ours(e: &Value, hosts: &[String]) -> bool {
 fn write_workbuddy_site(
     site: &Site,
     spec: &ModelSpec,
-    hosts: &[String],
     opts: &Opts,
 ) -> Result<SiteOutcome, String> {
+    let hosts = spec.hosts();
     let models_path = site.root.join("models.json");
     let settings_path = site.root.join("settings.json");
 
@@ -721,7 +746,7 @@ fn write_workbuddy_site(
     });
     if let Some(i) = idx {
         let old = arr[i].as_object().cloned().ok_or("条目不是对象")?;
-        if !wb_is_ours(&arr[i], hosts) {
+        if !wb_is_ours(&arr[i], &hosts) {
             outcome.foreign_conflict = Some(
                 arr[i]
                     .get("url")
@@ -861,7 +886,7 @@ fn write_zcode_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, String
         .and_then(|m| {
             m.iter()
                 .find(|(_, v)| {
-                    v.get("name").and_then(|n| n.as_str()) == Some("4SAPI")
+                    v.get("name").and_then(|n| n.as_str()) == Some(spec.source_name.as_str())
                         && v.get("source").and_then(|s| s.as_str()) == Some("custom")
                 })
                 .map(|(k, _)| k.clone())
@@ -896,7 +921,7 @@ fn write_zcode_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, String
             .ok_or("config.json 里没有 provider 对象")?;
         let entry = providers.entry(pid.clone()).or_insert_with(|| json!({}));
         let obj = entry.as_object_mut().ok_or("provider 条目不是对象")?;
-        obj.insert("name".into(), json!("4SAPI"));
+        obj.insert("name".into(), json!(spec.source_name));
         obj.insert("kind".into(), json!("openai-compatible"));
         obj.insert(
             "options".into(),
@@ -937,7 +962,7 @@ fn write_zcode_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, String
             None => {
                 rules_root.push(json!({
                     "providerId": pid,
-                    "providerName": "4SAPI",
+                    "providerName": spec.source_name,
                     "config": {
                         "group": "standard-personal",
                         "access": {"type": "api-key", "apiKey": spec.key},
@@ -1000,6 +1025,7 @@ fn write_zcode_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, String
 
     let stamp = stamp_now();
     let (id, url, key) = (spec.id.clone(), spec.base_url.clone(), spec.key.clone());
+    let name2 = spec.source_name.clone();
     let cfg_for_check = cfg_path.clone();
     outcome.backup = commit(
         site,
@@ -1019,7 +1045,7 @@ fn write_zcode_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, String
                         p.as_object().and_then(|m| {
                             m.iter()
                                 .find(|(_, v)| {
-                                    v.get("name").and_then(|n| n.as_str()) == Some("4SAPI")
+                                    v.get("name").and_then(|n| n.as_str()) == Some(name2.as_str())
                                 })
                                 .map(|(_, v)| {
                                     v.get("options").and_then(|o| o.get("apiKey")).and_then(|k| k.as_str())
@@ -1177,6 +1203,7 @@ fn trae_write(
     spec: &ModelSpec,
     opts: &Opts,
 ) -> Result<SiteOutcome, String> {
+    let hosts3 = spec.hosts();
     let conn = rusqlite::Connection::open(db)
         .map_err(|e| format!("打开 {} 失败(Trae 可能正在运行?): {e}", pretty(db)))?;
     // 键名前缀是「区域/租户号」,会随版本变,所以按后缀找,不写死
@@ -1216,10 +1243,7 @@ fn trae_write(
         for (agent, arr) in groups.iter_mut() {
             let _ = agent;
             let Some(list) = arr.as_array_mut() else { continue };
-            let pos = list.iter().position(|e| {
-                e.get("provider").and_then(|p| p.as_str()) == Some("custom_openai_compatible")
-                    && e.get("display_name").and_then(|d| d.as_str()) == Some(spec.id.as_str())
-            });
+            let pos = list.iter().position(|e| trae_is_ours(e, &spec.id, &hosts3));
             match pos {
                 Some(i) => {
                     // 更新:保留原有 custom_model_id 与所有我们不认识的字段
@@ -1391,14 +1415,15 @@ pub struct Removal {
     pub count: usize,
 }
 
-/// ZCode 的「4SAPI」provider id(source=custom 且 name=4SAPI 的那条)。
-fn zcode_pid(cfg: &Value) -> Option<String> {
+/// ZCode 里我们这个来源的 provider id(source=custom 且 name=来源名)。
+/// 每个来源一个 provider(「4SAPI」/「Hapi」/「OpenCode Go」),互不覆盖。
+fn zcode_pid(cfg: &Value, name: &str) -> Option<String> {
     cfg.get("provider")
         .and_then(|p| p.as_object())
         .and_then(|m| {
             m.iter()
                 .find(|(_, v)| {
-                    v.get("name").and_then(|n| n.as_str()) == Some("4SAPI")
+                    v.get("name").and_then(|n| n.as_str()) == Some(name)
                         && v.get("source").and_then(|s| s.as_str()) == Some("custom")
                 })
                 .map(|(k, _)| k.clone())
@@ -1407,6 +1432,7 @@ fn zcode_pid(cfg: &Value) -> Option<String> {
 
 /// WorkBuddy 类:有没有我们写的这一条,以及移除它会动到什么。
 fn wb_removal(site: &Site, spec: &ModelSpec) -> (bool, Option<Removal>) {
+    let hosts = spec.hosts();
     let models = read_json(&site.root.join("models.json")).ok().flatten();
     let entry = models
         .as_ref()
@@ -1419,6 +1445,10 @@ fn wb_removal(site: &Site, spec: &ModelSpec) -> (bool, Option<Removal>) {
     let Some(e) = entry else {
         return (false, None);
     };
+    if !wb_is_ours(e, &hosts) {
+        // 同名但不属于这个来源(比如是别家地址) → 不当成"已配置"
+        return (false, None);
+    }
     let name = e
         .get("name")
         .and_then(|n| n.as_str())
@@ -1452,7 +1482,7 @@ fn zcode_removal(site: &Site, spec: &ModelSpec) -> (bool, Option<Removal>) {
         Ok(Some(v)) => v,
         _ => return (false, None),
     };
-    let Some(pid) = zcode_pid(&cfg) else {
+    let Some(pid) = zcode_pid(&cfg, &spec.source_name) else {
         return (false, None);
     };
     let models = cfg
@@ -1504,6 +1534,7 @@ fn trae_removal(db: &Path, spec: &ModelSpec) -> (bool, Option<Removal>) {
             keys = rows.flatten().collect();
         }
     }
+    let hosts = spec.hosts();
     let mut count = 0usize;
     let mut groups = 0usize;
     for k in &keys {
@@ -1520,7 +1551,7 @@ fn trae_removal(db: &Path, spec: &ModelSpec) -> (bool, Option<Removal>) {
                 if let Some(list) = arr.as_array() {
                     let n = list
                         .iter()
-                        .filter(|e| trae_is_ours(e, &spec.id))
+                        .filter(|e| trae_is_ours(e, &spec.id, &hosts))
                         .count();
                     if n > 0 {
                         count += n;
@@ -1558,9 +1589,21 @@ fn trae_removal(db: &Path, spec: &ModelSpec) -> (bool, Option<Removal>) {
 }
 
 /// 一条 Trae 条目是不是我们要找的那条自定义模型。
-fn trae_is_ours(e: &Value, model: &str) -> bool {
-    e.get("provider").and_then(|p| p.as_str()) == Some("custom_openai_compatible")
-        && e.get("display_name").and_then(|d| d.as_str()) == Some(model)
+///
+/// **还要看它的 base_url 属于哪个来源**:同名模型可能来自不同来源(4SAPI / Hapi / Go),
+/// 删 Hapi 那条时不能把 4SAPI 那条一起删掉。`hosts` 为空 = 不过滤来源(兼容旧调用)。
+fn trae_is_ours(e: &Value, model: &str, hosts: &[String]) -> bool {
+    if e.get("provider").and_then(|p| p.as_str()) != Some("custom_openai_compatible") {
+        return false;
+    }
+    if e.get("display_name").and_then(|d| d.as_str()) != Some(model) {
+        return false;
+    }
+    if hosts.is_empty() {
+        return true;
+    }
+    let url = e.get("base_url").and_then(|u| u.as_str()).unwrap_or("");
+    hosts.iter().any(|h| url.contains(h.as_str()))
 }
 
 /// Trae 的选中项那一行(键名 + 值)。
@@ -1686,7 +1729,7 @@ fn remove_zcode_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, Strin
     }
 
     let mut outcome = SiteOutcome::default();
-    let Some(pid) = zcode_pid(&cfg) else {
+    let Some(pid) = zcode_pid(&cfg, &spec.source_name) else {
         return Ok(outcome); // 没有我们的 provider → 没什么可删
     };
 
@@ -1752,6 +1795,7 @@ fn remove_zcode_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, Strin
 
     let stamp = stamp_now();
     let (id, pid_for_check) = (spec.id.clone(), pid.clone());
+    let name2 = spec.source_name.clone();
     let cfg_check = cfg_path.clone();
     outcome.backup = commit(
         site,
@@ -1765,7 +1809,7 @@ fn remove_zcode_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, Strin
         move || {
             let after = read_json(&cfg_check).ok().flatten();
             match after {
-                Some(v) => match zcode_pid(&v) {
+                Some(v) => match zcode_pid(&v, &name2) {
                     // provider 还在:模型必须已经不在它下面
                     Some(p) => v
                         .get("provider")
@@ -1796,6 +1840,7 @@ fn remove_zcode_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, Strin
 }
 
 fn remove_trae_site(db: &Path, spec: &ModelSpec) -> Result<SiteOutcome, String> {
+    let hosts2 = spec.hosts();
     let conn = rusqlite::Connection::open(db)
         .map_err(|e| format!("打开 {} 失败(Trae 可能正在运行?): {e}", pretty(db)))?;
     let keys: Vec<String> = {
@@ -1825,7 +1870,7 @@ fn remove_trae_site(db: &Path, spec: &ModelSpec) -> Result<SiteOutcome, String> 
             for arr in obj.values_mut() {
                 if let Some(list) = arr.as_array_mut() {
                     let before = list.len();
-                    list.retain(|e| !trae_is_ours(e, &spec.id));
+                    list.retain(|e| !trae_is_ours(e, &spec.id, &hosts2));
                     let removed = before - list.len();
                     if removed > 0 {
                         outcome.removed += removed;
@@ -1961,17 +2006,30 @@ fn site_readable(site: &Site) -> Result<(), String> {
     }
 }
 
-/// WorkBuddy 类站点:读出「已写入的模型 id」与「当前选中值」。
-fn wb_read(site: &Site) -> (Vec<String>, Option<String>) {
+/// WorkBuddy 类站点:读出「已写入的模型(带来源)」与「当前选中值」。
+fn wb_read(site: &Site) -> (Vec<ConfiguredModel>, Option<String>) {
     let models = read_json(&site.root.join("models.json")).ok().flatten();
-    let hosts = crate::providers::four_s_api_hosts();
-    let ours: Vec<String> = models
+    let ours: Vec<ConfiguredModel> = models
         .as_ref()
         .and_then(|v| v.as_array())
         .map(|a| {
             a.iter()
-                .filter(|e| wb_is_ours(e, &hosts))
-                .filter_map(|e| e.get("id").and_then(|i| i.as_str()).map(String::from))
+                .filter_map(|e| {
+                    let url = e.get("url").and_then(|u| u.as_str()).unwrap_or("");
+                    // 来源由地址决定;认不出地址的条目靠名字前缀仍算我们写的,但来源留空
+                    let src = crate::models::source_of_url(url).map(String::from);
+                    let named = e
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .map(|n| n.starts_with(OUR_NAME_PREFIX))
+                        .unwrap_or(false);
+                    let id = e.get("id").and_then(|i| i.as_str())?;
+                    match (src, named) {
+                        (Some(s), _) => Some(ConfiguredModel { id: id.to_string(), source: s }),
+                        (None, true) => Some(ConfiguredModel { id: id.to_string(), source: String::new() }),
+                        (None, false) => None,
+                    }
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -2048,7 +2106,10 @@ pub fn preview(client: Client, spec: &ModelSpec, opts: &Opts) -> Vec<Preview> {
                     let learned = opts
                         .selection_prefix
                         .clone()
-                        .or_else(|| learn_prefix(cur.as_deref(), &ours));
+                        .or_else(|| {
+                            let ids: Vec<String> = ours.iter().map(|m| m.id.clone()).collect();
+                            learn_prefix(cur.as_deref(), &ids)
+                        });
                     p.writes_selection = learned.is_some() && p.changed;
                     if learned.is_none() {
                         p.notes.push(
@@ -2060,7 +2121,7 @@ pub fn preview(client: Client, spec: &ModelSpec, opts: &Opts) -> Vec<Preview> {
                 }
                 Client::Zcode => {
                     let cfg = read_json(&site.root.join("config.json")).ok().flatten();
-                    let pid = cfg.as_ref().and_then(zcode_pid);
+                    let pid = cfg.as_ref().and_then(|c| zcode_pid(c, spec.source_name.as_str()));
                     let has_model = pid
                         .as_ref()
                         .map(|id| {
@@ -2123,7 +2184,7 @@ pub fn apply(client: Client, spec: &ModelSpec, opts: &Opts) -> Result<Vec<Report
 
         match client {
             Client::Workbuddy | Client::WorkbuddyAi => {
-                let o = write_workbuddy_site(&site, spec, &crate::providers::four_s_api_hosts(), opts)?;
+                let o = write_workbuddy_site(&site, spec, opts)?;
                 out.push(Report {
                     client: client_id,
                     label,
@@ -2226,7 +2287,7 @@ pub fn state(learned: &HashMap<String, String>) -> Vec<ClientState> {
                     for s in &mine {
                         let (ours, cur) = wb_read(s);
                         for m in ours {
-                            if !st.models.contains(&m) {
+                            if !st.models.iter().any(|x| x.id == m.id) {
                                 st.models.push(m);
                             }
                         }
@@ -2249,7 +2310,7 @@ pub fn state(learned: &HashMap<String, String>) -> Vec<ClientState> {
                             st.learned_prefix = learn_prefix(cur.as_deref(), &ids);
                         }
                     }
-                    st.models.sort();
+                    st.models.sort_by(|a, b| a.id.cmp(&b.id));
                     if c == Client::WorkbuddyAi || c == Client::Workbuddy {
                         st.note = Some(
                             "两个 WorkBuddy 共用进程名 WorkBuddy.exe:只要有一个在跑,两个都会判为「正在运行」".into(),
@@ -2264,31 +2325,44 @@ pub fn state(learned: &HashMap<String, String>) -> Vec<ClientState> {
                 Client::Zcode => {
                     for s in &mine {
                         let cfg = read_json(&s.root.join("config.json")).ok().flatten();
-                        let models: Vec<String> = cfg
+                        let rows: Vec<ConfiguredModel> = cfg
                             .as_ref()
                             .and_then(|c| c.get("provider"))
                             .and_then(|p| p.as_object())
                             .map(|m| {
                                 m.iter()
-                                    .filter(|(_, v)| {
-                                        v.get("name").and_then(|n| n.as_str()) == Some("4SAPI")
-                                    })
-                                    .flat_map(|(_, v)| {
-                                        v.get("models")
+                                    .filter_map(|(_, v)| {
+                                        // provider 名 = 来源名,据此反查来源
+                                        let name = v.get("name").and_then(|n| n.as_str())?;
+                                        let src = crate::models::SOURCES
+                                            .iter()
+                                            .find(|d| d.name == name)
+                                            .map(|d| d.id.to_string())?;
+                                        let ids: Vec<String> = v
+                                            .get("models")
                                             .and_then(|x| x.as_object())
-                                            .map(|mm| mm.keys().cloned().collect::<Vec<_>>())
-                                            .unwrap_or_default()
+                                            .map(|mm| mm.keys().cloned().collect())
+                                            .unwrap_or_default();
+                                        Some(
+                                            ids.into_iter()
+                                                .map(move |id| ConfiguredModel {
+                                                    id,
+                                                    source: src.clone(),
+                                                })
+                                                .collect::<Vec<_>>(),
+                                        )
                                     })
+                                    .flatten()
                                     .collect()
                             })
                             .unwrap_or_default();
-                        for m in models {
-                            if !st.models.contains(&m) {
+                        for m in rows {
+                            if !st.models.iter().any(|x| x.id == m.id && x.source == m.source) {
                                 st.models.push(m);
                             }
                         }
                     }
-                    st.models.sort();
+                    st.models.sort_by(|a, b| a.id.cmp(&b.id));
                 }
                 Client::Trae => {
                     for s in &mine {
@@ -2337,8 +2411,21 @@ pub fn state(learned: &HashMap<String, String>) -> Vec<ClientState> {
                                                 if let Some(d) =
                                                     e.get("display_name").and_then(|d| d.as_str())
                                                 {
-                                                    if !st.models.contains(&d.to_string()) {
-                                                        st.models.push(d.to_string());
+                                                    let url = e
+                                                        .get("base_url")
+                                                        .and_then(|u| u.as_str())
+                                                        .unwrap_or("");
+                                                    let src = crate::models::source_of_url(url)
+                                                        .unwrap_or("")
+                                                        .to_string();
+                                                    if !st.models
+                                                        .iter()
+                                                        .any(|x| x.id == d && x.source == src)
+                                                    {
+                                                        st.models.push(ConfiguredModel {
+                                                            id: d.to_string(),
+                                                            source: src,
+                                                        });
                                                     }
                                                 }
                                             }
@@ -2348,7 +2435,7 @@ pub fn state(learned: &HashMap<String, String>) -> Vec<ClientState> {
                             }
                         }
                     }
-                    st.models.sort();
+                    st.models.sort_by(|a, b| a.id.cmp(&b.id));
                     st.note = Some("选中项写入是实验开关(默认关)".into());
                 }
             }
@@ -2374,16 +2461,13 @@ mod tests {
 
     fn spec() -> ModelSpec {
         ModelSpec::new(
+            "4sapi",
             "claude-sonnet-5",
             "https://4sapi.com/v1",
             "sk-test-123",
             Some(1_000_000),
             true,
         )
-    }
-
-    fn hosts() -> Vec<String> {
-        vec!["4sapi.com".into(), "4sapi.cn".into()]
     }
 
     fn site_at(root: &Path, client: Client) -> Site {
@@ -2422,7 +2506,7 @@ mod tests {
         std::fs::write(root.join("settings.json"), "{\n  \"sandbox\": true\n}\n").unwrap();
         let site = site_at(&root, Client::Workbuddy);
 
-        let o = write_workbuddy_site(&site, &spec(), &hosts(), &Opts::default()).unwrap();
+        let o = write_workbuddy_site(&site, &spec(), &Opts::default()).unwrap();
         assert_eq!((o.added, o.updated), (1, 0));
 
         let v = read_v(&root.join("models.json"));
@@ -2439,7 +2523,7 @@ mod tests {
         assert!(raw.starts_with(&[0xEF, 0xBB, 0xBF]), "BOM 要保留");
 
         // 幂等:同样内容再写一次,不新增、不重复、不写盘
-        let o2 = write_workbuddy_site(&site, &spec(), &hosts(), &Opts::default()).unwrap();
+        let o2 = write_workbuddy_site(&site, &spec(), &Opts::default()).unwrap();
         assert!((o2.added, o2.updated) == (0, 0) && o2.same, "内容一致应报「无需改动」");
         let v2 = read_v(&root.join("models.json"));
         assert_eq!(v2.as_array().unwrap().len(), 1, "不能写出重复条目");
@@ -2458,7 +2542,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(opts.selection_prefix.as_deref(), Some("custom-local:"));
-        let o = write_workbuddy_site(&site, &spec(), &hosts(), &opts).unwrap();
+        let o = write_workbuddy_site(&site, &spec(), &opts).unwrap();
         assert!(o.selected, "学到前缀就该写选中项");
         let s = read_v(&root.join("settings.json"));
         assert_eq!(s["model"], "custom-local:claude-sonnet-5");
@@ -2469,7 +2553,7 @@ mod tests {
         std::fs::write(root2.join("models.json"), "[]").unwrap();
         std::fs::write(root2.join("settings.json"), "{\"model\":\"gpt-6-luna\"}").unwrap();
         let site2 = site_at(&root2, Client::Workbuddy);
-        let o2 = write_workbuddy_site(&site2, &spec(), &hosts(), &Opts::default()).unwrap();
+        let o2 = write_workbuddy_site(&site2, &spec(), &Opts::default()).unwrap();
         assert!(!o2.selected);
         let s2 = read_v(&root2.join("settings.json"));
         assert_eq!(s2["model"], "gpt-6-luna", "学不到口径就不动选中项");
@@ -2500,8 +2584,8 @@ mod tests {
         .unwrap();
         std::fs::write(root.join("settings.json"), "{}").unwrap();
         let site = site_at(&root, Client::Workbuddy);
-        let s = ModelSpec::new("deepseek-v4.1-flash", "https://4sapi.com/v1", "sk-new", None, false);
-        let o = write_workbuddy_site(&site, &s, &hosts(), &Opts::default()).unwrap();
+        let s = ModelSpec::new("4sapi", "deepseek-v4.1-flash", "https://4sapi.com/v1", "sk-new", None, false);
+        let o = write_workbuddy_site(&site, &s, &Opts::default()).unwrap();
         assert_eq!(o.updated, 1);
         assert_eq!(
             o.foreign_conflict.as_deref(),
@@ -2520,7 +2604,7 @@ mod tests {
         std::fs::write(root.join("models.json"), "{\"models\":[]}").unwrap();
         std::fs::write(root.join("settings.json"), "{}").unwrap();
         let site = site_at(&root, Client::Workbuddy);
-        let e = write_workbuddy_site(&site, &spec(), &hosts(), &Opts::default()).unwrap_err();
+        let e = write_workbuddy_site(&site, &spec(), &Opts::default()).unwrap_err();
         assert!(e.contains("不是数组"), "{e}");
     }
 
@@ -2633,7 +2717,7 @@ mod tests {
         );
 
         // 再写第二个模型:同一个 provider,模型合并
-        let s2 = ModelSpec::new("glm-5.3", "https://4sapi.com/v1", "sk-test-123", Some(1_000_000), false);
+        let s2 = ModelSpec::new("4sapi", "glm-5.3", "https://4sapi.com/v1", "sk-test-123", Some(1_000_000), false);
         let o2 = write_zcode_site(&site, &s2).unwrap();
         assert_eq!((o2.added, o2.updated), (0, 1));
         let cfg2: Value =
@@ -2882,7 +2966,7 @@ mod tests {
             selection_prefix: Some(WB_PREFIX.to_string()),
             ..Default::default()
         };
-        write_workbuddy_site(&site, &spec(), &hosts(), &opts).unwrap();
+        write_workbuddy_site(&site, &spec(), &opts).unwrap();
         let s = read_v(&root.join("settings.json"));
         assert_eq!(s[WB_SELECTION_KEY], "custom-local:claude-sonnet-5");
 
@@ -2914,7 +2998,7 @@ mod tests {
         std::fs::write(root.join("models.json"), "[]").unwrap();
         std::fs::write(root.join("settings.json"), "{\"model\":\"custom-local:other\"}").unwrap();
         let site = site_at(&root, Client::Workbuddy);
-        write_workbuddy_site(&site, &spec(), &hosts(), &Opts::default()).unwrap();
+        write_workbuddy_site(&site, &spec(), &Opts::default()).unwrap();
         let (_, removal) = wb_removal(&site, &spec());
         assert!(!removal.unwrap().clears_selection);
         let o = remove_workbuddy_site(&site, &spec()).unwrap();
@@ -2936,7 +3020,7 @@ mod tests {
         .unwrap();
         let site = site_at(&root, Client::Zcode);
         write_zcode_site(&site, &spec()).unwrap();
-        let s2 = ModelSpec::new("glm-5.3", "https://4sapi.com/v1", "sk-test-123", Some(1_000_000), false);
+        let s2 = ModelSpec::new("4sapi", "glm-5.3", "https://4sapi.com/v1", "sk-test-123", Some(1_000_000), false);
         write_zcode_site(&site, &s2).unwrap();
 
         let (configured, removal) = zcode_removal(&site, &spec());
@@ -2946,7 +3030,7 @@ mod tests {
         let o = remove_zcode_site(&site, &spec()).unwrap();
         assert_eq!(o.removed, 1);
         let cfg = read_v(&root.join("config.json"));
-        let pid = zcode_pid(&cfg).expect("provider 还在");
+        let pid = zcode_pid(&cfg, "4SAPI").expect("provider 还在");
         assert!(cfg["provider"][&pid]["models"].get(&spec().id).is_none());
         assert!(cfg["provider"][&pid]["models"].get("glm-5.3").is_some(), "别的模型不动");
         let rules = read_v(&root.join("provider_config.json"));
@@ -2965,7 +3049,7 @@ mod tests {
         let o2 = remove_zcode_site(&site, &s2).unwrap();
         assert_eq!(o2.removed, 1);
         let cfg2 = read_v(&root.join("config.json"));
-        assert!(zcode_pid(&cfg2).is_none(), "空 provider 不该留下");
+        assert!(zcode_pid(&cfg2, "4SAPI").is_none(), "空 provider 不该留下");
         let rules2 = read_v(&root.join("provider_config.json"));
         assert!(rules2["config"]["providerConfigRules"]["providerRules"]
             .as_array()

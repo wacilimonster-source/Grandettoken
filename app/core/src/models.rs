@@ -27,6 +27,95 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
+// ───────────────────────── 来源(渠道)定义 ─────────────────────────
+//
+// 模型页从 v0.1.25 起支持多个来源:同一个模型名可能同时存在于几个来源里
+// (`gpt-6-luna` 在 4SAPI / Hapi / OpenCode Go 都有),"已配置"必须按来源分别判定 ——
+// 客户端条目里的 url 命中哪个来源的域名,它就属于哪个来源。
+
+/// 一个模型来源。决定三件事:列表从哪来、写进客户端用哪个地址、哪些域名算"我们写的"。
+pub struct SourceDef {
+    pub id: &'static str,
+    /// 界面上的名字,也是写进 ZCode 时那个 provider 的名字
+    pub name: &'static str,
+    /// 接口主机(列表/价目表都在它下面)
+    pub api_host: &'static str,
+    /// 列表路径
+    pub list_path: &'static str,
+    /// 列表是否公开(无需密钥)。Go 的列表是公开的 —— 没配密钥也能先看有什么模型
+    pub list_public: bool,
+    /// 价目表路径;None = 这个来源没有公开价目表(Hapi 的价目接口要登录态,不是 API key)
+    pub pricing_path: Option<&'static str>,
+    /// 写进客户端的接入地址
+    pub base_url: &'static str,
+    /// 除 api_host 之外还算这个来源的域名(4SAPI 走 source_hosts 从渠道定义转发)
+    pub extra_hosts: &'static [&'static str],
+}
+
+pub const SOURCES: &[SourceDef] = &[
+    SourceDef {
+        id: "4sapi",
+        name: "4SAPI",
+        api_host: "4sapi.com",
+        list_path: "/v1/models",
+        list_public: false,
+        pricing_path: Some("/api/pricing"),
+        base_url: "https://4sapi.com/v1",
+        // 4SAPI 的四个域名在渠道定义里,这里不重复写(见 source_hosts)
+        extra_hosts: &[],
+    },
+    SourceDef {
+        id: "hapi",
+        name: "Hapi",
+        api_host: "ai.yuchuantest.com",
+        list_path: "/v1/models",
+        list_public: false,
+        pricing_path: None,
+        base_url: "https://ai.yuchuantest.com/v1",
+        extra_hosts: &[],
+    },
+    SourceDef {
+        id: "opencode-go",
+        name: "OpenCode Go",
+        api_host: "opencode.ai",
+        list_path: "/zen/go/v1/models",
+        // 实测公开:不带密钥也返回 38 个模型
+        list_public: true,
+        pricing_path: None,
+        base_url: "https://opencode.ai/zen/go/v1",
+        extra_hosts: &[],
+    },
+];
+
+pub fn find_source(id: &str) -> Option<&'static SourceDef> {
+    SOURCES.iter().find(|s| s.id == id)
+}
+
+/// 某个来源的域名列表(判定"这条条目是我们写的"用)。
+///
+/// 4SAPI 的域名只在渠道定义里写一份(`providers::four_s_api_hosts`),这里转发过去 ——
+/// 域名多一处拷贝,就多一处忘记同步的机会。
+pub fn source_hosts(id: &str) -> Vec<String> {
+    match id {
+        "4sapi" => crate::providers::four_s_api_hosts(),
+        other => match find_source(other) {
+            Some(d) => std::iter::once(d.api_host)
+                .chain(d.extra_hosts.iter().copied())
+                .map(String::from)
+                .collect(),
+            None => Vec::new(),
+        },
+    }
+}
+
+/// 这条客户端条目(看它的 url)属于哪个来源。认不出来返回 None。
+pub fn source_of_url(url: &str) -> Option<&'static str> {
+    SOURCES
+        .iter()
+        .find(|d| source_hosts(d.id).iter().any(|h| url.contains(h.as_str())))
+        .map(|d| d.id)
+}
+
 /// 上下文长度标签(1M / 256K / 128K…)能不能算上下文标签。
 ///
 /// K 档要求 ≥ 16K:图像/视频模型的分辨率也写成 `2K` / `4K`,那不是上下文长度。
@@ -508,6 +597,47 @@ pub async fn fetch_usable(
     Err(format!("可用模型取回失败 · {last}"))
 }
 
+/// 取"只有 id 列表"的来源(Hapi / OpenCode Go)。
+/// 公开列表不带密钥;需要密钥的来源没配密钥时直接报错(界面据此提示先去配)。
+pub async fn fetch_source_ids(
+    client: &reqwest::Client,
+    def: &SourceDef,
+    key: Option<&str>,
+) -> Result<(Vec<String>, String), String> {
+    if !def.list_public && key.is_none() {
+        return Err(format!("{} 的模型列表需要密钥:先在「渠道」页签填一次", def.name));
+    }
+    let url = format!("https://{}{}", def.api_host, def.list_path);
+    let v = get_json(client, &url, key).await?;
+    let ids = parse_usable(&v);
+    if ids.is_empty() {
+        return Err(format!("{}:列表是空的", def.name));
+    }
+    Ok((ids, def.api_host.to_string()))
+}
+
+/// 由 id 列表造模型行。**没有的字段一律留空,不编** ——
+/// 列表接口只给 id/object/created/owned_by,那就只有 id 是真的。
+/// `chat = true`:拿不到类型信息 ≠ 不是对话模型,不能因此把它们挡在「只看编码/对话」之外。
+pub fn rows_from_ids(ids: &[String], usable: &[String], usable_known: bool) -> Vec<ModelRow> {
+    let set: std::collections::HashSet<&str> = usable.iter().map(|s| s.as_str()).collect();
+    let mut rows: Vec<ModelRow> = ids
+        .iter()
+        .map(|id| ModelRow {
+            id: id.clone(),
+            chat: true,
+            usable: if usable_known {
+                Some(set.contains(id.as_str()))
+            } else {
+                None
+            },
+            ..Default::default()
+        })
+        .collect();
+    rows.sort_by(|a, b| a.id.cmp(&b.id));
+    rows
+}
+
 // ───────────────────────── 缓存与视图 ─────────────────────────
 
 /// 缓存落在 SQLite 的 settings 里(单独一行,不进 Config)。
@@ -533,6 +663,30 @@ pub struct ModelCache {
     /// 最近一次成功的域名(价目表 / 可用集合各记一个,写进客户端时优先用后者)
     pub host: String,
     pub usable_host: String,
+    /// 只有 id 列表的来源(Hapi / OpenCode Go)。4SAPI 有自己的价目表字段,不进这里。
+    #[serde(default)]
+    pub sources: HashMap<String, SourceCache>,
+}
+
+/// 只有 id 列表的来源的缓存。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SourceCache {
+    pub ids: Vec<String>,
+    pub fetched_at: i64,
+    pub host: String,
+    /// 该来源这把 key 能调的模型;`usable_at` = 0 表示从没成功取到过
+    pub usable: Vec<String>,
+    pub usable_at: i64,
+}
+
+impl SourceCache {
+    pub fn usable_known(&self) -> bool {
+        self.usable_at > 0
+    }
+    pub fn stale(&self, now: i64) -> bool {
+        self.fetched_at <= 0 || now - self.fetched_at > CACHE_TTL_SEC
+    }
 }
 
 impl ModelCache {
@@ -593,11 +747,15 @@ pub struct RowView {
 
 /// 按分组把所有行组装成视图(单价在这里一次算好,前端不做算术)。
 pub fn row_views(cat: &Catalog, group: &str) -> Vec<RowView> {
-    cat.rows
-        .iter()
+    row_views_of(cat.rows.clone(), &cat.groups, group)
+}
+
+/// 同一件事,但收现成的行与分组表 —— 只有 id 列表的来源没有分组表,价自然是空的。
+pub fn row_views_of(rows: Vec<ModelRow>, groups: &[Group], group: &str) -> Vec<RowView> {
+    rows.into_iter()
         .map(|r| RowView {
-            row: r.clone(),
-            price: price_of(r, &cat.groups, group),
+            price: price_of(&r, groups, group),
+            row: r,
         })
         .collect()
 }
@@ -800,6 +958,54 @@ mod tests {
         assert!(p.output.is_none(), "completion_ratio 是脏值时不给输出价");
     }
 
+    /// 来源判定:靠客户端条目的 url 认它属于哪个来源(同名模型可能存在于多个来源)。
+    #[test]
+    fn source_of_url_maps_domains_to_sources() {
+        assert_eq!(source_of_url("https://4sapi.com/v1"), Some("4sapi"));
+        assert_eq!(source_of_url("https://4sapi.cn/v1"), Some("4sapi"), "备用域名也要认");
+        assert_eq!(source_of_url("https://ai.yuchuantest.com/v1"), Some("hapi"));
+        assert_eq!(source_of_url("https://opencode.ai/zen/go/v1"), Some("opencode-go"));
+        // 别家的地址不能误认
+        assert_eq!(source_of_url("https://api.deepseek.com/v1"), None);
+        assert_eq!(source_of_url(""), None);
+        // Hapi 的域名不许被 4SAPI 抢走(4SAPI 的域名是精确串,不含 yuchuantest)
+        assert_ne!(source_of_url("https://ai.yuchuantest.com/v1"), Some("4sapi"));
+    }
+
+    /// 只有 id 的来源:行里除了 id 全是空的 —— 没有的字段不编。
+    #[test]
+    fn rows_from_ids_stay_honest() {
+        let ids: Vec<String> = vec!["b-model".into(), "a-model".into()];
+        let rows = rows_from_ids(&ids, &["a-model".into()], true);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, "a-model", "按 id 排序");
+        assert_eq!(rows[0].usable, Some(true));
+        assert_eq!(rows[1].usable, Some(false));
+        assert!(rows.iter().all(|r| r.chat && r.tags.is_empty() && r.context.is_none()));
+        assert!(rows.iter().all(|r| r.ratio == 0.0 && r.groups.is_empty()));
+        // 可用集合未知时是 None,不是"都不可用"
+        let rows = rows_from_ids(&ids, &[], false);
+        assert!(rows.iter().all(|r| r.usable.is_none()));
+    }
+
+    /// 来源表本身:三个来源,只有 4SAPI 有价目表;Go 的列表公开。
+    #[test]
+    fn source_table_shape() {
+        assert_eq!(SOURCES.len(), 3);
+        assert_eq!(find_source("hapi").unwrap().name, "Hapi");
+        assert!(find_source("nope").is_none());
+        assert!(find_source("opencode-go").unwrap().list_public);
+        assert!(!find_source("hapi").unwrap().list_public);
+        assert_eq!(
+            SOURCES.iter().filter(|s| s.pricing_path.is_some()).count(),
+            1,
+            "只有 4SAPI 有公开价目表"
+        );
+        // 域名转发:4SAPI 的四个域名来自渠道定义
+        assert_eq!(source_hosts("4sapi").len(), 4);
+        assert_eq!(source_hosts("hapi"), vec!["ai.yuchuantest.com".to_string()]);
+    }
+
     #[test]
     fn context_tokens_reads_k_and_m() {
         assert_eq!(context_tokens("1M"), Some(1_000_000));
@@ -864,6 +1070,7 @@ mod tests {
             usable_at: 1_700_000_100,
             host: "4sapi.cn".into(),
             usable_host: "4sapi.com".into(),
+            sources: Default::default(),
         };
         c.save(&store).unwrap();
         let back = ModelCache::load(&store).unwrap();

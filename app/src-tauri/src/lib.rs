@@ -898,10 +898,42 @@ fn take_startup_error(state: State<'_, AppState>) -> Option<String> {
 //   2. 写进客户端一律「先备份 → 写 → 读回校验」,目标在跑就拒写(规矩在 core::inject 里);
 //   3. 密钥只从凭据管理器**现读现写**,不回前端、不落盘、不进日志。
 
+/// 来源芯片要的信息。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SourceInfo {
+    id: String,
+    name: String,
+    has_price: bool,
+    list_public: bool,
+}
+
+fn source_infos() -> Vec<SourceInfo> {
+    models::SOURCES
+        .iter()
+        .map(|d| SourceInfo {
+            id: d.id.to_string(),
+            name: d.name.to_string(),
+            has_price: d.pricing_path.is_some(),
+            list_public: d.list_public,
+        })
+        .collect()
+}
+
 /// 模型页要的整份视图。
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CatalogView {
+    /// 来源 id("4sapi" / "hapi" / "opencode-go")
+    source: String,
+    /// 来源的界面名
+    source_name: String,
+    /// 全部来源(界面上的芯片;没取到的来源也要列出来,标「—」)
+    sources: Vec<SourceInfo>,
+    /// 这个来源有没有价格(只有 4SAPI 有)。false → 界面不显示单价、也不按价排序
+    has_price: bool,
+    /// 列表是否公开(Go 是:没配密钥也能列出模型)
+    list_public: bool,
     /// 价目表取数的域名
     host: String,
     /// 要写进客户端的接入地址(挂件实测可用的那个)
@@ -930,7 +962,13 @@ struct InjectOverview {
 }
 
 /// 写进客户端的接入地址:用户指定 > 实测可用的域名 > 主域名。
-fn four_s_api_base(cfg: &Config, cache: Option<&models::ModelCache>) -> String {
+/// 写进客户端的接入地址。
+/// 4SAPI:用户指定 > 实测可用的域名 > 主域名(它有几个域名,得挑一个真通的);
+/// 其它来源:用来源定义里的固定地址。
+fn source_base(cfg: &Config, cache: Option<&models::ModelCache>, def: &models::SourceDef) -> String {
+    if def.id != "4sapi" {
+        return def.base_url.to_string();
+    }
     if let Some(u) = cfg.model_base_url.as_deref() {
         let t = u.trim().trim_end_matches('/');
         if !t.is_empty() {
@@ -939,9 +977,18 @@ fn four_s_api_base(cfg: &Config, cache: Option<&models::ModelCache>) -> String {
     }
     match cache {
         Some(c) => c.base_url(),
-        None => "https://4sapi.com/v1".to_string(),
+        None => def.base_url.to_string(),
     }
 }
+
+/// 该来源的密钥。Go 的列表公开,但写进客户端必须带密钥。
+fn source_key(id: &str) -> Option<String> {
+    secrets::get(id)
+        .ok()
+        .flatten()
+        .filter(|k| !k.trim().is_empty())
+}
+
 
 /// 入口顺序:配置里指定的域名优先,其次上次成功的(可用集合 > 价目表),最后默认顺序。
 fn host_order(cfg: &Config, cache: Option<&models::ModelCache>) -> Vec<String> {
@@ -976,16 +1023,22 @@ fn host_order(cfg: &Config, cache: Option<&models::ModelCache>) -> Vec<String> {
 fn model_spec_with(
     store: &Arc<Mutex<Store>>,
     cfg: &Config,
+    source: &str,
     model: &str,
 ) -> Result<inject::ModelSpec, String> {
     let model = model.trim();
     if model.is_empty() {
         return Err("没有指定模型".into());
     }
-    let key = match secrets::get("4sapi") {
-        Ok(Some(k)) if !k.trim().is_empty() => k,
-        Ok(_) => return Err("还没配置 4SAPI 密钥:先在「渠道」页签里填一次".into()),
-        Err(e) => return Err(e),
+    let def = models::find_source(source).ok_or_else(|| format!("未知模型来源: {source}"))?;
+    let key = match source_key(def.id) {
+        Some(k) => k,
+        None => {
+            return Err(format!(
+                "还没配置 {} 密钥:先在「渠道」页签里填一次",
+                def.name
+            ))
+        }
     };
     let cache = {
         let s = lock_rw(store);
@@ -1000,9 +1053,14 @@ fn model_spec_with(
         .and_then(|r| r.context.as_deref())
         .and_then(models::context_tokens);
     let multimodal = row.as_ref().map(|r| r.multimodal).unwrap_or(false);
-    let base = four_s_api_base(&cfg, cache.as_ref());
+    let base = source_base(cfg, cache.as_ref(), def);
     Ok(inject::ModelSpec::new(
-        model, &base, &key, context, multimodal,
+        def.id,
+        model,
+        &base,
+        &key,
+        context,
+        multimodal,
     ))
 }
 
@@ -1017,18 +1075,85 @@ fn inject_opts(cfg: &Config, client: inject::Client) -> inject::Opts {
 /// 取 4SAPI 的可用模型:公开价目表 + 这把 key 能调的集合。
 /// 两者都是元数据,不产生 token 计费;缓存一天,失败时退回上次快照并如实报错。
 #[tauri::command]
-async fn get_model_catalog(state: State<'_, AppState>, force: bool) -> Result<CatalogView, String> {
+async fn get_model_catalog(
+    state: State<'_, AppState>,
+    source: Option<String>,
+    force: bool,
+) -> Result<CatalogView, String> {
     let store = state.store.clone();
     let cfg = lock_rw(&state.config).clone();
     let client = state.fetcher.http.clone();
     let now = now_ts();
+    let want = source.unwrap_or_default();
+    let def = models::find_source(if want.is_empty() { "4sapi" } else { &want })
+        .ok_or_else(|| format!("未知模型来源: {want}"))?;
 
     let mut cache = {
         let s = lock_rw(&store);
         models::ModelCache::load(&s)
     };
-    let hosts = host_order(&cfg, cache.as_ref());
     let mut error: Option<String> = None;
+
+    // ── 只有 id 列表的来源(Hapi / OpenCode Go):列表给什么就是什么,没有价、没有标签 ──
+    if def.pricing_path.is_none() {
+        let key = source_key(def.id);
+        let need = force
+            || cache
+                .as_ref()
+                .and_then(|c| c.sources.get(def.id))
+                .map(|sc| sc.stale(now))
+                .unwrap_or(true);
+        if need {
+            match models::fetch_source_ids(&client, def, key.as_deref()).await {
+                Ok((ids, host)) => {
+                    let c = cache.get_or_insert_with(Default::default);
+                    let sc = c.sources.entry(def.id.to_string()).or_default();
+                    sc.ids = ids.clone();
+                    sc.fetched_at = now;
+                    sc.host = host;
+                    // 对这个来源而言,"能用"就是列表本身(公开列表 = 它提供这些模型)
+                    sc.usable = ids;
+                    sc.usable_at = now;
+                }
+                Err(e) => error = Some(e),
+            }
+        }
+        if let Some(c) = cache.as_ref() {
+            let s = lock_rw(&store);
+            if let Err(e) = c.save(&s) {
+                eprintln!("模型缓存写入失败: {e}");
+            }
+        }
+        let sc = cache.as_ref().and_then(|c| c.sources.get(def.id));
+        let (ids, usable, usable_at) = match sc {
+            Some(sc) => (sc.ids.clone(), sc.usable.clone(), sc.usable_at),
+            None => (Vec::new(), Vec::new(), 0),
+        };
+        let rows = models::rows_from_ids(&ids, &usable, usable_at > 0);
+        return Ok(CatalogView {
+            source: def.id.to_string(),
+            source_name: def.name.to_string(),
+            sources: source_infos(),
+            has_price: false,
+            list_public: def.list_public,
+            host: sc.map(|s| s.host.clone()).unwrap_or_default(),
+            base_url: def.base_url.to_string(),
+            version: String::new(),
+            fetched_at: sc.map(|s| s.fetched_at).unwrap_or(0),
+            usable_at,
+            has_key: key.is_some(),
+            group: String::new(),
+            groups: Vec::new(),
+            total: rows.len(),
+            chat_count: rows.len(),
+            usable_count: rows.iter().filter(|r| r.usable == Some(true)).count(),
+            rows: models::row_views_of(rows, &[], ""),
+            error,
+        });
+    }
+
+    // ── 4SAPI:价目表 + 可用集合(它有四个域名,挑真通的)──
+    let hosts = host_order(&cfg, cache.as_ref());
 
     let needs_catalog = force || cache.as_ref().map(|c| c.stale(now)).unwrap_or(true);
     if needs_catalog {
@@ -1079,8 +1204,13 @@ async fn get_model_catalog(state: State<'_, AppState>, force: bool) -> Result<Ca
 
     let Some(cache) = cache else {
         return Ok(CatalogView {
+            source: def.id.to_string(),
+            source_name: def.name.to_string(),
+            sources: source_infos(),
+            has_price: true,
+            list_public: def.list_public,
             host: String::new(),
-            base_url: four_s_api_base(&cfg, None),
+            base_url: source_base(&cfg, None, def),
             version: String::new(),
             fetched_at: 0,
             usable_at: 0,
@@ -1107,8 +1237,13 @@ async fn get_model_catalog(state: State<'_, AppState>, force: bool) -> Result<Ca
         .unwrap_or_else(|| catalog.default_group());
     let rows = models::row_views(&catalog, &group);
     Ok(CatalogView {
+        source: def.id.to_string(),
+        source_name: def.name.to_string(),
+        sources: source_infos(),
+        has_price: true,
+        list_public: def.list_public,
         host: cache.host.clone(),
-        base_url: four_s_api_base(&cfg, Some(&cache)),
+        base_url: source_base(&cfg, Some(&cache), def),
         version: cache.version.clone(),
         fetched_at: cache.fetched_at,
         usable_at: cache.usable_at,
@@ -1134,13 +1269,15 @@ async fn get_model_catalog(state: State<'_, AppState>, force: bool) -> Result<Ca
 async fn inject_preview(
     state: State<'_, AppState>,
     client: String,
+    source: Option<String>,
     model: String,
 ) -> Result<Vec<inject::Preview>, String> {
     let c = inject::Client::parse(&client).ok_or_else(|| format!("未知客户端: {client}"))?;
     let store = state.store.clone();
     let cfg = lock_rw(&state.config).clone();
     tokio::task::spawn_blocking(move || {
-        let spec = model_spec_with(&store, &cfg, &model)?;
+        let src = source.clone().unwrap_or_else(|| "4sapi".to_string());
+        let spec = model_spec_with(&store, &cfg, &src, &model)?;
         Ok(inject::preview(c, &spec, &inject_opts(&cfg, c)))
     })
     .await
@@ -1152,13 +1289,15 @@ async fn inject_preview(
 async fn inject_apply(
     state: State<'_, AppState>,
     client: String,
+    source: Option<String>,
     model: String,
 ) -> Result<Vec<inject::Report>, String> {
     let c = inject::Client::parse(&client).ok_or_else(|| format!("未知客户端: {client}"))?;
     let store = state.store.clone();
     let cfg = lock_rw(&state.config).clone();
     tokio::task::spawn_blocking(move || {
-        let spec = model_spec_with(&store, &cfg, &model)?;
+        let src = source.clone().unwrap_or_else(|| "4sapi".to_string());
+        let spec = model_spec_with(&store, &cfg, &src, &model)?;
         let reports = inject::apply(c, &spec, &inject_opts(&cfg, c))?;
         // 记账:只记「写到哪、备份在哪、写了几条」——密钥不在其中
         {
@@ -1194,6 +1333,7 @@ async fn inject_apply(
 async fn inject_remove(
     state: State<'_, AppState>,
     client: String,
+    source: Option<String>,
     model: String,
 ) -> Result<Vec<inject::Report>, String> {
     let c = inject::Client::parse(&client).ok_or_else(|| format!("未知客户端: {client}"))?;
@@ -1201,7 +1341,8 @@ async fn inject_remove(
     let cfg = lock_rw(&state.config).clone();
     tokio::task::spawn_blocking(move || {
         // 取消写入也要一个 spec:按 base_url / 名字认出"这条是不是我们写的"
-        let spec = model_spec_with(&store, &cfg, &model)?;
+        let src = source.clone().unwrap_or_else(|| "4sapi".to_string());
+        let spec = model_spec_with(&store, &cfg, &src, &model)?;
         let reports = inject::remove(c, &spec)?;
         {
             let s = lock_rw(&store);
@@ -1309,11 +1450,16 @@ async fn inject_rollback(state: State<'_, AppState>, backup: String) -> Result<S
 /// 「复制三件套」。密钥由后端拼进字符串,**不回前端**。
 /// 注意:写入剪贴板对其他程序(含剪贴板历史)可见 —— 界面必须写明这一点。
 #[tauri::command]
-async fn copy_model_bundle(state: State<'_, AppState>, model: String) -> Result<String, String> {
+async fn copy_model_bundle(
+    state: State<'_, AppState>,
+    source: Option<String>,
+    model: String,
+) -> Result<String, String> {
     let store = state.store.clone();
     let cfg = lock_rw(&state.config).clone();
     tokio::task::spawn_blocking(move || {
-        let spec = model_spec_with(&store, &cfg, &model)?;
+        let src = source.clone().unwrap_or_else(|| "4sapi".to_string());
+        let spec = model_spec_with(&store, &cfg, &src, &model)?;
         let text = format!(
             "接入地址:{}\n模型名称:{}\nAPI Key:{}",
             spec.base_url, spec.id, spec.key
