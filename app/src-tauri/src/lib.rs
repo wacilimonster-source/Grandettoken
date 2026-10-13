@@ -8,7 +8,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{Emitter, Manager, State};
 use tokenscope_core::config::Config;
 use tokenscope_core::fetch::{now_ts, ChannelView, Fetcher};
-use tokenscope_core::{inject, models, providers, secrets, store::Store};
+use tokenscope_core::{appauth, checkin, inject, models, providers, secrets, store::Store};
 
 pub struct AppState {
     pub store: Arc<Mutex<Store>>,
@@ -891,6 +891,237 @@ fn take_startup_error(state: State<'_, AppState>) -> Option<String> {
     lock_rw(&state.startup_error).take()
 }
 
+// ─────────────── 每日签到(Trae / WorkBuddy 加油站)───────────────
+//
+// 设计见 `design-auto-checkin-2026-10-13.html`。三条红线:
+//   ① 独立开关、默认关:关掉就一个请求都不发(与 hidden_channels 同口径);
+//   ② 判因只看 code / HTTP / 域名,**永远不看 message 文案**;
+//   ③ 签到的状态不参与余额渲染 —— 签到失败不可能让余额显示成 0。
+//
+// 请求走**强制直连**(`checkin::direct_client`,不跟随系统代理):Trae 侧 9074 的成因之一
+// 是按出口 IP 排队限流,而系统代理/机场 IP 正是那类高发出口(设计稿裁决 4A)。
+
+/// 界面要的每个渠道的签到状态。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckinState {
+    id: String,
+    name: String,
+    enabled: bool,
+    auto: bool,
+    /// 今天的状态短码(claimed / already / retry:ready / retry:device / auth / inactive / shape / failed)
+    outcome: String,
+    credits: Option<f64>,
+    attempts: i64,
+    last_try_at: Option<i64>,
+    next_try_at: Option<i64>,
+    /// 现在能不能点「领积分」
+    can_try: bool,
+    /// 要去用户动手(凭据失效 / 结构变了)
+    needs_user: bool,
+    /// 拿不到凭据的原因(界面直接显示)
+    note: Option<String>,
+    /// 本月自动领到的合计(只算真领到的)
+    month_credits: f64,
+    /// 近 7 天流水
+    log: Vec<tokenscope_core::store::CheckinRow>,
+}
+
+/// 该渠道现在能不能拿到签到凭据;拿不到就把原因说清楚(界面照抄)。
+fn checkin_credential(app: &tauri::AppHandle, def: &checkin::CheckinDef) -> Result<checkin::Cred, String> {
+    match def.auth {
+        checkin::CheckinAuth::TraeApp => {
+            let c = appauth::candidates(appauth::App::Trae)
+                .into_iter()
+                .next()
+                .ok_or_else(|| "没检测到 Trae 登录信息 · 打开一次 Trae 即可".to_string())?;
+            let device_id = c
+                .device_id
+                .ok_or_else(|| "Trae 的 storage.json 里没读到设备号(签到需要它)".to_string())?;
+            Ok(checkin::Cred::Trae {
+                token: c.token,
+                device_id,
+            })
+        }
+        checkin::CheckinAuth::WebSession => {
+            let session = wb_session_of(app, def.id)
+                .ok_or_else(|| format!("未登录 {} 账号 · 在渠道卡上登录一次", def.name))?;
+            Ok(checkin::Cred::Web(session))
+        }
+    }
+}
+
+fn checkin_state_of(id: &str, cfg: &Config, store: &Store, note: Option<String>) -> CheckinState {
+    let def = checkin::find(id);
+    let c = cfg.checkin.get(id).cloned().unwrap_or_default();
+    let today = checkin::beijing_day(now_ts());
+    let now = now_ts();
+    let done = c.done_for_day(&today);
+    let waiting = c.next_try_at.map(|t| t > now).unwrap_or(false);
+    let outcome = c.last_code.clone().unwrap_or_default();
+    let needs_user = outcome.starts_with("auth") || outcome.starts_with("shape");
+    let log = store.recent_checkins(id, now - 7 * 86_400).unwrap_or_default();
+    let month_credits = store
+        .checkin_month_credits(id, &today[..7])
+        .unwrap_or(0.0);
+    CheckinState {
+        id: id.to_string(),
+        name: def.map(|d| d.name.to_string()).unwrap_or_else(|| id.to_string()),
+        enabled: c.enabled,
+        auto: c.auto,
+        outcome,
+        credits: c.last_credits,
+        attempts: c.attempts,
+        last_try_at: c.last_try_at,
+        next_try_at: c.next_try_at,
+        can_try: c.enabled && !done && !waiting,
+        needs_user,
+        note,
+        month_credits,
+        log,
+    }
+}
+
+/// 跑一次签到:查状态 → 可领就领 → 领完回查一次 → 触发一次取数做到账核对。
+/// 手动点与自动节拍器共用这一条路。
+async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<checkin::Outcome, String> {
+    let def = checkin::find(id).ok_or_else(|| format!("未知签到渠道: {id}"))?;
+    let cred = checkin_credential(app, def)?;
+    let client = checkin::direct_client();
+    let today = checkin::beijing_day(now_ts());
+    let now = now_ts();
+
+    // 查状态
+    let mut out = checkin::call(&client, def, &cred, false).await;
+    let mut credits: Option<f64> = match &out {
+        checkin::Outcome::Already(c) | checkin::Outcome::Claimed(c) => *c,
+        _ => None,
+    };
+
+    // 可领 → 领;领完**回查一次**(服务端可能已被客户端自己点掉,那种情况也算成功)
+    if matches!(&out, checkin::Outcome::Retry(m) if m == "ready") {
+        let claimed = checkin::call(&client, def, &cred, true).await;
+        credits = match &claimed {
+            checkin::Outcome::Claimed(c) | checkin::Outcome::Already(c) => c.or(credits),
+            _ => credits,
+        };
+        let back = checkin::call(&client, def, &cred, false).await;
+        out = match &back {
+            checkin::Outcome::Already(_) => checkin::Outcome::Claimed(credits),
+            _ => claimed,
+        };
+    }
+
+    // 到账核对:立刻取一轮(新包会出现在余额里),失败不影响签到结论
+    if matches!(out, checkin::Outcome::Claimed(_)) {
+        refresh_now(app).await;
+    }
+
+    // 落配置 + 落流水(凭据不进去)
+    {
+        let state = app.state::<AppState>();
+        let mut cfg = lock_rw(&state.config).clone();
+        let entry = cfg.checkin.entry(id.to_string()).or_default();
+        let same_day = entry.last_day.as_deref() == Some(today.as_str());
+        entry.attempts = if same_day { entry.attempts + 1 } else { 1 };
+        entry.last_day = Some(today.clone());
+        entry.last_code = Some(out.code());
+        entry.last_try_at = Some(now);
+        entry.last_credits = credits;
+        entry.next_try_at = if out.retryable() && checkin::should_retry(&out, entry.attempts) {
+            Some(now + checkin::next_delay(entry.attempts))
+        } else {
+            None
+        };
+        entry.last_message = match &out {
+            checkin::Outcome::Inactive(m) | checkin::Outcome::Retry(m) | checkin::Outcome::BadShape(m)
+            | checkin::Outcome::Failed(m) => Some(m.clone()),
+            _ => None,
+        };
+        let store = lock_rw(&state.store);
+        if let Err(e) = store.record_checkin(
+            id,
+            now,
+            &today,
+            &out.code(),
+            credits,
+            entry.attempts,
+            entry.last_message.as_deref().unwrap_or(""),
+        ) {
+            eprintln!("{e}");
+        }
+        if let Err(e) = cfg.save(&store) {
+            eprintln!("签到配置落库失败: {e}");
+        }
+        drop(store);
+        *lock_rw(&state.config) = cfg;
+    }
+    let _ = manual;
+    let _ = app.emit("checkin-updated", serde_json::json!({ "id": id }));
+    Ok(out)
+}
+
+#[tauri::command]
+async fn checkin_state(state: State<'_, AppState>) -> Result<Vec<CheckinState>, String> {
+    let cfg = lock_rw(&state.config).clone();
+    let list = {
+        let store = lock_rw(&state.store);
+        checkin::CHECKINS
+            .iter()
+            .map(|d| checkin_state_of(d.id, &cfg, &store, None))
+            .collect::<Vec<_>>()
+    };
+    Ok(list)
+}
+
+/// 手动领一次(渠道卡上的「领积分」)。
+#[tauri::command]
+async fn checkin_now(app: tauri::AppHandle, id: String) -> Result<CheckinState, String> {
+    let out = run_checkin(&app, &id, true).await?;
+    let state = app.state::<AppState>();
+    let cfg = lock_rw(&state.config).clone();
+    let store = lock_rw(&state.store);
+    let _ = out;
+    Ok(checkin_state_of(&id, &cfg, &store, None))
+}
+
+/// 每日节拍器:每 5 分钟看一次"今天该不该签"。
+/// **不塞进 poll_loop 的 60 秒里** —— 签到是写操作,节奏要跟取数分开(设计稿第 8 节)。
+fn spawn_checkin_ticker(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+            let (cfg, today, now) = {
+                let state = app.state::<AppState>();
+                let cfg = lock_rw(&state.config).clone();
+                (cfg, checkin::beijing_day(now_ts()), now_ts())
+            };
+            for def in checkin::CHECKINS {
+                let Some(c) = cfg.checkin.get(def.id) else { continue };
+                if !c.enabled || !c.auto {
+                    continue; // 关了就一个请求都不发
+                }
+                if c.done_for_day(&today) {
+                    continue;
+                }
+                if c.next_try_at.map(|t| t > now).unwrap_or(false) {
+                    continue; // 退避中
+                }
+                // 北京时间 00:23 + 该渠道抖动之后才允许(当天更晚也算 → 开机补跑)
+                if !checkin::due_now(now, &today, def.id) {
+                    continue;
+                }
+                if let Err(e) = run_checkin(&app, def.id, false).await {
+                    // 拿不到凭据:记一句就走,别每 5 分钟刷屏
+                    eprintln!("签到 {} 跳过: {e}", def.name);
+                }
+                // 两渠道之间串行 + 间隔(设计稿第 8 节)
+                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+            }
+        }
+    });
+}
+
 // ─────────────── 4SAPI 可用模型 + 一键配置到客户端 ───────────────
 //
 // 设计与取证见 `design-4sapi-models.html`。三条纪律:
@@ -1695,6 +1926,10 @@ pub fn run() {
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move { poll_loop(handle).await });
+            // 签到节拍器:独立于取数轮询(签到是写操作,节奏要分开)。
+            // **必须在原有 setup 里起** —— Tauri 的 Builder::setup 只有一个槽位,
+            // 再加一个会把 manage(AppState) 那套顶掉,应用会在第一条命令就 panic。
+            spawn_checkin_ticker(app.handle().clone());
 
             // 窗口配置为 visible:false,这里统一控制显隐:
             // 正常启动立即显示;开机自启带 --hidden,直接进托盘等用户点开
@@ -1751,6 +1986,8 @@ pub fn run() {
             inject_rollback,
             copy_model_bundle,
             open_path,
+            checkin_state,
+            checkin_now,
         ])
         .run(tauri::generate_context!())
         .expect("TokenScope 启动失败");

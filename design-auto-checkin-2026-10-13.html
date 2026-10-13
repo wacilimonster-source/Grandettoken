@@ -353,6 +353,61 @@
 </table>
 <div class="note"><b>方式：</b>沿用仓库既有套路——临时 <code>#[tokio::test]</code>（core 临时加 tokio dev-dependency）、只读、跑完删测试并还原 <code>Cargo.toml</code>，把原始响应当文本落盘到工作区再分析（先落盘再继续，防中途丢失）。</div>
 
+<h2>16. 实施与 M0 取证结果(2026-10-13,v0.1.26)</h2>
+
+<div class="say">
+  <div class="lab">一句话</div>
+  <p style="margin:0">M0 的七个探测里,<b>最要紧的两个一次通过</b>:Trae 的 status 认本机设备号;WorkBuddy 的
+  <b>Cookie 会话认签到接口</b> —— 第 4 节里"最大未知数"与第 15 节 P5 就此关闭,<b>不需要改登录走 OAuth</b>。
+  功能按 M1(手动)+ M2(自动)+ M3 的一部分(流水)落地。</p>
+</div>
+
+<h3>16.1 M0 取证(只读,真机)</h3>
+<table>
+<tr><th style="width:60px">探测</th><th>结果</th></tr>
+<tr><td>P1</td><td class="ok"><b>通了</b>:<code>POST api.trae.cn/trae/api/v2/ug/checkin_credits/status</code> →
+  HTTP 200 · <code>{"checked_in":true,"code":0,"credits":100,"did_checked_in":true,"enable":true,"extra_credits":100,"message":"success"}</code></td></tr>
+<tr><td>P2</td><td><code>{}</code> 与 <code>{"req_source":1}</code> <b>都返回 code=0</b> → 实现里用 <code>{}</code></td></tr>
+<tr><td>P3</td><td><b>设备号从 key 名取</b>:<code>iCubeAuthInfo://icube-dc:3974077616517587</code>(16 位十进制,两套 Trae 安装同一个号)。
+  实现落在 <code>appauth::trae_device_id_from_storage</code>,仍是只读同一份 <code>storage.json</code>。</td></tr>
+<tr><td>P4</td><td>跟随系统代理与强制直连<b>今天都通</b>(9074 未复现)→ 仍按裁决 4A 走<b>强制直连</b>(IP 限流是概率问题,不是每次都撞)</td></tr>
+<tr><td>P5</td><td class="ok"><b>Cookie 能打签到接口</b>:<code>checkin_now('workbuddy')</code> → <code>already · +100</code>。
+  第 4 节的 A 路线(改官方 OAuth)因此<b>不必做</b>;登录流程一个字没改。</td></tr>
+<tr><td>P6</td><td>WorkBuddy 的数额:这次 status 没走到"可领"分支(<b>今天已签</b>),<code>today_credit</code>/<code>daily_credit</code>
+  是否有值仍待明天观察;拿不到就按设计稿第 9 节走"余额差值"到账核对 ✔ 已实现为"领完立刻触发一次取数"</td></tr>
+<tr><td>P7</td><td>Trae 签到包 7 天还是 31 天:<b>今天没有可领的</b>,拿不到新包 → 留到明天领到后再看</td></tr>
+</table>
+
+<h3>16.2 落地范围</h3>
+<table>
+<tr><th style="width:70px">期</th><th>做到什么程度</th></tr>
+<tr><td>M1</td><td>渠道卡上的签到行(八种状态文案 + 「开启签到」/「领积分」/「重试」/「去登录」);
+  默认<b>关</b>,首次点一次才发请求(裁决 3A)</td></tr>
+<tr><td>M2</td><td>每日节拍器(独立于取数轮询):北京时间 00:23 + 按渠道抖动的 0–20 分钟;当天没成功 → 开机后自然补跑;
+  9074 退避 <code>[120,300,600,900,1200]</code> 秒、跨日清零;查状态与领取<b>两个窗口分开</b>;领前先查(幂等)、领后回查</td></tr>
+<tr><td>M3(部分)</td><td><code>checkin_log</code> 表(渠道/北京日/结果码/数额/次数/说明),设置页能看到近 7 天流水与"本月已领 N 分";
+  <b>没做</b>:托盘/胶囊的"今天还差 1 笔"、30 天日历、连续失败的通知(留待下一版)</td></tr>
+</table>
+
+<h3>16.3 与设计稿的偏差</h3>
+<table>
+<tr><th style="width:150px">项</th><th style="width:230px">设计稿</th><th>实现</th><th style="width:220px">原因</th></tr>
+<tr><td>WorkBuddy 凭据</td><td>先 C(Cookie 硬试)不通再 A(OAuth)</td><td><b>C 直接通过,没做 A</b></td><td>P5 实测 Cookie 就能签 —— 少一个本期最大的结构增量</td></tr>
+<tr><td>到账核对</td><td>"已领(待确认到账)" → "已领 +150(已到账)"两态</td><td>领完<b>立刻触发一次取数</b>,文案写「已领 +N 分 · 已触发到账核对」;<b>没有</b>"已到账"这个终态</td><td>要做"到账"终态得比对积分包列表的前后差;先保住"不谎报"(数额只来自平台字段),这一步留到明天有真领取时再补</td></tr>
+<tr><td>通知</td><td>连续 3 天失败才提示</td><td>未接系统通知;<code>checkin_notify</code> 配置项已留</td><td>本轮先从简:界面上的状态与流水已经能看出哪几天断了</td></tr>
+<tr><td>设置页落点</td><td>裁决 8A:并入「刷新与启动」</td><td>同(A),不新开页签</td><td>—</td></tr>
+</table>
+
+<h3>16.4 这次踩到的两个坑(与签到无关,但值得记)</h3>
+<ul>
+  <li><b>Tauri 的 <code>Builder::setup</code> 只有一个槽位</b>。我为了起签到节拍器又加了一个 <code>.setup()</code>,
+    把原有那个(负责 <code>manage(AppState)</code> 与轮询的)顶掉了 → 应用启动后第一条命令就
+    <code>state() called before manage()</code> panic。修法:节拍器挂在**原有 setup 的末尾**。</li>
+  <li><b>验证时必须确认在跑的是哪个二进制</b>。中间有一次 <code>build.ps1 build</code> 其实失败了(输出被
+    <code>tail</code> 截掉),我对着旧二进制又量了一轮、得出了"修复无效"的错误结论。加了两个 eprintln 探针
+    重编后才看清:修复是好的,只是没编进去。</li>
+</ul>
+
 <div class="foot">
   出处：接口与规则全部指向上表公开仓库的源码行号；<code>app/core/src/*.rs</code> 的行号来自本次会话读取（<code>providers.rs</code>、<code>appauth.rs</code>、<code>fetch.rs</code>、<code>config.rs</code>、<code>weblogin.rs</code>、<code>lib.rs</code>、<code>app.js</code>、<code>index.html</code>）。<br>
   本文档只做产品设计与调研，<b>未修改任何代码、未提交、未发版</b>。文中 <span class="tag t-tbd">待取证</span> 与 <span class="tag t-risk">冲突</span> 标记的条目，在 M0 之前不可当作事实写进实现。

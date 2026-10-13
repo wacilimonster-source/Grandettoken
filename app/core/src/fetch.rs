@@ -20,7 +20,7 @@ pub const EXPIRING_SOON_DAYS: i64 = 30;
 /// Cookie 型凭据要冒充的浏览器 UA。见 fetch_once 里的注释:网关按 UA 分流,
 /// 非浏览器 UA 一律 401。版本号写死没关系(网关只看"像不像浏览器"),
 /// 但别改成 `TokenScope/…`。
-const BROWSER_UA: &str =
+pub(crate) const BROWSER_UA: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) \
      Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0";
 
@@ -469,6 +469,7 @@ fn credentials(
                 Ok(Some(k)) => out.push(appauth::Credential {
                     token: k,
                     source: String::new(),
+                    device_id: None,
                 }),
                 Ok(None) => {}
                 Err(e) => err = Some(e),
@@ -478,6 +479,7 @@ fn credentials(
                     out.push(appauth::Credential {
                         token: session,
                         source: String::new(),
+                        device_id: None,
                     });
                 }
             }
@@ -1024,11 +1026,13 @@ mod tests {
         let session = appauth::Credential {
             token: "cookie:session=A; session_2=B".into(),
             source: String::new(),
+            device_id: None,
         };
         assert_eq!(auth_label(def, Some(&session)), "浏览器网页会话");
         let pasted = appauth::Credential {
             token: "eyJhbGciOi.abc".into(),
             source: String::new(),
+            device_id: None,
         };
         assert_eq!(auth_label(def, Some(&pasted)), "手动粘贴的密钥");
         // 过期指引必须指回挂件,不能再让人去开桌面客户端(那条路已被加密存储堵死)

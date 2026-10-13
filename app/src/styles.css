@@ -737,3 +737,16 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
   box-shadow:0 -12px 34px -14px #000c}
 .modl-in::-webkit-scrollbar{width:8px}
 .modl-in::-webkit-scrollbar-thumb{background:var(--line2);border-radius:9px;border:2px solid #151d2b}
+
+/* ── 每日签到:渠道卡上的一行 + 设置页的流水 ── */
+.ckwrap{margin-top:calc(7px*var(--u))}
+.ckrow{display:flex;align-items:center;gap:calc(8px*var(--u));justify-content:space-between;
+  font-size:max(11px,calc(11.5px*var(--u)));color:var(--tx2);
+  border:1px solid var(--line);background:#15181f;border-radius:calc(7px*var(--u));
+  padding:calc(5px*var(--u)) calc(8px*var(--u))}
+.ckrow span{flex:1;min-width:0;line-height:1.5}
+.ckrow.warn{border-color:#6b5327;color:#f0c67a}
+.ckrow .btn.s{flex:none}
+.cklog{font-size:max(10px,calc(10.5px*var(--u)));color:var(--tx3);line-height:1.8;
+  padding:0 0 calc(4px*var(--u));font-variant-numeric:tabular-nums}
+.cklog .ckd{color:var(--tx2);margin-right:2px}

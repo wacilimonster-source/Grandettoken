@@ -63,6 +63,21 @@ impl Store {
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+
+            -- 签到流水:唯一能回答"到底哪天断了"的凭据(设计稿第 9 节)。
+            -- 只记结果与数额,凭据/令牌一律不进这里。
+            CREATE TABLE IF NOT EXISTS checkin_log (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel  TEXT    NOT NULL,
+                ts       INTEGER NOT NULL,
+                day      TEXT    NOT NULL,
+                outcome  TEXT    NOT NULL,
+                credits  REAL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                detail   TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_checkin_lookup
+                ON checkin_log (channel, ts DESC);
             "#,
             )
             .map_err(|e| format!("初始化数据库失败: {e}"))?;
@@ -296,6 +311,104 @@ impl Store {
         self.conn
             .execute("DELETE FROM snapshots WHERE ts < ?1", params![before_ts])
             .map_err(|e| format!("清理旧快照失败: {e}"))
+    }
+}
+
+/// 一条签到流水(界面直接用)。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckinRow {
+    pub ts: i64,
+    pub day: String,
+    /// 结果短码(claimed / already / retry:… / auth / shape:… / failed:…)
+    pub outcome: String,
+    pub credits: Option<f64>,
+    pub attempts: i64,
+    pub detail: Option<String>,
+}
+
+impl Store {
+    /// 记一条签到流水。失败只打日志不打断 —— 签到本身已经发生,记不上账不该回滚事实。
+    pub fn record_checkin(
+        &self,
+        channel: &str,
+        ts: i64,
+        day: &str,
+        outcome: &str,
+        credits: Option<f64>,
+        attempts: i64,
+        detail: &str,
+    ) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT INTO checkin_log (channel, ts, day, outcome, credits, attempts, detail)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![channel, ts, day, outcome, credits, attempts, detail],
+            )
+            .map_err(|e| format!("写签到流水失败: {e}"))?;
+        Ok(())
+    }
+
+    /// 某渠道最近的签到流水(新的在前)。
+    pub fn recent_checkins(&self, channel: &str, since_ts: i64) -> Result<Vec<CheckinRow>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT ts, day, outcome, credits, attempts, detail FROM checkin_log
+                 WHERE channel = ?1 AND ts >= ?2 ORDER BY ts DESC LIMIT 400",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![channel, since_ts], |r| {
+                Ok(CheckinRow {
+                    ts: r.get(0)?,
+                    day: r.get(1)?,
+                    outcome: r.get(2)?,
+                    credits: r.get(3)?,
+                    attempts: r.get(4)?,
+                    detail: r.get(5)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// 某天该渠道的最后一条流水(判"今天处理过了吗")。
+    pub fn checkin_of_day(&self, channel: &str, day: &str) -> Result<Option<CheckinRow>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT ts, day, outcome, credits, attempts, detail FROM checkin_log
+                 WHERE channel = ?1 AND day = ?2 ORDER BY ts DESC LIMIT 1",
+            )
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query_map(params![channel, day], |r| {
+                Ok(CheckinRow {
+                    ts: r.get(0)?,
+                    day: r.get(1)?,
+                    outcome: r.get(2)?,
+                    credits: r.get(3)?,
+                    attempts: r.get(4)?,
+                    detail: r.get(5)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(rows.next().and_then(|r| r.ok()))
+    }
+
+    /// 本月的签到合计(界面上的"这个月自动领了多少分")。只算真领到的。
+    pub fn checkin_month_credits(&self, channel: &str, month_prefix: &str) -> Result<f64, String> {
+        let v: Option<f64> = self
+            .conn
+            .query_row(
+                "SELECT SUM(credits) FROM checkin_log
+                 WHERE channel = ?1 AND day LIKE ?2 AND outcome LIKE 'claimed%'",
+                params![channel, format!("{month_prefix}%")],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(v.unwrap_or(0.0))
     }
 }
 

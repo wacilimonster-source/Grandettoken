@@ -114,6 +114,11 @@ pub struct Config {
     /// Trae 的「选中项」写入。默认关:条目写入是确定性的,选中项的口径虽然已破译,
     /// 但客户端认不认只有真机能验,所以留成显式开关。
     pub trae_auto_select: bool,
+    /// 每日签到(Trae / WorkBuddy 加油站):渠道 id → 配置。**默认关**,
+    /// 首次要在渠道卡上点一次「开启签到」才发请求(设计稿裁决 3A)。
+    pub checkin: HashMap<String, crate::checkin::CheckinCfg>,
+    /// 签到出问题时要不要弹系统通知。成功的静默,只有连续失败才提示(裁决 6A)。
+    pub checkin_notify: bool,
 }
 
 impl Default for Config {
@@ -150,6 +155,8 @@ impl Default for Config {
             model_show_all: false,
             selection_prefix: HashMap::new(),
             trae_auto_select: false,
+            checkin: HashMap::new(),
+            checkin_notify: true,
         }
     }
 }
@@ -250,6 +257,34 @@ mod tests {
         assert_eq!(h.amount, 100.0);
         assert_eq!(h.min_interval_days, 7);
         assert_eq!(h.manual_last_at, Some(1_700_000_000));
+    }
+
+    /// 签到相关字段:老配置没有 → 空表 + 允许通知(功能默认关,不会自己发请求)。
+    #[test]
+    fn checkin_defaults_and_roundtrip() {
+        let old = r#"{"activeIntervalSec":60,"form":"panel","sort":"percent"}"#;
+        let c: Config = serde_json::from_str(old).unwrap();
+        assert!(c.checkin.is_empty(), "老配置里没有签到:空表,功能默认关");
+        assert!(c.checkin_notify);
+
+        let mut c2 = Config::default();
+        c2.checkin.insert(
+            "trae".into(),
+            crate::checkin::CheckinCfg {
+                enabled: true,
+                auto: true,
+                last_day: Some("2026-10-13".into()),
+                last_code: Some("already".into()),
+                attempts: 2,
+                last_credits: Some(100.0),
+                ..Default::default()
+            },
+        );
+        let back: Config = serde_json::from_str(&serde_json::to_string(&c2).unwrap()).unwrap();
+        let t = back.checkin.get("trae").expect("trae 的签到配置要能往返");
+        assert!(t.enabled && t.auto);
+        assert_eq!(t.last_day.as_deref(), Some("2026-10-13"));
+        assert_eq!(t.last_credits, Some(100.0));
     }
 
     /// 模型相关的新字段:老配置缺字段要能兜默认(入口跟随实测、分组跟随站点、

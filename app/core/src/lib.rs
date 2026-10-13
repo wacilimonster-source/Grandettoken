@@ -8,6 +8,7 @@
 #![recursion_limit = "256"]
 
 pub mod appauth;
+pub mod checkin;
 pub mod config;
 pub mod fetch;
 pub mod inject;

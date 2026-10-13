@@ -1288,6 +1288,7 @@ function renderChCards() {
         <div class="ccbody">
           ${keyBlock}
           ${claimBlock}
+      ${CHECKIN_ON.has(c.id) ? '<div class="ckwrap" data-id="' + esc(c.id) + '">' + ckRowHtml(c.id) + "</div>" : ""}
           <div class="ccord"><span class="mini">在列表中的位置</span>
             <span class="ord">
               <button class="btn ord" data-act="ordermove" data-id="${c.id}" data-dir="-1"${i === 0 ? " disabled" : ""} title="上移">&#9650;</button>
@@ -1667,6 +1668,7 @@ function openManage() {
   fillKeyHints();
   renderPillPick();
   renderAbout(UPD.last); // 版本号与上次检查时间
+  loadCheckin();         // 签到状态(渠道卡与设置页都用)
   document.body.classList.add("view-manage");
   $("btnS").classList.add("on");
 }
@@ -1961,6 +1963,31 @@ $("manage").addEventListener("click", async (e) => {
   const id = act.dataset.id;
   const a = act.dataset.act;
   // ── 模型页:过滤芯片 / 写入预告 / 写入 / 复制三件套 / 回滚 / 开目录 ──
+  // ── 签到:开启 / 切自动 / 领一次 / 去登录 ──
+  if (a === "ckenable") {
+    const on = !(CK[id] && CK[id].enabled);
+    await ckSetEnabled(id, on, null);
+    return;
+  }
+  if (a === "ckauto") {
+    const on = !(CK[id] && CK[id].auto);
+    await ckSetEnabled(id, null, on);
+    return;
+  }
+  if (a === "ckrun") {
+    if (CK_LOG) return;
+    await ckRun(id);
+    return;
+  }
+  if (a === "cklogin") {
+    // 凭据失效的两条指路:Trae 去开客户端;WorkBuddy 回渠道卡登录
+    if (id === "workbuddy") {
+      await invoke("workbuddy_login").catch((e) => showToast("打不开登录窗口:" + e, true));
+    } else {
+      showToast("打开一次 Trae 即可(它自己会续期)");
+    }
+    return;
+  }
   if (a === "mdlfilter") {
     const f = act.dataset.f;
     MDL.f[f] = !MDL.f[f];
@@ -2527,6 +2554,146 @@ document.addEventListener("keydown", (e) => {
 });
 
 
+// ───────────── 每日签到(Trae / WorkBuddy)─────────────
+// 设计见 design-auto-checkin-2026-10-13.html。三条不许破的规矩:
+//   ① 独立开关、默认关 —— 关掉就一个请求都不发;
+//   ② **不把"点了按钮"说成"领到了"**:数额只显示平台自己给的字段,拿不到就不写数字;
+//   ③ 签到状态**不参与余额渲染** —— 签到失败永远不可能让余额显示成 0。
+let CK = {};            // 渠道 id → checkin_state 的那一条
+let CK_LOG = false;     // 「领积分」正在跑
+const CHECKIN_ON = new Set(["trae", "workbuddy"]);
+
+/** 状态 → 一行字 + 一个按钮。八种状态照设计稿 7.2 的表。 */
+function ckText(s) {
+  if (!s) return null;
+  const n = s.credits === null || s.credits === undefined ? "" : " +" + s.credits;
+  const o = s.outcome || "";
+  if (!s.enabled) {
+    // 关着也要把最近一次已知状态带上:上一轮手动验过/刚关掉的人,不该看不到"其实今天已领"
+    const tail = o.startsWith("claimed") || o.startsWith("already") ? " · 今天已领" + n + " 分" : "";
+    return { text: "签到未开启(开了才会发请求)" + tail, btn: "开启签到", act: "ckenable" };
+  }
+  if (s.note) return { text: s.note, btn: "去登录", act: "cklogin", warn: true };
+  if (o.startsWith("claimed")) return { text: "今日已领" + n + " 分 · 已触发到账核对" };
+  if (o.startsWith("already")) return { text: "今日已领" + n + " 分(平台侧显示已签到)" };
+  if (o === "retry:ready") return { text: "今日可领" + n, btn: "领积分", act: "ckrun", cls: "p" };
+  if (o === "retry:device") return { text: "太挤了,今天还会自动再试(第 " + (s.attempts || 1) + "/5 次)", btn: "重试", act: "ckrun" };
+  if (o.startsWith("retry")) return { text: "上次没成功,今天还会再试(第 " + (s.attempts || 1) + "/5 次)", btn: "重试", act: "ckrun" };
+  if (o.startsWith("auth")) return { text: "凭据失效 —— 打开一次客户端 / 在渠道卡上登录一次", btn: "去登录", act: "cklogin", warn: true };
+  if (o.startsWith("inactive")) return { text: "加油站本期已结束(等下一期)" };
+  if (o.startsWith("shape")) return { text: "签到接口有变动,已暂停自动签到 · 余额显示不受影响", warn: true };
+  if (o.startsWith("failed")) return { text: "上次没成功:" + (s.lastMessage || o.slice(7)), btn: "重试", act: "ckrun" };
+  return { text: "今天还没签", btn: "领积分", act: "ckrun", cls: "p" };
+}
+
+function ckRowHtml(id) {
+  const s = CK[id];
+  if (!s) return "";
+  const t = ckText(s);
+  if (!t) return "";
+  return (
+    '<div class="ckrow' + (t.warn ? " warn" : "") + '" data-id="' + esc(id) + '">' +
+    "<span>" + esc(t.text) + "</span>" +
+    (t.btn ? '<button class="btn s ' + (t.cls || "") + '" data-act="' + t.act + '" data-id="' + esc(id) + '">' + esc(t.btn) + "</button>" : "") +
+    "</div>"
+  );
+}
+
+async function loadCheckin() {
+  try {
+    const list = await invoke("checkin_state");
+    CK = {};
+    for (const x of list) CK[x.id] = x;
+  } catch (e) {
+    CK = {};
+  }
+  // 渠道卡与设置页都跟着更新(哪个在场更新哪个)
+  if (document.body.classList.contains("view-manage")) {
+    renderCheckinSet();
+    document.querySelectorAll("#chList .ckwrap").forEach((el) => {
+      el.innerHTML = ckRowHtml(el.dataset.id);
+    });
+  }
+}
+
+/** 设置页的签到区:每渠道两个开关 + 近 7 天流水 + 免责。 */
+function renderCheckinSet() {
+  const box = $("ckSet");
+  if (!box) return;
+  const rows = [];
+  for (const id of CHECKIN_ON) {
+    const s = CK[id];
+    const on = s ? s.enabled : false;
+    const auto = s ? s.auto : true;
+    let logs = "";
+    if (s && s.log && s.log.length) {
+      logs =
+        '<div class="cklog">' +
+        s.log
+          .slice(0, 7)
+          .map(
+            (r) =>
+              '<span class="ckd">' + esc(r.day.slice(5)) + "</span>" +
+              esc((r.outcome || "").split(":")[0]) +
+              (r.credits ? " +" + r.credits : "")
+          )
+          .join(" · ") +
+        "</div>";
+    }
+    rows.push(
+      '<div class="field"><span>' + esc(s ? s.name : id) +
+        '<span class="desc">' +
+        (on ? (auto ? "每天 00:23 后自动领,失败当天退避重试" : "只保留手动「领积分」按钮") : "关着 —— 一个请求都不发") +
+        (s && s.month_credits ? " · 本月已领 " + s.month_credits + " 分" : "") +
+        "</span></span>" +
+        '<button class="sw' + (on ? " on" : "") + '" role="switch" aria-checked="' + on +
+        '" data-act="ckenable" data-id="' + esc(id) + '" aria-label="' + esc((s ? s.name : id) + " 签到") + '"></button></div>' +
+      (on
+        ? '<div class="field"><span>自动签到<span class="desc">关掉只留手动按钮</span></span>' +
+          '<button class="sw' + (auto ? " on" : "") + '" role="switch" aria-checked="' + auto +
+          '" data-act="ckauto" data-id="' + esc(id) + '" aria-label="自动签到"></button></div>'
+        : "") +
+      logs
+    );
+  }
+  box.innerHTML =
+    rows.join("") +
+    '<div class="khint" style="margin:8px 0 0">签到走<b>直连</b>(不经过系统代理):平台按出口 IP 限流,代理 IP 更容易被拒。' +
+    "签到状态与余额显示互不影响。</div>";
+}
+
+async function ckRun(id) {
+  CK_LOG = true;
+  try {
+    const st = await invoke("checkin_now", { id });
+    CK[st.id] = st;
+    const t = ckText(st);
+    if (st.outcome && st.outcome.startsWith("claimed")) showToast("已领到" + (st.credits ? " +" + st.credits + " 分" : ""));
+    else if (st.outcome && st.outcome.startsWith("already")) showToast("今天已经签过了");
+    else showToast(t && t.text ? t.text : "签到没成功", true);
+  } catch (e) {
+    showToast(String(e), true);
+  }
+  CK_LOG = false;
+  loadCheckin();
+}
+
+async function ckSetEnabled(id, on, auto) {
+  const cur = CFG.checkin && CFG.checkin[id];
+  CFG.checkin = CFG.checkin || {};
+  CFG.checkin[id] = Object.assign(
+    { enabled: false, auto: true, attempts: 0 },
+    cur || {},
+    on === null ? {} : { enabled: on },
+    auto === null || auto === undefined ? {} : { auto }
+  );
+  await invoke("set_config", { config: CFG }).catch((e) => showToast("保存失败:" + e, true));
+  if (on) {
+    showToast("已开启 " + (CK[id] ? CK[id].name : id) + " 签到");
+  }
+  loadCheckin();
+}
+
 // ───────────── 模型页:多来源 + 弹层确认 ─────────────
 // 设计见 design-models-multi-source.html。三条不变的口径:
 //   ① 列表只列「这个来源能用的 ∪ 已配置到这个来源的」,别的永不出现;
@@ -3077,6 +3244,10 @@ async function refresh() {
   await applyForm("panel", false);
   await refresh();
   playEntrance(); // 启动首帧也来一次入场(上面 applyForm 没换形态,不会自动放)
+
+  listen("checkin-updated", () => {
+    loadCheckin();
+  });
 
   listen("channels-updated", (ev) => {
     CHANNELS = ev.payload;

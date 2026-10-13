@@ -40,6 +40,10 @@ impl App {
 pub struct Credential {
     pub token: String,
     pub source: String,
+    /// Trae 的纯数字设备号(`iCubeAuthInfo://icube-dc:<数字>` 的键名里那串)。
+    /// **签到必需**:缺了或不是客户端注册过的号,接口恒定回 9074("当前参与用户太多")。
+    /// 仍然是只读同一份 storage.json,不额外读文件。
+    pub device_id: Option<String>,
 }
 
 /// Trae 的凭据键名(各版本一致)。
@@ -82,6 +86,7 @@ fn trae_candidates() -> Vec<Credential> {
             Some(Credential {
                 token,
                 source: (*dir).to_string(),
+                device_id: trae_device_id_from_storage(&raw),
             })
         })
         .collect()
@@ -103,6 +108,21 @@ fn trae_token_from_storage(storage_json: &str) -> Option<String> {
         return None;
     }
     Some(token.to_string())
+}
+
+/// 从 storage.json 的键名里取设备号:`iCubeAuthInfo://icube-dc:<纯数字>`。
+/// 号在**键名**里不在值里,所以不用解密;位数 12~20 位十进制(实测 16 位)。
+pub fn trae_device_id_from_storage(storage_json: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(storage_json).ok()?;
+    let obj = v.as_object()?;
+    for k in obj.keys() {
+        if let Some(num) = k.strip_prefix("iCubeAuthInfo://icube-dc:") {
+            if (12..=20).contains(&num.len()) && num.bytes().all(|b| b.is_ascii_digit()) {
+                return Some(num.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Trae `tc` 容器:base64 → [6 字节头][32 字节随机密钥][密文]。
@@ -223,6 +243,7 @@ fn codex_candidates() -> Vec<Credential> {
     vec![Credential {
         token,
         source: "CLI 登录态".into(),
+        device_id: None,
     }]
 }
 
@@ -285,6 +306,20 @@ mod tests {
         assert!(trae_token_from_storage(r#"{"a":1}"#).is_none());
         // 不是 JSON
         assert!(trae_token_from_storage("<<<").is_none());
+    }
+
+    /// 设备号:从键名取,位数/纯数字都要卡;没有就 None(签到会据此拒跑,而不是拿个假号去撞 9074)。
+    #[test]
+    fn trae_device_id_from_key_name() {
+        assert_eq!(
+            trae_device_id_from_storage(r#"{"iCubeAuthInfo://icube-dc:3974077616517587":"x"}"#).as_deref(),
+            Some("3974077616517587")
+        );
+        // UUID / hex 一律不认(那类号会被服务端拒)
+        assert!(trae_device_id_from_storage(r#"{"iCubeAuthInfo://icube-dc:abc-def":"x"}"#).is_none());
+        assert!(trae_device_id_from_storage(r#"{"iCubeAuthInfo://icube-dc:123":"x"}"#).is_none());
+        assert!(trae_device_id_from_storage(r#"{"iCubeAuthInfo://icube.cloudide":"x"}"#).is_none());
+        assert!(trae_device_id_from_storage("不是 json").is_none());
     }
 
     #[test]
