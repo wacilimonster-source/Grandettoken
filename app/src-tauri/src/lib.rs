@@ -894,6 +894,153 @@ fn take_startup_error(state: State<'_, AppState>) -> Option<String> {
     lock_rw(&state.startup_error).take()
 }
 
+// ─────────────── 本地密钥箱 ───────────────
+//
+// 设计见 `design-vault-and-hidden-restore.html` 第三节(裁决 1A–7A):
+//   · **密文在 Windows 凭据管理器**(服务名 `TokenScope:vault`),SQLite 只存索引(平台/标签/尾号/备注/时间)
+//     —— 列表渲染**不需要解密**,只有「查看/复制」才读出那一条;
+//   · 不导出、不自动使用、不同步上云、无主密码(边界 = 当前 Windows 账户)。
+
+/// 界面提交的新建/编辑请求。`key` 为空 = 只改平台/标签/备注,不动密钥。
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VaultInput {
+    id: Option<String>,
+    platform: String,
+    label: String,
+    #[serde(default)]
+    note: String,
+    #[serde(default)]
+    key: String,
+}
+
+#[tauri::command]
+async fn vault_list(state: State<'_, AppState>) -> Result<Vec<tokenscope_core::store::VaultItem>, String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let s = lock_rw(&store);
+        s.vault_list()
+    })
+    .await
+    .map_err(|e| format!("读取密钥箱失败: {e}"))?
+}
+
+/// 新建或编辑一条。**先写凭据、再写索引**:索引写失败就把刚写的凭据删掉,不留半条。
+#[tauri::command]
+async fn vault_save(
+    state: State<'_, AppState>,
+    item: VaultInput,
+) -> Result<tokenscope_core::store::VaultItem, String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        use tokenscope_core::vault;
+        let platform = vault::valid_platform(&item.platform)?;
+        let label = vault::valid_label(&item.label)?;
+        let key = item.key.trim().to_string();
+        let now = now_ts();
+
+        let s = lock_rw(&store);
+        let all = s.vault_list()?;
+        let existing = match item.id.as_deref() {
+            Some(id) => s.vault_get(id)?,
+            None => None,
+        };
+        if item.id.is_some() && existing.is_none() {
+            return Err("这条已经不在密钥箱里了(可能刚被删过)".into());
+        }
+        if vault::label_taken(&all, &platform, &label, item.id.as_deref()) {
+            return Err(format!("「{platform}」下已经有一个叫「{label}」的了"));
+        }
+
+        let id = existing
+            .as_ref()
+            .map(|e| e.id.clone())
+            .unwrap_or_else(vault::new_id);
+        let hint = if key.is_empty() {
+            existing
+                .as_ref()
+                .map(|e| e.hint.clone())
+                .unwrap_or_else(|| "••••".into())
+        } else {
+            // 先写凭据:写不进去就别动索引
+            secrets::vault_set(&id, &key)?;
+            secrets::mask_of(&key)
+        };
+        if existing.is_none() && key.is_empty() {
+            return Err("新建时要填密钥".into());
+        }
+        let out = tokenscope_core::store::VaultItem {
+            id: id.clone(),
+            platform,
+            label,
+            hint,
+            note: item.note.trim().to_string(),
+            created_at: existing.as_ref().map(|e| e.created_at).unwrap_or(now),
+            updated_at: now,
+        };
+        if let Err(e) = s.vault_upsert(&out) {
+            // 新建时回滚凭据,不留"索引里没有、凭据里有"的孤儿
+            if existing.is_none() {
+                let _ = secrets::vault_delete(&id);
+            }
+            return Err(e);
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| format!("保存失败: {e}"))?
+}
+
+#[tauri::command]
+async fn vault_delete(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        // 先删索引(用户视角"这条没了"),再删凭据;凭据删失败也不该把索引变回来
+        {
+            let s = lock_rw(&store);
+            s.vault_delete(&id)?;
+        }
+        if let Err(e) = secrets::vault_delete(&id) {
+            eprintln!("删密钥箱凭据失败({id}): {e}");
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("删除失败: {e}"))?
+}
+
+/// 取出明文(界面点「显示」时一次性返回,8 秒后界面自己收回)。
+#[tauri::command]
+async fn vault_reveal(state: State<'_, AppState>, id: String) -> Result<String, String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let exists = {
+            let s = lock_rw(&store);
+            s.vault_get(&id)?.is_some()
+        };
+        if !exists {
+            return Err("这条已经不在密钥箱里了".into());
+        }
+        match secrets::vault_get(&id)? {
+            Some(k) => Ok(k),
+            None => Err("索引还在但凭据丢了(可能被系统清理过),请重新录入".into()),
+        }
+    })
+    .await
+    .map_err(|e| format!("取密钥失败: {e}"))?
+}
+
+/// 复制:明文**不回前端**,后端读出来直接进剪贴板。
+#[tauri::command]
+async fn vault_copy(state: State<'_, AppState>, id: String) -> Result<String, String> {
+    let key = vault_reveal(state, id.clone()).await?;
+    tokio::task::spawn_blocking(move || {
+        copy_to_clipboard(&key).map(|_| "已复制到剪贴板".to_string())
+    })
+    .await
+    .map_err(|e| format!("复制失败: {e}"))?
+}
+
 // ─────────────── 每日签到(Trae / WorkBuddy 加油站)───────────────
 //
 // 设计见 `design-auto-checkin-2026-10-13.html`。三条红线:
@@ -2018,6 +2165,11 @@ pub fn run() {
             checkin_now,
             key_reveal,
             key_copy,
+            vault_list,
+            vault_save,
+            vault_delete,
+            vault_reveal,
+            vault_copy,
         ])
         .run(tauri::generate_context!())
         .expect("TokenScope 启动失败");

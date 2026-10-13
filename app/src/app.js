@@ -1840,6 +1840,13 @@ $("mTabs").addEventListener("click", (e) => {
   showTab(b.dataset.p);
   // 模型页签才去取清单:没打开就不打扰接口(价目表一天一次的手动/自动刷新)
   if (b.dataset.p === "mdl") ensureModels();
+  // 密钥箱:每次切进来都重新读索引(列表不需要解密,读起来很便宜);
+  // 重新渲染也会把已显示的明文收回
+  if (b.dataset.p === "vault") {
+    VAULT_REVEAL = {};
+    clearTimeout(vaultRevealTimer);
+    loadVault();
+  }
 });
 // 置顶:窗口状态与配置一起改(见 Rust 的 set_pin),按钮与设置项共用同一个值
 async function setPin(enabled) {
@@ -2001,6 +2008,13 @@ $("manage").addEventListener("change", async (e) => {
 });
 
 // 渠道卡上的操作:折叠/显隐/密钥保存删除/额度申请/排序/胶囊选择,全走 data-act
+$("manage").addEventListener("input", (e) => {
+  if (e.target && e.target.id === "vaultQ") {
+    VAULT_Q = e.target.value || "";
+    renderVault();
+  }
+});
+
 $("manage").addEventListener("click", async (e) => {
   const act = e.target.closest("[data-act]");
   if (!act) return;
@@ -2114,6 +2128,60 @@ $("manage").addEventListener("click", async (e) => {
     const card = act.closest(".ccard");
     card.classList.toggle("open");
     card.classList.contains("open") ? cardOpen.add(id) : cardOpen.delete(id);
+  } else if (a === "vnew") {
+    VAULT_EDIT = { platform: act.dataset.id || "", label: "", key: "", note: "" };
+    renderVault();
+    setTimeout(() => { const el = $("vPlat"); if (el) el.focus(); }, 30);
+  } else if (a === "vedit") {
+    const it = VAULT.find((x) => x.id === id);
+    if (it) {
+      VAULT_EDIT = { id: it.id, platform: it.platform, label: it.label, key: "", note: it.note };
+      renderVault();
+    }
+  } else if (a === "vcancel") {
+    VAULT_EDIT = null;
+    renderVault();
+  } else if (a === "vsave") {
+    await vaultSave();
+  } else if (a === "vdel") {
+    vaultDel(id);
+  } else if (a === "vdel-no") {
+    loadVault();
+  } else if (a === "vdel-yes") {
+    try {
+      await invoke("vault_delete", { id });
+      delete VAULT_REVEAL[id];
+      showToast("已删除");
+    } catch (e) {
+      showToast("删除失败:" + e, true);
+    }
+    await loadVault();
+  } else if (a === "vcopy") {
+    try {
+      const msg = await invoke("vault_copy", { id });
+      showToast(msg + " · 剪贴板对其他程序可见");
+    } catch (e) {
+      showToast("复制失败:" + e, true);
+    }
+  } else if (a === "vreveal") {
+    if (VAULT_REVEAL[id]) {
+      delete VAULT_REVEAL[id];
+      clearTimeout(vaultRevealTimer);
+      renderVault();
+    } else {
+      try {
+        VAULT_REVEAL[id] = await invoke("vault_reveal", { id });
+        renderVault();
+        clearTimeout(vaultRevealTimer);
+        // 8 秒后自动收回:明文不许留在界面上(切页签/搜索也会重绘收回)
+        vaultRevealTimer = setTimeout(() => {
+          VAULT_REVEAL = {};
+          renderVault();
+        }, 8000);
+      } catch (e) {
+        showToast("取密钥失败:" + e, true);
+      }
+    }
   } else if (a === "keycopy") {
     try {
       const msg = await invoke("key_copy", { id });
@@ -2639,6 +2707,129 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+
+// ───────────── 本地密钥箱 ─────────────
+// 设计见 design-vault-and-hidden-restore.html 第三节(1A–7A 已批)。
+// 三条要点:密文在 Windows 凭据管理器、SQLite 只存索引(列表不需要解密)、
+// 明文只在「显示」那一次回界面且 8 秒自动隐;「复制」根本不回前端。
+let VAULT = [];            // 索引列表(vault_list 的结果)
+let VAULT_Q = "";          // 搜索词
+let VAULT_EDIT = null;     // 正在编辑/新建的表单:{id?, platform, label, key, note}
+let VAULT_REVEAL = {};     // id → 明文(8 秒后删)
+let vaultRevealTimer = null;
+
+const VAULT_PLATFORM_HINT = ["4SAPI", "Hapi", "OpenCode Go", "DeepSeek", "OpenAI", "Anthropic", "Gemini", "Moonshot", "智谱", "阿里云百炼", "腾讯", "火山引擎"];
+
+async function loadVault() {
+  try {
+    VAULT = await invoke("vault_list");
+  } catch (e) {
+    VAULT = [];
+    showToast("读密钥箱失败:" + e, true);
+  }
+  renderVault();
+}
+
+function vaultGrouped() {
+  const out = new Map();
+  for (const it of VAULT) {
+    if (VAULT_Q && !`${it.platform} ${it.label} ${it.note}`.toLowerCase().includes(VAULT_Q.toLowerCase())) continue;
+    if (!out.has(it.platform)) out.set(it.platform, []);
+    out.get(it.platform).push(it);
+  }
+  return out;
+}
+
+function renderVault() {
+  const list = $("vaultList");
+  const form = $("vaultForm");
+  if (!list || !form) return;
+
+  // 表单(新建/编辑)
+  const e = VAULT_EDIT;
+  form.innerHTML = e
+    ? `<div class="kform">
+        <div class="kf"><span>平台</span><input class="inp" id="vPlat" list="vPlatList" value="${esc(e.platform)}" placeholder="如 4SAPI">
+          <datalist id="vPlatList">${VAULT_PLATFORM_HINT.map((p) => `<option value="${esc(p)}">`).join("")}</datalist></div>
+        <div class="kf"><span>标签</span><input class="inp" id="vLabel" value="${esc(e.label)}" placeholder="如 主号 / 备用"></div>
+        <div class="kf"><span>密钥</span><input class="inp" id="vKey" type="password" autocomplete="off" placeholder="${
+          e.id ? "留空 = 不改这把" : "粘贴密钥"
+        }"></div>
+        <div class="kf"><span>备注</span><input class="inp" id="vNote" value="${esc(e.note)}" placeholder="选填,如 充值用的那个"></div>
+        <div class="acts">
+          <button class="btn p" data-act="vsave">保存</button>
+          <button class="btn" data-act="vcancel">取消</button>
+          <span class="note" style="margin-left:6px">密钥写进 Windows 凭据管理器,列表里只留尾 4 位</span>
+        </div>
+      </div>`
+    : "";
+
+  if (!VAULT.length) {
+    list.innerHTML = `<div class="empty">密钥箱是空的<div style="margin-top:8px"><button class="btn p" data-act="vnew">新增一把密钥</button></div></div>`;
+    return;
+  }
+  const groups = vaultGrouped();
+  if (!groups.size) {
+    list.innerHTML = `<div class="empty">没有匹配的条目</div>`;
+    return;
+  }
+  list.innerHTML = [...groups.entries()]
+    .map(([plat, items]) => {
+      const rows = items
+        .map((it) => {
+          const plain = VAULT_REVEAL[it.id];
+          return `<div class="krow"><span class="k1">${esc(it.label)} · <span class="khint">${esc(it.hint)}</span>
+            ${it.note ? `<br><span class="dim">${esc(it.note)}</span>` : ""}
+            <br><span class="dim">${new Date(it.createdAt * 1000).toLocaleDateString("zh-CN")} 建${
+              it.updatedAt !== it.createdAt ? " · " + new Date(it.updatedAt * 1000).toLocaleDateString("zh-CN") + " 改" : ""
+            }</span></span>
+            <button class="btn s" data-act="vcopy" data-id="${esc(it.id)}" title="明文不回界面,直接进剪贴板">复制</button>
+            <button class="btn s" data-act="vreveal" data-id="${esc(it.id)}" title="显示明文,8 秒后自动隐">${
+              plain ? "收起" : "显示"
+            }</button>
+            <button class="btn s" data-act="vedit" data-id="${esc(it.id)}">改</button>
+            <button class="btn s danger" data-act="vdel" data-id="${esc(it.id)}">删</button></div>
+            ${plain ? `<div class="reveal" style="margin:-2px 0 6px">${esc(plain)}</div>` : ""}`;
+        })
+        .join("");
+      return `<div class="pf"><b>${esc(plat)}</b><span>${items.length} 把</span>
+        <span style="margin-left:auto"><button class="btn s" data-act="vnew" data-id="${esc(plat)}">+ 新增</button></span></div>${rows}`;
+    })
+    .join("");
+}
+
+/** 把表单里的内容提交(新建或改名/改备注/换密钥)。 */
+async function vaultSave() {
+  const e = VAULT_EDIT;
+  if (!e) return;
+  const payload = {
+    id: e.id || null,
+    platform: ($("vPlat").value || "").trim(),
+    label: ($("vLabel").value || "").trim(),
+    key: ($("vKey").value || "").trim(),
+    note: ($("vNote").value || "").trim(),
+  };
+  try {
+    await invoke("vault_save", { item: payload });
+    VAULT_EDIT = null;
+    showToast(e.id ? "已更新" : "已存进密钥箱");
+    await loadVault();
+  } catch (err) {
+    showToast(String(err), true);
+  }
+}
+
+/** 删除要内联确认(与渠道密钥删除同一套做法,不用原生 confirm)。 */
+function vaultDel(id) {
+  const row = document.querySelector(`.krow [data-act="vdel"][data-id="${id}"]`);
+  if (!row) return;
+  const strip = document.createElement("span");
+  strip.className = "cfrm";
+  strip.innerHTML = `删除这一把?<button class="btn s danger" data-act="vdel-yes" data-id="${esc(id)}">删除</button>
+    <button class="btn s" data-act="vdel-no">取消</button>`;
+  row.parentElement.appendChild(strip);
+  row.remove();
+}
 
 // ───────────── 每日签到(Trae / WorkBuddy)─────────────
 // 设计见 design-auto-checkin-2026-10-13.html。三条不许破的规矩:

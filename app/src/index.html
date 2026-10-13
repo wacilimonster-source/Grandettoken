@@ -77,6 +77,7 @@
       <button data-p="mdl">模型</button>
       <button data-p="disp">显示</button>
       <button data-p="run">刷新与启动</button>
+      <button data-p="vault">密钥箱</button>
       <button data-p="about">关于</button>
     </div>
 
@@ -182,7 +183,17 @@
         <input class="sel hk-rec" id="cfgHotkey" readonly placeholder="未设置"></div>
     </div>
 
-    <!-- 页签 4:关于 -->
+    <!-- 页签 5:密钥箱 —— 本地存各类平台的密钥:密文在 Windows 凭据管理器,这里只列索引 -->
+    <div class="mbody panel" data-p="vault">
+      <div class="khint">把各平台的密钥存在这里,平时<b>加密存放</b>(Windows 凭据管理器,绑当前 Windows 账户)。
+        列表只显示平台、标签与尾号 —— 点「显示」才取出明文,8 秒后自动隐;复制走系统剪贴板。
+        <b>不导出、不自动填到任何地方</b>。</div>
+      <input class="inp" id="vaultQ" placeholder="搜索平台 / 标签 / 备注…" autocomplete="off" spellcheck="false">
+      <div id="vaultForm"></div>
+      <div id="vaultList"></div>
+    </div>
+
+    <!-- 页签 6:关于 -->
     <div class="mbody panel" data-p="about">
       <h4>版本</h4>
       <div class="field">

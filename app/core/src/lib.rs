@@ -16,4 +16,5 @@ pub mod models;
 pub mod providers;
 pub mod secrets;
 pub mod store;
+pub mod vault;
 pub mod weblogin;

@@ -7,6 +7,56 @@
 
 const SERVICE: &str = "TokenScope";
 
+/// 密钥箱用**另一个服务名**:与渠道密钥分开,删渠道密钥不会碰到密钥箱里的条目,
+/// 反之亦然。密文同样由当前 Windows 账户的登录凭据保护。
+const VAULT_SERVICE: &str = "TokenScope:vault";
+
+fn vault_entry(id: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new(VAULT_SERVICE, id).map_err(|e| format!("凭据库不可用: {e}"))
+}
+
+/// 密钥箱:写一条。id 由调用方生成(与平台/标签解耦,改名不会丢密文)。
+pub fn vault_set(id: &str, key: &str) -> Result<(), String> {
+    let key = key.trim();
+    if key.is_empty() {
+        return Err("密钥不能为空".into());
+    }
+    vault_entry(id)?
+        .set_password(key)
+        .map_err(|e| format!("写入凭据失败: {e}"))
+}
+
+/// 密钥箱:读一条。Ok(None) = 没这条(索引与凭据不同步的情形由调用方处理)。
+pub fn vault_get(id: &str) -> Result<Option<String>, String> {
+    let e = vault_entry(id)?;
+    match e.get_password() {
+        Ok(k) => Ok(Some(k)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(err) => Err(format!("读取凭据失败: {err}")),
+    }
+}
+
+pub fn vault_delete(id: &str) -> Result<(), String> {
+    match vault_entry(id)?.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(format!("删除凭据失败: {e}")),
+    }
+}
+
+/// 尾 4 位掩码(纯函数,密钥箱与渠道密钥共用同一口径)。
+pub fn mask_of(key: &str) -> String {
+    let tail: String = key
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("••••{tail}")
+}
+
 fn entry(provider_id: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new(SERVICE, provider_id).map_err(|e| format!("凭据库不可用: {e}"))
 }
@@ -49,6 +99,5 @@ pub fn exists(provider_id: &str) -> bool {
 /// 只回显尾部 4 位,用于界面确认"存的是哪把 key",不泄露完整密钥。
 pub fn masked(provider_id: &str) -> Option<String> {
     let k = get(provider_id).ok().flatten()?;
-    let tail: String = k.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
-    Some(format!("••••{}", tail))
+    Some(mask_of(&k))
 }

@@ -78,6 +78,21 @@ impl Store {
             );
             CREATE INDEX IF NOT EXISTS idx_checkin_lookup
                 ON checkin_log (channel, ts DESC);
+
+            -- 密钥箱的**索引**。注意:这张表里没有密钥字段,也永远不该有 ——
+            -- 密文在 Windows 凭据管理器(服务名 TokenScope:vault),这里只存
+            -- 平台/标签/尾号/备注/时间,好让列表**不需要解密**就能渲染。
+            CREATE TABLE IF NOT EXISTS vault_items (
+                id         TEXT PRIMARY KEY,
+                platform   TEXT    NOT NULL,
+                label      TEXT    NOT NULL,
+                hint       TEXT    NOT NULL DEFAULT '',
+                note       TEXT    NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_vault_platform
+                ON vault_items (platform, created_at DESC);
             "#,
             )
             .map_err(|e| format!("初始化数据库失败: {e}"))?;
@@ -409,6 +424,100 @@ impl Store {
             )
             .map_err(|e| e.to_string())?;
         Ok(v.unwrap_or(0.0))
+    }
+}
+
+/// 密钥箱的一条**索引**(不含密钥)。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultItem {
+    pub id: String,
+    pub platform: String,
+    pub label: String,
+    /// 尾 4 位掩码(存下来,列表不需要解密)
+    pub hint: String,
+    pub note: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl Store {
+    pub fn vault_list(&self) -> Result<Vec<VaultItem>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, platform, label, hint, note, created_at, updated_at
+                 FROM vault_items ORDER BY platform COLLATE NOCASE, created_at DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(VaultItem {
+                    id: r.get(0)?,
+                    platform: r.get(1)?,
+                    label: r.get(2)?,
+                    hint: r.get(3)?,
+                    note: r.get(4)?,
+                    created_at: r.get(5)?,
+                    updated_at: r.get(6)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// 写索引(新建或改名/改备注)。密钥本身由 `secrets::vault_set` 负责。
+    pub fn vault_upsert(&self, it: &VaultItem) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT INTO vault_items (id, platform, label, hint, note, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT(id) DO UPDATE SET
+                   platform = excluded.platform, label = excluded.label,
+                   hint = excluded.hint, note = excluded.note, updated_at = excluded.updated_at",
+                params![
+                    it.id,
+                    it.platform,
+                    it.label,
+                    it.hint,
+                    it.note,
+                    it.created_at,
+                    it.updated_at
+                ],
+            )
+            .map_err(|e| format!("写密钥箱索引失败: {e}"))?;
+        Ok(())
+    }
+
+    pub fn vault_delete(&self, id: &str) -> Result<(), String> {
+        self.conn
+            .execute("DELETE FROM vault_items WHERE id = ?1", params![id])
+            .map_err(|e| format!("删密钥箱索引失败: {e}"))?;
+        Ok(())
+    }
+
+    pub fn vault_get(&self, id: &str) -> Result<Option<VaultItem>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, platform, label, hint, note, created_at, updated_at
+                 FROM vault_items WHERE id = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query_map(params![id], |r| {
+                Ok(VaultItem {
+                    id: r.get(0)?,
+                    platform: r.get(1)?,
+                    label: r.get(2)?,
+                    hint: r.get(3)?,
+                    note: r.get(4)?,
+                    created_at: r.get(5)?,
+                    updated_at: r.get(6)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(rows.next().and_then(|r| r.ok()))
     }
 }
 

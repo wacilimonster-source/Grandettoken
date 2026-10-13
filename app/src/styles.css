@@ -768,3 +768,14 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 .reveal{font-family:Consolas,monospace;font-size:max(10.5px,calc(11px*var(--u)));color:#8ee9b8;
   word-break:break-all;background:#132219;border:1px solid #2f6b43;border-radius:calc(7px*var(--u));
   padding:calc(6px*var(--u)) calc(8px*var(--u))}
+
+/* ── 密钥箱(v0.1.28)── */
+.kform{border:1px solid #3d5a8a;background:#151d2b;border-radius:calc(9px*var(--u));
+  padding:calc(9px*var(--u)) calc(10px*var(--u));margin:calc(8px*var(--u)) 0}
+.kf{display:flex;align-items:center;gap:calc(7px*var(--u));margin:calc(5px*var(--u)) 0}
+.kf>span{flex:none;width:calc(34px*var(--u));color:var(--tx3);font-size:max(11px,calc(11.5px*var(--u)))}
+.kf .inp{flex:1;min-width:0}
+.pf{display:flex;align-items:center;gap:calc(6px*var(--u));margin:calc(10px*var(--u)) 0 calc(5px*var(--u))}
+.pf b{font-size:max(11.5px,calc(12px*var(--u)));color:var(--tx2)}
+.pf span{font-size:max(10px,calc(10.5px*var(--u)));color:var(--tx3)}
+.btn.s.danger{border-color:#6b3230;color:#ffb4b0}
