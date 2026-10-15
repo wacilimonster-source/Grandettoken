@@ -1260,15 +1260,35 @@ CARGO_TARGET_DIR:构建直接在仓库里跑,产物落在 `app/src-tauri/target`
   还挡着就把「HH:MM:SS 刚查过,它还在运行」就地写出来并弹提示;放开了就直接接着写。
   同一处顺手加了两条:busy 闸(连点两次写入不再各备份一份)与成功提示带上生效方式
   (「已写入 Trae CN · 下次启动 Trae 时出现在模型列表里」)。
-- **还没验的一段(留给用户,约 30 秒)**:退出 Trae → 点「写入」→ 打开 Trae 看自定义模型里有没有它。
-  条目形状与用户手配的那条(见 `design-4sapi-models.html` 2.1 真文件节选)逐字段一致,
-  但"Trae 自己认不认"只有打开它才算数。
+- **真机端到端(用户授权后跑完)**:退出 Trae CN 全部进程 → 在挂件模型页点第一行
+  `claude-opus-4-5-20251101` 的 Trae 点 → 弹层「写入」→ 结果「Trae CN / TRAE SOLO CN 各新增 17 条」,
+  备份 `backup-inject/20261015-185058/state.vscdb`(921,600 B = 写入前那份,字节数一致)。
+- **磁盘核对**:Trae CN 组内条目 192 → 209(正好 +17,17 个 agent 组各一条);ItemTable 行数不变
+  (只改了两个 `model_list_map` 的值);条目字段与模板对齐(`base_url=…/v1/chat/completions`、
+  `config_source=3`、`status/selectable=true`、`ak` 51 字符)。
+- **Trae 自己认了(决定性证据)**:重新启动 Trae CN 后它重写了两张 `model_list_map` ——
+  在**当前在用的那张**(键名 `<id>_AI.agent.model.model_list_map`)把我们 7 个 agent 组的条目
+  **原样留下**(字段与 `custom_model_id=2061458791` 一字未改);旧那张(`<id>:AI.agent…`)
+  里我们写的 9 组被它清掉,而它自己的内置条目一条没动。Trae 自己的日志:
+  `[trae-chat-core][ModelRestrictionDiagnostic][provider] snapshot changed {"agentType":"solo_agent"…
+  "groupSequence":[{"group":"preset",…},{"group":"custom_models",
+  "models":["solo_agent_3_custom_openai_compatible_custom_openai_compatible//claude-opus-4-5-20251101_2061458791"]}]}`
+  —— 模型进了它自己的 `custom_models` 组,模型 key 口径与设计稿 2.1 破译的完全一致
+  (`<agent>_3_<provider>_<name>_<custom_model_id>`)。
+- **界面侧回读**:模型页第一行 Trae 点变成「已配置 · 点开可更新或取消写入」,弹层给
+  「取消写入(移除这条)」—— 写入/取消的闭环在真机上闭合。
+- **两处如实记下**:(a) 报告的「新增 17 条」是"写进去 17 条",Trae 启动后会清掉它不用的那套 agent 组,
+  这一代版本实际存活 **7 组**(solo_agent / builder / builder_v3 / chat_v3 / code_reviewer /
+  code_review_summary / refactor);(b) `TRAE SOLO CN` 的安装已不在(只剩数据目录),挂件按
+  "库存在即目标"的口径照样写了一份 17 条 —— 无害,但"没安装就跳过"是不是更好,是个产品决定。
+- **遗留**:真正发一条请求让它回话会产生真实计费,仍留给用户点。
 
 ### 还没真机验的部分(诚实清单)
 
-1. **写入后客户端真能跑起该模型**:**写入本身**已在真机真库的副本上验过(v0.1.31:17 组各一条、
-   幂等、精确可逆、回滚有效),但"发一条最小请求看它真的回话"会产生真实计费,所以不由挂件代跑 ——
-   留给用户点一次。
+1. **写入后客户端真能跑起该模型**:**写入**与"客户端自己认不认"都验完了(v0.1.31:真库副本上 17 组各一条、
+   幂等、精确可逆、回滚有效;用户授权后真机写了一次,Trae 重启后把我们 7 组条目留在当前在用的模型表里,
+   并把它记进自己的 `custom_models` 组 —— 见上面日志)。只剩"发一条最小请求看它真的回话"会产生真实计费,
+   不由挂件代跑。
 2. **WorkBuddy / WB AI 的选中项写入**:前缀学到之前只写条目。第一次在客户端里选中后,
    `inject_state` 会读到并记住口径,之后才自动写选中项。
 3. **Trae 的选中项**:实验开关默认关(口径已破译并有单测回归,但客户端认不认只有真机能验)。
