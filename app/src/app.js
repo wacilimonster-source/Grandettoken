@@ -3289,7 +3289,7 @@ function mdlRowHtml(r) {
       const cls = on ? " on" : running ? " run" : installed ? "" : " no";
       const tip = installed
         ? (on ? "已配置 · 点开可更新或取消写入" : "写入 " + st.label) +
-          (running ? "(正在运行 · 需先退出)" : "")
+          (running ? "(正在运行 · 先退出它再写,否则会被它覆盖)" : "")
         : "没检测到配置文件";
       return (
         '<button class="cdot' + cls + '" data-act="mdlcli" data-id="' + esc(r.id) + '" data-c="' + id +
@@ -3564,7 +3564,9 @@ function renderModelSheet() {
     (blocked ? '<div class="mdlwarn">' + esc(blocked.blocked) + "</div>" : "") +
     '<div class="acts">' +
     (blocked
-      ? '<button class="btn p" disabled>写入(已禁用)</button>'
+      ? '<button class="btn p" disabled>写入(' +
+        esc(/正在运行/.test(blocked.blocked) ? blocked.label + " 在运行,先退出它" : "当前不可写") +
+        ")</button>"
       : changed
       ? '<button class="btn p" data-act="injectgo">写入</button>'
       : '<button class="btn" disabled>内容一致 · 无需写入</button>') +

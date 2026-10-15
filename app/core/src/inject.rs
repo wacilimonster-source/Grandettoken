@@ -140,7 +140,11 @@ fn appdata() -> Option<PathBuf> {
 }
 
 /// Trae 的两个安装(CN 与 SOLO CN 各一套独立 DB)。名字与 `appauth::TRAE_DIRS` 同源。
-const TRAE_DIRS: [&str; 2] = ["Trae CN", "TRAE SOLO CN"];
+/// Trae 的安装/数据目录名。**版本改名会让这里落空** —— 2026-10-15 用户侧实测:
+/// 更新后只剩「Trae CN」,原来的「TRAE SOLO CN」已消失(用户口径:以前是 traesolo/traework,
+/// 现在最新版就叫 Trae)。所以与 `appauth::TRAE_DIRS` 保持同一份名单并多留历史名:
+/// 多列一个不花钱,漏一个就是"写了但客户端根本不读那份库"。
+const TRAE_DIRS: [&str; 4] = ["Trae CN", "TRAE SOLO CN", "Trae", "TraeWork"];
 
 /// 某套安装的候选根目录(用户级安装优先,再退到机器级)。
 fn install_roots(dir: &str) -> Vec<PathBuf> {
