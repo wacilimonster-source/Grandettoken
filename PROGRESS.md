@@ -1293,6 +1293,46 @@ CARGO_TARGET_DIR:构建直接在仓库里跑,产物落在 `app/src-tauri/target`
    `inject_state` 会读到并记住口径,之后才自动写选中项。
 3. **Trae 的选中项**:实验开关默认关(口径已破译并有单测回归,但客户端认不认只有真机能验)。
 
+## Trae 自定义模型:能持久的是「云端添加」,改本地库只是改缓存(2026-10-15)
+
+### v0.1.31 之后查清的真相
+
+用户给的文档(`~/Documents/Trae-CN/temp_20261015_01/Trae自定义模型-接口自动化添加说明.md`)
+指出 Trae「添加自定义模型」是**云端动作**;这轮顺着它把契约挖到了字节级,并在真机上跑通。
+
+- **契约(从 Trae 自己的 bundle 里挖出来,不是猜的)**:`resources/app/node_modules/@byted-icube/ai-modules-chat/dist/index.mjs`
+  - transport 信封:`{service:"model", method:"add_custom_model", data:{…}}`;HTTP 体 = 字段平铺 + `Request` 信封
+  - 字段:`provider`(自定义走 `custom_openai_compatible`)、`model_name`、`ak`、`is_custom:true`、
+    `auth_type`(枚举 API_KEY=0 / AK_SK=1)、`sk`、`region`、`base_url`、`custom_model_type`、
+    `config_detail{multimodal, model_hyper_params{max_tokens, prompt_max_tokens, thinking_enable,
+    temperature, top_p, top_k}, max_turn}`、`display_name`
+  - 编辑/删除:`update_custom_model`(action 枚举里有 UPDATE/DELETE,`id` 用 `custom_model_id`)
+  - 鉴权:`Authorization: Cloud-IDE-JWT <token>` + `X-Trae-Client-Type: ide`,host `trae-api-cn.mchost.guru`
+- **token 才是文档里那个 401 的根因**:`.trae-cn/trae-jwt-token`(925 字符,文件那份)怎么带都 401;
+  **`storage.json` 里 `iCubeAuthInfo://icube.cloudide`(tc 容器,解密后 1004 字符)那份才有效** ——
+  正是挂件签到一直在用的同一个凭据(签名:`Cloud-IDE-JWT` + `x-device-id`)。
+  真机实测:`GET /api/ide/v1/providers` → 200,只要 `Cloud-IDE-JWT` + `X-Trae-Client-Type: ide`,设备号/版本/区域都不需要。
+- **真机跑通**:`POST /api/ide/v1/add_custom_model`(4sapi 的 claude-opus-4-5-20251101)→
+  `{"code":0,"message":"success"}`;重启 Trae 后它把服务端那条**刷进本地缓存**
+  (`<uid>:AI.agent.model.model_list_map`,10 个 agent 组,`custom_model_id=2911517954` 由**服务端分配**),
+  用户界面侧从此认它。
+- **同一轮刷新把「我们写进本地库的条目」清掉了** —— 这正是 v0.1.31 那次的全部真相:
+  改 `state.vscdb` 只是改**缓存副本**(`model-list-fallback`),任何一次成功刷新都会重写;
+  界面列表来自服务端,所以"日志里认了、界面里没有"。
+- **服务端权威条目 vs 我们本地模板的差异**(实锤了我们模板哪里不对):
+  | 字段 | 我们写的 | 服务端真值 |
+  |---|---|---|
+  | `base_url` | `https://4sapi.com/v1/chat/completions` | **`https://4sapi.com/v1`**(由 Trae 自己拼路径) |
+  | `config_name` | 缺 | `custom_openai_compatible//<model>` |
+  | `custom_model_type` | 缺 | `""` |
+  | `use_remote_service` | 缺 | `false` |
+  | `prompt_max_tokens` | `null` | `1000000`(config_detail 里传了就有) |
+  其余(`config_source=3`、`auth_type=0`、`client_connect=true`、`display_name`=裸模型名、
+  `icon`/`features`/`context_window_size`/`max_turns`/`ak`/`sk=""`)与我们模板一致 —— 模板本身没白写。
+- **挂件侧待裁决**:要不要把「写入 Trae」改成走云端(账号级、跨设备持久、可被 `update_custom_model` 删除),
+  本地库那条降级为离线兜底(并把上面四个字段补齐)。用户 2026-10-15 已在 Trae 界面里成功手加过一条
+  (`OG-deepseek-v4.1-flash`,id 2923059202),说明界面/云端这条链路对他可用。
+
 ## 尚未实现 / 待验证
 
 - ~~布局修复的运行时验证~~ ✅ 已完成(2026-09-16):`build/verify-form.js`
