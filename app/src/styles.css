@@ -696,6 +696,18 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 .cdot:disabled{cursor:default}
 .cdot:active:not(:disabled){transform:scale(.94)}
 
+/* ── 模型基本信息(v0.1.32):逐项可复制,给"客户端自动写入不认时手工填"用 ── */
+.minfo{flex:none;margin-left:calc(5px*var(--u));padding:0 calc(4px*var(--u));cursor:pointer;
+  font-family:inherit;font-size:max(9.5px,calc(10px*var(--u)));line-height:1.5;vertical-align:1px;
+  border:1px dashed var(--line2);border-radius:calc(4px*var(--u));background:none;color:var(--tx3)}
+.minfo:hover{border-color:#55617d;color:var(--tx2)}
+.irow{display:flex;gap:calc(6px*var(--u));align-items:baseline;margin:calc(4px*var(--u)) 0;
+  font-size:max(10.5px,calc(11px*var(--u)))}
+.irow .ik{flex:none;width:calc(52px*var(--u));color:var(--tx3)}
+.irow .iv{flex:1;min-width:0;color:var(--tx);font-family:Consolas,monospace;
+  word-break:break-all;user-select:text}
+.irow .btn{flex:none}
+
 /* 写入预告 / 结果 / 客户端详情:长在列表下方,不弹新窗口(沿用删除密钥的内联确认) */
 .sheet{border:1px solid #3d5a8a;background:#151d2b;border-radius:calc(9px*var(--u));
   padding:calc(9px*var(--u)) calc(10px*var(--u));margin:calc(8px*var(--u)) 0}

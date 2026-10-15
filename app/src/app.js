@@ -2201,6 +2201,74 @@ $("manage").addEventListener("click", async (e) => {
     await openModelSheet(act.dataset.c, id, MDL.src);
     return;
   }
+  if (a === "mdlinfo") {
+    await openModelInfo(id, MDL.src);
+    return;
+  }
+  if (a === "infocopy") {
+    const sheet = MDL.sheet;
+    const v = infoFields(sheet)[id];
+    if (!v) {
+      showToast("这项没有值可复制", true);
+      return;
+    }
+    try {
+      await invoke("copy_text", { text: v });
+      showToast("已复制:" + id);
+    } catch (e) {
+      showToast("复制失败:" + e, true);
+    }
+    return;
+  }
+  if (a === "infocopyall") {
+    const f = infoFields(MDL.sheet);
+    const text = Object.keys(f)
+      .filter((k) => f[k] !== "" && !(k === "图片" && f[k] === "不支持"))
+      .map((k) => k + ":" + f[k])
+      .join("\n");
+    try {
+      await invoke("copy_text", { text });
+      showToast("已复制地址/名称等信息(密钥在下面单独复制)");
+    } catch (e) {
+      showToast("复制失败:" + e, true);
+    }
+    return;
+  }
+  if (a === "infokeycopy") {
+    const src = (MDL.sheet && MDL.sheet.source) || MDL.src;
+    try {
+      const msg = await invoke("key_copy", { id: src });
+      showToast(msg + " · 剪贴板对其他程序可见");
+    } catch (e) {
+      showToast("复制失败:" + e, true);
+    }
+    return;
+  }
+  if (a === "infokeyreveal") {
+    const box = document.querySelector('.reveal-box[data-rev="info"]');
+    if (!box) return;
+    if (box.dataset.on === "1") {
+      box.dataset.on = "0";
+      box.innerHTML = "";
+      clearTimeout(revealTimer);
+      return;
+    }
+    const src = (MDL.sheet && MDL.sheet.source) || MDL.src;
+    try {
+      const key = await invoke("key_reveal", { id: src });
+      box.dataset.on = "1";
+      box.innerHTML = `<div class="reveal" style="margin-top:4px">${esc(key)}</div>
+        <div class="note">8 秒后自动隐;切页签/刷新也会收回</div>`;
+      clearTimeout(revealTimer);
+      revealTimer = setTimeout(() => {
+        box.dataset.on = "0";
+        box.innerHTML = "";
+      }, 8000);
+    } catch (e) {
+      showToast("取密钥失败:" + e, true);
+    }
+    return;
+  }
   if (a === "mdlcli2") {
     // 客户端详情里的条目:来源由它的 data-src 决定(认不出的来源归"其它")
     const src = act.dataset.src || "";
@@ -3302,7 +3370,10 @@ function mdlRowHtml(r) {
   const price = mdlHasPrice() && !unusable ? mdlPriceText(r) : "";
   return (
     '<div class="mrow' + (configured ? " done" : "") + '">' +
-    '<div class="mtop"><span class="mname">' + esc(r.id) + '</span><span class="cdots">' + btns + "</span></div>" +
+    '<div class="mtop"><span class="mname">' + esc(r.id) +
+    '<button class="minfo" data-act="mdlinfo" data-id="' + esc(r.id) +
+    '" title="基本信息 · 逐项可复制(客户端里手填时用这个)">ⓘ</button>' +
+    '</span><span class="cdots">' + btns + "</span></div>" +
     '<div class="mtags">' + esc(bits.join(" · ")) + badges.join("") + "</div>" +
     (price ? '<div class="mprice ' + mdlPriceTone(r) + '">' + esc(price) + "</div>" : "") +
     "</div>"
@@ -3398,6 +3469,11 @@ function renderModelSheet() {
     return;
   }
   ov.style.display = "flex";
+
+  if (s.kind === "info") {
+    box.innerHTML = infoSheetHtml(s);
+    return;
+  }
 
   if (s.kind === "client") {
     const c = MDL.clients.find((x) => x.client === s.client);
@@ -3617,6 +3693,89 @@ async function loadInjects() {
   renderModels();
   renderModelSheet();
 }
+/** 模型基本信息里那几行(标签 → 要复制的值)。逐项复制与「复制全部」共用一份口径。 */
+function infoFields(s) {
+  const i = (s && s.info) || {};
+  return {
+    模型名: i.id || "",
+    显示名: i.displayName || "",
+    接口地址: i.baseUrl || "",
+    完整端点: i.endpoint || "",
+    上下文: i.contextTokens ? String(i.contextTokens) : "",
+    图片: i.multimodal ? "支持" : "不支持",
+  };
+}
+
+/** 模型基本信息弹层:手工在客户端里新建自定义模型时照着填的那几个值。
+ * 密钥在这里只给后四位,「显示」才出明文(key_reveal,8 秒自动收回)。 */
+function infoSheetHtml(s) {
+  const head =
+    '<div class="ov-h"><b>' + esc(s.model) + '</b><span class="dim" style="font-size:11px">' +
+    esc(s.sourceName || s.source || "") +
+    ' 基本信息 <span data-act="mdlclose" style="cursor:pointer">✕</span></span></div>';
+  if (s.error) {
+    return (
+      head + '<div class="mdlwarn">' + esc(s.error) + "</div>" +
+      '<div class="acts"><button class="btn p" data-act="mdlclose">关闭</button></div>'
+    );
+  }
+  if (!s.info) return head + '<div class="dim">正在读取…</div>';
+  const f = infoFields(s);
+  const tips = {
+    模型名: "OpenAI 兼容接口的 model 参数;Trae 里也是它",
+    显示名: "WorkBuddy / ZCode 里的名字口径(Trae 用上面的模型名)",
+    接口地址: "base_url,到 /v1 为止",
+    完整端点: "有的客户端要完整地址(…/chat/completions)",
+    上下文: "上下文窗口(token);取不到就不显示",
+    图片: "能不能收图",
+  };
+  const rows = Object.keys(f)
+    .filter((k) => f[k] !== "" && !(k === "图片" && f[k] === "不支持"))
+    .map(
+      (k) =>
+        '<div class="irow"><span class="ik" title="' + esc(tips[k] || "") + '">' + esc(k) + "</span>" +
+        '<span class="iv">' + esc(f[k]) + "</span>" +
+        '<button class="btn s" data-act="infocopy" data-id="' + esc(k) + '">复制</button></div>'
+    )
+    .join("");
+  const keyRow = s.info.hasKey
+    ? '<div class="krow"><span class="k1">API Key · <span class="khint">' +
+      esc(s.info.keyHint || "••••") + "</span></span>" +
+      '<button class="btn s" data-act="infokeycopy" title="复制整把密钥(明文不回界面)">复制</button>' +
+      '<button class="btn s" data-act="infokeyreveal" title="显示明文,8 秒后自动隐">显示</button></div>' +
+      '<div class="reveal-box" data-rev="info"></div>'
+    : '<div class="mdlwarn">还没配 ' + esc(s.sourceName || s.source) +
+      " 密钥 —— 先在「渠道」页签填一次,这里才有可复制的密钥(地址与模型名照样能复制)。</div>";
+  return (
+    head +
+    '<div class="note">这些就是挂件往客户端里写的那几个值。自动写入客户端不认的时候,' +
+    "可以对着这几行在客户端自己的「自定义模型」里手填一遍。</div>" +
+    rows + keyRow +
+    '<div class="acts">' +
+    '<button class="btn" data-act="infocopyall">复制全部(不含密钥)</button>' +
+    '<button class="btn p" data-act="mdlclose">关闭</button></div>'
+  );
+}
+
+/** 打开某个模型的「基本信息」(纯读:不写盘、不碰任何客户端)。 */
+async function openModelInfo(model, source) {
+  const src = source || MDL.src;
+  const sheet = { kind: "info", mode: "info", model, source: src };
+  MDL.sheet = sheet;
+  renderModelSheet();
+  let info, failure = "";
+  try {
+    info = await invoke("model_info", { source: src, model });
+  } catch (e) {
+    failure = String(e);
+  }
+  if (MDL.sheet !== sheet) return;
+  sheet.info = info;
+  sheet.sourceName = (MDL.sources.find((x) => x.id === src) || {}).name || src;
+  if (failure) sheet.error = failure;
+  renderModelSheet();
+}
+
 /** 打开某个模型 × 某个客户端的弹层(纯读,还没有任何写盘动作)。 */
 async function openModelSheet(client, model, source) {
   const src = source || MDL.src;

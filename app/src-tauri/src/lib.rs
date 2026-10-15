@@ -2203,6 +2203,90 @@ async fn copy_model_bundle(
     .map_err(|e| format!("复制失败: {e}"))?
 }
 
+/// 模型基本信息:手工在客户端里新建自定义模型时该填的那几个值。
+///
+/// 为什么要有这条:自动写入有时客户端不认(真机:Trae 的日志把条目收进了 custom_models,
+/// 界面列表却没出现),那时候用户得自己在这个客户端的"自定义模型"里手填一遍。
+/// 所以他得能看见这些值 —— 密钥在这里**只给后四位**,明文走 key_reveal 那条专用路。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelInfoView {
+    /// 模型标识(OpenAI 兼容接口的 model 参数;Trae 里也是它)
+    id: String,
+    /// 客户端里的显示名口径(`4S-<id>`;WorkBuddy / ZCode 用这个)
+    display_name: String,
+    source: String,
+    source_name: String,
+    /// base_url(到 /v1 为止)
+    base_url: String,
+    /// 完整端点(有的客户端要 `.../chat/completions`)
+    endpoint: String,
+    context_tokens: Option<i64>,
+    multimodal: bool,
+    has_key: bool,
+    /// 密钥后四位(取不到就是 None)
+    key_hint: Option<String>,
+}
+
+#[tauri::command]
+async fn model_info(
+    state: State<'_, AppState>,
+    source: Option<String>,
+    model: String,
+) -> Result<ModelInfoView, String> {
+    let store = state.store.clone();
+    let cfg = lock_rw(&state.config).clone();
+    tokio::task::spawn_blocking(move || {
+        let src = need_source(source)?;
+        let def = models::find_source(&src).ok_or_else(|| format!("未知模型来源: {src}"))?;
+        let model = model.trim().to_string();
+        if model.is_empty() {
+            return Err("没有指定模型".into());
+        }
+        // 与写入用同一份清单:上下文/多模态从价目表来,未知就不编(不要求必须配了密钥 ——
+        // 没配密钥的来源也要能把地址和模型名给人看)
+        let cache = {
+            let s = lock_rw(&store);
+            models::ModelCache::load(&s)
+        };
+        let row = cache
+            .as_ref()
+            .and_then(|c| c.catalog().ok())
+            .and_then(|cat| cat.find(&model).cloned());
+        let base = source_base(&cfg, cache.as_ref(), def);
+        let key = source_key(def.id);
+        Ok(ModelInfoView {
+            id: model.clone(),
+            display_name: format!("{}{}", inject::OUR_NAME_PREFIX, model),
+            source: def.id.to_string(),
+            source_name: def.name.to_string(),
+            endpoint: format!("{}/chat/completions", base.trim_end_matches('/')),
+            base_url: base,
+            context_tokens: row
+                .as_ref()
+                .and_then(|r| r.context.as_deref())
+                .and_then(models::context_tokens),
+            multimodal: row.as_ref().map(|r| r.multimodal).unwrap_or(false),
+            has_key: key.is_some(),
+            key_hint: key.as_deref().map(secrets::mask_of),
+        })
+    })
+    .await
+    .map_err(|e| format!("取模型信息失败: {e}"))?
+}
+
+/// 复制任意一段文本到剪贴板(模型信息的逐项复制)。**明文密钥不走这里** ——
+/// 那一条有 key_copy 专用路(明文不回前端)。
+#[tauri::command]
+async fn copy_text(text: String) -> Result<(), String> {
+    if text.trim().is_empty() {
+        return Err("没有可复制的内容".into());
+    }
+    tokio::task::spawn_blocking(move || copy_to_clipboard(&text))
+        .await
+        .map_err(|e| format!("复制失败: {e}"))?
+}
+
 /// 渠道密钥的明文(用户点「显示」时一次性返回)。**这是产品里唯一把密钥回前端的路径**,
 /// 所以只有用户显式点击才会走到这里;界面侧 8 秒自动收回,不留驻。密钥型渠道以外没有可取的。
 #[tauri::command]
@@ -2531,6 +2615,8 @@ pub fn run() {
             inject_state,
             inject_rollback,
             copy_model_bundle,
+            model_info,
+            copy_text,
             open_path,
             checkin_state,
             checkin_now,
