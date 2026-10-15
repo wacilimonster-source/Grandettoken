@@ -3561,17 +3561,27 @@ function renderModelSheet() {
           )
           .join("")
       : "") +
-    (blocked ? '<div class="mdlwarn">' + esc(blocked.blocked) + "</div>" : "") +
+    (blocked
+      ? '<div class="mdlwarn">' + esc(blocked.blocked) +
+        '<div class="note">退出它之后直接再点一次下面的按钮就行 —— 按钮会自己重查一遍,这个窗口不用关。' +
+        (s.recheckAt ? "(" + esc(s.recheckAt) + " 刚查过,它还在运行)" : "") +
+        "</div></div>"
+      : "") +
     '<div class="acts">' +
     (blocked
-      ? '<button class="btn p" disabled>写入(' +
-        esc(/正在运行/.test(blocked.blocked) ? blocked.label + " 在运行,先退出它" : "当前不可写") +
-        ")</button>"
+      ? /正在运行/.test(blocked.blocked)
+        // 别在这里禁掉按钮:用户常常是**弹层开着的时候**才去退客户端,禁掉的按钮
+        // 点了毫无反应,看着就像"写入没成功"(实机反馈)。所以按钮留着,点它 = 重查。
+        ? '<button class="btn p"' + (s.busy ? " disabled" : ' data-act="injectgo"') + ">" +
+          esc(s.busy ? "正在重查…" : "写入(" + blocked.label + " 在运行 · 点这里重查)") + "</button>"
+        : '<button class="btn p" disabled>写入(当前不可写)</button>'
       : changed
-      ? '<button class="btn p" data-act="injectgo">写入</button>'
+      ? '<button class="btn p" data-act="injectgo"' + (s.busy ? " disabled" : "") + ">" +
+        (s.busy ? "写入中…" : "写入") + "</button>"
       : '<button class="btn" disabled>内容一致 · 无需写入</button>') +
-    (removals.length && !blocked
-      ? '<button class="btn danger" data-act="injectrm">取消写入(移除这条)</button>'
+    (removals.length
+      ? '<button class="btn danger" data-act="injectrm"' + (s.busy ? " disabled" : "") + ">" +
+        "取消写入(移除这条)</button>"
       : "") +
     '<button class="btn" data-act="mdlcopy" data-id="' + esc(s.model) + '">复制三件套</button>' +
     '<button class="btn" data-act="mdlclose">取消</button></div>';
@@ -3630,23 +3640,70 @@ async function openModelSheet(client, model, source) {
   renderModelSheet();
 }
 /** 确认写入:预告看过之后才走到这里。 */
+/** 点「写入 / 取消写入」前先重查一次"客户端还在不在运行"。
+ *
+ * 为什么要有这一步:用户常常是**弹层已经开着**的时候才去退客户端。以前这里是个禁用的
+ * 按钮 —— 退完客户端回来一看按钮还是灰的、点了毫无反应,看着就像"写入没成功"
+ * (实机反馈)。现在按钮留着可点,点它 = 重新生成一次预告:还挡着就把原因跟时间点
+ * 就地写出来,放开了就继续做原先那件事。
+ * 返回 true = 可以继续;false = 还被挡着(界面已更新,调用方直接收手)。 */
+async function mdlRecheck(s) {
+  if (!(s.previews || []).some((p) => p.blocked)) return true;
+  s.busy = true;
+  renderModelSheet();
+  let fresh;
+  try {
+    fresh = await invoke("inject_preview", { client: s.client, source: s.source, model: s.model });
+  } catch (e) {
+    if (MDL.sheet === s) {
+      s.busy = false;
+      s.error = String(e);
+      renderModelSheet();
+    }
+    return false;
+  }
+  if (MDL.sheet !== s) return false;
+  s.busy = false;
+  s.previews = fresh;
+  const still = (fresh || []).find((p) => p.blocked);
+  s.recheckAt = new Date().toTimeString().slice(0, 8);
+  renderModelSheet();
+  if (still) {
+    showToast(s.recheckAt + " 查过:" + (still.label || "") + " 还在运行,先退出它再点一次", true);
+    return false;
+  }
+  return true;
+}
+
 async function injectGo() {
   const s = MDL.sheet;
-  if (!s || !s.model) return;
+  if (!s || !s.model || s.busy) return;
+  if (!(await mdlRecheck(s))) return;
+  s.busy = true;
+  renderModelSheet();
   try {
     s.reports = await invoke("inject_apply", { client: s.client, source: s.source, model: s.model });
-    showToast("已写入 " + (CLIENT_NAME[s.client] || s.client));
+    const ok = (s.reports || []).filter((r) => !r.error);
+    // 只有一家、且写成了的时候才把"怎么生效"顺带说一句 —— 多家时详情在结果里
+    showToast(
+      "已写入 " + (CLIENT_NAME[s.client] || s.client) +
+        (s.reports.length === 1 && ok.length === 1 ? " · " + ok[0].effect : "")
+    );
   } catch (e) {
     s.error = String(e);
   }
+  s.busy = false;
   renderModelSheet();
   loadInjects();
 }
 /** 取消写入:把这条模型从客户端里删掉。 */
 async function injectRemove() {
   const s = MDL.sheet;
-  if (!s || !s.model) return;
+  if (!s || !s.model || s.busy) return;
+  if (!(await mdlRecheck(s))) return;
   s.mode = "remove";
+  s.busy = true;
+  renderModelSheet();
   try {
     s.reports = await invoke("inject_remove", { client: s.client, source: s.source, model: s.model });
     const n = s.reports.reduce((a, r) => a + (r.removed || 0), 0);
@@ -3654,6 +3711,7 @@ async function injectRemove() {
   } catch (e) {
     s.error = String(e);
   }
+  s.busy = false;
   renderModelSheet();
   loadInjects();
 }
