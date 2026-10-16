@@ -227,6 +227,30 @@ body{
   overflow:hidden;text-overflow:ellipsis}
 .spark{height:calc(30px*var(--u));display:flex;align-items:flex-end;gap:calc(2px*var(--u));margin-bottom:calc(9px*var(--u))}
 .spark i{flex:1;background:#3d5c92;border-radius:1px;min-height:1px}
+/* 缺口柱:那段没观测,数字只算了一半 —— 斜纹与实心柱在灰度下也能分开 */
+.spark i.gap{background:repeating-linear-gradient(45deg,#5a6c96 0 2px,#2b3448 2px 4px)}
+/* 变动台账(展开区) */
+.ledger{border:1px solid var(--line);border-radius:calc(8px*var(--u));margin-top:calc(9px*var(--u));
+  padding:calc(4px*var(--u)) calc(9px*var(--u));background:var(--bg2)}
+.ledger .ldh{display:flex;justify-content:space-between;font-size:max(11.5px,calc(11px*var(--u)));
+  color:var(--tx3);padding:calc(3px*var(--u)) 0 calc(5px*var(--u));border-bottom:1px dashed var(--line)}
+.ledger .lrow{display:flex;gap:calc(8px*var(--u));align-items:baseline;padding:calc(4px*var(--u)) 0;
+  border-bottom:1px dashed var(--line);font-size:max(11.5px,calc(11.5px*var(--u)))}
+.ledger .lrow:last-child{border-bottom:0}
+.ledger .lt{color:var(--tx3);flex:none;font-variant-numeric:tabular-nums}
+.ledger .lrow b{flex:none;font-weight:600;font-variant-numeric:tabular-nums}
+.ledger .lx{color:var(--tx3);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ledger .lx i{font-style:normal;color:var(--warn);margin-left:calc(5px*var(--u))}
+/* 渠道卡里的「测试连接」结果行(自检报告;不含任何密钥) */
+.prb{font-size:max(11.5px,calc(11.5px*var(--u)));color:var(--tx2);line-height:1.7;
+  padding:calc(3px*var(--u)) 0 0 calc(2px*var(--u));word-break:break-all}
+.prb:empty{display:none}
+.okc{color:var(--ok)} .badc{color:var(--bad)}
+/* 体检报告(关于页) */
+.diagout{background:#0d1017;border:1px solid var(--line);border-radius:calc(8px*var(--u));
+  padding:calc(9px*var(--u)) calc(11px*var(--u));margin:calc(9px*var(--u)) 0 0;
+  font:max(11.5px,calc(11.5px*var(--u)))/1.75 Consolas,monospace;white-space:pre-wrap;
+  max-height:calc(260px*var(--u));overflow:auto;color:#cfd6e4}
 .acts{display:flex;gap:calc(6px*var(--u));flex-wrap:wrap}
 .btn{border:1px solid var(--line2);background:var(--bg3);color:var(--tx2);font-size:max(11.5px,calc(12px*var(--u)));
   padding:calc(4px*var(--u)) calc(9px*var(--u));border-radius:calc(6px*var(--u));cursor:pointer;font-family:inherit}
@@ -457,9 +481,24 @@ body.form-pill .sum,
 body.form-pill .manage,
 body.form-pill .foot{display:none}
 body.form-pill .list{display:none}
-.pill-body{display:none;align-items:center;gap:calc(8px*var(--u));padding:calc(7px*var(--u)) calc(7px*var(--u)) calc(7px*var(--u)) calc(9px*var(--u));flex:1;
-  cursor:pointer;overflow:hidden}
+.pill-body{display:none;align-items:center;gap:calc(8px*var(--u));padding:calc(7px*var(--u)) calc(7px*var(--u)) calc(7px*var(--u)) calc(9px*var(--u));flex:1;  cursor:pointer;overflow:hidden}
 body.form-pill .pill-body{display:flex}
+/* 胶囊单击速览(裁决 7A):窗口临时向上长高 --peekh,留出的空间给气泡。
+   气泡绝对定位在 body 的 padding 区里(= 新增的那条),不用改任何现有布局。 */
+body.peek-open{padding-top:var(--peekh,0)}
+.pill-peek{display:none;position:absolute;left:calc(8px*var(--u));right:calc(8px*var(--u));
+  top:calc(6px*var(--u));z-index:60;background:#171a21;border:1px solid var(--ac);
+  border-radius:calc(10px*var(--u));padding:calc(8px*var(--u)) calc(10px*var(--u));
+  font-size:max(11.5px,calc(12px*var(--u)));line-height:1.62;overflow:hidden;
+  box-shadow:0 calc(12px*var(--u)) calc(28px*var(--u)) rgba(0,0,0,.5)}
+.pill-peek.on{display:block}
+/* 每行一句话、不许折行 —— 气泡在窄胶囊上也要是可预期的高度(高度由 JS 按实测留出) */
+.pill-peek>div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pill-peek .pk-d{color:var(--tx3);font-size:max(11px,calc(11px*var(--u)));margin-top:calc(4px*var(--u))}
+/* 按压 Q 弹:按下微缩、松开回弹,底边不动(transform-origin 定在下缘) */
+.pill-body{transition:transform .12s ease;transform-origin:50% 100%}
+.pill-body:active{transform:scale(.96)}
+@media (prefers-reduced-motion:reduce){.pill-body{transition:none}.pill-body:active{transform:none}}
 /* 胶囊里的渠道图标:与列表行同一来源(官方标 → 字母块),失败/未配置灰化 */
 .pill-body .pico{width:calc(26px*var(--u));height:calc(26px*var(--u));border-radius:calc(7px*var(--u));flex:none;
   display:grid;place-items:center;font-size:calc(10.5px*var(--u));font-weight:700;color:#fff;overflow:hidden}
@@ -799,3 +838,9 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 .pf b{font-size:max(11.5px,calc(12px*var(--u)));color:var(--tx2)}
 .pf span{font-size:max(10px,calc(10.5px*var(--u)));color:var(--tx3)}
 .btn.s.danger{border-color:#6b3230;color:#ffb4b0}
+
+/* 自定义渠道表单(渠道页底部):一行一个字段,和密钥行同一套观感 */
+.cform{border:1px solid var(--line);border-radius:calc(8px*var(--u));padding:calc(4px*var(--u)) calc(9px*var(--u)) calc(9px*var(--u));margin-top:calc(6px*var(--u))}
+.cform .krow{margin-top:calc(6px*var(--u))}
+.cform .inp{flex:1;min-width:0}
+.cform .inp[style]{flex:none}

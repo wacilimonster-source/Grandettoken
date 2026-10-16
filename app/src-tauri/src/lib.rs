@@ -2,10 +2,12 @@
 //!
 //! 取数逻辑全在 tokenscope-core,这里只做胶水。
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, State};
+use tauri_plugin_notification::NotificationExt;
 use tokenscope_core::config::Config;
 use tokenscope_core::fetch::{now_ts, ChannelView, Fetcher};
 use tokenscope_core::{appauth, checkin, inject, models, providers, secrets, store::Store};
@@ -267,15 +269,47 @@ async fn key_hint(id: String) -> Result<Option<String>, String> {
     .map_err(|e| format!("读取凭据失败: {e}"))?
 }
 
+/// 这个 id 是不是自定义渠道(custom-1、custom-2…)。
+fn is_custom_id(id: &str) -> bool {
+    id.starts_with("custom-")
+}
+
+/// 这个渠道"当前密钥的指纹":内置渠道读它自己的凭据,自定义渠道的凭据名就是 id。
+/// **阻塞**(读凭据管理器),只能在非主线程上调。
+fn fp_of_any(id: &str) -> String {
+    if let Some(def) = providers::find(id) {
+        return tokenscope_core::fetch::current_key_fp(def);
+    }
+    match secrets::get(id) {
+        Ok(Some(k)) if !k.trim().is_empty() => tokenscope_core::fetch::key_fp(&k),
+        _ => String::new(),
+    }
+}
+
+/// 这个渠道能不能填/删密钥:内置渠道(非 App 型)或**存在的**自定义渠道。
+/// 自定义渠道的密钥也在同一个凭据管理器里,账户名就是渠道 id。
+fn key_allowed(state: &AppState, id: &str) -> Result<(), String> {
+    if providers::find(id).is_some() {
+        return Ok(());
+    }
+    let c = lock_rw(&state.config);
+    if is_custom_id(id) && c.custom_channels.iter().any(|x| x.id == id) {
+        return Ok(());
+    }
+    Err(format!("未知渠道: {id}"))
+}
+
 #[tauri::command]
 async fn set_key(app: tauri::AppHandle, id: String, key: String) -> Result<(), String> {
-    let def = providers::find(&id).ok_or_else(|| format!("未知渠道: {id}"))?;
-    if let providers::AuthKind::App(app) = def.auth {
-        return Err(format!(
-            "{} 不需要填密钥:凭据直接读本机已登录的 {} 客户端",
-            def.name,
-            app.label()
-        ));
+    key_allowed(&app.state::<AppState>(), &id)?;
+    if let Some(def) = providers::find(&id) {
+        if let providers::AuthKind::App(app) = def.auth {
+            return Err(format!(
+                "{} 不需要填密钥:凭据直接读本机已登录的 {} 客户端",
+                def.name,
+                app.label()
+            ));
+        }
     }
     // 凭据管理器写 = RPC:不能在主线程做(报告 P1-14)
     tokio::task::spawn_blocking(move || secrets::set(&id, &key))
@@ -291,6 +325,16 @@ async fn set_key(app: tauri::AppHandle, id: String, key: String) -> Result<(), S
 /// 而下一轮取数又读到了那个 Cookie —— 用户看到"清掉了却还显示已登录"。
 #[tauri::command]
 async fn delete_key(app: tauri::AppHandle, id: String) -> Result<String, String> {
+    key_allowed(&app.state::<AppState>(), &id)?;
+    // 自定义渠道:只有凭据管理器里那一份,没有网页会话可清
+    if providers::find(&id).is_none() {
+        let del_id = id.clone();
+        tokio::task::spawn_blocking(move || secrets::delete(&del_id))
+            .await
+            .map_err(|e| format!("删除密钥任务失败: {e}"))??;
+        app.state::<AppState>().fetcher.invalidate();
+        return Ok("已删除这个自定义渠道的密钥(渠道定义还在,换一把可继续用)".into());
+    }
     let def = providers::find(&id).ok_or_else(|| format!("未知渠道: {id}"))?;
     if let providers::AuthKind::App(app) = def.auth {
         return Err(format!("{} 没有本应用保存的密钥(用的是 {} 的登录态)", def.name, app.label()));
@@ -595,22 +639,84 @@ async fn workbuddy_login(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// 展开区曲线的返回:值 + 有缺口的分桶 + 数据来源。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SeriesView {
+    values: Vec<f64>,
+    /// 有缺口的分桶下标(柱图上打斜纹:那段时间挂件没在跑,柱子只算了一半)
+    gaps: Vec<usize>,
+    /// detail = 全部来自 90 天明细;daily = 含 90 天外的日级摘要(界面写清口径)
+    source: String,
+}
+
 #[tauri::command]
-async fn get_series(state: State<'_, AppState>, id: String, hours: i64) -> Result<Vec<f64>, String> {
+async fn get_series(app: tauri::AppHandle, id: String, hours: i64) -> Result<SeriesView, String> {
     // 参数来自前端:负数或超大值会把扫描窗口翻成"全表",而这个查询以前还跑在主线程上
     // (报告 P3-24 + P1-14)。id 也必须是认得出的渠道,否则白扫一条不存在的序列。
-    providers::find(&id).ok_or_else(|| format!("未知渠道: {id}"))?;
-    let hours = hours.clamp(1, 24 * 90);
-    let store = state.store.clone();
+    // 上限抬到 400 天:长期趋势要用(90 天外的部分由日级摘要补,见 trend_series)。
+    key_allowed(&app.state::<AppState>(), &id)?;
+    let hours = hours.clamp(1, 24 * 400);
+    let store = {
+        let st = app.state::<AppState>();
+        st.store.clone()
+    };
+    let id2 = id.clone();
     tokio::task::spawn_blocking(move || {
-        let from = now_ts() - hours * 3600;
+        // 曲线只画"现在这把钥匙"的账(与消耗推算同一口径);读凭据是阻塞 IO,已在下沉线程里
+        let fp = fp_of_any(&id2);
+        let fpo = if fp.is_empty() { None } else { Some(fp.as_str()) };
+        let to = now_ts();
+        let from = to - hours * 3600;
         // lock_rw:锁被毒化时也要出图,不能让取数线程的一次 panic 之后所有曲线都空掉
         let s = lock_rw(&store);
-        Ok(s.series(&id, from, from + hours * 3600, 24)
-            .unwrap_or_default())
+        let archived = s
+            .daily_summaries(&id2, fpo, from)
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
+        let (values, gaps) = s
+            .trend_series(
+                &id2,
+                fpo,
+                from,
+                to,
+                24,
+                tokenscope_core::fetch::local_tz_offset(),
+            )
+            .unwrap_or_else(|_| (vec![0.0; 24], Vec::new()));
+        Ok(SeriesView {
+            values,
+            gaps,
+            source: if archived { "daily".into() } else { "detail".into() },
+        })
     })
     .await
     .map_err(|e| format!("取曲线失败: {e}"))?
+}
+
+/// 行详情里的「最近变动」台账:展开时才取,不占轮询、不进视图。
+#[tauri::command]
+async fn channel_changes(
+    app: tauri::AppHandle,
+    id: String,
+    days: i64,
+) -> Result<Vec<tokenscope_core::store::ChangeEntry>, String> {
+    key_allowed(&app.state::<AppState>(), &id)?;
+    let days = days.clamp(1, 90);
+    let store = {
+        let st = app.state::<AppState>();
+        st.store.clone()
+    };
+    let id2 = id.clone();
+    tokio::task::spawn_blocking(move || {
+        let fp = fp_of_any(&id2);
+        let fpo = if fp.is_empty() { None } else { Some(fp.as_str()) };
+        let s = lock_rw(&store);
+        Ok(s.recent_changes(&id2, fpo, now_ts() - days * 86_400, 12)
+            .unwrap_or_default())
+    })
+    .await
+    .map_err(|e| format!("取变动台账失败: {e}"))?
 }
 
 /// 开机自启:写 HKCU 的 Run 键,不需要管理员权限。
@@ -703,6 +809,13 @@ mod autostart {
         }
     }
 
+    /// 开机自启项在不在、指向哪个 exe(体检只读,不改注册表)。
+    /// 返回 Some(路径) = 键存在;None = 没有这条键。
+    pub fn entry_present() -> Option<String> {
+        let hk = RegKey::predef(HKEY_CURRENT_USER).open_subkey(RUN_KEY).ok()?;
+        hk.get_value::<String, _>(NAME).ok()
+    }
+
     fn in_self_build_tree() -> bool {
         std::env::current_exe().map(|p| in_build_tree(&p)).unwrap_or(false)
     }
@@ -714,6 +827,10 @@ mod autostart {
         Err("开机自启仅支持 Windows".into())
     }
     pub fn sync(_enabled: bool) -> Option<String> {
+        None
+    }
+    /// 非 Windows 没有注册表自启项(体检如实报"不适用")。
+    pub fn entry_present() -> Option<String> {
         None
     }
 }
@@ -811,10 +928,528 @@ async fn set_pin(app: tauri::AppHandle, state: State<'_, AppState>, enabled: boo
     Ok(())
 }
 
+// ───────────────────── 跌破红线的系统通知(裁决 3A) ─────────────────────
+
+/// 已通知过的「渠道 + 本地日」:同一天里同一个渠道只响一次。
+/// 只放内存:重启最多多响一次,不值得为它写盘(小鲸鱼"同一事件只响一次"同款)。
+static NOTIFIED_CRIT: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+/// 上一轮的"红线集合",用来识别**跌破的那一刻**而不是持续低位期间每轮都响。
+static PREV_CRIT: Mutex<Option<HashMap<String, bool>>> = Mutex::new(None);
+
+/// 渠道算不算"跌破红线"。**与前端 `toneOf()` 逐条同口径** —— 两边判据必须一致,
+/// 否则会出现"界面已经飘红、通知却说没事"这种自相矛盾。
+///   百分比型:看主窗剩余;  金额型:剩余 / 本轮额度(拿不到分母就不算,与界面同);
+///   积分型:不看余额,只看近 7 天将过期的占比(界面上 >= 30% 就是 bad);
+///   取不到数 / 已隐藏 一律不算 —— 失联不等于欠费,这是本产品的第一条红线。
+fn crit_now(v: &ChannelView, cfg: &Config) -> bool {
+    use tokenscope_core::providers::Kind;
+    if !v.has_key || !v.valid || v.hidden {
+        return false;
+    }
+    match v.kind {
+        Kind::Percent => v
+            .windows
+            .iter()
+            .find(|w| w.main)
+            .or_else(|| v.windows.first())
+            .map(|w| (w.remain_percent / 100.0).clamp(0.0, 1.0) < cfg.crit_percent / 100.0)
+            .unwrap_or(false),
+        Kind::Amount => {
+            // 余额真的见底(0.00 或负)是最高一级警报,与有没有额度分母无关
+            if v.remaining.map(|r| r <= 0.0).unwrap_or(false) {
+                return true;
+            }
+            match (v.remaining, v.claim.as_ref().map(|c| c.amount)) {
+                (Some(r), Some(d)) if d > 0.0 => (r / d).clamp(0.0, 1.0) < cfg.crit_percent / 100.0,
+                // 充值型没有分母:界面不染红,通知也不该自作聪明
+                _ => false,
+            }
+        }
+        Kind::Points => {
+            let r = v.remaining.unwrap_or(0.0);
+            if r <= 0.0 {
+                return true; // 积分见底(界面判 ok,但"没分了"值得说一声)——
+                            // 与界面不一致的地方只有这里,注释写明:通知更保守
+            }
+            let within: f64 = v
+                .expiring
+                .iter()
+                .filter(|e| e.at <= now_ts() + 7 * 86_400)
+                .map(|e| e.amount)
+                .sum();
+            within / r >= 0.3
+        }
+    }
+}
+
+/// 通知正文(人话,带渠道名与具体数字)。
+fn crit_body(v: &ChannelView) -> String {
+    use tokenscope_core::providers::Kind;
+    match v.kind {
+        Kind::Percent => {
+            let pct = v
+                .windows
+                .iter()
+                .find(|w| w.main)
+                .or_else(|| v.windows.first())
+                .map(|w| w.remain_percent)
+                .unwrap_or(0.0);
+            format!("{} 剩余 {:.0}%,已经很低了 · 打开挂件查看", v.name, pct)
+        }
+        Kind::Amount => match (v.remaining, v.claim.as_ref().map(|c| c.amount)) {
+            (Some(r), Some(d)) if d > 0.0 => format!(
+                "{} 剩余 ¥{:.2}({:.0}%),本轮额度 ¥{:.0} · 打开挂件查看",
+                v.name,
+                r,
+                (r / d * 100.0).clamp(0.0, 100.0),
+                d
+            ),
+            (Some(r), _) => format!("{} 余额只剩 ¥{:.2} · 打开挂件查看", v.name, r),
+            _ => format!("{} 余额很低 · 打开挂件查看", v.name),
+        },
+        Kind::Points => {
+            let r = v.remaining.unwrap_or(0.0);
+            if r <= 0.0 {
+                format!("{} 积分已用尽 · 打开挂件查看", v.name)
+            } else {
+                let within: f64 = v
+                    .expiring
+                    .iter()
+                    .filter(|e| e.at <= now_ts() + 7 * 86_400)
+                    .map(|e| e.amount)
+                    .sum();
+                format!("{} 有 {:.0} 分将在 7 天内过期(共 {:.0} 分)· 打开挂件查看", v.name, within, r)
+            }
+        }
+    }
+}
+
+/// 每轮取数后检查"刚刚跌破红线"的渠道,发一条系统通知。
+/// 三种克制:只在**跌破那一刻**、**一天一次**、**按渠道各自记账**。
+fn maybe_notify_crit(app: &tauri::AppHandle, views: &[ChannelView]) {
+    let cfg = lock_rw(&app.state::<AppState>().config).clone();
+    let cur: HashMap<String, bool> = views
+        .iter()
+        .map(|v| (v.id.clone(), crit_now(v, &cfg)))
+        .collect();
+    let prev = PREV_CRIT
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+        .unwrap_or_default();
+    *PREV_CRIT.lock().unwrap_or_else(|p| p.into_inner()) = Some(cur.clone());
+    // 第一轮只记基线:刚启动就把一堆"早就在红线以下"的旧账全报一遍最烦人
+    if !cfg.notify_on_crit || prev.is_empty() {
+        return;
+    }
+    let today = tokenscope_core::fetch::local_day_string();
+    for v in views {
+        let was = prev.get(&v.id).copied().unwrap_or(false);
+        let now = cur.get(&v.id).copied().unwrap_or(false);
+        if !now || was {
+            continue;
+        }
+        {
+            let mut g = NOTIFIED_CRIT.lock().unwrap_or_else(|p| p.into_inner());
+            let m = g.get_or_insert_with(HashMap::new);
+            if m.get(&v.id).map(|d| *d == today).unwrap_or(false) {
+                continue;
+            }
+            m.insert(v.id.clone(), today.clone());
+        }
+        if let Err(e) = app
+            .notification()
+            .builder()
+            .title("Grandettoken · 余额预警")
+            .body(crit_body(v))
+            .show()
+        {
+            // 通知发不出去(平台限制/权限)不该影响取数;如实记一行
+            eprintln!("发送系统通知失败: {e}");
+        }
+        // 面板侧同步一条:前端据此播预警音(如果开了)并弹应用内提示
+        let _ = app.emit(
+            "crit-alert",
+            serde_json::json!({ "id": v.id, "name": v.name, "body": crit_body(v) }),
+        );
+        // 通知本体不回跳(插件不支持动作),闪一下任务栏是最接近的替代:
+        // 窗口藏着时"有人注意到"的概率比静默高得多。
+        if let Some(w) = app.get_webview_window("main") {
+            if !w.is_visible().unwrap_or(false) {
+                let _ = w.request_user_attention(Some(tauri::UserAttentionType::Informational));
+            }
+        }
+    }
+}
+
+// ───────────────────────── 渠道体检(裁决 2A) ─────────────────────────
+
+/// 按**显示宽度**补空格:中文一个字占两列,`{:<12}` 会把报告排歪。
+fn pad_display(s: &str, width: usize) -> String {
+    let w: usize = s
+        .chars()
+        .map(|c| if (c as u32) > 0x2E7F { 2 } else { 1 })
+        .sum();
+    let mut out = s.to_string();
+    for _ in w..width {
+        out.push(' ');
+    }
+    out
+}
+
+fn host_of(url: &Option<String>) -> String {
+    match url {
+        Some(u) => {
+            let rest = u.split_once("://").map(|(_, r)| r).unwrap_or(u);
+            rest.split(['/', '?']).next().unwrap_or(rest).to_string()
+        }
+        None => "(未记录)".into(),
+    }
+}
+
+// ───────────────────── 自定义渠道的增删改(裁决 6A) ─────────────────────
+
+/// 下一个自定义渠道 id(从 1 开始找空位;删掉再建不复用旧 id,
+/// 免得和"历史快照属于谁"这件事搅在一起)。
+fn next_custom_id(cfg: &Config) -> String {
+    let mut n = 1u32;
+    loop {
+        let id = format!("custom-{n}");
+        if !cfg.custom_channels.iter().any(|c| c.id == id) {
+            return id;
+        }
+        n += 1;
+    }
+}
+
+/// 「测试连接」在**保存之前**:先校验定义本身,再真打一次。
+/// 测试通过才允许保存 —— 这就是"坏配置进不来"的那道门(照小鲸鱼的做法)。
+#[tauri::command]
+async fn custom_test(
+    app: tauri::AppHandle,
+    ch: tokenscope_core::custom::CustomChannel,
+    key: String,
+) -> Result<tokenscope_core::fetch::ProbeReport, String> {
+    ch.validate()?;
+    if key.trim().is_empty() {
+        return Err("先填密钥再测试".into());
+    }
+    let http = app.state::<AppState>().fetcher.http.clone();
+    let started = std::time::Instant::now();
+    let r = tokenscope_core::custom::fetch_custom(&http, &ch, &key).await;
+    // 探活模式:HTTP 通了就算过(它本来就不解析余额)
+    Ok(tokenscope_core::fetch::ProbeReport {
+        id: ch.id.clone(),
+        name: ch.name.clone(),
+        ok: r.valid,
+        auth_label: if ch.probe_only {
+            "探活模式".into()
+        } else {
+            format!("字段 {}(scale {})", ch.path, ch.normalized_scale())
+        },
+        url_used: r.url_used,
+        elapsed_ms: started.elapsed().as_millis() as u64,
+        remaining: r.remaining,
+        used: None,
+        total: None,
+        unit: ch.normalized_unit(),
+        error: r.error,
+        // 还没保存,谈不上本地管道
+        snapshot_last_at: None,
+        snapshot_count_7d: 0,
+        accounts: 1,
+    })
+}
+
+/// 保存一个新自定义渠道。**先写密钥、再落配置** —— 反过来会留下"配置里有、密钥没有"
+/// 的半截渠道(界面显示未配置,用户不知道要不要再填一次)。
+#[tauri::command]
+async fn custom_add(
+    app: tauri::AppHandle,
+    ch: tokenscope_core::custom::CustomChannel,
+    key: String,
+) -> Result<String, String> {
+    ch.validate()?;
+    if key.trim().is_empty() {
+        return Err("密钥不能为空".into());
+    }
+    let (id, _) = {
+        let st = app.state::<AppState>();
+        let c = lock_rw(&st.config);
+        (next_custom_id(&c), ())
+    };
+    let mut saved = ch.clone();
+    saved.id = id.clone();
+    // 小写化颜色/单位在这里做一次,免得每种渲染各写一遍
+    saved.unit = ch.normalized_unit();
+    let cid = id.clone();
+    let k = key.clone();
+    tokio::task::spawn_blocking(move || secrets::set(&cid, &k))
+        .await
+        .map_err(|e| format!("写密钥任务失败: {e}"))??;
+    let st = app.state::<AppState>();
+    let push = saved.clone();
+    if let Err(e) = save_config_off_main(&st, move |c| c.custom_channels.push(push)).await {
+        // 配置没落成:把刚写的密钥删掉,不留孤儿凭据
+        let cid2 = id.clone();
+        let _ = tokio::task::spawn_blocking(move || secrets::delete(&cid2)).await;
+        return Err(e);
+    }
+    st.fetcher.invalidate();
+    Ok(id)
+}
+
+/// 删除一个自定义渠道。**历史快照保留**(与隐藏渠道同一条纪律:数据不删),
+/// 只清定义与密钥。
+#[tauri::command]
+async fn custom_remove(app: tauri::AppHandle, id: String) -> Result<String, String> {
+    let st = app.state::<AppState>();
+    key_allowed(&st, &id)?;
+    let name = {
+        let c = lock_rw(&st.config);
+        c.custom_channels
+            .iter()
+            .find(|x| x.id == id)
+            .map(|x| x.name.clone())
+            .unwrap_or_else(|| id.clone())
+    };
+    let id2 = id.clone();
+    save_config_off_main(&st, move |c| c.custom_channels.retain(|x| x.id != id2)).await?;
+    let cid = id.clone();
+    let _ = tokio::task::spawn_blocking(move || secrets::delete(&cid)).await;
+    st.fetcher.invalidate();
+    Ok(format!(
+        "已删除自定义渠道「{name}」· 它的历史快照仍在库里(只是不再显示,也不参与合计)"
+    ))
+}
+
+/// 一个渠道的「测试连接」:真打一次接口,把过程如实报出来。
+/// 与轮询共用同一条取数链路,但**不写快照**(手动测试不该篡改观测缺口)。
+#[tauri::command]
+async fn probe_channel(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<tokenscope_core::fetch::ProbeReport, String> {
+    // 自定义渠道:用自己的定义 + 凭据(账户名 = id)打一次,报告口径与内置一致
+    if providers::find(&id).is_none() {
+        let ch = {
+            let state = app.state::<AppState>();
+            key_allowed(&state, &id)?;
+            let c = lock_rw(&state.config);
+            c.custom_channels
+                .iter()
+                .find(|x| x.id == id)
+                .cloned()
+                .ok_or_else(|| format!("没有这个自定义渠道:{id}"))?
+        };
+        let cid = id.clone();
+        let key = tokio::task::spawn_blocking(move || secrets::get(&cid).ok().flatten())
+            .await
+            .unwrap_or(None);
+        let started = std::time::Instant::now();
+        let Some(k) = key else {
+            return Ok(tokenscope_core::fetch::ProbeReport {
+                id: ch.id.clone(),
+                name: ch.name.clone(),
+                ok: false,
+                auth_label: "未配置密钥".into(),
+                url_used: None,
+                elapsed_ms: 0,
+                remaining: None,
+                used: None,
+                total: None,
+                unit: ch.normalized_unit(),
+                error: Some("还没填密钥".into()),
+                snapshot_last_at: None,
+                snapshot_count_7d: 0,
+                accounts: 1,
+            });
+        };
+        let r = {
+            let http = app.state::<AppState>().fetcher.http.clone();
+            tokenscope_core::custom::fetch_custom(&http, &ch, &k).await
+        };
+        return Ok(tokenscope_core::fetch::ProbeReport {
+            id: ch.id.clone(),
+            name: ch.name.clone(),
+            ok: r.valid,
+            auth_label: "自定义渠道 · 密码管理器".into(),
+            url_used: r.url_used,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            remaining: r.remaining,
+            used: None,
+            total: None,
+            unit: ch.normalized_unit(),
+            error: r.error,
+            snapshot_last_at: None,
+            snapshot_count_7d: 0,
+            accounts: 1,
+        });
+    }
+    let def = providers::find(&id).ok_or_else(|| format!("没有这个渠道:{id}"))?;
+    let (fetcher, store) = {
+        let state = app.state::<AppState>();
+        (state.fetcher.clone(), state.store.clone())
+    };
+    Ok(fetcher.probe_report(def, &store).await)
+}
+
+/// 一键体检:逐渠道真打一次 + 本机四项检查,产出一份**可复制**的纯文本。
+/// 报告里只有域名、状态、数值与路径 —— 没有密钥、没有完整响应体。
+#[tauri::command]
+async fn run_diagnostic(app: tauri::AppHandle) -> Result<String, String> {
+    let (fetcher, store) = {
+        let state = app.state::<AppState>();
+        (state.fetcher.clone(), state.store.clone())
+    };
+    let cfg = {
+        let s = lock_rw(&store);
+        Config::try_load(&s).unwrap_or_default()
+    };
+    let mut lines: Vec<String> = vec![format!(
+        "Grandettoken 体检 · {}",
+        tokenscope_core::fetch::local_datetime_string()
+    )];
+    let total = providers::PROVIDERS.len();
+    let mut need = 0usize;
+    for (i, def) in providers::PROVIDERS.iter().enumerate() {
+        let idx = format!("[{}/{}]", i + 1, total);
+        if cfg.hidden_channels.iter().any(|h| h == def.id) {
+            lines.push(format!(
+                "{} {} 已隐藏(不发请求,跳过)",
+                idx,
+                pad_display(def.name, 12)
+            ));
+            continue;
+        }
+        let r = fetcher.probe_report(def, &store).await;
+        if r.ok {
+            let val = match r.remaining {
+                Some(v) if r.unit == "%" => format!("{v:.0}%"),
+                Some(v) if r.unit == "CNY" => format!("¥{v:.2}"),
+                Some(v) => format!("{v:.0}"),
+                None => "—".to_string(),
+            };
+            lines.push(format!(
+                "{} {} ✓ {}ms · {} · {}",
+                idx,
+                pad_display(def.name, 12),
+                r.elapsed_ms,
+                host_of(&r.url_used),
+                val
+            ));
+        } else {
+            need += 1;
+            lines.push(format!(
+                "{} {} ✗ {} —— 显示的是本地快照,取数未通",
+                idx,
+                pad_display(def.name, 12),
+                r.error.unwrap_or_else(|| "失败".into())
+            ));
+        }
+    }
+    // 本机那一半:网络通了不等于记录在写,两半各证一半
+    // 自定义渠道:逐个真打一次(它们不在 PROVIDERS 里,单独一轮)
+    {
+        let custom = { lock_rw(&app.state::<AppState>().config).custom_channels.clone() };
+        for (i, ch) in custom.iter().enumerate() {
+            let idx = format!("[自{}/{}]", i + 1, custom.len());
+            if cfg.hidden_channels.iter().any(|h| h == &ch.id) {
+                lines.push(format!("{} {} 已隐藏(不发请求,跳过)", idx, pad_display(&ch.name, 12)));
+                continue;
+            }
+            let cid = ch.id.clone();
+            let key = tokio::task::spawn_blocking(move || secrets::get(&cid).ok().flatten())
+                .await
+                .unwrap_or(None);
+            match key {
+                None => {
+                    need += 1;
+                    lines.push(format!(
+                        "{} {} ✗ 还没填密钥 —— 在渠道卡里填一次",
+                        idx,
+                        pad_display(&ch.name, 12)
+                    ));
+                }
+                Some(k) => {
+                    let http = app.state::<AppState>().fetcher.http.clone();
+                    let r = tokenscope_core::custom::fetch_custom(&http, ch, &k).await;
+                    if r.valid {
+                        let val = match r.remaining {
+                            Some(v) if ch.normalized_unit() == "%" => format!("{v:.0}%"),
+                            Some(v) if ch.normalized_unit() == "CNY" => format!("¥{v:.2}"),
+                            Some(v) => format!("{v:.0}"),
+                            None => "—".to_string(),
+                        };
+                        lines.push(format!(
+                            "{} {} ✓ {}{}",
+                            idx,
+                            pad_display(&ch.name, 12),
+                            host_of(&r.url_used),
+                            if r.probe_only {
+                                " · 探活通过(不解析余额)".to_string()
+                            } else {
+                                format!(" · 读到 {val}")
+                            }
+                        ));
+                    } else {
+                        need += 1;
+                        lines.push(format!(
+                            "{} {} ✗ {}",
+                            idx,
+                            pad_display(&ch.name, 12),
+                            r.error.unwrap_or_else(|| "失败".into())
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    let db_err = {
+        let s = lock_rw(&store);
+        s.set_setting("diag_ping", &now_ts().to_string()).err()
+    };
+    lines.push(format!(
+        "本机:快照库可写 {}",
+        if db_err.is_none() { "✓" } else { "✗" }
+    ));
+    let auto = autostart::entry_present();
+    let auto_txt = match (auto, cfg.autostart) {
+        (Some(_), true) => "✓ 已注册".to_string(),
+        (Some(_), false) => "注册表里有,但设置里是关的(点一次开关即可对齐)".to_string(),
+        (None, true) => "✗ 设置里开着,注册表里没有(点一次开关重写)".to_string(),
+        (None, false) => "未启用".to_string(),
+    };
+    lines.push(format!("      开机自启 {auto_txt}"));
+    let proxies: Vec<String> = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]
+        .iter()
+        .filter_map(|k| std::env::var(k).ok().filter(|v| !v.trim().is_empty()).map(|v| format!("{k}={v}")))
+        .collect();
+    lines.push(format!(
+        "      系统代理 {}",
+        if proxies.is_empty() {
+            "未检测到(全部直连)".to_string()
+        } else {
+            format!("检测到 {} —— 取数会经过它", proxies.join(" · "))
+        }
+    ));
+    if let Ok(dir) = app.path().app_data_dir() {
+        lines.push(format!("      数据目录 {}", dir.display()));
+    }
+    if let Some(e) = lock_rw(&app.state::<AppState>().startup_error).clone() {
+        lines.push(format!("      启动期错误 {e}"));
+    }
+    lines.push(if need == 0 {
+        "结论:全部正常".to_string()
+    } else {
+        format!("结论:{need} 项需要处理(上面对应行标 ✗)")
+    });
+    Ok(lines.join("\n"))
+}
+
 /// 后台轮询。渠道都是账务接口,查询余额不消耗 token,所以间隔可以压得比较短;
 /// 唯一约束是对方的限流礼貌性,所以失败时退避。
-async fn poll_loop(app: tauri::AppHandle) {
-    let mut failures = 0u32;
+async fn poll_loop(app: tauri::AppHandle) {    let mut failures = 0u32;
     // 90 天清理原来只在启动时做一次:这台机器常年不重启的话快照表就一直长(报告 O-2)
     let mut last_prune = now_ts();
 
@@ -855,7 +1490,7 @@ async fn poll_loop(app: tauri::AppHandle) {
         if now_ts() - last_prune >= 86_400 {
             last_prune = now_ts();
             let s = lock_rw(&store);
-            if let Err(e) = s.prune(now_ts() - 90 * 86_400) {
+            if let Err(e) = s.prune(now_ts() - 90 * 86_400, tokenscope_core::fetch::local_tz_offset()) {
                 eprintln!("定期清理快照失败: {e}");
             }
         }
@@ -874,6 +1509,8 @@ async fn poll_loop(app: tauri::AppHandle) {
 
         LAST_REFRESH.store(now_ts(), std::sync::atomic::Ordering::Relaxed);
         let _ = app.emit("channels-updated", &views);
+        // 跌破红线的系统通知(裁决 3A):只在跌破那一刻、一天一次、按渠道记账
+        maybe_notify_crit(&app, &views);
     }
 }
 
@@ -1565,6 +2202,14 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
         *lock_rw(&state.config) = cfg;
     }
     let _ = manual;
+    // 真领到了才单独发一条:前端据此播"叮"一声(裁决 8A 的两声之一)。
+    // 自动签到跑在后台,没有这条事件用户就无从知道"今天领到了"。
+    if let checkin::Outcome::Claimed(cr) = &out {
+        let _ = app.emit(
+            "checkin-claimed",
+            serde_json::json!({ "id": id, "name": def.name, "credits": cr }),
+        );
+    }
     let _ = app.emit("checkin-updated", serde_json::json!({ "id": id }));
     Ok(out)
 }
@@ -2562,6 +3207,9 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_opener::init())
+        // 系统通知(裁决 3A)。前端没有打包器拿不到插件的 JS 包,所以通知**全在
+        // Rust 侧发**(poll_loop → maybe_notify_crit),这里只负责把能力挂上。
+        .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 // 全插件共用这一个回调:按下的那一刻切换主窗口显隐(与托盘左键同语义)
@@ -2638,7 +3286,7 @@ pub fn run() {
                 }
             }
 
-            let _ = store.prune(now_ts() - 90 * 86400);
+            let _ = store.prune(now_ts() - 90 * 86400, tokenscope_core::fetch::local_tz_offset());
 
             app.manage(AppState {
                 store: Arc::new(Mutex::new(store)),
@@ -2767,6 +3415,7 @@ pub fn run() {
             delete_key,
             workbuddy_login,
             get_series,
+            channel_changes,
             set_autostart,
             set_pin,
             set_tray_icon,
@@ -2797,6 +3446,11 @@ pub fn run() {
             vault_delete,
             vault_reveal,
             vault_copy,
+            probe_channel,
+            run_diagnostic,
+            custom_test,
+            custom_add,
+            custom_remove,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

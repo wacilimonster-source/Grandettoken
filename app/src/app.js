@@ -9,8 +9,9 @@ const $ = (id) => document.getElementById(id);
 let CHANNELS = [];
 let CFG = null;
 let VER = "";          // app_version 命令回来的版本号,关于页在首检之前也有的显示
-let sparkCache = {};   // { [id]: {24:[],168:[],720:[]} }
+let sparkCache = {};   // { [id]: { values:[], gaps:[], source:"detail"|"daily" } }
 let sparkHours = {};   // { [id]: 当前选中的区间 },渲染详情时据此标记选中项
+let changesCache = {}; // { [id]: 最近变动台账(展开时按需取,不进轮询) }
 // 面板里展开的行 id(DOM 上的 .open 只是它的投影):行头的 aria-expanded 与轮询重建后的
 // 恢复都读它。以前 renderRow 里写的是未声明的 `open`,实际解析成 window.open(恒真),
 // 于是每行都发 aria-expanded="true",开合也从不更新(F2)。
@@ -90,6 +91,81 @@ function resetMs(w) {
   if (!w || !w.resetsAt) return null;
   const t = Date.parse(w.resetsAt);
   return Number.isNaN(t) ? null : t;
+}
+
+/** 台钟 HH:MM(缺口文案用:「今日数据自 10:23 起」)。 */
+function fmtClock(ts) {
+  const d = new Date(ts);
+  return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+}
+
+/**
+ * 峰谷状态(只有 DeepSeek 这类按峰谷计价的渠道带 c.peak;见 core/peak.rs)。
+ * 界面只报"现在贵不贵 + 还有多久变",**不显示任何单价数字** —— 规则两个月被
+ * 官方改过三次,数字会过期,时段判据不会。
+ */
+function peakParts(c) {
+  const p = c && c.peak;
+  if (!p) return null;
+  if (p.holiday) return { label: "法定节假日 · 全天谷价" };
+  if (p.weekend) return { label: "周末 · 全天谷价" };
+  return { label: p.peak ? "高峰价" : "谷价中" };
+}
+
+/** 距下一次切换的倒计时文案(按**本地时钟**每秒算,不依赖轮询频率)。 */
+function peakCountdown(p, nowMs) {
+  if (!p || !p.nextChangeAt) return "";
+  const ms = p.nextChangeAt * 1000 - nowMs;
+  if (ms <= 0) return "";
+  const h = Math.floor(ms / 3600e3);
+  const m = Math.floor((ms % 3600e3) / 60000);
+  const left = h ? h + " 小时 " + m + " 分" : m + " 分";
+  if (p.peak) return left + "后转谷价";
+  if (p.weekend || p.holiday) return "距下次高峰 " + left;
+  return left + "后转高峰";
+}
+
+// 1 秒一跳只改文案,不重绘整行 —— 一条消息管一天,不为倒计时加压轮询频率。
+setInterval(() => {
+  const nowMs = Date.now();
+  document.querySelectorAll("[data-peakcd]").forEach((el) => {
+    let p = null;
+    try {
+      p = JSON.parse(el.dataset.peakcd);
+    } catch (e) {
+      return;
+    }
+    el.textContent = peakCountdown(p, nowMs);
+  });
+}, 1000);
+
+/**
+ * 提示音两声(裁决 8A:签到结果 + 跌破红线,默认关)。
+ * 用 WebAudio 现场合成,不新增任何音频资源文件(单 exe 约束下少一个二进制就少一份事);
+ * 用户没开 soundOn 时一个采样都不产生。
+ */
+let AUDIO_CTX = null;
+function beep(kind) {
+  if (!CFG || !CFG.soundOn) return;
+  try {
+    AUDIO_CTX = AUDIO_CTX || new (window.AudioContext || window.webkitAudioContext)();
+    const g = AUDIO_CTX.createGain();
+    g.connect(AUDIO_CTX.destination);
+    g.gain.value = 0.06;
+    const seq = kind === "warn" ? [[880, 0], [587, 0.18]] : [[880, 0], [1319, 0.1]];
+    const t0 = AUDIO_CTX.currentTime;
+    seq.forEach(([f, off]) => {
+      const o = AUDIO_CTX.createOscillator();
+      o.type = "sine";
+      o.frequency.value = f;
+      o.connect(g);
+      o.start(t0 + off);
+      o.stop(t0 + off + 0.14);
+    });
+  } catch (e) {
+    // 声音是锦上添花:任何环境问题都不该影响账本展示
+    console.warn("提示音播放失败", e);
+  }
 }
 
 /** 倒计时档位化:<1 小时用分钟,<24 小时用小时,更长按「天+小时」;short 用于窄列。 */
@@ -404,6 +480,8 @@ function renderRow(c, i) {
   } else if (claim) sub = `本轮额度 ${esc(money(claim.amount))}${claimTail(claim)}`;
   // 以前没开申请制时这里显示「额度 ¥{c.total}」:c.total 是**累计发放**(只增不减),
   // 不是额度上限 → "剩 21%" 会随每次充值一路下滑,与还能用多少钱毫无关系(报告 P1-11)。
+  // 峰谷渠道(DeepSeek):第二行如实说"现在贵不贵",只报状态不报单价(规则会变)
+  else if (c.peak) sub = esc(peakParts(c).label);
   else sub = ""; // 金额型拿到多少就是可用多少,不加说明
 
   let subVal;
@@ -412,6 +490,11 @@ function renderRow(c, i) {
   else if (failed) subVal = c.stale ? "上次快照" : "失联";
   else if (mw) subVal = `${esc(mw.label)}窗 · ${fmtReset(resetMs(mw), true)}`;
   else if (isPts) subVal = soon ? `最近 ${fmtDay(soon.at)} 到期` : "无近期到期";
+  // 峰谷倒计时交给 1 秒一跳的 ticker 填,不用等下一轮取数
+  else if (c.peak)
+    subVal = `<span data-peakcd='${JSON.stringify(c.peak)}'>${esc(
+      peakCountdown(c.peak, Date.now())
+    )}</span>`;
   else if (pct !== null) subVal = `剩 ${pct}%`;
   else subVal = "";
 
@@ -651,14 +734,31 @@ function renderDetail(c) {
         `失效时重新登录一次即可,<b>不影响你桌面客户端的登录状态</b>。</div>`
       : "";
 
-  const spark = sparkCache[c.id] || [];
-  const sparkHtml = spark.length
+  // 曲线:老形状是数组,现在是 { values, gaps, source }(带缺口标注与长期趋势)
+  const sv = sparkCache[c.id] || null;
+  const sparkVals = sv && sv.values && sv.values.length ? sv.values : [];
+  const gapSet = new Set((sv && sv.gaps) || []);
+  const sparkHtml = sparkVals.length
     ? `<div class="spark">${(() => {
-        const max = Math.max(...spark, 0.000001);
-        return spark
-          .map((v) => `<i style="height:${Math.max(2, (v / max) * 100)}%"></i>`)
+        const max = Math.max(...sparkVals, 0.000001);
+        return sparkVals
+          .map(
+            (v, i) =>
+              `<i class="${gapSet.has(i) ? "gap" : ""}" style="height:${Math.max(
+                2,
+                (v / max) * 100
+              )}%"></i>`
+          )
           .join("");
-      })()}</div>`
+      })()}</div>${
+        gapSet.size
+          ? `<div class="hint" style="margin:2px 0 0">斜纹的柱子:那段时间挂件没在运行,数字只算了一半 —— 不是"那几天没花钱"。</div>`
+          : ""
+      }${
+        sv && sv.source === "daily"
+          ? `<div class="hint" style="margin:2px 0 0">更早的部分由日级摘要拼成(90 天明细之外),一天一格。</div>`
+          : ""
+      }`
     : `<div class="spark">${Array.from({ length: 24 }, () => '<i style="height:2%"></i>').join(
         ""
       )}</div>`;
@@ -679,7 +779,7 @@ function renderDetail(c) {
   const body = [];
   body.push(
     `<div class="seg">
-       ${[[24, "近 24 小时"], [168, "近 7 天"], [720, "近 30 天"]]
+       ${[[24, "近 24 小时"], [168, "近 7 天"], [720, "近 30 天"], [2160, "近 3 月"], [8760, "近 12 月"]]
          .map(
            ([h, label]) =>
              `<button class="${(sparkHours[c.id] || 24) === h ? "on" : ""}" data-act="range" data-id="${c.id}" data-h="${h}">${label}</button>`
@@ -698,6 +798,53 @@ function renderDetail(c) {
   body.push(winKv);
   body.push(expHtml);
   body.push(sparkHtml);
+  // 观测缺口:今天的数据不是从零点开始的,如实说出来 ——
+  // 否则"今日消耗偏小"永远没有解释,用户只会觉得数字不准
+  if (c.gapDayFrom) {
+    body.push(
+      `<div class="hint" style="margin:8px 0 0">今日数据自 <b>${fmtClock(
+        c.gapDayFrom
+      )}</b> 起 —— 此前挂件没在运行,今日消耗只覆盖之后的时段(不是没花钱)。</div>`
+    );
+  }
+  // 变动台账:同方向的连续轮询已聚合成一条(轮询是分钟级的,逐条列出来是噪音);
+  // 空档秒数如实标注 —— 一条 +50 里如果揉了几小时的空白,得让用户知道
+  const chags = changesCache[c.id];
+  if (c.kind === "amount" && chags && chags.length) {
+    body.push(`<div class="ledger"><div class="ldh">最近变动<span>共 ${chags.length} 条</span></div>${chags
+      .map((g) => {
+        const amt = Math.abs(g.delta) < 0.005 ? "±0" : money(Math.abs(g.delta), c.unit || "CNY");
+        const cls = g.delta < 0 ? "bad" : "ok";
+        const when =
+          g.startTs === g.endTs
+            ? fmtClock(g.startTs)
+            : `${fmtClock(g.startTs)}–${fmtClock(g.endTs)}`;
+        const tail =
+          g.samples > 1
+            ? `推算消费(${g.samples} 次轮询)`
+            : g.delta < 0
+            ? "推算消费"
+            : "入账(充值/额度)";
+        const gapH =
+          g.gapSecs > 7200 ? `<i class="gap">含 ${Math.round(g.gapSecs / 3600)} 小时未观测</i>` : "";
+        return `<div class="lrow"><span class="lt">${when}</span><b class="${cls}">${
+          g.delta < 0 ? "−" : "+"
+        }${amt}</b><span class="lx">${tail}${gapH}</span></div>`;
+      })
+      .join("")}</div>`);
+  }
+  // 换过密钥的渠道:说清"现在这笔账是谁的",旧账不混算但也不消失
+  if (c.accounts > 1) {
+    body.push(
+      `<div class="hint" style="margin:8px 0 0">这个渠道换过密钥:上方消耗只按<b>当前这把</b>推算;更早那本账不参与合计(历史快照仍在库里,只是不混算)。</div>`
+    );
+  }
+  // 节假日表过期:如实提示,不假装知道明年的安排
+  if (c.peak && c.peak.tableStale) {
+    body.push(
+      `<div class="hint" style="margin:8px 0 0">明年的法定节假日安排还没发布,时段提示暂按"周末规则"估算,发布后会随版本更新。</div>`
+    );
+  }
   if (c.estimated && c.kind === "amount") {
     body.push(
       `<div class="hint" style="margin:0 0 8px">消耗为本地快照推算值 —— 该接口只返回当前余额,不含累计消耗;程序未运行的时段不计入。</div>`
@@ -1058,6 +1205,143 @@ function pillAnim(newId, lastText, lastId) {
   }
   LAST_PILL = { id: newId, text };
 }
+
+// ─────────── 胶囊单击速览(裁决 7A):不展开面板,看一眼就走 ───────────
+// 窗口本来只有胶囊那么高,气泡没处画 —— 所以临时把窗口**向上长高一条**,
+// 气泡画在新增的空间里,4 秒后收回。几何操作全走 enqueueGeom(与形态切换同一条队列),
+// 免得和吸附/形态切换的改尺寸打架。
+let PEEK = { open: false, timer: null, h: 0 };
+
+/** 今天签到的进度(只数"真领到"的,与签到那三条规矩一致)。 */
+function peekCheckinLine() {
+  const today = new Date();
+  const day =
+    today.getFullYear() +
+    "-" +
+    String(today.getMonth() + 1).padStart(2, "0") +
+    "-" +
+    String(today.getDate()).padStart(2, "0");
+  let done = 0;
+  let on = 0;
+  for (const id of CHECKIN_ON) {
+    const s = CK[id];
+    if (!s || !s.enabled) continue;
+    on++;
+    const top = s.log && s.log[0];
+    if (top && top.day === day && String(top.outcome || "").startsWith("claimed")) done++;
+  }
+  return on ? `今日签到 ${done}/${on}` : "";
+}
+
+function pillPeekHtml() {
+  const amt = CHANNELS.filter((c) => c.hasKey && !c.hidden && c.valid && c.kind === "amount");
+  const today = amt.reduce((s, c) => s + (c.day || 0), 0);
+  const lines = [
+    `今日合计 <b>${esc(money(today, "CNY"))}</b>${
+      amt.length ? ` <span class="pk-d">(${amt.length} 个金额渠道)</span>` : ""
+    }`,
+  ];
+  const tight = (PILL.sorted || []).find((c) => c.hasKey && !c.hidden) || null;
+  if (tight) {
+    const r = remainRatio(tight);
+    lines.push(
+      `最紧张 ${esc(tight.name)} 剩 <b>${r === null ? "—" : Math.round(r * 100) + "%"}</b>`
+    );
+  } else {
+    lines.push("还没有配置好的渠道");
+  }
+  const ck = peekCheckinLine();
+  if (ck) lines.push(ck);
+  return (
+    lines.map((t) => `<div>${t}</div>`).join("") +
+    `<div class="pk-d">单击收起 · 4 秒自动收 · ▲ 仍是展开面板</div>`
+  );
+}
+
+async function pillPeekToggle() {
+  if (currentForm() !== "pill" || DOCK.on) return;
+  await enqueueGeom(async () => {
+    const box = $("pillPeek");
+    if (!box) return;
+    if (PEEK.open) return pillPeekHide();
+    const u = fsU();
+    box.innerHTML = pillPeekHtml();
+    box.classList.add("on");
+    // 留出的高度按**实测**气泡高度来(字体档/内容长短都可能变),再夹一个范围:
+    // 写死一个数字会在"特大字号 + 长渠道名"下把气泡切掉或把胶囊压扁
+    const measured = Math.ceil(box.getBoundingClientRect().height);
+    PEEK.h = Math.min(Math.round(132 * u), Math.max(Math.round(84 * u), measured + Math.round(14 * u)));
+    document.body.style.setProperty("--peekh", PEEK.h + "px");
+    document.body.classList.add("peek-open");
+    const [w, h] = formSize("pill");
+    const sf = (await appWindow.scaleFactor()) || 1;
+    const pos = await appWindow.outerPosition();
+    markSelfMove(FORM_SELF_MOVE_MS);
+    await appWindow.setMinSize(null);
+    await appWindow.setMaxSize(null);
+    // 尺寸走 LogicalSize、位移按物理像素算 —— 与形态切换同一条纪律:
+    // 尺寸给 PhysicalSize 在 125% 缩放下会短掉 1/1.25(实测:窗口只长 61px、胶囊被压成 14px)
+    await appWindow.setSize(new T.dpi.LogicalSize(w, h + PEEK.h));
+    await appWindow.setMinSize(new T.dpi.LogicalSize(w, h + PEEK.h));
+    await appWindow.setMaxSize(new T.dpi.LogicalSize(w, h + PEEK.h));
+    await appWindow.setPosition(
+      new T.dpi.PhysicalPosition(pos.x, Math.max(0, pos.y - Math.round(PEEK.h * sf)))
+    );
+    await clampToMonitor();
+    PEEK.open = true;
+    if (PEEK.timer) clearTimeout(PEEK.timer);
+    PEEK.timer = setTimeout(() => {
+      enqueueGeom(pillPeekHide);
+    }, 4000);
+  });
+}
+
+async function pillPeekHide() {
+  if (PEEK.timer) {
+    clearTimeout(PEEK.timer);
+    PEEK.timer = null;
+  }
+  const box = $("pillPeek");
+  if (box) {
+    box.classList.remove("on");
+    box.innerHTML = "";
+  }
+  document.body.classList.remove("peek-open");
+  document.body.style.removeProperty("--peekh");
+  if (!PEEK.open) return;
+  PEEK.open = false;
+  // 形态已经换了(比如用户按了 ▲):尺寸归那个形态管,这里不再动窗口
+  if (currentForm() !== "pill" || DOCK.on) return;
+  const [w, h] = formSize("pill");
+  const sf = (await appWindow.scaleFactor()) || 1;
+  const pos = await appWindow.outerPosition();
+  markSelfMove(FORM_SELF_MOVE_MS);
+  await appWindow.setSize(new T.dpi.LogicalSize(w, h));
+  await appWindow.setMinSize(new T.dpi.LogicalSize(w, h));
+  await appWindow.setMaxSize(new T.dpi.LogicalSize(w, h));
+  await appWindow.setPosition(
+    new T.dpi.PhysicalPosition(pos.x, pos.y + Math.round(PEEK.h * sf))
+  );
+}
+
+// 单击 vs 拖动:拖动是系统级拖窗(元素照样收到 mousedown/up),
+// 按"位移 < 4px 且 < 400ms"判单击 —— 与吸附的 250ms 判定互不干扰。
+(function () {
+  const pill = $("pill");
+  if (!pill) return;
+  let down = null;
+  pill.addEventListener("mousedown", (e) => {
+    down = { x: e.screenX, y: e.screenY, t: Date.now() };
+  });
+  pill.addEventListener("mouseup", (e) => {
+    if (!down) return;
+    const dx = Math.abs(e.screenX - down.x);
+    const dy = Math.abs(e.screenY - down.y);
+    const dt = Date.now() - down.t;
+    down = null;
+    if (dx < 4 && dy < 4 && dt < 400) pillPeekToggle();
+  });
+})();
 
 /** B 光环(2026-09-25,design-pill-restyle-5.html 方案 B):状态染到整颗胶囊
  *  (body 的 st-* 类,只在 form-pill 下有样式)+ 发丝条常驻显示剩余百分比。
@@ -1441,6 +1725,19 @@ function renderChCards() {
           : ""
       }
       ${claimBlock}
+      ${
+        c.hasKey && !c.hidden
+          ? `<div class="krow"><span class="k1" style="flex:1">连接自检<span class="desc">真打一次接口,不落快照</span></span>
+               <button class="btn s" data-act="probe" data-id="${c.id}">测试连接</button></div>
+             <div class="prb" data-prb="${c.id}"></div>`
+          : ""
+      }
+      ${
+        String(c.id).startsWith("custom-")
+          ? `<div class="krow"><span class="k1" style="flex:1">自定义渠道<span class="desc">删除只清定义与密钥,历史快照保留</span></span>
+               <button class="btn s danger" data-act="cdel" data-id="${c.id}">删除</button></div>`
+          : ""
+      }
       ${CHECKIN_ON.has(c.id) ? '<div class="ckwrap" data-id="' + esc(c.id) + '">' + ckRowHtml(c.id) + "</div>" : ""}
           <div class="ccord"><span class="mini">在列表中的位置</span>
             <span class="ord">
@@ -1454,8 +1751,7 @@ function renderChCards() {
     .join("");
 }
 
-/** 轮询刷新时更新渠道卡;正在输入就不重建,免得把输入内容冲掉。 */
-function refreshChCards() {
+/** 轮询刷新时更新渠道卡;正在输入就不重建,免得把输入内容冲掉。 */function refreshChCards() {
   if (!manageOpen()) return;
   const ae = document.activeElement;
   if (ae && ae.closest && ae.closest("#chList") && (ae.tagName === "INPUT" || ae.tagName === "SELECT")) return;
@@ -1939,8 +2235,7 @@ $("list").addEventListener("click", async (e) => {
       const c = CHANNELS.find((x) => x.id === id);
       const body = document.querySelector(`.rbody[data-body="${id}"]`);
       if (c && body) body.innerHTML = renderDetail(c);
-    }
-    return;
+    }    return;
   }
 
   const head = e.target.closest(".rhead");
@@ -1965,7 +2260,15 @@ $("list").addEventListener("click", async (e) => {
         try {
           sparkCache[id] = await invoke("get_series", { id, hours: 24 });
         } catch {
-          sparkCache[id] = [];
+          sparkCache[id] = null;
+        }
+      }
+      // 变动台账每次展开都重取(它扫 7 天明细,很便宜;缓存住反而会显示过期账目)
+      if (c.kind === "amount") {
+        try {
+          changesCache[id] = await invoke("channel_changes", { id, days: 7 });
+        } catch {
+          changesCache[id] = [];
         }
       }
       // 等曲线这段时间里轮询可能把整行换成了新节点:手里那份 body 成了游离节点,
@@ -2505,6 +2808,59 @@ $("manage").addEventListener("click", async (e) => {
     } catch (e) {
       showToast("复制失败:" + e, true);
     }
+  } else if (a === "probe") {
+    // 「测试连接」:真打一次接口,结果如实贴在按钮下面(不落快照,不改任何数据)
+    const box = document.querySelector(`.prb[data-prb="${id}"]`);
+    if (box) box.innerHTML = '<span class="mini">正在测试…</span>';
+    try {
+      const r = await invoke("probe_channel", { id });
+      if (!box) return;
+      if (r.ok) {
+        const val =
+          r.unit === "%"
+            ? (r.remaining === null ? "—" : r.remaining.toFixed(0) + "%")
+            : r.unit === "CNY"
+            ? (r.remaining === null ? "—" : "¥" + r.remaining.toFixed(2))
+            : r.remaining === null
+            ? "—"
+            : String(Math.round(r.remaining));
+        const host = (r.urlUsed || "").split("/")[2] || "(未记录)";
+        box.innerHTML = `<span class="okc">✓ 通了</span> · ${r.elapsedMs}ms · 域名 <b>${esc(
+          host
+        )}</b> · 读到 <b>${val}</b> · 凭据来自 ${esc(r.authLabel)}${
+          r.accounts > 1 ? ` · 这个渠道用过 ${r.accounts} 把密钥` : ""
+        }`;
+      } else {
+        box.innerHTML = `<span class="badc">✗ ${esc(r.error || "没通")}</span> · 凭据来源:${esc(
+          r.authLabel
+        )} —— 界面上的数字仍是本地快照`;
+      }
+    } catch (e) {
+      if (box) box.innerHTML = `<span class="badc">✗ ${esc(String(e))}</span>`;
+    }
+  } else if (a === "cdel") {
+    // 删除自定义渠道:走行内确认(不用原生 confirm —— 单 exe + 无边框窗口下它很丑)
+    const card = act.closest(".ccard");
+    const c = CHANNELS.find((x) => x.id === id);
+    if (!card) return;
+    if (card.dataset.confirm !== "1") {
+      card.dataset.confirm = "1";
+      act.textContent = "点一次确认删除";
+      setTimeout(() => {
+        if (card.dataset.confirm === "1") {
+          card.dataset.confirm = "";
+          act.textContent = "删除";
+        }
+      }, 4000);
+      return;
+    }
+    try {
+      const msg = await invoke("custom_remove", { id });
+      showToast(msg);
+      await refresh();
+    } catch (e) {
+      showToast("删除失败:" + e, true);
+    }
   } else if (a === "keyreveal") {
     const box = document.querySelector(`.reveal-box[data-rev="${id}"]`);
     if (!box) return;
@@ -2687,6 +3043,114 @@ bindSwitch("cfgAutoUpdate", "autoCheckUpdate");
 bindSwitch("cfgTrayNum", "trayShowNumber", () => { trayKey = ""; drawTrayIcon(); });
 // 告急呼吸(动效 G):全应用唯一循环动画,默认关;开关只拨 body.pulse 这个总闸
 bindSwitch("cfgPulse", "alertPulse", (on) => document.body.classList.toggle("pulse", !!on));
+// 跌破红线的系统通知(裁决 3A):判定全在 Rust 侧(与 UI 同一口径),这里只是开关
+bindSwitch("cfgNotify", "notifyOnCrit");
+// 提示音两声(裁决 8A):开的时候试听一声,让用户知道会是什么声音
+bindSwitch("cfgSound", "soundOn", (on) => {
+  if (on) beep("ding");
+});
+
+// ─────────── 自定义渠道表单(裁决 6A):测试通过才允许保存 ───────────
+// 为什么卡在"测试"这一步:取数地址与字段路径都是用户手填的,坏配置进来会变成一个
+// 天天报错的渠道 —— 测试按钮是唯一能在保存前验一次的地方(照小鲸鱼的做法)。
+(function () {
+  const F = {
+    name: $("cName"),
+    short: $("cShort"),
+    color: $("cColor"),
+    url: $("cUrl"),
+    method: $("cMethod"),
+    unit: $("cUnit"),
+    path: $("cPath"),
+    scale: $("cScale"),
+    key: $("cKey"),
+    probeOnly: $("cProbeOnly"),
+    out: $("cOut"),
+    test: $("cTest"),
+    save: $("cSave"),
+  };
+  if (!F.test) return;
+  let passed = false; // 这份表单测试通过了没有;任何字段一改动立刻作废
+  function draft() {
+    const sc = parseFloat(F.scale.value);
+    return {
+      id: "",
+      name: F.name.value.trim(),
+      short: F.short.value.trim(),
+      color: F.color.value.trim(),
+      url: F.url.value.trim(),
+      method: F.method.value,
+      body: null,
+      path: F.path.value.trim(),
+      scale: Number.isFinite(sc) ? sc : 0,
+      unit: F.unit.value,
+      probeOnly: F.probeOnly.classList.contains("on"),
+      probeUrl: null,
+    };
+  }
+  function invalidate() {
+    if (!passed) return;
+    passed = false;
+    F.save.disabled = true;
+    F.save.textContent = "测试通过后保存";
+  }
+  ["input", "change"].forEach((ev) =>
+    [F.name, F.short, F.color, F.url, F.method, F.unit, F.path, F.scale, F.key].forEach((el) =>
+      el.addEventListener(ev, invalidate)
+    )
+  );
+  F.probeOnly.addEventListener("click", () => {
+    const on = !F.probeOnly.classList.contains("on");
+    F.probeOnly.classList.toggle("on", on);
+    F.probeOnly.setAttribute("aria-checked", String(on));
+    invalidate();
+  });
+  F.test.addEventListener("click", async () => {
+    F.out.innerHTML = '<span class="mini">正在测试…</span>';
+    F.test.disabled = true;
+    try {
+      // `|| {}`:命令返回 null(异常实现)时也不该把整段逻辑炸掉 —— 报"没通"就够了
+      const r = (await invoke("custom_test", { ch: draft(), key: F.key.value })) || {};
+      passed = !!r.ok;
+      F.save.disabled = !passed;
+      F.save.textContent = passed ? "保存这个渠道" : "测试通过后保存";
+      if (r.ok) {
+        const val =
+          r.remaining === null || r.remaining === undefined ? "—" : String(r.remaining);
+        F.out.innerHTML = `<span class="okc">✓ 通了</span> · ${r.elapsedMs}ms · 读到 <b>${esc(
+          val
+        )}</b>${esc(r.unit || "")}`;
+      } else {
+        F.out.innerHTML = `<span class="badc">✗ ${esc(r.error || "没通")}</span>`;
+      }
+    } catch (e) {
+      passed = false;
+      F.save.disabled = true;
+      F.save.textContent = "测试通过后保存";
+      F.out.innerHTML = `<span class="badc">✗ ${esc(String(e))}</span>`;
+    } finally {
+      F.test.disabled = false;
+    }
+  });
+  F.save.addEventListener("click", async () => {
+    if (!passed) return;
+    F.save.disabled = true;
+    try {
+      const id = await invoke("custom_add", { ch: draft(), key: F.key.value });
+      showToast("已添加自定义渠道 " + id + ",下一次取数就会带上它");
+      [F.name, F.short, F.color, F.url, F.path, F.scale, F.key].forEach((el) => (el.value = ""));
+      F.probeOnly.classList.remove("on");
+      F.probeOnly.setAttribute("aria-checked", "false");
+      F.out.innerHTML = "";
+      passed = false;
+      F.save.textContent = "测试通过后保存";
+      await refresh(); // 立刻带出新渠道(Rust 侧已作废 5 秒缓存)
+    } catch (e) {
+      F.out.innerHTML = `<span class="badc">✗ ${esc(String(e))}</span>`;
+      F.save.disabled = false;
+    }
+  });
+})();
 // 置顶走 set_pin:窗口与配置一起改,失败时 bindSwitch 会回滚开关
 // 吸附开关:关掉时如果正吸附着,立刻解除
 bindSwitch("cfgDock", "dockEnabled", async (on) => {
@@ -2754,6 +3218,8 @@ function syncStaticControls() {
   setSwitch("cfgAutoUpdate", CFG.autoCheckUpdate !== false);
   setSwitch("cfgTrayNum", CFG.trayShowNumber !== false);
   setSwitch("cfgPulse", CFG.alertPulse);
+  setSwitch("cfgNotify", CFG.notifyOnCrit !== false);
+  setSwitch("cfgSound", !!CFG.soundOn);
   setSwitch("cfgDock", CFG.dockEnabled);
   setSwitch("cfgPin", CFG.alwaysOnTop);
   document.body.classList.toggle("pulse", !!CFG.alertPulse);
@@ -2958,6 +3424,37 @@ function onUpdProgress(p) {
 }
 
 $("btnCheck").addEventListener("click", () => checkUpdate(true));
+
+// 一键体检(裁决 2A):逐渠道真打一次 + 本机检查,产出可复制文本。
+// 跑一次要打 7 个真请求(最坏十几秒),按钮期间禁用,避免连点叠请求。
+$("btnDiag").addEventListener("click", async () => {
+  const btn = $("btnDiag");
+  btn.disabled = true;
+  btn.textContent = "体检中…";
+  $("diagOut").style.display = "block";
+  $("diagOut").textContent = "正在逐渠道测试连接…";
+  try {
+    const report = await invoke("run_diagnostic");
+    $("diagOut").textContent = report;
+    $("btnDiagCopy").style.display = "inline-block";
+    // 报告里有需要处理的渠道就顺手提示一句(不替用户判断严重性)
+    showToast(String(report).includes("✗") ? "体检完成:有项目需要处理" : "体检完成:全部正常");
+  } catch (e) {
+    $("diagOut").textContent = "体检失败:" + e;
+    showToast("体检失败:" + e, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "运行体检";
+  }
+});
+$("btnDiagCopy").addEventListener("click", async () => {
+  try {
+    await invoke("copy_text", { text: $("diagOut").textContent });
+    showToast("报告已复制 · 可直接贴给我");
+  } catch (e) {
+    showToast("复制失败:" + e, true);
+  }
+});
 $("lkUpd").addEventListener("click", () => {
   openManage();
   // 更新卡片在「关于」页签里。之前只 openManage 不切页签:默认停在「渠道」页,
@@ -4103,6 +4600,22 @@ async function refresh() {
   listen("channels-updated", (ev) => {
     CHANNELS = ev.payload;
     render({ updated: true });
+  });
+
+  // 跌破红线(Rust 判定、一天一次):播一声预警音(开了才有)+ 应用内提示。
+  // 判定不放前端 —— 界面与通知必须用同一个口径,否则会出现"红了但没响"。
+  listen("crit-alert", (ev) => {
+    const d = (ev && ev.payload) || {};
+    beep("warn");
+    showToast(d.body || d.name + " 余额很低", true);
+  });
+
+  // 自动签到领到了(后台静默跑,这一声就是收据);手动点的由按钮回执负责,不重响
+  listen("checkin-claimed", (ev) => {
+    const d = (ev && ev.payload) || {};
+    const cr = d.credits === null || d.credits === undefined ? "" : " +" + d.credits + " 分";
+    beep("ding");
+    showToast((d.name || "签到") + " 今天领到了" + cr);
   });
 
   // WorkBuddy 网页登录的三种结果都走这个事件:抓到令牌 / 用户自己关了窗 / 失败。

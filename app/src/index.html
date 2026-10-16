@@ -13,6 +13,11 @@
   <!-- 拖拽靠近屏幕边缘时的吸附预览线(在窗口贴边侧的 2px 高亮) -->
   <div class="prevline" id="prevLine"></div>
 
+  <!-- 单击速览气泡(裁决 7A):窗口临时向上长高一条,气泡画在那块新空间里,4 秒自收。
+       必须挂在 body 下、不能放进 .pill-body —— 后者是 position:relative 且 overflow:hidden,
+       气泡会被"定位到胶囊内部"再被裁掉(真机实测踩过:气泡跑到窗口底部、只露半截)。 -->
+  <div class="pill-peek" id="pillPeek" aria-hidden="true"></div>
+
   <!-- 吸附展开态的显式收回按钮(移出鼠标/Esc 之外的第三条出路) -->
   <button class="ib" id="dockClose" title="收回为竖条">&#10005;</button>
 
@@ -86,6 +91,30 @@
       <div class="khint">点卡片展开密钥与额度设置;眼睛 = 显示/隐藏 ——
         隐藏后不再请求接口、不再读本机登录凭据,历史快照保留,随时可恢复。</div>
       <div id="chList"></div>
+
+      <h4>自定义渠道</h4>
+      <div class="khint">接一个没有内置支持的取数地址(比如中转站的余额接口)。填完<b>先点「测试」</b>,
+        通过了才能保存 —— 坏配置进不来。密钥只进 Windows 凭据管理器,配置文件里只有字段路径。</div>
+      <div class="cform" id="cForm">
+        <div class="krow"><span class="k1">名称</span><input class="inp" id="cName" placeholder="如 我的中转站" autocomplete="off" spellcheck="false"></div>
+        <div class="krow"><span class="k1">简称 / 颜色</span>
+          <input class="inp" id="cShort" placeholder="2 字" style="max-width:70px" autocomplete="off">
+          <input class="inp" id="cColor" placeholder="#7f8ea3" style="max-width:96px" autocomplete="off"></div>
+        <div class="krow"><span class="k1">取数地址</span><input class="inp" id="cUrl" placeholder="https://…/api/user/self" autocomplete="off" spellcheck="false"></div>
+        <div class="krow"><span class="k1">方法 / 单位</span>
+          <select class="sel" id="cMethod"><option>GET</option><option>POST</option></select>
+          <select class="sel" id="cUnit"><option>CNY</option><option>USD</option><option>credits</option><option>%</option></select></div>
+        <div class="krow"><span class="k1">字段路径</span><input class="inp" id="cPath" placeholder="如 data.quota(探活模式留空)" autocomplete="off" spellcheck="false"></div>
+        <div class="krow"><span class="k1">换算倍数</span><input class="inp" id="cScale" placeholder="如 500000(积分→元);留空 = 1" autocomplete="off"></div>
+        <div class="krow"><span class="k1">密钥</span><input class="inp" id="cKey" type="password" placeholder="sk-…" autocomplete="off"></div>
+        <div class="krow"><span class="k1" style="flex:1">探活模式<span class="desc">只验证"地址与密钥可达",不解析余额(余额显示「—」,不计消耗)</span></span>
+          <button class="sw" id="cProbeOnly" role="switch" aria-checked="false" aria-label="探活模式"></button></div>
+        <div class="acts">
+          <button class="btn" id="cTest">测试连接</button>
+          <button class="btn p" id="cSave" disabled>测试通过后保存</button>
+        </div>
+        <div class="prb" id="cOut"></div>
+      </div>
     </div>
 
     <!-- 页签 2:模型 —— 4SAPI 可用模型 + 一键配置到客户端(design-4sapi-models.html) -->
@@ -144,6 +173,12 @@
           <option value="20">20%</option><option value="15">15%</option>
           <option value="10">10%</option><option value="5">5%</option>
         </select></div>
+
+      <h4>提醒与声音</h4>
+      <div class="field"><span>跌破红线时发系统通知<span class="desc">只在跌破的那一刻响一次、一天最多一次;通知本身不回跳(插件不支持),窗口藏着时会闪一下任务栏</span></span>
+        <button class="sw" id="cfgNotify" role="switch" aria-checked="true" aria-label="跌破红线时发系统通知"></button></div>
+      <div class="field"><span>提示音<span class="desc">只有两声:签到领到、跌破红线。默认关</span></span>
+        <button class="sw" id="cfgSound" role="switch" aria-checked="false" aria-label="提示音"></button></div>
 
       <h4>胶囊轮播</h4>
       <div class="khint">不选 = 自动显示最紧张的一个;选中的每 8 秒轮播(鼠标停在胶囊上时放慢到 24 秒)。渠道隐藏后自动从轮播中剔除。</div>
@@ -214,8 +249,15 @@
           <button class="btn" id="btnUpdLater">稍后</button>
         </div>
       </div>
-      <h4>数据与隐私</h4>
-      <div class="khint" style="margin:0">密钥只写入 Windows 凭据管理器,不进配置文件、数据库或日志;
+      <h4>体检</h4>
+      <div class="khint" style="margin:0 0 8px">逐渠道真打一次接口 + 本机检查(快照库可写、开机自启、系统代理),
+        结果是一份可复制的纯文本报告 —— 里面只有域名、状态与数值,<b>没有任何密钥</b>。</div>
+      <div class="acts">
+        <button class="btn p" id="btnDiag">运行体检</button>
+        <button class="btn" id="btnDiagCopy" style="display:none">复制报告</button>
+      </div>
+      <pre class="diagout" id="diagOut" style="display:none"></pre>
+      <h4>数据与隐私</h4>      <div class="khint" style="margin:0">密钥只写入 Windows 凭据管理器,不进配置文件、数据库或日志;
         快照库在 <span style="font-family:Consolas,monospace">%APPDATA%\com.wacil.tokenscope</span>;
         Trae / WorkBuddy 只读本机登录凭据,不写回、不刷新 —— 隐藏渠道后连读取也会停止。<br>
         OpenCode Go 的 $10 套餐按天摊进「今日/本周/本月消耗」:周期长度优先用两次真实重置的间隔,
