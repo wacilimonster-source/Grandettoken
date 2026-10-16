@@ -291,44 +291,32 @@ function renderSummary() {
     if (!vals.length) return null;
     return vals.reduce((a, b) => a + b, 0);
   };
-  // 每格显式带上自己的字段名与注释文案 —— 不要拿"是否推算"去推字段名,
-  // 那种写法今天恰好对,给今日/本周也加计数时就会读到错的字段
+  // 每格显式带上自己的字段名与比对口径 —— 不要拿"是否推算"去推字段名。
   // prev* = 上一周期同时段(U8 环比):今日 vs 昨日同时段,以此类推
   const cells = [
-    { label: "今日消耗", field: "day", prev: "dayPrev", note: "推算", cmp: "对比昨日同时段" },
-    { label: "本周消耗", field: "week", prev: "weekPrev", note: "推算", cmp: "对比上周同时段" },
-    { label: "本月消耗", field: "month", prev: "monthPrev", note: null, cmp: "对比上月同时段" },
+    { label: "今日消耗", field: "day", prev: "dayPrev", cmp: "对比昨日同时段" },
+    { label: "本周消耗", field: "week", prev: "weekPrev", cmp: "对比上周同时段" },
+    { label: "本月消耗", field: "month", prev: "monthPrev", cmp: "对比上月同时段" },
   ];
   // 一格数都没有时不留空条 —— 但**只有非人民币渠道**时要把条留着:整条消失
-  // 看起来像挂件坏了,三格「——」+ 点名"谁没被计入"才诚实(G1)。
+  // 看起来像挂件坏了,三格「——」才诚实(G1);谁没被计入放在 tooltip 里点名。
   // 无论如何不做跨币种求和。
   if (!am.length && !plans.length && !offCur.length) {
     $("sum").innerHTML = "";
     return;
   }
+  // 面上只留「标签 + 金额」,干干净净;口径 / 环比 / 套餐摊销 / 非人民币点名
+  // 全部收进 title —— 之前塞在金额后面,窄窗 + 大字号下被 ellipsis 截成
+  // 「¥123…」,钱和说明两头都看不清(P3-31)。
   $("sum").innerHTML = cells
-    .map(({ label, field, prev, note: cellNote, cmp }) => {
+    .map(({ label, field, prev, cmp }) => {
       const v = sum(field);
       const add = plans.length ? planSum(field) : 0;
       // 金额型这一格没数时,套餐那一笔仍然要显示(否则"今日"会因为一家接口挂了而空掉)
       const total = v === null ? (add > 0 ? add : null) : v + add;
       const txt = total === null ? "——" : money(total);
-      // 计数要按"真正参与了求和"的渠道数 —— 有的渠道这个窗口还没数据,
-      // 用 am.length 会把没算进去的也算上,看起来像少加了钱
-      const contributors = am.filter((c) => c[field] != null).length;
-      let note = "数据不足";
-      if (total !== null) {
-        if (contributors) note = (cellNote || `${contributors} 个渠道`) + (add > 0 ? " +套餐" : "");
-        else if (add > 0) note = "仅套餐摊销";
-      } else if (!am.length && offCur.length) {
-        // 钱只存在于非人民币渠道里:这不是"数据不足"(那像取数失败),
-        // 而是"它们不参与人民币合计" —— 渠道名在 tooltip 里(G1)
-        note = "非人民币未计入";
-      }
       // 环比只在"本期与上期都有数"的渠道集合上算,两边口径才对称;
-      // 套餐那一笔两边都加(它是按天摊的,所以只会让比例更平,不会凭空造出涨幅);
-      // 上期合计为 0(或集合为空)时比例无意义,显示「——」而不是 0 或 ∞
-      let delta = "";
+      // 套餐那一笔两边都加(按天摊,只会让比例更平);上期无基线时如实说
       const both = am.filter((c) => c[field] != null && c[prev] != null);
       let cur2 = both.reduce((a, c) => a + c[field], 0);
       let prev2 = both.reduce((a, c) => a + c[prev], 0);
@@ -336,19 +324,6 @@ function renderSummary() {
         cur2 += add;
         prev2 += planSum(prev);
       }
-      if ((both.length || add > 0) && prev2 > 0) {
-        const p = ((cur2 - prev2) / prev2) * 100;
-        delta =
-          p > 0.5
-            ? `<span class="dl delta up">↑${Math.round(p)}%</span>`
-            : p < -0.5
-              ? `<span class="dl delta dn">↓${Math.round(-p)}%</span>`
-              : `<span class="dl delta na">±0%</span>`;
-      } else if (total !== null) {
-        delta = `<span class="dl delta na">——</span>`;
-      }
-      // tooltip 要把**数字**摊开:只写「对比昨日同时段」说不清这个 ↑ 是怎么来的(F20)。
-      // prev2 只在"两边都有数"时成立(与上面 delta 同一条件),否则如实说没有基线
       const hasBase = (both.length || add > 0) && prev2 > 0;
       const tip =
         `${cmp}:本期 ${txt}` +
@@ -358,7 +333,7 @@ function renderSummary() {
         planTip +
         offTip;
       return `<div class="cell" title="${esc(tip)}"><div class="lb">${label}</div>
-        <div class="vv">${txt}<span class="dl">${note}</span>${delta}</div></div>`;
+        <div class="vv">${txt}</div></div>`;
     })
     .join("");
 }
