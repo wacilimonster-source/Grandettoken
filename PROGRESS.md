@@ -91,8 +91,16 @@ v0.4.2;代码注释回指到 issue #232),写了一份设计文档并拿到 10 �
   两条防"假绿"的断言都过 —— `ok Grandettoken.exe rebuilt (SHA-256 changed)`(证明本轮真的重链过)
   与 `ok import table clean (no WebView2Loader.dll)`。新依赖 `tauri-plugin-notification` 经本地代理
   从 crates.io 拉取并已进缓存(此后构建不再需要网络)。
-- **尚未做**(等「发版」指令):打 tag、推远端、`gh release create` 与 `latest.json` 上传。
-  代码、文档、安装包都已就绪。
+- **已发版**(2026-10-17):tag `v0.1.35` → `3e1688a`,release
+  <https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.35>,
+  三个资源都在 —— `Grandettoken_0.1.35_x64-setup.exe`(4,948,446 字节,
+  sha256 `d69248904606b9f5a70b5a1dd982daebc9c79cf3df830f14b42fbc01c4d3d8b7`)、`.sig`、`latest.json`。
+  更新端点 `releases/latest/download/latest.json` 实测 200,内容与本地产出逐字一致(含签名),
+  安装包 URL 302 → 200 可下载。
+- 提交分三次(便于回退与二分):core 数据层 / 壳+前端 / 文档;版本号提升在第二次里。
+- **真机走查抓到并已修**的两个 bug(修复后重出安装包再发,故 02:46 那个才是发布产物):
+  ① 速览窗口用 `PhysicalSize` 传逻辑尺寸 —— 125% 缩放下窗口只长 61px、胶囊被压成 14px;
+  ② 气泡挂在 `.pill-body`(position:relative + overflow:hidden)里,被定位到胶囊内部并裁掉半截。
 
 ## WorkBuddy 登录:真正要抄的是会话 Cookie,不是令牌(2026-10-08,v0.1.19)
 
