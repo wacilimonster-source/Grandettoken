@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>产品设计 · 小鲸鱼插件研读与启发 · 2026-10-16</title>
+<style>
+  :root{
+    --bg:#0f1115; --fg:#e6e8ee; --mut:#9aa3b2; --line:#262b36; --card:#151922;
+    --ac:#6d5ef8; --ok:#2fbf71; --warn:#f5a623; --bad:#e5484d; --ds:#4d6bfe;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f6f7f9; --fg:#1b1f27; --mut:#5b6472; --line:#dfe3ea; --card:#fff; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:15px/1.72 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1080px;margin:0 auto;padding:28px 22px 90px}
+  h1{font-size:26px;margin:0 0 4px}
+  h2{font-size:19px;margin:38px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+  h3{font-size:16px;margin:22px 0 6px}
+  h4{font-size:14px;margin:16px 0 4px;color:var(--mut);font-weight:600}
+  p{margin:8px 0}
+  code{background:rgba(127,127,127,.16);padding:1px 5px;border-radius:4px;font-size:13px;
+    font-family:"Cascadia Mono",Consolas,monospace;word-break:break-all}
+  .sub{color:var(--mut);font-size:13px}
+  .hand{border:1px solid var(--ac);border-left-width:4px;background:var(--card);
+    border-radius:8px;padding:14px 16px;margin:18px 0}
+  .hand b{color:var(--ac)}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:rgba(127,127,127,.08);font-weight:600;white-space:nowrap}
+  .tag{display:inline-block;padding:0 7px;border-radius:10px;font-size:12px;border:1px solid var(--line)}
+  .t-fact{color:var(--ok);border-color:var(--ok)}
+  .t-half{color:var(--warn);border-color:var(--warn)}
+  .t-risk{color:var(--bad);border-color:var(--bad)}
+  .t-tbd{color:var(--mut)}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media (max-width:820px){.grid{grid-template-columns:1fr}}
+  .note{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:10px 0}
+  .note.ok{border-left:3px solid var(--ok)}
+  .note.warn{border-left:3px solid var(--warn)}
+  .note.bad{border-left:3px solid var(--bad)}
+  .note .lbl{color:var(--mut);font-size:13px;display:block}
+  ul,ol{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+  .pick{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+  .pick button{background:var(--card);color:var(--fg);border:1px solid var(--line);
+    border-radius:6px;padding:6px 12px;cursor:pointer;font-size:13px;font-family:inherit}
+  .pick button.on{border-color:var(--ac);background:rgba(109,94,248,.16);font-weight:600}
+  .btnx{background:var(--ac);border:0;color:#fff;padding:7px 14px;border-radius:6px;
+    cursor:pointer;font-size:13px;font-family:inherit}
+  .btnx.ghost{background:transparent;border:1px solid var(--line);color:var(--fg)}
+  /* 渠道卡 mock(与上一份设计稿同款) */
+  .card{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--card);
+    max-width:440px;position:relative;overflow:hidden}
+  .card .bar{position:absolute;left:0;top:0;bottom:0;width:3px}
+  .card .r1{display:flex;align-items:center;gap:8px;padding-left:6px}
+  .card .nm{font-weight:600}
+  .card .big{font-size:26px;font-weight:700;padding-left:6px;margin:4px 0 2px;letter-spacing:.5px}
+  .card .ln{font-size:12.5px;color:var(--mut);padding-left:6px}
+  .badge{margin-left:auto;font-size:12px;padding:2px 8px;border-radius:11px;border:1px solid;white-space:nowrap}
+  .okc{color:var(--ok)} .noc{color:var(--bad)} .hc{color:var(--warn)} .mc{color:var(--mut)}
+  /* 缺口柱图 mock */
+  .mbars{display:flex;gap:3px;align-items:flex-end;height:44px;margin:8px 0 4px;padding-left:6px}
+  .mbars i{width:11px;background:#3d63d8;border-radius:2px 2px 0 0}
+  .mbars i.gap{background:repeating-linear-gradient(45deg,#4a5163 0 3px,var(--card) 3px 6px);border:1px solid var(--line);border-bottom:0;border-radius:2px 2px 0 0}
+  /* 变动台账 mock */
+  .ledger{margin:6px 0}
+  .ledger div{display:flex;gap:10px;padding:6px 0;border-bottom:1px dashed var(--line);font-size:13px;align-items:baseline}
+  .ledger div:last-child{border-bottom:0}
+  .ledger i{font-style:normal;color:var(--mut);width:44px;flex:none}
+  .ledger b{font-weight:600;width:86px;flex:none}
+  .ledger span{color:var(--mut)}
+  /* 体检 mock */
+  .hpout{background:#0b0d11;border:1px solid var(--line);border-radius:8px;padding:10px 12px;
+    font:12.5px/1.75 "Cascadia Mono",Consolas,monospace;white-space:pre-wrap;min-height:22px;margin:10px 0 0}
+  @media (prefers-color-scheme: light){.hpout{background:#10131a;color:#d9dee8}}
+  /* 桌面通知 mock */
+  .wf-toast{display:none;max-width:400px;background:#1c212c;border:1px solid var(--line);border-radius:12px;
+    padding:12px 14px;margin:12px 0 0;box-shadow:0 10px 30px -8px rgba(0,0,0,.7)}
+  .wf-toast.on{display:block;animation:toastin .25s ease}
+  @keyframes toastin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  .wf-toast .th{font-size:12px;color:var(--mut);display:flex;align-items:center;gap:7px}
+  .wf-toast .tico{display:inline-block;background:var(--ac);color:#fff;border-radius:5px;
+    padding:0 5px;font-size:11px;font-weight:700}
+  .wf-toast .tb{font-size:14px;font-weight:600;margin:5px 0 2px}
+  .wf-toast .td{font-size:12px;color:var(--mut)}
+  @media (prefers-color-scheme: light){.wf-toast{background:#fff}}
+  /* 胶囊 mock */
+  .pillwrap{position:relative;display:inline-block;padding:30px 0 8px;margin:6px 0}
+  .pillm{display:inline-flex;align-items:center;gap:8px;background:#1c212c;border:1px solid var(--line);
+    border-radius:999px;padding:9px 13px;cursor:pointer;user-select:none;
+    transition:transform .12s ease;position:relative;overflow:hidden}
+  .pillm:active{transform:scale(.96)}
+  .pillm .pdot{width:9px;height:9px;border-radius:50%;background:var(--ok);flex:none}
+  .pillm .pico{font-size:11px;font-weight:700;background:#2a3040;border-radius:5px;padding:1px 5px}
+  .pillm .pv{font-weight:700;font-size:14px}
+  .pillm .pex{color:var(--mut);font-size:10px}
+  .pillm .ph{position:absolute;left:0;right:0;bottom:0;height:2px;background:rgba(255,255,255,.09)}
+  .pillm .ph i{display:block;height:100%;width:9%;background:var(--ok)}
+  .pillb{display:none;position:absolute;left:0;bottom:calc(100% - 16px);z-index:3;
+    background:#1c212c;border:1px solid var(--ac);border-radius:10px;padding:10px 12px;
+    font-size:13px;min-width:250px;box-shadow:0 10px 30px -8px rgba(0,0,0,.7)}
+  .pillb.on{display:block;animation:toastin .18s ease}
+  .pillb div{margin:2px 0}
+  .pillb .d{color:var(--mut);font-size:12px;margin-top:6px}
+  @media (prefers-color-scheme: light){.pillm{background:#fff}.pillb{background:#fff}}
+  @media (prefers-reduced-motion:reduce){.pillm{transition:none}.pillm:active{transform:none}}
+  /* 裁决 */
+  .q{border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:10px 0;background:var(--card)}
+  .q .t{font-weight:600;margin-bottom:2px}
+  .q .o{display:block;margin:5px 0;cursor:pointer;font-size:14px}
+  .q .o input{margin-right:7px}
+  .q .rec{font-size:12.5px;color:var(--ok)}
+  .memo{position:sticky;bottom:0;background:var(--card);border:1px solid var(--ac);border-radius:8px;
+    padding:12px 14px;margin-top:18px;z-index:5}
+  .memo textarea{width:100%;min-height:64px;background:var(--bg);color:var(--fg);
+    border:1px solid var(--line);border-radius:6px;padding:8px;font:13px/1.6 Consolas,monospace;resize:vertical}
+  .memo button{margin-top:8px;background:var(--ac);border:0;color:#fff;padding:7px 16px;border-radius:6px;cursor:pointer;font-size:13px}
+  details{margin:6px 0}
+  summary{cursor:pointer;color:var(--mut);font-size:13px}
+  .foot{margin-top:34px;padding-top:14px;border-top:1px solid var(--line);font-size:12.5px;color:var(--mut)}
+  a{color:#7aa2ff}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>小鲸鱼插件研读 · 对 Grandettoken 的产品设计</h1>
+<div class="sub">产品设计文档 v1（待裁决）· 2026-10-16 · 研读对象:dsh-whale-widget v0.4.2（本机 desktop profile 已装那版）· 仅方案，未动任何代码 · 事实出处见第 13 节</div>
+
+<div class="hand">
+  <b>交接框 ·</b> 现在停在哪:<b>研读 + 方案</b>已完成 —— 小鲸鱼的 README、记账内核、宿主与前端源码全过了一遍（本地路径可复核，第 13 节），提炼出 <b>4 个可发版的「包」、10 项编号裁决</b>。代码一行没动。
+  <div>解锁下一步只需要一句话:把下面 <a href="#decide">第 12 节的 10 项裁决</a> 勾一遍，复制那行速记贴回给我即可。</div>
+  <div><b>两处要提前知道的:</b>① 本文所有引用「小鲸鱼怎么做」的事实，都能在 <code>C:\Users\wacil\.dsh\profiles\desktop\node_modules\dsh-whale-widget\</code> 里只读复核；② DeepSeek 的峰谷定价规则两个月里官方改了三次，所以第 5.3 节按「只提示时段、不承诺数字」的口径设计，改规则伤不到我们。</div>
+  <div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)">
+    <b>2026-10-16 已裁决:</b>10 项里 9 项通过、<b>第 4 项「今日预算」作废</b>；第 10 项选了「一版全做」（= 全部进 v0.1.35）—— 施工单与两条保护措施见 <a href="#impl">第 14 节</a>。
+  </div>
+</div>
+
+<h2>1. 先说人话</h2>
+<p>小鲸鱼（<code>dsh-whale-widget</code>）是 <b>DeepSeek Harness</b>（DSH，DeepSeek 官方那套带插件系统的 AI 工作台）上的一个社区挂件:界面右下角一只会拖、会弹、会叫的小鲸鱼，气泡里显示 DeepSeek 余额、今日已用、每轮对话花了多少，还管预警、今日预算，并且支持接 34 种第三方服务的余额查询。它和我们做的，本质是<b>同一种东西</b> —— 一个常驻桌面的「钱袋子仪表」。</p>
+<p>为什么拿它当镜子照:① <b>同一条赛道</b>:它也把「余额下降 = 消费、上升 = 充值」的观测记账做成了内核，而且做得比我们深；② <b>同一种架构</b>:本地文件 + 定时轮询 + 系统凭据服务，跟 Grandettoken 一个路数，经验可以直接搬；③ <b>它是活的</b>:内部构建代次写到 v789、代码注释里回指到 issue #232 —— 每个功能都被真实用户锤过，能上它的功能清单就等于拿到了一份「验证过的答案」。</p>
+<p><b>结论先给:</b>值得我们抄的核心不是「让它变可爱」，而是三件严肃的事 —— <b>数字的诚实性</b>（说清楚哪些数字有缺口）、<b>提醒的克制</b>（跌破才响、一天一次、成功静默）、<b>渠道的可持续</b>（模板化自定义 + 一键体检）。可爱（按压、冒泡、两声提示音）只是顺路捡的，排最后一个包。</p>
+
+<h2>2. 它有什么、我们有什么</h2>
+<table>
+  <tr><th>能力</th><th>小鲸鱼</th><th>Grandettoken 现状</th></tr>
+  <tr><td>余额 + 今日已用</td><td>定点记账（8 位小数），观测消费</td><td class="okc">有。快照推算，标「推算」二字</td></tr>
+  <tr><td>数据缺口标注</td><td class="okc">有。「部分数据」+ 从几点起才有观测</td><td class="hc">半个。只有「推算」两个字，不说缺在哪</td></tr>
+  <tr><td>换 key / 换账户</td><td class="okc">有。换 key 分账本，旧数据标「历史账户」留给你看</td><td class="noc">没有。换 key 后新旧余额差会被算进消耗</td></tr>
+  <tr><td>峰谷时段提示</td><td class="okc">有。时段状态 + 倒计时 + 周末/节假日表</td><td class="noc">没有</td></tr>
+  <tr><td>跌破阈值通知</td><td class="okc">有。余额预警 + 今日预算，内容可编辑</td><td class="noc">没有（DESIGN B10 有设计，开关没接线）</td></tr>
+  <tr><td>音效 / 角色 / 气泡</td><td class="okc">全套（五类事件音效、自定义角色、可编排气泡）</td><td class="mc">无（定位就是静默工具）</td></tr>
+  <tr><td>多厂商</td><td class="okc">34 个模板 + 字段路径自填 + 探活档</td><td class="noc">固定 7 渠道，加一家要改代码发版</td></tr>
+  <tr><td>本机会话日志</td><td class="okc">有。读 Codex 的 JSONL 统计（不需要 key）</td><td class="mc">无（我们 Codex 走在线窗，够用）</td></tr>
+  <tr><td>数据保留</td><td>90 天明细 + 365 天日级 + 独立归档文件</td><td class="hc">90 天快照，更早的丢弃</td></tr>
+  <tr><td>自检 / 诊断</td><td class="okc">有。每模型「测试连通性」+ 两半区自检说明</td><td class="noc">没有（靠 launch-debug 日志人肉查）</td></tr>
+  <tr><td>桌面形态</td><td>吸附 + 镜像翻转（网页宿主）</td><td class="okc">四形态 + 8×64 贴边 —— 我们的强项</td></tr>
+  <tr><td>环比</td><td class="mc">无</td><td class="okc">同时段环比 —— 我们的强项</td></tr>
+  <tr><td>每日签到</td><td class="mc">无（它不管领取）</td><td class="okc">Trae / WorkBuddy —— 独家</td></tr>
+  <tr><td>写客户端配置</td><td class="mc">无</td><td class="okc">模型一键配置到 Trae —— 独家</td></tr>
+</table>
+<p class="sub">一句话读表:两张不同的卷子。它把「账本的语义」做深（缺口、分账本、校正、拓展机制），我们把「桌面挂件的形态」做全（四形态、贴边、签到、环比）。<b>所以下面只抄它做深的那部分，不抄它的热闹。</b></p>
+<p class="sub">旁证一条:这台机器上它正在跑 —— <code>~/.dsh/.dshw-usage.json</code> 里能看到 10-16 当天 15 笔逐笔事件（金额、token 数、模型名）。它不是概念稿，是被日常使用的工具。</p>
+
+<h2>3. 它最值钱的三段设计（记账内核）</h2>
+<p class="sub">读的是 <code>lib/accounting.mjs</code>，289 行；下面每段都从原文来。</p>
+
+<h3>3.1 开头第一句注释，就是它的立场</h3>
+<p>原文（首行）:<code>Balance observations are not a transaction API. Keep them separate from token estimates and require explicit credits/debits for reconciliation.</code> 翻译:「余额观测不是交易流水。把它和 token 估算严格分开，校正时必须让用户显式填『到账』和『其它扣减』。」金额全程用 8 位小数的定点整数算（<code>SCALE = 100000000</code>），不碰浮点。</p>
+<p>对照我们:我们已有「消耗是推算值 + clamp + 标注『推算』」的口径（DESIGN 7.3），立场一致。它比我们多出来的，是下面两个具体机制。</p>
+
+<h3>3.2 缺口判据:「这天数字是全的吗」是一等公民</h3>
+<p>它的判据带具体数字:观测起点距当天 00:00 超过 <b>10 分钟</b>，或（对已经过去的天）最后一次观测距次日 00:00 超过 10 分钟，这一天就标「部分数据」，并给出「从几点开始才有观测 / 观测到几点为止」。背景装在代码注释里（issue #184）:以前「今日已用」长期偏小，界面上<b>没有任何『这是部分数据』的提示</b> —— 用户以为花了 10 块，其实只观测了半天的 10 块。</p>
+<p>对照我们:快照推算同样有「程序没开 = 数据空洞」的问题，现在我们只写「推算」两个字。缺的具体是「<b>缺在哪一段</b>」。</p>
+
+<h3>3.3 换 key 分账本:数据没丢，只是没有入口能再看到它</h3>
+<p>它的实现:余额账本按「凭据指纹 + 币种」分本，换 / 删 API key 就开一本新账；但<b>展示侧跨本聚合</b>——当前本是主行，别的本标注「历史账户」仍列出来。代码注释（issue #163）写得很直白:「数据没丢，只是没有任何入口能再看到它」。导火索是:换 key 后旧数据退化成「本地估算 ¥0.00」，用户以为账丢了。</p>
+<p>对照我们:快照按渠道存，不认 key。换了 key（同一家服务商换账号、换中转 key），新旧两个账户的余额差会直接进消耗推算 —— 换到余额更高的号是一笔假充值（clamp 掉，无害），换到更低的是<b>一笔假消耗</b>。</p>
+
+<h2>4. 启发一 · 信任包（建议 v0.1.35）</h2>
+<p class="sub">主题一句话:给每个数字上「溯源章」。三件:缺口标注、渠道体检、变动台账。</p>
+
+<h3>4.1 观测缺口标注</h3>
+<div class="grid">
+  <div>
+    <div class="card">
+      <div class="bar" style="background:#e8622c"></div>
+      <div class="r1"><span class="nm">4SAPI</span><span class="badge okc" style="border-color:var(--ok)">正常</span></div>
+      <div class="big">¥18.20</div>
+      <div class="ln">剩 9% · 本轮额度 ¥200 · 再等 6 天可申请</div>
+      <div class="ln hc">今日数据自 10:23 起（此前未开机，数字偏小）</div>
+    </div>
+    <div class="mbars" style="margin-top:14px">
+      <i style="height:18px"></i><i style="height:26px"></i><i style="height:14px"></i>
+      <i class="gap" style="height:30px"></i><i class="gap" style="height:22px"></i>
+      <i style="height:34px"></i><i style="height:22px"></i><i style="height:28px"></i>
+      <i style="height:16px"></i><i style="height:30px"></i>
+    </div>
+    <p class="sub">柱图里带斜纹的两天 = 当天有大段没开机，数字只算了一半 —— 鼠标悬停告诉你「覆盖 10:23–23:59」。</p>
+  </div>
+  <div>
+    <ul>
+      <li><b>怎么落:</b>行详情的今日/本周/本月消耗旁标一行「数据自 X 起」；<b>仅当缺口 ≥ 10 分钟</b>才出现（正常开机不会天天挂一行字）；过去的日子点开柱图能看到当天覆盖区间。</li>
+      <li><b>依据:</b>它用「10 分钟」卡误报线，原话是「正常运行时两个缺口都只有几分钟，不会误伤正常日」。</li>
+      <li><b>数据从哪来:</b>只用现有的快照表（最早/最晚一条快照时间），<b>不新增任何请求</b>。</li>
+      <li><b>顺带:</b>汇总条 hover 提示「今日合计包含 1 个渠道的部分数据」。</li>
+    </ul>
+  </div>
+</div>
+<div class="note ok"><span class="lbl">三问</span>
+<b>用户可感知:</b>今天数字为什么偏小，第一次有了答案；环比「昨天 +30%」不再莫名其妙。<br>
+<b>风险与对策:</b>空隙阈值卡太紧会天天挂提示 —— 用 10 分钟起步、只在真缺时出现；文案统一「数据自 X 起」。<br>
+<b>不做的后果:</b>永久只能靠「推算」两个字让用户自己猜；长期下来用户会不信任整块数字。
+</div>
+
+<h3>4.2 渠道体检（每渠道「测试连接」+ 一键体检报告）</h3>
+<p>它对应的是两样:每个模型都有「测试连通性」按钮（先验证 key 再用）；README 里教用户「两半区自检」（宿主半区看某文件、客户端半区看某存储键，各自证明一半管道是活的）。我们的对应缺口:<code>PROGRESS.md</code> 里「系统代理那条仍未取证」、以及排障全靠 <code>launch-debug.ps1</code> 落日志人肉看。</p>
+<div class="note ok" id="hpBox">
+  <span class="lbl">可点着看（演示数据）:设置与管理 → 关于 → 运行体检</span>
+  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:6px">
+    <button class="btnx" id="hpBtn">运行体检</button>
+    <button class="btnx ghost" id="hpCopy" style="display:none">复制报告</button>
+    <span class="sub" id="hpState"></span>
+  </div>
+  <pre class="hpout" id="hpOut" style="display:none"></pre>
+</div>
+<div class="note ok"><span class="lbl">三问</span>
+<b>用户可感知:</b>「为什么这块数字不对」从玄学变成一张清单；每个渠道卡多一个「测试」小按钮，配新 key 前先验一遍。<br>
+<b>风险与对策:</b>测试 = 真发一次请求（复用现有取数链路，不新增接口种族）；报告里只出现「用什么域名、拿到什么数、错误分类」，<b>永不出现明文密钥</b>（沿用现有密钥纪律）。<br>
+<b>不做的后果:</b>每次异常都靠开日志 / 跑脚本；「系统代理有没有干扰取数」这类问题一直没有产品内出口。
+</div>
+
+<h3>4.3 余额变动台账（每个数字变动都留痕）</h3>
+<div class="grid">
+  <div>
+    <div class="card" style="max-width:420px">
+      <div class="r1" style="padding-left:6px"><span class="nm">4SAPI</span><span class="sub" style="margin-left:auto">最近变动</span></div>
+      <div class="ledger">
+        <div><i>20:14</i><b class="noc">−¥2.31</b><span>推算消费（两次轮询的差）</span></div>
+        <div><i>16:02</i><b class="okc">+¥200.00</b><span>额度申请（自动识别）</span></div>
+        <div><i>09:57</i><b class="okc">+¥50.00</b><span>入账</span></div>
+        <div><i>09:12</i><b class="mc">沿用</b><span>取数失败，显示 09:12 快照</span></div>
+      </div>
+    </div>
+  </div>
+  <div>
+    <ul>
+      <li><b>怎么落:</b>行详情加「最近变动」小列表，取自现有快照表相邻差值 + 已有的申请识别标记；点「查看全部」进明细。</li>
+      <li><b>依据:</b>它的事件流（<code>events</code>）逐笔记录时间/模型/token/金额，且把「余额上升」显式登记为「待核对余额调整」而不是静默吞掉。</li>
+      <li><b>讲人话:</b>它相当于给 4SAPI 那张「自动识别申请」的牌子配了个账本 —— 每次 +¥200 是哪天来的，翻一眼就有。</li>
+    </ul>
+  </div>
+</div>
+
+<h2>5. 启发二 · 提醒包（建议 v0.1.36）</h2>
+<p class="sub">主题一句话:该出手时叫你，但只叫一次。三件:红线通知、今日预算、峰谷提示。</p>
+
+<h3>5.1 跌破红线桌面通知（把 B10 接线，按小鲸鱼的行为细节）</h3>
+<p>我们的 DESIGN 10.2-B10 早写了方案「通知只在跌破瞬间发一次」，开关至今没接线。小鲸鱼把这套行为的每个细节都验证过了:<b>没有 API 的事件不重复响</b>（「同一个未回答的提问只响一次，刷新页面也不会重复响」）、内容可编辑、可设自动关闭秒数、气泡不可用时退化成居中卡片。</p>
+<div class="note ok">
+  <span class="lbl">可点着看（外观示意，真实形态是 Windows 系统通知）</span>
+  <button class="btnx" id="toastBtn" style="margin-top:6px">模拟:4SAPI 跌破红线</button>
+  <div class="wf-toast" id="wfToast">
+    <div class="th"><span class="tico">GT</span> Grandettoken · 余额预警</div>
+    <div class="tb">4SAPI 剩余 ¥18.20（9%），低于红线 ¥20</div>
+    <div class="td">点此打开面板 · 今天不会再重复提醒</div>
+  </div>
+</div>
+<div class="note ok"><span class="lbl">三问</span>
+<b>用户可感知:</b>不盯着挂件也能收到「谁快没钱了」；点通知直接落到面板对应渠道。<br>
+<b>风险与对策:</b>吵人 —— 默认只对<b>红线</b>响、一天一次、回弹后再次跌破才再响（沿用签到那套「成功静默、只在要你行动时说话」的哲学）；不点也不会重复轰炸。<br>
+<b>不做的后果:</b>跌破红线的「一次性呼吸红晕」只有碰巧看到才有用 —— 而「不盯着窗口」正是这个产品要解决的问题（B10 原话）。<br>
+<span class="lbl" style="margin-top:8px">顺路一起做掉:</span>B10 的另一半「托盘图标角标显示最紧张渠道百分比」在同一个包里接线 —— 通知管「那一刻」，角标管「平时」。
+</div>
+
+<h3>5.2 今日预算（合计一个数，默认关）</h3>
+<ul>
+  <li><b>它怎么做的:</b>「今日已用达到设定金额时弹提醒」，内容可编辑，可设自动关闭。</li>
+  <li><b>怎么落:</b>设置里一个金额（默认关）；「今日合计消耗」越线时按 5.1 的同一套通知出去；文案带拆分:「今日已用 ¥12.4（4SAPI ¥7.1 最多）」。不做每渠道预算（7 个渠道 × 预算 = 14 个数字要维护，先不）。</li>
+  <li><b>三问:</b>可感知 —— 大跑一天之前先有个把关的；风险 —— 数据空洞日会误报偏低（不是误报偏高，可接受；有 4.1 的缺口标注兜底解释）；不做 —— 消耗只能「事后看」，不能「当日拦」。</li>
+</ul>
+
+<h3>5.3 DeepSeek 峰谷提示（只提示时段，不承诺数字）</h3>
+<div class="pick" id="peakPick">
+  <button class="on" data-k="valley">工作日·谷价中</button>
+  <button data-k="peak">工作日·高峰中</button>
+  <button data-k="weekend">周末 / 节假日</button>
+</div>
+<div class="card">
+  <div class="bar" style="background:var(--ds)"></div>
+  <div class="r1"><span class="nm">DeepSeek</span><span class="badge okc" style="border-color:var(--ok)">正常</span></div>
+  <div class="big">¥42.48</div>
+  <div class="ln" id="peakLn">谷价中 · 1 小时 12 分后转高峰（工作日 09:00）</div>
+</div>
+<p class="sub" style="margin-top:6px" id="peakNote">放假日子按国务院清单全年谷价 —— 哪怕那天调休上班。</p>
+<div class="note ok"><span class="lbl">三问</span>
+<b>用户可感知:</b>「现在贵不贵、还有多久变」一眼可见 —— 大任务挪到谷价窗口跑，这是写进挂件里的省钱决策。<br>
+<b>风险与对策:</b>规则再变 —— 我们<b>只显示时段状态与倒计时，不显示单价数字</b>；节假日表做成清单式常量 + 每年 11 月补一次（它踩过这个坑，代码里写着「次年安排发布后必须来补」）。规则万一错，最多提示不准，不涉及钱的一分一厘。<br>
+<b>不做的后果:</b>错过的是这个产品唯一能「主动替用户省钱」的信息类功能；DeepSeek 是你日常主力，峰谷倍率约 2×（工作日 9–12、14–18 高峰，其余时段谷价；2026-08-23 起周末全天谷价）。<br>
+<span class="lbl" style="margin-top:8px">范围:</span>先只做 DeepSeek 渠道；4SAPI 等服务商若将来有类似时段价，这套机制可复用。
+</div>
+
+<h2>6. 启发三 · 拓展包（建议 v0.1.37）</h2>
+<p class="sub">主题一句话:让「再连一家」不再等于「等我们发版」。</p>
+
+<h3>6.1 自定义渠道:先做「中转站」，再做「全自定义」</h3>
+<p>小鲸鱼的这套是它产品面最宽的部分:<b>34 个厂商模板</b>（选完自动带好凭据名/币种/接口/字段路径/探活地址；留空 = 沿用模板默认值）、<b>全手填档</b>（URL 与字段路径自己写，支持 <code>a.b[0].c</code> 与倍率）、<b>探活档</b>（官方没有余额接口的 20 家：验证 key 可达即可，余额显示「—」）。它的两条原则我们要原样学:</p>
+<ul>
+  <li><b>模板只提供默认值</b> —— 厂商接口变了，用户自己改字段路径就能自救，不用等作者发版；</li>
+  <li><b>保存前先「测试连通性」</b> —— 坏配置进不来（和我们 4.1 的体检是同一个按钮的两种场景）。</li>
+</ul>
+<table>
+  <tr><th>期</th><th>做什么</th><th>用户得到什么</th></tr>
+  <tr><td class="nowrap"><b>一期</b></td><td>新增一类渠道「OpenAI 兼容中转站」（OneAPI / New API 那批）:填地址 + key，内置探法；测试通过才落库、出现在渠道列表（可设简称与颜色）</td><td>常跑的中转站不再受 7 渠道限制;消耗推算自动适用（快照差法是通用机制，不需要为新渠道写任何核算代码）</td></tr>
+  <tr><td class="nowrap"><b>二期</b></td><td>全自定义 HTTP:URL / 方法 / 字段路径 / 换算倍率；外加「探活模式」（只验 key，余额显示「—」，不参与消耗合计）</td><td>接口变动时用户可自救;非常规服务也能挂上来「至少看着它活着」</td></tr>
+</table>
+<div class="note ok"><span class="lbl">三问</span>
+<b>用户可感知:</b>多一个「添加自定义渠道」入口；中转站换家、上新的号，不用回来找我改代码。<br>
+<b>风险与对策:</b>① 模板维护面变大 —— 对策是「默认值 + 用户可覆盖」的它式设计，测试按钮挡在保存前；② 密钥发往用户自填域名 —— 只发往用户自己填的地址，密钥仍只进 Windows 凭据管理器（零信任纪律不变），保存前界面明示「请求将发往该地址」。<br>
+<b>不做的后果:</b>每来一家新服务商都要走一遍「调研接口 → 改代码 → 发版」；这类需求会越来越频繁（中转站是最常换的一环）。<br>
+<span class="lbl" style="margin-top:8px">与《明确不做》核对（DESIGN 1.4）:</span>不冲突 —— 仍是纯只读账务，不发任何写请求到平台；不做汇率（倍率由用户按 ¥ 口径填）；单机单用户不变。
+</div>
+
+<h2>7. 启发四 · 气质包（建议 v0.1.38）</h2>
+<p class="sub">主题一句话:顺路把它「被喜欢」的部分捡一点 —— 不是学热闹，是学「看一眼就走」的交互密度。</p>
+
+<h3>7.1 按压反馈 + 单击冒泡速览</h3>
+<div class="grid">
+  <div>
+    <div class="pillwrap">
+      <div class="pillb" id="pillBubble">
+        <div>今日合计 <b>¥6.42</b> · 较昨日同时段 <span class="noc">+12%</span></div>
+        <div>最紧张:4SAPI 剩 <b>9%</b></div>
+        <div>今日签到 2/2</div>
+        <div class="d">单击收起 · 4 秒自动收 · ▲ 仍是展开面板</div>
+      </div>
+      <div class="pillm" id="pillMock" title="单击速览 · 拖动移动 · ▲ 展开面板">
+        <span class="pdot"></span>
+        <span class="pico">4S</span>
+        <span class="pv">¥18.20</span>
+        <span class="pex">▲</span>
+        <span class="ph"><i></i></span>
+      </div>
+    </div>
+    <p class="sub">点一下这只胶囊试试（演示）:按下会微缩回弹，松开冒泡。</p>
+  </div>
+  <div>
+    <ul>
+      <li><b>按压 Q 弹:</b>它的玩偶按压「按的时候底边不动」—— 我们做胶囊/紧凑条的按下微缩（0.96）+ 松开回弹，纯 CSS 动效层，纳入动效令牌。</li>
+      <li><b>单击冒泡:</b>它学会了「单击出小气泡、拖动不误触」的分离（点按推进自己的序列，拖动照旧）。我们:单击胶囊 → 冒 3 行速览（今日合计 / 最紧张渠道 / 签到状态），4 秒自收；<b>拖动判定沿用现有 250ms 机制</b>（动过就不算单击），▲ 仍然是展开面板的唯一入口。</li>
+      <li><b>边界:</b>只做胶囊一种形态；气泡只给 3 行、不可编辑（它是聊天伴生品才需要编排，我们不需要）。</li>
+    </ul>
+  </div>
+</div>
+<div class="note ok"><span class="lbl">三问</span>
+<b>用户可感知:</b>不展开面板就能回答「今天花了多少、哪个最紧张、签到领了没」—— 这是挂件一天被看十几次的三个问题。<br>
+<b>风险与对策:</b>误触与干扰 —— 拖动/单击已分离，气泡只信息不操作；不喜欢的人不受影响（▲ 逻辑一字不动）。<br>
+<b>不做的后果:</b>纯加分项，不做也不缺什么；做了是把「看一眼」的成本从一次展开降到一次点击。
+</div>
+
+<h3>7.2 音效两声:签到结果 + 跌破红线</h3>
+<ul>
+  <li><b>它怎么做的:</b>一整套（按压/松开/每轮/提问/授权五类事件、自定义音效组、逐事件音量、试听、保存才生效）—— 这套我们<b>不学</b>（见第 9 节）。</li>
+  <li><b>怎么落:</b>只做两声且默认关:① 签到成功「叮」一下（自动化跑在后台时，这一声就是「今天领到了」的收据）；② 跌破红线时一声警示（与 5.1 的通知同一时机、同一个开关的姊妹项）。</li>
+  <li><b>三问:</b>可感知 —— 后台行为有了即时反馈；风险 —— 声音天然扰人，对策是只有两处、默认关、音量跟随系统；不做 —— 纯加分项。</li>
+</ul>
+
+<h2>8. 散件四件（随包捎带，不单独发版）</h2>
+<table>
+  <tr><th>#</th><th>散件</th><th>来源与做法</th><th>推荐</th></tr>
+  <tr><td>S1</td><td>换密钥账目隔离（第 3.3 节的落地）</td><td>快照按「密钥指纹」分段:换 key 起新基线，不跨账户推算消耗；旧段标「历史账户」仍可看。指纹 = 取到 key 后哈希，<b>明文仍只在凭据管理器</b></td><td class="okc">做。否则换一次号就凭空一笔「消耗」</td></tr>
+  <tr><td>S2</td><td>长期趋势（90 天明细 → 365 天日级）</td><td>学它「明细压日级、归档独立文件、主库不膨胀」:90 天前的快照压成每日一条摘要保留一年；行详情柱图加「近 3 月 / 近 12 月」切换。<b>只展示不导出</b>（维持非目标）</td><td class="hc">可做。数据本来就在，只是活得久一点</td></tr>
+  <tr><td>S3</td><td>「真 0」与「没数」全面审查</td><td>学它「取不到显示 —，真的为 0 才显示 0.00」:全局过一遍每处数字；<b>余额真 0.00 是最高级警报</b>，应直接进 5.1 通知路径</td><td class="okc">做。审查类，改的是文案与判断</td></tr>
+  <tr><td>S4</td><td>设置保存语义审查</td><td>学它「面板内改动只落内存，点保存才生效；取消完整还原；连『恢复默认』也能撤销」:把我们设置页每个开关过一遍「立即生效 vs 显式保存」的语义，不齐的拉齐</td><td class="okc">做。审查类，不动界面</td></tr>
+</table>
+
+<h2>9. 劝退清单（明确不学）</h2>
+<table>
+  <tr><th>不学</th><th>为什么</th></tr>
+  <tr><td>气泡编辑器全家桶（点击序列 / 加权随机 / 模块库 / 拖拽排版）</td><td>它是聊天伴生品:每轮对话结束需要一个「说话」的出口。我们没有对话流，做出来全是维护成本（它前端 2.2 万行，一多半在这）</td></tr>
+  <tr><td>全事件音效矩阵（五类事件 × 自定义音效组 × 逐事件音量）</td><td>我们只留两声（7.2）；音效组编辑对 7 渠道的账本工具是纯负担</td></tr>
+  <tr><td>移动端触控适配</td><td>Windows 桌面挂件，不解释</td></tr>
+  <tr><td>34 家模板全量铺开</td><td>它的大多数模板是「无余额接口 + 探活」，那是「装了 34 家服务」的用户画像；我们起步只做中转站一类（6.1），按需加</td></tr>
+  <tr><td>按 token 估算消耗（读本机会话日志凑数字）</td><td>我们已有更准的「余额观测」口径；两套口径并存会打架（它的校正流程一半复杂度就是用来缝这个）</td></tr>
+  <tr><td>角色 / 音频 / 图片资源管理窗口</td><td>除非哪天真有「自定义胶囊形象」，否则不建资源管理器</td></tr>
+</table>
+
+<h2>10. 它的工程习惯（抄作业，不用裁决）</h2>
+<ul>
+  <li><b>带数字的判据:</b>「缺口 &gt; 10 分钟算部分数据」这种线，写成常量 + 注释，界面才敢跟用户解释。我们的阈值也该这么写（标黄/标红已是）。</li>
+  <li><b>新功能默认关、且写明关掉的后果:</b>它给签到/扫描都写了「关掉后一个请求都不发」；我们签到的空态文案已经是这个路数，继续沿用。</li>
+  <li><b>README 里教用户自检:</b>「看这两个文件/存储键，就知道它有没有在跑」—— 配 4.2 的体检，我们把「装了之后怀疑它没动」的问题一次性答掉。</li>
+  <li><b>issue 编号进代码注释:</b>它 232 个 issue 的回查成本极低（<code>// v789（issue #184）：…</code>）。我们用 PROGRESS.md 做同一件事，保持。</li>
+  <li><b>素材来源声明:</b>它把「代码 MIT、素材 as-is、出处不可考就如实写、有主张就换」做成了 PROVENANCE 文件。我们发公开仓库，早晚需要这一页 —— 记一笔，不急着做。</li>
+</ul>
+
+<h2>11. 改动面（给研发看的，你可以跳过）</h2>
+<ul>
+  <li><b>系统通知:</b>引入 <code>tauri-plugin-notification</code>（或 WinRT 直发）；「一天一次 / 跌破瞬间」去重状态放内存，重启最多多响一次，可接受。</li>
+  <li><b>缺口标注 + 变动台账:</b>纯读现有快照表（最早/最晚时间、相邻差值），无新请求、无新存储。</li>
+  <li><b>体检:</b>逐渠道复用取数链路发一次真请求 + 组装文本；「用了哪个域名」读现有 url_memo；报告明文字段白名单化（不含密钥/完整响应体）。</li>
+  <li><b>峰谷:</b>core 加纯函数时段模块（吃时间戳回「峰/谷 + 下一跳时刻」）+ 静态节假日表；UI 只读。</li>
+  <li><b>自定义渠道:</b>ProviderDef 从静态表动态化 + 按字段路径的通用取值器 + 凭据管理器动态 id（custom-1、custom-2…）；「测试」与取数同一条路径，避免两套行为。</li>
+  <li><b>换密钥隔离:</b>快照表加 key 指纹列（keyring 读值后的哈希）；历史聚合按现有渠道历史渲染复用。</li>
+  <li><b>纪律复述:</b>全部改动仍遵守三条老规矩 —— 失败不降级成 0；无数据一律「——」；真 0 要看得见。</li>
+</ul>
+
+<h2 id="decide">12. 待裁决（勾完自动出速记，复制贴回给我）</h2>
+<div id="qs"></div>
+<div class="memo">
+  <div class="sub">速记（还能勾:<span id="doneCnt">0</span>/10）</div>
+  <textarea id="out" readonly placeholder="勾完上面的选项，这一行会变成可以贴回给我的话"></textarea>
+  <button id="copyBtn">复制这行</button>
+  <div class="sub" style="margin-top:6px">每项后面写了「一句话否决办法」——不同意我的推荐时，直接用那句否掉即可，不需要解释理由。</div>
+</div>
+
+<h2>13. 参考与出处（可复核）</h2>
+<ul>
+  <li><b>研读对象（本机只读核对，2026-10-16）:</b><code>C:\Users\wacil\.dsh\profiles\desktop\node_modules\dsh-whale-widget\</code> —— README.md / lib/accounting.mjs（289 行）/ lib/index.js（4,926 行）/ assets/whale-widget.js（22,320 行）/ package.json（v0.4.2）。文中「代码注释原文」均出自 lib/accounting.mjs 与 lib/index.js。</li>
+  <li><b>本机运行数据:</b><code>C:\Users\wacil\.dsh\.dshw-usage.json</code>（10-16 当天 15 笔逐笔事件、余额 ¥42.48）——「它正在被使用」的旁证。</li>
+  <li><b>仓库:</b><a href="https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget">DeepSeek-Balance-Whale-Widget</a>（代码 MIT，素材不适用 MIT、as-is 提供）；Codex 分支已迁出至 <a href="https://github.com/Yang-huai406/Codex-Whale-Public">Codex-Whale-Public</a>。</li>
+  <li><b>DeepSeek 峰谷规则:</b><a href="https://api-docs.deepseek.com/zh-cn/quick_start/pricing">官方价目页</a> · 2026-08-23 周末全天谷价:<a href="https://www.stcn.com/article/detail/4103775.html">证券时报</a> / <a href="https://www.cls.cn/detail/2461482">财联社</a> / <a href="https://wap.eastmoney.com/a/202608223850193982.html">东方财富</a> · 调休上班日也按谷价:<a href="https://x.com/NFT_Chen/status/2101205713934762052">社区核对帖</a> · 峰谷首推与倍率:<a href="https://tidenews.com.cn/news.html?id=3532358">潮新闻</a> / <a href="https://zhuanlan.zhihu.com/p/2075260274609803574">知乎</a>。文案口径以官方价目页为准。</li>
+  <li><b>Grandettoken 侧对照:</b>DESIGN.md（1.4 非目标 / 7.3 推算口径 / 8.5 未实现 / 10.2-B10）· PROGRESS.md（2026-10-16 尾）· <code>app/src/index.html</code>（设置:渠道 / 模型 / 显示 / 刷新与启动 / 密钥箱 / 关于）。</li>
+</ul>
+
+<h2 id="impl">14. 裁决结果与施工单（2026-10-16 回填）</h2>
+<table>
+  <tr><th>#</th><th>事项</th><th>裁决</th><th>说明</th></tr>
+  <tr><td>1</td><td>观测缺口标注 + 变动台账</td><td class="okc">1A 做</td><td>两件一起</td></tr>
+  <tr><td>2</td><td>渠道体检</td><td class="okc">2A 做</td><td>每渠道「测试」+ 一键报告</td></tr>
+  <tr><td>3</td><td>跌破红线桌面通知</td><td class="okc">3A 做</td><td>默认只对红线响、一天一次</td></tr>
+  <tr><td>4</td><td>今日预算</td><td class="noc">4C 不做</td><td><b>整条作废</b>（第 5.2 节保留在文档里作痕迹）</td></tr>
+  <tr><td>5</td><td>DeepSeek 峰谷提示</td><td class="okc">5A 做</td><td>行内三态 + 倒计时，不显示单价</td></tr>
+  <tr><td>6</td><td>自定义渠道</td><td class="okc">6A 做</td><td>分两期:中转站 → 全自定义</td></tr>
+  <tr><td>7</td><td>按压反馈 + 单击冒泡</td><td class="okc">7A 做</td><td>▲ 仍是展开面板</td></tr>
+  <tr><td>8</td><td>音效两声</td><td class="okc">8A 做</td><td>默认关</td></tr>
+  <tr><td>9</td><td>散件四件</td><td class="okc">9A 全做</td><td>换密钥隔离 / 长期趋势 / 真 0 审查 / 设置语义审查</td></tr>
+  <tr><td>10</td><td>开发节奏</td><td class="hc">10C 一版全做</td><td>覆盖原推荐（分四包逐包发）→ 全部进 <b>v0.1.35</b></td></tr>
+</table>
+<div class="note warn"><span class="lbl">10C 的两条保护措施（采纳原「不推荐」理由，用工程手段对冲）</span>
+① <b>提交按包分组</b>（信任 / 提醒 / 拓展 / 气质四组），真出问题按组定位与回退，不必整版回滚；<br>
+② <b>每件都带开关或可独立关闭</b>：新增的通知 / 音效 / 动效一律默认关，坏哪件关哪件，不留「关不掉的打扰」。
+</div>
+<div class="note ok"><span class="lbl">施工单（顺序即依赖顺序；core 先行，每步 cargo test 保持绿）</span>
+<b>信任包</b> · ✅①峰谷时段模块(core) ✅②快照密钥指纹分段+隔离(core) ✅③缺口覆盖度查询(core) ✅④变动台账查询(core) ✅⑤365 天日级归档+趋势查询(core) ⑥视图接线(峰谷/缺口进 ChannelView) ⑦体检:测试连接+报告命令(shell) ⑧真 0/设置语义审查<br>
+<b>提醒包</b> · ⑨桌面通知+托盘角标 ⑩前端:行详情(缺口/台账/趋势)+峰谷提示+体检 UI<br>
+<b>拓展包</b> · ⑪自定义渠道一期 ⑫自定义渠道二期<br>
+<b>气质包</b> · ⑬按压+冒泡+音效(WebAudio 合成，不新增资源文件)<br>
+<b>收尾</b> · ⑭全量复测 + PROGRESS.md/DESIGN.md 回写 + v0.1.35 发版<br>
+<span class="lbl" style="margin-top:8px">进度(2026-10-16 第一轮):①–⑤ 完成 —— core 173 项测试全绿、壳与 core 零警告;下一步 ⑥。</span>
+</div>
+
+<div class="foot">产品设计文档 · 小鲸鱼插件研读与启发 · 2026-10-16 · 已裁决（4C 作废 / 10C 一版全做）· 来源:本机只读核对 + 公开链接（第 13 节）</div>
+
+</div>
+<script>
+(function(){
+  /* 4.2 体检 mock */
+  var HP_LINES=[
+    "Grandettoken 体检 · 2026-10-16 20:14",
+    "[1/9] 4SAPI        ✓ 200 · 68ms · 域名 4sapi.com（主）· 余额 ¥18.20（9%）",
+    "[2/9] OpenCode Go  ✓ 200 · 210ms · 月窗剩 55%",
+    "[3/9] DeepSeek     ✓ 200 · 96ms · 余额 ¥42.48 · 当前谷价",
+    "[4/9] Hapi         ✓ 200 · 74ms · 余额 ¥7.90",
+    "[5/9] Trae         ✗ 401 · 凭据失效 —— 试试重新登录 Trae；显示的是 20:12 的快照",
+    "[6/9] WorkBuddy    ✓ 200 · 132ms · 积分 1,204",
+    "[7/9] Codex        ✓ 200 · 188ms · 周窗剩 84%",
+    "[8/9] 本机         快照库可写 ✓ · 开机自启已注册 ✓ · 更新源可达 ✓",
+    "[9/9] 网络         未检测到系统代理；全部请求直连",
+    "",
+    "结论:1 项需要处理 —— Trae 凭据（其余 8 项正常）"
+  ];
+  var hpBtn=document.getElementById('hpBtn'), hpOut=document.getElementById('hpOut'),
+      hpCopy=document.getElementById('hpCopy'), hpState=document.getElementById('hpState');
+  var hpTimer=null, hpDone=false;
+  hpBtn.onclick=function(){
+    if(hpTimer){ clearInterval(hpTimer); hpTimer=null; }
+    hpOut.style.display='block'; hpOut.textContent=''; hpDone=false;
+    hpCopy.style.display='none'; hpState.textContent='正在逐项探测…';
+    var i=0;
+    hpTimer=setInterval(function(){
+      hpOut.textContent += (i? '\n':'') + HP_LINES[i];
+      hpOut.scrollTop = hpOut.scrollHeight;
+      i++;
+      if(i>=HP_LINES.length){
+        clearInterval(hpTimer); hpTimer=null; hpDone=true;
+        hpState.textContent='完成';
+        hpCopy.style.display='inline-block';
+      }
+    },130);
+  };
+  hpCopy.onclick=function(){
+    var t=hpOut.textContent; var s=this;
+    if(navigator.clipboard) navigator.clipboard.writeText(t).catch(function(){});
+    else { var ta=document.createElement('textarea'); ta.value=t; document.body.appendChild(ta); ta.select(); try{document.execCommand('copy')}catch(e){} ta.remove(); }
+    s.textContent='已复制'; setTimeout(function(){ s.textContent='复制报告' },1800);
+  };
+
+  /* 5.1 通知 mock */
+  var toastBtn=document.getElementById('toastBtn'), wfToast=document.getElementById('wfToast');
+  var toastTimer=null;
+  toastBtn.onclick=function(){
+    if(toastTimer){ clearTimeout(toastTimer); }
+    wfToast.classList.remove('on');
+    void wfToast.offsetWidth; /* 重触发动画 */
+    wfToast.classList.add('on');
+    toastTimer=setTimeout(function(){ wfToast.classList.remove('on'); toastTimer=null; }, 4200);
+  };
+
+  /* 5.3 峰谷三态 mock */
+  var PEAK={
+    valley:{ ln:"谷价中 · 1 小时 12 分后转高峰（工作日 09:00）",
+             note:"工作日 9:00–12:00、14:00–18:00 是高峰（约 2×）；其余时段谷价。" },
+    peak:  { ln:"高峰价 · 3 小时 48 分后转谷价（18:00）",
+             note:"高峰时段:工作日 9:00–12:00、14:00–18:00（北京时间）。" },
+    weekend:{ ln:"周末全天谷价 · 下次高峰 周一 09:00",
+             note:"周末与法定节假日全天谷价 —— 哪怕那天调休上班也算。" }
+  };
+  var peakPick=document.getElementById('peakPick'), peakLn=document.getElementById('peakLn'), peakNote=document.getElementById('peakNote');
+  [].forEach.call(peakPick.children, function(b){
+    b.onclick=function(){
+      [].forEach.call(peakPick.children, function(x){ x.classList.toggle('on', x===b); });
+      var d=PEAK[b.dataset.k]; peakLn.textContent=d.ln; peakNote.textContent=d.note;
+    };
+  });
+
+  /* 7.1 胶囊 mock */
+  var pillMock=document.getElementById('pillMock'), pillBubble=document.getElementById('pillBubble');
+  var pillTimer=null;
+  pillMock.onclick=function(){
+    if(pillBubble.classList.contains('on')){
+      pillBubble.classList.remove('on');
+      if(pillTimer){ clearTimeout(pillTimer); pillTimer=null; }
+      return;
+    }
+    pillBubble.classList.add('on');
+    if(pillTimer) clearTimeout(pillTimer);
+    pillTimer=setTimeout(function(){ pillBubble.classList.remove('on'); pillTimer=null; }, 4000);
+  };
+
+  /* 12. 裁决 */
+  var QS=[
+    ["1","信任包 · 观测缺口标注与变动台账",
+      [["A","缺口标注 + 变动台账 都做（推荐，同一件事:让每个数字有据可查）","否了就说「只做缺口标注」"],
+       ["B","只做缺口标注（行里一行『数据自 X 起』），台账以后再说"],
+       ["C","都不做（现状标了『推算』，先够用）"]],0],
+    ["2","信任包 · 渠道体检",
+      [["A","每渠道「测试」按钮 + 一键体检报告（可复制）都做（推荐）","否了就说「先只做能复制报告的那种」"],
+       ["B","只做每渠道「测试」按钮"],
+       ["C","不做（继续靠日志人肉查）"]],0],
+    ["3","提醒包 · 跌破红线桌面通知",
+      [["A","做，默认只对红线响、一天一次、点通知聚焦面板（推荐）","不想被系统通知打扰就选 B"],
+       ["B","做但默认关，想要的人在设置里开"],
+       ["C","不做"]],0],
+    ["4","提醒包 · 今日预算",
+      [["A","做「合计」一个预算，默认关（推荐）","否了就说「预算先不做」"],
+       ["B","做每渠道预算"],
+       ["C","不做"]],0],
+    ["5","提醒包 · DeepSeek 峰谷提示",
+      [["A","做:行内三态 + 倒计时，只提示时段不显示单价（推荐）","怕规则再变就退 B"],
+       ["B","精简版:只显示『高峰中 / 谷价中』，不带倒计时和周末说明"],
+       ["C","不做"]],0],
+    ["6","拓展包 · 自定义渠道",
+      [["A","分两期:一期中转站模板 → 二期全自定义（推荐）","想收窄就说「一期做完先停」或选 B"],
+       ["B","只做探活档（自定义地址 + key，只验证可达，不解析余额）"],
+       ["C","不做（继续一渠道一改版）"]],0],
+    ["7","气质包 · 按压反馈 + 单击冒泡速览",
+      [["A","都做:按压微缩 + 单击冒 3 行速览，▲ 仍是展开（推荐）","嫌多余就说「冒泡不做，只留按压」"],
+       ["B","只做按压反馈"],
+       ["C","都不做"]],0],
+    ["8","气质包 · 音效两声（签到结果 + 跌破红线）",
+      [["A","做，默认关（推荐）","不喜欢声音就选 B"],
+       ["B","不做"]],0],
+    ["9","散件四件（换密钥隔离 / 长期趋势 / 真 0 审查 / 设置保存语义审查）",
+      [["A","全做（推荐，都是小件）","点点名去掉哪件也行"],
+       ["B","只做「换密钥隔离 + 真 0 审查」两件"],
+       ["C","全不做"]],0],
+    ["10","开发节奏",
+      [["A","四个包逐包发:0.1.35 信任 → 0.1.36 提醒 → 0.1.37 拓展 → 0.1.38 气质（推荐，每包可独立停）","想先看看效果就选 B"],
+       ["B","先只定 0.1.35 信任包，后面的发完再议"],
+       ["C","一版全做（不推荐，改坏了不知道是哪包坏的）"]],0]
+  ];
+  var wrap=document.getElementById('qs'), out=document.getElementById('out'), done=document.getElementById('doneCnt');
+  QS.forEach(function(q){
+    var d=document.createElement('div'); d.className='q';
+    d.innerHTML='<div class="t">'+q[0]+'、'+q[1]+'</div>';
+    q[2].forEach(function(o){
+      var l=document.createElement('label'); l.className='o';
+      l.innerHTML='<input type="radio" name="q'+q[0]+'" value="'+o[0]+'"><b>'+o[0]+'</b> · '+o[1]+
+        (o[2]?'<div class="sub rec" style="margin-left:22px">一句话否决：'+o[2]+'</div>':'');
+      l.querySelector('input').onchange=gen; d.appendChild(l);
+    });
+    wrap.appendChild(d);
+  });
+  function gen(){
+    var r="", n=0;
+    QS.forEach(function(q){
+      var c=wrap.querySelector('input[name="q'+q[0]+'"]:checked');
+      if(c){ r+=q[0]+c.value+" "; n++; }
+    });
+    out.value=r.trim(); done.textContent=n;
+  }
+  document.getElementById('copyBtn').onclick=function(){
+    out.select(); try{document.execCommand('copy')}catch(e){}
+    if(navigator.clipboard) navigator.clipboard.writeText(out.value).catch(function(){});
+    this.textContent="已复制，贴回对话即可";
+    var s=this; setTimeout(function(){ s.textContent="复制这行" },2200);
+  };
+})();
+</script>
+</body>
+</html>
