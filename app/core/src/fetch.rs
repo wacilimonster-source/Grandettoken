@@ -5,15 +5,48 @@
 
 use crate::appauth::{self};
 use crate::config::{ClaimConfig, Config};
+use crate::custom;
 use crate::fx::{self, FxRate};
+use crate::peak;
 use crate::providers::{self, AuthKind, Expiring, FetchResult, Kind, Method};
 use crate::store::Store;
 use crate::secrets;
 use crate::weblogin;
 use chrono::{Datelike, Duration, Local, TimeZone, Utc, Weekday};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
+
+/// 判"数据有缺口"的空档线。定义在 store(归档/曲线/文案三处共用同一个数字),
+/// 这里转发一次,调用方继续用 `fetch::OBSERVE_GAP_SEC`。
+pub use crate::store::OBSERVE_GAP_SEC;
+
+/// 当前这把密钥的指纹(曲线上只画"现在这本账";换 key 后旧账不进曲线)。
+/// 非 Keyring 型的凭据会轮换(网页会话/本机登录态),一律空串 = 不分段。
+/// **阻塞**(要读凭据管理器),只能在非主线程上调。
+pub fn current_key_fp(def: &providers::ProviderDef) -> String {
+    if !matches!(def.auth, AuthKind::Keyring) {
+        return String::new();
+    }
+    match secrets::get(def.id) {
+        Ok(Some(k)) if !k.trim().is_empty() => key_fp(&k),
+        _ => String::new(),
+    }
+}
+
+/// 密钥指纹:同一把 API Key 恒定,换 key 就换一本账(见 store::record_fp)。
+///
+/// 为什么用 sha256 前 12 字节的十六进制:
+///   ① 它只用来给快照分段,不承担任何认证职责,截断够用;
+///   ② 不落明文也不可逆(与"密钥只进凭据管理器"同一条纪律);
+///   ③ 稳定 —— 换台机器同一把 key 也是同一段。
+pub fn key_fp(token: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(token.trim().as_bytes());
+    let d = h.finalize();
+    d.iter().take(12).map(|b| format!("{b:02x}")).collect()
+}
 
 /// 距到期多久算"近期"。界面上的"近 30 天将过期"用的就是它。
 pub const EXPIRING_SOON_DAYS: i64 = 30;
@@ -79,6 +112,34 @@ pub struct ChannelView {
     /// 用户隐藏了该渠道:不显示、不取数(见 Config::hidden_channels)。
     /// 视图仍会返回,管理页要靠它列出「已隐藏」的卡片。
     pub hidden: bool,
+    /// 峰谷计价渠道(DeepSeek)的时段状态;其它渠道 None。
+    pub peak: Option<PeakView>,
+    /// 观测缺口:今天/本周/本月**从几点起才有数据**(超过 [`OBSERVE_GAP_SEC`] 才算)。
+    /// None = 起点没缺口(或这个窗口压根没数据)。
+    pub gap_day_from: Option<i64>,
+    pub gap_week_from: Option<i64>,
+    pub gap_month_from: Option<i64>,
+    /// 有缺口的日子(本地日零点,升序,最近 92 天)—— 柱图/趋势给这些天打斜纹
+    pub gap_days: Vec<i64>,
+    /// 这个渠道用过几把密钥(> 1 = 还有历史账户的数据;与"当前是否在用"无关)
+    pub accounts: i64,
+}
+
+/// 峰谷时段状态。倒计时**不在这里算**:只给"下一次切换的时刻"和"判定时刻",
+/// 前端按本地时钟每秒重算 —— 这样一条消息管一天,不用为倒计时加压轮询频率。
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeakView {
+    pub peak: bool,
+    /// 下一次峰↔谷切换的时刻;None = 当前规则下扫不到
+    pub next_change_at: Option<i64>,
+    /// 此刻整日谷价是不是因为法定节假日 / 周末(界面文案据此说"为什么便宜")
+    pub holiday: bool,
+    pub weekend: bool,
+    /// 节假日表已过期(进入表最大年份的 11 月之后)—— 如实提示,不假装知道
+    pub table_stale: bool,
+    /// 判定时刻(前端据此在本地推算倒计时)
+    pub now: i64,
 }
 
 /// 申请制额度渠道(4SAPI 这类:定期申请,把余额补到固定上限)的展示状态。
@@ -460,14 +521,24 @@ pub fn claim_state(
 
 /// 近 7 天日均消耗(推算)。快照覆盖不足 1 天时返回 None ——
 /// 样本太短算出来的斜率会离谱,宁可不报。
-fn seven_day_burn(store: &Store, id: &str, now: i64) -> Option<f64> {
+/// `key_fp` 非空时只看同一把密钥的账:换 key 不该把另一个账户的历史算进斜率。
+fn seven_day_burn(store: &Store, id: &str, key_fp: &str, now: i64) -> Option<f64> {
     let since = now - 7 * 86_400;
-    let first = store.first_ts_since(id, since).ok().flatten()?;
+    let fp = if key_fp.is_empty() { None } else { Some(key_fp) };
+    let first = if let Some(fp) = fp {
+        store.first_ts_since_fp(id, fp, since).ok().flatten()?
+    } else {
+        store.first_ts_since(id, since).ok().flatten()?
+    };
     let covered = now - first;
     if covered < 86_400 {
         return None;
     }
-    let used = store.consumed_in_window(id, since, now).ok()?;
+    let used = if let Some(fp) = fp {
+        store.consumed_in_window_fp(id, fp, since, now).ok()?
+    } else {
+        store.consumed_in_window(id, since, now).ok()?
+    };
     Some(used / (covered as f64 / 86_400.0))
 }
 
@@ -511,6 +582,24 @@ fn resolve_midnight(
 pub fn local_midnight_today() -> i64 {
     let n = Local::now();
     local_date_start(n.year(), n.month(), n.day())
+}
+
+/// 当前本地时区偏移(秒,东为正)。归档分桶用:把明细压成日级摘要时,必须和界面
+/// 用**同一个日历**切天。中国无夏令时,一年一个值就是精确的;有夏令时的区跨 DST
+/// 那一天可能差一小时(那天摘要挪一格),这是可接受的近似 —— 如实写在这里,
+/// 不假装它普适。
+pub fn local_tz_offset() -> i64 {
+    Local::now().offset().local_minus_utc() as i64
+}
+
+/// 本地日 YYYY-MM-DD(通知去重按它记账:同一天同一渠道只响一次)。
+pub fn local_day_string() -> String {
+    Local::now().format("%Y-%m-%d").to_string()
+}
+
+/// 本地时间 YYYY-MM-DD HH:MM(体检报告抬头用)。
+pub fn local_datetime_string() -> String {
+    Local::now().format("%Y-%m-%d %H:%M").to_string()
 }
 
 pub fn local_week_start() -> i64 {
@@ -897,7 +986,14 @@ fn expiring_soon(expiring: &[Expiring], now: i64) -> Option<Expiring> {
 }
 
 /// 申请制状态:只有开启了申请制的渠道才算,并且要查快照历史。
-fn claim_for(def: &providers::ProviderDef, cfg: &Config, store: &Store, remaining: Option<f64>) -> Option<ClaimState> {
+/// `key_fp` 非空时按同一把密钥分段 —— 换 key 写进来的余额变化不该被算成"申请到账"。
+fn claim_for(
+    def: &providers::ProviderDef,
+    cfg: &Config,
+    store: &Store,
+    remaining: Option<f64>,
+    key_fp: &str,
+) -> Option<ClaimState> {
     let ccfg = cfg.claim_channels.get(def.id)?;
     if !ccfg.enabled {
         return None;
@@ -905,9 +1001,11 @@ fn claim_for(def: &providers::ProviderDef, cfg: &Config, store: &Store, remainin
     let now = now_ts();
     // 只有"补到本轮额度线附近"的量级变化才算一次申请,并且相邻两条快照不能隔太久
     // (合盖多日后第一轮会把几天的差值合成一个"跳升")—— P2-1
-    let auto_at = store
-        .last_jump_since(
+    let fp = if key_fp.is_empty() { None } else { Some(key_fp) };
+    let auto_at = if let Some(fp) = fp {
+        store.last_jump_since_fp(
             def.id,
+            fp,
             now - CLAIM_LOOKBACK_SEC,
             CLAIM_JUMP_MIN_DELTA,
             ccfg.amount,
@@ -915,10 +1013,65 @@ fn claim_for(def: &providers::ProviderDef, cfg: &Config, store: &Store, remainin
             // 又不能紧到把正常补跑后的真申请也否掉(30 分钟太敏感)
             2 * 3600,
         )
-        .ok()
-        .flatten();
-    let burn = seven_day_burn(store, def.id, now);
+    } else {
+        store.last_jump_since(
+            def.id,
+            now - CLAIM_LOOKBACK_SEC,
+            CLAIM_JUMP_MIN_DELTA,
+            ccfg.amount,
+            2 * 3600,
+        )
+    }
+    .ok()
+    .flatten();
+    let burn = seven_day_burn(store, def.id, key_fp, now);
     claim_state(ccfg, auto_at, now, remaining, burn)
+}
+
+/// 日/周/月消耗与三个环比(金额型通用)。内置渠道与自定义渠道**共用这一份**,
+/// 口径漂移的机会只留一个。
+#[allow(clippy::type_complexity)]
+fn amount_windows(
+    store: &Store,
+    id: &str,
+    key_fp: &str,
+    now: i64,
+) -> (
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+) {
+    // 消耗一律**只在当前这把密钥的账里**推算:换 key 后新旧账户的余额差
+    // 不是消费(小鲸鱼 issue #163 的教训:数据没丢,但也不能混算)。
+    let cons = |from: i64, to: i64| -> Option<f64> {
+        let r = if key_fp.is_empty() {
+            store.consumption_since(id, from, to)
+        } else {
+            store.consumption_since_fp(id, key_fp, from, to)
+        };
+        r.ok().flatten()
+    };
+    let today0 = local_midnight_today();
+    let week0 = local_week_start();
+    let month0 = local_month_start();
+    // 只取一次:跨零点时两次调用可能差一个月份(P2-4)
+    let prev0 = local_prev_month_start();
+    // 环比口径 = 上一周期的「同时段」:昨日 0 点到昨天此刻、上周同时段、
+    // 上月同时段 —— 拿整段上周期比会系统性偏大(它天然比本期多一段尾巴)
+    (
+        cons(today0, now),
+        cons(week0, now),
+        cons(month0, now),
+        cons(today0 - 86_400, now - 86_400),
+        cons(week0 - 7 * 86_400, now - 7 * 86_400),
+        // 终点必须钳在上月之内:以前把"本月已过秒数"直接加到上月 1 号上,
+        // 于是 3 月 31 日时窗口落到 3 月 3 日,本月的消耗被算进"上月同期"基线
+        // (短月尤其明显)。同时只取一次 prev_month_start,免得跨零点两次不等。
+        cons(prev0, (prev0 + (now - month0)).min(month0 - 1)),
+    )
 }
 
 fn build_view(
@@ -929,6 +1082,8 @@ fn build_view(
     store: &Store,
     cfg: &Config,
     cred: Option<&appauth::Credential>,
+    key_fp: &str,
+    accounts: i64,
 ) -> ChannelView {
     // 只有金额型才有"消耗"这个概念可算;配额型的用量由接口直接给出。
     // 注意:**不要**把 `result.valid` 串进来 —— 消耗是本地快照推算的,和这次网络请求
@@ -936,34 +1091,7 @@ fn build_view(
     // 会整片显示"数据不足",明明本地有快照。
     let has_amount = result.kind == Kind::Amount && result.remaining.is_some();
     let (day, week, month, day_prev, week_prev, month_prev) = if has_amount {
-        let now = now_ts();
-        let today0 = local_midnight_today();
-        let week0 = local_week_start();
-        let month0 = local_month_start();
-        // 只取一次:跨零点时两次调用可能差一个月份(P2-4)
-        let prev0 = local_prev_month_start();
-        // 环比口径 = 上一周期的「同时段」:昨日 0 点到昨天此刻、上周同时段、
-        // 上月同时段 —— 拿整段上周期比会系统性偏大(它天然比本期多一段尾巴)
-        (
-            store.consumption_since(def.id, today0, now).ok().flatten(),
-            store.consumption_since(def.id, week0, now).ok().flatten(),
-            store.consumption_since(def.id, month0, now).ok().flatten(),
-            store
-                .consumption_since(def.id, today0 - 86_400, now - 86_400)
-                .ok()
-                .flatten(),
-            store
-                .consumption_since(def.id, week0 - 7 * 86_400, now - 7 * 86_400)
-                .ok()
-                .flatten(),
-            store
-                // 终点必须钳在上月之内:以前把"本月已过秒数"直接加到上月 1 号上,
-                // 于是 3 月 31 日时窗口落到 3 月 3 日,本月的消耗被算进"上月同期"基线
-                // (短月尤其明显)。同时只取一次 prev_month_start,免得跨零点两次不等。
-                .consumption_since(def.id, prev0, (prev0 + (now - month0)).min(month0 - 1))
-                .ok()
-                .flatten(),
-        )
+        amount_windows(store, def.id, key_fp, now_ts())
     } else {
         (None, None, None, None, None, None)
     };
@@ -971,6 +1099,41 @@ fn build_view(
     // 同一个视图里只用一个"现在":上面 583 行那个 now 出了块作用域,这里取一次复用
     let now2 = now_ts();
     let soon = expiring_soon(&result.expiring, now2);
+
+    // ── 观测缺口 / 密钥分段 / 峰谷 ──
+    // 缺口与分段只对金额型算(百分比/积分型没有日周月消耗这回事,查了也没处显示)。
+    let fp_opt = if key_fp.is_empty() { None } else { Some(key_fp) };
+    let (gap_day_from, gap_week_from, gap_month_from, gap_days) = if has_amount {
+        let tz = local_tz_offset();
+        (
+            gap_from(store, def.id, fp_opt, local_midnight_today(), now2),
+            gap_from(store, def.id, fp_opt, local_week_start(), now2),
+            gap_from(store, def.id, fp_opt, local_month_start(), now2),
+            store
+                .daily_coverage(def.id, fp_opt, now2 - 92 * 86_400, now2, tz)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|d| gap_of_day(d, now2))
+                .map(|d| d.day_start)
+                .collect(),
+        )
+    } else {
+        (None, None, None, Vec::new())
+    };
+    // 峰谷只看时间,不看数据 —— 但只在挂了"峰谷计价"的渠道上出现(DeepSeek)。
+    let peak = if def.peak_pricing {
+        let i = peak::info_at(now2);
+        Some(PeakView {
+            peak: i.peak,
+            next_change_at: i.next_change_at,
+            holiday: i.holiday,
+            weekend: i.weekend,
+            table_stale: peak::table_stale(now2),
+            now: now2,
+        })
+    } else {
+        None
+    };
 
     ChannelView {
         id: def.id.into(),
@@ -1008,9 +1171,40 @@ fn build_view(
         estimated: result.kind == Kind::Amount,
         stale,
         updated_at,
-        claim: claim_for(def, cfg, store, result.remaining),
+        claim: claim_for(def, cfg, store, result.remaining, key_fp),
         hidden: false,
+        peak,
+        gap_day_from,
+        gap_week_from,
+        gap_month_from,
+        gap_days,
+        accounts,
     }
+}
+
+/// 窗口里"从几点起才有数据":首次观测离窗口起点超过空档线才算缺口。
+/// None = 起点没缺口,或这个窗口压根没有观测 —— 后者是"没数据",不是"有缺口"。
+fn gap_from(store: &Store, id: &str, key_fp: Option<&str>, from_ts: i64, now: i64) -> Option<i64> {
+    let cov = store.window_coverage(id, key_fp, from_ts, now).ok()?;
+    let first = cov.first_ts?;
+    if first - from_ts > OBSERVE_GAP_SEC {
+        Some(first)
+    } else {
+        None
+    }
+}
+
+/// 一天算不算"部分数据":起点晚于本地零点、或(已经过去的那天)末尾提前收工,
+/// 超过空档线。判据与 peak.rs / store.rs 里的注释同一套数字。
+fn gap_of_day(d: &crate::store::DayCoverage, now: i64) -> bool {
+    let leading = d.first_ts - d.day_start;
+    let finished = d.day_start + 86_400 <= now;
+    let trailing = if finished {
+        (d.day_start + 86_400 - d.last_ts).max(0)
+    } else {
+        0
+    };
+    leading > OBSERVE_GAP_SEC || trailing > OBSERVE_GAP_SEC
 }
 
 /// 没有可用凭据的渠道占位。这不是故障,只是没启用。
@@ -1055,7 +1249,200 @@ fn placeholder(def: &providers::ProviderDef) -> ChannelView {
         updated_at: 0,
         claim: None,
         hidden: false,
+        // 占位(没配密钥/已隐藏)不显示时段与缺口:没有数据可解释,少即是多
+        peak: None,
+        gap_day_from: None,
+        gap_week_from: None,
+        gap_month_from: None,
+        gap_days: Vec::new(),
+        accounts: 1,
     }
+}
+
+/// 自定义渠道的展示名/简称/颜色(没填的给一个体面的默认,不显示空字符串)。
+fn custom_identity(ch: &custom::CustomChannel) -> (String, String, String) {
+    let short = if ch.short.trim().is_empty() {
+        ch.name.chars().take(2).collect::<String>()
+    } else {
+        ch.short.clone()
+    };
+    let color = if ch.color.trim().is_empty() {
+        "#7f8ea3".to_string()
+    } else {
+        ch.color.clone()
+    };
+    (ch.name.clone(), short, color)
+}
+
+/// 自定义渠道的成品视图。与内置渠道共用消耗窗口/缺口/分段的全部口径。
+fn build_custom_view(
+    ch: &custom::CustomChannel,
+    r: &custom::CustomResult,
+    store: &Store,
+    key_fp: &str,
+    accounts: i64,
+) -> ChannelView {
+    let now = now_ts();
+    // 探活模式没有数值:不装成"消耗"、不画日周月(它只回答"活着吗")
+    let has_amount = r.valid && !r.probe_only && r.remaining.is_some();
+    let (day, week, month, day_prev, week_prev, month_prev) = if has_amount {
+        amount_windows(store, &ch.id, key_fp, now)
+    } else {
+        (None, None, None, None, None, None)
+    };
+    let fp_opt = if key_fp.is_empty() { None } else { Some(key_fp) };
+    let (gap_day_from, gap_week_from, gap_month_from, gap_days) = if has_amount {
+        let tz = local_tz_offset();
+        (
+            gap_from(store, &ch.id, fp_opt, local_midnight_today(), now),
+            gap_from(store, &ch.id, fp_opt, local_week_start(), now),
+            gap_from(store, &ch.id, fp_opt, local_month_start(), now),
+            store
+                .daily_coverage(&ch.id, fp_opt, now - 92 * 86_400, now, tz)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|d| gap_of_day(d, now))
+                .map(|d| d.day_start)
+                .collect(),
+        )
+    } else {
+        (None, None, None, Vec::new())
+    };
+    let (name, short, color) = custom_identity(ch);
+    // 失败时"数据是什么时候的"要如实:沿用最近一次成功快照的时刻,不是此刻
+    let updated_at = if r.valid {
+        now
+    } else {
+        store
+            .last_ts_since(&ch.id, fp_opt, 0)
+            .ok()
+            .flatten()
+            .unwrap_or(0)
+    };
+    ChannelView {
+        id: ch.id.clone(),
+        name,
+        short,
+        color,
+        kind: Kind::Amount,
+        unstable: false,
+        has_key: true,
+        valid: r.valid,
+        remaining: r.remaining,
+        used: None,
+        total: None,
+        unit: ch.normalized_unit(),
+        windows: Vec::new(),
+        expiring: Vec::new(),
+        expiring_soon: None,
+        extra: vec![(
+            "取数".to_string(),
+            if r.probe_only {
+                "探活模式(不解析余额)".to_string()
+            } else {
+                "自定义渠道".to_string()
+            },
+        )],
+        error: r.error.clone(),
+        limited: false,
+        auth_source: "keyring".into(),
+        auth_label: "自定义渠道 · 密码管理器".into(),
+        day,
+        week,
+        month,
+        day_prev,
+        week_prev,
+        month_prev,
+        plan: None,
+        estimated: has_amount,
+        stale: !r.valid,
+        updated_at,
+        claim: None,
+        hidden: false,
+        peak: None,
+        gap_day_from,
+        gap_week_from,
+        gap_month_from,
+        gap_days,
+        accounts,
+    }
+}
+
+/// 自定义渠道的占位(没填密钥 / 已隐藏)。
+fn custom_placeholder(
+    ch: &custom::CustomChannel,
+    hidden: bool,
+    error: Option<String>,
+) -> ChannelView {
+    let (name, short, color) = custom_identity(ch);
+    ChannelView {
+        id: ch.id.clone(),
+        name,
+        short,
+        color,
+        kind: Kind::Amount,
+        unstable: false,
+        has_key: false,
+        valid: false,
+        remaining: None,
+        used: None,
+        total: None,
+        unit: ch.normalized_unit(),
+        windows: Vec::new(),
+        expiring: Vec::new(),
+        expiring_soon: None,
+        extra: vec![("取数".to_string(), "自定义渠道".to_string())],
+        error,
+        limited: false,
+        auth_source: "keyring".into(),
+        auth_label: "自定义渠道 · 密码管理器".into(),
+        day: None,
+        week: None,
+        month: None,
+        day_prev: None,
+        week_prev: None,
+        month_prev: None,
+        plan: None,
+        estimated: false,
+        stale: false,
+        updated_at: 0,
+        claim: None,
+        hidden,
+        peak: None,
+        gap_day_from: None,
+        gap_week_from: None,
+        gap_month_from: None,
+        gap_days: Vec::new(),
+        accounts: 1,
+    }
+}
+
+/// 一次「测试连接」的结果。
+///
+/// **只带域名、状态与解析出的数值** —— 报告是要用户复制给作者看的东西,
+/// 密钥、Cookie、完整响应体一律不进(与"密钥不进任何文件"同一条纪律)。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProbeReport {
+    pub id: String,
+    pub name: String,
+    pub ok: bool,
+    /// 这次用的凭据是从哪读的(人话,如「本机 Trae 登录」/「密码管理器」)
+    pub auth_label: String,
+    /// 实际打通的入口(主域名还是某个备用域名)
+    pub url_used: Option<String>,
+    /// 总耗时(含凭据读取)
+    pub elapsed_ms: u64,
+    pub remaining: Option<f64>,
+    pub used: Option<f64>,
+    pub total: Option<f64>,
+    pub unit: String,
+    pub error: Option<String>,
+    /// 本地那一半:最新一条快照的时刻与近 7 天的条数
+    pub snapshot_last_at: Option<i64>,
+    pub snapshot_count_7d: i64,
+    /// 这个渠道用过几把密钥(> 1 = 有历史账户)
+    pub accounts: i64,
 }
 
 /// 单渠道并发取数的产出:要么自带成品视图(占位/隐藏),
@@ -1063,6 +1450,9 @@ fn placeholder(def: &providers::ProviderDef) -> ChannelView {
 struct FetchedOne {
     i: usize,
     def: &'static providers::ProviderDef,
+    /// 本轮的密钥指纹(空串 = 这个渠道不按密钥分段:会话型凭据会轮换,分不了);
+    /// 快照写入与消耗推算都按它分段
+    fp: String,
     view: Option<ChannelView>,
     pending: Option<(FetchResult, bool, i64, Option<appauth::Credential>)>,
     success: Option<(FetchResult, i64)>,
@@ -1085,6 +1475,12 @@ pub struct Fetcher {
     /// 一个是凭据管理器放不下(实测 blob 上限约 1280 字符,而两个会话 Cookie 近 6 KB),
     /// 另一个是平台一旦轮换 Cookie,存下来的副本会静默失效。
     web_cred_src: Mutex<Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>>>,
+    /// 已经认领过"无指纹历史快照"的 (渠道 + 指纹)。认领本身是一次性动作,
+    /// 这个集合只是让每轮不必再跑那条 UPDATE。
+    adopted: Mutex<HashSet<String>>,
+    /// 每本账"有几本账"的缓存:COUNT(DISTINCT key_fp) 是整渠道扫描,
+    /// 不该每轮都跑;指纹没变就直接复用。
+    accounts_cache: Mutex<HashMap<String, i64>>,
 }
 
 impl Default for Fetcher {
@@ -1107,6 +1503,8 @@ impl Fetcher {
             gate: tokio::sync::Mutex::new(()),
             last_run: Mutex::new(None),
             web_cred_src: Mutex::new(None),
+            adopted: Mutex::new(HashSet::new()),
+            accounts_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -1134,6 +1532,87 @@ impl Fetcher {
     pub async fn probe(&self, def: &providers::ProviderDef, credential: &str) -> bool {
         let (result, _, _) = fetch_channel(&self.http, def, credential, None).await;
         result.valid
+    }
+
+    /// 「测试连接」:真打一次接口,把过程如实报出来(设置里那个逐渠道测试按钮)。
+    ///
+    /// 与轮询**共用同一条取数链路**,所以"测试通过"和"平时取得到"是同一件事;
+    /// 但**不写快照** —— 手动测试要是落了快照,会把当天的观测缺口悄悄填上
+    /// (测试一下就把"今天 10:23 才开机"的记录改掉了),那是篡改自己的数据。
+    pub async fn probe_report(
+        &self,
+        def: &'static providers::ProviderDef,
+        store: &Arc<Mutex<Store>>,
+    ) -> ProbeReport {
+        let started = std::time::Instant::now();
+        let web_src = self
+            .web_cred_src
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let (creds, secret_err) =
+            tokio::task::spawn_blocking(move || credentials(def, web_src.as_deref()))
+                .await
+                .unwrap_or_else(|_| (Vec::new(), Some("凭据读取异常".to_string())));
+        // 本地这一半:快照管道有没有在动(照小鲸鱼的"两半区自检"—— 网络通了不等于
+        // 记录在写,两半都要各证一半)。
+        let (last_at, count_7d, accounts) = {
+            let s = store.lock().unwrap_or_else(|p| p.into_inner());
+            let fp = if matches!(def.auth, AuthKind::Keyring) {
+                creds.first().map(|c| key_fp(&c.token)).unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let fpo = if fp.is_empty() { None } else { Some(fp.as_str()) };
+            let now = now_ts();
+            (
+                s.last_ts_since(def.id, fpo, 0).ok().flatten(),
+                s.window_coverage(def.id, fpo, now - 7 * 86_400, now)
+                    .map(|c| c.count)
+                    .unwrap_or(0),
+                s.fingerprint_count(def.id).unwrap_or(1).max(1),
+            )
+        };
+        let mut rep = ProbeReport {
+            id: def.id.to_string(),
+            name: def.name.to_string(),
+            ok: false,
+            auth_label: auth_label(def, creds.first()),
+            url_used: None,
+            elapsed_ms: 0,
+            remaining: None,
+            used: None,
+            total: None,
+            unit: unit_for(def.default_kind).to_string(),
+            error: None,
+            snapshot_last_at: last_at,
+            snapshot_count_7d: count_7d,
+            accounts,
+        };
+        let Some(cred) = creds.first() else {
+            rep.error = Some(
+                secret_err.unwrap_or_else(|| format!("没检测到 {} 的登录凭据", def.name)),
+            );
+            rep.elapsed_ms = started.elapsed().as_millis() as u64;
+            return rep;
+        };
+        // 轮询记住的入口优先:测试要回答的是"平时这条路通不通,用的哪个域名"
+        let memo = self
+            .url_memo
+            .lock()
+            .ok()
+            .and_then(|m| m.get(def.id).cloned());
+        let (r, url, _kind) = fetch_channel(&self.http, def, &cred.token, memo.as_deref()).await;
+        rep.ok = r.valid;
+        rep.url_used = url;
+        rep.remaining = r.remaining;
+        rep.used = r.used;
+        rep.total = r.total;
+        rep.unit = r.unit.clone();
+        rep.error = r.error;
+        // 耗时含凭据读取(既有 network 也有 IO),如实叫"总耗时"
+        rep.elapsed_ms = started.elapsed().as_millis() as u64;
+        rep
     }
 
 
@@ -1232,6 +1711,7 @@ impl Fetcher {
                         return FetchedOne {
                             i,
                             def,
+                            fp: String::new(),
                             view: Some(v),
                             pending: None,
                             success: None,
@@ -1246,6 +1726,19 @@ impl Fetcher {
                         tokio::task::spawn_blocking(move || credentials(def, web_src.as_deref()))
                             .await
                             .unwrap_or_else(|_| (Vec::new(), Some("凭据读取异常".to_string())));
+                    // 密钥指纹只对"稳定的 API Key"有意义:网页会话 / 本机登录态的凭据
+                    // 每轮都可能轮换,拿它分段等于每轮开一本新账 —— 那两类一律空串,
+                    // 退回"不分段"的老口径(与后端 store::record_fp 的约定一致)。
+                    // 用**库里现在存的那把钥匙**算,不用"这次试成功的那把":
+                    // 取数失败时也要按当前 key 分段,否则失败期间的快照会落错账。
+                    let fp: String = if matches!(def.auth, AuthKind::Keyring) {
+                        creds
+                            .first()
+                            .map(|c| key_fp(&c.token))
+                            .unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
                     if creds.is_empty() {
                         // 「读不到凭据」经常是瞬时的:Codex 正在写 auth.json(文件被占)、
                         // 凭据管理器 RPC 卡一下、问 webview 要 Cookie 时 3 秒超时。
@@ -1267,6 +1760,7 @@ impl Fetcher {
                             return FetchedOne {
                                 i,
                                 def,
+                                fp,
                                 view: None,
                                 pending: Some((prev, true, prev_ts, None)),
                                 success: None,
@@ -1277,6 +1771,7 @@ impl Fetcher {
                         return FetchedOne {
                             i,
                             def,
+                            fp: String::new(),
                             view: Some(v),
                             pending: None,
                             success: None,
@@ -1332,6 +1827,7 @@ impl Fetcher {
                         FetchedOne {
                             i,
                             def,
+                            fp,
                             view: None,
                             pending: Some((result.clone(), false, ts, shown_cred)),
                             success: Some((result, ts)),
@@ -1358,6 +1854,7 @@ impl Fetcher {
                         FetchedOne {
                             i,
                             def,
+                            fp,
                             view: None,
                             pending: Some(p),
                             success: None,
@@ -1377,10 +1874,47 @@ impl Fetcher {
             })
             .collect();
 
+        // ── 自定义渠道(裁决 6A):没有静态定义,单独取 ──
+        // 数量少(个位数),串行即可;凭据走同一个凭据管理器(账户名 = 渠道 id),
+        // 所以"自定义"在密钥纪律上和内置渠道没有任何区别。
+        let mut custom_results: Vec<(custom::CustomChannel, Option<custom::CustomResult>, String)> =
+            Vec::new();
+        for ch in cfg.custom_channels.iter() {
+            if hidden.iter().any(|h| h == &ch.id) {
+                continue; // 隐藏 = 连凭据都不读(与内置渠道同一条裁决)
+            }
+            let cid = ch.id.clone();
+            let key = tokio::task::spawn_blocking(move || secrets::get(&cid).ok().flatten())
+                .await
+                .unwrap_or(None);
+            match key {
+                None => custom_results.push((ch.clone(), None, String::new())),
+                Some(k) => {
+                    let fp = key_fp(&k);
+                    let r = custom::fetch_custom(&self.http, ch, &k).await;
+                    custom_results.push((ch.clone(), Some(r), fp));
+                }
+            }
+        }
+        let mut custom_views: Vec<ChannelView> = Vec::new();
+
         // ── 同步段:一次性锁库完成快照写入与消耗推算,期间不跨 await ──
         {
             let s = store.lock().unwrap_or_else(|p| p.into_inner());
             for f in &fetched {
+                // 升级上来的库里,历史行还没有指纹:首次拿到稳定指纹时认领一次,
+                // 让"还没换过 key"的用户的账目连续(见 store::adopt_orphan_snapshots)。
+                if !f.fp.is_empty() {
+                    let first = {
+                        let mut done = self.adopted.lock().unwrap_or_else(|p| p.into_inner());
+                        done.insert(format!("{}:{}", f.def.id, f.fp))
+                    };
+                    if first {
+                        if let Err(e) = s.adopt_orphan_snapshots(f.def.id, &f.fp) {
+                            eprintln!("认领无指纹历史快照失败 {}: {e}", f.def.id);
+                        }
+                    }
+                }
                 if let Some((res, ts)) = f.success.as_ref() {
                     let kind = match res.kind {
                         Kind::Amount => "amount",
@@ -1388,7 +1922,9 @@ impl Fetcher {
                         Kind::Points => "points",
                     };
                     // 注意顺序:先写快照再组视图 —— 申请制额度的跳升检测要用最新快照
-                    if let Err(e) = s.record(f.def.id, *ts, res.remaining, res.used, res.total, kind) {
+                    if let Err(e) =
+                        s.record_fp(f.def.id, &f.fp, *ts, res.remaining, res.used, res.total, kind)
+                    {
                         // 写库失败以前是 let _ = 静默吞掉:消耗会悄悄偏小且无从排查(O-7)
                         eprintln!("写入快照失败 {}: {e}", f.def.id);
                     }
@@ -1399,7 +1935,34 @@ impl Fetcher {
                 if let Some(v) = f.view {
                     out[f.i] = Some(v);
                 } else if let Some((result, stale, ts, cred)) = f.pending {
-                    out[f.i] = Some(build_view(f.def, result, stale, ts, &s, &cfg, cred.as_ref()));
+                    // "这个渠道用过几把密钥"是整渠道扫描,按指纹缓存,别每轮都跑
+                    let accounts = if f.fp.is_empty() {
+                        1
+                    } else {
+                        let mut cache = self
+                            .accounts_cache
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner());
+                        match cache.get(&f.fp) {
+                            Some(n) => *n,
+                            None => {
+                                let n = s.fingerprint_count(f.def.id).unwrap_or(1).max(1);
+                                cache.insert(f.fp.clone(), n);
+                                n
+                            }
+                        }
+                    };
+                    out[f.i] = Some(build_view(
+                        f.def,
+                        result,
+                        stale,
+                        ts,
+                        &s,
+                        &cfg,
+                        cred.as_ref(),
+                        &f.fp,
+                        accounts,
+                    ));
                 }
             }
             // 牌价只在"跨月取到了新数"那一轮落库,不是每轮都写
@@ -1410,6 +1973,60 @@ impl Fetcher {
                     }
                 }
             }
+            // 自定义渠道的视图在这里组装(快照写入也在这一段的锁里)
+            for ch in cfg.custom_channels.iter() {
+                if cfg.hidden_channels.iter().any(|h| h == &ch.id) {
+                    custom_views.push(custom_placeholder(ch, true, None));
+                    continue;
+                }
+                let Some((_, res, fp)) = custom_results.iter().find(|(c, _, _)| c.id == ch.id) else {
+                    custom_views.push(custom_placeholder(ch, false, None));
+                    continue;
+                };
+                let Some(r) = res else {
+                    custom_views.push(custom_placeholder(ch, false, None));
+                    continue;
+                };
+                // 历史行认领(与内置渠道同一套);探活模式不写快照 ——
+                // 它没有数值,"记一笔"只会把当天的观测缺口悄悄填上
+                if !fp.is_empty() {
+                    let first = {
+                        let mut done = self.adopted.lock().unwrap_or_else(|p| p.into_inner());
+                        done.insert(format!("{}:{}", ch.id, fp))
+                    };
+                    if first {
+                        if let Err(e) = s.adopt_orphan_snapshots(&ch.id, fp) {
+                            eprintln!("认领无指纹历史快照失败 {}: {e}", ch.id);
+                        }
+                    }
+                    if r.valid && !r.probe_only {
+                        if let Some(v) = r.remaining {
+                            if let Err(e) =
+                                s.record_fp(&ch.id, fp, now_ts(), Some(v), None, None, "amount")
+                            {
+                                eprintln!("写入快照失败 {}: {e}", ch.id);
+                            }
+                        }
+                    }
+                }
+                let accounts = if fp.is_empty() {
+                    1
+                } else {
+                    let mut cache = self
+                        .accounts_cache
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner());
+                    match cache.get(fp) {
+                        Some(n) => *n,
+                        None => {
+                            let n = s.fingerprint_count(&ch.id).unwrap_or(1).max(1);
+                            cache.insert(fp.clone(), n);
+                            n
+                        }
+                    }
+                };
+                custom_views.push(build_custom_view(ch, r, &s, fp, accounts));
+            }
             attach_plan_costs(&mut out, &s, &cycle_cached, fx_now.as_ref());
         }
 
@@ -1419,7 +2036,10 @@ impl Fetcher {
             }
         }
 
-        out.into_iter().flatten().collect()
+        // 内置渠道在前、自定义渠道在后(顺序由前端的排序/自定义排序再排一次)
+        let mut all: Vec<ChannelView> = out.into_iter().flatten().collect();
+        all.extend(custom_views);
+        all
     }
 }
 
@@ -1906,7 +2526,7 @@ mod tests {
             .find(|d| d.id == "4sapi")
             .expect("4sapi 应在渠道表里");
 
-        let st = claim_for(def, &cfg, &s, Some(18.99)).expect("4sapi 默认开启申请制");
+        let st = claim_for(def, &cfg, &s, Some(18.99), "").expect("4sapi 默认开启申请制");
         assert_eq!(st.source, "auto");
         assert_eq!(st.last_claim_at, Some(applied_at + 300));
         // 按整天向下取整:差 5 分钟不满 12 天 → 算 11 天,还剩 3 天(宁可保守,
@@ -1920,7 +2540,7 @@ mod tests {
         let mut cfg2 = Config::default();
         cfg2.claim_channels.insert("hapi".into(), ClaimConfig { enabled: true, ..Default::default() });
         let def_h = providers::PROVIDERS.iter().find(|d| d.id == "hapi").unwrap();
-        let st = claim_for(def_h, &cfg2, &s, Some(55.0)).unwrap();
+        let st = claim_for(def_h, &cfg2, &s, Some(55.0), "").unwrap();
         assert_eq!(st.source, "none");
     }
 
@@ -2109,5 +2729,94 @@ mod tests {
         let mut first: Vec<u8> = Vec::new();
         assert!(push_chunk(&mut first, &vec![0u8; 11], 10).is_err());
         assert!(first.is_empty());
+    }
+
+    // ───────────────── 指纹分段 / 缺口标注 / 峰谷进视图 ─────────────────
+
+    /// 指纹:同一把 key 恒定、两侧空白不影响、换一位就变、且不含明文片段。
+    #[test]
+    fn key_fp_is_stable_and_hides_the_key() {
+        let a = key_fp("sk-abc123");
+        assert_eq!(a, key_fp("sk-abc123"));
+        assert_eq!(a, key_fp("  sk-abc123  "), "裁剪两侧空白后同一把");
+        assert_ne!(a, key_fp("sk-abc124"), "换一位就是另一本账");
+        assert_eq!(a.len(), 24, "12 字节的十六进制");
+        assert!(!a.contains("abc"), "指纹里不许出现密钥片段");
+    }
+
+    /// 峰谷状态只挂在标了 `peak_pricing` 的渠道上(DeepSeek),别的渠道一律 None。
+    #[test]
+    fn peak_state_only_for_peak_priced_channels() {
+        let store = Store::open_memory().unwrap();
+        let cfg = Config::default();
+        let res = FetchResult {
+            valid: true,
+            kind: Kind::Amount,
+            unit: "CNY".into(),
+            remaining: Some(42.0),
+            ..Default::default()
+        };
+        let ds = providers::find("deepseek").expect("渠道在表里");
+        let v = build_view(ds, res.clone(), false, now_ts(), &store, &cfg, None, "fpA", 1);
+        let p = v.peak.expect("DeepSeek 该有峰谷状态");
+        assert!(p.next_change_at.is_some(), "总能算出下一次切换");
+        assert!(!p.table_stale, "2026 年内表没过期");
+
+        let api = providers::find("4sapi").unwrap();
+        let v2 = build_view(api, res, false, now_ts(), &store, &cfg, None, "fpA", 1);
+        assert!(v2.peak.is_none(), "中转站没有峰谷时段这回事");
+    }
+
+    /// 缺口进视图 + 消耗只在同一本账里推算(换 key 后不跨账户)。
+    #[test]
+    fn gap_and_fingerprint_reach_the_view() {
+        let store = Store::open_memory().unwrap();
+        let cfg = Config::default();
+        let def = providers::find("deepseek").unwrap();
+        let midnight = local_midnight_today();
+        let res = FetchResult {
+            valid: true,
+            kind: Kind::Amount,
+            unit: "CNY".into(),
+            remaining: Some(90.0),
+            ..Default::default()
+        };
+        // A 账:今天 02:00 才开始有观测(有缺口),掉 10 元
+        store
+            .record_fp(def.id, "fpA", midnight + 2 * 3600, Some(100.0), None, None, "amount")
+            .unwrap();
+        store
+            .record_fp(def.id, "fpA", midnight + 3 * 3600, Some(90.0), None, None, "amount")
+            .unwrap();
+        // B 账:另一把 key,余额低得多(旧口径会把它算成一大笔"消耗")
+        store
+            .record_fp(def.id, "fpB", midnight + 4 * 3600, Some(10.0), None, None, "amount")
+            .unwrap();
+        let v = build_view(def, res.clone(), false, now_ts(), &store, &cfg, None, "fpA", 2);
+        assert_eq!(
+            v.gap_day_from,
+            Some(midnight + 2 * 3600),
+            "今天 02:00 才有第一条,要如实标出来"
+        );
+        assert_eq!(v.day, Some(10.0), "只算 A 账自己的掉额");
+        assert_eq!(v.accounts, 2, "用过两把密钥");
+        assert!(v.gap_days.contains(&midnight), "今天本身就是缺口日:{:?}", v.gap_days);
+
+        // A 账起点贴着零点 → 不算缺口
+        let s2 = Store::open_memory().unwrap();
+        s2.record_fp(def.id, "fpC", midnight + 60, Some(100.0), None, None, "amount").unwrap();
+        s2.record_fp(def.id, "fpC", midnight + 3600, Some(95.0), None, None, "amount").unwrap();
+        let v2 = build_view(
+            def,
+            FetchResult { remaining: Some(95.0), ..res.clone() },
+            false,
+            now_ts(),
+            &s2,
+            &cfg,
+            None,
+            "fpC",
+            1,
+        );
+        assert_eq!(v2.gap_day_from, None, "正常开机不该天天挂一行缺口提示");
     }
 }

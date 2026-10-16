@@ -121,6 +121,16 @@ pub struct Config {
     /// 系统通知要额外引一个通知插件,当前没引;现在走"面板里常驻一条警告"
     /// (run_checkin 在 needs_user 时 emit `checkin-alert`),这个开关先管住那条提示。
     pub checkin_notify: bool,
+    /// 跌破红线时发一条系统通知(裁决 3A)。**默认开**,但克制到只有一种触发:
+    /// 跌破的那一刻响一次、一天最多一次、回弹后再跌破才再响 —— 与签到
+    /// "成功静默、只在要你动手时说话"同一套哲学。
+    pub notify_on_crit: bool,
+    /// 提示音(签到结果 / 跌破红线两声)。**默认关**(裁决 8A):声音天然扰人,
+    /// 由用户显式打开;打开后也只有这两个事件会响,没有音效商店。
+    pub sound_on: bool,
+    /// 自定义渠道(裁决 6A):用户自己接进来的取数地址 + 字段路径。
+    /// 密钥不进这里 —— 它在 Windows 凭据管理器,账户名就是渠道 id。
+    pub custom_channels: Vec<crate::custom::CustomChannel>,
 }
 
 impl Default for Config {
@@ -159,6 +169,9 @@ impl Default for Config {
             trae_auto_select: false,
             checkin: HashMap::new(),
             checkin_notify: true,
+            notify_on_crit: true,
+            sound_on: false,
+            custom_channels: Vec::new(),
         }
     }
 }

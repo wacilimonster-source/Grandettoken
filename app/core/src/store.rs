@@ -17,6 +17,56 @@ pub struct Store {
     conn: Connection,
 }
 
+/// 变动台账里"同方向合并"的时间窗:轮询是分钟级的,一次连续消费会攒成几十条。
+/// 20 分钟能把最长的退避轮询(15 分钟)也并进同一条,又不会把"隔小时的两笔"误并。
+const MERGE_GAP: i64 = 20 * 60;
+
+/// 判"数据有缺口"的空档线:窗口起点/一天的两头离开观测时刻超过它,才算缺口。
+/// 正常轮询是分钟级的,不会被误伤。定在 store 这一层,因为**归档(日级摘要)、
+/// 曲线、界面文案三处都用它**,必须只有一个数字。
+pub const OBSERVE_GAP_SEC: i64 = 10 * 60;
+
+/// 一个窗口里的快照覆盖情况(缺口标注用)。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WindowCoverage {
+    pub first_ts: Option<i64>,
+    pub last_ts: Option<i64>,
+    pub count: i64,
+}
+
+/// 某一自然日的快照覆盖(长期趋势柱图的"缺口日"判据)。
+#[derive(Debug, Clone, Copy)]
+pub struct DayCoverage {
+    pub day_start: i64,
+    pub first_ts: i64,
+    pub last_ts: i64,
+    pub count: i64,
+}
+
+/// 变动台账的一条(同方向的连续变动已聚合;`delta` 负 = 消费、正 = 入账)。
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangeEntry {
+    pub start_ts: i64,
+    pub end_ts: i64,
+    pub delta: f64,
+    pub remaining: f64,
+    /// 参与聚合的轮询条数(1 = 单笔)
+    pub samples: i64,
+    /// 与上一次变动之间的空档秒数(>0 = 中间有段时间没观测);窗口内第一条为 0
+    pub gap_secs: i64,
+}
+
+/// 长期趋势的一条日级摘要(90 天外的明细归档出来的)。
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaySummary {    pub day_start: i64,
+    pub consumed: f64,
+    pub first_ts: i64,
+    pub last_ts: i64,
+    pub count: i64,
+}
+
 impl Store {
     pub fn open(path: &Path) -> Result<Self, String> {
         if let Some(dir) = path.parent() {
@@ -36,7 +86,8 @@ impl Store {
     /// 也不校验形状,老库要等运行期报 "no such column" 才发现(报告 P2-17)。
     fn migrate(&self) -> Result<(), String> {
         // 2 = vault_items 按 (platform,label) 去重 + 唯一索引(下面那段),老库也补跑
-        const WANT: i64 = 2;
+        // 3 = snapshots 加 key_fp(密钥指纹分段,换 key 后两本账不互相推算消耗)
+        const WANT: i64 = 3;
         let cur: i64 = self
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -63,7 +114,13 @@ impl Store {
             ),
             (
                 "snapshots",
-                [("kind", "TEXT NOT NULL DEFAULT 'amount'")].as_slice(),
+                [
+                    ("kind", "TEXT NOT NULL DEFAULT 'amount'"),
+                    // 密钥指纹(见 `adopt_orphan_snapshots`):老库已有行的值留空 ——
+                    // 空串由"首次带指纹的那一轮"认领,不在这里猜。
+                    ("key_fp", "TEXT NOT NULL DEFAULT ''"),
+                ]
+                .as_slice(),
             ),
         ] {
             if !self.table_exists(table)? {
@@ -72,6 +129,15 @@ impl Store {
             for (col, decl) in cols {
                 self.add_column_if_missing(table, col, decl)?;
             }
+        }
+        // 按指纹分段查快照是新读路径的主力,单独给一条索引(provider + 指纹 + 时间)。
+        if self.table_exists("snapshots")? {
+            self.conn
+                .execute_batch(
+                    "CREATE INDEX IF NOT EXISTS idx_snap_fp
+                        ON snapshots (provider_id, key_fp, ts);",
+                )
+                .map_err(|e| format!("建立快照指纹索引失败: {e}"))?;
         }
         // vault_items 里两条同 (platform,label) 的行是允许的 —— 唯一性只由应用层
         // "先查后插"把关,而查与插之间会放开锁:双击「保存」能插进两条一模一样的
@@ -189,6 +255,21 @@ impl Store {
             CREATE INDEX IF NOT EXISTS idx_checkin_lookup
                 ON checkin_log (channel, ts DESC);
 
+            -- 长期趋势的底料:90 天外的明细在 `prune` 时**先归档再删**,
+            -- 这里按 (渠道 + 密钥指纹 + 自然日) 留一条日级摘要,保留 365 天。
+            -- consumed 只累加相邻明细的下降(与 consumption_since 同一口径),
+            -- 所以它是"已观测消费"而不是接口给的数。
+            CREATE TABLE IF NOT EXISTS daily_summary (
+                provider_id TEXT    NOT NULL,
+                key_fp      TEXT    NOT NULL,
+                day_start   INTEGER NOT NULL,
+                consumed    REAL    NOT NULL DEFAULT 0,
+                first_ts    INTEGER NOT NULL DEFAULT 0,
+                last_ts     INTEGER NOT NULL DEFAULT 0,
+                count       INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (provider_id, key_fp, day_start)
+            );
+
             -- 密钥箱的**索引**。注意:这张表里没有密钥字段,也永远不该有 ——
             -- 密文在 Windows 凭据管理器(服务名 TokenScope:vault),这里只存
             -- 平台/标签/尾号/备注/时间,好让列表**不需要解密**就能渲染。
@@ -209,6 +290,7 @@ impl Store {
         Ok(())
     }
 
+    /// 写一条快照(不带密钥指纹,落成空串)。旧签名保留给"指纹未知"的场合与既有测试。
     pub fn record(
         &self,
         provider_id: &str,
@@ -218,14 +300,65 @@ impl Store {
         total: Option<f64>,
         kind: &str,
     ) -> Result<(), String> {
+        self.record_fp(provider_id, "", ts, remaining, used, total, kind)
+    }
+
+    /// 写一条快照,连**这次实际用的凭据指纹**一起记下。
+    ///
+    /// 为什么要有指纹:同渠道换一次 key 就是换一个余额账户,两个账户的余额差
+    /// 不是消费。按指纹分段后,`*_fp` 系列查询只在同一本账里推算消耗;
+    /// 历史账户的数据不删,标注后照样能看(照小鲸鱼 issue #163 的教训:
+    /// "数据没丢,只是没有任何入口能再看到它")。
+    ///
+    /// 只对**稳定的 API key** 型渠道有意义:网页会话/本机登录态的凭据会轮换,
+    /// 拿它当指纹等于每轮开一本新账(调用方不要给那两类传指纹)。
+    pub fn record_fp(
+        &self,
+        provider_id: &str,
+        key_fp: &str,
+        ts: i64,
+        remaining: Option<f64>,
+        used: Option<f64>,
+        total: Option<f64>,
+        kind: &str,
+    ) -> Result<(), String> {
         self.conn
             .execute(
-                "INSERT INTO snapshots (provider_id, ts, remaining, used, total, kind)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![provider_id, ts, remaining, used, total, kind],
+                "INSERT INTO snapshots (provider_id, ts, remaining, used, total, kind, key_fp)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![provider_id, ts, remaining, used, total, kind, key_fp],
             )
             .map_err(|e| format!("写入快照失败: {e}"))?;
         Ok(())
+    }
+
+    /// 把某渠道**还没有指纹**的历史行认领给当前指纹。
+    ///
+    /// 升级上来的库里旧行 key_fp 是空串。空串既不等于"某个旧 key"也不等于"新 key",
+    /// 只有"这一轮实际用的凭据"能回答它属于谁 —— 所以首次拿到稳定指纹时认领一次;
+    /// 之后换 key 写进来的都是别的指纹,不会再被认领。返回认领行数(0 = 无需认领)。
+    pub fn adopt_orphan_snapshots(&self, provider_id: &str, key_fp: &str) -> Result<usize, String> {
+        if key_fp.is_empty() {
+            return Ok(0);
+        }
+        self.conn
+            .execute(
+                "UPDATE snapshots SET key_fp = ?2 WHERE provider_id = ?1 AND key_fp = ''",
+                params![provider_id, key_fp],
+            )
+            .map_err(|e| format!("认领无指纹的历史快照失败: {e}"))
+    }
+
+    /// 该渠道历史上用过几个不同的密钥指纹(含空串),用来判断"有没有历史账户"。
+    /// 只回答数量,不暴露指纹本身。
+    pub fn fingerprint_count(&self, provider_id: &str) -> Result<i64, String> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(DISTINCT key_fp) FROM snapshots WHERE provider_id = ?1",
+                params![provider_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| format!("统计快照指纹失败: {e}"))
     }
 
     /// 指定时间窗口内的消耗推算值。
@@ -236,24 +369,30 @@ impl Store {
     /// 窗口内不足两条快照才算真的无从推算,返回 None;窗口内**一条都没有**
     /// (只剩窗口起点之前的基线)同样返回 None —— 那是"这一期还没数据",
     /// 不是"这期消耗 0"(以前回 Some(0.0),环比会凭空多一个 0 当分母)。
-    pub fn consumption_since(
+    /// 读窗口内的 (ts, remaining) 升序行。
+    ///
+    /// `key_fp`:`Some(指纹)` 只看那一本账;`None` = 不限(升级前的旧行为)。
+    /// 一条 SQL 覆盖两种口径 —— `?4 IS NULL` 时整条指纹条件失效。
+    fn rows_between(
         &self,
         provider_id: &str,
+        key_fp: Option<&str>,
         from_ts: i64,
-        now_ts: i64,
-    ) -> Result<Option<f64>, String> {
+        to_ts: i64,
+    ) -> Result<Vec<(i64, f64)>, String> {
         let mut stmt = self
             .conn
             .prepare(
                 "SELECT ts, remaining FROM snapshots
                  WHERE provider_id = ?1 AND remaining IS NOT NULL
-                   AND ts >= ?2 - 86400 AND ts <= ?3
+                   AND ts >= ?2 AND ts <= ?3
+                   AND (?4 IS NULL OR key_fp = ?4)
                  ORDER BY ts ASC",
             )
             .map_err(|e| format!("查询失败: {e}"))?;
 
         let rows: Vec<(i64, f64)> = stmt
-            .query_map(params![provider_id, from_ts, now_ts], |r| {
+            .query_map(params![provider_id, from_ts, to_ts, key_fp], |r| {
                 Ok((r.get(0)?, r.get(1)?))
             })
             .map_err(|e| format!("读取快照失败: {e}"))?
@@ -266,6 +405,38 @@ impl Store {
                 }
             })
             .collect();
+        Ok(rows)
+    }
+
+    pub fn consumption_since(
+        &self,
+        provider_id: &str,
+        from_ts: i64,
+        now_ts: i64,
+    ) -> Result<Option<f64>, String> {
+        self.consumption_since_scoped(provider_id, None, from_ts, now_ts)
+    }
+
+    /// 同 [`Self::consumption_since`],但只在**同一把密钥**的账里推算(换 key 不清算旧账)。
+    pub fn consumption_since_fp(
+        &self,
+        provider_id: &str,
+        key_fp: &str,
+        from_ts: i64,
+        now_ts: i64,
+    ) -> Result<Option<f64>, String> {
+        self.consumption_since_scoped(provider_id, Some(key_fp), from_ts, now_ts)
+    }
+
+    fn consumption_since_scoped(
+        &self,
+        provider_id: &str,
+        key_fp: Option<&str>,
+        from_ts: i64,
+        now_ts: i64,
+    ) -> Result<Option<f64>, String> {
+        // 多读一天:窗口起点前的基线要在窗口外(按时间折算进来),这是原口径
+        let rows = self.rows_between(provider_id, key_fp, from_ts - 86400, now_ts)?;
 
         // 窗口内一条都没有:只有窗口起点之前的基线。这是"这一期还没数据",
         // 不是"这期消耗 0" —— 报 0 会把汇总条的环比百分比凭空抬高。
@@ -325,26 +496,31 @@ impl Store {
     /// 与 consumption_since 的差别:不要求窗口起点之前有基线 —— 窗口内第一行
     /// 就是基准,因为"近 7 天日均"这类推算只关心窗口自身。
     pub fn consumed_in_window(&self, provider_id: &str, from_ts: i64, to_ts: i64) -> Result<f64, String> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT remaining FROM snapshots
-                 WHERE provider_id = ?1 AND remaining IS NOT NULL
-                   AND ts >= ?2 AND ts <= ?3
-                 ORDER BY ts ASC",
-            )
-            .map_err(|e| format!("查询失败: {e}"))?;
+        self.consumed_in_window_scoped(provider_id, None, from_ts, to_ts)
+    }
 
-        let vals: Vec<f64> = stmt
-            .query_map(params![provider_id, from_ts, to_ts], |r| r.get(0))
-            .map_err(|e| format!("读取快照失败: {e}"))?
-            .filter_map(|r| match r {
-                Ok(v) => Some(v),
-                Err(e) => {
-                    eprintln!("读取快照行失败(该行已跳过): {e}");
-                    None
-                }
-            })
+    /// 同 [`Self::consumed_in_window`],但只看同一把密钥的账。
+    pub fn consumed_in_window_fp(
+        &self,
+        provider_id: &str,
+        key_fp: &str,
+        from_ts: i64,
+        to_ts: i64,
+    ) -> Result<f64, String> {
+        self.consumed_in_window_scoped(provider_id, Some(key_fp), from_ts, to_ts)
+    }
+
+    fn consumed_in_window_scoped(
+        &self,
+        provider_id: &str,
+        key_fp: Option<&str>,
+        from_ts: i64,
+        to_ts: i64,
+    ) -> Result<f64, String> {
+        let vals: Vec<f64> = self
+            .rows_between(provider_id, key_fp, from_ts, to_ts)?
+            .into_iter()
+            .map(|(_, r)| r)
             .collect();
 
         let mut sum = 0.0;
@@ -354,15 +530,165 @@ impl Store {
         Ok((sum * 100.0).round() / 100.0)
     }
 
-    /// 窗口内最早一条快照的时间 —— 用来判断数据覆盖了多长,太短就不做推算。
+    /// 窗口内快照的 MIN/MAX 时间(不限指纹的旧口径)。
+    /// 注意:这里算的是**快照覆盖**(应用在不在跑),不看 `remaining` 是否为空。
     pub fn first_ts_since(&self, provider_id: &str, from_ts: i64) -> Result<Option<i64>, String> {
+        self.edge_ts(provider_id, None, from_ts, None, "MIN")
+    }
+
+    /// 同 [`Self::first_ts_since`],但只看同一把密钥的账。
+    pub fn first_ts_since_fp(
+        &self,
+        provider_id: &str,
+        key_fp: &str,
+        from_ts: i64,
+    ) -> Result<Option<i64>, String> {
+        self.edge_ts(provider_id, Some(key_fp), from_ts, None, "MIN")
+    }
+
+    /// 窗口内最晚一条快照的时间(缺口标注用:尾部缺口 = now - last_ts)。
+    pub fn last_ts_since(&self, provider_id: &str, key_fp: Option<&str>, from_ts: i64) -> Result<Option<i64>, String> {
+        self.edge_ts(provider_id, key_fp, from_ts, None, "MAX")
+    }
+
+    fn edge_ts(
+        &self,
+        provider_id: &str,
+        key_fp: Option<&str>,
+        from_ts: i64,
+        to_ts: Option<i64>,
+        agg: &str,
+    ) -> Result<Option<i64>, String> {
+        // agg 只能是本文件里写死的 "MIN"/"MAX",不是外部输入
+        let sql = format!(
+            "SELECT {agg}(ts) FROM snapshots
+              WHERE provider_id = ?1 AND ts >= ?2
+                AND (?3 IS NULL OR key_fp = ?3)
+                AND (?4 IS NULL OR ts <= ?4)"
+        );
+        self.conn
+            .query_row(&sql, params![provider_id, from_ts, key_fp, to_ts], |r| {
+                r.get::<_, Option<i64>>(0)
+            })
+            .map_err(|e| format!("查询失败: {e}"))
+    }
+
+    /// 窗口内的覆盖情况(最早/最晚快照 + 条数)。缺口标注的原料:
+    /// 界面拿它和窗口起止一比,就知道"数据从几点才开始有 / 已经多久没更新"。
+    pub fn window_coverage(
+        &self,
+        provider_id: &str,
+        key_fp: Option<&str>,
+        from_ts: i64,
+        to_ts: i64,
+    ) -> Result<WindowCoverage, String> {
         self.conn
             .query_row(
-                "SELECT MIN(ts) FROM snapshots WHERE provider_id = ?1 AND ts >= ?2",
-                params![provider_id, from_ts],
-                |r| r.get::<_, Option<i64>>(0),
+                "SELECT MIN(ts), MAX(ts), COUNT(*) FROM snapshots
+                  WHERE provider_id = ?1 AND ts >= ?2 AND ts <= ?3
+                    AND (?4 IS NULL OR key_fp = ?4)",
+                params![provider_id, from_ts, to_ts, key_fp],
+                |r| {
+                    Ok(WindowCoverage {
+                        first_ts: r.get(0)?,
+                        last_ts: r.get(1)?,
+                        count: r.get(2)?,
+                    })
+                },
             )
             .map_err(|e| format!("查询失败: {e}"))
+    }
+
+    /// 逐日覆盖(长期趋势柱图上的"缺口日"判据)。分桶按调用方给的时区偏移,
+    /// 不用 SQLite 的 'localtime'(那玩意儿在不同环境行为不一致,踩过)。
+    ///
+    /// 只对 `ts + tz_offset` 为正的现代时间做整除 —— 1970 年前的数据不在考虑范围。
+    pub fn daily_coverage(
+        &self,
+        provider_id: &str,
+        key_fp: Option<&str>,
+        from_ts: i64,
+        to_ts: i64,
+        tz_offset: i64,
+    ) -> Result<Vec<DayCoverage>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT ((ts + ?4) / 86400) AS b, MIN(ts), MAX(ts), COUNT(*) FROM snapshots
+                  WHERE provider_id = ?1 AND ts >= ?2 AND ts <= ?3
+                    AND (?5 IS NULL OR key_fp = ?5)
+                  GROUP BY b ORDER BY b ASC",
+            )
+            .map_err(|e| format!("查询失败: {e}"))?;
+        let rows = stmt
+            .query_map(
+                params![provider_id, from_ts, to_ts, tz_offset, key_fp],
+                |r| {
+                    let b: i64 = r.get(0)?;
+                    Ok(DayCoverage {
+                        day_start: b * 86_400 - tz_offset,
+                        first_ts: r.get(1)?,
+                        last_ts: r.get(2)?,
+                        count: r.get(3)?,
+                    })
+                },
+            )
+            .map_err(|e| format!("读取快照失败: {e}"))?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// 余额变动台账(行详情里那张"最近变动")。
+    ///
+    /// 聚合口径:同一方向的连续变动在 `MERGE_GAP` 内并成一条(轮询是分钟级的,
+    /// 一次连续消费会攒成几十条 —— 逐条列出来是噪音);方向一变(充值/申请)
+    /// 立刻另起一条。`samples` 记参与聚合的轮询条数,`gap_secs` 记这条与
+    /// 上一次变动之间的空档(>0 说明中间有段时间没观测)。
+    pub fn recent_changes(
+        &self,
+        provider_id: &str,
+        key_fp: Option<&str>,
+        from_ts: i64,
+        limit: usize,
+    ) -> Result<Vec<ChangeEntry>, String> {
+        let rows = self.rows_between(provider_id, key_fp, from_ts, i64::MAX / 2)?;
+        let mut out: Vec<ChangeEntry> = Vec::new();
+        for pair in rows.windows(2) {
+            let (t0, r0) = pair[0];
+            let (t1, r1) = pair[1];
+            let delta = r1 - r0;
+            if delta.abs() < 0.005 {
+                continue; // 四舍五入级别的抖动不算一次变动
+            }
+            let same_sign = out
+                .last()
+                .map(|e| (e.delta > 0.0) == (delta > 0.0))
+                .unwrap_or(false);
+            let within_merge = out
+                .last()
+                .map(|e| t0 - e.end_ts <= MERGE_GAP)
+                .unwrap_or(false);
+            if same_sign && within_merge {
+                let e = out.last_mut().expect("刚判过非空");
+                e.end_ts = t1;
+                e.delta += delta;
+                e.samples += 1;
+                e.remaining = r1;
+            } else {
+                // 空档 = 从"上一次观测到的时点"到"这次观测到时点"之间有多久没看:
+                // 它说明这条变动的金额里可能揉进了好几段时间的消耗,界面据此标注。
+                let gap_secs = out.last().map(|e| t1 - e.end_ts).unwrap_or(0);
+                out.push(ChangeEntry {
+                    start_ts: t0,
+                    end_ts: t1,
+                    delta,
+                    remaining: r1,
+                    samples: 1,
+                    gap_secs,
+                });
+            }
+        }
+        let tail: Vec<ChangeEntry> = out.split_off(out.len().saturating_sub(limit));
+        Ok(tail.into_iter().rev().collect())
     }
 
     /// 最近一次"余额跳升"的时间(申请额度 / 充值到账)。
@@ -375,26 +701,32 @@ impl Store {
         target: f64,
         max_gap: i64,
     ) -> Result<Option<i64>, String> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT ts, remaining FROM snapshots
-                 WHERE provider_id = ?1 AND remaining IS NOT NULL AND ts >= ?2
-                 ORDER BY ts ASC",
-            )
-            .map_err(|e| format!("查询失败: {e}"))?;
+        self.last_jump_since_scoped(provider_id, None, from_ts, min_delta, target, max_gap)
+    }
 
-        let rows: Vec<(i64, f64)> = stmt
-            .query_map(params![provider_id, from_ts], |r| Ok((r.get(0)?, r.get(1)?)))
-            .map_err(|e| format!("读取快照失败: {e}"))?
-            .filter_map(|r| match r {
-                Ok(v) => Some(v),
-                Err(e) => {
-                    eprintln!("读取快照行失败(该行已跳过): {e}");
-                    None
-                }
-            })
-            .collect();
+    /// 同 [`Self::last_jump_since`],但只看同一把密钥的账(换 key 后的补账不该被算成申请)。
+    pub fn last_jump_since_fp(
+        &self,
+        provider_id: &str,
+        key_fp: &str,
+        from_ts: i64,
+        min_delta: f64,
+        target: f64,
+        max_gap: i64,
+    ) -> Result<Option<i64>, String> {
+        self.last_jump_since_scoped(provider_id, Some(key_fp), from_ts, min_delta, target, max_gap)
+    }
+
+    fn last_jump_since_scoped(
+        &self,
+        provider_id: &str,
+        key_fp: Option<&str>,
+        from_ts: i64,
+        min_delta: f64,
+        target: f64,
+        max_gap: i64,
+    ) -> Result<Option<i64>, String> {
+        let rows = self.rows_between(provider_id, key_fp, from_ts, i64::MAX / 2)?;
 
         // 顺序扫描,取最后一次**像申请的**跳升。
         // 只看涨幅会把平台的预扣退还(一次能涨几十元)记成"用户申请过了",
@@ -425,26 +757,30 @@ impl Store {
         to_ts: i64,
         buckets: usize,
     ) -> Result<Vec<f64>, String> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT ts, remaining FROM snapshots
-                 WHERE provider_id = ?1 AND remaining IS NOT NULL AND ts >= ?2
-                 ORDER BY ts ASC",
-            )
-            .map_err(|e| format!("查询失败: {e}"))?;
+        self.series_scoped(provider_id, None, from_ts, to_ts, buckets)
+    }
 
-        let rows: Vec<(i64, f64)> = stmt
-            .query_map(params![provider_id, from_ts], |r| Ok((r.get(0)?, r.get(1)?)))
-            .map_err(|e| format!("读取快照失败: {e}"))?
-            .filter_map(|r| match r {
-                Ok(v) => Some(v),
-                Err(e) => {
-                    eprintln!("读取快照行失败(该行已跳过): {e}");
-                    None
-                }
-            })
-            .collect();
+    /// 同 [`Self::series`],但只看同一把密钥的账。
+    pub fn series_fp(
+        &self,
+        provider_id: &str,
+        key_fp: &str,
+        from_ts: i64,
+        to_ts: i64,
+        buckets: usize,
+    ) -> Result<Vec<f64>, String> {
+        self.series_scoped(provider_id, Some(key_fp), from_ts, to_ts, buckets)
+    }
+
+    fn series_scoped(
+        &self,
+        provider_id: &str,
+        key_fp: Option<&str>,
+        from_ts: i64,
+        to_ts: i64,
+        buckets: usize,
+    ) -> Result<Vec<f64>, String> {
+        let rows = self.rows_between(provider_id, key_fp, from_ts, i64::MAX / 2)?;
 
         // 少于两条推不出任何差值:返回空数组,让界面画"数据不足"。
         // 以前回落到全 0,画出来与"真实零消耗"一模一样,分不出来(P2-18)
@@ -493,13 +829,24 @@ impl Store {
         Ok(())
     }
 
-    /// 清理旧数据:快照按 90 天,签到流水按 400 天(月统计只看本月,留一年多足够
-    /// 回答"哪几天断了",又不会让它无限长 —— 以前这张表**没有任何清理路径**,P3-14)。
-    pub fn prune(&self, before_ts: i64) -> Result<usize, String> {
+    /// 清理旧数据 —— **删明细之前先把它们压成日级摘要**(长期趋势的底料):
+    /// 快照明细按 90 天,归档出的日级摘要保留 365 天;签到流水按 400 天。
+    ///
+    /// `day_offset_secs` 是调用方的**时区偏移**(本地零点 = 日桶边界)。归档必须按
+    /// 和界面同一个日历分桶,否则趋势里的"日"和明细里的"日"对不上。
+    pub fn prune(&self, before_ts: i64, day_offset_secs: i64) -> Result<usize, String> {
+        self.archive_before(before_ts, day_offset_secs)?;
         let n = self
             .conn
             .execute("DELETE FROM snapshots WHERE ts < ?1", params![before_ts])
             .map_err(|e| format!("清理旧快照失败: {e}"))?;
+        // 日级摘要留到明细之外再一年
+        self.conn
+            .execute(
+                "DELETE FROM daily_summary WHERE day_start < ?1",
+                params![before_ts - 275 * 86_400],
+            )
+            .map_err(|e| format!("清理旧日级摘要失败: {e}"))?;
         let log_before = before_ts - 300 * 86_400; // 快照的 90 天之外再多留 300 天
         self.conn
             .execute(
@@ -509,6 +856,184 @@ impl Store {
             .map_err(|e| format!("清理旧签到流水失败: {e}"))?;
         Ok(n)
     }
+
+    /// 把 `before_ts` 之前的明细压成日级摘要。可重入:行随后就被删,不会被算两次;
+    /// 跨 `before_ts` 的那一天如果被劈成两半,两半靠 ON CONFLICT **累加**并回同一条。
+    ///
+    /// 覆盖(首/末/条数)按**全部行**算,消耗只累加下降(与 `consumption_since` 同口径),
+    /// 且只归档 `kind='amount'` —— 百分比渠道没有"余额消耗"这个概念,进来是噪声。
+    fn archive_before(&self, before_ts: i64, day_offset_secs: i64) -> Result<(), String> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| format!("开启归档事务失败: {e}"))?;
+        // ① 覆盖:全部行,按天桶(MIN/MAX/COUNT 累加 —— 分界日两半会并回同一条)
+        tx.execute(
+            "INSERT INTO daily_summary (provider_id, key_fp, day_start, consumed, first_ts, last_ts, count)
+             SELECT provider_id, key_fp, b * 86400 - ?2, 0, MIN(ts), MAX(ts), COUNT(*)
+               FROM (
+                 SELECT provider_id, key_fp, ts, ((ts + ?2) / 86400) AS b
+                   FROM snapshots WHERE ts < ?1
+               )
+              GROUP BY provider_id, key_fp, b
+             ON CONFLICT(provider_id, key_fp, day_start) DO UPDATE SET
+               first_ts = MIN(daily_summary.first_ts, excluded.first_ts),
+               last_ts  = MAX(daily_summary.last_ts,  excluded.last_ts),
+               count    = daily_summary.count + excluded.count",
+            params![before_ts, day_offset_secs],
+        )
+        .map_err(|e| format!("归档日覆盖失败: {e}"))?;
+        // ② 消耗:相邻下降之和,归属到**前一行**所在的那天(与界面柱图同一口径:
+        //    差值按起点分桶)。先在一条 SQL 里聚合成少量行,再逐行累加进摘要 ——
+        //    不要在 UPDATE 里写相关子查询(那是 O(摘要数 × 明细数))。
+        let deltas: Vec<(String, String, i64, f64)> = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT provider_id, key_fp, b * 86400 - ?2 AS day_start, SUM(delta)
+                       FROM (
+                         SELECT provider_id, key_fp,
+                                ((pts + ?2) / 86400) AS b,
+                                prem - remaining AS delta
+                           FROM (
+                             SELECT provider_id, key_fp, ts,
+                                    LAG(ts)        OVER win AS pts,
+                                    LAG(remaining) OVER win AS prem,
+                                    remaining
+                               FROM snapshots
+                              WHERE ts < ?1 AND kind = 'amount' AND remaining IS NOT NULL
+                             WINDOW win AS (PARTITION BY provider_id, key_fp ORDER BY ts ASC)
+                           )
+                          WHERE delta > 0
+                       )
+                      GROUP BY provider_id, key_fp, b",
+                )
+                .map_err(|e| format!("聚合归档消耗失败: {e}"))?;
+            let rows = stmt
+                .query_map(params![before_ts, day_offset_secs], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                })
+                .map_err(|e| format!("聚合归档消耗失败: {e}"))?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+        for (provider_id, key_fp, day_start, delta) in deltas {
+            tx.execute(
+                "UPDATE daily_summary SET consumed = consumed + ?4
+                  WHERE provider_id = ?1 AND key_fp = ?2 AND day_start = ?3",
+                params![provider_id, key_fp, day_start, delta],
+            )
+            .map_err(|e| format!("累加归档消耗失败: {e}"))?;
+        }
+        tx.commit().map_err(|e| format!("提交归档失败: {e}"))?;
+        Ok(())
+    }
+
+    /// 长期趋势曲线:老的部分吃**日级摘要**(90 天外的明细已归档),新的部分吃明细,
+    /// 统一装进 `buckets` 个桶。返回 (每桶消耗, 有缺口的分桶下标)。
+    ///
+    /// 与 [`Self::series`] 的差别:那个只看明细、也不报缺口,是"近 30 天"用的;
+    /// 这个能一路画到一年前,并且把"那段没观测"的日子标出来(柱图上打斜纹)——
+    /// 否则长曲线会把空洞画成一串 0,看着像"那些天真的没花钱"。
+    #[allow(clippy::too_many_arguments)]
+    pub fn trend_series(
+        &self,
+        provider_id: &str,
+        key_fp: Option<&str>,
+        from_ts: i64,
+        to_ts: i64,
+        buckets: usize,
+        tz_offset: i64,
+    ) -> Result<(Vec<f64>, Vec<usize>), String> {
+        if buckets == 0 {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let span = (to_ts - from_ts).max(1) as f64;
+        let bucket_of = |t: i64| -> usize {
+            let idx = (((t - from_ts) as f64 / span) * buckets as f64) as usize;
+            idx.min(buckets - 1)
+        };
+        let mut out = vec![0.0f64; buckets];
+        let mut gaps: Vec<usize> = Vec::new();
+
+        // ① 归档部分:日级摘要(完全落在窗口起点之前的那天不算)
+        for d in self.daily_summaries(provider_id, key_fp, from_ts)? {
+            if d.day_start + 86_400 <= from_ts {
+                continue;
+            }
+            let idx = bucket_of(d.day_start);
+            out[idx] += d.consumed;
+            if day_summary_partial(&d, to_ts) {
+                gaps.push(idx);
+            }
+        }
+
+        // ② 明细部分:与 series() 同一套"下降才累加"的差值分桶(按差值起点归桶)
+        let rows = self.rows_between(provider_id, key_fp, from_ts, to_ts)?;
+        for pair in rows.windows(2) {
+            let (t0, r0) = pair[0];
+            let drop = (r0 - pair[1].1).max(0.0);
+            out[bucket_of(t0)] += drop;
+        }
+
+        // ③ 缺口:明细窗口内按天看覆盖(日级摘要那边已经在①里判过)
+        for d in self.daily_coverage(provider_id, key_fp, from_ts, to_ts, tz_offset)? {
+            let leading = d.first_ts - d.day_start;
+            let finished = d.day_start + 86_400 <= to_ts;
+            let trailing = if finished {
+                (d.day_start + 86_400 - d.last_ts).max(0)
+            } else {
+                0
+            };
+            if leading > OBSERVE_GAP_SEC || trailing > OBSERVE_GAP_SEC {
+                // 归到这天中点所在的桶,比归到零点更贴近"看起来缺的是哪一段"
+                gaps.push(bucket_of(d.day_start + 43_200));
+            }
+        }
+        gaps.sort_unstable();
+        gaps.dedup();
+        Ok((out, gaps))
+    }
+
+    /// 长期趋势:某渠道(某一本账)的日级摘要,`from_ts` 之后的都在。
+    pub fn daily_summaries(
+        &self,
+        provider_id: &str,
+        key_fp: Option<&str>,
+        from_ts: i64,
+    ) -> Result<Vec<DaySummary>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT day_start, consumed, first_ts, last_ts, count FROM daily_summary
+                  WHERE provider_id = ?1 AND day_start >= ?2
+                    AND (?3 IS NULL OR key_fp = ?3)
+                  ORDER BY day_start ASC",
+            )
+            .map_err(|e| format!("查询失败: {e}"))?;
+        let rows = stmt
+            .query_map(params![provider_id, from_ts, key_fp], |r| {
+                Ok(DaySummary {
+                    day_start: r.get(0)?,
+                    consumed: r.get(1)?,
+                    first_ts: r.get(2)?,
+                    last_ts: r.get(3)?,
+                    count: r.get(4)?,
+                })
+            })
+            .map_err(|e| format!("读取日级摘要失败: {e}"))?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+}
+
+/// 一条日级摘要算不算"部分数据"(归档侧的判据,与明细侧 [`OBSERVE_GAP_SEC`] 同源)。
+fn day_summary_partial(d: &DaySummary, now: i64) -> bool {
+    let leading = d.first_ts - d.day_start;
+    let finished = d.day_start + 86_400 <= now;
+    let trailing = if finished {
+        (d.day_start + 86_400 - d.last_ts).max(0)
+    } else {
+        0
+    };
+    leading > OBSERVE_GAP_SEC || trailing > OBSERVE_GAP_SEC
 }
 
 /// 一条签到流水(界面直接用)。
@@ -711,7 +1236,8 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE snapshots (id INTEGER PRIMARY KEY AUTOINCREMENT, provider_id TEXT NOT NULL,
-                ts INTEGER NOT NULL, remaining REAL, used REAL, total REAL, kind TEXT NOT NULL);
+                ts INTEGER NOT NULL, remaining REAL, used REAL, total REAL, kind TEXT NOT NULL,
+                key_fp TEXT NOT NULL DEFAULT '');
              CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
         )
         .unwrap();
@@ -934,5 +1460,246 @@ mod tests {
 
         // 对照:consumption_since 无窗口前基线时退化为窗口内下限估算(同为 15)
         assert_eq!(s.consumption_since("p", 1000, 6000).unwrap(), Some(15.0));
+    }
+
+    // ───────────────── 密钥指纹分段(换 key 账目不互相推算) ─────────────────
+
+    /// 老库(没有 key_fp 列)升级后,列要真的补上,历史行落在空串里。
+    #[test]
+    fn migration_adds_key_fp_to_old_snapshots_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE snapshots (id INTEGER PRIMARY KEY AUTOINCREMENT, provider_id TEXT NOT NULL,
+                ts INTEGER NOT NULL, remaining REAL, used REAL, total REAL, kind TEXT NOT NULL);
+             INSERT INTO snapshots (provider_id, ts, remaining, kind) VALUES ('p', 1000, 80.0, 'amount');",
+        )
+        .unwrap();
+        let s = Store { conn };
+        s.migrate().unwrap();
+        // 补出来的列能写能读:给历史行认领指纹
+        assert_eq!(s.adopt_orphan_snapshots("p", "fpA").unwrap(), 1);
+        assert_eq!(s.consumption_since_fp("p", "fpA", 500, 2000).unwrap(), None, "只有一条,推不出消耗");
+        s.record_fp("p", "fpA", 2000, Some(70.0), None, None, "amount").unwrap();
+        assert_eq!(s.consumption_since_fp("p", "fpA", 500, 3000).unwrap(), Some(10.0));
+        // 幂等:再跑一次迁移不动数据
+        s.migrate().unwrap();
+        assert_eq!(s.fingerprint_count("p").unwrap(), 1);
+    }
+
+    /// 两本账互不推算;不带指纹的旧口径会把中间那笔跨账户跳变算成消耗 —— 这正是
+    /// 分段要挡住的东西。
+    #[test]
+    fn fingerprint_scoping_keeps_accounts_apart() {
+        let s = Store::open_memory().unwrap();
+        s.record_fp("p", "A", 1000, Some(100.0), None, None, "amount").unwrap();
+        s.record_fp("p", "A", 2000, Some(90.0), None, None, "amount").unwrap();
+        s.record_fp("p", "B", 3000, Some(500.0), None, None, "amount").unwrap();
+        s.record_fp("p", "B", 4000, Some(400.0), None, None, "amount").unwrap();
+        assert_eq!(s.consumption_since_fp("p", "A", 500, 5000).unwrap(), Some(10.0));
+        assert_eq!(s.consumption_since_fp("p", "B", 500, 5000).unwrap(), Some(100.0));
+        // 旧口径(不分段):A→B 的 410 元跳升被 clamp 掉,但两本账的下降被加在一起
+        assert_eq!(
+            s.consumption_since("p", 500, 5000).unwrap(),
+            Some(110.0),
+            "不分段 = 跨账户求和,这就是升级后要避免的旧行为"
+        );
+        assert_eq!(s.fingerprint_count("p").unwrap(), 2, "两本账");
+    }
+
+    /// 认领只发生一次:换 key 写进来的新指纹不会被再认领走。
+    #[test]
+    fn adopt_orphans_claims_legacy_rows_only_once() {
+        let s = Store::open_memory().unwrap();
+        s.record("p", 1000, Some(50.0), None, None, "amount").unwrap(); // 升级前的行(空指纹)
+        assert_eq!(s.adopt_orphan_snapshots("p", "fpA").unwrap(), 1);
+        assert_eq!(s.adopt_orphan_snapshots("p", "fpA").unwrap(), 0, "再认领没有新行");
+        s.record_fp("p", "fpB", 2000, Some(20.0), None, None, "amount").unwrap();
+        assert_eq!(s.adopt_orphan_snapshots("p", "fpB").unwrap(), 0, "别把 A 的账抢过来");
+        assert_eq!(s.fingerprint_count("p").unwrap(), 2);
+        // 空指纹不认领(调用方没拿到稳定凭据时不该动数据)
+        assert_eq!(s.adopt_orphan_snapshots("p", "").unwrap(), 0);
+    }
+
+    // ───────────────── 缺口覆盖 / 变动台账 / 长期趋势 ─────────────────
+
+    #[test]
+    fn window_and_daily_coverage_report_gaps() {
+        let s = Store::open_memory().unwrap();
+        let tz = 8 * 3600;
+        // 北京 10-16:09:00 开机,23:00 关机;10-17 只观测了 14:00 之后两条
+        let d16 = 16 * 86_400 - tz; // 10-16 00:00(北京)
+        let d17 = 17 * 86_400 - tz;
+        s.record("p", d16 + 9 * 3600, Some(100.0), None, None, "amount").unwrap();
+        s.record("p", d16 + 23 * 3600, Some(80.0), None, None, "amount").unwrap();
+        s.record("p", d17 + 14 * 3600, Some(70.0), None, None, "amount").unwrap();
+        s.record("p", d17 + 15 * 3600, Some(66.0), None, None, "amount").unwrap();
+
+        let cov = s.window_coverage("p", None, d16, d17 + 86_400).unwrap();
+        assert_eq!(cov.count, 4);
+        assert_eq!(cov.first_ts, Some(d16 + 9 * 3600));
+        assert_eq!(cov.last_ts, Some(d17 + 15 * 3600));
+
+        let days = s.daily_coverage("p", None, d16, d17 + 86_400, tz).unwrap();
+        assert_eq!(days.len(), 2);
+        assert_eq!(days[0].day_start, d16);
+        assert_eq!(days[0].first_ts, d16 + 9 * 3600, "16 日 09:00 才开始有观测");
+        assert_eq!(days[0].count, 2);
+        assert_eq!(days[1].day_start, d17);
+        assert_eq!(days[1].first_ts, d17 + 14 * 3600);
+        assert_eq!(days[1].count, 2);
+    }
+
+    /// 台账:同方向的连续轮询并成一条,方向一变立刻另起;空档秒数如实带上。
+    #[test]
+    fn change_ledger_merges_consecutive_drops_and_splits_on_topup() {
+        let s = Store::open_memory().unwrap();
+        s.record("p", 9 * 3600, Some(100.0), None, None, "amount").unwrap();
+        s.record("p", 9 * 3600 + 60, Some(99.5), None, None, "amount").unwrap();
+        s.record("p", 9 * 3600 + 120, Some(99.0), None, None, "amount").unwrap();
+        // 一小时后充值 +50
+        s.record("p", 10 * 3600, Some(149.0), None, None, "amount").unwrap();
+        // 紧接着又花掉 1 元
+        s.record("p", 10 * 3600 + 60, Some(148.0), None, None, "amount").unwrap();
+
+        let ch = s.recent_changes("p", None, 0, 20).unwrap();
+        assert_eq!(ch.len(), 3, "掉→充→掉,三次变动:{ch:?}");
+        // 最新在前
+        assert!((ch[0].delta + 1.0).abs() < 1e-9 && ch[0].samples == 1);
+        assert_eq!(ch[0].gap_secs, 60, "与上一笔间隔 1 分钟");
+        assert!((ch[1].delta - 50.0).abs() < 1e-9, "充值那条是 +50");
+        assert_eq!(ch[1].gap_secs, 10 * 3600 - (9 * 3600 + 120), "含一小时的空白");
+        assert!((ch[2].delta + 1.0).abs() < 1e-9, "两笔 0.5 合并成 -1.0");
+        assert_eq!(ch[2].samples, 2, "两次轮询参与了聚合");
+        assert_eq!(ch[2].start_ts, 9 * 3600);
+        assert_eq!(ch[2].end_ts, 9 * 3600 + 120);
+
+        // limit 只留最近的几条(一条变动记的是 [起点, 终点点] 这一段)
+        let one = s.recent_changes("p", None, 0, 1).unwrap();
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].start_ts, 10 * 3600);
+        assert_eq!(one[0].end_ts, 10 * 3600 + 60);
+    }
+
+    /// 台账按指纹分段:另一本账的变动不该出现在这本账里。
+    #[test]
+    fn change_ledger_respects_fingerprint() {
+        let s = Store::open_memory().unwrap();
+        s.record_fp("p", "A", 1000, Some(100.0), None, None, "amount").unwrap();
+        s.record_fp("p", "A", 1060, Some(95.0), None, None, "amount").unwrap();
+        s.record_fp("p", "B", 1200, Some(500.0), None, None, "amount").unwrap();
+        s.record_fp("p", "B", 1260, Some(400.0), None, None, "amount").unwrap();
+        let a = s.recent_changes("p", Some("A"), 0, 20).unwrap();
+        assert_eq!(a.len(), 1);
+        assert!((a[0].delta + 5.0).abs() < 1e-9, "A 账只掉了 5");
+    }
+
+    /// 明细归档成日级摘要:删之前先压,摘要保留;再跑一次不重复累加。
+    #[test]
+    fn prune_archives_details_into_daily_summaries() {
+        let s = Store::open_memory().unwrap();
+        let tz = 8 * 3600;
+        let now = 100 * 86_400;
+        let day = |d: i64| d * 86_400 - tz; // 那天的本地零点
+        // 三天明细,每天掉 10 元(相邻下降)
+        for d in [10_i64, 11, 12] {
+            s.record("p", day(d) + 10 * 3600, Some(100.0), None, None, "amount").unwrap();
+            s.record("p", day(d) + 11 * 3600, Some(90.0), None, None, "amount").unwrap();
+        }
+        // 保留窗口:now - 20 天,只有 10~12 号那三天被清
+        let cutoff = now - 20 * 86_400;
+        let removed = s.prune(cutoff, tz).unwrap();
+        assert_eq!(removed, 6, "6 条明细被清掉");
+
+        let sums = s.daily_summaries("p", None, 0).unwrap();
+        assert_eq!(sums.len(), 3, "三天都有摘要");
+        assert_eq!(sums[0].day_start, day(10));
+        assert!((sums[0].consumed - 10.0).abs() < 1e-9, "每天 10 元: {sums:?}");
+        assert!((sums[2].consumed - 10.0).abs() < 1e-9, "每天 10 元: {sums:?}");
+        assert_eq!(sums[0].first_ts, day(10) + 10 * 3600);
+        assert_eq!(sums[0].last_ts, day(10) + 11 * 3600);
+        assert_eq!(sums[0].count, 2);
+
+        // 幂等:再清一次,摘要不会翻倍
+        let again = s.prune(cutoff, tz).unwrap();
+        assert_eq!(again, 0);
+        let sums2 = s.daily_summaries("p", None, 0).unwrap();
+        assert!((sums2[0].consumed - 10.0).abs() < 1e-9, "重跑不重复累加");
+        assert_eq!(sums2[0].count, 2);
+    }
+
+    /// 摘要的保留期是"明细之外再一年":太老的日直接清掉,一年内的留着。
+    #[test]
+    fn daily_summary_retention_drops_ancient_days() {
+        let s = Store::open_memory().unwrap();
+        let tz = 8 * 3600;
+        let now = 500 * 86_400;
+        let old = (now - 400 * 86_400) / 86_400; // 400 天前
+        let mid = (now - 100 * 86_400) / 86_400; // 100 天前
+        for d in [old, mid] {
+            s.record("p", d * 86_400 - tz + 10 * 3600, Some(100.0), None, None, "amount").unwrap();
+            s.record("p", d * 86_400 - tz + 11 * 3600, Some(95.0), None, None, "amount").unwrap();
+        }
+        s.prune(now - 90 * 86_400, tz).unwrap();
+        let sums = s.daily_summaries("p", None, 0).unwrap();
+        assert_eq!(sums.len(), 1, "只留 100 天前那条(400 天前超出一年保留期): {sums:?}");
+        assert_eq!(sums[0].day_start, mid * 86_400 - tz);
+        assert!((sums[0].consumed - 5.0).abs() < 1e-9, "{sums:?}");
+    }
+
+    /// 百分比渠道不进归档:daily_summary 只收 kind='amount' 的消耗。
+    #[test]
+    fn archive_ignores_non_amount_kinds() {
+        let s = Store::open_memory().unwrap();
+        let tz = 0;
+        let d = 10 * 86_400;
+        s.record("p", d + 3600, Some(50.0), None, None, "percent").unwrap();
+        s.record("p", d + 7200, Some(40.0), None, None, "percent").unwrap();
+        s.prune(100 * 86_400, tz).unwrap();
+        let sums = s.daily_summaries("p", None, 0).unwrap();
+        assert_eq!(sums.len(), 1, "覆盖仍记(它证明应用在跑)");
+        assert_eq!(sums[0].count, 2);
+        assert!((sums[0].consumed - 0.0).abs() < 1e-9, "百分比渠道没有余额消耗");
+    }
+
+    /// 长期趋势曲线:明细与日级摘要拼在一条线上;有缺口的日子标出来。
+    #[test]
+    fn trend_series_merges_archive_and_details_and_marks_gaps() {
+        let s = Store::open_memory().unwrap();
+        let tz = 0;
+        let now = 100 * 86_400;
+        let from = now - 10 * 86_400; // 10 天窗口
+        // 8 天前:一天的明细(掉 10 元)——会被归档
+        let old = now - 8 * 86_400;
+        s.record("p", old + 3600, Some(100.0), None, None, "amount").unwrap();
+        s.record("p", old + 7200, Some(90.0), None, None, "amount").unwrap();
+        // 今天:明细(掉 3 元)
+        s.record("p", now - 3600, Some(50.0), None, None, "amount").unwrap();
+        s.record("p", now - 1800, Some(47.0), None, None, "amount").unwrap();
+        // 归档(把 8 天前那天压进摘要并清掉明细;90 天清理线设在 5 天前)
+        s.prune(now - 5 * 86_400, tz).unwrap();
+        assert_eq!(s.daily_summaries("p", None, from).unwrap().len(), 1, "归档那天在摘要里");
+
+        let (vals, gaps) = s.trend_series("p", None, from, now, 10, tz).unwrap();
+        assert_eq!(vals.len(), 10);
+        let total: f64 = vals.iter().sum();
+        assert!((total - 13.0).abs() < 1e-9, "归档的 10 元 + 今天的 3 元 = 13:{vals:?}");
+        // 8 天前那天:明细起点 01:00(离零点 1 小时 > 10 分钟)且末尾 02:00 收工 → 有缺口
+        assert!(!gaps.is_empty(), "那天只观测了两小时,必须标成缺口");
+        assert_eq!(vals[2], 10.0, "归档那天落在第 3 个桶");
+    }
+
+    /// 窗口里一天都没数据的那种"空",不算缺口(那是没数据,不是有缺口)。
+    #[test]
+    fn trend_series_ignores_days_without_any_observation() {
+        let s = Store::open_memory().unwrap();
+        let now = 100 * 86_400;
+        let from = now - 10 * 86_400;
+        s.record("p", now - 3600, Some(10.0), None, None, "amount").unwrap();
+        s.record("p", now - 1800, Some(9.0), None, None, "amount").unwrap();
+        let (vals, gaps) = s.trend_series("p", None, from, now, 10, 0).unwrap();
+        let total: f64 = vals.iter().sum();
+        assert!((total - 1.0).abs() < 1e-9);
+        // 只有"今天"这一天有观测,其余 9 天是"没数据" —— 只有今天可能算缺口
+        assert!(gaps.len() <= 1, "没数据的日子不该被标成缺口:{gaps:?}");
     }
 }

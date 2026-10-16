@@ -434,6 +434,10 @@ pub struct ProviderDef {
     pub unstable: bool,
     /// 拿不到凭据时的占位类型(渠道还没启用时的展示口径)
     pub default_kind: Kind,
+    /// 这家服务商按**峰谷时段**计价(DeepSeek 官方 API 是;中转站/订阅类不是)。
+    /// 只决定"要不要给这个渠道显示时段状态与倒计时",不参与任何金额计算 ——
+    /// 峰谷规则两个月被官方改过三次,判错也只影响提示,动不到账目(见 peak.rs 头注)。
+    pub peak_pricing: bool,
     pub extract: fn(&Value) -> FetchResult,
 }
 
@@ -890,6 +894,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         method: Method::Get,
         unstable: false,
         default_kind: Kind::Amount,
+        peak_pricing: false,
         extract: extract_4sapi,
     },
     ProviderDef {
@@ -905,6 +910,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         method: Method::Get,
         unstable: true,
         default_kind: Kind::Percent,
+        peak_pricing: false,
         extract: extract_opencode_go,
     },
     ProviderDef {
@@ -920,6 +926,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         method: Method::Get,
         unstable: false,
         default_kind: Kind::Amount,
+        peak_pricing: true,
         extract: extract_deepseek,
     },
     ProviderDef {
@@ -935,6 +942,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         method: Method::Get,
         unstable: false,
         default_kind: Kind::Amount,
+        peak_pricing: false,
         extract: extract_hapi,
     },
     ProviderDef {
@@ -955,6 +963,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         method: Method::PostJson(trae_body),
         unstable: true,
         default_kind: Kind::Points,
+        peak_pricing: false,
         extract: extract_trae,
     },
     ProviderDef {
@@ -975,6 +984,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         method: Method::PostJson(workbuddy_body),
         unstable: true,
         default_kind: Kind::Points,
+        peak_pricing: false,
         extract: extract_workbuddy,
     },
     ProviderDef {
@@ -992,6 +1002,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         method: Method::Get,
         unstable: true,
         default_kind: Kind::Percent,
+        peak_pricing: false,
         extract: extract_codex,
     },
 ];
