@@ -10,7 +10,7 @@ use crate::providers::{self, AuthKind, Expiring, FetchResult, Kind, Method};
 use crate::store::Store;
 use crate::secrets;
 use crate::weblogin;
-use chrono::{Datelike, Duration, Local, TimeZone, Weekday};
+use chrono::{Datelike, Duration, Local, TimeZone, Utc, Weekday};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -225,10 +225,28 @@ pub fn save_cycle(store: &Store, id: &str, memo: &CycleMemo) -> Result<(), Strin
     store.set_setting(&cycle_key(id), &txt)
 }
 
-/// 周期窗的重置时刻:优先「主窗」的 `resets_at`(RFC3339)。没有就返回 None ——
-/// 宁可不学,也不能拿 5 小时窗或周窗的间隔去当包月周期。
+/// 按 **PROVIDERS 下标**装一整套周期记忆 —— 长度与顺序必须与 `views` 完全一致,
+/// 因为 [`attach_plan_costs`] 是按下标读的。以前只装"有套餐的那几条"(长度 1),
+/// 而 opencode-go 在 PROVIDERS[1] → `cycles.get(1)` 恒为 None:周期永远学不到,
+/// 每轮还把同一份锚点重写回 SQLite(P1)。装的时候顺手过滤成 None,读的地方不用再判。
+fn load_cycles(store: &Store) -> Vec<Option<CycleMemo>> {
+    providers::PROVIDERS
+        .iter()
+        .map(|d| {
+            if providers::plan_usd(d.id).is_some() {
+                load_cycle(store, d.id)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// 周期窗的重置时刻:**只认「主窗」**的 `resets_at`(RFC3339)。没有就返回 None ——
+/// 宁可不学,也不能拿 5 小时窗或周窗的间隔去当包月周期。以前这里兜了个
+/// `v.windows.first()`,等于把非主窗的间隔学成"包月周期"(P2)。
 fn main_window_reset(v: &ChannelView) -> Option<i64> {
-    let w = v.windows.iter().find(|w| w.main).or(v.windows.first())?;
+    let w = v.windows.iter().find(|w| w.main)?;
     let txt = w.resets_at.as_ref()?;
     chrono::DateTime::parse_from_rfc3339(txt)
         .ok()
@@ -458,18 +476,36 @@ pub fn now_ts() -> i64 {
 }
 
 /// 本地零点。按用户本地时区切,不按 UTC —— 否则跨时区时"今日消耗"会指错日子。
-/// DST 区用 earliest()(0 点被重复时取第一段);0 点根本不存在的区(哈瓦那等)
-/// 退回 UTC 对齐的今日零点 —— 兜成 now_ts 会把窗口塌成零长度、再被 -86400 容差
-/// 放大成"近 24 小时",数字静默偏大(扫描报告 P2-9)。
+/// DST 区用 earliest()(0 点被重复时取第一段);0 点被跳过的区取 latest()(当天第一个
+/// 存在的时刻);0 点根本不存在的区(哈瓦那等)退回**请求的那一天**的 UTC 零点 ——
+/// 兜成 now_ts 会把窗口塌成零长度、再被 -86400 容差放大成"近 24 小时",数字静默偏大
+/// (扫描报告 P2-9);而以前直接拿"今天"的 UTC 零点顶替,会把周一/月初/上月初全部算错。
 fn local_date_start(y: i32, m: u32, d: u32) -> i64 {
-    Local
-        .with_ymd_and_hms(y, m, d, 0, 0, 0)
-        .earliest()
-        .map(|x| x.timestamp())
-        .unwrap_or_else(|| {
-            let n = now_ts();
-            n - n.rem_euclid(86_400)
-        })
+    resolve_midnight(Local.with_ymd_and_hms(y, m, d, 0, 0, 0), y, m, d)
+}
+
+/// [`local_date_start`] 的决策体(抽出来单测:DST 的坑没法在测试里造时区)。
+fn resolve_midnight(
+    cand: chrono::LocalResult<chrono::DateTime<Local>>,
+    y: i32,
+    m: u32,
+    d: u32,
+) -> i64 {
+    // 0 点被重复(DST 回拨):取第一段,窗口不会因此短一截
+    if let Some(x) = cand.earliest() {
+        return x.timestamp();
+    }
+    // 0 点被跳过(DST 前拨):取当天第一个存在的时刻
+    if let Some(x) = cand.latest() {
+        return x.timestamp();
+    }
+    // 本地这一天没有 0 点:退到**请求的 (y,m,d)** 的 UTC 零点
+    if let Some(x) = Utc.with_ymd_and_hms(y, m, d, 0, 0, 0).earliest() {
+        return x.timestamp();
+    }
+    // 连 y/m/d 都不合法:最后的兜底才是今天的 UTC 零点
+    let n = now_ts();
+    n - n.rem_euclid(86_400)
 }
 
 pub fn local_midnight_today() -> i64 {
@@ -617,21 +653,18 @@ async fn fetch_once(
     };
 
     let status = resp.status();
-    // 上限 2 MB:入口被网关换成大 HTML 时不要整包读进内存再解析(P2-24)
+    // 上限 2 MB:入口被网关换成大 HTML 时不要整包读进内存再解析(P2-24)。
+    // 先看 Content-Length,超了**在读之前**就拒;没有长度(分块传输)才按块累加,
+    // 一超上限立刻停手 —— 以前 `resp.bytes()` 会先把整包缓进内存再判大小(P2)。
     const MAX_BODY: usize = 2_000_000;
-    let raw = match resp.bytes().await {
-        Ok(b) => {
-            if b.len() > MAX_BODY {
-                return err_result(
-                    def,
-                    format!("响应过大({} 字节),已丢弃", b.len()),
-                    Some(FailKind::Server),
-                );
-            }
-            b
+    if let Some(len) = resp.content_length() {
+        if len > MAX_BODY as u64 {
+            return err_result(def, format!("响应过大({len} 字节),已丢弃"), Some(FailKind::Server));
         }
-        // 连接中断属于传输类 → 值得换下一个入口(以前 None 会让整条回退链就地停下)
-        Err(e) => return err_result(def, format!("读取响应失败: {e}"), Some(FailKind::Transport)),
+    }
+    let raw = match read_body_capped(resp, MAX_BODY).await {
+        Ok(b) => b,
+        Err((msg, kind)) => return err_result(def, msg, Some(kind)),
     };
     let body: serde_json::Value = match serde_json::from_slice(&raw) {
         Ok(v) => v,
@@ -681,7 +714,47 @@ async fn fetch_once(
     (result, kind)
 }
 
-/// 返回 (结果, 成功时用的地址, 最后一次失败的类别)。调用方据此记住"哪个入口是通的"。
+/// 把下一块拼进缓冲,一旦超过 `max` 就报错(**纯函数**:上限逻辑靠它单测,
+/// 真起 HTTP 服务端才能造出的 2 MB 响应不该进单元测试)。
+/// `pub(crate)`:模型价目表那条取数路径(models.rs)用同一个上限口径,不另写一份。
+pub(crate) fn push_chunk(out: &mut Vec<u8>, c: &[u8], max: usize) -> Result<(), String> {
+    if out.len() + c.len() > max {
+        return Err(format!("响应过大(超过 {max} 字节),已丢弃"));
+    }
+    out.extend_from_slice(c);
+    Ok(())
+}
+
+/// 分块读响应体,超限**立刻停手** —— 不再把超大的包整个读进内存。
+/// 返回 (缓冲, 失败类别),失败类别沿用 fetch_once 的口径。
+async fn read_body_capped(
+    mut resp: reqwest::Response,
+    max: usize,
+) -> Result<Vec<u8>, (String, FailKind)> {
+    let mut out: Vec<u8> = Vec::new();
+    loop {
+        match resp.chunk().await {
+            Ok(Some(c)) => {
+                if let Err(msg) = push_chunk(&mut out, &c, max) {
+                    return Err((msg, FailKind::Server));
+                }
+            }
+            Ok(None) => return Ok(out),
+            // 连接中断属于传输类 → 值得换下一个入口(以前 None 会让整条回退链就地停下)
+            Err(e) => return Err((format!("读取响应失败: {e}"), FailKind::Transport)),
+        }
+    }
+}
+
+/// 要不要把"上次成功地址"的备忘清掉:**这次失败、且确实发过请求**时清。
+/// 这个入口已经不行了却还被记着,每轮都要先等满 8 秒超时才切下一个(P2-22);
+/// 成功那一支不清(备忘正要写进去),没发过请求(没凭据)也无从谈起。
+fn should_clear_memo(result_valid: bool, attempted: bool) -> bool {
+    !result_valid && attempted
+}
+
+/// 返回 (结果, **最后一次实际尝试的地址**, 最后一次失败的类别)。调用方据此记住
+/// "哪个入口是通的",失败时也要知道"刚撞的是哪一个"好把那条备忘清掉。
 pub async fn fetch_channel(
     client: &reqwest::Client,
     def: &providers::ProviderDef,
@@ -700,7 +773,10 @@ pub async fn fetch_channel(
             Some(k) => !k.retryable(),
         };
         if stop || i + 1 == order.len() {
-            let used = if result.valid { Some(url.clone()) } else { None };
+            // 失败也要把**刚试过的地址**报上去:调用方要靠它把"上次成功地址"清掉。
+            // 以前只在成功时给 Some,于是失败分支永远不会清备忘 ——
+            // 一个挂掉的备用镜像能把渠道永久钉在上面,每轮白等满超时(P2)。
+            let used = Some(url.clone());
             return (result, used, kind);
         }
         last_kind = kind;
@@ -1115,17 +1191,9 @@ impl Fetcher {
         let hidden: Arc<Vec<String>> = Arc::new(cfg.hidden_channels.clone());
         // 订阅套餐要用的两份缓存:美元牌价(每月一次)与周期记忆(跨期才更新)。
         // 单独一次短锁读出来 —— 下面的 refresh 会 await,不能带着 MutexGuard 跨过去。
-        let plan_ids: Vec<&'static str> = providers::PROVIDERS
-            .iter()
-            .map(|d| d.id)
-            .filter(|id| providers::plan_usd(id).is_some())
-            .collect();
         let (fx_cached, cycle_cached): (Option<FxRate>, Vec<Option<CycleMemo>>) = {
             let s = store.lock().unwrap_or_else(|p| p.into_inner());
-            (
-                fx::load(&s),
-                plan_ids.iter().map(|id| load_cycle(&s, id)).collect(),
-            )
+            (fx::load(&s), load_cycles(&s))
         };
         // 当月已有牌价时这个 await 是纯内存返回,不打网络;只有跨月后的第一轮才会
         // 真去试两个公开接口(每个 6 秒上限)。
@@ -1246,16 +1314,12 @@ impl Fetcher {
                     }
                     let ts = now_ts();
 
-                    if !result.valid {
-            // 这个入口已经不行了却还被记在"上次成功地址"上,于是每一轮都先等满 8 秒
-            // 超时才切下一个(P2-22)。失败且确实发了请求时就把备忘清掉,回到定义顺序。
-            if used_url.is_some() {
-                if let Ok(mut m) = self.url_memo.lock() {
-                    m.remove(def.id);
-                }
-            }
-        }
-        if let (true, Some(url)) = (result.valid, used_url.as_ref()) {
+                    if should_clear_memo(result.valid, used_url.is_some()) {
+                        if let Ok(mut m) = self.url_memo.lock() {
+                            m.remove(def.id);
+                        }
+                    }
+                    if let (true, Some(url)) = (result.valid, used_url.as_ref()) {
                         if let Ok(mut m) = self.url_memo.lock() {
                             m.insert(def.id.to_string(), url.clone());
                         }
@@ -1372,6 +1436,43 @@ mod tests {
         }
     }
 
+    /// `attach_plan_costs` 按 PROVIDERS 下标读写,所以测试也得造**同长同序**的向量:
+    /// 以前测试里递的是长度 1 的 `[memo]`,恰好替生产代码把 P1 那个下标错位遮住了。
+    fn pidx(id: &str) -> usize {
+        providers::PROVIDERS
+            .iter()
+            .position(|d| d.id == id)
+            .expect("渠道在表里")
+    }
+
+    fn aligned_views(v: ChannelView) -> Vec<Option<ChannelView>> {
+        let i = pidx(&v.id);
+        let mut out: Vec<Option<ChannelView>> =
+            (0..providers::PROVIDERS.len()).map(|_| None).collect();
+        out[i] = Some(v);
+        out
+    }
+
+    fn aligned_cycles(pairs: &[(&str, Option<CycleMemo>)]) -> Vec<Option<CycleMemo>> {
+        providers::PROVIDERS
+            .iter()
+            .map(|d| {
+                pairs
+                    .iter()
+                    .find(|(id, _)| *id == d.id)
+                    .and_then(|(_, m)| *m)
+            })
+            .collect()
+    }
+
+    fn plan_at(views: &[Option<ChannelView>], id: &str) -> Option<PlanCost> {
+        views
+            .iter()
+            .flatten()
+            .find(|v| v.id == id)
+            .and_then(|v| v.plan.clone())
+    }
+
     /// $10 / 10 天周期 / 汇率 7 → 每天 7 元。它只跟"过了多久"有关,与用了多少 token 无关。
     #[test]
     fn plan_cost_accrues_with_elapsed_time_only() {
@@ -1482,29 +1583,78 @@ mod tests {
             main: true,
         }];
 
-        let mut observed = vec![Some(v.clone())];
+        let mut observed = aligned_views(v.clone());
         attach_plan_costs(
             &mut observed,
             &s,
-            &[Some(CycleMemo {
-                last_reset: 1,
-                days: Some(10.0),
-            })],
+            &aligned_cycles(&[(
+                "opencode-go",
+                Some(CycleMemo {
+                    last_reset: 1,
+                    days: Some(10.0),
+                }),
+            )]),
             Some(&test_rate()),
         );
-        let p = observed[0].as_ref().unwrap().plan.clone().unwrap();
+        let p = plan_at(&observed, "opencode-go").unwrap();
         assert!((p.days - 10.0).abs() < 1e-9, "已经学到的优先用");
         assert!(p.learned);
 
-        let mut inferred = vec![Some(v)];
-        attach_plan_costs(&mut inferred, &s, &[None], Some(&test_rate()));
-        let p = inferred[0].as_ref().unwrap().plan.clone().unwrap();
+        let mut inferred = aligned_views(v);
+        attach_plan_costs(&mut inferred, &s, &aligned_cycles(&[]), Some(&test_rate()));
+        let p = plan_at(&inferred, "opencode-go").unwrap();
         assert!(
             (p.days - 31.0).abs() < 1e-9,
             "没学到时按重置日往前推一个整月,而不是 30 天"
         );
         assert!(!p.learned, "推出来的必须标明不是实测");
-        assert!(inferred[0].as_ref().unwrap().extra.iter().any(|(k, _)| k == "套餐摊销(按上一期长度)"));
+        assert!(inferred[pidx("opencode-go")]
+            .as_ref()
+            .unwrap()
+            .extra
+            .iter()
+            .any(|(k, _)| k == "套餐摊销(按上一期长度)"));
+    }
+
+    /// F1:周期记忆是**按 PROVIDERS 下标**读的。opencode-go 在 PROVIDERS[1],以前
+    /// `cycles` 只装了长度 1 的"有套餐的那几条" → `cycles.get(1)` 恒为 None,
+    /// 学到的周期永远读不到、`save_cycle` 每轮白写一次库(P1)。
+    /// 这条测试走的是生产的构造路径(load_cycles)与真实下标,不是手搓向量。
+    #[test]
+    fn plan_cost_reads_the_memo_at_the_providers_index() {
+        let s = Store::open_memory().unwrap();
+        let def = providers::find("opencode-go").expect("opencode-go 渠道存在");
+        assert_eq!(pidx("opencode-go"), 1, "这条测试的前提:它不在下标 0 上");
+        save_cycle(
+            &s,
+            "opencode-go",
+            &CycleMemo {
+                last_reset: 1,
+                days: Some(30.0),
+            },
+        )
+        .unwrap();
+
+        let mut v = placeholder(def);
+        v.windows = vec![providers::Window {
+            label: "周期".into(),
+            percent: 10.0,
+            remain_percent: 90.0,
+            status: "ok".into(),
+            resets_at: Some("2026-12-03T00:00:00+00:00".into()),
+            main: true,
+        }];
+        let mut out = aligned_views(v);
+        let cycles = load_cycles(&s);
+        assert_eq!(
+            cycles.len(),
+            providers::PROVIDERS.len(),
+            "周期记忆必须与 views 同长"
+        );
+        attach_plan_costs(&mut out, &s, &cycles, Some(&test_rate()));
+        let p = plan_at(&out, "opencode-go").expect("有汇率就该挂上摊销");
+        assert!(p.learned, "库里那份记忆要在它的真实下标上被读到");
+        assert_eq!(p.days, 30.0);
     }
 
     #[test]
@@ -1512,16 +1662,16 @@ mod tests {
         let s = Store::open_memory().unwrap();
         let def = providers::find("opencode-go").expect("opencode-go 渠道存在");
 
-        let mut none = vec![Some(placeholder(def))];
-        attach_plan_costs(&mut none, &s, &[None], None);
+        let mut none = aligned_views(placeholder(def));
+        attach_plan_costs(&mut none, &s, &aligned_cycles(&[]), None);
         assert!(
-            none[0].as_ref().unwrap().plan.is_none(),
+            plan_at(&none, "opencode-go").is_none(),
             "一次汇率都没取到时不许拿猜的数往合计里加钱"
         );
 
-        let mut got = vec![Some(placeholder(def))];
-        attach_plan_costs(&mut got, &s, &[None], Some(&test_rate()));
-        let p = got[0].as_ref().unwrap().plan.clone().expect("有汇率就该挂上");
+        let mut got = aligned_views(placeholder(def));
+        attach_plan_costs(&mut got, &s, &aligned_cycles(&[]), Some(&test_rate()));
+        let p = plan_at(&got, "opencode-go").expect("有汇率就该挂上");
         assert!((p.usd - 10.0).abs() < 1e-9);
         assert!((p.days - ASSUMED_CYCLE_DAYS).abs() < 1e-9);
         assert!(!p.learned, "没跨过真实重置前必须标明周期是按 30 天估的");
@@ -1529,16 +1679,16 @@ mod tests {
 
         let mut hidden_view = placeholder(def);
         hidden_view.hidden = true;
-        let mut hid = vec![Some(hidden_view)];
-        attach_plan_costs(&mut hid, &s, &[None], Some(&test_rate()));
+        let mut hid = aligned_views(hidden_view);
+        attach_plan_costs(&mut hid, &s, &aligned_cycles(&[]), Some(&test_rate()));
         assert!(
-            hid[0].as_ref().unwrap().plan.is_none(),
+            plan_at(&hid, "opencode-go").is_none(),
             "隐藏的渠道不进合计,挂上等于偷偷把用户关掉的东西算回钱"
         );
 
-        let mut amount = vec![Some(placeholder(providers::find("4sapi").unwrap()))];
-        attach_plan_costs(&mut amount, &s, &[None], Some(&test_rate()));
-        assert!(amount[0].as_ref().unwrap().plan.is_none());
+        let mut amount = aligned_views(placeholder(providers::find("4sapi").unwrap()));
+        attach_plan_costs(&mut amount, &s, &aligned_cycles(&[]), Some(&test_rate()));
+        assert!(plan_at(&amount, "4sapi").is_none());
     }
 
     /// 观察到一次重置先只记锚点;下一次跨期才学出周期,并且落库(重启后还记得)。
@@ -1558,17 +1708,22 @@ mod tests {
             }];
             v
         };
-        let mut first = vec![Some(mk("2026-11-03T00:00:00+00:00"))];
-        attach_plan_costs(&mut first, &s, &[None], Some(&test_rate()));
+        let mut first = aligned_views(mk("2026-11-03T00:00:00+00:00"));
+        attach_plan_costs(&mut first, &s, &aligned_cycles(&[]), Some(&test_rate()));
         let m1 = load_cycle(&s, "opencode-go").expect("第一次观察就该落锚点");
         assert_eq!(m1.days, None);
 
-        let mut second = vec![Some(mk("2026-12-03T00:00:00+00:00"))];
-        attach_plan_costs(&mut second, &s, &[Some(m1)], Some(&test_rate()));
+        let mut second = aligned_views(mk("2026-12-03T00:00:00+00:00"));
+        attach_plan_costs(
+            &mut second,
+            &s,
+            &aligned_cycles(&[("opencode-go", Some(m1))]),
+            Some(&test_rate()),
+        );
         let m2 = load_cycle(&s, "opencode-go").unwrap();
         let days = m2.days.expect("跨了一次真实重置,该学到周期长度");
         assert!((days - 30.0).abs() < 0.2, "11-03 → 12-03 是 30 天,实测学到 {days}");
-        let p = second[0].as_ref().unwrap().plan.clone().unwrap();
+        let p = plan_at(&second, "opencode-go").unwrap();
         assert!(p.learned);
         assert!((p.days - days).abs() < 1e-9);
     }
@@ -1839,5 +1994,120 @@ mod tests {
         assert!(!another_credential_may_help(Some(FailKind::Server)));
         assert!(!another_credential_may_help(Some(FailKind::Business)));
         assert!(!another_credential_may_help(None));
+    }
+
+    /// F2:失败且真的发过请求 → 清掉"上次成功地址";成功不清、没发过请求也不清。
+    /// 以前清备忘这一支永远进不去(失败时拿不到 attempted 地址),渠道会被钉在
+    /// 一个挂掉的备用镜像上,每轮先白等满超时。
+    #[test]
+    fn failed_attempt_clears_the_url_memo_but_success_keeps_it() {
+        assert!(should_clear_memo(false, true), "失败 + 发过请求 → 清备忘");
+        assert!(!should_clear_memo(true, true), "成功时备忘正要写进去,不能清");
+        assert!(!should_clear_memo(false, false), "没发过请求就没什么可清的");
+        assert!(!should_clear_memo(true, false));
+    }
+
+    /// F3:没有 `main: true` 的窗口时宁可不学 —— 不能拿 5 小时窗/周窗的间隔当包月周期。
+    #[test]
+    fn main_window_reset_needs_a_main_window() {
+        let def = providers::find("opencode-go").unwrap();
+        let mut v = placeholder(def);
+        v.windows = vec![
+            providers::Window {
+                label: "5 小时".into(),
+                percent: 10.0,
+                remain_percent: 90.0,
+                status: "ok".into(),
+                resets_at: Some("2026-11-03T00:00:00+00:00".into()),
+                main: false,
+            },
+            providers::Window {
+                label: "周".into(),
+                percent: 20.0,
+                remain_percent: 80.0,
+                status: "ok".into(),
+                resets_at: Some("2026-11-10T00:00:00+00:00".into()),
+                main: false,
+            },
+        ];
+        assert!(main_window_reset(&v).is_none(), "没有主窗就该返回 None");
+
+        // 有主窗时照旧取它(而不是顺手拿第一个)
+        let mut w = placeholder(def);
+        w.windows = vec![
+            providers::Window {
+                label: "5 小时".into(),
+                percent: 10.0,
+                remain_percent: 90.0,
+                status: "ok".into(),
+                resets_at: Some("2026-11-03T00:00:00+00:00".into()),
+                main: false,
+            },
+            providers::Window {
+                label: "周期".into(),
+                percent: 20.0,
+                remain_percent: 80.0,
+                status: "ok".into(),
+                resets_at: Some("2026-12-03T00:00:00+00:00".into()),
+                main: true,
+            },
+        ];
+        assert_eq!(
+            main_window_reset(&w),
+            Some(
+                chrono::DateTime::parse_from_rfc3339("2026-12-03T00:00:00+00:00")
+                    .unwrap()
+                    .timestamp()
+            )
+        );
+    }
+
+    /// F4:本地没有 0 点(DST 造出的不存在的时刻)时,退路必须是**请求的那一天**的
+    /// UTC 零点,不能拿"今天"顶替 —— 否则周一/月初/上月初全算错。
+    #[test]
+    fn midnight_fallback_uses_the_requested_day_not_today() {
+        let want = |y, m, d| {
+            Utc.with_ymd_and_hms(y, m, d, 0, 0, 0)
+                .unwrap()
+                .timestamp()
+        };
+        assert_eq!(
+            resolve_midnight(chrono::LocalResult::None, 2026, 3, 3),
+            want(2026, 3, 3)
+        );
+        assert_eq!(
+            resolve_midnight(chrono::LocalResult::None, 2020, 1, 2),
+            want(2020, 1, 2),
+            "请求的是哪一天就用哪一天"
+        );
+        // 正常/歧义(DST 回拨)时仍按 earliest 取第一段,不动行为
+        let t = Local.with_ymd_and_hms(2026, 3, 3, 0, 0, 0).unwrap();
+        assert_eq!(
+            resolve_midnight(chrono::LocalResult::Single(t), 2026, 3, 3),
+            t.timestamp()
+        );
+        let later = t + Duration::hours(1);
+        assert_eq!(
+            resolve_midnight(chrono::LocalResult::Ambiguous(t, later), 2026, 3, 3),
+            t.timestamp(),
+            "0 点被重复时取第一段"
+        );
+    }
+
+    /// F5:响应体的上限在**边收边判**时就生效,不是等整包读进内存之后再判。
+    #[test]
+    fn body_cap_is_enforced_while_collecting_chunks() {
+        let mut out: Vec<u8> = Vec::new();
+        assert!(push_chunk(&mut out, b"12345", 10).is_ok());
+        assert_eq!(out, b"12345");
+        assert!(push_chunk(&mut out, b"12345", 10).is_ok());
+        assert_eq!(out.len(), 10);
+        let e = push_chunk(&mut out, b"x", 10).unwrap_err();
+        assert!(e.contains("响应过大"), "{e}");
+        assert_eq!(out.len(), 10, "超限的那块不许拼进去");
+        // 单块就超限也要立刻报错(分块传输时第一块就可能已经超了)
+        let mut first: Vec<u8> = Vec::new();
+        assert!(push_chunk(&mut first, &vec![0u8; 11], 10).is_err());
+        assert!(first.is_empty());
     }
 }

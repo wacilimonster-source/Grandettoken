@@ -133,6 +133,7 @@ const ctx = {
   document: documentMock,
   console: {
     log: (...a) => logs.push(['log', a.join(' ')]),
+    // 级别名 'ERROR' 是文件末尾退出码判断里认的那个字符串,改这里必须一起改
     error: (...a) => logs.push(['ERROR', a.map(String).join(' ')]),
     warn: (...a) => logs.push(['warn', a.map(String).join(' ')]),
   },
@@ -172,6 +173,9 @@ setTimeout(() => {
   console.log('=== console output ===');
   if (!logs.length) console.log('(none)');
   logs.forEach(([lv, msg]) => console.log('[' + lv + '] ' + msg));
-  // app.js 会注册 setInterval(贴边折叠等),不显式退出进程会一直挂着
-  process.exit(logs.some(([lv]) => lv === 'THROWN' || lv === 'UNHANDLED') ? 1 : 0);
+  // app.js 会注册 setInterval(贴边折叠等),不显式退出进程会一直挂着。
+  // 退出码是这个探针唯一的机器可读信号,所以 app.js 自己打出的 [ERROR] 也算失败:
+  // 以前的判断只看 THROWN/UNHANDLED,一次"渲染抛错被 catch 住,只 console.error"
+  // 的运行会以 0 退出,看起来是通过。
+  process.exit(logs.some(([lv]) => lv === 'THROWN' || lv === 'UNHANDLED' || lv === 'ERROR') ? 1 : 0);
 }, 400);

@@ -21,10 +21,25 @@ const WS_MAXIMIZEBOX = 0x00010000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const near = (a, b, tol = 2) => Math.abs(a - b) <= tol;
 
+// 只接受应用自己的页面。以前是 `find(type==='page') || targets[0]`:当 9222 端口被
+// 别人占用(另一个 Chromium、遗留的 Edge WebView)时,脚本会静默连到那个无关页面上,
+// 把整套断言跑在它上面 —— 机器读到的结论是错的。找不到就列出候选并失败退出。
+const APP_RE = /tauri|grandettoken|tokenscope/i;
+function pickAppTarget(targets) {
+  const pages = targets.filter((x) => x.type === 'page');
+  const t = pages.find((x) => APP_RE.test(`${x.title || ''} ${x.url || ''}`));
+  if (!t) {
+    console.error(`no app page on port ${PORT} - refusing to attach to an unrelated target`);
+    console.error('candidates:');
+    for (const x of targets) console.error(`  ${x.type}  ${x.title || '(no title)'}  ${x.url || '(no url)'}`);
+  }
+  return t || null;
+}
+
 async function connect() {
   const targets = await (await fetch(`http://127.0.0.1:${PORT}/json`)).json();
-  const t = targets.find((x) => x.type === 'page') || targets[0];
-  if (!t) throw new Error('no debuggable target');
+  const t = pickAppTarget(targets);
+  if (!t) throw new Error('no app page on port ' + PORT + ' (candidates listed above)');
   const ws = new WebSocket(t.webSocketDebuggerUrl);
   await new Promise((res, rej) => {
     ws.addEventListener('open', res);

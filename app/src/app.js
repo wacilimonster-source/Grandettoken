@@ -11,6 +11,10 @@ let CFG = null;
 let VER = "";          // app_version 命令回来的版本号,关于页在首检之前也有的显示
 let sparkCache = {};   // { [id]: {24:[],168:[],720:[]} }
 let sparkHours = {};   // { [id]: 当前选中的区间 },渲染详情时据此标记选中项
+// 面板里展开的行 id(DOM 上的 .open 只是它的投影):行头的 aria-expanded 与轮询重建后的
+// 恢复都读它。以前 renderRow 里写的是未声明的 `open`,实际解析成 window.open(恒真),
+// 于是每行都发 aria-expanded="true",开合也从不更新(F2)。
+const rowOpen = new Set();
 // WorkBuddy 网页登录窗口已打开、正在等令牌:按钮期间置真,防止连点开出第二个窗口
 // (Rust 侧也会把已开的那个拉到前台,但界面要给出"进行中"的样子)
 let WB_LOGGING = false;
@@ -30,7 +34,17 @@ const esc = (v) =>
   String(v ?? "").replace(/[&<>"']/g, (ch) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch])
   );
-const money = (v) => (v === null || v === undefined ? "——" : "¥" + v.toFixed(2));
+/** 币种前缀:CNY 是 ¥,其余(DeepSeek 的余额会带自己的币种代码)直接用代码本身 ——
+    只做**标注**,不做任何换算。 */
+const curSign = (unit) => (!unit || unit === "CNY" ? "¥" : unit + " ");
+/** 金额的唯一口径:千分位 + 两位小数,币种按渠道自己的 unit(F11/F12)。
+    null/undefined 一律「——」(0 与"没取到数"不能混);Number() 兜住字符串,
+    输出永远是纯数字文本,进 innerHTML 也安全。 */
+const money = (v, unit) =>
+  v === null || v === undefined
+    ? "——"
+    : curSign(unit) +
+      Number(v).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /** 积分:带千分位;小数按需显示(3855 → 3,855;6075.5 → 6,075.5)。 */
 const points = (v) =>
@@ -244,16 +258,33 @@ function sortChannels(list) {
 
 // ───────────── 渲染 ─────────────
 function renderSummary() {
-  // 汇总只累加金额型渠道 —— 百分比和金额不能相加;隐藏的渠道不参与
-  const am = CHANNELS.filter((c) => c.kind === "amount" && c.hasKey && c.remaining !== null && !c.hidden);
+  // 汇总只累加金额型渠道 —— 百分比和金额不能相加;隐藏的渠道不参与;
+  // 币种不是 CNY 的也不参与(DeepSeek 可能返回非人民币余额,混进来就是把美元当人民币加)
+  const am = CHANNELS.filter(
+    (c) =>
+      c.kind === "amount" &&
+      c.hasKey &&
+      c.remaining !== null &&
+      !c.hidden &&
+      (c.unit || "CNY") === "CNY"
+  );
   // 订阅型套餐(OpenCode Go $10/期)是另一笔:它不是余额差值,但这个周期确实掏了这笔钱。
   // 后端按天摊好(周期长度从真实重置里学,汇率每月自动取),这里只管加进三格并说明口径。
-  const plans = CHANNELS.filter((c) => !c.hidden && c.plan);
+  // **必须带 hasKey**:后端会把 plan 连没有密钥的占位视图一起挂上,只按 plan 过滤时
+  // 全新安装(只配了 4SAPI)会凭空多出「OpenCode Go 套餐摊销」那笔钱(F1)。
+  const plans = CHANNELS.filter((c) => !c.hidden && c.hasKey && c.plan);
   const planSum = (f) => plans.reduce((a, c) => a + (c.plan[f] || 0), 0);
   const p0 = plans.length ? plans[0].plan : null;
   const planTip = p0
-    ? ` · 含套餐 $${p0.usd.toFixed(0)}/期 按天摊 ¥${p0.perDay.toFixed(2)}/天` +
+    ? ` · 含套餐 $${p0.usd.toFixed(0)}/期 按天摊 ${money(p0.perDay)}/天` +
       `(周期 ${p0.days.toFixed(1)} 天${p0.learned ? "·实测" : "·按上一期推"},汇率 ${p0.rate}·${p0.rateMonth})`
+    : "";
+  // 被排除在 CNY 合计之外的非人民币渠道要点名:合计里少了谁,用户有权知道(F12)
+  const offCur = CHANNELS.filter(
+    (c) => c.kind === "amount" && c.hasKey && c.remaining !== null && !c.hidden && !am.includes(c)
+  );
+  const offTip = offCur.length
+    ? " · " + offCur.map((c) => `${c.name}(${c.unit || "?"})不是人民币,未计入`).join("、")
     : "";
   const sum = (f) => {
     const vals = am.map((c) => c[f]).filter((v) => v !== null && v !== undefined);
@@ -268,7 +299,10 @@ function renderSummary() {
     { label: "本周消耗", field: "week", prev: "weekPrev", note: "推算", cmp: "对比上周同时段" },
     { label: "本月消耗", field: "month", prev: "monthPrev", note: null, cmp: "对比上月同时段" },
   ];
-  if (!am.length && !plans.length) {
+  // 一格数都没有时不留空条 —— 但**只有非人民币渠道**时要把条留着:整条消失
+  // 看起来像挂件坏了,三格「——」+ 点名"谁没被计入"才诚实(G1)。
+  // 无论如何不做跨币种求和。
+  if (!am.length && !plans.length && !offCur.length) {
     $("sum").innerHTML = "";
     return;
   }
@@ -286,6 +320,10 @@ function renderSummary() {
       if (total !== null) {
         if (contributors) note = (cellNote || `${contributors} 个渠道`) + (add > 0 ? " +套餐" : "");
         else if (add > 0) note = "仅套餐摊销";
+      } else if (!am.length && offCur.length) {
+        // 钱只存在于非人民币渠道里:这不是"数据不足"(那像取数失败),
+        // 而是"它们不参与人民币合计" —— 渠道名在 tooltip 里(G1)
+        note = "非人民币未计入";
       }
       // 环比只在"本期与上期都有数"的渠道集合上算,两边口径才对称;
       // 套餐那一笔两边都加(它是按天摊的,所以只会让比例更平,不会凭空造出涨幅);
@@ -309,7 +347,17 @@ function renderSummary() {
       } else if (total !== null) {
         delta = `<span class="dl delta na">——</span>`;
       }
-      return `<div class="cell" title="${cmp}${planTip}"><div class="lb">${label}</div>
+      // tooltip 要把**数字**摊开:只写「对比昨日同时段」说不清这个 ↑ 是怎么来的(F20)。
+      // prev2 只在"两边都有数"时成立(与上面 delta 同一条件),否则如实说没有基线
+      const hasBase = (both.length || add > 0) && prev2 > 0;
+      const tip =
+        `${cmp}:本期 ${txt}` +
+        (hasBase
+          ? ` · 上期 ${money(prev2)} · 环比 ${(((cur2 - prev2) / prev2) * 100).toFixed(1)}%`
+          : " · 上期无同期基线") +
+        planTip +
+        offTip;
+      return `<div class="cell" title="${esc(tip)}"><div class="lb">${label}</div>
         <div class="vv">${txt}<span class="dl">${note}</span>${delta}</div></div>`;
     })
     .join("");
@@ -339,8 +387,10 @@ function renderRow(c, i) {
     const [ip, dp] = points(c.remaining).split(".");
     main = ip + (dp ? '<i class="dec">.' + dp + "</i>" : "") + '<i class="unit">分</i>';
   } else {
-    const [int, dec] = c.remaining.toFixed(2).split(".");
-    main = "¥" + int + '<i class="dec">.' + dec + "</i>";
+    // 金额型:统一走 money(千分位 + 币种,非 CNY 渠道照它自己的币种标,不换算);
+    // 小数部分单独包一层 <i class="dec"> 缩一号
+    const [int, dec] = money(c.remaining, c.unit).split(".");
+    main = int + (dec ? '<i class="dec">.' + dec + "</i>" : "");
   }
 
   // 申请制额度(4SAPI):分母是本轮额度,副标题给周期状态
@@ -376,7 +426,7 @@ function renderRow(c, i) {
       : c.expiring && c.expiring.length
         ? "30 天内无到期"
         : "近期无到期";
-  } else if (claim) sub = `本轮额度 ¥${esc(claim.amount)}${claimTail(claim)}`;
+  } else if (claim) sub = `本轮额度 ${esc(money(claim.amount))}${claimTail(claim)}`;
   // 以前没开申请制时这里显示「额度 ¥{c.total}」:c.total 是**累计发放**(只增不减),
   // 不是额度上限 → "剩 21%" 会随每次充值一路下滑,与还能用多少钱毫无关系(报告 P1-11)。
   else sub = ""; // 金额型拿到多少就是可用多少,不加说明
@@ -448,7 +498,7 @@ function renderRow(c, i) {
       })
       .join("")}</div>`;
   } else {
-    const f = (v) => (v === null || v === undefined ? "——" : "¥" + v.toFixed(2));
+    const f = (v) => money(v, c.unit);
     useHtml = `<div class="use">
       <div>今日<b>${f(c.day)}</b></div>
       <div>本周<b>${f(c.week)}</b></div>
@@ -485,7 +535,7 @@ function renderRow(c, i) {
     : `<div class="rhint">更新于 ${relTime(c.updatedAt)}</div>`;
 
   return `<div class="row" data-id="${c.id}" data-dtone="${dcls}">
-    <div class="rhead" tabindex="0" role="button" aria-expanded="${open ? "true" : "false"}">
+    <div class="rhead" tabindex="0" role="button" aria-expanded="${rowOpen.has(c.id) ? "true" : "false"}">
       <div class="r1">
         ${iconHtml(c, "ico", noKey || failed)}
         <div class="nm">
@@ -551,7 +601,9 @@ function renderDetail(c) {
   const claimKv = [];
   if (c.claim) {
     const cl = c.claim;
-    claimKv.push(["本轮额度", `¥${esc(cl.amount)}`]);
+    // 本轮额度是申请制自己的口径(设置页按「元」填),单独用 ¥;
+    // 日均消耗与累计发放都来自该渠道的余额序列,跟着渠道的 unit 走
+    claimKv.push(["本轮额度", money(cl.amount)]);
     claimKv.push([
       "上次申请",
       cl.lastClaimAt
@@ -567,13 +619,13 @@ function renderDetail(c) {
           : `再等 ${cl.daysUntilEligible} 天`,
     ]);
     if (cl.dailyBurn !== null && cl.dailyBurn !== undefined) {
-      claimKv.push(["日均消耗(推算)", `¥${cl.dailyBurn.toFixed(2)}`]);
+      claimKv.push(["日均消耗(推算)", money(cl.dailyBurn, c.unit)]);
     }
     if (cl.daysOfBalance !== null && cl.daysOfBalance !== undefined) {
       claimKv.push(["预计可用", `约 ${Math.round(cl.daysOfBalance)} 天`]);
     }
     if (c.total !== null && c.total !== undefined) {
-      claimKv.push(["累计发放", `¥${esc(c.total)}`]);
+      claimKv.push(["累计发放", money(c.total, c.unit)]);
     }
   }
 
@@ -780,13 +832,14 @@ function renderInner(opts) {
     return;
   }
 
-  const openId = document.querySelector(".row.open")?.dataset.id;
-
   // 展示区只显示已配置密钥、且未被隐藏的渠道(隐藏的只在管理页出现,用于恢复);
   // 一个都没配时给一张引导卡,全被隐藏时给「去设置恢复」卡
   const hiddenN = CHANNELS.filter((c) => c.hidden).length;
   const shown = sorted.filter((c) => c.hasKey && !c.hidden);
   const configured = shown.length > 0;
+  // 哪些行要展开由 rowOpen 决定(DOM 只是投影):轮询重建后用同一份状态恢复,
+  // 行头的 aria-expanded 在 renderRow 里也读它,开合两边永远一致(F2)
+  const openId = [...rowOpen].find((x) => shown.some((c) => c.id === x)) || null;
   $("list").innerHTML = configured
     ? shown.map((c, i) => renderRow(c, i)).join("")
     : hiddenN && CHANNELS.some((c) => c.hasKey && c.hidden)
@@ -907,6 +960,9 @@ function fitCompact() {
     const ce = document.createElement("div");
     ce.className = "cempty";
     ce.textContent = $("fstat").textContent || "暂无渠道";
+    // 紧凑条整块是 data-tauri-drag-region="deep",新加的孩子默认也在里面:
+    // 显式退出拖动区,不然按住它就成了拖窗口(F13)
+    ce.setAttribute("data-tauri-drag-region", "false");
     list.appendChild(ce);
     setCompactW(Math.min(maxW, Math.ceil(ce.offsetWidth + gap + chrome)));
     return;
@@ -961,6 +1017,12 @@ function fitCompact() {
       .filter(Boolean);
     more.title = names.join("、") + " —— 点击展开面板查看";
     more.dataset.first = rows[n] ? rows[n].dataset.id : "";
+    // +N 是可点、也要能 Tab 到的(F19):显式退出紧凑条的拖动区(F13),
+    // 再给一个 tabindex 与 data-act —— keyActivate 认的是 [data-act]/[data-act] 那套,
+    // 没有它键盘按 Enter/Space 是空的(点击本身仍由 #list 的委托分支处理)
+    more.setAttribute("data-tauri-drag-region", "false");
+    more.tabIndex = 0;
+    more.dataset.act = "more";
     list.appendChild(more);
   }
   setCompactW(Math.min(maxW, Math.ceil(total())));
@@ -1074,10 +1136,14 @@ function renderPillFace() {
     c.remaining === null
       ? "——"
       : c.kind === "percent"
-        ? `${((remainRatio(c) ?? 0) * 100).toFixed(1)}<i>%</i>`
+        ? // 比率拿不到时照面板那样显示「——」:以前 `?? 0` 把"没数"画成 0.0%,
+          // 同一份数据在胶囊上说"用完了"、在面板上说"不知道"(F21)
+          remainRatio(c) === null
+          ? "——"
+          : `${(remainRatio(c) * 100).toFixed(1)}<i>%</i>`
         : c.kind === "points"
           ? points(c.remaining)
-          : money(c.remaining);
+          : money(c.remaining, c.unit);
 
   const bits = [c.name];  // tooltip 是纯文本,不需要转义
   const r = remainRatio(c);
@@ -1273,13 +1339,29 @@ function chDot(c) {
 /** 未保存的密钥输入草稿:重绘 #chList 前存、重建后回填(报告 P2-28)。 */
 const keyDraft = {};
 
+/** 明文「显示」的 8 秒自动隐。计时器挂在盒子自己身上 —— 渠道卡与模型弹层各有一个
+    .reveal-box,两者共用一个变量时,后显示的那个会把前一个的倒计时清掉,
+    于是另一处明文永远留在屏幕上(F5)。 */
+const REVEAL_MS = 8000;
+function revealBoxHide(box) {
+  if (!box) return;
+  clearTimeout(box._revealTimer);
+  box._revealTimer = null;
+  box.dataset.on = "0";
+  box.innerHTML = "";
+}
+function revealBoxShow(box, key) {
+  if (!box) return;
+  clearTimeout(box._revealTimer);
+  box.dataset.on = "1";
+  box.innerHTML = `<div class="reveal" style="margin-top:4px">${esc(key)}</div>
+    <div class="note">8 秒后自动隐;切页签/刷新也会收回</div>`;
+  box._revealTimer = setTimeout(() => revealBoxHide(box), REVEAL_MS);
+}
+
 function renderChCards() {
-  // 重绘前把已显示的密钥收回:明文不许留在 DOM 里过夜
-  clearTimeout(revealTimer);
-  document.querySelectorAll(".reveal-box").forEach((b) => {
-    b.dataset.on = "0";
-    b.innerHTML = "";
-  });
+  // 重绘前把已显示的密钥收回:明文不许留在 DOM 里过夜(盒子自己的计时器一起清)
+  document.querySelectorAll(".reveal-box").forEach((b) => revealBoxHide(b));
   // 点别的卡上的「恢复」眼睛也会整块重建 #chList,新建输入框的 value 是空的 ——
   // 用户刚粘进去、还没点保存的那串密钥就这么没了(报告 P2-28)
   document.querySelectorAll('#chList [id^="key-"]').forEach((el) => {
@@ -1492,7 +1574,7 @@ async function applyFormInner(form, remember = true) {
   try {
     // 改尺寸在 Windows 上会连带挪动窗口(被工作区/边缘约束顶开),那一发 moved
     // 不是用户拖的:不标 selfMove 的话松手判定会把它当成"拖到边缘",切个形态就自己吸附上了(报告 P1-8)
-    markSelfMove();
+    markSelfMove(FORM_SELF_MOVE_MS);
     // 先解除上一形态的钳位,否则新尺寸会被旧 min/max 卡住
     await appWindow.setMinSize(null);
     await appWindow.setMaxSize(null);
@@ -1523,9 +1605,10 @@ async function applyFormInner(form, remember = true) {
   // 完成,而 clampToMonitor 还在拿"上一环未落地时"的尺寸算坐标、并排到队尾之后才落地
   // —— 违反下面那条"一切改窗口几何的入口都排进同一条链"的纪律(报告 P2-30)。
   await clampToMonitor();
-  // 600ms 的掩护窗口要从**最后一次**几何 IPC 之后重新起算:不然尾部那次 setSize
-  // 触发的 moved 会落在窗口之外,被当成"用户自己拖到屏幕边"→ 挂件自己吸成竖条(P3-29)
-  markSelfMove();
+  // 掩护窗口要从**最后一次**几何 IPC 之后重新起算:不然尾部那次 setSize
+  // 触发的 moved 会落在窗口之外,被当成"用户自己拖到屏幕边"→ 挂件自己吸成竖条(P3-29)。
+  // 时长用形态切换那一档:上面整条链(~12 个 await)在慢机器上会超过 600ms(F14)。
+  markSelfMove(FORM_SELF_MOVE_MS);
 }
 
 // 形态/几何操作**全局串行**:applyForm 的类切换是同步的,但尺寸是 6 连 await 的 IPC——
@@ -1578,12 +1661,17 @@ const DOCK = {
 
 const currentForm = () => (document.body.className.match(/form-(\w+)/) || [])[1] || "panel";
 
-/** 自己的 setPosition / setSize 也会触发 moved 事件,这段时间内不判定吸附。 */
-function markSelfMove() {
+/** 自己的 setPosition / setSize 也会触发 moved 事件,这段时间内不判定吸附。
+    ms 可调:形态切换的几何链有十来个 await,慢机器上会超过 600ms,尾部那发 moved
+    就会被当成"用户拖到屏幕边"而自己吸成竖条(F14)。 */
+function markSelfMove(ms = 600) {
   DOCK.selfMove = true;
   clearTimeout(DOCK.selfMoveTimer);
-  DOCK.selfMoveTimer = setTimeout(() => (DOCK.selfMove = false), 600);
+  DOCK.selfMoveTimer = setTimeout(() => (DOCK.selfMove = false), ms);
 }
+
+/** 长档掩护时长:形态切换与吸附布局的几何链都是多连 await,都要盖住(见 markSelfMove)。 */
+const FORM_SELF_MOVE_MS = 1500;
 
 async function monitorInfo() {
   const mon = await T.window.currentMonitor();
@@ -1628,7 +1716,9 @@ async function dockLayoutNow(open) {
   // 垂到屏幕外(报告 P1-7),按当前高度再夹一次
   const y = Math.max(info.top, Math.min(DOCK.y, Math.max(info.top, info.bottom - Math.round(h * info.sf))));
   try {
-    markSelfMove();
+    // 吸附的几何链一样是 6 连 await:用形态切换那一档掩护,不然尾部的 moved
+    // 会被当成用户拖拽 —— 而吸附态误判的后果正是"自己吸成 8px 竖条"(G2)
+    markSelfMove(FORM_SELF_MOVE_MS);
     await appWindow.setMinSize(null);
     await appWindow.setMaxSize(null);
     await appWindow.setSize(new T.dpi.LogicalSize(w, h));
@@ -1665,7 +1755,8 @@ async function dockExitNow(keepPos) {
   const [w, h] = formSize(currentForm());
   const info = await monitorInfo();
   try {
-    markSelfMove();
+    // 与 dockLayoutNow 同理:解除吸附也是多连 await 的几何链,用长档掩护(G2)
+    markSelfMove(FORM_SELF_MOVE_MS);
     await appWindow.setMinSize(null);
     await appWindow.setMaxSize(null);
     const pos = await appWindow.outerPosition();
@@ -1882,9 +1973,17 @@ $("list").addEventListener("click", async (e) => {
   const row = head.closest(".row");
   const id = row.dataset.id;
   const was = row.classList.contains("open");
-  document.querySelectorAll(".row").forEach((r) => r.classList.remove("open"));
+  // 收起的行同时改 aria:开合是可感知状态,不能等下一次轮询重绘才更新(F2)
+  document.querySelectorAll(".row").forEach((r) => {
+    r.classList.remove("open");
+    const h = r.querySelector(".rhead");
+    if (h) h.setAttribute("aria-expanded", "false");
+  });
+  rowOpen.clear();
   if (!was) {
+    rowOpen.add(id);
     row.classList.add("open");
+    head.setAttribute("aria-expanded", "true");
     const c = CHANNELS.find((x) => x.id === id);
     if (c) {
       if (!sparkCache[id]) {
@@ -1927,9 +2026,13 @@ $("btnR").addEventListener("click", async () => {
   showToast(bad ? `${bad} 个渠道取数失败` : "已更新 · 刚刚", bad > 0);
 });
 // 模型页:搜索框与「重新取价目表」按钮
+// 搜索去抖:一敲就重建 160 行列表太贵(每个字符一次 innerHTML + 排序)(F15);
+// MDL.q 仍然立刻更新 —— 语义不变,只是渲染晚 140ms,连打时只画最后一次
+let mdlQTimer = null;
 $("mdlQ").addEventListener("input", () => {
   MDL.q = $("mdlQ").value || "";
-  renderModels();
+  clearTimeout(mdlQTimer);
+  mdlQTimer = setTimeout(renderModels, 140);
 });
 $("mdlR").addEventListener("click", () => loadModels(true));
 
@@ -1996,8 +2099,13 @@ $("btnP").addEventListener("click", () => setPin(!CFG.alwaysOnTop));
 $("btnC").addEventListener("click", () => {
   applyForm(document.body.className.includes("form-compact") ? "panel" : "compact");
 });
-$("btnH").addEventListener("click", () => invoke("window_cmd", { action: "hide" }));
-$("lkQuit").addEventListener("click", () => invoke("window_cmd", { action: "quit" }));
+// 失败必须说出来:invoke 被拒时以前没有 catch,"点了没反应"用户只会以为按钮坏了(F16)
+$("btnH").addEventListener("click", () =>
+  invoke("window_cmd", { action: "hide" }).catch((e) => showToast("隐藏失败:" + e, true))
+);
+$("lkQuit").addEventListener("click", () =>
+  invoke("window_cmd", { action: "quit" }).catch((e) => showToast("退出失败:" + e, true))
+);
 $("lkKeys").addEventListener("click", openManage);
 // 紧凑条上的两个方向:展开一级 / 再收一级
 $("btnExpand").addEventListener("click", () => applyForm("panel"));
@@ -2092,6 +2200,9 @@ async function saveCfg(what) {
   } catch (e) {
     showToast("保存" + (what || "设置") + "失败:" + e, true);
     CFG = backup;
+    // 静态控件(下拉 / 开关)也必须退回:它们不在 render() 的重绘范围里,
+    // 以前只重画列表,开关停在新状态上,重启才"变回去" —— 界面等于在骗人(F6)
+    syncStaticControls();
     render();
     return false;
   }
@@ -2100,10 +2211,20 @@ async function saveCfg(what) {
 async function saveConfigAndRefresh() {
   // **不许吞错**:以前这里 catch(() => {}) 一吞,保存失败时界面只会"回到原状",
   // 看起来就是"点了没反应"(用户实测:隐藏渠道点「–」恢复不动)。
+  // 而且调用方都是**先改状态再保存**(隐藏渠道、申请制…),不做快照回滚就等于
+  // 乐观地把失败当成功:界面上那条渠道"恢复了",重启后又冒出来(F7)。
+  const cfgBackup = JSON.parse(JSON.stringify(CFG));
+  // CHANNELS 上的 hidden 是被就地改的(chvis / chshowall);其余字段后端会给新视图。
+  // 整份深拷贝 CHANNELS 太重,这里只存真正会被调用方改的那一个字段。
+  const hidBackup = CHANNELS.map((c) => ({ c, hidden: c.hidden }));
   try {
     await invoke("set_config", { config: CFG });
   } catch (e) {
     showToast("保存设置失败:" + e, true);
+    CFG = cfgBackup;
+    for (const b of hidBackup) b.c.hidden = b.hidden;
+    syncStaticControls();
+    render();
   }
   await refresh();
 }
@@ -2146,6 +2267,19 @@ $("manage").addEventListener("input", (e) => {
   if (e.target && e.target.id === "vaultQ") {
     VAULT_Q = e.target.value || "";
     renderVault();
+  } else if (e.target && e.target.closest && e.target.closest("#vaultForm .kform")) {
+    // 密钥箱表单:输入即记草稿。提交前的任何重绘(显示明文 / 改搜索词)都靠它回填(F4)。
+    // 监听挂在常驻的 #manage 上,表单 innerHTML 被重建也不会掉。
+    const val = (id) => {
+      const el = $(id);
+      return el ? el.value : "";
+    };
+    VAULT_DRAFT = {
+      platform: val("vPlat"),
+      label: val("vLabel"),
+      key: val("vKey"),
+      note: val("vNote"),
+    };
   }
 });
 
@@ -2248,22 +2382,14 @@ $("manage").addEventListener("click", async (e) => {
     const box = document.querySelector('.reveal-box[data-rev="info"]');
     if (!box) return;
     if (box.dataset.on === "1") {
-      box.dataset.on = "0";
-      box.innerHTML = "";
-      clearTimeout(revealTimer);
+      revealBoxHide(box); // 再点一次立即收回
       return;
     }
     const src = (MDL.sheet && MDL.sheet.source) || MDL.src;
     try {
       const key = await invoke("key_reveal", { id: src });
-      box.dataset.on = "1";
-      box.innerHTML = `<div class="reveal" style="margin-top:4px">${esc(key)}</div>
-        <div class="note">8 秒后自动隐;切页签/刷新也会收回</div>`;
-      clearTimeout(revealTimer);
-      revealTimer = setTimeout(() => {
-        box.dataset.on = "0";
-        box.innerHTML = "";
-      }, 8000);
+      // 计时器归这个盒子自己:渠道卡那边的明文不受影响(F5)
+      revealBoxShow(box, key);
     } catch (e) {
       showToast("取密钥失败:" + e, true);
     }
@@ -2340,17 +2466,22 @@ $("manage").addEventListener("click", async (e) => {
     card.classList.contains("open") ? cardOpen.add(id) : cardOpen.delete(id);
   } else if (a === "vnew") {
     VAULT_EDIT = { platform: act.dataset.id || "", label: "", key: "", note: "" };
+    VAULT_DRAFT = null; // 换目标就丢草稿,不然会拿上一张表单里敲的内容回填(F4)
     renderVault();
     setTimeout(() => { const el = $("vPlat"); if (el) el.focus(); }, 30);
   } else if (a === "vedit") {
     const it = VAULT.find((x) => x.id === id);
     if (it) {
       VAULT_EDIT = { id: it.id, platform: it.platform, label: it.label, key: "", note: it.note };
+      VAULT_DRAFT = null; // 同上:改另一条时以它自己的值为准
       renderVault();
     }
   } else if (a === "vcancel") {
     VAULT_EDIT = null;
+    VAULT_DRAFT = null;
     renderVault();
+  } else if (a === "vreload") {
+    await loadVault(); // 读失败后的重试入口(F3)
   } else if (a === "vsave") {
     await vaultSave();
   } else if (a === "vdel") {
@@ -2404,21 +2535,13 @@ $("manage").addEventListener("click", async (e) => {
     if (!box) return;
     if (box.dataset.on === "1") {
       // 再点一次立即收回(明文不留在界面上)
-      box.dataset.on = "0";
-      box.innerHTML = "";
-      clearTimeout(revealTimer);
+      revealBoxHide(box);
       return;
     }
     try {
       const key = await invoke("key_reveal", { id });
-      box.dataset.on = "1";
-      box.innerHTML = `<div class="reveal" style="margin-top:4px">${esc(key)}</div>
-        <div class="note">8 秒后自动隐;切页签/刷新也会收回</div>`;
-      clearTimeout(revealTimer);
-      revealTimer = setTimeout(() => {
-        box.dataset.on = "0";
-        box.innerHTML = "";
-      }, 8000);
+      // 计时器归这个盒子自己:模型弹层那边的明文不受影响(F5)
+      revealBoxShow(box, key);
     } catch (e) {
       showToast("取密钥失败:" + e, true);
     }
@@ -2487,10 +2610,12 @@ $("manage").addEventListener("click", async (e) => {
     act.closest(".cfrm").remove();
   } else if (a === "delkey-yes") {
     try {
-      await invoke("delete_key", { id });
+      // delete_key 现在回一句人话(删了什么 / 浏览器会话清没清干净):照它说的显示,
+      // 后端更清楚这次到底动了哪些东西(F17)。老后端返回空时退回原来的文案。
+      const msg = await invoke("delete_key", { id });
       await refresh();
       renderChCards();
-      showToast("已删除密钥");
+      showToast(msg || "已删除密钥");
     } catch (err) {
       showToast("删除失败:" + err, true);
     }
@@ -2624,7 +2749,18 @@ $("cfgHotkey").addEventListener("keydown", (e) => {
   if (HK_KEY.test(e.code)) saveHotkey(mods.join("+") + "+" + e.code);
 });
 
-function applyConfigToUI() {
+/** role="switch" 的类与 aria-checked 必须一起落(语义全靠它)。 */
+function setSwitch(id, on) {
+  const el = $(id);
+  if (!el) return;
+  el.classList.toggle("on", !!on);
+  el.setAttribute("aria-checked", String(!!on));
+}
+
+/** 把 CFG 推回静态控件(下拉 + 全部 bindSwitch 开关)。启动时与**保存失败回滚时**
+    共用同一份:以前只有启动时同步,保存失败只重画列表,控件停在新值上,
+    重启才"变回去"(F6)。 */
+function syncStaticControls() {
   if (!CFG) return;
   const set = (id, v) => {
     const el = $(id);
@@ -2639,19 +2775,18 @@ function applyConfigToUI() {
   set("cfgFontScale", CFG.fontScale || "md");
   const hk = $("cfgHotkey");
   if (hk) hk.value = hkLabel(CFG.hotkey) || "未设置";
-  // 开关统一走 setSw:类与 aria-checked 一起落(role="switch" 的语义全靠它)
-  const setSw = (id, on) => {
-    const el = $(id);
-    if (!el) return;
-    el.classList.toggle("on", !!on);
-    el.setAttribute("aria-checked", String(!!on));
-  };
-  setSw("cfgAutostart", !!CFG.autostart);
-  setSw("cfgAutoUpdate", CFG.autoCheckUpdate !== false);
-  setSw("cfgTrayNum", CFG.trayShowNumber !== false);
-  $("cfgPulse").classList.toggle("on", !!CFG.alertPulse);
-  $("cfgPulse").setAttribute("aria-checked", String(!!CFG.alertPulse));
+  setSwitch("cfgAutostart", CFG.autostart);
+  setSwitch("cfgAutoUpdate", CFG.autoCheckUpdate !== false);
+  setSwitch("cfgTrayNum", CFG.trayShowNumber !== false);
+  setSwitch("cfgPulse", CFG.alertPulse);
+  setSwitch("cfgDock", CFG.dockEnabled);
+  setSwitch("cfgPin", CFG.alwaysOnTop);
   document.body.classList.toggle("pulse", !!CFG.alertPulse);
+}
+
+function applyConfigToUI() {
+  if (!CFG) return;
+  syncStaticControls();
   renderAbout();
 }
 
@@ -2931,16 +3066,23 @@ document.addEventListener("keydown", (e) => {
 let VAULT = [];            // 索引列表(vault_list 的结果)
 let VAULT_Q = "";          // 搜索词
 let VAULT_EDIT = null;     // 正在编辑/新建的表单:{id?, platform, label, key, note}
+let VAULT_DRAFT = null;    // 表单里已敲未存的内容:{platform,label,key,note}(见 renderVault)
 let VAULT_REVEAL = {};     // id → 明文(8 秒后删)
 let vaultRevealTimer = null;
+// vault_list 的失败原因:读失败 ≠ 箱子是空的 —— 前者说"读不出来 + 重试",
+// 后者才是"去新增一把"。把故障画成空态会让用户以为密钥全丢了(F3,
+// 与渠道卡 1417-1419 的「凭据库读取失败」同一条纪律)。
+let VAULT_ERR = "";
 
 const VAULT_PLATFORM_HINT = ["4SAPI", "Hapi", "OpenCode Go", "DeepSeek", "OpenAI", "Anthropic", "Gemini", "Moonshot", "智谱", "阿里云百炼", "腾讯", "火山引擎"];
 
 async function loadVault() {
   try {
     VAULT = await invoke("vault_list");
+    VAULT_ERR = "";
   } catch (e) {
     VAULT = [];
+    VAULT_ERR = String(e);
     showToast("读密钥箱失败:" + e, true);
   }
   renderVault();
@@ -2961,17 +3103,22 @@ function renderVault() {
   const form = $("vaultForm");
   if (!list || !form) return;
 
-  // 表单(新建/编辑)
+  // 表单(新建/编辑)。草稿优先:它比 VAULT_EDIT 新 —— 用户刚敲进去、还没点保存的
+  // 平台/标签/密钥/备注,不能因为「显示明文」或改搜索词触发一次重绘就被吞掉
+  // (与 #chList 的 keyDraft 同一套做法,F4)。草稿只在 vnew/vedit/vcancel/保存成功时清。
   const e = VAULT_EDIT;
+  const d = VAULT_DRAFT;
   form.innerHTML = e
     ? `<div class="kform">
-        <div class="kf"><span>平台</span><input class="inp" id="vPlat" list="vPlatList" value="${esc(e.platform)}" placeholder="如 4SAPI">
+        <div class="kf"><span>平台</span><input class="inp" id="vPlat" list="vPlatList" value="${esc(d ? d.platform : e.platform)}" placeholder="如 4SAPI">
           <datalist id="vPlatList">${VAULT_PLATFORM_HINT.map((p) => `<option value="${esc(p)}">`).join("")}</datalist></div>
-        <div class="kf"><span>标签</span><input class="inp" id="vLabel" value="${esc(e.label)}" placeholder="如 主号 / 备用"></div>
-        <div class="kf"><span>密钥</span><input class="inp" id="vKey" type="password" autocomplete="off" placeholder="${
+        <div class="kf"><span>标签</span><input class="inp" id="vLabel" value="${esc(d ? d.label : e.label)}" placeholder="如 主号 / 备用"></div>
+        <div class="kf"><span>密钥</span><input class="inp" id="vKey" type="password" autocomplete="off" value="${esc(
+          d ? d.key : ""
+        )}" placeholder="${
           e.id ? "留空 = 不改这把" : "粘贴密钥"
         }"></div>
-        <div class="kf"><span>备注</span><input class="inp" id="vNote" value="${esc(e.note)}" placeholder="选填,如 充值用的那个"></div>
+        <div class="kf"><span>备注</span><input class="inp" id="vNote" value="${esc(d ? d.note : e.note)}" placeholder="选填,如 充值用的那个"></div>
         <div class="acts">
           <button class="btn p" data-act="vsave">保存</button>
           <button class="btn" data-act="vcancel">取消</button>
@@ -2979,6 +3126,14 @@ function renderVault() {
         </div>
       </div>`
     : "";
+
+  // 读失败:说清是"读不出来"并给重试,绝不画成"密钥箱是空的 + 新增一把"(F3)
+  if (VAULT_ERR) {
+    list.innerHTML = `<div class="empty">读不出密钥箱:${esc(VAULT_ERR)}
+      <div style="margin-top:8px"><button class="btn p" data-act="vreload">重试</button></div>
+      <div class="note" style="margin-top:6px">列表(以及里面的密钥)并没有丢,只是这一次没读出来</div></div>`;
+    return;
+  }
 
   if (!VAULT.length) {
     list.innerHTML = `<div class="empty">密钥箱是空的<div style="margin-top:8px"><button class="btn p" data-act="vnew">新增一把密钥</button></div></div>`;
@@ -3028,6 +3183,7 @@ async function vaultSave() {
   try {
     await invoke("vault_save", { item: payload });
     VAULT_EDIT = null;
+    VAULT_DRAFT = null; // 存进去了就不再是草稿,免得下次开表单又被回填(F4)
     showToast(e.id ? "已更新" : "已存进密钥箱");
     await loadVault();
   } catch (err) {
@@ -3052,7 +3208,6 @@ function vaultDel(id) {
 //   ① 独立开关、默认关 —— 关掉就一个请求都不发;
 //   ② **不把"点了按钮"说成"领到了"**:数额只显示平台自己给的字段,拿不到就不写数字;
 //   ③ 签到状态**不参与余额渲染** —— 签到失败永远不可能让余额显示成 0。
-let revealTimer = null; // 「显示」的 8 秒倒计时;任何重绘都先收回明文
 let CK = {};            // 渠道 id → checkin_state 的那一条
 let CK_LOG = false;     // 「领积分」正在跑
 const CHECKIN_ON = new Set(["trae", "workbuddy"]);
@@ -3238,12 +3393,12 @@ const CLIENT_NAME = {
   zcode: "ZCode",
 };
 
-/** 单价显示。价目表口径是元/百万 token;按次计费的是元/次。 */
+/** 单价显示。价目表口径是元/百万 token;按次计费的是元/次。
+    金额走统一的 money(千分位 + 两位);只有 <¥1 的档位保留三位小数 ——
+    0.005/百万 token 用两位口径会被抹成 0.01,单价信息就没了。 */
 function mdlMoney(v) {
   if (v === null || v === undefined) return "—";
-  if (v >= 100) return "¥" + v.toFixed(0);
-  if (v >= 1) return "¥" + v.toFixed(2);
-  return "¥" + v.toFixed(3);
+  return v < 1 ? "¥" + Number(v).toFixed(3) : money(v);
 }
 function mdlPriceText(r) {
   const p = r.price || {};

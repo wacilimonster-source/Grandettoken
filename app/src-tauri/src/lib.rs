@@ -114,6 +114,32 @@ fn refuse_while_updating(what: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 正在跑签到的渠道(节拍器与手动点击之间的互斥)。
+///
+/// 以前没有任何在途标记:"今天已经处理过/退避中"这两个闸门只在**所有网络往返结束之后**
+/// 才写配置,而一次签到要串 2~3 个请求(每个最多 20 秒)。用户在节拍器正跑的时候点一次
+/// 「领积分」就能同时发出第二个 claim,两条路的 attempts/last_day/next_try_at 还会互相覆盖。
+/// 只存 id、不跨 await 持锁,拿不到就明确告诉用户"稍等几秒"。
+static CHECKIN_RUNNING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+struct CheckinBusy(String);
+impl CheckinBusy {
+    fn acquire(id: &str) -> Result<Self, String> {
+        let mut g = CHECKIN_RUNNING.lock().unwrap_or_else(|p| p.into_inner());
+        if g.iter().any(|x| x == id) {
+            return Err(id.to_string());
+        }
+        g.push(id.to_string());
+        Ok(CheckinBusy(id.to_string()))
+    }
+}
+impl Drop for CheckinBusy {
+    fn drop(&mut self) {
+        let mut g = CHECKIN_RUNNING.lock().unwrap_or_else(|p| p.into_inner());
+        g.retain(|x| x != &self.0);
+    }
+}
+
 /// 把启动期的致命错误写成文件。release 是 GUI 子系统 + `panic = "abort"`:
 /// `?` 与 `expect` 的信息只进 stderr,而 stderr 在这种构建下没人看得见 ——
 /// 用户只会看到"双击了没反应"(报告 P2-38)。
@@ -260,8 +286,11 @@ async fn set_key(app: tauri::AppHandle, id: String, key: String) -> Result<(), S
     Ok(())
 }
 
+/// 返回值是给界面直接显示的一句话(成功也要说清"删了什么"),不是 Result<(),_>:
+/// 清浏览器会话失败时以前是 `let _ =` 一吞,命令照样 Ok、界面照样说"已删除密钥",
+/// 而下一轮取数又读到了那个 Cookie —— 用户看到"清掉了却还显示已登录"。
 #[tauri::command]
-async fn delete_key(app: tauri::AppHandle, id: String) -> Result<(), String> {
+async fn delete_key(app: tauri::AppHandle, id: String) -> Result<String, String> {
     let def = providers::find(&id).ok_or_else(|| format!("未知渠道: {id}"))?;
     if let providers::AuthKind::App(app) = def.auth {
         return Err(format!("{} 没有本应用保存的密钥(用的是 {} 的登录态)", def.name, app.label()));
@@ -269,14 +298,26 @@ async fn delete_key(app: tauri::AppHandle, id: String) -> Result<(), String> {
     // 网页登录型的会话住在浏览器 profile 里,不在凭据管理器 —— 一并清掉。
     // 不清的话这个按钮点了等于没点:下一轮取数照样读得到 Cookie(2026-10-08)。
     // 这条命令因此必须是 async:清 Cookie 要同步问 webview,不能占着主线程等。
-    if matches!(def.auth, providers::AuthKind::WebSession) {
-        wb_clear_session(&app);
+    let is_web = matches!(def.auth, providers::AuthKind::WebSession);
+    let mut warn = String::new();
+    if is_web {
+        if let Err(e) = wb_clear_session(&app) {
+            warn = format!(";浏览器登录会话可能没清干净({e}),请在客户端里退出登录一次");
+        }
     }
-    secrets::delete(&id)?;
+    // 凭据管理器的删是 RPC:与 key_hint/set_key 同一条纪律,不能直接占着 tokio worker
+    let del_id = id.clone();
+    tokio::task::spawn_blocking(move || secrets::delete(&del_id))
+        .await
+        .map_err(|e| format!("删除密钥任务失败: {e}"))??;
     // 凭据刚变过:作废"5 秒内复用上次结果",否则紧接着的刷新还会把旧结果(带旧凭据
     // 取到的那份)端上来,用户看到"清掉了却还显示已登录"。
     app.state::<AppState>().fetcher.invalidate();
-    Ok(())
+    Ok(if is_web {
+        format!("已清除 {} 的登录会话{warn}", def.name)
+    } else {
+        format!("已删除 {} 的密钥{warn}", def.name)
+    })
 }
 
 // ───────────── WorkBuddy 网页登录 ─────────────
@@ -381,16 +422,19 @@ fn wb_session_of(app: &tauri::AppHandle, id: &str) -> Option<String> {
     .flatten()
 }
 
-/// 清掉宿主浏览器里的 WorkBuddy 会话(「清除登录」用)。
-/// 会话不在凭据库里,不清这里那个按钮点了等于没点:下一轮取数照样读得到 Cookie。
-fn wb_clear_session(app: &tauri::AppHandle) {
+/// 清 WorkBuddy 的登录会话(「清除登录」用)。**返回结果不能丢**:以前调用方
+/// `let _ =` 一吞,超时 / 删失败都变成"命令成功",界面说清掉了、下一轮取数又读到那个 Cookie。
+/// 找不到会话不算失败(目标状态"没有会话"本来就成立),超时与删失败才报错。
+fn wb_clear_session(app: &tauri::AppHandle) -> Result<(), String> {
     let handle = app.clone();
-    let _ = on_main_with_timeout(
+    let job = on_main_with_timeout(
         app,
         move || {
             let Some(w) = handle.get_webview_window("main") else {
-                return;
+                return (0usize, 0usize);
             };
+            let mut matched = 0usize;
+            let mut failed = 0usize;
             // 两个工作台域名都要清:只在其中一个上登过的人,点「清除登录」后
             // 另一个域的会话还在,下一轮取数照样读得到(报告 P2-16)
             for host in tokenscope_core::weblogin::SITE_HOSTS {
@@ -402,13 +446,22 @@ fn wb_clear_session(app: &tauri::AppHandle) {
                 };
                 for c in jar {
                     if tokenscope_core::weblogin::is_session_cookie(c.name()) {
-                        let _ = w.delete_cookie(c);
+                        matched += 1;
+                        if w.delete_cookie(c).is_err() {
+                            failed += 1;
+                        }
                     }
                 }
             }
+            (matched, failed)
         },
         std::time::Duration::from_secs(3),
     );
+    match job {
+        None => Err("主线程 3 秒内没回信(窗口正忙或正在销毁)".to_string()),
+        Some((_, failed)) if failed > 0 => Err(format!("有 {failed} 个会话 cookie 没删掉")),
+        Some(_) => Ok(()),
+    }
 }
 
 /// 会话可用吗:用挂件自己的 HTTP 栈真打一次接口(见 Fetcher::probe)。
@@ -616,7 +669,10 @@ mod autostart {
     fn legacy_left() -> Option<String> {
         let hk = RegKey::predef(HKEY_CURRENT_USER).open_subkey(RUN_KEY).ok()?;
         let val: String = hk.get_value(LEGACY_NAME).ok()?;
-        let path = PathBuf::from(val.trim_matches('"').split(" --").next().unwrap_or(""));
+        // 顺序要紧:旧版写进去的值是 `"<exe 路径>" --hidden`(与本文件 set() 同格式)。
+        // 以前先 trim 引号再 split,尾引号没被去掉 → exists() 为假 → 这条提醒永不出现。
+        let raw = val.split(" --").next().unwrap_or("").trim().trim_matches('"').trim();
+        let path = PathBuf::from(raw);
         if path.as_os_str().is_empty() || !path.exists() {
             return None;
         }
@@ -710,7 +766,11 @@ fn window_cmd(app: tauri::AppHandle, action: String) -> Result<(), String> {
     match action.as_str() {
         "hide" => win.hide().map_err(|e| e.to_string())?,
         "minimize" => win.minimize().map_err(|e| e.to_string())?,
-        "quit" => app.exit(0),
+        "quit" => {
+            // 正在写客户端配置时立刻退出,进程会停在"已落盘、还没记账"的瞬间,
+            // 重启后没有任何台账能回滚它(P1-15 那条窗口期)。走同一个等待逻辑。
+            quit_when_idle(&app);
+        }
         _ => return Err(format!("未知操作: {action}")),
     }
     Ok(())
@@ -735,23 +795,17 @@ fn note(prev: Option<String>, msg: String) -> Option<String> {
 /// 置顶的唯一写入口:窗口状态与配置一起改,不会出现"按钮亮了其实没置顶"。
 /// 折叠形态(紧凑条/胶囊/贴边)没有置顶按钮,靠设置页里的同一个开关控制。
 #[tauri::command]
-fn set_pin(app: tauri::AppHandle, state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+async fn set_pin(app: tauri::AppHandle, state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
     refuse_if_config_broken()?;
     let win = app.get_webview_window("main").ok_or("窗口不存在")?;
     // 先落库再动窗口:反过来会出现本函数注释声称"不可能"的状态 ——
     // 窗口实际置顶了而按钮不亮、下次启动也不置顶(报告 P3-27)。
-    {
-        let store = lock_rw(&state.store);
-        let mut cfg = lock_rw(&state.config);
-        cfg.always_on_top = enabled;
-        cfg.save(&store).map_err(|e| format!("保存置顶状态失败,窗口未改动: {e}"))?;
-    }
+    // 走 save_config_off_main:同步命令是在主线程上跑的,而这里要写 SQLite 并等 store 锁,
+    // 90 天清理正持着那把锁时会整窗卡住(P1-14 的同一类问题)。
+    save_config_off_main(&state, move |c| c.always_on_top = enabled).await?;
     if let Err(e) = win.set_always_on_top(enabled) {
         // 窗口没改成就把刚写的配置撤回,别让界面状态与真实置顶态背离
-        let store = lock_rw(&state.store);
-        let mut cfg = lock_rw(&state.config);
-        cfg.always_on_top = !enabled;
-        let _ = cfg.save(&store);
+        let _ = save_config_off_main(&state, move |c| c.always_on_top = !enabled).await;
         return Err(e.to_string());
     }
     Ok(())
@@ -818,7 +872,46 @@ async fn poll_loop(app: tauri::AppHandle) {
         // 一个渠道都没配凭据时不算失败:那是全新安装,退避到 5 分钟只会让
         // 用户「填好 key 却半天看不到数字」
 
+        LAST_REFRESH.store(now_ts(), std::sync::atomic::Ordering::Relaxed);
         let _ = app.emit("channels-updated", &views);
+    }
+}
+
+/// 上次取数的时刻(秒)。托盘/热键把窗口唤回来时用它判断要不要补一轮:
+/// 轮询循环只在**进入下一轮时**读一次窗口可见性,然后睡满整个间隔(折叠态最长 30 分钟),
+/// 所以"藏了两小时再打开"看到的仍是两小时前的数字(报告 P3-37)。
+static LAST_REFRESH: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// 窗口重新显示时调用:数据比 max_age_sec 旧就补一轮。新鲜结果不重复打接口
+/// (fetch_shared 自己也会与在途的轮询合流,不会发出双份请求)。
+fn refresh_if_stale(app: &tauri::AppHandle, max_age_sec: i64) {
+    let last = LAST_REFRESH.load(std::sync::atomic::Ordering::Relaxed);
+    if last != 0 && now_ts() - last < max_age_sec {
+        return;
+    }
+    let h = app.clone();
+    tauri::async_runtime::spawn(async move {
+        refresh_now(&h).await;
+    });
+}
+
+/// 退出:正在写客户端配置时先等它写完(最多 10 秒)再退。
+/// 立即退出会停在"文件已改、台账还没落"的那一瞬间,重启后没有任何记录能回滚它(P1-15)。
+/// 交给后台任务等,按钮立刻有反应,不会让人以为点了没动。
+fn quit_when_idle(app: &tauri::AppHandle) {
+    if INJECTING.load(std::sync::atomic::Ordering::Relaxed) {
+        let h = app.clone();
+        tauri::async_runtime::spawn(async move {
+            for _ in 0..50 {
+                if !INJECTING.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+            h.exit(0);
+        });
+    } else {
+        app.exit(0);
     }
 }
 
@@ -828,6 +921,7 @@ async fn refresh_now(app: &tauri::AppHandle) {
         (state.store.clone(), state.fetcher.clone())
     };
     let views = fetcher.fetch_shared(&store).await;
+    LAST_REFRESH.store(now_ts(), std::sync::atomic::Ordering::Relaxed);
     let _ = app.emit("channels-updated", &views);
 }
 
@@ -905,11 +999,16 @@ async fn check_update(
     // 只要真的要发请求就先把时间戳写掉 —— 失败也算检查过,
     // 否则一次网络故障会变成每次启动都重试的请求风暴。
     {
-        let store = state.store.lock();
-        if let Ok(s) = store {
-            // 锁序样板:这里 store→config,set_pin 等命令必须同序(见 lock_rw 注释)
-            let mut cfg = lock_rw(&state.config);
-            cfg.last_check_at = Some(now_ts());
+        // 锁必须用 lock_rw():store 被污染时 .lock() 会永久返回 Err,这段被整段跳过,
+        // 24 小时节流等于失效(前端每 10 分钟真去打一次 GitHub)。
+        let s = lock_rw(&state.store);
+        // 锁序样板:这里 store→config,set_pin 等命令必须同序(见 lock_rw 注释)
+        let mut cfg = lock_rw(&state.config);
+        cfg.last_check_at = Some(now_ts());
+        // 配置损坏时**不能**整份写回:内存里那份是 Config::default(),一写就把用户
+        // 还能手工救回的原始 JSON 永久覆盖掉 —— 正好是 refuse_if_config_broken 要防的事,
+        // 而这里是全文件唯一一个没问它的整份写入者(报告 P1-16 的反例)。
+        if refuse_if_config_broken().is_ok() {
             let _ = cfg.save(&s);
         }
     }
@@ -1360,7 +1459,17 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
             return Err(format!("{} 的签到开关没开", def.name));
         }
     }
-    let cred = checkin_credential(app, def)?;
+    // 在途互斥:节拍器与手动点击不许同时跑同一条渠道(见 CHECKIN_BUSY 注释)。
+    // 注意绑到具名变量:绑给 `_` 会立刻 Drop,闸门等于没上。
+    let _busy = CheckinBusy::acquire(id).map_err(|_| format!("{} 正在签到,等它跑完再点", def.name))?;
+    // 本机凭据要读文件 / 派发主线程,都是阻塞调用:下沉到 spawn_blocking,
+    // 否则一个卡住的 Trae storage.json 会占住一个 tokio worker(P1-14 同族)。
+    let cred = {
+        let h = app.clone();
+        tokio::task::spawn_blocking(move || checkin_credential(&h, def))
+            .await
+            .map_err(|e| format!("读取签到凭据失败: {e}"))??
+    };
     let client = checkin::direct_client();
     let today = checkin::beijing_day(now_ts());
     let now = now_ts();
@@ -1380,8 +1489,15 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
             _ => credits,
         };
         let back = checkin::call(&client, def, &cred, false).await;
+        // 回查是**唯一的到账证据**。以前只有 Already 才改判,其余情况一律照抄 claimed:
+        // 于是"领了但没生效"(平台返回 code=0、回查仍说未签)被记成 claimed →
+        // done_for_day 为真 → 节拍器与手动按钮当天都不再试,积分静默丢掉。
         out = match &back {
-            checkin::Outcome::Already(_) => checkin::Outcome::Claimed(credits),
+            // 回查说已签:真领到了,顺手把回查里带的积分数补上
+            checkin::Outcome::Already(c) => checkin::Outcome::Claimed(c.or(credits)),
+            // 回查仍说可领 = 这次领取没生效:降级成可重试,别把这一天记成已领
+            checkin::Outcome::Retry(_) => checkin::Outcome::Retry("claim 未见生效".into()),
+            // 回查本身失败(网络 / 接口变动):保留领取回执,界面如实显示
             _ => claimed,
         };
     }
@@ -1776,7 +1892,11 @@ async fn get_model_catalog(
 
     // ── 只有 id 列表的来源(Hapi / OpenCode Go):列表给什么就是什么,没有价、没有标签 ──
     if def.pricing_path.is_none() {
-        let key = source_key(def.id);
+        // 凭据管理器读是 RPC,别占着 tokio worker(其余调用点都在 spawn_blocking 里)
+        let sid = def.id;
+        let key = tokio::task::spawn_blocking(move || source_key(sid))
+            .await
+            .map_err(|e| format!("读取密钥失败: {e}"))?;
         let need = force
             || cache
                 .as_ref()
@@ -1850,7 +1970,10 @@ async fn get_model_catalog(
         }
     }
 
-    let key = secrets::get("4sapi")
+    // 凭据管理器读是 RPC,下沉到阻塞任务(模型页虽然是人点的,但一次要串好几个请求)
+    let key = tokio::task::spawn_blocking(|| secrets::get("4sapi"))
+        .await
+        .map_err(|e| format!("读取 4SAPI 密钥失败: {e}"))?
         .ok()
         .flatten()
         .filter(|k| !k.trim().is_empty());
@@ -2152,13 +2275,35 @@ async fn inject_rollback(state: State<'_, AppState>, backup: String) -> Result<S
             let s = lock_rw(&store);
             inject::load_log(&s)
         };
-        let abs = path.to_string_lossy().to_string();
         // 归属由"这条备份落在哪个客户端配置目录的 backup-inject 下"决定,而不是只查台账:
         // 台账只留 20 条、以前 Trae 的记录备份路径干脆是空 —— 查不到时以前**直接跳过**
         // 运行检查(fail-open),等于给前端一个"把任意目录里的文件拷到别处"的原语(P2-36)。
+        //
+        // 旧实现是"字符串前缀 + 不解析 ..":`…\backup-inject\..\..\..\Temp\evil` 与
+        // `…\backup-injectXYZ` 都能通过。现在:拒 `..`、要求父目录真叫 backup-inject、
+        // 两侧归一成真实路径再比。
+        if path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err("备份路径里不允许出现 ..".to_string());
+        }
+        let in_backup = path
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|n| n.eq_ignore_ascii_case("backup-inject"))
+            .unwrap_or(false);
+        if !in_backup {
+            return Err(
+                "这条备份不在任何客户端的 backup-inject 目录下,来历不明,挂件不执行回滚"
+                    .to_string(),
+            );
+        }
+        let canon = std::fs::canonicalize(&path).map_err(|e| format!("备份路径无效: {e}"))?;
         let owner = inject::sites().into_iter().find(|site| {
-            let base = site.root.join("backup-inject").to_string_lossy().to_string();
-            abs.starts_with(&base)
+            std::fs::canonicalize(site.root.join("backup-inject"))
+                .map(|b| canon.starts_with(&b))
+                .unwrap_or(false)
         });
         let Some(site) = owner else {
             return Err(
@@ -2295,7 +2440,12 @@ async fn key_reveal(id: String) -> Result<String, String> {
     if !matches!(def.auth, providers::AuthKind::Keyring) {
         return Err(format!("{} 没有可复制的密钥(用的是本机登录态或网页会话)", def.name));
     }
-    match secrets::get(&id) {
+    // 凭据管理器读是 RPC:与 key_hint/set_key 同一条纪律,不下沉就会占住一个 tokio worker
+    let rid = id.clone();
+    match tokio::task::spawn_blocking(move || secrets::get(&rid))
+        .await
+        .map_err(|e| format!("读取凭据失败: {e}"))?
+    {
         Ok(Some(k)) if !k.trim().is_empty() => Ok(k),
         Ok(_) => Err(format!("{} 还没有保存密钥", def.name)),
         Err(e) => Err(e),
@@ -2365,9 +2515,23 @@ async fn open_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
         if !target.exists() {
             return Err(format!("路径不存在: {raw}"));
         }
+        // 词法上的 `..` 一律拒绝:starts_with 是按组件比、**不解析父目录**的,
+        // 于是 `<site.root>\..\..\..\..\Windows\System32\calc.exe` 也能过白名单 ——
+        // 这条命令就退化成"把任意 exe 交给资源管理器"的原语(P3-24 要挡的正是这个)。
+        if target
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err("路径里不允许出现 ..".to_string());
+        }
         // 只允许打开挂件认识的客户端配置目录(含各自的 backup-inject/):
-        // 否则这条命令就是"把任意路径交给资源管理器"的原语,前端一旦被注入就能用(P3-24)
-        let allowed = inject::sites().iter().any(|site| target.starts_with(&site.root));
+        // 两侧都归一成真实路径再比,短名 / 大小写 / 符号链接都绕不过去。
+        let canon = std::fs::canonicalize(&target).map_err(|e| format!("路径无效: {e}"))?;
+        let allowed = inject::sites().iter().any(|site| {
+            std::fs::canonicalize(&site.root)
+                .map(|r| canon.starts_with(&r))
+                .unwrap_or(false)
+        });
         if !allowed {
             return Err("只能打开客户端自己的配置目录与备份目录".to_string());
         }
@@ -2393,6 +2557,8 @@ pub fn run() {
                 if !was {
                     let _ = app.emit("window-shown", ());
                 }
+                // 第二实例把窗口唤回来时也补一轮,别让人看到半天前的数字(P3-37)
+                refresh_if_stale(app, 60);
             }
         }))
         .plugin(tauri_plugin_opener::init())
@@ -2413,6 +2579,7 @@ pub fn run() {
                             // 真正「隐藏 → 显示」的那一刻告知前端(重放入场动画)。
                             // 前端不能靠 focus 事件区分 alt-tab 与唤回(报告 B8)
                             let _ = app.emit("window-shown", ());
+                            refresh_if_stale(app, 60);
                         }
                     }
                 })
@@ -2516,7 +2683,8 @@ pub fn run() {
                 // 不设这个开关时 Tauri 在 Windows 上左键也会弹菜单。
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, ev| match ev.id().as_ref() {
-                    "quit" => app.exit(0),
+                    // 正在写客户端配置时立刻退出会留下"改了没记账"的中间态,先等它写完(P1-15)
+                    "quit" => quit_when_idle(app),
                     "show" => {
                         if let Some(w) = app.get_webview_window("main") {
                             let was = w.is_visible().unwrap_or(false);
@@ -2525,6 +2693,7 @@ pub fn run() {
                             if !was {
                                 let _ = app.emit("window-shown", ());
                             }
+                            refresh_if_stale(app, 60);
                         }
                     }
                     "refresh" => {
@@ -2548,6 +2717,7 @@ pub fn run() {
                                 let _ = w.show();
                                 let _ = w.set_focus();
                                 let _ = app.emit("window-shown", ());
+                                refresh_if_stale(app, 60);
                             }
                         }
                     }

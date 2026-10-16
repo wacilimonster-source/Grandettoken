@@ -217,8 +217,9 @@ pub struct ModelRow {
     pub ratio: f64,
     pub completion_ratio: f64,
     pub cache_ratio: Option<f64>,
-    /// 按次计费单价(站点原值,元/次)
-    pub model_price: f64,
+    /// 按次计费单价(站点原值,元/次)。**取不到就是 None** ——
+    /// 以前缺字段落成 0.0,按次渠道会被显示成"¥0.000 / 次"(与 [`Price`] 的契约同一条)。
+    pub model_price: Option<f64>,
     /// 阶梯计价(billing_expr 能落成表达式)
     pub tiered: bool,
     pub billing_expr: Option<String>,
@@ -413,7 +414,7 @@ pub fn parse_catalog(v: &Value) -> Result<Catalog, String> {
             ratio: e.get("model_ratio").and_then(num).unwrap_or(0.0),
             completion_ratio: e.get("completion_ratio").and_then(num).unwrap_or(0.0),
             cache_ratio: e.get("cache_ratio").and_then(num).filter(|v| *v > 0.0),
-            model_price: e.get("model_price").and_then(num).unwrap_or(0.0),
+            model_price: e.get("model_price").and_then(num),
             tiered: e
                 .get("billing_mode")
                 .and_then(|m| m.as_str())
@@ -481,8 +482,9 @@ pub fn price_of(row: &ModelRow, groups: &[Group], want: &str) -> Price {
     };
 
     if row.quota_type != 0 {
-        // 按次计费:model_price 原值就是元/次,没有输入输出之分
-        out.per_call = Some(round4(row.model_price));
+        // 按次计费:model_price 原值就是元/次,没有输入输出之分。
+        // 站点没给这个字段时给 None(界面显示"未标价"),绝不用 0 顶替
+        out.per_call = row.model_price.map(round4);
         out.group_ratio = groups.iter().find(|g| g.name == want).map(|g| g.ratio).unwrap_or(0.0);
         return out;
     }
@@ -526,6 +528,22 @@ pub fn price_of(row: &ModelRow, groups: &[Group], want: &str) -> Price {
 /// 单次请求预算:与渠道取数同一档(8 秒)。价目表 100 KB 上下,正常很快。
 const TIMEOUT_SEC: u64 = 8;
 
+/// 响应体上限。价目表正常 100 KB 上下;入口被网关换成大 HTML / 超大响应时,
+/// 不把整包读进内存再解析(与渠道取数 fetch.rs 同一口径、同一个分块累加器)。
+const MAX_BODY: usize = 2_000_000;
+
+/// 分块读响应体,超过上限立刻停手。
+async fn read_body_capped(mut resp: reqwest::Response, max: usize) -> Result<Vec<u8>, String> {
+    let mut out: Vec<u8> = Vec::new();
+    loop {
+        match resp.chunk().await {
+            Ok(Some(c)) => crate::fetch::push_chunk(&mut out, &c, max)?,
+            Ok(None) => return Ok(out),
+            Err(e) => return Err(format!("读取响应失败: {e}")),
+        }
+    }
+}
+
 async fn get_json(client: &reqwest::Client, url: &str, key: Option<&str>) -> Result<Value, String> {
     let mut req = client
         .get(url)
@@ -544,9 +562,14 @@ async fn get_json(client: &reqwest::Client, url: &str, key: Option<&str>) -> Res
         }
     })?;
     let status = resp.status();
-    let body: Value = resp
-        .json()
-        .await
+    // 先看 Content-Length,超了在读之前就拒;没有长度(分块传输)才边收边判
+    if let Some(len) = resp.content_length() {
+        if len > MAX_BODY as u64 {
+            return Err(format!("响应过大({len} 字节),已丢弃"));
+        }
+    }
+    let raw = read_body_capped(resp, MAX_BODY).await?;
+    let body: Value = serde_json::from_slice(&raw)
         .map_err(|_| format!("响应不是合法 JSON (HTTP {})", status.as_u16()))?;
     if !status.is_success() {
         // 网关的错误体里带的是最有用的一句(如 "Invalid token"),原样带给用户
@@ -931,6 +954,26 @@ mod tests {
         assert!(p.tiered);
         assert_eq!(p.input, Some(150.0)); // 2 × 37.5 × 2
         assert!(grok.billing_expr.as_deref().unwrap().contains("tier(\"Long context\""));
+    }
+
+    /// F7:按次计费但站点没给 `model_price` → 是"没有数据",不是"¥0.000 / 次"。
+    /// 契约见 [`Price`]:"取不到一律 None —— 不用 0 顶替"。
+    #[test]
+    fn per_call_is_none_when_the_site_gives_no_price() {
+        let c = parse_catalog(&json!({
+            "data": [
+                { "model_name": "按次-没价", "quota_type": 1, "tags": "图像",
+                  "supported_endpoint_types": ["openai"] },
+                { "model_name": "按次-有价", "quota_type": 1, "model_price": 0.5, "tags": "图像",
+                  "supported_endpoint_types": ["openai"] }
+            ]
+        }))
+        .unwrap();
+        let p = price_of(c.find("按次-没价").unwrap(), &c.groups, "");
+        assert!(p.per_call.is_none(), "缺字段必须给 None,拿 0 顶替会把「没数据」显示成「¥0.000 / 次」");
+
+        let p = price_of(c.find("按次-有价").unwrap(), &c.groups, "");
+        assert_eq!(p.per_call, Some(0.5));
     }
 
     /// 分组表里找不到任何可用分组 → 不给价(返回 None),不用 0 顶替。

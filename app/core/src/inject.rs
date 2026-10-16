@@ -158,6 +158,20 @@ fn install_roots(dir: &str) -> Vec<PathBuf> {
     out
 }
 
+/// 卸载器 / Electron 辅助进程:它们也是 .exe,但**不是主程序名**。
+/// 以前只按小写敏感的 `starts_with("unins")` 排一次,`Unins000.exe`、`uninstall.exe`、
+/// `Trae CN Helper.exe` 都会留在候选里,于是 `Site.process` 可能挑到它们 ——
+/// 而进程检查是写入前唯一那道门(判"客户端在不在跑")。
+fn is_helper_exe(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n.starts_with("unins")
+        || n.starts_with("uninstall")
+        || n.starts_with("uninst")
+        || n.contains("helper")
+        || n.contains("crashsender")
+        || n.contains("crashpad")
+}
+
 /// 这套 Trae 安装对应的候选进程名。
 ///
 /// 以前两个安装都共用 `Client::Trae.process()` 那个字面量 `"Trae CN.exe"`:SOLO 在跑时
@@ -179,8 +193,8 @@ fn trae_processes(dir: &str) -> Vec<String> {
                 continue;
             }
             let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-            // 卸载器/更新器也算进程名会误报"在跑",只收主程序那一类
-            if name.starts_with("unins") || name.eq_ignore_ascii_case("CrashSender.exe") {
+            // 卸载器/更新器/辅助进程不算主程序名(大小写不敏感)
+            if is_helper_exe(&name) {
                 continue;
             }
             if !v.contains(&name) {
@@ -193,6 +207,19 @@ fn trae_processes(dir: &str) -> Vec<String> {
         v.push(by_dir);
     }
     v
+}
+
+/// 这套安装该拿去判"在不在跑"的进程名:**优先与安装目录同名的主程序**
+/// (`Trae CN` → `Trae CN.exe`)。以前 `Site.process` 直接吃 `read_dir` 的顺序,
+/// 挑到哪个算哪个 —— 顺序随文件系统变,进程检查时灵时不灵(P2)。
+fn expected_process(dir: &str, procs: &[String]) -> String {
+    let by_dir = format!("{dir}.exe");
+    procs
+        .iter()
+        .find(|p| p.eq_ignore_ascii_case(&by_dir))
+        .cloned()
+        .or_else(|| procs.first().cloned())
+        .unwrap_or_else(|| Client::Trae.process().to_string())
 }
 
 /// 显示用路径:`C:\Users\x\...` → `~/.zcode/...`。
@@ -241,10 +268,7 @@ pub fn sites() -> Vec<Site> {
                 client: Client::Trae,
                 label: dir.to_string(),
                 running,
-                process: procs
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| Client::Trae.process().to_string()),
+                process: expected_process(dir, &procs),
                 root,
                 files,
             });
@@ -754,26 +778,54 @@ fn backup(root: &Path, files: &[PathBuf], stamp: &str) -> Result<PathBuf, String
     Ok(dir)
 }
 
+/// 备份目录名是不是我们生成的那种:`YYYYMMDD-HHMMSS`,或同秒撞车时由 [`backup`]
+/// 追加的 `-N`(N = 2..=99)。**其它名字一律不认** ——
+/// ① 清理只动我们自己建的目录,用户在 `backup-inject/` 里自建的东西不碰;
+/// ② 回滚只认这个形态,拒绝"把随便一个目录里的文件盖到它上一级"。
+/// 以前只认 15 位,于是带序号的备份**永远不会被清理**:含明文密钥的快照无上限地堆着,
+/// 与"每个客户端最多 5 份"的承诺相矛盾(P2)。
+fn is_stamp_name(name: &str) -> bool {
+    let b = name.as_bytes();
+    if b.len() < 15 {
+        return false;
+    }
+    if !b[..8].iter().all(u8::is_ascii_digit) || b[8] != b'-' {
+        return false;
+    }
+    if !b[9..15].iter().all(u8::is_ascii_digit) {
+        return false;
+    }
+    if b.len() == 15 {
+        return true;
+    }
+    // `<stamp>-N`:只有一个 '-' 加 1~2 位数字(99 封顶,backup 超过就报错不建了)
+    if b[15] != b'-' {
+        return false;
+    }
+    let n = &name[16..];
+    !n.is_empty()
+        && n.len() <= 2
+        && n.bytes().all(|c| c.is_ascii_digit())
+        && n.parse::<u32>().map(|v| (2..=99).contains(&v)).unwrap_or(false)
+}
+
 /// 只留最近 KEEP_BACKUPS 份,免得天天写把用户目录撑大。
 ///
 /// 两条边界(报告 P2-8):
-/// ① 只动名字形如 `%Y%m%d-%H%M%S` 的目录 —— 以前只判 `is_dir()`,用户在
+/// ① 只动名字形如 `%Y%m%d-%H%M%S`(含 `-N`)的目录 —— 以前只判 `is_dir()`,用户在
 ///    `backup-inject/` 里自己建的目录会被当成"最旧的备份"删掉;
 /// ② 删除失败不再静默:以前 `let _ =` 一吞,备份就会积到 6 份以上,
 ///    "别撑大用户目录"的目的落空,而界面上的历史还留着指向已消失目录的记录。
 fn prune_backups(root: &Path) {
-    fn is_stamp_name(p: &Path) -> bool {
-        let n = p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-        // YYYYMMDD-HHMMSS
-        n.len() == 15
-            && n.chars().enumerate().all(|(i, c)| if i == 8 { c == '-' } else { c.is_ascii_digit() })
+    fn name_of(p: &Path) -> String {
+        p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()
     }
     let base = root.join("backup-inject");
     let Ok(rd) = std::fs::read_dir(&base) else { return };
     let mut dirs: Vec<PathBuf> = rd
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.is_dir() && is_stamp_name(p))
+        .filter(|p| p.is_dir() && is_stamp_name(&name_of(p)))
         .collect();
     if dirs.len() <= KEEP_BACKUPS {
         return;
@@ -787,8 +839,31 @@ fn prune_backups(root: &Path) {
 }
 
 /// 从备份目录回滚:备份目录里的文件按名字放回它的上一级(即配置目录)。
-/// 布局 `<root>/backup-inject/<stamp>/<文件>` 是固定的,所以不用额外记账。
+/// 布局 `<root>/backup-inject/<stamp>/<文件>` 是固定的,所以不用额外记账 ——
+/// 也正因为固定,这里**必须自己核一遍布局**:调用方的包含性检查只是一次字符串前缀
+/// 比较,拼错的/别处的路径不该被当成备份,把它的文件盖到上一级去(P2)。
 pub fn restore(backup_dir: &Path) -> Result<String, String> {
+    let dir_name = backup_dir
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let parent_is_backup_inject = backup_dir
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|s| s.to_string_lossy().eq_ignore_ascii_case("backup-inject"))
+        .unwrap_or(false);
+    if !parent_is_backup_inject {
+        return Err(format!(
+            "这不是我们的备份目录(上一级不是 backup-inject):{}",
+            pretty(backup_dir)
+        ));
+    }
+    if !is_stamp_name(&dir_name) {
+        return Err(format!(
+            "备份目录名不是时间戳形态,拒绝恢复:{}",
+            pretty(backup_dir)
+        ));
+    }
     let Some(root) = backup_dir.parent().and_then(|p| p.parent()) else {
         return Err("备份目录结构异常".into());
     };
@@ -803,7 +878,22 @@ pub fn restore(backup_dir: &Path) -> Result<String, String> {
         // 再逐块拷,目标被占用时就把客户端自己的配置留成了半截文件(报告 P2-6)。
         let tmp = root.join(format!("{name_str}.restore-tmp"));
         match std::fs::copy(e.path(), &tmp).and_then(|_| std::fs::rename(&tmp, &target)) {
-            Ok(_) => n += 1,
+            Ok(_) => {
+                n += 1;
+                // SQLite 主库恢复完,旁边若留着**没进这份备份**的 -wal/-shm,SQLite
+                // 下次打开会把回滚掉的那次写入重放回刚恢复的库上 —— 回滚等于没做。
+                // 备份里没有它,就说明它与这份备份不是一套,删掉。
+                if name_str.to_ascii_lowercase().ends_with(".vscdb") {
+                    for suffix in ["-wal", "-shm"] {
+                        let sib = root.join(format!("{name_str}{suffix}"));
+                        if sib.exists() && !backup_dir.join(format!("{name_str}{suffix}")).exists() {
+                            if let Err(err) = std::fs::remove_file(&sib) {
+                                eprintln!("清理 {} 失败: {err}", pretty(&sib));
+                            }
+                        }
+                    }
+                }
+            }
             Err(err) => {
                 let _ = std::fs::remove_file(&tmp);
                 bad.push(format!("{}:{err}", pretty(&target)));
@@ -925,17 +1015,100 @@ fn wb_entry(spec: &ModelSpec, existing: Option<&Map<String, Value>>) -> Value {
     Value::Object(m)
 }
 
-/// 一条 models.json 条目是不是「我们(4SAPI)写的」。判据:url 命中央道域名,
-/// 或者名字带我们加的前缀。**不能只看 id** —— 别的中转站的同名模型有同样的 id。
-fn wb_is_ours(e: &Value, hosts: &[String]) -> bool {
-    let url = e.get("url").and_then(|u| u.as_str()).unwrap_or("");
-    if hosts.iter().any(|h| url.contains(h.as_str())) {
+/// 一条 url 里的**主机名**:剥掉 scheme / userinfo / 端口 / 路径 / 查询串,小写。
+/// 与 `models::source_of_url`(读路径,早就是精确主机名比对)同一套解析。
+fn url_host_of(url: &str) -> Option<String> {
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let authority = rest
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(rest)
+        .rsplit('@')
+        .next()
+        .unwrap_or(rest);
+    let host = if let Some(h) = authority.strip_prefix('[') {
+        // IPv6 字面量 [::1]:8080:方括号里的冒号不是端口分隔符
+        h.split(']').next().unwrap_or(h)
+    } else {
+        authority.split(':').next().unwrap_or(authority)
+    };
+    let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    (!host.is_empty()).then_some(host)
+}
+
+/// 这条地址是不是**这个来源**的条目地址。判据两条:
+/// ① 主机名与来源域名**精确**相同(不能 `contains`:那样 `https://mirror-4sapi.com/v1`
+///    与 `https://not4sapi.com.evil/v1` 都会算成"我们写的",于是「取消写入」会删掉
+///    用户自己的条目、写入时也不再报"同名属于别家"的冲突);
+/// ② 或者整串等于我们会写下去的那个 base_url(用户把 `model_base_url` 配到自定义域名时,
+///    只有这一条能把他写进去的条目认回来;Trae 写的是 `…/chat/completions`,一并认)。
+/// `hosts` 为空 = 这个来源没有域名表,那就只剩 ② 可判。
+fn url_is_ours(url: &str, hosts: &[String], base_url: &str) -> bool {
+    if !base_url.is_empty()
+        && (url == base_url || url == format!("{base_url}/chat/completions"))
+    {
         return true;
     }
-    e.get("name")
-        .and_then(|n| n.as_str())
-        .map(|n| n.starts_with(OUR_NAME_PREFIX))
-        .unwrap_or(false)
+    let Some(host) = url_host_of(url) else {
+        return false;
+    };
+    hosts.iter().any(|h| host == h.trim().to_ascii_lowercase())
+}
+
+/// 一条 models.json 条目是不是「我们(4SAPI)写的」。判据:[`url_is_ours`] ——
+/// **只有 url 空/缺**时才退回名字前缀(`4S-`)。**不能只看 id** —— 别的中转站的同名
+/// 模型有同样的 id;也不能"名字带 4S- 就算" —— 用户手配的 `4S-` 条目地址指向别家时
+/// 不是我们的,删了就是删用户的东西(写入侧的冲突提示同理)。
+fn wb_is_ours(e: &Value, hosts: &[String], base_url: &str) -> bool {
+    let url = e.get("url").and_then(|u| u.as_str()).unwrap_or("");
+    if url_is_ours(url, hosts, base_url) {
+        return true;
+    }
+    if url.trim().is_empty() {
+        return e
+            .get("name")
+            .and_then(|n| n.as_str())
+            .map(|n| n.starts_with(OUR_NAME_PREFIX))
+            .unwrap_or(false);
+    }
+    false
+}
+
+/// 写入后的读回校验:盘上那条必须与我们**这次写下去的内容逐字段一致**
+/// (id / url / apiKey / name),写过的选中项也要落上。
+///
+/// 以前只比 id + url —— 两者在写之前就成立,于是被截断/写坏的行、或客户端把
+/// apiKey 抹掉/换了,校验一律通过(与 ZCode 那边校验 apiKey+baseURL 的口径看齐)。
+fn wb_verify(models_path: &Path, settings_path: &Path, expect: &Value, selection: Option<&str>) -> bool {
+    let same = |e: &Value, k: &str| {
+        e.get(k).and_then(|v| v.as_str()) == expect.get(k).and_then(|v| v.as_str())
+    };
+    let entry_ok = read_json(models_path)
+        .ok()
+        .flatten()
+        .and_then(|v| {
+            v.as_array().map(|a| {
+                a.iter().any(|e| {
+                    same(e, "id")
+                        && same(e, "url")
+                        && same(e, "apiKey")
+                        && same(e, "name")
+                })
+            })
+        })
+        .unwrap_or(false);
+    if !entry_ok {
+        return false;
+    }
+    match selection {
+        None => true,
+        Some(want) => read_json(settings_path)
+            .ok()
+            .flatten()
+            .and_then(|s| s.get(WB_SELECTION_KEY).and_then(|v| v.as_str()).map(String::from))
+            .as_deref()
+            == Some(want),
+    }
 }
 
 fn write_workbuddy_site(
@@ -968,7 +1141,7 @@ fn write_workbuddy_site(
     });
     if let Some(i) = idx {
         let old = arr[i].as_object().cloned().ok_or("条目不是对象")?;
-        if !wb_is_ours(&arr[i], &hosts) {
+        if !wb_is_ours(&arr[i], &hosts, &spec.base_url) {
             outcome.foreign_conflict = Some(
                 arr[i]
                     .get("url")
@@ -1016,7 +1189,21 @@ fn write_workbuddy_site(
     let models_next = Value::Array(arr);
     let settings_for_write = settings_new.clone();
     let models_for_check = models_path.clone();
-    let (id, url) = (spec.id.clone(), spec.base_url.clone());
+    let settings_for_check = settings_path.clone();
+    // 读回校验要按**这次实际写下去的那一条**逐字段比对(名字可能沿用了用户自己起的)
+    let expect = models_next
+        .as_array()
+        .and_then(|a| {
+            a.iter()
+                .find(|e| e.get("id").and_then(|i| i.as_str()) == Some(spec.id.as_str()))
+        })
+        .cloned()
+        .unwrap_or(Value::Null);
+    let want_selection = settings_new
+        .as_ref()
+        .and_then(|s| s.get(WB_SELECTION_KEY))
+        .and_then(|v| v.as_str())
+        .map(String::from);
     outcome.backup = commit(
         site,
         &[models_path.clone(), settings_path.clone()],
@@ -1029,24 +1216,28 @@ fn write_workbuddy_site(
             Ok(())
         },
         move || {
-            read_json(&models_for_check)
-                .ok()
-                .flatten()
-                .and_then(|v| {
-                    v.as_array().map(|a| {
-                        a.iter().any(|e| {
-                            e.get("id").and_then(|i| i.as_str()) == Some(id.as_str())
-                                && e.get("url").and_then(|u| u.as_str()) == Some(url.as_str())
-                        })
-                    })
-                })
-                .unwrap_or(false)
+            wb_verify(
+                &models_for_check,
+                &settings_for_check,
+                &expect,
+                want_selection.as_deref(),
+            )
         },
     )?;
     outcome
         .notes
         .push(format!("备份:{}", pretty(&outcome.backup)));
     Ok(outcome)
+}
+
+/// 「同名条目被覆盖」这条提示里该怎么称呼**原本那条**的来源:按它的实际地址认
+/// (`models::source_of_url`),认不出才是"别家来源"。
+/// 以前这句话写死"不是 4SAPI":写 Hapi / OpenCode Go 时意思正好反了(P2)。
+fn foreign_source_label(url: &str) -> &'static str {
+    crate::models::source_of_url(url)
+        .and_then(crate::models::find_source)
+        .map(|d| d.name)
+        .unwrap_or("别家来源")
 }
 
 /// 从 WorkBuddy 当前选中值反推前缀口径。返回 None = 没有可用的证据(不猜)。
@@ -1491,7 +1682,9 @@ fn trae_write(
         for (agent, arr) in groups.iter_mut() {
             let _ = agent;
             let Some(list) = arr.as_array_mut() else { continue };
-            let pos = list.iter().position(|e| trae_is_ours(e, &spec.id, &hosts3));
+            let pos = list.iter().position(|e| {
+                trae_is_ours(e, &spec.id, &hosts3, &spec.base_url)
+            });
             match pos {
                 Some(i) => {
                     // 更新:保留原有 custom_model_id 与所有我们不认识的字段
@@ -1704,7 +1897,7 @@ fn wb_removal(site: &Site, spec: &ModelSpec) -> (bool, Option<Removal>) {
     let Some(e) = entry else {
         return (false, None);
     };
-    if !wb_is_ours(e, &hosts) {
+    if !wb_is_ours(e, &hosts, &spec.base_url) {
         // 同名但不属于这个来源(比如是别家地址) → 不当成"已配置"
         return (false, None);
     }
@@ -1810,7 +2003,7 @@ fn trae_removal(db: &Path, spec: &ModelSpec) -> (bool, Option<Removal>) {
                 if let Some(list) = arr.as_array() {
                     let n = list
                         .iter()
-                        .filter(|e| trae_is_ours(e, &spec.id, &hosts))
+                        .filter(|e| trae_is_ours(e, &spec.id, &hosts, &spec.base_url))
                         .count();
                     if n > 0 {
                         count += n;
@@ -1850,19 +2043,21 @@ fn trae_removal(db: &Path, spec: &ModelSpec) -> (bool, Option<Removal>) {
 /// 一条 Trae 条目是不是我们要找的那条自定义模型。
 ///
 /// **还要看它的 base_url 属于哪个来源**:同名模型可能来自不同来源(4SAPI / Hapi / Go),
-/// 删 Hapi 那条时不能把 4SAPI 那条一起删掉。`hosts` 为空 = 不过滤来源(兼容旧调用)。
-fn trae_is_ours(e: &Value, model: &str, hosts: &[String]) -> bool {
+/// 删 Hapi 那条时不能把 4SAPI 那条一起删掉。来源判据与 [`wb_is_ours`] 共用
+/// [`url_is_ours`](精确主机名,或整串等于我们会写的那个地址)。
+/// `hosts` 与 `base_url` 都为空 = 不过滤来源(兼容旧调用)。
+fn trae_is_ours(e: &Value, model: &str, hosts: &[String], base_url: &str) -> bool {
     if e.get("provider").and_then(|p| p.as_str()) != Some("custom_openai_compatible") {
         return false;
     }
     if e.get("display_name").and_then(|d| d.as_str()) != Some(model) {
         return false;
     }
-    if hosts.is_empty() {
+    if hosts.is_empty() && base_url.is_empty() {
         return true;
     }
     let url = e.get("base_url").and_then(|u| u.as_str()).unwrap_or("");
-    hosts.iter().any(|h| url.contains(h.as_str()))
+    url_is_ours(url, hosts, base_url)
 }
 
 /// Trae 的选中项那一行(键名 + 值)。
@@ -1896,7 +2091,8 @@ fn remove_workbuddy_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, S
     // 写入契约第③条;以前是按 id 全表 retain,一次「取消写入」能把别人的同名条目一起删掉。
     let hosts = spec.hosts();
     if let Some(i) = arr.iter().position(|e| {
-        e.get("id").and_then(|x| x.as_str()) == Some(spec.id.as_str()) && wb_is_ours(e, &hosts)
+        e.get("id").and_then(|x| x.as_str()) == Some(spec.id.as_str())
+            && wb_is_ours(e, &hosts, &spec.base_url)
     }) {
         arr.remove(i);
         outcome.removed = 1;
@@ -1932,6 +2128,7 @@ fn remove_workbuddy_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, S
     let settings_for_check = settings_path.clone();
     let id = spec.id.clone();
     let hosts_for_check = hosts;
+    let base_for_check = spec.base_url.clone();
     outcome.backup = commit(
         site,
         &[models_path.clone(), settings_path.clone()],
@@ -1951,7 +2148,7 @@ fn remove_workbuddy_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, S
                     v.as_array().map(|a| {
                         !a.iter().any(|e| {
                             e.get("id").and_then(|i| i.as_str()) == Some(id.as_str())
-                                && wb_is_ours(e, &hosts_for_check)
+                                && wb_is_ours(e, &hosts_for_check, &base_for_check)
                         })
                     })
                 })
@@ -2158,7 +2355,7 @@ fn remove_trae_site(db: &Path, spec: &ModelSpec) -> Result<SiteOutcome, String> 
             for arr in obj.values_mut() {
                 if let Some(list) = arr.as_array_mut() {
                     let before = list.len();
-                    list.retain(|e| !trae_is_ours(e, &spec.id, &hosts2));
+                    list.retain(|e| !trae_is_ours(e, &spec.id, &hosts2, &spec.base_url));
                     let removed = before - list.len();
                     if removed > 0 {
                         outcome.removed += removed;
@@ -2250,7 +2447,7 @@ fn trae_read_back(db: &Path, spec: &ModelSpec) -> Option<(usize, usize)> {
         for arr in groups.values() {
             let Some(list) = arr.as_array() else { continue };
             arrays += 1;
-            if list.iter().any(|e| trae_is_ours(e, &spec.id, &hosts)) {
+            if list.iter().any(|e| trae_is_ours(e, &spec.id, &hosts, &spec.base_url)) {
                 ours += 1;
             }
         }
@@ -2394,7 +2591,17 @@ fn site_readable(site: &Site) -> Result<(), String> {
             if rules.get("schemaVersion").and_then(|v| v.as_i64()) != Some(1) {
                 return Err("provider_config.json 的 schemaVersion 不是 1".into());
             }
-            let _ = rules.get("config");
+            if !rules.get("config").map(|c| c.is_object()).unwrap_or(false) {
+                return Err("provider_config.json 里没有 config 对象".into());
+            }
+            // config.json 也要核:写入侧要往 provider 对象里塞一个 provider,
+            // 缺了它真写时会失败("config.json 里没有 provider 对象")。以前这里不读它,
+            // 预告就敢承诺「新增 provider「4SAPI」+ N 条模型」,点下去才报错(P2)。
+            let cfg = read_json(&site.root.join("config.json"))?
+                .ok_or_else(|| "config.json 是空的".to_string())?;
+            if !cfg.get("provider").map(|p| p.is_object()).unwrap_or(false) {
+                return Err("config.json 里没有 provider 对象".into());
+            }
             Ok(())
         }
         Client::Trae => Ok(()),
@@ -2606,8 +2813,11 @@ pub fn apply(client: Client, spec: &ModelSpec, opts: &Opts) -> Result<Vec<Report
                             n.push("内容和盘上一致,这次没有改动文件。".into());
                         }
                         if let Some(url) = o.foreign_conflict {
+                            // 这句里的来源名以前写死"不是 4SAPI":写 Hapi / OpenCode Go 时
+                            // 句子的意思就反了(见 foreign_source_label)。
+                            let who = foreign_source_label(&url);
                             n.push(format!(
-                                "注意:这条 id 的条目原本指向 {url}(不是 4SAPI),已按上面的内容覆盖。"
+                                "注意:这条 id 的条目原本指向 {url}({who}),已按上面的内容覆盖。"
                             ));
                         }
                         n
@@ -3390,17 +3600,319 @@ mod tests {
         assert!(!big.contains(&id2));
     }
 
-    /// 从 WorkBuddy 现有文件里认得出「哪些是我们写的」。
+    /// F11:认"这条是我们写的"必须**精确比主机名**(或整串等于我们会写的那个 base_url),
+    /// `4S-` 名字前缀**只在 url 空/缺时**才作数。以前是 `url.contains(host)` +
+    /// "名字带 4S- 就算":`mirror-4sapi.com`、`not4sapi.com.evil` 都算成我们的,
+    /// 「取消写入」于是会删掉用户自己的条目、写入时也不再报同名冲突。
+    ///
+    /// (旧断言 `url=https://x/y, name=4S-foo → ours` 就是那个宽松口径 —— 已按新规矩改掉。)
     #[test]
-    fn wb_is_ours_detects_by_host_and_name() {
+    fn ownership_requires_an_exact_host_or_our_own_base_url() {
         let hosts = vec!["4sapi.com".into(), "4sapi.cn".into()];
-        assert!(wb_is_ours(&json!({"url":"https://4sapi.cn/v1"}), &hosts));
-        assert!(wb_is_ours(&json!({"url":"https://x/y","name":"4S-foo"}), &hosts));
+        let base = "https://4sapi.com/v1";
+        assert!(wb_is_ours(&json!({"url":"https://4sapi.cn/v1"}), &hosts, base));
+        assert!(
+            wb_is_ours(&json!({"url":"https://4SAPI.com/v1"}), &hosts, base),
+            "主机名比对不区分大小写"
+        );
+        assert!(wb_is_ours(
+            &json!({"url":"https://user:pw@4sapi.com:8443/v1"}),
+            &hosts,
+            base
+        ), "userinfo / 端口 / 路径都要剥掉");
+        // 形近域名一律不是
+        assert!(!wb_is_ours(&json!({"url":"https://mirror-4sapi.com/v1"}), &hosts, base));
+        assert!(!wb_is_ours(&json!({"url":"https://not4sapi.com.evil/v1"}), &hosts, base));
+        assert!(!wb_is_ours(&json!({"url":"https://evil.com/?next=4sapi.com"}), &hosts, base));
+        // 用户把 model_base_url 配到自定义域名:整串等于我们会写的地址 → 是我们的
+        let custom = "https://my-proxy.example/v1";
+        assert!(wb_is_ours(&json!({"url":"https://my-proxy.example/v1"}), &hosts, custom));
+        assert!(!wb_is_ours(&json!({"url":"https://my-proxy.example/v1/other"}), &hosts, custom));
+        // url 空/缺:只剩名字前缀可判
+        assert!(wb_is_ours(&json!({"name":"4S-foo"}), &hosts, base));
+        assert!(wb_is_ours(&json!({"url":"","name":"4S-foo"}), &hosts, base));
+        // 地址指向别家时,名字带 4S- 也不是我们的(用户自己起的名字照样保留)
         assert!(!wb_is_ours(
-            &json!({"url":"https://opencode.ai/zen/go/v1","name":"GO-x"}),
-            &hosts
+            &json!({"url":"https://opencode.ai/zen/go/v1","name":"4S-foo"}),
+            &hosts,
+            base
         ));
     }
+
+    /// F11(Trae 侧):与 WorkBuddy 共用同一套判据 —— 精确主机名,或整串等于
+    /// 我们会写下去的那个地址(Trae 写的是 `…/chat/completions`)。
+    #[test]
+    fn trae_ownership_uses_the_same_exact_host_rule() {
+        let hosts = vec!["4sapi.com".into()];
+        let base = "https://4sapi.com/v1";
+        let ours = |url: &str| {
+            json!({"provider":"custom_openai_compatible",
+                   "display_name":"claude-sonnet-5","base_url":url})
+        };
+        assert!(trae_is_ours(&ours("https://4sapi.com/v1/chat/completions"), "claude-sonnet-5", &hosts, base));
+        assert!(trae_is_ours(&ours("https://4sapi.com/v1"), "claude-sonnet-5", &hosts, base));
+        assert!(!trae_is_ours(&ours("https://mirror-4sapi.com/v1/chat/completions"), "claude-sonnet-5", &hosts, base));
+        assert!(!trae_is_ours(&ours("https://not4sapi.com.evil/v1"), "claude-sonnet-5", &hosts, base));
+        // 自定义域名(base_url 就是我们会写的那个)→ 是我们的
+        let custom = "https://my-proxy.example/v1";
+        assert!(trae_is_ours(&ours("https://my-proxy.example/v1/chat/completions"), "claude-sonnet-5", &hosts, custom));
+        // 别的模型名不吃这套
+        assert!(!trae_is_ours(&ours("https://4sapi.com/v1"), "别的模型", &hosts, base));
+    }
+
+    /// F11:形近域名上的条目是**用户自己的**,「取消写入」一条都不许删,
+    /// 预告也不许报"已配置"。
+    #[test]
+    fn workbuddy_remove_keeps_an_entry_on_a_lookalike_host() {
+        let root = tmpdir("wb-rm-lookalike");
+        std::fs::write(
+            root.join("models.json"),
+            r#"[{"id":"glm-5.3","name":"4S-glm-5.3","url":"https://mirror-4sapi.com/v1"},
+                {"id":"glm-5.3","name":"4S-mine","url":"https://not4sapi.com.evil/v1"}]"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("settings.json"), "{}").unwrap();
+        let site = site_at(&root, Client::Workbuddy);
+        let s = ModelSpec::new("4sapi", "glm-5.3", "https://4sapi.com/v1", "sk-test-123", None, false);
+        let o = remove_workbuddy_site(&site, &s).unwrap();
+        assert_eq!(o.removed, 0, "形近域名不是我们的,一条都不该删");
+        assert_eq!(read_v(&root.join("models.json")).as_array().unwrap().len(), 2);
+        assert!(!wb_removal(&site, &s).0, "也不该报「已配置」");
+    }
+
+    /// F14:读回校验必须逐字段比(id / url / apiKey / name),不能只看写前就已成立的
+    /// id+url —— 截断/串码/密钥没落盘(或被客户端抹掉)都要判失败。
+    #[test]
+    fn workbuddy_verify_detects_a_write_whose_key_did_not_land() {
+        let root = tmpdir("wb-verify");
+        let models = root.join("models.json");
+        let settings = root.join("settings.json");
+        let expect = json!({"id":"claude-sonnet-5","name":"4S-claude-sonnet-5",
+                            "url":"https://4sapi.com/v1","apiKey":"sk-test-123"});
+        std::fs::write(&models, json!([expect.clone()]).to_string()).unwrap();
+        std::fs::write(&settings, "{}").unwrap();
+        assert!(wb_verify(&models, &settings, &expect, None), "写对了就该过");
+
+        let mut broken = expect.clone();
+        broken["apiKey"] = json!("sk-别的");
+        std::fs::write(&models, json!([broken]).to_string()).unwrap();
+        assert!(!wb_verify(&models, &settings, &expect, None), "密钥没落上必须判失败");
+
+        let mut renamed = expect.clone();
+        renamed["name"] = json!("别人起的名字");
+        std::fs::write(&models, json!([renamed]).to_string()).unwrap();
+        assert!(!wb_verify(&models, &settings, &expect, None), "名字不对也要判失败");
+
+        std::fs::write(&models, json!([expect.clone()]).to_string()).unwrap();
+        std::fs::write(&settings, "{\"model\":\"custom-local:别的东西\"}").unwrap();
+        assert!(
+            !wb_verify(&models, &settings, &expect, Some("custom-local:claude-sonnet-5")),
+            "写过的选中项没落上也要判失败"
+        );
+        std::fs::write(&settings, "{\"model\":\"custom-local:claude-sonnet-5\"}").unwrap();
+        assert!(wb_verify(&models, &settings, &expect, Some("custom-local:claude-sonnet-5")));
+    }
+
+    /// F14 端到端:一次"apiKey 没落上"的写入必须被读回校验拦住并回滚。
+    #[test]
+    fn workbuddy_commit_rolls_back_when_the_key_did_not_land() {
+        let root = tmpdir("wb-verify-rb");
+        let models = root.join("models.json");
+        let settings = root.join("settings.json");
+        std::fs::write(&models, "[]").unwrap();
+        std::fs::write(&settings, "{}").unwrap();
+        let before = std::fs::read(&models).unwrap();
+        let site = site_at(&root, Client::Workbuddy);
+        let expect = json!({"id":"claude-sonnet-5","name":"4S-claude-sonnet-5",
+                            "url":"https://4sapi.com/v1","apiKey":"sk-test-123"});
+        let res = commit(
+            &site,
+            &[models.clone(), settings.clone()],
+            "20260101-000000",
+            || {
+                // 模拟截断/串码:entry 写下去了,apiKey 丢了
+                std::fs::write(
+                    &models,
+                    r#"[{"id":"claude-sonnet-5","name":"4S-claude-sonnet-5","url":"https://4sapi.com/v1"}]"#,
+                )
+                .unwrap();
+                Ok(())
+            },
+            || wb_verify(&models, &settings, &expect, None),
+        );
+        assert!(res.is_err(), "apiKey 没落上必须判校验失败");
+        assert_eq!(std::fs::read(&models).unwrap(), before, "校验不过要回滚");
+    }
+
+    /// F12:`-N`(同秒撞车时 backup 自己造的序号)也算备份名,必须一起清理 ——
+    /// 以前只认 15 位,带序号的快照**永远不会被删**,含明文密钥的备份无上限地堆积。
+    #[test]
+    fn prune_keeps_five_and_removes_numbered_backups() {
+        let root = tmpdir("prune-n");
+        let base = root.join("backup-inject");
+        for n in [
+            "20260101-000001",
+            "20260101-000001-2",
+            "20260101-000001-3",
+            "20260102-000001",
+            "20260103-000001",
+            "20260104-000001",
+            "20260105-000001",
+            "20260106-000001",
+        ] {
+            std::fs::create_dir_all(base.join(n)).unwrap();
+        }
+        prune_backups(&root);
+        let left: Vec<String> = std::fs::read_dir(&base)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(left.len(), KEEP_BACKUPS, "只留 5 份: {left:?}");
+        assert!(
+            !left.iter().any(|n| n.ends_with("-2") || n.ends_with("-3")),
+            "带序号的那几份在最旧的一端,该被清掉: {left:?}"
+        );
+        assert!(is_stamp_name("20260101-000001"));
+        assert!(is_stamp_name("20260101-000001-2"));
+        assert!(is_stamp_name("20260101-000001-99"));
+        assert!(!is_stamp_name("20260101-000001-1"), "-1 不是我们造的");
+        assert!(!is_stamp_name("20260101-000001-100"));
+        assert!(!is_stamp_name("20260101-000001x"));
+        assert!(!is_stamp_name("我的备份"));
+    }
+
+    /// F13:restore 只认 `<root>/backup-inject/<stamp>/`。
+    #[test]
+    fn restore_refuses_a_directory_outside_backup_inject() {
+        let root = tmpdir("restore-guard");
+        let outside = root.join("随便一个目录");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("models.json"), "[]").unwrap();
+        let e = restore(&outside).unwrap_err();
+        assert!(e.contains("backup-inject"), "{e}");
+
+        // 在 backup-inject 下,但名字不是时间戳形态
+        let odd = root.join("backup-inject").join("我的备份");
+        std::fs::create_dir_all(&odd).unwrap();
+        std::fs::write(odd.join("models.json"), "[]").unwrap();
+        let e2 = restore(&odd).unwrap_err();
+        assert!(e2.contains("时间戳"), "{e2}");
+        assert!(!root.join("models.json").exists(), "被拒时一个文件都不许动");
+    }
+
+    /// F13:恢复 `*.vscdb` 时,这份备份里没有的 `-wal`/`-shm` 必须删掉 ——
+    /// 否则 SQLite 下次打开会把回滚掉的那次写入重放回刚恢复的库上。
+    #[test]
+    fn restore_drops_a_stray_wal_next_to_the_restored_vscdb() {
+        let root = tmpdir("restore-wal");
+        let db = root.join("state.vscdb");
+        std::fs::write(&db, "old-db").unwrap();
+        let dir = backup(&root, &[db.clone()], "20260101-000000").unwrap();
+        std::fs::write(&db, "written-while-running").unwrap();
+        let wal = root.join("state.vscdb-wal");
+        std::fs::write(&wal, "replay-me").unwrap();
+        let shm = root.join("state.vscdb-shm");
+        std::fs::write(&shm, "shm").unwrap();
+
+        restore(&dir).unwrap();
+        assert_eq!(std::fs::read_to_string(&db).unwrap(), "old-db");
+        assert!(!wal.exists(), "备份里没有的 -wal 要删掉");
+        assert!(!shm.exists(), "备份里没有的 -shm 也要删掉");
+    }
+
+    /// F16:卸载器/辅助进程不算主程序名(大小写不敏感),候选里优先挑与安装目录
+    /// 同名的那支 —— `Site.process` 是写入前进程检查用的名字。
+    #[test]
+    fn trae_process_choice_prefers_the_install_exe_and_skips_helpers() {
+        for bad in [
+            "unins000.EXE",
+            "Uninstall.exe",
+            "UNINST000.exe",
+            "Trae CN Helper.exe",
+            "Trae CN Helper (GPU).exe",
+            "crashpad_handler.exe",
+            "CrashSender.exe",
+        ] {
+            assert!(is_helper_exe(bad), "{bad} 不该算主程序");
+        }
+        for good in ["Trae CN.exe", "Trae.exe", "TraeWork.exe"] {
+            assert!(!is_helper_exe(good), "{good} 是主程序");
+        }
+        let procs = vec!["aaa.exe".to_string(), "Trae CN.exe".to_string()];
+        assert_eq!(expected_process("Trae CN", &procs), "Trae CN.exe", "优先目录同名的那支");
+        assert_eq!(
+            expected_process("Trae CN", &["aaa.exe".to_string()]),
+            "aaa.exe",
+            "没有同名项就退到第一个候选"
+        );
+        assert_eq!(expected_process("Trae CN", &[]), Client::Trae.process());
+    }
+
+    /// F15:「同名条目被覆盖」那句提示里的来源名必须按**实际地址**认 ——
+    /// 以前写死"不是 4SAPI",写 Hapi / OpenCode Go 模型时意思正好反了。
+    #[test]
+    fn foreign_conflict_note_names_the_real_source() {
+        assert_eq!(foreign_source_label("https://opencode.ai/zen/go/v1"), "OpenCode Go");
+        assert_eq!(foreign_source_label("https://ai.yuchuantest.com/v1"), "Hapi");
+        assert_eq!(foreign_source_label("https://4sapi.com/v1"), "4SAPI");
+        assert_eq!(foreign_source_label("https://example.com/v1"), "别家来源");
+        let go = ModelSpec::new(
+            "opencode-go",
+            "deepseek-v4.1-flash",
+            "https://opencode.ai/zen/go/v1",
+            "sk-go",
+            None,
+            false,
+        );
+        let root = tmpdir("note-source");
+        std::fs::write(
+            root.join("models.json"),
+            r#"[{"id":"deepseek-v4.1-flash","name":"4S-x","url":"https://4sapi.com/v1","apiKey":"old"}]"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("settings.json"), "{}").unwrap();
+        let site = site_at(&root, Client::Workbuddy);
+        let o = write_workbuddy_site(&site, &go, &Opts::default()).unwrap();
+        assert_eq!(
+            o.foreign_conflict.as_deref(),
+            Some("https://4sapi.com/v1"),
+            "指向 4SAPI 的条目对 Go 来说就是别家的"
+        );
+    }
+
+    /// F17:ZCode 的"可不可写"必须先核 config.json 里的 provider 对象 ——
+    /// 否则预告敢承诺「新增 provider「4SAPI」+ N 条模型」,真写才报
+    /// "config.json 里没有 provider 对象"。
+    #[test]
+    fn zcode_readable_requires_a_provider_object_in_config_json() {
+        let root = tmpdir("zcode-readable");
+        std::fs::write(
+            root.join("provider_config.json"),
+            r#"{"schemaVersion":1,"config":{"providerConfigRules":{"providerRules":[]},"modelConfigRules":{"providerModelRules":[]}}}"#,
+        )
+        .unwrap();
+        let site = site_at(&root, Client::Zcode);
+        // config.json 缺 provider → 提前判不可读(真写也正是在这一句上失败)
+        std::fs::write(root.join("config.json"), "{}").unwrap();
+        let e = site_readable(&site).unwrap_err();
+        assert!(e.contains("provider"), "{e}");
+        let we = write_zcode_site(&site, &spec()).unwrap_err();
+        assert!(we.contains("provider"), "真写的失败点应与之对应: {we}");
+
+        // 补齐后通过
+        std::fs::write(root.join("config.json"), r#"{"provider":{}}"#).unwrap();
+        site_readable(&site).unwrap();
+        // provider 不是对象同样不行
+        std::fs::write(root.join("config.json"), r#"{"provider":[]}"#).unwrap();
+        assert!(site_readable(&site).unwrap_err().contains("provider"));
+        // provider_config.json 缺 config 对象也要提前拦住(真写要往它下面塞规则)
+        std::fs::write(root.join("config.json"), r#"{"provider":{}}"#).unwrap();
+        std::fs::write(root.join("provider_config.json"), r#"{"schemaVersion":1}"#).unwrap();
+        let e2 = site_readable(&site).unwrap_err();
+        assert!(e2.contains("config"), "{e2}");
+    }
+
+/// 取消写入:WorkBuddy 删条目;选中项指向它时一并清掉;再删一次是「本来就没有」(不写盘)。
 
 /// 取消写入:WorkBuddy 删条目;选中项指向它时一并清掉;再删一次是「本来就没有」(不写盘)。
     #[test]

@@ -68,9 +68,35 @@ if (strayDll.length) {
 const crypto = require('crypto');
 const sha256 = crypto.createHash('sha256').update(fs.readFileSync(exePath)).digest('hex');
 
+// 更新说明两种给法:一串命令行参数(RELEASE.md 的用法),或 `--notes-file <路径>`。
+// 后者的存在理由:这段文字要**原样**进应用里的更新卡,而多行 / 中文 / 带引号的说明
+// 走命令行时会被 shell 的引号与代码页规则搅坏(实测在 PowerShell 5.1 下尤其容易)。
+const argv = process.argv.slice(2);
+const nfIdx = argv.indexOf('--notes-file');
+let notes = '';
+if (nfIdx >= 0) {
+  const notesPath = argv[nfIdx + 1];
+  if (!notesPath) {
+    console.error('--notes-file 后面要跟一个文件路径');
+    process.exit(1);
+  }
+  try {
+    notes = fs.readFileSync(notesPath, 'utf8').trim();
+  } catch (e) {
+    console.error(`读不到说明文件 ${notesPath}: ${e.message}`);
+    process.exit(1);
+  }
+  if (!notes) {
+    console.error(`说明文件是空的:${notesPath}`);
+    process.exit(1);
+  }
+} else {
+  notes = argv.join(' ');
+}
+
 const json = {
   version,
-  notes: process.argv.slice(2).join(' ') || `Grandettoken ${version}`,
+  notes: notes || `Grandettoken ${version}`,
   pub_date: new Date().toISOString(),
   platforms: {
     'windows-x86_64': {

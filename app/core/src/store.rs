@@ -35,7 +35,8 @@ impl Store {
     /// 版本化迁移。`CREATE TABLE IF NOT EXISTS` 对**已存在**的表零作用 —— 既不补列
     /// 也不校验形状,老库要等运行期报 "no such column" 才发现(报告 P2-17)。
     fn migrate(&self) -> Result<(), String> {
-        const WANT: i64 = 1;
+        // 2 = vault_items 按 (platform,label) 去重 + 唯一索引(下面那段),老库也补跑
+        const WANT: i64 = 2;
         let cur: i64 = self
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -71,6 +72,35 @@ impl Store {
             for (col, decl) in cols {
                 self.add_column_if_missing(table, col, decl)?;
             }
+        }
+        // vault_items 里两条同 (platform,label) 的行是允许的 —— 唯一性只由应用层
+        // "先查后插"把关,而查与插之间会放开锁:双击「保存」能插进两条一模一样的
+        // 索引行。落成库级约束:先在**一个事务**里按大小写不敏感去重(留最早那一行
+        // —— earliest 是用户最初那条,后插的副本跟着它;顺序按 created_at,同刻按 rowid),
+        // 再建唯一索引。两段都幂等,user_version 到 2 之后不再跑。
+        if self.table_exists("vault_items")? {
+            let tx = self
+                .conn
+                .unchecked_transaction()
+                .map_err(|e| format!("开启密钥箱迁移事务失败: {e}"))?;
+            tx.execute_batch(
+                r#"
+                DELETE FROM vault_items WHERE rowid NOT IN (
+                    SELECT rowid FROM vault_items v WHERE NOT EXISTS (
+                        SELECT 1 FROM vault_items o
+                        WHERE o.platform = v.platform COLLATE NOCASE
+                          AND o.label = v.label COLLATE NOCASE
+                          AND (o.created_at < v.created_at
+                               OR (o.created_at = v.created_at AND o.rowid < v.rowid))
+                    )
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_vault_uniq
+                    ON vault_items (platform COLLATE NOCASE, label COLLATE NOCASE);
+                "#,
+            )
+            .map_err(|e| format!("整理密钥箱索引失败: {e}"))?;
+            tx.commit()
+                .map_err(|e| format!("提交密钥箱迁移失败: {e}"))?;
         }
         self.conn
             .execute_batch(&format!("PRAGMA user_version = {WANT};"))
@@ -203,7 +233,9 @@ impl Store {
     /// 没有基线(软件那天还没装上/机器整段没开)→ 退化为「窗口内首快照起算」
     /// 的**下限估算** —— 界面本来就标"推算",报一个偏小的真值比整格「——」有用
     /// (踩过:装当周周一/月首没有快照,本周消耗一直显示数据不足)。
-    /// 窗口内不足两条快照才算真的无从推算,返回 None。
+    /// 窗口内不足两条快照才算真的无从推算,返回 None;窗口内**一条都没有**
+    /// (只剩窗口起点之前的基线)同样返回 None —— 那是"这一期还没数据",
+    /// 不是"这期消耗 0"(以前回 Some(0.0),环比会凭空多一个 0 当分母)。
     pub fn consumption_since(
         &self,
         provider_id: &str,
@@ -225,8 +257,22 @@ impl Store {
                 Ok((r.get(0)?, r.get(1)?))
             })
             .map_err(|e| format!("读取快照失败: {e}"))?
-            .filter_map(Result::ok)
+            .filter_map(|r| match r {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    // 静默丢行 = 数字悄悄偏小且无从排查(与写库失败同一条纪律,O-7)
+                    eprintln!("读取快照行失败(该行已跳过): {e}");
+                    None
+                }
+            })
             .collect();
+
+        // 窗口内一条都没有:只有窗口起点之前的基线。这是"这一期还没数据",
+        // 不是"这期消耗 0" —— 报 0 会把汇总条的环比百分比凭空抬高。
+        // (与"不足两条快照返回 None"同一条纪律;doc 早写明窗口要两条快照才算得出。)
+        if !rows.iter().any(|(ts, _)| *ts >= from_ts) {
+            return Ok(None);
+        }
 
         // 窗口起点之前要有基线;没有就退到窗口内首行起算(下限)
         let has_baseline = rows.iter().any(|(ts, _)| *ts <= from_ts);
@@ -292,7 +338,13 @@ impl Store {
         let vals: Vec<f64> = stmt
             .query_map(params![provider_id, from_ts, to_ts], |r| r.get(0))
             .map_err(|e| format!("读取快照失败: {e}"))?
-            .filter_map(Result::ok)
+            .filter_map(|r| match r {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    eprintln!("读取快照行失败(该行已跳过): {e}");
+                    None
+                }
+            })
             .collect();
 
         let mut sum = 0.0;
@@ -335,7 +387,13 @@ impl Store {
         let rows: Vec<(i64, f64)> = stmt
             .query_map(params![provider_id, from_ts], |r| Ok((r.get(0)?, r.get(1)?)))
             .map_err(|e| format!("读取快照失败: {e}"))?
-            .filter_map(Result::ok)
+            .filter_map(|r| match r {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    eprintln!("读取快照行失败(该行已跳过): {e}");
+                    None
+                }
+            })
             .collect();
 
         // 顺序扫描,取最后一次**像申请的**跳升。
@@ -379,7 +437,13 @@ impl Store {
         let rows: Vec<(i64, f64)> = stmt
             .query_map(params![provider_id, from_ts], |r| Ok((r.get(0)?, r.get(1)?)))
             .map_err(|e| format!("读取快照失败: {e}"))?
-            .filter_map(Result::ok)
+            .filter_map(|r| match r {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    eprintln!("读取快照行失败(该行已跳过): {e}");
+                    None
+                }
+            })
             .collect();
 
         // 少于两条推不出任何差值:返回空数组,让界面画"数据不足"。
@@ -654,6 +718,33 @@ mod tests {
         Store { conn }
     }
 
+    /// 迁移前的现场:只有 vault_items(且里面已经有重复行),`user_version` 还是 0。
+    /// 用 (id, platform, label, created_at)。
+    fn mem_with_vault(rows: &[(&str, &str, &str, i64)]) -> Store {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE vault_items (
+                id         TEXT PRIMARY KEY,
+                platform   TEXT    NOT NULL,
+                label      TEXT    NOT NULL,
+                hint       TEXT    NOT NULL DEFAULT '',
+                note       TEXT    NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );",
+        )
+        .unwrap();
+        for (id, platform, label, created_at) in rows {
+            conn.execute(
+                "INSERT INTO vault_items (id, platform, label, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?4)",
+                params![id, platform, label, created_at],
+            )
+            .unwrap();
+        }
+        Store { conn }
+    }
+
     #[test]
     fn consumption_sums_decreases_and_ignores_topups() {
         let s = mem();
@@ -671,6 +762,75 @@ mod tests {
         s.record("p", 5000, Some(10.0), None, None, "amount").unwrap();
         // 窗口起点 4000 之前没有基线,窗口内也只有一条 → 真的无从推算
         assert_eq!(s.consumption_since("p", 4000, 6000).unwrap(), None);
+    }
+
+    /// F8:有基线但**窗口内一条都没有** → None,不是 Some(0.0)。
+    /// 报 0 等于说"这一期消耗 0",环比百分比会凭空被抬高(doc 早写明要两条快照)。
+    #[test]
+    fn consumption_is_none_when_the_window_itself_has_no_row() {
+        let s = mem();
+        // 只有窗口起点之前的那一条快照(基线),窗口里什么都没有
+        s.record("p", 1000, Some(100.0), None, None, "amount").unwrap();
+        assert_eq!(
+            s.consumption_since("p", 2000, 3000).unwrap(),
+            None,
+            "窗口内没有快照时不能编一个 0 出来"
+        );
+        // 窗口内一旦有行,原有的"跨起点按时间折算"行为一字不变:
+        // 基线 100(ts=1000)→ 窗口首行 80(ts=2500),起点 2000 处按线性折算余额
+        // = 100 - 20×(1000/1500) = 86.67,差额 6.67
+        s.record("p", 2500, Some(80.0), None, None, "amount").unwrap();
+        assert_eq!(s.consumption_since("p", 2000, 3000).unwrap(), Some(6.67));
+    }
+
+    /// F10:老库里已经有重复的 (platform,label)(大小写不同也算同一对)时,
+    /// 迁移要去重到最早那一行,并落下大小写不敏感的唯一索引。
+    #[test]
+    fn migration_dedupes_existing_vault_duplicates() {
+        let s = mem_with_vault(&[
+            ("a", "4SAPI", "主key", 100),
+            ("b", "4sapi", "主KEY", 200), // 双击「保存」留下的副本
+            ("c", "Hapi", "别的", 150),
+        ]);
+        s.migrate().unwrap();
+        let list = s.vault_list().unwrap();
+        assert_eq!(list.len(), 2, "同 (platform,label) 只留一条: {list:?}");
+        let kept = list
+            .iter()
+            .find(|i| i.platform.eq_ignore_ascii_case("4sapi"))
+            .expect("4SAPI 那条还在");
+        assert_eq!(kept.id, "a", "留最早那一行(用户最初建的)");
+        s.migrate().unwrap(); // 幂等:再跑一次不动数据也不报错
+        // 把版本号退回去重跑一遍:去重 + CREATE INDEX IF NOT EXISTS 都能重入
+        s.conn.execute_batch("PRAGMA user_version = 0;").unwrap();
+        s.migrate().unwrap();
+        assert_eq!(s.vault_list().unwrap().len(), 2);
+    }
+
+    /// F10:唯一索引在库这一层拒绝重复插入(应用层的"先查后插"隔着一次放开锁,
+    /// 双击保存时挡不住第二个)。
+    #[test]
+    fn vault_unique_index_rejects_a_duplicate_insert() {
+        let s = Store::open_memory().unwrap();
+        let mk = |id: &str, platform: &str, label: &str, ts: i64| VaultItem {
+            id: id.into(),
+            platform: platform.into(),
+            label: label.into(),
+            hint: String::new(),
+            note: String::new(),
+            created_at: ts,
+            updated_at: ts,
+        };
+        s.vault_upsert(&mk("a", "4SAPI", "主key", 100)).unwrap();
+        let e = s
+            .vault_upsert(&mk("b", "4sapi", "主KEY", 200))
+            .unwrap_err();
+        assert!(e.contains("UNIQUE"), "库级约束要真的拦住: {e}");
+        assert_eq!(s.vault_list().unwrap().len(), 1);
+        // 不同标签/不同平台照旧能插
+        s.vault_upsert(&mk("c", "4sapi", "备用", 300)).unwrap();
+        s.vault_upsert(&mk("d", "Hapi", "主KEY", 300)).unwrap();
+        assert_eq!(s.vault_list().unwrap().len(), 3);
     }
 
     /// 无窗口前基线(装软件当周/当月):从窗口内首快照起算下限,而不是整格「——」。

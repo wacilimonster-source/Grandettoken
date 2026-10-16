@@ -12,19 +12,39 @@ $dl    = Join-Path $root 'dl'
 $mingw = Join-Path $env:USERPROFILE 'mingw64'
 New-Item -ItemType Directory -Force -Path $dl | Out-Null
 
-function Get-File($url, $out) {
-  if (Test-Path $out) { Write-Host "skip  $out"; return }
+function Get-File($url, $out, $minBytes = 0) {
+  if (Test-Path $out) {
+    $have = (Get-Item $out).Length
+    if ($minBytes -gt 0 -and $have -lt $minBytes) {
+      # A truncated download (or an HTML error page saved under this name) used to be
+      # accepted forever by the bare Test-Path: rustup-init then failed with a
+      # confusing error, or did nothing at all. Same idea as the pinned winlibs
+      # SHA-256 below - never trust a leftover file just because it exists.
+      Write-Host "redo  $out is $have bytes (< $minBytes) - discarding and re-downloading"
+      Remove-Item $out -Force
+    } else {
+      Write-Host "skip  $out"
+      return
+    }
+  }
   Write-Host "get   $url"
   $sw = [System.Diagnostics.Stopwatch]::StartNew()
   Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing -TimeoutSec 900
   $sw.Stop()
-  $mb = [math]::Round((Get-Item $out).Length / 1MB, 1)
+  $len = (Get-Item $out).Length
+  if ($minBytes -gt 0 -and $len -lt $minBytes) {
+    Remove-Item $out -Force -EA SilentlyContinue
+    throw "$out is only $len bytes (expected at least $minBytes): truncated download or an error page. Delete build\dl and re-run; if the URL now serves something else, update this script deliberately."
+  }
+  $mb = [math]::Round($len / 1MB, 1)
   Write-Host "done  $mb MB in $([math]::Round($sw.Elapsed.TotalSeconds,1))s"
 }
 
-# 1. rustup-init
+# 1. rustup-init. The URL always serves the newest rustup, so it cannot be pinned by
+#    hash; a size floor is what catches a truncated file or a saved error page
+#    (a real rustup-init.exe is >8 MB, so 1 MB never rejects a good download).
 $rustup = Join-Path $dl 'rustup-init.exe'
-Get-File 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-gnu/rustup-init.exe' $rustup
+Get-File 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-gnu/rustup-init.exe' $rustup 1MB
 
 # 2. MinGW-w64 (WinLibs standalone zip). Pinned by SHA-256: a corrupted or
 #    swapped archive used to unpack straight into the toolchain silently.
@@ -44,8 +64,24 @@ if (-not (Test-Path (Join-Path $mingw 'bin\gcc.exe'))) {
   if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
   Expand-Archive -Path $zip -DestinationPath $tmp -Force
   $inner = Get-ChildItem $tmp -Directory | Select-Object -First 1
-  Move-Item $inner.FullName $mingw -Force
+  if (-not $inner) { throw "winlibs.zip contains no top-level directory - delete build\dl\winlibs.zip and re-run" }
+  if (Test-Path $mingw) {
+    # %USERPROFILE%\mingw64 already exists (older unpack, or a nested one left behind
+    # by the old bug). `Move-Item $inner $mingw -Force` into an EXISTING directory
+    # NESTS the tree - mingw64\mingw64\bin\gcc.exe - and the old script still printed
+    # "ok MinGW -> ...", so every later build failed with a confusing "gcc not found".
+    # Merge the CONTENTS into place instead, then prove gcc is where it belongs.
+    Write-Host "merge $($inner.FullName) -> $mingw (existing directory kept)"
+    Get-ChildItem -LiteralPath $inner.FullName -Force | ForEach-Object {
+      Copy-Item -LiteralPath $_.FullName -Destination $mingw -Recurse -Force
+    }
+  } else {
+    Move-Item $inner.FullName $mingw -Force
+  }
   Remove-Item -Recurse -Force $tmp
+  if (-not (Test-Path (Join-Path $mingw 'bin\gcc.exe'))) {
+    throw "MinGW unpack failed: $mingw\bin\gcc.exe is missing. Delete the whole '$mingw' directory (it holds a broken or nested unpack) and run install-toolchain.ps1 again."
+  }
   Write-Host "ok    MinGW -> $mingw"
 } else {
   Write-Host "skip  MinGW already present"
@@ -67,9 +103,22 @@ if (Test-Path (Join-Path $cargoBin 'cargo.exe')) {
 $env:Path = "$cargoBin;" + (Join-Path $mingw 'bin') + ";$env:Path"
 Write-Host ""
 Write-Host "=== verify ==="
-& (Join-Path $cargoBin 'rustc.exe') -V
-& (Join-Path $cargoBin 'cargo.exe') -V
-& (Join-Path $mingw 'bin\gcc.exe') --version | Select-Object -First 1
+# Native commands do NOT throw under $ErrorActionPreference='Stop': a broken or
+# absent default toolchain still printed "toolchain ready." and exited 0, because
+# only the tauri-cli probe below ever looked at $LASTEXITCODE (report P3-21).
+# Every probe now has its exit code examined; a missing path is reported as such.
+function Assert-Tool($exe, $arguments, $what) {
+  if (-not (Test-Path $exe)) {
+    throw "$what not found: $exe - the toolchain install above did not complete; delete the directory and run install-toolchain.ps1 again"
+  }
+  $out = & $exe @arguments
+  $code = $LASTEXITCODE
+  if ($code -ne 0) { throw "$what failed (exit code $code): $exe $($arguments -join ' ')" }
+  return $out
+}
+Write-Host (Assert-Tool (Join-Path $cargoBin 'rustc.exe') @('-V') 'rustc')
+Write-Host (Assert-Tool (Join-Path $cargoBin 'cargo.exe') @('-V') 'cargo')
+(Assert-Tool (Join-Path $mingw 'bin\gcc.exe') @('--version') 'gcc' | Select-Object -First 1) | Write-Host
 # tauri-cli is required by `build.ps1 bundle`. Compiling it takes 10+ minutes, so
 # this script only CHECKS and tells the operator what to run - it does not build it.
 # Calling a path that does not exist raises a terminating CommandNotFound, and with

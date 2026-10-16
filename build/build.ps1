@@ -107,38 +107,102 @@ try {
     'bundle'    {
       # Missing updater signing env vars = tauri-cli waits for a password in a
       # non-interactive session and hangs forever (CPU 0), or produces a setup.exe
-      # with no .sig. Fail fast here; the working recipe is RELEASE.md step 3 -
-      # export the vars from bash. NOTE: in PowerShell, "$env:X = ''" DELETES the
-      # variable instead of setting an empty value (bitten twice, see RELEASE.md).
+      # with no .sig. Fail fast here. NOTE: in PowerShell, "$env:X = ''" DELETES the
+      # variable instead of setting an empty value (bitten twice, see RELEASE.md) -
+      # and neither Git Bash nor .NET can hand an empty value to a child process.
+      # So accept the OTHER documented route: tauri-cli itself falls back to an
+      # empty password when its `ci` flag is on (bundle.rs: `or_else(|| if ci {
+      # Some("".into()) })`), and that flag is just `env = "CI"`. For an unencrypted
+      # key `$env:CI = 'true'` is therefore equivalent to an empty password and
+      # works from plain PowerShell. `ci` changes nothing else in the bundler.
       if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
-        throw "TAURI_SIGNING_PRIVATE_KEY is not set (path to the signing key). See RELEASE.md step 3: export it from bash, then run this script"
+        throw "TAURI_SIGNING_PRIVATE_KEY is not set (path to the signing key). See RELEASE.md step 3"
       }
-      if ($null -eq $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) {
-        throw "TAURI_SIGNING_PRIVATE_KEY_PASSWORD is not set. Even an unencrypted key needs an explicit empty value (bash: export TAURI_SIGNING_PRIVATE_KEY_PASSWORD='') or signing hangs waiting for a password"
+      if ($null -eq $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -and -not $env:CI) {
+        throw "neither TAURI_SIGNING_PRIVATE_KEY_PASSWORD nor CI is set: signing would block on an interactive password prompt. For an unencrypted key set `$env:CI = 'true' (tauri then uses an empty password); for an encrypted one export the password from bash (see RELEASE.md step 3)"
       }
+      $relDir = Join-Path $targetRoot 'release'
+      # The exe the bundler must be asserted on is the one THIS run produced. A no-op
+      # build can skip the final relink: the leftover exe then keeps its old
+      # LastWriteTime, so a `-gt $started` filter either picks some other stale
+      # binary - and the import-table check below validates the wrong file - or finds
+      # nothing and throws "build produced no fresh artifact" right after a
+      # SUCCESSFUL build (report P0-3 / G-1). So move every candidate aside first:
+      # with the output gone cargo has to relink, and anything found afterwards
+      # cannot be a leftover. The pre-build hashes are kept for the note below.
+      $stash = Join-Path $targetRoot ('release-pre-bundle-' + $PID)
+      $preHash = @{}
+      if (Test-Path $relDir) {
+        foreach ($f in Get-ChildItem -Path $relDir -Filter '*.exe' -File -EA SilentlyContinue |
+                        Where-Object { $_.Name -notmatch '^(cargo|rustc|build-script)' }) {
+          $preHash[$f.Name] = (Get-FileHash $f.FullName -Algorithm SHA256).Hash
+          New-Item -ItemType Directory -Force -Path $stash | Out-Null
+          try { Move-Item $f.FullName (Join-Path $stash $f.Name) -Force }
+          catch { throw "cannot move $($f.FullName) out of the way before bundling (is the app still running?): $($_.Exception.Message)" }
+          Write-Host "stash $($f.Name) -> $stash (forces a real relink)"
+        }
+      }
+      # PS 5.1 turns ANY native stderr line into a terminating error while
+      # $ErrorActionPreference='Stop' is in force - and cargo writes its progress
+      # ("Info Looking up installed tauri packages...") to stderr. When the caller
+      # drives this script through a pipe or captures its streams (an agent session,
+      # CI, `... | Out-String`), that write aborts the script at this line BEFORE the
+      # exit code below is read - and the stashed exe is never restored. Relax the
+      # preference for the two native calls only: $LASTEXITCODE stays the single
+      # source of truth (report P0-3), so a real build failure is still fatal.
+      $prevEap = $ErrorActionPreference
+      $ErrorActionPreference = 'Continue'
       & cargo tauri build
       # cargo is a NATIVE command: $ErrorActionPreference='Stop' does not catch it, and
       # every later native command (objdump below) OVERWRITES $LASTEXITCODE. Without this
       # capture a failed build printed "ok import table clean" and exited 0 (report P0-3).
       $buildExit = $LASTEXITCODE
-      if ($buildExit -ne 0) { throw "cargo tauri build failed with exit code $buildExit" }
+      $ErrorActionPreference = $prevEap
+      if ($buildExit -ne 0) {
+        # Put the previous artifact back: a failed build should not also leave the tree
+        # without a usable exe.
+        if (Test-Path $stash) {
+          foreach ($f in Get-ChildItem -Path $stash -File) { Move-Item $f.FullName (Join-Path $relDir $f.Name) -Force }
+          Remove-Item -Recurse -Force $stash -EA SilentlyContinue
+          Write-Host "restored the pre-build artifact(s) after the failed build"
+        }
+        throw "cargo tauri build failed with exit code $buildExit"
+      }
       # Deleting the copied DLL is a bet on -L search order - it can lose silently
       # and ship an exe with a runtime DLL dependency this machine happens to have.
       # Assert against the real import table instead (report O-11).
-      $relDir = Join-Path $targetRoot 'release'
-      # Only an artifact produced by THIS run may be asserted on, otherwise a stale exe
-      # from the previous version passes the check and gets uploaded as the new release.
-      $exePath = Get-ChildItem -Path $relDir -Filter '*.exe' -File |
+      # Deterministic pick: biggest exe wins, name breaks ties - never LastWriteTime.
+      $exePath = Get-ChildItem -Path $relDir -Filter '*.exe' -File -EA SilentlyContinue |
         Where-Object { $_.Name -notmatch '^(cargo|rustc|build-script)' } |
-        Where-Object { $_.LastWriteTime -gt $started } |
-        Sort-Object Length -Descending | Select-Object -First 1
-      if (-not $exePath) { throw "cannot find a release exe newer than this run started under $relDir (build produced no fresh artifact)" }
+        Sort-Object -Property @{ Expression = { $_.Length }; Descending = $true },
+                              @{ Expression = { $_.Name }; Descending = $false } |
+        Select-Object -First 1
+      if (-not $exePath) { throw "no release exe under $relDir after a successful cargo tauri build (the pre-build copy is kept in $stash)" }
+      if ($exePath.LastWriteTime -le $started) {
+        throw "$($exePath.Name) was not (re)written by this run even though the pre-build copy was moved aside - refusing to assert on it. Pre-build copy: $stash"
+      }
+      $newHash = (Get-FileHash $exePath.FullName -Algorithm SHA256).Hash
+      if (-not $preHash.ContainsKey($exePath.Name)) {
+        Write-Host "ok    $($exePath.Name) is new in this run"
+      } elseif ($preHash[$exePath.Name] -eq $newHash) {
+        # Byte-identical is expected: same inputs, same linker. Freshness is proved by
+        # the stash (the file was gone, so it can only have been recreated by this run).
+        Write-Host "note  $($exePath.Name) is byte-identical to the pre-build copy (deterministic relink)"
+      } else {
+        Write-Host "ok    $($exePath.Name) rebuilt (SHA-256 changed)"
+      }
+      # The stash is only the safety net for a failed build; the fresh artifact supersedes it.
+      Remove-Item -Recurse -Force $stash -EA SilentlyContinue
       $objdump = Join-Path $mingwBin 'objdump.exe'
       if (-not (Test-Path $objdump)) {
         Write-Host "warn  objdump missing - skipped single-exe import check"
       } else {
+        # Same PS 5.1 native-stderr trap as cargo above: keep this call from aborting
+        # the script when its streams are captured.
+        $ErrorActionPreference = 'Continue'
         $bad = & $objdump -p $exePath.FullName 2>$null |
           Select-String '^\s*DLL Name:.*WebView2Loader'
+        $ErrorActionPreference = $prevEap
         if ($bad) { throw "single-exe delivery broken: $($exePath.Name) still imports WebView2Loader.dll" }
         Write-Host "ok    import table clean (no WebView2Loader.dll) - $($exePath.Name)"
       }

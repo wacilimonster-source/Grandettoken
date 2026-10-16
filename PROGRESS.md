@@ -1,9 +1,10 @@
 # TokenScope 开发进展
 
-> 最后更新:2026-10-08
-> 状态:**v0.1.19 已构建(WorkBuddy 登录改抓浏览器会话 Cookie,尚未发版)**;
-> 同日 v0.1.18 修掉登录窗空白死锁;更早:v0.1.17(WorkBuddy 改走挂件内网页登录)、
-> v0.1.16(胶囊光环)、v0.1.13(Trae / WorkBuddy 积分 + Codex 渠道 + 热键 / 动效层 / 渠道显隐)
+> 最后更新:2026-10-16
+> 状态:**v0.1.33 已构建(全量体检第二轮:36 条缺陷修完,P1 六条;core 单测 153 项全绿)**
+> 更早:v0.1.32(模型「基本信息」逐项可复制)、v0.1.31(写入 Trae 真库验证通过)、
+> v0.1.30(Trae 目录名抗改名)、v0.1.29(全量代码体检修复)、v0.1.28(本地密钥箱)、
+> v0.1.26(每日签到 Trae/WorkBuddy)、v0.1.25(模型页多来源)
 
 ## WorkBuddy 登录:真正要抄的是会话 Cookie,不是令牌(2026-10-08,v0.1.19)
 
@@ -1332,6 +1333,80 @@ CARGO_TARGET_DIR:构建直接在仓库里跑,产物落在 `app/src-tauri/target`
 - **挂件侧待裁决**:要不要把「写入 Trae」改成走云端(账号级、跨设备持久、可被 `update_custom_model` 删除),
   本地库那条降级为离线兜底(并把上面四个字段补齐)。用户 2026-10-15 已在 Trae 界面里成功手加过一条
   (`OG-deepseek-v4.1-flash`,id 2923059202),说明界面/云端这条链路对他可用。
+
+## 全量体检第二轮:36 条缺陷一次修完(2026-10-16,v0.1.33)
+
+**怎么查的**:先把 133 项单测跑绿当基线,再按文件切分做了一遍**全量**静态审查
+(core 12 个模块、`lib.rs` 2638 行、`app.js` 4002 行、`styles.css` 798 行、7 个 `.ps1` + 8 个 `.js`),
+配机器化交叉检查:37 个 `#[tauri::command]` × 48 个 `invoke()` 调用点的参数契约、
+DOM id / CSS 类引用、`innerHTML` 转义扫描、生产代码 `unwrap/expect` 清点、密钥外泄扫描、编码/BOM。
+每条 P1 都回到源码逐行复核过(不采信"看起来像")。**结论:0 个 P0、6 个 P1、约 30 个 P2。**
+
+**6 条 P1(都已修)**
+1. **配置坏了却仍被整份覆盖**(`lib.rs` `check_update`):启动时 `Config::try_load` 失败会置
+   `CONFIG_BROKEN` 并提示"设置保存已暂停,以免覆盖还能修复的原始配置",但 `check_update`
+   是唯一没问 `refuse_if_config_broken()` 的整份写入者,而默认配置 `auto_check_update=true`、
+   `last_check_at=None` 两道节流都不拦 → 前端(启动 30 秒后无条件调一次)会把这行 JSON 永久覆盖。
+   修:损坏时只更新内存时间戳,不落库。
+2. **「取消写入」删掉用户自己的条目**(`inject.rs`):归属判定是 `url.contains(host)`,
+   `https://mirror-4sapi.com/v1` 也算"我们写的";`4S-` 前缀更是用户自己的命名习惯。
+   修:改成**精确主机名**比对(或整串等于我们会写的 base_url),`4S-` 前缀只在 url 为空时兜底 ——
+   与读路径 `models::source_of_url` 终于同一口径。
+3. **签到没到账却记成「已领」**(`lib.rs`):回查只在返回 `Already` 时才改判,其余(含
+   "仍显示未签"这个最强反证)一律照抄 `Claimed` → `done_for_day` 为真 → 节拍器与手动按钮
+   当天都不再试,积分静默丢掉。修:回查仍可领就降级为可重试。
+4. **汇总条把没配密钥的 OpenCode Go 套餐摊进消耗**(`app.js`):后端会把 `plan` 连占位视图一起挂,
+   前端只按 `plan` 过滤 → 全新安装(只配 4SAPI)凭空多出约 ¥2.37/天的"套餐摊销"。
+   修:`plans` 必须带 `hasKey`。
+5. **套餐周期"实测学习"永久失效**(`fetch.rs`):`cycle_cached` 只收套餐渠道(长度 1),
+   而读取按 `PROVIDERS` 下标(opencode-go 是 `[1]`)→ `cycles.get(1)` 恒为 `None`,
+   `learned` 永远是 false,且每轮都白写一次 SQLite。修:按 `PROVIDERS` 全表对齐。
+   (旧测试传的是单元素切片,下标恰好对上,所以一直没暴露。)
+6. **吸附展开态的「收回 ✕」压住底栏「退出」**(`styles.css`):`#dockClose` 固定在卡片右下
+   8px、`z-index:30`,而展开时 `docked` 已移除、底栏是显示的 → 点「退出」被它截走,变成收成竖条。
+   实测重叠 87%×94%;修:`body.dock-open .foot{padding-right:44u}`,留出 12px 净空。
+
+**P2 里值得记的几条**:`url_memo` 的"失败就清备忘"分支实际不可达(渠道会永久钉在失效的备用域名上);
+`main_window_reset` 回退到 `windows.first()`,与它自己的注释相反;上期窗口无快照时
+`consumption_since` 报 `Some(0.0)` 而不是 `None`(环比被凭空抬高);DeepSeek 的
+`balance_infos[].currency` 从没读过(USD 账户被当人民币显示并计入合计);`model_price` 缺字段
+被 `unwrap_or(0.0)` 顶替成"¥0.000/次";响应体上限在读完整个 body 之后才检查;
+`-N` 后缀的备份目录(同秒连点两次时自己产生的)因为只认 15 位而**永不被清理**
+(里面是明文密钥);`open_path` / `inject_rollback` 的白名单是不解析 `..` 的字符串前缀
+(可交给资源管理器执行任意 exe);WorkBuddy 读回校验只断言写入前就已成立的 id+url;
+`legacy_left()` 先 trim 后 split,尾引号没去掉 → "旧版还在"的提醒永不出现;
+`wb_clear_session` 的结果被 `let _ =` 吞掉 → 命令返回成功但 Cookie 还在;
+`check_update` 用裸 `.lock()`(store 被污染时 24 小时节流失效);签到没有在途互斥
+(节拍器与手动点击可同时 POST claim);`quit` 不等在途的客户端写入;`set_pin` 在主线程写 SQLite;
+密钥箱没有 `UNIQUE(platform,label)`(双击保存能插进两条一样的);前端 `aria-expanded` 引用了
+一个未声明的 `open`(恒为 true);密钥箱读取失败被显示成"密钥箱是空的";
+`.note/.dim/.ov-h/.okbox/.err` 五个类**压根没有 CSS 规则**;`scan-secrets.ps1` 对自家更新私钥
+结构性失明且命中时原样回显密钥;`verify-ui-0923.js` 点了一个不存在的 `#btnSort`,必然抛异常
+且一条结果都不打印;`cdp-probe.js` 匹配不到就连到任意 Chromium 还 `exit 0`。
+
+**顺带修掉的"宣称已修但没修完"**:金额千分位(P3-30)、紧凑条点「+N」会拖窗口(P3-32)、
+`inject.rs` 里最后一处硬编码"不是 4SAPI"(P0-4 残留);另外 4 处 `filter_map(Result::ok)`
+静默吞坏行改成 `eprintln!` 后丢弃。
+
+**复测**:core `cargo test` **153 passed / 0 failed**(净增 20 项,其中 13 项经"临时还原后再跑"
+证明在修复前确实失败)、0 告警;`cargo check --all-targets`(整个 Tauri 壳)零错误零告警;
+8 个 `.js` 全过 `node --check`;7 个 `.ps1` 纯 ASCII 无 BOM;IPC 契约 37 命令 × 48 调用点全对齐;
+`build/scan-secrets.ps1` 在真实仓库上仍 CLEAN(夹具仓库能全部命中,公开公钥不误报)。
+
+**发版**:v0.1.33。**签名环境变量的坑这次换了条正路**——`cargo tauri` 只在
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 缺席时提示密码,而 PowerShell / Git Bash / .NET
+**都无法把"存在但为空"的变量交给子进程**(实测:`$env:X=''` 是删除;Git Bash 的
+`export X=''` 到不了 Windows 子进程;`ProcessStartInfo` 的空值也被丢掉)。真正的出路是
+tauri-cli 自己的 `ci` 标志(`bundle.rs`:`or_else(|| if ci { Some("".into()) })`,
+来源就是 `env = "CI"`):**未加密的密钥只要 `$env:CI = 'true'`,等价于给了空密码**,
+纯 PowerShell 就能跑。`build/build.ps1` 的 bundle 守卫据此放宽(密码 或 CI 二选一),
+`ci` 在打包器里只影响这一个分支。
+
+**本次未修(记录在案)**:①签到只取第一份 Trae 凭据(`candidates().next()`,双装 Trae 且
+首份 token 过期时每天报"凭据失效",取数那条路是会轮换的);②`appauth` 把"文件被占用/写到一半"
+与"真的没登录"混成同一句话;③WorkBuddy 登录的三个状态位是进程级 `AtomicBool`、无会话号、
+无超时(关窗后立刻重开可能停在"登录中");④每轮取数有约 9 次重叠的 O(n) 区间扫描(既有 O-1,
+行数随 90 天保留期增长)。前三条是 P3、影响面窄,第四条是明确的优化项,都不阻塞本次发版。
 
 ## 尚未实现 / 待验证
 

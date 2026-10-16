@@ -38,15 +38,21 @@ const EXPR = `JSON.stringify({
     process.exit(1);
   }
 
-  // Only real pages, and prefer the app's own page: with several debug targets
-  // attached, pages[0] can be an iframe/SW and the DOM reads are all garbage.
+  // Only the app's own page. The old `find(...) || pages[0]` fallback attached to
+  // whatever else owned port 9222 (another Chromium, a leftover Edge WebView),
+  // evaluated the DOM expression on that unrelated page and exited 0 - a
+  // machine-readable "pass" measured on the wrong page. Refuse instead, and list
+  // the candidates so the operator can see what is squatting on the port.
   const pages = targets.filter((t) => t.type === 'page');
   console.log('targets:', targets.map((t) => `${t.type}:${t.title || ''}`).join(' | '));
 
-  const target =
-    pages.find((t) => /tauri|grandettoken|tokenscope/i.test(`${t.title || ''} ${t.url || ''}`)) ||
-    pages[0];
-  if (!target) { console.log('no debuggable target'); process.exit(1); }
+  const target = pages.find((t) => /tauri|grandettoken|tokenscope/i.test(`${t.title || ''} ${t.url || ''}`));
+  if (!target) {
+    console.log(`no app page on port ${PORT} - refusing to probe an unrelated target`);
+    if (!targets.length) console.log('  (no targets at all - is the app running with remote debugging enabled?)');
+    for (const t of targets) console.log(`  ${t.type}  ${t.title || '(no title)'}  ${t.url || '(no url)'}`);
+    process.exit(1);
+  }
 
   const ws = new WebSocket(target.webSocketDebuggerUrl);
   const send = (id, method, params) => ws.send(JSON.stringify({ id, method, params }));

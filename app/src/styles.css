@@ -63,7 +63,6 @@ body{
 /* 选中态用实心强调色:emoji 图标改不了颜色,所以图标统一换成 currentColor 的 SVG */
 .ib.on{color:#fff;background:var(--ac)}
 .ib.on:hover{background:#93b1ff;color:#fff}
-.ib.spin{animation:spin .7s ease}
 /* 面板标题栏的文字按钮:比图标直白;10.5px 太小,按 11.5px 下限抬了 */
 .tb{border:0;background:transparent;color:var(--tx2);cursor:pointer;font-family:inherit;
   font-size:max(11.5px,calc(10.5px*var(--u)));line-height:1.25;padding:calc(3px*var(--u)) calc(6px*var(--u));border-radius:calc(5px*var(--u));flex:none;white-space:nowrap}
@@ -72,7 +71,6 @@ body{
 /* 文字按钮没法"转",刷新反馈改成脉冲 */
 .tb.spin{animation:pulse .7s ease}
 @keyframes pulse{50%{opacity:.35}}
-@keyframes spin{to{transform:rotate(360deg)}}
 
 /* 标题旁的更新提示:强调色,不是告警色 —— 更新不是故障 */
 .uchip{flex:none;border:1px solid #7fa2ff66;background:#7fa2ff24;color:#b7ccff;
@@ -130,8 +128,6 @@ body{
 .ico.logo>img{width:100%;height:100%;object-fit:contain;display:block}
 /* 未配置 / 取数失败:和字母方块的"变灰"语义对齐 */
 .ico.logo.off>img{filter:grayscale(1);opacity:.5}
-/* 紧凑条的 chip 图标更小,官方标要稍微收一点,不然视觉上盖过文字 */
-body.form-compact .ico.logo>img{width:88%;height:88%}
 
 /* 配额型(OpenCode Go):5 小时 / 本周 / 本月 三个窗口各一行迷你条 */
 .wins{margin-top:calc(8px*var(--u));display:flex;flex-direction:column;gap:calc(5px*var(--u))}
@@ -328,6 +324,8 @@ body.view-manage #lkKeys{display:none}
 .ccname{font-size:calc(12.5px*var(--u));font-weight:500;display:flex;align-items:center;gap:calc(6px*var(--u))}
 .ccst{font-size:max(11.5px,calc(11.5px*var(--u)));color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ccst .kh{color:var(--tx3);font-variant-numeric:tabular-nums}
+/* 凭据库读取失败:钥匙尾号那格转红(必须写在 .ccst .kh 之后 —— 同为 0-2-0,靠源码顺序赢) */
+.err,.kh.err{color:var(--bad)}
 .tagn{font-size:max(10.5px,calc(10.5px*var(--u)));color:var(--tx3);border:1px dashed var(--line2);
   border-radius:999px;padding:0 calc(7px*var(--u));flex:none}
 .eye{flex:none;width:calc(28px*var(--u));height:calc(28px*var(--u));border-radius:calc(7px*var(--u));
@@ -384,6 +382,11 @@ body.form-compact .wmark{display:inline}
   border-top:1px solid var(--line);font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);flex:none}
 .foot .lk{color:var(--tx2);cursor:pointer}
 .foot .lk:hover{color:var(--ac)}
+/* 吸附展开态(docked 已摘、底栏在):右下角的「收回」按钮(#dockClose,.ib 24px)会压住
+   底栏最右的「退出」—— 按钮横向 8~32px、纵向 8~32px,退出文字 12~35px,重叠 ~87%×94%,
+   点「退出」实际是收成竖条。只在这一态给底栏让出右侧空间(44u = 按钮左缘 32u + 12u 空隙),
+   紧凑条/胶囊的 .foot 是 display:none,docked 态与 dock-open 互斥,几何都不受影响。 */
+body.dock-open .foot{padding-right:calc(44px*var(--u))}
 
 /* 紧凑条专属的形态切换按钮(条内其余部分不放按钮) */
 .cctl{display:none;align-items:center;gap:calc(2px*var(--u));flex:none;padding:0 calc(6px*var(--u)) 0 calc(2px*var(--u))}
@@ -711,24 +714,31 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 /* 写入预告 / 结果 / 客户端详情:长在列表下方,不弹新窗口(沿用删除密钥的内联确认) */
 .sheet{border:1px solid #3d5a8a;background:#151d2b;border-radius:calc(9px*var(--u));
   padding:calc(9px*var(--u)) calc(10px*var(--u));margin:calc(8px*var(--u)) 0}
-.mstop{display:flex;justify-content:space-between;align-items:baseline;gap:calc(8px*var(--u));
-  margin-bottom:calc(6px*var(--u))}
-.mstop b{color:#cfe0ff;font-size:max(11.5px,calc(12px*var(--u)))}
 .srow{display:flex;gap:calc(7px*var(--u));align-items:baseline;margin:calc(3px*var(--u)) 0;
   font-size:max(10.5px,calc(11px*var(--u)))}
 .srow .sk{flex:none;width:calc(35px*var(--u));color:var(--tx3)}
 .srow .sv{flex:1;min-width:0;color:var(--tx2);word-break:break-all}
 .srow .sv b{color:var(--tx);font-weight:600}
-.mdlnote{font-size:max(10px,calc(10.5px*var(--u)));color:var(--tx3);line-height:1.65;margin:calc(3px*var(--u)) 0}
 .mdlwarn{border:1px solid #6b5327;background:#241d12;border-radius:calc(6px*var(--u));
   padding:calc(6px*var(--u)) calc(8px*var(--u));color:#f0c67a;margin:calc(5px*var(--u)) 0;
   font-size:max(10.5px,calc(11px*var(--u)))}
 .mdlwarn b{color:#ffd894}
-.mdlok{border:1px solid #2f6b43;background:#132219;border-radius:calc(6px*var(--u));
+/* ── 弹层通用排版类(F1):v0.1.32 起 app.js 一直在发这五个类,样式表里一个都没有 ——
+   说明文字/次要文字因此继承了正文的 --tx,标题行也没有两端对齐。全部只在弹层(#mdlOvIn)
+   与设置页里出现,紧凑条/胶囊/吸附态都碰不到。 ── */
+/* 弹层标题行:与 .uhead 同一套排布(标题靠左、✕ 靠右) */
+.ov-h{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:calc(6px*var(--u))}
+/* 说明段:比正文小一档、次级色、放宽行距(中文长句更耐读) */
+.note{font-size:max(11px,calc(11px*var(--u)));color:var(--tx2);line-height:1.7;margin:calc(3px*var(--u)) 0}
+/* 行内次要文字:真的变暗(以前没规则,和正文一样亮) */
+.dim{color:var(--tx3)}
+/* 写入结果框:接管退役的 .mdlok 那套绿框;哪一家没写成时框内会带 .mdlwarn,
+   用 :has() 把整框转红,失败一眼可见(WebView2 的 Chromium ≥105,与文件里已在用的
+   grid-template-rows:0fr 过渡同代) */
+.okbox{border:1px solid #2f6b43;background:#132219;border-radius:calc(6px*var(--u));
   padding:calc(6px*var(--u)) calc(8px*var(--u));color:#8ee9b8;margin:calc(5px*var(--u)) 0;
   font-size:max(10.5px,calc(11px*var(--u)))}
-.mdlsub{color:var(--tx3);letter-spacing:.06em;margin:calc(8px*var(--u)) 0 calc(3px*var(--u));
-  font-size:max(10px,calc(10.5px*var(--u)))}
+.okbox:has(.mdlwarn){border-color:#6b3230;background:#241512;color:#ffb4b0}
 .mdlprev{padding-bottom:calc(5px*var(--u));border-bottom:1px solid var(--line)}
 .mdlprev:last-of-type{border-bottom:0;padding-bottom:0}
 .btn.s{font-size:max(10px,calc(10.5px*var(--u)));padding:calc(2px*var(--u)) calc(6px*var(--u));

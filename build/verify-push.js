@@ -31,27 +31,55 @@ const REPO = 'Grandettoken';
 
   console.log('');
   console.log('=== scanning local files for the token ===');
+  // .git 整体跳过(objects/pack 又大又是二进制),但 token 恰好最容易落在 .git 里
+  // 的纯文本文件上:
+  //   .git/config    <- `git remote set-url https://user:TOKEN@github.com/...`,这是和
+  //                     RELEASE.md 里 `git credential fill` 并列的常见做法
+  //   .git/logs/**   <- reflog 会把远端 URL 原样写进去(head 与 refs/remotes 都有)
+  //   .git/FETCH_HEAD<- 按 URL fetch 时同样会写进完整 URL
+  // 所以这几处单独扫。以前只扫工作区却输出"token is not stored anywhere on disk",
+  // 结论比证据宽 —— 现在只说扫过哪里。
   const SKIP_DIR = /(\\|\/)(\.git|dl|mingw64|git|target|node_modules)(\\|\/|$)/;
   const SKIP_EXT = /\.(png|ico|db|db-wal|db-shm|exe|dll|rlib|rmeta|bin|lock)$/i;
 
   let hits = 0, scanned = 0;
+  const scanText = (p) => {
+    if (SKIP_EXT.test(path.basename(p))) return;
+    let c;
+    try { c = fs.readFileSync(p, 'utf8'); } catch { return; } // binary or unreadable
+    scanned++;
+    if (c.includes(t)) { console.log('  LEAK:', p.replace(ROOT, '.')); hits++; }
+  };
   const walk = (d) => {
     let entries;
     try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
     for (const e of entries) {
       const p = path.join(d, e.name);
       if (e.isDirectory()) { if (!SKIP_DIR.test(p)) walk(p); continue; }
-      if (SKIP_EXT.test(e.name)) continue;
-      try {
-        const c = fs.readFileSync(p, 'utf8');
-        scanned++;
-        if (c.includes(t)) { console.log('  LEAK:', p.replace(ROOT, '.')); hits++; }
-      } catch { /* binary or unreadable */ }
+      scanText(p);
     }
   };
   walk(ROOT);
+
+  // 上面那个 walk 把 .git 跳过了:这里补上 .git 里的纯文本落点(远端 URL 就在 config 里)
+  const gitDir = path.join(ROOT, '.git');
+  const gitTargets = [path.join(gitDir, 'config'), path.join(gitDir, 'FETCH_HEAD')];
+  const collectLogs = (d) => {
+    let entries;
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) collectLogs(p);
+      else gitTargets.push(p);
+    }
+  };
+  collectLogs(path.join(gitDir, 'logs'));
+  for (const p of gitTargets) scanText(p);
+
+  const scope = 'the repo tree (without .git objects/pack, dl, mingw64, node_modules, target) plus .git/config, .git/logs and .git/FETCH_HEAD';
   console.log(`scanned ${scanned} text files; token occurrences: ${hits}`);
-  console.log(hits === 0 ? 'CLEAN - token is not stored anywhere on disk.' : 'WARNING - token found on disk!');
+  console.log(`scope: ${scope}`);
+  console.log(hits === 0 ? 'CLEAN - token not stored in any scanned location.' : 'WARNING - token found on disk!');
   // 这个脚本是用来"确认没泄漏、确实推上去了"的,发现泄漏却以 0 退出等于反向造假(报告 G-2)。
   const ok = hits === 0 && cr.status === 200 && tr.status === 200 && blobs.length > 0;
   if (!ok) {

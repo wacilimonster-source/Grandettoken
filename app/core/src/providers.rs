@@ -291,6 +291,7 @@ pub fn extract_opencode_go(body: &Value) -> FetchResult {
 }
 
 /// DeepSeek 官方:充值型,接口不给累计消耗,全靠本地快照差值推算。
+/// 币种按 `balance_infos[].currency` 如实透出(缺字段才按 CNY)。
 pub fn extract_deepseek(body: &Value) -> FetchResult {
     let Some(info) = body
         .get("balance_infos")
@@ -306,13 +307,36 @@ pub fn extract_deepseek(body: &Value) -> FetchResult {
     };
 
     let total_balance = info.get("total_balance").and_then(num);
+    // 币种以接口答复为准(缺字段才按 CNY):以前一律写死 "CNY"、副行还硬写 ¥,
+    // 美元账户会被显示成"¥256.00" —— 数字是真的,单位是假的。
+    let unit = info
+        .get("currency")
+        .and_then(|c| c.as_str())
+        .map(|c| c.trim().to_ascii_uppercase())
+        .filter(|c| !c.is_empty())
+        .unwrap_or_else(|| "CNY".to_string());
+    let money = |v: f64| {
+        if unit == "CNY" {
+            format!("¥{v:.2}")
+        } else {
+            // 不是人民币就别摆 ¥ 符号:那个符号会被读成"已经换算过了"
+            format!("{unit} {v:.2}")
+        }
+    };
     // 缺字段就是"未知",不能拿 0.00 顶替 —— 界面会把"没这个数据"读成"余额是 0"
     let mut extra = Vec::new();
     if let Some(g) = info.get("granted_balance").and_then(num) {
-        extra.push(("赠送余额".to_string(), format!("¥{:.2}", g)));
+        extra.push(("赠送余额".to_string(), money(g)));
     }
     if let Some(t) = info.get("topped_up_balance").and_then(num) {
-        extra.push(("充值余额".to_string(), format!("¥{:.2}", t)));
+        extra.push(("充值余额".to_string(), money(t)));
+    }
+    if unit != "CNY" {
+        // 说清"这笔钱没折进人民币合计",否则汇总条会把两种货币直接相加
+        extra.push((
+            "币种".to_string(),
+            format!("{unit}:平台自己的计价单位,未折进 CNY 合计"),
+        ));
     }
 
     // is_available=false 是服务器对**账户状态**的答复(余额耗尽 / 停用),不是"这次取数失败"。
@@ -332,7 +356,7 @@ pub fn extract_deepseek(body: &Value) -> FetchResult {
         remaining: total_balance.map(round2),
         used: None,
         total: None, // 充值型无"限额"概念,不画进度条
-        unit: "CNY".into(),
+        unit,
         extra,
         ..Default::default()
     }
@@ -1105,6 +1129,39 @@ mod tests {
         }));
         assert_eq!(r.remaining, Some(256.0));
         assert!(r.total.is_none()); // 充值型不画进度条
+        assert_eq!(r.unit, "CNY");
+        assert!(r.extra.iter().all(|(_, v)| v.starts_with('¥')));
+        assert!(!r.extra.iter().any(|(k, _)| k == "币种"));
+    }
+
+    /// F6:美元账户不能被标成 CNY、副行也不能带 ¥ —— 单位必须是接口给的那个币种,
+    /// 并且明说它没折进人民币合计(汇总条只加 CNY)。
+    #[test]
+    fn deepseek_uses_the_currency_the_api_reports() {
+        let r = extract_deepseek(&json!({
+            "is_available": true,
+            "balance_infos": [{
+                "currency": "usd",
+                "total_balance": "12.34",
+                "granted_balance": "0.00",
+                "topped_up_balance": "12.34"
+            }]
+        }));
+        assert_eq!(r.unit, "USD", "币种大写、且照接口写,不再一律 CNY");
+        assert_eq!(r.remaining, Some(12.34), "数值照旧给界面显示");
+        assert!(
+            r.extra.iter().all(|(_, v)| !v.starts_with('¥')),
+            "非人民币的副行不能写 ¥: {:?}",
+            r.extra
+        );
+        assert!(r.extra.iter().any(|(_, v)| v.contains("USD 12.34")));
+        let note = r
+            .extra
+            .iter()
+            .find(|(k, _)| k == "币种")
+            .map(|(_, v)| v.as_str())
+            .expect("要有一条说明币种的行");
+        assert!(note.contains("未折进") && note.contains("CNY"), "{note}");
     }
 
     #[test]
