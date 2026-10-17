@@ -1236,26 +1236,27 @@ function peekCheckinLine() {
 function pillPeekHtml() {
   const amt = CHANNELS.filter((c) => c.hasKey && !c.hidden && c.valid && c.kind === "amount");
   const today = amt.reduce((s, c) => s + (c.day || 0), 0);
-  const lines = [
-    `今日合计 <b>${esc(money(today, "CNY"))}</b>${
-      amt.length ? ` <span class="pk-d">(${amt.length} 个金额渠道)</span>` : ""
-    }`,
-  ];
+  // 胶囊只有 132~280px 宽:每行必须一句话说得完,长渠道名用简称 ——
+  // 截断成 "OpenCod…" 比不给还难看(真机截图确认过)
+  const lines = [`<div class="pk-row"><span class="pk-k">今日</span><b>${esc(money(today, "CNY"))}</b></div>`];
   const tight = (PILL.sorted || []).find((c) => c.hasKey && !c.hidden) || null;
   if (tight) {
     const r = remainRatio(tight);
+    const pct = r === null ? "—" : Math.round(r * 100) + "%";
+    // 放得下就用全名(4SAPI / DeepSeek),放不下才退简称(OC),不截成 "OpenCod…"
+    const nm = (tight.name || "").trim();
+    const name = nm && nm.length <= 7 ? nm : (tight.short || nm).trim();
     lines.push(
-      `最紧张 ${esc(tight.name)} 剩 <b>${r === null ? "—" : Math.round(r * 100) + "%"}</b>`
+      `<div class="pk-row"><span class="pk-k">最紧</span><span class="pk-n">${esc(
+        name
+      )}</span><b style="color:${TONE_COLOR[toneOf(tight)]}">${pct}</b></div>`
     );
   } else {
-    lines.push("还没有配置好的渠道");
+    lines.push(`<div class="pk-row"><span class="pk-k">还没有可用渠道</span></div>`);
   }
   const ck = peekCheckinLine();
-  if (ck) lines.push(ck);
-  return (
-    lines.map((t) => `<div>${t}</div>`).join("") +
-    `<div class="pk-d">单击收起 · 4 秒自动收 · ▲ 仍是展开面板</div>`
-  );
+  if (ck) lines.push(`<div class="pk-row"><span class="pk-k">${esc(ck)}</span></div>`);
+  return lines.join("");
 }
 
 async function pillPeekToggle() {
@@ -1270,7 +1271,9 @@ async function pillPeekToggle() {
     // 留出的高度按**实测**气泡高度来(字体档/内容长短都可能变),再夹一个范围:
     // 写死一个数字会在"特大字号 + 长渠道名"下把气泡切掉或把胶囊压扁
     const measured = Math.ceil(box.getBoundingClientRect().height);
-    PEEK.h = Math.min(Math.round(132 * u), Math.max(Math.round(84 * u), measured + Math.round(14 * u)));
+    // 贴着内容长高:只留 12px 呼吸 + 下限 44(两行的高度)。
+    // 下限给大了会变成"信息在上、胶囊在下、中间一大块空" (真机截图确认过)
+    PEEK.h = Math.min(Math.round(132 * u), Math.max(Math.round(44 * u), measured + Math.round(12 * u)));
     document.body.style.setProperty("--peekh", PEEK.h + "px");
     document.body.classList.add("peek-open");
     const [w, h] = formSize("pill");
