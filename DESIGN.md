@@ -945,6 +945,12 @@ harness home 根下。所以 DSH 的备份目录里多一份 `.inject-layout.jso
 - **改版本号别用 PowerShell 的 `-replace | Set-Content`**(v0.1.38 发版时踩到):它按 ANSI 重写整份
   文件 —— `多平台` 变乱码、注释行被并成一行,`Cargo.toml` 事实上被改坏(TOML 里那句 description
   不再是合法 UTF-8)。改版本号只动那一行,改完 `git diff` 复核"只有一行变了"再提交。
+- **前端改动的回归,探针必须"驱动到你改的那一屏"**(v0.1.39 补的教训):v0.1.38 把 `mdlRowHtml`
+  里的 `const on = done(id, r.id);` 连带删掉,而行渲染还在用它 —— 每行抛一次 `ReferenceError`,
+  被 `renderModels` 外层的 try/catch 兜成界面上的「模型页渲染出错」。`node --check` 只看语法、
+  假 DOM 探针只加载页面(`inject_state` 返回 null → 停在"还没取到模型清单"),两个都报"通过"。
+  现在 `build/probe-frontend.js` 会真渲染模型页(5 个客户端 + 价目表 + 详情/预告/已配置/被挡四个弹层),
+  并把「界面上不许出现『渲染出错』」写进退出码。**删变量、改渲染函数之后,必须确认探针走到那一屏。**
 
 ### 12.6 安全
 

@@ -3988,6 +3988,7 @@ function mdlRowHtml(r) {
       const st = MDL.clients.find((x) => x.client === id);
       const installed = st ? st.installed : false;
       const running = st ? st.running : false;
+      const on = done(id, r.id);
       // DSH 是唯一「边跑边写」的:它的 profile 按请求解析,运行中不必先退出,
       // 所以既不给它「运行中」的黄色警示,也不在提示里让人去退它。
       const hot = HOT_CLIENTS.has(id);
