@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>产品设计 · 胶囊"看一眼"· 速览交互重做 · 2026-10-17</title>
+<style>
+  :root{
+    --bg:#0f1115; --fg:#e6e8ee; --mut:#9aa3b2; --line:#262b36; --card:#151922;
+    --ac:#6d5ef8; --ok:#4ade9d; --warn:#f7c355; --bad:#ff6b63; --ds:#4d6bfe;
+    --pillbg:#12141af2; --pillline:#2b3140;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f6f7f9; --fg:#1b1f27; --mut:#5b6472; --line:#dfe3ea; --card:#fff;
+           --pillbg:#12141af2; --pillline:#2b3140; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:15px/1.72 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1060px;margin:0 auto;padding:28px 22px 90px}
+  h1{font-size:26px;margin:0 0 4px}
+  h2{font-size:19px;margin:36px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+  h3{font-size:16px;margin:22px 0 6px}
+  h4{font-size:14px;margin:16px 0 4px;color:var(--mut);font-weight:600}
+  p{margin:8px 0}
+  code{background:rgba(127,127,127,.16);padding:1px 5px;border-radius:4px;font-size:13px;
+    font-family:"Cascadia Mono",Consolas,monospace;word-break:break-all}
+  .sub{color:var(--mut);font-size:13px}
+  .hand{border:1px solid var(--ac);border-left-width:4px;background:var(--card);
+    border-radius:8px;padding:14px 16px;margin:18px 0}
+  .hand b{color:var(--ac)}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:rgba(127,127,127,.08);font-weight:600;white-space:nowrap}
+  .note{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:10px 0}
+  .note.ok{border-left:3px solid var(--ok)}
+  .note.warn{border-left:3px solid var(--warn)}
+  .note.bad{border-left:3px solid var(--bad)}
+  .note .lbl{color:var(--mut);font-size:13px;display:block;margin-bottom:4px}
+  ul,ol{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+  .okc{color:var(--ok)} .badc{color:var(--bad)} .hc{color:var(--warn)} .mc{color:var(--mut)}
+  /* ───── 真尺寸胶囊 mock(164×46;和产品里同一套观感) ───── */
+  .rail{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:14px 0}
+  @media (max-width:860px){.rail{grid-template-columns:1fr}}
+  .opt{border:1px solid var(--line);border-radius:10px;background:var(--card);padding:12px 14px}
+  .opt header{display:flex;align-items:baseline;gap:8px;margin-bottom:2px}
+  .opt header b{font-size:15px}
+  .opt header .tag{font-size:11.5px;color:var(--mut);border:1px solid var(--line);border-radius:10px;padding:0 7px}
+  .stage{position:relative;height:190px;margin:10px 0 6px;border-radius:8px;
+    background:repeating-linear-gradient(45deg,#1a1e27 0 12px,#171b23 12px 24px);
+    display:flex;align-items:center;justify-content:center;overflow:hidden}
+  @media (prefers-color-scheme: light){.stage{background:repeating-linear-gradient(45deg,#eceff4 0 12px,#e6e9ef 12px 24px)}}
+  /* 胶囊本体:与 styles.css 同规格(46 高、圆角 999、#12141af2、1px 描边) */
+  .pillm{position:relative;display:flex;align-items:center;gap:8px;
+    background:var(--pillbg);border:1px solid var(--pillline);border-radius:999px;
+    height:46px;padding:0 10px 2px 9px;min-width:132px;max-width:280px;
+    transition:width .18s ease, height .18s ease, border-radius .18s ease;
+    user-select:none;cursor:pointer;overflow:hidden}
+  .pillm .pdot{width:8px;height:8px;border-radius:50%;background:var(--ok);flex:none}
+  .pillm .pico{width:26px;height:26px;border-radius:7px;background:#2a3040;flex:none;
+    display:grid;place-items:center;font-size:10.5px;font-weight:700;color:#fff}
+  .pillm .pv{font-size:14px;font-weight:600;white-space:nowrap;font-variant-numeric:tabular-nums}
+  .pillm .pv i{font-style:normal;font-size:12px;color:var(--mut);font-weight:400}
+  .pillm .ex{color:var(--mut);font-size:10px;margin-left:2px}
+  .pillm .hair{position:absolute;left:16px;right:16px;bottom:5px;height:2px;border-radius:2px;background:#ffffff14}
+  .pillm .hair i{display:block;height:100%;width:96%;border-radius:2px;background:var(--ok)}
+  .pillm .swap{transition:opacity .15s ease, transform .15s ease}
+  .pillm .swap.out{opacity:0;transform:translateY(-2px)}
+  /* C 方案:被拉高 + 小圆角(用于说明"形状身份"问题) */
+  .pillm.reshaper{border-radius:16px;height:120px;align-items:flex-start;padding-top:9px;flex-direction:column;gap:2px}
+  .pillm.reshaper .pv{font-size:12px}
+  /* D 方案:独立提示窗(这里用一个漂浮盒示意) */
+  .tip{position:absolute;left:50%;transform:translateX(-50%) translateY(-64px);
+    background:#1a1e27;border:1px solid var(--line);border-radius:9px;padding:7px 10px;
+    font-size:12px;line-height:1.6;color:var(--tx2,#c7ced9);white-space:nowrap;
+    box-shadow:0 10px 24px -8px rgba(0,0,0,.6);opacity:0;pointer-events:none;transition:.18s}
+  .tip.on{opacity:1;transform:translateX(-50%) translateY(-72px)}
+  .opt .cap{font-size:12px;color:var(--mut);margin-top:2px}
+  .btnx{background:var(--ac);border:0;color:#fff;padding:6px 12px;border-radius:6px;
+    cursor:pointer;font-size:12.5px;font-family:inherit}
+  .btnx.ghost{background:transparent;border:1px solid var(--line);color:var(--fg)}
+  .row-actions{display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap}
+  /* 裁决 */
+  .q{border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:10px 0;background:var(--card)}
+  .q .t{font-weight:600;margin-bottom:2px}
+  .q .o{display:block;margin:5px 0;cursor:pointer;font-size:14px}
+  .q .o input{margin-right:7px}
+  .q .rec{font-size:12.5px;color:var(--ok)}
+  .memo{position:sticky;bottom:0;background:var(--card);border:1px solid var(--ac);border-radius:8px;
+    padding:12px 14px;margin-top:18px;z-index:5}
+  .memo textarea{width:100%;min-height:60px;background:var(--bg);color:var(--fg);
+    border:1px solid var(--line);border-radius:6px;padding:8px;font:13px/1.6 Consolas,monospace;resize:vertical}
+  .memo button{margin-top:8px;background:var(--ac);border:0;color:#fff;padding:7px 16px;border-radius:6px;cursor:pointer;font-size:13px}
+  .foot{margin-top:34px;padding-top:14px;border-top:1px solid var(--line);font-size:12.5px;color:var(--mut)}
+  a{color:#7aa2ff}
+  .kbd{font-family:Consolas,monospace;font-size:12px;border:1px solid var(--line);border-radius:4px;padding:0 5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>胶囊"看一眼" · 速览交互重做</h1>
+<div class="sub">产品设计文档 v1（待裁决）· 2026-10-17 · 针对 v0.1.35 / v0.1.36 的真机反馈 · <b>只出方案，未改代码</b></div>
+
+<div class="hand">
+  <b>交接框 ·</b> 你已经两次说"看着奇怪"。第一次我以为是配色和文案，改了一轮；第二次我停下来量了真机，
+  发现根因是<b>几何</b>，不是样式：胶囊是 <code>border-radius:999px</code>，46px 高时是药丸，被我拉到 120px 后
+  圆角上限变成 60px —— 视觉上成了"一颗被吹起来的豆子"。所以这次不修修补补，把五个方向都按
+  <b>真实的 164×46</b> 做成可点的 mock，请你选一个方向。
+  <div style="margin-top:8px">裁决在 <a href="#decide">第 8 节</a>（5 项，勾完自动出速记）。定案后我按方案实施，发 v0.1.37。</div>
+</div>
+
+<h2>1. 先说人话</h2>
+<p>你要的是<b>点一下胶囊、不展开面板</b>，就知道三件事：今天花了多少、谁最紧张、签到领没领。这个需求没问题，
+问题出在我把它做成了"<b>胶囊长高、上半截显示两行字</b>"——真机上它看起来既不像胶囊、也不像气泡，像把面板压扁塞进了胶囊。</p>
+
+<h2>2. 为什么还是怪（三条，都能复现）</h2>
+<table>
+  <tr><th>#</th><th>现象</th><th>根因</th></tr>
+  <tr><td>1</td><td>胶囊从"药丸"变成"被吹起来的豆子"</td>
+      <td>胶囊圆角是 <code>999px</code>。高 46 时圆角=23（标准药丸）；高 120 时圆角被钳到 60，
+          宽 164、高 120、四角半径 60 → 接近"圆角方块"。<b>这是几何，不是配色</b></td></tr>
+  <tr><td>2</td><td>像"缩小版面板"，两个视觉主体抢注意力</td>
+      <td>上半是信息、中间一条分割线、下半还是原来的胶囊脸 —— 一个控件里出现了两个主体</td></tr>
+  <tr><td>3</td><td>同一颗胶囊两次点开，高度可能不一样；贴边时还会"跳一下"</td>
+      <td>预留高度是按内容实测的（120 / 151 都出现过）；外加层会触发 <code>clampToMonitor</code> 挪位置</td></tr>
+</table>
+<div class="note bad"><span class="lbl">真机测量（125% 缩放，v0.1.36）</span>
+胶囊常态 <b>164×67</b>（内容区 164×46）→ 速览时 <b>164×120</b>，内容 41px、分割线在 64px、胶囊脸在 64~109px。
+圆角从 23 变成 60。截图里那个"大圆角方块"就是这么来的。</div>
+
+<h2>3. 把需求拆开</h2>
+<ul>
+  <li><b>三个问题，按"一天里被问到的频率"排</b>:最紧张是谁（最高）&gt; 今日花了多少 &gt; 签到状态。</li>
+  <li><b>三个硬约束</b>:① 不打断（不展开面板、不抢焦点）；② <b>不改变挂件身份</b>——它是一颗胶囊，
+      不是小面板；③ 数字必须和面板口径一致，取不到就说"——"，不编。</li>
+  <li><b>一条隐含约束</b>:胶囊的宽高/形状不该因为"看一眼"而变化。一旦变，它就不再是那件东西了。</li>
+</ul>
+<p class="sub">这条隐含约束是这次设计的核心。下面五个方向，就是围绕"要不要动形状、动多少"排的。</p>
+
+<h2>4. 五个方向（按真实 164×46 做，直接点胶囊试）</h2>
+
+<div class="rail">
+
+  <!-- A 原地翻页 -->
+  <div class="opt">
+    <header><b>A · 原地翻页</b><span class="tag">推荐 · 零几何</span></header>
+    <div class="stage">
+      <div class="pillm" id="pillA">
+        <span class="pdot"></span><span class="pico">4S</span>
+        <span class="pv swap" id="aV">¥18.20</span><span class="ex">▲</span>
+        <span class="hair"><i></i></span>
+      </div>
+    </div>
+    <div class="row-actions"><button class="btnx" onclick="runA()">点一下试试</button>
+      <span class="cap" id="aCap">点击后播三页，每页 1.6 秒，播完自动回原值</span></div>
+    <p class="cap"><b>做法</b>:形状、宽高、位置全不动，只把胶囊里的文字依次换成
+      「今日 ¥6.42」→「最紧 4SAPI 9%」→「签到 1/2」→ 回原值。<br>
+      <span class="okc">优点</span>:原理上不可能"怪"；零窗口几何操作；和现有的 8 秒轮播是同一套语言。<br>
+      <span class="badc">代价</span>:一次一条，三条要 4.8 秒；期间原来那个数暂时看不见。</p>
+  </div>
+
+  <!-- B 横向加宽 -->
+  <div class="opt">
+    <header><b>B · 横向加宽</b><span class="tag">一次看全</span></header>
+    <div class="stage">
+      <div class="pillm" id="pillB" style="width:164px">
+        <span class="pdot"></span><span class="pico">4S</span>
+        <span class="pv swap">¥18.20</span><span class="ex">▲</span>
+        <span class="hair"><i></i></span>
+      </div>
+    </div>
+    <div class="row-actions"><button class="btnx" onclick="runB()">点一下试试</button>
+      <span class="cap" id="bCap">点击后宽度 164 → 260，高度不变</span></div>
+    <p class="cap"><b>做法</b>:不加高，只加宽到 260，塞一行：
+      「今日 ¥6.42 · 最紧 4SAPI 9% · 签到 1/2」。仍是药丸（半径=23），只是变长。<br>
+      <span class="okc">优点</span>:一次看全；形状身份不变；胶囊宽度本来就是内容驱动的（132~280 已经会变）。<br>
+      <span class="badc">代价</span>:仍是一次窗口宽度变更（约 1 帧）；贴屏幕右边要朝左长，多屏/贴边需要 clamp；
+      一行 11.5px 的密排，读起来像状态条，不如翻页从容。</p>
+  </div>
+
+  <!-- C 抬升卡片 -->
+  <div class="opt">
+    <header><b>C · 抬升卡片</b><span class="tag">当前做法的修正版</span></header>
+    <div class="stage">
+      <div class="pillm reshaper" id="pillC" style="width:164px">
+        <div style="display:flex;align-items:center;gap:8px;width:100%">
+          <span class="pdot"></span><span class="pico">4S</span>
+          <span class="pv">¥18.20</span><span class="ex" style="margin-left:auto">▲</span>
+        </div>
+        <div style="width:100%;padding:2px 2px 0;font-size:12px;color:#c7ced9">
+          <div>今日 ¥6.42</div><div>最紧 4SAPI 9%</div><div>签到 1/2</div>
+        </div>
+      </div>
+    </div>
+    <div class="row-actions"><button class="btnx ghost" onclick="toggleC()">切换圆角 16 / 999</button>
+      <span class="cap" id="cCap">圆角 16px 时是"小卡片"；999px 时就是你觉得怪的那个样子</span></div>
+    <p class="cap"><b>做法</b>:长高到 120，但把圆角从 999 改成 16、隐藏胶囊脸，只留信息 + 底部一条 2px 状态色。<br>
+      <span class="okc">优点</span>:信息最全、和面板同一套排版。<br>
+      <span class="badc">代价</span>:形态身份变了（药丸 → 卡片），用户会问"我刚才那颗胶囊呢"；
+      高度不定、贴边会挪位置 —— 前两个 bug 都出在这里。</p>
+  </div>
+
+  <!-- D 独立提示窗 -->
+  <div class="opt">
+    <header><b>D · 独立提示窗</b><span class="tag">工程面最大</span></header>
+    <div class="stage">
+      <div class="tip" id="tipD">今日 ¥6.42 · 最紧 4SAPI 9% · 签到 1/2</div>
+      <div class="pillm" id="pillD">
+        <span class="pdot"></span><span class="pico">4S</span>
+        <span class="pv">¥18.20</span><span class="ex">▲</span>
+        <span class="hair"><i></i></span>
+      </div>
+    </div>
+    <div class="row-actions"><button class="btnx ghost" onclick="runD()">点一下试试</button>
+      <span class="cap">主窗口完全不动，另弹一个无边框小窗</span></div>
+    <p class="cap"><b>做法</b>:单独一个 240×88 的提示窗贴在胶囊上方。<br>
+      <span class="okc">优点</span>:尺寸自由、主窗口零变形。<br>
+      <span class="badc">代价</span>:多一个窗口要管层级/焦点/跟随移动/退出清理；贴边与多屏要自己算锚点。
+      为了"点一下看三个数"引入第二个窗口，<b>不值</b>。</p>
+  </div>
+
+  <!-- E 不做 -->
+  <div class="opt">
+    <header><b>E · 不做速览</b><span class="tag">最保守</span></header>
+    <div class="stage">
+      <div class="pillm" id="pillE" onclick="runE()">
+        <span class="pdot"></span><span class="pico">4S</span>
+        <span class="pv">¥18.20</span><span class="ex">▲</span>
+        <span class="hair"><i></i></span>
+      </div>
+      <div id="eHint" style="position:absolute;bottom:16px;font-size:11.5px;color:#c7ced9;opacity:0;transition:.18s">单击 → 展开<u>面板</u>（或紧凑条）</div>
+    </div>
+    <div class="row-actions"><span class="cap">点击胶囊 = 展开面板；▲ 与现在一致</span></div>
+    <p class="cap"><b>做法</b>:撤掉速览，只保留 ▲ 展开。<br>
+      <span class="okc">优点</span>:零新增代码、零风险。<br>
+      <span class="badc">代价</span>:"看一眼"的成本从"点一次"回到"展开面板再关掉"—— 而这正是当初提这个功能的理由。</p>
+  </div>
+
+</div>
+
+<h2>5. 我的推荐:A（原地翻页）</h2>
+<div class="note ok">
+<b>为什么是 A:</b>这次两次"怪"的共同点都是<b>形状/尺寸变了</b>。A 是唯一在原理上不会怪的方案 ——
+胶囊自始至终是那颗胶囊，只是"开口说话"。它和胶囊已有的 8 秒轮播是同一套语言（文字在变、形状不变），
+用户不需要学新东西；实现上<b>不碰任何窗口几何</b>，前面两个 bug 那类风险直接归零。
+<div style="margin-top:6px"><b>代价说清楚:</b>一次只显示一条，三条要看 4.8 秒，期间原来那个数暂时看不见。
+缓解:① 每页 1.6 秒（够读一行，也不至于等太久）；② 播放中<b>再点一次立即结束</b>、回到原值；
+③ 发丝条与状态色<b>不动</b>，视觉上始终是"同一颗胶囊在换字"，不是"换了一个界面"。</div>
+</div>
+<div class="note warn"><span class="lbl">备选（如果你更想"一次看全"）</span>
+选 <b>B</b>。它同样保住了药丸形状，只是把胶囊拉长一点；代价是宽度的瞬时变化与贴边时的展开方向。
+C 不建议（形状身份变了）；D 不建议（为一个速览引入第二个窗口）；E 只在"你其实不需要速览"时选。</div>
+
+<h2>6. A 方案的详细规格</h2>
+<h3>6.1 交互</h3>
+<table>
+  <tr><th>项</th><th>规格</th></tr>
+  <tr><td>触发</td><td>单击（位移 &lt; 4px 且按下时长 &lt; 400ms）。拖动、双击、右键都不触发；贴边竖条形态不响应</td></tr>
+  <tr><td>序列</td><td>今日 → 最紧 → 签到 → 回原值。每页 1.6 秒；缺数据的那页自动跳过（例如没启用签到就只播两页）</td></tr>
+  <tr><td>提前结束</td><td>播放中单击 = 立即回原值；按 ▲ 展开面板也会立即结束</td></tr>
+  <tr><td>轮播冲突</td><td>速览期间暂停胶囊的 8 秒轮播，结束后恢复原来的轮播位置</td></tr>
+  <tr><td>托盘</td><td><b>不跟</b>。托盘是"常驻可信信号"，不该跟着翻页跳字（裁决 4）</td></tr>
+</table>
+<h3>6.2 视觉</h3>
+<ul>
+  <li>形状、宽高、位置、圆角、底色、图标、状态点、发丝条：<b>全部不动</b>。只有中间那一行文字在换。</li>
+  <li>每页格式：<code>今日 ¥6.42</code> / <code>最紧 4SAPI 9%</code> / <code>签到 1/2</code>。
+      字标（今日/最紧/签到）用 <code>--tx3</code>，数值用 <code>--tx</code> 650 字重；
+      "最紧"的百分比按状态色（绿/黄/红）。</li>
+  <li>换页动效：旧字 150ms 淡出上移 2px → 新字淡入；<code>prefers-reduced-motion</code> 下直接换字。</li>
+  <li><b>播放期间锁宽</b>：开始速览时把宽度定为「当前宽 vs 三条文案各自所需宽」的最大值，全程不动，
+      播完恢复内容驱动宽度 —— 否则文字一长一短，胶囊宽度会跟着呼吸，又变成"动形状"。</li>
+  <li>宽度：平时仍是内容驱动（132~280），这是既有行为；只有速览这 4.8 秒是锁定值。</li>
+</ul>
+<h3>6.3 数据口径（与面板同源）</h3>
+<ul>
+  <li><b>今日</b> = 全部金额型渠道的今日消耗之和（与汇总条同一口径；不含订阅摊销以外的估算口径变化）。</li>
+  <li><b>最紧</b> = 与胶囊"自动选最紧张"同一个排序函数；百分比渠道取主窗、金额型取本轮额度；取不到显示 <code>—</code>。</li>
+  <li><b>签到</b> = 已启用渠道的"今日已领 / 总数"；一个都没启用 → 跳过这一页。</li>
+  <li>只读现有视图里的值，<b>不新增任何请求</b>。</li>
+</ul>
+<h3>6.4 边界</h3>
+<ul>
+  <li>没有可用渠道 → 「今日 —」+「最紧 —」，签到页跳过。</li>
+  <li>取数失败（显示的是上次快照）→ 照常显示数值，与胶囊平时一致（胶囊本来就会显示上次快照）。</li>
+  <li>读屏：不加 <code>aria-live</code>（每 1.6 秒播报一次会吵）；tooltip 里保留完整信息。</li>
+  <li>开关：显示页加「单击胶囊看速览」，默认开；关掉后单击胶囊无动作。</li>
+</ul>
+
+<h2>7. 改动面与风险（给研发，可跳过）</h2>
+<ul>
+  <li><b>删</b>：<code>peek-open</code> 的窗口长高、<code>--peekh</code>、<code>.pill-peek</code> 绝对定位与气泡 DOM、
+      <code>PEEK</code> 状态与相关 <code>clampToMonitor</code> 调用（v0.1.36 那套整体退役）。</li>
+  <li><b>加</b>：胶囊文字层一个"临时覆盖"状态（不改数据源），1.6 秒翻页定时器、结束回落、
+      播放中暂停轮播；单击/拖动判定沿用现有 4px / 400ms。</li>
+  <li><b>风险</b>：低 —— 无窗口几何操作；唯一要盯的是"速览与 8 秒轮播/托盘重绘"三者别打架。</li>
+  <li><b>回归面</b>：胶囊轮播、贴边、形态切换、托盘 tooltip（应始终是原渠道值）。</li>
+</ul>
+
+<h2 id="decide">8. 待裁决（勾完自动出速记，复制贴回给我）</h2>
+<div id="qs"></div>
+<div class="memo">
+  <div class="sub">速记（还能勾:<span id="doneCnt">0</span>/5）</div>
+  <textarea id="out" readonly placeholder="勾完上面的选项，这一行会变成可以贴回给我的话"></textarea>
+  <button id="copyBtn">复制这行</button>
+  <div class="sub" style="margin-top:6px">每项推荐项上都写了「一句话否决办法」——不同意就直接用那句否掉。</div>
+</div>
+
+<h2>9. 参考</h2>
+<ul>
+  <li>真机截图（v0.1.36）:<code>C:\Users\wacil\AppData\Local\Temp\ts-pill-peek.png</code></li>
+  <li>真机测量:胶囊常态 164×67（内容 164×46）、速览态 164×120、圆角 999→60；
+      点击判定 4px / 400ms；轮播 8 秒（悬停 24 秒）。</li>
+  <li>现有实现位置:<code>app/src/app.js</code> 的 <code>pillPeekToggle / pillPeekHide / pillPeekHtml</code>、
+      <code>app/src/styles.css</code> 的 <code>.pill-peek</code> 与 <code>body.peek-open</code>。</li>
+</ul>
+
+<div class="foot">产品设计文档 · 胶囊速览重做 · 2026-10-17 · 待裁决 · 未改任何代码</div>
+
+</div>
+<script>
+/* ───── A:原地翻页 mock ───── */
+var A_PAGES = ["今日 ¥6.42", "最紧 4SAPI 9%", "签到 1/2"];
+var aTimer = null, aIndex = -1, aOrig = "¥18.20";
+function aRender(txt) {
+  var el = document.getElementById("aV");
+  el.textContent = txt;
+}
+function runA() {
+  var el = document.getElementById("aV");
+  if (aTimer) { clearInterval(aTimer); aTimer = null; }
+  aIndex = -1;
+  aRender(aOrig);
+  // 演示"播放期间锁宽":真实实现取三条文案所需宽度的最大值;这里用 200 近似
+  document.getElementById("pillA").style.width = "200px";
+  function next() {
+    aIndex++;
+    if (aIndex >= A_PAGES.length) { stopA(); return; }
+    el.classList.add("out");
+    setTimeout(function () {
+      el.textContent = A_PAGES[aIndex];
+      el.classList.remove("out");
+    }, 150);
+  }
+  next();
+  aTimer = setInterval(next, 1600);
+  document.getElementById("aCap").textContent = "播放中…（宽度已锁定，再点一次立即结束）";
+  document.querySelector("#pillA").onclick = stopA;
+}
+function stopA() {
+  if (aTimer) { clearInterval(aTimer); aTimer = null; }
+  var el = document.getElementById("aV");
+  el.classList.add("out");
+  setTimeout(function () { el.textContent = aOrig; el.classList.remove("out"); }, 150);
+  document.getElementById("pillA").style.width = "";
+  document.getElementById("aCap").textContent = "点击后播三页，每页 1.6 秒，播放期间宽度锁定";
+  document.querySelector("#pillA").onclick = runA;
+}
+document.querySelector("#pillA").onclick = runA;
+
+/* ───── B:加宽 mock ───── */
+var bWide = false;
+function runB() {
+  var p = document.getElementById("pillB");
+  var v = p.querySelector(".pv");
+  bWide = !bWide;
+  if (bWide) {
+    p.style.width = "260px";
+    v.textContent = "今日 ¥6.42 · 最紧 4SAPI 9% · 签到 1/2";
+    v.style.fontSize = "11.5px";
+    document.getElementById("bCap").textContent = "加宽态：164 → 260，高度不变";
+  } else {
+    p.style.width = "164px";
+    v.textContent = "¥18.20";
+    v.style.fontSize = "";
+    document.getElementById("bCap").textContent = "点击后宽度 164 → 260，高度不变";
+  }
+}
+document.querySelector("#pillB").onclick = runB;
+
+/* ───── C:圆角切换 ───── */
+var cSmall = true;
+function toggleC() {
+  var p = document.getElementById("pillC");
+  cSmall = !cSmall;
+  p.style.borderRadius = cSmall ? "16px" : "999px";
+  document.getElementById("cCap").textContent = cSmall
+    ? "圆角 16px：小卡片（形状身份变了，但看着不怪）"
+    : "圆角 999px：圆角被钳到 60 —— 就是你觉得怪的那个样子";
+}
+document.getElementById("cCap").textContent = "圆角 16px 时是\"小卡片\"；999px 时就是你觉得怪的那个样子";
+
+/* ───── D:提示窗 ───── */
+var dOn = false;
+function runD() {
+  dOn = !dOn;
+  document.getElementById("tipD").classList.toggle("on", dOn);
+}
+document.querySelector("#pillD").onclick = runD;
+
+/* ───── E ───── */
+function runE() {
+  var h = document.getElementById("eHint");
+  h.style.opacity = 1;
+  setTimeout(function () { h.style.opacity = 0; }, 1200);
+}
+
+/* ───── 裁决 ───── */
+(function () {
+  var QS = [
+    ["1", "速览走哪个方向",
+      [["A", "原地翻页：形状不变，文字依次换三条（推荐）", "否了就说「要一次看全」"],
+       ["B", "横向加宽：加宽到 260，一行放三条"],
+       ["C", "抬升卡片：长高 + 圆角改 16 + 不要分割线（当前方向的修正版）"],
+       ["D", "独立提示窗"],
+       ["E", "不做速览（点击=展开面板）"]], 0],
+    ["2", "速览显示哪几项",
+      [["A", "今日合计 + 最紧 + 签到（缺数据的页自动跳过）（推荐）", "少一项就说「去掉签到」"],
+       ["B", "只显示今日 + 最紧"],
+       ["C", "只显示最紧"]], 0],
+    ["3", "每页停留时长",
+      [["A", "1.6 秒（推荐，够读一行）", "嫌慢就说「1.2 秒」"],
+       ["B", "1.2 秒（更快，但可能读不完）"],
+       ["C", "2.5 秒（更从容，但三条要 7.5 秒）"]], 0],
+    ["4", "托盘跟着翻吗",
+      [["A", "不跟（推荐：托盘是常驻可信信号，不跳字）", "想让托盘也翻就选 B"],
+       ["B", "跟（速览时托盘图标也显示当前页）"]], 0],
+    ["5", "开关默认",
+      [["A", "默认开（推荐：这是「看一眼」成本最低的方式）", "嫌多就选 B"],
+       ["B", "默认关，设置里显式打开"]], 0]
+  ];
+  var wrap = document.getElementById("qs"), out = document.getElementById("out"), done = document.getElementById("doneCnt");
+  QS.forEach(function (q) {
+    var d = document.createElement("div"); d.className = "q";
+    d.innerHTML = '<div class="t">' + q[0] + "、" + q[1] + "</div>";
+    q[2].forEach(function (o) {
+      var l = document.createElement("label"); l.className = "o";
+      l.innerHTML = '<input type="radio" name="q' + q[0] + '" value="' + o[0] + '"><b>' + o[0] + "</b> · " + o[1] +
+        (o[2] ? '<div class="sub rec" style="margin-left:22px">一句话否决：' + o[2] + "</div>" : "");
+      l.querySelector("input").onchange = gen; d.appendChild(l);
+    });
+    wrap.appendChild(d);
+  });
+  function gen() {
+    var r = "", n = 0;
+    QS.forEach(function (q) {
+      var c = wrap.querySelector('input[name="q' + q[0] + '"]:checked');
+      if (c) { r += q[0] + c.value + " "; n++; }
+    });
+    out.value = r.trim(); done.textContent = n;
+  }
+  document.getElementById("copyBtn").onclick = function () {
+    out.select(); try { document.execCommand("copy"); } catch (e) {}
+    if (navigator.clipboard) navigator.clipboard.writeText(out.value).catch(function () {});
+    this.textContent = "已复制，贴回对话即可";
+    var s = this; setTimeout(function () { s.textContent = "复制这行"; }, 2200);
+  };
+})();
+</script>
+</body>
+</html>
