@@ -21,3 +21,4 @@ pub mod secrets;
 pub mod store;
 pub mod vault;
 pub mod weblogin;
+pub mod yamledge;

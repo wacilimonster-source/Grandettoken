@@ -3867,7 +3867,11 @@ const CLIENT_NAME = {
   workbuddy: "WorkBuddy",
   "workbuddy-ai": "WorkBuddy AI",
   zcode: "ZCode",
+  dsh: "DeepSeek Harness",
 };
+/// 唯一「边跑边写」的客户端:DSH 的 profile 按请求解析,它自己的设置层与凭据层都会
+/// 收敛外部编辑 —— 所以运行中不是「先退出」,而是「下一个请求生效」。
+const HOT_CLIENTS = new Set(["dsh"]);
 
 /** 单价显示。价目表口径是元/百万 token;按次计费的是元/次。
     金额走统一的 money(千分位 + 两位);只有 <¥1 的档位保留三位小数 ——
@@ -3979,16 +3983,20 @@ function mdlRowHtml(r) {
   if (configured) badges.push('<span class="tagd ok">已配置</span>');
   if (r.tiered) badges.push('<span class="tagd">阶梯</span>');
   if (unusable) badges.push('<span class="tagd bad">不可用</span>');
-  const btns = ["trae", "workbuddy", "workbuddy-ai", "zcode"]
+  const btns = ["trae", "workbuddy", "workbuddy-ai", "zcode", "dsh"]
     .map((id) => {
       const st = MDL.clients.find((x) => x.client === id);
       const installed = st ? st.installed : false;
       const running = st ? st.running : false;
-      const on = done(id, r.id);
-      const cls = on ? " on" : running ? " run" : installed ? "" : " no";
+      // DSH 是唯一「边跑边写」的:它的 profile 按请求解析,运行中不必先退出,
+      // 所以既不给它「运行中」的黄色警示,也不在提示里让人去退它。
+      const hot = HOT_CLIENTS.has(id);
+      const cls = on ? " on" : running && !hot ? " run" : installed ? "" : " no";
       const tip = installed
         ? (on ? "已配置 · 点开可更新或取消写入" : "写入 " + st.label) +
-          (running ? "(正在运行 · 先退出它再写,否则会被它覆盖)" : "")
+          (hot
+            ? (running ? "(运行中也能写 · 下一个请求生效)" : "(不用退出 · 下一个请求生效)")
+            : running ? "(正在运行 · 先退出它再写,否则会被它覆盖)" : "")
         : "没检测到配置文件";
       return (
         '<button class="cdot' + cls + '" data-act="mdlcli" data-id="' + esc(r.id) + '" data-c="' + id +
@@ -4045,7 +4053,7 @@ function renderModelsInner() {
     ? MDL.clients.map(mdlClientChip).join("")
     : MDL.stateError
       ? '<span class="dim">检测客户端失败:' + esc(MDL.stateError) + "</span>"
-      : '<span class="dim">没检测到可写入的客户端(Trae / WorkBuddy / ZCode)</span>';
+      : '<span class="dim">没检测到可写入的客户端(Trae / WorkBuddy / ZCode / DeepSeek Harness)</span>';
 
   const v = mdlView();
   if (!v) {
@@ -4138,7 +4146,13 @@ function renderModelSheet() {
       '<div class="ov-h"><b>' + esc(c.label) + "</b>" +
       '<span class="dim" style="font-size:11px" data-act="mdlclose">✕</span></div>' +
       '<div class="srow"><span class="sk">状态</span><span class="sv">' +
-      (c.installed ? (c.running ? "正在运行(写入前需先退出)" : "未运行") : "没检测到配置文件") + "</span></div>" +
+      (c.installed
+        ? c.running
+          ? HOT_CLIENTS.has(c.client)
+            ? "正在运行(不用退出 · 下一个请求生效)"
+            : "正在运行(写入前需先退出)"
+          : "未运行"
+        : "没检测到配置文件") + "</span></div>" +
       '<div class="srow"><span class="sk">配置</span><span class="sv">' + esc((c.files || []).join("  ·  ")) + "</span></div>" +
       chipsHtml +
       '<div class="srow"><span class="sk">选中</span><span class="sv">' +
@@ -4244,14 +4258,15 @@ function renderModelSheet() {
       .join("") +
     (writesSecret
       ? '<div class="mdlwarn">会把这把 ' + esc(s.sourceName || "") +
-        ' 密钥<b>明文</b>写进上面那个客户端自己的配置文件(它们本来就这么存)。' +
-        "挂件自己不存副本:密钥不进数据库、不进日志、不进写入台账。" +
+        ' 密钥<b>明文</b>写进上面那个客户端自己的配置文件' +
+        (s.client === "dsh" ? "(DSH 这边是 <code>.credentials.yaml</code> 的 <code>refs:</code>,它自己也是这么存的)" : "") +
+        "。挂件自己不存副本:密钥不进数据库、不进日志、不进写入台账。" +
         "<b>但回滚要靠备份</b> —— 备份是照原样拷那个客户端那几个文件,而里面的密钥本来就是明文," +
         "所以 <code>backup-inject/&lt;时间戳&gt;/</code> 下会留下含明文密钥的历史快照" +
         "(每个客户端最多 5 份;换密钥后旧快照不自动失效)。想清掉就去模型页的「打开配置目录」。"+
         "</div>"
       : "") +
-    (!writesSel && !blocked && !removals.length
+    (!writesSel && !blocked && !removals.length && s.client !== "dsh"
       ? '<div class="note">选中项这次不写:写入后在客户端里选一次,挂件会记住口径,以后就能直接帮你选。</div>'
       : "") +
     (removals.length

@@ -2956,7 +2956,7 @@ async fn inject_rollback(state: State<'_, AppState>, backup: String) -> Result<S
                     .to_string(),
             );
         };
-        if inject::process_running(&site.process) {
+        if site.running && site.client.blocks_when_running() {
             return Err(format!(
                 "{} 正在运行,先退出它再回滚(否则回滚会被它的内存态覆盖)",
                 site.label

@@ -1,9 +1,88 @@
 # TokenScope 开发进展
 
 > 最后更新:2026-10-17
-> 状态:**v0.1.37 已发布(速览改为"抬升卡片":圆角 999→16、向下长高、三行一次看全)**
-> 更早:v0.1.36(速览气泡样式重做)、v0.1.35(小鲸鱼研读四包)、v0.1.34(汇总条瘦身)、
-> v0.1.33(全量体检第二轮:36 条缺陷,P1 六条)、v0.1.32(模型「基本信息」逐项可复制)
+> 状态:**v0.1.38 待发版 —— 模型页新增第五个写入目标 DeepSeek Harness(真实 DSH 配置上真写 + 回滚验过)**
+> 更早:v0.1.37(速览改为"抬升卡片")、v0.1.36(速览气泡样式重做)、v0.1.35(小鲸鱼研读四包)、
+> v0.1.34(汇总条瘦身)、v0.1.33(全量体检第二轮:36 条缺陷,P1 六条)
+
+## DeepSeek Harness 写入(2026-10-17,v0.1.38)
+
+**起点**:用户口径「增加一个配置模型添加到 DeepSeek Harness 的功能」,三处裁决:
+① 在模型页加 DSH 作为**第五个写入客户端**(与 T / WB / WBA / ZC 同一套交互);
+② 落点选 **`cordis.patch.yml` 的 `llm-pi-ai` providers + `.credentials.yaml` 的 `refs`**
+(与 DSH 自己的 Models 页同一份事实);
+③ **允许热写**(DSH 会收敛外部编辑)。
+
+**取证(全部可复核,2026-10-17 从本机 DSH 安装包 `app.asar` 里取出)**
+
+| 结论 | 出处 |
+|---|---|
+| 模型/提供方配置落在当前 profile 的 **Cordis patch**(`~/.dsh/profiles/<profile>/cordis.patch.yml`) | `dsh-settings` README:「更改通过当前 profile 的 Cordis patch 持久化」;`dsh-config-editor` 同 |
+| 路由字段:`api`(三选一)/`baseURL`/`apiKeyEnv`/`models[]`(`id`/`name`/`contextWindow`/`maxTokens`/`input`) | `dsh-llm-pi-ai` `lib/index.js` 的 `profile` schema 与 README |
+| **非目录路由**必须给 `api` + `baseURL` + **非空** models;目录里的提供方(如 `opencode-go`)由目录给端点 | 同上 README「失败与恢复」「何时选择」 |
+| `apiKeyEnv` 是**凭据引用**,值落在 `~/.dsh/.credentials.yaml` 的 `refs:`;名字是 `<ROUTE>_API_KEY` | `dsh-credentials-local` README(文件示例里 `refs:` 与 `OPENCODE_GO_API_KEY` 就是这条) |
+| 外部编辑会被收敛:配置编辑器"在派生候选配置前应用外部更改";凭据存储"同一把写锁下保留注释与未触及条目" | `dsh-config-editor` / `dsh-credentials-local` README |
+| 本机真文件:profile `desktop`、patch 里有 `agent-default-model` + `llm-pi-ai`(route `opencode-go`)、凭据文件 `refs.OPENCODE_GO_API_KEY` | 真机读取(见下方"真机取证"测试) |
+
+**落点与契约**(细节写进 `DESIGN.md` 12.3.2,不在这里重复):两份文件一起备份、一起读回校验;
+route 键 = 来源 id;目录 route 不写端点;`models` 是替换语义所以先读回再合并、保留用户手加字段;
+摘掉最后一个模型时连 route 一起收走;密钥只在没人再用这个引用名时才撤;选中项只读不写。
+
+**新模块 `yamledge.rs`(不引第三方 crate)**
+
+- 只认块式 mapping / 块式 sequence / 标量;流式集合与 `!!js` 当不透明标量;注释、空行、CRLF 原样,
+  末尾没换行不硬塞;**行范围替换**(不是整树往返,否则注释全丢)。
+- 两种合法的列表缩进写法都收(短横比键深 / 与键同缩进)。
+- 12 条单测;含一条"游标没前进就报错"的兜底 —— 这条兜底是被真机教训逼出来的(见下)。
+
+**跨目录备份**:DSH 的 patch 与凭据文件不在同一层,而回滚原本是"按文件名放回配置目录"——
+照旧逻辑会把 `cordis.patch.yml` 放到 harness home 根下。所以 DSH 的备份目录多一份
+`.inject-layout.json` 落点清单,回滚照它逐份放回;清单只允许 root 以内的相对路径;
+**写入前不存在的文件,回滚时删掉**。其它四家的备份目录与以前逐字节一样。
+
+**热写口径**:`Client::blocks_when_running()` —— 前四家仍"在跑就拒写",DSH 例外;
+`inject_rollback` 的运行检查也改成按客户端判(否则 DSH 写入允许、回滚却报"先退出它")。
+
+**踩过的三个坑(都写进 DESIGN.md 12.7)**
+
+1. 夹具用了 Rust 的 `\n\` 行续接 —— **续接吃掉下一行的缩进**,夹具被悄悄改成顶格 YAML,
+   失败信息却指向解析器。夹具改用 `r#"…"#`。
+2. 生成 YAML 块时把列表项写成了与 `models:` 同缩进 → 插进去的列表被当成 route 的兄弟节点。
+   生成侧统一"项比键深 2 列",解析侧两种都收。
+3. 解析器里"行内起头的序列项"(`- key: value`)第一轮就撞上缩进检查 → `break` 但游标不前进 →
+   外层无限塞空节点 → **6 GB 内存几分钟吃满后 abort**。修完加了"游标没前进就报错"的兜底。
+
+**验证(本机)**
+
+- core `cargo test`:**204 passed / 0 failed**(另有 2 条默认 `#[ignore]` 的真机测试,见下)。
+  新增 25 条:YAML 编辑器 12 + DSH 契约 13(其中真机形状端到端那条默认 ignore;基线 181 → 206)。
+- 壳 `cargo check --all-targets`:**0 错误 0 警告**。
+- 前端:全部 `.js` 过 `node --check`;`build/probe-frontend.js`(假 DOM)退出码 0。
+- **真机测试一(只读)**:拿本机**真实的** `~/.dsh/profiles/desktop/cordis.patch.yml` 与
+  `~/.dsh/.credentials.yaml` 过一遍"可读性检查 + 预告",预告内容为「在 llm-pi-ai 里新增
+  route「4sapi」与这条模型」、落点与密钥引用名正确,且**预告前后两份文件逐字节不变**。
+- **真机测试二(在真文件的逐字节抄本上,不碰 `~/.dsh`)**:把真实两份文件抄进临时 harness home,
+  跑通「写入 → 独立读回校验 → 取消写入 → 回滚删除 → 回滚写入」——断言:原有顶层条目数与
+  `agent-default-model` / `opencode-go` / 开头注释全部留着、`records:` 段留着、
+  两次回滚分别回到"写入之后"与**逐字节回到原始文件**(原本没有的凭据文件则被删掉),
+  且站点故意标成"在跑"验证热写不被挡。
+- **真机测试三(在真实 `~/.dsh` 上真写一次,然后回滚)**:用凭据管理器里的**真 4SAPI 密钥**,
+  把 `route「4sapi」+ claude-sonnet-5` 真写进 `~/.dsh/profiles/desktop/cordis.patch.yml`、
+  密钥真写进 `~/.dsh/.credentials.yaml` → 独立读回校验过 → 取消写入过 → 回滚两次
+  (`~/.dsh/backup-inject/20261017-151752` 写入前快照、`...-151754` 取消前快照)→
+  **两份文件逐字节回到写入前**(断言 `read == read`),随后独立核验真实文件里已无
+  `4sapi` / `4SAPI_API_KEY`、原有 `opencode-go` 与 `records:` 段原样,测试产生的两个备份目录已清理。
+  这一步用的是发版前的一次性临时测试(验完即删),仓库里留下的是**只读**的第 1、2 条。
+- 端到端写入/回滚(小夹具):幂等 → 不建备份、文件逐字节不变;目录 route 不加端点、
+  原有模型保留;用户手加的 `maxTokens`/`reasoningEfforts` 保留;结构认不出时拒绝且文件原样。
+
+**未在真机验(不阻塞,列在这里)**
+
+1. 模型页第五个按钮的**真机点击**(只过了 `node --check` 与假 DOM 探针,没在真窗口里点过;
+   写入链路本身已在真实 `~/.dsh` 上真写 + 回滚验过,见"真机测试三")。
+2. DSH 侧**真的用 4SAPI 模型发出过一次请求**(要留着那条写入、再回 DSH 选模型;本轮为了回滚没有留)。
+3. 多 profile 场景(本机只有 `desktop`):"优先 desktop → 挑配了 llm-pi-ai 的 → 按名字第一个"
+   只有单测覆盖。
 
 ## 速览改"抬升卡片"(2026-10-17,v0.1.37)
 

@@ -389,11 +389,14 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 | 10 | 申请制额度状态机(倒计时/手动优先/撑不到预警) | ✅ | `fetch.rs` |
 | 11 | 本地零点 / 周一起算 / 月初起算 | ✅ | `fetch.rs` |
 | 12 | 设置项(`Config`)+ 容器级 `serde(default)` 老库兼容 | ✅ | `config.rs` |
-| 13 | 26 个单元测试(2026-10-12 起为 91 个) | ✅ | 各模块 `#[cfg(test)]` |
+| 13 | 26 个单元测试(2026-10-12 起 91 个;2026-10-17 起 206 个,另 2 条真机测试默认 ignore) | ✅ | 各模块 `#[cfg(test)]` |
 | 14 | 4SAPI 价目表解析 + 可用集合 + 单价换算 + 缓存 | ✅ | `models.rs` |
-| 15 | 四客户端写入契约(备份 / 读回校验 / 回滚 / 幂等 / 结构不认就放弃) | ✅ | `inject.rs` |
+| 15 | 五客户端写入契约(备份 / 读回校验 / 回滚 / 幂等 / 结构不认就放弃) | ✅ | `inject.rs` |
 | 16 | Trae modelId 口径还原(用真样本回归) | ✅ | `inject.rs` `trae_model_id` |
 | 17 | WorkBuddy 选中项前缀的现读现学 | ✅ | `inject.rs` `learn_prefix` |
+| 18 | 极小 YAML 子集解析 + 行范围编辑(注释/CRLF/`!!js` 原样保留) | ✅ | `yamledge.rs` |
+| 19 | DeepSeek Harness 写入(route 写进 cordis.patch.yml、密钥写进凭据文件的 refs) | ✅ | `inject.rs` DSH 一节 |
+| 20 | 跨目录备份的落点清单(`.inject-layout.json`,回滚照清单放回) | ✅ | `inject.rs` `backup_layered` |
 
 ### 8.2 外壳 `app/src-tauri`
 
@@ -432,7 +435,7 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 | 38 | 官方图标 + 字母方块回退 + `off` 态去色 | ✅ | `iconHtml` |
 | 39 | 置顶按钮与设置项双向同步 | ✅ | `applyPinUI` |
 | 40 | `Esc` 分级回退 | ✅ | `keydown` |
-| 41 | 「模型」页签(搜索 / 过滤芯片 / 分组切换 / 单价 / 四客户端按钮) | ✅ | `renderModels` |
+| 41 | 「模型」页签(搜索 / 过滤芯片 / 分组切换 / 单价 / 五客户端按钮) | ✅ | `renderModels` |
 | 42 | 写入预告 —— 确认前看到文件、动作、明文密钥、备份位置与阻塞原因 | ✅ | `renderModelSheet` |
 | 43 | 写入结果与一键回滚 / 打开备份目录 | ✅ | `injectGo` / `mdlrollback` |
 | 44 | 客户端状态条(装没装 / 在不在跑 / 写了几条 / 选中的是哪个) | ✅ | `mdlClientChip` |
@@ -784,7 +787,7 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
   每行的「N 个分组可用」与「价按 X 分组」徽标全部删掉,口径行只留一句「单价按站点自动分组折算」。
   不可用那几行**不给单价**:它的价本就不属于这把 key 的分组,要显示就得写清分组名,而那正是要拿掉的。
 
-### 12.3 四个客户端写入契约(缺一不写)
+### 12.3 五个客户端写入契约(缺一不写)
 
 共同前提:**① 目标进程不在运行 ② 先备份 ③ 只增改自己写的那条 ④ 写完读回校验,不过就回滚**。
 
@@ -794,11 +797,13 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 | WorkBuddy AI | `~/.workbuddy-ai/models.json`(同结构) | 同上 | 学到前缀才写 |
 | ZCode | `~/.zcode/v2/config.json` + `provider_config.json` | 两份 JSON(`schemaVersion` 不是 1 就放弃) | 不需要(会话级) |
 | Trae | `%APPDATA%` 下各安装的 `User/globalStorage/state.vscdb` | SQLite 的 `ItemTable` | 实验开关(默认关) |
+| DeepSeek Harness | `~/.dsh/profiles/<profile>/cordis.patch.yml` + `~/.dsh/.credentials.yaml` | 两份 **YAML**(注释原样保留) | 只读不写(见 12.3.2) |
 
 - 备份在 `<配置目录>/backup-inject/<时间戳>/`,含 SQLite 的 `-wal/-shm`,保留最近 5 份,可一键回滚。
 - **两个 WorkBuddy 共用进程名 `WorkBuddy.exe`**:只要有一个在跑,两个都判为"正在运行"(保守方向)。
+- **DSH 是「在跑也能写」的唯一例外**(理由与边界见 12.3.2),前提①对它不适用。
 - 幂等:同模型写两次不产生重复条目;ZCode 复用同一个 provider id(名字为 `4SAPI` 的那条);
-  Trae 更新时保留原 `custom_model_id`。
+  Trae 更新时保留原 `custom_model_id`;DSH 复用同一个 route 键、更新时保留用户手加的模型字段。
 - 认不出来就放弃:结构/版本号与取证时不符 → 不写、不改、不猜。
 - 撞名(同 id 属于别家服务)不回避但必须点明:预告里写出"原本指向 xxx,将被覆盖"。
 
@@ -831,6 +836,66 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 - **写入/取消写入的确认改成弹层**(P1):以前那块确认区长在列表末尾,列表 20 行时得滚到底才看得见 ——
   改成面板内覆盖层(复用更新提示那套),标题写 `模型 → 客户端`,内容可滚、按钮固定底部、Esc 关闭。
 - ZCode 侧**每个来源一个 provider**(名字=来源名),互不覆盖;Trae 侧删条目时要求条目的 `base_url` 也属于该来源。
+
+### 12.3.2 DeepSeek Harness(v0.1.38)
+
+取证来源(2026-10-17,本机 DSH 安装包内的四个包,非猜测):`dsh-llm-pi-ai`(路由字段与目录语义)、
+`dsh-settings` + `dsh-config-editor`(改动"通过当前 profile 的 Cordis patch 持久化")、
+`dsh-credentials-local`(凭据文件的文档形式与解析优先级)。
+
+**落点(两份文件、一次备份)**
+
+| 文件 | 写什么 |
+|---|---|
+| `~/.dsh/profiles/<profile>/cordis.patch.yml` | 那条 `llm-pi-ai` 条目的 `config.providers.<route>` |
+| `~/.dsh/.credentials.yaml` | `refs.<ROUTE>_API_KEY` = **明文**密钥 |
+
+- harness home = `$DSH_HOME`,否则 `~/.dsh`;profile 优先 `desktop`,再挑已配了 `llm-pi-ai` 的,
+  最后按名字第一个(挑不出来 = 没装)。
+- **一个来源一条 route**(与 ZCode「每个来源一个 provider」同口径):`4sapi` / `hapi` / `opencode-go`,
+  route 键就是来源 id,互不覆盖。
+- `opencode-go` 是 pi-ai **已安装目录**里的提供方:端点与协议由目录给,写它时**不给** `api`/`baseURL`;
+  另外两个来源不在目录里,必须写全 `api: openai-completions` + `baseURL`(这正是 DSH 自己的
+  「自定义模型 API」那条路)。
+- 引用名按 `<ROUTE>_API_KEY` 派生(大写、非字母数字换下划线)—— 与 DSH 自己的 Models 页同一条规则;
+  写入的是**只写**的密钥本身,`cordis.patch.yml` 里从不出现密钥值。
+
+**只增改自己那条**
+
+- `models` 在 pi-ai 里是**整体替换**语义,所以写入前先读回现有列表:已有的同 id 条目就地更新,
+  没有才追加;用户自己加过的字段(`maxTokens` / `reasoningEfforts` / `compat` …)原样保留
+  (与 ZCode 的 P2-10 同一个教训)。
+- **不留空 `models`**:pi-ai 对"非目录路由"要求 `api` + `baseURL` + 非空列表,所以取消写入摘掉
+  最后一个模型时**连 route 一起收走**;route 空了收 `providers`,再空了收 `config`。
+- 密钥只在**没有别的 route 还用这个引用名**时才撤(别人的引用一个都不动);`records:` 段永不触碰。
+- 选中项(`agent-default-model`)**只读不写**:写入后由用户回 DSH 里选一次;移除时若默认模型正指向
+  这条,回执里点名提示(不替用户改)。
+
+**边跑边写(唯一例外)**
+
+DSH 的 profile 按请求解析,且它自己的 settings 层与凭据层都**收敛外部编辑**(配置编辑器在派生候选
+之前先采纳外部改动;凭据存储在同一把写锁下合并行编辑)。所以前提①对它不适用:运行中直接写、
+`下一个请求生效`;回滚同样不要求先退出。
+
+**注释与结构**
+
+- 编辑是**行范围替换**,不是整树往返:注释、空行、`!!js` 表达式、别的条目、键序全部原样保留
+  (DSH 自己的 config-editor 也承诺"保留替换值以外的 YAML 注释和 `!!js` 表达式",挂件口径不比它松)。
+- 新增 `app/core/src/yamledge.rs`(极小 YAML 子集 + 行范围编辑,不引第三方 crate):
+  只认块式 mapping / 块式 sequence / 标量;流式集合与标签当**不透明标量**;两种合法的列表缩进写法
+  (短横比键深 / 与键同列)都收;CRLF 原样;末尾没换行不硬塞。
+- **认不出来就放弃**:根不是条目数组 / 不是 mapping、`providers` 是流式集合、缩进跳跃、制表符缩进
+  → 明确报错、一个字节不写(预告里就把原因显示出来,不让用户点了才发现)。
+
+**备份要多带一份"落点清单"**
+
+两份文件不在同一层,而回滚是"按文件名放回配置目录"——对 DSH 会把 `cordis.patch.yml` 放到
+harness home 根下。所以 DSH 的备份目录里多一份 `.inject-layout.json`(备份文件名 → 相对 root 的落点),
+回滚照它逐份放回;清单里只允许 root 以内的相对路径(手改过的清单不能把文件写到别处)。
+**写入前不存在的文件,回滚时删掉** —— 那才是它写入前的样子。其它四家的备份目录与以前逐字节一样。
+
+---
+
 
 ### 12.4 Trae 的 modelId 口径(用真样本破译)
 
@@ -865,13 +930,26 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
   `tasklist` 与「复制三件套」的 `clip.exe` 都加 `0x08000000`,同名进程一轮只探一次。
 - **前端渲染异常不许把界面留在"正在取…"里**:`renderModels` 外面套了 try/catch,
   出错就把原因写在口径行上(否则"后端成功 + 前端抛异常"会被误读成"请求没回来")。
+- **YAML 不能整树往返**(v0.1.38):`serde_yaml` 这类"解析成值再序列化"会把注释、空行、`!!js`
+  表达式、键序全部丢掉,而 `cordis.patch.yml` 是用户手写的。所以 DSH 侧用**行范围替换**:
+  只碰自己那几行,区间之外一个字节不动(见 `yamledge.rs`)。
+- **生成 YAML 块时列表项要比键再深 2 列**(`models:` 与 `- id` 不能同缩进);解析侧则两种写法
+  都要收(别家工具会吐与键同列的那种)。生成错了一次:插进去的列表被当成 route 的兄弟节点,
+  读回直接报"缩进比上一行深"。
+- **解析器必须有"游标没前进就报错"的兜底**:一个 `break` 的条件写错,外层就会无限往里塞同一个
+  空节点 —— 真机上表现为几分钟吃满 6 GB 内存然后 abort,而栈里只有 `parse`。宁可明确报错。
+- **测试夹具别用 Rust 的 `\n\` 行续接**:续接会**吃掉下一行的全部缩进**,写好的 YAML 夹具会被
+  悄悄改成顶格的,测试失败信息指向解析器而不是夹具(踩过一次)。夹具一律用原始字符串 `r#"…"#`。
+- **跨目录的备份要带落点清单**:回滚原本是"按文件名放回配置目录",DSH 的两份文件不在同一层,
+  照旧逻辑会把 `cordis.patch.yml` 放到 harness home 根下(见 12.3.2)。
 
 ### 12.6 安全
 
 - 密钥只从 Windows 凭据管理器**现读现写**:不回前端(「复制三件套」由后端拼字符串)、不进数据库、
   不进日志、不进备份(备份只备份客户端自己的文件)。
-- 明文目的地逐个客户端写明(WorkBuddy 的 `apiKey`、Trae 的 `ak`、ZCode 的 `options.apiKey`)——
-  这是本功能最大的信任成本,界面不藏。
+- 明文目的地逐个客户端写明(WorkBuddy 的 `apiKey`、Trae 的 `ak`、ZCode 的 `options.apiKey`、
+  DSH 的 `.credentials.yaml` → `refs.<ROUTE>_API_KEY`)—— 这是本功能最大的信任成本,界面不藏。
+  DSH 侧与它自己的做法一致:profile 里只留 `apiKeyEnv` 引用名,密钥值只落在凭据文件里。
 - 「复制三件套」写系统剪贴板(经 `clip.exe` 的 stdin,密钥不进命令行),界面说明"对其他程序可见"。
 
 ---

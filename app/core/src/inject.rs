@@ -61,23 +61,26 @@ pub enum Client {
     Workbuddy,
     WorkbuddyAi,
     Zcode,
+    Dsh,
 }
 
 impl Client {
-    pub const ALL: [Client; 4] = [
+    pub const ALL: [Client; 5] = [
         Client::Trae,
         Client::Workbuddy,
         Client::WorkbuddyAi,
         Client::Zcode,
+        Client::Dsh,
     ];
 
-    /// 界面上的短标签(模型行里那四个小按钮)。
+    /// 界面上的短标签(模型行里那几个小按钮)。
     pub fn short(self) -> &'static str {
         match self {
             Client::Trae => "T",
             Client::Workbuddy => "WB",
             Client::WorkbuddyAi => "WBA",
             Client::Zcode => "ZC",
+            Client::Dsh => "DSH",
         }
     }
 
@@ -87,6 +90,7 @@ impl Client {
             Client::Workbuddy => "WorkBuddy",
             Client::WorkbuddyAi => "WorkBuddy AI",
             Client::Zcode => "ZCode",
+            Client::Dsh => "DeepSeek Harness",
         }
     }
 
@@ -96,6 +100,7 @@ impl Client {
             Client::Workbuddy => "workbuddy",
             Client::WorkbuddyAi => "workbuddy-ai",
             Client::Zcode => "zcode",
+            Client::Dsh => "dsh",
         }
     }
 
@@ -110,7 +115,19 @@ impl Client {
             Client::Trae => "Trae CN.exe",
             Client::Workbuddy | Client::WorkbuddyAi => "WorkBuddy.exe",
             Client::Zcode => "ZCode.exe",
+            Client::Dsh => "DeepSeek Harness.exe",
         }
+    }
+
+    /// 「目标在跑就不能写」这条规矩适不适用。
+    ///
+    /// 前四家是内存态落盘:边跑边写会在它们退出时被覆盖,所以一律拒写。
+    /// DSH 不一样 —— 它的 profile 按请求解析,配置改动在下一个请求生效;
+    /// 它自己的 settings / credentials 两层都**收敛外部编辑**(配置编辑器在派生候选前
+    /// 先采纳外部改动,凭据存储在同一把写锁下合并行编辑),所以边跑边写是它认的用法,
+    /// 挂件也照这个口径走(见 DESIGN.md 第 12 节「DSH 契约」)。
+    pub fn blocks_when_running(self) -> bool {
+        !matches!(self, Client::Dsh)
     }
 }
 
@@ -310,6 +327,23 @@ pub fn sites() -> Vec<Site> {
                     zc_root.join("config.json"),
                     zc_root.join("provider_config.json"),
                 ],
+            });
+        }
+    }
+
+    // DeepSeek Harness:harness home 下挑一个 profile。两份文件不在同一层,
+    // 所以 root 是 harness home、回滚靠备份清单(见 backup_layered)。
+    if let Some(home) = dsh_home() {
+        if let Some(profile) = dsh_profile(&home) {
+            let patch = dsh_patch_of(&home, &profile);
+            let cred = dsh_creds_of(&home);
+            out.push(Site {
+                client: Client::Dsh,
+                label: format!("{} · {profile}", Client::Dsh.label()),
+                running: is_running(Client::Dsh.process(), &mut probed),
+                process: Client::Dsh.process().to_string(),
+                root: home.clone(),
+                files: vec![patch, cred],
             });
         }
     }
@@ -633,8 +667,10 @@ pub struct ClientState {
 
 /// 备用配置的「在不在跑」。拿不到进程表时返回 false 而不是报错 ——
 /// 真正的保护是备份 + 读回校验,进程检查只是第一道。
+/// DSH 是唯一例外:它收敛外部编辑、profile 按请求解析,所以边跑边写是它认的用法
+/// (见 `Client::blocks_when_running`)。
 pub fn blocked_by_running(site: &Site) -> Option<String> {
-    if !site.running {
+    if !site.running || !site.client.blocks_when_running() {
         return None;
     }
     Some(format!(
@@ -751,19 +787,7 @@ fn os(e: &std::io::Error) -> String {
 
 /// 备份要改的文件到 `<root>/backup-inject/<stamp>/`。返回备份目录。
 fn backup(root: &Path, files: &[PathBuf], stamp: &str) -> Result<PathBuf, String> {
-    // 同一秒内连点两次「写入」时,备份目录名会撞车:第二次把**已改过**的文件盖进
-    // 同一个目录,于是第一条记录的"备份"指向第二次写入之后的状态 —— 回滚回到错误时间点
-    // (报告 P3-5 / P3-8)。撞了就加序号,每个 stamp 目录只对应一次写入前快照。
-    let mut dir = root.join("backup-inject").join(stamp);
-    let mut n = 2u32;
-    while dir.exists() {
-        dir = root.join("backup-inject").join(format!("{stamp}-{n}"));
-        n += 1;
-        if n > 99 {
-            return Err(format!("备份目录名重复太多次:{}", pretty(&dir)));
-        }
-    }
-    std::fs::create_dir_all(&dir).map_err(|e| format!("建备份目录失败: {e}"))?;
+    let dir = fresh_backup_dir(root, stamp)?;
     for f in files {
         if !f.exists() {
             continue;
@@ -774,6 +798,67 @@ fn backup(root: &Path, files: &[PathBuf], stamp: &str) -> Result<PathBuf, String
             .ok_or_else(|| format!("文件名非法: {}", pretty(f)))?;
         std::fs::copy(f, dir.join(name)).map_err(|e| format!("备份 {name} 失败: {e}"))?;
     }
+    prune_backups(root);
+    Ok(dir)
+}
+
+/// 备份目录里的**落点清单**:备份文件名 → 相对 root 的落点。
+/// 只有落点跨目录的客户端(DSH 的 patch 与凭据文件不在同一层)才写这份清单;
+/// 其它四家的备份目录与以前逐字节一样(回滚走"按文件名放回 root"的老路)。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BackupEntry {
+    /// 备份目录里的文件名(相对路径压平而来)
+    copy: String,
+    /// 相对 `root` 的落点(不含 `..`,不会是绝对路径)
+    rel: String,
+    /// 备份时它本来就在吗?不在 = 是我们新建的,回滚要把它删掉而不是留着
+    existed: bool,
+}
+
+const BACKUP_LAYOUT: &str = ".inject-layout.json";
+
+/// 备份目录名:同一秒内连点两次「写入」时不能撞车(撞了第二次会把**已改过**的文件
+/// 盖进同一个目录,回滚就回到错误的时间点)。
+fn fresh_backup_dir(root: &Path, stamp: &str) -> Result<PathBuf, String> {
+    let mut dir = root.join("backup-inject").join(stamp);
+    let mut n = 2u32;
+    while dir.exists() {
+        dir = root.join("backup-inject").join(format!("{stamp}-{n}"));
+        n += 1;
+        if n > 99 {
+            return Err(format!("备份目录名重复太多次:{}", pretty(&dir)));
+        }
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| format!("建备份目录失败: {e}"))?;
+    Ok(dir)
+}
+
+/// 带落点清单的备份(DSH 用):文件名按相对路径压平,`restore` 照清单放回去。
+fn backup_layered(
+    root: &Path,
+    files: &[PathBuf],
+    rels: &[String],
+    stamp: &str,
+) -> Result<PathBuf, String> {
+    if files.len() != rels.len() {
+        return Err("备份清单与文件数对不上".into());
+    }
+    let dir = fresh_backup_dir(root, stamp)?;
+    let mut entries: Vec<BackupEntry> = Vec::new();
+    for (f, rel) in files.iter().zip(rels.iter()) {
+        let copy = rel.replace('/', "__");
+        let existed = f.exists();
+        if existed {
+            std::fs::copy(f, dir.join(&copy)).map_err(|e| format!("备份 {rel} 失败: {e}"))?;
+        }
+        entries.push(BackupEntry {
+            copy,
+            rel: rel.clone(),
+            existed,
+        });
+    }
+    let json = serde_json::to_string_pretty(&entries).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join(BACKUP_LAYOUT), json).map_err(|e| format!("写备份清单失败: {e}"))?;
     prune_backups(root);
     Ok(dir)
 }
@@ -867,6 +952,11 @@ pub fn restore(backup_dir: &Path) -> Result<String, String> {
     let Some(root) = backup_dir.parent().and_then(|p| p.parent()) else {
         return Err("备份目录结构异常".into());
     };
+    // 带落点清单的备份(DSH):两份文件不在同一层,按文件名平铺会放错地方 ——
+    // 照清单逐份放回去,清单里没有那次不存在过的文件则删掉(那才是它写入前的样子)。
+    if backup_dir.join(BACKUP_LAYOUT).is_file() {
+        return restore_layered(backup_dir, &root);
+    }
     let rd = std::fs::read_dir(backup_dir).map_err(|e| format!("读备份目录失败: {e}"))?;
     let mut n = 0usize;
     let mut bad: Vec<String> = Vec::new();
@@ -915,6 +1005,78 @@ pub fn restore(backup_dir: &Path) -> Result<String, String> {
 
 fn stamp_now() -> String {
     chrono::Local::now().format("%Y%m%d-%H%M%S").to_string()
+}
+
+/// 按落点清单回滚:每份文件放回它自己的位置,写入前不存在的删掉。
+/// 清单里的 `rel` 只允许是 `root` 以内的相对路径(手改过的清单不能把文件写到别处 ——
+/// 这条与"备份目录必须叫 backup-inject"是同一道防线)。
+fn restore_layered(backup_dir: &Path, root: &Path) -> Result<String, String> {
+    let raw = std::fs::read_to_string(backup_dir.join(BACKUP_LAYOUT))
+        .map_err(|e| format!("读备份清单失败: {e}"))?;
+    let entries: Vec<BackupEntry> =
+        serde_json::from_str(&raw).map_err(|e| format!("备份清单解析失败: {e}"))?;
+    let mut n = 0usize;
+    let mut bad: Vec<String> = Vec::new();
+    for e in entries {
+        let rel = Path::new(&e.rel);
+        let unsafe_rel = rel.is_absolute()
+            || rel.components().any(|c| {
+                matches!(
+                    c,
+                    std::path::Component::ParentDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            });
+        if unsafe_rel {
+            bad.push(format!("落点不是相对路径,拒绝恢复: {}", e.rel));
+            continue;
+        }
+        let target = root.join(rel);
+        if !e.existed {
+            // 写入前它不存在 → 回滚就是把它删掉
+            match std::fs::remove_file(&target) {
+                Ok(_) => n += 1,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => bad.push(format!("{}:{err}", pretty(&target))),
+            }
+            continue;
+        }
+        let src = backup_dir.join(&e.copy);
+        if !src.is_file() {
+            bad.push(format!("备份里缺 {}", e.copy));
+            continue;
+        }
+        if let Some(p) = target.parent() {
+            if let Err(err) = std::fs::create_dir_all(p) {
+                bad.push(format!("建目录 {} 失败:{err}", pretty(p)));
+                continue;
+            }
+        }
+        let name = target
+            .file_name()
+            .map(|x| x.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let tmp = target.with_file_name(format!("{name}.restore-tmp"));
+        match std::fs::copy(&src, &tmp).and_then(|_| std::fs::rename(&tmp, &target)) {
+            Ok(_) => n += 1,
+            Err(err) => {
+                let _ = std::fs::remove_file(&tmp);
+                bad.push(format!("{}:{err}", pretty(&target)));
+            }
+        }
+    }
+    if n == 0 && bad.is_empty() {
+        return Err("备份清单是空的".into());
+    }
+    if !bad.is_empty() {
+        return Err(format!(
+            "只恢复了 {n} 个文件,这些没成:{} —— 备份仍在 {},可重试或手动拷回",
+            bad.join(";"),
+            pretty(backup_dir)
+        ));
+    }
+    Ok(format!("已按落点清单恢复 {n} 个文件"))
 }
 
 /// 一次站点写入的结果。写盘/校验/回滚都在这层做完,上层只管组报告。
@@ -968,6 +1130,44 @@ where
             ),
             Err(e) => format!(
                 "读回校验没过,而且回滚失败: {e}｜备份仍在 {}——请退出客户端后手动还原",
+                pretty(&dir)
+            ),
+        });
+    }
+    Ok(dir)
+}
+
+/// 与 [`commit`] 同一条流水线,只是备份带落点清单(落点跨目录的客户端用)。
+fn commit_layered<W, V>(
+    site: &Site,
+    files: &[PathBuf],
+    rels: Option<&[String]>,
+    stamp: &str,
+    write: W,
+    verify: V,
+) -> Result<PathBuf, String>
+where
+    W: FnOnce() -> Result<(), String>,
+    V: FnOnce() -> bool,
+{
+    let dir = match rels {
+        Some(rels) => backup_layered(&site.root, files, rels, stamp)?,
+        None => backup(&site.root, files, stamp)?,
+    };
+    if let Err(e) = write() {
+        return Err(match restore(&dir) {
+            Ok(s) => format!("写入失败: {e}｜已按备份整批盖回,未产生半成品。{s}"),
+            Err(r) => format!(
+                "写入失败: {e}｜回滚也失败: {r}｜备份仍在 {},可手动还原",
+                pretty(&dir)
+            ),
+        });
+    }
+    if !verify() {
+        return Err(match restore(&dir) {
+            Ok(s) => format!("读回校验没过,已回滚到写入前的备份({})。{s}", pretty(&dir)),
+            Err(e) => format!(
+                "读回校验没过,而且回滚失败: {e}｜备份仍在 {}——请手动还原",
                 pretty(&dir)
             ),
         });
@@ -1852,6 +2052,920 @@ fn find_our_custom_id(maps: &[(String, Value)], model: &str) -> Option<String> {
     None
 }
 
+// ───────────────────────── DeepSeek Harness ─────────────────────────
+//
+// 两份文件、一套写入:
+//   <harness home>/profiles/<profile>/cordis.patch.yml → llm-pi-ai 的 config.providers.<route>
+//   <harness home>/.credentials.yaml                   → refs.<ROUTE>_API_KEY = 明文密钥
+//
+// 与其它四家最大的不同:**边跑边写是它认的用法**。DSH 的 profile 按请求解析,而且它自己的
+// settings / credentials 两层都收敛外部编辑(配置编辑器在派生候选之前先采纳外部改动;
+// 凭据存储在同一把写锁下合并行编辑)。四条共同前提里的另外三条一条不少 ——
+// 先备份 / 只增改自己写的那条 / 读回校验不过就回滚。
+//
+// 结构取自 2026-10-17 在本机 DSH 安装包里四个包的取证(dsh-llm-pi-ai / dsh-settings /
+// dsh-config-editor / dsh-credentials-local 的 README 与 lib/index.js),不是猜的:
+//   · 路由字段:`api`(`openai-completions` / `openai-responses` / `anthropic-messages`)、
+//     `baseURL`、`apiKeyEnv`、`models[]`(`id`/`name`/`contextWindow`/`maxTokens`/`input`);
+//   · 目录里已有的提供方(如 `opencode-go`)**不给** api / baseURL —— 端点与协议由目录给;
+//   · pi-ai 不提供的路由必须给 `api` + `baseURL` + **非空** models,所以移除最后一个模型时
+//     连 route 一起收走(留一个空 models 列表会让 pi-ai 把它判成"不可服务");
+//   · `apiKeyEnv` 是**凭据引用**,值落在 `.credentials.yaml` 的 `refs:` 下(名字按
+//     `<ROUTE>_API_KEY`、非字母数字换成下划线 —— 用户机器上 route `opencode-go` 对应的
+//     就是 `OPENCODE_GO_API_KEY`)。
+
+/// patch 层里那条 pi-ai 条目:认 id,也认 name(用户手写的那份两个都有)。
+const DSH_PI_AI_ID: &str = "llm-pi-ai";
+const DSH_PI_AI_NAME: &str = "@deepseek-ai/dsh-llm-pi-ai";
+/// 桌面端的默认 profile 名。
+const DSH_DESKTOP_PROFILE: &str = "desktop";
+/// 默认选中的模型写在 `agent-default-model` 这条里(只读它,不替用户改)。
+const DSH_DEFAULT_MODEL_ID: &str = "agent-default-model";
+
+/// harness home:`$DSH_HOME`,否则 `~/.dsh`(与 dsh-credentials-local 的默认一致)。
+fn dsh_home() -> Option<PathBuf> {
+    if let Some(v) = std::env::var_os("DSH_HOME") {
+        let p = PathBuf::from(v);
+        if !p.as_os_str().is_empty() {
+            return Some(p);
+        }
+    }
+    home().map(|h| h.join(".dsh"))
+}
+
+fn dsh_patch_of(home: &Path, profile: &str) -> PathBuf {
+    home.join("profiles").join(profile).join("cordis.patch.yml")
+}
+
+fn dsh_creds_of(home: &Path) -> PathBuf {
+    home.join(".credentials.yaml")
+}
+
+/// 挑一个 profile 写:桌面端默认 `desktop`;没有就挑**已经配了 llm-pi-ai** 的那个
+/// (说明用户正在用它);再没有就按名字第一个。挑不出来就没装。
+fn dsh_profile(home: &Path) -> Option<String> {
+    let dir = home.join("profiles");
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| {
+            let d = dir.join(n);
+            d.join("cordis.patch.yml").exists() || d.join("cordis.yml").exists()
+        })
+        .collect();
+    if names.is_empty() {
+        return None;
+    }
+    names.sort();
+    if names.iter().any(|n| n == DSH_DESKTOP_PROFILE) {
+        return Some(DSH_DESKTOP_PROFILE.to_string());
+    }
+    for n in &names {
+        if let Ok(t) = std::fs::read_to_string(dir.join(n).join("cordis.patch.yml")) {
+            if t.contains(DSH_PI_AI_ID) {
+                return Some(n.clone());
+            }
+        }
+    }
+    names.into_iter().next()
+}
+
+/// 站点的两份文件。约定:`files[0]` = patch,`files[1]` = 凭据(名字反查,不靠顺序)。
+fn dsh_paths(site: &Site) -> Result<(PathBuf, PathBuf), String> {
+    let patch = site
+        .files
+        .iter()
+        .find(|f| {
+            f.file_name()
+                .map(|n| n.to_string_lossy().eq_ignore_ascii_case("cordis.patch.yml"))
+                .unwrap_or(false)
+        })
+        .cloned()
+        .ok_or("站点里没有 cordis.patch.yml")?;
+    let cred = site
+        .files
+        .iter()
+        .find(|f| {
+            f.file_name()
+                .map(|n| n.to_string_lossy().eq_ignore_ascii_case(".credentials.yaml"))
+                .unwrap_or(false)
+        })
+        .cloned()
+        .ok_or("站点里没有 .credentials.yaml")?;
+    Ok((patch, cred))
+}
+
+/// 这个来源写进 DSH 用哪个 route 键:一个来源一条 route(与 ZCode「每个来源一个 provider」
+/// 同口径),互不覆盖。键就是来源 id。
+fn dsh_route(source: &str) -> String {
+    source.to_string()
+}
+
+/// 这条 route 是不是 pi-ai 已安装目录里就有的。
+/// `opencode-go` 是目录里的提供方:端点与协议由目录给,写它时**不给** api / baseURL
+/// (给了反而与目录打架)。用户机器上那条就是这么配的。
+fn dsh_catalog_route(source: &str) -> bool {
+    source == "opencode-go"
+}
+
+/// 凭据引用名:DSH 自己的 Models 页派生的是 `<ROUTE>_API_KEY`(大写、非字母数字换下划线)。
+fn dsh_key_ref(source: &str) -> String {
+    let mut s = String::new();
+    for c in source.chars() {
+        if c.is_ascii_alphanumeric() {
+            s.push(c.to_ascii_uppercase());
+        } else {
+            s.push('_');
+        }
+    }
+    format!("{s}_API_KEY")
+}
+
+/// 文件相对 harness home 的落点。备份清单要用它 —— 这两份文件不在同一个目录里,
+/// 而其它四家的文件都直接躺在 root 下(所以那份清单只对 DSH 写)。
+fn dsh_rel(home: &Path, f: &Path) -> String {
+    f.strip_prefix(home)
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| {
+            f.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default()
+        })
+}
+
+/// 读文本文件。不存在或读不了 → 空串(新建是合法初态)。
+fn dsh_read_text(path: &Path) -> String {
+    std::fs::read_to_string(path).unwrap_or_default()
+}
+
+/// 原子写文本:先写同目录临时文件再改名 —— 半截 YAML 比不写更糟(DSH 会当场解析失败)。
+fn dsh_write_text(path: &Path, text: &str) -> Result<(), String> {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .ok_or_else(|| format!("文件名非法: {}", pretty(path)))?;
+    let tmp = path.with_file_name(format!("{name}.ts-tmp"));
+    std::fs::write(&tmp, text).map_err(|e| format!("写 {} 失败: {e}", pretty(&tmp)))?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("替换 {} 失败: {e}", pretty(path))
+    })
+}
+
+/// patch 文件里那条 pi-ai 条目。
+fn dsh_entry(root: &crate::yamledge::Node) -> Option<&crate::yamledge::Node> {
+    root.children.iter().find(|e| {
+        e.get("id").and_then(|n| n.scalar()) == Some(DSH_PI_AI_ID)
+            || e.get("name").and_then(|n| n.scalar()) == Some(DSH_PI_AI_NAME)
+    })
+}
+
+fn dsh_providers(root: &crate::yamledge::Node) -> Option<&crate::yamledge::Node> {
+    dsh_entry(root)?.get("config")?.get("providers")
+}
+
+/// 这条 route 属于哪个来源(认不出来的 route 不是我们写的)。
+fn dsh_route_source(route: &str) -> Option<String> {
+    crate::models::SOURCES
+        .iter()
+        .find(|d| d.id == route)
+        .map(|d| d.id.to_string())
+}
+
+/// 我们写进 DSH 那条 route 的完整块(不带缩进,插入时统一缩进)。
+fn dsh_route_block(spec: &ModelSpec) -> Vec<String> {
+    let route = dsh_route(&spec.source);
+    let mut out = vec![format!("{route}:")];
+    out.push(format!(
+        "  displayName: {}",
+        crate::yamledge::scalar_text(&spec.source_name)
+    ));
+    if !dsh_catalog_route(&spec.source) {
+        out.push("  api: openai-completions".to_string());
+        out.push(format!(
+            "  baseURL: {}",
+            crate::yamledge::scalar_text(&spec.base_url)
+        ));
+    }
+    out.push(format!(
+        "  apiKeyEnv: {}",
+        crate::yamledge::scalar_text(&dsh_key_ref(&spec.source))
+    ));
+    out.push("  models:".to_string());
+    // 列表项比 `models:` 再深 2 列(与用户那份手写文件、以及 DSH 自己的写法一致)
+    out.extend(crate::yamledge::indented(&dsh_model_block(spec), 4));
+    out
+}
+
+/// 一条模型条目(`- id: …`,不带缩进)。
+/// 上下文与图片能力**只在知道时才写**:编一个能力上限会让客户端按不存在的上限发请求。
+fn dsh_model_block(spec: &ModelSpec) -> Vec<String> {
+    let mut out = vec![format!(
+        "- id: {}",
+        crate::yamledge::scalar_text(&spec.id)
+    )];
+    out.push(format!(
+        "  name: {}",
+        crate::yamledge::scalar_text(&spec.display_name)
+    ));
+    if let Some(ctx) = spec.context_tokens {
+        out.push(format!("  contextWindow: {ctx}"));
+    }
+    out.push("  input:".to_string());
+    out.push("    - text".to_string());
+    if spec.multimodal {
+        out.push("    - image".to_string());
+    }
+    out
+}
+
+/// 更新已有条目时,用户自己加过的字段(maxTokens / reasoningEfforts / compat …)原样留着 ——
+/// 整条替换会把它们抹掉(与 ZCode 那条 P2-10 同一个教训)。
+fn dsh_model_merged(lines: &[String], old: &crate::yamledge::Node, ours: &[String]) -> Vec<String> {
+    let mut out = ours.to_vec();
+    for c in &old.children {
+        let k = c.key.as_deref().unwrap_or("");
+        if matches!(k, "id" | "name" | "contextWindow" | "input") {
+            continue;
+        }
+        for i in c.start..c.end {
+            out.push(dsh_strip_lead(&lines[i], old.indent));
+        }
+    }
+    out
+}
+
+/// 去掉行首 `n` 个缩进空格(行尾先剥掉)。
+fn dsh_strip_lead(raw: &str, n: usize) -> String {
+    let c = raw.trim_end_matches('\n').trim_end_matches('\r');
+    let cut = c.len().min(n);
+    c[cut..].to_string()
+}
+
+/// route 那一段必须是块式 mapping:空值(null)替它补一个冒号行,标量值一律放弃。
+fn dsh_route_fix(lines: &mut Vec<String>, route: &str) -> Result<(), String> {
+    let root = crate::yamledge::parse(lines)?;
+    let r = dsh_providers(&root)
+        .and_then(|p| p.get(route))
+        .ok_or_else(|| format!("route「{route}」不见了"))?;
+    if r.kind != crate::yamledge::Kind::Scalar {
+        return Ok(());
+    }
+    if r.value.is_some() {
+        return Err(format!(
+            "route「{route}」的值是标量({:?}),不是块,本次不写",
+            r.value.as_deref().unwrap_or("")
+        ));
+    }
+    let line = format!("{}{route}:", " ".repeat(r.indent));
+    crate::yamledge::splice(lines, r.start..r.end, &[line]);
+    Ok(())
+}
+
+/// route 下设置一个标量键:有就换那一行,没有就插在它末尾。
+fn dsh_set_scalar(
+    lines: &mut Vec<String>,
+    route: &str,
+    key: &str,
+    value: &str,
+) -> Result<(), String> {
+    let root = crate::yamledge::parse(lines)?;
+    let r = dsh_providers(&root)
+        .and_then(|p| p.get(route))
+        .ok_or_else(|| format!("route「{route}」不见了"))?;
+    let pad = " ".repeat(r.indent + 2);
+    let line = format!("{pad}{key}: {}", crate::yamledge::scalar_text(value));
+    match r.get(key) {
+        Some(c) if c.kind == crate::yamledge::Kind::Scalar => {
+            crate::yamledge::splice(lines, c.start..c.end, &[line]);
+        }
+        Some(c) => {
+            return Err(format!(
+                "route「{route}」下的 {key} 不是标量({}),本次不写",
+                c.what()
+            ))
+        }
+        None => crate::yamledge::splice(lines, r.end..r.end, &[line]),
+    }
+    Ok(())
+}
+
+/// 把这条模型放进 route 的 models 列表。返回"是不是新增的"。
+fn dsh_put_model(
+    lines: &mut Vec<String>,
+    route: &str,
+    spec: &ModelSpec,
+) -> Result<bool, String> {
+    let item = dsh_model_block(spec);
+    let root = crate::yamledge::parse(lines)?;
+    let r = dsh_providers(&root)
+        .and_then(|p| p.get(route))
+        .ok_or_else(|| format!("route「{route}」不见了"))?;
+    match r.get("models") {
+        Some(m) => {
+            let m = m.as_sequence()?;
+            let ind = m.items().first().map(|x| x.indent).unwrap_or(m.indent + 2);
+            if let Some(old) = m
+                .items()
+                .iter()
+                .find(|x| x.get("id").and_then(|n| n.scalar()) == Some(spec.id.as_str()))
+            {
+                let merged = dsh_model_merged(lines, old, &item);
+                let block = crate::yamledge::indented(&merged, ind);
+                crate::yamledge::splice(lines, old.start..old.end, &block);
+                Ok(false)
+            } else {
+                let block = crate::yamledge::indented(&item, ind);
+                crate::yamledge::splice(lines, m.end..m.end, &block);
+                Ok(true)
+            }
+        }
+        None => {
+            let pad = r.indent + 2;
+            let mut block = vec![format!("{}models:", " ".repeat(pad))];
+            block.extend(crate::yamledge::indented(&item, pad + 2));
+            crate::yamledge::splice(lines, r.end..r.end, &block);
+            Ok(true)
+        }
+    }
+}
+
+/// 写 patch:保证 pi-ai 条目 → config.providers → route → models 这条链都在。
+/// 返回(新文本, 动作)。
+fn dsh_patch_apply(text: &str, spec: &ModelSpec) -> Result<(String, PatchAction), String> {
+    let route = dsh_route(&spec.source);
+    let mut lines = crate::yamledge::split(text);
+
+    // ① 条目/接口层:缺哪层补哪层,已有的一个字不动
+    {
+        let root = crate::yamledge::parse(&lines)?;
+        if dsh_entry(&root).is_none() {
+            let pad = lines.len();
+            let block = vec![
+                format!("- id: {DSH_PI_AI_ID}"),
+                format!(
+                    "  name: {}",
+                    crate::yamledge::scalar_text(DSH_PI_AI_NAME)
+                ),
+                "  config:".to_string(),
+                "    providers:".to_string(),
+            ];
+            crate::yamledge::splice(&mut lines, pad..pad, &block);
+        }
+    }
+    {
+        let root = crate::yamledge::parse(&lines)?;
+        let entry = dsh_entry(&root).ok_or("刚补进去的条目又不见了")?;
+        if entry.get("config").is_none() {
+            let at = entry.end;
+            let block = vec!["  config:".to_string(), "    providers:".to_string()];
+            crate::yamledge::splice(&mut lines, at..at, &block);
+        }
+    }
+    {
+        let root = crate::yamledge::parse(&lines)?;
+        let entry = dsh_entry(&root).ok_or("条目不见了")?;
+        let config = entry.get("config").ok_or("config 不见了")?;
+        if config.get("providers").is_none() {
+            let at = config.end;
+            let pad = " ".repeat(config.indent + 2);
+            let block = vec![format!("{pad}providers:")];
+            crate::yamledge::splice(&mut lines, at..at, &block);
+        }
+    }
+
+    // ② route:没有就整块插进 providers 末尾
+    let existed = {
+        let root = crate::yamledge::parse(&lines)?;
+        dsh_providers(&root)
+            .and_then(|p| p.get(&route))
+            .map(|r| {
+                r.get("models")
+                    .map(|m| {
+                        m.items()
+                            .iter()
+                            .any(|x| x.get("id").and_then(|n| n.scalar()) == Some(spec.id.as_str()))
+                    })
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false)
+    };
+    {
+        let root = crate::yamledge::parse(&lines)?;
+        let providers = dsh_providers(&root).ok_or("providers 不见了")?;
+        if providers.get(&route).is_none() {
+            let at = providers.end;
+            let pad = providers.indent + 2;
+            let block = crate::yamledge::indented(&dsh_route_block(spec), pad);
+            crate::yamledge::splice(&mut lines, at..at, &block);
+        }
+    }
+    dsh_route_fix(&mut lines, &route)?;
+
+    // ③ 标量键(幂等:值一样就是换一行同样的内容,最终文本不变 → 不写盘)
+    dsh_set_scalar(
+        &mut lines,
+        &route,
+        "apiKeyEnv",
+        &dsh_key_ref(&spec.source),
+    )?;
+    if !dsh_catalog_route(&spec.source) {
+        dsh_set_scalar(&mut lines, &route, "displayName", &spec.source_name)?;
+        dsh_set_scalar(&mut lines, &route, "api", "openai-completions")?;
+        dsh_set_scalar(&mut lines, &route, "baseURL", &spec.base_url)?;
+    }
+
+    // ④ 模型条目
+    dsh_put_model(&mut lines, &route, spec)?;
+
+    let out = crate::yamledge::join(&lines);
+    let action = if existed {
+        PatchAction::Updated
+    } else {
+        PatchAction::Added
+    };
+    Ok((out, action))
+}
+
+/// 从 patch 里把这条模型摘掉:最后一个模型连 route 一起收走,route 空了连 providers 一起收,
+/// 免得留一个空 models 列表(pi-ai 会把它判成不可服务)。
+fn dsh_patch_remove(text: &str, spec: &ModelSpec) -> Result<(String, usize), String> {
+    let route = dsh_route(&spec.source);
+    let mut lines = crate::yamledge::split(text);
+    {
+        let root = crate::yamledge::parse(&lines)?;
+        let Some(r) = dsh_providers(&root).and_then(|p| p.get(&route)) else {
+            return Ok((text.to_string(), 0));
+        };
+        let Some(m) = r.get("models") else {
+            return Ok((text.to_string(), 0));
+        };
+        let Some(item) = m
+            .items()
+            .iter()
+            .find(|x| x.get("id").and_then(|n| n.scalar()) == Some(spec.id.as_str()))
+        else {
+            return Ok((text.to_string(), 0));
+        };
+        if m.items().len() == 1 {
+            crate::yamledge::splice(&mut lines, r.start..r.end, &[]);
+        } else {
+            crate::yamledge::splice(&mut lines, item.start..item.end, &[]);
+        }
+    }
+    // 收空壳:providers 空了连它一起收,config 空了也收(空 mapping 在 YAML 里是 null,
+    // 会让 pi-ai 的 schema 直接报"配置不可用")
+    for _ in 0..2 {
+        let root = crate::yamledge::parse(&lines)?;
+        let Some(entry) = dsh_entry(&root) else { break };
+        let Some(config) = entry.get("config") else { break };
+        if let Some(p) = config.get("providers") {
+            if p.children.is_empty() {
+                crate::yamledge::splice(&mut lines, p.start..p.end, &[]);
+                continue;
+            }
+        }
+        if config.children.is_empty() {
+            crate::yamledge::splice(&mut lines, config.start..config.end, &[]);
+        }
+        break;
+    }
+    Ok((crate::yamledge::join(&lines), 1))
+}
+
+/// 凭据文件里写一个引用。返回(新文本, 动作)。
+fn dsh_cred_apply(
+    text: &str,
+    name: &str,
+    key: &str,
+) -> Result<(String, CredAction), String> {
+    let mut lines = crate::yamledge::split(text);
+    let root = crate::yamledge::parse(&lines)?;
+    if root.kind != crate::yamledge::Kind::Mapping {
+        return Err("凭据文件的根不是 mapping,认不出来(本次不写)".to_string());
+    }
+    match root.get("refs") {
+        Some(refs) if refs.kind == crate::yamledge::Kind::Mapping => {
+            let pad = refs.indent + 2;
+            let line = format!("{}{name}: {}", " ".repeat(pad), crate::yamledge::scalar_text(key));
+            match refs.get(name) {
+                Some(c) if c.kind == crate::yamledge::Kind::Scalar => {
+                    if c.scalar() == Some(key) {
+                        Ok((text.to_string(), CredAction::Same))
+                    } else {
+                        crate::yamledge::splice(&mut lines, c.start..c.end, &[line]);
+                        Ok((crate::yamledge::join(&lines), CredAction::Updated))
+                    }
+                }
+                Some(c) => Err(format!(
+                    "refs 下的 {name} 不是标量({}),本次不写",
+                    c.what()
+                )),
+                None => {
+                    crate::yamledge::splice(&mut lines, refs.end..refs.end, &[line]);
+                    Ok((crate::yamledge::join(&lines), CredAction::Added))
+                }
+            }
+        }
+        // `refs:` 后面什么都没有:补成块
+        Some(refs) => {
+            let pad = refs.indent + 2;
+            let block = vec![
+                format!("{}refs:", " ".repeat(refs.indent)),
+                format!("{}{name}: {}", " ".repeat(pad), crate::yamledge::scalar_text(key)),
+            ];
+            crate::yamledge::splice(&mut lines, refs.start..refs.end, &block);
+            Ok((crate::yamledge::join(&lines), CredAction::Added))
+        }
+        None => {
+            let mut block: Vec<String> = Vec::new();
+            if root.get("version").is_none() {
+                // 带版本的文档是这个存储的形式要求(裸 refs 的扁平形态只在启动时被迁移)
+                block.push("version: 1".to_string());
+            }
+            block.push("refs:".to_string());
+            block.push(format!("  {name}: {}", crate::yamledge::scalar_text(key)));
+            let at = lines.len();
+            crate::yamledge::splice(&mut lines, at..at, &block);
+            Ok((crate::yamledge::join(&lines), CredAction::Added))
+        }
+    }
+}
+
+/// 凭据文件里去掉一个引用。`refs` 空了连它一起收走 —— 空 mapping 在存储里是类型错误。
+fn dsh_cred_remove(text: &str, name: &str) -> Result<String, String> {
+    let mut lines = crate::yamledge::split(text);
+    let root = crate::yamledge::parse(&lines)?;
+    let Some(refs) = root.get("refs") else {
+        return Ok(text.to_string());
+    };
+    if refs.kind != crate::yamledge::Kind::Mapping {
+        return Ok(text.to_string());
+    }
+    let Some(c) = refs.get(name) else {
+        return Ok(text.to_string());
+    };
+    if c.kind != crate::yamledge::Kind::Scalar {
+        return Err(format!("refs 下的 {name} 不是标量,本次不写"));
+    }
+    crate::yamledge::splice(&mut lines, c.start..c.end, &[]);
+    let root2 = crate::yamledge::parse(&lines)?;
+    if let Some(r) = root2.get("refs") {
+        if r.children.is_empty() {
+            crate::yamledge::splice(&mut lines, r.start..r.end, &[]);
+        }
+    }
+    Ok(crate::yamledge::join(&lines))
+}
+
+/// 读回校验:route 在、模型在、引用对、基地址对(目录路由不看 baseURL)、密钥落到了凭据文件。
+fn dsh_verify(patch: &Path, cred: &Path, spec: &ModelSpec) -> bool {
+    let text = dsh_read_text(patch);
+    let Ok(root) = crate::yamledge::parse(&crate::yamledge::split(&text)) else {
+        return false;
+    };
+    let route = dsh_route(&spec.source);
+    let Some(r) = dsh_providers(&root).and_then(|p| p.get(&route)) else {
+        return false;
+    };
+    let model_ok = r
+        .get("models")
+        .map(|m| {
+            m.items()
+                .iter()
+                .any(|x| x.get("id").and_then(|n| n.scalar()) == Some(spec.id.as_str()))
+        })
+        .unwrap_or(false);
+    let key_ok = r.get("apiKeyEnv").and_then(|n| n.scalar())
+        == Some(dsh_key_ref(&spec.source).as_str());
+    let url_ok = dsh_catalog_route(&spec.source)
+        || r.get("baseURL").and_then(|n| n.scalar()) == Some(spec.base_url.as_str());
+    let cred_ok = {
+        let t = dsh_read_text(cred);
+        crate::yamledge::parse(&crate::yamledge::split(&t))
+            .ok()
+            .and_then(|root| {
+                root.get("refs")
+                    .and_then(|r| r.get(&dsh_key_ref(&spec.source)))
+                    .and_then(|n| n.scalar())
+                    .map(|v| v == spec.key)
+            })
+            .unwrap_or(false)
+    };
+    model_ok && key_ok && url_ok && cred_ok
+}
+
+/// 写入 DSH 的一次「方案」:两份文件的现状与目标形态。纯函数(除读两个文件外不碰盘),
+/// 预告与真正写盘共用它 —— 两边口径就不可能分叉。
+struct DshPlan {
+    patch: PathBuf,
+    cred: PathBuf,
+    next_patch: String,
+    next_cred: String,
+    same: bool,
+    patch_action: PatchAction,
+    cred_action: CredAction,
+}
+
+fn dsh_plan(site: &Site, spec: &ModelSpec) -> Result<DshPlan, String> {
+    let (patch, cred) = dsh_paths(site)?;
+    let patch_text = dsh_read_text(&patch);
+    let cred_text = dsh_read_text(&cred);
+    let (next_patch, patch_action) = dsh_patch_apply(&patch_text, spec)?;
+    let name = dsh_key_ref(&spec.source);
+    let (next_cred, cred_action) = dsh_cred_apply(&cred_text, &name, &spec.key)?;
+    let same = next_patch == patch_text && next_cred == cred_text;
+    Ok(DshPlan {
+        patch,
+        cred,
+        next_patch,
+        next_cred,
+        same,
+        patch_action,
+        cred_action,
+    })
+}
+
+/// 写入 DSH:两份文件一起改,一次备份、一起校验。
+fn write_dsh_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, String> {
+    let plan = dsh_plan(site, spec)?;
+    let mut outcome = SiteOutcome::default();
+    if plan.same {
+        // 内容和盘上一致:不写盘,连备份都不必做
+        outcome.same = true;
+        return Ok(outcome);
+    }
+    match plan.patch_action {
+        PatchAction::Added => outcome.added = 1,
+        PatchAction::Updated => outcome.updated = 1,
+    }
+    let name = dsh_key_ref(&spec.source);
+    match plan.cred_action {
+        CredAction::Added => outcome
+            .notes
+            .push(format!("凭据文件里新增引用 {name}(只写密钥本身,不碰别的引用)")),
+        CredAction::Updated => outcome
+            .notes
+            .push(format!("引用 {name} 原有的值与这次不同,已按这次的内容覆盖")),
+        CredAction::Same => {}
+    }
+
+    let stamp = stamp_now();
+    let (patch, cred) = (plan.patch.clone(), plan.cred.clone());
+    let (pw, cw) = (patch.clone(), cred.clone());
+    let (pc, cc) = (patch.clone(), cred.clone());
+    let rels = vec![dsh_rel(&site.root, &patch), dsh_rel(&site.root, &cred)];
+    let (next_patch, next_cred) = (plan.next_patch, plan.next_cred);
+    outcome.backup = commit_layered(
+        site,
+        &[patch.clone(), cred.clone()],
+        Some(&rels),
+        &stamp,
+        move || {
+            dsh_write_text(&pw, &next_patch)?;
+            dsh_write_text(&cw, &next_cred)
+        },
+        move || dsh_verify(&pc, &cc, spec),
+    )?;
+    outcome
+        .notes
+        .push(format!("备份:{}", pretty(&outcome.backup)));
+    outcome.notes.push(
+        "DSH 不用退出也能写:它的 profile 按请求解析,配置改动在下一个请求生效。".to_string(),
+    );
+    Ok(outcome)
+}
+
+/// 取消写入 DSH:摘掉这一条模型;最后一个模型连 route 一起收;没人再用这个引用了才删密钥。
+fn remove_dsh_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, String> {
+    let (patch, cred) = dsh_paths(site)?;
+    let patch_text = dsh_read_text(&patch);
+    let cred_text = dsh_read_text(&cred);
+    let (mid_patch, removed) = dsh_patch_remove(&patch_text, spec)?;
+
+    // 还有别的 route 在用这个引用名吗?没有才删密钥(别人在用的引用一个都不动)
+    let name = dsh_key_ref(&spec.source);
+    let still_used = {
+        let root = crate::yamledge::parse(&crate::yamledge::split(&mid_patch))?;
+        dsh_providers(&root)
+            .map(|p| {
+                p.children.iter().any(|r| {
+                    r.get("apiKeyEnv").and_then(|n| n.scalar()) == Some(name.as_str())
+                })
+            })
+            .unwrap_or(false)
+    };
+    let drop_cred = removed > 0 && !still_used;
+    let next_cred = if drop_cred {
+        dsh_cred_remove(&cred_text, &name)?
+    } else {
+        cred_text.clone()
+    };
+
+    let mut outcome = SiteOutcome::default();
+    outcome.removed = removed;
+    if mid_patch == patch_text && next_cred == cred_text {
+        return Ok(outcome);
+    }
+    if removed > 0 && still_used {
+        outcome
+            .notes
+            .push(format!("引用 {name} 还有别的 route 在用,密钥留着不动"));
+    } else if drop_cred {
+        outcome.notes.push(format!(
+            "引用 {name} 已经没有 route 再用,密钥一并从凭据文件里撤掉"
+        ));
+    }
+    // 默认模型还指着这条吗?指着就说明白,让用户去 DSH 里另选一个(不替他改)
+    if removed > 0 && dsh_default_points_at(&patch_text, &spec.source, &spec.id) {
+        outcome.notes.push(format!(
+            "注意:DSH 的默认模型(agent-default-model)正指向 {} / {} —— 挂件不动它,\
+             请回 DSH 的设置里另选一个,否则新会话会报模型不可用。",
+            spec.source, spec.id
+        ));
+    }
+
+    let stamp = stamp_now();
+    let (pw, cw) = (patch.clone(), cred.clone());
+    let (pc, cc) = (patch.clone(), cred.clone());
+    let rels = vec![dsh_rel(&site.root, &patch), dsh_rel(&site.root, &cred)];
+    outcome.backup = commit_layered(
+        site,
+        &[patch.clone(), cred.clone()],
+        Some(&rels),
+        &stamp,
+        move || {
+            dsh_write_text(&pw, &mid_patch)?;
+            dsh_write_text(&cw, &next_cred)
+        },
+        move || {
+            // 读回校验:这条模型在盘上读不到了;密钥按**这次实际写的**口径核对 ——
+            // 撤了就必须没有,留着就必须原样还在(不然读回校验会把成功的删除当失败回滚)
+            let t = dsh_read_text(&pc);
+            let gone = dsh_model_absent(&t, &spec.source, &spec.id);
+            let cred_ok = {
+                let c = dsh_read_text(&cc);
+                let current = crate::yamledge::parse(&crate::yamledge::split(&c))
+                    .ok()
+                    .and_then(|root| {
+                        root.get("refs")
+                            .and_then(|r| r.get(&name))
+                            .and_then(|n| n.scalar())
+                            .map(String::from)
+                    });
+                if drop_cred {
+                    current.is_none()
+                } else {
+                    current.as_deref() == Some(spec.key.as_str())
+                }
+            };
+            gone && cred_ok
+        },
+    )?;
+    Ok(outcome)
+}
+
+/// 盘上这条模型已经不在我们写的那条 route 里了(或连 route 都没了)。
+fn dsh_model_absent(text: &str, source: &str, model: &str) -> bool {
+    let Ok(root) = crate::yamledge::parse(&crate::yamledge::split(text)) else {
+        return false;
+    };
+    dsh_providers(&root)
+        .and_then(|p| p.get(&dsh_route(source)))
+        .and_then(|r| r.get("models"))
+        .map(|m| {
+            !m.items()
+                .iter()
+                .any(|x| x.get("id").and_then(|n| n.scalar()) == Some(model))
+        })
+        .unwrap_or(true)
+}
+
+/// DSH 的默认模型是不是指着这条(只读,不改)。
+fn dsh_default_points_at(patch_text: &str, source: &str, model: &str) -> bool {
+    let Ok(root) = crate::yamledge::parse(&crate::yamledge::split(patch_text)) else {
+        return false;
+    };
+    root.children
+        .iter()
+        .find(|e| e.get("id").and_then(|n| n.scalar()) == Some(DSH_DEFAULT_MODEL_ID))
+        .and_then(|e| e.get("config"))
+        .map(|c| {
+            c.get("provider").and_then(|n| n.scalar()) == Some(source)
+                && c.get("model").and_then(|n| n.scalar()) == Some(model)
+        })
+        .unwrap_or(false)
+}
+
+/// 从 patch 文本里读「我们写进去的模型(带来源)」。
+fn dsh_read_configured(text: &str) -> Vec<ConfiguredModel> {
+    let mut out: Vec<ConfiguredModel> = Vec::new();
+    let Ok(root) = crate::yamledge::parse(&crate::yamledge::split(text)) else {
+        return out;
+    };
+    let Some(providers) = dsh_providers(&root) else {
+        return out;
+    };
+    for r in &providers.children {
+        let Some(route) = r.key.as_deref() else { continue };
+        let Some(source) = dsh_route_source(route) else {
+            continue;
+        };
+        let Some(m) = r.get("models") else { continue };
+        for item in m.items() {
+            let Some(id) = item.get("id").and_then(|n| n.scalar()) else {
+                continue;
+            };
+            if !out.iter().any(|x| x.id == id && x.source == source) {
+                out.push(ConfiguredModel {
+                    id: id.to_string(),
+                    source: source.clone(),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// DSH 当前的默认模型(`agent-default-model` 里那条),读得到才给。
+fn dsh_read_selected(text: &str) -> Option<String> {
+    let root = crate::yamledge::parse(&crate::yamledge::split(text)).ok()?;
+    let cfg = root
+        .children
+        .iter()
+        .find(|e| e.get("id").and_then(|n| n.scalar()) == Some(DSH_DEFAULT_MODEL_ID))?
+        .get("config")?;
+    let provider = cfg.get("provider").and_then(|n| n.scalar())?;
+    if dsh_route_source(provider).is_none() {
+        return None;
+    }
+    cfg.get("model").and_then(|n| n.scalar()).map(String::from)
+}
+
+/// patch 动作(回执用)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PatchAction {
+    Added,
+    Updated,
+}
+
+/// 凭据动作(回执用)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CredAction {
+    Added,
+    Updated,
+    Same,
+}
+
+/// DSH:这条模型在不在我们写的那条 route 里,以及移除后会剩下什么。
+fn dsh_removal(site: &Site, spec: &ModelSpec) -> (bool, Option<Removal>) {
+    let Ok((patch, _cred)) = dsh_paths(site) else {
+        return (false, None);
+    };
+    let text = dsh_read_text(&patch);
+    let Ok(root) = crate::yamledge::parse(&crate::yamledge::split(&text)) else {
+        return (false, None);
+    };
+    let Some(r) = dsh_providers(&root).and_then(|p| p.get(&dsh_route(&spec.source))) else {
+        return (false, None);
+    };
+    let Some(m) = r.get("models") else {
+        return (false, None);
+    };
+    if !m
+        .items()
+        .iter()
+        .any(|x| x.get("id").and_then(|n| n.scalar()) == Some(spec.id.as_str()))
+    {
+        return (false, None);
+    }
+    let left = m.items().len().saturating_sub(1);
+    let what = if left == 0 {
+        format!(
+            "route「{}」下的「{}」—— 这是它最后一个模型,连 route 一起移除\
+             (留一个空 models 列表会让 pi-ai 判它不可服务)",
+            spec.source, spec.id
+        )
+    } else {
+        format!(
+            "route「{}」下的「{}」(route 留下,还剩 {left} 个模型)",
+            spec.source, spec.id
+        )
+    };
+    (
+        true,
+        Some(Removal {
+            what,
+            // DSH 的「选中项」是 agent-default-model 那条,挂件只读不写 ——
+            // 移除时不替用户改,只在回执里点明(见 remove_dsh_site)。
+            clears_selection: false,
+            count: 1,
+        }),
+    )
+}
+
 // 取消写入(移除条目)的公共描述 + 各客户端实现
 // ───────────────────────── 取消写入 ─────────────────────────
 
@@ -2519,6 +3633,7 @@ pub fn remove(client: Client, spec: &ModelSpec) -> Result<Vec<Report>, String> {
                     o
                 }
             }
+            Client::Dsh => remove_dsh_site(&site, spec)?,
         };
             local.push(Report {
                 client: client_id,
@@ -2530,7 +3645,11 @@ pub fn remove(client: Client, spec: &ModelSpec) -> Result<Vec<Report>, String> {
                 updated: 0,
                 removed: o.removed,
             selected: false,
-            effect: format!("重启 {} 后这条模型不再出现在列表里", site.label),
+            effect: if client == Client::Dsh {
+                "DSH 下一个请求就不在列表里了(不用重启)".to_string()
+            } else {
+                format!("重启 {} 后这条模型不再出现在列表里", site.label)
+            },
             notes: {
                 let mut n = o.notes;
                 if o.removed == 0 {
@@ -2605,6 +3724,31 @@ fn site_readable(site: &Site) -> Result<(), String> {
             Ok(())
         }
         Client::Trae => Ok(()),
+        Client::Dsh => {
+            let (patch, cred) = dsh_paths(site)?;
+            if patch.exists() {
+                let text = dsh_read_text(&patch);
+                if !text.trim().is_empty() {
+                    let root = crate::yamledge::parse(&crate::yamledge::split(&text))?;
+                    if root.kind != crate::yamledge::Kind::Sequence {
+                        return Err(format!(
+                            "{} 的根不是「条目数组」,结构可能已变",
+                            pretty(&patch)
+                        ));
+                    }
+                }
+            }
+            if cred.exists() {
+                let text = dsh_read_text(&cred);
+                if !text.trim().is_empty() {
+                    let root = crate::yamledge::parse(&crate::yamledge::split(&text))?;
+                    if root.kind != crate::yamledge::Kind::Mapping {
+                        return Err(format!("{} 的根不是 mapping", pretty(&cred)));
+                    }
+                }
+            }
+            Ok(())
+        }
     }
 }
 
@@ -2762,6 +3906,60 @@ pub fn preview(client: Client, spec: &ModelSpec, opts: &Opts) -> Vec<Preview> {
                         );
                     }
                 }
+                Client::Dsh => {
+                    let plan = match dsh_plan(&site, spec) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            // 结构认不出来 / 值不是块 —— 点下去必然失败,预告里就说清楚
+                            p.blocked = Some(format!("{e}(本次不写)"));
+                            return p;
+                        }
+                    };
+                    p.action = if plan.same {
+                        "已配置,内容和这次要写的一致,无需改动".into()
+                    } else if plan.patch_action == PatchAction::Updated {
+                        format!("更新 llm-pi-ai 里的 route「{}」与这条模型", spec.source)
+                    } else {
+                        format!("在 llm-pi-ai 里新增 route「{}」与这条模型", spec.source)
+                    };
+                    p.changed = !plan.same;
+                    p.writes_selection = false;
+                    p.notes.push(format!(
+                        "落点:route「{}」写在 {},密钥以 {} 的名字写进 {}(两份文件一次备份、一起校验)",
+                        spec.source,
+                        pretty(&plan.patch),
+                        dsh_key_ref(&spec.source),
+                        pretty(&plan.cred)
+                    ));
+                    if plan.cred_action == CredAction::Updated {
+                        p.notes.push(format!(
+                            "注意:引用 {} 在凭据文件里已经存在,值与这次不同,写入会覆盖它。",
+                            dsh_key_ref(&spec.source)
+                        ));
+                    }
+                    if !spec.source.is_empty() && !dsh_catalog_route(&spec.source) {
+                        p.notes.push(
+                            "这条 route 不在 pi-ai 的已安装目录里,所以要写全协议(openai-completions)\
+                             与端点 —— 这正是 DSH 的「自定义模型 API」那条路。"
+                                .into(),
+                        );
+                    }
+                    let (configured, removal) = dsh_removal(&site, spec);
+                    p.configured = configured;
+                    p.removal = removal;
+                    if site.running {
+                        p.notes.push(
+                            "DSH 正在运行也能写(不用退出):它的 profile 按请求解析,而且它自己的\
+                             设置层与凭据层都会收敛外部改动。"
+                                .into(),
+                        );
+                    }
+                    p.notes.push(
+                        "选中项不写:DSH 的默认模型由 agent-default-model 那条决定。写入后回 DSH \
+                         的模型选择器里选一次(挂件只读它,不替你改)。"
+                            .into(),
+                    );
+                }
             }
             p
         })
@@ -2875,6 +4073,29 @@ pub fn apply(client: Client, spec: &ModelSpec, opts: &Opts) -> Result<Vec<Report
                     selected: o.selected,
                     effect: format!("重启 {} 后出现在自定义模型里", site.label),
                     notes: o.notes,
+                    error: None,
+                });
+            }
+            Client::Dsh => {
+                let o = write_dsh_site(&site, spec)?;
+                local.push(Report {
+                    client: client_id,
+                    label,
+                    stamp,
+                    backup: pretty(&o.backup),
+                    backup_path: o.backup.to_string_lossy().to_string(),
+                    added: o.added,
+                    updated: o.updated,
+                    removed: 0,
+                    selected: o.selected,
+                    effect: "DSH 下一个请求就生效(不用重启)".into(),
+                    notes: {
+                        let mut n = o.notes;
+                        if !o.same && (o.added + o.updated) == 0 {
+                            n.push("内容和盘上一致,这次没有改动文件。".into());
+                        }
+                        n
+                    },
                     error: None,
                 });
             }
@@ -3094,6 +4315,27 @@ pub fn state(learned: &HashMap<String, String>) -> Vec<ClientState> {
                     }
                     st.models.sort_by(|a, b| a.id.cmp(&b.id));
                     st.note = Some("选中项写入是实验开关(默认关)".into());
+                }
+                Client::Dsh => {
+                    for s in &mine {
+                        let Ok((patch, _cred)) = dsh_paths(s) else {
+                            continue;
+                        };
+                        let text = dsh_read_text(&patch);
+                        for m in dsh_read_configured(&text) {
+                            // 同名模型可能在两个来源里都有:只按 id 去重会让来源徽标串台
+                            if !st.models.iter().any(|x| x.id == m.id && x.source == m.source) {
+                                st.models.push(m);
+                            }
+                        }
+                        if st.selected.is_none() {
+                            st.selected = dsh_read_selected(&text);
+                        }
+                    }
+                    st.models.sort_by(|a, b| a.id.cmp(&b.id));
+                    st.note = Some(
+                        "边跑边写:DSH 的 profile 按请求解析,不用退出它。默认模型只读不写".into(),
+                    );
                 }
             }
             st
@@ -4376,5 +5618,548 @@ mod tests {
         let o = remove_trae_site(&db, &sp).unwrap();
         assert_eq!(o.removed, 1);
         assert!(trae_verify_removed(&db, &sp), "移除后读回应干净");
+    }
+
+    // ───────────────────── DeepSeek Harness ─────────────────────
+
+    /// 与真机同形的一份 patch:注释、别的条目、目录里已有的 opencode-go route 都在。
+    /// 原始字符串:行续接 `\` 会吃掉缩进,夹具会被悄悄改写(踩过一次)。
+    const DSH_PATCH: &str = r#"# dsh profile patch
+- id: agent-default-model
+  name: "@deepseek-ai/dsh-agent-default-model"
+  config:
+    provider: opencode-go
+    model: deepseek-v4.1-flash
+    reasoningEffort: high
+
+- id: llm-pi-ai
+  name: "@deepseek-ai/dsh-llm-pi-ai"
+  config:
+    providers:
+      opencode-go:
+        models:
+          - id: deepseek-v4.1-flash
+            name: OG DeepSeek V4.1 Flash
+            contextWindow: 1000000
+        apiKeyEnv: OPENCODE_GO_API_KEY
+"#;
+
+    /// 与真机同形的一份凭据文件(值换成假的)。
+    const DSH_CRED: &str = r#"version: 1
+records:
+  client-connection/browser-session:
+    kind: grant
+    payload:
+      version: 1
+      secret: abc
+refs:
+  OPENCODE_GO_API_KEY: sk-existing
+"#;
+
+    fn dsh_home_at(tag: &str) -> PathBuf {
+        let home = tmpdir(tag);
+        std::fs::create_dir_all(home.join("profiles").join("desktop")).unwrap();
+        home
+    }
+
+    fn dsh_site_at(home: &Path) -> Site {
+        Site {
+            client: Client::Dsh,
+            label: format!("{} · desktop", Client::Dsh.label()),
+            running: false,
+            process: Client::Dsh.process().into(),
+            root: home.to_path_buf(),
+            files: vec![dsh_patch_of(home, "desktop"), dsh_creds_of(home)],
+        }
+    }
+
+    fn dsh_write_fixture(home: &Path, patch: &str, cred: &str) {
+        std::fs::write(dsh_patch_of(home, "desktop"), patch).unwrap();
+        std::fs::write(dsh_creds_of(home), cred).unwrap();
+    }
+
+    fn dsh_read(home: &Path, name: &str) -> String {
+        let p = if name == "patch" {
+            dsh_patch_of(home, "desktop")
+        } else {
+            dsh_creds_of(home)
+        };
+        std::fs::read_to_string(p).unwrap()
+    }
+
+    /// 真机取证:本机装了 DSH 时,拿**真实**的 patch / 凭据文件过一遍「读 + 预告」——
+    /// 只读、绝不写盘。默认 ignore(换台机器就没这两个文件):
+    /// `cargo test --lib -- --ignored dsh_real_machine`。
+    #[test]
+    #[ignore]
+    fn dsh_real_machine_files_parse_and_preview() {
+        let home = dsh_home().expect("本机没有 harness home");
+        assert!(home.is_dir(), "harness home 不存在:{}", home.display());
+        let profile = dsh_profile(&home).expect("没找到可用的 profile");
+        let site = dsh_site_at(&home);
+        eprintln!("harness home = {}", home.display());
+        eprintln!("profile      = {profile}");
+        for f in &site.files {
+            eprintln!("  {}", pretty(f));
+        }
+        site_readable(&site).expect("真实文件应当读得懂(认不出来就别写)");
+        let sp = spec();
+        let out = preview(Client::Dsh, &sp, &Opts::default());
+        assert_eq!(out.len(), 1, "应当只有一个 DSH 站点");
+        assert!(
+            out[0].blocked.is_none(),
+            "预告不该被拒:{:?}",
+            out[0].blocked
+        );
+        eprintln!("动作 = {}", out[0].action);
+        for n in &out[0].notes {
+            eprintln!("  · {n}");
+        }
+        // 只读校验:预览前后文件逐字节不变
+        let before: Vec<String> = site
+            .files
+            .iter()
+            .map(|f| dsh_read_text(f))
+            .collect();
+        let _ = preview(Client::Dsh, &sp, &Opts::default());
+        let after: Vec<String> = site.files.iter().map(|f| dsh_read_text(f)).collect();
+        assert_eq!(before, after, "预告是纯读,一个字节都不该动");
+    }
+
+    /// 真机形状的端到端:把本机**真实**的 patch / 凭据文件抄进临时 harness home,
+    /// 在抄本上跑 写入 → 读回校验 → 取消写入 → 两次回滚。
+    /// **全程不碰 `~/.dsh`**;默认 ignore:`cargo test --lib -- --ignored dsh_real_machine`。
+    #[test]
+    #[ignore]
+    fn dsh_real_machine_shapes_write_and_rollback() {
+        let home = dsh_home().expect("本机没有 harness home");
+        let profile = dsh_profile(&home).expect("没找到可用的 profile");
+        let patch0 = std::fs::read_to_string(dsh_patch_of(&home, &profile)).expect("读真实 patch");
+        let cred0 = std::fs::read_to_string(dsh_creds_of(&home)).unwrap_or_default();
+        let had_cred = !cred0.is_empty();
+
+        // 抄进临时 home:形状与真机逐字节一致,但一个字符都不写回 ~/.dsh
+        let tmp = tmpdir("dsh-real-shapes");
+        std::fs::create_dir_all(tmp.join("profiles").join(&profile)).unwrap();
+        std::fs::write(dsh_patch_of(&tmp, &profile), &patch0).unwrap();
+        if had_cred {
+            std::fs::write(dsh_creds_of(&tmp), &cred0).unwrap();
+        }
+        let site = Site {
+            client: Client::Dsh,
+            label: format!("{} · {profile}", Client::Dsh.label()),
+            running: true, // 故意标成"在跑":DSH 是唯一不该被它挡住的客户端
+            process: Client::Dsh.process().into(),
+            root: tmp.clone(),
+            files: vec![dsh_patch_of(&tmp, &profile), dsh_creds_of(&tmp)],
+        };
+        assert!(
+            blocked_by_running(&site).is_none(),
+            "DSH 在跑也不该阻止写入(热写口径)"
+        );
+        site_readable(&site).expect("真实文件形状应当读得懂");
+
+        let sp = spec(); // 4sapi / claude-sonnet-5 / https://4sapi.com/v1 / sk-test-123
+        let o = write_dsh_site(&site, &sp).unwrap();
+        assert_eq!(o.added, 1, "真实形状里没有这条 route,应当是新增");
+        let patch1 = std::fs::read_to_string(dsh_patch_of(&tmp, &profile)).unwrap();
+        assert!(
+            dsh_verify(&dsh_patch_of(&tmp, &profile), &dsh_creds_of(&tmp), &sp),
+            "真实形状写完之后,独立读回校验也要过"
+        );
+        // 我们那条进去了
+        let root1 = crate::yamledge::parse(&crate::yamledge::split(&patch1)).unwrap();
+        let r = dsh_providers(&root1).unwrap().get("4sapi").unwrap();
+        assert_eq!(r.get("baseURL").unwrap().scalar(), Some("https://4sapi.com/v1"));
+        assert_eq!(r.get("apiKeyEnv").unwrap().scalar(), Some("4SAPI_API_KEY"));
+        // 别人的一个都没动:条目数、原有 route、注释
+        let before_entries = crate::yamledge::parse(&crate::yamledge::split(&patch0))
+            .unwrap()
+            .children
+            .len();
+        assert_eq!(root1.children.len(), before_entries, "顶层条目数不该变");
+        assert!(patch1.contains("agent-default-model"), "别的条目必须留着");
+        if patch0.contains("opencode-go") {
+            assert!(patch1.contains("opencode-go"), "原有的 route 必须留着");
+        }
+        if patch0.starts_with('#') {
+            assert!(patch1.starts_with('#'), "文件开头的注释必须留着");
+        }
+        let cred1 = std::fs::read_to_string(dsh_creds_of(&tmp)).unwrap();
+        if had_cred {
+            assert!(cred1.contains("records:"), "records 段必须留着");
+        }
+        assert!(cred1.contains("4SAPI_API_KEY"), "密钥引用要落进凭据文件");
+
+        // 取消写入 → 回滚它 → 回滚最初那次写入
+        let o2 = remove_dsh_site(&site, &sp).unwrap();
+        assert_eq!(o2.removed, 1);
+        let patch2 = std::fs::read_to_string(dsh_patch_of(&tmp, &profile)).unwrap();
+        assert!(dsh_model_absent(&patch2, "4sapi", "claude-sonnet-5"));
+        restore(&o2.backup).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dsh_patch_of(&tmp, &profile)).unwrap(),
+            patch1,
+            "回滚这次删除 = 回到写入之后的样子"
+        );
+        restore(&o.backup).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dsh_patch_of(&tmp, &profile)).unwrap(),
+            patch0,
+            "回滚那次写入 = 逐字节回到原始文件"
+        );
+        if had_cred {
+            assert_eq!(
+                std::fs::read_to_string(dsh_creds_of(&tmp)).unwrap(),
+                cred0,
+                "凭据文件也要逐字节回到原样"
+            );
+        } else {
+            assert!(!dsh_creds_of(&tmp).exists(), "原本没有的凭据文件要删掉");
+        }
+    }
+
+    #[test]
+    fn dsh_key_ref_names_match_dsh_own_derivation() {
+        assert_eq!(dsh_key_ref("opencode-go"), "OPENCODE_GO_API_KEY");
+        assert_eq!(dsh_key_ref("4sapi"), "4SAPI_API_KEY");
+        assert_eq!(dsh_key_ref("hapi"), "HAPI_API_KEY");
+        assert_eq!(dsh_route_source("4sapi").as_deref(), Some("4sapi"));
+        assert_eq!(dsh_route_source("hapi").as_deref(), Some("hapi"));
+        assert!(dsh_route_source("someone-else").is_none());
+        assert!(dsh_catalog_route("opencode-go"), "目录里的提供方不给端点");
+        assert!(!dsh_catalog_route("4sapi"));
+    }
+
+    /// 新增:非目录来源要写全协议 + 端点 + 引用名,密钥进凭据文件;注释与别的条目一个不动。
+    #[test]
+    fn dsh_adds_route_and_credential() {
+        let home = dsh_home_at("dsh-add");
+        dsh_write_fixture(&home, DSH_PATCH, DSH_CRED);
+        let site = dsh_site_at(&home);
+        let sp = spec(); // 4sapi / claude-sonnet-5 / https://4sapi.com/v1 / sk-test-123
+
+        let o = write_dsh_site(&site, &sp).unwrap();
+        assert_eq!((o.added, o.updated, o.same), (1, 0, false));
+
+        let patch = dsh_read(&home, "patch");
+        assert!(patch.contains("# dsh profile patch"), "注释必须留着");
+        assert!(patch.contains("- id: agent-default-model"), "别的条目必须留着");
+        assert!(patch.contains("OPENCODE_GO_API_KEY"), "目录里那条 route 不该被抹掉");
+        let root = crate::yamledge::parse(&crate::yamledge::split(&patch)).unwrap();
+        let r = dsh_providers(&root).unwrap().get("4sapi").unwrap();
+        assert_eq!(r.get("api").unwrap().scalar(), Some("openai-completions"));
+        assert_eq!(
+            r.get("baseURL").unwrap().scalar(),
+            Some("https://4sapi.com/v1")
+        );
+        assert_eq!(r.get("apiKeyEnv").unwrap().scalar(), Some("4SAPI_API_KEY"));
+        let m = r.get("models").unwrap().items();
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].get("id").unwrap().scalar(), Some("claude-sonnet-5"));
+        assert_eq!(m[0].get("name").unwrap().scalar(), Some("4S-claude-sonnet-5"));
+        assert_eq!(m[0].get("contextWindow").unwrap().scalar(), Some("1000000"));
+        assert_eq!(
+            m[0].get("input").unwrap().items().len(),
+            2,
+            "多模态模型要带 image"
+        );
+
+        let cred = dsh_read(&home, "cred");
+        let croot = crate::yamledge::parse(&crate::yamledge::split(&cred)).unwrap();
+        assert_eq!(
+            croot
+                .get("refs")
+                .unwrap()
+                .get("4SAPI_API_KEY")
+                .unwrap()
+                .scalar(),
+            Some("sk-test-123")
+        );
+        assert_eq!(
+            croot
+                .get("refs")
+                .unwrap()
+                .get("OPENCODE_GO_API_KEY")
+                .unwrap()
+                .scalar(),
+            Some("sk-existing"),
+            "别人的引用一个都不动"
+        );
+        assert_eq!(croot.get("version").unwrap().scalar(), Some("1"));
+        assert!(cred.contains("kind: grant"), "records 段必须原样留着");
+    }
+
+    /// 幂等:同样内容再写一次 —— 不动盘、不建备份、回执说「无需改动」。
+    #[test]
+    fn dsh_write_is_idempotent() {
+        let home = dsh_home_at("dsh-idem");
+        dsh_write_fixture(&home, DSH_PATCH, DSH_CRED);
+        let site = dsh_site_at(&home);
+        let sp = spec();
+        write_dsh_site(&site, &sp).unwrap();
+        let after1 = (dsh_read(&home, "patch"), dsh_read(&home, "cred"));
+        let o2 = write_dsh_site(&site, &sp).unwrap();
+        assert!(o2.same, "第二次应报「内容一致」");
+        assert_eq!((o2.added, o2.updated), (0, 0));
+        assert!(o2.backup.as_os_str().is_empty(), "没改动就不该建备份目录");
+        assert_eq!(
+            (dsh_read(&home, "patch"), dsh_read(&home, "cred")),
+            after1,
+            "文件必须逐字节不变"
+        );
+    }
+
+    /// 目录里的 route(`opencode-go`):只往 models 里加一条,不给 api/baseURL,
+    /// 用户的 apiKeyEnv 与已有模型都留着。
+    #[test]
+    fn dsh_catalog_route_merges_without_touching_endpoint() {
+        let home = dsh_home_at("dsh-catalog");
+        dsh_write_fixture(&home, DSH_PATCH, DSH_CRED);
+        let site = dsh_site_at(&home);
+        let sp = ModelSpec::new(
+            "opencode-go",
+            "glm-5.3",
+            "https://opencode.ai/zen/go/v1",
+            "sk-go-123",
+            None,
+            false,
+        );
+        let o = write_dsh_site(&site, &sp).unwrap();
+        assert_eq!(o.added, 1);
+
+        let patch = dsh_read(&home, "patch");
+        let root = crate::yamledge::parse(&crate::yamledge::split(&patch)).unwrap();
+        let r = dsh_providers(&root).unwrap().get("opencode-go").unwrap();
+        assert!(r.get("api").is_none(), "目录路由不该被塞 api");
+        assert!(r.get("baseURL").is_none(), "目录路由不该被塞 baseURL");
+        assert_eq!(
+            r.get("apiKeyEnv").unwrap().scalar(),
+            Some("OPENCODE_GO_API_KEY")
+        );
+        let ids: Vec<&str> = r
+            .get("models")
+            .unwrap()
+            .items()
+            .iter()
+            .map(|x| x.get("id").unwrap().scalar().unwrap())
+            .collect();
+        assert_eq!(ids, vec!["deepseek-v4.1-flash", "glm-5.3"], "原有模型必须留着");
+        let cred = dsh_read(&home, "cred");
+        let croot = crate::yamledge::parse(&crate::yamledge::split(&cred)).unwrap();
+        assert_eq!(
+            croot
+                .get("refs")
+                .unwrap()
+                .get("OPENCODE_GO_API_KEY")
+                .unwrap()
+                .scalar(),
+            Some("sk-go-123"),
+            "同名引用按这次的内容覆盖"
+        );
+    }
+
+    /// 更新已有条目:用户自己加过的字段(maxTokens / reasoningEfforts)必须留着。
+    #[test]
+    fn dsh_update_keeps_user_added_model_fields() {
+        let home = dsh_home_at("dsh-keep");
+        let patch = DSH_PATCH.replace(
+            "          - id: deepseek-v4.1-flash\n            name: OG DeepSeek V4.1 Flash\n            contextWindow: 1000000\n",
+            "          - id: deepseek-v4.1-flash\n            name: OG DeepSeek V4.1 Flash\n            contextWindow: 1000000\n            maxTokens: 384000\n            reasoningEfforts:\n              off:\n              high: high\n",
+        );
+        assert!(patch.contains("maxTokens: 384000"), "夹具本身要改成功");
+        dsh_write_fixture(&home, &patch, DSH_CRED);
+        let site = dsh_site_at(&home);
+        let sp = ModelSpec::new(
+            "opencode-go",
+            "deepseek-v4.1-flash",
+            "https://opencode.ai/zen/go/v1",
+            "sk-go-123",
+            Some(1_000_000),
+            true,
+        );
+        let o = write_dsh_site(&site, &sp).unwrap();
+        assert_eq!(o.updated, 1);
+        let after = dsh_read(&home, "patch");
+        assert!(after.contains("maxTokens: 384000"), "未知字段必须保留");
+        assert!(after.contains("reasoningEfforts:"), "未知字段必须保留");
+        assert!(after.contains("- image"), "这次新学的图片能力要写进去");
+    }
+
+    /// 取消写入:最后一个模型 → route 一起收走(不留空 models),没人再用的密钥也撤掉;
+    /// 默认模型指着它时如实提示(但不替用户改)。
+    #[test]
+    fn dsh_remove_last_model_takes_route_and_credential() {
+        let home = dsh_home_at("dsh-rm");
+        dsh_write_fixture(&home, DSH_PATCH, DSH_CRED);
+        let site = dsh_site_at(&home);
+        let sp = ModelSpec::new(
+            "4sapi",
+            "claude-sonnet-5",
+            "https://4sapi.com/v1",
+            "sk-test-123",
+            None,
+            false,
+        );
+        write_dsh_site(&site, &sp).unwrap();
+        // 把默认模型指到它上面,验证「只提示、不改」
+        let patched = dsh_read(&home, "patch").replace(
+            "    provider: opencode-go\n    model: deepseek-v4.1-flash",
+            "    provider: 4sapi\n    model: claude-sonnet-5",
+        );
+        std::fs::write(dsh_patch_of(&home, "desktop"), &patched).unwrap();
+
+        let o = remove_dsh_site(&site, &sp).unwrap();
+        assert_eq!(o.removed, 1);
+        assert!(
+            o.notes.iter().any(|n| n.contains("默认模型")),
+            "默认模型指着它必须提示:{:?}",
+            o.notes
+        );
+        let patch = dsh_read(&home, "patch");
+        let root = crate::yamledge::parse(&crate::yamledge::split(&patch)).unwrap();
+        assert!(
+            dsh_providers(&root).unwrap().get("4sapi").is_none(),
+            "最后一个模型被摘走,route 不该留成空壳"
+        );
+        assert!(
+            patch.contains("provider: 4sapi"),
+            "默认模型那几条挂件不动(只提示)"
+        );
+        let cred = dsh_read(&home, "cred");
+        assert!(!cred.contains("4SAPI_API_KEY"), "没人再用的引用要撤掉");
+        assert!(cred.contains("OPENCODE_GO_API_KEY"), "别人的引用不许动");
+        assert!(cred.contains("kind: grant"), "records 段不许动");
+    }
+
+    /// 还有别的 route 在用同一个引用名 → 密钥留着不动(读回校验也要按这个口径)。
+    #[test]
+    fn dsh_remove_keeps_credential_still_used_by_another_route() {
+        let home = dsh_home_at("dsh-rm2");
+        let patch = DSH_PATCH.replace(
+            "      opencode-go:\n",
+            "      4sapi-other:\n        api: openai-completions\n        baseURL: https://4sapi.com/v1\n        apiKeyEnv: 4SAPI_API_KEY\n        models:\n          - id: keep-me\n            name: keep\n      opencode-go:\n",
+        );
+        dsh_write_fixture(&home, &patch, DSH_CRED);
+        let site = dsh_site_at(&home);
+        let sp = ModelSpec::new(
+            "4sapi",
+            "claude-sonnet-5",
+            "https://4sapi.com/v1",
+            "sk-test-123",
+            None,
+            false,
+        );
+        write_dsh_site(&site, &sp).unwrap();
+        let o = remove_dsh_site(&site, &sp).unwrap();
+        assert_eq!(o.removed, 1);
+        assert!(
+            o.notes.iter().any(|n| n.contains("还有别的 route 在用")),
+            "要说明密钥为什么留着:{:?}",
+            o.notes
+        );
+        let cred = dsh_read(&home, "cred");
+        assert!(cred.contains("4SAPI_API_KEY"), "别的 route 还在用,密钥不能删");
+    }
+
+    /// 回滚:两份文件一起盖回原来的样子;写入前不存在的凭据文件,回滚后要消失。
+    #[test]
+    fn dsh_rollback_restores_both_files_and_removes_created_one() {
+        let home = dsh_home_at("dsh-roll");
+        // 凭据文件先不放:写入会新建它
+        std::fs::write(dsh_patch_of(&home, "desktop"), DSH_PATCH).unwrap();
+        let site = dsh_site_at(&home);
+        let sp = spec();
+        let o = write_dsh_site(&site, &sp).unwrap();
+        assert!(dsh_creds_of(&home).is_file(), "写入应建出凭据文件");
+        let backup = o.backup.clone();
+        assert!(
+            backup.starts_with(home.join("backup-inject")),
+            "备份落在 harness home 下"
+        );
+        assert!(
+            backup.join(BACKUP_LAYOUT).is_file(),
+            "跨目录的备份要带落点清单"
+        );
+
+        let msg = restore(&backup).unwrap();
+        assert!(msg.contains("落点清单"), "回滚走的是清单那条路:{msg}");
+        assert_eq!(dsh_read(&home, "patch"), DSH_PATCH, "patch 要逐字节回到原样");
+        assert!(
+            !dsh_creds_of(&home).exists(),
+            "写入前不存在的文件,回滚后要删掉(而不是留一份我们建的)"
+        );
+    }
+
+    /// 结构认不出来(providers 是流式集合)→ 写入要明确拒绝,不猜、不写坏。
+    #[test]
+    fn dsh_refuses_flow_style_providers() {
+        let home = dsh_home_at("dsh-flow");
+        let patch =
+            DSH_PATCH.replace("    providers:\n", "    providers: {opencode-go: {apiKeyEnv: X}}\n");
+        dsh_write_fixture(&home, &patch, DSH_CRED);
+        let e = dsh_patch_apply(&dsh_read(&home, "patch"), &spec()).unwrap_err();
+        assert!(
+            e.contains("认不出来") || e.contains("mapping") || e.contains("sequence"),
+            "拒绝的理由要说清:{e}"
+        );
+        let site = dsh_site_at(&home);
+        let before = dsh_read(&home, "patch");
+        assert!(write_dsh_site(&site, &spec()).is_err(), "认不出来就不许写");
+        assert_eq!(dsh_read(&home, "patch"), before, "拒绝时文件必须原样");
+    }
+
+    /// 状态读取:认得出我们写的模型(带来源)、读得到默认模型;别人的 route 不算数。
+    #[test]
+    fn dsh_state_reads_models_and_selection() {
+        let home = dsh_home_at("dsh-state");
+        let patch = DSH_PATCH.replace(
+            "      opencode-go:\n",
+            "      someone-else:\n        apiKeyEnv: OTHER_KEY\n        models:\n          - id: not-ours\n            name: nope\n      opencode-go:\n",
+        );
+        dsh_write_fixture(&home, &patch, DSH_CRED);
+        let site = dsh_site_at(&home);
+        write_dsh_site(&site, &spec()).unwrap();
+        let text = dsh_read(&home, "patch");
+        let rows = dsh_read_configured(&text);
+        let ids: Vec<(&str, &str)> = rows
+            .iter()
+            .map(|m| (m.id.as_str(), m.source.as_str()))
+            .collect();
+        assert!(ids.contains(&("claude-sonnet-5", "4sapi")), "{ids:?}");
+        assert!(
+            ids.contains(&("deepseek-v4.1-flash", "opencode-go")),
+            "目录里那条也是我们认识的来源:{ids:?}"
+        );
+        assert!(
+            !ids.iter().any(|(id, _)| *id == "not-ours"),
+            "别人的 route 不算我们写的:{ids:?}"
+        );
+        assert_eq!(
+            dsh_read_selected(&text).as_deref(),
+            Some("deepseek-v4.1-flash")
+        );
+        // 默认模型不在我们认识的来源上 → 不报「选中」
+        let other = DSH_PATCH.replace("provider: opencode-go", "provider: deepseek-official");
+        assert_eq!(dsh_read_selected(&other), None);
+    }
+
+    /// 站点发现:harness home 有 profile 才算装了;优先 desktop。
+    #[test]
+    fn dsh_site_discovery_prefers_desktop() {
+        let home = dsh_home_at("dsh-site");
+        let work = home.join("profiles").join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(work.join("cordis.yml"), "[]").unwrap();
+        std::fs::write(dsh_patch_of(&home, "desktop"), DSH_PATCH).unwrap();
+        assert_eq!(dsh_profile(&home).as_deref(), Some("desktop"));
+        // 只有 work 一个 → 挑它;啥都没有 → 没装
+        let home2 = dsh_home_at("dsh-site2");
+        let work2 = home2.join("profiles").join("work");
+        std::fs::create_dir_all(&work2).unwrap();
+        std::fs::write(work2.join("cordis.yml"), "[]").unwrap();
+        assert_eq!(dsh_profile(&home2).as_deref(), Some("work"));
+        let empty = tmpdir("dsh-site3");
+        assert_eq!(dsh_profile(&empty), None);
     }
 }

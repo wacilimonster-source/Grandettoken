@@ -705,7 +705,7 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 .mcli-c span{color:var(--tx3);font-size:max(10px,calc(10px*var(--u)))}
 .mcli-c.off{opacity:.45}
 
-/* 模型行:名称 + 四个客户端按钮 + 标签 + 单价 */
+/* 模型行:名称 + 五个客户端按钮 + 标签 + 单价 */
 .mrow{border:1px solid var(--line);background:var(--bg2);border-radius:calc(9px*var(--u));
   padding:calc(7px*var(--u)) calc(9px*var(--u));margin-bottom:calc(6px*var(--u))}
 .mrow.done{border-color:#2f6b43}
