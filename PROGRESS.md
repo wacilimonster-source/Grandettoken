@@ -40,7 +40,12 @@
 已配置 / 被挡四个弹层都出得来`,退出码 0;计数按 `data-act="mdlcli"` 走,
 不再用会把容器 `class="cdots"` 也数进去的松正则。
 
-**发版(v0.1.39)**:待回填。
+**发版(v0.1.39)**:tag `v0.1.39`(提交 `6ead4f4`,main + tag 已推)→ release
+<https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.39>,
+三资源齐(installer **4,977,131 字节**,sha256 `b4cb1cd1af751677e7c006e89261bab62515d3c9ee97023d680033d4e537720f`;
+`.sig` 424 字节;`latest.json` 2,381 字节);更新端点实测 **200**、与本地产出的 `latest.json`
+**逐字节一致**、version 0.1.39、签名与本地逐字一致(GitHub 侧 asset digest 也一致)、
+安装包下载后 sha256 与本地一致;单 exe 交付检查通过。装 0.1.38 的机器在这条更新里直接升到 0.1.39。
 
 ## DeepSeek Harness 写入(2026-10-17,v0.1.38)
 
