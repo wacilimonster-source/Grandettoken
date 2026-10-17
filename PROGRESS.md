@@ -25,6 +25,10 @@
 **验证**:真机(125% 缩放)67→123、圆角 999→16、胶囊 142×46 不被压、向下长高、4.5 秒收回、零异常;
 `node --check` 与假 DOM 探针通过。
 
+**发版**:tag `v0.1.37` → release <https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.37>,
+三资源齐(installer 4,949,653 字节,sha256 `bcb176228935308d9543d4efd2127fcb76b95b39162e0e1ea10aabda0f017259`);
+更新端点实测 200、version 0.1.37、签名与本地逐字一致。
+
 ## 速览气泡样式重做(2026-10-17,v0.1.36)
 
 **起因**:v0.1.35 发布后用户贴了张真机截图,说"这个样式显示的很奇怪"。
