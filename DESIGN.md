@@ -942,6 +942,9 @@ harness home 根下。所以 DSH 的备份目录里多一份 `.inject-layout.jso
   悄悄改成顶格的,测试失败信息指向解析器而不是夹具(踩过一次)。夹具一律用原始字符串 `r#"…"#`。
 - **跨目录的备份要带落点清单**:回滚原本是"按文件名放回配置目录",DSH 的两份文件不在同一层,
   照旧逻辑会把 `cordis.patch.yml` 放到 harness home 根下(见 12.3.2)。
+- **改版本号别用 PowerShell 的 `-replace | Set-Content`**(v0.1.38 发版时踩到):它按 ANSI 重写整份
+  文件 —— `多平台` 变乱码、注释行被并成一行,`Cargo.toml` 事实上被改坏(TOML 里那句 description
+  不再是合法 UTF-8)。改版本号只动那一行,改完 `git diff` 复核"只有一行变了"再提交。
 
 ### 12.6 安全
 

@@ -1,7 +1,7 @@
 # TokenScope 开发进展
 
 > 最后更新:2026-10-17
-> 状态:**v0.1.38 待发版 —— 模型页新增第五个写入目标 DeepSeek Harness(真实 DSH 配置上真写 + 回滚验过)**
+> 状态:**v0.1.38 已发布 —— 模型页新增第五个写入目标 DeepSeek Harness(真实 DSH 配置上真写 + 回滚验过)**
 > 更早:v0.1.37(速览改为"抬升卡片")、v0.1.36(速览气泡样式重做)、v0.1.35(小鲸鱼研读四包)、
 > v0.1.34(汇总条瘦身)、v0.1.33(全量体检第二轮:36 条缺陷,P1 六条)
 
@@ -83,6 +83,16 @@ route 键 = 来源 id;目录 route 不写端点;`models` 是替换语义所以�
 2. DSH 侧**真的用 4SAPI 模型发出过一次请求**(要留着那条写入、再回 DSH 选模型;本轮为了回滚没有留)。
 3. 多 profile 场景(本机只有 `desktop`):"优先 desktop → 挑配了 llm-pi-ai 的 → 按名字第一个"
    只有单测覆盖。
+
+**发版(v0.1.38)**:tag `v0.1.38`(提交 `641ad9d`,已推 main + tag)→ release
+<https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.38>,
+三资源齐(installer 4,978,276 字节,sha256 `70594ee789fb01f14e77f65a8d7b270890b4c1966fcb6f4a189dba42fc72ab10`;
+`.sig` 424 字节;`latest.json` 3,124 字节);
+更新端点实测 200、与本地产出的 `latest.json` **逐字节一致**、version 0.1.38、
+签名与本地逐字一致,安装包下载后 sha256 与本地一致;单 exe 交付检查(无 `WebView2Loader.dll` 混入)通过。
+发版过程踩到一个坑,已记进 DESIGN.md 12.7:**不要用 PowerShell 的 `-replace | Set-Content` 改版本号** ——
+它按 ANSI 重写整份文件,`多平台` 变乱码、注释行被并成一行(当年这版差点带着坏 manifest 发出去);
+改用定点编辑只动那一行,`git diff` 复核后 `--amend` 修回。
 
 ## 速览改"抬升卡片"(2026-10-17,v0.1.37)
 
