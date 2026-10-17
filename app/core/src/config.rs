@@ -131,6 +131,9 @@ pub struct Config {
     /// 自定义渠道(裁决 6A):用户自己接进来的取数地址 + 字段路径。
     /// 密钥不进这里 —— 它在 Windows 凭据管理器,账户名就是渠道 id。
     pub custom_channels: Vec<crate::custom::CustomChannel>,
+    /// 单击胶囊弹出"抬升卡片"速览(今日 / 最紧 / 签到)。默认开 —— 这是
+    /// "不展开面板看一眼"的最低成本方式;关掉后单击胶囊无动作(▲ 仍展开面板)。
+    pub peek_on_click: bool,
 }
 
 impl Default for Config {
@@ -172,6 +175,7 @@ impl Default for Config {
             notify_on_crit: true,
             sound_on: false,
             custom_channels: Vec::new(),
+            peek_on_click: true,
         }
     }
 }

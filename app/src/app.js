@@ -1206,11 +1206,15 @@ function pillAnim(newId, lastText, lastId) {
   LAST_PILL = { id: newId, text };
 }
 
-// ─────────── 胶囊单击速览(裁决 7A):不展开面板,看一眼就走 ───────────
-// 窗口本来只有胶囊那么高,气泡没处画 —— 所以临时把窗口**向上长高一条**,
-// 气泡画在新增的空间里,4 秒后收回。几何操作全走 enqueueGeom(与形态切换同一条队列),
-// 免得和吸附/形态切换的改尺寸打架。
-let PEEK = { open: false, timer: null, h: 0 };
+// ─────────── 胶囊单击速览(方案 C:抬升卡片)───────────
+// 点一下:窗口向下长出一条,圆角从 999 收到 16,胶囊脸留在顶部,下方三行信息
+// (今日 / 最紧 / 签到)。再点一次或 4.5 秒收回。
+//
+// 为什么是"向下 + 小圆角":999 的圆角在 120px 高时会被钳到 60 —— 视觉上从药丸
+// 变成"被吹起来的豆子",这是 v0.1.35/36 看着怪的根因(真机截图量出来的)。
+// 圆角收起后它是"药丸展开成一张小卡片",形状身份是连续的。
+// 几何操作全走 enqueueGeom(与形态切换同一条队列),尺寸用 LogicalSize。
+let PEEK = { open: false, timer: null, h: 0, w: 0 };
 
 /** 今天签到的进度(只数"真领到"的,与签到那三条规矩一致)。 */
 function peekCheckinLine() {
@@ -1230,20 +1234,20 @@ function peekCheckinLine() {
     const top = s.log && s.log[0];
     if (top && top.day === day && String(top.outcome || "").startsWith("claimed")) done++;
   }
-  return on ? `今日签到 ${done}/${on}` : "";
+  return on ? `签到 ${done}/${on}` : "";
 }
 
 function pillPeekHtml() {
   const amt = CHANNELS.filter((c) => c.hasKey && !c.hidden && c.valid && c.kind === "amount");
   const today = amt.reduce((s, c) => s + (c.day || 0), 0);
-  // 胶囊只有 132~280px 宽:每行必须一句话说得完,长渠道名用简称 ——
+  // 胶囊常态只有 132~280px 宽:每行一句话,长渠道名退简称 ——
   // 截断成 "OpenCod…" 比不给还难看(真机截图确认过)
   const lines = [`<div class="pk-row"><span class="pk-k">今日</span><b>${esc(money(today, "CNY"))}</b></div>`];
   const tight = (PILL.sorted || []).find((c) => c.hasKey && !c.hidden) || null;
   if (tight) {
     const r = remainRatio(tight);
     const pct = r === null ? "—" : Math.round(r * 100) + "%";
-    // 放得下就用全名(4SAPI / DeepSeek),放不下才退简称(OC),不截成 "OpenCod…"
+    // 放得下就用全名(4SAPI / DeepSeek),放不下才退简称(OC)
     const nm = (tight.name || "").trim();
     const name = nm && nm.length <= 7 ? nm : (tight.short || nm).trim();
     lines.push(
@@ -1261,6 +1265,7 @@ function pillPeekHtml() {
 
 async function pillPeekToggle() {
   if (currentForm() !== "pill" || DOCK.on) return;
+  if (CFG && CFG.peekOnClick === false) return; // 显示页可以关掉
   await enqueueGeom(async () => {
     const box = $("pillPeek");
     if (!box) return;
@@ -1268,34 +1273,30 @@ async function pillPeekToggle() {
     const u = fsU();
     box.innerHTML = pillPeekHtml();
     box.classList.add("on");
-    // 留出的高度按**实测**气泡高度来(字体档/内容长短都可能变),再夹一个范围:
-    // 写死一个数字会在"特大字号 + 长渠道名"下把气泡切掉或把胶囊压扁
-    const measured = Math.ceil(box.getBoundingClientRect().height);
-    // 贴着内容长高:只留 12px 呼吸 + 下限 44(两行的高度)。
-    // 下限给大了会变成"信息在上、胶囊在下、中间一大块空" (真机截图确认过)
-    PEEK.h = Math.min(Math.round(132 * u), Math.max(Math.round(44 * u), measured + Math.round(12 * u)));
+    // 高度:贴着实测的三行(字体档/内容长短都可能变),夹在 56~96 之间
+    const ih = Math.ceil(box.getBoundingClientRect().height);
+    PEEK.h = Math.min(Math.round(96 * u), Math.max(Math.round(56 * u), ih + Math.round(12 * u)));
+    // 宽度:锁在「当前胶囊宽 vs 三行所需宽」的较大值(上限 280 内容宽),
+    // 否则长渠道名会被截、或窄胶囊里挤成一团
+    const need = Math.ceil(box.scrollWidth) + Math.round(24 * u);
+    const [w0, h0] = formSize("pill");
+    PEEK.w = Math.min(Math.round(300 * u), Math.max(w0, need));
     document.body.style.setProperty("--peekh", PEEK.h + "px");
     document.body.classList.add("peek-open");
-    const [w, h] = formSize("pill");
     const sf = (await appWindow.scaleFactor()) || 1;
-    const pos = await appWindow.outerPosition();
     markSelfMove(FORM_SELF_MOVE_MS);
     await appWindow.setMinSize(null);
     await appWindow.setMaxSize(null);
-    // 尺寸走 LogicalSize、位移按物理像素算 —— 与形态切换同一条纪律:
-    // 尺寸给 PhysicalSize 在 125% 缩放下会短掉 1/1.25(实测:窗口只长 61px、胶囊被压成 14px)
-    await appWindow.setSize(new T.dpi.LogicalSize(w, h + PEEK.h));
-    await appWindow.setMinSize(new T.dpi.LogicalSize(w, h + PEEK.h));
-    await appWindow.setMaxSize(new T.dpi.LogicalSize(w, h + PEEK.h));
-    await appWindow.setPosition(
-      new T.dpi.PhysicalPosition(pos.x, Math.max(0, pos.y - Math.round(PEEK.h * sf)))
-    );
+    // 向下长高:顶边不动,卡片在胶囊下方展开(位置由 clampToMonitor 兜住屏幕边)
+    await appWindow.setSize(new T.dpi.LogicalSize(PEEK.w, h0 + PEEK.h));
+    await appWindow.setMinSize(new T.dpi.LogicalSize(PEEK.w, h0 + PEEK.h));
+    await appWindow.setMaxSize(new T.dpi.LogicalSize(PEEK.w, h0 + PEEK.h));
     await clampToMonitor();
     PEEK.open = true;
     if (PEEK.timer) clearTimeout(PEEK.timer);
     PEEK.timer = setTimeout(() => {
       enqueueGeom(pillPeekHide);
-    }, 4000);
+    }, 4500);
   });
 }
 
@@ -1316,15 +1317,10 @@ async function pillPeekHide() {
   // 形态已经换了(比如用户按了 ▲):尺寸归那个形态管,这里不再动窗口
   if (currentForm() !== "pill" || DOCK.on) return;
   const [w, h] = formSize("pill");
-  const sf = (await appWindow.scaleFactor()) || 1;
-  const pos = await appWindow.outerPosition();
   markSelfMove(FORM_SELF_MOVE_MS);
   await appWindow.setSize(new T.dpi.LogicalSize(w, h));
   await appWindow.setMinSize(new T.dpi.LogicalSize(w, h));
   await appWindow.setMaxSize(new T.dpi.LogicalSize(w, h));
-  await appWindow.setPosition(
-    new T.dpi.PhysicalPosition(pos.x, pos.y + Math.round(PEEK.h * sf))
-  );
 }
 
 // 单击 vs 拖动:拖动是系统级拖窗(元素照样收到 mousedown/up),
@@ -1814,6 +1810,8 @@ function formSize(form) {
 
 async function applyFormInner(form, remember = true) {
   if (!SIZES[form]) form = "panel"; // 白名单:老配置里的 form 可能是个已废弃的名字
+  // 速览卡片开着时切形态/重排:先收回,否则会出现"class=pill 但窗口还是卡片高"的半截状态
+  if (PEEK.open) await pillPeekHide();
   const prevForm = currentForm();
   const changed = prevForm !== form;
   // 切换到折叠形态时管理页没有意义(它的入口都在面板上),顺手关掉
@@ -3046,6 +3044,8 @@ bindSwitch("cfgAutoUpdate", "autoCheckUpdate");
 bindSwitch("cfgTrayNum", "trayShowNumber", () => { trayKey = ""; drawTrayIcon(); });
 // 告急呼吸(动效 G):全应用唯一循环动画,默认关;开关只拨 body.pulse 这个总闸
 bindSwitch("cfgPulse", "alertPulse", (on) => document.body.classList.toggle("pulse", !!on));
+// 单击胶囊速览(方案 C):关掉后单击无动作,▲ 仍展开面板
+bindSwitch("cfgPeek", "peekOnClick");
 // 跌破红线的系统通知(裁决 3A):判定全在 Rust 侧(与 UI 同一口径),这里只是开关
 bindSwitch("cfgNotify", "notifyOnCrit");
 // 提示音两声(裁决 8A):开的时候试听一声,让用户知道会是什么声音
@@ -3221,6 +3221,7 @@ function syncStaticControls() {
   setSwitch("cfgAutoUpdate", CFG.autoCheckUpdate !== false);
   setSwitch("cfgTrayNum", CFG.trayShowNumber !== false);
   setSwitch("cfgPulse", CFG.alertPulse);
+  setSwitch("cfgPeek", CFG.peekOnClick !== false);
   setSwitch("cfgNotify", CFG.notifyOnCrit !== false);
   setSwitch("cfgSound", !!CFG.soundOn);
   setSwitch("cfgDock", CFG.dockEnabled);

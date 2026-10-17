@@ -483,22 +483,21 @@ body.form-pill .foot{display:none}
 body.form-pill .list{display:none}
 .pill-body{display:none;align-items:center;gap:calc(8px*var(--u));padding:calc(7px*var(--u)) calc(7px*var(--u)) calc(7px*var(--u)) calc(9px*var(--u));flex:1;  cursor:pointer;overflow:hidden}
 body.form-pill .pill-body{display:flex}
-/* 胶囊单击速览(裁决 7A):窗口临时向上长高 --peekh,留出的空间给气泡。
-   气泡绝对定位在 body 的 padding 区里(= 新增的那条),不用改任何现有布局。 */
-body.peek-open{padding-top:var(--peekh,0)}
-/* 速览(单击胶囊):不做"框里套框" —— 胶囊本身长高,上半部分就是两/三行信息,
-   中间只有一条细分割线。之前用蓝色内边框 + 深底,真机上看起来像弹窗而不是气泡。 */
+/* 胶囊单击速览(C 方案:抬升卡片)。窗口向下留出一条 --peekh,
+   胶囊脸留在顶部、三行信息在下方;长高时圆角从 999 收到 16 —— 药丸变成小卡片,
+   而不是"被纵向拉长的药丸"(999 在 120px 高时会被钳成 60,那才是"怪"的根源)。 */
+body.peek-open{padding-bottom:var(--peekh,0)}
+body.form-pill{transition:border-radius .18s ease}
+body.form-pill.peek-open{border-radius:calc(16px*var(--u))}
 .pill-peek{display:none;position:absolute;left:calc(12px*var(--u));right:calc(12px*var(--u));
-  top:calc(9px*var(--u));z-index:60;overflow:hidden;
-  font-size:max(11.5px,calc(12px*var(--u)));line-height:1.7;color:var(--tx2)}
+  bottom:calc(8px*var(--u));z-index:60;overflow:hidden;
+  font-size:max(11.5px,calc(12px*var(--u)));line-height:1.6;color:var(--tx2)}
 .pill-peek.on{display:block}
 .pill-peek .pk-row{display:flex;align-items:baseline;gap:calc(6px*var(--u));
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pill-peek .pk-row b{color:var(--tx);font-weight:650;font-variant-numeric:tabular-nums}
 .pill-peek .pk-k{color:var(--tx3)}
-.pill-peek .pk-n{color:var(--tx2);max-width:calc(62px*var(--u));overflow:hidden;text-overflow:ellipsis}
-/* 速览时胶囊上部与信息区之间一条细线(不抢眼,但让"胶囊长高了"这件事成立) */
-body.peek-open .pill-body{border-top:1px solid var(--line)}
+.pill-peek .pk-n{color:var(--tx2);max-width:calc(96px*var(--u));overflow:hidden;text-overflow:ellipsis}
 /* 按压 Q 弹:按下微缩、松开回弹,底边不动(transform-origin 定在下缘) */
 .pill-body{transition:transform .12s ease;transform-origin:50% 100%}
 .pill-body:active{transform:scale(.96)}
