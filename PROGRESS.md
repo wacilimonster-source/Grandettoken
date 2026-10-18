@@ -1,7 +1,7 @@
 # TokenScope 开发进展
 
 > 最后更新:2026-10-19
-> 状态:**v0.1.41 待发版 —— WorkBuddy 改用桌面端凭据(带 refresh 续期),彻底摆脱网页会话 7 天 TTL**
+> 状态:**v0.1.41 已发版 —— WorkBuddy 改用桌面端凭据(带 refresh 续期),彻底摆脱网页会话 7 天 TTL**
 > 更早:v0.1.40(WorkBuddy 会话 TTL 的提示 / 预警 / 补签)、v0.1.39(修模型页渲染出错)、
 > v0.1.38(模型页新增第五个写入目标 DeepSeek Harness)、v0.1.37(速览"抬升卡片")
 
@@ -49,7 +49,11 @@
   → **HTTP 200,24 个包,`extract_workbuddy` 算出余额 2661.21**;
 - 与 `dsh-connect-workbuddy` 的 Node 探针结果(合计 2661)一致。
 
-**发版(v0.1.41)**:待回填。
+**发版(v0.1.41)**:tag `v0.1.41`(提交 `081e30b`,main + tag 已推;tag 含壳 `Cargo.lock` 的
+aes-gcm 依赖)→ release <https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.41>,
+三资源齐(installer **5,009,387 字节**,sha256 `ae0b5186e49eedcbe652a7f9c6649599c376fc32844ef29c9660da880dcb1596`;
+`.sig` 424 字节;`latest.json` 2,844 字节);更新端点实测 **200**、与本地产出**逐字节一致**、
+version 0.1.41、签名与本地逐字一致、安装包下载后 sha256 与本地一致;单 exe 交付检查通过。
 
 ## WorkBuddy 渠道"又"断:这次是会话 7 天 TTL,不是接口变了(2026-10-18,v0.1.40)
 
