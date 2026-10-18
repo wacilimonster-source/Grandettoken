@@ -1,11 +1,11 @@
 # TokenScope 开发进展
 
 > 最后更新:2026-10-18
-> 状态:**开发中 —— 修 WorkBuddy 网页会话约 7 天(绝对 TTL)一次的"例行失效";已进代码,未发版**
-> 更早:v0.1.39(修 v0.1.38 的「模型页渲染出错」,已发版)、v0.1.38(模型页新增第五个写入目标 DeepSeek Harness)、
+> 状态:**v0.1.40 已发版 —— WorkBuddy 网页会话 7 天绝对 TTL 的提示 / 预警 / 复登当天补签**
+> 更早:v0.1.39(修 v0.1.38 的「模型页渲染出错」)、v0.1.38(模型页新增第五个写入目标 DeepSeek Harness)、
 > v0.1.37(速览改为"抬升卡片")、v0.1.36(速览气泡样式重做)
 
-## WorkBuddy 渠道"又"断:这次是会话 7 天 TTL,不是接口变了(2026-10-18,进代码未发版)
+## WorkBuddy 渠道"又"断:这次是会话 7 天 TTL,不是接口变了(2026-10-18,v0.1.40)
 
 **现象**:workbuddy 渠道不出数已三天。SQLite 里最后一笔成功快照 **2026-10-15 11:56:47**,
 同刻其余 6 渠道(codex/deepseek/hapi/opencode-go/trae/4sapi)每天照常出数;今天 10:28 的
@@ -52,6 +52,17 @@
   **0 错误 0 告警**。真机待验:①复登后卡片出数;②当天「领积分」按钮可再点(auth 已被放出);
   ③第 5 天起详情出现"已使用 N 天"一行。访问密钥路线(B)经实测对免费账号**不可行**(门控),
   方案不依赖它。
+
+**发版(v0.1.40)**:tag `v0.1.40`(提交 `121b375`,main + tag 已推)→ release
+<https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.40>,
+三资源齐(installer **4,977,830 字节**,sha256
+`acac61386de1bfbbbbcf9664f1a1294ff619a2685900f51d426f9a38f12ed5f6`;
+`.sig` 424 字节;`latest.json` 1,566 字节)。更新端点实测 **200**:线上 latest.json
+与本地逐字节一致、`signature` 与本地 `.sig` 内容逐字一致、`version 0.1.40`;
+安装包公开下载 4,977,830 字节、sha256 与本地逐字节一致。签名环境变量走
+build.ps1 认的 `$env:CI='true'` 这条路(未加密私钥=空密码,RELEASE.md 第 3 步)。
+发布过程中本机直连 github.com 的探针行为不稳(node fetch 的 HEAD 全部 connect
+timeout,同一分钟内 curl/gh 正常)——核验一律以 curl 实测为准。
 
 ## 修「模型页渲染出错」(2026-10-17,v0.1.39)
 
