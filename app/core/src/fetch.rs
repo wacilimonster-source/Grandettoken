@@ -58,6 +58,14 @@ pub(crate) const BROWSER_UA: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) \
      Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0";
 
+/// 桌面端凭据在凭据串里的前缀:带它的走 `Authorization: Bearer`,且**不带 Cookie**。
+/// 为什么不靠"长得像不像令牌"来分:同一个渠道可能有三种凭据(Cookie 会话 / 桌面端令牌 /
+/// 手动粘贴的密钥),光看字符串分不出来,前缀是唯一无歧义的标记。
+pub const DESKTOP_TOKEN_PREFIX: &str = "desktop:";
+
+/// 桌面端请求的 UA(与 dsh-connect-workbuddy 同口径:CLI 形态的 CodeBuddy 身份)。
+pub(crate) const DESKTOP_UA: &str = "CLI/2.63.2 CodeBuddy/2.63.2";
+
 /// 传给界面的一行。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -697,20 +705,29 @@ async fn fetch_once(
 
     // 网页登录型的凭据有两种形态(见 core::weblogin):
     // - `cookie:session=…; session_2=…` —— 宿主浏览器登录后留下的会话
+    // - `desktop:<accessToken>` —— 从 WorkBuddy **桌面端**凭据里解出来的令牌
     // - 其余一律当令牌,走 `Authorization: Bearer …`(手动粘贴的访问密钥)
     //
     // Cookie 这条路**必须冒充浏览器 UA**:网关(openresty)按 UA 分流,同一批 Cookie
     // 用浏览器 UA 200、用客户端 UA 401(2026-10-08 实测,两种各打一次)。
     // 客户端默认那个 `TokenScope/0.1` 恰好是被拒的一类,所以这台机器上要靠逐请求覆盖。
-    match weblogin::cookie_header(key) {
-        Some(cookie) => {
-            req = req.header("Cookie", cookie).header("User-Agent", BROWSER_UA);
-        }
-        None => {
-            req = req.header(
-                "Authorization",
-                format!("{}{}", def.auth_prefix, key.trim()),
-            );
+    let desktop_token = key.trim().strip_prefix(DESKTOP_TOKEN_PREFIX);
+    if let Some(token) = desktop_token {
+        // 桌面端令牌走 Bearer,且**不能**带 Cookie;UA 用桌面端自己的形态
+        req = req
+            .header("Authorization", format!("Bearer {}", token.trim()))
+            .header("User-Agent", DESKTOP_UA);
+    } else {
+        match weblogin::cookie_header(key) {
+            Some(cookie) => {
+                req = req.header("Cookie", cookie).header("User-Agent", BROWSER_UA);
+            }
+            None => {
+                req = req.header(
+                    "Authorization",
+                    format!("{}{}", def.auth_prefix, key.trim()),
+                );
+            }
         }
     }
 
@@ -884,6 +901,58 @@ pub async fn fetch_channel(
     )
 }
 
+/// 桌面端凭据读取器。**生产环境默认启用**;`cfg!(test)` 下默认**关闭** ——
+/// 单测绝不能真去起 WorkBuddy 进程(那会让测试依赖本机装了什么,还会把并发测试拖慢,
+/// 2026-10-19 就因此让两条无关用例挂掉)。要测这条路径的用例用 `set_desktop_reader` 显式打开。
+type DesktopReader = dyn Fn() -> Vec<String> + Send + Sync;
+
+static DESKTOP_READER: std::sync::RwLock<Option<&'static DesktopReader>> = std::sync::RwLock::new(None);
+
+/// 测试里"永远读不到"的替身。
+static NO_DESKTOP_READER: fn() -> Vec<String> = Vec::new;
+
+/// 读**全部**桌面端候选(国内版优先,其次国际版,再其次历史备份)。
+///
+/// 为什么给全部:同一台机器可能同时登着国内版与国际版(两套凭据各自有效),
+/// 而历史备份里的 token 可能已被上游作废(未过期但 401)—— 上层按 401 换下一份,
+/// 比直接让用户重新登录更省事。
+fn read_desktop_tokens() -> Vec<String> {
+    if let Ok(g) = DESKTOP_READER.read() {
+        if let Some(f) = *g {
+            return f();
+        }
+    }
+    if cfg!(test) {
+        // 单测默认不碰本机凭据(见上面那段注释)
+        return Vec::new();
+    }
+    let now_ms = chrono::Local::now().timestamp_millis();
+    // desktop_tokens 内部已经处理:上次续期的成果 → 桌面端文件 → 过期时自动续期
+    crate::workbuddy::desktop_tokens(now_ms)
+        .into_iter()
+        .map(|t| format!("{}{}", DESKTOP_TOKEN_PREFIX, t))
+        .collect()
+}
+
+/// 测试专用:替换/关闭桌面端读取器。返回前一个(便于恢复)。
+/// 目前没有用例需要打开它(桌面端链路由 `workbuddy` 模块的单测 + 一条默认 ignore 的
+/// 真机测试覆盖),但保留入口:以后要测"凭据候选顺序"时不必再改生产代码。
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) fn set_desktop_reader(r: Option<&'static DesktopReader>) -> Option<&'static DesktopReader> {
+    let mut g = DESKTOP_READER.write().ok()?;
+    let prev = *g;
+    *g = r;
+    prev
+}
+
+/// 测试专用:恢复"读不到"的默认姿态。
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) fn disable_desktop_reader() {
+    let _ = set_desktop_reader(Some(&NO_DESKTOP_READER));
+}
+
 /// 取一个渠道的凭据候选(按可信度排序)。空的第一个返回值 = 没有可用凭据;
 /// 第二个返回值 = 凭据管理器本身坏了的说明文字(与"没配密钥"区分,P2-12)。
 ///
@@ -908,6 +977,19 @@ fn credentials(
                 }),
                 Ok(None) => {}
                 Err(e) => err = Some(e),
+            }
+            // WorkBuddy:**桌面端凭据优先**。它比网页会话活得久(accessToken 28 天、
+            // refreshToken 30 天,且可续),而网页会话是约 7 天的绝对 TTL ——
+            // 2026-10-15 之后连续三天取不到数,就是网页会话到期、而界面仍报"已登录"。
+            // 读不到桌面端凭据不是错误(没装桌面端很常见),静默跳过、落到网页会话。
+            if def.id == "workbuddy" {
+                for tok in read_desktop_tokens() {
+                    out.push(appauth::Credential {
+                        token: tok,
+                        source: "WorkBuddy 桌面端".into(),
+                        device_id: None,
+                    });
+                }
             }
             if matches!(def.auth, AuthKind::WebSession) {
                 if let Some(session) = web_src.and_then(|f| f(def.id)) {
@@ -935,8 +1017,11 @@ fn credentials(
 pub fn expired_credential_msg(def: &providers::ProviderDef) -> Option<String> {
     match def.auth {
         AuthKind::App(app) => Some(format!("登录状态已失效 · 打开一次 {} 即可", app.label())),
-        // 平台会话是绝对 TTL(实测 7 天,证据链见 core::weblogin),失效是日程内的事:
-        // 把原因与恢复动作一起说,免得用户以为是密钥写错或平台又改了接口。
+        // WorkBuddy 现在有两条路:桌面端凭据(可续期)与网页会话(约 7 天绝对 TTL)。
+        // 桌面端那条自己会刷新,所以先指向它;网页会话那条按老文案说清"7 天一次"。
+        AuthKind::WebSession if def.id == "workbuddy" => Some(
+            "WorkBuddy 凭据失效 · 打开一次桌面端(它会自动续期),或在本卡片点「重新登录」".into(),
+        ),
         AuthKind::WebSession => Some(
             "网页登录已过期(平台会话约 7 天一次,属正常) · 在渠道卡上点「重新登录」即可".into(),
         ),
@@ -950,8 +1035,11 @@ fn auth_label(def: &providers::ProviderDef, cred: Option<&appauth::Credential>) 
         AuthKind::Keyring => "Windows 凭据管理器".into(),
         // 网页登录:不碰本机客户端的任何文件,也不写自己的凭据库 —— 会话就住在
         // 挂件的浏览器 profile 里(登录窗那个 webview 与主窗口共用一份)。
-        // 两种形态分开报:会话是登录窗登出来的,令牌是用户自己粘的。
+        // 三种形态分开报:桌面端凭据 / 浏览器会话 / 用户自己粘的令牌。
         AuthKind::WebSession => match cred {
+            Some(c) if c.token.trim().starts_with(DESKTOP_TOKEN_PREFIX) => {
+                "WorkBuddy 桌面端凭据(自动续期)".into()
+            }
             Some(c) if weblogin::cookie_header(&c.token).is_some() => "浏览器网页会话".into(),
             Some(_) => "手动粘贴的密钥".into(),
             None => format!("未登录 {} 账号", def.name),
@@ -2069,6 +2157,12 @@ mod tests {
     use super::*;
     use chrono::Timelike;
 
+    /// 单测里把"读桌面端凭据"关掉:它要起 WorkBuddy 进程、还依赖本机装没装,
+    /// 两条都不该出现在单元测试里。测这条路径的用例自己 set_desktop_reader。
+    fn _init_desktop_off() {
+        disable_desktop_reader();
+    }
+
     fn test_rate() -> FxRate {
         FxRate {
             rate: 7.0,
@@ -2390,12 +2484,11 @@ mod tests {
             device_id: None,
         };
         assert_eq!(auth_label(def, Some(&pasted)), "手动粘贴的密钥");
-        // 过期指引必须指回挂件,不能再让人去开桌面客户端(那条路已被加密存储堵死);
-        // 说清"约 7 天属正常",免得每次过期都被当成平台又改了接口
-        assert_eq!(
-            expired_credential_msg(def).as_deref(),
-            Some("网页登录已过期(平台会话约 7 天一次,属正常) · 在渠道卡上点「重新登录」即可")
-        );
+        // 过期指引必须指对方向:WorkBuddy 现在首选桌面端(它会自动续期),
+        // 网页会话那条仍说清"约 7 天属正常",免得每次过期都被当成平台又改了接口
+        let msg = expired_credential_msg(def).expect("WorkBuddy 要有过期指引");
+        assert!(msg.contains("桌面端"), "要先指向会自续期的桌面端:{msg}");
+        assert!(msg.contains("重新登录"), "网页会话那条也要留着:{msg}");
     }
 
     /// 另外两类渠道不能被这次改造带偏:本机登录型仍说"打开一次 X",密钥型不瞎指路。
@@ -2790,12 +2883,17 @@ mod tests {
     }
 
     /// 缺口进视图 + 消耗只在同一本账里推算(换 key 后不跨账户)。
+    ///
+    /// **时间必须相对"现在"取**:以前写死 `midnight + 2h / +3h / +4h`,凌晨 2 点前跑测试时
+    /// 那些快照还在未来,`v.day` 自然算不出来 —— 2026-10-19 02:14 就这么挂过一次
+    /// (与业务无关,是夹具写死了钟点)。
     #[test]
     fn gap_and_fingerprint_reach_the_view() {
         let store = Store::open_memory().unwrap();
         let cfg = Config::default();
         let def = providers::find("deepseek").unwrap();
         let midnight = local_midnight_today();
+        let now = now_ts();
         let res = FetchResult {
             valid: true,
             kind: Kind::Amount,
@@ -2803,26 +2901,36 @@ mod tests {
             remaining: Some(90.0),
             ..Default::default()
         };
-        // A 账:今天 02:00 才开始有观测(有缺口),掉 10 元
+        // A 账:今天早些时候才开始有观测(有缺口),掉 10 元。
+        // 起点必须**比本地零点晚 10 分钟以上**(OBSERVE_GAP_SEC 才认这是缺口),
+        // 且必须落在过去 —— 凌晨 2 点跑测试时 `now-3h` 会掉到昨天,踩过。
+        let lo = midnight + 20 * 60; // 距零点 20 分钟:稳稳超过缺口线
+        let hi = now.saturating_sub(120); // 留 2 分钟余量
+        let a1 = if lo < hi { lo } else { hi.saturating_sub(60).max(midnight + 1) };
+        let a2 = (a1 + 60).min(hi.max(a1 + 1));
         store
-            .record_fp(def.id, "fpA", midnight + 2 * 3600, Some(100.0), None, None, "amount")
+            .record_fp(def.id, "fpA", a1, Some(100.0), None, None, "amount")
             .unwrap();
         store
-            .record_fp(def.id, "fpA", midnight + 3 * 3600, Some(90.0), None, None, "amount")
+            .record_fp(def.id, "fpA", a2, Some(90.0), None, None, "amount")
             .unwrap();
         // B 账:另一把 key,余额低得多(旧口径会把它算成一大笔"消耗")
         store
-            .record_fp(def.id, "fpB", midnight + 4 * 3600, Some(10.0), None, None, "amount")
+            .record_fp(def.id, "fpB", a2 + 30, Some(10.0), None, None, "amount")
             .unwrap();
-        let v = build_view(def, res.clone(), false, now_ts(), &store, &cfg, None, "fpA", 2);
+        let v = build_view(def, res.clone(), false, now, &store, &cfg, None, "fpA", 2);
         assert_eq!(
             v.gap_day_from,
-            Some(midnight + 2 * 3600),
-            "今天 02:00 才有第一条,要如实标出来"
+            Some(a1),
+            "今天 a1 才有第一条,要如实标出来"
         );
         assert_eq!(v.day, Some(10.0), "只算 A 账自己的掉额");
         assert_eq!(v.accounts, 2, "用过两把密钥");
-        assert!(v.gap_days.contains(&midnight), "今天本身就是缺口日:{:?}", v.gap_days);
+        assert!(
+            v.gap_days.contains(&midnight),
+            "今天本身就是缺口日(起点不在零点):{:?}",
+            v.gap_days
+        );
 
         // A 账起点贴着零点 → 不算缺口
         let s2 = Store::open_memory().unwrap();

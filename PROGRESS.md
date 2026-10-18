@@ -1,9 +1,55 @@
 # TokenScope 开发进展
 
-> 最后更新:2026-10-18
-> 状态:**v0.1.40 已发版 —— WorkBuddy 网页会话 7 天绝对 TTL 的提示 / 预警 / 复登当天补签**
-> 更早:v0.1.39(修 v0.1.38 的「模型页渲染出错」)、v0.1.38(模型页新增第五个写入目标 DeepSeek Harness)、
-> v0.1.37(速览改为"抬升卡片")、v0.1.36(速览气泡样式重做)
+> 最后更新:2026-10-19
+> 状态:**v0.1.41 待发版 —— WorkBuddy 改用桌面端凭据(带 refresh 续期),彻底摆脱网页会话 7 天 TTL**
+> 更早:v0.1.40(WorkBuddy 会话 TTL 的提示 / 预警 / 补签)、v0.1.39(修模型页渲染出错)、
+> v0.1.38(模型页新增第五个写入目标 DeepSeek Harness)、v0.1.37(速览"抬升卡片")
+
+## WorkBuddy 换成读桌面端凭据(2026-10-19,v0.1.41)
+
+**起点**:用户口径「现在还是已登录取数失败,可以通过 dsh-connect-workbuddy 学习一下如何取数」。
+
+**真机取证(全部可复核)**
+
+| 事实 | 证据 |
+|---|---|
+| 桌面端 auth 文件在 `%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\workbuddy-desktop.info` | 本机存在,10-18 还在更新 |
+| `accessToken` / `refreshToken` / `nickname` 是 **AES-256-GCM 信封**(`{$wbEncrypted:1,envelope}`) | 信封里 `keyId=9127dea1b44020a7`,与日志一致 |
+| 32 字节密钥要向桌面端自己问 | `WorkBuddy.exe -e "…_linkedBinding('electron_browser_workbuddy_storage').loggerGet()"`(需 `ELECTRON_RUN_AS_NODE=1`),返回 JSON 的 `atRestSecretKey`;**key = sha256(该 base64 字符串)** |
+| AAD 是带域前缀的定长转录 | `WB-AAD\0` + 版本 + 长度前缀字段 + suite + keyId + framing + 2 字节 0 |
+| 取数端点是 `/v2/billing/meter/get-user-resource`,国内主域 **codebuddy.cn** | 老路径(无 `/v2`)实测已不可用 |
+| 用国际版 token 打国内域名 = 401 | 本机同时登着国际版(`www.workbuddy.ai`)与国内版 |
+| 历史备份里的 token 可能未过期但已作废 | 6 月那份备份明文 token 到 2027 却 401 |
+| refresh 走 `POST {chatBase}/v2/plugin/auth/token/refresh` + `X-Refresh-Token` 头 | chatBase 国内是 `copilot.tencent.com`(与计费不同域) |
+
+**改法**
+
+1. 新模块 `app/core/src/workbuddy.rs`:找 exe → 取 `atRestSecretKey`(缓存 6 小时)→ 解信封 →
+   得到 accessToken;`/v2` 取数;**按凭据 domain 选区域基址**。
+2. 凭据候选顺序:**上次续期成果 → 桌面端 live(国内版优先)→ 历史备份**;每份候选各自带区域,
+   401 时自动换下一份(既有机制)。
+3. **续期**:accessToken 过期时用 refreshToken 换新令牌,结果存 Windows 凭据管理器
+   (`workbuddy-refresh-cn` / `-global`,按区域分开,不覆盖)。这解决的是"7 天绝对 TTL"这个根因。
+4. 网页会话降为**兜底**(没装桌面端时仍可用),端点也一并改成 `/v2`。
+5. 失败分五档说清:找不到 exe / 问不出密钥 / keyId 不匹配 / 凭据读不了 / 已过期,各自给可执行动作。
+6. `extract_workbuddy` 解析层**没有改** —— 它本来就能算对(24 个包求和)。
+
+**踩过的坑(都写进代码注释)**
+
+- 夹具/排序把国际版 `-ai.info` 排在前面 → 国际 token 打国内域名 401;
+- 按 mtime 排序会选中 6 月的旧备份(未过期但已作废)→ live 文件名必须优先;
+- 单测里真读了本机凭据、还起 WorkBuddy 进程 → 两条**无关**用例挂掉(其中一条本来就对时刻敏感,
+  凌晨跑必挂)→ 桌面端读取在 `cfg!(test)` 下默认关闭,并顺手修了那条时间敏感的夹具。
+
+**验证**
+
+- core `cargo test`:**218 passed / 0 failed / 0 warning**(4 条真机测试默认 ignore);
+- **真机端到端**(`cargo test --lib -- --ignored wb_real_machine`):桌面端 live 凭据 → 解密成功
+  (accessToken 1318 字符,有效期到 2026-11-15)→ `POST https://www.codebuddy.cn/v2/billing/…`
+  → **HTTP 200,24 个包,`extract_workbuddy` 算出余额 2661.21**;
+- 与 `dsh-connect-workbuddy` 的 Node 探针结果(合计 2661)一致。
+
+**发版(v0.1.41)**:待回填。
 
 ## WorkBuddy 渠道"又"断:这次是会话 7 天 TTL,不是接口变了(2026-10-18,v0.1.40)
 

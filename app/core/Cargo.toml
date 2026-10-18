@@ -22,3 +22,6 @@ aes = "0.8"
 sha2 = "0.10"
 base64 = "0.22"
 generic-array = "0.14"
+# 解 WorkBuddy 桌面端 5.6+ 的凭据信封(AES-256-GCM + AAD 转录)。
+# 纯 Rust、与上面的 aes 同源(RustCrypto),不引入 C 依赖。
+aes-gcm = "0.10"

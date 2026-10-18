@@ -971,13 +971,16 @@ pub const PROVIDERS: &[ProviderDef] = &[
         name: "WorkBuddy",
         short: "WB",
         color: "#19b8c4",
-        url: "https://www.workbuddy.cn/billing/meter/get-user-resource",
-        fallback_urls: &["https://www.codebuddy.cn/billing/meter/get-user-resource"],
+        // 2026-10-19:**必须带 `/v2`**,主域用 codebuddy.cn(桌面端凭据的 domain 也是它)。
+        // 老的 `/billing/meter/get-user-resource`(无 /v2)实测已不可用。
+        // 取证自 dsh-connect-workbuddy v4.8.1 的 billingBase() + fetchCredits()。
+        url: "https://www.codebuddy.cn/v2/billing/meter/get-user-resource",
+        fallback_urls: &["https://www.workbuddy.cn/v2/billing/meter/get-user-resource"],
         // X-Client-Platform 是硬要求:缺了直接 403 code 10085(实测)
         extra_headers: &[
             ("X-Client-Platform", "web"),
-            ("Origin", "https://www.workbuddy.cn"),
-            ("Referer", "https://www.workbuddy.cn/profile/plans-usage"),
+            ("Origin", "https://www.codebuddy.cn"),
+            ("Referer", "https://www.codebuddy.cn/profile/plans-usage"),
         ],
         auth: AuthKind::WebSession,
         auth_prefix: "Bearer ",

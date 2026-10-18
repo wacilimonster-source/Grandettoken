@@ -369,6 +369,42 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 - 出网请求只发往渠道自身域名,无遥测、无云同步;
 - `.gitignore` 排除 `*.db`(快照含余额与用量历史)。
 
+### 7.7 登录态从哪来(WorkBuddy 是最复杂的一条)
+
+三条路,优先级从高到低,**每条失败都能单独说清原因**:
+
+| 来源 | 存活期 | 何时用 |
+|---|---|---|
+| WorkBuddy **桌面端凭据**(AES-256-GCM 信封) | accessToken 28 天、refreshToken 30 天,**可续** | 默认首选;装了桌面端就用它 |
+| 上次续期存下的 accessToken(本机凭据管理器 `workbuddy-refresh-cn` / `-global`) | 同上,续期后滚动 | 桌面端文件读不出来时先用它,免得每次都起进程 |
+| 网页会话(`session` + `session_2` Cookie) | **约 7 天绝对 TTL,不可续** | 兜底:没装桌面端时 |
+
+- **桌面端凭据要解密**:32 字节密钥不在文件里,要向已安装的桌面端自己问
+  (`WorkBuddy.exe -e "…loggerGet()"`,需 `ELECTRON_RUN_AS_NODE=1`;回 JSON 的
+  `atRestSecretKey`,key = 对它做 sha256)。AAD 是带 `WB-AAD\0` 域前缀的定长转录,
+  写错一位 GCM 就认证失败 —— 这正是它防"解出半截 token"的设计。**key 缓存 6 小时**
+  (用户裁决):轮询期间不重复起进程。
+- **区域跟凭据走**:国内版打 `www.codebuddy.cn`,国际版打 `www.workbuddy.ai`;
+  拿国际版 token 打国内域名一定 401(本机同时登着两套)。
+- **端点必须带 `/v2`**:`POST {base}/v2/billing/meter/get-user-resource`;老的无 `/v2` 路径已不可用。
+- **续期**:`POST {chatBase}/v2/plugin/auth/token/refresh`,凭据放在 `X-Refresh-Token` 头
+  (国内 chatBase 是 `copilot.tencent.com`,与计费**不同域**)。续期结果写回凭据管理器,
+  不写桌面端自己的文件(那份只读)。
+- 候选顺序:**续期成果 → 国内 live → 国内备份 → 国际 live → 国际备份**;401 时自动换下一份。
+- 为什么值得这么麻烦:网页会话是绝对 TTL,到期只能人工重登 —— v0.1.40 的提示与预警治的是
+  "知道它要过期",这条治的是**根因**。
+
+### 7.8 失败分档(WorkBuddy 凭据)
+
+| 档位 | 文案指向的动作 |
+|---|---|
+| 找不到 exe | 装一次桌面端并登录,或用 `WORKBUDDY_APP_EXECUTABLE` 指定 |
+| 问不出密钥 | 确认桌面端 ≥ 5.6,或先手动打开一次桌面端 |
+| keyId 不匹配 | 换过账号 / 桌面端重装过 → 在桌面端重新登录一次 |
+| 凭据文件读不了 | 在桌面端重新登录一次 |
+| 已过期(access + refresh 都超期) | 打开一次桌面端(它会自动续期) |
+
+
 ---
 
 ## 8. 已开发功能清单
