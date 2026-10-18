@@ -79,6 +79,25 @@ pub fn is_session_cookie(name: &str) -> bool {
     SESSION_COOKIES.contains(&name)
 }
 
+/// 网页会话验证通过时刻的 settings 键(挂件外壳在登录成功时写,unix 秒字符串)。
+pub const WEB_SESSION_AT_KEY: &str = "wb_web_session_at";
+
+/// 网页会话的年龄提示。
+///
+/// 平台会话是**绝对 TTL**:2026-10-08 登录 → 2026-10-15 11:56:47 最后一次成功,
+/// 恰好 168 小时,期间挂件每 60 秒都在用这份会话真打接口也没能续命 —— 说明不是
+/// "闲置才掉",而是到点就死。掉之前帮用户把预期摆出来:第 5 天起详情里多一行
+/// "已使用几天"。`at` 缺失(从未记录)或已过期好久一律不拦正常取数,这只是文案。
+///
+/// 返回 None = 不提示(没有记录 / 不到 5 天 / 系统时钟被拨回去)。
+pub fn web_session_hint(at: Option<i64>, now: i64) -> Option<String> {
+    let at = at?;
+    let days = (now - at).max(0) / 86_400;
+    (days >= 5).then(|| {
+        format!("已使用 {days} 天 · 平台会话实测约 7 天过期;失效后点「重新登录」即可,历史数据不丢")
+    })
+}
+
 /// 页面落在"登录完成后"的路径上吗?
 ///
 /// 主机名做**整串相等**比较,不是后缀匹配:`www.workbuddy.cn.attacker.example/profile`
@@ -176,6 +195,26 @@ mod tests {
         assert_eq!(cookie_header("cookie:nonsense"), None);
         // 控制字符(头注入)拒绝
         assert_eq!(cookie_header("cookie:a=b\r\nX-Evil: 1"), None);
+    }
+
+    /// 会话年龄提示:没记录不说话、前 4 天闭嘴、第 5 天起说话、时钟倒拨不造谣。
+    #[test]
+    fn web_session_hint_window() {
+        let now = 1_792_000_000_i64;
+        // 没记录 / 时钟被拨回(未来时刻):不提示
+        assert_eq!(web_session_hint(None, now), None);
+        assert_eq!(web_session_hint(Some(now + 3_600), now), None);
+        // 新鲜(第 0~4 天):不提示
+        assert_eq!(web_session_hint(Some(now), now), None);
+        assert_eq!(web_session_hint(Some(now - 4 * 86_400), now), None);
+        // 第 5 天起:提示,且天数随年龄增长;再过 2 天还是同一把钥匙的另一条文案
+        let h5 = web_session_hint(Some(now - 5 * 86_400), now).unwrap();
+        assert!(h5.contains("已使用 5"), "{h5}");
+        let h9 = web_session_hint(Some(now - 9 * 86_400), now).unwrap();
+        assert!(h9.contains("已使用 9"), "{h9}");
+        // 过期很久也如实报(取数失败那行会把"重新登录"指出来,这里只说年龄)
+        let h30 = web_session_hint(Some(now - 30 * 86_400), now).unwrap();
+        assert!(h30.contains("已使用 30"), "{h30}");
     }
 
     /// "登录完成了"的判定:主机名整串相等 + 路径在前缀表里。

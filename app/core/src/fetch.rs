@@ -935,7 +935,11 @@ fn credentials(
 pub fn expired_credential_msg(def: &providers::ProviderDef) -> Option<String> {
     match def.auth {
         AuthKind::App(app) => Some(format!("登录状态已失效 · 打开一次 {} 即可", app.label())),
-        AuthKind::WebSession => Some("网页登录已过期 · 在挂件里重新登录一次即可".into()),
+        // 平台会话是绝对 TTL(实测 7 天,证据链见 core::weblogin),失效是日程内的事:
+        // 把原因与恢复动作一起说,免得用户以为是密钥写错或平台又改了接口。
+        AuthKind::WebSession => Some(
+            "网页登录已过期(平台会话约 7 天一次,属正常) · 在渠道卡上点「重新登录」即可".into(),
+        ),
         AuthKind::Keyring => None,
     }
 }
@@ -1076,7 +1080,7 @@ fn amount_windows(
 
 fn build_view(
     def: &providers::ProviderDef,
-    result: FetchResult,
+    mut result: FetchResult,
     stale: bool,
     updated_at: i64,
     store: &Store,
@@ -1099,6 +1103,23 @@ fn build_view(
     // 同一个视图里只用一个"现在":上面 583 行那个 now 出了块作用域,这里取一次复用
     let now2 = now_ts();
     let soon = expiring_soon(&result.expiring, now2);
+
+    // 网页会话型(WorkBuddy):平台会话是约 7 天的**绝对 TTL**(证据链见
+    // core::weblogin::web_session_hint 的注释)。在卡片变红之前把"用了几天"
+    // 摆出来,用户能自己决定哪天顺手重新登录一次。只对"确实在用 Cookie 会话"
+    // 的凭据说话:手动粘贴的密钥(Bearer 路线)没有这个生命周期。
+    if matches!(def.auth, AuthKind::WebSession)
+        && cred.map(|c| weblogin::cookie_header(&c.token).is_some()) == Some(true)
+    {
+        let at = store
+            .get_setting(weblogin::WEB_SESSION_AT_KEY)
+            .ok()
+            .flatten()
+            .and_then(|s| s.parse::<i64>().ok());
+        if let Some(text) = weblogin::web_session_hint(at, now2) {
+            result.extra.push(("网页会话".into(), text));
+        }
+    }
 
     // ── 观测缺口 / 密钥分段 / 峰谷 ──
     // 缺口与分段只对金额型算(百分比/积分型没有日周月消耗这回事,查了也没处显示)。
@@ -2369,10 +2390,11 @@ mod tests {
             device_id: None,
         };
         assert_eq!(auth_label(def, Some(&pasted)), "手动粘贴的密钥");
-        // 过期指引必须指回挂件,不能再让人去开桌面客户端(那条路已被加密存储堵死)
+        // 过期指引必须指回挂件,不能再让人去开桌面客户端(那条路已被加密存储堵死);
+        // 说清"约 7 天属正常",免得每次过期都被当成平台又改了接口
         assert_eq!(
             expired_credential_msg(def).as_deref(),
-            Some("网页登录已过期 · 在挂件里重新登录一次即可")
+            Some("网页登录已过期(平台会话约 7 天一次,属正常) · 在渠道卡上点「重新登录」即可")
         );
     }
 

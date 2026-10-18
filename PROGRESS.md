@@ -1,9 +1,57 @@
 # TokenScope 开发进展
 
-> 最后更新:2026-10-17
-> 状态:**v0.1.39 待发版 —— 修 v0.1.38 的「模型页渲染出错」(少一行变量声明)**
-> 更早:v0.1.38(模型页新增第五个写入目标 DeepSeek Harness)、v0.1.37(速览改为"抬升卡片")、
-> v0.1.36(速览气泡样式重做)、v0.1.35(小鲸鱼研读四包)
+> 最后更新:2026-10-18
+> 状态:**开发中 —— 修 WorkBuddy 网页会话约 7 天(绝对 TTL)一次的"例行失效";已进代码,未发版**
+> 更早:v0.1.39(修 v0.1.38 的「模型页渲染出错」,已发版)、v0.1.38(模型页新增第五个写入目标 DeepSeek Harness)、
+> v0.1.37(速览改为"抬升卡片")、v0.1.36(速览气泡样式重做)
+
+## WorkBuddy 渠道"又"断:这次是会话 7 天 TTL,不是接口变了(2026-10-18,进代码未发版)
+
+**现象**:workbuddy 渠道不出数已三天。SQLite 里最后一笔成功快照 **2026-10-15 11:56:47**,
+同刻其余 6 渠道(codex/deepseek/hapi/opencode-go/trae/4sapi)每天照常出数;今天 10:28 的
+签到探测落库 `outcome=auth`(HTTP 401/403,凭据被网关拒绝)。
+
+**取证(全部现场可复核)**
+
+| # | 证据 | 结论 |
+|---|---|---|
+| 1 | webview 锁着 Cookies 库(运行中),但**端点探测**打 `get-user-resource` / `checkin-activity-status`(新旧两代路径)全部 **401 + HTML(openresty/APISIX 网关页)**,不是 404 | 接口没迁移,纯认证失败 |
+| 2 | 抓官方个人中心 SPA 最新 bundle(`assets.workbuddy.cn/web/usercenter/ad5683203/…/config-*.js`):仍 `POST /billing/meter/get-user-resource`、`withCredentials: true`、恒带 `X-Client-Platform: web`;只有**微信小程序场景**(`sessionStorage["growth-center-platform"]==="miniProgram"`)才补 `Authorization: Bearer`。与 weblogin.rs 顶部 2026-10-08 的实测记录一致 | 平台认证方式没变,请求构造不用改 |
+| 3 | 时间线:10-08 12:12 首笔成功(v0.1.19 网页登录)→ 10-15 11:56:47 末笔,**差值恰好 168 小时**;期间挂件每 60 秒都用这份会话真打接口 | 会话是**绝对 TTL(7 天)**,不是滑动窗口 —— 请求频繁也续不了命,到点就死 |
+| 4 | 官方「访问密钥」页:SPA 路由 `/keys`(站点地址是 **`www.workbuddy.cn/profile/keys`**,裸 `/keys` 是 404 —— 挂件旧提示里的地址已失效);有效期可选 `7天/30天/1年/永久`;但创建按钮**门控**:i18n 明文「该功能为标准版以上用户可用」,用户实测该账号提示需要升级 | 访问密钥(Bearer)这条**对免费账号不可行**(本账号验证);对标准版以上仍可用(挂件已支持手动粘贴 Bearer,候选顺序里它优先) |
+| 5 | 「登录捕获 Bearer 令牌」(v0.1.17 方案)已是**死路**:2026-10-08 CDP 实测 web 登录流程里**没有** Authorization 头、没有 `growth-center-token`、落地 URL 无 `?token=`(设计稿 design-workbuddy-web-login.html 已裁决改走 Cookie) | 不复活"抓令牌"方案 |
+
+**根因**:v0.1.19 起挂件吃"浏览器 profile 里的会话 Cookie",这条路活着的前提是会话不失效;
+平台把会话做成了 7 天绝对 TTL。于是每过 7 天必断一次 —— 9/17–10/1 那次断是另一个根因
+(客户端 5.6.2 加密了本地 accessToken),这次是纯日程性失效。**取数与签到都不用改请求。**
+
+**修复(四处,全部低风险)**
+
+1. **错误文案摆出真相**:`fetch.rs` 的 `expired_credential_msg`(WebSession 分支)改为
+   「网页登录已过期(平台会话约 7 天一次,属正常) · 在渠道卡上点「重新登录」即可」;
+   登录窗"取数被拒"那条(reason)同步改写,并把访问密钥入口从死了的 `/keys` 改成
+   `www.workbuddy.cn/profile/keys`、注明"要标准版以上的账号才能建"。
+2. **过期前亮出会话年龄**:登录验证通过时(`wb_finish_login`)把时刻写进 settings
+   (`core::weblogin::WEB_SESSION_AT_KEY`,`wb_web_session_at`,无敏感内容);
+   `build_view` 对**确实在用 Cookie 会话**的 WebSession 渠道,第 5 天起在详情 extra
+   里加一行「网页会话 · 已使用 N 天 · 平台会话实测约 7 天过期;失效后点「重新登录」即可,
+   历史数据不丢」。核心逻辑抽成纯函数 `weblogin::web_session_hint`,`core` 挂单测。
+3. **复登当天放行补签**:`done_for_day` 把 `auth` 算"当天完结",`can_try` 又被它卡住
+   (lib.rs `checkin_state_of`),所以 auth 之后即使复登成功,当天的 100 分按钮也是
+   点不动的(实测:2026-10-18 10:28 auth 一次,之后当季不能补;天数为界要静默到次日)。
+   `wb_finish_login` 收工时把 workbuddy 签到的 last_code 里的 `auth*` 清掉
+   (last_day 落回今天、attempts 清零),节拍器下一拍 / 手动按钮立刻可补一次。
+   只清 `auth*`;claimed/already/inactive 是真签完,不动。
+4. 明确**不做**:隐藏 webview 常驻续期(TTL 是绝对的,续不了命,还白背一个常驻窗口);
+   自动补登(登录要微信扫码,机器替不了);request 层改动(平台没变,无需再变)。
+
+**验证**
+
+- core `cargo test` **205 passed / 0 failed**(基线 204;新增 `web_session_hint_window`:
+  没记录不说话、前 4 天闭嘴、第 5 天起说话、时钟拨回不造谣);src-tauri `cargo check --all-targets`
+  **0 错误 0 告警**。真机待验:①复登后卡片出数;②当天「领积分」按钮可再点(auth 已被放出);
+  ③第 5 天起详情出现"已使用 N 天"一行。访问密钥路线(B)经实测对免费账号**不可行**(门控),
+  方案不依赖它。
 
 ## 修「模型页渲染出错」(2026-10-17,v0.1.39)
 

@@ -523,6 +523,47 @@ async fn wb_session_works(app: &tauri::AppHandle, session: &str) -> bool {
 async fn wb_finish_login(app: &tauri::AppHandle) {
     // 先置位再关窗:Destroyed 监听靠这个标志区分"登录成功"与"用户自己关了"
     WB_LOGIN_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
+    // 记下"这份会话从现在起是新鲜的":平台会话是绝对 TTL(实测 7 天,证据链在
+    // core::weblogin::web_session_hint 的注释),取数侧按这个年龄出提示。
+    // 键的定义只留 core 一份(WEB_SESSION_AT_KEY);写失败只是少一条提示,
+    // 不值得让收工流程失败。就一次毫秒级的 SQLite 写,直接做。
+    {
+        let st = app.state::<AppState>();
+        let store = lock_rw(&st.store);
+        let _ = store.set_setting(
+            tokenscope_core::weblogin::WEB_SESSION_AT_KEY,
+            &now_ts().to_string(),
+        );
+    }
+    // 复登成功 = 当天"凭据失效"的签到该放出补领了:done_for_day 把 auth 算成
+    // "今天完结",节拍器从此照章跳过、手动「领积分」按钮也被 can_try 拦住 ——
+    // 实锤过(2026-10-18:上午 auth 一次,中午复登成功,当天的分要静默到次日)。
+    // 只清 auth 之后的场次,claimed/already/inactive 不动(那些是真签完了)。
+    {
+        let st = app.state::<AppState>();
+        let mut cfg = lock_rw(&st.config).clone();
+        let mut changed = false;
+        let store2 = app.state::<AppState>().store.clone();
+        if let Some(entry) = cfg.checkin.get_mut(WB_CHANNEL_ID) {
+            if entry.last_code.as_deref().is_some_and(|c| c.starts_with("auth")) {
+                let today = checkin::beijing_day(now_ts());
+                entry.last_day = Some(today);
+                entry.last_code = None;
+                entry.attempts = 0;
+                entry.next_try_at = None;
+                changed = true;
+            }
+        }
+        if changed {
+            // save(写盘)与回写内存态照 run_checkin 的次序:先落库,再放出 guard。
+            let save_store = lock_rw(&store2);
+            if let Err(e) = cfg.save(&save_store) {
+                eprintln!("复登后重置签到状态失败: {e}");
+            }
+            drop(save_store);
+            *lock_rw(&st.config) = cfg;
+        }
+    }
     let handle = app.clone();
     on_main(app, move || {
         if let Some(w) = handle.get_webview_window(WB_LOGIN_LABEL) {
@@ -585,7 +626,7 @@ fn spawn_login_watcher(app: tauri::AppHandle) {
                             "workbuddy-login",
                             serde_json::json!({
                                 "ok": false,
-                                "reason": "登录是成功了,但挂件用这份会话取数被平台拒绝。可改用访问密钥:在 www.workbuddy.cn/keys 建一份,贴进卡片的输入框。"
+                                "reason": "登录是成功了,但挂件用这份会话取数被平台拒绝。平台网页会话实测约 7 天过期(绝对 TTL,挂件每分钟打接口也续不上命),还是先在渠道卡上点「重新登录」;访问密钥那条备选路要标准版以上的账号才能建(入口 www.workbuddy.cn/profile/keys)。"
                             }),
                         );
                     }
