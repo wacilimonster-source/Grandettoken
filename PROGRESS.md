@@ -1,9 +1,71 @@
 # TokenScope 开发进展
 
 > 最后更新:2026-10-19
-> 状态:**v0.1.41 已发版 —— WorkBuddy 改用桌面端凭据(带 refresh 续期),彻底摆脱网页会话 7 天 TTL**
-> 更早:v0.1.40(WorkBuddy 会话 TTL 的提示 / 预警 / 补签)、v0.1.39(修模型页渲染出错)、
-> v0.1.38(模型页新增第五个写入目标 DeepSeek Harness)、v0.1.37(速览"抬升卡片")
+> 状态:**v0.1.42 已发版 —— 第三轮全量体检:修好 WorkBuddy 自动续期的断链,并结掉"系统代理"那条悬了两轮的取证**
+> 更早:v0.1.41(WorkBuddy 改读桌面端凭据)、v0.1.40(会话 TTL 的提示 / 预警 / 补签)、
+> v0.1.39(修模型页渲染出错)、v0.1.38(模型页新增第五个写入目标 DeepSeek Harness)
+
+## 第三轮全量体检:续期断链与代理取证(2026-10-19,v0.1.42)
+
+**怎么查的**:目标是 v0.1.33 之后新进场的约 7800 行(workbuddy / yamledge / peak / custom 四个新模块 +
+store / fetch / inject 的大改)。原定七路并行子代理审查**因额度上限全部失败**,改为主代理自己读代码,
+配机器化交叉检查:基线(touch 逼重查后 `cargo check --all-targets` 两 crate + `cargo test`)、
+43 个 `#[tauri::command]` × 43 个 `invoke()` 调用点的契约、生产区(首个 `#[cfg(test)]` 之前)的
+`unwrap/expect` 清点、`SystemTime`/`Command`/`AtomicBool`/时区/默认 0 的模式扫描、
+JS 重名函数与 `innerHTML` 未转义插值清点、前端探针。
+
+**两条 P1(功能没真正生效)**
+
+1. **WorkBuddy 的"自动续期"永远进不去**。`collect_desktop_credentials` 四处长候选都写成
+   "只收未过期",而 `desktop_tokens` 的续期分支条件是"候选里有过期那份" → 恒为假 →
+   续期与落库整段是死代码;`fetch.rs` 那句注释("过期时自动续期")与实际相反,
+   而且**没有任何一条用例覆盖"过期后续期"**,所以两轮都没发现。
+   后果:v0.1.41 宣称的"摆脱 7 天 TTL"只兑现一半 —— 断供周期从 7 天变成 28 天,到点仍要人工开一次桌面端。
+   修法:① 过期判定抽成 `accept(cred, now, include_expired)`,续期路径带 `include_expired = true`;
+   ② 编排逻辑抽成纯函数 `plan_tokens`(不碰文件/凭据管理器/HTTP,续期动作注入)→ 这才测得动;
+   ③ 落库带上**过期时刻**(以前只存令牌,作废的那份会永远顶在候选第一位、每轮白吃一个 401);
+   ④ 续期失败按区域冷却 30 分钟(挂件每 60 秒一轮,不冷却就是每天 1440 次白打)。
+2. **体检报告在"系统代理"上印了句没依据的话**,同时把第一轮 P2-12 的取证结掉了:
+   reqwest 0.12.28(core 用的那个)的 `default` features 里带着 `system-proxy`,
+   hyper-util 0.1.21 `client/proxy/matcher.rs:696` 读 `HKCU\...\Internet Settings\ProxyEnable` ——
+   **注册表系统代理确实影响挂件取数**;而报告只查 6 个环境变量,查不到就印"未检测到(全部直连)"。
+   本机就是活证据:ProxyEnable=1、ProxyServer=127.0.0.1:7897、用户/机器/进程三级环境变量都没设代理。
+   修法:注册表与环境变量**分两行报**,再加一行"取数是否走代理"的结论,并写明
+   "代理软件若是 TUN/全局模式,这里看不出来"。签到仍是强制直连(设计如此,已标注)。
+
+**P2 三条**
+③ 积分渠道把"上游没给余额数值"当"0 分"报"积分已用尽"(Amount 分支一直是 `unwrap_or(false)`,
+两个 kind 口径相反);现网不可触发(自定义渠道恒为 Amount、内置积分渠道恒给 Some),但按不一致修一行。
+④ **365 天归档每轮永久丢一笔消耗**:归档 SQL 只读 `ts < before_ts`,跨分界线那一跳的"后一行"不在场,
+而下一轮时它的"前一行"已被删 → LAG 永远取不到参照。修法:窗口多读一天(`ARCHIVE_LOOKBACK_SEC`),
+按"前一行在窗口内"(`pts < before_ts`)收,归到前一行那天;前一行已删所以不会被重复计。
+⑤ 向桌面端要密钥时先等退出、退出后才读管道 → 输出超过管道缓冲就会卡满 15 秒再误判"问不出密钥";
+改成两个线程并发读。
+
+**P3 五条**:签到流水注释说 400 天而实为 390(改成 310 天 = 合计 400);归档聚合里
+`filter_map(Result::ok)` 静默丢坏行(第二轮刚禁过这个写法,改回"记一行再丢");
+`auth_dirs()` 三个候选在正常机器上有两个指向同一目录(去重);DSH 回滚只校验落点 `rel`
+没校验来源 `copy`(注释声称要防手改清单)(补上同套校验);`NO_DESKTOP_READER` 只在测试里用
+却在生产区声明 → `cargo check --all-targets` 带着 1 条警告(v0.1.41 记录里的"0 警告"是
+`cargo test` 口径,两者不是一回事);速览里 `scaleFactor()` 取来没用,白一次跨进程往返。
+
+**复测(硬证据)**:把 ① 与 ④ 的判据临时还原成修复前,新增用例**精确地只让这 2 条失败** ——
+`archive_keeps_the_drop_that_straddles_the_cutoff` 拿到 `consumed: 10.0`(应为 20.0)、
+`expired_live_credential_reaches_the_refresh_step` 报 `include_expired 该收下过期那份: Expired`;
+其余 221 条全过(说明归档那处改动没伤到既有口径)。
+修回后:core `cargo test` **223 passed / 0 failed**(基线 218 + 新增 5 条)、
+`cargo check --all-targets` core 与壳**均 0 错误 0 警告**、`node --check` 通过、
+前端探针退出 0、**真机两条 ignore 用例重跑通过**(桌面端凭据解密 + `/v2` 取数算出余额,链路没被改坏)。
+
+**本轮仍未做(不是遗漏,是有意的)**
+- `providers.rs` 里 Trae `credits_amount` / WorkBuddy `RemainPrecise` 字段缺失按 0 处理:
+  还是没有样本,不盲改。**注意它的后果被 v0.1.35 的新功能放大了** —— 缺字段现在不只是"显示 0",
+  还会发一条"积分已用尽"的系统通知(③ 修的是 None,修不了"真给了 0")。
+- O-1:每轮取数约 9 次重叠的 O(n) 区间扫描,仍是结构性优化项。
+- **第三轮没覆盖到的**:`fetch.rs` 其余约 850 行改动、`inject.rs` 其余约 1700 行、
+  `app.js` 其余约 540 行、`yamledge.rs` 解析主体、`styles.css`、build 脚本与探针内部。
+- 真机待验:续期分支的真机路径(要等 accessToken 真过期,本机那份到 2026-11-15)、
+  体检报告新的两行代理文案在真窗口里的排版。
 
 ## WorkBuddy 换成读桌面端凭据(2026-10-19,v0.1.41)
 
