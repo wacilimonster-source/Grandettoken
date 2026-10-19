@@ -829,6 +829,10 @@ impl Store {
         Ok(())
     }
 
+    /// 归档时往分界线**之后**多看多久,专门用来接住跨边界的那一笔(见 `archive_before` 的注)。
+    /// 取一天:比任何渠道的轮询间隔都宽得多,笔记本睡眠/挂件暂停留出的空档也盖得住。
+    const ARCHIVE_LOOKBACK_SEC: i64 = 86_400;
+
     /// 清理旧数据 —— **删明细之前先把它们压成日级摘要**(长期趋势的底料):
     /// 快照明细按 90 天,归档出的日级摘要保留 365 天;签到流水按 400 天。
     ///
@@ -847,7 +851,7 @@ impl Store {
                 params![before_ts - 275 * 86_400],
             )
             .map_err(|e| format!("清理旧日级摘要失败: {e}"))?;
-        let log_before = before_ts - 300 * 86_400; // 快照的 90 天之外再多留 300 天
+        let log_before = before_ts - 310 * 86_400; // 快照的 90 天之外再多留 310 天(合计 400 天,与上面的说明对齐)
         self.conn
             .execute(
                 "DELETE FROM checkin_log WHERE ts < ?1",
@@ -886,6 +890,13 @@ impl Store {
         // ② 消耗:相邻下降之和,归属到**前一行**所在的那天(与界面柱图同一口径:
         //    差值按起点分桶)。先在一条 SQL 里聚合成少量行,再逐行累加进摘要 ——
         //    不要在 UPDATE 里写相关子查询(那是 O(摘要数 × 明细数))。
+        //
+        //    读的时候要多往后看 `ARCHIVE_LOOKBACK_SEC`:跨在分界线上的那一跳,它的"后一行"
+        //    落在 `ts < before_ts` 之外,而下一轮归档时它的前一行已经被删掉了 —— LAG 永远取不到
+        //    参照,于是每轮 prune 都永久丢一笔消耗(第三轮体检 P2-④)。现在收"前一行在窗口内"
+        //    的所有下降(`pts < before_ts`),跨边界那一跳归到前一行那天。
+        //    不会重复计:下一轮里前一行已经不在表里,同一对相邻行不可能再被算第二次。
+        let horizon = before_ts + Self::ARCHIVE_LOOKBACK_SEC;
         let deltas: Vec<(String, String, i64, f64)> = {
             let mut stmt = tx
                 .prepare(
@@ -900,20 +911,29 @@ impl Store {
                                     LAG(remaining) OVER win AS prem,
                                     remaining
                                FROM snapshots
-                              WHERE ts < ?1 AND kind = 'amount' AND remaining IS NOT NULL
+                              WHERE ts < ?3 AND kind = 'amount' AND remaining IS NOT NULL
                              WINDOW win AS (PARTITION BY provider_id, key_fp ORDER BY ts ASC)
                            )
-                          WHERE delta > 0
+                          WHERE delta > 0 AND pts IS NOT NULL AND pts < ?1
                        )
                       GROUP BY provider_id, key_fp, b",
                 )
                 .map_err(|e| format!("聚合归档消耗失败: {e}"))?;
             let rows = stmt
-                .query_map(params![before_ts, day_offset_secs], |r| {
+                .query_map(params![before_ts, day_offset_secs, horizon], |r| {
                     Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
                 })
                 .map_err(|e| format!("聚合归档消耗失败: {e}"))?;
-            rows.filter_map(|r| r.ok()).collect()
+            // 坏行如实记一行再丢(第二轮刚把四处同类 `filter_map(Result::ok)` 改成这样,
+            // 别让同一个静默吞数据的问题又回来)
+            let mut out: Vec<(String, String, i64, f64)> = Vec::new();
+            for r in rows {
+                match r {
+                    Ok(v) => out.push(v),
+                    Err(e) => eprintln!("归档消耗聚合里丢了一行: {e}"),
+                }
+            }
+            out
         };
         for (provider_id, key_fp, day_start, delta) in deltas {
             tx.execute(
@@ -1659,6 +1679,37 @@ mod tests {
         assert_eq!(sums.len(), 1, "覆盖仍记(它证明应用在跑)");
         assert_eq!(sums[0].count, 2);
         assert!((sums[0].consumed - 0.0).abs() < 1e-9, "百分比渠道没有余额消耗");
+    }
+
+    /// 跨归档边界的那一笔不能丢(第三轮体检 P2-④)。
+    /// 构造:10 号两条明细(100→90,掉 10),11 号两条(80→70),清理线压在 11 号零点 ——
+    /// 于是"90→80"这一跳的**前一行在窗口内、后一行在窗口外**,修复前它两头都不沾:
+    /// 这一轮读不到后一行,下一轮前一行已被删除 → 永久少记一笔。
+    #[test]
+    fn archive_keeps_the_drop_that_straddles_the_cutoff() {
+        let s = Store::open_memory().unwrap();
+        let tz = 0i64;
+        let day = |d: i64| d * 86_400;
+        s.record("p", day(10) + 10 * 3600, Some(100.0), None, None, "amount").unwrap();
+        s.record("p", day(10) + 11 * 3600, Some(90.0), None, None, "amount").unwrap();
+        s.record("p", day(11) + 3600, Some(80.0), None, None, "amount").unwrap();
+        s.record("p", day(11) + 2 * 3600, Some(70.0), None, None, "amount").unwrap();
+
+        s.prune(day(11), tz).unwrap();
+        let sums = s.daily_summaries("p", None, 0).unwrap();
+        assert_eq!(sums.len(), 1, "只有 10 号那天进了摘要: {sums:?}");
+        assert!(
+            (sums[0].consumed - 20.0).abs() < 1e-9,
+            "10 号 = 当天 10 + 跨边界的 10: {sums:?}"
+        );
+
+        // 再清一轮:11 号那两条归档。同一对相邻行不能被算第二次(前一行已不在表里)。
+        s.prune(day(12), tz).unwrap();
+        let sums2 = s.daily_summaries("p", None, 0).unwrap();
+        let d10 = sums2.iter().find(|x| x.day_start == day(10)).unwrap();
+        let d11 = sums2.iter().find(|x| x.day_start == day(11)).unwrap();
+        assert!((d10.consumed - 20.0).abs() < 1e-9, "10 号不该被再算一次: {sums2:?}");
+        assert!((d11.consumed - 10.0).abs() < 1e-9, "11 号只有 80→70: {sums2:?}");
     }
 
     /// 长期趋势曲线:明细与日级摘要拼在一条线上;有缺口的日子标出来。

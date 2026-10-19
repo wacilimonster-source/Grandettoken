@@ -34,6 +34,7 @@ use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -154,6 +155,18 @@ pub fn auth_dirs() -> Vec<PathBuf> {
         let h = PathBuf::from(home);
         out.push(h.join("AppData").join("Local").join("CodeBuddyExtension").join("Data").join("Public").join("auth"));
     }
+    // 正常机器上 LOCALAPPDATA 就等于 USERPROFILE\AppData\Local,同一条路径会被列两遍。
+    // 不去重的话,后面会把同一个凭据文件读两遍、解两遍。
+    let mut seen: Vec<String> = Vec::new();
+    out.retain(|p| {
+        let k = p.to_string_lossy().to_lowercase();
+        if seen.iter().any(|s| s == &k) {
+            false
+        } else {
+            seen.push(k);
+            true
+        }
+    });
     out
 }
 
@@ -437,35 +450,57 @@ fn fetch_key_payload(exe: &Path) -> Result<String, DesktopErr> {
     let mut child = cmd
         .spawn()
         .map_err(|e| DesktopErr::KeyUnavailable(format!("起不来: {e}")))?;
-    // 轮询等退出:std 没有 wait_timeout,自己转;超时就杀掉,不留孤儿进程
-    let deadline = Instant::now() + KEY_TIMEOUT;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(DesktopErr::KeyUnavailable(format!(
-                        "桌面端 {} 秒内没有应答",
-                        KEY_TIMEOUT.as_secs()
-                    )));
-                }
-                std::thread::sleep(Duration::from_millis(80));
+    // 输出要**趁子进程还活着的时候并发读走**。以前的写法是"轮询等它退出、退出后再读管道":
+    // 一旦 loggerGet() 输出超过管道缓冲,子进程就永远卡在写上,我们则永远卡在等它退出,
+    // 15 秒到点后误报成"桌面端没有应答"(本次改造没踩到,是因为当时那段 JSON 恰好没满)。
+    let so = child.stdout.take();
+    let se = child.stderr.take();
+    let (out, err, timeout_reason) = std::thread::scope(|s| {
+        let h_out = s.spawn(move || {
+            let mut buf = String::new();
+            if let Some(mut r) = so {
+                let _ = r.read_to_string(&mut buf);
             }
-            Err(e) => {
-                let _ = child.kill();
-                return Err(DesktopErr::KeyUnavailable(format!("等待桌面端失败: {e}")));
+            buf
+        });
+        let h_err = s.spawn(move || {
+            let mut buf = String::new();
+            if let Some(mut r) = se {
+                let _ = r.read_to_string(&mut buf);
+            }
+            buf
+        });
+        // std 没有 wait_timeout,自己转;超时就杀掉,不留孤儿进程
+        let deadline = Instant::now() + KEY_TIMEOUT;
+        let mut why: Option<String> = None;
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) => {
+                    if Instant::now() >= deadline {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        why = Some(format!("桌面端 {} 秒内没有应答", KEY_TIMEOUT.as_secs()));
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(80));
+                }
+                Err(e) => {
+                    let _ = child.kill();
+                    why = Some(format!("等待桌面端失败: {e}"));
+                    break;
+                }
             }
         }
-    }
-    let mut out = String::new();
-    let mut err = String::new();
-    if let Some(mut s) = child.stdout.take() {
-        let _ = s.read_to_string(&mut out);
-    }
-    if let Some(mut s) = child.stderr.take() {
-        let _ = s.read_to_string(&mut err);
+        // 子进程已退出或被杀 → 写端关闭,两个读线程读到 EOF 自然收尾
+        (
+            h_out.join().unwrap_or_default(),
+            h_err.join().unwrap_or_default(),
+            why,
+        )
+    });
+    if let Some(w) = timeout_reason {
+        return Err(DesktopErr::KeyUnavailable(w));
     }
     let stdout = out.trim().to_string();
     if stdout.is_empty() {
@@ -512,17 +547,40 @@ pub fn at_rest_key() -> Result<Vec<u8>, DesktopErr> {
 
 // ───────────────────────── 组装:读凭据 → 取数 ─────────────────────────
 
-/// 读桌面端凭据(含解密),返回**所有**可用候选。
+/// 读桌面端凭据(含解密),返回**所有**没过期可用的候选。
+pub fn read_desktop_credentials(now_ms: i64) -> Result<Vec<DesktopCredential>, DesktopErr> {
+    collect_desktop_credentials(now_ms, false)
+}
+
+/// 刚解析出来的一份凭据该不该进候选。
 ///
-/// 顺序(踩过两次才对):
+/// 单独成函数是为了能被单测钉住:这条判断以前直接埋在四处 match 里,四处都写"只收未过期",
+/// 于是"过期候选 → 续期"整条链恒不可达,却没人发现(2026-10-19 第三轮体检)。
+fn accept(c: &DesktopCredential, now_ms: i64, include_expired: bool) -> bool {
+    include_expired || !c.expired(now_ms)
+}
+
+/// 扫候选目录并解密,产出凭据列表。`include_expired = true` 时**也把"accessToken 已过期
+/// 但仍带 refreshToken"的候选带出来** —— 续期只能用这些。
+///
+/// 为什么要有这个参数:2026-10-19 第一版只在"候选里有过期凭据"时才续期,而这里把过期的一律
+/// 过滤掉了 → 续期分支恒不可达,渠道到 accessToken 第 28 天照样断(界面还宣称会自动续)。
+/// 现在把"要不要过期那份"交给调用方:`desktop_tokens` 用 true,展示/其它路径用 false。
+///
+/// 候选顺序(踩过两次才对):
 ///   1. **live 文件优先**(`workbuddy-desktop.info` / `-ai.info`),加密的也要拿 key 解开 ——
 ///      桌面端 5.6+ 就是加密的,这份才是"现在真正在用"的凭据;
 ///   2. 只有 live 读不出来时,才回落到历史备份(那些通常是明文,但 token 可能已被上游作废:
 ///      2026-10-19 真机上一份 6 月的备份 token 未过期却 401)。
 ///
 /// 返回全部候选是为了让上层在 401 时能换下一份,而不是直接让用户重新登录。
-pub fn read_desktop_credentials(now_ms: i64) -> Result<Vec<DesktopCredential>, DesktopErr> {
-    let files = credential_files();
+fn collect_desktop_credentials(now_ms: i64, include_expired: bool) -> Result<Vec<DesktopCredential>, DesktopErr> {
+    collect_from(&credential_files(), now_ms, include_expired)
+}
+
+/// 从给定的候选文件列表组装凭据。把"扫目录"与"读 + 判"拆开,是为了能用临时目录把
+/// `include_expired` 这条判据端到端测掉 —— 它决定过期凭据能不能被送去续期。
+fn collect_from(files: &[PathBuf], now_ms: i64, include_expired: bool) -> Result<Vec<DesktopCredential>, DesktopErr> {
     if files.is_empty() {
         return Err(DesktopErr::BadCredential(
             "auth 目录里没有 workbuddy-desktop*.info".into(),
@@ -534,14 +592,14 @@ pub fn read_desktop_credentials(now_ms: i64) -> Result<Vec<DesktopCredential>, D
     // ① live 文件:可能是加密的,必要时拿 key
     let mut live_err: Option<DesktopErr> = None;
     let mut need_key = false;
-    for f in &files {
+    for f in files {
         if !is_live_name(f) {
             continue;
         }
         let Ok(text) = std::fs::read_to_string(f) else { continue };
         let src = f.to_string_lossy().to_string();
         match parse_auth_file(&text, &src, None) {
-            Ok(c) if !c.expired(now_ms) => out.push(c),
+            Ok(c) if accept(&c, now_ms, include_expired) => out.push(c),
             Ok(_) => {
                 live_err.get_or_insert(DesktopErr::Expired);
             }
@@ -554,14 +612,14 @@ pub fn read_desktop_credentials(now_ms: i64) -> Result<Vec<DesktopCredential>, D
     if need_key {
         match at_rest_key() {
             Ok(key) => {
-                for f in &files {
+                for f in files {
                     if !is_live_name(f) {
                         continue;
                     }
                     let Ok(text) = std::fs::read_to_string(f) else { continue };
                     let src = f.to_string_lossy().to_string();
                     match parse_auth_file(&text, &src, Some(&key)) {
-                        Ok(c) if !c.expired(now_ms) => out.push(c),
+                        Ok(c) if accept(&c, now_ms, include_expired) => out.push(c),
                         Ok(_) => {
                             live_err.get_or_insert(DesktopErr::Expired);
                         }
@@ -580,14 +638,14 @@ pub fn read_desktop_credentials(now_ms: i64) -> Result<Vec<DesktopCredential>, D
     // ② live 一份都没解出来,才回落到历史备份(明文直接读;加密的同样要 key)
     if out.is_empty() {
         let mut backup_need_key = false;
-        for f in &files {
+        for f in files {
             if is_live_name(f) {
                 continue;
             }
             let Ok(text) = std::fs::read_to_string(f) else { continue };
             let src = f.to_string_lossy().to_string();
             match parse_auth_file(&text, &src, None) {
-                Ok(c) if !c.expired(now_ms) => out.push(c),
+                Ok(c) if accept(&c, now_ms, include_expired) => out.push(c),
                 Ok(_) => {
                     first_err.get_or_insert(DesktopErr::Expired);
                 }
@@ -599,14 +657,14 @@ pub fn read_desktop_credentials(now_ms: i64) -> Result<Vec<DesktopCredential>, D
         }
         if backup_need_key {
             if let Ok(key) = at_rest_key() {
-                for f in &files {
+                for f in files {
                     if is_live_name(f) {
                         continue;
                     }
                     let Ok(text) = std::fs::read_to_string(f) else { continue };
                     let src = f.to_string_lossy().to_string();
                     if let Ok(c) = parse_auth_file(&text, &src, Some(&key)) {
-                        if !c.expired(now_ms) {
+                        if accept(&c, now_ms, include_expired) {
                             out.push(c);
                         }
                     }
@@ -628,53 +686,148 @@ pub fn read_desktop_credentials(now_ms: i64) -> Result<Vec<DesktopCredential>, D
     Ok(out)
 }
 
-/// 读**全部**桌面端候选:先看上次续期存下来的那份(没过期就不用起进程),
-/// 再读桌面端文件;两份都过期时用 refreshToken 续一次并把结果落库。
+/// 上次续期成果在凭据管理器里的形状。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredRefresh {
+    pub global: bool,
+    pub access: String,
+    /// 上游轮换过的 refreshToken(留着,桌面端文件被删时还能用)
+    pub refresh: Option<String>,
+    /// accessToken 的过期时刻(epoch 毫秒)。0 = 老数据没记过,按"还能用"处理。
+    pub expires_at_ms: i64,
+}
+
+/// [`plan_tokens`] 的产出。
+#[derive(Debug, Default)]
+pub struct TokenPlan {
+    /// 取数按这个顺序试(最可能活着的排最前)
+    pub tokens: Vec<String>,
+    /// 续期成功、需要落库的(区域, 结果)
+    pub to_store: Vec<(bool, Refreshed)>,
+    /// 续期失败的原因(如实记日志,不参与取数)
+    pub refresh_fails: Vec<String>,
+}
+
+/// 上游没给 `expiresIn` 时按多久就再续一次。故意给得很短:
+/// 没记下来的过期时刻不能拿来当"这令牌还能挂 28 天"的依据。
+const REFRESH_FALLBACK_TTL_SEC: i64 = 24 * 3600;
+
+/// **纯函数**:把"上次续期成果 + 桌面端候选"排成取数用的顺序,并对已过期但仍可续的
+/// 候选发起续期。不碰文件、不碰凭据管理器、不发请求(续期动作由参数注入)。
 ///
-/// 顺序(挂件视角):
-///   1. 上次续期存下的 accessToken(本地凭据管理器,不落盘在外面的文件里)
-///   2. 桌面端当前凭据(live 优先,国内版优先)
-///   两者都过期 → 用桌面端凭据自带的 refreshToken 续期,成功则覆盖第 1 项。
-pub fn desktop_tokens(now_ms: i64) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    // ① 上次续期的成果
-    for slot in [false, true] {
-        if let Some((access, _)) = load_refreshed(slot) {
-            if !out.iter().any(|t| t == &access) {
-                out.push(access);
-            }
-        }
-    }
-    // ② 桌面端文件
-    let creds = match read_desktop_credentials(now_ms) {
-        Ok(v) => v,
-        Err(_) => Vec::new(),
-    };
-    let any_expired = creds.iter().any(|c| c.expired(now_ms));
-    if any_expired {
-        // 有一份过期:试着续期(每个区域一份)。成功就存起来、并顶到候选最前面。
-        for c in &creds {
-            if !c.refresh_expired(now_ms) && c.refresh_token.is_some() {
-                if let Ok(new) = try_refresh(c) {
-                    let slot = c.is_global();
-                    let _ = store_refreshed(slot, &new.access_token, new.refresh_token.as_deref());
-                    if !out.contains(&new.access_token) {
-                        out.insert(0, new.access_token.clone());
-                    }
-                }
-            }
-        }
-    }
-    for c in &creds {
-        if c.expired(now_ms) {
+/// 为什么要单独拆出来:这段判据以前写在 `desktop_tokens` 里,和真文件、真 HTTP 搅在
+/// 一起,结果"过期候选被上游过滤掉 → 续期恒不可达"的断链一路带到发版都没被用例碰到
+/// (2026-10-19 第三轮体检抓到)。拆成纯函数后它能直接被单测钉住。
+pub fn plan_tokens(
+    now_ms: i64,
+    stored: &[StoredRefresh],
+    creds: &[DesktopCredential],
+    refresh: &dyn Fn(&DesktopCredential) -> Result<Refreshed, String>,
+) -> TokenPlan {
+    let mut plan = TokenPlan::default();
+    // ① 过期但仍带可用 refreshToken 的:先续。续来的最新,排最前。
+    for c in creds {
+        if !c.expired(now_ms) {
             continue;
         }
-        let t = c.access_token.clone();
-        if !out.contains(&t) {
-            out.push(t);
+        let has_rt = c
+            .refresh_token
+            .as_deref()
+            .is_some_and(|s| !s.trim().is_empty());
+        // refreshToken 自己也超期 → 只能让人在桌面端登一次,机器替不了
+        if !has_rt || c.refresh_expired(now_ms) {
+            continue;
+        }
+        match refresh(c) {
+            Ok(new) => {
+                plan.to_store.push((c.is_global(), new.clone()));
+                push_unique(&mut plan.tokens, &new.access_token);
+            }
+            Err(e) => plan.refresh_fails.push(format!("{}: {e}", c.source)),
         }
     }
-    out
+    // ② 上次续期的成果:没过期才顶用(没记过期时刻的老数据按能用处理)
+    for s in stored {
+        if s.expires_at_ms == 0 || now_ms < s.expires_at_ms {
+            push_unique(&mut plan.tokens, &s.access);
+        }
+    }
+    // ③ 桌面端文件里现在还能用的(顺序已由 collect 排好:国内版优先、live 优先)
+    for c in creds {
+        if !c.expired(now_ms) {
+            push_unique(&mut plan.tokens, &c.access_token);
+        }
+    }
+    plan
+}
+
+fn push_unique(v: &mut Vec<String>, t: &str) {
+    let t = t.trim();
+    if !t.is_empty() && !v.iter().any(|x| x == t) {
+        v.push(t.to_string());
+    }
+}
+
+/// 读**全部**桌面端候选(顺序:刚续来的 → 上次续期成果 → 桌面端 live → 历史备份)。
+///
+/// 落库与冷却这些带副作用的都在这一层,判据本身在 [`plan_tokens`](可单测)。
+pub fn desktop_tokens(now_ms: i64) -> Vec<String> {
+    // include_expired = true:过期那份正是续期要的对象(见 plan_tokens 的来由)
+    let creds = collect_desktop_credentials(now_ms, true).unwrap_or_default();
+    let mut stored: Vec<StoredRefresh> = Vec::new();
+    for global in [false, true] {
+        if let Some(s) = load_refreshed(global) {
+            stored.push(s);
+        }
+    }
+    let plan = plan_tokens(now_ms, &stored, &creds, &refresh_with_cooldown);
+    for (global, new) in &plan.to_store {
+        let ttl = new.expires_in_sec.unwrap_or(REFRESH_FALLBACK_TTL_SEC).max(60);
+        let exp = now_ms + ttl * 1000;
+        if let Err(e) = store_refreshed(*global, &new.access_token, new.refresh_token.as_deref(), exp) {
+            eprintln!("WorkBuddy 续期结果落库失败: {e}");
+        }
+    }
+    for m in &plan.refresh_fails {
+        eprintln!("WorkBuddy 续期没成: {m}");
+    }
+    plan.tokens
+}
+
+/// 续期失败的冷却:挂件每 60 秒一轮,不冷却就会拿同一份失效的 refreshToken 每天打 1440 次。
+const REFRESH_COOLDOWN: Duration = Duration::from_secs(30 * 60);
+static REFRESH_FAIL_AT: Mutex<Option<HashMap<String, Instant>>> = Mutex::new(None);
+
+fn refresh_with_cooldown(cred: &DesktopCredential) -> Result<Refreshed, String> {
+    if cfg!(test) {
+        // 单测不真发请求(要验判据请用 plan_tokens 注入假实现)
+        return Err("单测里不发续期请求".into());
+    }
+    let slot = refresh_slot(cred.is_global()).to_string();
+    let lk = || REFRESH_FAIL_AT.lock().unwrap_or_else(|p| p.into_inner());
+    let cooling = lk()
+        .as_ref()
+        .and_then(|m| m.get(&slot))
+        .map(|t| t.elapsed() < REFRESH_COOLDOWN)
+        .unwrap_or(false);
+    if cooling {
+        return Err(format!(
+            "距上次续期失败不到 {} 分钟,先不重试",
+            REFRESH_COOLDOWN.as_secs() / 60
+        ));
+    }
+    match try_refresh(cred) {
+        Ok(r) => {
+            if let Some(m) = lk().as_mut() {
+                m.remove(&slot);
+            }
+            Ok(r)
+        }
+        Err(e) => {
+            lk().get_or_insert_with(HashMap::new).insert(slot, Instant::now());
+            Err(e)
+        }
+    }
 }
 
 /// 续期一次(同步包装,给 `desktop_tokens` 这种同步入口用)。
@@ -719,22 +872,41 @@ pub fn refresh_slot(region_global: bool) -> &'static str {
     }
 }
 
-/// 读上次续期存下的 accessToken。
-pub fn load_refreshed(region_global: bool) -> Option<(String, Option<String>)> {
+/// 读上次续期存下的成果(含过期时刻)。
+pub fn load_refreshed(region_global: bool) -> Option<StoredRefresh> {
     let raw = crate::secrets::get(refresh_slot(region_global)).ok().flatten()?;
-    // 存的是 `access\nrefresh`(refresh 可空)
-    let mut it = raw.splitn(2, '\n');
+    // 存的是三行:`access` / `refresh`(可空) / `过期毫秒`
+    let mut it = raw.split('\n');
     let access = it.next()?.trim().to_string();
     if access.is_empty() {
         return None;
     }
     let refresh = it.next().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-    Some((access, refresh))
+    // 老格式(两行)没有第三行 → 0,判据里按"还能用"处理,不会把用户挡在门外
+    let expires_at_ms = it.next().and_then(|s| s.trim().parse::<i64>().ok()).unwrap_or(0);
+    Some(StoredRefresh {
+        global: region_global,
+        access,
+        refresh,
+        expires_at_ms,
+    })
 }
 
 /// 存续期结果(空 refresh 表示上游没轮换,沿用旧的)。
-pub fn store_refreshed(region_global: bool, access: &str, refresh: Option<&str>) -> Result<(), String> {
-    let payload = format!("{}\n{}", access.trim(), refresh.unwrap_or("").trim());
+/// 必须连过期时刻一起存:只存令牌本身的话,这份令牌过期后仍会顶在候选最前面,
+/// 每轮白打一次 401。
+pub fn store_refreshed(
+    region_global: bool,
+    access: &str,
+    refresh: Option<&str>,
+    expires_at_ms: i64,
+) -> Result<(), String> {
+    let payload = format!(
+        "{}\n{}\n{}",
+        access.trim(),
+        refresh.unwrap_or("").trim(),
+        expires_at_ms
+    );
     crate::secrets::set(refresh_slot(region_global), &payload)
 }
 
@@ -1108,6 +1280,136 @@ mod tests {
         assert_eq!(v[0].source, "/a/workbuddy-desktop.info", "国内 live 第一");
         assert_eq!(v[1].source, "/a/workbuddy-desktop.2026-06-09.info", "国内备份第二");
         assert_eq!(v[2].source, "/a/workbuddy-desktop-ai.info", "国际版最后");
+    }
+
+    // ───────── 第三轮体检(2026-10-19)抓到的续期断链:以下四条把它钉住 ─────────
+
+    /// 端到端:临时目录里放一份"accessToken 已过期但仍带可用 refreshToken"的 live 凭据。
+    /// 旧姿态(include_expired=false)根本看不见它 → 续期分支恒不可达;新姿态才续得上。
+    #[test]
+    fn expired_live_credential_reaches_the_refresh_step() {
+        let now = 1_800_000_000_000i64;
+        let dir = std::env::temp_dir().join(format!("ts-wb-expired-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("建临时目录");
+        // 明文形态:单测不该去起桌面端进程拿 key
+        let live = dir.join("workbuddy-desktop.info");
+        std::fs::write(
+            &live,
+            format!(
+                r#"{{"auth":{{"accessToken":"old-tok","refreshToken":"rt","domain":"www.codebuddy.cn","expiresAt":{},"refreshExpiresAt":{}}},"account":{{"uin":123}}}}"#,
+                now - 1,
+                now + 86_400_000
+            ),
+        )
+        .expect("写伪造凭据");
+        let files = vec![live.clone()];
+
+        // ① 修复前的过滤:过期那份被丢掉 → 上层拿不到任何候选 → 不会去续
+        let old = collect_from(&files, now, false).expect_err("过期的不该进候选");
+        assert!(matches!(old, DesktopErr::Expired));
+
+        // ② 修复后:同一份文件带进续期这一步
+        let got = collect_from(&files, now, true).expect("include_expired 该收下过期那份");
+        assert_eq!(got.len(), 1);
+        assert!(got[0].expired(now));
+
+        let tried = std::cell::Cell::new(0usize);
+        let plan = plan_tokens(now, &[], &got, &|_: &DesktopCredential| -> Result<Refreshed, String> {
+            tried.set(tried.get() + 1);
+            Ok(Refreshed {
+                access_token: "fresh-tok".into(),
+                refresh_token: Some("rt2".into()),
+                expires_in_sec: Some(3600),
+                domain: None,
+            })
+        });
+        assert_eq!(tried.get(), 1, "该发起一次续期");
+        assert_eq!(plan.tokens[0], "fresh-tok", "续来的排最前");
+        assert_eq!(plan.to_store.len(), 1, "续期结果该落库");
+        assert_eq!(plan.to_store[0].1.refresh_token.as_deref(), Some("rt2"));
+        assert!(plan.refresh_fails.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 不该续的三种情形:没过期、refreshToken 也超期、refreshToken 是空白。
+    #[test]
+    fn refresh_is_attempted_only_when_it_can_work() {
+        let now = 1_800_000_000_000i64;
+        let tried = std::cell::Cell::new(0usize);
+        let fake = &|_: &DesktopCredential| -> Result<Refreshed, String> {
+            tried.set(tried.get() + 1);
+            Ok(Refreshed {
+                access_token: "x".into(),
+                ..Default::default()
+            })
+        };
+        let mk = |rt: Option<&str>, exp: i64, rtx: i64| DesktopCredential {
+            access_token: "old".into(),
+            refresh_token: rt.map(String::from),
+            expires_at_ms: exp,
+            refresh_expires_at_ms: rtx,
+            ..Default::default()
+        };
+        // 没过期 → 直接用,不起请求
+        let p = plan_tokens(now, &[], &[mk(Some("rt"), now + 60_000, now + 86_400_000)], fake);
+        assert_eq!(tried.get(), 0, "没过期就不该续");
+        assert_eq!(p.tokens, vec!["old".to_string()]);
+        // accessToken 与 refreshToken 都超期 → 只能人工登一次
+        plan_tokens(now, &[], &[mk(Some("rt"), now - 1, now - 1)], fake);
+        assert_eq!(tried.get(), 0, "refreshToken 也过期就不该白打");
+        // 没有 refreshToken / 只有空白
+        plan_tokens(now, &[], &[mk(None, now - 1, now + 1)], fake);
+        plan_tokens(now, &[], &[mk(Some("   "), now - 1, now + 1)], fake);
+        assert_eq!(tried.get(), 0, "空白 refreshToken 不算可用的续期凭据");
+    }
+
+    /// 上次续期的成果:必须按**过期时刻**决定用不用。
+    /// 修复前落库只存令牌不存时刻 → 那份令牌作废后仍永远顶在候选第一位,每轮白吃一个 401。
+    #[test]
+    fn stored_refresh_is_dropped_once_expired() {
+        let now = 1_800_000_000_000i64;
+        let st = |exp: i64| StoredRefresh {
+            global: false,
+            access: format!("tok-{exp}"),
+            refresh: None,
+            expires_at_ms: exp,
+        };
+        let none = &|_: &DesktopCredential| -> Result<Refreshed, String> { Err("不该被调".into()) };
+        let p = plan_tokens(now, &[st(0), st(now + 1000)], &[], none);
+        assert!(p.tokens.contains(&format!("tok-{}", now + 1000)));
+        assert!(p.tokens.contains(&"tok-0".to_string()), "老数据没记过期时刻,不该把人挡死");
+        let p2 = plan_tokens(now, &[st(now - 1)], &[], none);
+        assert!(p2.tokens.is_empty(), "已过期的上次续期成果不该再当首选");
+    }
+
+    /// 续期失败要如实带出来(界面/日志能说清"为什么还是没数"),但不能把其它候选挤掉。
+    #[test]
+    fn refresh_failure_is_reported_and_other_candidates_still_used() {
+        let now = 1_800_000_000_000i64;
+        let expired = DesktopCredential {
+            access_token: "dead".into(),
+            refresh_token: Some("rt".into()),
+            expires_at_ms: now - 1,
+            refresh_expires_at_ms: now + 1,
+            source: "/a/workbuddy-desktop.info".into(),
+            ..Default::default()
+        };
+        let live_backup = DesktopCredential {
+            access_token: "still-ok".into(),
+            expires_at_ms: now + 60_000,
+            source: "/a/workbuddy-desktop.2026-06-09.info".into(),
+            ..Default::default()
+        };
+        let plan = plan_tokens(
+            now,
+            &[],
+            &[expired, live_backup],
+            &|_: &DesktopCredential| -> Result<Refreshed, String> { Err("9074 排队".into()) },
+        );
+        assert_eq!(plan.tokens, vec!["still-ok".to_string()], "续期失败不该挤掉可用候选");
+        assert_eq!(plan.refresh_fails.len(), 1);
+        assert!(plan.refresh_fails[0].contains("9074"), "{:?}", plan.refresh_fails);
+        assert!(plan.to_store.is_empty());
     }
 
     /// 端到端(真机):桌面端凭据 → 按区域选域名 → /v2 取数 → `extract_workbuddy` 算余额。

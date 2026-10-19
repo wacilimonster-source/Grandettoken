@@ -1042,7 +1042,23 @@ fn restore_layered(backup_dir: &Path, root: &Path) -> Result<String, String> {
             }
             continue;
         }
-        let src = backup_dir.join(&e.copy);
+        // 来源也要同样验一遍:上面那句注释说"手改过的清单不能把文件写到别处",但只防了
+        // 落点 `rel` —— 不防 `copy` 的话,手改的来源照样能把备份目录之外的文件拷进来。
+        let cp = Path::new(&e.copy);
+        let unsafe_src = cp.is_absolute()
+            || cp.components().any(|c| {
+                matches!(
+                    c,
+                    std::path::Component::ParentDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            });
+        if unsafe_src {
+            bad.push(format!("备份来源不是相对路径,拒绝恢复: {}", e.copy));
+            continue;
+        }
+        let src = backup_dir.join(cp);
         if !src.is_file() {
             bad.push(format!("备份里缺 {}", e.copy));
             continue;

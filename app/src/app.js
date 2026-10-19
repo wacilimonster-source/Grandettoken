@@ -1283,7 +1283,6 @@ async function pillPeekToggle() {
     PEEK.w = Math.min(Math.round(300 * u), Math.max(w0, need));
     document.body.style.setProperty("--peekh", PEEK.h + "px");
     document.body.classList.add("peek-open");
-    const sf = (await appWindow.scaleFactor()) || 1;
     markSelfMove(FORM_SELF_MOVE_MS);
     await appWindow.setMinSize(null);
     await appWindow.setMaxSize(null);

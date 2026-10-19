@@ -512,7 +512,11 @@ pub fn splice(lines: &mut Vec<String>, range: Range<usize>, new_lines: &[String]
             out.push(format!("{l}{eol}"));
         }
     }
-    lines.splice(range, out);
+    // 区间上界钳一下:调用方给的都是合法区间,但 release 用 panic="abort" —— 哪天传越界了,
+    // 应该是"这次写入失败",而不是整个挂件原地消失。
+    let start = range.start.min(lines.len());
+    let end = range.end.max(start).min(lines.len());
+    lines.splice(start..end, out);
 }
 
 /// 把一段内容按 `pad` 列缩进(用于整块插入)。

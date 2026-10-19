@@ -1007,7 +1007,12 @@ fn crit_now(v: &ChannelView, cfg: &Config) -> bool {
             }
         }
         Kind::Points => {
-            let r = v.remaining.unwrap_or(0.0);
+            // 上游没给余额数值(None)不等于"0 分" —— 那是失联,不是欠费。
+            // Amount 分支一直是对的(:1000 用 map+unwrap_or(false)),积分分支以前写成
+            // unwrap_or(0.0),会把"读不到数值"报成"积分已用尽"(第三轮体检 P2-③)。
+            let Some(r) = v.remaining else {
+                return false;
+            };
             if r <= 0.0 {
                 return true; // 积分见底(界面判 ok,但"没分了"值得说一声)——
                             // 与界面不一致的地方只有这里,注释写明:通知更保守
@@ -1049,7 +1054,11 @@ fn crit_body(v: &ChannelView) -> String {
             _ => format!("{} 余额很低 · 打开挂件查看", v.name),
         },
         Kind::Points => {
-            let r = v.remaining.unwrap_or(0.0);
+            // crit_now 已经保证"没有数值不报警",这里拿到的一定是数字;
+            // 兜底那一行只是万一有别的路径进来时,别说出"已用尽 0 分"这种话。
+            let Some(r) = v.remaining else {
+                return format!("{} 积分余额读不到 · 打开挂件查看", v.name);
+            };
             if r <= 0.0 {
                 format!("{} 积分已用尽 · 打开挂件查看", v.name)
             } else {
@@ -1146,6 +1155,47 @@ fn host_of(url: &Option<String>) -> String {
         }
         None => "(未记录)".into(),
     }
+}
+
+/// 系统(WinINET)注册表代理的状态:返回"(是否启用, 给人看的一句话)"。
+///
+/// 为什么要单独读它:挂件取数用的 reqwest 0.12.28 的 default feature 里带着
+/// `system-proxy`,hyper-util 会读 `HKCU\Software\Microsoft\Windows\CurrentVersion\
+/// Internet Settings` 的 ProxyEnable —— 也就是说**注册表代理是真的影响挂件的**。
+/// 体检报告以前只查环境变量,查不到就印"未检测到(全部直连)":在本机
+/// (ProxyEnable=1、ProxyServer=127.0.0.1:7897、环境变量为空)是一句错话,
+/// 会把"取数为什么连不上/走的哪个出口"的排查方向带歪(2026-10-19 取证结掉第一轮 P2-12)。
+#[cfg(windows)]
+fn system_proxy_state() -> (bool, String) {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+    const KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings";
+    let Ok(k) = RegKey::predef(HKEY_CURRENT_USER).open_subkey(KEY) else {
+        return (false, "注册表里没有 Internet Settings 项".to_string());
+    };
+    let on = k.get_value::<u32, _>("ProxyEnable").unwrap_or(0) != 0;
+    if !on {
+        return (false, "未启用".to_string());
+    }
+    let server = k.get_value::<String, _>("ProxyServer").unwrap_or_default();
+    let pac = k.get_value::<String, _>("AutoConfigURL").unwrap_or_default();
+    let server = server.trim();
+    let pac = pac.trim();
+    (
+        true,
+        if !server.is_empty() {
+            format!("已启用 → {server}")
+        } else if !pac.is_empty() {
+            format!("已启用(PAC)→ {pac}")
+        } else {
+            "已启用,但注册表里没写地址".to_string()
+        },
+    )
+}
+
+#[cfg(not(windows))]
+fn system_proxy_state() -> (bool, String) {
+    (false, "非 Windows,注册表代理不适用".to_string())
 }
 
 // ───────────────────── 自定义渠道的增删改(裁决 6A) ─────────────────────
@@ -1462,16 +1512,26 @@ async fn run_diagnostic(app: tauri::AppHandle) -> Result<String, String> {
         (None, false) => "未启用".to_string(),
     };
     lines.push(format!("      开机自启 {auto_txt}"));
-    let proxies: Vec<String> = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]
+    let envp: Vec<String> = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]
         .iter()
         .filter_map(|k| std::env::var(k).ok().filter(|v| !v.trim().is_empty()).map(|v| format!("{k}={v}")))
         .collect();
+    let (sys_on, sys_txt) = system_proxy_state();
     lines.push(format!(
-        "      系统代理 {}",
-        if proxies.is_empty() {
-            "未检测到(全部直连)".to_string()
+        "      代理 · 环境变量 {}",
+        if envp.is_empty() {
+            "无".to_string()
         } else {
-            format!("检测到 {} —— 取数会经过它", proxies.join(" · "))
+            envp.join(" · ")
+        }
+    ));
+    lines.push(format!("      代理 · 系统(注册表){sys_txt}"));
+    lines.push(format!(
+        "      取数是否走代理:{}",
+        if !envp.is_empty() || sys_on {
+            "是(上面两行任一开着,reqwest 都会走它;每日签到例外,走强制直连)"
+        } else {
+            "否,直连(注意:代理软件若是 TUN/全局模式,系统层面仍会接管,这里看不出来)"
         }
     ));
     if let Ok(dir) = app.path().app_data_dir() {

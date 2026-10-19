@@ -908,7 +908,10 @@ type DesktopReader = dyn Fn() -> Vec<String> + Send + Sync;
 
 static DESKTOP_READER: std::sync::RwLock<Option<&'static DesktopReader>> = std::sync::RwLock::new(None);
 
-/// 测试里"永远读不到"的替身。
+/// 测试里"永远读不到"的替身。只在测试构建里存在 —— 放外面会报"static is never used"
+/// (v0.1.41 的发版记录说"0 警告",那是 `cargo test` 口径;`cargo check --all-targets`
+/// 当时其实带着这一条)。
+#[cfg(test)]
 static NO_DESKTOP_READER: fn() -> Vec<String> = Vec::new;
 
 /// 读**全部**桌面端候选(国内版优先,其次国际版,再其次历史备份)。
