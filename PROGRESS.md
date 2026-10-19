@@ -67,6 +67,23 @@ JS 重名函数与 `innerHTML` 未转义插值清点、前端探针。
 - 真机待验:续期分支的真机路径(要等 accessToken 真过期,本机那份到 2026-11-15)、
   体检报告新的两行代理文案在真窗口里的排版。
 
+**发版(v0.1.42)**:两次提交(`00b08ad` 修复 / `46e7486` 版本号+本记录),tag `v0.1.42` 指向
+`46e7486`(main 与 tag 都已推,远端 `git ls-remote` 核对同一条提交)→ release
+<https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.42>,三资源齐
+(installer **5,013,865 字节**,sha256
+`22321988049088bdc172ca5146212ef76a6b6171d48032cfcdc0cb75defd1dc4`;`.sig` 424 字节;
+`latest.json` 2,461 字节)。构建日志里三条硬断言都过:`Compiling tokenscope v0.1.42`、
+`ok Grandettoken.exe rebuilt (SHA-256 changed)`(旧 exe 先被 stash 走,确实重链过)、
+`ok import table clean (no WebView2Loader.dll)`;`corrupt .drectve` 那条链接器噪声照旧出现 3 次
+(已知、产物导入表干净,仍未追根)。更新端点实测 **200** 且与本地 `latest.json` **逐字节相同**
+(`cmp` 通过)、version 0.1.42、`platforms["windows-x86_64"].url` 指向 v0.1.42 的 asset、
+其 `signature` 与本地 `.sig` **逐字一致**(424 vs 424),线上 `.sig` 与本地也 `cmp` 相同,
+安装包公开下载 200、5,013,865 字节、sha256 与本地一致。签名走 `$env:CI`/空密码那条老路
+(RELEASE.md 第 3 步,从 bash export)。
+> 核验脚本这次自己先错过一回:按 Tauri v1 的顶层 `url` / `signature` 字段读,结果报出
+> "signature 不一致"和 `url=undefined` —— v2 的清单是 `platforms.<os-arch>.{url,signature}`。
+> 结论:核验脚本的字段名要照着实际 JSON 结构打一遍,别凭记忆。
+
 ## WorkBuddy 换成读桌面端凭据(2026-10-19,v0.1.41)
 
 **起点**:用户口径「现在还是已登录取数失败,可以通过 dsh-connect-workbuddy 学习一下如何取数」。
