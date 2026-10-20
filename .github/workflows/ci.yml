@@ -91,17 +91,18 @@ jobs:
       # make-webview2-static.ps1 从 cargo registry 里 Cargo.lock 钉住的那一版
       # webview2-com-sys 取 WebView2LoaderStatic.lib 重打 —— 所以必须先 cargo fetch。
       #
-      # 两个坑(第一版在 runner 上就是这么挂的):
+      # 两个坑(第一版在 runner 上就是这么挂的,已修):
       #   ① cargo fetch 必须**带 working-directory**。仓库根目录没有 Cargo.toml,
       #      cargo 会沿目录往上找,找到 app/src-tauri 的那份,然后想改它的 lock ——
-      #      `--locked` 当场报 "cannot update the lock file"。所以每条 cargo 都钉死目录。
-      #   ② pwsh 里 `./build/xxx.ps1` 不能直接执行(不是命令名),要写
-      #      `pwsh -File ./build/xxx.ps1`。
-      - name: cargo fetch + static WebView2 loader archive
+      #      `--locked` 当场报 "cannot update the lock file"。
+      #   ② pwsh 里 `./build/xxx.ps1` 不能直接执行(不是命令名),要写 `pwsh -File <绝对路径>`。
+      #      相对路径也不行:这一步的 working-directory 是 app/src-tauri,`./build/...` 指不到。
+      - name: cargo fetch (src-tauri) + static WebView2 loader archive
         shell: pwsh
+        working-directory: app/src-tauri
         run: |
           cargo fetch --locked
-          pwsh -File ./build/make-webview2-static.ps1
+          pwsh -File ${{ github.workspace }}/build/make-webview2-static.ps1
 
       - name: cargo check --all-targets (src-tauri)
         shell: pwsh

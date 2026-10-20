@@ -100,7 +100,7 @@ jobs:
           try {
             $env:TAURI_SIGNING_PRIVATE_KEY = $keyPath
             # pwsh 里必须用 -File 调本地脚本,`./build.ps1` 不是可执行命令名
-            pwsh -File ./build/build.ps1 bundle
+            pwsh -File ${{ github.workspace }}/build/build.ps1 bundle
             if ($LASTEXITCODE -ne 0) { throw "bundle failed: $LASTEXITCODE" }
           } finally {
             Remove-Item $keyPath -Force -EA SilentlyContinue

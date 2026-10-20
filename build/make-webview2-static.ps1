@@ -13,11 +13,26 @@ $ErrorActionPreference = 'Stop'
 $root     = Split-Path -Parent $PSScriptRoot
 $srcDir   = Join-Path $PSScriptRoot 'webview2-static'
 $outDir   = Join-Path $srcDir 'out'
-$mingwBin = Join-Path $env:USERPROFILE 'mingw64\bin'
-if (-not (Test-Path $mingwBin)) { $mingwBin = Join-Path $PSScriptRoot 'mingw64\bin' }
+
+# gcc 的候选位置,按顺序试,取第一个存在的:
+#   ① 用户目录(install-toolchain.ps1 装 winlibs 时落这里)
+#   ② 仓库内 build/mingw64(历史位置,保留兼容)
+#   ③ CI 上 msys2/setup-msys2 装到 C:\mingw64(ACTION 的 MINGW64 环境)
+# ③ 是必须的:CI runner 上①和②都不存在,而 RUSTUP/CARGO 都在默认位置 —— 以前
+# 这里只试①②,在 runner 上直接 throw "missing gcc",静态加载器归档永远生不出来。
+$mingwBin = $null
+foreach ($cand in @(
+    (Join-Path $env:USERPROFILE 'mingw64\bin'),
+    (Join-Path $PSScriptRoot 'mingw64\bin'),
+    'C:\mingw64\bin'
+  )) {
+  if (Test-Path (Join-Path $cand 'gcc.exe')) { $mingwBin = $cand; break }
+}
+if (-not $mingwBin) {
+  throw "missing gcc (tried `$USERPROFILE\mingw64\bin, build\mingw64\bin, C:\mingw64\bin) - run install-toolchain.ps1 first, or set up MSYS2"
+}
 $gcc  = Join-Path $mingwBin 'gcc.exe'
 $ar   = Join-Path $mingwBin 'ar.exe'
-if (-not (Test-Path $gcc)) { throw "missing gcc: $gcc (run install-toolchain.ps1 first)" }
 
 # Locate WebView2LoaderStatic.lib inside the cargo registry checkout of webview2-com-sys.
 # Pick the EXACT version pinned by Cargo.lock - multiple cached versions can coexist
