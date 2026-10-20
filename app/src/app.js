@@ -1813,8 +1813,9 @@ async function applyFormInner(form, remember = true) {
   if (PEEK.open) await pillPeekHide();
   const prevForm = currentForm();
   const changed = prevForm !== form;
-  // 切换到折叠形态时管理页没有意义(它的入口都在面板上),顺手关掉
-  if (form !== "panel" && manageOpen()) closeManage();
+  // 切换到折叠形态时管理页没有意义(它的入口都在面板上),顺手关掉 ——
+  // 这条路上不要把焦点还给底栏(那一刻底栏正要被 display:none 掉)。
+  if (form !== "panel" && manageOpen()) closeManage(false);
   // 只换 form-* 与 view-manage 类,**保留 docked / dock-left** ——
   // 整体覆写 className 会在吸附期间抹掉竖条形态,还把 8px 窗口强拉回形态尺寸
   document.body.classList.remove("form-panel", "form-compact", "form-pill");
@@ -2146,7 +2147,7 @@ function openManage() {
   const back = $("btnBack");
   if (back) back.focus();
 }
-function closeManage() {
+function closeManage(restoreFocus = true) {
   // 关掉设置页时把过期的弹层与编辑态一起作废:否则重开设置页会直接停在
   // 几分钟前那个「写入 · 确认」弹层上,而且还能点(报告 P2-31)
   MDL.sheet = null;
@@ -2158,7 +2159,9 @@ function closeManage() {
   const mgr = $("manage");
   const fromManage = !ae || ae === document.body || (mgr && mgr.contains(ae));
   document.body.classList.remove("view-manage");
-  if (fromManage) {
+  // restoreFocus=false 给"切形态顺手关掉管理页"那条路:底栏只在面板形态存在,
+  // 切紧凑条/胶囊时还给一个 display:none 的按钮,浏览器会立刻丢给 body,等于白聚焦。
+  if (restoreFocus && fromManage && document.body.classList.contains("form-panel")) {
     const k = $("lkKeys");
     if (k && k.offsetParent !== null) k.focus();
   }
@@ -2332,7 +2335,9 @@ $("mdlR").addEventListener("click", () => loadModels(true));
 // 特大字号 + 更新角标时内容宽 405px,最右的「隐藏」被挤出窗口点不到。
 // 排序也不放标题栏:加了排序键会重演同一个溢出(排序在 设置 → 显示 与 渠道页 ↑↓)。
 
-$("btnBack").addEventListener("click", closeManage);
+// 注意别直接写 addEventListener("click", closeManage):那样 click 的 Event 会
+// 落到 closeManage(restoreFocus) 这个形参上(Event 恒为真,行为碰巧对,但语义是错的)。
+$("btnBack").addEventListener("click", () => closeManage());
 // 设置页页签:渠道 / 显示 / 刷新与启动 / 关于
 function showTab(name) {
   const btns = [...$("mTabs").children];
