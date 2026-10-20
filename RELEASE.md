@@ -1,39 +1,60 @@
 # 发布流程
 
 > 交付形态:**只有 NSIS 安装包**(绿色单 exe 已下线,见 PROGRESS「追加调整 12」)。
+>
+> **现在发版是自动的**:推 `v*` tag 即触发 `.github/workflows/release.yml`,
+> 一条链跑完 构建 → 签名 → 生成 `latest.json` → 上传三件套 → 按字节核验。
+> 下面的手工步骤只在**本地验证**或自动链路挂了要手动补救时才需要走。
 
 产物是 **NSIS 安装包**(per-user,装到 `%LOCALAPPDATA%\Grandettoken`(实测确认,不是 Programs 子目录),
 **不需要管理员权限**)。更新走 GitHub Releases。
 
-## 一次性准备(已完成,别重复做)
+## 一次性准备
 
 | 项 | 位置 | 说明 |
 |---|---|---|
 | 签名私钥 | `C:\Users\wacil\.tauri\tokenscope.key` | ⚠ 丢了就没法再给已装用户推更新 |
 | 签名公钥 | `tauri.conf.json` 的 `plugins.updater.pubkey` | 公钥丢了可以重新生成,但要连私钥一起换 |
-| Tauri CLI | `cargo install tauri-cli` | 已装 |
+| Tauri CLI | `cargo install tauri-cli` | 已装(**runner 镜像里没有**,CI 的 workflow 自己装) |
+| GitHub secrets | `TAURI_SIGNING_PRIVATE_KEY`(私钥**内容**)+ `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`(空串) | 已设。私钥从 secret 读、写进 `RUNNER_TEMP` 后即删,不进日志 |
 
 **私钥必须备份到密码管理器。** 它和公钥是配对的:换了密钥对,老版本装的用户
 会因为签名校验失败而永远收不到更新,只能手动重装。
 
-## 每次发版
+**仓库必须保持 public。** 私有仓库的 release 资源需要鉴权,更新插件拉不到 —— 这是硬约束。
 
-### 1. 版本号两处同步
+## 每次发版(推 tag 就行)
 
-`app/src-tauri/Cargo.toml` 的 `version` 与 `app/src-tauri/tauri.conf.json` 的
-`version` **必须相等**。前者是 Rust 里 `env!("CARGO_PKG_VERSION")` 的来源,
-后者决定安装包文件名和更新清单里的版本号 —— 不一致会出现"装完检测到自己是新版"
-或者永远检测不到。`build/make-latest-json.js` 会断言这一步。
+### 1. 版本号**三处**同步
+
+`app/src-tauri/Cargo.toml`、`app/src-tauri/tauri.conf.json`、**`app/src-tauri/Cargo.lock`**
+的版本号必须相等:
+
+- 前者是 Rust 里 `env!("CARGO_PKG_VERSION")` 的来源
+- `tauri.conf.json` 决定安装包文件名与更新清单里的版本号
+- **`Cargo.lock` 最容易漏**。改了 Cargo.toml 不跑 `cargo fetch`,任何带 `--locked`
+  的 cargo 调用(CI 全是)都会报 `cannot update the lock file`;而本地早 fetch 过、
+  lock 被悄悄改好,所以只在干净 runner 上暴露
+
+```bash
+cd app/src-tauri && cargo fetch && cd ../..   # 让 lock 跟上
+```
+
+`build/make-latest-json.js` 会断言这三处一致,漏了在本地就红。
 
 ### 2. 提交并打 tag
 
 ```bash
-git add -A && git commit -m "release: v0.2.0"
-git tag v0.2.0
+git add -A && git commit -m "release: vX.Y.Z"
+git tag vX.Y.Z
 git push && git push --tags
 ```
 
-### 3. 构建(私钥必须在环境变量里)
+推 tag 即触发 release workflow。**它跑完后自动核验 13 项**
+(`build/verify-release.js`:端点 200 / 版本一致 / 签名与本地 `.sig` 逐字相同 /
+安装包可下且 sha256 相同 / 三件套齐 / notes 中文完好 / 仓库元数据),任一项不过则整个 job 红。
+
+### 3. 本地构建(只在验证或手动补救时)
 
 `.env` 文件**不起作用**,必须是真的环境变量:
 
