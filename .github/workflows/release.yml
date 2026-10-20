@@ -155,25 +155,6 @@ jobs:
           echo "size=$((Get-Item (Join-Path $dir $exe)).Length)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "installer=$exe sha256=$sha"
 
-      - name: Verify update endpoint shape (post-release)
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # 上传后立刻复查:latest.json 的 url/signature 与本地 .sig 逐字一致 ——
-        # 少了这一步,签错/传错要等用户报"更新失败"才发现(RELEASE.md 第 5 步的教训)。
-        run: |
-          $ver = "${{ steps.meta.outputs.version }}"
-          gh release view "v$ver" --json assets --jq '.assets[].name'
-          gh api "repos/${{ github.repository }}/releases/tags/v$ver" --jq '.assets[] | "\(.name) \(.size) \(.state)"'
-          $url = "https://github.com/${{ github.repository }}/releases/download/v$ver/latest.json"
-          $live = Invoke-RestMethod -Uri $url -MaximumRedirection 3
-          $local = Get-Content "app/src-tauri/target/release/bundle/nsis/latest.json" -Raw | ConvertFrom-Json
-          if ($live.version -ne $local.version) { throw "latest.json version mismatch: live=$($live.version) local=$($local.version)" }
-          $sig = Get-Content "app/src-tauri/target/release/bundle/nsis/Grandettoken_${ver}_x64-setup.exe.sig" -Raw
-          $liveSig = $live.platforms.'windows-x86_64'.signature.Trim()
-          if ($liveSig -ne $sig.Trim()) { throw 'signature in live latest.json differs from the local .sig' }
-          Write-Host "update endpoint OK: version=$($live.version) url=$($live.platforms.'windows-x86_64'.url)"
-
       - name: Create release and upload the three assets
         uses: softprops/action-gh-release@v2
         with:
@@ -189,6 +170,20 @@ jobs:
           append_body: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 上传**之后**才核验。第一版把核验放在了上传之前 —— 那时 release 还不存在,
+      # 拉 latest.json 只会拿到 GitHub 的 404 错误页,Invoke-RestMethod 直接抛,
+      # 于是"验证步骤失败"其实是顺序写反了(runner 上第八个坑)。
+      # 而且这一步与 build/verify-release.js 完全重复,那个脚本已经按字节核过
+      # 13 项(端点 200 / 版本 / 签名逐字 / 安装包 sha256 / 三件套 / notes 中文完好 /
+      # 元数据),不复用第二份还容易两边各自烂掉。所以这里直接调它。
+      - name: Verify the released artifacts end to end
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node build/verify-release.js
+          if ($LASTEXITCODE -ne 0) { throw "release verification FAILED - see the checks above" }
 
       - name: Post-release summary
         shell: pwsh
