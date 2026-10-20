@@ -17,16 +17,33 @@ $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
 # MinGW must live on an ASCII path: GNU ld cannot resolve its own sysroot files
 # when the toolchain sits under a non-ASCII directory (e.g. a Chinese repo path),
 # so it installs to the user profile instead of inside the repo.
-$mingwBin = Join-Path $env:USERPROFILE 'mingw64\bin'
+# Candidates, in order (first one that has gcc.exe wins):
+#   1. $USERPROFILE\mingw64\bin  - where install-toolchain.ps1 puts winlibs
+#   2. build\mingw64\bin         - historical in-repo location
+#   3. C:\mingw64\bin            - where CI runners put MSYS2 (msys2/setup-msys2
+#                                  with msystem MINGW64). #3 is required: on a
+#                                  runner 1 and 2 do not exist, and the old
+#                                  two-candidate lookup threw "missing toolchain
+#                                  path" before the build even started.
+$mingwBin = $null
+foreach ($cand in @(
+    (Join-Path $env:USERPROFILE 'mingw64\bin'),
+    (Join-Path $PSScriptRoot 'mingw64\bin'),
+    'C:\mingw64\bin'
+  )) {
+  if (Test-Path (Join-Path $cand 'gcc.exe')) { $mingwBin = $cand; break }
+}
 $tauriDir = Join-Path $root 'app\src-tauri'
 
 foreach ($p in @($cargoBin, $mingwBin)) {
-  if (-not (Test-Path $p)) { throw "missing toolchain path: $p  (run install-toolchain.ps1 first)" }
+  if (-not $p -or -not (Test-Path $p)) { throw "missing toolchain path: $p  (run install-toolchain.ps1 first)" }
 }
 
 $env:Path = "$cargoBin;$mingwBin;$env:Path"
-$env:CARGO_HOME  = Join-Path $env:USERPROFILE '.cargo'
-$env:RUSTUP_HOME = Join-Path $env:USERPROFILE '.rustup'
+# CARGO_HOME / RUSTUP_HOME: only set when not already present, so a CI runner that
+# caches them elsewhere (or a shared toolchain image) keeps its own.
+if (-not $env:CARGO_HOME) { $env:CARGO_HOME = Join-Path $env:USERPROFILE '.cargo' }
+if (-not $env:RUSTUP_HOME) { $env:RUSTUP_HOME = Join-Path $env:USERPROFILE '.rustup' }
 # Pin the GNU toolchain for this process tree. The project only builds with
 # *-pc-windows-gnu (MSVC would need the WebView2 loader as a separate DLL, see
 # PROGRESS), but `rustup default` can be pointed at msvc by other projects on
@@ -35,9 +52,9 @@ $env:RUSTUP_HOME = Join-Path $env:USERPROFILE '.rustup'
 $env:RUSTUP_TOOLCHAIN = 'stable-x86_64-pc-windows-gnu'
 
 # GNU binutils (ld, windres) cannot open files under non-ASCII paths: ld fails
-# on .o/.rlib inputs, windres fails on the exe icon. The toolchain lives under
-# USERPROFILE, so that path matters just as much as the repo root - check both
-# and fail fast here instead of letting the linker produce cryptic errors.
+# on .o/.rlib inputs, windres fails on the exe icon. So BOTH the repo root and the
+# toolchain location have to be ASCII. On a CI runner USERPROFILE is
+# C:\Users\runneradmin (ASCII) and CARGO_HOME lives there too, so the check holds.
 foreach ($p in @($root, $env:USERPROFILE)) {
   if ($p -match '[^\x00-\x7F]') {
     throw "path is not ASCII: $p  (GNU ld/windres require an ASCII repo path AND toolchain location)"
