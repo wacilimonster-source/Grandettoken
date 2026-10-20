@@ -29,7 +29,8 @@ pub fn current_key_fp(def: &providers::ProviderDef) -> String {
     if !matches!(def.auth, AuthKind::Keyring) {
         return String::new();
     }
-    match secrets::get(def.id) {
+    // 走 resolve 而不是 get:引用模式的渠道,值在密钥箱里(设计稿 product-vault-channel-bridge)
+    match secrets::resolve(def.id).map(|r| r.key().map(|k| k.to_string())) {
         Ok(Some(k)) if !k.trim().is_empty() => key_fp(&k),
         _ => String::new(),
     }
@@ -1024,13 +1025,18 @@ fn credentials(
         AuthKind::Keyring | AuthKind::WebSession => {
             let mut out: Vec<appauth::Credential> = Vec::new();
             let mut err = None;
-            match secrets::get(def.id) {
-                Ok(Some(k)) => out.push(appauth::Credential {
-                    token: k,
-                    source: String::new(),
-                    device_id: None,
-                }),
-                Ok(None) => {}
+            match secrets::resolve(def.id) {
+                Ok(secrets::Resolved::Inline(k)) | Ok(secrets::Resolved::Vault { key: k, .. }) => {
+                    out.push(appauth::Credential {
+                        token: k,
+                        source: String::new(),
+                        device_id: None,
+                    })
+                }
+                Ok(secrets::Resolved::None) => {}
+                // 断链:引用还在但箱子那条被删了。当"没有密钥"处理(发不了请求),
+                // 但界面会单独说清是断链 —— 见 `resolve` 的说明
+                Ok(secrets::Resolved::Dangling(_)) => {}
                 Err(e) => err = Some(e),
             }
             // WorkBuddy:**桌面端凭据优先**。它比网页会话活得久(accessToken 28 天、

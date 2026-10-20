@@ -1678,7 +1678,8 @@ function renderChCards() {
         : isApp
         ? `<div class="mini">凭据来自本机已登录的 ${esc(c.name)} 客户端,只读复用、不写回不刷新;` +
           `失效时打开一次 ${esc(c.name)} 即可;隐藏本渠道后连读取也会停止。</div>`
-        : `<div class="ccbtns">
+        : `<div class="ksrc" data-src="${c.id}">${srcRowHtml(c.id)}</div>
+          <div class="ccbtns">
             <input type="password" id="key-${c.id}" autocomplete="off" spellcheck="false"
               value="${esc(keyDraft[c.id] || '')}"
               placeholder="${c.hasKey ? "已保存 · 留空则不修改" : "粘贴 API Key"}">
@@ -1778,7 +1779,89 @@ function fillKeyHints() {
       }
     }
   });
+  fillKeySources();
 }
+
+// ───────────── 渠道密钥的来源(直接填 / 引用密钥箱)─────────────
+// 设计见 docs/product/product-vault-channel-bridge-2026-10-20.md(裁决 1–7 已批)。
+// 主线是**引用**:同一把钥匙不存两份,改箱子渠道立刻跟着变。
+const KEYSRC = {};        // 渠道 id → key_source 的结果
+let VAULTREF = [];        // [[渠道 id, 箱子条目 id], ...] 反查用
+
+/** 一次问出全部引用关系(箱子列表要标"正被谁用")。 */
+async function loadVaultRefs() {
+  try { VAULTREF = await invoke("vault_ref_map"); } catch { VAULTREF = []; }
+}
+
+/** 哪些渠道正引用这条箱子密钥。 */
+function refChannelsOf(vaultId) {
+  return VAULTREF.filter(([, v]) => v === vaultId).map(([c]) => c);
+}
+
+/** 渠道 id → 中文名(反查结果显示用)。 */
+function channelName(id) {
+  const c = CHANNELS.find((x) => x.id === id);
+  return c ? c.name : id;
+}
+
+/**
+ * 渠道卡上的「密钥来源」一行。
+ *
+ * 三种情形必须说清区别(裁决 4):
+ *   · 引用正常 → 显示引用的条目 + 尾号,给「改回手填」
+ *   · 断链     → 说"引用的条目已删除",**不能**含糊成"未配置"(该去箱子看,不是去重填)
+ *   · 直接填   → 什么都不用额外说,输入框本身就是来源
+ */
+function srcRowHtml(cid) {
+  const s = KEYSRC[cid];
+  if (!s || s.mode === "inline" || s.mode === "none") return vaultPickHtml(cid);
+  if (s.mode === "dangling") {
+    return `<div class="krow warn"><span class="k1" style="flex:1">引用的密钥箱条目已删除
+      <span class="desc">去密钥箱看看,或改回在这里直接填</span></span>
+      <button class="btn s" data-act="unvault" data-id="${esc(cid)}">改回手填</button></div>`;
+  }
+  // vault:把"用的是哪一条"直接写出来,别让用户猜
+  const which = s.vaultPlatform || s.vaultLabel
+    ? `${esc(s.vaultPlatform || "")}${s.vaultLabel ? " / " + esc(s.vaultLabel) : ""}`
+    : "箱子条目";
+  return `<div class="krow"><span class="k1" style="flex:1">密钥来源
+    <span class="desc">引用密钥箱 · ${which}${s.hint ? " · " + esc(s.hint) : ""}</span></span>
+    <button class="btn s" data-act="unvault" data-id="${esc(cid)}">改回手填</button></div>`;
+}
+
+/** "或从密钥箱选一把"——把箱子里的条目平铺成下拉(按平台分组)。 */
+function vaultPickHtml(cid) {
+  if (!VAULT.length) return "";
+  const opts = VAULT.map(
+    (it) => `<option value="${esc(it.id)}">${esc(it.platform)} / ${esc(it.label)} · ${esc(it.hint)}</option>`
+  ).join("");
+  return `<div class="ccbtns">
+      <select id="vref-${cid}" class="kref">${opts}</select>
+      <button class="btn" data-act="usevault" data-id="${cid}" title="让这个渠道改用箱子里那把(会清掉这里手填的值)">改用这把</button>
+    </div>`;
+}
+
+/** 补每张卡上的来源一行(读到就替换掉占位)。 */
+async function fillKeySources() {
+  // 「或从密钥箱选一把」要用到箱子列表;用户可能没打开过密钥箱页签,这里按需补一次。
+  if (!VAULT.length) {
+    try { VAULT = await invoke("vault_list"); } catch { /* 读不出来就不显示下拉 */ }
+  }
+  await loadVaultRefs();
+  for (const c of CHANNELS) {
+    const box = document.querySelector(`.ksrc[data-src="${c.id}"]`);
+    if (!box) continue;
+    if (c.authSource !== "keyring") { box.innerHTML = ""; continue; }
+    try {
+      KEYSRC[c.id] = await invoke("key_source", { id: c.id });
+    } catch (e) {
+      // 读不到来源时退回"直接填"的样子 —— 不显示未经验证的引用状态
+      KEYSRC[c.id] = { mode: "inline" };
+    }
+    box.innerHTML = srcRowHtml(c.id);
+  }
+}
+
 
 /** 管理页里的胶囊渠道选择:点一下加入/移出轮播列表。 */
 function renderPillPick() {
@@ -2946,6 +3029,38 @@ $("manage").addEventListener("click", async (e) => {
     } catch (err) {
       showToast("保存失败:" + err, true);
     }
+  } else if (a === "usevault") {
+    // 让渠道改用密钥箱里的某一把。后端会先写指针、再**清掉手填的值**(裁决 7)——
+    // 留着就是两份真相,而且箱子条目被删后还可能被回退使用。
+    const sel = $("vref-" + id);
+    const vid = sel ? sel.value : "";
+    if (!vid) return;
+    const it = VAULT.find((x) => x.id === vid);
+    try {
+      await invoke("set_key_ref", { id, vaultId: vid });
+      await refresh();
+      renderChCards();
+      fillKeyHints();
+      showToast("已改用密钥箱里的那把" + (it ? `(${it.platform} / ${it.label})` : "") + " · 手填的值已清除");
+      const card = document.querySelector(`.ccard[data-id="${id}"]`);
+      if (card) {
+        card.classList.add("saved");
+        setTimeout(() => card.classList.remove("saved"), 1400);
+      }
+    } catch (err) {
+      showToast("改用失败:" + err, true);
+    }
+  } else if (a === "unvault") {
+    // 取消引用,改回"直接填"。
+    try {
+      await invoke("clear_key_ref", { id });
+      await refresh();
+      renderChCards();
+      fillKeyHints();
+      showToast("已改回直接填 · 现在可以在这个渠道上贴密钥了");
+    } catch (err) {
+      showToast("取消失败:" + err, true);
+    }
   } else if (a === "delkey") {
     // I3 行内确认:原生 confirm 在无边框透明置顶窗上风格脱节又阻塞
     const card = act.closest(".ccard");
@@ -3651,6 +3766,8 @@ async function loadVault() {
     VAULT_ERR = String(e);
     showToast("读密钥箱失败:" + e, true);
   }
+  // 反查关系要在渲染前就位:列表里要标"正被谁使用",而那是渲染时的同步判断
+  await loadVaultRefs();
   renderVault();
 }
 
@@ -3715,11 +3832,16 @@ function renderVault() {
       const rows = items
         .map((it) => {
           const plain = VAULT_REVEAL[it.id];
+          // 反查:这把钥匙正被哪些渠道引用(裁决 4 —— 删前要说清后果,平时要看得见)
+          const refs = refChannelsOf(it.id);
+          const refLine = refs.length
+            ? `<br><span class="dim">🔗 正被 ${refs.map((c) => esc(channelName(c))).join("、")} 使用</span>`
+            : `<br><span class="dim">未被任何渠道使用</span>`;
           return `<div class="krow"><span class="k1">${esc(it.label)} · <span class="khint">${esc(it.hint)}</span>
             ${it.note ? `<br><span class="dim">${esc(it.note)}</span>` : ""}
             <br><span class="dim">${new Date(it.createdAt * 1000).toLocaleDateString("zh-CN")} 建${
               it.updatedAt !== it.createdAt ? " · " + new Date(it.updatedAt * 1000).toLocaleDateString("zh-CN") + " 改" : ""
-            }</span></span>
+            }</span>${refLine}</span>
             <button class="btn s" data-act="vcopy" data-id="${esc(it.id)}" title="明文不回界面,直接进剪贴板">复制</button>
             <button class="btn s" data-act="vreveal" data-id="${esc(it.id)}" title="显示明文,8 秒后自动隐">${
               plain ? "收起" : "显示"
@@ -3761,9 +3883,19 @@ async function vaultSave() {
 function vaultDel(id) {
   const row = document.querySelector(`.krow [data-act="vdel"][data-id="${id}"]`);
   if (!row) return;
+  // 裁决 4:被渠道引用时要拦一下并说清后果 —— 但**允许删**(拦死会让用户没法清理)。
+  // 关键是别把"删掉后渠道会怎样"藏起来:删完后渠道卡会显示"引用的条目已删除"。
+  const refs = refChannelsOf(id);
+  const warn = refs.length
+    ? `<span class="err">这把正被 ${refs.map((c) => esc(channelName(c))).join("、")} 使用。
+       删掉后 ${refs.length > 1 ? "这些渠道" : "它"}就没密钥可用了(会显示「引用的条目已删除」,` +
+      `不会自动改用别的)。</span><br>`
+    : "";
   const strip = document.createElement("span");
   strip.className = "cfrm";
-  strip.innerHTML = `删除这一把?<button class="btn s danger" data-act="vdel-yes" data-id="${esc(id)}">删除</button>
+  strip.innerHTML = `${warn}删除这一把?<button class="btn s danger" data-act="vdel-yes" data-id="${esc(id)}">${
+    refs.length ? "仍然删除" : "删除"
+  }</button>
     <button class="btn s" data-act="vdel-no">取消</button>`;
   row.parentElement.appendChild(strip);
   row.remove();

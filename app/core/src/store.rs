@@ -284,6 +284,23 @@ impl Store {
             );
             CREATE INDEX IF NOT EXISTS idx_vault_platform
                 ON vault_items (platform, created_at DESC);
+
+            -- 渠道 → 密钥箱条目的**引用关系**(设计稿 `product-vault-channel-bridge`)。
+            --
+            -- 这张表里**没有任何密钥值**,只有 id 之间的关系 —— 密文始终在凭据管理器里。
+            -- 为什么需要它:密钥值不落库,就没法靠"把所有密钥扫一遍比对"来回答
+            -- 「这把被谁用了」;而反查是删除前的拦截与列表标注的必需品。
+            --
+            -- 一个渠道最多一条引用(裁决 5);一个箱子条目可以被多个渠道引用(裁决 6)。
+            -- 断链**故意保留**:箱子条目被删后这行还在,界面才能说"引用的条目已删除"(裁决 4),
+            -- 而不是含糊地退回"未配置密钥"。
+            CREATE TABLE IF NOT EXISTS vault_refs (
+                channel_id TEXT PRIMARY KEY,
+                vault_id   TEXT    NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_vault_refs_vault
+                ON vault_refs (vault_id);
             "#,
             )
             .map_err(|e| format!("初始化数据库失败: {e}"))?;
@@ -1221,6 +1238,73 @@ impl Store {
             .execute("DELETE FROM vault_items WHERE id = ?1", params![id])
             .map_err(|e| format!("删密钥箱索引失败: {e}"))?;
         Ok(())
+    }
+
+    // ── 渠道 → 箱子条目的引用关系 ──────────────────────────────────────────
+    //
+    // 只在 SQLite 里记 id 关系,不碰密文。详见 init_schema 里 vault_refs 的注释。
+
+    /// 让 `channel_id` 引用箱子里的 `vault_id`(已有引用则覆盖 —— 裁决 5 只允许一把)。
+    pub fn vault_ref_set(&self, channel_id: &str, vault_id: &str) -> Result<(), String> {
+        // store.rs 里没有时间工具函数(created_at 一律由调用方给):
+        // 这里的 created_at 只用于排查"这引用什么时候建的",不需要可注入的时钟。
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        self.conn
+            .execute(
+                "INSERT INTO vault_refs (channel_id, vault_id, created_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(channel_id) DO UPDATE SET vault_id = excluded.vault_id",
+                params![channel_id, vault_id, created_at],
+            )
+            .map_err(|e| format!("写密钥引用失败: {e}"))?;
+        Ok(())
+    }
+
+    /// 该渠道引用的是哪个箱子条目。`Ok(None)` = 用的是"直接填在渠道卡上"的密钥。
+    pub fn vault_ref_of(&self, channel_id: &str) -> Result<Option<String>, String> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT vault_id FROM vault_refs WHERE channel_id = ?1")
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query_map(params![channel_id], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        Ok(rows.next().and_then(|r| r.ok()))
+    }
+
+    /// 取消引用(改回"直接填"或清除密钥时用)。本来没有引用也算成功。
+    pub fn vault_ref_clear(&self, channel_id: &str) -> Result<(), String> {
+        self.conn
+            .execute("DELETE FROM vault_refs WHERE channel_id = ?1", params![channel_id])
+            .map_err(|e| format!("清除密钥引用失败: {e}"))?;
+        Ok(())
+    }
+
+    /// 反查:有哪些渠道正引用这个箱子条目。删前拦截与列表标注都靠它。
+    pub fn vault_ref_channels(&self, vault_id: &str) -> Result<Vec<String>, String> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT channel_id FROM vault_refs WHERE vault_id = ?1 ORDER BY channel_id")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![vault_id], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// 全部引用关系,一次读出来给界面批量渲染(避免逐条箱子条目各查一次)。
+    pub fn vault_ref_pairs(&self) -> Result<Vec<(String, String)>, String> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT channel_id, vault_id FROM vault_refs")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| e.to_string())?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
     pub fn vault_get(&self, id: &str) -> Result<Option<VaultItem>, String> {

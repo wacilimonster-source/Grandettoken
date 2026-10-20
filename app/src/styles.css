@@ -835,6 +835,17 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
   margin-top:calc(7px*var(--u));font-size:max(11px,calc(11.5px*var(--u)))}
 .krow .k1{flex:1;min-width:0;color:var(--tx2);word-break:break-all}
 .krow .khint{font-family:Consolas,monospace;color:var(--tx3)}
+/* 断链提醒:引用的箱子条目被删了 —— 必须与"未配置密钥"看起来不同,
+   否则用户会去渠道卡重填(错误的方向),而不是去密钥箱看 */
+.krow.warn{border-color:#8a6d2f;background:#1f1a10}
+.krow.warn .k1{color:#e8c07d}
+/* 「密钥来源」区块与"从密钥箱选"的下拉(v0.1.49) */
+.ksrc:empty{display:none}
+.ksrc .ccbtns{margin-top:calc(6px*var(--u))}
+.kref{flex:1;min-width:0;background:#0e1015;border:1px solid var(--line2);color:var(--tx2);
+  border-radius:calc(7px*var(--u));padding:calc(5px*var(--u)) calc(6px*var(--u));
+  font-size:max(11px,calc(11.5px*var(--u)))}
+.kref:focus{outline:none;border-color:var(--ac)}
 .reveal{font-family:Consolas,monospace;font-size:max(10.5px,calc(11px*var(--u)));color:#8ee9b8;
   word-break:break-all;background:#132219;border:1px solid #2f6b43;border-radius:calc(7px*var(--u));
   padding:calc(6px*var(--u)) calc(8px*var(--u))}
