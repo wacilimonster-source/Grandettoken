@@ -267,6 +267,29 @@ gitignore 的),Windows runner 上 GNU ld 链接整套 Tauri 依赖树既慢又�
 修完后 **ci 全绿**(core 229 passed / 0 failed + 两 crate check + `node --check`,
 runner 上实测 7 分钟),release 那条也重跑通过。
 
+### 后来还踩了三个(5–7),其中 ⑥⑦ 是发版链路真正的洞
+
+前四个修完我误以为 release 也能通了,结果 v0.1.44 / v0.1.45 各重跑一次,
+又暴露三个。**尤其 ⑥ 说明"本地能跑"不等于"CI 能跑"**:
+
+| # | 现象(runner 上的原话) | 根因 | 修法 |
+|---|---|---|---|
+| 5 | `missing toolchain path: C:\Users\runneradmin\mingw64\bin`(`build.ps1:24`) | `build.ps1` 与 `make-webview2-static.ps1` 同一个病:只认本机那两个 gcc 位置。runner 上 msys2 在 `C:\mingw64` | 三个候选按顺序试。顺带把 `CARGO_HOME`/`RUSTUP_HOME` 改成"未设置才覆盖"(CI 上可能指向共享缓存) |
+| 6 | `webview2-com-sys 0.38.2 is pinned by Cargo.lock but its ... .lib is not in <registry>` | release.yml 里 bundle 前**没 fetch src-tauri 的依赖**。前面的 "Run core tests" 只 fetch 了 `app/core` 的,而静态加载器要从 **src-tauri 的 registry 源码检出**里取 `WebView2LoaderStatic.lib` | 加一步 `cargo fetch --locked`(带 working-directory)。ci.yml 本来就有这步,所以没暴露 |
+| 7 | `error: no such command: tauri`(`cargo tauri build` exit 101) | **runner 镜像里没有 cargo-tauri**。RELEASE.md「一次性准备」里那条 `cargo install tauri-cli` 是给本机的,CI 里从来没装 | 加一步 `cargo install tauri-cli --version '^2' --locked` |
+
+**⑥ 还连带一个更值得记的教训:Cargo.lock 是版本号的第三处,升版本时最容易漏。**
+我把 `Cargo.toml` 与 `tauri.conf.json` 升到 0.1.45 时没跑 `cargo fetch`,
+lock 里 `tokenscope` 还是 0.1.44 —— 任何带 `--locked` 的 cargo 调用都会报
+`cannot update the lock file`。**本地复现不出来,因为本地早已 fetch 过、lock 被悄悄改好了**,
+只在干净的 runner 上暴露。治本不靠记住:`build/make-latest-json.js` 加第三处断言,
+漏了就在本地这步红掉(双向验证过:改回 0.1.44 → 红 + 退出 1 并指明要跑 cargo fetch;
+恢复 → 越过这步)。
+
+而且我第一次"修"lock 其实是失败的 —— 把修复前的 `.bak` 覆盖了回去,
+`git status` 显示干净是因为文件内容和 HEAD 一致,**而 HEAD 里那一版就是错的**。
+教训:**"文件没改"和"文件是对的"是两件事,要看内容,不能只看 status。**
+
 **另一个教训:发版核验不能靠终端回显。** 用 PowerShell 的 `Invoke-WebRequest` 拉
 线上 `latest.json`,`$resp.Content` 里的中文全是 GBK 乱码,一度以为"发出去的说明是乱的";
 按 UTF-8 读文件 + 数 `U+FFFD` 为 0,确认线上内容是好的。
