@@ -119,3 +119,12 @@ jobs:
           node --check build/verify-ui-0923.js
           node --check build/shot-panel.js
           node --check build/make-latest-json.js
+
+      # 推送前扫凭据。以前只在本地手动跑 —— 而"只在本地跑"等于"忘了就不跑",
+      # 这一步恰恰是最不该忘的。它扫的是 git ls-files,所以 untracked 的文件不会
+      # 被算进去(那是设计:只关心真正会推上去的东西)。
+      - name: scan for credentials
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File build/scan-secrets.ps1
+          if ($LASTEXITCODE -ne 0) { throw "credential-like strings found - see the HIT lines above" }

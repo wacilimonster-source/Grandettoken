@@ -97,6 +97,52 @@ $patterns = @(
 # and a base64 body on the second.
 $miniShape = '(?m)^untrusted comment:([^\r\n]*)\r?\n([A-Za-z0-9+/=]{40,})'
 
+# ---- known public test fixtures -------------------------------------------
+#
+# The scanner cannot tell a FIXTURE from a real leak, and this repo deliberately
+# contains a few strings shaped exactly like credentials - their whole point is
+# to prove the redaction actually works. Without an allowlist every run reports
+# them, and a check that always fails is a check nobody reads (alert fatigue is
+# worse than no alert).
+#
+# Allowlist by EXACT STRING, never by file or directory - a file-level skip would
+# also hide the real leak sitting next to the fixture. Every entry must say where
+# it comes from; adding one means answering "whose is it, and why is it safe".
+#
+# ASCII-only on purpose: PowerShell 5.1 reads .ps1 as GBK on zh-CN Windows, so a
+# UTF-8 Chinese comment here corrupts the parse (hit 2026-10-20 - the script died
+# with "unexpected token" and the scan silently stopped checking anything).
+$knownFixtures = @(
+  # The public example from the jwt.io home page: header {"alg":"HS256"},
+  # payload {"sub":"1234567890"}. diaglog.rs uses it to assert the raw token
+  # never reaches the digest.
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U',
+  # A synthetic "very long access token" in diaglog.rs: right shape, invented value.
+  'eyJhbGciOiJIUzI1NiJ9.very-long-access-token-value-0123456789'
+)
+
+# Skip a hit when it is part of one of the known fixtures. Reported, not silent.
+#
+# Matching is fiddly because the patterns capture only a SLICE, and the slice may
+# carry a prefix the fixture does not have:
+#   pattern `token = "..."`  -> capture `token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9`
+#   pattern `eyJ...\.eyJ...` -> capture `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIi...`
+#   the fixture itself       -> `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIi....dozjgN...`
+# Neither plain containment direction covers the first case (the capture has extra
+# text the fixture lacks). So compare on the fixture's DISTINCTIVE HEAD: if the
+# capture contains the first N characters of a fixture, it is that fixture's text.
+# N is small enough that a JWT header (always `{"alg":...,"typ":"JWT"}`) is well
+# inside it, and long enough that a real credential will not accidentally contain it.
+$fixtureHead = 24
+function Test-KnownFixture([string]$value) {
+  $v = $value.Trim()
+  foreach ($f in $knownFixtures) {
+    $head = $f.Substring(0, [Math]::Min($fixtureHead, $f.Length))
+    if ($v.Contains($head) -or $f.Contains($v)) { return $true }
+  }
+  return $false
+}
+
 # The same key as Tauri takes it (TAURI_SIGNING_PRIVATE_KEY): base64 of the WHOLE
 # file. Public and private keys share the base64 of "untrusted comment: minisign"
 # - which is why an earlier version of this script refused to match that prefix at
@@ -130,6 +176,7 @@ function Show-Hit([string]$rel, [string]$detail) {
 }
 
 $hits = 0
+$skipped = 0
 foreach ($f in $files) {
   # $files may hold FileInfo (whitelist path) or plain strings (git ls-files path)
   $full = if ($f -is [string]) { $f } else { $f.FullName }
@@ -147,6 +194,10 @@ foreach ($f in $files) {
   if (-not $c) { continue }
   foreach ($p in $patterns) {
     foreach ($m in [regex]::Matches($c, $p)) {
+      if (Test-KnownFixture $m.Value) {
+        $skipped++
+        continue
+      }
       Show-Hit $rel (Get-Preview $m.Value)
       $hits++
     }
@@ -176,6 +227,12 @@ foreach ($f in $files) {
 }
 
 Write-Host ""
+# Report skipped fixtures too - never silently. Otherwise the allowlist becomes an
+# invisible hole: if someone ever adds a real token to that list, the output looks
+# exactly the same.
+if ($skipped -gt 0) {
+  Write-Host ("skipped {0} known test fixture(s) (see `$knownFixtures in this script)" -f $skipped)
+}
 if ($hits -eq 0) {
   Write-Host "CLEAN - no credential-like strings found."
 } else {
