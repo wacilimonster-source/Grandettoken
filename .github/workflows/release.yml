@@ -60,6 +60,14 @@ jobs:
           rustup target add x86_64-pc-windows-gnu
           rustc -vV
 
+      # cargo-tauri 不在 runner 镜像里(RELEASE.md「一次性准备」里那条 cargo install
+      # 是给本机的)。缺了它 bundle 会报 `error: no such command: tauri` ——
+      # runner 上第七个坑:前六个修完之后,真正卡住的居然是这儿。
+      # 版本钉一下:CLI 的小版本升级偶尔会改 bundle 参数,钉住便于复现。
+      - name: Install cargo-tauri (bundler CLI)
+        shell: pwsh
+        run: cargo install tauri-cli --version '^2' --locked
+
       - name: Install MinGW-w64 (LLVM+MinGW distribution)
         uses: msys2/setup-msys2@v2
         with:
