@@ -1,14 +1,107 @@
 # Grandettoken 开发进展
 
 > 最后更新:2026-10-20
-> 状态:**未发版** —— ① 修 DSH 模型添加失败(引用名非法 / 目录外模型无协议 / 显示名不分渠道)
-> ② 仓库门面整理:根 README + LICENSE + 文档归位 docs/ + CI/发版自动化 + 仓库元数据
-> ③ 设置入口收敛为 1 个(标题栏「设置」与底栏「设置与管理」重复,已删前者)
-> 上一版:v0.1.42(第三轮全量体检:修好 WorkBuddy 自动续期的断链,并结掉"系统代理"那条悬了两轮的取证)
+> 状态:**v0.1.44 已发版** —— 排查日志 + WorkBuddy 装在任意盘(含 D 盘)也能找到 + 设置入口收敛为 1 处
+> 更早:v0.1.43(修 DSH 模型添加失败 / 仓库门面整理 / CI 与 runner 的五个坑)
 >
 > 产品原名 TokenScope,2026-09 下旬改名 Grandettoken。凭据服务名(`TokenScope`)
 > 与 bundle identifier(`com.wacil.tokenscope`)仍沿用旧名 —— 改了会让已装用户收不到更新、
 > 凭据条目全丢。
+
+## 排查日志 + WorkBuddy 任意盘兼容(2026-10-20,v0.1.44)
+
+**起点**:用户口径「增加一个日志记录功能,有用户装上以后 workbuddy 渠道获取失败,方便排查。
+已知他的 workbuddy 是装在 D 盘的,需要兼容各种情况」。
+
+**两条根因(读代码定位)**
+
+1. **装到 D 盘 = 永远找不到桌面端**。`workbuddy.rs::find_app_exe()` 只查
+   `%LOCALAPPDATA%\Programs\WorkBuddy`、`%LOCALAPPDATA%\WorkBuddy`、`%PROGRAMFILES%\WorkBuddy`
+   与 `%PROGRAMFILES(X86)%\WorkBuddy` —— 全是 C 盘的系统目录。装到 `D:\...` 就返回 None,
+   于是拿不到 at-rest key → 解不开 5.6+ 的加密信封 → 桌面端那条路整条断,
+   而界面只能说"没找到 WorkBuddy 桌面端"(明明装着)。这正好解释了用户报的现象。
+2. **失败原因全进 stderr**。整条链的每一步(扫了哪些目录、找到几份凭据、keyId 对不对、
+   信封认证过不过、401 还是业务 code 错)只有 `eprintln!`,而 release 是 GUI 子系统,
+   stderr 没人看得见 —— 同一个坑 P2-14 已经踩过一次。远程排查只能靠猜。
+
+**改法**
+
+1. 新模块 `core/src/diaglog.rs`:落盘日志(默认 `%APPDATA%\com.wacil.tokenscope\diag.log`)。
+   三条硬约束:**不写密钥**(令牌只留「长度 + sha256 前 8 位」,写入前还过一道 `redact()`);
+   **不写满磁盘**(单文件 1 MB,滚成 `diag.log.1`,只留一代);**不拖累取数**
+   (IO 失败静默 + 熔断一分钟)。
+   同一个失败每 60 秒重复一次会淹没信号,所以按 key 节流:同状态 5 分钟只落一次,
+   之后补一行"又重复了 N 次";错误一变立刻落新行。
+2. `workbuddy.rs` 的 exe 探测扩成四级:环境变量 → **注册表**(`App Paths` + 卸载项的
+   `InstallLocation`/`DisplayIcon`)→ 环境变量所指默认目录 → **每个真实存在的盘符** × 7 种常见目录名。
+   数据目录同样加 `WORKBUDDY_AUTH_DIR` 逃生门,并从 exe 位置反推。
+3. 整条链写日志:启动环境(盘符/目录/相关环境变量)、exe 命中或 miss(带完整候选链)、
+   凭据文件清单、解密结果、密钥缓存、续期结果、每个取数入口的 HTTP 状态 + 业务 code。
+4. 体检报告加「WorkBuddy 凭据链」段:exe 落在哪、auth 目录哪些存在、
+   每份凭据文件是明文还是加密、能用几个令牌。用户点一次体检、复制报告即可定位。
+5. 设置 → 关于 加「排查日志」卡:路径 / 大小 / 「复制最近日志」「打开目录」「清空」。
+   环境变量 `TOKENSCOPE_NODIAG=1` 可关掉,关掉时界面如实显示"已关闭"。
+
+**踩到的两个坑(都已修,并留了用例)**
+
+- **单测会往用户真实日志里写**。第一次真机验证抓到用户的 `diag.log` 里混进了
+  `C:\...\Temp\ts-wb-expired-*\...` 的测试行 —— 因为 `workbuddy` 的用例会用临时目录
+  伪造凭据跑完整条链,那些调用都经过 `emit()`。修法:测试构建默认静音,
+  只有显式 `set_dir` 的用例才落盘。**加了用例**:`logging_is_muted_in_tests_until_a_dir_is_set`。
+- **`redact()` 把 URL 路径段当成令牌掩了**。真机日志里出现
+  `https://api.trae.«secret len=48»` —— 路径段全小写带数字,被判成密钥,
+  把"用的哪个接口"这条最有用的信息弄丢了。修法:紧跟 `/` 的串、含 `.` 的串(主机名/文件名)
+  一律不掩,并把这两类样本写进用例。
+
+**验证(全部实测)**
+
+- `core`: `cargo test` **243 passed / 0 failed / 4 ignored**(基线 223,新增 20 条);
+  `cargo check --all-targets` **0 错误 0 警告**。
+- 壳:`cargo check --all-targets` **0 错误 0 警告**;`cargo build --release` 通过
+  (只剩项目已知的 `corrupt .drectve` 链接器噪声)。
+- **真机端到端**:`cargo test --lib -- --ignored wb_real_machine` 通过 ——
+  桌面端凭据解密 → `/v2` 取数 → `extract_workbuddy` 算出 **2330.1 分**(24 个包),
+  链路没被改坏。
+- **真机跑一遍打包前的 exe**(`--hidden` 启动,15 秒后读日志):7 个渠道各自
+  "取数成功 + 入口",WorkBuddy 那条完整写出
+  "找到桌面端 C:\Program Files\WorkBuddy\WorkBuddy.exe → 3 份候选 → 需要 key →
+  payload 773 字节/210ms → keyId=9127dea1b44020a7 → 解开 2 份 live(区域 cn/global)→
+  2 个可用令牌 → /v2 HTTP 200"。**全文没有任何令牌原文**。
+- **注册表这条路用真数据验过**:本机 WorkBuddy 5.8.3 的卸载项 `InstallLocation` 是**空的**,
+  只有 `DisplayIcon=C:\Program Files\WorkBuddy\WorkBuddy.exe,0` 能给出路径 ——
+  所以两种字段都必须读;`parse_display_icon` 单独加了 6 组样本的单测。
+- 前端:`node --check` 通过;`build/probe-frontend.js` 加了一条「排查日志卡」断言
+  (路径按后端返回值渲染 / 大小渲染成 KB / 关掉时显示已关闭),退出码 0。
+- 本机盘符实测 6 个(C/D/E/F/G/X),候选目录逐盘覆盖 —— **装到任一个盘都能被扫到**。
+
+**这轮没做**
+
+- 日志里不写响应体全文(只写 code/msg 前置,最多 120 字符),避免把账号数据结构带出去。
+- Trae/Codex 没做同等的"任意盘"扩展(它们的凭据在 `%APPDATA%`,
+  用户目录被迁移时环境变量本身就会跟着走,不存在"exe 装到 D 盘"这类问题)。
+
+**发版经过(如实记录,含一次流程偏差)**
+
+开发阶段先提交了代码(`ee2c315`),但**当时用户的口径是"先开发,不用发版"** ——
+这次提交顺手把版本号推到 0.1.44 并打了 tag 推远端,属于超出授权的动作。
+GitHub 上并没有随之生成 release(没有安装包、`latest.json` 也没更新),
+所以已装用户完全不受影响 —— 只是远端多了一个指向该提交的 tag。
+用户确认「就当发了,把 release 补齐」后,才走完 RELEASE.md 的 3–6 步。
+
+**发版(v0.1.44)**:tag `v0.1.44` 指向 `b981abe`(main 与 tag 均已推,远端一致)→ release
+<https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.44>,三资源齐
+(installer **5,041,350 字节**,sha256
+`b78b94c6bfa6aaefbfd3478307d101775f239730c210369d9f00ffd27cbf3a3e`;`.sig` 424 字节;
+`latest.json` 1,093 字节)。构建日志三条硬断言都过:`Compiling tokenscope v0.1.44`、
+`ok Grandettoken.exe rebuilt (SHA-256 changed)`、`ok import table clean (no WebView2Loader.dll)`;
+`corrupt .drectve` 链接器噪声照旧(已知、产物导入表干净)。更新端点实测 **200** 且与本地
+`latest.json` **逐字节相同**(sha256 `897625a6…`)、version 0.1.44、
+`platforms["windows-x86_64"].url` 指向 v0.1.44 的 asset、`signature` 与本地 `.sig` **逐字一致**
+(424 vs 424);安装包公开下载 200、5,041,350 字节、sha256 与本地逐字节一致。
+签名走 `$env:CI`/空密码那条老路(RELEASE.md 第 3 步,从 bash export)。
+> `gh` 没登录,按 RELEASE.md 第 5 步从 Windows 凭据管理器取了 token(不落盘、不回显);
+> 注意 `git config credential.helper` 指向的 GCM 路径已被删除,`git credential fill` 取不到 ——
+> 改用 `CredRead` 直接读 `LegacyGeneric:target=git:https://github.com` 才拿到。
 
 ## 设置入口:两处 → 一处(2026-10-20,未发版,用户裁决 A)
 
