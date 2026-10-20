@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>全量代码体检报告 · Grandettoken · 2026-10-20</title>
+<style>
+  :root{
+    --bg:#0f1115; --fg:#e6e8ee; --mut:#9aa3b2; --line:#262b36; --card:#151922;
+    --ac:#19b8c4; --ok:#2fbf71; --warn:#f5a623; --bad:#e5484d; --p0:#e5484d; --p1:#f5a623;
+    --p2:#4a9eff; --p3:#8b93a5;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f6f7f9; --fg:#1b1f27; --mut:#5b6472; --line:#dfe3ea; --card:#fff;
+           --p0:#c62b30; --p1:#b5730a; --p2:#1a66c9; --p3:#6b7280; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:15px/1.75 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1080px;margin:0 auto;padding:28px 22px 90px}
+  h1{font-size:26px;margin:0 0 4px}
+  h2{font-size:20px;margin:38px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+  h3{font-size:16px;margin:22px 0 8px}
+  p{margin:8px 0}
+  code{background:rgba(127,127,127,.16);padding:1px 5px;border-radius:4px;font-size:13px;
+    font-family:"Cascadia Mono",Consolas,monospace;word-break:break-all}
+  pre{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px;
+    overflow-x:auto;font-size:12.5px;line-height:1.6;font-family:"Cascadia Mono",Consolas,monospace}
+  .sub{color:var(--mut);font-size:13px}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:rgba(127,127,127,.08);font-weight:600}
+  .tag{display:inline-block;padding:0 8px;border-radius:10px;font-size:12px;border:1px solid var(--line);
+    white-space:nowrap;font-weight:600}
+  .t-p0{color:var(--p0);border-color:var(--p0)}
+  .t-p1{color:var(--p1);border-color:var(--p1)}
+  .t-p2{color:var(--p2);border-color:var(--p2)}
+  .t-p3{color:var(--p3);border-color:var(--p3)}
+  .t-ok{color:var(--ok);border-color:var(--ok)}
+  .note{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:12px 0}
+  .note.warn{border-left:3px solid var(--warn)}
+  .note.bad{border-left:3px solid var(--bad)}
+  .note.ok{border-left:3px solid var(--ok)}
+  .note.info{border-left:3px solid var(--ac)}
+  .verdict{border:1px solid var(--bad);border-left-width:4px;background:var(--card);
+    border-radius:8px;padding:14px 16px;margin:18px 0}
+  .verdict b{color:var(--bad)}
+  ul,ol{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+  .cards{margin-top:10px}
+  .bug{background:var(--card);border:1px solid var(--line);border-radius:9px;padding:12px 15px;margin:11px 0}
+  .bug.p0{border-left:4px solid var(--p0)}
+  .bug.p1{border-left:4px solid var(--p1)}
+  .bug.p2{border-left:4px solid var(--p2)}
+  .bug.p3{border-left:4px solid var(--p3)}
+  .bhead{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
+  .bid{color:var(--mut);font-family:"Cascadia Mono",Consolas,monospace;font-size:12.5px}
+  .btitle{font-weight:600;font-size:15px}
+  .bwhere{color:var(--mut);font-size:12.5px;margin:3px 0 0;
+    font-family:"Cascadia Mono",Consolas,monospace}
+  .rows{margin-top:8px}
+  .row{display:flex;gap:9px;margin:5px 0;font-size:14px}
+  .row .k{flex:0 0 5.4em;color:var(--mut);font-size:13px;padding-top:1px}
+  .row .v{flex:1;min-width:0}
+  .fix{color:var(--ok)}
+  .toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:14px 0 4px}
+  .toolbar button{font:inherit;font-size:13px;padding:5px 12px;border-radius:16px;cursor:pointer;
+    background:transparent;color:var(--fg);border:1px solid var(--line)}
+  .toolbar button.on{background:var(--ac);color:#08121a;border-color:var(--ac);font-weight:600}
+  .toolbar input{font:inherit;font-size:13px;padding:5px 10px;border-radius:6px;
+    background:var(--card);color:var(--fg);border:1px solid var(--line);min-width:200px}
+  .hidden{display:none !important}
+  .count{color:var(--mut);font-size:13px;margin-left:auto}
+  .toc{columns:2;column-gap:26px;font-size:13.5px}
+  .toc a{color:var(--ac);text-decoration:none;display:block;padding:2px 0}
+  .toc a:hover{text-decoration:underline}
+  .sum{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}
+  .sum .box{flex:1 1 130px;background:var(--card);border:1px solid var(--line);border-radius:9px;padding:11px 13px}
+  .sum .n{font-size:25px;font-weight:700;line-height:1.2}
+  .sum .l{color:var(--mut);font-size:12.5px}
+  footer{margin-top:44px;padding-top:14px;border-top:1px solid var(--line);color:var(--mut);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Grandettoken 全量代码体检报告</h1>
+<p class="sub">2026-10-20 · 覆盖 <code>app/core</code>（纯逻辑层，18 个模块）· <code>app/src-tauri</code>（Tauri 后端，43 个命令）· <code>app/src</code>（前端，4773 行）· <code>build</code>（16 个脚本）</p>
+
+<div class="verdict">
+<b>一句话结论：</b>项目的<b>自动化测试全部通过</b>（271 个单测 0 失败、两个 crate 编译零警告、16 个脚本语法全对、仓库无凭据泄漏），
+但这些测试<b>只覆盖了"正常路径"</b>。我逐行读完了全部源码，又找出 <b>53 个真实缺陷</b>，
+其中 <b>5 个会悄悄改坏数据或弄丢凭据</b>、<b>13 个用户肉眼能看见</b>。<br><br>
+<b>好消息：</b>这 53 个问题里没有一个会让程序崩溃或删坏用户的第三方配置。
+加密实现（AES-256-GCM、DPAPI）、备份回滚、YAML 解析主体、SQLite 事务边界都写得很扎实。
+<b>坏消息：</b>出问题的几乎全是"异常分支"——网络抖动、并发、跨时区、失败重试这些平时不容易撞上的路径。
+</div>
+
+<div class="sum">
+  <div class="box"><div class="n" style="color:var(--p0)">5</div><div class="l">P0 · 悄悄改坏数据 / 弄丢凭据</div></div>
+  <div class="box"><div class="n" style="color:var(--p1)">13</div><div class="l">P1 · 用户看得见的错</div></div>
+  <div class="box"><div class="n" style="color:var(--p2)">21</div><div class="l">P2 · 边界情况 / 数字偏差</div></div>
+  <div class="box"><div class="n" style="color:var(--p3)">14</div><div class="l">P3 · 健壮性 / 体验</div></div>
+  <div class="box"><div class="n" style="color:var(--ok)">0</div><div class="l">现有自动化测试失败</div></div>
+</div>
+
+<h2>1. 怎么测的</h2>
+
+<h3>1.1 跑起来的验证（全部通过）</h3>
+<table>
+<tr><th>项目</th><th>命令</th><th>结果</th></tr>
+<tr><td>纯逻辑层单元测试</td><td><code>cargo test --locked</code>（app/core）</td><td><b>271 通过 / 0 失败</b> / 6 个真机用例按设计跳过</td></tr>
+<tr><td>纯逻辑层编译检查</td><td><code>cargo check --all-targets --locked</code></td><td>干净，零警告</td></tr>
+<tr><td>Tauri 后端编译检查</td><td><code>cargo check --all-targets --locked</code>（app/src-tauri）</td><td>干净，零警告</td></tr>
+<tr><td>前端与脚本语法</td><td><code>node --check</code> × 16 个文件</td><td>全部通过</td></tr>
+<tr><td>仓库凭据扫描</td><td><code>build/scan-secrets.ps1</code></td><td>CLEAN — 120 个文件里没有疑似凭据</td></tr>
+</table>
+
+<div class="note ok">
+<b>说明：</b>上面 5 项都是"机器能自动判定"的检查，全绿。这说明项目<b>没有编译错误、没有语法错误、没有把密钥提交进仓库</b>，
+已有的 271 个单测也都守着各自负责的那块逻辑。下面的 53 个 bug <b>全部是单测覆盖不到的地方</b>——
+它们要么需要"网络刚好失败"，要么需要"两个用户操作撞在一起"，要么需要"日期刚好跨过某个边界"。
+</div>
+
+<h3>1.2 读代码的部分</h3>
+<p>逐个文件读完全部源码（约 <b>110 万字符</b>），重点看五类东西：</p>
+<ul>
+<li><b>算错的数</b>——单位换算（积分↔元↔美元）、时间窗口（今天/本周/跨月）、比例计算；</li>
+<li><b>异常分支</b>——请求失败、超时、返回体结构变了、令牌过期、上游返回"业务失败"；</li>
+<li><b>并发</b>——两个动作同时发生、定时刷新和手动点击撞车、写盘和读盘撞车；</li>
+<li><b>回滚能力</b>——改坏了能不能原样还原（这个项目要往 Trae / DSH / ZCode / WorkBuddy 四个第三方客户端里写配置，写坏了就是别人软件罢工）；</li>
+<li><b>密钥安全</b>——密钥会不会被写进日志、会不会被明文发出去、退出时会不会残留。</li>
+</ul>
+
+<h2>2. Bug 清单</h2>
+
+<div class="toolbar" id="toolbar">
+  <button class="on" data-f="all">全部 53</button>
+  <button data-f="p0">P0 (5)</button>
+  <button data-f="p1">P1 (13)</button>
+  <button data-f="p2">P2 (21)</button>
+  <button data-f="p3">P3 (14)</button>
+  <input id="q" type="search" placeholder="搜索关键字（文件名 / 现象 / 关键词）">
+  <span class="count" id="cnt"></span>
+</div>
+
+<div class="cards" id="cards">
+
+<!-- ===================== P0 ===================== -->
+<h3 id="h-p0" class="gr">P0 · 会悄悄改坏数据或弄丢凭据</h3>
+
+<div class="bug p0" data-sev="p0">
+  <div class="bhead"><span class="bid">#01</span><span class="tag t-p0">P0</span><span class="btitle">签到结束后，把一份"旧的"整份设置写回磁盘，用户刚改的设置被吞掉</span></div>
+  <p class="bwhere">app/src-tauri/src/lib.rs:2324-2380</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">你在设置页改了东西（比如关掉某个渠道、把刷新间隔改成 5 分钟），几秒后设置又变回原样；面板上显示的是新值，但重启后又"变回去"了。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">签到任务开始时把<b>整份设置</b>拍了个快照存进变量（<code>let mut cfg = lock_rw(&state.config).clone()</code>）。签到要走 2~3 个网络请求，每个最多等 20 秒，这期间是<b>30~70 秒</b>的窗口。你在这段时间里改了设置，签到结束后执行 <code>cfg.save(&store)</code> —— 写回去的是那份旧快照，把你的改动整个盖掉了。内存里的 <code>state.config</code> 同样被换回旧值。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">保存时只改"签到进度"这一个字段，绝不整份覆盖。</span>签到写盘前先读一遍当前的配置，只把 <code>checkin[id]</code> 合并进去再存。这样无论签到跑多久，你在设置页做的任何改动都不会丢。顺带把这段写盘也挂到已有的串行闸上，避免和普通保存互相覆盖。</span></div>
+  </div>
+</div>
+
+<div class="bug p0" data-sev="p0">
+  <div class="bhead"><span class="bid">#02</span><span class="tag t-p0">P0</span><span class="btitle">WorkBuddy 续期时，如果上游没换新令牌，代码反而把旧令牌擦成空</span></div>
+  <p class="bwhere">app/core/src/workbuddy.rs:1439-1455</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">WorkBuddy 桌面端能正常续期，但续期一次之后，自动续期能力就断了 —— 用户以为能"永不过期"，实际用着用着就掉线，得手动去桌面端重新登录。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">函数注释白纸黑字写着「空 refresh 表示上游没轮换，<b>沿用旧的</b>」，但代码直接 <code>refresh.unwrap_or("")</code> —— 上游没给新令牌时，它把空字符串写进去，<b>原来那份还能用的 refresh token 被彻底覆盖没了</b>。注释承诺的"沿用旧的"根本没实现。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">上游没给新令牌时，先读回已存的那份，把旧令牌原样留着。</span>写盘时改成"有新值用新值，没新值读旧值顶上"，让代码和注释一致。用户的自动续期就不会莫名其妙断掉。</span></div>
+  </div>
+</div>
+
+<div class="bug p0" data-sev="p0">
+  <div class="bhead"><span class="bid">#03</span><span class="tag t-p0">P0</span><span class="btitle">WorkBuddy 取数的时间窗开了 100 年，把过期旧包也算了进来</span></div>
+  <p class="bwhere">app/core/src/providers.rs:893-902</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">挂件里显示的 WorkBuddy 积分，比 WorkBuddy 官方网页控制台上的数字<b>偏大</b>，用户对不上账。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">取数请求体的时间窗结束时间是 <code>现在 + 100 年</code>。而同一个函数上方的注释明确写着"窗口开太宽会把上几个周期用剩的旧包也捞回来，本周期发放/已使用就会比官方口径大（实测宽 7 天多出 4 个包、400 积分）"—— <b>注释写的规则，代码自己没遵守</b>。项目里另一处 <code>workbuddy::billing_body()</code> 用的是上游真实的 36.9 天窗口，两者对不上。请求体里的 <code>Status</code>（[0,1,2,3] vs 上游 [0,3]）和 <code>PageSize</code>（200 vs 100）也不一致。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">取数请求体和上游完全对齐：时间窗 36.9 天、Status [0,3]、PageSize 100。</span>两处 body 合并成一个公共函数，以后不会再走偏。修完之后，挂件上的数字和官方控制台<b>对得上</b>了。</span></div>
+  </div>
+</div>
+
+<div class="bug p0" data-sev="p0">
+  <div class="bhead"><span class="bid">#04</span><span class="tag t-p0">P0</span><span class="btitle">诊断日志不遮盖带点的令牌（也就是 JWT）</span></div>
+  <p class="bwhere">app/core/src/diaglog.rs:183, 214-217</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">用户按官方指引把诊断日志发到群里问问题，日志里可能<b>明文躺着 access token</b>，等于把账号凭据贴给所有人看。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">遮盖规则里有三条"不遮"的例外，第三条是"含 <code>.</code> 的串当域名放过"。但 <b>JWT 令牌天然带两个点</b>（<code>头.载荷.签名</code>），所以整条令牌会被当成"域名"原样写进文件。代码注释里写"真令牌极少含 <code>.</code>"——这个前提是错的，<b>每个 JWT 都有点</b>。目前所有调用方都还好没直接传令牌进去，所以今天没出事，但这个"保险丝"其实是断的。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">先按"这串像不像令牌"判断，再考虑是不是路径/域名。</span>具体做法：点数 ≥2 的长串一律按令牌遮盖；"像路径"这个判断改成看形状（域名只有一个点），而不是"有没有点"。再补一条 JWT 专用规则（三段用点连起来）强制遮盖。保险丝接上了，以后任何调用方手滑都不会泄密。</span></div>
+  </div>
+</div>
+
+<div class="bug p0" data-sev="p0">
+  <div class="bhead"><span class="bid">#05</span><span class="tag t-p0">P0</span><span class="btitle">诊断日志的限流漏了"渠道"这一维，多个渠道一失败，日志就被刷爆</span></div>
+  <p class="bwhere">app/core/src/diaglog.rs:314-352（调用点 fetch.rs:1959, 2049）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">诊断日志文件一天涨到几 MB，稍微一两周就把有用的历史记录冲掉；而且日志里<b>看不到"这个错误重复了多少次"</b>这句本来最有用的话。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">限流表 <code>SEEN</code> 的键只有"事件名"（比如 <code>"channel"</code>），<b>没带渠道 id</b>。而实际调用是 <code>write_keyed(渠道id, "channel", ...)</code>——渠道 id 被当成了"分组名"丢掉了。结果：9 个渠道共用同一张限流表。渠道 A 写完，渠道 B 因为消息内容不一样被判成"状态变了"，于是<b>每 60 秒每个渠道都写一行</b>，限流等于没开。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">限流键改成"渠道 id + 事件名"组合。</span>这样每个渠道各算各的：同一个渠道重复报错会被正确合并成"又重复了 N 次"，日志量回到设计目标的 1/9 左右，重复次数的统计也终于能用了。</span></div>
+  </div>
+</div>
+
+<!-- ===================== P1 ===================== -->
+<h3 id="h-p1" class="gr">P1 · 用户肉眼能看见的错</h3>
+
+<div class="bug p1" data-sev="p1">
+  <div class="bhead"><span class="bid">#06</span><span class="tag t-p1">P1</span><span class="btitle">界面上的时间全错了：把"秒"当成了"毫秒"</span></div>
+  <p class="bwhere">app/src/app.js:96-100（调用点 809-811、822-825）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">"今日数据自 <b>16:40</b> 起"这类提示、最近变动台账里的每一行时间，显示的都是 1970 年附近的离谱时间。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">后端给的时间戳是 Unix <b>秒</b>（快照表里存的就是秒），而 <code>fmtClock()</code> 写的是 <code>new Date(ts)</code> —— JavaScript 的 <code>new Date(数字)</code> 一律当成<b>毫秒</b>。同一个文件里另外三个时间函数（<code>toDateInput</code>、<code>fmtDay</code>、<code>relTime</code>）都老老实实乘了 1000，只有它漏了。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">乘上 1000 再交给 Date。</span>修完，"今日数据自 10:23 起"和变动台账里的时间会变成真实时刻，用户终于能对上自己什么时候开的机、什么时候充的额度。</span></div>
+  </div>
+</div>
+
+<div class="bug p1" data-sev="p1">
+  <div class="bhead"><span class="bid">#07</span><span class="tag t-p1">P1</span><span class="btitle">Qoder 早上开机时不会补签当天的积分</span></div>
+  <p class="bwhere">app/core/src/checkin.rs:280-291</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">Qoder（国际版 + 国内版）每天早上开机（比如 8 点）时不会补签，要等到当天 10 点之后才行；如果电脑晚上关机，第二天 10 点前才开机，就只能等下一个周期，<b>当天的 100 积分直接没了</b>，也没有任何提示。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">Qoder 的"周期"是 10:00 → 次日 9:59。判断"该不该签"的代码 <code>due_now()</code> 拿的是"北京时间的当天已过分钟数"，跟 <code>10:00 + 抖动</code> 比。早上 8 点时当天已过 480 分钟，阈值是 600 多分钟，比不过 → 判定"还没到时间"。但早上 8 点其实<b>还在上一个周期里</b>（周期到 9:59 才结束），本该补签。Trae/WorkBuddy 用的是 0 点翻日，早 9 点开机被判成"该补签"是对的 —— <b>只有 Qoder 这个非零翻日点的渠道漏了</b>。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">改成"距离本周期开始过了多少分钟"来比，而不是"今天过了多少分钟"。</span>对 0 点翻日的渠道这个公式和现在完全等价（现有测试照过），对 Qoder 则能正确识别"还在昨天那个周期里"。开机补签恢复了，当天积分不会再白丢。</span></div>
+  </div>
+</div>
+
+<div class="bug p1" data-sev="p1">
+  <div class="bhead"><span class="bid">#08</span><span class="tag t-p1">P1</span><span class="btitle">Qoder 把"上上个周期已领过"当成了"今天已领过"</span></div>
+  <p class="bwhere">app/core/src/checkin.rs:601-639</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">界面显示"今日已签"，但今天的积分其实<b>没领到</b>。代码里把当天标成"已完成"，当天再也不会重试。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">Qoder 返回的是一个<b>活动列表</b>，里面同时躺着往期活动和本期活动。代码遍历时只要看到任何一个 <code>CLAIMED</code> 就置 <code>already = true</code>，<b>完全不看这个活动是不是属于当前周期</b>（返回体里明明有 <code>startAt</code>/<code>endAt</code>）。项目自己的单测 <code>qoder_claimable_wins_over_older_claimed</code> 就证明了"往期 CLAIMED 和本期 CLAIMABLE 同时存在"是常态。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">先按当前周期的时间窗把活动筛一遍，只看窗内的。</span>窗外的活动既不算"可领"也不算"已领"。这样"今日已签"这句话才是真的，当天该领的积分不会因为往期记录而被误判跳过。</span></div>
+  </div>
+</div>
+
+<div class="bug p1" data-sev="p1">
+  <div class="bhead"><span class="bid">#09</span><span class="tag t-p1">P1</span><span class="btitle">YAML 里"引号 + 行内注释"没脱引号，导致同一个模型被写了两遍</span></div>
+  <p class="bwhere">app/core/src/yamledge.rs:448-467</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">往 DSH 写模型配置时，如果你的 <code>cordis.patch.yml</code> 里写了 <code>- id: "claude-sonnet-5"   # 我自己加的</code>，挂件找不到它，就<b>再追加一条同 id 的</b>。DSH 按 id 取第一条，你更新模型的结果<b>被静默丢掉</b>，配置文件里还多了一条重复。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v"><code>strip_scalar()</code> 脱引号的条件是"整串以引号结尾"。加了行内注释后整串变成 <code>"claude-sonnet-5"   # 我自己加的</code>，不以引号结尾 → 走不到脱引号分支 → 注释被切掉了，<b>引号却留了下来</b>。于是 id 变成了 <code>"claude-sonnet-5"</code>（带引号），跟要写的 <code>claude-sonnet-5</code> 对不上。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">先切掉行内注释，再判断要不要脱引号。</span>这样带注释的条目也能被正确识别，DSH 配置里不会再出现重复 id，你的模型更新能真正生效。</span></div>
+  </div>
+</div>
+
+<div class="bug p1" data-sev="p1">
+  <div class="bhead"><span class="bid">#10</span><span class="tag t-p1">P1</span><span class="btitle">4SAPI 兜底分支不检查业务返回码，"失败"被当成"余额正常"显示</span></div>
+  <p class="bwhere">app/core/src/providers.rs:130-157（对比 168-169）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">4SAPI 返回 <code>{"code": false, "data": {"total_available": 93500000}}</code> 这种"业务失败"时，界面照样显示 <b>¥187.00</b>，还会被写进历史快照，把"申请跳升"检测器也带偏。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">这个函数有两条路：主路径检查了 <code>code</code> 和 <code>is_active</code>（注释里专门写了"之前写成 <code>||</code>，<code>code:false</code> 被吞掉"的教训），但<b>兜底分支在这两行之前就 return 了</b>，压根没检查。两条路的行为不一致。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">把 <code>code</code>/<code>is_active</code> 的判断提到两条分支共用。</span>兜底分支也会正确识别业务失败，界面显示"接口返回错误"而不是一个假的余额，历史快照也不会被污染。</span></div>
+  </div>
+</div>
+
+<div class="bug p1" data-sev="p1">
+  <div class="bhead"><span class="bid">#11</span><span class="tag t-p1">P1</span><span class="btitle">「跳过此版本」会被下一次保存设置悄悄撤销</span></div>
+  <p class="bwhere">app/src-tauri/src/lib.rs:186-194（前端 app.js:3592）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">用户点了「跳过此版本 0.1.48」，之后改了个无关设置（比如换个刷新间隔），0.1.48 的更新提示又冒出来了。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">后端合并配置时的规则是"前端没传（null）才用后端的值"。但前端启动时读了一次配置就<b>再也不更新</b> <code>skippedVersion</code>（跳过后只是调了个后端命令，本地那份还是旧的）。所以下次保存时前端会传<b>旧的非空值</b>，后端就老老实实用了旧值 —— 跳过记录被覆盖。这正是代码注释里说"已修（报告 P1-3）"的那个坑，只是没修干净。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">这两个字段（跳过版本、上次检查时间）完全由后端说了算，前端传什么都以后端为准。</span>跳过的版本再也不会被覆盖，更新提示不会反复骚扰用户。</span></div>
+  </div>
+</div>
+
+<div class="bug p1" data-sev="p1">
+  <div class="bhead"><span class="bid">#12</span><span class="tag t-p1">P1</span><span class="btitle">设置保存失败时，内存里的新值已经生效了，磁盘上的还是旧值</span></div>
+  <p class="bwhere">app/src-tauri/src/lib.rs:76-94</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">保存设置失败（磁盘满、数据库被锁）时，弹了错误提示，但挂件的<b>行为已经按新设置在跑</b>，重启后又变回老样子。用户会以为"保存失败 = 什么都没变"，其实变了一半。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v"><code>save_config_off_main()</code> 里，<code>mutate(&mut cfg)</code> 是<b>直接改内存里那份配置</b>（<code>cfg</code> 就是 <code>state.config</code> 的锁守卫），然后才去落库。落库失败时函数返回错误，但内存已经被改了。更糟的是自定义渠道那条路：写失败后代码会把凭据删掉，内存里却还留着那个渠道，<b>内存和磁盘对不上</b>。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">先在副本上改、落库成功后再发布到内存。</span>落库失败时内存保持原样，界面提示和实际状态一致，不会出现"显示一套、运行另一套"的分裂状态。</span></div>
+  </div>
+</div>
+
+<div class="bug p1" data-sev="p1">
+  <div class="bhead"><span class="bid">#13</span><span class="tag t-p1">P1</span><span class="btitle">前端"保存失败就回滚"这个操作，实际上什么都没回滚</span></div>
+  <p class="bwhere">app/src/app.js:2491-2531（调用方 2902-2918、3023-3031 等）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">保存设置失败，弹了"保存设置失败"的红色提示，<b>但开关还是停在改后的位置</b>、隐藏的渠道还是消失着。用户被界面骗了 —— 注释里自己写着"界面等于在骗人（F6）"，但这个回滚是无效的。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">所有调用方都是<b>先改状态再调用保存</b>（<code>CFG[key] = !CFG[key]</code> 然后才 <code>saveCfg()</code>）。而 <code>saveCfg()</code> 里的备份是在<b>函数入口</b>才拍的 —— 这时候新值已经写进去了。所以"回滚"是把新值又赋回去，<b>等于没回滚</b>。注释还专门解释了"快照必须是拷贝"——拷贝是对的方向，但拷的是已经改过的状态。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">让调用方在改动<b>之前</b>拍快照，把快照传给保存函数；或者把"改"和"存"合成一步。</span>保存失败后开关会真的弹回去、渠道会真的回来，界面和实际状态一致，用户不会再被误导。</span></div>
+  </div>
+</div>
+
+<div class="bug p1" data-sev="p1">
+  <div class="bhead"><span class="bid">#14</span><span class="tag t-p1">P1</span><span class="btitle">"这个渠道用过几把密钥"按密钥去重，两个渠道共用一把密钥就数错</span></div>
+  <p class="bwhere">app/core/src/fetch.rs:2198-2210（自定义渠道同形：2268-2283）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">如果同一把 API key 同时填给了两个渠道（很常见，比如 4SAPI 和一个指向同一站点的自定义渠道），两个渠道会显示<b>一样的</b>密钥数量，而且永远错下去。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">缓存的键只有"密钥指纹"，但查出来的值是 <code>fingerprint_count(渠道id)</code> —— <b>按渠道统计</b>的。第二个渠道命中了第一个渠道的缓存，直接拿了别人的数字。而且这个缓存<b>永不失效</b>。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">缓存键改成"渠道 id + 密钥指纹"。</span>每个渠道各算各的，共用一把密钥也不会串。数字对得上，缓存还能继续当性能优化用。</span></div>
+  </div>
+</div>
+
+<div class="bug p1" data-sev="p1">
+  <div class="bhead"><span class="bid">#15</span><span class="tag t-p1">P1</span><span class="btitle">自定义渠道的颜色没做转义，能往界面里塞进任意样式</span></div>
+  <p class="bwhere">app/src/app.js:296-302（配合 app/core/src/custom.rs:73-87）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">在自定义渠道里把颜色填成 <code>red"><img src=x onerror=...><div style="</code> 这类内容，能在界面上注入任意 HTML/CSS。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">整个前端里所有来自接口的字符串都老老实实过了 <code>esc()</code>，<b>只有 <code>c.color</code> 是直接拼进 <code>style="..."</code> 属性的</b>。后端的 <code>CustomChannel::validate()</code> 校验了名字、地址、路径，<b>唯独没校验颜色</b>（注释只写了"#rrggbb"，代码没强制）。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">前端加一个颜色格式白名单（只放行 <code>#RGB</code>/<code>#RRGGBB</code>/<code>#RRGGBBAA</code>，不合规就退回默认色），后端校验也补上同一条规则。</span>因为应用的 CSP 允许内联样式，注入进来的 CSS 至少能覆盖界面做点击劫持 —— 修掉之后这条路彻底封死。颜色格式不对时用户会看到默认色而不是界面错乱。</span></div>
+  </div>
+</div>
+
+<div class="bug p1" data-sev="p1">
+  <div class="bhead"><span class="bid">#16</span><span class="tag t-p1">P1</span><span class="btitle">上游轮换过的新 refresh token 存下来了，但从来没人用它</span></div>
+  <p class="bwhere">app/core/src/workbuddy.rs:1200-1209、1260-1271</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">WorkBuddy 桌面端登录能撑约 28 天，之后自动续期就断了 —— 而代码注释里明明写着"续期成功就等于<b>永不过期</b>"。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">上游每次续期都会<b>换发</b>新的 refresh token、把旧的作废（项目注释里写明了这一点）。续期成功后新 token 存进了凭据管理器，但读取那一档时只取了 <code>s.access</code>，<b><code>s.refresh</code> 存了但从来不用</b>。下一次要续期时，代码还是拿桌面端文件里那个<b>已经被作废</b>的旧 token 去刷，必然失败。而且每次失败都会踩到 30 分钟冷却，之后一直拿同一个死 token 重试 —— 有些服务端还会因为"重放已用过的令牌"把整个令牌族作废，<b>连用户在 WorkBuddy 官网的登录都可能掉</b>。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">续期时把"已存的新 refresh token"和"桌面端文件里的旧 token"一起当候选，优先用新的那个。</span>轮换链就接上了，"永不过期"的承诺成立，用户不用每隔 28 天跑去桌面端重新登录。</span></div>
+  </div>
+</div>
+
+<div class="bug p1" data-sev="p1">
+  <div class="bhead"><span class="bid">#17</span><span class="tag t-p1">P1</span><span class="btitle">「删除密钥 / 清除登录」没有删掉 WorkBuddy 的续期凭据</span></div>
+  <p class="bwhere">app/src-tauri/src/lib.rs:348-356 + app/core/src/workbuddy.rs:1409-1417</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">用户在 WorkBuddy 卡片上点了"清除登录"，界面显示已清除，<b>但下一轮轮询这个渠道照样出数</b> —— 因为可用的 accessToken 还躺在 Windows 凭据管理器里。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">WorkBuddy 的续期凭据存在两个专门的凭据条目里（<code>workbuddy-refresh-cn</code> / <code>workbuddy-refresh-global</code>），而删除密钥的命令只删了"渠道 id"这一个条目，<b>没人碰过这两个专用条目</b>。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">删凭据时把这两个续期条目一起删掉（条目名单由 workbuddy 模块统一提供，别散在两处）。</span>"清除登录"就真的清了，渠道会干净地变成"未登录"状态，符合用户预期。</span></div>
+  </div>
+</div>
+
+<div class="bug p1" data-sev="p1">
+  <div class="bhead"><span class="bid">#18</span><span class="tag t-p1">P1</span><span class="btitle">换了 WorkBuddy 账号后，最多 6 小时内认不出新凭据</span></div>
+  <p class="bwhere">app/core/src/workbuddy.rs:57-59、415-423（密钥不匹配分支 310-313）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">用户在 WorkBuddy 桌面端换了账号，挂件报错"凭据是用另一把密钥加密的，在桌面端重新登录一次即可"。<b>但用户真的重新登录了还是不行</b>，因为提示给的建议在这个状态下没用。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">桌面端的本地加密密钥被缓存了 <code>KEY_TTL = 6 小时</code>。账号一换，加密密钥也换了，缓存里的还是旧的 → 每次都报"密钥不匹配"。项目里有个 <code>clear_key_cache()</code> 函数专门用来清这个缓存，<b>但全项目从来没有任何地方调用它</b>（只定义了）。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">检测到"密钥不匹配"时，先清缓存再重新读一次桌面端密钥，并重试一次解析。</span>换账号后立刻就能用上，错误提示里说的"重新登录一次"也就真的可执行了。</span></div>
+  </div>
+</div>
+
+<!-- ===================== P2 ===================== -->
+<h3 id="h-p2" class="gr">P2 · 边界情况与数字偏差</h3>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">#19</span><span class="tag t-p2">P2</span><span class="btitle">清理旧快照不是一次做完的，失败重跑会把消耗量算两遍</span></div>
+  <p class="bwhere">app/core/src/store.rs:841-862（配合 869-948）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">一年趋势里的某些天消耗偏大，而且是<b>永久性</b>偏大。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">归档（把明细压成日级摘要）先提交事务，<b>删明细行是另一次独立的提交</b>。如果中间失败或进程被杀，行还在，下次归档会把<b>同一批行再累加一次</b>（SQL 是 <code>consumed = consumed + ?</code>）。调用方只把错误打印一下就继续跑，所以这个状态会一直留着。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">归档和删除放进同一个事务。</span>要么全成要么全不成，不会出现"算了但没删干净"的中间态，长期趋势数据可信。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">#20</span><span class="tag t-p2">P2</span><span class="btitle">曲线分桶数量为 0 时会崩溃</span></div>
+  <p class="bwhere">app/core/src/store.rs:794-800</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">目前没有调用方会传 0，属于"埋着的雷"。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">代码里写了 <code>idx.min(buckets - 1)</code>，<code>buckets</code> 是无符号数，0 减 1 会下溢 —— debug 版直接 panic，release 版变成一个巨大的下标然后数组越界。旁边的 <code>trend_series()</code> <b>恰恰有</b>这个防护，说明是漏写不是设计。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">加上和 <code>trend_series()</code> 一样的零值守卫。</span>任何调用方传 0 都会安全返回空数组而不是把进程带崩。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">#21</span><span class="tag t-p2">P2</span><span class="btitle">曲线查询忽略了时间上界，"截至昨天"的曲线会混进今天的数据</span></div>
+  <p class="bwhere">app/core/src/store.rs:753-803</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">目前没有生产调用方用它，但函数签名收着 <code>to_ts</code> 却不用，属于"接口骗人"。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">取数时上界写的是 <code>i64::MAX / 2</code>，等于没有上界，窗口之后的所有消耗都被算进了桶里。同一个文件里的 <code>trend_series()</code> 是对的，注释还说两者"同一套口径"，实际不一致。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">把 <code>to_ts</code> 真正传进查询。</span>函数行为和它的签名、注释都对齐了，以后谁用它拿历史窗口都不会拿到未来的数据。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">#22</span><span class="tag t-p2">P2</span><span class="btitle">还没配凭据的占位卡片，单位写错了</span></div>
+  <p class="bwhere">app/core/src/fetch.rs:1406-1408（对照 702-708）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">OpenCode Go 和 Codex 是百分比渠道，但没配凭据时它们吐出来的占位数据里，单位写的是 <code>credits</code>（积分）而不是 <code>%</code>。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">项目里明明有唯一的单位映射函数 <code>unit_for(kind)</code>，注释还专门写了"以前在三个地方各写一遍，漏了 Percent"。这个占位路径<b>就是第三个地方</b>，又漏了。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">占位卡片也走 <code>unit_for()</code>。</span>接口吐出来的数据自洽了，任何按 <code>unit</code> 读数的第三方消费方都不会被误导。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">#23</span><span class="tag t-p2">P2</span><span class="btitle">同一个视图里取了两个"现在"，跨零点时会对不上</span></div>
+  <p class="bwhere">app/core/src/fetch.rs:1259、1264-1265</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">每天零点那一瞬间刷新的那一帧，消耗窗口用的是"昨天"，缺口提示用的是"今天"。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">代码注释写着"同一个视图里只用一个'现在'"，但实际调了两次 <code>now_ts()</code>，而且 <code>amount_windows()</code> 内部还会再算一遍本地零点/周初/月初。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">取一次时间，所有窗口都从它派生。</span>视图里的所有时间口径永远一致，不会出现自相矛盾的一帧。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">#24</span><span class="tag t-p2">P2</span><span class="btitle">WorkBuddy 的过期时间如果是字符串，会被当成"永不过期"</span></div>
+  <p class="bwhere">app/core/src/workbuddy.rs:367-378、129-135</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">一个早就失效的令牌，每轮轮询都排第一位，先吃一个 401 才轮到后面能用的凭据。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">解析过期时间的函数遇到 JSON <b>字符串</b>就返回 0，而 0 的含义是"没有过期时间"，于是永远不过期。同一套接口在别处确实返回字符串形式的时间戳（<code>"DeductionEndTime": "1790045965000"</code>），所以这不是臆想。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">字符串数字也解析；解析不出来时按"未知"处理（视为需要续期），而不是"永不过期"。</span>死令牌不会一直霸占第一位，每次轮询都省一次注定失败的请求。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">#25</span><span class="tag t-p2">P2</span><span class="btitle">WorkBuddy 续期没有加锁，同一个令牌可能被同时刷两次</span></div>
+  <p class="bwhere">app/core/src/workbuddy.rs:1285-1339、1345-1375</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">每分钟一次的自动刷新和你手动点的「领积分」撞在同一个分钟时，会发出两个续期请求。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">续期动作外面<b>没有互斥锁</b>，冷却机制只在<b>失败之后</b>才起作用。两个请求抢同一个 refresh token：一个成功并轮换了，另一个要么失败（还会把整个区域的 30 分钟冷却污染掉），要么两个都成功、第二次把刚存好的新 token 又作废了。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">给续期加一把按区域分的锁，拿到锁后再检查一次冷却。</span>同一个令牌绝不会被用两次，并发场景下不会互相踩。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">#26</span><span class="tag t-p2">P2</span><span class="btitle">WorkBuddy 读桌面端进程的 15 秒超时，管不住管道读取</span></div>
+  <p class="bwhere">app/core/src/workbuddy.rs:690-741</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">极端情况下整轮轮询会卡住不返回。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">超时后只杀了直接子进程。如果那个程序自己又拉起了子进程并继承了输出管道，<b>写端不会关闭</b>，两个读线程就永远等不到 EOF，<code>join()</code> 无限阻塞 —— 15 秒超时形同虚设。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">读管道也带截止时间，读取线程改成带超时的等待而不是无条件 join。</span>即使桌面端程序行为异常，挂件的轮询也不会被拖死。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">#27</span><span class="tag t-p2">P2</span><span class="btitle">往 DSH 写模型时，会删掉用户自己写的 contextWindow 和 input</span></div>
+  <p class="bwhere">app/core/src/inject.rs:2529-2564（配合 2498-2527）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">用户在 DSH 配置里手写的 <code>contextWindow: 200000</code> 或 <code>input: [text, image]</code>，在挂件更新一次模型后<b>无声无息地没了</b>；多模态模型甚至被降级成纯文本。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">合并逻辑会丢掉旧的 <code>contextWindow</code> / <code>input</code>，前提是"我们会写上自己的"。但对于不在价目表里、要写进 <code>-custom</code> 路由的模型，我们<b>恰恰不写</b>这两项 —— 旧的被丢了，新的又没有。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">只有"我们真的要写这一项"时才覆盖旧值，否则原样保留。</span>用户手写的上下文长度和多模态声明不会再被悄悄抹掉。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">#28</span><span class="tag t-p2">P2</span><span class="btitle">往 WorkBuddy 写模型时只看 id，会覆盖掉别家来源的同名模型</span></div>
+  <p class="bwhere">app/core/src/inject.rs:1432-1464（对照删除路径 3550-3556）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">你配了 <code>glm-5.3</code> 指向 OpenCode Go，挂件再写 4SAPI 的 <code>glm-5.3</code> 时，<b>你那条被就地改掉了</b>（地址和密钥都换成 4SAPI 的）。而且"取消写入"也救不回来。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">整个模块的设计前提是"同名模型可以同时存在于多个来源"（代码里有 <code>ModelSpec.source</code>、<code>wb_is_ours()</code> 精确匹配主机），但<b>写入路径完全无视归属</b>，只按 id 找。删除路径倒是做了归属判断 —— 两边不一致。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">命中同 id 但不属于我们时，新增一条而不是就地覆盖。</span>两个来源的同名模型能共存，用户自己配的那条不会被抢走，删除时也能精确只删我们的。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">#29</span><span class="tag t-p2">P2</span><span class="btitle">清理旧备份时，可能把这次要用的备份当成"最旧的"删掉</span></div>
+  <p class="bwhere">app/core/src/inject.rs:864-878、979-999</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">写入失败后想回滚，提示说"备份目录是空的"—— 备份已经没了。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">备份目录名是时间戳，清理时<b>按目录名排序</b>取最旧的几个删掉。如果系统时间被调过、NTP 回拨、或者从别的机器拷过备份目录，新建的目录名可能排在最前面，<b>在写文件之前就被自己删了</b>。注释说"可重入，行随后就被删，不会被算两次"，但这个前提在删失败时就不成立。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">清理时跳过"刚创建的那一个"，排序改用创建时间而不是目录名。</span>回滚永远有备份可用，写第三方配置的安全网才真的兜得住。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">#30</span><span class="tag t-p2">P2</span><span class="btitle">写 DSH 配置时缩进硬编码成 2 空格，用 4 空格的配置文件会写失败</span></div>
+  <p class="bwhere">app/core/src/inject.rs:2594-2619、2622-2659</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">在用 4 空格缩进的 <code>cordis.patch.yml</code> 上写模型，会报"读回校验没过"然后自动回滚 —— 用户的文件其实没问题。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">改已有键时，新行按 <code>路由缩进 + 2</code> 写，跟同级兄弟节点的实际缩进对不上，YAML 结构就散了（校验会拦住，所以没造成损坏，但功能用不了）。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">缩进从该路由<b>实际子节点</b>的缩进推导，替换已有键时沿用它原本的缩进。</span>各种缩进风格的文件都能正常写入，校验不再无端失败。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">#31</span><span class="tag t-p2">P2</span><span class="btitle">写 YAML 时不转义换行，写进去的值读回来会变样</span></div>
+  <p class="bwhere">app/core/src/yamledge.rs:470-484</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">值里含换行或制表符时，写进 DSH 配置后读回来变成了空格拼接的内容 —— 写进去的和读出来的不一样。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">双引号分支只转义了 <code>\</code> 和 <code>"</code>，换行符被<b>原样写进</b>双引号里。YAML 会把双引号里的换行折叠成一个空格，值就变了。制表符在双引号里干脆是语法错误。这个路径能写到 <code>cordis.patch.yml</code> 的地址/密钥名，也能写到 <code>.credentials.yaml</code> 里的<b>密钥本身</b>。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">把换行、回车、制表符和其余控制字符也转义掉。</span>写进去的值和读出来的值完全一致，DSH 拿到的就是原样的东西。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">#32</span><span class="tag t-p2">P2</span><span class="btitle">模型价格：所选分组缺倍率时不给价，哪怕别的分组有</span></div>
+  <p class="bwhere">app/core/src/models.rs:492-509</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">某个模型在价格表里显示不出价格。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">"所选分组不含这个模型时，退回到倍率最低的、确实有这个模型的分组"这条规则<b>只写了一半</b>：只有"分组里没这个模型"时才回退；"分组里有这个模型、但这个分组没配倍率"这种情况直接放弃报价。而文件自己的注释明确说"绝不显示一个本分组用不上的价"。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">两种情况统一走同一个回退逻辑。</span>只要任何已知分组里有这个模型的价格，就会给出正确的价，不会莫名其妙空着。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">#33</span><span class="tag t-p2">P2</span><span class="btitle">模型"可用/不可用"缓存不跟密钥绑定，换了密钥 24 小时内数据都是旧的</span></div>
+  <p class="bwhere">app/core/src/models.rs:712-795（消费点 src-tauri/src/lib.rs:2849-2868）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">换了 4SAPI 的密钥之后，模型页上的"可用/不可用"标记还是按<b>旧密钥</b>的结果显示，最长要过 24 小时才更新。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">缓存里存了 <code>usable</code> 和 <code>usable_at</code>，<b>没存产生它的那把密钥的指纹</b>，所以无法判断缓存是否过期。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">缓存里存一份密钥指纹，指纹变了就当缓存失效。</span>换密钥后模型页立刻反映新密钥的实际情况，24 小时的陈旧期没了。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">#34</span><span class="tag t-p2">P2</span><span class="btitle">法定"调休上班日"被算成谷价，跟文件自己写的规则打架</span></div>
+  <p class="bwhere">app/core/src/peak.rs:10-13、33-34、119-128</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">一年里有 6 天（2026-01-04、02-14、02-28、05-09、09-20、10-10）明明是<b>法定上班日</b>，DeepSeek 却显示"谷价"。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">规则写的是"工作日（不含法定节假日）= 高峰"，但实现只判断"是不是周六周日"。调休上班日<b>正好落在周末</b>，于是被判成谷价。文件自己的注释里<b>已经把这 6 个日期列出来了</b>，只是没被用上。顺带说明：2026 年那张节假日表本身<b>核对无误</b>，是分类逻辑的问题。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">加一张调休上班日表，判断顺序放在"周末"之前。</span>这 6 天会正确显示"高峰"，"现在贵不贵"的提示和真实计费规则对得上。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">#35</span><span class="tag t-p2">P2</span><span class="btitle">汇率过了月之后，每 60 秒都要重试一次公开接口</span></div>
+  <p class="bwhere">app/core/src/fx.rs:79-115（调用点 fetch.rs:1870）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">每月 1 号如果汇率接口正好挂着，挂件会<b>每分钟</b>去戳两次公开接口（每次最多等 6 秒），整整一个月不休息，每一轮取数都被拖长最多 12 秒。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">缓存只在"月份相同"时才命中。跨月后旧缓存的月份对不上，<b>永远命中不了</b>，于是每轮都去请求。模块的规则写着"每月取一次最新的"，网络最差的时候反而最不守规矩。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">记录上次尝试时间，失败后加一段退避期（比如 1 小时）。</span>接口正常时依旧每月一次；接口挂了也不会被每分钟轰炸，轮询不会被拖慢。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">#36</span><span class="tag t-p2">P2</span><span class="btitle">4 个字符以内的密钥，"掩码"等于把密钥完整显示出来</span></div>
+  <p class="bwhere">app/core/src/secrets.rs:47-58</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">短密钥在界面和数据库里被完整显示出来。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">掩码固定保留末尾 4 个字符。密钥长度 ≤ 4 时，"保留的尾巴"就是密钥本身（<code>mask_of("ab") == "••••ab"</code>）。而存储时只拒绝空密钥，1~4 字符是能存进去的。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">短密钥不露尾，改成显示"••••（N 字）"。</span>掩码在任何长度下都起到遮盖作用。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">#37</span><span class="tag t-p2">P2</span><span class="btitle">更新和"写第三方客户端配置"会撞车</span></div>
+  <p class="bwhere">app/src-tauri/src/lib.rs:1817-1828（对照 2984-2986）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">更新过程中正好在写 DSH/Trae 配置，Windows 上更新那一步会直接结束进程，用户第三方客户端的配置停在半写状态，而且<b>没有任何记录能回滚它</b>。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">两个标志的先后顺序反了：更新命令<b>先</b>等写配置结束、<b>然后</b>才置"更新中"标志。而写配置那边检查的是"更新中"标志 —— 中间那一下空隙里启动的写配置，能通过检查、又还没被更新那边看见。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">先置"更新中"，再去等在途写入收尾；写配置那边拿到锁后<b>再查一次</b>标志。</span>更新和写配置彻底互斥，第三方客户端的配置不会再停在半路。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">#38</span><span class="tag t-p2">P2</span><span class="btitle">"开机自启"只写注册表不落配置，重启后自己会关掉</span></div>
+  <p class="bwhere">app/src-tauri/src/lib.rs:885-891、3553-3558</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">用户打开"开机自启"，重启电脑后自启没了（注册表被启动时的同步逻辑删掉）。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">这个命令只改了注册表，<b>没改 <code>config.autostart</code></b>。而启动时的 <code>autostart::sync(config.autostart)</code> 是拿配置来决定注册表状态的。配置没存上 → 下次启动按旧值同步 → 删掉 Run 键。前端虽然会另外调一次 <code>set_config</code>，但那个调用<b>没有等待完成</b>，而且一旦失败（比如快捷键被占用导致整次保存被拒）就没有兜底。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">这个命令自己负责把配置也存上，注册表写失败还能回滚。</span>开机自启是个独立开关，不该被别的设置保存失败连累，重启后依然有效。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">#39</span><span class="tag t-p2">P2</span><span class="btitle">同时加两个自定义渠道，会拿到同一个 id</span></div>
+  <p class="bwhere">app/src-tauri/src/lib.rs:1273-1296</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">两次快速点击"添加自定义渠道"，两个渠道 id 撞成同一个，<b>后加的那个把前一个的密钥覆盖了</b>，配置里出现两条同 id 的记录。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">id 在配置锁里算出来，但真正改配置是在后面的串行段里做的 —— 两步之间有空隙，两个并发请求算出同一个 <code>custom-1</code>。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">id 的分配放进串行段里做。</span>并发添加不会撞号，每个渠道的密钥各归各位。</span></div>
+  </div>
+</div>
+
+<!-- ===================== P3 ===================== -->
+<h3 id="h-p3" class="gr">P3 · 健壮性与使用体验</h3>
+
+<div class="bug p3" data-sev="p3">
+  <div class="bhead"><span class="bid">#40</span><span class="tag t-p3">P3</span><span class="btitle">热键输入框吞掉 Tab 键，键盘用户出不去</span></div>
+  <p class="bwhere">app/src/app.js:3207-3214</p>
+  <div class="rows">
+    <div class="row"><span class="k">原因</span><span class="v"><code>preventDefault()</code> 在判断"这个键要不要用"之前就无条件执行了，Tab 因此被吞。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">只对真正要消费的键调 <code>preventDefault()</code>，Tab 放行。</span>纯键盘操作可以正常在表单里移动焦点。</span></div>
+  </div>
+</div>
+
+<div class="bug p3" data-sev="p3">
+  <div class="bhead"><span class="bid">#41</span><span class="tag t-p3">P3</span><span class="btitle">模型页里已经显示的密钥，会被渠道列表的一次重绘顺手清掉</span></div>
+  <p class="bwhere">app/src/app.js:1623-1625</p>
+  <div class="rows">
+    <div class="row"><span class="k">原因</span><span class="v">重绘渠道卡片时用 <code>document.querySelectorAll(".reveal-box")</code> 清密钥盒子 —— 范围是<b>整个文档</b>，把模型页里那个也一起清了。渠道列表每次轮询都重绘。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">清理范围限定在 <code>#chList</code> 里。</span>模型页的密钥会按承诺的 8 秒自动隐藏，而不是"下次刷新就没了"。</span></div>
+  </div>
+</div>
+
+<div class="bug p3" data-sev="p3">
+  <div class="bhead"><span class="bid">#42</span><span class="tag t-p3">P3</span><span class="btitle">"点开密钥"拿到的密文可能写进了一个已经被删掉的节点</span></div>
+  <p class="bwhere">app/src/app.js:2887-2901、2682-2698</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">点「显示」没反应，也没报错。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">DOM 节点在 <code>await</code> 之前就拿到了，等取密钥回来时页面可能已经重绘过，那个节点已经不在文档里了，密钥被写进了一个"孤儿"节点。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">await 之后重新查一次节点。</span>拿不到就提示"界面已刷新，请再点一次"，不再静默失败。</span></div>
+  </div>
+</div>
+
+<div class="bug p3" data-sev="p3">
+  <div class="bhead"><span class="bid">#43</span><span class="tag t-p3">P3</span><span class="btitle">"最近变动"的曲线只取一次，之后一直不刷新</span></div>
+  <p class="bwhere">app/src/app.js:2276-2284</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">同一张卡片里，下面的"最近变动"是实时的，上面的曲线还是几个小时前的，两边自相矛盾。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">变动台账每次展开都重取（代码注释里还特意说明了"缓存住反而会显示过期账目"），但<b>曲线只取一次</b>。换密钥时缓存也不清。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">曲线也每次重取，换密钥时清掉缓存。</span>上下两块信息口径一致，看图就是看当下。</span></div>
+  </div>
+</div>
+
+<div class="bug p3" data-sev="p3">
+  <div class="bhead"><span class="bid">#44</span><span class="tag t-p3">P3</span><span class="btitle">诊断日志里"重复了 N 次"引的是新消息，不是重复的那条</span></div>
+  <p class="bwhere">app/core/src/diaglog.rs:335-345</p>
+  <div class="rows">
+    <div class="row"><span class="k">原因</span><span class="v">限流表里只记了消息的"签名"没记内容，所以补写那句话时取的是当前（新）消息。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">把上一条（脱敏后的）文本也存下来并打印它。</span>用户一眼能看出到底是哪件事在重复。</span></div>
+  </div>
+</div>
+
+<div class="bug p3" data-sev="p3">
+  <div class="bhead"><span class="bid">#45</span><span class="tag t-p3">P3</span><span class="btitle">自定义渠道的探活地址没校验，{key} 没转义，还允许明文 http</span></div>
+  <p class="bwhere">app/core/src/custom.rs:73-87、151-181</p>
+  <div class="rows">
+    <div class="row"><span class="k">原因</span><span class="v">三个小问题叠一起：① 校验只看 <code>url</code> 不看 <code>probeUrl</code>，探活模式下能存进一个根本不可用的地址，每轮都在失败；② 请求体里的 <code>{key}</code> 直接贴原始密钥，密钥里带引号就会生成非法 JSON，用户只看到"响应不是合法 JSON"；③ 允许 <code>http://</code>，而每个请求都带 <code>Authorization: Bearer</code> 密钥 —— 明文发出去，局域网里就能嗅到。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">校验实际生效的那个地址；<code>{key}</code> 按 JSON 规则转义；默认要求 https。</span>自定义渠道不会存进去一个必然失败的配置，密钥不会因为一个引号就整条链路报错，Bearer 也不会明文裸奔。</span></div>
+  </div>
+</div>
+
+<div class="bug p3" data-sev="p3">
+  <div class="bhead"><span class="bid">#46</span><span class="tag t-p3">P3</span><span class="btitle">查看/清空诊断日志时在异步命令里做阻塞文件操作</span></div>
+  <p class="bwhere">app/src-tauri/src/lib.rs:3442-3477</p>
+  <div class="rows">
+    <div class="row"><span class="k">原因</span><span class="v">这两个命令直接 <code>fs::read_to_string</code> 整个日志文件，而同文件里其它重 IO 命令都规规矩矩用了 <code>spawn_blocking</code>。日志大的时候会卡住运行时线程。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">包一层 <code>spawn_blocking</code>。</span>看日志时界面不会卡住，和其它命令的做法也统一了。</span></div>
+  </div>
+</div>
+
+<div class="bug p3" data-sev="p3">
+  <div class="bhead"><span class="bid">#47</span><span class="tag t-p3">P3</span><span class="btitle">"体检报告"读的是数据库里的旧配置，不是正在跑的配置</span></div>
+  <p class="bwhere">app/src-tauri/src/lib.rs:1402-1405</p>
+  <div class="rows">
+    <div class="row"><span class="k">原因</span><span class="v">其它命令都从内存里读配置，只有体检命令重新去数据库读一份，还用 <code>unwrap_or_default()</code> 把解析错误吞成"全部默认"。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">统一从内存读，并把解析错误显示出来。</span>体检报告说的就是挂件现在的实际状态，不会给出误导性的结论。</span></div>
+  </div>
+</div>
+
+<div class="bug p3" data-sev="p3">
+  <div class="bhead"><span class="bid">#48</span><span class="tag t-p3">P3</span><span class="btitle">多显示器下窗口位置总是被拉回第一块屏</span></div>
+  <p class="bwhere">app/src-tauri/src/lib.rs:1892-1919</p>
+  <div class="rows">
+    <div class="row"><span class="k">原因</span><span class="v">保存的位置不完整落在任何一块屏内时，直接用 <code>monitors[0]</code> 夹。而 Windows 上 <code>available_monitors()</code> 的顺序不保证第一块是主屏，也不保证是用户原来那块。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">选"离保存位置最近"的那块屏。</span>多屏用户重启后窗口还在自己那块屏上。</span></div>
+  </div>
+</div>
+
+<div class="bug p3" data-sev="p3">
+  <div class="bhead"><span class="bid">#49</span><span class="tag t-p3">P3</span><span class="btitle">保存设置时不跑一遍范围检查，导致当前值和重启后的值不一致</span></div>
+  <p class="bwhere">app/src-tauri/src/lib.rs:180-247 + app/core/src/config.rs:230-263</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">比如把"危险阈值"设得比"警告阈值"还低，当前界面按新值算颜色，重启后被夹回一个不一样的值。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v"><code>Config::sanitize()</code> 只在<b>读</b>的时候跑，<code>set_config</code> 写的时候不跑。间隔设成 0 也会变成忙轮询。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">保存前也调一次 <code>sanitize()</code>。</span>存下去的和当下生效的永远一致，不用等到重启才"变"。</span></div>
+  </div>
+</div>
+
+<div class="bug p3" data-sev="p3">
+  <div class="bhead"><span class="bid">#50</span><span class="tag t-p3">P3</span><span class="btitle">WorkBuddy 登录监听可能同时跑两个</span></div>
+  <p class="bwhere">app/src-tauri/src/lib.rs:597-645、655-687</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">快速关掉再打开登录窗口时，会同时有两个监听在每 6 秒打一次 WorkBuddy 的真实 HTTP 请求，还可能重复触发刷新。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">"用户关掉了窗口"这个标记只每 1.2 秒查一次，在这 1.2 秒的空隙里重新打开，旧监听就永远看不到关闭标记。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">用自增的"代次号"代替布尔标记。</span>任何时候只会有一个监听在跑，请求量减半，事件不重复。</span></div>
+  </div>
+</div>
+
+<div class="bug p3" data-sev="p3">
+  <div class="bhead"><span class="bid">#51</span><span class="tag t-p3">P3</span><span class="btitle">YAML 里出现重复键时，工具改的是第一个，YAML 实际生效的是最后一个</span></div>
+  <p class="bwhere">app/core/src/yamledge.rs:46-48</p>
+  <div class="rows">
+    <div class="row"><span class="k">原因</span><span class="v"><code>Node::get()</code> 用 <code>find</code> 返回第一个匹配；标准 YAML 语义是"后者覆盖前者"。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">要么在解析时直接拒绝重复键，要么让 <code>get</code> 返回最后一个。</span>手改过的配置也不会出现"改了没反应"。</span></div>
+  </div>
+</div>
+
+<div class="bug p3" data-sev="p3">
+  <div class="bhead"><span class="bid">#52</span><span class="tag t-p3">P3</span><span class="btitle">回滚时会把备份目录里的所有文件都写回客户端目录</span></div>
+  <p class="bwhere">app/core/src/inject.rs:1035-1067</p>
+  <div class="rows">
+    <div class="row"><span class="k">原因</span><span class="v">回滚是"把备份目录里有什么都复制回去"，而不是"把当初写过的文件恢复回去"。备份目录里多出的杂物会被一起塞进第三方客户端的配置目录。带清单的变体（<code>restore_layered</code>）做对了，平铺的那个没有。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">备份时记一份文件清单，回滚严格按清单来。</span>回滚只动我们改过的文件，第三方目录保持干净。</span></div>
+  </div>
+</div>
+
+<div class="bug p3" data-sev="p3">
+  <div class="bhead"><span class="bid">#53</span><span class="tag t-p3">P3</span><span class="btitle">写 JSON 时会重排第三方文件的缩进风格</span></div>
+  <p class="bwhere">app/core/src/inject.rs:760-811</p>
+  <div class="rows">
+    <div class="row"><span class="k">原因</span><span class="v">读进来解析成 JSON 再序列化回去，缩进固定 2 空格、末尾不补换行。用户原本 4 空格的配置文件会被整份重排，diff 大得吓人。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">检测并保留原缩进和末尾换行。</span>改动最小化，用户看得懂我们到底改了哪几行。</span></div>
+  </div>
+</div>
+
+</div><!-- /cards -->
+
+<h2>3. 建议的修复顺序</h2>
+<p>按"对用户影响大小 × 改动成本"排了一下，先修前 6 个就能挡住绝大部分实际损失：</p>
+<table>
+<tr><th>批次</th><th>包含</th><th>理由</th></tr>
+<tr><td><b>第一批</b><br>（半天内可完成）</td><td>#01 #02 #06 #10 #13 #14</td><td>都是<b>几行改动</b>，但每一个都在每天稳定发生。#06 改一个 <code>*1000</code>，#02 改一个 <code>unwrap_or</code>，收益立竿见影。</td></tr>
+<tr><td><b>第二批</b><br>（需要想清楚）</td><td>#03 #04 #05 #07 #08 #11 #12 #16 #17 #18</td><td>涉及凭据生命周期、签到周期、日志脱敏这些<b>有状态</b>的逻辑，改之前最好先补上对应的单测（现在这些路径几乎没测）。</td></tr>
+<tr><td><b>第三批</b><br>（可以拆开慢慢做）</td><td>P2 全部 21 个</td><td>多数是边界情况，一次改几个，每个都值得配一条单测锁住行为。</td></tr>
+<tr><td><b>第四批</b><br>（攒着一起改）</td><td>P3 全部 14 个</td><td>不紧急，但改起来零风险，适合放在版本末统一收拾。</td></tr>
+</table>
+
+<div class="note info">
+<b>一个建议：</b>这 53 个 bug 之所以单测没发现，是因为它们大多<b>依赖外部条件</b>（网络失败、并发、跨时区、跨天、时钟偏差）。
+建议在补修复的同时，针对每条补一条<b>能在 CI 里跑的复现用例</b>——
+比如 #06 补一条"给定秒级时间戳，输出的小时数要等于本地小时"，#07 补一条"08:00 开机时 Qoder 的周期号应等于前一天"，
+#02 补一条"上游没给新 refresh token 时，旧的那个必须还在"。
+这样以后再改这块代码，这些坑不会重新长出来。
+</div>
+
+<h2>4. 顺便确认过、没问题的部分</h2>
+<p>为了让你知道这份报告的边界，下面这些是<b>专门查过并且确认是对的</b>，不用担心：</p>
+<ul>
+<li><b>加密实现</b>——Qoder 的 AES-256-GCM（12 字节 nonce、GCM 标签校验、无 AAD 复用）、DPAPI 解密、Trae 的 AES-128-CBC + PKCS7 + SHA-512 双轮派生，全部正确；还拿 OpenSSL 交叉验证过。</li>
+<li><b>密钥不会进 JSON / SQLite / 日志 / 导出文件</b>——密钥只存 Windows 凭据管理器，仓库扫描也干净。</li>
+<li><b>备份与回滚主流程</b>——先备份再写、写失败和校验失败两条路都会回滚、带清单的变体能正确删除"我们新建的文件"。</li>
+<li><b>SQL 注入</b>——全部用参数绑定，没有拼字符串拼 SQL 的地方。</li>
+<li><b>轮询不会重复打接口</b>——有串行闸 + 5 秒结果缓存，取数接口是账务接口不计费也不会重复请求。</li>
+<li><b>前端 XSS 面</b>——除了 #15 的颜色，其余所有来自接口的字符串都过了转义函数；没有 <code>eval</code>、<code>document.write</code>；CSP 也挡住了内联脚本。</li>
+<li><b>2026 年法定节假日表</b>——逐条核对过，<b>完全正确</b>。#34 的问题只是"调休上班日"的分类，不是表本身。</li>
+<li><b>模型价格公式</b>——和站点自己的算法（2 × model_ratio × group_ratio）一致，#32 是"找不到倍率时不回退"的问题，公式本身没错。</li>
+<li><b>Trae 写配置用单事务</b>——不会写到一半。</li>
+</ul>
+
+<h2>5. 一句话总结</h2>
+<div class="note ok">
+<b>这个项目的底子是扎实的</b>：271 个单测全过、编译零警告、加密写对、备份回滚到位、密钥管理规矩。
+<b>问题集中在"顺利情况之外"</b>——网络抖动、并发撞车、跨天跨月、失败重试这些路径。<br><br>
+把 <b>#01、#02、#06</b> 这三个先修掉，用户能立刻感觉到差别（设置不再丢、WorkBuddy 不用重登、时间显示正确）；
+再把 <b>#03、#04、#05</b> 修掉，数据的可信度和日志的安全性就到位了。
+剩下的都是打磨，不影响日常使用。
+</div>
+
+<footer>
+报告生成于 2026-10-20 · 基于 commit <code>6a366a3</code>（v0.1.47）· 全量通读 <code>app/core</code>（18 模块）· <code>app/src-tauri</code>（43 命令）· <code>app/src</code>（4773 行）· <code>build</code>（16 脚本）<br>
+自动化验证：<code>cargo test</code> 271 通过 / 0 失败 · <code>cargo check --all-targets</code> 两个 crate 零警告 · <code>node --check</code> 16 文件全过 · <code>scan-secrets.ps1</code> CLEAN
+</footer>
+
+</div>
+
+<script>
+(function () {
+  var cards = Array.prototype.slice.call(document.querySelectorAll('.bug'));
+  var btns  = Array.prototype.slice.call(document.querySelectorAll('#toolbar button'));
+  var q     = document.getElementById('q');
+  var cnt   = document.getElementById('cnt');
+  var cur   = 'all';
+
+  function apply() {
+    var term = (q.value || '').trim().toLowerCase();
+    var shown = 0;
+    cards.forEach(function (c) {
+      var okSev = (cur === 'all') || (c.getAttribute('data-sev') === cur);
+      var okTxt = !term || c.textContent.toLowerCase().indexOf(term) !== -1;
+      var vis = okSev && okTxt;
+      c.classList.toggle('hidden', !vis);
+      if (vis) { shown++; }
+    });
+    // 小标题也跟着过滤
+    document.querySelectorAll('#cards h3').forEach(function (h) {
+      var any = false;
+      let n = h.nextElementSibling;
+      while (n && !n.tagName.match(/^H3$/)) {
+        if (n.classList.contains('bug') && !n.classList.contains('hidden')) { any = true; }
+        n = n.nextElementSibling;
+      }
+      h.classList.toggle('hidden', !any);
+    });
+    cnt.textContent = '显示 ' + shown + ' / ' + cards.length + ' 条';
+  }
+
+  btns.forEach(function (b) {
+    b.addEventListener('click', function () {
+      btns.forEach(function (x) { x.classList.remove('on'); });
+      b.classList.add('on');
+      cur = b.getAttribute('data-f');
+      apply();
+    });
+  });
+  q.addEventListener('input', apply);
+  apply();
+})();
+</script>
+</body>
+</html>

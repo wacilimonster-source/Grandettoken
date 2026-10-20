@@ -326,6 +326,15 @@ pub struct CheckinCfg {
     pub last_credits: Option<f64>,
     /// 连续签到天数(只有 Qoder 的接口给 `streak_days`;拿不到就是 None,不编)
     pub last_streak_days: Option<i64>,
+    /// 产生 `auth` 结论时运行的版本。用来判断那条 `auth` 是不是**陈旧**的。
+    ///
+    /// 为什么需要它(v0.1.47 真机踩到):v0.1.47 修好了「WorkBuddy 签到只读网页 Cookie、
+    /// 取数却用桌面端凭据」这件事,但升级后当天界面仍显示"凭据失效"——
+    /// 因为 `auth` 让 `done_for_day` 判当天完结,而那条 `auth` 是**升级前**记下的
+    /// (本机 lastTryAt=00:37,升级是 22:48),凭据链路早就变了却没人重新判。
+    ///
+    /// `None` = 这条记录**早于本字段存在** → 一律视为陈旧:产生它的代码已经不是现在这份了。
+    pub last_auth_version: Option<String>,
 }
 
 impl Default for CheckinCfg {
@@ -341,6 +350,7 @@ impl Default for CheckinCfg {
             last_message: None,
             last_credits: None,
             last_streak_days: None,
+            last_auth_version: None,
         }
     }
 }
@@ -367,6 +377,31 @@ impl CheckinCfg {
             }
             None => false,
         }
+    }
+
+    /// 这条 `auth` 是不是陈旧的(记录它的版本与当前版本不同)。
+    ///
+    /// 只对 `auth` 有意义:`claimed` / `already` 是**平台给的既成事实**(真领到了),
+    /// 换版本也不会变成没领;而 `auth` 是**对某一套凭据的判决**,凭据链路一改就该重判。
+    pub fn auth_is_stale(&self, version: &str) -> bool {
+        match self.last_code.as_deref() {
+            Some(c) if c.starts_with("auth") => {
+                self.last_auth_version.as_deref() != Some(version)
+            }
+            _ => false,
+        }
+    }
+
+    /// 今天是不是**真的**不用再试了。
+    ///
+    /// 与 [`done_for_day`](Self::done_for_day) 只差一处:`auth` 只在**同一版本内**才算完结。
+    /// 换了版本说明凭据链路可能已经变了(比如 v0.1.47 把 WorkBuddy 签到改成用桌面端凭据),
+    /// 这时候还拿旧版本的 `auth` 挡住当天,用户就会看到一条早已不成立的"凭据失效"。
+    ///
+    /// 不担心变成无限重试:`auth` 不可重试(`next_try_at` 为 None),且下次真判出 `auth`
+    /// 时会带上当前版本,同一版本内照样当天完结 —— 只有"换版本"这一次会多给一枪。
+    pub fn blocks_today(&self, today: &str, version: &str) -> bool {
+        self.done_for_day(today) && !self.auth_is_stale(version)
     }
 }
 
@@ -1052,6 +1087,46 @@ mod tests {
         // 昨天签的不算今天
         c.last_day = Some("2026-10-12".into());
         assert!(!c.done_for_day(today));
+    }
+
+    /// v0.1.47 真机踩到的那件事:`auth` 记在升级**之前**,升级后凭据链路已经修好,
+    /// 但当天仍被那条旧 `auth` 挡住,界面一直显示"凭据失效"。
+    /// 判据是「记录 auth 的版本 ≠ 当前版本」 → 陈旧 → 放开当天。
+    #[test]
+    fn stale_auth_does_not_block_the_day_after_version_change() {
+        let today = "2026-10-20";
+        let mut c = CheckinCfg::default();
+        c.last_day = Some(today.into());
+        c.last_code = Some("auth".into());
+
+        // ① 老数据:字段还不存在(None) → 一定陈旧
+        assert!(c.auth_is_stale("0.1.47"));
+        assert!(c.done_for_day(today), "done_for_day 本身不变:auth 仍算当天完结");
+        assert!(!c.blocks_today(today, "0.1.47"), "但换版本后不该再挡当天");
+
+        // ② 同一版本判出的 auth → 不陈旧,当天照旧完结(不担心无限重试)
+        c.last_auth_version = Some("0.1.47".into());
+        assert!(!c.auth_is_stale("0.1.47"));
+        assert!(c.blocks_today(today, "0.1.47"));
+        // 但换到 0.1.48 又该放行
+        assert!(c.auth_is_stale("0.1.48"));
+        assert!(!c.blocks_today(today, "0.1.48"));
+
+        // ③ 只有 auth 会被版本影响:claimed / already 是平台给的既成事实
+        for code in ["claimed", "already", "inactive:本期无活动"] {
+            let mut d = CheckinCfg::default();
+            d.last_day = Some(today.into());
+            d.last_code = Some(code.into());
+            d.last_auth_version = Some("0.1.0".into());
+            assert!(!d.auth_is_stale("0.1.47"), "{code} 不该因版本变化被重判");
+            assert!(d.blocks_today(today, "0.1.47"), "{code} 仍应挡住当天");
+        }
+
+        // ④ 不是今天的 auth 不影响今天
+        let mut e = CheckinCfg::default();
+        e.last_day = Some("2026-10-19".into());
+        e.last_code = Some("auth".into());
+        assert!(!e.blocks_today(today, "0.1.47"));
     }
 
     /// Trae:真机取样的响应(2026-10-13)—— 已签、100 分、在顶层。

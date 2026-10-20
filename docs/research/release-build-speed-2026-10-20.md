@@ -88,6 +88,74 @@ GitHub 缓存上限 10 GB/仓库,而且上传/下载 12 GB 比重编还慢。
 ①②③ 加起来预计 **21.9 分 → 约 6 分**,且不动构建方式,风险很低。
 ④ 能进一步降到 **1–2 分**,但要先验证 msvc 二进制能不能驱动 GNU target 的 bundle。
 
+## 四之二、社区调研:别人怎么加速,以及为什么我们抄不了
+
+2026-10-20 用 GitHub 代码搜索 + 直接读仓库统计了主流做法。
+
+### 做法 A:`taiki-e/install-action`(200+ 项目在用)—— **对 tauri-cli 无效**
+
+这是 Rust CI 里装工具的社区标准做法(免编译,直接拉预编译二进制)。但实测:
+
+| 检查 | 结果 |
+|---|---|
+| `install-action` 的 tools 白名单里有没有 tauri-cli | **没有**(tools 目录只有 8 个条目) |
+| 不在白名单会怎样 | 回退到 `cargo-binstall` |
+| `tauri-apps/tauri` 的 release assets | **0 个** |
+| `cargo-quickinstall` 最近 100 个 release 里 tauri-cli | **命中 0** |
+
+**结论:tauri-cli 根本没有官方预编译二进制可拿。** 这条"标准做法"落到 tauri-cli 上
+等于还是 `cargo install`,那 11 分钟省不掉。
+
+### 做法 B:npm 的 `@tauri-apps/cli` —— 有 GNU 分支的痕迹,但包不存在
+
+`@tauri-apps/cli` 的 `index.js`(NAPI-RS 生成)里明确写着:
+
+```js
+return require('./cli.win32-x64-gnu.node')   // ← 优先 GNU
+return require('./cli.win32-x64-msvc.node')
+```
+
+看着像有 GNU 版。但 **`@tauri-apps/cli-win32-x64-gnu` 在 npm 上是 404**(实测)。
+所以 Windows 上只能装到 **msvc** 版 `.node` 二进制。
+
+本项目用 **GNU 工具链**,而 `build/build.ps1:172` 写死了 `& cargo tauri build`。
+要走这条路得:① 改 build.ps1 支持 npx 调用;② 赌 msvc 版 CLI 能驱动 GNU target 的
+bundle —— **这两点都没有实测依据**。发版链路不能赌,所以不做。
+
+### 做法 C:`tauri-apps/tauri-action`(spacedrive 等在用)—— **不省编译**
+
+spacedrive 的 release.yml 核心只有:
+
+```yaml
+- name: Build with tauri-action
+  uses: tauri-apps/tauri-action@v0
+  with:
+    profile: release
+```
+
+`tauri-action` 只是封装了 `cargo tauri build` + 上传 release,**底层照样全量编译**。
+它不解决"装 CLI 要 11 分钟"这个我们特有的问题。
+
+### 结论:我们已用的方案就是当前能拿到的最优
+
+| 方案 | 别人用吗 | 我们能省 | 状态 |
+|---|---|---|---|
+| `Swatinem/rust-cache` 缓存依赖产物 | ✅ 广泛 | ~5 分 | ✅ 已上 |
+| 缓存 cargo-tauri 二进制 + 稳定 key | ✅ 常见 | 11 分(次轮起) | ✅ 已上 |
+| `taiki-e/install-action` | ✅ 200+ 项目 | **0**(tauri-cli 无预编译) | ❌ 实测无效 |
+| `cargo-binstall` | ✅ | **0**(同上) | ❌ 实测无效 |
+| npm 预编译 CLI | ⚠️ 少数 | 10.5 分 | ❌ 只有 msvc,风险高 |
+| `tauri-apps/tauri-action` | ✅ | 0(不省编译) | ❌ 无收益 |
+
+### 还想再快的两条路(都有代价,未做)
+
+1. **自建 tauri-cli 预编译缓存**:手动编一次,把 `cargo-tauri.exe` 传到本项目自己的
+   release(或 artifact),CI 直接下。能省 11 分,但**要自己维护一个二进制分发点**,
+   且跨 runner 镜像版本可能 ABI 不兼容(需要按 `runner.os` + 镜像版本打 tag)。
+2. **改用 msvc 工具链**:那样就能用 npm 预编译 CLI。但整个项目要改链接器配置,
+   且 WebView2 加载器要从静态改为动态分发(PROGRESS 里记过:当初选 GNU 正是为了
+   避免 MSVC 需要单独的 WebView2Loader.dll)。**改动面远超收益**。
+
 ## 五、顺带发现的两个发版正确性 bug(不是速度问题,但更要紧)
 
 调研过程中重跑 v0.1.47,暴露出两个**会让发版"看起来成功、实际坏掉"**的问题。

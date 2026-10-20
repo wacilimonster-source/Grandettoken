@@ -3,7 +3,15 @@
 # 对应 RELEASE.md 的手工 5 步。把每一步都单独拆开是有意的:哪一段红了,
 # 本地就能照 RELEASE.md 原样复现哪一段,不用猜是哪半步坏的。
 #
-# 需要 3 个 secret(见 RELEASE.md「一次性准备」):
+# ⚠ **2026-10-20 起,发版改回本地打包,本文件不再是主链路。**
+#   原因见 RELEASE.md 顶部:CI 一次 22 分钟,其中 12 分钟花在 `cargo install tauri-cli`
+#   (tauri-cli 没有官方预编译二进制,实测 cargo-binstall / install-action / npm 都不行)。
+#   本机已有编好的 cargo-tauri.exe + target/ 增量缓存,本地 bundle 只要 **3 分 11 秒**。
+#
+#   所以:去掉 `push: tags` 触发器,**只留 workflow_dispatch 作应急**。
+#   正常发版走 `bash build/release-local.sh` + `gh release create`(见 RELEASE.md)。
+#
+# 需要 3 个 secret(仅应急链路需要,见 RELEASE.md「一次性准备」):
 #   TAURI_SIGNING_PRIVATE_KEY        签名私钥**文件内容**(不是路径)—— CI 上没有那把文件
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  空串(密钥未加密)
 # 私钥只从 secret 读,不落盘、不回显。GITHUB_TOKEN 由 Actions 内置提供。
@@ -12,12 +20,11 @@
 name: release
 
 on:
-  push:
-    tags: ['v*']
+  # 只留手工触发。推 tag **不再**自动发版(2026-10-20 改)。
   workflow_dispatch:
     inputs:
       tag:
-        description: '要发布的 tag(已存在),如 v0.1.43'
+        description: '要发布的 tag(已存在),如 v0.1.47'
         required: true
 
 permissions:

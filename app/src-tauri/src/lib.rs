@@ -2212,12 +2212,23 @@ fn cycle_day_of(id: &str, now: i64) -> String {
     checkin::cycle_day(now, roll)
 }
 
+/// 当前版本。用来判断一条 `auth` 结论是不是**陈旧**的 —— 见
+/// [`checkin::CheckinCfg::blocks_today`] 的说明:v0.1.47 升级后当天仍显示
+/// "凭据失效",就是因为旧的 `auth` 把当天挡住了,而凭据链路其实已经修好。
+const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// 「今天还用不用再试」。三处调用点(状态展示 / 手动按钮 / 自动节拍器)必须同口径,
+/// 否则会出现"界面说不能试、节拍器却在试"这种自相矛盾。
+fn checkin_blocks_today(c: &checkin::CheckinCfg, today: &str) -> bool {
+    c.blocks_today(today, APP_VERSION)
+}
+
 fn checkin_state_of(id: &str, cfg: &Config, store: &Store, note: Option<String>) -> CheckinState {
     let def = checkin::find(id);
     let c = cfg.checkin.get(id).cloned().unwrap_or_default();
     let now = now_ts();
     let today = cycle_day_of(id, now);
-    let done = c.done_for_day(&today);
+    let done = checkin_blocks_today(&c, &today);
     let waiting = c.next_try_at.map(|t| t > now).unwrap_or(false);
     let outcome = c.last_code.clone().unwrap_or_default();
     let needs_user = outcome.starts_with("auth") || outcome.starts_with("shape");
@@ -2328,6 +2339,12 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
         entry.attempts = if same_day { entry.attempts + 1 } else { 1 };
         entry.last_day = Some(today.clone());
         entry.last_code = Some(out.code());
+        // 记下"判出这条 auth 的是哪个版本"。换版本后 `blocks_today` 会认为它陈旧、
+        // 给一次重新判定的机会 —— 见 checkin.rs 里 last_auth_version 的说明。
+        // 非 auth 的结论不需要清这个字段:auth_is_stale 只在 last_code 以 auth 开头时才看它。
+        if matches!(out, checkin::Outcome::AuthNeeded) {
+            entry.last_auth_version = Some(APP_VERSION.to_string());
+        }
         entry.last_try_at = Some(now);
         entry.last_credits = credits;
         // 连续天数:拿不到就**保留上次的值**(None 覆盖成 None 没问题,但别把已知的清掉)
@@ -2480,7 +2497,7 @@ async fn checkin_now(app: tauri::AppHandle, id: String) -> Result<CheckinState, 
         // 周期日(不是自然日):Qoder 的"今天"从 10:00 起算
         let today = cycle_day_of(&id, now_ts());
         if let Some(c) = cfg.checkin.get(&id) {
-            if c.done_for_day(&today) {
+            if checkin_blocks_today(c, &today) {
                 return Err(format!(
                     "今天已经处理过了({})",
                     c.last_code.clone().unwrap_or_else(|| "已领".to_string())
@@ -2531,7 +2548,7 @@ fn spawn_checkin_ticker(app: tauri::AppHandle) {
                 // **逐渠道算周期日**:Qoder 的"今天"从 10:00 起算,不是自然日。
                 // 用自然日会让 09:59 与 10:01 混成一天,当天那一期永远领不到。
                 let today = checkin::cycle_day(now, def.day_roll_hour);
-                if c.done_for_day(&today) {
+                if checkin_blocks_today(c, &today) {
                     continue;
                 }
                 if c.next_try_at.map(|t| t > now).unwrap_or(false) {

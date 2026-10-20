@@ -47,3 +47,8 @@ desktop.ini
 .zcode/
 # DSH 沙箱 ACL 取证报告(运行期产物)
 .dsh-acl-report/
+
+# WebView2/crashpad 在运行目录留下的噪音(不是我们的日志;diag.log 才是)
+debug.log
+*.log
+!.gitignore
