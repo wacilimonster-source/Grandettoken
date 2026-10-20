@@ -2370,7 +2370,15 @@ fn checkin_state_of(id: &str, cfg: &Config, store: &Store, note: Option<String>)
     let today = cycle_day_of(id, now);
     let done = checkin_blocks_today(&c, &today);
     let waiting = c.next_try_at.map(|t| t > now).unwrap_or(false);
-    let outcome = c.last_code.clone().unwrap_or_default();
+    // 陈旧的 `auth` **不要当事实显示**:它是对旧版本那一套凭据的判决,凭据链路
+    // 可能早就变了(2026-10-20 真机:启动后 5 分钟内界面一直挂着过期的"凭据失效",
+    // 把用户引去网页登录,而那条路还被网关拒)。在节拍器重新判定回来之前,
+    // 如实说"正在重新确认",且**不给「去登录」**。
+    let outcome = if c.auth_is_stale(APP_VERSION) {
+        "recheck".to_string()
+    } else {
+        c.last_code.clone().unwrap_or_default()
+    };
     let needs_user = outcome.starts_with("auth") || outcome.starts_with("shape");
     let log = store.recent_checkins(id, now - 7 * 86_400).unwrap_or_default();
     let month_credits = store
@@ -2665,52 +2673,62 @@ async fn checkin_now(app: tauri::AppHandle, id: String) -> Result<CheckinState, 
 
 /// 每日节拍器:每 5 分钟看一次"今天该不该签"。
 /// **不塞进 poll_loop 的 60 秒里** —— 签到是写操作,节奏要跟取数分开(设计稿第 8 节)。
+///
+/// **先跑一轮再睡**(2026-10-20 修):以前 `sleep(300)` 在循环最前面,启动后要干等
+/// 整整 5 分钟才判第一次。而界面在这段时间挂的是**上次运行留下的结论** ——
+/// 真机现场:应用 23:38 启动,23:43 才重试成功;中间那 5 分钟卡片一直显示
+/// 早已过期的"凭据失效",用户被「去登录」引到死胡同(网页登录还被网关拒)。
 fn spawn_checkin_ticker(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
+            checkin_tick_once(&app).await;
             tokio::time::sleep(std::time::Duration::from_secs(300)).await;
-            if UPDATING.load(std::sync::atomic::Ordering::Relaxed) {
-                continue; // 更新期间不签到(报告 P1-15)
-            }
-            let (cfg, now) = {
-                let state = app.state::<AppState>();
-                let cfg = lock_rw(&state.config).clone();
-                (cfg, now_ts())
-            };
-            for def in checkin::CHECKINS {
-                let Some(c) = cfg.checkin.get(def.id) else { continue };
-                if !c.enabled || !c.auto {
-                    continue; // 关了就一个请求都不发
-                }
-                if cfg.hidden_channels.iter().any(|h| h == def.id) {
-                    continue; // 隐藏 = 不读本机登录凭据、也不对外发请求(与取数同口径)
-                }
-                // **逐渠道算周期日**:Qoder 的"今天"从 10:00 起算,不是自然日。
-                // 用自然日会让 09:59 与 10:01 混成一天,当天那一期永远领不到。
-                let today = checkin::cycle_day(now, def.day_roll_hour);
-                if checkin_blocks_today(c, &today) {
-                    continue;
-                }
-                if c.next_try_at.map(|t| t > now).unwrap_or(false) {
-                    continue; // 退避中
-                }
-                // 跨日时刻 + 该渠道抖动之后才允许(当天更晚也算 → 开机补跑)
-                if !checkin::due_now(now, &today, def.id, def.day_roll_hour) {
-                    continue;
-                }
-                if let Err(e) = run_checkin(&app, def.id, false).await {
-                    // 拿不到凭据:记一句就走,别每 5 分钟刷屏。
-                    // **但也要落一条流水** —— 以前这里只 eprintln,绿色版从托盘启动时
-                    // 那行没人看得到,于是"没试"与"试了失败"在数据里无法区分
-                    // (2026-10-20 排查:workbuddy 10-16/10-17 两天在 checkin_log 里是空白)。
-                    eprintln!("签到 {} 跳过: {e}", def.name);
-                    record_checkin_skip(&app, def.id, &today, now, &e);
-                }
-                // 两渠道之间串行 + 间隔(设计稿第 8 节)
-                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-            }
         }
     });
+}
+
+/// 走一轮:对每个"今天还没处理完"的渠道尝试签到。
+async fn checkin_tick_once(app: &tauri::AppHandle) {
+    if UPDATING.load(std::sync::atomic::Ordering::Relaxed) {
+        return; // 更新期间不签到(报告 P1-15)
+    }
+    let (cfg, now) = {
+        let state = app.state::<AppState>();
+        let cfg = lock_rw(&state.config).clone();
+        (cfg, now_ts())
+    };
+    for def in checkin::CHECKINS {
+        let Some(c) = cfg.checkin.get(def.id) else { continue };
+        if !c.enabled || !c.auto {
+            continue; // 关了就一个请求都不发
+        }
+        if cfg.hidden_channels.iter().any(|h| h == def.id) {
+            continue; // 隐藏 = 不读本机登录凭据、也不对外发请求(与取数同口径)
+        }
+        // **逐渠道算周期日**:Qoder 的"今天"从 10:00 起算,不是自然日。
+        // 用自然日会让 09:59 与 10:01 混成一天,当天那一期永远领不到。
+        let today = checkin::cycle_day(now, def.day_roll_hour);
+        if checkin_blocks_today(c, &today) {
+            continue;
+        }
+        if c.next_try_at.map(|t| t > now).unwrap_or(false) {
+            continue; // 退避中
+        }
+        // 跨日时刻 + 该渠道抖动之后才允许(当天更晚也算 → 开机补跑)
+        if !checkin::due_now(now, &today, def.id, def.day_roll_hour) {
+            continue;
+        }
+        if let Err(e) = run_checkin(app, def.id, false).await {
+            // 拿不到凭据:记一句就走,别每 5 分钟刷屏。
+            // **但也要落一条流水** —— 以前这里只 eprintln,绿色版从托盘启动时
+            // 那行没人看得到,于是"没试"与"试了失败"在数据里无法区分
+            // (2026-10-20 排查:workbuddy 10-16/10-17 两天在 checkin_log 里是空白)。
+            eprintln!("签到 {} 跳过: {e}", def.name);
+            record_checkin_skip(app, def.id, &today, now, &e);
+        }
+        // 两渠道之间串行 + 间隔(设计稿第 8 节)
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+    }
 }
 
 // ─────────────── 4SAPI 可用模型 + 一键配置到客户端 ───────────────

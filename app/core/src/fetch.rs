@@ -1261,14 +1261,17 @@ fn build_view(
     // 成不成功无关。之前取数一失败就把三个窗口一起置 None,汇总里"今日/本周/本月"
     // 会整片显示"数据不足",明明本地有快照。
     let has_amount = result.kind == Kind::Amount && result.remaining.is_some();
+    // 「现在」一律用调用方传进来的 `updated_at`,**不要**在这里再取一次 now_ts():
+    // 生产调用方传的就是 now_ts()(见本文件 `let ts = now_ts();`),两者等价;
+    // 而测试可以传一个合成时刻,把"今天几点"钉住 —— 之前这里偷偷用真实时钟,
+    // 导致缺口类测试在刚过午夜时必挂(2026-10-21 00:07 真机撞到)。
+    let now2 = updated_at;
     let (day, week, month, day_prev, week_prev, month_prev) = if has_amount {
-        amount_windows(store, def.id, key_fp, now_ts())
+        amount_windows(store, def.id, key_fp, now2)
     } else {
         (None, None, None, None, None, None)
     };
 
-    // 同一个视图里只用一个"现在":上面 583 行那个 now 出了块作用域,这里取一次复用
-    let now2 = now_ts();
     let soon = expiring_soon(&result.expiring, now2);
 
     // 网页会话型(WorkBuddy):平台会话是约 7 天的**绝对 TTL**(证据链见
@@ -3111,13 +3114,22 @@ mod tests {
     /// **时间必须相对"现在"取**:以前写死 `midnight + 2h / +3h / +4h`,凌晨 2 点前跑测试时
     /// 那些快照还在未来,`v.day` 自然算不出来 —— 2026-10-19 02:14 就这么挂过一次
     /// (与业务无关,是夹具写死了钟点)。
+    ///
+    /// **2026-10-21 00:07 又挂了一次**,这次是另一种:想构造"距零点 20 分钟的缺口",
+    /// 但刚过午夜时 `midnight+20min` 还在未来,`lo < hi` 不成立 → 缺口只剩 4 分钟
+    /// → 判不出缺口。根本原因还是**依赖真实钟点**。
+    ///
+    /// 现在把"现在"钉成**今天 03:00**(合成值,直接传给 build_view),与真实钟点彻底解耦:
+    /// 凌晨、白天、深夜跑都得到同一组快照时刻。
     #[test]
     fn gap_and_fingerprint_reach_the_view() {
         let store = Store::open_memory().unwrap();
         let cfg = Config::default();
         let def = providers::find("deepseek").unwrap();
         let midnight = local_midnight_today();
-        let now = now_ts();
+        // 合成"现在" = 今天 03:00。build_view 接 now 参数,所以不必是真实时间;
+        // 但**必须**与 record_fp 落的时刻同一坐标系(都是"今天零点 + 偏移")。
+        let now = midnight + 3 * 3600;
         let res = FetchResult {
             valid: true,
             kind: Kind::Amount,
@@ -3125,13 +3137,9 @@ mod tests {
             remaining: Some(90.0),
             ..Default::default()
         };
-        // A 账:今天早些时候才开始有观测(有缺口),掉 10 元。
-        // 起点必须**比本地零点晚 10 分钟以上**(OBSERVE_GAP_SEC 才认这是缺口),
-        // 且必须落在过去 —— 凌晨 2 点跑测试时 `now-3h` 会掉到昨天,踩过。
-        let lo = midnight + 20 * 60; // 距零点 20 分钟:稳稳超过缺口线
-        let hi = now.saturating_sub(120); // 留 2 分钟余量
-        let a1 = if lo < hi { lo } else { hi.saturating_sub(60).max(midnight + 1) };
-        let a2 = (a1 + 60).min(hi.max(a1 + 1));
+        // A 账:今天 00:20 才开始有观测(距零点 20 分钟 > OBSERVE_GAP_SEC),掉 10 元。
+        let a1 = midnight + 20 * 60;
+        let a2 = a1 + 60;
         store
             .record_fp(def.id, "fpA", a1, Some(100.0), None, None, "amount")
             .unwrap();
@@ -3164,7 +3172,8 @@ mod tests {
             def,
             FetchResult { remaining: Some(95.0), ..res.clone() },
             false,
-            now_ts(),
+            // 同一个合成 now:这里以前传 now_ts(),刚过午夜时第二笔(midnight+1h)还在未来
+            now,
             &s2,
             &cfg,
             None,
