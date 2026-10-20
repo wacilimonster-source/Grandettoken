@@ -1061,6 +1061,24 @@ fn auth_label(def: &providers::ProviderDef, cred: Option<&appauth::Credential>) 
     }
 }
 
+/// 凭据候选的**可读标签**(诊断日志用)。只描述形态与来源,不含令牌本身。
+fn cred_desc(def: &providers::ProviderDef, c: &appauth::Credential) -> String {
+    let kind = if c.token.trim().starts_with(DESKTOP_TOKEN_PREFIX) {
+        "桌面端"
+    } else if weblogin::cookie_header(&c.token).is_some() {
+        "网页会话"
+    } else if matches!(def.auth, AuthKind::Keyring) {
+        "密钥"
+    } else {
+        "手动令牌"
+    };
+    if c.source.is_empty() {
+        kind.to_string()
+    } else {
+        format!("{kind}/{}", c.source)
+    }
+}
+
 /// 汇总"近 30 天会过期多少"。
 fn expiring_soon(expiring: &[Expiring], now: i64) -> Option<Expiring> {
     let limit = now + EXPIRING_SOON_DAYS * 86_400;
@@ -1859,6 +1877,19 @@ impl Fetcher {
                         let reason = secret_err.unwrap_or_else(|| {
                             format!("没检测到 {} 的登录凭据(可能只是瞬时读不到)", def.name)
                         });
+                        crate::diaglog::write_keyed(
+                            def.id,
+                            "no-cred",
+                            &format!(
+                                "没有可用凭据({}) · 凭据类型={}",
+                                reason,
+                                match def.auth {
+                                    AuthKind::Keyring => "keyring",
+                                    AuthKind::WebSession => "web(桌面端/网页会话/手动密钥)",
+                                    AuthKind::App(_) => "本机登录态",
+                                }
+                            ),
+                        );
                         let cached = self
                             .cache
                             .lock()
@@ -1904,12 +1935,16 @@ impl Fetcher {
                     let mut last_cred: Option<appauth::Credential> = None;
                     let mut result = FetchResult::default();
                     let mut used_url = None;
+                    // 每个候选凭据试一轮;诊断日志要知道"试了几份、最后卡在哪"。
+                    let mut tried: Vec<String> = Vec::new();
                     for cred in creds.iter() {
                         last_cred = Some(cred.clone());
+                        let desc = cred_desc(def, cred);
                         let (r, url, kind) =
                             fetch_channel(&self.http, def, &cred.token, memo.as_deref()).await;
                         result = r;
                         used_url = url;
+                        tried.push(format!("{desc}→{}", if result.valid { "通" } else { "不通" }));
                         if result.valid {
                             chosen = Some(cred.clone());
                             break;
@@ -1919,6 +1954,25 @@ impl Fetcher {
                         }
                         break;
                     }
+                    // 渠道级一行:失败必记(节流),成功只在"从失败变成功"时有信息量,
+                    // 由 diaglog 的签名去重自然处理 —— 同一成功状态不会反复落。
+                    crate::diaglog::write_keyed(
+                        def.id,
+                        "channel",
+                        &if result.valid {
+                            format!(
+                                "取数成功 · 凭据 [{}] · 入口 {}",
+                                tried.join("，"),
+                                used_url.as_deref().unwrap_or("?")
+                            )
+                        } else {
+                            format!(
+                                "取数失败 · 凭据 [{}] · 原因:{}",
+                                if tried.is_empty() { "无可用凭据".into() } else { tried.join("，") },
+                                result.error.as_deref().unwrap_or("未知")
+                            )
+                        },
+                    );
                     let ts = now_ts();
 
                     if should_clear_memo(result.valid, used_url.is_some()) {

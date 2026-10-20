@@ -136,6 +136,26 @@ const invoke = async (cmd, args) => {
   if (cmd === 'get_series') return [];
   if (cmd === 'inject_state') return JSON.parse(JSON.stringify(SAMPLE_INJECT));
   if (cmd === 'get_model_catalog') return JSON.parse(JSON.stringify(SAMPLE_CATALOG));
+  // 「排查日志」卡:路径/大小/开关状态 + 最近几行。这两条不 mock 的话,
+  // refreshLogCard 会在探针里走到 catch、把路径写成"拿不到日志路径",
+  // 就测不到"卡片按真实返回值渲染"这条。
+  if (cmd === 'diag_log_info') {
+    return {
+      path: 'C:\\Users\\probe\\AppData\\Roaming\\com.wacil.tokenscope\\diag.log',
+      dir: 'C:\\Users\\probe\\AppData\\Roaming\\com.wacil.tokenscope',
+      size: 349913,
+      enabled: true,
+    };
+  }
+  if (cmd === 'diag_log_tail') {
+    return [
+      '2026-10-20 12:45:30.120+08:00 启动: Grandettoken 0.1.43 · exe=D:\\Grandettoken\\Grandettoken.exe',
+      '2026-10-20 12:45:30.121+08:00 启动: 本机盘符:C: D:',
+      '2026-10-20 12:45:31.004+08:00 wb: 找到桌面端:D:\\Programs\\WorkBuddy\\WorkBuddy.exe · 命中目录 D:\\Programs\\WorkBuddy',
+      '2026-10-20 12:45:31.201+08:00 wb: 派生密钥成功 · keyId=9127dea1b44020a7',
+      '2026-10-20 12:45:31.880+08:00 wb: 取数成功 · https://www.codebuddy.cn/v2/billing/meter/get-user-resource · HTTP 200 · code=Some(0) · 凭据=桌面端 Bearer',
+    ].join('\n');
+  }
   return null;
 };
 
@@ -202,7 +222,6 @@ vm.createContext(ctx);
 // ── 模型页:真渲染(2026-10-17 补)──
 // 为什么补:v0.1.38 里 `mdlRowHtml` 少了一行 `const on = done(id, r.id);`,而行渲染还在用 `on`,
 // 于是**每渲染一行抛一次 ReferenceError**,被 renderModels 的 try/catch 兜成界面上的
-// 「模型页渲染出错:on is not defined」。老探针只加载页面、不驱动模型页(inject_state 返回 null),
 // 所以它照样报"通过" —— 这条就是那个缺口。
 // 现在:塞进 5 个客户端(DSH 标成"正在运行")与一份价目表,真跑 renderModels / renderModelSheet,
 // 再用**界面自己会显示的那句话**做强断言。
@@ -280,8 +299,49 @@ function probeModels() {
   return '';
 }
 
-process.on('unhandledRejection', (e) => logs.push(['UNHANDLED', String(e && e.stack || e)]));
+// 「排查日志」卡(关于页签):真跑一遍 refreshLogCard,
+// 断言路径 / 大小 / 开关状态都按后端返回值渲染 —— 这些是用户报问题时最先看的东西,
+// 渲染错了("拿不到日志路径")等于把唯一的排查入口也弄丢了。
+// 直接调 refreshLogCard 而不走 showTab:后者要遍历 mTabs.children,假 DOM 没实现它,
+// 而页签切换本身另有 verify-ui 覆盖;这里要验的是这张卡自己的渲染。
+function probeLogCard() {
+  const dump = vm.runInContext(
+    `(() => {
+       refreshLogCard();
+       return 'ok';
+     })()`,
+    ctx
+  );
+  if (dump !== 'ok') return 'refreshLogCard 没跑起来';
+  return '';
+}
 
+function probeLogCardCheck() {
+  const dump = vm.runInContext(
+    `(() => {
+       const g = (id) => document.getElementById(id) || {};
+       return JSON.stringify({
+         path: (g('logPath').textContent) || '',
+         size: (g('logSize').textContent) || '',
+         off: ((g('logOff').style) || {}).display || '',
+       });
+     })()`,
+    ctx
+  );
+  const { path, size, off } = JSON.parse(dump);
+  if (!/diag\.log$/.test(path)) {
+    return '日志路径没按后端返回值渲染:' + path;
+  }
+  if (!/KB|MB|B$/.test(size)) {
+    return '日志大小没渲染:' + size;
+  }
+  if (off === 'block') {
+    return '日志明明开着,界面却显示已关闭';
+  }
+  return '';
+}
+
+process.on('unhandledRejection', (e) => logs.push(['UNHANDLED', String(e && e.stack || e)]));
 try {
   vm.runInContext(src, ctx, { filename: 'app.js' });
 } catch (e) {
@@ -297,6 +357,26 @@ setTimeout(() => {
   } catch (e) {
     modelFail = 'probeModels 自己抛异常: ' + String((e && e.stack) || e);
   }
+  // 排查日志卡:真跑一次 refreshLogCard,等它 async 落地后再读 DOM 断言
+  let logFail = '';
+  try {
+    logFail = probeLogCard();
+  } catch (e) {
+    logFail = 'probeLogCard 自己抛异常: ' + String((e && e.stack) || e);
+  }
+  setTimeout(() => {
+    if (!logFail) {
+      try {
+        logFail = probeLogCardCheck();
+      } catch (e) {
+        logFail = 'probeLogCardCheck 自己抛异常: ' + String((e && e.stack) || e);
+      }
+    }
+    finish(modelFail, logFail);
+  }, 80);
+}, 400);
+
+function finish(modelFail, logFail) {
   console.log('=== invoke calls (in order) ===');
   console.log(invokeCalls.length ? invokeCalls.join(', ') : '(none)');
   console.log('');
@@ -306,6 +386,9 @@ setTimeout(() => {
   console.log('=== 模型页 ===');
   console.log(modelFail ? 'FAIL: ' + modelFail : 'ok');
   console.log('');
+  console.log('=== 排查日志卡 ===');
+  console.log(logFail ? 'FAIL: ' + logFail : 'ok');
+  console.log('');
   console.log('=== console output ===');
   if (!logs.length) console.log('(none)');
   logs.forEach(([lv, msg]) => console.log('[' + lv + '] ' + msg));
@@ -313,8 +396,8 @@ setTimeout(() => {
   // 退出码是这个探针唯一的机器可读信号,所以 app.js 自己打出的 [ERROR] 也算失败:
   // 以前的判断只看 THROWN/UNHANDLED,一次"渲染抛错被 catch 住,只 console.error"
   // 的运行会以 0 退出,看起来是通过。
-  // 模型页那条同理:它正是"渲染抛错被 catch 住"的那类故障,必须单独判。
+  // 模型页与排查日志卡同理:它们正是"渲染抛错被 catch 住"的那类故障,必须单独判。
   process.exit(
-    modelFail || logs.some(([lv]) => lv === 'THROWN' || lv === 'UNHANDLED' || lv === 'ERROR') ? 1 : 0
+    modelFail || logFail || logs.some(([lv]) => lv === 'THROWN' || lv === 'UNHANDLED' || lv === 'ERROR') ? 1 : 0
   );
-}, 400);
+}

@@ -229,6 +229,43 @@ ZCode 是两份 JSON(`schemaVersion` 不是 1 就放弃),Trae 是 SQLite 的 `It
   都不落盘、不进日志。
 - **流水**在 SQLite 的 `checkin_log`:渠道 / 北京日 / 结果码 / 数额 / 次数 / 说明。
 
+## 排查日志
+
+用户报"某渠道取不到数"时,唯一能把现场带回来的东西。
+
+- **落在哪**:`%APPDATA%\com.wacil.tokenscope\diag.log`(与 SQLite 同一个文件夹)。
+  设置 → 关于 → 「排查日志」里有路径、大小,以及「复制最近日志 / 打开目录 / 清空」。
+- **记什么**:取数链路的每一步 —— 启动环境(盘符、数据目录、相关环境变量)→ 找桌面端 exe
+  (命中哪个目录 / 整条候选链)→ 扫到的凭据文件 → 是否加密、keyId 是否匹配 → 解出的令牌
+  (长度 + 指纹前 8 位)→ 续期结果 → 每个取数入口的 HTTP 状态与业务 code。
+- **不记什么**:任何令牌、Cookie、`atRestSecretKey`、API Key。要区分时用
+  「长度 + sha256 前 8 位」;写入前还有一道 `redact()` 兜底(连 `session=` 的值一起掩)。
+- **不会写满磁盘**:单文件 1 MB,超过滚成 `diag.log.1`(只留一代),写失败静默并熔断一分钟。
+- **重复的失败不会刷屏**:同一状态 5 分钟内只落一次,之后补一行"又重复了 N 次";
+  状态一变(错误不同)立刻落新行。
+- **关掉**:设环境变量 `TOKENSCOPE_NODIAG=1`(设置页会如实显示"已关闭")。
+- 单元测试默认**不写**这个文件(`diaglog` 的测试闸门),只有显式 `set_dir` 的用例才落盘。
+
+### WorkBuddy 装在 D 盘 / 自定义目录
+
+`core/src/workbuddy.rs` 的 `find_app_exe()` 解析顺序:
+
+1. `WORKBUDDY_APP_EXECUTABLE`(可给 exe 或目录,最高优先);
+2. **注册表** —— `App Paths\WorkBuddy.exe`(HKCU/HKLM/32 位视图)与卸载项的
+   `InstallLocation` / `DisplayIcon`。这是**唯一不靠猜**的来源:
+   官方安装器无论装到哪个盘都会写在这儿(本机实测 5.8.3 的 `InstallLocation` 为空,
+   只有 `DisplayIcon` 给出路径,所以两种都要读);
+3. `LOCALAPPDATA` / `APPDATA` / `PROGRAMFILES` / `PROGRAMFILES(X86)` 下的默认位置;
+4. **每个盘符**(A–Z 里真实存在的)× 常见目录名:`WorkBuddy`、`Programs\WorkBuddy`、
+   `Program Files\WorkBuddy`、`Apps\WorkBuddy` 等。
+
+数据目录(`workbuddy-desktop*.info`)同样兼容非默认位置:除了三个环境变量,
+还认 `WORKBUDDY_AUTH_DIR`,并从找到的 exe 位置反推 `<exe 目录>\CodeBuddyExtension\...`
+与 `<盘根>\CodeBuddyExtension\...`。
+
+> 装到别的盘、找不到 exe 时,以前只会说"没装桌面端"(明明装着)。现在失败原因分档
+> (找不到 exe / 问不出密钥 / keyId 不匹配 / 凭据过期 / 401),并且**整条探测链进日志**。
+
 ## 已知限制
 
 - OpenCode Go 的接口未公开,无稳定性保证,响应结构变化时该渠道会显示取数失败。

@@ -1534,6 +1534,12 @@ async fn run_diagnostic(app: tauri::AppHandle) -> Result<String, String> {
             "否,直连(注意:代理软件若是 TUN/全局模式,系统层面仍会接管,这里看不出来)"
         }
     ));
+    // ── WorkBuddy 专项:这条链最长、失败点最多,而且是"装上就取不到数"的最常见来源。
+    //    用户报问题时把这几行贴过来,基本就能定位到"没装 / 没找到 / 拿不到密钥 / 过期 / 被拒"。
+    lines.push("      ── WorkBuddy 凭据链 ──".to_string());
+    for l in tokenscope_core::workbuddy::diag_summary(now_ts()) {
+        lines.push(format!("      {l}"));
+    }
     if let Ok(dir) = app.path().app_data_dir() {
         lines.push(format!("      数据目录 {}", dir.display()));
     }
@@ -3289,6 +3295,70 @@ async fn open_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
     .map_err(|e| format!("打开失败: {e}"))?
 }
 
+/// 排查日志的落点与大小(设置页要显示"日志在哪儿、多大")。
+/// 只报路径,不读内容 —— 打开/复制是另外两条命令,便于前端按需触发。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagLogInfo {
+    pub path: String,
+    pub dir: String,
+    pub size: u64,
+    /// 静默关闭了吗(`TOKENSCOPE_NODIAG=1`)。关着时界面上要如实说明,
+    /// 否则用户以为"有日志",报问题时却什么都没有。
+    pub enabled: bool,
+}
+
+#[tauri::command]
+async fn diag_log_info() -> Result<DiagLogInfo, String> {
+    let dir = tokenscope_core::diaglog::log_dir().ok_or("拿不到日志目录")?;
+    let path = tokenscope_core::diaglog::log_path().unwrap_or_else(|| dir.join(tokenscope_core::diaglog::LOG_FILE));
+    Ok(DiagLogInfo {
+        path: path.display().to_string(),
+        dir: dir.display().to_string(),
+        size: tokenscope_core::diaglog::size_bytes(),
+        enabled: !tokenscope_core::diaglog::is_disabled(),
+    })
+}
+
+/// 读日志尾巴(设置页预览 + 用户点「复制」时用)。只读文本,不含任何密钥
+/// (写入侧已经做过 [`tokenscope_core::diaglog::redact`])。
+#[tauri::command]
+async fn diag_log_tail(lines: Option<usize>) -> Result<String, String> {
+    let n = lines.unwrap_or(400).clamp(1, 5000);
+    let got = tokenscope_core::diaglog::tail_lines(n);
+    if got.is_empty() {
+        return Ok("(日志还是空的 —— 等一轮取数之后再看,或者点一次「立即刷新」)".to_string());
+    }
+    Ok(got.join("\n"))
+}
+
+/// 在资源管理器里打开日志目录。**与 `open_path` 分开**:那条只允许打开客户端配置
+/// 目录(白名单很窄),而这里只有"我们自己的日志目录"一个落点,不需要也不该复用。
+#[tauri::command]
+async fn open_log_dir(app: tauri::AppHandle) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        use tauri_plugin_opener::OpenerExt;
+        let dir = tokenscope_core::diaglog::log_dir().ok_or("拿不到日志目录".to_string())?;
+        if !dir.exists() {
+            std::fs::create_dir_all(&dir).map_err(|e| format!("建日志目录失败: {e}"))?;
+        }
+        app.opener()
+            .open_path(dir.display().to_string(), None::<&str>)
+            .map_err(|e| format!("打开失败: {e}"))
+    })
+    .await
+    .map_err(|e| format!("打开失败: {e}"))?
+}
+
+/// 清空日志(用户报完问题、想重新观察一段时用)。
+#[tauri::command]
+async fn diag_log_clear() -> Result<String, String> {
+    tokenscope_core::diaglog::clear()?;
+    // 清完立刻记一行:让"新的一段"从明确的起点开始,不至于看起来像日志坏了
+    tokenscope_core::diaglog::write("日志", "已清空(用户手动)");
+    Ok("日志已清空".to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -3388,6 +3458,12 @@ pub fn run() {
             }
 
             let _ = store.prune(now_ts() - 90 * 86400, tokenscope_core::fetch::local_tz_offset());
+
+            // 排查用日志:目录与 SQLite 同一个文件夹(用户找得着、也跟着数据一起备份/清理)。
+            // **必须在 manage 与起轮询之前**:第一轮取数的失败链要能落进文件,否则
+            // "装上就取不到数"那种场景又只剩一句界面文案(2026-10-20 用户报的那类)。
+            tokenscope_core::diaglog::set_dir(dir.clone());
+            tokenscope_core::diaglog::startup_banner(env!("CARGO_PKG_VERSION"));
 
             app.manage(AppState {
                 store: Arc::new(Mutex::new(store)),
@@ -3538,6 +3614,10 @@ pub fn run() {
             model_info,
             copy_text,
             open_path,
+            diag_log_info,
+            diag_log_tail,
+            open_log_dir,
+            diag_log_clear,
             checkin_state,
             checkin_now,
             key_reveal,

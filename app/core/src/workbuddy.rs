@@ -140,9 +140,27 @@ impl DesktopCredential {
     }
 }
 
-/// 桌面端 auth 目录的候选(与上游同口径,Windows 优先)。
+/// 桌面端 auth 目录的候选(Windows 优先)。
+///
+/// **兼容"数据目录不在 C 盘"的各种装法**(2026-10-20 用户实证:WorkBuddy 装在 D 盘):
+///   ① `LOCALAPPDATA` / `APPDATA` / `USERPROFILE` —— 正常机器(用户目录被迁移时,
+///      这些环境变量本身就已经指向别的盘,跟着走即可);
+///   ② `WORKBUDDY_AUTH_DIR` 显式覆盖 —— 用户把数据目录挪走 / 便携版时唯一的可靠来源;
+///   ③ 从桌面端 exe 的位置**反推**:不少"绿色/自定义目录"装法会把 userData 放在
+///      `<exe 所在目录>\CodeBuddyExtension\...` 或 `<exe 盘>:\CodeBuddyExtension\...`。
+///      这条排在系统路径之后,读不到也无害,但能救回一类本来永远找不到的机器。
 pub fn auth_dirs() -> Vec<PathBuf> {
     let mut out = Vec::new();
+    if let Some(v) = std::env::var_os("WORKBUDDY_AUTH_DIR") {
+        let p = PathBuf::from(v);
+        if !p.as_os_str().is_empty() {
+            // 允许用户直接给 auth 目录,或给它的上一层(带了 CodeBuddyExtension 就照用)
+            out.push(p.clone());
+            if !p.ends_with("auth") {
+                out.push(p.join("auth"));
+            }
+        }
+    }
     for var in ["LOCALAPPDATA", "APPDATA"] {
         if let Some(v) = std::env::var_os(var) {
             let p = PathBuf::from(v);
@@ -154,6 +172,16 @@ pub fn auth_dirs() -> Vec<PathBuf> {
     if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
         let h = PathBuf::from(home);
         out.push(h.join("AppData").join("Local").join("CodeBuddyExtension").join("Data").join("Public").join("auth"));
+    }
+    // ③ 从 exe 位置反推(只在真的找到 exe 时才有内容;找不到就是空,不产生候选)
+    if let Some(exe) = find_app_exe() {
+        if let Some(dir) = exe.parent() {
+            out.push(dir.join("CodeBuddyExtension").join("Data").join("Public").join("auth"));
+            // 盘根那一层:<盘>:\CodeBuddyExtension\...
+            if let Some(root) = dir.ancestors().last() {
+                out.push(root.join("CodeBuddyExtension").join("Data").join("Public").join("auth"));
+            }
+        }
     }
     // 正常机器上 LOCALAPPDATA 就等于 USERPROFILE\AppData\Local,同一条路径会被列两遍。
     // 不去重的话,后面会把同一个凭据文件读两遍、解两遍。
@@ -394,32 +422,241 @@ pub fn clear_key_cache() {
     }
 }
 
-/// 找桌面端可执行文件:环境变量 > 常见安装目录 > 注册表探测到的目录。
-pub fn find_app_exe() -> Option<PathBuf> {
-    if let Some(v) = std::env::var_os("WORKBUDDY_APP_EXECUTABLE") {
-        let p = PathBuf::from(v);
-        if p.is_file() {
-            return Some(p);
-        }
-    }
-    let mut roots: Vec<PathBuf> = Vec::new();
-    for var in ["LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)"] {
+/// 列出本机存在的盘符(`A`..`Z`)。
+///
+/// 为什么不用 `GetLogicalDrives`:core 刻意不依赖 Win32 绑定(见 `lib.rs` 顶部),
+/// 而 26 次 `is_dir` 是微秒级的事,还天然跳过光驱/未挂载盘。**只有盘根存在才算**,
+/// 所以网络盘断线时不会卡在这里(那一次 `is_dir` 会失败并返回 false)。
+pub fn drive_letters() -> Vec<char> {
+    ('A'..='Z')
+        .filter(|c| Path::new(&format!("{c}:\\")).is_dir())
+        .collect()
+}
+
+/// 桌面端可能落地的目录。**每个盘符都看** —— 2026-10-20 用户的 WorkBuddy 装在 D 盘,
+/// 而原来的实现只认 `%PROGRAMFILES%`(C 盘),于是整条凭据链断在第一步,
+/// 界面还只能说"没装桌面端"(明明装着)。
+fn app_roots() -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    // ① 注册表(最准):装到哪都写着,包括自定义目录与其它盘
+    out.extend(registry_app_roots());
+    // ② 环境变量所指的默认位置(用户目录被迁移到别的盘时会跟着走)
+    for var in ["LOCALAPPDATA", "APPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)"] {
         if let Some(v) = std::env::var_os(var) {
             let p = PathBuf::from(v);
-            if !p.as_os_str().is_empty() {
-                roots.push(p.join("Programs").join("WorkBuddy"));
-                roots.push(p.join("WorkBuddy"));
+            if p.as_os_str().is_empty() {
+                continue;
+            }
+            out.push(p.join("Programs").join("WorkBuddy"));
+            out.push(p.join("WorkBuddy"));
+        }
+    }
+    // ③ 每个盘符下的常见装法。用户口径「装在 D 盘」通常就是这几种之一:
+    //    D:\WorkBuddy、D:\Programs\WorkBuddy、D:\Program Files\WorkBuddy、D:\Apps\WorkBuddy
+    for drive in drive_letters() {
+        for sub in [
+            "Programs\\WorkBuddy",
+            "WorkBuddy",
+            "Program Files\\WorkBuddy",
+            "Program Files (x86)\\WorkBuddy",
+            "Apps\\WorkBuddy",
+            "Applications\\WorkBuddy",
+            "Software\\WorkBuddy",
+        ] {
+            out.push(PathBuf::from(format!("{drive}:\\{sub}")));
+        }
+    }
+    // 去重(注册表与环境变量经常指向同一个目录),保持顺序
+    let mut seen: Vec<String> = Vec::new();
+    out.retain(|p| {
+        let k = p.to_string_lossy().to_lowercase();
+        if seen.iter().any(|s| s == &k) {
+            false
+        } else {
+            seen.push(k);
+            true
+        }
+    });
+    out
+}
+
+/// 从注册表找桌面端装在哪。这是**唯一不靠猜**的来源:官方安装器会把位置写进
+/// App Paths 与卸载项,自定义安装目录 / 非 C 盘都会如实记在那儿。
+///
+/// 三处都看(顺序即优先级):
+///   ① `HKCU\...\App Paths\WorkBuddy.exe` —— per-user 安装,值就是 exe 全路径;
+///   ② `HKLM\SOFTWARE\...\App Paths\WorkBuddy.exe` —— 机器级安装;
+///   ③ `HKLM/HKCU\...\Uninstall\*` 的 `InstallLocation` / `DisplayIcon` —— 兜底。
+#[cfg(windows)]
+fn registry_app_roots() -> Vec<PathBuf> {
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ};
+    use winreg::RegKey;
+
+    let mut out: Vec<PathBuf> = Vec::new();
+    let names = ["WorkBuddy.exe", "WorkBuddyAI.exe", "CodeBuddy.exe"];
+    let app_paths = r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths";
+
+    let push_exe = |p: PathBuf, out: &mut Vec<PathBuf>| {
+        if p.is_file() {
+            if let Some(dir) = p.parent() {
+                out.push(dir.to_path_buf());
+            }
+        }
+    };
+    let push_dir = |p: PathBuf, out: &mut Vec<PathBuf>| {
+        if p.is_dir() {
+            out.push(p);
+        }
+    };
+
+    for hive in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
+        // ① / ② App Paths
+        for sub in [app_paths.to_string(), format!(r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths")] {
+            let Ok(key) = RegKey::predef(hive).open_subkey_with_flags(&sub, KEY_READ) else {
+                continue;
+            };
+            for name in names {
+                let Ok(exe) = key.open_subkey_with_flags(name, KEY_READ) else {
+                    continue;
+                };
+                if let Ok(path) = exe.get_value::<String, _>("") {
+                    push_exe(PathBuf::from(path.trim().trim_matches('"')), &mut out);
+                }
+            }
+        }
+        // ③ 卸载项(找 InstallLocation / DisplayIcon)
+        for sub in [
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+            r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+        ] {
+            let Ok(un) = RegKey::predef(hive).open_subkey_with_flags(sub, KEY_READ) else {
+                continue;
+            };
+            for item in un.enum_keys().flatten() {
+                let Ok(k) = un.open_subkey_with_flags(&item, KEY_READ) else {
+                    continue;
+                };
+                let name = k
+                    .get_value::<String, _>("DisplayName")
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                if !(name.contains("workbuddy") || name.contains("codebuddy")) {
+                    continue;
+                }
+                if let Ok(loc) = k.get_value::<String, _>("InstallLocation") {
+                    push_dir(PathBuf::from(loc.trim().trim_matches('"')), &mut out);
+                }
+                // DisplayIcon 形如 `D:\Apps\WorkBuddy\WorkBuddy.exe,0`
+                if let Ok(icon) = k.get_value::<String, _>("DisplayIcon") {
+                    if let Some(p) = parse_display_icon(&icon) {
+                        push_exe(p, &mut out);
+                    }
+                }
             }
         }
     }
-    for r in roots {
+    out
+}
+
+/// 从卸载项的 `DisplayIcon` 里取出 exe 路径。
+/// 真机形态:`C:\Program Files\WorkBuddy\WorkBuddy.exe,0`(逗号后是图标序号);
+/// 也有只给 `.ico` 的(那种不是主程序,返回 None)。**纯函数**,便于钉住格式。
+fn parse_display_icon(raw: &str) -> Option<PathBuf> {
+    // 先按逗号切图标序号。注意路径里本身可能带逗号,所以只在"末尾像序号"时才切。
+    let s = raw.trim().trim_matches('"').trim();
+    let s = match s.rsplit_once(',') {
+        Some((head, tail)) if tail.trim().parse::<i32>().is_ok() => head.trim().trim_matches('"'),
+        _ => s,
+    };
+    // 只认 .exe:`.ico` / `.png` 是图标文件,不是桌面端本体
+    let p = PathBuf::from(s);
+    let is_exe = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("exe"))
+        .unwrap_or(false);
+    (is_exe && !s.is_empty()).then_some(p)
+}
+
+/// 非 Windows 没有注册表这一说。
+#[cfg(not(windows))]
+fn registry_app_roots() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+/// 找桌面端可执行文件。探测链与结果会**原样写进诊断日志** —— 用户报"取不到数"时,
+/// 第一件事就是看这条链走到哪儿断了。
+///
+/// 顺序:
+///   ① `WORKBUDDY_APP_EXECUTABLE`(显式指定,最高优先;用户自己改过目录时的逃生门)
+///   ② 注册表(App Paths / 卸载项,任意盘任意目录)
+///   ③ 环境变量所指的默认目录
+///   ④ 每个盘符 × 常见目录名
+pub fn find_app_exe() -> Option<PathBuf> {
+    // ① 显式覆盖
+    if let Some(v) = std::env::var_os("WORKBUDDY_APP_EXECUTABLE") {
+        let p = PathBuf::from(v);
+        // 允许给目录:给了目录就在里面找主程序名
+        let hit = if p.is_file() {
+            Some(p.clone())
+        } else if p.is_dir() {
+            EXE_NAMES.iter().map(|n| p.join(n)).find(|c| c.is_file())
+        } else {
+            None
+        };
+        if let Some(hit) = hit {
+            crate::diaglog::write_keyed(
+                "wb",
+                "exe-env",
+                &format!("桌面端 exe 来自 WORKBUDDY_APP_EXECUTABLE:{}", hit.display()),
+            );
+            return Some(hit);
+        }
+        crate::diaglog::write_keyed(
+            "wb",
+            "exe-env",
+            &format!(
+                "WORKBUDDY_APP_EXECUTABLE 已设置但不可用({})—— 继续按默认链探测",
+                p.display()
+            ),
+        );
+    }
+
+    let roots = app_roots();
+    for r in &roots {
         for name in EXE_NAMES {
             let p = r.join(name);
             if p.is_file() {
+                crate::diaglog::write_keyed(
+                    "wb",
+                    "exe-hit",
+                    &format!(
+                        "找到桌面端:{} · 命中目录 {}",
+                        p.display(),
+                        r.display()
+                    ),
+                );
                 return Some(p);
             }
         }
     }
+    // 一个都没找到:**把整条链记下来**,否则只能远程让用户猜
+    let shown: Vec<String> = roots.iter().take(40).map(|p| p.display().to_string()).collect();
+    crate::diaglog::write_keyed(
+        "wb",
+        "exe-miss",
+        &format!(
+            "没找到桌面端 exe(主程序名 {:?} · 盘符 {:?} · 探了 {} 个目录){}",
+            EXE_NAMES,
+            drive_letters(),
+            roots.len(),
+            if shown.is_empty() {
+                String::new()
+            } else {
+                format!(":{}", shown.join(" | "))
+            }
+        ),
+    );
     None
 }
 
@@ -532,17 +769,74 @@ pub fn at_rest_key() -> Result<Vec<u8>, DesktopErr> {
     if let Ok(g) = KEY_CACHE.lock() {
         if let Some((k, at)) = g.as_ref() {
             if at.elapsed() < KEY_TTL {
+                crate::diaglog::write_keyed(
+                    "wb",
+                    "key-cache",
+                    &format!("用缓存的 at-rest key({} 秒前取到)", at.elapsed().as_secs()),
+                );
                 return Ok(k.clone());
             }
         }
     }
-    let exe = find_app_exe().ok_or(DesktopErr::AppNotFound)?;
-    let payload = fetch_key_payload(&exe)?;
-    let key = derive_key(&payload)?;
-    if let Ok(mut g) = KEY_CACHE.lock() {
-        *g = Some((key.clone(), Instant::now()));
+    let started = Instant::now();
+    let exe = match find_app_exe() {
+        Some(e) => e,
+        None => {
+            crate::diaglog::write_keyed(
+                "wb",
+                "key-noexe",
+                "拿不到 at-rest key:没找到桌面端 exe(见上一条 exe-miss 的探测链)",
+            );
+            return Err(DesktopErr::AppNotFound);
+        }
+    };
+    match fetch_key_payload(&exe) {
+        Ok(payload) => {
+            crate::diaglog::write_keyed(
+                "wb",
+                "key-ok",
+                &format!(
+                    "拿到密钥响应:{} · payload {} 字节 · 耗时 {} ms",
+                    exe.display(),
+                    payload.len(),
+                    started.elapsed().as_millis()
+                ),
+            );
+            match derive_key(&payload) {
+                Ok(key) => {
+                    crate::diaglog::write_keyed(
+                        "wb",
+                        "key-derived",
+                        &format!("派生密钥成功 · keyId={}", key_id_of(&key)),
+                    );
+                    if let Ok(mut g) = KEY_CACHE.lock() {
+                        *g = Some((key.clone(), Instant::now()));
+                    }
+                    Ok(key)
+                }
+                Err(e) => {
+                    crate::diaglog::write_keyed(
+                        "wb",
+                        "key-bad",
+                        &format!("密钥响应里没有可用的 atRestSecretKey:{}", e.message()),
+                    );
+                    Err(e)
+                }
+            }
+        }
+        Err(e) => {
+            crate::diaglog::write_keyed(
+                "wb",
+                "key-fail",
+                &format!(
+                    "问不出 at-rest key({} · 耗时 {} ms)",
+                    e.message(),
+                    started.elapsed().as_millis()
+                ),
+            );
+            Err(e)
+        }
     }
-    Ok(key)
 }
 
 // ───────────────────────── 组装:读凭据 → 取数 ─────────────────────────
@@ -582,10 +876,34 @@ fn collect_desktop_credentials(now_ms: i64, include_expired: bool) -> Result<Vec
 /// `include_expired` 这条判据端到端测掉 —— 它决定过期凭据能不能被送去续期。
 fn collect_from(files: &[PathBuf], now_ms: i64, include_expired: bool) -> Result<Vec<DesktopCredential>, DesktopErr> {
     if files.is_empty() {
+        // 把"扫了哪些目录、每个目录在不在"一起记下来 —— 数据目录被挪到别的盘时,
+        // 这是唯一能看出"我们压根没往那儿看"的证据。
+        let dirs: Vec<String> = auth_dirs()
+            .iter()
+            .map(|d| format!("{}{}", d.display(), if d.is_dir() { "(有)" } else { "(无)" }))
+            .collect();
+        crate::diaglog::write_keyed(
+            "wb",
+            "cred-empty",
+            &format!("auth 目录里没有 workbuddy-desktop*.info · 扫过的目录:{}", dirs.join(" | ")),
+        );
         return Err(DesktopErr::BadCredential(
             "auth 目录里没有 workbuddy-desktop*.info".into(),
         ));
     }
+    crate::diaglog::write_keyed(
+        "wb",
+        "cred-files",
+        &format!(
+            "找到 {} 份候选凭据:{}",
+            files.len(),
+            files
+                .iter()
+                .map(|f| format!("{}{}", f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), if is_live_name(f) { "(live)" } else { "(备份)" }))
+                .collect::<Vec<_>>()
+                .join(" | ")
+        ),
+    );
     let mut out: Vec<DesktopCredential> = Vec::new();
     let mut first_err: Option<DesktopErr> = None;
 
@@ -599,8 +917,33 @@ fn collect_from(files: &[PathBuf], now_ms: i64, include_expired: bool) -> Result
         let Ok(text) = std::fs::read_to_string(f) else { continue };
         let src = f.to_string_lossy().to_string();
         match parse_auth_file(&text, &src, None) {
-            Ok(c) if accept(&c, now_ms, include_expired) => out.push(c),
-            Ok(_) => {
+            Ok(c) if accept(&c, now_ms, include_expired) => {
+                crate::diaglog::write_keyed(
+                    "wb",
+                    "cred-live-plain",
+                    &format!(
+                        "live 凭据是明文,直接可用 · {} · {} 字节 · 区域={} · access {} · 到期 {}",
+                        src,
+                        text.len(),
+                        if c.is_global() { "global" } else { "cn" },
+                        crate::diaglog::secret_brief(&c.access_token),
+                        fmt_ms(c.expires_at_ms)
+                    ),
+                );
+                out.push(c)
+            }
+            Ok(c) => {
+                crate::diaglog::write_keyed(
+                    "wb",
+                    "cred-live-expired",
+                    &format!(
+                        "live 凭据已过期 · {} · access {} · 到期 {} · refresh {}",
+                        src,
+                        crate::diaglog::secret_brief(&c.access_token),
+                        fmt_ms(c.expires_at_ms),
+                        c.refresh_token.as_deref().map(crate::diaglog::secret_brief).unwrap_or_else(|| "无".into())
+                    ),
+                );
                 live_err.get_or_insert(DesktopErr::Expired);
             }
             Err(DesktopErr::BadCredential(_)) => need_key = true,
@@ -610,6 +953,7 @@ fn collect_from(files: &[PathBuf], now_ms: i64, include_expired: bool) -> Result
         }
     }
     if need_key {
+        crate::diaglog::write_keyed("wb", "cred-needkey", &format!("live 凭据是加密信封,需要 at-rest key({} 份 live 文件)", files.iter().filter(|f| is_live_name(f)).count()));
         match at_rest_key() {
             Ok(key) => {
                 for f in files {
@@ -619,17 +963,52 @@ fn collect_from(files: &[PathBuf], now_ms: i64, include_expired: bool) -> Result
                     let Ok(text) = std::fs::read_to_string(f) else { continue };
                     let src = f.to_string_lossy().to_string();
                     match parse_auth_file(&text, &src, Some(&key)) {
-                        Ok(c) if accept(&c, now_ms, include_expired) => out.push(c),
-                        Ok(_) => {
+                        Ok(c) if accept(&c, now_ms, include_expired) => {
+                            crate::diaglog::write_keyed(
+                                "wb",
+                                "cred-live-open",
+                                &format!(
+                                    "解开 live 凭据 · {} · {} 字节 · 区域={} · access {} · 到期 {}",
+                                    src,
+                                    text.len(),
+                                    if c.is_global() { "global" } else { "cn" },
+                                    crate::diaglog::secret_brief(&c.access_token),
+                                    fmt_ms(c.expires_at_ms)
+                                ),
+                            );
+                            out.push(c)
+                        }
+                        Ok(c) => {
+                            crate::diaglog::write_keyed(
+                                "wb",
+                                "cred-live-expired",
+                                &format!(
+                                    "live 凭据已过期 · {} · access {} · 到期 {} · refresh {}",
+                                    src,
+                                    crate::diaglog::secret_brief(&c.access_token),
+                                    fmt_ms(c.expires_at_ms),
+                                    c.refresh_token.as_deref().map(crate::diaglog::secret_brief).unwrap_or_else(|| "无".into())
+                                ),
+                            );
                             live_err.get_or_insert(DesktopErr::Expired);
                         }
                         Err(e) => {
+                            crate::diaglog::write_keyed(
+                                "wb",
+                                "cred-live-bad",
+                                &format!("解不开 live 凭据 · {src}:{}", e.message()),
+                            );
                             live_err.get_or_insert(e);
                         }
                     }
                 }
             }
             Err(e) => {
+                crate::diaglog::write_keyed(
+                    "wb",
+                    "cred-nokey",
+                    &format!("拿不到 at-rest key,没法解加密凭据:{}", e.message()),
+                );
                 live_err.get_or_insert(e);
             }
         }
@@ -645,7 +1024,14 @@ fn collect_from(files: &[PathBuf], now_ms: i64, include_expired: bool) -> Result
             let Ok(text) = std::fs::read_to_string(f) else { continue };
             let src = f.to_string_lossy().to_string();
             match parse_auth_file(&text, &src, None) {
-                Ok(c) if accept(&c, now_ms, include_expired) => out.push(c),
+                Ok(c) if accept(&c, now_ms, include_expired) => {
+                    crate::diaglog::write_keyed(
+                        "wb",
+                        "cred-backup",
+                        &format!("回落到历史备份(明文)· {} · access {} · 到期 {}", src, crate::diaglog::secret_brief(&c.access_token), fmt_ms(c.expires_at_ms)),
+                    );
+                    out.push(c)
+                }
                 Ok(_) => {
                     first_err.get_or_insert(DesktopErr::Expired);
                 }
@@ -665,6 +1051,11 @@ fn collect_from(files: &[PathBuf], now_ms: i64, include_expired: bool) -> Result
                     let src = f.to_string_lossy().to_string();
                     if let Ok(c) = parse_auth_file(&text, &src, Some(&key)) {
                         if accept(&c, now_ms, include_expired) {
+                            crate::diaglog::write_keyed(
+                                "wb",
+                                "cred-backup-open",
+                                &format!("回落到历史备份(已解密)· {} · access {} · 到期 {}", src, crate::diaglog::secret_brief(&c.access_token), fmt_ms(c.expires_at_ms)),
+                            );
                             out.push(c);
                         }
                     }
@@ -674,7 +1065,13 @@ fn collect_from(files: &[PathBuf], now_ms: i64, include_expired: bool) -> Result
     }
 
     if out.is_empty() {
-        return Err(live_err.or(first_err).unwrap_or(DesktopErr::Expired));
+        let e = live_err.or(first_err).unwrap_or(DesktopErr::Expired);
+        crate::diaglog::write_keyed(
+            "wb",
+            "cred-none",
+            &format!("一份可用凭据都没有(最终原因:{} · include_expired={include_expired})", e.message()),
+        );
+        return Err(e);
     }
     // 候选排序:**国内版优先**(挂件只展示国内版;国际版是同栈的另一套账号),
     // 同区域内 live 优先于历史备份。注意不能拿 source 判 live ——
@@ -684,6 +1081,120 @@ fn collect_from(files: &[PathBuf], now_ms: i64, include_expired: bool) -> Result
         (c.is_global(), !live)
     });
     Ok(out)
+}
+
+/// 体检报告用:把桌面端凭据这条链**当前的事实**拼成几行文本。
+///
+/// 为什么单独提供:日志是"发生过什么"的流水,而用户点「运行体检」想要的是
+/// "现在这条链走到哪一步"。两样都要,不能互相替代 —— 用户报问题时往往只有截图,
+/// 而这一段的每一行都能直接指认"是没装 / 没找到 / 拿不到密钥 / 凭据过期 / 被平台拒"。
+///
+/// **只描述形态与长度,不含任何令牌**。
+pub fn diag_summary(now_ms: i64) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+
+    // ① exe
+    let exe = find_app_exe();
+    lines.push(match &exe {
+        Some(p) => format!("桌面端 exe · {}", p.display()),
+        None => {
+            let dirs = auth_dirs();
+            format!(
+                "桌面端 exe · 没找到(主程序名 {:?};盘符 {:?};{} 个候选目录)",
+                EXE_NAMES,
+                drive_letters(),
+                app_roots().len()
+            )
+            .replace("· 没找到", &format!("· 没找到(顺带:auth 候选 {} 个)", dirs.len()))
+        }
+    });
+    // 环境变量覆盖:设了但没用上,是最容易解释"为什么还是失败"的一条
+    if let Ok(v) = std::env::var("WORKBUDDY_APP_EXECUTABLE") {
+        lines.push(format!("桌面端 exe · WORKBUDDY_APP_EXECUTABLE={v}"));
+    }
+
+    // ② auth 目录(只列前几个:全列会把报告刷屏)
+    let dirs = auth_dirs();
+    let shown: Vec<String> = dirs
+        .iter()
+        .take(6)
+        .map(|d| format!("{}{}", d.display(), if d.is_dir() { " ✓" } else { " ✗" }))
+        .collect();
+    lines.push(format!(
+        "凭据目录 · {} 个候选:{}",
+        dirs.len(),
+        shown.join(" | ")
+    ));
+
+    // ③ 凭据文件 + 解析结果
+    let files = credential_files();
+    if files.is_empty() {
+        lines.push("凭据文件 · 一个都没有(没装桌面端,或数据目录不在默认位置)".to_string());
+    } else {
+        for f in files.iter().take(4) {
+            let kind = if is_live_name(f) { "live" } else { "备份" };
+            match std::fs::read_to_string(f) {
+                Ok(text) => {
+                    // 先试明文:能读通就不必去起桌面端进程(体检要快、要无副作用)
+                    match parse_auth_file(&text, &f.to_string_lossy(), None) {
+                        Ok(c) => lines.push(format!(
+                            "凭据文件 · {} [{kind} 明文] 区域={} access {} 到期 {}",
+                            f.display(),
+                            if c.is_global() { "global" } else { "cn" },
+                            crate::diaglog::secret_brief(&c.access_token),
+                            fmt_ms(c.expires_at_ms)
+                        )),
+                        Err(DesktopErr::BadCredential(_)) => lines.push(format!(
+                            "凭据文件 · {} [{kind} 加密] {} 字节 · 需要桌面端密钥",
+                            f.display(),
+                            text.len()
+                        )),
+                        Err(e) => lines.push(format!("凭据文件 · {} [{kind}] 解析失败:{}", f.display(), e.message())),
+                    }
+                }
+                Err(e) => lines.push(format!("凭据文件 · {} [{kind}] 读不了:{e}", f.display())),
+            }
+        }
+    }
+
+    // ④ 密钥缓存状态(不必真去起进程;缓存里有没有直接决定"这一轮走不走桌面端")
+    let cached = KEY_CACHE
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|(k, at)| (key_id_of(k), at.elapsed().as_secs())));
+    lines.push(match cached {
+        Some((id, age)) => format!("桌面端密钥 · 已缓存 keyId={id}({age} 秒前取到)"),
+        None => "桌面端密钥 · 还没取过(首次取数时才起桌面端进程)".to_string(),
+    });
+
+    // ⑤ 凭据编排(不落库、不发请求,只看"能凑出几个候选令牌")
+    let creds = collect_desktop_credentials(now_ms, true);
+    match creds {
+        Ok(c) => lines.push(format!(
+            "可用令牌 · {} 个[{}]",
+            c.len(),
+            c.iter()
+                .map(|x| format!("{}({})", crate::diaglog::secret_brief(&x.access_token), if x.is_global() { "global" } else { "cn" }))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+        Err(e) => lines.push(format!("可用令牌 · 0 个 → {}", e.message())),
+    }
+    if let Some(p) = crate::diaglog::log_path() {
+        lines.push(format!("排查日志 · {}", p.display()));
+    }
+    lines
+}
+
+/// 把毫秒时间戳写成 `YYYY-MM-DD HH:MM:SS(本地)`,0 写成「未记录」。
+/// 日志里给人看的,不是给机器解析的 —— 排查时最常问的是"这份凭据什么时候到期"。
+fn fmt_ms(ms: i64) -> String {
+    if ms <= 0 {
+        return "未记录".into();
+    }
+    chrono::DateTime::from_timestamp_millis(ms)
+        .map(|d| d.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string())
+        .unwrap_or_else(|| format!("{ms}(解析不了)"))
 }
 
 /// 上次续期成果在凭据管理器里的形状。
@@ -773,7 +1284,19 @@ fn push_unique(v: &mut Vec<String>, t: &str) {
 /// 落库与冷却这些带副作用的都在这一层,判据本身在 [`plan_tokens`](可单测)。
 pub fn desktop_tokens(now_ms: i64) -> Vec<String> {
     // include_expired = true:过期那份正是续期要的对象(见 plan_tokens 的来由)
-    let creds = collect_desktop_credentials(now_ms, true).unwrap_or_default();
+    let creds = match collect_desktop_credentials(now_ms, true) {
+        Ok(c) => c,
+        Err(e) => {
+            // 以前这里 unwrap_or_default 一吞,日志里就只剩"取数失败"。
+            // 现在把"凭据这一层为什么空"如实说出来。
+            crate::diaglog::write_keyed(
+                "wb",
+                "tokens-empty",
+                &format!("桌面端凭据为空:{}", e.message()),
+            );
+            Vec::new()
+        }
+    };
     let mut stored: Vec<StoredRefresh> = Vec::new();
     for global in [false, true] {
         if let Some(s) = load_refreshed(global) {
@@ -785,12 +1308,33 @@ pub fn desktop_tokens(now_ms: i64) -> Vec<String> {
         let ttl = new.expires_in_sec.unwrap_or(REFRESH_FALLBACK_TTL_SEC).max(60);
         let exp = now_ms + ttl * 1000;
         if let Err(e) = store_refreshed(*global, &new.access_token, new.refresh_token.as_deref(), exp) {
-            eprintln!("WorkBuddy 续期结果落库失败: {e}");
+            crate::diaglog::write_keyed(
+                "wb",
+                "refresh-store",
+                &format!("续期结果落库失败: {e}"),
+            );
         }
     }
     for m in &plan.refresh_fails {
-        eprintln!("WorkBuddy 续期没成: {m}");
+        crate::diaglog::write_keyed("wb", "refresh-fail", &format!("续期没成: {m}"));
     }
+    crate::diaglog::write_keyed(
+        "wb",
+        "tokens-plan",
+        &format!(
+            "凭据编排:桌面端候选 {} 份 · 上次续期成果 {} 份 · 续期成功 {} 份 · 续期失败 {} 条 · 最终可用令牌 {} 个[{}]",
+            creds.len(),
+            stored.len(),
+            plan.to_store.len(),
+            plan.refresh_fails.len(),
+            plan.tokens.len(),
+            plan.tokens
+                .iter()
+                .map(|t| crate::diaglog::secret_brief(t))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    );
     plan.tokens
 }
 
@@ -971,9 +1515,32 @@ pub async fn fetch_billing(
             Ok(r) => {
                 let status = r.status();
                 let text = r.text().await.unwrap_or_default();
+                // 业务 code 也记:HTTP 200 + code!=0(例如 10085 缺 X-Client-Platform)
+                // 与 HTTP 401 是两个完全不同的根因,只看状态码会判错。
+                let code = serde_json::from_str::<serde_json::Value>(&text)
+                    .ok()
+                    .and_then(|v| v.get("code").and_then(|c| c.as_i64()));
+                let kind = match auth {
+                    FetchAuth::Bearer(_) => "桌面端 Bearer",
+                    FetchAuth::Cookie(_) => "网页会话 Cookie",
+                };
                 if status.is_success() {
+                    crate::diaglog::write_keyed(
+                        "wb",
+                        "billing-ok",
+                        &format!("取数成功 · {url} · HTTP {} · code={code:?} · 凭据={kind}", status.as_u16()),
+                    );
                     return Ok((url, text));
                 }
+                crate::diaglog::write_keyed(
+                    "wb",
+                    &format!("billing-{url}-{}", status.as_u16()),
+                    &format!(
+                        "取数被拒 · {url} · HTTP {} · code={code:?} · 凭据={kind} · 响应 {}",
+                        status.as_u16(),
+                        text.chars().take(120).collect::<String>()
+                    ),
+                );
                 last = Some(format!(
                     "{url} → HTTP {} {}",
                     status.as_u16(),
@@ -981,6 +1548,11 @@ pub async fn fetch_billing(
                 ));
             }
             Err(e) => {
+                crate::diaglog::write_keyed(
+                    "wb",
+                    &format!("billing-net-{url}"),
+                    &format!("取数请求失败 · {url} · {e}"),
+                );
                 last = Some(format!("{url} → 请求失败: {e}"));
             }
         }
@@ -1531,6 +2103,168 @@ mod tests {
             r.expiring.len()
         );
         assert!(r.valid, "解析应当有效:{:?}", r.error);
-        assert!(r.remaining.is_some(), "应当算出余额");
+        assert!(r.remaining.is_some(), "应当能算出余额");
     }
+
+    // ───────── 装到别的盘(2026-10-20 用户实证:WorkBuddy 装在 D 盘)─────────
+
+    /// 盘符枚举只列真实存在的盘,且一定是大写字母。
+    #[test]
+    fn drive_letters_are_real_drives() {
+        let ds = drive_letters();
+        assert!(!ds.is_empty(), "本机至少有一个盘");
+        for d in &ds {
+            assert!(d.is_ascii_uppercase(), "盘符要大写:{d}");
+            assert!(Path::new(&format!("{d}:\\")).is_dir(), "列出来的盘符必须存在");
+        }
+        assert!(ds.contains(&'C'), "本机一定有 C 盘:{ds:?}");
+    }
+
+    /// **这条是用例的核心**:装到别的盘 / 自定义目录时,exe 也必须被找到。
+    /// 用临时目录伪造一个 `D:\Programs\WorkBuddy` 式的布局,只验证"候选目录的构造"
+    /// 与"命中逻辑",不依赖真机有没有装。
+    #[test]
+    fn exe_search_covers_non_default_install_dirs() {
+        let base = std::env::temp_dir().join(format!("ts-wb-exe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        // 伪造一个"用户自己挑的目录"下的安装
+        let install = base.join("Programs").join("WorkBuddy");
+        std::fs::create_dir_all(&install).unwrap();
+        let exe = install.join("WorkBuddy.exe");
+        std::fs::write(&exe, b"fake").unwrap();
+
+        // 把用户盘符那一步替换成这个临时根,验证"逐盘 × 常见目录"确实会扫到它
+        let roots = app_roots_for(&[base.clone()]);
+        let hit = roots
+            .iter()
+            .flat_map(|r| EXE_NAMES.iter().map(move |n| r.join(n)))
+            .find(|p| p.is_file());
+        // 用存在性 + 文件名判,不比较绝对路径字符串:临时目录的大小写/短名在
+        // Windows 上可能与候选拼出来的写法不一致,那不是被测语义。
+        let hit = hit.unwrap_or_else(|| panic!("非默认目录里的 WorkBuddy.exe 必须被找到;候选根:{roots:?}"));
+        assert_eq!(
+            hit.file_name().unwrap().to_string_lossy(),
+            "WorkBuddy.exe",
+            "命中的是主程序名"
+        );
+        assert_eq!(
+            hit.parent().map(|p| p.to_path_buf()),
+            Some(install.clone()),
+            "必须命中那个自定义安装目录:{hit:?}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 候选目录里必须**同时**含"环境变量默认位置"与"任意盘常见位置"两大类,
+    /// 否则"装在 D 盘"这类机器还是会落空。
+    #[test]
+    fn app_roots_include_every_drive_and_standard_programs() {
+        let roots = app_roots();
+        let text: Vec<String> = roots.iter().map(|p| p.display().to_string().to_lowercase()).collect();
+        // 每个存在的盘都要有候选(哪怕那个盘上其实没装,也要去看一眼)
+        for d in drive_letters() {
+            let prefix = format!("{}:\\", d.to_ascii_lowercase());
+            assert!(
+                text.iter().any(|p| p.starts_with(&prefix)),
+                "{d} 盘没有任何候选:{}",
+                text.join(" | ")
+            );
+        }
+        // 常见的几种"用户自定义目录"命名都要覆盖
+        for want in ["\\programs\\workbuddy", "\\workbuddy", "\\program files\\workbuddy", "\\apps\\workbuddy"] {
+            assert!(
+                text.iter().any(|p| p.ends_with(want)),
+                "缺少候选后缀 {want}:{}",
+                text.join(" | ")
+            );
+        }
+        // 去重:同一个路径不许出现两遍(否则日志里看着像探了两遍)
+        let mut uniq = text.clone();
+        uniq.sort();
+        uniq.dedup();
+        assert_eq!(uniq.len(), text.len(), "候选目录里有重复");
+    }
+
+    /// exe 名字要认国内版与国际版两个(它们同栈但文件名不同)。
+    #[test]
+    fn exe_names_cover_both_editions() {
+        assert!(EXE_NAMES.contains(&"WorkBuddy.exe"), "{EXE_NAMES:?}");
+        assert!(EXE_NAMES.contains(&"WorkBuddyAI.exe"), "{EXE_NAMES:?}");
+    }
+
+    /// 注册表 `DisplayIcon` 的解析:真机形态是 `C:\Program Files\WorkBuddy\WorkBuddy.exe,0`
+    /// (逗号后是图标序号)。**这条是"装到任意盘也能定位"的最后一道保险** ——
+    /// 本机实测 WorkBuddy 5.8.3 的卸载项里 `InstallLocation` 是空的,
+    /// 只剩 `DisplayIcon` 能给出路径,所以它必须解析得对。
+    #[test]
+    fn display_icon_parses_to_the_exe() {
+        // 真机样例(本机 WorkBuddy 5.8.3)
+        assert_eq!(
+            parse_display_icon(r"C:\Program Files\WorkBuddy\WorkBuddy.exe,0"),
+            Some(PathBuf::from(r"C:\Program Files\WorkBuddy\WorkBuddy.exe"))
+        );
+        // 装到别的盘 + 带引号
+        assert_eq!(
+            parse_display_icon(r#""D:\Apps\WorkBuddy\WorkBuddy.exe",0"#),
+            Some(PathBuf::from(r"D:\Apps\WorkBuddy\WorkBuddy.exe"))
+        );
+        // 没有图标序号
+        assert_eq!(
+            parse_display_icon(r"E:\WorkBuddy\WorkBuddy.exe"),
+            Some(PathBuf::from(r"E:\WorkBuddy\WorkBuddy.exe"))
+        );
+        // 图标文件不是主程序
+        assert_eq!(parse_display_icon(r"C:\x\icon.ico"), None);
+        assert_eq!(parse_display_icon(r"C:\x\icon.ico,0"), None);
+        assert_eq!(parse_display_icon(""), None);
+        // 路径本身带逗号时不能切错(尾部不是数字就当没有序号)
+        assert_eq!(
+            parse_display_icon(r"C:\a,b\WorkBuddy.exe,0"),
+            Some(PathBuf::from(r"C:\a,b\WorkBuddy.exe"))
+        );
+    }
+
+    /// `WORKBUDDY_AUTH_DIR` 是数据目录被挪走时的逃生门:给了就**必须**排在第一个,
+    /// 而且要同时接受"给 auth 目录"和"给它的上一层"两种写法。
+    #[test]
+    fn auth_dir_env_override_comes_first() {
+        // 环境变量是进程级的,用完就还原,别污染别的用例
+        let prev = std::env::var_os("WORKBUDDY_AUTH_DIR");
+        let probe = std::env::temp_dir().join(format!("ts-wb-auth-env-{}", std::process::id()));
+        std::env::set_var("WORKBUDDY_AUTH_DIR", &probe);
+        let dirs = auth_dirs();
+        assert_eq!(dirs.first().map(|p| p.as_path()), Some(probe.as_path()), "{dirs:?}");
+        // 给的是"上一层"时,还要自动补一个 auth 子目录(免得用户写错一层就失效)
+        assert!(
+            dirs.iter().any(|p| p.ends_with("auth") && p.starts_with(&probe)),
+            "应当自动补 auth 子目录:{dirs:?}"
+        );
+        match prev {
+            Some(v) => std::env::set_var("WORKBUDDY_AUTH_DIR", v),
+            None => std::env::remove_var("WORKBUDDY_AUTH_DIR"),
+        }
+    }
+}
+
+/// `app_roots()` 的**纯注入**版本:只返回给定根下的常见装法,不含环境变量与注册表。
+/// 单测用它伪造"装在 D 盘的某个自定义目录",既不用碰真盘,也不会被本机真实安装干扰
+/// (本机确实装着 WorkBuddy,混进来的话这条用例就测不到"候选构造"本身了)。
+#[cfg(test)]
+fn app_roots_for(drives: &[PathBuf]) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for root in drives {
+        for sub in [
+            "Programs\\WorkBuddy",
+            "WorkBuddy",
+            "Program Files\\WorkBuddy",
+            "Program Files (x86)\\WorkBuddy",
+            "Apps\\WorkBuddy",
+            "Applications\\WorkBuddy",
+            "Software\\WorkBuddy",
+        ] {
+            // 临时根是普通目录,不是盘根:用 join 而不是拼 `X:\`
+            out.push(root.join(sub.replace('\\', "/")));
+        }
+    }
+    out
 }

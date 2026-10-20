@@ -4749,6 +4749,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "winreg 0.52.0",
 ]
 
 [[package]]

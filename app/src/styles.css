@@ -405,6 +405,14 @@ body.form-compact .wmark{display:inline}
   border-top:1px solid var(--line);font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);flex:none}
 .foot .lk{color:var(--tx2);cursor:pointer}
 .foot .lk:hover{color:var(--ac)}
+/* 底栏链接是 <button>(2026-10-20 收敛设置入口时一起改的):按钮默认的边框/底色/内边距/字体
+   全部归零,视觉与原来的 <span> 逐像素一致;唯一的有意差别是它能拿到 :focus-visible 焦点环。
+   不用 `font:inherit` 一条盖全部 —— .foot 的 font-size 里带 max() 兜底,inherit 会把它带过来,
+   但按钮在 Chromium 里有自己的 UA font-family,分开写更明确。 */
+.foot button.lk{border:0;background:none;padding:0;margin:0;font-family:inherit;
+  font-size:inherit;line-height:inherit;text-align:inherit;color:var(--tx2)}
+.foot button.lk:hover{color:var(--ac)}
+.foot button.lk:focus-visible{outline:2px solid var(--ac);outline-offset:2px;border-radius:calc(3px*var(--u))}
 /* 吸附展开态(docked 已摘、底栏在):右下角的「收回」按钮(#dockClose,.ib 24px)会压住
    底栏最右的「退出」—— 按钮横向 8~32px、纵向 8~32px,退出文字 12~35px,重叠 ~87%×94%,
    点「退出」实际是收成竖条。只在这一态给底栏让出右侧空间(44u = 按钮左缘 32u + 12u 空隙),

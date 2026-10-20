@@ -25,3 +25,9 @@ generic-array = "0.14"
 # 解 WorkBuddy 桌面端 5.6+ 的凭据信封(AES-256-GCM + AAD 转录)。
 # 纯 Rust、与上面的 aes 同源(RustCrypto),不引入 C 依赖。
 aes-gcm = "0.10"
+
+# 找 WorkBuddy 桌面端:**它可能装在任意盘、任意目录**(2026-10-20 用户实证:装在 D 盘,
+# 而挂件原来只认 C 盘的三个默认位置)。注册表的 App Paths / 卸载项是唯一不靠猜的来源。
+# 只在 Windows 目标上编译,Linux 下这段探测整体编译掉(返回空)。
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"

@@ -38,7 +38,9 @@
     <button class="uchip" id="updChip" style="display:none"></button>
     <div class="spacer" data-tauri-drag-region></div>
     <button class="tb" id="btnR" title="立即刷新">刷新</button>
-    <button class="tb" id="btnS" title="设置与管理">设置</button>
+    <!-- 设置入口只在底栏一处(2026-10-20 收敛):这里曾经还有一枚「设置」按钮,
+         与底栏「设置与管理」调同一个 openManage(),名字却不同;删掉它也让标题栏
+         在特大字号下不再把最右的「隐藏」挤出窗口(实测 405px > 378px)。 -->
     <button class="tb" id="btnP" title="窗口置顶">置顶</button>
     <button class="tb" id="btnC" title="切换紧凑条">紧凑</button>
     <button class="tb" id="btnH" title="隐藏到托盘">隐藏</button>
@@ -259,6 +261,21 @@
         <button class="btn" id="btnDiagCopy" style="display:none">复制报告</button>
       </div>
       <pre class="diagout" id="diagOut" style="display:none"></pre>
+      <h4>排查日志</h4>
+      <div class="khint" style="margin:0 0 8px">取数失败时,每一步走到哪儿都记在这里(找桌面端 exe → 读凭据 → 解密 → 请求 → 响应)。
+        <b>不含任何密钥或令牌</b> —— 令牌只记"长度 + 指纹前 8 位"。遇到问题时点「复制最近日志」贴过来即可。</div>
+      <div class="krow" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span class="kpath" id="logPath" style="font-family:Consolas,monospace;font-size:max(10.5px,calc(10.5px*var(--u)));
+          color:var(--tx3);word-break:break-all;flex:1;min-width:120px">—</span>
+        <span class="usub" id="logSize"></span>
+      </div>
+      <div class="acts" style="margin-top:8px">
+        <button class="btn p" id="btnLogCopy">复制最近日志</button>
+        <button class="btn" id="btnLogOpen">打开目录</button>
+        <button class="btn danger" id="btnLogClear">清空</button>
+      </div>
+      <div class="khint" id="logOff" style="display:none;margin:8px 0 0;color:var(--bad)">
+        日志已被环境变量 TOKENSCOPE_NODIAG 关闭 —— 去掉它并重启挂件才会重新记录。</div>
       <h4>数据与隐私</h4>      <div class="khint" style="margin:0">密钥只写入 Windows 凭据管理器,不进配置文件、数据库或日志;
         快照库在 <span style="font-family:Consolas,monospace">%APPDATA%\com.wacil.tokenscope</span>;
         Trae / WorkBuddy 只读本机登录凭据,不写回、不刷新 —— 隐藏渠道后连读取也会停止。<br>
@@ -271,11 +288,13 @@
   <div class="foot">
     <span class="dot" id="fdot"></span>
     <span id="fstat">正在取数…</span>
-    <span class="lk" id="lkUpd" style="display:none"></span>
+    <!-- 底栏三处可点元素都改成真正的 <button>:以前是 <span>,Tab 到不了、回车没反应,
+         而设置入口收敛到这一处之后,它就成了键盘用户唯一的入口(2026-10-20)。 -->
+    <button type="button" class="lk" id="lkUpd" style="display:none"></button>
     <div class="spacer"></div>
-    <span class="lk" id="lkKeys">设置与管理</span>
+    <button type="button" class="lk" id="lkKeys">设置与管理</button>
     <span style="color:var(--line2)">|</span>
-    <span class="lk" id="lkQuit">退出</span>
+    <button type="button" class="lk" id="lkQuit">退出</button>
   </div>
 
   <!-- 轻量提示条:刷新回执 / 操作失败,替代原生 alert -->

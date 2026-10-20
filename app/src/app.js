@@ -2140,7 +2140,11 @@ function openManage() {
   renderAbout(UPD.last); // 版本号与上次检查时间
   loadCheckin();         // 签到状态(渠道卡与设置页都用)
   document.body.classList.add("view-manage");
-  $("btnS").classList.add("on");
+  // 键盘用户是从底栏那枚按钮进来的,而它进管理页后就被 CSS 隐藏了 ——
+  // 焦点会掉到 body,Tab 一下回到标题栏。把焦点交给页头的「← 返回」,
+  // 入口与出口方向一致(鼠标点进来时 :focus-visible 不出环,看不出差别)。
+  const back = $("btnBack");
+  if (back) back.focus();
 }
 function closeManage() {
   // 关掉设置页时把过期的弹层与编辑态一起作废:否则重开设置页会直接停在
@@ -2148,8 +2152,16 @@ function closeManage() {
   MDL.sheet = null;
   renderModelSheet();
   VAULT_EDIT = null;
+  // 焦点还在管理页里(含页头返回按钮)时,关掉之后把焦点还给底栏入口;
+  // 若焦点在别处(比如点了标题栏「紧凑」触发切形态),不去抢它。
+  const ae = document.activeElement;
+  const mgr = $("manage");
+  const fromManage = !ae || ae === document.body || (mgr && mgr.contains(ae));
   document.body.classList.remove("view-manage");
-  $("btnS").classList.remove("on");
+  if (fromManage) {
+    const k = $("lkKeys");
+    if (k && k.offsetParent !== null) k.focus();
+  }
 }
 
 // 模型弹层:点在遮罩空白处也能关(它既没有背景关闭、也没有焦点收拢,
@@ -2315,11 +2327,11 @@ $("mdlQ").addEventListener("input", () => {
 $("mdlR").addEventListener("click", () => loadModels(true));
 
 // ───────────── 标题栏按钮 ─────────────
-// 排序不放标题栏:标题栏在默认面板宽(380 逻辑像素)下本来就不够宽,
-// 加一个排序键会把最右边的「隐藏」整个挤出窗口外(实测内容需 417px)。
-// 排序本身仍有两个入口:设置 → 显示的下拉,以及设置 → 渠道页的 ↑↓ 自定义顺序。
+// 标题栏没有「设置」入口(2026-10-20 收敛):它与底栏「设置与管理」调的是同一个
+// openManage(),却用另一个名字,而且 5 个文字按钮在 380px 里本就挤不下 ——
+// 特大字号 + 更新角标时内容宽 405px,最右的「隐藏」被挤出窗口点不到。
+// 排序也不放标题栏:加了排序键会重演同一个溢出(排序在 设置 → 显示 与 渠道页 ↑↓)。
 
-$("btnS").addEventListener("click", () => (manageOpen() ? closeManage() : openManage()));
 $("btnBack").addEventListener("click", closeManage);
 // 设置页页签:渠道 / 显示 / 刷新与启动 / 关于
 function showTab(name) {
@@ -2337,6 +2349,8 @@ $("mTabs").addEventListener("click", (e) => {
   showTab(b.dataset.p);
   // 模型页签才去取清单:没打开就不打扰接口(价目表一天一次的手动/自动刷新)
   if (b.dataset.p === "mdl") ensureModels();
+  // 关于页签里的「排查日志」卡:每次切进来刷新路径与大小(便宜,一次本地文件 stat)
+  if (b.dataset.p === "about") refreshLogCard();
   // 密钥箱:每次切进来都重新读索引(列表不需要解密,读起来很便宜);
   // 重新渲染也会把已显示的明文收回
   if (b.dataset.p === "vault") {
@@ -3428,6 +3442,72 @@ function onUpdProgress(p) {
 
 $("btnCheck").addEventListener("click", () => checkUpdate(true));
 
+// ───────────── 排查日志(设置页 · 关于页签)─────────────
+// 用户报"某渠道取不到数"时,这一段是唯一能把现场带回来的东西:
+// 路径 + 大小 + 最近若干行,一键复制 / 打开目录 / 清空。
+// 日志里不含密钥(写入侧 diaglog 已做摘要与脱敏),所以复制不需要二次确认。
+
+let LOG_INFO = null;
+
+/** 把字节数说成人话(界面上"342 KB"比 349913 好读)。 */
+function fmtBytes(n) {
+  if (!n) return "空";
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(0) + " KB";
+  return (n / 1024 / 1024).toFixed(1) + " MB";
+}
+
+/** 刷新日志卡(路径 / 大小 / 是否被环境变量关掉)。 */
+async function refreshLogCard() {
+  try {
+    const info = await invoke("diag_log_info");
+    LOG_INFO = info;
+    const el = $("logPath");
+    if (el) el.textContent = info.path || info.dir || "—";
+    const sz = $("logSize");
+    if (sz) sz.textContent = info.enabled ? fmtBytes(info.size) : "已关闭";
+    const off = $("logOff");
+    if (off) off.style.display = info.enabled ? "none" : "block";
+  } catch (e) {
+    const el = $("logPath");
+    if (el) el.textContent = "拿不到日志路径:" + e;
+  }
+}
+
+if ($("btnLogCopy")) {
+  $("btnLogCopy").addEventListener("click", async () => {
+    const btn = $("btnLogCopy");
+    btn.disabled = true;
+    try {
+      const text = await invoke("diag_log_tail", { lines: 600 });
+      await invoke("copy_text", { text });
+      showToast("最近日志已复制 · 可直接贴给我");
+    } catch (e) {
+      showToast("复制日志失败:" + e, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  $("btnLogOpen").addEventListener("click", async () => {
+    try {
+      await invoke("open_log_dir");
+    } catch (e) {
+      showToast("打开日志目录失败:" + e, true);
+    }
+  });
+  $("btnLogClear").addEventListener("click", async () => {
+    // 清空不可逆,但代价很小(只是排查线索);提示一句让用户知道"清掉就没了"
+    if (!confirm("清空排查日志?清掉之后,下次出问题就没有这段记录了。")) return;
+    try {
+      await invoke("diag_log_clear");
+      await refreshLogCard();
+      showToast("日志已清空");
+    } catch (e) {
+      showToast("清空失败:" + e, true);
+    }
+  });
+}
+
 // 一键体检(裁决 2A):逐渠道真打一次 + 本机检查,产出可复制文本。
 // 跑一次要打 7 个真请求(最坏十几秒),按钮期间禁用,避免连点叠请求。
 $("btnDiag").addEventListener("click", async () => {
@@ -3440,6 +3520,8 @@ $("btnDiag").addEventListener("click", async () => {
     const report = await invoke("run_diagnostic");
     $("diagOut").textContent = report;
     $("btnDiagCopy").style.display = "inline-block";
+    // 体检把失败链也写进了日志,顺手刷新一下大小/路径
+    refreshLogCard();
     // 报告里有需要处理的渠道就顺手提示一句(不替用户判断严重性)
     showToast(String(report).includes("✗") ? "体检完成:有项目需要处理" : "体检完成:全部正常");
   } catch (e) {
