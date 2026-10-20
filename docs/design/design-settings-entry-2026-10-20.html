@@ -9,8 +9,8 @@
   html{height:auto;overflow:auto}
   body.doc{margin:0;height:auto;border:0;border-radius:0;box-shadow:none;
     background:#0a0c10;color:#dfe5f1;display:block;overflow:visible;
-    font:14px/1.7 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;padding:36px 26px 90px}
-  .wrap{max-width:1220px;margin:0 auto}
+    font:14px/1.7 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;padding:36px 22px 90px}
+  .wrap{max-width:1260px;margin:0 auto}
   h1{font-size:22px;margin:0 0 6px;letter-spacing:.01em}
   .sub{color:#7d879e;font-size:13px;margin-bottom:8px}
   .badge{display:inline-block;font-size:11.5px;color:#f0c67a;background:#241d12;border:1px solid #7a6234;
@@ -95,7 +95,7 @@
   </ul>
 
   <h3>代价 1:标题栏已经装不下了(实测)</h3>
-  <p>标题栏内容宽 378px(窗口 400 − 两侧 10px 透明边)。5 个文字按钮 + 更新角标(「新版本」,是角标里最宽的一档)同时在场时:</p>
+  <p>标题栏内容宽 378px(窗口 400 − 两侧 10px 透明边)。5 个文字按钮 + 更新角标(取三字角标「新版本」/「安装中」,是角标里最宽的一档)同时在场时:</p>
 
   <table>
     <tr><th>字号档</th><th class="num">标题可用宽</th><th class="num">标题需要宽</th><th class="num">标题栏内容宽</th><th>结果</th></tr>
@@ -112,7 +112,8 @@
 
   <h2>二、三个方案,按真实尺寸画</h2>
   <p>下面三列都是 380px 真宽、套用 <code>app/src/styles.css</code> 的真实类名(不是手绘示意图)、并用与实现相同的
-  <code>--u</code> 倍率渲染。每列上方一条:标准字号;下方一条:特大字号。两条都带着「新版本」更新角标 —— 那是标题栏最坏的情况。</p>
+  <code>--u</code> 倍率渲染。每列上方一条:标准字号;下方一条:特大字号。两条都带着「新版本」更新角标 —— 那是标题栏最坏的情况。
+  (还有第四个候选 B′:把顶部「设置」换成 ⚙ 图标,它只是在同一位置省 13px,视觉差异小,列在第三节表里对比。)</p>
 
   <div class="stage" id="stage"></div>
 
@@ -157,7 +158,7 @@
         <li>删掉标题栏 <code>#btnS</code> 一个按钮</li>
         <li>底栏那枚链接升级为真正的按钮,文案就是视图名</li>
       </ul>
-      <div class="pro"><b>赚:</b>标题栏省下一个按钮加一个 9px 间距 —— 标准字号下标题可用宽从 43.5px 回到 77.8px(实测不再出现省略号),特大字号的 27px 溢出直接归零。<b>不改逻辑就修掉一个真缺陷。</b></div>
+      <div class="pro"><b>赚:</b>标题栏少一个按钮(含间距约 44px 的位置)。腾出的空间流向标题:可用宽 43.5 → 77.8px(标题固有宽 78px,实测不再出省略号)、大字号 10.5 → 58.8px、特大 0 → 17.3px,<b>27px 的按钮溢出直接归零</b>。<b>不改任何逻辑就修掉一个真缺陷。</b></div>
       <div class="pro"><b>赚:</b>名字与页面标题统一,不再有"设置 vs 设置与管理"的第三种说法。</div>
       <div class="con"><b>付:</b>底栏在「最长状态句 + 有新版本」时本来就零余量,所以<b>不能</b>给这枚链接加齿轮图标,也不宜把文案改长。</div>
       <div class="con"><b>付:</b>底栏链接目前是 <code>span</code>,不可 Tab、不可回车 —— 必须同时改成按钮,否则这次收敛<em>会砍掉键盘用户唯一的入口</em>。</div>
@@ -169,7 +170,7 @@
         <li>删掉底栏 <code>#lkKeys</code> 与它前面的分隔符</li>
         <li>标题栏保持 5 个按钮不变</li>
       </ul>
-      <div class="pro"><b>赚:</b>底栏弹性空隙多出 69~145px(标准字号),最长状态句 + 更新角标也不挤。</div>
+      <div class="pro"><b>赚:</b>底栏弹性空隙从 0 变成 58~145px(标准字号,取决于有没有更新角标),最长状态句也不会挤。</div>
       <div class="con"><b>付:</b>标题栏一点没松,特大字号下「隐藏」照样被挤出窗口 27px。</div>
       <div class="con"><b>付:</b>名字还是「设置」,进去却是「设置与管理」;底栏只剩「退出」一枚灰字,视觉上像少了东西。</div>
     </div>

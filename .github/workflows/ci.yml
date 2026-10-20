@@ -75,7 +75,7 @@ jobs:
           echo "RUSTFLAGS=-C linker=$mingw\gcc.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           gcc -v
 
-      - name: cargo test (core, 227 tests)
+      - name: cargo test (core, 229 tests)
         shell: pwsh
         working-directory: app/core
         # 4 条 #[ignore] 是真机用例(要读本机凭据、要打真接口),runner 上没有
@@ -90,13 +90,23 @@ jobs:
       # src-tauri 的 check 需要静态 WebView2 加载器归档,而那个归档是 gitignore 的。
       # make-webview2-static.ps1 从 cargo registry 里 Cargo.lock 钉住的那一版
       # webview2-com-sys 取 WebView2LoaderStatic.lib 重打 —— 所以必须先 cargo fetch。
-      - name: cargo check --all-targets (src-tauri)
+      #
+      # 两个坑(第一版在 runner 上就是这么挂的):
+      #   ① cargo fetch 必须**带 working-directory**。仓库根目录没有 Cargo.toml,
+      #      cargo 会沿目录往上找,找到 app/src-tauri 的那份,然后想改它的 lock ——
+      #      `--locked` 当场报 "cannot update the lock file"。所以每条 cargo 都钉死目录。
+      #   ② pwsh 里 `./build/xxx.ps1` 不能直接执行(不是命令名),要写
+      #      `pwsh -File ./build/xxx.ps1`。
+      - name: cargo fetch + static WebView2 loader archive
         shell: pwsh
         run: |
           cargo fetch --locked
-          ./build/make-webview2-static.ps1
-          cargo check --all-targets --locked
+          pwsh -File ./build/make-webview2-static.ps1
+
+      - name: cargo check --all-targets (src-tauri)
+        shell: pwsh
         working-directory: app/src-tauri
+        run: cargo check --all-targets --locked
         # 这里只 check 不 build:check 也要过 build.rs,也就是会真的去链接静态加载器
         # 并把导入表走一遍 —— 单 exe 那条约束在编译期就能发现问题,不必跑完整 release。
 
