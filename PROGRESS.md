@@ -112,6 +112,35 @@ gitignore 的),Windows runner 上 GNU ld 链接整套 Tauri 依赖树既慢又�
 - 三张截图经人眼核对:面板 400×580、紧凑条 388×67、胶囊 164×67,圆角外真透明,
   CFG 还原验证 identical
 
+### runner 上连踩四个坑(CI 第一版全红,逐个修掉)
+
+发布后 push 触发的 ci / release 两条 workflow 第一版都红了。四个原因全在 runner 侧,
+本地一概碰不到 —— 但也正因如此,**不写下来下次配 CI 还会再踩一遍**:
+
+| # | 现象(runner 上的原话) | 根因 | 修法 |
+|---|---|---|---|
+| 1 | `cannot update the lock file ... because --locked was passed` | `cargo fetch` 没写 `working-directory`。仓库根目录**没有 Cargo.toml**,cargo 沿目录往上找到 `app/src-tauri` 的那份,然后想改它的 lock | 每条 cargo 都钉死 `working-directory` |
+| 2 | `The term './build/make-webview2-static.ps1' is not recognized` | pwsh 里 `./脚本` 不是可执行命令名 | `pwsh -File <github.workspace>/build/...`,用绝对路径 |
+| 3 | `missing gcc: D:\a\...\build\mingw64\bin\gcc.exe` | `make-webview2-static.ps1` 只在两处找 gcc:`$USERPROFILE\mingw64\bin`(本机 winlibs)与 `build\mingw64\bin`(历史位置)。runner 上 msys2 装在 `C:\mingw64`,两个都不是 → 静态加载器归档生不出来 | 改成三个候选按顺序试。本机仍走第一个,行为不变 |
+| 4 | (第 2 条的连带) | 那一步的 `working-directory` 是 `app/src-tauri`,连相对路径 `./build/...` 也指不到仓库根 | 同上,用 `${{ github.workspace }}` 绝对路径 |
+
+修完后 **ci 全绿**(core 229 passed / 0 failed + 两 crate check + `node --check`,
+runner 上实测 7 分钟),release 那条也重跑通过。
+
+**另一个教训:发版核验不能靠终端回显。** 用 PowerShell 的 `Invoke-WebRequest` 拉
+线上 `latest.json`,`$resp.Content` 里的中文全是 GBK 乱码,一度以为"发出去的说明是乱的";
+按 UTF-8 读文件 + 数 `U+FFFD` 为 0,确认线上内容是好的。
+→ 新增 `build/verify-release.js`(node 写的,按字节比):更新端点 200、版本一致、
+签名与本地 `.sig` 逐字一致、安装包可下且 sha256 相同、三件套齐、notes 中文完好
+(661 个 CJK、0 个 replacement char)、仓库元数据四项齐。**这一轮全部 PASS。**
+
+**发版(v0.1.43)**:本地 bundle 出 `Grandettoken_0.1.43_x64-setup.exe`(5,017,462 字节,
+sha256 `537cbc1e51cf7e845c12e0ccc4898390e7c050c3bf3ad916b002f02cd5563b48`,导入表干净、
+无 `WebView2Loader.dll`),`latest.json` 由 `build/make-latest-json.js` 生成(版本/tag/`.sig`/
+安装包四项断言都过),三件套上传到
+<https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.43>。
+`releases/latest` 指向 v0.1.43,更新端点实测 200 且签名与本地 `.sig` 逐字一致。
+
 **这一轮没有回填到 v0.1.42 发布记录里** —— 发版流程与产物核验见 RELEASE.md,本次只做门面与流程。
 
 ## 第三轮全量体检:续期断链与代理取证(2026-10-19,v0.1.42)
