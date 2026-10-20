@@ -388,6 +388,48 @@ body.view-manage #lkKeys{display:none}
 .wmark{display:none;font-size:max(10px,calc(9.5px*var(--u)));line-height:1;margin-left:calc(2px*var(--u))}
 .wmark.warn{color:var(--warn)} .wmark.bad{color:var(--bad)}
 body.form-compact .wmark{display:inline}
+
+/* ── 签到徽标(2026-10-21,设计稿 product-home-checkin-badge)──
+   沿用 .wmark 那套"极小标记、折叠后仍保留"的机制,不另造一套。
+   四条硬规矩:
+     · 只表达签到态,**绝不参与余额渲染**(不影响 .v / .dot 的颜色)
+     · 默认不画 —— JS 只在"该渠道开了签到且读到状态"时才输出这个元素
+     · 四态:ok(已签) / hot(可领,可点) / 默认(待签) / warn(需处理)
+     · 文字必须能一眼区分,不靠颜色单独承载信息(色盲友好) */
+.ckb{display:inline-flex;align-items:center;gap:calc(2px*var(--u));
+  font-size:max(9.5px,calc(9px*var(--u)));line-height:1.35;
+  margin-left:calc(4px*var(--u));padding:0 calc(4px*var(--u));
+  border-radius:calc(4px*var(--u));border:1px solid var(--line2);
+  background:#181c24;color:var(--tx3);white-space:nowrap;
+  font-family:inherit;cursor:default;vertical-align:middle}
+.ckb.ok{color:#8ee9b8;border-color:#2f6b43;background:#132219}
+.ckb.hot{color:#cfe0ff;border-color:#3d5a8a;background:#151d2b;cursor:pointer}
+.ckb.hot:hover{background:#1c2740;border-color:var(--ac)}
+.ckb.warn{color:#e8c07d;border-color:#6b5a2e;background:#1f1a10;cursor:pointer}
+.ckb.warn:hover{background:#2a2213}
+/* 紧凑条:只留最要紧的两种(可领 / 需处理)看得清,已签与待签压到最小 ——
+   46px 单行里塞满四态会把行撑高。 */
+body.form-compact .ckb{font-size:max(9px,calc(8.5px*var(--u)));padding:0 calc(3px*var(--u))}
+body.form-compact .ckb.ok{color:#6fbf95}
+body.form-compact .ckb:not(.hot):not(.warn){color:var(--tx3);opacity:.72}
+body.form-compact .ckb:empty{display:none}
+
+/* 首页顶部「还有 N 个没签」提示条:只在真有未签时由 JS 输出,全签完就消失 */
+.ckstrip{display:block;width:100%;margin:0 0 calc(6px*var(--u));
+  padding:calc(5px*var(--u)) calc(8px*var(--u));text-align:left;
+  font-size:max(10.5px,calc(10.5px*var(--u)));font-family:inherit;
+  color:var(--tx2);background:#151d2b;border:1px solid #3d5a8a;
+  border-radius:calc(7px*var(--u));cursor:pointer}
+.ckstrip b{color:#cfe0ff}
+.ckstrip:hover{background:#1c2740;border-color:var(--ac)}
+body.form-compact .ckstrip,body.form-pill .ckstrip{display:none}
+
+/* 行详情里的签到区(主卡片只给"一眼",这里给完整信息) */
+.ckdet{border:1px dashed var(--line2);border-radius:calc(7px*var(--u));
+  padding:calc(6px*var(--u)) calc(8px*var(--u));margin:calc(8px*var(--u)) 0}
+.ckdet .k1{font-size:max(11px,calc(11.5px*var(--u)));color:var(--tx2)}
+.ckdet .k2{font-size:max(10px,calc(10.5px*var(--u)));color:var(--tx3);
+  margin-top:calc(3px*var(--u));font-family:Consolas,monospace}
 .nm .s .cy{color:var(--ac)}
 .nm .s .ct{color:var(--tx3)}
 /* Codex 副标题里的套餐小徽章(free/plus/pro) */

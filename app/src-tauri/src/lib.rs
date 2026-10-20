@@ -2276,6 +2276,16 @@ struct CheckinState {
     streak_days: Option<i64>,
     /// 近 7 天流水
     log: Vec<tokenscope_core::store::CheckinRow>,
+    /// **今天这个渠道签完了吗**(claimed / already / inactive)。
+    ///
+    /// 为什么由后端给、不让前端算:Qoder 的周期日**从 10:00 起算**
+    /// (`CheckinDef::day_roll_hour`),前端拿 `new Date()` 算本地日,10:00 之前
+    /// 必然对不上 —— 明明签了也显示没签。凡是"哪一天"的判断,后端算过就别在前端再算一遍
+    /// (与 0.1.49 的 `last_auth_version` 同一个思路)。
+    ///
+    /// 注意这与 `outcome` 不重复:`outcome` 是给"设置页"看的原始短码(含 reason),
+    /// 这里是给"首页徽标"用的**已判定结论**,`already` 也算签完。
+    done_today: bool,
 }
 
 /// 该渠道现在能不能拿到签到凭据;拿不到就把原因说清楚(界面照抄)。
@@ -2399,6 +2409,9 @@ fn checkin_state_of(id: &str, cfg: &Config, store: &Store, note: Option<String>)
         needs_user,
         note,
         month_credits,
+        // 首页徽标用:今天没有待办了(已签 / 平台说已签 / 本期无活动)。
+        // **用后端的 cycle_day** —— Qoder 的"今天"从 10:00 起算,前端按本地日算必错。
+        done_today: c.signed_today(&today),
         streak_days: c.last_streak_days,
         log,
     }

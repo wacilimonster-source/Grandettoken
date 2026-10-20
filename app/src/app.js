@@ -590,6 +590,9 @@ function renderRow(c, i) {
       ? '<span class="wmark warn" title="余额可能撑不到下次可申请">⚠</span>'
       : "";
 
+  // 签到徽标:只在该渠道开了签到时出现,折叠成紧凑条也保留(与 .wmark 同一套机制)
+  const ckb = ckBadgeHtml(c);
+
   const src = c.stale
     ? `<div class="rhint stale">显示的是 ${relTime(c.updatedAt)} 的成功快照${
         c.error ? " · " + esc(c.error) : ""
@@ -601,7 +604,7 @@ function renderRow(c, i) {
       <div class="r1">
         ${iconHtml(c, "ico", noKey || failed)}
         <div class="nm">
-          <div class="n"><span class="nn">${esc(c.name)}</span><span class="nsh">${esc(c.short)}</span>${dot}${wmark}</div>
+          <div class="n"><span class="nn">${esc(c.name)}</span><span class="nsh">${esc(c.short)}</span>${dot}${wmark}${ckb}</div>
           <div class="s">${sub}</div>
         </div>
         <div class="val">
@@ -863,6 +866,29 @@ function renderDetail(c) {
       n ? " " + n + " 个" : ""
     } —— <span class="lk" data-act="open-models" data-id="${c.id}">去「模型」页挑一个,一键配到 Trae / WorkBuddy / ZCode</span>。</div>`);
   }
+  // 签到详情:卡片上那枚徽标只给"一眼"的结论,这里给完整信息
+  // (连续天数、本月合计、上次尝试、下次自动重试)。数据全在已有的 CheckinState 里。
+  const cks = CK[c.id];
+  if (CHECKIN_ON.has(c.id) && cks && cks.enabled) {
+    body.push(
+      `<div class="ckdet">` +
+        `<div class="k1">签到 · ${esc(ckText(cks) ? ckText(cks).text : "今天还没签")}</div>` +
+        (cks.streakDays || cks.monthCredits
+          ? `<div class="k2">${[
+              cks.streakDays ? "连续 " + cks.streakDays + " 天" : "",
+              cks.monthCredits ? "本月共 " + cks.monthCredits + " 分" : "",
+            ]
+              .filter(Boolean)
+              .join(" · ")}</div>`
+          : "") +
+        (cks.lastTryAt
+          ? `<div class="k2">上次尝试 ${relTime(cks.lastTryAt)}${
+              cks.nextTryAt && cks.nextTryAt * 1000 > Date.now() ? " · 下次 " + ckHold(cks) : ""
+            }</div>`
+          : "") +
+        `</div>`
+    );
+  }
   body.push(manageLink);
 
   return `<div class="rbody-in">${body.join("")}</div>`;
@@ -967,7 +993,7 @@ function renderInner(opts) {
   // 行头的 aria-expanded 在 renderRow 里也读它,开合两边永远一致(F2)
   const openId = [...rowOpen].find((x) => shown.some((c) => c.id === x)) || null;
   $("list").innerHTML = configured
-    ? shown.map((c, i) => renderRow(c, i)).join("")
+    ? ckPendingStrip() + shown.map((c, i) => renderRow(c, i)).join("")
     : hiddenN && CHANNELS.some((c) => c.hasKey && c.hidden)
       ? `<div class="empty">
            <div class="ek">&#128065;</div>
@@ -1221,22 +1247,22 @@ function pillAnim(newId, lastText, lastId) {
 let PEEK = { open: false, timer: null, h: 0, w: 0 };
 
 /** 今天签到的进度(只数"真领到"的,与签到那三条规矩一致)。 */
+/** 今天签到的进度(胶囊速览第 3 行)。
+ *
+ * **不再自己算日期**(2026-10-21 修两个 bug):
+ *   ① 以前只数 `claimed`,`already` 不算 —— 而"平台说今天已签"同样是签完了,
+ *      于是真实已签却显示成没签(当天 WorkBuddy 就是这个);
+ *   ② 以前用 `new Date()` 算本地日去比对 log 里的 day,而 **Qoder 的周期日从 10:00
+ *      起算** —— 10:00 之前必然对不上,明明签了也显示没签。
+ * 现在直接用后端算好的 `doneToday`,前端**零日期运算**。 */
 function peekCheckinLine() {
-  const today = new Date();
-  const day =
-    today.getFullYear() +
-    "-" +
-    String(today.getMonth() + 1).padStart(2, "0") +
-    "-" +
-    String(today.getDate()).padStart(2, "0");
   let done = 0;
   let on = 0;
   for (const id of CHECKIN_ON) {
     const s = CK[id];
     if (!s || !s.enabled) continue;
     on++;
-    const top = s.log && s.log[0];
-    if (top && top.day === day && String(top.outcome || "").startsWith("claimed")) done++;
+    if (s.doneToday) done++;
   }
   return on ? `签到 ${done}/${on}` : "";
 }
@@ -2304,9 +2330,20 @@ $("list").addEventListener("click", async (e) => {
     e.stopPropagation();
     const id = act.dataset.id;
     const a = act.dataset.act;
-    if (a === "open-manage") {
+    if (a === "ckstripopen") {
+      // 首页顶部「还有 N 个没签」→ 直接落到设置里的签到区,不用自己翻页签
       openManage();
-      // 空态卡的「去恢复」带 data-first:直接滚到那条隐藏渠道并闪一下,不用自己翻
+      showTab("run");
+      requestAnimationFrame(() => {
+        const el = $("ckSet");
+        if (el) {
+          el.scrollIntoView({ block: "center" });
+          el.classList.add("flash");
+          setTimeout(() => el.classList.remove("flash"), 1150);
+        }
+      });
+    } else if (a === "open-manage") {
+      openManage();
       const first = act.dataset.first;
       if (first) {
         showTab("ch");
@@ -3967,6 +4004,105 @@ function ckText(s) {
   if (o.startsWith("shape")) return { text: "签到接口有变动,已暂停自动签到 · 余额显示不受影响", warn: true };
   if (o.startsWith("failed")) return Object.assign({ text: "上次没成功:" + (s.lastMessage || o.slice(7)) }, run("重试", ""));
   return Object.assign({ text: "今天还没签" }, run("领积分", "p"));
+}
+
+/**
+ * 首页顶部「今天还有 N 个渠道没签到」提示条。
+ *
+ * **只在真有未签时出现**:全部签完就消失 —— "全部已签"是噪音不是信息;
+ * 签到全关时也不出现(没开的人不该被提醒一件他没要求的事)。
+ */
+function ckPendingStrip() {
+  let pending = 0;
+  let on = 0;
+  for (const id of CHECKIN_ON) {
+    const s = CK[id];
+    if (!s || !s.enabled) continue;
+    on++;
+    if (!s.doneToday) pending++;
+  }
+  if (!on || !pending) return "";
+  return `<button type="button" class="ckstrip" data-act="ckstripopen"
+      title="打开「刷新与启动 → 每日签到」">今天还有 <b>${pending}</b> 个渠道没签到 · 去查看</button>`;
+}
+
+/**
+ * 首页卡片上的签到徽标。设计见 docs/product/product-home-checkin-badge-2026-10-21.md。
+ *
+ * 内部有十几种 short code,但对用户只有四态:**已签 / 可领 / 待签 / 需处理**。
+ * 其余细节(reason、连续天数、退避剩余)全进 tooltip。
+ *
+ * 三条硬规矩:
+ *   ① 签到**没开启**就一个像素都不画 —— 默认关,没开的人不该看到满屏"待签";
+ *   ② `CK[id]` 还没读到就**不画** —— 宁可晚 200ms,也不先给假状态再跳变
+ *      (这产品被"界面显示陈旧结论"坑过一次,见 0.1.50);
+ *   ③ 徽标**不参与余额渲染** —— 颜色只表达签到态,绝不影响金额与状态点。
+ */
+function ckBadgeHtml(c) {
+  if (!CHECKIN_ON.has(c.id)) return "";
+  if (c.hidden) return "";
+  const s = CK[c.id];
+  if (!s || !s.enabled) return "";
+  const o = String(s.outcome || "");
+  const n = s.credits === null || s.credits === undefined ? "" : " +" + s.credits;
+  const tip = esc(ckBadgeTip(s));
+
+  // claimed = **我们刚替他领到了** → 可以说数额
+  if (o.startsWith("claimed")) return `<span class="ckb ok" title="${tip}">✓${esc(n)}</span>`;
+  // already = **平台侧已签**(可能是他自己在客户端点的)→ 只说"已签",数额进 tooltip。
+  // 写成 "+100" 会让人以为是我们领的 —— 签到红线第 2 条(不把点了按钮说成领到了)。
+  if (o.startsWith("already")) return `<span class="ckb ok" title="${tip}">✓ 已签</span>`;
+  // inactive = 本期无活动:不是"已签",但今天确实没有待办,聚合里算它一份
+  if (o.startsWith("inactive")) return `<span class="ckb ok" title="${tip}">本期无活动</span>`;
+  if (o.startsWith("retry:ready")) {
+    // 后端把"能不能点"算好了(canTry):退避中就别给一个点了没反应的按钮
+    return s.canTry === false
+      ? `<span class="ckb" title="${tip}">待签</span>`
+      : `<button class="ckb hot" data-act="ckrun" data-id="${esc(c.id)}" title="${tip}">可领${esc(n)}</button>`;
+  }
+  if (o.startsWith("auth")) {
+    return `<button class="ckb warn" data-act="open-manage" data-id="${esc(c.id)}" title="${tip}">需登录</button>`;
+  }
+  if (o.startsWith("shape")) {
+    return `<button class="ckb warn" data-act="open-manage" data-id="${esc(c.id)}" title="${tip}">异常</button>`;
+  }
+  if (o.startsWith("no_cred")) {
+    return `<button class="ckb" data-act="open-manage" data-id="${esc(c.id)}" title="${tip}">未就绪</button>`;
+  }
+  // 空 / retry:* / recheck / failed → 一律"待签"(细节在 tooltip)
+  return `<span class="ckb" title="${tip}">待签</span>`;
+}
+
+/** 徽标的 tooltip:把 short code 翻成一句人话,再补上关键时间。 */
+function ckBadgeTip(s) {
+  const o = String(s.outcome || "");
+  const bits = [];
+  if (o.startsWith("claimed")) bits.push("今天已领" + (s.credits ? " +" + s.credits + " 分" : ""));
+  else if (o.startsWith("already"))
+    bits.push("平台显示今天已签到" + (s.credits ? "(数额 " + s.credits + " 分)" : ""));
+  else if (o.startsWith("inactive")) bits.push(s.lastMessage || "本期无打卡活动,等下一期");
+  else if (o.startsWith("retry:ready"))
+    bits.push("今天可领" + (s.credits ? " +" + s.credits + " 分" : ""));
+  else if (o.startsWith("auth")) bits.push("凭据失效 —— 打开一次客户端");
+  else if (o.startsWith("no_cred")) bits.push(s.lastMessage || "本机没读到签到凭据");
+  else if (o.startsWith("shape")) bits.push("签到接口有变动,已暂停自动签到(余额不受影响)");
+  else if (o === "recheck") bits.push("正在重新确认凭据");
+  else if (o.startsWith("retry")) bits.push("上次没成功,今天还会自动再试");
+  else bits.push("今天还没签");
+  if (s.streakDays) bits.push("连续 " + s.streakDays + " 天");
+  if (s.monthCredits) bits.push("本月共 " + s.monthCredits + " 分");
+  if (s.nextTryAt) {
+    const left = Math.ceil((s.nextTryAt * 1000 - Date.now()) / 1000);
+    if (left > 0) {
+      bits.push((left >= 60 ? Math.round(left / 60) + " 分钟" : left + " 秒") + "后再试");
+    }
+  } else if (!s.doneToday) {
+    // 还没到本渠道的跨日时刻:必须说清是几点,不能说"明天"
+    // (Qoder 的"今天"从 10:00 起算 —— 说"明天"会让人以为今天没戏了)
+    const roll = CK_ROLL[s.id] || 0;
+    if (roll > 0 && new Date().getHours() < roll) bits.push(roll + ":00 后可签");
+  }
+  return bits.join(" · ");
 }
 
 function ckRowHtml(id) {

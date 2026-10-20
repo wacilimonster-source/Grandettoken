@@ -379,6 +379,26 @@ impl CheckinCfg {
         }
     }
 
+    /// 今天这个渠道**没有待办了**(已签 / 平台说已签 / 本期无活动)。
+    ///
+    /// 与 [`done_for_day`](Self::done_for_day) 的区别:那个还含 `auth` / `shape`
+    /// —— 它们的意思是"今天别再试了",**不是**"签完了"。首页徽标要的是正面结论,
+    /// 所以两者不能混用。
+    ///
+    /// `inactive`(本期无打卡活动)算"没有待办":不算进去的话,聚合行会永远说
+    /// "还有 N 个没签",用户会一直等一个不会到来的签到。
+    pub fn signed_today(&self, today: &str) -> bool {
+        if self.last_day.as_deref() != Some(today) {
+            return false;
+        }
+        match self.last_code.as_deref() {
+            Some(c) => {
+                c.starts_with("claimed") || c.starts_with("already") || c.starts_with("inactive")
+            }
+            None => false,
+        }
+    }
+
     /// 这条 `auth` 是不是陈旧的(记录它的版本与当前版本不同)。
     ///
     /// 只对 `auth` 有意义:`claimed` / `already` 是**平台给的既成事实**(真领到了),
@@ -1071,6 +1091,33 @@ mod tests {
     }
 
     /// 当天处理完了就不再自动试;可重试的才继续。
+    /// 首页徽标要的是"今天没有待办了"这个**正面**结论,与 done_for_day(含 auth/shape
+    /// —— 那是"别再试了",不是"签完了")不能混用。2026-10-21 首页徽标上线时刻意分开。
+    #[test]
+    fn signed_today_is_a_positive_conclusion_not_just_stop_trying() {
+        let today = "2026-10-21";
+        let mk = |code: &str| {
+            let mut c = CheckinCfg::default();
+            c.last_day = Some(today.into());
+            c.last_code = Some(code.into());
+            c
+        };
+
+        // 真签完的三种
+        for code in ["claimed", "claimed:100", "already", "inactive:本期无活动"] {
+            assert!(mk(code).signed_today(today), "{code} 应算今天没有待办");
+        }
+        // auth / shape:今天不该再试,但**不是签完了** —— 徽标要说"需处理",不能说"已签"
+        for code in ["auth", "shape:缺字段", "retry:ready", "retry:device", "failed:boom"] {
+            assert!(!mk(code).signed_today(today), "{code:?} 不是'签完了'");
+        }
+        // 昨天签的不算今天
+        let mut y = CheckinCfg::default();
+        y.last_day = Some("2026-10-20".into());
+        y.last_code = Some("claimed".into());
+        assert!(!y.signed_today(today), "跨日了就得重新签");
+    }
+
     #[test]
     fn done_for_day_rules() {
         let today = "2026-10-13";
