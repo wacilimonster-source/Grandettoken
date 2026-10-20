@@ -155,8 +155,19 @@ jobs:
         shell: pwsh
         # make-latest-json.js 自己断言:tag 存在、.sig 存在、安装包存在、
         # 目录里没有混进 WebView2Loader.dll、两处版本号一致。
+        #
+        # ⚠ **提交信息绝不能内插进 PowerShell 字符串**(v0.1.47 在这里炸过):
+        #   以前写的是  $notes = "## Grandettoken ${{ ... }}`n`n${{ github.event.head_commit.message }}"
+        #   —— 提交信息里的 `"` 会提前闭合字符串,`$`/反引号还会被当成插值。
+        #   v0.1.47 的正文含「Qoder 的"今天"从 10:00 起算」,于是 runner 报
+        #   `ParserError: Unexpected token` ,而**构建与签名早已成功**,白等一轮。
+        #   现在改为经 env 传递(GitHub 的推荐做法):env 的值不进 shell 解析,
+        #   任何字符都安全。版本号同理,也走 env。
+        env:
+          VER: ${{ steps.meta.outputs.version }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
-          $notes = "## Grandettoken ${{ steps.meta.outputs.version }}`n`n${{ github.event.head_commit.message }}"
+          $notes = "## Grandettoken $env:VER`n`n$env:COMMIT_MSG"
           $notesFile = Join-Path $env:RUNNER_TEMP 'release-notes.md'
           [System.IO.File]::WriteAllText($notesFile, $notes)
           node build/make-latest-json.js --notes-file $notesFile
