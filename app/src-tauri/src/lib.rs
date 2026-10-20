@@ -2508,6 +2508,23 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
         }
         entry.last_try_at = Some(now);
         entry.last_credits = credits;
+        // 签到落一行诊断(**不含凭据**)。以前这条路一个字都不记,排查只能靠数据库反推 ——
+        // 2026-10-21 查"为什么显示不出领了多少分"时才发现:Trae / WorkBuddy 的接口
+        // 根本不返回数额,而日志里连这条事实都看不到。现在至少能一眼确认
+        // 「平台没给数额」与「我们解析漏了」是哪种。
+        tokenscope_core::diaglog::write_keyed(
+            "checkin",
+            id,
+            &format!(
+                "签到 {} · 结果={} · 数额={} · 第 {} 次",
+                def.name,
+                out.code(),
+                credits
+                    .map(|c| format!("{c}"))
+                    .unwrap_or_else(|| "平台未返回".into()),
+                entry.attempts
+            ),
+        );
         // 连续天数:拿不到就**保留上次的值**(None 覆盖成 None 没问题,但别把已知的清掉)
         if streak.is_some() {
             entry.last_streak_days = streak;

@@ -3958,10 +3958,22 @@ function ckHold(s) {
  *  Qoder 是 10:00 —— 官方活动描述原文「每日 10:00（UTC+8）刷新」。 */
 const CK_ROLL = { trae: 0, workbuddy: 0, qoder: 10, "qoder-cn": 10 };
 
-/** 状态 → 一行字 + 一个按钮。八种状态照设计稿 7.2 的表。 */
+/**
+ * 状态 → 一行字 + 一个按钮。八种状态照设计稿 7.2 的表。
+ *
+ * ⚠ **数额可能没有**(2026-10-21 真机):Trae / WorkBuddy 的签到接口常常**不返回**
+ * 领到多少分(`credits` 为 null,本机日志 10-20 与 10-21 都是)。以前文案写死成
+ * `"今日已领" + n + " 分"`,n 为空时就成了「今日已领 分」—— 悬空一个"分",
+ * 用户看到的正是"显示不出领了多少分"。
+ *
+ * 规矩:有数额就报数额;**没有就明说"平台未返回数额"**,绝不留一个洞。
+ * 这与签到红线一致 —— 数额只信平台给的字段,拿不到就不编。
+ */
 function ckText(s) {
   if (!s) return null;
-  const n = s.credits === null || s.credits === undefined ? "" : " +" + s.credits;
+  const hasN = s.credits !== null && s.credits !== undefined;
+  const n = hasN ? " +" + s.credits : "";
+  const amt = hasN ? " +" + s.credits + " 分" : "";
   const o = s.outcome || "";
   // 后端把"现在到底能不能点"算好了(can_try = 开关开 && 今天没完结 && 不在退避中)。
   // 以前前端不读它,退避中连点 N 次 = 对平台发 N×3 个请求,越限流撞得越凶。
@@ -3975,8 +3987,18 @@ function ckText(s) {
   if (s.note) return { text: s.note, btn: "去登录", act: "cklogin", warn: true };
   // 连续天数只有 Qoder 的接口给(streak_days),有就带上 —— 比现有两个渠道多一个可展示项
   const streak = s.streakDays ? " · 连续 " + s.streakDays + " 天" : "";
-  if (o.startsWith("claimed")) return { text: "今日已领" + n + " 分" + streak + " · 已触发到账核对" };
-  if (o.startsWith("already")) return { text: "今日已领" + n + " 分" + streak + "(平台侧显示已签到)" };
+  if (o.startsWith("claimed"))
+    return {
+      text:
+        (hasN ? "今日已领" + amt : "今日已签到(平台未返回数额)") +
+        streak +
+        " · 已触发到账核对",
+    };
+  if (o.startsWith("already"))
+    return {
+      text: (hasN ? "今日已领" + amt : "今日已签到(平台未返回数额)") +
+        streak + "(平台侧显示已签到)",
+    };
   if (o === "retry:ready") return Object.assign({ text: "今日可领" + n }, run("领积分", "p"));
   // Qoder 的可领短码形如 retry:ready:{活动id} —— 同样落进"可领"
   if (o.startsWith("retry:ready:")) return Object.assign({ text: "今日可领" + n }, run("领积分", "p"));
@@ -4936,6 +4958,11 @@ async function refresh() {
     return;
   }
   CHANNELS = list;
+  // 签到状态必须**在 render 之前**取好(2026-10-21 修):
+  // 以前 loadCheckin() 只在「打开设置页 / 点签到按钮 / 后端推事件」时调用 ——
+  // 于是首页从来就没有 CK,徽标一律拿到 undefined 直接不画,用户当然看不到签到。
+  // 它是**一个** IPC(一次返回全部渠道),比每个渠道各查一次便宜,放在这里不心疼。
+  await loadCheckin();
   render({ updated: true });
 }
 
