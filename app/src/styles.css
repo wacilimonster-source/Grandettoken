@@ -1,4 +1,4 @@
-/* TokenScope 样式。视觉基准 = token-dashboard-prototype.html:
+/* Grandettoken 样式。视觉基准 = docs/prototype/token-dashboard-prototype.html:
    同一套调色板与字号;窗口无边框(transparent),body 自己就是那张卡片,
    所以圆角/描边/内高光都在 body 上,各形态只改圆角与底色。
 
@@ -535,7 +535,7 @@ body.docked .upd-ov,
 body.form-compact .upd-ov,
 body.form-pill .upd-ov{display:none}
 
-/* ═════════ 动效层(设计稿 design-motion.html,裁决 A/D1/默认关)═════════
+/* ═════════ 动效层(设计稿 docs/design/design-motion.html,裁决 A/D1/默认关)═════════
    铁律:短(≤320ms)/ 只动有语义的变化 / 只用 transform+opacity / 无常驻循环
    (唯一例外 G 呼吸,默认关)。prefers-reduced-motion 一键全静。 */
 
@@ -592,7 +592,7 @@ body.pulse .dot.b{animation:breathe 2s ease-in-out infinite}
     transition-duration:.01ms!important}
 }
 
-/* ═════════ 2026-09-23 设计稿落地(design-ui-motion-2026-09-23.html)═════════ */
+/* ═════════ 2026-09-23 设计稿落地(docs/design/design-ui-motion-2026-09-23.html)═════════ */
 
 /* U6 小尺寸图标清晰度:紧凑条 16px 档位官方位图糊成一团,回退字母方块
    (字母比图形更可辨识);面板/管理页的 28px 档继续用官方标 */
@@ -630,7 +630,7 @@ body.form-compact .more:hover{color:var(--tx);background:var(--bg3)}
 @keyframes rowflash{0%,55%{background:#7fa2ff26}100%{background:transparent}}
 
 /* M5 轮播指示点已随 2026-09-25 方案 B「光环」退役:底部让位给发丝进度条,
-   页序改由胶囊 tooltip 的「N/M 轮播」承担(design-pill-restyle-5.html) */
+   页序改由胶囊 tooltip 的「N/M 轮播」承担(docs/design/design-pill-restyle-5.html) */
 /* M6 贴边:拖拽近边缘的吸附预览线(画在窗口靠边缘一侧) */
 .prevline{position:fixed;top:0;bottom:0;width:2px;background:var(--ac);
   box-shadow:0 0 8px var(--ac);display:none;z-index:55;pointer-events:none}
@@ -652,7 +652,7 @@ body.docked #toast{display:none}
 /* 管理页与展示页的切换过渡:120ms 淡入,空间关系更清楚 */
 body.view-manage .manage{animation:fadeup var(--t1) var(--ease)}
 
-/* ═════════ 2026-09-25 设计稿落地(design-pill-restyle-5.html 方案 B「光环」)═════════ */
+/* ═════════ 2026-09-25 设计稿落地(docs/design/design-pill-restyle-5.html 方案 B「光环」)═════════ */
 
 /* B 光环:状态染到整颗胶囊 —— 描边 + 6px 微光随状态色(绿=宽裕/黄=警戒/红=告急/灰=无数据)。
    光晕外延 6px ≤ 窗口 10px 透明边距,不会被裁出硬边(阴影预算见 body 注释);
@@ -682,7 +682,7 @@ body.form-pill.st-warn .pill-body .hair i{background:var(--warn)}
 body.form-pill.st-bad .pill-body .hair i{background:var(--bad)}
 body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 
-/* ── 模型页:4SAPI 可用模型 + 一键配置到客户端(design-4sapi-models.html)── */
+/* ── 模型页:4SAPI 可用模型 + 一键配置到客户端(docs/design/design-4sapi-models.html)── */
 .mdl-q{display:flex;gap:calc(6px*var(--u));margin:calc(-2px*var(--u)) 0 calc(8px*var(--u))}
 .mdl-q .inp{flex:1;min-width:0;background:var(--bg3);border:1px solid var(--line2);border-radius:calc(5px*var(--u));
   color:var(--tx);font-family:inherit;font-size:max(11.5px,calc(12px*var(--u)));padding:calc(5px*var(--u)) calc(8px*var(--u))}

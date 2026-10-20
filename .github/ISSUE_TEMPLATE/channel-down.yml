@@ -1,0 +1,68 @@
+name: 渠道失效
+description: 某个渠道突然取数失败 / 显示失联,怀疑是上游接口变了
+labels: ['channel-down']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        渠道失效的头号嫌疑是上游改了接口或改了鉴权方式。
+        报这一类的价值在于**取证**:和官方网页控制台对照一次,能省掉大量猜测。
+
+        判断方法:挂件显示失败的同时,打开该平台的网页控制台 ——
+        网页上能看到余额,而挂件报错,就是接口侧的问题;网页也看不了,是账号/密钥侧的问题。
+
+  - type: dropdown
+    id: channel
+    attributes:
+      label: 哪个渠道
+      options:
+        - 4SAPI
+        - OpenCode Go
+        - DeepSeek
+        - Hapi
+        - Trae
+        - WorkBuddy
+        - Codex
+        - 自定义渠道
+    validations:
+      required: true
+
+  - type: input
+    id: key_hint
+    attributes:
+      label: 密钥尾号
+      description: 「设置与管理 → 渠道」里那个密钥输入框下方的尾号掩码,**只要尾号 4 位**
+      placeholder: '••••abcd'
+
+  - type: textarea
+    id: error
+    attributes:
+      label: 挂件显示的错误文案
+      description: 渠道行副标题那句,或展开详情里的具体错误
+    validations:
+      required: true
+
+  - type: dropdown
+    id: web
+    attributes:
+      label: 同一时刻,该平台的网页控制台能正常看到余额吗
+      options:
+        - 能看到 —— 接口侧的问题
+        - 看不到 —— 账号/密钥侧的问题
+        - 没试 / 没有网页控制台
+    validations:
+      required: true
+
+  - type: textarea
+    id: diag
+    attributes:
+      label: 体检报告
+      description: 「设置与管理 → 关于 → 运行体检」→「复制报告」(不含密钥)
+    validations:
+      required: false
+
+  - type: input
+    id: since
+    attributes:
+      label: 从什么时候开始的
+      placeholder: '大概日期,或"昨天更新后"'

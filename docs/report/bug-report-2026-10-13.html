@@ -107,7 +107,7 @@
                     let dir = backup(&amp;site.root, &amp;site.files, &amp;stamp)?;
                     let _ = restore(&amp;dir);</span>先执行了若干条 <code>UPDATE</code>,<b>之后</b>才备份——拷进备份目录的是"已经写坏的文件",紧接着又把它盖回去,语义上是空操作;而且 <code>let _ =</code> 把回滚失败也吞了。<br>
 ③ <code>trae_write</code> 从 1207 行开库到 1295 行逐条 <code>UPDATE</code> 全程<b>没有事务</b>,中途失败即半套状态落盘;成功路径也没有第④条契约要求的读回校验。</p>
-<p class="fix"><b class="lb">修复后的正确效果:</b>Trae 与另外三家走同一条 <code>commit(site, files, stamp, write, verify)</code>:写入前在 <code>backup-inject/&lt;时间戳&gt;/</code> 落 <code>state.vscdb</code>(含 <code>-wal/-shm</code>)快照,回执里备份栏是真实目录、两个按钮可用,失败先恢复写入前状态再报错。依据:design-4sapi-models.html:496「共同前提四条(缺一不写)」与 :527「写入用事务、失败立即回滚、写前强制备份」。</p></div>
+<p class="fix"><b class="lb">修复后的正确效果:</b>Trae 与另外三家走同一条 <code>commit(site, files, stamp, write, verify)</code>:写入前在 <code>backup-inject/&lt;时间戳&gt;/</code> 落 <code>state.vscdb</code>(含 <code>-wal/-shm</code>)快照,回执里备份栏是真实目录、两个按钮可用,失败先恢复写入前状态再报错。依据:../design/design-4sapi-models.html:496「共同前提四条(缺一不写)」与 :527「写入用事务、失败立即回滚、写前强制备份」。</p></div>
 
 <div class="bug p0"><h4><span class="sev p0">P0-3</span>发版脚本会在构建失败时报"成功",并把上一次的旧安装包当新包上传<span class="tag v-ok">✅ 我已核到行号</span></h4>
 <p><span class="loc">build/build.ps1:116 → 121-124 → 129-132 → 137</span></p>
@@ -222,7 +222,7 @@
         } else {
             None
         };</span>第 6 次起 <code>next_try_at</code> 被置 <code>None</code>,而节拍器的判断是 <code>next_try_at.map(|t| t &gt; now).unwrap_or(false)</code> —— <b><code>None</code> 被解释成"不在退避中"</b>,于是每 300 秒的 tick 一律放行,比设计里的 1200 秒激进 4 倍。<code>done_for_day</code>(236-241)只对 claimed/already/inactive/auth/shape 收口,<code>Retry</code> 会一直放行。</p>
-<p class="fix"><b class="lb">修复后的正确效果:</b>超过 5 次仍按 1200 秒间隔重试(或明确当天放弃,二者必居其一),全天请求次数不超过退避表定义。依据:design-auto-checkin-2026-10-13.html:265「退避 [120,300,600,900,1200] 秒<b>封顶</b>,当天内继续」,checkin.rs:585 的 <code>next_delay(9)==1200</code> 单测也证明作者要的是封顶不是放弃。</p></div>
+<p class="fix"><b class="lb">修复后的正确效果:</b>超过 5 次仍按 1200 秒间隔重试(或明确当天放弃,二者必居其一),全天请求次数不超过退避表定义。依据:../design/design-auto-checkin-2026-10-13.html:265「退避 [120,300,600,900,1200] 秒<b>封顶</b>,当天内继续」,checkin.rs:585 的 <code>next_delay(9)==1200</code> 单测也证明作者要的是封顶不是放弃。</p></div>
 
 <div class="bug p1"><h4><span class="sev">P1-3</span>OpenCode Go 缺 <code>percent</code> 字段被当"已消耗 0%",显示「剩余 100%」<span class="tag v-ok">✅ 我已核到行号</span></h4>
 <p><span class="loc">app/core/src/providers.rs:206-226(208 行)</span></p>
@@ -653,7 +653,7 @@
 <tr><td class="c">真打外部接口</td><td>没有向 4SAPI/OpenCode/Codex/Trae/WorkBuddy 发过任何请求(那需要真实凭据,且会产生账务副作用)。所有"上游字段/错误码"类结论都标了 <span class="tag v-run">⚠</span>。</td></tr>
 <tr><td class="c">访问凭据管理器/注册表/第三方登录文件</td><td>未触碰。凭据与密钥箱结论全部来自静态阅读。</td></tr>
 <tr><td class="c">cargo clippy</td><td>本机 gnu 工具链未装 clippy 组件;<b>为了不改你的工具链而放弃</b>,改跑 <code>cargo check --all-targets</code>(0 警告)。需要 clippy 的话我可以再装(或走 msvc + vcvars)。</td></tr>
-<tr><td class="c">文档类 HTML(25 个 design-*/bug-report-*)</td><td>只按需要引用了与本次结论直接冲突/相关的段落(design-4sapi-models.html:496/527、design-auto-checkin:242/265、PROGRESS.md:1152),没有全量通读——它们不是代码。</td></tr>
+<tr><td class="c">文档类 HTML(25 个 design-*/bug-report-*)</td><td>只按需要引用了与本次结论直接冲突/相关的段落(../design/design-4sapi-models.html:496/527、../design/design-auto-checkin:242/265、PROGRESS.md:1152),没有全量通读——它们不是代码。</td></tr>
 </table>
 
 <h2 id="contract">十、前后端契约全量核对(35 条命令 + 5 个事件,一条不漏)</h2>

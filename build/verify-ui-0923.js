@@ -144,7 +144,7 @@ const CH = [
     check('M2/I3 toast 显示并自动消失', toast.shown && toast.gone, JSON.stringify(toast));
 
     // M5 胶囊:选 2 个渠道。轮播指示点(#pillDots,09-23 设计稿)已在 v0.1.16 退役,
-    // 现在是 B 光环(design-pill-restyle-5.html):body 上的 st-* 状态类 + #pillHair
+    // 现在是 B 光环(docs/design/design-pill-restyle-5.html):body 上的 st-* 状态类 + #pillHair
     // 发丝条常驻显示剩余百分比。断言旧指示点确实不在,并且新光环就位。
     await evalJs(`CFG.pillChannels = ['4sapi', 'opencode-go']; render(); applyForm('pill', false);`);
     await sleep(800);

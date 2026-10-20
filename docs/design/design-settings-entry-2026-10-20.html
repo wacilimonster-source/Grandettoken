@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Grandettoken · 设置入口收敛为 1 个(设计草案)</title>
+<link rel="stylesheet" href="../../app/src/styles.css">
+<style>
+  /* ── 文档外壳(覆盖 styles.css 里给挂件 body 用的那条规则)── */
+  html{height:auto;overflow:auto}
+  body.doc{margin:0;height:auto;border:0;border-radius:0;box-shadow:none;
+    background:#0a0c10;color:#dfe5f1;display:block;overflow:visible;
+    font:14px/1.7 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;padding:36px 26px 90px}
+  .wrap{max-width:1220px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 6px;letter-spacing:.01em}
+  .sub{color:#7d879e;font-size:13px;margin-bottom:8px}
+  .badge{display:inline-block;font-size:11.5px;color:#f0c67a;background:#241d12;border:1px solid #7a6234;
+    border-radius:999px;padding:1px 9px;margin-left:8px;vertical-align:2px;letter-spacing:0;font-weight:600}
+  h2{font-size:16px;margin:40px 0 12px;padding-left:10px;border-left:3px solid var(--ac)}
+  h3{font-size:13.5px;margin:20px 0 8px;color:#dfe5f1}
+  p{color:#b6bfce;margin:8px 0;font-size:13px}
+  ul{margin:6px 0 6px 20px;color:#b6bfce;font-size:13px}
+  li{margin:5px 0}
+  b{color:#edf0f6}
+  code{background:#1a1f2c;border:1px solid #262d3d;border-radius:4px;padding:1px 5px;
+    font:12px/1.5 Consolas,monospace;color:#cdd6e8}
+  .lead{background:#10131a;border:1px solid #262d3d;border-left:3px solid var(--ac);
+    border-radius:0 8px 8px 0;padding:12px 16px;margin:14px 0 6px}
+  .lead p{margin:4px 0}
+
+  .stage{display:flex;gap:26px;flex-wrap:wrap;align-items:flex-start;margin-top:6px}
+  .col{min-width:0}
+  .cap{font-size:12px;color:#8d97ab;margin-bottom:8px;letter-spacing:.04em}
+  .cap b{color:#dfe5f1}
+  .tagx{display:inline-block;font-size:11px;border-radius:999px;padding:0 8px;margin-left:6px;
+    border:1px solid #3c445c;color:#8d97ab;vertical-align:1px}
+  .tagx.ok{border-color:#2f6b43;color:#8ee9b8;background:#132219}
+  .tagx.bad{border-color:#6b3230;color:#ffb4b0;background:#241413}
+
+  /* 挂件 Mock:参数与真实窗口内容区一致(380 宽、圆角 12、body 底色) */
+  .mock{display:flex;flex-direction:column;width:380px;flex:none;overflow:hidden;
+    background:var(--bg);border:1px solid var(--line);border-radius:12px;
+    font:calc(13px*var(--u))/1.5 "Segoe UI","Microsoft YaHei",sans-serif;color:var(--tx);
+    box-shadow:0 18px 50px -18px #000c}
+  .mock .tbar,.mock .sum,.mock .foot{flex:none}
+  .mock .list{flex:none}
+  .mock .row{flex:none}
+  .mock .rhead{cursor:default}
+  .clipnote{font-size:11.5px;color:#8d97ab;margin-top:6px;width:380px;line-height:1.6}
+  .clipnote em{font-style:normal;color:#ffb4b0}
+
+  table{border-collapse:collapse;font-size:12.5px;width:100%;max-width:1000px;margin:10px 0}
+  th,td{padding:7px 10px;border-bottom:1px solid #1d2330;text-align:left;vertical-align:top;color:#b6bfce}
+  th{color:#8d97ab;font-weight:600;background:#141824}
+  td b{color:#edf0f6}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;font-family:Consolas,monospace}
+  tr.pick td{background:#12211a}
+  tr.pick td:first-child{box-shadow:inset 2px 0 0 #4ade9d}
+  tr.bad td{background:#241413}
+
+  .cards{display:flex;gap:14px;flex-wrap:wrap;margin-top:8px}
+  .card{background:#10131a;border:1px solid #262d3d;border-radius:10px;padding:13px 16px;flex:1 1 330px;min-width:300px}
+  .card h3{margin:0 0 6px;font-size:13px}
+  .card ul{margin:2px 0 0 18px}
+  .card.rec{border-color:#2f6b43;box-shadow:0 0 0 1px #2f6b4333}
+  .card.rec h3{color:#8ee9b8}
+  .pro,.con{font-size:12.5px;margin-top:8px}
+  .pro b{color:#4ade9d}.con b{color:#ff8f88}
+
+  .spec{width:100%;max-width:1000px}
+  .spec td:first-child{width:150px;color:#8d97ab}
+  .qa{border-left:2px solid #f0b23c;padding:2px 0 2px 14px;margin:14px 0}
+  .qa b{color:#f0c67a}
+  .foot-note{color:#6f7a8f;font-size:12px;margin-top:26px;border-top:1px solid #1d2330;padding-top:12px}
+</style>
+</head>
+<body class="doc">
+<div class="wrap">
+
+  <h1>设置入口:两处 → 一处<span class="badge">设计草案 · 待确认</span></h1>
+  <div class="sub">2026-10-20 · 只改「设置与管理」的入口,不动设置页内部结构 · 本文档未改任何应用代码</div>
+
+  <div class="lead">
+    <p><b>一句话:</b>标题栏「设置」与底栏「设置与管理」做的是同一件事、却有两个名字;收敛为<b>底栏一个入口</b>,
+    标题栏因此空出一个文字按钮的位置 —— 顺带修掉「特大字号时最右的『隐藏』被挤出窗口」这个真缺陷。</p>
+    <p><b>代价:</b>底栏链接从 <code>&lt;span&gt;</code> 改成按钮(否则这次收敛会砍掉键盘用户唯一入口)—— 「退出」一并修好。</p>
+  </div>
+
+  <h2>一、现状:同一个动作,两个名字,两处入口</h2>
+
+  <ul>
+    <li>标题栏第 2 个文字按钮「<b>设置</b>」(<code>#btnS</code>)→ <code>openManage()</code></li>
+    <li>底栏右侧「<b>设置与管理</b>」(<code>#lkKeys</code>)→ 同一个 <code>openManage()</code></li>
+    <li>进去之后页头标题又叫「<b>设置与管理</b>」—— 于是同一个地方,顶部叫"设置"、底部和页头叫"设置与管理"</li>
+    <li>两者唯一的差别是个半吊子的选中态:只有顶部按钮会变实心(<code>.on</code>),底栏链接没有任何反馈</li>
+  </ul>
+
+  <h3>代价 1:标题栏已经装不下了(实测)</h3>
+  <p>标题栏内容宽 378px(窗口 400 − 两侧 10px 透明边)。5 个文字按钮 + 更新角标(「新版本」,是角标里最宽的一档)同时在场时:</p>
+
+  <table>
+    <tr><th>字号档</th><th class="num">标题可用宽</th><th class="num">标题需要宽</th><th class="num">标题栏内容宽</th><th>结果</th></tr>
+    <tr class="bad"><td>标准 <code>--u:1</code></td><td class="num">43.5px</td><td class="num">78px</td><td class="num">378px</td><td>「Grandettoken」被省略号截掉一半</td></tr>
+    <tr class="bad"><td>大 <code>--u:1.15</code></td><td class="num">10.5px</td><td class="num">89px</td><td class="num">378px</td><td>标题只剩一个字母宽</td></tr>
+    <tr class="bad"><td>特大 <code>--u:1.3</code></td><td class="num">0px</td><td class="num">101px</td><td class="num"><b>405px</b></td><td><b>溢出 27px</b>:最右「隐藏」被挤出窗口,点不到</td></tr>
+  </table>
+
+  <h3>代价 2:底栏在「最长状态句 + 有新版本」时已经零余量</h3>
+  <p>底栏 = 状态点 + 状态句 + 「有新版本 x.y.z」+ 弹性空隙 + 「设置与管理」+ 分隔符 + 「退出」。
+  按 <code>app.js</code> 真实会拼出的最长状态句(「5 正常 · 1 预警 · 1 失联 · 1 隐藏」)测量:同时有新版本角标时,
+  弹性空隙在<b>三档字号下全都是 0px</b>(特大字号甚至不等最长句就已经是 0)。底栏是 flex 布局,挤到极限会先压掉空隙、
+  再压缩文字 —— 它不会像标题栏那样把按钮推出窗口,但没有余量再塞任何东西(比如给这枚链接加个齿轮图标)。</p>
+
+  <h2>二、三个方案,按真实尺寸画</h2>
+  <p>下面三列都是 380px 真宽、套用 <code>app/src/styles.css</code> 的真实类名(不是手绘示意图)、并用与实现相同的
+  <code>--u</code> 倍率渲染。每列上方一条:标准字号;下方一条:特大字号。两条都带着「新版本」更新角标 —— 那是标题栏最坏的情况。</p>
+
+  <div class="stage" id="stage"></div>
+
+  <h2>三、实测对照表(更新角标在场,最坏情况)</h2>
+
+  <table class="spec" style="table-layout:fixed;max-width:1000px">
+    <colgroup><col style="width:180px"><col style="width:180px"><col style="width:180px"><col></colgroup>
+    <thead>
+      <tr><th>方案</th><th class="num">标题可用宽<br>标准 / 大 / 特大</th><th class="num">标题栏内容宽<br>标准 / 大 / 特大</th><th>结论</th></tr>
+    </thead>
+    <tbody>
+      <tr class="bad">
+        <td><b>现状(5 按钮)</b></td>
+        <td class="num">43.5 / 10.5 / 0</td>
+        <td class="num">378 / 378 / 405</td>
+        <td>三档都截断;特大溢出 27px,「隐藏」点不到</td>
+      </tr>
+      <tr class="pick">
+        <td><b>A 只留底栏(4 按钮)</b></td>
+        <td class="num">77.8 / 58.8 / 17.3</td>
+        <td class="num">378 / 378 / 378</td>
+        <td>零溢出;标准字号标题完整,特大仍有 17px 可放标题</td>
+      </tr>
+      <tr>
+        <td><b>B′ 换成 ⚙ 图标(省 13px)</b></td>
+        <td class="num">56.8 / 24.5 / 0</td>
+        <td class="num">378 / 378 / 389</td>
+        <td>比现状好,但特大仍溢出 11px</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p class="sub" style="margin:8px 0 0">测量方式:无头 Chromium 加载真实 <code>styles.css</code>,按 378px 内容宽渲染标题栏,读
+  <code>clientWidth / scrollWidth / getBoundingClientRect</code>;「需要宽」指标题文本的固有宽。文件名与字号均取当前实现。</p>
+
+  <h2>四、推荐:方案 A —— 只留底栏</h2>
+
+  <div class="cards">
+    <div class="card rec">
+      <h3>A 只留底栏「设置与管理」<span class="tagx ok">推荐</span></h3>
+      <ul>
+        <li>删掉标题栏 <code>#btnS</code> 一个按钮</li>
+        <li>底栏那枚链接升级为真正的按钮,文案就是视图名</li>
+      </ul>
+      <div class="pro"><b>赚:</b>标题栏省下一个按钮加一个 9px 间距 —— 标准字号下标题可用宽从 43.5px 回到 77.8px(实测不再出现省略号),特大字号的 27px 溢出直接归零。<b>不改逻辑就修掉一个真缺陷。</b></div>
+      <div class="pro"><b>赚:</b>名字与页面标题统一,不再有"设置 vs 设置与管理"的第三种说法。</div>
+      <div class="con"><b>付:</b>底栏在「最长状态句 + 有新版本」时本来就零余量,所以<b>不能</b>给这枚链接加齿轮图标,也不宜把文案改长。</div>
+      <div class="con"><b>付:</b>底栏链接目前是 <code>span</code>,不可 Tab、不可回车 —— 必须同时改成按钮,否则这次收敛<em>会砍掉键盘用户唯一的入口</em>。</div>
+    </div>
+
+    <div class="card">
+      <h3>B 只留标题栏「设置」</h3>
+      <ul>
+        <li>删掉底栏 <code>#lkKeys</code> 与它前面的分隔符</li>
+        <li>标题栏保持 5 个按钮不变</li>
+      </ul>
+      <div class="pro"><b>赚:</b>底栏弹性空隙多出 69~145px(标准字号),最长状态句 + 更新角标也不挤。</div>
+      <div class="con"><b>付:</b>标题栏一点没松,特大字号下「隐藏」照样被挤出窗口 27px。</div>
+      <div class="con"><b>付:</b>名字还是「设置」,进去却是「设置与管理」;底栏只剩「退出」一枚灰字,视觉上像少了东西。</div>
+    </div>
+
+    <div class="card">
+      <h3>B′ 只留标题栏 ⚙ 图标</h3>
+      <ul>
+        <li>用 16px 齿轮顶掉「设置」两个字,省约 13px</li>
+      </ul>
+      <div class="pro"><b>赚:</b>比 B 省位 —— 标题可用宽 56.8 / 24.5 / 0,比现状好一档。</div>
+      <div class="con"><b>付:</b>特大字号下仍溢出 11px,「隐藏」还是点不到;齿轮的语义也不等于「设置与管理」。</div>
+      <div class="con"><b>付:</b>380px 标题栏里突然混进一个图标,与「刷新 / 置顶 / 紧凑 / 隐藏」四个文字按钮不同族。</div>
+    </div>
+  </div>
+
+  <h3>为什么不是「两个都留、只统一名字」</h3>
+  <p>那等于把"同一个动作两个入口"这件事保留下来,只是把它藏得更体面。同一个界面里重复的入口迟早会被写成两套状态同步逻辑
+  (今天已经有一半:<code>.on</code> 只加在顶部按钮上,底栏永远不知道自己"正在被使用")。</p>
+
+  <h2>五、方案 A 的落地规格</h2>
+
+  <table class="spec">
+    <tr><td>入口(全局)</td><td>底栏右侧「<b>设置与管理</b>」,1 个。进管理页后该链接隐藏(沿用 <code>body.view-manage #lkKeys{display:none}</code>),改由页头「← 返回」+ <code>Esc</code> 退出</td></tr>
+    <tr><td>上下文入口(保留)</td><td>空态卡「去恢复 / 去配置密钥」、行详情「密钥、刷新与阈值在『设置与管理』里配置」、模型行「配置到客户端」。这三个是<b>带上下文的跳转</b>,不是全局入口,文案里已经写明去的是"设置与管理",不再重复"设置"</td></tr>
+    <tr><td>文案</td><td>统一「设置与管理」。标题栏那枚「设置」两个字随元素一起删除,不留残影</td></tr>
+    <tr><td>选中态</td><td>删除 <code>#btnS.on</code> 的加/去类。管理页本身(页头标题 + 返回箭头)就是状态,不需要第四个指示器</td></tr>
+    <tr><td>键盘可达</td><td>底栏两枚链接(<code>#lkKeys</code> / <code>#lkQuit</code>)由 <code>span</code> 改为 <code>&lt;button type="button" class="lk"&gt;</code>:<code>background:none;border:0;font:inherit;color:inherit;padding:0</code>,并加入 <code>:focus-visible</code> 焦点环白名单。<b>这是本次改动的必要条件</b>,不是顺手优化</td></tr>
+    <tr><td>不加图标</td><td>在「最长状态句 + 更新角标」的底栏里弹性空隙已经是 0px,加齿轮只会把「退出」挤出去,故纯文字</td></tr>
+    <tr><td>不改的</td><td>设置页内部(6 个页签、渠道卡、密钥箱)、所有 <code>openManage()</code> 行为、<code>Esc</code> 链、紧凑条 / 胶囊 / 贴边形态(这三种形态本来就没有标题栏与底栏,入口只在面板形态存在,维持不变)</td></tr>
+    <tr><td>文档</td><td><code>DESIGN.md</code> §3「入口(4 个)」改为「1 个全局 + 3 个上下文」并补这条取舍理由;§6.2 交互表删掉标题栏「⚙ 设置」一行</td></tr>
+  </table>
+
+  <h2>六、影响面(确认后执行,约 4 处改动)</h2>
+  <ul>
+    <li><code>app/src/index.html</code>:删 <code>&lt;button class="tb" id="btnS"&gt;设置&lt;/button&gt;</code>;底栏两枚 <code>span.lk</code> 改 <code>button.lk</code></li>
+    <li><code>app/src/app.js</code>:删 <code>$("btnS").classList.add/remove("on")</code> 两句、删 <code>$("btnS")</code> 的 click 绑定;底栏监听改挂到按钮上(逻辑不变)</li>
+    <li><code>app/src/styles.css</code>:新增 <code>.foot .lk</code> 的按钮归零样式 + 焦点环;其余不动</li>
+    <li><code>DESIGN.md</code>:§3 入口清单、§6.2 交互表</li>
+  </ul>
+  <p>验证:CDP 起真机 → 断言 <code>#btnS</code> 不存在、<code>#lkKeys</code> 是 <code>BUTTON</code> 且 Tab 可达;三档字号 × 更新角标在场/不在场 6 种组合下断言标题栏 <code>scrollWidth ≤ clientWidth</code>(即无溢出);底栏在最长状态句下同样断言不溢出。</p>
+
+  <h2>七、请你确认</h2>
+  <div class="qa">
+    <p><b>1. 选 A 还是 B?</b>　A = 只留底栏「设置与管理」(推荐,能顺手修掉特大字号下的按钮溢出);B = 只留标题栏「设置」。</p>
+    <p><b>2. 底栏链接要不要保留分隔符?</b>　现状是「设置与管理 | 退出」。A 方案下建议保留(两枚可点元素之间需要分隔),但如果选了 B,分隔符随之删除。</p>
+    <p><b>3. 空态与行详情里的那两处上下文跳转要不要也去掉?</b>　建议保留 —— 它们解决的是"我看到这条渠道缺密钥,怎么去配"的当下问题,不是重复入口。</p>
+  </div>
+
+  <div class="foot-note">
+    本文档为设计预览:所有面板均为真实 <code>app/src/styles.css</code> 类名与真实字号参数渲染,数字为演示值。
+    顶部数据取自当前实现的无头测量,不是估算。
+  </div>
+</div>
+
+<script>
+/* ═══ 用真实类名拼三块 380px 面板 ═══ */
+const ROWS = `
+  <div class="row">
+    <div class="rhead">
+      <div class="r1">
+        <div class="ico" style="background:#e8622c">4S</div>
+        <div class="nm">
+          <div class="n"><span class="nn">4SAPI</span><span class="dot"></span></div>
+          <div class="s">本轮额度 ¥200.00 · 再等 6 天可申请</div>
+        </div>
+        <div class="val"><div class="v" style="color:#4ade9d">¥74.20</div><div class="p">剩 37%</div></div>
+        <div class="caret">&#9654;</div>
+      </div>
+      <div class="bar"><i style="width:74.2%;background:#4ade9d"></i></div>
+      <div class="use"><div>今日<b>¥12.40</b></div><div>本周<b>¥86.10</b></div><div>本月<b>¥301.55</b></div></div>
+      <div class="rhint">更新于 刚刚</div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="rhead">
+      <div class="r1">
+        <div class="ico" style="background:#4d6bfe">DS</div>
+        <div class="nm">
+          <div class="n"><span class="nn">DeepSeek</span><span class="dot st"></span></div>
+          <div class="s">取数失败</div>
+        </div>
+        <div class="val"><div class="v" style="color:#f7c355">¥256.00</div><div class="p">上次快照</div></div>
+        <div class="caret">&#9654;</div>
+      </div>
+      <div class="rhint stale">显示的是 12 分钟前的成功快照 · HTTP 401</div>
+    </div>
+  </div>`;
+
+const TITLE = (withSet) => `
+  <div class="tbar">
+    <div class="mark"></div>
+    <div class="tt">Grandettoken</div>
+    <button class="uchip">新版本</button>
+    <div class="spacer"></div>
+    <button class="tb">刷新</button>
+    ${withSet ? '<button class="tb">设置</button>' : ''}
+    <button class="tb">置顶</button>
+    <button class="tb">紧凑</button>
+    <button class="tb">隐藏</button>
+  </div>`;
+
+const FOOT = (withKeys) => `
+  <div class="foot">
+    <span class="dot st"></span>
+    <span>2 正常 · 1 失联</span>
+    <div class="spacer"></div>
+    ${withKeys ? '<span class="lk">设置与管理</span><span style="color:var(--line2)">|</span>' : ''}
+    <span class="lk">退出</span>
+  </div>`;
+
+const PANEL = (withSet, withKeys) => `
+  <div class="mock">${TITLE(withSet)}
+    <div class="sum">
+      <div class="cell"><div class="lb">今日消耗</div><div class="vv">¥15.50</div></div>
+      <div class="cell"><div class="lb">本周消耗</div><div class="vv">¥106.10</div></div>
+      <div class="cell"><div class="lb">本月消耗</div><div class="vv">¥389.55</div></div>
+    </div>
+    <div class="list">${ROWS}</div>
+    ${FOOT(withKeys)}
+  </div>`;
+
+const variants = [
+  { id: 'now', title: '现状', note: '顶部「设置」+ 底栏「设置与管理」', set: true, keys: true,
+    cls: 'bad', tag: '两份入口',
+    what: '标题栏 5 按钮 + 底栏两枚链接' },
+  { id: 'a', title: 'A 只留底栏', note: '标题栏删「设置」,底栏那条升级为按钮', set: false, keys: true,
+    cls: 'ok', tag: '推荐', what: '标题栏 4 按钮 + 底栏「设置与管理」' },
+  { id: 'b', title: 'B 只留标题栏', note: '底栏删「设置与管理」,标题栏保持 5 按钮', set: true, keys: false,
+    cls: '', tag: '备选', what: '标题栏 5 按钮 + 底栏只剩「退出」' },
+];
+
+const stage = document.getElementById('stage');
+stage.innerHTML = variants.map((v) => `
+  <div class="col">
+    <div class="cap"><b>${v.title}</b><span class="tagx ${v.cls}">${v.tag}</span><br>${v.note}</div>
+    <div style="--u:1">${PANEL(v.set, v.keys)}</div>
+    <div style="--u:1.3;margin-top:14px">${PANEL(v.set, v.keys)}</div>
+    <div class="clipnote">↑ 上标准字号 / 下特大字号,两条都带「新版本」角标:${
+      v.id === 'now' ? '<em>最右「隐藏」被窗口边缘切掉</em>' :
+      v.id === 'a' ? '<em>四个按钮全在窗口内</em>' :
+      '<em>「隐藏」仍被切掉</em>'}</div>
+  </div>`).join('');
+
+/* ═══ 实测数字表已静态写在 HTML 里(避免注入式样式在无头渲染下失效) ═══ */
+</script>
+</body>
+</html>
+

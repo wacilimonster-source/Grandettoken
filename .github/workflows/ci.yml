@@ -1,0 +1,110 @@
+# CI:core 单测 + 两个 crate 的 check。
+#
+# 本项目是 Windows-GNU 非官方路径(Tauri 官方只覆盖 MSVC),所以 runner 上要自己
+# 装 GNU 工具链。core 是纯逻辑层(不依赖 Tauri/WebView2),测试秒级跑完;
+# src-tauri 的 check 不链接 WebView2 运行时也能过 —— 只有真跑 release 时才需要它,
+# 而那件事由 release.yml 在打 tag 时做。
+#
+# 为什么 release 构建不进 CI:单 exe 交付依赖 build/make-webview2-static.ps1 从
+# cargo registry 现成产物重打静态加载器归档(那个归档是 gitignore 的,CI 里要现生成),
+# 而 Windows runner 上的 GNU ld 链接整套 Tauri 依赖树既慢又脆。真正发布走
+# release.yml —— 那条链路本机每次发版都在跑,风险已知。
+name: ci
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+  workflow_dispatch:
+
+# 同一分支上新的 push 取消上一轮:这个仓库单人开发,频繁 push 时排队没有意义。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # GNU 工具链是硬约束:MSVC 会让链接阶段失败(LNK2019 ___chkstk_ms),
+  # 单 exe 的静态加载器也只有 GNU ld 才能吃下。
+  RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-gnu
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GNU toolchain + target
+        shell: pwsh
+        run: |
+          rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal --no-self-update
+          rustup default stable-x86_64-pc-windows-gnu
+          rustup target add x86_64-pc-windows-gnu
+          rustc -vV
+
+      # Tauri 官方镜像带 mingw-w64(LLVM+MinGW),免去自己下 winlibs 那一大步。
+      # install-toolchain.ps1 走的是 winlibs zip,CI 走镜像 —— 产出等价,别混。
+      - name: Install MinGW-w64 (LLVM+MinGW distribution)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc
+          update: true
+
+      - name: Wire CC/CXX and GNU binutils onto PATH
+        shell: pwsh
+        run: |
+          $mingw = (Get-Command gcc.exe).Source | Split-Path -Parent
+          echo "mingw bin: $mingw"
+          # GNU ld/windres 必须比 MSVC 的 link.exe 先被找到,否则 crate-type 与
+          # 资源编译都会走错工具。RUSTFLAGS 也钉一遍链接器,双保险。
+          echo "$mingw" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          echo "CC=$mingw\gcc.exe"   | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          echo "CXX=$mingw\g++.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          echo "RUSTFLAGS=-C linker=$mingw\gcc.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          gcc -v
+
+      - name: cargo test (core, 227 tests)
+        shell: pwsh
+        working-directory: app/core
+        # 4 条 #[ignore] 是真机用例(要读本机凭据、要打真接口),runner 上没有
+        # 这些前提,跳过是对的。它们在任何环境都不该自动跑 —— 见各用例的注释。
+        run: cargo test --locked
+
+      - name: cargo check --all-targets (core)
+        shell: pwsh
+        working-directory: app/core
+        run: cargo check --all-targets --locked
+
+      # src-tauri 的 check 需要静态 WebView2 加载器归档,而那个归档是 gitignore 的。
+      # make-webview2-static.ps1 从 cargo registry 里 Cargo.lock 钉住的那一版
+      # webview2-com-sys 取 WebView2LoaderStatic.lib 重打 —— 所以必须先 cargo fetch。
+      - name: cargo check --all-targets (src-tauri)
+        shell: pwsh
+        run: |
+          cargo fetch --locked
+          ./build/make-webview2-static.ps1
+          cargo check --all-targets --locked
+        working-directory: app/src-tauri
+        # 这里只 check 不 build:check 也要过 build.rs,也就是会真的去链接静态加载器
+        # 并把导入表走一遍 —— 单 exe 那条约束在编译期就能发现问题,不必跑完整 release。
+
+      - name: node --check (front-end scripts)
+        shell: pwsh
+        run: |
+          node --check app/src/app.js
+          node --check build/verify-form.js
+          node --check build/verify-ui-0923.js
+          node --check build/shot-panel.js
+          node --check build/make-latest-json.js

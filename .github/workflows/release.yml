@@ -1,0 +1,181 @@
+# 发版自动化:打 v* tag → 构建 + 签名 + 发 Release + 生成 latest.json。
+#
+# 对应 RELEASE.md 的手工 5 步。把每一步都单独拆开是有意的:哪一段红了,
+# 本地就能照 RELEASE.md 原样复现哪一段,不用猜是哪半步坏的。
+#
+# 需要 3 个 secret(见 RELEASE.md「一次性准备」):
+#   TAURI_SIGNING_PRIVATE_KEY        签名私钥**文件内容**(不是路径)—— CI 上没有那把文件
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  空串(密钥未加密)
+# 私钥只从 secret 读,不落盘、不回显。GITHUB_TOKEN 由 Actions 内置提供。
+#
+# 仓库必须保持 public:私有仓库的 release 资源需要鉴权,更新插件拉不到。
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的 tag(已存在),如 v0.1.43'
+        required: true
+
+permissions:
+  contents: write   # 创建 release、上传资源
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-gnu
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 手工触发时按输入的 tag 检出,而不是默认分支 —— 否则构建出来的是
+          # 分支头代码,版本号与 tag 不符。
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Resolve tag and version
+        id: meta
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          if (-not $tag.StartsWith('v')) { throw "tag must start with v: $tag" }
+          $conf = Get-Content app/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $cargo = (Select-String -Path app/src-tauri/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          $ver = $conf.version
+          if ($ver -ne $cargo) { throw "version mismatch: tauri.conf.json=$ver Cargo.toml=$cargo" }
+          if ("v$ver" -ne $tag) { throw "tag $tag does not match version $ver (打 tag 前先同步两处版本号)" }
+          echo "tag=$tag"    | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          echo "version=$ver"| Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "tag=$tag version=$ver"
+
+      - name: Install GNU toolchain + target
+        shell: pwsh
+        run: |
+          rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal --no-self-update
+          rustup default stable-x86_64-pc-windows-gnu
+          rustup target add x86_64-pc-windows-gnu
+          rustc -vV
+
+      - name: Install MinGW-w64 (LLVM+MinGW distribution)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc
+          update: true
+
+      - name: Wire CC/CXX and GNU binutils onto PATH
+        shell: pwsh
+        run: |
+          $mingw = (Get-Command gcc.exe).Source | Split-Path -Parent
+          echo "$mingw" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          echo "CC=$mingw\gcc.exe"   | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          echo "CXX=$mingw\g++.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          echo "RUSTFLAGS=-C linker=$mingw\gcc.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Run core tests before bundling
+        shell: pwsh
+        working-directory: app/core
+        # 单测不过就不发版。这里跑的是 227 条里能跑的 223 条(4 条 #[ignore] 是真机用例)。
+        run: cargo test --locked
+
+      - name: Build NSIS installer + sign
+        shell: pwsh
+        env:
+          # 私钥从 secret 取,写进临时文件给 tauri-cli 读,用完即删。
+          # build.ps1 自己会检查这两件事:缺 TAURI_SIGNING_PRIVATE_KEY 直接失败;
+          # 密码项要么显式设空串、要么把 CI 置为 true(tauri-cli 的 ci 分支回落空密码)——
+          # 否则签名步骤会在非交互环境里等一个永远不来的密码输入,CPU 全程 0 地挂住。
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          CI: 'true'
+        run: |
+          if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
+            throw 'TAURI_SIGNING_PRIVATE_KEY secret is not set (see RELEASE.md step 3)'
+          }
+          $keyPath = Join-Path $env:RUNNER_TEMP 'tokenscope.key'
+          [System.IO.File]::WriteAllText($keyPath, $env:TAURI_SIGNING_PRIVATE_KEY)
+          try {
+            $env:TAURI_SIGNING_PRIVATE_KEY = $keyPath
+            ./build/build.ps1 bundle
+            if ($LASTEXITCODE -ne 0) { throw "bundle failed: $LASTEXITCODE" }
+          } finally {
+            Remove-Item $keyPath -Force -EA SilentlyContinue
+          }
+        # build.ps1 里已经带三条硬断言(两处版本号一致、导入表无 WebView2Loader.dll、
+        # 产物确由本次运行产出),这里不重复造一遍。
+
+      - name: Generate latest.json
+        shell: pwsh
+        # make-latest-json.js 自己断言:tag 存在、.sig 存在、安装包存在、
+        # 目录里没有混进 WebView2Loader.dll、两处版本号一致。
+        run: |
+          $notes = "## Grandettoken ${{ steps.meta.outputs.version }}`n`n${{ github.event.head_commit.message }}"
+          $notesFile = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          [System.IO.File]::WriteAllText($notesFile, $notes)
+          node build/make-latest-json.js --notes-file $notesFile
+          if ($LASTEXITCODE -ne 0) { throw "make-latest-json failed: $LASTEXITCODE" }
+
+      - name: Collect artifacts + digests
+        id: art
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.meta.outputs.version }}"
+          $dir = "app/src-tauri/target/release/bundle/nsis"
+          $exe = "Grandettoken_${ver}_x64-setup.exe"
+          foreach ($f in @($exe, "$exe.sig", 'latest.json')) {
+            $p = Join-Path $dir $f
+            if (-not (Test-Path $p)) { throw "missing artifact: $p" }
+          }
+          $sha = (Get-FileHash (Join-Path $dir $exe) -Algorithm SHA256).Hash
+          echo "sha256=$sha"                    | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          echo "installer=$exe"                 | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          echo "size=$((Get-Item (Join-Path $dir $exe)).Length)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "installer=$exe sha256=$sha"
+
+      - name: Verify update endpoint shape (post-release)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # 上传后立刻复查:latest.json 的 url/signature 与本地 .sig 逐字一致 ——
+        # 少了这一步,签错/传错要等用户报"更新失败"才发现(RELEASE.md 第 5 步的教训)。
+        run: |
+          $ver = "${{ steps.meta.outputs.version }}"
+          gh release view "v$ver" --json assets --jq '.assets[].name'
+          gh api "repos/${{ github.repository }}/releases/tags/v$ver" --jq '.assets[] | "\(.name) \(.size) \(.state)"'
+          $url = "https://github.com/${{ github.repository }}/releases/download/v$ver/latest.json"
+          $live = Invoke-RestMethod -Uri $url -MaximumRedirection 3
+          $local = Get-Content "app/src-tauri/target/release/bundle/nsis/latest.json" -Raw | ConvertFrom-Json
+          if ($live.version -ne $local.version) { throw "latest.json version mismatch: live=$($live.version) local=$($local.version)" }
+          $sig = Get-Content "app/src-tauri/target/release/bundle/nsis/Grandettoken_${ver}_x64-setup.exe.sig" -Raw
+          $liveSig = $live.platforms.'windows-x86_64'.signature.Trim()
+          if ($liveSig -ne $sig.Trim()) { throw 'signature in live latest.json differs from the local .sig' }
+          Write-Host "update endpoint OK: version=$($live.version) url=$($live.platforms.'windows-x86_64'.url)"
+
+      - name: Create release and upload the three assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: Grandettoken ${{ steps.meta.outputs.version }}
+          # 三件套缺一个,自动更新链路就断(RELEASE.md 的教训)。
+          files: |
+            app/src-tauri/target/release/bundle/nsis/Grandettoken_${{ steps.meta.outputs.version }}_x64-setup.exe
+            app/src-tauri/target/release/bundle/nsis/Grandettoken_${{ steps.meta.outputs.version }}_x64-setup.exe.sig
+            app/src-tauri/target/release/bundle/nsis/latest.json
+          body_path: ${{ runner.temp }}/release-notes.md
+          fail_on_unmatched_files: true
+          append_body: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Post-release summary
+        shell: pwsh
+        run: |
+          $sha = "${{ steps.art.outputs.sha256 }}"
+          Write-Host "=== release ${{ steps.meta.outputs.tag }} ==="
+          Write-Host "installer : ${{ steps.art.outputs.installer }}"
+          Write-Host "size      : ${{ steps.art.outputs.size }} bytes"
+          Write-Host "sha256    : $sha"
+          Write-Host "endpoint  : https://github.com/${{ github.repository }}/releases/latest/download/latest.json"

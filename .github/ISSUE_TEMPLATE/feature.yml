@@ -1,0 +1,25 @@
+name: 功能建议
+description: 希望挂件多一件事
+labels: ['enhancement']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提之前值得先看一眼 [DESIGN.md 的「明确不做」](https://github.com/wacilimonster-source/Grandettoken/blob/main/DESIGN.md#14-明确不做非目标) ——
+        不做推理入口、不做多账户聚合、不做历史账单导出,这几条是定过的。
+
+  - type: textarea
+    id: want
+    attributes:
+      label: 想解决什么
+      description: 说场景,不说方案 —— 「我想在 X 的时候知道 Y」比「请加一个 Z 按钮」有用
+    validations:
+      required: true
+
+  - type: textarea
+    id: now
+    attributes:
+      label: 现在怎么凑合
+      description: 没有这个功能时,你今天的做法是什么
+    validations:
+      required: false

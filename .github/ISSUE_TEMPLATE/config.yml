@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 已知边界与常见疑问
+    url: https://github.com/wacilimonster-source/Grandettoken#已知边界不是-bug-是设计或上游限制
+    about: 报 issue 前先看一眼 —— OpenCode Go 接口未公开、备份含明文密钥、没有降级通道都在这里
+  - name: 安装与下载
+    url: https://github.com/wacilimonster-source/Grandettoken/releases/latest
+    about: 安装最新版请去 Releases 下 NSIS 安装包(per-user,免管理员)

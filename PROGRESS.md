@@ -1,9 +1,118 @@
-# TokenScope 开发进展
+# Grandettoken 开发进展
 
-> 最后更新:2026-10-19
-> 状态:**v0.1.42 已发版 —— 第三轮全量体检:修好 WorkBuddy 自动续期的断链,并结掉"系统代理"那条悬了两轮的取证**
-> 更早:v0.1.41(WorkBuddy 改读桌面端凭据)、v0.1.40(会话 TTL 的提示 / 预警 / 补签)、
-> v0.1.39(修模型页渲染出错)、v0.1.38(模型页新增第五个写入目标 DeepSeek Harness)
+> 最后更新:2026-10-20
+> 状态:**未发版** —— ① 修 DSH 模型添加失败(引用名非法 / 目录外模型无协议 / 显示名不分渠道)
+> ② 仓库门面整理:根 README + LICENSE + 文档归位 docs/ + CI/发版自动化 + 仓库元数据
+> 上一版:v0.1.42(第三轮全量体检:修好 WorkBuddy 自动续期的断链,并结掉"系统代理"那条悬了两轮的取证)
+>
+> 产品原名 TokenScope,2026-09 下旬改名 Grandettoken。凭据服务名(`TokenScope`)
+> 与 bundle identifier(`com.wacil.tokenscope`)仍沿用旧名 —— 改了会让已装用户收不到更新、
+> 凭据条目全丢。
+
+## 修 DSH 模型添加失败(2026-10-20,未发版)
+
+**现象**:模型页往 DeepSeek Harness 写任何模型都失败;4SAPI 那种写入还会连带把 DSH 里
+原有的 `opencode-go` 一起弄坏(点了添加,DSH 里模型列表反而少了)。
+
+**三条根因(都在 `core/src/inject.rs` 的 DSH 一节,现已改成新规则)**
+
+1. **引用名非法**:route 键直接照抄来源 id,`4sapi` 派生出的 `apiKeyEnv: 4SAPI_API_KEY`
+   以数字开头。DSH 的凭据引用名要匹配 `^[A-Za-z_][A-Za-z0-9_]*$`(`dsh-credentials` 的
+   `REF_PATTERN`),后果是**整份 `.credentials.yaml` 被拒**(所有密钥读不到),而且 pi-ai 的
+   `resolveProfiles` 在 `credentialRef()` 上抛错 → **该插件所有 route 一起失效**。
+   → route 键改成字母开头:`4sapi` → `foursapi`,引用名 `FOURSAPI_API_KEY`。
+   `dsh_ref_legal()` 兜底:派生出来不合法就拒写,绝不写一个注定弄坏 DSH 的名字。
+
+2. **目录里没有的模型被写进目录 route**:`opencode-go` 以前一律当作"目录里一定有",不写
+   `api`/`baseURL`。但 pi-ai v1.1.0 目录只有 30 个模型,来源列表有 37 个;目录外的
+   (`minimax-m3.1-flash-free` 等 10 个)拿不到协议,pi-ai 直接报
+   `model "…" needs an api` 并把整条 route 判成不可服务。
+   → 抄了一份目录表(`DSH_CATALOG`),**按模型**分派:目录里有 → 留目录 route;
+   目录里没有 → 自建 route `opencode-go-custom`(`api: openai-completions` + `baseURL`)。
+
+3. **显示名不分渠道**:所有来源都叫 `4S-<id>`,`opencode-go` 的模型显示成 `4S-deepseek-v4.1-flash`;
+   目录 route 还不写 `displayName`,在 DSH 里只能看到 `opencode-go`。
+   → 按来源分前缀:`4SAPI` → `4S-<id>`、`Hapi` → `HP-<id>`、`OpenCode Go` → `OG <目录名>`
+   (如 `OG DeepSeek V4.1 Flash`);三条 route 都写 `displayName`。
+
+**顺带修掉的两处**
+
+- 目录里有的模型,能力/上下文**照目录抄**(以前固定写 `input: [text]`,把目录的 `text+image`
+  写窄了);目录外的模型不编能力,省掉 `input` 让 pi-ai 用默认值。
+- 用户自己改过的模型名(`name`)与 route 名(`displayName`)不再被覆盖(与 WorkBuddy 同一条纪律)。
+
+**取消写入**也跟着改:按「这次该写的那条 route → 老版本写的 route(含改名前 `4sapi`)→
+目录内/外两种落点」的顺序找,只收**这个来源自己的**键,不碰别人的 route;凭据按旧/新两个
+引用名分别判断"还有没有人在用",没人用才撤。
+
+**验证**
+
+- core `cargo test`:**229 passed / 0 failed**(另有 4 条真机测试默认 ignore);新增 7 条:
+  引用名合法性与 route 分派、目录内/外分派、按来源的显示名、目录外模型落到自建 route、
+  旧 `4sapi` route 的清理、用户改名的保留、两条 route 并存的去重。
+- 真机形状端到端(在真实 `~/.dsh` 两份文件的**逐字节抄本**上跑,不碰真文件):
+  写入 → 读回校验 → 取消写入 → 回滚,以及「目录外模型写自建 route → 取消 → 回滚」;
+  断言原有条目数、`agent-default-model`、`opencode-go`、文件开头注释全部留着,
+  回滚后逐字节回到原始文件。
+- **外部核验**:把写出来的两份文件用 DSH 自己的 `yaml` 包解析,并按 pi-ai 的可服务性规则
+  (`needs an api` / `MISSING_CREDENTIAL`)与凭据引用名规则逐条过一遍 —— 结论 SERVICEABLE;
+  旧的 `4SAPI_API_KEY` 会被判 ILLEGAL(正是问题 1 的物证)。
+- 壳 `cargo check` 通过;`node --check app.js` 与 `build/probe-frontend.js` 通过。
+- 全程 `~/.dsh/profiles/desktop/cordis.patch.yml` 与 `~/.dsh/.credentials.yaml` 的 sha256
+  前后一致(未改动机器上真实的 DSH 配置);排查用的探针脚本与测试临时目录已清理。
+
+**没做**:未在真实 `~/.dsh` 上真写一次(要留一条写入才能验 DSH 侧真发请求),按"不发版"的口径
+留到发版前一起做。用户机器上 08:18 那次失败留下的备份
+`~/.dsh/backup-inject/20261020-081837` 保留未动。
+
+## 仓库门面整理(2026-10-20)
+
+**起点**:2026-10-11 留了一份 [docs/design/design-github-optimization.html](docs/design/design-github-optimization.html)
+(只调研未动手),里面 6 个待裁决点这次一并定了:**1A MIT / 2A 中文 / 3A 全量进 docs/ /
+5A CI+发版自动化 / 6A 全自动**。裁决 4(AI 工作日志)当时已按 A 处理过 —— 停止跟踪 +
+进 `.gitignore`,**不在历史里抹除**(改写历史要 force-push,会牵连 tags/release,风险大于收益)。
+
+**做了什么**
+
+| 项 | 内容 |
+|---|---|
+| 根 README | [README.md](README.md):定位 + 三形态截图 + 下载入口 + 7 渠道表 + 数据隐私 + 已知边界 + 技术栈 |
+| LICENSE | [LICENSE](LICENSE):MIT(裁决 1A) |
+| 文档归位 | 28 份 HTML 全量搬进 `docs/` 五类:`design/`(21)、`report/`(5)、`prototype/`(2)、`research/`(1)、`product/`(1) |
+| 引用改写 | 代码注释 8 处 + `DESIGN.md`/`PROGRESS.md` 共 9 处 + 7 份文档内部互引,统一改成新路径;`git grep` 复核根目录无裸文件名残留 |
+| 截图 | 新增 `build/shot-panel.js`:CDP 注入**仿真数据**截图,`finally` 里把 CFG 连内存带磁盘写回并**逐字段核对一致**才算还原(夹具形状照 `verify-ui-0923.js`) |
+| CI | `.github/workflows/ci.yml`:push/PR 跑 core `cargo test`(229)+ 两 crate `cargo check --all-targets` + `node --check` |
+| 发版 | `.github/workflows/release.yml`:打 `v*` tag → 断言两处版本号与 tag 一致 → bundle 签名 → `make-latest-json.js` → 上传三件套 → 复查线上 `latest.json` 的 version/signature |
+| 治理 | Dependabot(cargo + actions 两条,周更)、3 个 issue 模板(bug / 渠道失效 / 功能建议)。**不上** wiki/discussions/贡献指南 —— 单人项目,维护不动的等于负债 |
+
+**为什么 release 构建只在 tag 触发的那条 workflow 里,不在 ci.yml**:单 exe 交付依赖
+`build/make-webview2-static.ps1` 从 cargo registry 现成产物重打静态加载器归档(那个归档是
+gitignore 的),Windows runner 上 GNU ld 链接整套 Tauri 依赖树既慢又脆。CI 里 `check` 也会过
+`build.rs`(会真的去链静态加载器),足够在编译期发现问题;完整 release 留给本机每次发版
+跑熟了的那条链路。`design-github-optimization.html` 里说的 spike 结论就是这条。
+
+**踩到的两件事**(都不是新 bug,是现场状态,记下来免得下次误判)
+
+1. **工作区里躺着上一轮未提交的功能改动**。整理过程中 `cargo check` 突然报
+   `inject.rs:6137` 少一个参数 —— 而那 678 行 DSH 目录分派的改动不是本轮写的,是
+   上一轮"修 DSH 模型添加失败"进行到一半留在工作区的。第一次 check 正好撞上它写盘的中间态,
+   等它写完(19:01)再跑就全绿,`cargo test` **229 passed / 0 failed**。
+   教训:** takeover 一个工作区时,第一件事是 `git status` + 等编译稳定,再动手** ——
+   否则很容易把别人的在途工作当成自己改坏的。
+2. **PowerShell 5.1 会把 UTF-8 中文按 GBK 显示**。`Get-Content -Tail` 看 `inject.rs` 尾部
+   看到一片 `鍙湁 work 涓€涓?鈫?`,一度以为是文件被写坏了;按 UTF-8 读回来 + 数
+   `U+FFFD` 为 0,确认文件是好的。教训:**判编码问题要数 replacement char,不能看终端回显**。
+
+**验证**
+
+- core `cargo test` 229 passed / 0 failed(含上一轮新增的 7 条 DSH 用例)、壳 `cargo check` 0 错误
+- `node --check` 6 个脚本全过、`build/probe-frontend.js` 退出 0
+- `build/scan-secrets.ps1`:93 个入库文件 CLEAN(0 命中)
+- `build/check-yaml.js`:7 个 YAML 全部解析通过(为此新写了一个不引第三方依赖的 YAML 子集检查器)
+- 三张截图经人眼核对:面板 400×580、紧凑条 388×67、胶囊 164×67,圆角外真透明,
+  CFG 还原验证 identical
+
+**这一轮没有回填到 v0.1.42 发布记录里** —— 发版流程与产物核验见 RELEASE.md,本次只做门面与流程。
 
 ## 第三轮全量体检:续期断链与代理取证(2026-10-19,v0.1.42)
 
@@ -148,7 +257,7 @@ version 0.1.41、签名与本地逐字一致、安装包下载后 sha256 与本�
 | 2 | 抓官方个人中心 SPA 最新 bundle(`assets.workbuddy.cn/web/usercenter/ad5683203/…/config-*.js`):仍 `POST /billing/meter/get-user-resource`、`withCredentials: true`、恒带 `X-Client-Platform: web`;只有**微信小程序场景**(`sessionStorage["growth-center-platform"]==="miniProgram"`)才补 `Authorization: Bearer`。与 weblogin.rs 顶部 2026-10-08 的实测记录一致 | 平台认证方式没变,请求构造不用改 |
 | 3 | 时间线:10-08 12:12 首笔成功(v0.1.19 网页登录)→ 10-15 11:56:47 末笔,**差值恰好 168 小时**;期间挂件每 60 秒都用这份会话真打接口 | 会话是**绝对 TTL(7 天)**,不是滑动窗口 —— 请求频繁也续不了命,到点就死 |
 | 4 | 官方「访问密钥」页:SPA 路由 `/keys`(站点地址是 **`www.workbuddy.cn/profile/keys`**,裸 `/keys` 是 404 —— 挂件旧提示里的地址已失效);有效期可选 `7天/30天/1年/永久`;但创建按钮**门控**:i18n 明文「该功能为标准版以上用户可用」,用户实测该账号提示需要升级 | 访问密钥(Bearer)这条**对免费账号不可行**(本账号验证);对标准版以上仍可用(挂件已支持手动粘贴 Bearer,候选顺序里它优先) |
-| 5 | 「登录捕获 Bearer 令牌」(v0.1.17 方案)已是**死路**:2026-10-08 CDP 实测 web 登录流程里**没有** Authorization 头、没有 `growth-center-token`、落地 URL 无 `?token=`(设计稿 design-workbuddy-web-login.html 已裁决改走 Cookie) | 不复活"抓令牌"方案 |
+| 5 | 「登录捕获 Bearer 令牌」(v0.1.17 方案)已是**死路**:2026-10-08 CDP 实测 web 登录流程里**没有** Authorization 头、没有 `growth-center-token`、落地 URL 无 `?token=`(设计稿 docs/design/design-workbuddy-web-login.html 已裁决改走 Cookie) | 不复活"抓令牌"方案 |
 
 **根因**:v0.1.19 起挂件吃"浏览器 profile 里的会话 Cookie",这条路活着的前提是会话不失效;
 平台把会话做成了 7 天绝对 TTL。于是每过 7 天必断一次 —— 9/17–10/1 那次断是另一个根因
@@ -327,7 +436,7 @@ route 键 = 来源 id;目录 route 不写端点;`models` 是替换语义所以�
 ## 速览改"抬升卡片"(2026-10-17,v0.1.37)
 
 **背景**:v0.1.36 发布后,用户仍然说"显示还是很奇怪"。这次先做设计再动手,文档见
-`design-pill-peek-2026-10-17.html`(五个方向都按真实 164×46 做可点 mock)。
+`docs/design/design-pill-peek-2026-10-17.html`(五个方向都按真实 164×46 做可点 mock)。
 
 **根因(真机量的)**:胶囊是 `border-radius:999px`。46px 高时圆角 23 = 标准药丸;纵向拉到 120px 后
 圆角被钳到 60 —— 宽 164、高 120、四角半径 60,视觉上从"药丸"变成"被吹起来的豆子"。
@@ -372,7 +481,7 @@ route 键 = 来源 id;目录 route 不写端点;`models` 是替换语义所以�
 
 **起点**:研读了 DeepSeek Harness 上的社区挂件 `dsh-whale-widget`(本机 desktop profile 实装版,
 v0.4.2;代码注释回指到 issue #232),写了一份设计文档并拿到 10 项裁决
-(`design-whale-inspiration-2026-10-16.html`)。裁决结果:**第 4 项「今日预算」作废**;
+(`docs/design/design-whale-inspiration-2026-10-16.html`)。裁决结果:**第 4 项「今日预算」作废**;
 第 10 项选了「一版全做」→ 全部进 v0.1.35,并用两条措施对冲(提交按包分组、每件都带开关)。
 
 **信任包(核心:让每个数字有出处)**
@@ -559,7 +668,7 @@ v0.4.2;代码注释回指到 issue #232),写了一份设计文档并拿到 10 �
 
 ## WorkBuddy 凭据改道:挂件内网页登录(2026-10-02,v0.1.17)
 
-方案与取证见 `design-workbuddy-web-login.html`。用户裁决:**1A 2A 3B 4A 5A 6A 7B**。
+方案与取证见 `docs/design/design-workbuddy-web-login.html`。用户裁决:**1A 2A 3B 4A 5A 6A 7B**。
 
 **为什么必须改**:`C:\Users\wacil\AppData\Local\CodeBuddyExtension\Data\Public\auth\workbuddy-desktop.info`
 里 `auth.accessToken` 从明文字符串变成 `{"$wbEncrypted":1,"envelope":…}`(AES-256-GCM,
@@ -592,7 +701,7 @@ src-tauri `cargo check` 无告警;注入脚本用 lib.rs 原文抽出后在真�
 验过未登录 / 已登录 / 已过期三种卡片状态与登录按钮的 invoke、事件回流、toast 文案,零 console 报错。
 **尚需真机**:用真实登录拿到的令牌打 `get-user-resource` 是否 200、令牌实际能用多少天。
 
-## UI 优化第二轮(2026-09-23,设计稿 `design-ui-motion-2026-09-23.html`)
+## UI 优化第二轮(2026-09-23,设计稿 `docs/design/design-ui-motion-2026-09-23.html`)
 
 先出设计稿(用户裁决:全做、只做深色),再按「设计 − 代码现状」差集实施 ——
 实测发现 v0.1.13 已含动效层/高对比/热键/位置持久化,以下为本轮**实际**改动,
@@ -746,7 +855,7 @@ Tauri 在 GNU 工具链下默认动态链接 `WebView2Loader.dll`(MSVC 工具链
 
 ### 1. 产品设计与原型
 
-- `token-dashboard-prototype.html` —— 交互原型,四种折叠形态(面板 / 紧凑条 / 胶囊 / 边缘吸附)
+- `docs/prototype/token-dashboard-prototype.html` —— 交互原型,四种折叠形态(面板 / 紧凑条 / 胶囊 / 边缘吸附)
 - `providers.js` —— 渠道适配器配置的 JS 版本(设计阶段的产物,保留作参考)
 
 ### 2. 技术选型
@@ -1178,7 +1287,7 @@ OpenCode Go 与 DeepSeek 换成**官方标**,4SAPI / Hapi 仍是字母方块。
 
 ### 追加调整 9(2026-09-17,缺陷审查 14 处 + 四个新功能)
 
-**A. bug-report-2026-09-17.html 的 14 处缺陷:逐条核验,全部处理**
+**A. docs/report/bug-report-2026-09-17.html 的 14 处缺陷:逐条核验,全部处理**
 
 严重 3 处:
 1. `providers.rs` 4SAPI 的 valid 写成 `code.unwrap_or(true) || is_active.unwrap_or(true)`
@@ -1467,7 +1576,7 @@ CARGO_TARGET_DIR:构建直接在仓库里跑,产物落在 `app/src-tauri/target`
 
 ## 4SAPI 可用模型查询 + 一键配置到客户端(2026-10-12,v0.1.20 发布)
 
-设计稿 [`design-4sapi-models.html`](design-4sapi-models.html),已实现口径见 `DESIGN.md` 第 12 节。
+设计稿 [`docs/design/design-4sapi-models.html`](docs/design/design-4sapi-models.html),已实现口径见 `DESIGN.md` 第 12 节。
 这里记取证过程、踩坑与实测结果。
 
 ### 取证(全部可复核)
@@ -1682,7 +1791,7 @@ CARGO_TARGET_DIR:构建直接在仓库里跑,产物落在 `app/src-tauri/target`
 
 ### v0.1.26(2026-10-13,每日签到 M1+M2+M3 一部分)
 
-按 `design-auto-checkin-2026-10-13.html` 的十项裁决(全 A)实现。**M0 只读取证先跑,结论回写文档**(裁决 10A)。
+按 `docs/design/design-auto-checkin-2026-10-13.html` 的十项裁决(全 A)实现。**M0 只读取证先跑,结论回写文档**(裁决 10A)。
 
 - **M0 结果**(真机,只读):Trae status 通 —— HTTP 200 `{"checked_in":true,"code":0,"credits":100,…}`(字段全在顶层;
   `{}` 与 `{"req_source":1}` 都行);设备号是 `icube-dc` 键名里的 16 位十进制数;

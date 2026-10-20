@@ -1,8 +1,8 @@
-# TokenScope 产品设计文档
+# Grandettoken 产品设计文档
 
-> 版本 1.0 · 2026-09-17
+> 版本 1.0 · 2026-09-17(产品原名 TokenScope,2026-09 下旬改名 Grandettoken)
 > 适用范围:常驻 Windows 桌面的多平台 AI Token 余额与用量监控小组件
-> 配套文档:[`PROGRESS.md`](PROGRESS.md)(实现进展与踩坑记录) · [`app/README.md`](app/README.md)(开发者说明) · [`token-dashboard-prototype.html`](token-dashboard-prototype.html)(视觉原型稿) · [`design-spec.html`](design-spec.html)(本文档的可视化版) · [`bug-report-2026-09-17.html`](bug-report-2026-09-17.html)(缺陷审查)
+> 配套文档:[`PROGRESS.md`](PROGRESS.md)(实现进展与踩坑记录) · [`app/README.md`](app/README.md)(开发者说明) · [根 README](README.md)(安装 / 使用 / 下载) · [`docs/prototype/token-dashboard-prototype.html`](docs/prototype/token-dashboard-prototype.html)(视觉原型稿) · [`docs/design/design-spec.html`](docs/design/design-spec.html)(本文档的可视化版) · [`docs/report/bug-report-2026-09-17.html`](docs/report/bug-report-2026-09-17.html)(缺陷审查)
 >
 > 本文档记录**已实现的产品设计**(而不是设想),包含四部分:设计基线、已开发功能清单、设计稿差异台账、优化建议。
 
@@ -214,7 +214,7 @@
 
 ### 5.5 动效
 
-> 2026-09-23 第二轮落地(`design-ui-motion-2026-09-23.html`,原 `design-motion.html` 已并入):全部纯 CSS/合成器动画,时长 ≤320ms,曲线统一 `cubic-bezier(.2,.8,.2,1)`,永不回弹;`prefers-reduced-motion` 一键全静。
+> 2026-09-23 第二轮落地(`docs/design/design-ui-motion-2026-09-23.html`,原 `docs/design/design-motion.html` 已并入):全部纯 CSS/合成器动画,时长 ≤320ms,曲线统一 `cubic-bezier(.2,.8,.2,1)`,永不回弹;`prefers-reduced-motion` 一键全静。
 
 | 场景 | 实现 |
 |---|---|
@@ -506,7 +506,7 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 
 ## 8.6 v0.1.35 新增(小鲸鱼研读 → 四包)
 
-设计来源与裁决见 `design-whale-inspiration-2026-10-16.html`。要点:
+设计来源与裁决见 `docs/design/design-whale-inspiration-2026-10-16.html`。要点:
 
 | 能力 | 口径 | 关键约束 |
 |---|---|---|
@@ -525,7 +525,7 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 
 ## 9. 设计稿差异台账
 
-原型稿 `token-dashboard-prototype.html` 是视觉基准,但实现过程中有多处**有意偏离**。记录在此,避免后续把"有意为之"当成 bug 修掉:
+原型稿 `docs/prototype/token-dashboard-prototype.html` 是视觉基准,但实现过程中有多处**有意偏离**。记录在此,避免后续把"有意为之"当成 bug 修掉:
 
 | # | 原型稿 | 实现 | 原因 |
 |---|---|---|---|
@@ -550,7 +550,7 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 
 ## 10. 优化建议
 
-> **2026-09-23 第二轮落地**(设计稿 `design-ui-motion-2026-09-23.html`,本轮实测代码状态后按差集实施):
+> **2026-09-23 第二轮落地**(设计稿 `docs/design/design-ui-motion-2026-09-23.html`,本轮实测代码状态后按差集实施):
 > ✅ 已落地 —— A3/U2 状态点分层 · A7/U5 滚动条(此前已覆盖 `.extab`)· A9 动效规范(v0.1.13 动效层)· A10 reduced-motion(已有)· A11/U7 焦点态 + 开关 `<button role="switch">` · B3/I6 贴边显式收回(✕+Esc)· B6/M2 刷新真实进度 + toast · B7/U8 汇总环比(后端 `dayPrev/weekPrev/monthPrev`)· B8/I1 排序前置 · B9/I2 `+N` 可交互 · B12/I3 行内确认 + toast 替代 confirm/alert · B13/I4 位置持久化(O-6 已落地)· B14 管理页过渡 · B15/I5 保存成功高亮+尾号 · B1 吸附预览线 · B4 轮播指示点+8s+悬停×3 · A6/U4 卡片外阴影(10px 边距,阴影外延按 ≤10px 重定为 `0 2px 8px -2px`)· A8/U6 紧凑条字母方块 · M7 跌破一次性呼吸(替代 G 无限循环的默认形态)。
 > ⏳ 仍未做 —— A1 设计令牌(部分:动效/颜色已是变量)· A2 浅色主题(用户裁决:只做深色)· A5 字号收敛(`max(11.5px)` 下限已事实收敛)· B2 吸附轻量预览行(悬停仍直接展开完整形态)· B5 点击穿透 · B10 通知接线 · B11 行展开多开 · B16 形态快捷键 1/2/3(全局热键 Alt+G 类已有)· B17 托盘菜单补全。
 
@@ -781,7 +781,7 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 
 ## 12. 4SAPI 可用模型查询 + 一键配置到客户端(2026-10-12 落地;v0.1.20 发布,v0.1.21 收紧默认口径,v0.1.22 加取消写入,v0.1.23 修闪窗/去分组/钉死规则)
 
-设计稿与取证过程见 [`design-4sapi-models.html`](design-4sapi-models.html),这里只记已实现的口径。
+设计稿与取证过程见 [`docs/design/design-4sapi-models.html`](docs/design/design-4sapi-models.html),这里只记已实现的口径。
 
 ### 12.1 模型清单从哪来
 
@@ -888,24 +888,39 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 
 - harness home = `$DSH_HOME`,否则 `~/.dsh`;profile 优先 `desktop`,再挑已配了 `llm-pi-ai` 的,
   最后按名字第一个(挑不出来 = 没装)。
-- **一个来源一条 route**(与 ZCode「每个来源一个 provider」同口径):`4sapi` / `hapi` / `opencode-go`,
-  route 键就是来源 id,互不覆盖。
-- `opencode-go` 是 pi-ai **已安装目录**里的提供方:端点与协议由目录给,写它时**不给** `api`/`baseURL`;
-  另外两个来源不在目录里,必须写全 `api: openai-completions` + `baseURL`(这正是 DSH 自己的
-  「自定义模型 API」那条路)。
-- 引用名按 `<ROUTE>_API_KEY` 派生(大写、非字母数字换下划线)—— 与 DSH 自己的 Models 页同一条规则;
+- **一个来源一条 route**(与 ZCode「每个来源一个 provider」同口径):`foursapi` / `hapi` / `opencode-go`,
+  互不覆盖。route 键**不能**直接照抄来源 id:它要派生凭据引用名,而引用名必须以字母开头
+  (见下一条),所以来源 `4sapi` 的 route 键是 `foursapi`。
+- **目录内外按模型分派**(2026-10-20 修):pi-ai 已安装目录(`@earendil-works/pi-ai/dist/providers/
+  data/<route>.json`)里有这个模型 → 留在目录 route,端点与协议由目录给,**不给** `api`/`baseURL`;
+  目录里**没有**这个模型 → 写到自建 route `<route>-custom`,必须写全 `api: openai-completions` +
+  `baseURL`(目录外的模型拿不到协议,pi-ai 会报 `needs an api` 并把整条 route 判成不可服务)。
+  目录表抄在 `inject.rs` 的 `DSH_CATALOG`(opencode-go,30 个模型,含协议/上下文/图片能力);
+  `4sapi` / `hapi` 整个来源都不在目录里,天然只有自建 route。
+- 引用名按 `<ROUTE>_API_KEY` 派生(大写、非字母数字换下划线),但**必须过得了 DSH 的
+  `REF_PATTERN`**(`^[A-Za-z_][A-Za-z0-9_]*$`):`4SAPI_API_KEY` 数字开头,会让**整份**
+  `.credentials.yaml` 被拒、pi-ai 的**所有** route 一起失效(pi-ai 在 `credentialRef()` 上抛错)。
+  `dsh_ref_legal()` 兜底,派生出来不合法就拒写。
   写入的是**只写**的密钥本身,`cordis.patch.yml` 里从不出现密钥值。
+- **显示名按来源分前缀**:`4SAPI` → `4S-<id>`、`Hapi` → `HP-<id>`、`OpenCode Go` → `OG <目录名>`
+  (如 `OG DeepSeek V4.1 Flash`)。三条 route 都写 `displayName`(目录 route 默认名是
+  `opencode-go`,人认不出是哪个渠道);用户自己改过的 `displayName` / 模型 `name` 不覆盖。
 
 **只增改自己那条**
 
 - `models` 在 pi-ai 里是**整体替换**语义,所以写入前先读回现有列表:已有的同 id 条目就地更新,
-  没有才追加;用户自己加过的字段(`maxTokens` / `reasoningEfforts` / `compat` …)原样保留
-  (与 ZCode 的 P2-10 同一个教训)。
+  没有才追加;用户自己加过的字段(`maxTokens` / `reasoningEfforts` / `compat` …)原样保留,
+  用户改过的 `name` 也保留(与 ZCode 的 P2-10 同一个教训)。
+- 目录里有的模型,上下文与图片能力**照目录抄**(目录 route 不写 `api`,能力只能落在条目上);
+  目录里没有的模型不编能力,省掉 `input` 让 pi-ai 用默认值。
 - **不留空 `models`**:pi-ai 对"非目录路由"要求 `api` + `baseURL` + 非空列表,所以取消写入摘掉
   最后一个模型时**连 route 一起收走**;route 空了收 `providers`,再空了收 `config`。
-- 密钥只在**没有别的 route 还用这个引用名**时才撤(别人的引用一个都不动);`records:` 段永不触碰。
+- 取消写入按「这次该写的那条 route → 老版本写过的 route(含改名前 `4sapi`)→ 目录内/外两种落点」
+  逐条找,**只收这个来源自己的键**,不顺着别人的 route 找。
+- 密钥只在**没有别的 route 还用这个引用名**时才撤(别人的引用一个都不动);旧/新两个引用名分别判断;
+  `records:` 段永不触碰。
 - 选中项(`agent-default-model`)**只读不写**:写入后由用户回 DSH 里选一次;移除时若默认模型正指向
-  这条,回执里点名提示(不替用户改)。
+  这条(新旧 route 键都算),回执里点名提示(不替用户改)。
 
 **边跑边写(唯一例外)**
 
@@ -1001,7 +1016,7 @@ harness home 根下。所以 DSH 的备份目录里多一份 `.inject-layout.jso
 
 ## 12.9 每日签到(Trae / WorkBuddy 加油站,v0.1.26)
 
-设计稿与全部取证见 [`design-auto-checkin-2026-10-13.html`](design-auto-checkin-2026-10-13.html)。
+设计稿与全部取证见 [`docs/design/design-auto-checkin-2026-10-13.html`](docs/design/design-auto-checkin-2026-10-13.html)。
 
 - **用途**:Trae 与 WorkBuddy 的每日积分可以替你去领。默认**关**,首次在渠道卡点一次「开启签到」才发请求;
   关掉后一个请求都不发(与 `hidden_channels` 同口径)。

@@ -777,7 +777,7 @@ pub fn workbuddy_body() -> String {
 }
 
 /// Codex(ChatGPT 订阅)的用量。`wham/usage` 返回 `rate_limit.primary_window`
-/// (+ 可选 secondary_window),字段为本机实抓样本(见 codex-research.html)。
+/// (+ 可选 secondary_window),字段为本机实抓样本(见 docs/research/codex-research.html)。
 /// 窗口标签按时长生成 —— 窗型由服务端按套餐决定,绝不能写死「5 小时」
 /// (OpenAI 2026-07 曾临时取消过 5 小时窗又恢复,结构是会变的)。
 pub fn extract_codex(body: &Value) -> FetchResult {

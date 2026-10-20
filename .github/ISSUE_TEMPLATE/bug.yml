@@ -1,0 +1,67 @@
+name: Bug 反馈
+description: 挂件出问题了(取数失败 / 数字不对 / 界面异常)
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        报之前先看一眼[已知边界](https://github.com/wacilimonster-source/Grandettoken#已知边界不是-bug-是设计或上游限制)——
+        OpenCode Go 的接口未公开、Codex/Trae 读本机登录态,这几类的失败是预期内的。
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本号
+      description: 挂件右下角「设置与管理 → 关于」里那个版本号
+      placeholder: '0.1.42'
+    validations:
+      required: true
+
+  - type: dropdown
+    id: channel
+    attributes:
+      label: 哪个渠道出的问题
+      options:
+        - 4SAPI
+        - OpenCode Go
+        - DeepSeek
+        - Hapi
+        - Trae
+        - WorkBuddy
+        - Codex
+        - 自定义渠道
+        - 跟渠道无关(界面/窗口/更新)
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 界面上实际看到的文案 / 表现。原样贴出来,别概括。
+    validations:
+      required: true
+
+  - type: textarea
+    id: shots
+    attributes:
+      label: 截图
+      description: 面板截图。**注意打码** —— 余额、渠道名、密钥尾号都算敏感信息。
+    validations:
+      required: false
+
+  - type: input
+    id: recent
+    attributes:
+      label: 是不是刚更新完才出现的
+      placeholder: '是/否,从哪个版本更过来的'
+
+  - type: textarea
+    id: diag
+    attributes:
+      label: 体检报告(强烈建议附上)
+      description: |
+        「设置与管理 → 关于 → 运行体检」→「复制报告」。
+        报告里只有域名、状态与数值,**不含任何密钥**,可以放心贴。
+    validations:
+      required: false

@@ -1,6 +1,13 @@
-# TokenScope
+# Grandettoken 开发者说明
+
+> 产品早期叫 **TokenScope**,2026-09 下旬改名 Grandettoken。凭据服务名(`TokenScope`)
+> 与 bundle identifier(`com.wacil.tokenscope`)仍沿用旧名 —— 改了会让已装用户收不到更新、
+> 凭据条目全丢。**新代码一律写 Grandettoken,旧名只在这两处出现。**
 
 常驻 Windows 桌面的多平台 AI Token 余额与用量监控小组件。支持四级折叠:完全展开 → 紧凑条 → 胶囊 → 吸附屏幕边缘。
+
+安装 / 使用 / 下载入口看[根 README](../README.md),产品设计看 [DESIGN.md](../DESIGN.md),
+进展与踩坑看 [PROGRESS.md](../PROGRESS.md),本文只讲代码内部的事。
 
 ## 当前渠道
 
@@ -10,15 +17,21 @@
 | OpenCode Go | `GET https://opencode.ai/zen/go/v1/usage` | 配额型 | **未公开接口**,只返回百分比 |
 | DeepSeek | `GET https://api.deepseek.com/user/balance` | 金额型 | 充值型,无月限额 |
 | Hapi | `GET https://ai.yuchuantest.com/v1/usage` | 金额型 | 积分制,20 积分 = ¥1 |
+| Trae | `POST https://api.trae.cn/.../user_current_entitlement_list` | 积分型 | 读本机登录态;两端点互为备份 |
+| WorkBuddy | `POST https://www.codebuddy.cn/v2/billing/meter/get-user-resource` | 积分型 | 读桌面端凭据,accessToken 到期自动 refresh |
+| Codex | `GET https://chatgpt.com/backend-api/wham/usage` | 配额型 | 读本机 Codex 登录态;5 小时/周/月三个窗口 |
 
-### 两类渠道的区别
+### 三类渠道的区别
 
 **金额型**有 `remaining` / `used` / `total`,可以算钱、推"预计可用天数"、画进度条。
-**配额型**(OpenCode Go)接口只给已消耗百分比和重置时间,无法折算金额,所以:
+**配额型**(OpenCode Go / Codex)接口只给已消耗百分比和重置时间,无法折算金额,所以:
 
 - 卡片主数值显示百分比而非金额
-- 行内三格换成 5 小时 / 本周 / 本月三个限流窗口的剩余配额
+- 行内三格换成限流窗口(OpenCode Go 是 5 小时/本周/本月,Codex 是 5 小时/周)的剩余配额
 - **不参与底部消耗合计** —— 百分比与金额不能相加
+
+**积分型**(Trae / WorkBuddy)有剩余量,但每一笔各有到期日,量最大的风险是"过期"而非"花完",
+所以核心信息是逐笔到期列表(升序),"还剩多少"只是总数。
 
 ### 充值型渠道的消耗是推算值
 
@@ -35,7 +48,7 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 
 ## 取数不消耗 token
 
-四个接口都是账务/元数据接口,不是推理接口 —— 查询余额不产生任何 token 计费。
+这些接口都是账务/元数据接口,不是推理接口 —— 查询余额不产生任何 token 计费。
 所以可以放心定时轮询,唯一约束是对方的限流礼貌性而非费用。
 
 轮询策略(可在设置里调):
@@ -71,11 +84,23 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 app/
   core/                   纯逻辑层,不依赖 Tauri(可独立跑测试)
     src/
-      providers.rs        渠道定义 + 响应解析(带单元测试)
-      store.rs            SQLite 快照与消耗推算(带单元测试)
-      secrets.rs          Windows 凭据管理器封装
+      lib.rs              模块清单(17 个)
+      providers.rs        7 个内置渠道定义 + 响应解析(万元组测试)
+      store.rs            SQLite 快照、消耗推算、365 天归档、变动台账
+      secrets.rs          Windows 凭据管理器封装(渠道密钥 + 密钥箱两个服务名)
+      vault.rs            密钥箱的校验/去重/搜索/排序
       config.rs           设置项(含申请制额度、胶囊渠道、自定义排序)
-      fetch.rs            取数、失败降级、视图组装(带单元测试)
+      fetch.rs            取数、失败降级、峰谷、计划成本、视图组装
+      appauth.rs          本机已登录应用的凭据(Trae tc 容器解密 / Codex OAuth)
+      workbuddy.rs        WorkBuddy 桌面端凭据信封(AES-256-GCM)+ refresh 续期
+      weblogin.rs         WorkBuddy 网页会话(兜底路径)
+      checkin.rs          每日签到的纯逻辑(北京日、退避、幂等、状态机)
+      inject.rs           5 个客户端的写入契约(备份/校验/回滚/幂等)
+      models.rs           模型页多来源(价目表、可用集合、单价换算、缓存)
+      yamledge.rs         极小 YAML 子集解析与行范围编辑(DSH 的 cordis.patch.yml)
+      peak.rs             DeepSeek 峰谷时段与法定节假日表
+      fx.rs               公开汇率接口解析(OpenCode Go 按天摊费用)
+      custom.rs           自定义渠道的字段与校验
   src/                    前端(纯静态,无打包器)
     index.html
     styles.css
@@ -83,21 +108,32 @@ app/
     logos/                渠道官方图标(来源与版权见该目录 README)
   src-tauri/
     src/
-      lib.rs              命令、托盘、轮询调度、开机自启、置顶
+      lib.rs              43 个命令、托盘、轮询调度、开机自启、置顶
+      main.rs             入口
     capabilities/         Tauri 2 ACL:窗口尺寸/位置/置顶等权限
-    build.rs              链接静态 WebView2 加载器(单 exe 交付)
+    build.rs              链接静态 WebView2 加载器 + 断言两处版本号一致
     tauri.conf.json
     icons/
 build/
   install-toolchain.ps1   免管理员工具链安装
-  build.ps1               构建入口(含单 exe 的静态加载器准备)
+  build.ps1               构建入口(check/test/dev/build/bundle,含单 exe 静态加载器准备)
   make-webview2-static.ps1 把 MSVC 静态加载器 + CRT 垫片重打成 GNU 归档
-  webview2-static/        垫片源码(msvc-shim.c / msvc-alias.S)
+  make-latest-json.js     生成更新清单(校验版本/tag/.sig/安装包四件事)
+  gen-icons.js            图标生成(手写 PNG/ICO,无依赖)
+  shot-panel.js           给 README 截三形态图(仿真数据注入 + 还原现场)
   verify-form.js          三形态 / 固定尺寸 / 圆角透明的 CDP 断言
+  verify-ui-0923.js       2026-09-23 UI 轮的运行时断言
   win-style.ps1           读运行中窗口的 Win32 样式位
   launch-debug.ps1        带调试端口启动,stdout/stderr 落盘
   cdp-probe.js            读运行中实例的 DOM 状态
-  gen-icons.js            图标生成(手写 PNG/ICO,无依赖)
+  probe-frontend.js       假 DOM 里跑 app.js,看 body 最终 class
+  scan-secrets.ps1        推送前扫凭据(文件名 + 内容 + minisign 三条)
+  verify-push.js          验证推送结果,并确认 token 没落到本地文件
+  stop-app.ps1            停掉运行中的实例
+  webview2-static/        垫片源码(msvc-shim.c / msvc-alias.S)
+.github/workflows/
+  ci.yml                  push/PR:core cargo test + 两个 crate 的 check
+  release.yml             v* tag:bundle 签名发布 + latest.json
 ```
 
 ## 加新渠道
@@ -154,6 +190,19 @@ ZCode 删到最后一个模型时连 provider 与它的 providerRule 一起收�
 四份契约在 `core/src/inject.rs`,每个客户端一张表:WorkBuddy 是明文 JSON 数组(带 BOM、2 空格),
 ZCode 是两份 JSON(`schemaVersion` 不是 1 就放弃),Trae 是 SQLite 的 `ItemTable`(按后缀找键名,
 键前缀是区域/租户号,会随版本变)。
+
+### 第五个写入目标:DeepSeek Harness(两份 YAML)
+
+落点是 `~/.dsh/profiles/<profile>/cordis.patch.yml` 里 `llm-pi-ai` 条目的 `config.providers.<route>`
+与 `~/.dsh/.credentials.yaml` 的 `refs.<ROUTE>_API_KEY`(一次备份、一起校验)。
+
+- **route 键与显示名**:`4sapi` → `foursapi`、`hapi` → `hapi`、`opencode-go` → 同名;
+  模型显示名按来源分前缀 `4S-` / `HP-` / `OG `(如 `OG DeepSeek V4.1 Flash`)。
+- **目录内外按模型分派**:pi-ai 已安装目录里有的模型留在目录 route(不写 `api`/`baseURL`,能力照目录抄);
+  目录里没有的写到 `<route>-custom`,自带 `api: openai-completions` + `baseURL`。
+- **引用名必须合法**:DSH 的凭据引用名要匹配 `^[A-Za-z_][A-Za-z0-9_]*$`,否则整份凭据文件
+  连同 pi-ai 全部 route 一起失效 —— 所以 route 键不能以数字开头。
+- 它是唯一**允许在运行中写入**的客户端;`agent-default-model` 只读不写。
 
 ### 加一个新客户端
 

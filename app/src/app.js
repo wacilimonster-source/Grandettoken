@@ -1341,7 +1341,7 @@ async function pillPeekHide() {
   });
 })();
 
-/** B 光环(2026-09-25,design-pill-restyle-5.html 方案 B):状态染到整颗胶囊
+/** B 光环(2026-09-25,docs/design/design-pill-restyle-5.html 方案 B):状态染到整颗胶囊
  *  (body 的 st-* 类,只在 form-pill 下有样式)+ 发丝条常驻显示剩余百分比。
  *  状态与状态点(dotCls)同源,单一事实来源;灰态 = 无数据,细分语义仍由点承担
  *  (off 空心环 / st 斜杠)。比率拿不到时发丝条清 0 只留轨道。M5 轮播点已退役。 */
@@ -1382,7 +1382,7 @@ function renderPillFace() {
     return;
   }
 
-  // 图标与列表行同源:官方标 → 字母块 → 失败/未配置灰化(design-pill-icon.html 方案 A)
+  // 图标与列表行同源:官方标 → 字母块 → 失败/未配置灰化(docs/design/design-pill-icon.html 方案 A)
   icoBox.style.display = "contents";
   icoBox.innerHTML = iconHtml(c, "pico", !c.hasKey || !c.valid);
 
@@ -3535,7 +3535,7 @@ document.addEventListener("keydown", (e) => {
 
 
 // ───────────── 本地密钥箱 ─────────────
-// 设计见 design-vault-and-hidden-restore.html 第三节(1A–7A 已批)。
+// 设计见 docs/design/design-vault-and-hidden-restore.html 第三节(1A–7A 已批)。
 // 三条要点:密文在 Windows 凭据管理器、SQLite 只存索引(列表不需要解密)、
 // 明文只在「显示」那一次回界面且 8 秒自动隐;「复制」根本不回前端。
 let VAULT = [];            // 索引列表(vault_list 的结果)
@@ -3679,7 +3679,7 @@ function vaultDel(id) {
 }
 
 // ───────────── 每日签到(Trae / WorkBuddy)─────────────
-// 设计见 design-auto-checkin-2026-10-13.html。三条不许破的规矩:
+// 设计见 docs/design/design-auto-checkin-2026-10-13.html。三条不许破的规矩:
 //   ① 独立开关、默认关 —— 关掉就一个请求都不发;
 //   ② **不把"点了按钮"说成"领到了"**:数额只显示平台自己给的字段,拿不到就不写数字;
 //   ③ 签到状态**不参与余额渲染** —— 签到失败永远不可能让余额显示成 0。
@@ -3842,7 +3842,7 @@ async function ckSetEnabled(id, on, auto) {
 }
 
 // ───────────── 模型页:多来源 + 弹层确认 ─────────────
-// 设计见 design-models-multi-source.html。三条不变的口径:
+// 设计见 docs/design/design-models-multi-source.html。三条不变的口径:
 //   ① 列表只列「这个来源能用的 ∪ 已配置到这个来源的」,别的永不出现;
 //   ② 有价格的来源按单价从高到低排,没价格的排在末尾并写明原因;
 //   ③ 写入/取消写入的确认走**弹层**(以前长在列表底部,得滚到底才看得见)。

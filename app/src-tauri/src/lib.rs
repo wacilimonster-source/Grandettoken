@@ -1921,7 +1921,7 @@ fn take_startup_error(state: State<'_, AppState>) -> Option<String> {
 
 // ─────────────── 本地密钥箱 ───────────────
 //
-// 设计见 `design-vault-and-hidden-restore.html` 第三节(裁决 1A–7A):
+// 设计见 `docs/design/design-vault-and-hidden-restore.html` 第三节(裁决 1A–7A):
 //   · **密文在 Windows 凭据管理器**(服务名 `TokenScope:vault`),SQLite 只存索引(平台/标签/尾号/备注/时间)
 //     —— 列表渲染**不需要解密**,只有「查看/复制」才读出那一条;
 //   · 不导出、不自动使用、不同步上云、无主密码(边界 = 当前 Windows 账户)。
@@ -2090,7 +2090,7 @@ async fn vault_copy(state: State<'_, AppState>, id: String) -> Result<String, St
 
 // ─────────────── 每日签到(Trae / WorkBuddy 加油站)───────────────
 //
-// 设计见 `design-auto-checkin-2026-10-13.html`。三条红线:
+// 设计见 `docs/design/design-auto-checkin-2026-10-13.html`。三条红线:
 //   ① 独立开关、默认关:关掉就一个请求都不发(与 hidden_channels 同口径);
 //   ② 判因只看 code / HTTP / 域名,**永远不看 message 文案**;
 //   ③ 签到的状态不参与余额渲染 —— 签到失败不可能让余额显示成 0。
@@ -2435,7 +2435,7 @@ fn spawn_checkin_ticker(app: tauri::AppHandle) {
 
 // ─────────────── 4SAPI 可用模型 + 一键配置到客户端 ───────────────
 //
-// 设计与取证见 `design-4sapi-models.html`。三条纪律:
+// 设计与取证见 `docs/design/design-4sapi-models.html`。三条纪律:
 //   1. 模型清单是**元数据接口**,不产生 token 计费(与余额取数同一条原则);
 //   2. 写进客户端一律「先备份 → 写 → 读回校验」,目标在跑就拒写(规矩在 core::inject 里);
 //   3. 密钥只从凭据管理器**现读现写**,不回前端、不落盘、不进日志。
@@ -3104,7 +3104,7 @@ async fn copy_model_bundle(
 struct ModelInfoView {
     /// 模型标识(OpenAI 兼容接口的 model 参数;Trae 里也是它)
     id: String,
-    /// 客户端里的显示名口径(`4S-<id>`;WorkBuddy / ZCode 用这个)
+    /// 客户端里的显示名口径(`4S-<id>` / `HP-<id>` / `OG <目录名>`;按来源不同)
     display_name: String,
     source: String,
     source_name: String,
@@ -3148,7 +3148,7 @@ async fn model_info(
         let key = source_key(def.id);
         Ok(ModelInfoView {
             id: model.clone(),
-            display_name: format!("{}{}", inject::OUR_NAME_PREFIX, model),
+            display_name: inject::display_name_of(def.id, &model),
             source: def.id.to_string(),
             source_name: def.name.to_string(),
             endpoint: format!("{}/chat/completions", base.trim_end_matches('/')),

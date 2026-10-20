@@ -82,7 +82,7 @@
 <table>
 <tr><th style="width:26%">类别</th><th style="width:12%">数量</th><th>具体</th></tr>
 <tr><td>代码 / 构建</td><td>~40</td><td><code>app/</code>（core + src-tauri + 前端）、<code>build/</code> 工具链脚本 ✓ 健康</td></tr>
-<tr><td><b>根目录内部文档</b></td><td class="warn">20</td><td>4 份 <code>bug-report-*.html</code>、13 份 <code>design-*.html</code>、<code>token-dashboard-prototype.html</code>、<code>codex-research.html</code>、<code>product-optimization-2026-09.html</code>、<code>tbar-buttons.html</code></td></tr>
+<tr><td><b>根目录内部文档</b></td><td class="warn">20</td><td>4 份 <code>bug-report-*.html</code>、13 份 <code>design-*.html</code>、<code>../prototype/token-dashboard-prototype.html</code>、<code>../research/codex-research.html</code>、<code>../product/product-optimization-2026-09.html</code>、<code>../prototype/tbar-buttons.html</code></td></tr>
 <tr><td>工程文档</td><td>4</td><td><code>DESIGN.md</code> / <code>DESIGN-INSTALLER-UPDATE.md</code> / <code>PROGRESS.md</code> / <code>RELEASE.md</code></td></tr>
 <tr><td><b>AI 工作日志（公开）</b></td><td class="warn">1</td><td><code>.workbuddy-ai/memory/2026-09-17.md</code> —— 整份内部工作笔记：缺陷编号、复现手法、事故复盘（含"PAT 曾明文出现在对话里"这类记录）</td></tr>
 <tr><td>根 README / LICENSE / CHANGELOG / .github</td><td class="bad">0 / 0 / 0 / 0</td><td>GitHub 首页没有任何入口说明；唯一的 README 在 <code>app/README.md</code>（要翻目录才看得到），标题还写着旧名 TokenScope</td></tr>
@@ -127,7 +127,7 @@
 <h3>B. 仓库结构（P0/P2，约半天）</h3>
 <ul>
 <li><b>文档归位</b>：新建 <code>docs/</code>，把 20 份 <code>design-*.html</code> / <code>bug-report-*.html</code> / 原型 / 研究稿按前缀搬进去（<code>docs/design/</code>、<code>docs/report/</code>）；根目录只留 <code>README.md</code> / <code>LICENSE</code> / <code>RELEASE.md</code> / 两个 DESIGN + PROGRESS（或一并进 <code>docs/</code>，见裁决 3）。<br>
-<span class="dim">代价与做法：<code>PROGRESS.md</code> 与部分代码注释里引用了这些文件名（如 <code>app.js:954</code> 提到 <code>design-pill-restyle-5.html</code>），搬迁时用脚本统一改成 <code>docs/design/…</code> 并 grep 复核 0 处旧路径残留；<b>历史 commit 不受影响</b>（旧版本里的路径本来就指旧版）。</span></li>
+<span class="dim">代价与做法：<code>PROGRESS.md</code> 与部分代码注释里引用了这些文件名（如 <code>app.js:954</code> 提到 <code>../design/design-pill-restyle-5.html</code>），搬迁时用脚本统一改成 <code>docs/design/…</code> 并 grep 复核 0 处旧路径残留；<b>历史 commit 不受影响</b>（旧版本里的路径本来就指旧版）。</span></li>
 <li><b>停止跟踪工具目录</b>：<code>.workbuddy-ai/</code>（AI 工作日志）、<code>.workbuddy/</code>、<code>.zcode/</code> 加进 <code>.gitignore</code>；已在库里的那份 AI 日志按裁决 4 处理。</li>
 </ul>
 

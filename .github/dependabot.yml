@@ -1,0 +1,20 @@
+# Dependabot:cargo 依赖与 Actions 各一条,周更 PR。
+# rustls / reqwest / tauri 这类值得跟;小版本自动合并不现实(单 exe 静态加载器
+# 那条链对 webview2-com-sys 的版本敏感),所以只开周报、不开自动 merge。
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: '/'
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: ['dependencies', 'rust']
+
+  - package-ecosystem: github-actions
+    directory: '/'
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    labels: ['dependencies', 'ci']
