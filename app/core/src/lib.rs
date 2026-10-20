@@ -18,6 +18,7 @@ pub mod inject;
 pub mod models;
 pub mod peak;
 pub mod providers;
+pub mod qoder;
 pub mod secrets;
 pub mod store;
 pub mod vault;

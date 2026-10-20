@@ -10,6 +10,7 @@
 | `trae.svg` | Trae | 本机已安装的 TRAE SOLO CN 客户端自带素材 `resources/app/out/media/trae-logo.svg` | 2026-09-17 |
 | `workbuddy.png` | WorkBuddy | 本机已安装的 WorkBuddy 客户端 `Assets/Square44x44Logo.targetsize-256.png`(256×256) | 2026-09-17 |
 | `chatgpt.svg` | Codex | ChatGPT 官方结形标(取自 Wikimedia Commons `File:ChatGPT-Logo.svg` 权威路径,白色透明底) | 2026-09-19 |
+| `qoder.png` | Qoder / Qoder 国内版 | qoder.com 站点声明的 apple-touch-icon(`img.alicdn.com` 的 412×412 PNG),缩到 256×256 RGBA | 2026-10-20 |
 
 说明:
 
@@ -23,5 +24,8 @@
 - Trae / WorkBuddy 的图标**直接取自本机安装的客户端**,和用户桌面/任务栏里
   看到的是同一个标:Trae 是深底(`#1A1B1D`)+ 荧光绿几何标,WorkBuddy 是
   绿色圆角块 + 白色标。两者都是透明底,放在 `.ico` 容器里即可。
+- **Qoder 两个渠道共用一份标**:国际版与国内版视觉上是同一个产品,
+  靠渠道名(`Qoder` / `Qoder 国内版`)与主色区分,不另画图标。
+  原图 412×412 且带浅灰底(`#F3F3F3`),转成 RGBA 后缩到 256×256。
 - 未配置密钥 / 取数失败时,图标统一压暗去色(`.ico.logo.off`),与字母方块
   变灰的语义保持一致。

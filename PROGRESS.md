@@ -1,13 +1,139 @@
 # Grandettoken 开发进展
 
 > 最后更新:2026-10-20
-> 状态:**v0.1.46 已发版** —— 修「WorkBuddy 取不到数」(401 被当成 Server,凭据换不下去);
-> 发版链路补两道闸(Cargo.lock 版本断言 + 公钥真验签),并接进 CI
-> 上一版:v0.1.45(设置入口收敛后的焦点收尾;CI 发版链路第一次真正跑通)
+> 状态:**v0.1.47 已发版** —— Qoder 渠道(国际版 + 国内版,积分展示 + 每日 10:00 打卡);
+> 签到默认开(四个渠道);修 WorkBuddy 打卡「签到与取数用了两份凭据」
+> 上一版:v0.1.46(修「WorkBuddy 取不到数」:401 被当成 Server,凭据换不下去;
+> 发版链路补两道闸 —— Cargo.lock 版本断言 + 公钥真验签)
 >
 > 产品原名 TokenScope,2026-09 下旬改名 Grandettoken。凭据服务名(`TokenScope`)
 > 与 bundle identifier(`com.wacil.tokenscope`)仍沿用旧名 —— 改了会让已装用户收不到更新、
 > 凭据条目全丢。
+
+## Qoder 渠道 + 签到默认开 + WorkBuddy 打卡修复(2026-10-20,v0.1.46→v0.1.47)
+
+**三件事一起做的,按用户裁决**:① Qoder 两个渠道(积分展示 + 每日 10:00 打卡);
+② Qoder/WorkBuddy/Trae 签到**默认开**;③ 修 WorkBuddy 自动打卡失败。
+
+### 一、WorkBuddy 打卡失败:签到与取数用了两份凭据
+
+**现象**:workbuddy 余额**天天正常出数**,打卡却连续三天落库 `outcome=auth`
+(10-18 / 10-19 / 10-20),而 Trae 同期三天全是 `claimed`。
+
+**根因(代码路径对照,不是猜)**:
+
+| 路径 | 凭据候选顺序 | 结果 |
+|---|---|---|
+| 取数 `fetch.rs::credentials()` | 手动密钥 → **桌面端凭据** → 网页 Cookie | ✅ 桌面端那份活着,出数正常 |
+| 签到 `lib.rs::checkin_credential()` | **只有**网页 Cookie | ❌ 那份已失效 → 每次 401 → `auth` |
+
+`checkin::Cred` 里压根没有"桌面端凭据"这一档 —— **不是配置问题,是这条路径从来没接上**。
+
+**实测证据(两把凭据都解出来真打了一次接口)**:
+
+| 凭据 | 解出来的方式 | 打签到接口的结果 |
+|---|---|---|
+| 网页 `session`/`session_2` | 解 WebView2 v10(DPAPI 密钥 + AES-256-GCM) | **401**(openresty/APISIX 网关页,认证层就被挡) |
+| 桌面端 `accessToken` | `loggerGet()` 取 atRestSecretKey → sha256 派生 → 解 `$wbEncrypted` 信封 | **200**,`today_checked_in:true, streak_days:15` |
+
+**一个必须说准的细节**:那份网页 Cookie 签发于 10-18 18:03、到期 10-25 ——
+**失败时纸面上还没过期**,却被网关 401。所以这次不是"7 天 TTL 到点",
+更可能是会话被提前作废(原因未取证,不写死)。结论不变且更强:签到不该押在网页会话上。
+
+**修复**:`checkin_credential()` 的 WebSession 分支改成**桌面端优先、网页会话兜底**,
+与取数同口径。三个实现要点:
+1. `workbuddy::desktop_tokens()` 返回的是**裸 JWT** —— 交给 `Cred::Web` 后走"其余当 Bearer"那一支;
+2. **绝不能把 `desktop:` 前缀带进来**(那是取数层的标记,带进去 = `Bearer desktop:xxx`,必然 401);
+3. 取数那条路是"401 换下一份候选",签到照抄 —— 本机就有 3 份桌面端凭据(含一份 6 月的明文备份)。
+
+**验收(真机用例 `wb_checkin_desktop_cred_reaches_the_endpoint`,默认 ignore)**:
+```
+桌面端候选凭据 2 份
+第 1 份凭据 → Already(Some(100.0))
+✅ 桌面端凭据能打通签到接口
+```
+修复前同一路径是 `AuthNeeded`(即线上那个 `auth`)。
+
+### 二、Qoder 渠道(国际版 + 国内版)
+
+**取证**(本机桌面端 0.4.8,region=global;全部只读):
+
+| 项 | 结论 | 证据 |
+|---|---|---|
+| 额度接口 | `GET {openapi}/api/v2/quota/usage` | 真机 200 |
+| 剩余字段 | **`userQuota` 与 `addOnQuota` 两块都要读、相加** | 本账号 `userQuota.total=0`,量全在 `addOnQuota`(86)——只看前者会显示成 **0** |
+| 打卡 | `GET …/sash/api/v1/me/campaigns` → `POST …/{id}/claim` | 真机 200;重复领回 `replayed:true`(幂等) |
+| 跨日 | **10:00(UTC+8)** | 活动描述原文「每日 10:00（UTC+8）刷新」;`startAt/endAt` = 10:00:00 → 次日 09:59:00 |
+| 凭据 | `auth.v1.dat` = **Electron safeStorage**(v10 + AES-256-GCM),密钥由 **DPAPI** 保护 | 本机解通并真打了接口 |
+| 设备指纹 | **打卡不需要**(社区说国际版要,实测伪指纹照样 200) | 五种 UA/头部组合全 200 |
+
+**两版是两个渠道**(`qoder` / `qoder-cn`),不是"一个渠道两个域名":账号不互通,
+余额无法合并。**判定不要看 `product.json` 的下载域名** —— 本机明明是 global,
+那个字段却写着 `*.qoder.com.cn`;要看"哪个数据目录读到了凭据"。
+
+**踩到并修掉的两个坑(都是真机用例抓的,不是 review 出来的)**:
+1. **Qoder 查状态是 GET,POST 会 404**。沿用 Trae/WorkBuddy 的"全是 POST"时,
+   真机用例直接打出 `Inactive("HTTP 404")`。→ 加了 `CheckinDef::status_method` / `claim_method`。
+2. **`actionType` 的真机拼写是 `CLAIM_BENEFIT`(带 E)**。早先照混淆 bundle 写成少一个 E 的
+   `CLAIM_BEFIT`,后果是 `has_campaign` 恒为 false —— **"今天可领"被静默判成"本期无打卡活动",
+   用户当天直接丢 100 分**。修正后真机判定变成 `Already(Some(100.0))`,与平台实际状态一致;
+   留了别名表 + 回归用例 `qoder_action_type_is_claim_benefit_with_e`。
+
+### 三、签到默认开 + 10:00 跨日
+
+**默认开**(用户裁决):`Config::default()` 从 `checkin::CHECKINS` 现取渠道表生成
+(不另抄一份 id,以后加渠道不会漏配)。**升级语义**:
+- 已有 `checkin` 表的用户 → `sanitize()` **只补缺的渠道**,用户关掉的保持关着;
+- 表里从来没有 `checkin` 键的老配置 → 容器上的 `serde(default)` 整份取新默认(全开)。
+  **即"从没碰过签到设置"的用户升级后会开始自动签到** —— 这是"默认开"的直接后果,已写进设计稿。
+
+**10:00 跨日**:`checkin.rs` 加了 `CheckinDef::day_roll_hour` 与 `cycle_day()`,
+幂等键从"自然日"改成**签到周期日**。不这么改的话,Qoder 在 09:59 查到的"已领"
+其实是昨天那一期领的,会被判成"今天已领"而跳过 10:00 后该领的那一期 → 当天静默丢分。
+调度窗口:自然日渠道 00:23–00:43(不变),Qoder 10:00–10:20。
+
+### 四、顺带修掉的:拿不到凭据不留痕
+
+`run_checkin` 在拿到凭据**之前**就 `?` 提前返回,而落库在后面 —— 于是凭据读不到的那几天
+在 `checkin_log` 里是**空白**,与"还没到点"无法区分(排查 WorkBuddy 时正是 10-16/10-17 两天空白)。
+现在补 `record_checkin_skip()`,落一条 `no_cred:…`。**结果码与 `auth` 分开**:
+前者是"本机没读到",后者是"平台拒绝了这份凭据",用户要做的动作不同。
+`wb_finish_login` 的"复登放行补签"也一并认 `no_cred`。
+
+### 验证
+
+- core `cargo test`:**271 passed / 0 failed**(基线 245);
+- core 真机用例(`--ignored`):**6 passed / 0 failed**,含 Qoder 全链路与 WorkBuddy 桌面端凭据打签到;
+- src-tauri `cargo check --all-targets`:**0 错误 0 告警**;
+- 前端 `node --check app.js`:通过。
+
+**待真机验证(国内版)**:本机无 CN 安装,`com.qodercn.app.stable` 与 CN 两个端点
+只有社区代码 + 未认证 401 佐证。CN 渠道按同接口实现,但需在真机上跑一次 M0 只读取证后
+再确认默认开启无副作用(设计稿 §6.2)。
+
+### 五、refresh 端点取证:结论是"这个问题问错了"
+
+设计稿 M3 原本留了「refreshToken 换 accessToken 的端点待取证」。**四路查完的结论是:
+Qoder 桌面端没有自己刷新 token 的行为,所以没有端点可取证** —— 我们原先"access 3 周、
+refresh 1 年,可以自动续"的假设是**读字段名想当然**。
+
+| # | 查法 | 结果 |
+|---|---|---|
+| 1 | 全部日志递归搜 `refresh`/`oauth`/`token`/`renew`/`signin` | 命中 81 行,**无一行是 token 刷新**(全是 campaign 的 `forceRefresh:false` 与插件清单刷新) |
+| 2 | 日志里**全部**请求路径 | 只有 campaign + 5 条 collaboration,**没有任何 token/oauth/refresh 路径** |
+| 3 | asar 全量字符串搜端点形状 | `grant_type`/`token_endpoint`/`offline_access`/`exchangeRefreshToken` **全来自打包的 MCP OAuth 客户端库**,不是 Qoder 的认证链路(差点被误导) |
+| 4 | **文件 mtime(最硬的一条)** | `auth.v1.dat` 最后写入 **10-19 11:41**,而桌面端此后连续跑 **约 33 小时**、campaign 每小时 200 —— **同一份 token 用了 33 小时,文件从未被重写** |
+
+**没证到的部分(必须说清)**:第 4 条只证明**非临近过期时不刷新**,不能证明"临近过期时也不刷新"。
+那个只能等 `expiresAt`(本机 2026-11-10)真的临近,或抓包 —— 不建议拨系统时钟。
+
+**对实现的影响**:不做 refresh 自动续期(没有端点,硬做只能猜,猜错会把用户登出);
+过期保持现状「打开一次 Qoder 桌面端」。**待办**:到 11-10 前后开一次桌面端,
+看 `auth.v1.dat` 的 mtime 与 `expiresAt` 有没有变 —— 变了说明会自己续(文案成立),
+没变说明不会(文案要改成"重新登录")。这是唯一能验证的办法,且**不必解 token**。
+
+**方法论教训**:「端点是什么」有时是错的问题。刷新的可观测副作用就是"那个文件被重写",
+用 mtime 就能观测 —— 比抓包和解密都省事,也更不碰敏感数据。
 
 ## WorkBuddy 取不到数:401 被当成 Server,凭据换不下去(2026-10-20,v0.1.45→v0.1.46)
 

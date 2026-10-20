@@ -19,8 +19,7 @@ pub struct ClaimConfig {
     pub manual_set_at: Option<i64>,
 }
 
-impl Default for ClaimConfig {
-    fn default() -> Self {
+impl Default for ClaimConfig {    fn default() -> Self {
         Self {
             enabled: false,
             amount: 200.0,
@@ -114,8 +113,10 @@ pub struct Config {
     /// Trae 的「选中项」写入。默认关:条目写入是确定性的,选中项的口径虽然已破译,
     /// 但客户端认不认只有真机能验,所以留成显式开关。
     pub trae_auto_select: bool,
-    /// 每日签到(Trae / WorkBuddy 加油站):渠道 id → 配置。**默认关**,
-    /// 首次要在渠道卡上点一次「开启签到」才发请求(设计稿裁决 3A)。
+    /// 每日签到(Trae / WorkBuddy / Qoder):渠道 id → 配置。
+    ///
+    /// **默认开**(2026-10-20 用户裁决):首次装上就直接每天自动领,不用先去点一次。
+    /// 关掉后一个请求都不发(与 `hidden_channels` 同口径)。
     pub checkin: HashMap<String, crate::checkin::CheckinCfg>,
     /// 签到出问题时要不要提示。成功的静默,只有需要用户动手时才提示(裁决 6A)。
     /// 系统通知要额外引一个通知插件,当前没引;现在走"面板里常驻一条警告"
@@ -134,6 +135,29 @@ pub struct Config {
     /// 单击胶囊弹出"抬升卡片"速览(今日 / 最紧 / 签到)。默认开 —— 这是
     /// "不展开面板看一眼"的最低成本方式;关掉后单击胶囊无动作(▲ 仍展开面板)。
     pub peek_on_click: bool,
+}
+
+/// 签到渠道的出厂配置:**全部默认开**(2026-10-20 用户裁决)。
+///
+/// 表从 `checkin::CHECKINS` 现取,而不是在这里另抄一份渠道 id ——
+/// 以后加渠道时"忘了默认开"这种漏配就不会发生。
+///
+/// 只在**新装**(库里没有 config 这一行)时生效:老用户已有的配置整份照读,
+/// 不会被这里覆盖(所以升级不会把用户关掉的开关又打开)。
+fn default_checkins() -> HashMap<String, crate::checkin::CheckinCfg> {
+    crate::checkin::CHECKINS
+        .iter()
+        .map(|d| {
+            (
+                d.id.to_string(),
+                crate::checkin::CheckinCfg {
+                    enabled: true,
+                    auto: true,
+                    ..Default::default()
+                },
+            )
+        })
+        .collect()
 }
 
 impl Default for Config {
@@ -170,7 +194,7 @@ impl Default for Config {
             model_show_all: false,
             selection_prefix: HashMap::new(),
             trae_auto_select: false,
-            checkin: HashMap::new(),
+            checkin: default_checkins(),
             checkin_notify: true,
             notify_on_crit: true,
             sound_on: false,
@@ -181,8 +205,7 @@ impl Default for Config {
 }
 
 impl Config {
-    /// 唯一的读取入口。三条口径分开:库里没这行 = 新装,返回默认;
-    /// 有但解析失败 = 返回 Err,调用方沿用上次成功的配置 —— 绝不能
+    /// 唯一的读取入口。三条口径分开:库里没这行 = 新装,返回默认;    /// 有但解析失败 = 返回 Err,调用方沿用上次成功的配置 —— 绝不能
     /// unwrap_or_default 把隐藏渠道静默解除隐藏(扫描报告 P2-11);
     /// 读不出这一行(库损坏 / IO 错)= 同样返回 Err(P2-5,以前被 `.ok()` 折叠成"没这行")。
     ///
@@ -224,6 +247,18 @@ impl Config {
         }
         if self.sort != "balance" && self.sort != "dayUsage" && self.sort != "custom" {
             self.sort = "percent".into();
+        }
+        // 升级后新增的签到渠道要补进表里(否则老用户永远看不到它的开关)。
+        // **只补缺的,不动已有的**:用户显式关掉的渠道必须保持关着 ——
+        // 整表覆盖会把它们又打开,那是"擅自改用户设置"。
+        for d in crate::checkin::CHECKINS {
+            self.checkin.entry(d.id.to_string()).or_insert_with(|| {
+                crate::checkin::CheckinCfg {
+                    enabled: true,
+                    auto: true,
+                    ..Default::default()
+                }
+            });
         }
     }
 
@@ -307,13 +342,35 @@ mod tests {
         assert_eq!(h.manual_last_at, Some(1_700_000_000));
     }
 
-    /// 签到相关字段:老配置没有 → 空表 + 允许通知(功能默认关,不会自己发请求)。
+    /// 签到相关字段。
+    ///
+    /// 两种情形分开(2026-10-20 裁决"默认开"之后):
+    ///   - **库里没有 config 这一行**(新装)/ **老配置里没有 checkin 键** → 出厂默认:全开
+    ///     (容器上的 `serde(default)` 会调 `Config::default()`,所以这两条走的是同一个分支);
+    ///   - **已有 checkin 表** → 逐渠道保留用户的选择,缺的渠道由 `sanitize` 补上。
     #[test]
     fn checkin_defaults_and_roundtrip() {
+        // 老配置里没有 checkin 键 → 走出厂默认(全开)。这是"默认开"裁决的直接后果:
+        // 升级后签到会开始发请求。关掉的方法是在设置里显式关。
         let old = r#"{"activeIntervalSec":60,"form":"panel","sort":"percent"}"#;
         let c: Config = serde_json::from_str(old).unwrap();
-        assert!(c.checkin.is_empty(), "老配置里没有签到:空表,功能默认关");
+        assert_eq!(c.checkin.len(), crate::checkin::CHECKINS.len(), "缺键 → 全开");
+        assert!(c.checkin.values().all(|e| e.enabled && e.auto));
         assert!(c.checkin_notify);
+
+        // 新装(Config::default):四个渠道全开,且 auto 也开
+        let fresh = Config::default();
+        for id in ["trae", "workbuddy", "qoder", "qoder-cn"] {
+            let e = fresh.checkin.get(id).unwrap_or_else(|| panic!("{id} 应默认在表里"));
+            assert!(e.enabled, "{id} 应默认开启");
+            assert!(e.auto, "{id} 应默认自动签");
+            // 其余字段是后端进度,新装时必须是空的
+            assert!(e.last_day.is_none());
+            assert!(e.last_code.is_none());
+            assert_eq!(e.attempts, 0);
+        }
+        // 表里不该有 CHECKINS 之外的渠道(现取而不是另抄一份)
+        assert_eq!(fresh.checkin.len(), crate::checkin::CHECKINS.len());
 
         let mut c2 = Config::default();
         c2.checkin.insert(
@@ -333,6 +390,31 @@ mod tests {
         assert!(t.enabled && t.auto);
         assert_eq!(t.last_day.as_deref(), Some("2026-10-13"));
         assert_eq!(t.last_credits, Some(100.0));
+    }
+
+    /// **已有签到表的老用户**:用户显式关掉的渠道必须保持关着,
+    /// 而表里**没有**的渠道(升级后新增的 Qoder)要按"默认开"补上。
+    ///
+    /// 这条是本次升级最容易出错的地方:不补 → 老用户永远看不到 Qoder 的签到开关;
+    /// 补成关 → 与"默认开"裁决不符;整表覆盖 → 把用户关掉的又打开。
+    #[test]
+    fn existing_checkin_map_keeps_user_choices_and_backfills_new_channels() {
+        // 一个老用户的库:只认识 trae(且他关掉了)与 workbuddy(开着)
+        let stored = r#"{"activeIntervalSec":60,"form":"panel","sort":"percent",
+            "checkin":{"trae":{"enabled":false,"auto":true,"attempts":0},
+                       "workbuddy":{"enabled":true,"auto":true,"attempts":0}}}"#;
+        let mut c: Config = serde_json::from_str(stored).unwrap();
+        c.sanitize();
+
+        // 用户的选择被保留
+        assert!(!c.checkin.get("trae").unwrap().enabled, "用户关掉的不许擅自打开");
+        assert!(c.checkin.get("workbuddy").unwrap().enabled);
+        // 新渠道按默认开补上(否则老用户永远没有 Qoder 的签到)
+        for id in ["qoder", "qoder-cn"] {
+            let e = c.checkin.get(id).unwrap_or_else(|| panic!("{id} 应被补进表里"));
+            assert!(e.enabled && e.auto, "{id} 补进来时默认开");
+            assert!(e.last_day.is_none(), "{id} 是全新的,不该带进度");
+        }
     }
 
     /// 模型相关的新字段:老配置缺字段要能兜默认(入口跟随实测、分组跟随站点、

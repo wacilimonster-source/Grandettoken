@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>排查报告 · WorkBuddy 自动打卡为何失败(取数却正常)· 2026-10-20</title>
+<style>
+  :root{
+    --bg:#0f1115; --fg:#e6e8ee; --mut:#9aa3b2; --line:#262b36; --card:#151922;
+    --ac:#19b8c4; --ok:#2fbf71; --warn:#f5a623; --bad:#e5484d;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f6f7f9; --fg:#1b1f27; --mut:#5b6472; --line:#dfe3ea; --card:#fff; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:15px/1.72 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1040px;margin:0 auto;padding:28px 22px 90px}
+  h1{font-size:25px;margin:0 0 4px}
+  h2{font-size:19px;margin:36px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+  h3{font-size:16px;margin:22px 0 6px}
+  p{margin:8px 0}
+  code{background:rgba(127,127,127,.16);padding:1px 5px;border-radius:4px;font-size:13px;
+    font-family:"Cascadia Mono",Consolas,monospace;word-break:break-all}
+  pre{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px;
+    overflow-x:auto;font-size:12.5px;line-height:1.6;font-family:"Cascadia Mono",Consolas,monospace}
+  .sub{color:var(--mut);font-size:13px}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:rgba(127,127,127,.08);font-weight:600;white-space:nowrap}
+  .tag{display:inline-block;padding:0 7px;border-radius:10px;font-size:12px;border:1px solid var(--line)}
+  .t-fact{color:var(--ok);border-color:var(--ok)}
+  .t-risk{color:var(--bad);border-color:var(--bad)}
+  .note{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:10px 0}
+  .note.warn{border-left:3px solid var(--warn)}
+  .note.bad{border-left:3px solid var(--bad)}
+  .note.ok{border-left:3px solid var(--ok)}
+  .verdict{border:1px solid var(--bad);border-left-width:4px;background:var(--card);
+    border-radius:8px;padding:14px 16px;margin:18px 0}
+  .verdict b{color:var(--bad)}
+  ul,ol{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>WorkBuddy 自动打卡失败 —— 根因与修复</h1>
+<p class="sub">排查报告 · 2026-10-20 · 全部结论来自本机真实数据库、真实文件与真实 HTTP 调用</p>
+
+<div class="verdict">
+<b>根因一句话:</b>WorkBuddy 的<b>取数</b>与<b>签到</b>用的是<b>两份不同的凭据</b>。
+取数优先用「桌面端凭据」(还活着),签到却<b>只用</b>「网页 Cookie 会话」(已于 10-18 过期)。
+于是同一个渠道,余额天天出数,打卡天天报 <code>auth</code>。<br><br>
+<b>不是你操作的问题,是代码路径不一致。</b>Trae 正常,正是因为它只有一条凭据路径,没有这个分叉。
+</div>
+
+<h2>1. 现象</h2>
+<table>
+<tr><th>项</th><th>观察</th></tr>
+<tr><td>余额取数</td><td><b>完全正常</b>。本机最后一笔快照 <code>2026-10-20 16:13:56</code>,剩余 5992.96 积分,当天 336 笔,与其余 6 个渠道同步</td></tr>
+<tr><td>自动打卡</td><td><b>连续 3 天失败</b>:10-18 / 10-19 / 10-20 全部落库 <code>outcome=auth</code></td></tr>
+<tr><td>对照渠道</td><td>Trae 同期 10-18 / 10-19 / 10-20 全部 <code>claimed</code>,正常</td></tr>
+</table>
+
+<h3>1.1 签到流水(本机 SQLite <code>checkin_log</code>,原样抄出)</h3>
+<pre>day         channel    outcome   credits  attempts
+2026-10-13  trae       already   100.0    1
+2026-10-13  workbuddy  already   100.0    1
+2026-10-14  trae       claimed   —        1
+2026-10-14  workbuddy  claimed   —        1
+2026-10-15  trae       claimed   —        1
+2026-10-15  workbuddy  claimed   —        1        ← 最后一次成功
+2026-10-16  trae       already   100.0    1
+2026-10-17  trae       claimed   —        1        ← workbuddy 缺席
+2026-10-18  trae       claimed   —        1
+2026-10-18  workbuddy  <b>auth</b>      —        1        ← 开始失败
+2026-10-19  trae       claimed   —        1
+2026-10-19  workbuddy  <b>auth</b>      —        1
+2026-10-20  trae       claimed   —        1
+2026-10-20  workbuddy  <b>auth</b>      —        1</pre>
+
+<div class="note warn">
+<b>注意 10-16 与 10-17:workbuddy 那两天根本没有记录。</b>不是失败,是<b>一次都没试</b> ——
+凭据在这一步就拿不到,而 <code>run_checkin</code> 在落库之前就提前返回了(见 §5.1)。
+主因仍是凭据,但「失败不留痕」让这个现象变得更难看清。
+</div>
+
+<h2>2. 关键发现:两条路径用了两份凭据</h2>
+
+<h3>2.1 取数路径(能出数)</h3>
+<p><code>core/src/fetch.rs</code> 的 <code>credentials()</code>,对 <code>AuthKind::WebSession</code> 渠道按这个顺序收集候选:</p>
+<pre>① secrets::get(def.id)          // 用户手动粘贴的访问密钥(本机没有)
+② read_desktop_tokens()          // ★ WorkBuddy 桌面端凭据(含 refresh 续期)—— 优先!
+③ web_src(def.id)                // 网页 Cookie 会话 —— 兜底</pre>
+<p>源码注释写得很清楚(<code>fetch.rs:1036</code>):</p>
+<pre>// WorkBuddy:**桌面端凭据优先**。它比网页会话活得久(accessToken 28 天、
+// refreshToken 30 天,且可续),而网页会话是约 7 天的绝对 TTL ——
+// 2026-10-15 之后连续三天取不到数,就是网页会话到期、而界面仍报"已登录"。</pre>
+
+<h3>2.2 签到路径(报 auth)</h3>
+<p><code>src-tauri/src/lib.rs</code> 的 <code>checkin_credential()</code>:</p>
+<pre>checkin::CheckinAuth::WebSession => {
+    let session = wb_session_of(app, def.id)      // ← 只读网页 Cookie,没有桌面端这条
+        .ok_or_else(|| format!("未登录 {} 账号 · 在渠道卡上登录一次", def.name))?;
+    Ok(checkin::Cred::Web(session))
+}</pre>
+
+<div class="note bad">
+<b>这就是根因。</b>同一个渠道:
+<ul>
+<li>取数会去读<b>桌面端凭据</b>(活着,能续期)→ 出数正常</li>
+<li>签到<b>只读网页 Cookie</b>(死了)→ 每次 401 → 归为 <code>auth</code></li>
+</ul>
+而 <code>checkin::Cred</code> 枚举里根本没有「桌面端凭据」这一档 —— 不是配置问题,是这条路径<b>从来没接上</b>。
+</div>
+
+<h3>2.3 时间线严丝合缝</h3>
+<table>
+<tr><th>时刻(北京)</th><th>事件</th><th>证据</th></tr>
+<tr><td>2026-10-08 12:12</td><td>网页登录成功,首次取到数</td><td>快照首笔</td></tr>
+<tr><td>2026-10-15 11:56:47</td><td><b>取数最后一笔成功</b>,随后断 3 天</td><td>快照</td></tr>
+<tr><td>2026-10-15 → 10-18</td><td>取数中断(网页会话 7 天 TTL 到期)</td><td>快照空窗</td></tr>
+<tr><td>2026-10-18 10:28</td><td>签到探测落 <code>auth</code>(第一次报凭据失效)</td><td>checkin_log</td></tr>
+<tr><td>2026-10-18 18:03:51</td><td><b>Cookie 重新签发</b>(用户重新登录),纸面有效期到 10-25</td><td>Cookie 库 creation/expires_utc</td></tr>
+<tr><td>2026-10-19 02:34:26</td><td>桌面端凭据刷新</td><td>auth 文件 lastRefreshTime</td></tr>
+<tr><td>2026-10-19 02:37:58</td><td><b>取数恢复</b>(桌面端凭据上线)</td><td>快照恢复</td></tr>
+<tr><td>2026-10-19 00:23 / 10-20 00:37</td><td>签到仍报 <code>auth</code> —— 此时 Cookie <b>纸面上还没到期</b></td><td>checkin_log</td></tr>
+</table>
+
+<p>取数在 10-19 恢复,签到没有 —— 因为<b>恢复取数的那份凭据(桌面端)签到根本没在用</b>。
+两条线各走各的,时间线正好把这个分叉暴露出来。</p>
+<p class="sub">注:10-19 / 10-20 两次签到失败时,Cookie 距到期还有 6–7 天。
+所以这次不是「7 天 TTL 到点」,而是<b>会话被提前作废</b>(原因未取证,见 §3.1)。
+无论哪种,结论都是同一个:签到不该依赖网页会话。</p>
+
+<h2>3. 实测证据:两份凭据的真实状态</h2>
+
+<h3>3.1 网页 Cookie 会话:被网关拒绝(实测)</h3>
+<p>把挂件 WebView 里的 <code>session</code> / <code>session_2</code> Cookie 解出来(WebView2 的 v10 加密,
+DPAPI 解 <code>Local State</code> 密钥后 AES-256-GCM),直接打接口:</p>
+<table>
+<tr><th>目标</th><th>结果</th></tr>
+<tr><td><code>POST www.workbuddy.cn/v2/billing/meter/checkin-activity-status</code></td><td><b>HTTP 401</b> openresty/APISIX 网关页</td></tr>
+<tr><td><code>POST www.codebuddy.cn/v2/billing/meter/checkin-activity-status</code></td><td><b>HTTP 401</b> 同上</td></tr>
+<tr><td><code>POST www.codebuddy.cn/v2/billing/meter/get-user-resource</code></td><td><b>HTTP 401</b> 同上</td></tr>
+</table>
+<div class="note bad">
+<b>401 + HTML 网关页 ≠ 业务错误。</b>这是<b>认证层</b>就被挡下了(APISIX 网关),连业务代码都没进。
+所以 <code>Outcome::AuthNeeded</code> 判得<b>完全正确</b> —— 凭据确实失效了,不是误判。
+<br><br>
+<b>顺带排除了两个可能:</b>① 不是接口迁移(否则会 404);② 不是路径写错(新旧两代路径全试过,全是 401)。
+</div>
+
+<div class="note warn">
+<b>一个必须说准的细节:这份 Cookie <u>还没到期</u>,但已经被拒。</b>
+Cookie 库里 <code>session</code>/<code>session_2</code> 的签发时刻是 <b>2026-10-18 18:03:51</b>、
+到期时刻 <b>2026-10-25 18:03:51</b> —— 也就是说 10-19 / 10-20 两次签到报 <code>auth</code> 时,
+它在<b>纸面上是有效的</b>,却仍然被网关 401。<br><br>
+<b>所以「等 7 天 TTL 到期」不足以解释这次失败</b> —— 更可能是这份会话在服务端已被作废
+(例如 10-19 02:34 桌面端刷新凭据后,同账号的网页会话被顶掉)。
+<b>本次没有取到能定论这一点的证据</b>,所以不写死原因。<br><br>
+<b>但结论不变、而且更强:</b>网页会话这条路<b>既会到期、又会被提前作废,且都不可预测</b> ——
+把签到押在它上面本来就不该。桌面端凭据(可续期、实测 200)才是正确的凭据来源。
+</div>
+
+<h3>3.2 桌面端凭据:活着(实测)</h3>
+<p>从 <code>%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\workbuddy-desktop.info</code> 读凭据:
+它被 <code>$wbEncrypted</code> 信封加密,用桌面端自己的 <code>loggerGet()</code> 取 <code>atRestSecretKey</code>,
+sha256 派生密钥、按 AAD 转录解开,拿到 accessToken 后直接打接口:</p>
+<table>
+<tr><th>目标</th><th>结果</th></tr>
+<tr><td><code>POST /v2/billing/meter/get-user-resource</code></td><td><b>HTTP 200</b> <code>{"code":0,"msg":"OK",…TotalCount:27…}</code></td></tr>
+<tr><td><code>POST /v2/billing/meter/checkin-activity-status</code></td><td><b>HTTP 200</b> <code>{"code":0,"data":{"active":true,"today_checked_in":true,"streak_days":15,…}}</code></td></tr>
+</table>
+
+<div class="note ok">
+<b>这两条 200 是本报告最关键的证据。</b>它同时证明三件事:
+<ol>
+<li>桌面端凭据<b>现在就能用</b>(余额能取、签到接口也能打);</li>
+<li>签到接口<b>没坏</b>,路径也对 —— 坏的只是签到用的那份凭据;</li>
+<li>换用桌面端凭据后,打卡<b>立刻就能成功</b>。</li>
+</ol>
+另外接口自己说 <code>today_checked_in: true, streak_days: 15</code> —— 用户其实<b>每天在桌面端正常签到</b>,
+只有挂件这一侧因为拿不到凭据而空转。
+</div>
+
+<h3>3.3 顺便验证:签到接口对请求头不挑剔</h3>
+<p>用桌面端 token,故意换五种请求头组合打签到接口,<b>全部 200</b>:</p>
+<table>
+<tr><th>Authorization</th><th>User-Agent</th><th>X-Client-Platform</th><th>结果</th></tr>
+<tr><td>Bearer ✅</td><td>桌面端 UA</td><td>有</td><td>200</td></tr>
+<tr><td>Bearer ✅</td><td>浏览器 UA</td><td>有</td><td>200</td></tr>
+<tr><td>Bearer ✅</td><td>桌面端 UA</td><td>无</td><td>200</td></tr>
+<tr><td>Bearer ✅</td><td>浏览器 UA</td><td>无</td><td>200</td></tr>
+<tr><td>Bearer ✅</td><td>不带</td><td>无</td><td>200</td></tr>
+</table>
+<p>结论:<b>决定成败的只有那份 Bearer 凭据</b>,头部细节不是问题。修复不需要动请求构造。</p>
+
+<h2>4. 修复方案</h2>
+
+<div class="note ok">
+<b>一句话修法:让签到和取数用同一份凭据。</b>
+把 <code>checkin_credential()</code> 的 WorkBuddy 分支改成「先桌面端、后网页 Cookie」,
+与 <code>fetch.rs::credentials()</code> 的顺序对齐。
+</div>
+
+<h3>4.1 具体改法(三处)</h3>
+<table>
+<tr><th>#</th><th>文件</th><th>改动</th></tr>
+<tr><td>1</td><td><code>core/src/checkin.rs</code></td>
+    <td><code>CheckinAuth</code> 加一档,或让 <code>Cred::Web</code> 承载桌面端 token。<br>
+    <b>注意</b>:<code>Cred::Web</code> 目前把非 <code>cookie:</code> 前缀的值当 Bearer 发 —— 桌面端 token 正好走这条路,
+    但<b>必须去掉 <code>desktop:</code> 前缀</b>(那是取数层的标记,带进请求头会变成
+    <code>Bearer desktop:xxx</code>,必然 401)</td></tr>
+<tr><td>2</td><td><code>src-tauri/src/lib.rs</code> <code>checkin_credential()</code></td>
+    <td>WorkBuddy 分支:先试 <code>workbuddy::desktop_tokens()</code>(取第一个可用),
+    拿不到再退回 <code>wb_session_of()</code>。两处都拿不到才报「未登录」</td></tr>
+<tr><td>3</td><td><code>src-tauri/src/lib.rs</code> <code>checkin_state()</code> 的 note 文案</td>
+    <td>把「在渠道卡上登录一次」改成同时提桌面端:「打开一次 WorkBuddy 桌面端(它会自动续期),
+    或在本卡片点「重新登录」」—— 与 <code>fetch.rs::expired_credential_msg</code> 同口径</td></tr>
+</table>
+
+<h3>4.2 伪代码</h3>
+<pre>// checkin_credential(),WorkBuddy 分支
+checkin::CheckinAuth::WebSession => {
+    // ① 桌面端凭据优先 —— 与取数同口径(它活得久、能续期)
+    if let Some(tok) = workbuddy::desktop_tokens(now_ms()).into_iter().next() {
+        return Ok(checkin::Cred::Web(tok));   // 不带 desktop: 前缀
+    }
+    // ② 退回网页会话(手动粘贴的密钥 / 浏览器 Cookie)
+    let session = wb_session_of(app, def.id)
+        .ok_or_else(|| "未检测到 WorkBuddy 登录 · 打开一次桌面端即可(或在本卡片点「重新登录」)".to_string())?;
+    Ok(checkin::Cred::Web(session))
+}</pre>
+
+<div class="note warn">
+<b>两个实现细节别踩:</b>
+<ul>
+<li><b>前缀必须剥掉。</b><code>desktop_tokens()</code> 返回裸 token,但取数层会自己加
+<code>desktop:</code> 前缀再解析;<b>签到层不要加前缀</b>。</li>
+<li><b>只取第一个候选</b>在当前是够的,但更好的是<b>401 时轮换下一个候选</b> ——
+本机就有 3 份桌面端凭据(一份是 6 月的明文备份)。取数路径已经是「按 401 换下一份」,
+签到路径照抄即可,别只试第一份就放弃。</li>
+</ul>
+</div>
+
+<h3>4.3 为什么不改用「手动粘贴访问密钥」那条路</h3>
+<p>v0.1.40 的排查已经取证过:官方「访问密钥」页创建按钮<b>对免费账号是门控的</b>
+(i18n 明文「该功能为标准版以上用户可用」)。所以不能把修复押在那条路上 ——
+<b>桌面端凭据才是免费账号唯一稳定可用的凭据</b>。</p>
+
+<h2>5. 顺带发现的两个次要问题</h2>
+
+<h3>5.1 拿不到凭据时「不留痕」,导致失败被静默吞掉</h3>
+<p>10-16 / 10-17 workbuddy <b>完全没有流水记录</b> —— 不是失败,是<b>一次都没试</b>。</p>
+<p>机制(从代码路径读出):<code>run_checkin()</code> 在拿到凭据之前就 <code>?</code> 提前返回 ——</p>
+<pre>let cred = { … checkin_credential(&h, def) … .await.map_err(…)?  };   // ← 这里 Err 就直接返回
+…
+let store = lock_rw(&state.store);
+store.record_checkin(…)                                              // ← 落库在后面,到不了</pre>
+<p>而节拍器对这个 Err 只做一件事:</p>
+<pre>if let Err(e) = run_checkin(&app, def.id, false).await {
+    eprintln!("签到 {} 跳过: {e}", def.name);   // 绿色版从托盘启动,这行没人看得到
+}</pre>
+<div class="note bad">
+<b>后果:凭据拿不到的那几天,在 <code>checkin_log</code> 里是空白 —— 与「没到点」无法区分。</b>
+用户(和排查的人)只看到「今天没签上」,却看不到「今天连试都没试」。
+这与项目自己立过的红线相冲突(「取数失败绝不渲染成余额归零」的同族问题:
+<b>失败必须留下痕迹</b>)。
+</div>
+<p><b>建议:</b>凭据获取失败也要落一条流水(<code>outcome=no_cred</code> 之类),让「没试」和「试了失败」在数据里可区分。
+这条与 Qoder 的 10:00 跨日设计(见 <code>design-qoder-channel-2026-10-20.html</code> §3.3)无关,
+但同属「签到状态要能还原现场」这一类,可以一起改。</p>
+
+<h3>5.2 复登放行只覆盖了 auth,没覆盖「凭据换源」</h3>
+<p><code>wb_finish_login()</code> 会清掉当天的 <code>auth*</code> 让用户能补签 —— 这个逻辑是对的。
+但它只挂在「网页登录成功」这一个事件上。<b>如果修复后改用桌面端凭据,
+就没有这个事件了</b>(桌面端续期是后台静默发生的)。</p>
+<p><b>建议:</b>把「清 auth 放行补签」也挂到「桌面端凭据刷新成功」的时刻上,
+或者更简单 —— 在 <code>checkin_credential()</code> 成功拿到桌面端凭据时,顺带清一次当天的 <code>auth*</code>。</p>
+
+<h2>6. 验证清单(修完这么验)</h2>
+<table>
+<tr><th>#</th><th>验什么</th><th>怎么验</th><th>期望</th></tr>
+<tr><td>1</td><td>签到能拿到凭据</td><td>点渠道卡「领积分」</td><td>不再报 auth;返回 200 或 <code>already</code></td></tr>
+<tr><td>2</td><td>落库正确</td><td>查 <code>checkin_log</code></td><td><code>outcome</code> 为 <code>claimed</code> / <code>already</code>,不再 <code>auth</code></td></tr>
+<tr><td>3</td><td>到账</td><td>对比签到前后余额</td><td>+100 积分(接口 <code>today_credit</code> 也是 100)</td></tr>
+<tr><td>4</td><td>桌面端没装时不崩</td><td>临时改名 auth 目录</td><td>退回网页会话或如实报「未检测到登录」,不 panic</td></tr>
+<tr><td>5</td><td>不重复领</td><td>同一天连点两次</td><td>第二次 <code>already</code>,接口幂等不重复发币</td></tr>
+<tr><td>6</td><td>余额不受影响</td><td>看快照</td><td>照常每分钟出数(签到是写操作,不该动取数)</td></tr>
+</table>
+
+<h2>7. 结论</h2>
+<table>
+<tr><th></th><th>判定</th></tr>
+<tr><td>Trae 是否正常</td><td><b>正常</b>。10-18/19/20 连续三天 <code>claimed</code>,凭据路径单一,没有分叉</td></tr>
+<tr><td>WorkBuddy 打卡是否正常</td><td><b>不正常</b>。连续 3 天 <code>auth</code>,根因是签到路径没接桌面端凭据</td></tr>
+<tr><td>是否用户操作问题</td><td><b>不是</b>。余额一直在正常出数,说明账号与桌面端都是好的</td></tr>
+<tr><td>修复难度</td><td><b>低</b>。不动请求构造、不加依赖、不新增接口 —— 只是把凭据来源对齐(约 20 行)</td></tr>
+<tr><td>修复后能否立刻生效</td><td><b>能</b>。桌面端凭据现在就是活的,实测签到接口 200</td></tr>
+</table>
+
+<div class="note warn">
+<b>一句话提醒:</b>这个 bug 的形态是「<b>同一渠道的两条路径用了两份凭据,其中一份悄悄死了</b>」。
+只要两者不共用同一个凭据解析入口,以后还会以别的形式复发(比如手动密钥过期、桌面端卸载)。
+<b>根治做法是让签到复用取数的凭据候选链,而不是各写一份。</b>
+</div>
+
+<p class="sub" style="margin-top:34px">
+报告:2026-10-20 · 证据:本机 <code>tokenscope.db</code>(checkin_log / snapshots)、
+WebView2 Cookie 库、<code>CodeBuddyExtension</code> 凭据文件、真实 HTTP 调用。
+全程只读;凭据仅在内存中过一趟,未落盘、未进日志、未写入本报告。
+</p>
+
+</div>
+</body>
+</html>

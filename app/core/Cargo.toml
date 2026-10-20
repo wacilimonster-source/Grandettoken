@@ -29,5 +29,15 @@ aes-gcm = "0.10"
 # 找 WorkBuddy 桌面端:**它可能装在任意盘、任意目录**(2026-10-20 用户实证:装在 D 盘,
 # 而挂件原来只认 C 盘的三个默认位置)。注册表的 App Paths / 卸载项是唯一不靠猜的来源。
 # 只在 Windows 目标上编译,Linux 下这段探测整体编译掉(返回空)。
+#
+# windows-sys 同时提供解 Qoder 凭据要用的 DPAPI(CryptUnprotectData):Qoder 桌面端
+# 的 auth.v1.dat 是 Electron safeStorage 产物,密钥由 DPAPI 保护 —— 这不是"破解",
+# 而是同一个 Windows 账户本来就能解的东西(见 core::qoder 头注)。
+# 只开 Cryptography + Memory 两个 feature,不整包引入。
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+    "Win32_System_Memory",
+] }

@@ -1,16 +1,18 @@
-//! 本机已登录应用凭据的只读复用(Trae / Codex)。
+//! 本机已登录应用凭据的只读复用(Trae / Codex / Qoder)。
 //!
-//! 这两个平台的积分没有开放 API Key,只能拿客户端自己的登录态去查。所以这里
+//! 这几个平台的积分没有开放 API Key,只能拿客户端自己的登录态去查。所以这里
 //! 直接读客户端已经写在磁盘上的凭据文件 —— **只读,不写回,不刷新**。
 //!
 //! 为什么不刷新:他们的刷新都会轮换 refreshToken(新 token 发下来、旧的作废),
 //! 我们刷完客户端手里那份就成了废票,用户下次打开 IDE 会被登出。为了一个挂件
-//! 把用户踢下线是不能接受的。token 过期就如实报"打开一次 Trae / Codex 即可",
+//! 把用户踢下线是不能接受的。token 过期就如实报"打开一次 Trae / Codex / Qoder 即可",
 //! 由用户在客户端里正常续期,我们只是搭个便车。
 //!
 //! WorkBuddy 曾经也走这条路,但桌面端 5.6.2(2026-10-01 实测)起把
 //! `auth.accessToken` 改成了 `{"$wbEncrypted":1,"envelope":…}` 的 AES-GCM 信封,
 //! 静态钥编译期内置、本机拿不到,所以这条路已经废了 —— 见 `providers::AuthKind::WebSession`。
+//! (**Qoder 不是这种情况**:它的 `auth.v1.dat` 是 Electron safeStorage,密钥由
+//! Windows DPAPI 保护,同一个账户本来就能解 —— 见 `crate::qoder`。)
 //!
 //! 凭据本身(accessToken)只在本进程内存里流转,不落盘、不进日志、不进数据库。
 
@@ -23,6 +25,10 @@ use std::path::PathBuf;
 pub enum App {
     Trae,
     Codex,
+    /// Qoder 国际版(`%APPDATA%\com.qoder.app.stable`)
+    Qoder,
+    /// Qoder 国内版(`%APPDATA%\com.qodercn.app.stable`)—— 与上一条是**两套账号**
+    QoderCn,
 }
 
 impl App {
@@ -31,6 +37,17 @@ impl App {
         match self {
             App::Trae => "Trae",
             App::Codex => "Codex",
+            App::Qoder => "Qoder",
+            App::QoderCn => "Qoder 国内版",
+        }
+    }
+
+    /// 该应用对应的 Qoder region(非 Qoder 应用返回 None)。
+    pub fn qoder_region(self) -> Option<crate::qoder::Region> {
+        match self {
+            App::Qoder => Some(crate::qoder::Region::Global),
+            App::QoderCn => Some(crate::qoder::Region::Cn),
+            _ => None,
         }
     }
 }
@@ -60,6 +77,42 @@ pub fn candidates(app: App) -> Vec<Credential> {
     match app {
         App::Trae => trae_candidates(),
         App::Codex => codex_candidates(),
+        App::Qoder | App::QoderCn => qoder_candidates(app),
+    }
+}
+
+// ───────────── Qoder(国际版 / 国内版)─────────────
+
+/// 读 Qoder 桌面端凭据。解密链在 [`crate::qoder`](DPAPI 解密钥 + AES-256-GCM)。
+///
+/// 读不到不是错误(没装桌面端很常见),返回空表 —— 与 Trae/Codex 同口径。
+/// **但要把"为什么读不到"记进排查日志**:这条路最常见的失败是"换了 Windows 账户"
+/// (DPAPI 密文绑账户),不写日志的话用户只会看到"未检测到登录"而无从下手。
+fn qoder_candidates(app: App) -> Vec<Credential> {
+    let Some(region) = app.qoder_region() else {
+        return Vec::new();
+    };
+    match crate::qoder::read(region) {
+        Ok(cred) => {
+            let src = if cred.user_name.is_empty() {
+                region.label().to_string()
+            } else {
+                format!("{} · {}", region.label(), cred.user_name)
+            };
+            vec![Credential {
+                token: cred.token,
+                source: src,
+                device_id: None,
+            }]
+        }
+        Err(e) => {
+            crate::diaglog::write_keyed(
+                "qoder",
+                "cred-miss",
+                &format!("{} 凭据读不到:{}", region.label(), e.message()),
+            );
+            Vec::new()
+        }
     }
 }
 

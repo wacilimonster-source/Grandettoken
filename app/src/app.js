@@ -281,6 +281,10 @@ const LOGOS = {
   trae: "logos/trae.svg",
   workbuddy: "logos/workbuddy.png",
   codex: "logos/chatgpt.svg",
+  qoder: "logos/qoder.png",
+  // 国内版与国际版是**两套账号**,但视觉上是同一个产品 —— 共用同一份官方标,
+  // 靠渠道名("Qoder 国内版")与主色区分,不再另画一个图标。
+  "qoder-cn": "logos/qoder.png",
 };
 
 /**
@@ -3772,7 +3776,7 @@ function vaultDel(id) {
 //   ③ 签到状态**不参与余额渲染** —— 签到失败永远不可能让余额显示成 0。
 let CK = {};            // 渠道 id → checkin_state 的那一条
 let CK_LOG = false;     // 「领积分」正在跑
-const CHECKIN_ON = new Set(["trae", "workbuddy"]);
+const CHECKIN_ON = new Set(["trae", "workbuddy", "qoder", "qoder-cn"]);
 
 /** 退避没到 / 今天已处理完:按钮留着但点不动,并写明还要等多久(报告 P0-6)。 */
 function ckHold(s) {
@@ -3780,6 +3784,10 @@ function ckHold(s) {
   if (left > 0) return (left >= 60 ? Math.round(left / 60) + " 分钟" : left + " 秒") + "后再试";
   return "今天已处理";
 }
+
+/** 各渠道的跨日时刻(与 core::checkin::CheckinDef::day_roll_hour 对应)。
+ *  Qoder 是 10:00 —— 官方活动描述原文「每日 10:00（UTC+8）刷新」。 */
+const CK_ROLL = { trae: 0, workbuddy: 0, qoder: 10, "qoder-cn": 10 };
 
 /** 状态 → 一行字 + 一个按钮。八种状态照设计稿 7.2 的表。 */
 function ckText(s) {
@@ -3796,9 +3804,13 @@ function ckText(s) {
     return { text: "签到未开启(开了才会发请求)" + tail, btn: "开启签到", act: "ckenable" };
   }
   if (s.note) return { text: s.note, btn: "去登录", act: "cklogin", warn: true };
-  if (o.startsWith("claimed")) return { text: "今日已领" + n + " 分 · 已触发到账核对" };
-  if (o.startsWith("already")) return { text: "今日已领" + n + " 分(平台侧显示已签到)" };
+  // 连续天数只有 Qoder 的接口给(streak_days),有就带上 —— 比现有两个渠道多一个可展示项
+  const streak = s.streakDays ? " · 连续 " + s.streakDays + " 天" : "";
+  if (o.startsWith("claimed")) return { text: "今日已领" + n + " 分" + streak + " · 已触发到账核对" };
+  if (o.startsWith("already")) return { text: "今日已领" + n + " 分" + streak + "(平台侧显示已签到)" };
   if (o === "retry:ready") return Object.assign({ text: "今日可领" + n }, run("领积分", "p"));
+  // Qoder 的可领短码形如 retry:ready:{活动id} —— 同样落进"可领"
+  if (o.startsWith("retry:ready:")) return Object.assign({ text: "今日可领" + n }, run("领积分", "p"));
   if (o === "retry:device")
     return Object.assign(
       { text: "太挤了,今天还会自动再试(第 " + (s.attempts || 1) + "/5 次)" },
@@ -3810,7 +3822,12 @@ function ckText(s) {
       run("重试", "")
     );
   if (o.startsWith("auth")) return { text: "凭据失效 —— 打开一次客户端 / 在渠道卡上登录一次", btn: "去登录", act: "cklogin", warn: true };
-  if (o.startsWith("inactive")) return { text: "加油站本期已结束(等下一期)" };
+  // `no_cred` = **本机没读到凭据**(没装桌面端 / 没登录 / DPAPI 解不开),
+  // 与 `auth`(平台拒绝了这份凭据)是两件事,提示的方向也不同。
+  if (o.startsWith("no_cred"))
+    return { text: s.lastMessage || "本机没读到签到凭据 · 打开一次客户端即可", warn: true };
+  // 无活动与"已结束"分开说:前者是本期没有打卡活动(活动换季),不是失败也不是已签
+  if (o.startsWith("inactive")) return { text: s.lastMessage || "本期无打卡活动(等下一期)" };
   if (o.startsWith("shape")) return { text: "签到接口有变动,已暂停自动签到 · 余额显示不受影响", warn: true };
   if (o.startsWith("failed")) return Object.assign({ text: "上次没成功:" + (s.lastMessage || o.slice(7)) }, run("重试", ""));
   return Object.assign({ text: "今天还没签" }, run("领积分", "p"));
@@ -3877,7 +3894,12 @@ function renderCheckinSet() {
     rows.push(
       '<div class="field"><span>' + esc(s ? s.name : id) +
         '<span class="desc">' +
-        (on ? (auto ? "每天 00:23 后自动领,失败当天退避重试" : "只保留手动「领积分」按钮") : "关着 —— 一个请求都不发") +
+        (on
+          ? (auto
+              ? (CK_ROLL[id] ? "每天 " + CK_ROLL[id] + ":00 后自动领" : "每天 00:23 后自动领") +
+                ",失败当天退避重试"
+              : "只保留手动「领积分」按钮")
+          : "关着 —— 一个请求都不发") +
         (s && s.monthCredits ? " · 本月已领 " + points(s.monthCredits) + " 分" : "") +
         "</span></span>" +
         '<button class="sw' + (on ? " on" : "") + '" role="switch" aria-checked="' + on +

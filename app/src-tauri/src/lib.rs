@@ -10,7 +10,7 @@ use tauri::{Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
 use tokenscope_core::config::Config;
 use tokenscope_core::fetch::{now_ts, ChannelView, Fetcher};
-use tokenscope_core::{appauth, checkin, inject, models, providers, secrets, store::Store};
+use tokenscope_core::{appauth, checkin, inject, models, providers, secrets, store::Store, workbuddy};
 
 pub struct AppState {
     pub store: Arc<Mutex<Store>>,
@@ -545,8 +545,14 @@ async fn wb_finish_login(app: &tauri::AppHandle) {
         let mut changed = false;
         let store2 = app.state::<AppState>().store.clone();
         if let Some(entry) = cfg.checkin.get_mut(WB_CHANNEL_ID) {
-            if entry.last_code.as_deref().is_some_and(|c| c.starts_with("auth")) {
-                let today = checkin::beijing_day(now_ts());
+            // `auth` = 平台拒绝了那份凭据;`no_cred` = 本机压根没读到凭据。
+            // **两者都该被复登成功放行** —— 复登之后凭据就有了,当天的分不必等到次日。
+            if entry
+                .last_code
+                .as_deref()
+                .is_some_and(|c| c.starts_with("auth") || c.starts_with("no_cred"))
+            {
+                let today = cycle_day_of(WB_CHANNEL_ID, now_ts());
                 entry.last_day = Some(today);
                 entry.last_code = None;
                 entry.attempts = 0;
@@ -2126,11 +2132,29 @@ struct CheckinState {
     note: Option<String>,
     /// 本月自动领到的合计(只算真领到的)
     month_credits: f64,
+    /// 连续签到天数(只有 Qoder 给;没有就是 None,前端不显示)
+    streak_days: Option<i64>,
     /// 近 7 天流水
     log: Vec<tokenscope_core::store::CheckinRow>,
 }
 
 /// 该渠道现在能不能拿到签到凭据;拿不到就把原因说清楚(界面照抄)。
+///
+/// ## WorkBuddy 的凭据分叉(2026-10-20 修复)
+///
+/// 以前这里**只**读网页 Cookie 会话,而**取数**那条路(见 `fetch.rs::credentials`)
+/// 是「手动密钥 → 桌面端凭据 → 网页会话」。于是出现一个很难看的状态:
+/// 桌面端凭据还活着、余额天天出数,签到却因为网页会话失效而天天报 `auth`
+/// (本机 10-18/19/20 连续三天就是这个)。
+///
+/// 现在把顺序对齐成同一套:**先桌面端、后网页会话**。
+/// 桌面端凭据活得久(accessToken 约 3 周、refreshToken 约 1 年,且可续),
+/// 而网页会话是约 7 天的绝对 TTL —— 后者只能当兜底。
+///
+/// 桌面端 token 是**裸 JWT**(`desktop_tokens()` 返回的就不带 `desktop:` 前缀 ——
+/// 那是取数层的标记),交给 `Cred::Web` 后会走「其余当 Bearer 令牌」那一支,
+/// 正是签到接口要的形态。**绝不能把 `desktop:` 前缀带进来**,那会变成
+/// `Bearer desktop:xxx`,必然 401。
 fn checkin_credential(app: &tauri::AppHandle, def: &checkin::CheckinDef) -> Result<checkin::Cred, String> {
     match def.auth {
         checkin::CheckinAuth::TraeApp => {
@@ -2147,25 +2171,59 @@ fn checkin_credential(app: &tauri::AppHandle, def: &checkin::CheckinDef) -> Resu
             })
         }
         checkin::CheckinAuth::WebSession => {
-            let session = wb_session_of(app, def.id)
-                .ok_or_else(|| format!("未登录 {} 账号 · 在渠道卡上登录一次", def.name))?;
+            // ① 桌面端凭据优先(与取数同口径)。读不到不是错误 —— 没装桌面端很常见。
+            //    `desktop_tokens` 内部已处理"上次续期成果 → 桌面端文件 → 过期自动续期"。
+            if let Some(token) = workbuddy::desktop_tokens(now_ts() * 1000).into_iter().next() {
+                return Ok(checkin::Cred::Web(token));
+            }
+            // ② 兜底:网页会话(手动粘贴的密钥 / 挂件内登录抓到的 Cookie)
+            let session = wb_session_of(app, def.id).ok_or_else(|| {
+                format!(
+                    "未检测到 {} 登录 · 打开一次桌面端即可(或在本卡片点「重新登录」)",
+                    def.name
+                )
+            })?;
             Ok(checkin::Cred::Web(session))
         }
+        checkin::CheckinAuth::QoderApp => {
+            let app_kind = if def.id == "qoder-cn" {
+                appauth::App::QoderCn
+            } else {
+                appauth::App::Qoder
+            };
+            let c = appauth::candidates(app_kind)
+                .into_iter()
+                .next()
+                .ok_or_else(|| {
+                    format!("没检测到 {} 登录信息 · 打开一次 Qoder 桌面端即可", def.name)
+                })?;
+            Ok(checkin::Cred::Qoder(c.token))
+        }
     }
+}
+
+/// 该渠道的「签到周期日」——幂等键。
+///
+/// 不能一律用自然日:Qoder 的活动窗口是 10:00 → 次日 09:59,
+/// 09:00 查到的"已领"其实是昨天那一期领的,拿自然日当键会判成"今天已领"而跳过今天该领的。
+/// 见 `checkin::cycle_day` 的注释。
+fn cycle_day_of(id: &str, now: i64) -> String {
+    let roll = checkin::find(id).map(|d| d.day_roll_hour).unwrap_or(0);
+    checkin::cycle_day(now, roll)
 }
 
 fn checkin_state_of(id: &str, cfg: &Config, store: &Store, note: Option<String>) -> CheckinState {
     let def = checkin::find(id);
     let c = cfg.checkin.get(id).cloned().unwrap_or_default();
-    let today = checkin::beijing_day(now_ts());
     let now = now_ts();
+    let today = cycle_day_of(id, now);
     let done = c.done_for_day(&today);
     let waiting = c.next_try_at.map(|t| t > now).unwrap_or(false);
     let outcome = c.last_code.clone().unwrap_or_default();
     let needs_user = outcome.starts_with("auth") || outcome.starts_with("shape");
     let log = store.recent_checkins(id, now - 7 * 86_400).unwrap_or_default();
     let month_credits = store
-        // beijing_day 的兜底返回空串;直接 &today[..7] 会 panic(报告 P2-13)
+        // 日期串的兜底返回空串;直接 &today[..7] 会 panic(报告 P2-13)
         .checkin_month_credits(id, today.get(..7).unwrap_or(today.as_str()))
         .unwrap_or(0.0);
     CheckinState {
@@ -2182,6 +2240,7 @@ fn checkin_state_of(id: &str, cfg: &Config, store: &Store, note: Option<String>)
         needs_user,
         note,
         month_credits,
+        streak_days: c.last_streak_days,
         log,
     }
 }
@@ -2215,35 +2274,43 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
             .map_err(|e| format!("读取签到凭据失败: {e}"))??
     };
     let client = checkin::direct_client();
-    let today = checkin::beijing_day(now_ts());
     let now = now_ts();
+    // **签到周期日**(不是自然日):Qoder 的"今天"从 10:00 起算。
+    // 拿自然日当幂等键会把 09:59 与 10:01 混成一天,当天那一期就永远领不到。
+    let today = cycle_day_of(id, now);
 
-    // 查状态
-    let mut out = checkin::call(&client, def, &cred, false).await;
-    let mut credits: Option<f64> = match &out {
-        checkin::Outcome::Already(c) | checkin::Outcome::Claimed(c) => *c,
-        _ => None,
-    };
+    // 查状态。**用 call_with_body**:Qoder 的连续天数在顶层,需要原始响应;
+    // 其他渠道拿到 body 也不用,不额外付成本(同一次请求捎回来而已)。
+    let (mut out, status_body) = checkin::call_with_body(&client, def, &cred, false, None).await;
+    let mut credits: Option<f64> = out.credits();
+    // 连续天数:只有 Qoder 的接口给,拿不到就是 None(不编)
+    let streak: Option<i64> = status_body.as_ref().and_then(checkin::qoder_streak);
 
     // 可领 → 领;领完**回查一次**(服务端可能已被客户端自己点掉,那种情况也算成功)
-    if matches!(&out, checkin::Outcome::Retry(m) if m == "ready") {
-        let claimed = checkin::call(&client, def, &cred, true).await;
-        credits = match &claimed {
-            checkin::Outcome::Claimed(c) | checkin::Outcome::Already(c) => c.or(credits),
-            _ => credits,
-        };
-        let back = checkin::call(&client, def, &cred, false).await;
-        // 回查是**唯一的到账证据**。以前只有 Already 才改判,其余情况一律照抄 claimed:
-        // 于是"领了但没生效"(平台返回 code=0、回查仍说未签)被记成 claimed →
-        // done_for_day 为真 → 节拍器与手动按钮当天都不再试,积分静默丢掉。
-        out = match &back {
-            // 回查说已签:真领到了,顺手把回查里带的积分数补上
-            checkin::Outcome::Already(c) => checkin::Outcome::Claimed(c.or(credits)),
-            // 回查仍说可领 = 这次领取没生效:降级成可重试,别把这一天记成已领
-            checkin::Outcome::Retry(_) => checkin::Outcome::Retry("claim 未见生效".into()),
-            // 回查本身失败(网络 / 接口变动):保留领取回执,界面如实显示
-            _ => claimed,
-        };
+    //
+    // Qoder 的可领短码是 `retry:ready:{活动id}`(领取地址要这个 id);
+    // Trae / WorkBuddy 是固定的 `retry:ready`。两种都要认。
+    if let checkin::Outcome::Retry(m) = &out {
+        if m == "ready" || m.starts_with("ready:") {
+            let claim_id = checkin::ready_claim_id(m).filter(|s| !s.is_empty());
+            let claimed = checkin::call(&client, def, &cred, true, claim_id).await;
+            credits = match &claimed {
+                checkin::Outcome::Claimed(c) | checkin::Outcome::Already(c) => c.or(credits),
+                _ => credits,
+            };
+            let back = checkin::call(&client, def, &cred, false, None).await;
+            // 回查是**唯一的到账证据**。以前只有 Already 才改判,其余情况一律照抄 claimed:
+            // 于是"领了但没生效"(平台返回 code=0、回查仍说未签)被记成 claimed →
+            // done_for_day 为真 → 节拍器与手动按钮当天都不再试,积分静默丢掉。
+            out = match &back {
+                // 回查说已签:真领到了,顺手把回查里带的积分数补上
+                checkin::Outcome::Already(c) => checkin::Outcome::Claimed(c.or(credits)),
+                // 回查仍说可领 = 这次领取没生效:降级成可重试,别把这一天记成已领
+                checkin::Outcome::Retry(_) => checkin::Outcome::Retry("claim 未见生效".into()),
+                // 回查本身失败(网络 / 接口变动):保留领取回执,界面如实显示
+                _ => claimed,
+            };
+        }
     }
 
     // 到账核对:立刻取一轮(新包会出现在余额里),失败不影响签到结论
@@ -2263,6 +2330,10 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
         entry.last_code = Some(out.code());
         entry.last_try_at = Some(now);
         entry.last_credits = credits;
+        // 连续天数:拿不到就**保留上次的值**(None 覆盖成 None 没问题,但别把已知的清掉)
+        if streak.is_some() {
+            entry.last_streak_days = streak;
+        }
         // 退避:retryable 就一律排下一次,间隔由 next_delay 封顶(120→…→1200 秒)。
         // 以前还多判一个 attempts<5,第 6 次起把 next_try_at 置成 None,而节拍器把 None
         // 读成"不在退避中" → 当天改成每 5 分钟硬撞一次,比封顶值还激进 4 倍(报告 P1-2)。
@@ -2321,6 +2392,44 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
     Ok(out)
 }
 
+/// 拿不到凭据时也要**留一条流水**。
+///
+/// 以前这条路径只 `eprintln` 一句就返回,于是"今天一次都没试"在 `checkin_log` 里
+/// 是一片空白 —— 与"还没到点"完全无法区分。2026-10-20 排查 WorkBuddy 时就撞上了:
+/// 10-16 / 10-17 两天没有任何记录,只能靠推断才知道那两天是凭据读不到。
+///
+/// 结果码用 `no_cred` 前缀(不是 `auth`):**"凭据读不到"与"平台说凭据失效"是两件事** ——
+/// 前者是本机没装/没登录/解不开,后者是服务端拒绝了这份凭据。混成一个会让用户
+/// 照着错误的提示去操作。
+///
+/// 这条**不算当天完结**(`done_for_day` 不认 `no_cred`),所以白天补装/登录后
+/// 节拍器还会再试 —— 与 `retry` 同口径。
+fn record_checkin_skip(app: &tauri::AppHandle, id: &str, day: &str, now: i64, why: &str) {
+    let state = app.state::<AppState>();
+    let mut cfg = lock_rw(&state.config).clone();
+    let entry = cfg.checkin.entry(id.to_string()).or_default();
+    let same_day = entry.last_day.as_deref() == Some(day);
+    entry.attempts = if same_day { entry.attempts + 1 } else { 1 };
+    entry.last_day = Some(day.to_string());
+    entry.last_code = Some(format!("no_cred:{why}"));
+    entry.last_try_at = Some(now);
+    entry.last_message = Some(why.to_string());
+    // 排一次退避:凭据问题不会在 2 分钟内自愈,别每 5 分钟硬撞一次
+    entry.next_try_at = Some(now + checkin::next_delay(entry.attempts));
+
+    let store = lock_rw(&state.store);
+    if let Err(e) = store.record_checkin(id, now, day, &format!("no_cred:{why}"), None, entry.attempts, why)
+    {
+        eprintln!("{e}");
+    }
+    if let Err(e) = cfg.save(&store) {
+        eprintln!("签到配置落库失败: {e}");
+    }
+    drop(store);
+    *lock_rw(&state.config) = cfg;
+    let _ = app.emit("checkin-updated", serde_json::json!({ "id": id }));
+}
+
 #[tauri::command]
 async fn checkin_state(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<Vec<CheckinState>, String> {
     let cfg = lock_rw(&state.config).clone();
@@ -2368,7 +2477,8 @@ async fn checkin_now(app: tauri::AppHandle, id: String) -> Result<CheckinState, 
     {
         let st = app.state::<AppState>();
         let cfg = lock_rw(&st.config).clone();
-        let today = checkin::beijing_day(now_ts());
+        // 周期日(不是自然日):Qoder 的"今天"从 10:00 起算
+        let today = cycle_day_of(&id, now_ts());
         if let Some(c) = cfg.checkin.get(&id) {
             if c.done_for_day(&today) {
                 return Err(format!(
@@ -2405,10 +2515,10 @@ fn spawn_checkin_ticker(app: tauri::AppHandle) {
             if UPDATING.load(std::sync::atomic::Ordering::Relaxed) {
                 continue; // 更新期间不签到(报告 P1-15)
             }
-            let (cfg, today, now) = {
+            let (cfg, now) = {
                 let state = app.state::<AppState>();
                 let cfg = lock_rw(&state.config).clone();
-                (cfg, checkin::beijing_day(now_ts()), now_ts())
+                (cfg, now_ts())
             };
             for def in checkin::CHECKINS {
                 let Some(c) = cfg.checkin.get(def.id) else { continue };
@@ -2418,19 +2528,26 @@ fn spawn_checkin_ticker(app: tauri::AppHandle) {
                 if cfg.hidden_channels.iter().any(|h| h == def.id) {
                     continue; // 隐藏 = 不读本机登录凭据、也不对外发请求(与取数同口径)
                 }
+                // **逐渠道算周期日**:Qoder 的"今天"从 10:00 起算,不是自然日。
+                // 用自然日会让 09:59 与 10:01 混成一天,当天那一期永远领不到。
+                let today = checkin::cycle_day(now, def.day_roll_hour);
                 if c.done_for_day(&today) {
                     continue;
                 }
                 if c.next_try_at.map(|t| t > now).unwrap_or(false) {
                     continue; // 退避中
                 }
-                // 北京时间 00:23 + 该渠道抖动之后才允许(当天更晚也算 → 开机补跑)
-                if !checkin::due_now(now, &today, def.id) {
+                // 跨日时刻 + 该渠道抖动之后才允许(当天更晚也算 → 开机补跑)
+                if !checkin::due_now(now, &today, def.id, def.day_roll_hour) {
                     continue;
                 }
                 if let Err(e) = run_checkin(&app, def.id, false).await {
-                    // 拿不到凭据:记一句就走,别每 5 分钟刷屏
+                    // 拿不到凭据:记一句就走,别每 5 分钟刷屏。
+                    // **但也要落一条流水** —— 以前这里只 eprintln,绿色版从托盘启动时
+                    // 那行没人看得到,于是"没试"与"试了失败"在数据里无法区分
+                    // (2026-10-20 排查:workbuddy 10-16/10-17 两天在 checkin_log 里是空白)。
                     eprintln!("签到 {} 跳过: {e}", def.name);
+                    record_checkin_skip(&app, def.id, &today, now, &e);
                 }
                 // 两渠道之间串行 + 间隔(设计稿第 8 节)
                 tokio::time::sleep(std::time::Duration::from_millis(800)).await;

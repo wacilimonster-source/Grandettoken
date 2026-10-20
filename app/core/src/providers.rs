@@ -759,6 +759,131 @@ fn wb_pack_label(code: &str) -> String {
     }
 }
 
+/// Qoder:积分型(Credits)。
+///
+/// 2026-10-20 真机实测(`GET {openapi}/api/v2/quota/usage`):
+/// ```json
+/// {"userId":"…","userType":"personal_standard","usageType":"credits",
+///  "totalUsagePercentage":0.15,"isQuotaExceeded":false,"expiresAt":253402214400000,
+///  "userQuota":{"total":0.0,"used":0.0,"remaining":0.0,"percentage":0.0,"unit":"credits"},
+///  "addOnQuota":{"total":100.0,"used":14.0,"remaining":86.0,"percentage":0.15,
+///                "unit":"credits","detailUrl":"…"}}
+/// ```
+///
+/// **最重要的一个坑:剩余量有两个可能的字段,必须都读、相加。**
+/// 本账号(standard 档)`userQuota.total = 0`,量全在 `addOnQuota`(86);
+/// 只看 `userQuota.remaining` 会显示成 **0** —— 而实际还有 86。
+/// 反过来,订阅用户的量在 `userQuota`。两者都缺失才判取数失败。
+///
+/// **不要用 0 顶替缺失值**:0 会被界面渲染成"已耗尽",而"取不到"与"归零"是两回事
+/// (与 4SAPI/DeepSeek 的既定口径一致)。
+pub fn extract_qoder(body: &Value) -> FetchResult {
+    // 上游错误形如 {"code":"UNAUTHORIZED"|"TOKEN_INVALID"|"TOKEN_EXPIRE","message":…}
+    if let Some(code) = body.get("code").and_then(|c| c.as_str()) {
+        return FetchResult {
+            valid: false,
+            kind: Kind::Points,
+            unit: "credits".into(),
+            error: Some(match code.to_ascii_uppercase().as_str() {
+                "UNAUTHORIZED" | "TOKEN_INVALID" | "TOKEN_EXPIRE" => {
+                    "登录状态已失效 · 打开一次 Qoder 即可".into()
+                }
+                _ => format!("接口返回错误(code={code})"),
+            }),
+            ..Default::default()
+        };
+    }
+
+    // 两个配额块都认;名字可能给 snake_case(社区记录)或 camelCase(本机实测)
+    let pick_quota = |camel: &str, snake: &str| -> Option<&Value> {
+        body.get(camel)
+            .or_else(|| body.get(snake))
+            .filter(|v| v.is_object())
+    };
+    let user_q = pick_quota("userQuota", "user_quota");
+    let addon_q = pick_quota("addOnQuota", "add_on_quota");
+
+    if user_q.is_none() && addon_q.is_none() {
+        return FetchResult {
+            valid: false,
+            kind: Kind::Points,
+            unit: "credits".into(),
+            error: Some("响应里没有配额字段(userQuota / addOnQuota)".into()),
+            ..Default::default()
+        };
+    }
+
+    let num_of = |q: Option<&Value>, key: &str| -> Option<f64> {
+        q.and_then(|v| v.get(key)).and_then(num)
+    };
+    // 相加而不是"取一个":两个块可能同时有量(套餐额度 + 加量包)
+    let sum = |key: &str| -> Option<f64> {
+        match (num_of(user_q, key), num_of(addon_q, key)) {
+            (None, None) => None,
+            (a, b) => Some(a.unwrap_or(0.0) + b.unwrap_or(0.0)),
+        }
+    };
+
+    let remaining = sum("remaining");
+    let total = sum("total");
+    let used = sum("used");
+    // 拿不到 remaining 就是取数失败 —— 绝不用 0 顶替(0 会被渲染成"已耗尽")
+    let Some(remaining) = remaining else {
+        return FetchResult {
+            valid: false,
+            kind: Kind::Points,
+            unit: "credits".into(),
+            error: Some("配额里没有 remaining 字段".into()),
+            ..Default::default()
+        };
+    };
+
+    let mut extra: Vec<(String, String)> = Vec::new();
+    if let Some(t) = body.get("userType").and_then(|v| v.as_str()) {
+        if !t.trim().is_empty() {
+            extra.push(("套餐".into(), t.to_string()));
+        }
+    }
+    if let (Some(t), Some(u)) = (total, used) {
+        if t > 0.0 {
+            extra.push(("本期用量".into(), format!("{u:.2} / {t:.2} Credits")));
+        }
+    }
+    // 到期:本机是 253402214400000(= 9999-12-31,即"不过期")。
+    // 直接印这个天文数字对用户没有意义,折算成人话。
+    if let Some(ms) = body.get("expiresAt").and_then(num) {
+        let at = ts_norm(ms);
+        // 9999-12-31 之后一律当"不过期"(上游用这个值表示"没有到期日")
+        if at >= 253_402_214_400 {
+            extra.push(("到期".into(), "不过期".into()));
+        } else if let Some(d) = chrono::DateTime::from_timestamp(at, 0) {
+            extra.push((
+                "到期".into(),
+                d.with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+                    .format("%Y-%m-%d")
+                    .to_string(),
+            ));
+        }
+    }
+    if body.get("isQuotaExceeded").and_then(|v| v.as_bool()) == Some(true) {
+        extra.push(("配额".into(), "已用尽".into()));
+    }
+    // 逐笔到期明细本期未接入 —— 如实说,不装作有(设计稿 §2.2)
+    extra.push(("明细".into(), "逐笔到期明细本期未接入".into()));
+
+    FetchResult {
+        valid: true,
+        kind: Kind::Points,
+        remaining: Some(round2(remaining)),
+        used: used.map(round2),
+        // 积分型没有"额度上限"这个概念,不画进度条(与 Trae/WorkBuddy 同口径)
+        total: None,
+        unit: "credits".into(),
+        extra,
+        ..Default::default()
+    }
+}
+
 /// Trae 的取数 body。两个端点(ide_user_ent_usage / user_current_entitlement_list)
 /// 返回同一份数据,带上 require_usage 才是逐笔明细。
 pub fn trae_body() -> String {
@@ -1007,6 +1132,52 @@ pub const PROVIDERS: &[ProviderDef] = &[
         default_kind: Kind::Percent,
         peak_pricing: false,
         extract: extract_codex,
+    },
+    // ───────────── Qoder(国际版 / 国内版)─────────────
+    //
+    // 两版是**两套账号**(官方明确不支持跨区迁移),所以是两个独立渠道 —— 余额无法合并。
+    // 2026-10-20 真机取证(本机桌面端 0.4.8,region=global):
+    //   ① `GET /api/v2/quota/usage` → 200,额度在 userQuota + addOnQuota 两块
+    //   ② 头只需 Authorization + Cosy-ClientType + User-Agent(额度接口**不走** Cosy 签名)
+    //   ③ 凭据是本机桌面端 auth.v1.dat(Electron safeStorage + DPAPI,见 core::qoder)
+    ProviderDef {
+        id: "qoder",
+        name: "Qoder",
+        short: "QD",
+        color: "#00b3a4",
+        url: "https://openapi.qoder.sh/api/v2/quota/usage",
+        fallback_urls: &[],
+        extra_headers: &[
+            ("Cosy-ClientType", "10"),
+            // 网关按 UA 分流;官方客户端自己发的就是 "Qoder"
+            ("User-Agent", "Qoder"),
+        ],
+        auth: AuthKind::App(App::Qoder),
+        auth_prefix: "Bearer ",
+        method: Method::Get,
+        unstable: true,
+        default_kind: Kind::Points,
+        peak_pricing: false,
+        extract: extract_qoder,
+    },
+    ProviderDef {
+        id: "qoder-cn",
+        name: "Qoder 国内版",
+        short: "QDC",
+        color: "#e8622c",
+        url: "https://openapi.qoder.com.cn/api/v2/quota/usage",
+        fallback_urls: &[],
+        extra_headers: &[
+            ("Cosy-ClientType", "10"),
+            ("User-Agent", "Qoder"),
+        ],
+        auth: AuthKind::App(App::QoderCn),
+        auth_prefix: "Bearer ",
+        method: Method::Get,
+        unstable: true,
+        default_kind: Kind::Points,
+        peak_pricing: false,
+        extract: extract_qoder,
     },
 ];
 
@@ -1424,6 +1595,99 @@ mod tests {
         let r = extract_codex(&json!({ "detail": "Not authenticated" }));
         assert!(!r.valid);
         assert!(r.error.is_some());
+    }
+
+    /// Qoder:**本机真机样本**(2026-10-20,personal_standard 档)。
+    /// 量全在 addOnQuota,userQuota 全 0 —— 只看 userQuota 会显示成 0(这是最大的坑)。
+    #[test]
+    fn qoder_real_sample_reads_addon_quota() {
+        let r = extract_qoder(&json!({
+            "userId": "01a068b6-c10f-7658-9045-5084b2acb9f2",
+            "userType": "personal_standard",
+            "usageType": "credits",
+            "totalUsagePercentage": 0.15,
+            "isQuotaExceeded": false,
+            "expiresAt": 253402214400000_i64,
+            "userQuota": { "total": 0.0, "used": 0.0, "remaining": 0.0, "percentage": 0.0, "unit": "credits" },
+            "addOnQuota": { "total": 100.0, "used": 14.0, "remaining": 86.0, "percentage": 0.15, "unit": "credits" }
+        }));
+        assert!(r.valid, "{:?}", r.error);
+        assert_eq!(r.kind, Kind::Points);
+        assert_eq!(r.remaining, Some(86.0), "必须读到 addOnQuota,不能只看 userQuota");
+        assert_eq!(r.used, Some(14.0));
+        assert!(r.total.is_none(), "积分型不画进度条");
+        assert_eq!(r.unit, "credits");
+        // 套餐与到期都要如实透出;9999 年那个天文数字要折成"不过期"
+        assert!(r.extra.iter().any(|(k, v)| k == "套餐" && v == "personal_standard"));
+        assert!(r.extra.iter().any(|(k, v)| k == "到期" && v == "不过期"));
+    }
+
+    /// 两个块都有量时要**相加**(套餐额度 + 加量包),不是取其中一个。
+    #[test]
+    fn qoder_sums_both_quota_blocks() {
+        let r = extract_qoder(&json!({
+            "userQuota": { "total": 500.0, "used": 100.0, "remaining": 400.0 },
+            "addOnQuota": { "total": 100.0, "used": 14.0, "remaining": 86.0 }
+        }));
+        assert!(r.valid, "{:?}", r.error);
+        assert_eq!(r.remaining, Some(486.0), "400 + 86");
+        assert_eq!(r.used, Some(114.0));
+    }
+
+    /// snake_case 字段名也要认(社区记录上游两个版本都用过)。
+    #[test]
+    fn qoder_accepts_snake_case_quota_fields() {
+        let r = extract_qoder(&json!({
+            "user_quota": { "total": 0.0, "remaining": 0.0 },
+            "add_on_quota": { "total": 100.0, "remaining": 86.0 }
+        }));
+        assert!(r.valid, "{:?}", r.error);
+        assert_eq!(r.remaining, Some(86.0));
+    }
+
+    /// 缺 remaining 必须判**取数失败**,绝不用 0 顶替 —— 0 会被渲染成"已耗尽"。
+    #[test]
+    fn qoder_missing_remaining_is_invalid_not_zero() {
+        let r = extract_qoder(&json!({
+            "addOnQuota": { "total": 100.0, "used": 14.0 }
+        }));
+        assert!(!r.valid, "没有 remaining 不能算成功");
+        assert!(r.remaining.is_none(), "绝不能返回 0");
+        assert!(r.error.is_some());
+        // 两个配额块都没有 → 也是失败
+        let r2 = extract_qoder(&json!({ "userId": "x" }));
+        assert!(!r2.valid);
+        assert!(r2.remaining.is_none());
+    }
+
+    /// 凭据失效的错误码要指对方向("打开一次 Qoder"),而不是泛泛的"接口返回错误"。
+    #[test]
+    fn qoder_auth_errors_point_at_the_client() {
+        for code in ["UNAUTHORIZED", "TOKEN_INVALID", "TOKEN_EXPIRE"] {
+            let r = extract_qoder(&json!({ "code": code, "message": "whatever" }));
+            assert!(!r.valid);
+            assert_eq!(
+                r.error.as_deref(),
+                Some("登录状态已失效 · 打开一次 Qoder 即可"),
+                "code={code}"
+            );
+        }
+        // 认不出来的 code 要带出来(排查时它才是能查的东西)
+        let r = extract_qoder(&json!({ "code": "SOMETHING_NEW" }));
+        assert!(!r.valid);
+        assert!(r.error.as_deref().unwrap_or("").contains("SOMETHING_NEW"));
+    }
+
+    /// 已用尽的账号要显式标出来(而不是只显示一个 0)。
+    #[test]
+    fn qoder_exceeded_quota_is_flagged() {
+        let r = extract_qoder(&json!({
+            "isQuotaExceeded": true,
+            "addOnQuota": { "total": 100.0, "used": 100.0, "remaining": 0.0 }
+        }));
+        assert!(r.valid);
+        assert_eq!(r.remaining, Some(0.0));
+        assert!(r.extra.iter().any(|(k, v)| k == "配额" && v == "已用尽"));
     }
 
     #[test]

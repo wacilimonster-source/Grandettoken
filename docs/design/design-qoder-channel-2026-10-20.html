@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>产品设计 · Qoder 渠道(积分展示 + 每日打卡)· 2026-10-20</title>
+<style>
+  :root{
+    --bg:#0f1115; --fg:#e6e8ee; --mut:#9aa3b2; --line:#262b36; --card:#151922;
+    --ac:#2f7cf6; --qg:#00b3a4; --qc:#e8622c; --ok:#2fbf71; --warn:#f5a623; --bad:#e5484d;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f6f7f9; --fg:#1b1f27; --mut:#5b6472; --line:#dfe3ea; --card:#fff; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:15px/1.72 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1080px;margin:0 auto;padding:28px 22px 90px}
+  h1{font-size:26px;margin:0 0 4px}
+  h2{font-size:19px;margin:38px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+  h3{font-size:16px;margin:22px 0 6px}
+  h4{font-size:14px;margin:16px 0 4px;color:var(--mut);font-weight:600}
+  p{margin:8px 0}
+  code{background:rgba(127,127,127,.16);padding:1px 5px;border-radius:4px;font-size:13px;
+    font-family:"Cascadia Mono",Consolas,monospace;word-break:break-all}
+  pre{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px;
+    overflow-x:auto;font-size:12.5px;line-height:1.6;font-family:"Cascadia Mono",Consolas,monospace}
+  .sub{color:var(--mut);font-size:13px}
+  .hand{border:1px solid var(--ac);border-left-width:4px;background:var(--card);
+    border-radius:8px;padding:14px 16px;margin:18px 0}
+  .hand b{color:var(--ac)}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:rgba(127,127,127,.08);font-weight:600;white-space:nowrap}
+  td.nowrap{white-space:nowrap}
+  .tag{display:inline-block;padding:0 7px;border-radius:10px;font-size:12px;border:1px solid var(--line)}
+  .t-fact{color:var(--ok);border-color:var(--ok)}
+  .t-half{color:var(--warn);border-color:var(--warn)}
+  .t-risk{color:var(--bad);border-color:var(--bad)}
+  .t-tbd{color:var(--mut)}
+  .note{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:10px 0}
+  .note.warn{border-left:3px solid var(--warn)}
+  .note.bad{border-left:3px solid var(--bad)}
+  .note.ok{border-left:3px solid var(--ok)}
+  ul,ol{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+  /* 渠道卡 mock */
+  .card{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--card);
+    max-width:430px;position:relative;overflow:hidden}
+  .card .bar{position:absolute;left:0;top:0;bottom:0;width:3px}
+  .card .r1{display:flex;align-items:center;gap:8px;padding-left:6px}
+  .card .nm{font-weight:600}
+  .card .big{font-size:26px;font-weight:700;padding-left:6px;margin:4px 0 2px;letter-spacing:.5px}
+  .card .ln{font-size:12.5px;color:var(--mut);padding-left:6px}
+  .badge{margin-left:auto;font-size:12px;padding:2px 8px;border-radius:11px;border:1px solid;white-space:nowrap}
+  .ckrow{display:flex;align-items:center;gap:8px;margin-top:8px;padding:7px 8px 7px 6px;
+    border-top:1px dashed var(--line);font-size:13px}
+  .ckbtn{margin-left:auto;font-size:12px;padding:3px 10px;border-radius:6px;
+    border:1px solid var(--line);background:transparent;color:var(--fg);cursor:pointer;font-family:inherit}
+  .ckbtn.pri{border-color:var(--ac);color:var(--ac)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media (max-width:860px){.grid2{grid-template-columns:1fr}}
+  .kbd{font-size:11px;color:var(--mut)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Qoder 渠道:积分展示 + 每日打卡</h1>
+<p class="sub">产品设计 · 2026-10-20 · 证据来自本机 Qoder 桌面端 0.4.8(region=global)的实抓日志与真实接口调用</p>
+
+<div class="hand">
+<b>一句话:</b>把 Qoder 作为第 8 个内置渠道接进来。它是<b>积分型(Points)</b>渠道 ——
+展示剩余 Credits 与<b>每个资源包的到期日</b>,每日 10:00(UTC+8)自动领 100 Credits。
+国内版与国际版是<b>两套账号、两套域名、两个渠道条目</b>,不合并。
+</div>
+
+<h2>0. 先说结论(六条)</h2>
+<table>
+<tr><th>#</th><th>结论</th><th>证据等级</th></tr>
+<tr><td>1</td><td>Qoder 的积分叫 <b>Credits</b>,是<b>积分型</b>渠道,逐资源包有到期日 —— 与 Trae 同族,不是金额型</td><td><span class="tag t-fact">实测</span></td></tr>
+<tr><td>2</td><td>额度接口 <code>GET {openapi}/api/v2/quota/usage</code>,剩余在 <code>addOnQuota.remaining</code>(本账号)<b>或</b> <code>userQuota.remaining</code></td><td><span class="tag t-fact">实测</span></td></tr>
+<tr><td>3</td><td>打卡接口 <code>GET {openapi}/sash/api/v1/me/campaigns</code> → <code>POST …/{id}/claim</code>,<b>幂等</b>(重复领返回 <code>replayed:true</code>,不重复发币)</td><td><span class="tag t-fact">实测</span></td></tr>
+<tr><td>4</td><td>打卡<b>每天 10:00(UTC+8)跨日</b> —— 官方活动描述原文写着「每日 10:00(UTC+8)刷新」</td><td><span class="tag t-fact">实测</span></td></tr>
+<tr><td>5</td><td>凭据是 <b>Electron safeStorage</b>(<code>auth.v1.dat</code>,v10 + AES-256-GCM,DPAPI 保护的密钥),<b>不是</b> WorkBuddy 式静态钥信封</td><td><span class="tag t-fact">实测</span></td></tr>
+<tr><td>6</td><td>打卡<b>不需要设备指纹</b>(<code>Cosy-Machine*</code>)—— 只带 <code>Authorization</code> + <code>Cosy-ClientType</code> 即可</td><td><span class="tag t-fact">实测</span></td></tr>
+</table>
+
+<div class="note warn">
+<b>与 WorkBuddy 的关键差异:</b>WorkBuddy 走「挂件内网页登录抓 Cookie」,Qoder 走「读本机桌面端凭据」。
+Qoder 的凭据能<b>自动续期</b>(<code>refreshToken</code> 到 2027-10),所以不会像 WorkBuddy 那样每 7 天断一次。
+这是本次设计里最省心的一点。
+</div>
+
+<h2>1. 国内版 vs 国际版:两个渠道,不是一个渠道的两个域名</h2>
+
+<p>两版的账号体系、域名、凭据存储目录<b>全都不一样</b>,且官方明确不支持跨区迁移。
+所以做成 <b>两个独立渠道条目</b>(<code>qoder</code> / <code>qoder-cn</code>),各自独立开关、独立凭据、独立签到状态。</p>
+
+<table>
+<tr><th>项</th><th>国际版(global)</th><th>国内版(cn)</th><th>证据</th></tr>
+<tr><td>API 主机</td><td><code>openapi.qoder.sh</code></td><td><code>openapi.qoder.com.cn</code></td><td><span class="tag t-fact">实测</span> 两边未认证都回 401</td></tr>
+<tr><td>官网</td><td><code>qoder.com</code></td><td><code>qoder.com.cn</code> / <code>qoder.cn</code></td><td><span class="tag t-fact">实测</span></td></tr>
+<tr><td>数据目录</td><td><code>%APPDATA%\com.qoder.app.stable</code></td><td><code>%APPDATA%\com.qodercn.app.stable</code></td><td><span class="tag t-half">社区代码</span> 本机无 CN 安装</td></tr>
+<tr><td>凭据文件</td><td><code>auth.v1.dat</code>(safeStorage v10)</td><td>同名同格式</td><td><span class="tag t-half">社区代码</span></td></tr>
+<tr><td>活动页 env</td><td><code>env:'qoder-global'</code></td><td><code>env:'qoder-cn'</code></td><td><span class="tag t-fact">实测</span> 两页各抓一次</td></tr>
+<tr><td>跨日时刻</td><td>10:00 UTC+8</td><td>10:00 UTC+8</td><td><span class="tag t-fact">实测</span>(INTL)+ <span class="tag t-half">社区代码</span>(CN)</td></tr>
+<tr><td>设备指纹</td><td>社区称需要,<b>本次实测不需要</b></td><td>不需要</td><td><span class="tag t-fact">实测</span> 伪指纹照样 200</td></tr>
+</table>
+
+<div class="note bad">
+<b>两个判别陷阱(务必不要这么写代码):</b>
+<ul>
+<li>❌ <b>不能</b>用 <code>product.json</code> 的 <code>desktopUpdateDownloadBaseUrl</code> 或 <code>endpoint-cache.json</code> 判版本 ——
+本机明明是 <code>region=global</code>(日志每条请求都打 <code>"region":"global"</code>、走 <code>openapi.qoder.sh</code>),
+但这两个文件都写着 <code>*.qoder.com.cn</code>。用它判会判反。</li>
+<li>❌ <b>不能</b>用凭据里的 <code>email</code>/<code>user</code> 猜区域。<b>正确做法:用「哪个目录读到了凭据」+「哪个 API 主机应答了」双重判定</b>(见 §4)。</li>
+</ul>
+</div>
+
+<h3>1.1 为什么不做成「一个渠道 + 区域切换」</h3>
+<p>与 Trae 不同(Trae 只有国内站,<code>X-User-Region: CN</code> 是同一套接口的头部开关),Qoder 两版是
+<b>两套独立账号</b>:同一个用户在两边可能是两个不同的账号(本机 uid <code>01a068b6…</code> 是 global 的)。
+做成一个渠道就必须回答「余额算谁的」,而答案只能是「各算各的」。所以拆两条。</p>
+
+<h2>2. 积分展示(渠道卡)</h2>
+
+<h3>2.1 接口事实表</h3>
+<table>
+<tr><th>项</th><th>值</th></tr>
+<tr><td>URL</td><td><code>GET {openapi}/api/v2/quota/usage</code></td></tr>
+<tr><td>请求头</td><td><code>Authorization: Bearer &lt;token&gt;</code>、<code>Cosy-ClientType: 10</code>、<code>User-Agent: Qoder</code>、<code>Accept: application/json</code></td></tr>
+<tr><td>请求体</td><td>无(GET)</td></tr>
+<tr><td>是否要签名</td><td><b>不要</b>(<code>Cosy-*</code> 签名只用于 <code>/algo/*</code> 与推理链路)</td></tr>
+</table>
+
+<h4>真实响应(本机实测,2026-10-20)</h4>
+<pre>{
+  "userId": "01a068b6-c10f-7658-9045-5084b2acb9f2",
+  "userType": "personal_standard",
+  "usageType": "credits",
+  "totalUsagePercentage": 0.15,
+  "isQuotaExceeded": false,
+  "expiresAt": 253402214400000,
+  "upgradeUrl": "https://qoder.com/pricing?client=qoder",
+  "outerProviders": [],
+  "userQuota": { "total": 0.0,  "used": 0.0,  "remaining": 0.0,  "percentage": 0.0,  "unit": "credits" },
+  "addOnQuota":{ "total": 100.0,"used": 14.0, "remaining": 86.0, "percentage": 0.15, "unit": "credits",
+                 "detailUrl": "https://qoder.com/account/usage" },
+  "isPlanQuotaProrated": false
+}</pre>
+
+<div class="note bad">
+<b>最重要的一个坑:剩余积分有<b>两个</b>可能的字段,必须都读、按「哪个有量」取。</b>
+<ul>
+<li>本账号(<code>personal_standard</code>)<code>userQuota.total = 0</code>,量全在 <code>addOnQuota</code>(套餐赠送/加量包)。</li>
+<li>若只看 <code>userQuota.remaining</code>,本账号会显示 <b>0 积分</b> —— 而实际还有 86。</li>
+<li>反过来,订阅用户(<code>userQuota.total &gt; 0</code>)的量在 <code>userQuota</code>。</li>
+</ul>
+<b>取值口径:</b><code>remaining = addOnQuota.remaining + userQuota.remaining</code>(两者都缺失才判取数失败,
+不要用 0 顶替 —— 0 会被渲染成「已耗尽」)。<br>
+<b>对照:</b>同一次响应里 <code>totalUsagePercentage: 0.15</code> 与 <code>addOnQuota.percentage: 0.15</code> 一致(14/100 用掉 15%),
+可作为「读对了字段」的交叉校验。
+</div>
+
+<h3>2.2 逐笔到期:本期只能做到「部分」</h3>
+<div class="note warn">
+<b>诚实说明:</b>额度接口 <b>只给汇总</b>(userQuota / addOnQuota),<b>没有逐笔到期明细</b>。
+社区资料提到逐资源包到期在 <code>dedicated_resource_packages[].expires_at</code>,但<b>本机这次响应里没有这个字段</b>
+(账号是 standard 档,可能只有企业/更高档才有)。<br><br>
+所以设计分两期(见 §6):<b>M1 先做汇总</b>(剩余 + 已用 + 套餐档位),<b>M2 再补逐笔</b>。
+M1 不做假承诺 —— 卡片上不画「哪笔什么时候过期」,只画总额,并在详情里如实写「逐笔明细本期未接入」。
+</div>
+
+<h3>2.3 渠道卡形态(mock)</h3>
+<div class="grid2">
+<div>
+<h4>M1:汇总口径(本期)</h4>
+<div class="card">
+  <div class="bar" style="background:var(--qg)"></div>
+  <div class="r1"><span class="nm">Qoder</span>
+    <span class="badge" style="color:var(--ok);border-color:var(--ok)">正常</span></div>
+  <div class="big">86 <span style="font-size:14px;font-weight:400;color:var(--mut)">Credits</span></div>
+  <div class="ln">已用 14 / 本期 100 · personal_standard</div>
+  <div class="ckrow"><span>每日打卡</span>
+    <span class="badge" style="color:var(--ok);border-color:var(--ok)">今日已领 +100</span></div>
+</div>
+<p class="kbd">大数字 = 剩余 Credits(积分型不给总量上限,不画进度条 —— 与 Trae 同口径)</p>
+</div>
+<div>
+<h4>M2:逐笔到期(后续)</h4>
+<div class="card">
+  <div class="bar" style="background:var(--qg)"></div>
+  <div class="r1"><span class="nm">Qoder</span>
+    <span class="badge" style="color:var(--warn);border-color:var(--warn)">14 天后过期</span></div>
+  <div class="big">86 <span style="font-size:14px;font-weight:400;color:var(--mut)">Credits</span></div>
+  <div class="ln">最近到期:100 分 · 11-19(还剩 86)</div>
+  <div class="ln" style="color:var(--warn)">30 天内将有 86 分过期</div>
+</div>
+<p class="kbd">M2 需先拿到逐资源包明细(见 §6 待取证)</p>
+</div>
+</div>
+
+<h3>2.4 详情展开区(extra 键值对)</h3>
+<table>
+<tr><th>行</th><th>值</th><th>来源</th></tr>
+<tr><td>套餐</td><td><code>personal_standard</code>(如实透出 <code>userType</code>)</td><td>接口</td></tr>
+<tr><td>本期用量</td><td>已用 14.00 / 100.00 Credits(15%)</td><td><code>addOnQuota</code></td></tr>
+<tr><td>到期</td><td>本期额度到期 <code>expiresAt</code>(本机是 9999 年 = 不过期,要显示成「不过期」而不是一个天文数字)</td><td>接口</td></tr>
+<tr><td>区域</td><td>国际版 / 国内版(按命中的 API 主机如实写)</td><td>渠道定义</td></tr>
+<tr><td>明细</td><td>「逐笔到期明细本期未接入」<span class="kbd">(M1 如实说明,不装作有)</span></td><td>设计</td></tr>
+</table>
+
+<h2>3. 每日打卡</h2>
+
+<h3>3.1 接口事实表</h3>
+<table>
+<tr><th>步</th><th>方法与 URL</th><th>请求头</th><th>响应</th></tr>
+<tr><td>① 查</td><td><b><code>GET</code></b> <code>{openapi}/sash/api/v1/me/campaigns</code></td>
+    <td rowspan="2"><code>Authorization: Bearer</code><br><code>Cosy-ClientType: 10</code><br><code>User-Agent: Qoder</code><br><code>Accept: application/json</code></td>
+    <td><code>{uid, showCampaign, claimable, campaignUrl, streak_days, campaigns:[…]}</code></td></tr>
+<tr><td>② 领</td><td><code>POST {openapi}/sash/api/v1/me/campaigns/{campaignId}/claim</code><br><span class="kbd">无请求体</span></td>
+    <td><code>{grantId, status:"CLAIMED", replayed, benefit, expiresAt}</code></td></tr>
+</table>
+
+<div class="note bad">
+<b>两个实现细节是写代码时最容易错、且真机实测抓到的:</b>
+<ul>
+<li><b>查状态是 GET,不是 POST。</b>用 POST 打 <code>/sash/api/v1/me/campaigns</code> 直接 <b>404</b>
+(2026-10-20 真机踩到),GET 才是 200。所以"查/领"的 HTTP 方法必须逐渠道声明,
+不能沿用 Trae/WorkBuddy 的"全是 POST"。</li>
+<li><b><code>actionType</code> 的真机拼写是 <code>CLAIM_BENEFIT</code>(带 E)。</b>
+早先照混淆 bundle 写成了少一个 E 的 <code>CLAIM_BEFIT</code>,后果是 <code>has_campaign</code> 恒为 false ——
+"今天可领"会被静默判成"本期无打卡活动",<b>用户当天直接丢 100 分</b>。
+真机用例抓到后已改正,并留了别名表与回归用例
+(<code>qoder_action_type_is_claim_benefit_with_e</code>)。</li>
+</ul>
+</div>
+
+<h4>真实响应(本机实测,2026-10-20)</h4>
+<pre>// ① 查(GET)
+{
+  "uid": "01a068b6-…", "showCampaign": true, "claimable": false,
+  "campaignUrl": "https://openapi.qoder.sh/growth-page/activity-iframe",
+  "streak_days": 15,                    // ← 顶层,不在 campaigns 里
+  "campaigns": [{
+    "campaignId": "01a15721-d469-7a24-abd5-a81b73dc68f9",
+    "campaignKey": "act-20261020-910",
+    "actionType": "CLAIM_BENEFIT",       // ← 带 E,真机原样
+    "startAt": 1792461600,          // 2026-10-20 10:00:00 +08
+    "endAt":   1792547940,          // 2026-10-21 09:59:00 +08
+    "claimStatus": "CLAIMED",       // CLAIMABLE | CLAIMED
+    "benefit": { "kind": "CREDITS", "amount": 100,
+                 "modelScope": { "modelSeries": { "key": "ALL_MODELS" } },
+                 "validity": { "mode": "RELATIVE_DAYS", "days": 30 } },
+    "placements": [{
+      "type": "POPUP",
+      "content": { "zh": { "title": "每天领 100 Credits",
+                           "description": "每日 10:00（UTC+8）刷新，领取后 30 天有效",
+                           "detailUrl": "https://docs.qoder.com/zh/events/100credits" } }
+    }]
+  }, {
+    "campaignId": "01a05bce-…", "campaignKey": "act-20260901-493",
+    "actionType": "VIEW_DETAILS", "claimStatus": "CLAIMED"   // ← 纯展示,不参与领取
+  }]
+}
+
+// ② 领(重复领 → 幂等回执)
+{ "grantId": "01a15848-…", "status": "CLAIMED", "replayed": true,
+  "benefit": { "kind": "CREDITS", "amount": 100, "validity": { "mode": "RELATIVE_DAYS", "days": 30 } },
+  "campaignId": "01a15721-…", "campaignVersion": 1,
+  "claimedAt": "2026-10-20T07:48:49Z", "expiresAt": "2026-11-19T07:48:49Z" }</pre>
+
+<div class="note warn">
+<b>连续签到天数(<code>streak_days</code>)在顶层</b> —— 本机实测该账号 <code>streak_days: 15</code>、
+<code>today_credit: 100</code>。这是 Qoder 独有的可展示项(Trae/WorkBuddy 的接口不给),
+实现上由同一次查状态请求捎回(<code>call_with_body</code>),不额外多打一跳网络。
+拿不到就是 <code>None</code>,界面不显示,<b>不编</b>。
+</div>
+
+<div class="note ok">
+<b>跨日口径有官方原文背书。</b>活动描述逐字写着「每日 10:00（UTC+8）刷新，领取后 30 天有效」,
+并且 <code>startAt</code>/<code>endAt</code> 正好是 10:00:00 → 次日 09:59:00(23 小时 59 分窗口)。
+社区实现(CreditDaddy 等)的「Qoder 每天 10:00 跨日」说法<b>得到实测确认</b>。
+</div>
+
+<h3>3.2 判因口径(沿用 checkin.rs 的三条红线)</h3>
+<table>
+<tr><th>平台答复</th><th>判定</th><th>是否重试</th><th>是否通知</th></tr>
+<tr><td><code>claimable:true</code> + 有 <code>CLAIMABLE</code> 活动</td><td>可领 → 发 claim</td><td>—</td><td>否</td></tr>
+<tr><td>claim 后 <code>status:"CLAIMED"</code>、<code>replayed:false</code></td><td><b>Claimed(真领到)</b></td><td>否</td><td>否(领到播「叮」)</td></tr>
+<tr><td>claim 后 <code>replayed:true</code></td><td><b>Already(本次之前已领)</b></td><td>否</td><td>否</td></tr>
+<tr><td>列表里<b>没有</b> <code>CLAIM_BENEFIT</code> 活动(只有 VIEW_DETAILS)</td><td><b>Inactive(本期无打卡活动)</b><br><span class="kbd">与 Already 分开!否则误报「今天已签」</span></td><td>否</td><td>否</td></tr>
+<tr><td>有活动但 <code>claimStatus:"CLAIMED"</code> 且本次没领</td><td><b>Already</b></td><td>否</td><td>否</td></tr>
+<tr><td>HTTP 401 / <code>TOKEN_INVALID</code> / <code>TOKEN_EXPIRE</code></td><td><b>AuthNeeded</b> → 提示重新登录桌面端</td><td>否</td><td><b>是</b></td></tr>
+<tr><td>HTTP 429 / 503 / <code>campaignBusy</code></td><td><b>Retry(平台繁忙)</b></td><td><b>是</b>(退避)</td><td>否</td></tr>
+<tr><td>409 / <code>ALREADY_CLAIMED</code></td><td>Already(幂等,不报错)</td><td>否</td><td>否</td></tr>
+<tr><td>结构不认识(无 <code>campaigns</code> 字段)</td><td><b>BadShape</b> → 置灰开关,余额不受影响</td><td>否</td><td><b>是</b></td></tr>
+</table>
+
+<div class="note warn">
+<b>别把 100 写死。</b>金额一律从 <code>benefit.amount</code> 读。官方活动会换季
+(<code>campaignKey</code> 带日期,如 <code>act-20261020-910</code>),哪天变成 50 或 200 都不该改代码。
+</div>
+
+<h3>3.3 调度:10:00 跨日,不是 00:23</h3>
+<div class="note bad">
+<b>这是与现有两个渠道最大的不同,必须改 <code>checkin.rs</code> 的调度模型。</b>
+现有 <code>scheduled_minute()</code> 硬编码「00:23 + 0–20 分钟抖动」,对 Qoder 是错的 ——
+10:00 之前跨日还没发生,那时去查会拿到<b>昨天的</b>状态,把「昨天已领」误判成「今天已领」,当天就静默丢分。
+</div>
+
+<p>改法:把「当天刷新时刻」变成渠道定义里的一个字段。</p>
+<pre>// checkin.rs:由渠道定义决定跨日时刻,不再全局写死 00:23
+pub struct CheckinDef {
+    …
+    /// 签到日的刷新时刻(北京时间的小时)。00 = 自然日;Qoder 是 10。
+    pub day_roll_hour: u32,
+}
+
+// 抖动仍然保留:10:00 + 0–20 分钟,避免所有用户同一秒撞平台
+pub fn scheduled_minute(day: &str, id: &str, roll_hour: u32) -> u32 {
+    if roll_hour == 0 { return 23 + (hash % 21); }      // 老渠道:00:23–00:43
+    roll_hour * 60 + (hash % 21)                        // Qoder:10:00–10:20
+}</pre>
+
+<table>
+<tr><th>渠道</th><th>刷新时刻</th><th>调度窗口</th><th>依据</th></tr>
+<tr><td>Trae</td><td>00:00</td><td>00:23 – 00:43</td><td><span class="tag t-fact">实测</span> 沿用现状</td></tr>
+<tr><td>WorkBuddy</td><td>00:00</td><td>00:23 – 00:43</td><td><span class="tag t-fact">实测</span> 沿用现状</td></tr>
+<tr><td><b>Qoder / Qoder CN</b></td><td><b>10:00</b></td><td><b>10:00 – 10:20</b></td><td><span class="tag t-fact">实测</span> 官方活动描述 + startAt/endAt</td></tr>
+</table>
+
+<p><b>签到日的定义也要跟着变</b>:Qoder 的「今天」是「从 10:00 起算的那个活动周期」。
+<code>beijing_day()</code> 仍返回自然日,但判幂等时要用<b>活动周期</b>(<code>startAt</code> 那一天的日期)作 key,
+否则 09:59 和 10:01 会落进同一个自然日,当天第二次就不会再试。</p>
+
+<h2>4. 凭据:读本机桌面端 safeStorage</h2>
+
+<h3>4.1 存储事实</h3>
+<table>
+<tr><th>项</th><th>值</th><th>证据</th></tr>
+<tr><td>文件</td><td><code>%APPDATA%\com.qoder.app.stable\auth.v1.dat</code>(CN:<code>com.qodercn.app.stable</code>)</td><td><span class="tag t-fact">实测</span></td></tr>
+<tr><td>格式</td><td>ASCII <code>v10</code> + nonce(12) + AES-256-GCM 密文 + tag(16)</td><td><span class="tag t-fact">实测</span> 426 字节</td></tr>
+<tr><td>密钥</td><td>DPAPI 解 <code>Local State</code> 的 <code>os_crypt.encrypted_key</code>(去掉 <code>DPAPI</code> 前缀)</td><td><span class="tag t-fact">实测</span></td></tr>
+<tr><td>明文结构</td><td><code>{schemaVersion, token, refreshToken, expiresAt, refreshTokenExpiresAt, user{id,name,email,phone,avatarUrl}}</code></td><td><span class="tag t-fact">实测</span> 389 字节</td></tr>
+<tr><td>有效期</td><td>本机 token 到 <b>2026-11-10</b>、refreshToken 到 <b>2027-10-06</b></td><td><span class="tag t-fact">实测</span></td></tr>
+<tr><td>换机可解?</td><td><b>否</b> —— DPAPI 绑定当前 Windows 账户</td><td><span class="tag t-fact">实测</span></td></tr>
+</table>
+
+<div class="note ok">
+<b>好消息:这套东西 core 里已经有一半了。</b>
+<code>aes-gcm</code> 依赖已在 <code>Cargo.toml</code>(解 WorkBuddy 信封用),
+<code>workbuddy.rs</code> 里已有「读 DPAPI 保护的东西」的同类逻辑与 AAD 转录经验。
+新增工作主要是:<b>读 <code>Local State</code> 的 DPAPI 密钥</b> + <b>v10 解密</b>。
+</div>
+
+<h3>4.2 为什么这条比 WorkBuddy 稳</h3>
+<table>
+<tr><th></th><th>WorkBuddy(现状)</th><th>Qoder(本设计)</th></tr>
+<tr><td>凭据来源</td><td>挂件内网页登录 → webview Cookie 罐</td><td>直接读桌面端 <code>auth.v1.dat</code></td></tr>
+<tr><td>寿命</td><td><b>7 天绝对 TTL,到点必死</b></td><td>accessToken 约 3 周 + refreshToken 约 1 年</td></tr>
+<tr><td>能否续期</td><td>不能(TTL 是绝对的)</td><td><b>能</b>(<code>refreshToken</code>)</td></tr>
+<tr><td>用户要做的事</td><td>每 7 天点一次「重新登录」</td><td>正常用桌面端就不用管</td></tr>
+<tr><td>可自动化</td><td>否(登录要扫码)</td><td><b>是</b>(refresh 可机器代做)</td></tr>
+</table>
+
+<div class="note warn">
+<b>但有一条硬依赖:</b>用户<b>必须装并登录过 Qoder 桌面端</b>。
+没装桌面端 = 没有凭据 = 渠道显示「未检测到 Qoder 登录」。
+这与 WorkBuddy 的桌面端凭据那条路同口径(读不到不是错误,只是没有这条来源)。
+<b>不做</b>「挂件内网页登录 Qoder」—— Qoder 网页版与桌面端是两套前端,再走一次 Cookie 抓取等于把
+WorkBuddy 的 7 天坑重踩一遍,没有理由。
+</div>
+
+<h3>4.3 refresh 续期(可选,M3)</h3>
+<p>凭据里带 <code>refreshToken</code>,理论上可以在 accessToken 过期前自动续期,像 WorkBuddy 现在做的那样。
+<b>但本期先不做</b>:accessToken 还有 3 周,先把 M1/M2 跑通;续期的接口路径<b>本次未取证</b>
+(只知道 <code>refreshToken</code> 字段存在,不知道换 token 的端点),不做猜测性实现。</p>
+<p>到期的处理:M1 只做「如实报过期 + 提示打开一次桌面端」,与 WorkBuddy 的 <code>DesktopErr::Expired</code> 文案同风格。</p>
+
+<h2>5. 界面设计</h2>
+
+<h3>5.1 渠道卡</h3>
+<p>与现有积分型渠道(Trae / WorkBuddy)完全一致 —— 前端按 <code>kind: "points"</code> 自动渲染,<b>前端零改动</b>。
+唯一新增是打卡行(与 Trae / WorkBuddy 那行同一个组件)。</p>
+
+<h3>5.2 打卡行状态(九种,映射 <code>Outcome</code>)</h3>
+<table>
+<tr><th>状态</th><th>文案</th><th>按钮</th></tr>
+<tr><td>未开启</td><td>签到未开启</td><td>开启签到</td></tr>
+<tr><td>可领</td><td>今日 100 Credits 可领</td><td class="nowrap"><b>领积分</b>(主色)</td></tr>
+<tr><td>已领</td><td>今日已领 +100 · 连续 15 天</td><td>—</td></tr>
+<tr><td>无活动</td><td>本期无打卡活动(活动换季)</td><td>—</td></tr>
+<tr><td>平台繁忙</td><td>平台繁忙,约 N 分钟后再试</td><td>重试</td></tr>
+<tr><td>凭据失效</td><td>Qoder 登录已失效 · 打开一次桌面端</td><td>重试</td></tr>
+<tr><td>接口变化</td><td>接口结构变了(已停止自动打卡,余额不受影响)</td><td>—</td></tr>
+<tr><td>未装桌面端</td><td>未检测到 Qoder 登录 · 打开一次 Qoder 即可</td><td>—</td></tr>
+<tr><td>失败</td><td>打卡失败(code=…)</td><td>重试</td></tr>
+</table>
+
+<p><b>连续天数</b>是 Qoder 特有的好信息(<code>streak_days</code> / <code>checkin_dates</code> 都在接口里),
+比现有两个渠道多一个可展示项 —— 建议在已领状态里带上「连续 N 天」。</p>
+
+<h3>5.3 设置页</h3>
+<p>沿用现有「刷新与启动」页里的签到区,<b>不新开页签</b>(与 2026-10-13 裁决 8A 一致)。
+两个 Qoder 渠道各一行,带各自的开关与「自动签」勾选。</p>
+
+<h2>6. 分期实施</h2>
+<table>
+<tr><th>期</th><th>内容</th><th>能否独立发版</th><th>状态</th></tr>
+<tr><td><b>M1</b></td><td>渠道定义 + 额度接口 + 卡片展示(汇总口径)+ 凭据读取(safeStorage 解密)</td><td>✅</td><td>接口已实测,可直接做</td></tr>
+<tr><td><b>M2</b></td><td>每日打卡(10:00 跨日调度 + claim + 幂等 + 九态)</td><td>✅</td><td>接口已实测,可直接做</td></tr>
+<tr><td><b>M3</b></td><td>逐笔到期明细 + refresh 自动续期</td><td>✅</td><td><b>待取证</b>(见下)</td></tr>
+</table>
+
+<h3>6.1 M3 的两处待取证(不猜,先验证再写)</h3>
+<table>
+<tr><th>#</th><th>要查什么</th><th>怎么查</th></tr>
+<tr><td>1</td><td>逐资源包到期明细的真实字段路径。<br>社区称在 <code>dedicated_resource_packages[].expires_at</code>,本机响应里<b>没有</b> —— 是档位不够还是字段名不同?</td><td>用一个订阅档账号调一次 <code>/api/v2/quota/usage</code>,把响应原样存下来对照</td></tr>
+<tr><td>2</td><td>refreshToken 换 accessToken 的端点与请求格式</td><td><b>已取证:见 §6.3 —— 结论是"本机客户端根本不刷新 token",这条路暂时做不了</b></td></tr>
+</table>
+
+<h3>6.3 refresh 端点的取证结论(2026-10-20):<span style="color:var(--bad)">未找到,且大概率不存在于客户端</span></h3>
+
+<div class="note bad">
+<b>结论:Qoder 桌面端<u>没有</u>自己刷新 token 的行为,所以没有"refresh 端点"可以取证。</b>
+我们原先的假设(「accessToken 3 周、refreshToken 1 年,可以自动续」)是<b>读字段名想当然</b> —— 字段存在不等于客户端在用它。
+</div>
+
+<p><b>怎么取证的(四路交叉,全部可复核):</b></p>
+<table>
+<tr><th>#</th><th>查法</th><th>结果</th><th>说明</th></tr>
+<tr><td>1</td><td>桌面端日志里搜 <code>refresh</code> / <code>oauth</code> / <code>token</code> / <code>renew</code> / <code>signin</code>(全部日志文件、递归)</td><td>命中 81 行,<b>但没有一行是 token 刷新</b> —— 全是 <code>forceRefresh:false</code>(campaign 的缓存参数)与插件清单刷新</td><td>若客户端真会刷新,日志里该有请求发出/返回记录(campaign 每次请求都记)</td></tr>
+<tr><td>2</td><td>日志里<b>全部</b>请求路径(不止 campaign)</td><td>只有 <code>/sash/api/v1/me/campaigns</code> 与 5 条 collaboration 路径。<b>没有任何 token / oauth / refresh 路径</b></td><td>这个客户端把每次外发请求都记了 path;没有 = 没发生</td></tr>
+<tr><td>3</td><td>bundle(<code>app.asar</code>,157 MB)全量可打印字符串里搜端点形状</td><td><code>grant_type</code>(109)、<code>token_endpoint</code>(109)、<code>offline_access</code>(12)、<code>exchangeRefreshToken</code> 等<b>全部来自打包进来的 MCP OAuth 客户端库</b>(<code>handlers/token.js</code>、<code>server/auth/router.js</code> 这些路径是那个库自带的),不是 Qoder 自己的认证链路</td><td>差点被误导:这些字符串看着"像"答案,其实是第三方 SDK</td></tr>
+<tr><td>4</td><td>凭据文件里的 <code>expiresAt</code> 与 <code>refreshTokenExpiresAt</code></td><td><code>2026-11-10</code> / <code>2027-10-06</code> —— <b>两值不同</b>,说明字段有独立语义,但客户端<b>没有在 access 到期前换新</b>的迹象</td><td>字段存在 ≠ 有人在用</td></tr>
+<tr><td>5</td><td><b>文件 mtime 这条最硬</b>:<code>auth.v1.dat</code> 的最后写入是 <b>2026-10-19 11:41</b>,而桌面端此后<b>连续运行了约 33 小时</b>(campaign 每小时轮询一次、全部 200)</td><td><b>33 小时里每小时都在用同一份 token,文件从未被重写</b> → 客户端<b>没有周期性刷新</b>行为</td><td>刷新的可观测副作用就是"这个文件被重写",它没发生</td></tr>
+</table>
+
+<div class="note warn">
+<b>还要说清"没证到"的部分:</b>上面第 5 条只证明<b>非临近过期时不刷新</b>,
+<b>不能</b>证明"临近过期时也不刷新"。要回答那个,只能等 <code>expiresAt</code> 真的临近
+(本机 2026-11-10),或人为把时钟拨过去 —— 后者会影响别的软件,不建议。
+</div>
+
+<div class="note warn">
+<b>对我们的实现意味着什么:</b>
+<ul>
+<li><b>不做 refresh 自动续期</b> —— 没有端点可实现,硬做只能靠猜,而猜错会把用户登出(轮换 refreshToken 的经典坑)。</li>
+<li><b>过期处理保持现状</b>:<code>auth.v1.dat</code> 里的 <code>expiresAt</code> 到点后如实报
+「凭据已过期 · 打开一次 Qoder 桌面端」,由客户端自己在它认为合适的时候更新那份文件 ——
+我们<b>只读不写</b>,不替它做决定。</li>
+<li><b>但要去真机确认"到期时客户端到底会不会自己更新"</b>:本机 access 到 2026-11-10,
+届时开一次桌面端看 <code>auth.v1.dat</code> 的 <code>expiresAt</code> 有没有被推后。
+这是唯一能验证「用户只要开着桌面端就不会断」的办法,也是我们文案的依据。</li>
+</ul>
+</div>
+
+<h4>如果以后真要抓 refresh 请求,方法是这样(留给后续)</h4>
+<ol>
+<li><b>先定"什么时候会刷"</b>:本机 <code>expiresAt</code> 是 2026-11-10,refresh 若存在只可能在临近那时发生。
+到那天开一次桌面端,<b>先看 <code>auth.v1.dat</code> 的 mtime 与 <code>expiresAt</code> 有没有变</b> ——
+变了说明会自己续(那我们的"打开一次即可"文案是对的),没变说明不会(文案要改成"重新登录")。</li>
+<li><b>要抓包而不是读日志</b>:日志只记它<b>自己</b>发起的请求;若刷新由别的进程(内嵌 webview / qodercli)发起,
+主进程日志里看不到。用 Fiddler / mitmproxy 挂系统代理,过滤 <code>openapi.qoder.*</code> 与 <code>qoder.com</code>,
+看有没有 <code>POST</code> 到非 campaign 的路径。<b>注意这会把凭据暴露给代理进程</b>,用完立刻卸证书。</li>
+<li><b>优先用"副作用观测",别解 token</b>:刷新的可观测副作用就是 <code>auth.v1.dat</code> 被重写
+(token 变、<code>expiresAt</code> 推后)。比较前后 sha256 + <code>expiresAt</code> 就够了 ——
+<b>这条最省事,也最不碰敏感数据</b>。§6.3 表里第 5 条用的就是这个方法。</li>
+<li><b>不要</b>为了验证"新旧 token"把它们解出来打接口:凭据会被带进更多地方,而收益只是"确认换了"。</li>
+<li><b>不要</b>把系统时钟整体往后拨来造场景:会影响别的软件,也可能触发服务端时钟校验而被判异常。</li>
+</ol>
+
+<div class="note">
+<b>一句话总结这次取证:</b>「refresh 端点」这个问题本身可能是<b>错的问题</b> ——
+应该问的是「Qoder 桌面端会不会自己续期」,而答案用<b>文件 mtime</b> 就能观测,
+不需要端点、不需要解 token。这也是我们最终选择"只读不写、到期如实报"的依据。
+</div>
+
+<h3>6.2 国内版(M1 一并做,但标注为「待真机验证」)</h3>
+<div class="note warn">
+本机<b>没有装国内版 Qoder</b>,所以 CN 侧只有:① 两个 API 主机未认证都回 401(说明路由存在);
+② 活动页 <code>env:'qoder-cn'</code> 实测;③ 社区代码给的数据目录 <code>com.qodercn.app.stable</code>。
+<b>CN 渠道按同样的接口实现,但必须在真机上跑一次 M0 只读取证</b>(就像 Trae/WorkBuddy 当初那样),
+把真实响应回填文档后再放开默认开启。
+</div>
+
+<h2>7. 改动面(给研发看的)</h2>
+<table>
+<tr><th>文件</th><th>改动</th></tr>
+<tr><td><code>core/src/providers.rs</code></td><td>+2 条 <code>ProviderDef</code>(<code>qoder</code> / <code>qoder-cn</code>)+ <code>extract_qoder()</code> + 单测<br>新增 <code>AuthKind::QoderDesktop</code>(或复用 App 枚举加两个 App 项)</td></tr>
+<tr><td><code>core/src/qoder.rs</code> <span class="kbd">(新)</span></td><td>读 <code>auth.v1.dat</code>:定位目录 → DPAPI 解 Local State 密钥 → v10 解密 → 解析 token。<b>照 <code>workbuddy.rs</code> 的组织方式写,纯逻辑可单测</b></td></tr>
+<tr><td><code>core/src/checkin.rs</code></td><td>+2 条 <code>CheckinDef</code>;新增 <code>day_roll_hour</code> 字段;改 <code>scheduled_minute()</code>/<code>due_now()</code> 支持非 0 点跨日;+<code>parse_qoder()</code>;+单测</td></tr>
+<tr><td><code>core/src/fetch.rs</code></td><td>凭据来源加 Qoder 分支(桌面端凭据,参照 WorkBuddy 的 <code>DESKTOP_TOKEN_PREFIX</code> 模式);<code>expired_credential_msg</code> 加文案</td></tr>
+<tr><td><code>src-tauri/src/lib.rs</code></td><td><code>checkin_credential()</code> 加 <code>QoderDesktop</code> 分支(读 <code>qoder.rs</code>)</td></tr>
+<tr><td><code>app/src/app.js</code></td><td><b>不用改</b>(按 <code>kind</code> 自动渲染;打卡行组件已存在)</td></tr>
+</table>
+
+<div class="note">
+<b>依赖:无新增 crate。</b><code>aes-gcm</code>、<code>sha2</code>、<code>base64</code> 都已在。
+DPAPI 解密钥需要 Windows API —— 检查 <code>keyring</code>(windows-native)是否已传递暴露,否则加一个
+<code>windows</code> crate 的 <code>CryptUnprotectData</code> 调用(只 Windows 目标编译,与 <code>winreg</code> 同样处理)。
+</div>
+
+<h2>8. 风险与红线</h2>
+<table>
+<tr><th>风险</th><th>应对</th></tr>
+<tr><td>活动换季(官方文案说变就变)</td><td>金额只从 <code>benefit.amount</code> 读;<code>campaignKey</code> 只当日志;<b>没有 CLAIM_BENEFIT 活动 = Inactive,不是失败</b></td></tr>
+<tr><td>接口未公开(社区逆向所得)</td><td><code>unstable: true</code>,失败静默降级,不报警(与 OpenCode Go 同口径)</td></tr>
+<tr><td>误判「今天已领」导致丢分</td><td>10:00 跨日口径 + 活动周期作幂等 key(§3.3);claim 后回查一次(沿用现有红线②)</td></tr>
+<tr><td>凭据文件换版本改格式</td><td>认不出结构就报 <code>BadShape</code> 并停止自动打卡,<b>不猜</b>;<b>只读不写</b> —— 不碰 Qoder 自己的文件</td></tr>
+<tr><td>国际版按<b>设备</b>限领(社区说法)</td><td>不写死假设;以接口的 <code>claimable</code> 为准。若真按设备,多账号同机会互相抢占,如实显示即可</td></tr>
+<tr><td>隐私:凭据读出来会经过内存</td><td>沿用现有红线:token <b>只进内存过一趟</b>,不落盘、不进日志、不进导出;日志里只留 <code>secret_brief()</code> 摘要</td></tr>
+<tr><td>合规:替用户领积分是写操作</td><td><b>默认开</b>(2026-10-20 用户裁决,见 §9);关掉后一个请求都不发</td></tr>
+</table>
+
+<h2>9. 裁决结果(2026-10-20 用户已拍板)</h2>
+<table>
+<tr><th>#</th><th>问题</th><th>裁决</th></tr>
+<tr><td>1</td><td>CN / INTL 做成两个渠道,还是一个渠道两个条目?</td><td><b>两个渠道</b> <code>qoder</code> / <code>qoder-cn</code>(账号不互通,余额无法合并)</td></tr>
+<tr><td>2</td><td>签到默认开关?</td><td><b>默认开</b> —— Qoder 两个渠道 + <b>Trae / WorkBuddy 一并改成默认开</b>(共四个渠道)</td></tr>
+<tr><td>3</td><td>10:00 跨日是否改 <code>checkin.rs</code> 的调度模型?</td><td><b>是</b>,已加 <code>day_roll_hour</code> 字段 + <code>cycle_day()</code> 周期日口径</td></tr>
+<tr><td>4</td><td>M1 要不要等逐笔明细一起做?</td><td><b>不等</b> —— 汇总口径已够用,逐笔待取证</td></tr>
+<tr><td>5</td><td>refresh 自动续期?</td><td><b>M3</b>(端点未取证,不猜)</td></tr>
+<tr><td>6</td><td>是否复用 Qoder 自带 <code>runtime-info.exe</code> 生成设备指纹?</td><td><b>不需要</b> —— 实测打卡不带指纹也能 200。少一个依赖</td></tr>
+</table>
+
+<h3>9.1 「默认开」的两个必须说清的点</h3>
+<div class="note bad">
+<b>① 升级会不会把用户关掉的开关又打开?</b><br>
+<b>不会。</b><code>Config::sanitize()</code> 只<b>补缺的渠道</b>(<code>entry().or_insert_with()</code>),
+已有条目整条保留 —— 用户显式关掉的渠道保持关着。
+但有一条要如实告知:<b>老配置里从来没有 <code>checkin</code> 这个键</b>时,
+容器上的 <code>serde(default)</code> 会整份取新默认(全开)。也就是说
+<b>"从没碰过签到设置"的用户,升级后会开始自动签到</b>。这是"默认开"裁决的直接后果,
+已在 <code>config.rs</code> 的单测里钉住(<code>existing_checkin_map_keeps_user_choices_and_backfills_new_channels</code>)。
+<br><br>
+<b>② 默认开会立刻发请求吗?</b><br>
+会,但受两道闸门约束:渠道被<b>隐藏</b>时不发(<code>hidden_channels</code> 同口径);
+跨日时刻未到时不发。所以"装上就自动签到"的代价是明确的,且用户随时可在设置里关掉。
+</div>
+
+<h2>10. 附:本次取证的复现命令</h2>
+<p class="sub">全部为只读调用,凭据只在内存里过一趟;不含任何密钥。</p>
+<pre># ① 额度(把 &lt;TOKEN&gt; 换成真实 accessToken)
+curl -s https://openapi.qoder.sh/api/v2/quota/usage \
+  -H "Authorization: Bearer &lt;TOKEN&gt;" -H "Cosy-ClientType: 10" -H "User-Agent: Qoder"
+
+# ② 打卡状态(**GET**,POST 会 404)
+curl -s https://openapi.qoder.sh/sash/api/v1/me/campaigns \
+  -H "Authorization: Bearer &lt;TOKEN&gt;" -H "Cosy-ClientType: 10" -H "User-Agent: Qoder"
+
+# ③ 领取(幂等:已领过会回 replayed:true)
+curl -s -X POST https://openapi.qoder.sh/sash/api/v1/me/campaigns/&lt;CAMPAIGN_ID&gt;/claim \
+  -H "Authorization: Bearer &lt;TOKEN&gt;" -H "Cosy-ClientType: 10" -H "User-Agent: Qoder"
+
+# ④ 国内版:把主机换成 openapi.qoder.com.cn,其余相同</pre>
+
+<h2>11. 证据等级说明</h2>
+<table>
+<tr><th>标记</th><th>含义</th></tr>
+<tr><td><span class="tag t-fact">实测</span></td><td>本机真机跑出来的:真实 HTTP 响应、真实文件字节、真实日志行。可直接据此写代码</td></tr>
+<tr><td><span class="tag t-half">社区代码</span></td><td>来自开源实现或官方 bundle 的静态阅读,未经本机验证。要真机复核后再依赖</td></tr>
+<tr><td><span class="tag t-risk">推测</span></td><td>没有证据,只是合理猜想。<b>不要据此写代码</b></td></tr>
+<tr><td><span class="tag t-tbd">待取证</span></td><td>明确知道缺什么、也知道怎么补(见 §6.1)</td></tr>
+</table>
+
+<div class="note">
+<b>本次明确「没查到」的东西(不编造):</b>
+<ul>
+<li>积分 ↔ 人民币/美元换算关系 —— <b>无任何公开证据</b>。所以本设计<b>不做金额折算</b>,只显示 Credits。</li>
+<li>5 小时 / 周配额窗口 —— Qoder 只有日级与月级模型限流,<b>没有</b> Codex 那样的三窗结构。</li>
+<li>国内版客户端的真实响应 —— 本机无 CN 安装,CN 侧全是社区代码。</li>
+<li>refreshToken 的续期端点 —— 只知道字段存在。</li>
+<li>逐资源包明细字段 —— 本机响应里没有。</li>
+</ul>
+</div>
+
+<p class="sub" style="margin-top:34px">
+文档:2026-10-20 · 依据本机 Qoder 0.4.8(region=global)实抓 ·
+接口为社区逆向所得,非官方公开文档,已按 <code>unstable</code> 口径设计降级路径。
+</p>
+
+</div>
+</body>
+</html>

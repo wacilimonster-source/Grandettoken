@@ -20,6 +20,12 @@
 | Trae | `POST https://api.trae.cn/.../user_current_entitlement_list` | 积分型 | 读本机登录态;两端点互为备份 |
 | WorkBuddy | `POST https://www.codebuddy.cn/v2/billing/meter/get-user-resource` | 积分型 | 读桌面端凭据,accessToken 到期自动 refresh |
 | Codex | `GET https://chatgpt.com/backend-api/wham/usage` | 配额型 | 读本机 Codex 登录态;5 小时/周/月三个窗口 |
+| Qoder | `GET https://openapi.qoder.sh/api/v2/quota/usage` | 积分型 | 国际版;读桌面端 `auth.v1.dat`(Electron safeStorage) |
+| Qoder 国内版 | `GET https://openapi.qoder.com.cn/api/v2/quota/usage` | 积分型 | 国内版;**与上一行是两套账号**,不互通 |
+
+> Qoder 两版是**两个独立渠道**,不是"一个渠道两个域名":账号体系不互通
+> (官方明确不支持跨区迁移),余额无法合并。判定**不要**看 `product.json` 的下载域名 ——
+> 本机明明是 global,那个字段却写着 `*.qoder.com.cn`;要看"哪个数据目录读到了凭据"。
 
 ### 三类渠道的区别
 
@@ -30,8 +36,10 @@
 - 行内三格换成限流窗口(OpenCode Go 是 5 小时/本周/本月,Codex 是 5 小时/周)的剩余配额
 - **不参与底部消耗合计** —— 百分比与金额不能相加
 
-**积分型**(Trae / WorkBuddy)有剩余量,但每一笔各有到期日,量最大的风险是"过期"而非"花完",
+**积分型**(Trae / WorkBuddy / Qoder)有剩余量,但每一笔各有到期日,量最大的风险是"过期"而非"花完",
 所以核心信息是逐笔到期列表(升序),"还剩多少"只是总数。
+**Qoder 本期只有汇总口径**(接口不给逐资源包明细),所以不画"哪笔什么时候过期",
+详情里如实写「逐笔到期明细本期未接入」。
 
 ### 充值型渠道的消耗是推算值
 
@@ -84,17 +92,18 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 app/
   core/                   纯逻辑层,不依赖 Tauri(可独立跑测试)
     src/
-      lib.rs              模块清单(17 个)
-      providers.rs        7 个内置渠道定义 + 响应解析(万元组测试)
+      lib.rs              模块清单(18 个)
+      providers.rs        9 个内置渠道定义 + 响应解析(万元组测试)
       store.rs            SQLite 快照、消耗推算、365 天归档、变动台账
       secrets.rs          Windows 凭据管理器封装(渠道密钥 + 密钥箱两个服务名)
       vault.rs            密钥箱的校验/去重/搜索/排序
-      config.rs           设置项(含申请制额度、胶囊渠道、自定义排序)
+      config.rs           设置项(含申请制额度、胶囊渠道、自定义排序、签到默认开)
       fetch.rs            取数、失败降级、峰谷、计划成本、视图组装
-      appauth.rs          本机已登录应用的凭据(Trae tc 容器解密 / Codex OAuth)
+      appauth.rs          本机已登录应用的凭据(Trae tc 容器解密 / Codex OAuth / Qoder)
+      qoder.rs            Qoder 桌面端凭据(DPAPI 解密钥 + AES-256-GCM safeStorage)
       workbuddy.rs        WorkBuddy 桌面端凭据信封(AES-256-GCM)+ refresh 续期
       weblogin.rs         WorkBuddy 网页会话(兜底路径)
-      checkin.rs          每日签到的纯逻辑(北京日、退避、幂等、状态机)
+      checkin.rs          每日签到的纯逻辑(周期日、退避、幂等、状态机)
       inject.rs           5 个客户端的写入契约(备份/校验/回滚/幂等)
       models.rs           模型页多来源(价目表、可用集合、单价换算、缓存)
       yamledge.rs         极小 YAML 子集解析与行范围编辑(DSH 的 cordis.patch.yml)
@@ -216,18 +225,41 @@ ZCode 是两份 JSON(`schemaVersion` 不是 1 就放弃),Trae 是 SQLite 的 `It
 **规矩**:认不出来的结构就放弃(不写、不改、不猜);密钥只从凭据管理器现读现写,
 不落盘、不进日志、不进备份。
 
-## 每日签到(Trae / WorkBuddy)
+## 每日签到(Trae / WorkBuddy / Qoder)
 
-两个平台的每日积分可以替你去领。**默认关**,首次在渠道卡上点一次「开启签到」才开始发请求。
+四个渠道的每日积分可以替你去领。**默认开**(2026-10-20 裁决):装上就开始自动领,
+在设置里可以逐渠道关掉 —— 关掉后一个请求都不发。
 
-- **纯逻辑**在 `core/src/checkin.rs`:北京自然日为签到日、抖动的触发时刻、退避序列、幂等(先查后领、领后回查)、
-  以及把平台的响应解读成状态机的 `parse_trae` / `parse_workbuddy`。
-- **判因只看 `code` / HTTP / 域名,永远不看 message**:9074 的文案是"当前参与用户太多"(真实成因常是设备/IP),
+- **纯逻辑**在 `core/src/checkin.rs`:签到周期日、抖动的触发时刻、退避序列、幂等(先查后领、领后回查)、
+  以及把平台的响应解读成状态机的 `parse_trae` / `parse_workbuddy` / `parse_qoder`。
+- **跨日时刻逐渠道配**(`CheckinDef::day_roll_hour`):Trae / WorkBuddy 是自然日 00:00(抖动落在 00:23–00:43),
+  **Qoder 是 10:00**(抖动 10:00–10:20)—— 官方活动描述原文「每日 10:00（UTC+8）刷新」,实测
+  `startAt`/`endAt` 正好是 10:00:00 → 次日 09:59:00。幂等键用 `cycle_day()` 算的**周期日**,
+  不是自然日:否则 09:59 与 10:01 会混成一天,当天那一期永远领不到。
+- **HTTP 方法逐渠道声明**(`CheckinDef::status_method` / `claim_method`):Trae / WorkBuddy 全是 POST;
+  **Qoder 查状态是 GET**(POST 会 404)。
+- **判因只看 `code` / HTTP / 字段结构,不看 message 文案**:9074 的文案是"当前参与用户太多"(真实成因常是设备/IP),
   10001 在国区是"今天已签"、国际版是"活动未开启" —— 唯一按文案分支的地方就是这里,且只在认得出明确字样时才认。
+- **Qoder 的 `actionType` 真机拼写是 `CLAIM_BENEFIT`(带 E)**:写成少一个 E 的 `CLAIM_BEFIT`
+  会让"今天可领"被静默判成"本期无打卡活动",用户当天丢 100 分(真机用例抓到过,已留回归用例)。
 - **请求强制直连**(`direct_client`,`no_proxy`):平台按出口 IP 限流,代理 IP 更容易被拒。
-- **凭据**:Trae 用本机登录态(令牌 + `iCubeAuthInfo://icube-dc:` 键名里的设备号);WorkBuddy 用挂件内网页登录的会话。
+- **凭据**:
+  - Trae:本机登录态(令牌 + `iCubeAuthInfo://icube-dc:` 键名里的设备号);
+  - WorkBuddy:**桌面端凭据优先,网页会话兜底**(与取数同口径 —— 见下方"凭据来源必须与取数一致");
+  - Qoder:本机桌面端 `auth.v1.dat`(Electron safeStorage:DPAPI 解密钥 + AES-256-GCM,见 `core/src/qoder.rs`)。
   都不落盘、不进日志。
-- **流水**在 SQLite 的 `checkin_log`:渠道 / 北京日 / 结果码 / 数额 / 次数 / 说明。
+- **流水**在 SQLite 的 `checkin_log`:渠道 / 周期日 / 结果码 / 数额 / 次数 / 说明。
+  **拿不到凭据也会留一条**(结果码 `no_cred:…`)—— 否则"今天一次都没试"在流水里是空白,
+  与"还没到点"无法区分(2026-10-20 排查 WorkBuddy 时踩到)。
+
+### 凭据来源必须与取数一致
+
+WorkBuddy 的取数与签到**必须用同一套凭据候选顺序**(桌面端凭据优先、网页会话兜底)。
+2026-10-20 之前签到只读网页 Cookie,而取数已改成桌面端优先 —— 结果是
+**余额天天出数、打卡连续三天报 `auth`**(网页会话失效了,而桌面端凭据明明可用)。
+签到侧的修复在 `src-tauri` 的 `checkin_credential()`,两边共用同一份
+`workbuddy::desktop_tokens()`。**注意别把 `desktop:` 前缀带进请求头**(那是取数层的标记,
+带进去会变成 `Bearer desktop:xxx`,必然 401)。
 
 ## 排查日志
 
