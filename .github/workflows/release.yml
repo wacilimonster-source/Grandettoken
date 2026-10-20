@@ -63,10 +63,34 @@ jobs:
       # cargo-tauri 不在 runner 镜像里(RELEASE.md「一次性准备」里那条 cargo install
       # 是给本机的)。缺了它 bundle 会报 `error: no such command: tauri` ——
       # runner 上第七个坑:前六个修完之后,真正卡住的居然是这儿。
-      # 版本钉一下:CLI 的小版本升级偶尔会改 bundle 参数,钉住便于复现。
+      #
+      # 它要编 10 分钟以上(tauri-cli 的依赖树不轻),而每次发版都重编纯属浪费 ——
+      # 缓存 ~/.cargo/bin 与 registry/git 两处,命中后这一步降到几秒。
+      # key 里带上 tauri-cli 的版本区间,改了版本区间才会重新编译。
+      - name: Cache cargo-tauri
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-tauri.exe
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-tauri-${{ runner.os }}-${{ hashFiles('app/src-tauri/Cargo.lock') }}
+
       - name: Install cargo-tauri (bundler CLI)
         shell: pwsh
-        run: cargo install tauri-cli --version '^2' --locked
+        # 已经装好就跳过 —— 缓存命中时这里没有任何耗时。
+        # `cargo tauri --version` 能跑通就说明可用,不必再 install 一次。
+        run: |
+          $existing = Get-Command cargo-tauri -EA SilentlyContinue
+          if ($existing) {
+            Write-Host "cargo-tauri already present: $($existing.Source)"
+          } else {
+            cargo install tauri-cli --version '^2' --locked
+            if ($LASTEXITCODE -ne 0) { throw "cargo install tauri-cli failed: $LASTEXITCODE" }
+          }
+          cargo tauri --version
+          if ($LASTEXITCODE -ne 0) { throw "cargo tauri is not usable after install" }
 
       - name: Install MinGW-w64 (LLVM+MinGW distribution)
         uses: msys2/setup-msys2@v2
