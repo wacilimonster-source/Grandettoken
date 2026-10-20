@@ -135,6 +135,48 @@ refresh 1 年,可以自动续"的假设是**读字段名想当然**。
 **方法论教训**:「端点是什么」有时是错的问题。刷新的可观测副作用就是"那个文件被重写",
 用 mtime 就能观测 —— 比抓包和解密都省事,也更不碰敏感数据。
 
+### 六、发版时炸在 workflow 上:提交信息被内插进 PowerShell 字符串
+
+**现象**:推 tag `v0.1.47` 后,release job 在「Generate latest.json」失败,
+而**构建与签名早已 success** —— 白等一整轮 15 分钟的构建。
+
+```
+ParserError: Unexpected token '今天"从 10:00 起算。
+```
+
+**根因(工作流自身的注入类缺陷,不是代码问题)**:
+
+```powershell
+# 旧写法:提交信息被直接内插进 PowerShell 双引号字符串
+$notes = "## Grandettoken ${{ steps.meta.outputs.version }}`n`n${{ github.event.head_commit.message }}"
+```
+
+本版提交信息里有「Qoder 的"今天"从 10:00 起算」,那个 `"` **提前闭合了字符串**,
+后面整段被当成代码解析。含 `$` 或反引号也会被当成插值 ——
+**任何带引号/美元符的提交信息都会炸**,只是前几版的正文恰好没这些字符。
+
+**修复**:值经 `env` 传递(GitHub 推荐做法),不进 shell 解析:
+
+```yaml
+env:
+  VER: ${{ steps.meta.outputs.version }}
+  COMMIT_MSG: ${{ github.event.head_commit.message }}
+run: |
+  $notes = "## Grandettoken $env:VER`n`n$env:COMMIT_MSG"
+```
+
+本地已验证新旧写法对正常正文**产出逐字相同**(不改变已有行为),新写法能正确保留
+引号、反引号与 `$`。其余 `${{ }}`(版本号 / sha256 / runner.temp / secrets)都是受控值,保持原样。
+
+**补救过程**:v0.1.47 失败时**没有产生半成品 release**(`releases/tags/v0.1.47` 是 404),
+`latest` 仍是 v0.1.46 —— 用户更新链路未受影响。修好后用 `workflow_dispatch`
+(带 `tag=v0.1.47`)重跑:dispatch 取的是**默认分支上的 workflow 定义**,所以修复生效;
+而 checkout 仍按 tag 取代码,版本号不会错。
+
+**教训**:① 提交信息是**用户输入**,绝不能拼进任何脚本字符串 —— 这与"渠道返回的
+message 不能当判据"是同一类错误(信任了不可控文本);② 发版链路里"构建成功"不等于
+"发版成功",后面还有 5 步;③ 失败后先查**有没有半成品 release**,再决定重跑还是修。
+
 ## WorkBuddy 取不到数:401 被当成 Server,凭据换不下去(2026-10-20,v0.1.45→v0.1.46)
 
 **起点**:用户装上 v0.1.44 后仍然取不到数,把 `diag.log` 贴了回来(D 盘装 WorkBuddy 的那台)。

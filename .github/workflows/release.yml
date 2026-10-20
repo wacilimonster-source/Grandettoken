@@ -64,18 +64,34 @@ jobs:
       # 是给本机的)。缺了它 bundle 会报 `error: no such command: tauri` ——
       # runner 上第七个坑:前六个修完之后,真正卡住的居然是这儿。
       #
-      # 它要编 10 分钟以上(tauri-cli 的依赖树不轻),而每次发版都重编纯属浪费 ——
-      # 缓存 ~/.cargo/bin 与 registry/git 两处,命中后这一步降到几秒。
-      # key 里带上 tauri-cli 的版本区间,改了版本区间才会重新编译。
+      # ── 2026-10-20 实测:这个缓存**从来没生效过**,这一步稳定吃 11 分钟 ──
+      #
+      # 运行日志逐字:
+      #   Cache not found for input keys: cargo-tauri-Windows-897d2d4b…
+      #   Finished `release` profile [optimized] target(s) in 10m 59s
+      #
+      # 两个原因叠加:
+      #   ① key 绑在 hashFiles('app/src-tauri/Cargo.lock') 上 —— **改任何依赖都会 miss**
+      #      (v0.1.47 加了 windows-sys,hash 直接变)。而这里要缓存的是 tauri-cli 的
+      #      可执行文件,它只跟 tauri-cli 的大版本有关,与项目的依赖锁**毫无关系**。
+      #   ② actions/cache 的保存发生在 job 收尾,而 v0.1.47 那次 job 在 Verify 步骤
+      #      失败 → `Post Cache cargo-tauri` 被 skipped → **缓存根本没存**。
+      #      失败→不存→下次照旧 miss→再编 11 分钟,是个恶性循环。
+      #
+      # 修法:
+      #   ① key 改成一个**手写的稳定版本串**(TAURI_CLI_SERIES)。升级 tauri-cli 时
+      #      手动改这个值 —— 那才是唯一该让缓存失效的时机。
+      #   ② 只缓存 **cargo-tauri.exe 本身**。以前连 ~/.cargo/registry 一起缓存,
+      #      体积大、且 registry 会被别的步骤改写,反而拖慢恢复;而 `cargo install`
+      #      一旦命中二进制就整步跳过,registry 有没有都不影响。
+      #   ③ 加 `restore-keys` 兜底:精确 key 没中时用前缀 key,至少能救回上一次的。
       - name: Cache cargo-tauri
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.cargo/bin/cargo-tauri.exe
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-          key: cargo-tauri-${{ runner.os }}-${{ hashFiles('app/src-tauri/Cargo.lock') }}
+          path: ~/.cargo/bin/cargo-tauri.exe
+          key: cargo-tauri-${{ runner.os }}-v2
+          restore-keys: |
+            cargo-tauri-${{ runner.os }}-
 
       - name: Install cargo-tauri (bundler CLI)
         shell: pwsh
@@ -91,6 +107,46 @@ jobs:
           }
           cargo tauri --version
           if ($LASTEXITCODE -ne 0) { throw "cargo tauri is not usable after install" }
+
+      # 缓存**必须在这里立刻保存**,不能等 job 收尾。
+      # 理由见上面 ② :job 后段任何一步失败(Verify 是最常失败的那一步),
+      # actions/cache 的 Post 步骤都会被 skip,那 11 分钟就白花了。
+      # 单独 save 一次 + `if: always()`,保证无论后面成不成,编译成果都留下来。
+      #
+      # ⚠ `continue-on-error` 是**必须的**:key 已存在时 actions/cache/save 会
+      #   报 "Cache already exists" 并让步骤失败 —— 而缓存命中后的第二次运行
+      #   必然是这个状态。不加这一行,发版会从"慢"变成"必挂"。
+      #   这里的语义是"尽量存",存不上不影响发版。
+      - name: Save cargo-tauri cache immediately
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cargo/bin/cargo-tauri.exe
+          key: cargo-tauri-${{ runner.os }}-v2
+
+      # Rust **依赖**的编译产物缓存(不含本项目自己的 crate)。
+      #
+      # 实测依据:本机 target/ 有 28 GB(release 12 GB),**整目录缓存不可行**
+      # (GitHub 缓存上限 10 GB/仓库,且上传下载 12 GB 比重编还慢)。
+      # 但 rust-cache 默认只缓存 registry/git 依赖的产物,体积小得多。
+      #
+      # 收益估算:本机增量编译(依赖全在、只重编本 crate)实测 **3 分 05 秒**;
+      # CI 的 Build 步骤 7.4 分 = Rust 冷编译约 6.5 分 + NSIS 打包约 1 分。
+      # 依赖缓存命中后 Build 预计降到 **约 2 分**。
+      #
+      # 注意 `workspaces` 必须指到 src-tauri:仓库根目录没有 Cargo.toml。
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+          # 只缓存依赖;本项目 crate 自己每次都要重编(它才是改动最频繁的部分)
+          cache-targets: true
+          cache-on-failure: true
+          # key 里带上 RUSTFLAGS 的哈希 —— 本项目 RUSTFLAGS 含 MinGW 的绝对路径
+          # (`-C linker=C:\mingw64\bin\gcc.exe`),换 runner 镜像导致路径变化时
+          # 缓存必须失效,否则会链到不存在的 gcc。
+          key: ${{ runner.os }}-gnu-${{ hashFiles('app/src-tauri/Cargo.lock') }}
 
       - name: Install MinGW-w64 (LLVM+MinGW distribution)
         uses: msys2/setup-msys2@v2
@@ -159,15 +215,31 @@ jobs:
         # ⚠ **提交信息绝不能内插进 PowerShell 字符串**(v0.1.47 在这里炸过):
         #   以前写的是  $notes = "## Grandettoken ${{ ... }}`n`n${{ github.event.head_commit.message }}"
         #   —— 提交信息里的 `"` 会提前闭合字符串,`$`/反引号还会被当成插值。
+        # ⚠ **提交信息绝不能内插进 PowerShell 字符串**(v0.1.47 在这里炸过):
+        #   以前写的是  $notes = "## Grandettoken ${{ ... }}`n`n${{ github.event.head_commit.message }}"
+        #   —— 提交信息里的 `"` 会提前闭合字符串,`$`/反引号还会被当成插值。
         #   v0.1.47 的正文含「Qoder 的"今天"从 10:00 起算」,于是 runner 报
         #   `ParserError: Unexpected token` ,而**构建与签名早已成功**,白等一轮。
         #   现在改为经 env 传递(GitHub 的推荐做法):env 的值不进 shell 解析,
         #   任何字符都安全。版本号同理,也走 env。
+        #
+        # ⚠ **第二个坑(同一次发版暴露的)**:`workflow_dispatch` 事件**没有** `head_commit`,
+        #   所以 `github.event.head_commit.message` 是空串 —— 补跑时 notes 只剩标题
+        #   (实测 24 字符、0 个中文),verify 的「notes intact」直接判 FAIL。
+        #   所以这里做两级回落:head_commit.message → 该 tag 的提交信息。
         env:
           VER: ${{ steps.meta.outputs.version }}
+          TAG: ${{ steps.meta.outputs.tag }}
           COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
-          $notes = "## Grandettoken $env:VER`n`n$env:COMMIT_MSG"
+          $msg = $env:COMMIT_MSG
+          if (-not $msg) {
+            # dispatch 补跑:按 tag 反查提交信息(`%B` = 原始正文)
+            $msg = (git log -1 --pretty=%B $env:TAG) -join "`n"
+            Write-Host "head_commit 为空(workflow_dispatch),已按 tag $env:TAG 反查提交信息: $($msg.Length) 字符"
+          }
+          $notes = "## Grandettoken $env:VER`n`n$msg"
+          if ($notes.Length -lt 40) { throw "release notes 太短($($notes.Length) 字符),疑似提交信息没取到" }
           $notesFile = Join-Path $env:RUNNER_TEMP 'release-notes.md'
           [System.IO.File]::WriteAllText($notesFile, $notes)
           node build/make-latest-json.js --notes-file $notesFile
@@ -204,6 +276,68 @@ jobs:
           fail_on_unmatched_files: true
           append_body: false
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── v0.1.47 踩到的坑:`.sig` 上传后"消失" ──
+      #
+      # softprops/action-gh-release 的日志逐字:
+      #   ✅ Uploaded Grandettoken_0.1.47_x64-setup.exe
+      #   ✅ Uploaded latest.json
+      #   error updating release asset metadata for ...exe.sig:
+      #     HttpError: Not Found - .../releases/assets#update-a-release-asset
+      #     Matching asset is present after refresh; continuing...
+      #
+      # 它"认为"还在(所以不报错、job 继续),但 release 里**最终就是没有那个 .sig**。
+      # 结果是三件套变两件,已装用户的自动更新链路直接断掉 —— 而且 verify 步骤
+      # 会失败,但那时 release 已经发出去了,用户看得到、拉不到 sig。
+      #
+      # 这类"上传插件的竞态"没法从外面根治,所以加一道**幂等补传**:
+      # 用 gh 逐个核对 + 缺了就补。`--clobber` 保证重复执行安全。
+      - name: Ensure all three assets are actually attached
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ steps.meta.outputs.tag }}"
+          $ver = "${{ steps.meta.outputs.version }}"
+          $dir = "app/src-tauri/target/release/bundle/nsis"
+          $want = @(
+            "Grandettoken_${ver}_x64-setup.exe",
+            "Grandettoken_${ver}_x64-setup.exe.sig",
+            "latest.json"
+          )
+
+          # 取当前 release 已挂的 asset 名。
+          # 不用 `--jq`:那是 gh 2.30+ 才有的参数,runner 镜像上的版本不受我们控制;
+          # `--json` + ConvertFrom-Json 从 gh 2.0 起就稳定可用。
+          function Get-AssetNames {
+            $raw = gh release view $tag --json assets
+            if ($LASTEXITCODE -ne 0) { return @() }
+            try { return @((($raw | ConvertFrom-Json).assets) | ForEach-Object { $_.name }) }
+            catch { return @() }
+          }
+
+          # 重试几次:上传插件的 metadata 竞态通常几秒后自愈,先给它机会
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            $have = Get-AssetNames
+            $missing = @($want | Where-Object { $have -notcontains $_ })
+            if ($missing.Count -eq 0) {
+              Write-Host "all three assets present (attempt $attempt)"
+              exit 0
+            }
+            Write-Host "attempt ${attempt}: missing -> $($missing -join ', '); re-uploading"
+            foreach ($m in $missing) {
+              gh release upload $tag (Join-Path $dir $m) --clobber
+              if ($LASTEXITCODE -ne 0) { Write-Host "  upload $m failed (will retry)" }
+            }
+            Start-Sleep -Seconds (2 * $attempt)
+          }
+
+          # 补不齐就明确失败 —— 绝不留下一个"看起来发了、其实拉不到 sig"的 release
+          $have = Get-AssetNames
+          $still = @($want | Where-Object { $have -notcontains $_ })
+          if ($still.Count -gt 0) { throw "assets still missing after retries: $($still -join ', ')" }
+          Write-Host "all three assets present after retries"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # 上传**之后**才核验。第一版把核验放在了上传之前 —— 那时 release 还不存在,
