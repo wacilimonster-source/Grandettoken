@@ -79,8 +79,19 @@ jobs:
       - name: Run core tests before bundling
         shell: pwsh
         working-directory: app/core
-        # 单测不过就不发版。这里跑的是 227 条里能跑的 223 条(4 条 #[ignore] 是真机用例)。
+        # 单测不过就不发版。这里跑的是 243 条里能跑的条数(4 条 #[ignore] 是真机用例)。
         run: cargo test --locked
+
+      # make-webview2-static.ps1 要从 **cargo registry 的源码检出**里取
+      # WebView2LoaderStatic.lib —— 而 core 的 cargo test 只 fetch 了 app/core 的依赖,
+      # src-tauri 的 registry 在 runner 上还是空的 → 脚本报
+      # "webview2-com-sys <ver> is pinned by Cargo.lock but its ... .lib is not in ..."
+      # (runner 上第六个坑)。所以 bundle 前必须显式 fetch src-tauri 的依赖。
+      # working-directory 必须给:仓库根目录没有 Cargo.toml(坑 ①)。
+      - name: Fetch src-tauri dependencies
+        shell: pwsh
+        working-directory: app/src-tauri
+        run: cargo fetch --locked
 
       - name: Build NSIS installer + sign
         shell: pwsh
