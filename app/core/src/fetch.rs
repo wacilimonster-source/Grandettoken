@@ -456,6 +456,44 @@ pub fn attempt_order(primary: &str, fallbacks: &[&str], last_good: Option<&str>)
     out
 }
 
+/// 被服务器拒过的凭据降权多久。**不是永久**:用户重新登录、平台侧恢复、
+/// 或者那次 401 只是瞬时抖动,过了这段时间它就回到原位再试一次。
+const REJECTED_TTL: i64 = 30 * 60;
+
+/// 把"被 401/403 拒过"的凭据排到后面,其余保持原顺序。
+///
+/// 为什么需要:手动粘贴的令牌排在桌面端凭据之前(用户明确填的东西优先),
+/// 而一份**早已作废**的手动令牌会让每轮都先白打一个 401。修好"401 要换下一份"
+/// 之后已经能取到数,但那份废令牌仍会在每轮开头拖一个往返 —— 真机日志里
+/// 用户就是这么被卡了三天(2026-10-20)。
+///
+/// **纯函数**(时间与拒因都由参数给),单测能钉住"降权而非丢弃"这条语义。
+fn demote_rejected(
+    creds: Vec<appauth::Credential>,
+    rejected: &HashMap<String, i64>,
+    now: i64,
+    fp_of: impl Fn(&str) -> String,
+) -> Vec<appauth::Credential> {
+    let fresh = |c: &appauth::Credential| {
+        rejected
+            .get(&fp_of(&c.token))
+            .map(|at| now - *at >= REJECTED_TTL)
+            .unwrap_or(true)
+    };
+    let mut ok: Vec<appauth::Credential> = Vec::new();
+    let mut bad: Vec<appauth::Credential> = Vec::new();
+    for c in creds {
+        if fresh(&c) {
+            ok.push(c);
+        } else {
+            bad.push(c);
+        }
+    }
+    // 被拒的全部沉底:顺序在各自组内保持不变
+    ok.extend(bad);
+    ok
+}
+
 /// 申请事件的最小跳升幅度(元)。低于这个数当四舍五入抖动,不记为一次申请。
 const CLAIM_JUMP_MIN_DELTA: f64 = 20.0;
 /// 回溯窗口:与快照保留期(90 天)对齐
@@ -775,12 +813,18 @@ async fn fetch_once(
     let body: serde_json::Value = match serde_json::from_slice(&raw) {
         Ok(v) => v,
         Err(_) => {
-            // 可能是入口返回的错误页 —— 换个域名值得一试
+            // 响应体不是 JSON 时,**失败类别要跟着状态码走**,不能一律当成 Server。
+            //
+            // 2026-10-20 真机踩到(用户 diag.log):WorkBuddy 的 401 由网关回了一页 HTML,
+            // 这里判成 `FailKind::Server` → 只换域名、**不换下一份凭据** → 明明已经解出了
+            // 桌面端令牌(fp=345578fe),循环却停在那份 401 的手动令牌上,
+            // 日志写的是"凭据 [手动令牌→不通]",用户永远取不到数。
+            // 401/403 说的是"这份凭据不行",与"响应长什么样"无关 —— 语义由状态码定。
+            let code = status.as_u16();
             return err_result(
                 def,
-                format!("响应不是合法 JSON (HTTP {})", status.as_u16()),
-                // 可能是入口返回的错误页 —— 换个域名值得一试
-                Some(FailKind::Server),
+                format!("响应不是合法 JSON (HTTP {code})"),
+                Some(kind_for_status(code)),
             );
         }
     };
@@ -805,19 +849,27 @@ async fn fetch_once(
     let kind = if result.valid {
         None
     } else if !status.is_success() {
-        let code = status.as_u16();
-        Some(if code == 429 || code >= 500 {
-            FailKind::Server
-        } else if matches!(code, 401 | 403 | 407) {
-            FailKind::Auth // 凭据被明确拒绝:换下一份登录态值得一试
-        } else {
-            FailKind::Client // 404/400 等:路径/参数问题,换域名换凭据都没用
-        })
+        // 凭据被明确拒绝 → 换下一份登录态值得一试;404/400 → 路径/参数问题,换谁都没用。
+        Some(kind_for_status(status.as_u16()))
     } else {
         Some(FailKind::Business) // HTTP 200 但业务失败
     };
 
     (result, kind)
+}
+
+/// 非 2xx 的状态码 → 失败类别。**唯一口径**:正常分支与"响应体不是 JSON"那条
+/// 错误页分支都必须走它,否则会出现"同一个 401 在两处被判成不同类型"的漂移
+/// —— 2026-10-20 真机日志就是这么被坑的(HTML 错误页让 401 变成了 Server,
+/// 于是只换域名、不换凭据,桌面端令牌永远轮不到)。
+fn kind_for_status(code: u16) -> FailKind {
+    if matches!(code, 401 | 403 | 407) {
+        FailKind::Auth
+    } else if code == 429 || code >= 500 {
+        FailKind::Server
+    } else {
+        FailKind::Client
+    }
 }
 
 /// 把下一块拼进缓冲,一旦超过 `max` 就报错(**纯函数**:上限逻辑靠它单测,
@@ -1611,6 +1663,14 @@ pub struct Fetcher {
     /// 每本账"有几本账"的缓存:COUNT(DISTINCT key_fp) 是整渠道扫描,
     /// 不该每轮都跑;指纹没变就直接复用。
     accounts_cache: Mutex<HashMap<String, i64>>,
+    /// 被服务器明确拒过(401/403)的凭据 → 拒绝时刻。
+    ///
+    /// 2026-10-20 真机:用户很久以前粘贴过一个手动令牌(早已作废),它排在桌面端凭据
+    /// **前面**(用户明确填的东西优先),于是每轮都先打一次 401,白等一个往返。
+    /// 修好"401 该换下一份"之后已经能取到数了,但这份废令牌仍在每轮重试 ——
+    /// 按 `key_fp` 记账,被拒过的排到候选末尾(不是删除、也不是永久跳过:
+    /// 用户重新登录/平台恢复后,过了 [`REJECTED_TTL`] 自然回到原位)。
+    rejected: Mutex<HashMap<String, i64>>,
 }
 
 impl Default for Fetcher {
@@ -1635,6 +1695,7 @@ impl Fetcher {
             web_cred_src: Mutex::new(None),
             adopted: Mutex::new(HashSet::new()),
             accounts_cache: Mutex::new(HashMap::new()),
+            rejected: Mutex::new(HashMap::new()),
         }
     }
 
@@ -1856,6 +1917,18 @@ impl Fetcher {
                         tokio::task::spawn_blocking(move || credentials(def, web_src.as_deref()))
                             .await
                             .unwrap_or_else(|_| (Vec::new(), Some("凭据读取异常".to_string())));
+                    // 被服务器拒过(401/403)的凭据沉到末尾:一份早已作废的手动令牌排在
+                    // 桌面端凭据前面会让每轮都先白打一个往返(2026-10-20 真机日志)。
+                    // 只降权不丢弃 —— 用户重新登录/平台恢复后它还会被再试一次。
+                    let creds = {
+                        let now = now_ts();
+                        let rej = self
+                            .rejected
+                            .lock()
+                            .map(|m| m.clone())
+                            .unwrap_or_default();
+                        demote_rejected(creds, &rej, now, |t| key_fp(t))
+                    };
                     // 密钥指纹只对"稳定的 API Key"有意义:网页会话 / 本机登录态的凭据
                     // 每轮都可能轮换,拿它分段等于每轮开一本新账 —— 那两类一律空串,
                     // 退回"不分段"的老口径(与后端 store::record_fp 的约定一致)。
@@ -1875,7 +1948,13 @@ impl Fetcher {
                         // 这种时候不该把已有的数字抹成「——」—— 沿用上次成功快照并标注时间,
                         // 与"取数失败"走同一条口径(报告 P1-4;本文件头第 3-4 行的原则)。
                         let reason = secret_err.unwrap_or_else(|| {
-                            format!("没检测到 {} 的登录凭据(可能只是瞬时读不到)", def.name)
+                            // 措辞按凭据类型分开:密钥型渠道说"登录凭据"会让人以为要去登录,
+                            // 实际只是没填密钥(2026-10-20 用户日志里 4 个密钥型渠道都这么写,
+                            // 看着像登录出了问题)。
+                            match def.auth {
+                                AuthKind::Keyring => format!("还没填 {} 的密钥", def.name),
+                                _ => format!("没检测到 {} 的登录凭据(可能只是瞬时读不到)", def.name),
+                            }
                         });
                         crate::diaglog::write_keyed(
                             def.id,
@@ -1945,6 +2024,17 @@ impl Fetcher {
                         result = r;
                         used_url = url;
                         tried.push(format!("{desc}→{}", if result.valid { "通" } else { "不通" }));
+                        // 服务器明确说这份凭据不行:记下来,下一轮把它排到末尾。
+                        // 成功了就把这条撤销(同一份凭据在别的入口下可能就是通的,
+                        // 比如主域抖动时备用域 401、主域恢复后又能用)。
+                        let cfp = key_fp(&cred.token);
+                        if let Ok(mut m) = self.rejected.lock() {
+                            if result.valid {
+                                m.remove(&cfp);
+                            } else if another_credential_may_help(kind) {
+                                m.insert(cfp, now_ts());
+                            }
+                        }
                         if result.valid {
                             chosen = Some(cred.clone());
                             break;
@@ -2786,6 +2876,77 @@ mod tests {
         assert!(!another_credential_may_help(Some(FailKind::Server)));
         assert!(!another_credential_may_help(Some(FailKind::Business)));
         assert!(!another_credential_may_help(None));
+    }
+
+    /// 401 必须永远是 `Auth`,**不管响应体是不是 JSON**。
+    ///
+    /// 2026-10-20 真机(user diag.log):WorkBuddy 的 401 由网关回了一页 HTML,
+    /// 旧代码在"响应不是合法 JSON"那支一律给 `Server` → 只换域名、不换凭据 →
+    /// 明明已经解出桌面端令牌,循环却停在一份作废的手动令牌上,三天取不到数。
+    #[test]
+    fn auth_status_wins_over_body_shape() {
+        // 状态码口径本身
+        assert_eq!(kind_for_status(401), FailKind::Auth);
+        assert_eq!(kind_for_status(403), FailKind::Auth);
+        assert_eq!(kind_for_status(407), FailKind::Auth);
+        assert_eq!(kind_for_status(429), FailKind::Server);
+        assert_eq!(kind_for_status(500), FailKind::Server);
+        assert_eq!(kind_for_status(404), FailKind::Client);
+        assert_eq!(kind_for_status(400), FailKind::Client);
+
+        // 关键那条:Auth 才允许换凭据
+        assert!(
+            another_credential_may_help(Some(kind_for_status(401))),
+            "401 必须触发换下一份凭据(否则桌面端令牌永远轮不到)"
+        );
+        // 而 5xx 仍然不该换凭据(换域名才有意义)
+        assert!(!another_credential_may_help(Some(kind_for_status(503))));
+    }
+
+    /// 被 401 拒过的凭据要沉到末尾,**但不能被丢掉**:用户重新登录后它还会被再试一次。
+    /// 2026-10-20 真机:一份早已作废的手动令牌排在桌面端凭据前面,每轮先白打一个 401。
+    #[test]
+    fn rejected_credentials_are_demoted_not_dropped() {
+        let mk = |t: &str, src: &str| appauth::Credential {
+            token: t.to_string(),
+            source: src.to_string(),
+            device_id: None,
+        };
+        let manual = mk("manual-dead-token", "");
+        let desktop = mk("desktop:live-token", "WorkBuddy 桌面端");
+        let now = 1_800_000_000i64;
+
+        // 被拒的是手动那份 → 它沉底,桌面端排到第一
+        let mut rej: HashMap<String, i64> = HashMap::new();
+        rej.insert(key_fp("manual-dead-token"), now - 60);
+        let got = demote_rejected(
+            vec![manual.clone(), desktop.clone()],
+            &rej,
+            now,
+            |t| key_fp(t),
+        );
+        assert_eq!(got[0].token, "desktop:live-token", "可用那份要排第一");
+        assert_eq!(got[1].token, "manual-dead-token", "被拒的沉到末尾");
+        assert_eq!(got.len(), 2, "**不许丢** —— 丢了用户就再也看不到那份凭据的状态");
+
+        // 超过 TTL → 回到原位再试一次(可能是瞬时 401,也可能用户已重新登录)
+        let got = demote_rejected(
+            vec![manual.clone(), desktop.clone()],
+            &rej,
+            now + REJECTED_TTL,
+            |t| key_fp(t),
+        );
+        assert_eq!(got[0].token, "manual-dead-token", "TTL 过后要恢复原顺序");
+
+        // 没有任何拒绝记录 → 原样返回
+        let got = demote_rejected(
+            vec![manual.clone(), desktop.clone()],
+            &HashMap::new(),
+            now,
+            |t| key_fp(t),
+        );
+        assert_eq!(got[0].token, "manual-dead-token");
+        assert_eq!(got[1].token, "desktop:live-token");
     }
 
     /// F2:失败且真的发过请求 → 清掉"上次成功地址";成功不清、没发过请求也不清。

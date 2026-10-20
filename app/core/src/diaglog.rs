@@ -333,7 +333,13 @@ fn write_maybe_throttled(scope: &str, key: Option<&str>, msg: &str) {
                 Decision::Skip => return,
                 Decision::Write => clean,
                 Decision::WriteAfterRepeat(n) if n > 0 => {
-                    let head = format!("{scope}: 上一条相同状态又重复了 {n} 次");
+                    // 补的这一行要说清"是哪件事重复了":真机日志里曾经只写
+                    // `wb: 上一条相同状态又重复了 5 次`,看不出说的是 exe 探测还是取数。
+                    let what: String = clean.chars().take(60).collect();
+                    let head = format!(
+                        "{scope}[{k}]: 上一条相同状态又重复了 {n} 次 —— {what}{}",
+                        if clean.chars().count() > 60 { "…" } else { "" }
+                    );
                     emit(&head);
                     clean
                 }
