@@ -34,6 +34,20 @@ if (cargoVersion !== version) {
   process.exit(1);
 }
 
+// **第三处:Cargo.lock。** 升版本号时最容易漏的就是它 —— 改了 Cargo.toml 却没重新
+// 生成 lock,cargo 会在下一次带 --locked 的调用(fetch / check / build)上报
+// "cannot update the lock file",而那时往往已经在 CI runner 上、离发版只差一步。
+// 2026-10-20 的 v0.1.45 就因为这个在 runner 上白跑一次(release workflow 第 8 步挂),
+// 而且本地复现不了是因为本地早已 cargo fetch 过、lock 被悄悄改好了。
+// 治本不靠记住:这里直接断言,漏了就在本地这步红掉。
+const lock = fs.readFileSync(path.join(src, 'Cargo.lock'), 'utf8');
+const lockVersion = (lock.match(/name = "tokenscope"\r?\nversion = "([^"]+)"/) || [])[1];
+if (lockVersion !== version) {
+  console.error(`Cargo.lock 里 tokenscope 的版本号是 ${lockVersion},与 tauri.conf.json=${version} 不一致`);
+  console.error('升版本后要在 app/src-tauri 里跑一次 `cargo fetch` 让 lock 跟上');
+  process.exit(1);
+}
+
 const product = conf.productName;
 const exe = `${product}_${version}_x64-setup.exe`;
 const sigPath = path.join(nsisDir, `${exe}.sig`);
