@@ -1,14 +1,15 @@
 # Grandettoken 开发进展
 
 > 最后更新:2026-10-20
-> 状态:**未发版** —— 修「WorkBuddy 取不到数」:401 被当成 Server,凭据换不下去
-> 上一版:v0.1.44(排查日志 + WorkBuddy 装在任意盘也能找到 + 设置入口收敛为 1 处)
+> 状态:**v0.1.46 已发版** —— 修「WorkBuddy 取不到数」(401 被当成 Server,凭据换不下去);
+> 发版链路补两道闸(Cargo.lock 版本断言 + 公钥真验签),并接进 CI
+> 上一版:v0.1.45(设置入口收敛后的焦点收尾;CI 发版链路第一次真正跑通)
 >
 > 产品原名 TokenScope,2026-09 下旬改名 Grandettoken。凭据服务名(`TokenScope`)
 > 与 bundle identifier(`com.wacil.tokenscope`)仍沿用旧名 —— 改了会让已装用户收不到更新、
 > 凭据条目全丢。
 
-## WorkBuddy 取不到数:401 被当成 Server,凭据换不下去(2026-10-20,v0.1.45)
+## WorkBuddy 取不到数:401 被当成 Server,凭据换不下去(2026-10-20,v0.1.45→v0.1.46)
 
 **起点**:用户装上 v0.1.44 后仍然取不到数,把 `diag.log` 贴了回来(D 盘装 WorkBuddy 的那台)。
 
@@ -66,6 +67,84 @@ WorkBuddy 的 401 是网关回的一页 HTML,于是:
 上一版加日志时说"渠道取不到数时,唯一能还原现场的东西"。这次就是它第一次真正派上用场:
 73 行日志直接指出"客户端凭据解出来了、但取数用的是另一份、而且 401 被标成了 Server",
 省掉了原本至少一轮"让用户去翻注册表/贴截图"的往返。
+
+## 发版链路补两道闸(2026-10-20,v0.1.46)
+
+v0.1.45 让 CI 的发版 workflow 第一次全绿(15 步全 success,见「仓库门面整理」一节)。
+但那条链路此前只验证过"**自洽**",这一轮补上两个更深的检查,并把密钥扫描接进 CI。
+
+### 闸一:`Cargo.lock` 是版本号的**第三处**
+
+改 `Cargo.toml` 不跑 `cargo fetch`,lock 里的版本号就停在旧值;而 CI 里所有 cargo
+调用都带 `--locked`,于是报 `cannot update the lock file`。**本地复现不出来** ——
+本地早已 fetch 过、lock 被悄悄改好,只在干净 runner 上暴露(v0.1.45 因此白跑一次)。
+
+→ `build/make-latest-json.js` 现在断言三处一致(Cargo.toml / tauri.conf.json / Cargo.lock),
+漏了在本地这步就红。双向验证过:改回旧版本号 → 红并退出 1 且文案指明要跑 `cargo fetch`;
+恢复 → 越过这步。
+
+> 附带一条教训:**"文件没改"和"文件是对的"是两件事**。我第一次"修"lock 是把修复前的
+> `.bak` 覆盖了回去,`git status` 显示干净(内容和 HEAD 一致),而 HEAD 里那一版就是错的。
+> 判断要看内容,不能只看 status。
+
+### 闸二:验签从"自洽"升级到"配对"
+
+两个层次,以前只有第一层有检查:
+
+| 层 | 检查什么 | 脚本 | 漏掉它的后果 |
+|---|---|---|---|
+| 自洽 | 线上 `latest.json` 的 signature 与线上 `.sig` 逐字相同 | `build/verify-updater.js` | 传错文件 → 用户更新失败 |
+| **配对** | `tauri.conf.json` 里那把**公钥**真能验签 release 上那个安装包 | `build/verify-signature.js` | **换过密钥/复制错文件时,所有已装用户永远收不到更新**,而第一层照样全绿 |
+
+第二层才是要命的那个(正是 RELEASE.md 里"私钥丢了就再也推不动更新"的坑)。
+唯一能终结它的是密码学本身,所以 `verify-signature.js` 借 `minisign` crate
+(tauri 依赖树里本来就有)真的跑一遍验签,不是比对字符串。
+
+**v0.1.45 实测**:`verify-updater.js` PASS 6/6、`verify-signature.js` **VERIFY_OK**。
+
+> **这两个脚本的下载必须走 PowerShell,不能用 node 的 `fetch`。**
+> 本机必须走系统代理(注册表 `ProxyEnable=1`,`127.0.0.1:7897`),而 node 24 的原生
+> `fetch` 既不读系统代理、也不认 `HTTPS_PROXY`,直连 `github.com` 十秒超时 ——
+> 第一版写出来时它**随机地能跑/不能跑**(先跑通一次给了我错误信心),
+> 那种核验比没有更糟:它会在你真需要它的时候骗你。
+> 另外端点内容必须 `-OutFile` 落盘再读,不能把 `.Content` 接 stdout
+> (PowerShell 会把多行字符串拆成数组逐行输出,`JSON.parse` 直接报 unexpected character)。
+
+### 闸三:密钥扫描接进 CI,并给测试夹具开口子
+
+`build/scan-secrets.ps1` 以前只在本地手动跑 —— 而"只在本地跑"等于"忘了就不跑"。
+现在 ci.yml 每次 push 都跑。
+
+接进去立刻暴露一个问题:它报 `diaglog.rs` 两处"疑似凭据"。查证都是**故意**长成凭据形状的
+测试夹具 —— jwt.io 官网首页那个公开示例(header `{"alg":"HS256"}`,payload
+`{"sub":"1234567890"}`),和一段合成的 very-long-access-token。两条都在 `#[cfg(test)]` 之后。
+
+→ 加 `$knownFixtures`:按**精确字符串**豁免,不按文件或目录(文件级跳过会把夹具旁边
+真正的泄漏一起放过);豁免要**如实报数**("skipped N known test fixture(s)"),不静默 ——
+否则哪天有人把真令牌混进那张名单,输出上看不出区别。
+
+**两个坑都踩了,都写进注释:**
+
+1. **这个脚本必须 ASCII-only**。它自己开头就写了"PowerShell 5.1 在 zh-CN Windows 上按
+   GBK 读 `.ps1`",我加了 UTF-8 中文注释进去 → 解析直接崩(`unexpected token '}'`),
+   而**崩掉的扫描器什么也没检查,退出码却是 1** —— 看起来像"发现问题",实际是"根本没运行"。
+2. **匹配方向搞反了**。正则只抓凭据形状文本的一个**切片**,切片还可能带夹具没有的前缀
+   (`token = "eyJ...`),所以 `$fixture.Contains($capture)` 恒为假。改成比"夹具的特征头部":
+   抓到的串里含夹具前 24 字符就算命中。
+
+**双向验证**(单向"变绿了"说明不了任何事):临时 `git add` 一个 `ghp_AAAA…`(40 字符真形状
+PAT)→ 报 HIT、退出 1;清理后 → CLEAN、跳过 4 处夹具、退出 0。
+
+### 顺带:cargo-tauri 加缓存
+
+发版 workflow 每次要 `cargo install tauri-cli`,runner 上无缓存时编 10 分钟以上。
+→ `actions/cache` 缓存 `cargo-tauri.exe` 与 registry/git 目录,key 带 `Cargo.lock` 哈希;
+install 步改成"已装就跳过",并在末尾断言 `cargo tauri --version` 真能跑通(缓存半坏时
+不会默默带病往下走)。
+
+**发版(v0.1.46)**:tag `v0.1.46` → release workflow 全自动跑完(构建 / 签名 /
+`latest.json` / 三件套上传 / 13 项按字节核验),见
+<https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.46>。
 
 ## 排查日志 + WorkBuddy 任意盘兼容(2026-10-20,v0.1.44)
 
