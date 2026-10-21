@@ -1832,7 +1832,16 @@ async function loadVaultRefs() {
   try { VAULTREF = await invoke("vault_ref_map"); } catch { VAULTREF = []; }
 }
 
-/** 哪些渠道正引用这条箱子密钥。 */
+/**
+ * 哪些渠道正引用这条箱子密钥 —— **只用于列表显示**。
+ *
+ * 读的是索引(VAULTREF),不是凭据管理器里的真实指针。这个分工是刻意的:
+ *   · **显示**用索引:一行一次 SQL,列表几十条也不卡;而且索引在启动时与每次删除后
+ *     都会按真实指针重抄一遍(product-vault-ref-reconcile),所以它现在是可信的。
+ *   · **删除决策**用真实指针:那是破坏性操作,一律由后端 vault_delete 扫指针判定,
+ *     不信索引 —— 索引读坏了也不该让人误删。
+ * 换句话说:索引可以拿来**看**,不能拿来**决定删不删**。
+ */
 function refChannelsOf(vaultId) {
   return VAULTREF.filter(([, v]) => v === vaultId).map(([c]) => c);
 }
@@ -2933,15 +2942,39 @@ $("manage").addEventListener("click", async (e) => {
     vaultDel(id);
   } else if (a === "vdel-no") {
     loadVault();
-  } else if (a === "vdel-yes") {
+  } else if (a === "vdel-yes" || a === "vdel-force") {
+    // N07(2026-10-21):删前拦截现在在**后端**,而且扫的是真实指针(不是索引)——
+    // 有渠道在用时后端把清单交回来而不是直接删。这里据此弹二次确认,再带 force 重来。
+    // 以前拦截在浏览器里靠索引:索引读失败就静默放行,索引不准就拦了个寂寞。
+    const force = a === "vdel-force";
     try {
-      await invoke("vault_delete", { id });
+      const r = await invoke("vault_delete", force ? { id, force: true } : { id });
+      if (r && r.deleted === false) {
+        const list = r.referrers || [];
+        const names = list.map(channelName).join("、");
+        const strip = act.closest(".cfrm");
+        if (strip) {
+          strip.innerHTML =
+            `<span class="err">这把正被 ${esc(names)} 使用。删掉后` +
+            (list.length > 1 ? "这些渠道" : "它") +
+            `就没密钥可用了(会显示「引用的条目已删除」,不会自动改用别的)。</span><br>` +
+            `仍然删除?<button class="btn s danger" data-act="vdel-force" data-id="${esc(id)}">仍然删除</button>` +
+            `<button class="btn s" data-act="vdel-no">取消</button>`;
+        }
+        return;
+      }
       delete VAULT_REVEAL[id];
       showToast("已删除");
     } catch (e) {
       showToast("删除失败:" + e, true);
     }
     await loadVault();
+    // N16:渠道卡上的「密钥来源」也要立刻变 —— 否则它还显示"正在使用这把",
+    // 用户以为没删掉(以前要等下一轮轮询,最长 60 秒)。
+    if (document.body.classList.contains("view-manage")) {
+      renderChCards();
+      fillKeySources();
+    }
   } else if (a === "vcopy") {
     try {
       const msg = await invoke("vault_copy", { id });
@@ -3944,19 +3977,12 @@ async function vaultSave() {
 function vaultDel(id) {
   const row = document.querySelector(`.krow [data-act="vdel"][data-id="${id}"]`);
   if (!row) return;
-  // 裁决 4:被渠道引用时要拦一下并说清后果 —— 但**允许删**(拦死会让用户没法清理)。
-  // 关键是别把"删掉后渠道会怎样"藏起来:删完后渠道卡会显示"引用的条目已删除"。
-  const refs = refChannelsOf(id);
-  const warn = refs.length
-    ? `<span class="err">这把正被 ${refs.map((c) => esc(channelName(c))).join("、")} 使用。
-       删掉后 ${refs.length > 1 ? "这些渠道" : "它"}就没密钥可用了(会显示「引用的条目已删除」,` +
-      `不会自动改用别的)。</span><br>`
-    : "";
+  // N07(2026-10-21):这里**不再**用索引判断"有没有人在用" —— 拦截已经搬到后端,
+  // 而且后端扫的是真实指针(书架)。索引读坏了、过期了都不影响判断。
+  // 所以这里只问一句"删吗",真正的后果提示由后端把清单交回来后再说。
   const strip = document.createElement("span");
   strip.className = "cfrm";
-  strip.innerHTML = `${warn}删除这一把?<button class="btn s danger" data-act="vdel-yes" data-id="${esc(id)}">${
-    refs.length ? "仍然删除" : "删除"
-  }</button>
+  strip.innerHTML = `删除这一把?<button class="btn s danger" data-act="vdel-yes" data-id="${esc(id)}">删除</button>
     <button class="btn s" data-act="vdel-no">取消</button>`;
   row.parentElement.appendChild(strip);
   row.remove();

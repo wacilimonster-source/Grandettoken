@@ -475,9 +475,21 @@ async fn set_key_ref(app: tauri::AppHandle, id: String, vault_id: String) -> Res
         }
     }
     let store = app.state::<AppState>().store.clone();
-    // 引用的目标必须真的存在,否则一建就是断链
-    if lock_rw(&store).vault_get(&vault_id).map_err(|e| e.to_string())?.is_none() {
-        return Err("要引用的密钥箱条目不存在".into());
+    // 引用的目标必须真的存在,否则一建就是断链。
+    //
+    // ⚠ N17(2026-10-21):这里必须查**凭据管理器里的密文**,不能只查 SQLite 索引 ——
+    // 两者会分开(用户在凭据管理器里手动删过、或 vault_save 回滚时删密文失败)。
+    // 只查索引的后果很具体:代码会**先把手填的那把删掉**,然后切到一个死引用上,
+    // 渠道从"能用"变成"没密钥" —— 是操作把人搞坏的,不是数据本来坏了。
+    let vid_check = vault_id.clone();
+    let has_cipher = tokio::task::spawn_blocking(move || secrets::vault_get(&vid_check))
+        .await
+        .map_err(|e| format!("检查密钥箱条目失败: {e}"))??;
+    if has_cipher.is_none() {
+        return Err(
+            "这个密钥箱条目的密文已经不在了(列表里还看得到,但 Windows 凭据管理器里没有)—— 请在密钥箱里重新录一次"
+                .into(),
+        );
     }
     let (cid, vid) = (id.clone(), vault_id.clone());
     tokio::task::spawn_blocking(move || -> Result<(), String> {
@@ -509,13 +521,11 @@ async fn clear_key_ref(app: tauri::AppHandle, id: String) -> Result<(), String> 
 }
 
 /// 有哪些渠道正引用这个箱子条目。密钥箱列表与删除前拦截都要它。
+/// 反查"这把被哪些渠道用着"。**扫真实指针,不查索引**(N30:以前注册了却没人调,
+/// 而且它读的是索引 —— 注释说"删除前拦截要它",实现却在浏览器里自己过滤)。
 #[tauri::command]
-fn vault_ref_channels(app: tauri::AppHandle, vault_id: String) -> Result<Vec<String>, String> {
-    let store = app.state::<AppState>().store.clone();
-    let out = lock_rw(&store)
-        .vault_ref_channels(&vault_id)
-        .map_err(|e| e.to_string())?;
-    Ok(out)
+async fn vault_ref_channels(app: tauri::AppHandle, vault_id: String) -> Result<Vec<String>, String> {
+    ref_channels_by_pointer(&app, &vault_id).await
 }
 
 /// 全部引用关系(渠道 → 箱子条目)。密钥箱列表一次读出来批量渲染。
@@ -1443,9 +1453,16 @@ async fn custom_add(
     saved.unit = ch.normalized_unit();
     let cid = id.clone();
     let k = key.clone();
-    tokio::task::spawn_blocking(move || secrets::set(&cid, &k))
-        .await
-        .map_err(|e| format!("写密钥任务失败: {e}"))??;
+    // N29(2026-10-21):写值前先清引用指针。next_custom_id 用的是"最小空号",
+    // 删掉 custom-1 再新建就会复用它 —— 而上一个渠道若留下孤儿指针(N02 之前删的),
+    // 新渠道会**继承别人的引用**,卡片上显示"引用密钥箱",用的却是别人的密钥。
+    // 清了指针,id 复用就是安全的(也就不必为它引入单调计数器)。
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        secrets::link_clear(&cid)?;
+        secrets::set(&cid, &k)
+    })
+    .await
+    .map_err(|e| format!("写密钥任务失败: {e}"))??;
     let st = app.state::<AppState>();
     let push = saved.clone();
     if let Err(e) = save_config_off_main(&st, move |c| c.custom_channels.push(push)).await {
@@ -2211,8 +2228,114 @@ async fn vault_save(
     .map_err(|e| format!("保存失败: {e}"))?
 }
 
+/// 删密钥箱条目的结果。
+///
+/// 为什么要有结构而不是 `Result<(),_>`(N07):删前拦截现在在**后端**做,
+/// 而且扫的是真实指针 —— 有渠道在用时不直接报错,而是把清单交回去让界面确认。
+/// 用错误字符串传清单是不可靠的(会被转义、会被吞),这里给结构化字段。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VaultDeleteResult {
+    /// true = 真的删了;false = 有渠道在用,等用户确认(此时 referrers 非空)
+    deleted: bool,
+    /// 正引用这条的渠道 id 清单(**按真实指针扫出来的**,不是查索引)
+    referrers: Vec<String>,
+}
+
+/// 按**真实指针**反查:有哪些渠道正引用这个箱子条目。
+///
+/// 与 `store.vault_ref_channels`(查索引)的根本区别:这里问的是凭据管理器 ——
+/// **书架说了算**。索引读坏了、过期了、被删了,都不影响这个判断。
+///
+/// 渠道清单来自配置(内置渠道 + 自定义渠道)。已删除渠道留下的孤儿指针**扫不到**
+/// (keyring 不提供枚举),这一点在设计稿 §6 里写明了。
+async fn ref_channels_by_pointer(
+    app: &tauri::AppHandle,
+    vault_id: &str,
+) -> Result<Vec<String>, String> {
+    let ids = {
+        let st = app.state::<AppState>();
+        let c = lock_rw(&st.config);
+        let mut v: Vec<String> = providers::PROVIDERS.iter().map(|d| d.id.to_string()).collect();
+        v.extend(c.custom_channels.iter().map(|x| x.id.clone()));
+        v
+    };
+    let vid = vault_id.to_string();
+    tokio::task::spawn_blocking(move || -> Result<Vec<String>, String> {
+        let mut out = Vec::new();
+        for id in ids {
+            if let Ok(Some(v)) = secrets::link_get(&id) {
+                if v == vid {
+                    out.push(id);
+                }
+            }
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| format!("反查引用失败: {e}"))?
+}
+
+/// 按真实指针**整表重抄**索引。设计稿 `product-vault-ref-reconcile-2026-10-21` 的动作 1。
+///
+/// 一句话:**书架说了算,索引只是副本**。所以重建的方向永远是"读指针 → 写索引",
+/// 绝不会反过来(拿索引去改指针 —— 那就成了用副本校正正本)。
+///
+/// 什么时候跑:① 启动后台跑一次;② 删箱子条目之后立刻跑一次(界面要马上对)。
+/// 索引写失败不该让任何用户操作失败 —— 这里只记一行日志,下次启动还会重来。
+async fn rebuild_vault_refs(app: &tauri::AppHandle) -> Result<(), String> {
+    let ids = {
+        let st = app.state::<AppState>();
+        let c = lock_rw(&st.config);
+        let mut v: Vec<String> = providers::PROVIDERS.iter().map(|d| d.id.to_string()).collect();
+        v.extend(c.custom_channels.iter().map(|x| x.id.clone()));
+        v
+    };
+    let store = app.state::<AppState>().store.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let mut pairs: Vec<(String, String)> = Vec::new();
+        for id in ids {
+            if let Ok(Some(vid)) = secrets::link_get(&id) {
+                pairs.push((id, vid));
+            }
+        }
+        let n = pairs.len();
+        lock_rw(&store).vault_ref_rebuild(&pairs)?;
+        tokenscope_core::diaglog::write_keyed(
+            "vault",
+            "ref-rebuild",
+            &format!("引用索引已按真实指针重抄 · {n} 条"),
+        );
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("重抄引用索引失败: {e}"))?
+}
+
+/// 启动后跑一次索引对账(不挡界面)。
+fn spawn_vault_ref_rebuild(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        // 让界面先画出来:对账要读 N 次凭据管理器,没必要和首屏抢
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        if let Err(e) = rebuild_vault_refs(&app).await {
+            tokenscope_core::diaglog::write_keyed("vault", "ref-rebuild-fail", &e);
+        }
+    });
+}
+
 #[tauri::command]
-async fn vault_delete(state: State<'_, AppState>, id: String) -> Result<(), String> {
+async fn vault_delete(
+    app: tauri::AppHandle,
+    id: String,
+    force: Option<bool>,
+) -> Result<VaultDeleteResult, String> {
+    // N07:删前拦截搬到后端,并且**扫真实指针**而不是查索引。
+    // 以前拦截在浏览器里靠索引:索引读失败就静默放行、索引不准就拦了个寂寞。
+    let referrers = ref_channels_by_pointer(&app, &id).await?;
+    if !referrers.is_empty() && !force.unwrap_or(false) {
+        return Ok(VaultDeleteResult { deleted: false, referrers });
+    }
+    let state = app.state::<AppState>();
     let store = state.store.clone();
     tokio::task::spawn_blocking(move || {
         // 先删索引(用户视角"这条没了"),再删凭据;凭据删失败也不该把索引变回来
@@ -2236,7 +2359,15 @@ async fn vault_delete(state: State<'_, AppState>, id: String) -> Result<(), Stri
         Ok(())
     })
     .await
-    .map_err(|e| format!("删除失败: {e}"))?
+    .map_err(|e| format!("删除失败: {e}"))??;
+    // N16:删完立刻重抄索引,并作废取数缓存 —— 渠道卡要**马上**显示"引用的条目已删除",
+    // 而不是等下一轮轮询(最长 60 秒,用户会以为没删掉)。
+    let _ = rebuild_vault_refs(&app).await;
+    state.fetcher.invalidate();
+    Ok(VaultDeleteResult {
+        deleted: true,
+        referrers,
+    })
 }
 
 /// 取出明文(界面点「显示」时一次性返回,8 秒后界面自己收回)。
@@ -3923,6 +4054,10 @@ pub fn run() {
             // **必须在原有 setup 里起** —— Tauri 的 Builder::setup 只有一个槽位,
             // 再加一个会把 manage(AppState) 那套顶掉,应用会在第一条命令就 panic。
             spawn_checkin_ticker(app.handle().clone());
+
+    // 引用索引对账(设计稿 product-vault-ref-reconcile-2026-10-21):
+    // 启动后台按真实指针重抄一遍索引 —— 无论上次是怎么走偏的,下次启动自己就好了。
+    spawn_vault_ref_rebuild(app.handle().clone());
 
             // 窗口配置为 visible:false,这里统一控制显隐:
             // 正常启动立即显示;开机自启带 --hidden,直接进托盘等用户点开

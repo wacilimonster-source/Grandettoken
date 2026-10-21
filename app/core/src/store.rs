@@ -1263,18 +1263,43 @@ impl Store {
         Ok(())
     }
 
-    /// 该渠道引用的是哪个箱子条目。`Ok(None)` = 用的是"直接填在渠道卡上"的密钥。
-    pub fn vault_ref_of(&self, channel_id: &str) -> Result<Option<String>, String> {
-        let mut stmt = self
+    /// 用一份"按真实指针算出来的关系"**整表替换**索引。
+    ///
+    /// 这是对账的唯一动作(设计稿 `product-vault-ref-reconcile-2026-10-21`)。
+    /// 一句话规矩:**书架说了算,索引只是副本,随时可以重抄。**
+    ///
+    /// 为什么是整表替换而不是逐条 upsert:逐条改的话,"索引里有、指针里没有"的行
+    /// **永远清不掉** —— 而那恰恰是走偏的主要形态(取消引用时索引没删干净)。
+    /// 整表替换让索引只可能等于"这一次扫描到的真相",不可能残留幽灵行。
+    pub fn vault_ref_rebuild(&self, pairs: &[(String, String)]) -> Result<(), String> {
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let tx = self
             .conn
-            .prepare("SELECT vault_id FROM vault_refs WHERE channel_id = ?1")
-            .map_err(|e| e.to_string())?;
-        let mut rows = stmt
-            .query_map(params![channel_id], |r| r.get::<_, String>(0))
-            .map_err(|e| e.to_string())?;
-        Ok(rows.next().and_then(|r| r.ok()))
+            .unchecked_transaction()
+            .map_err(|e| format!("开启索引重建事务失败: {e}"))?;
+        tx.execute("DELETE FROM vault_refs", [])
+            .map_err(|e| format!("清空引用索引失败: {e}"))?;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT OR REPLACE INTO vault_refs (channel_id, vault_id, created_at)
+                     VALUES (?1, ?2, ?3)",
+                )
+                .map_err(|e| format!("准备写引用索引失败: {e}"))?;
+            for (c, v) in pairs {
+                stmt.execute(rusqlite::params![c, v, created_at])
+                    .map_err(|e| format!("写引用索引失败: {e}"))?;
+            }
+        }
+        tx.commit().map_err(|e| format!("提交索引重建失败: {e}"))?;
+        Ok(())
     }
 
+    // 原 `vault_ref_of` 已删除(N30):它读的是**索引**,而索引是派生数据。
+    // 需要"某渠道引用了谁"时一律走 `secrets::link_get` —— 书架才是权威。
     /// 取消引用(改回"直接填"或清除密钥时用)。本来没有引用也算成功。
     pub fn vault_ref_clear(&self, channel_id: &str) -> Result<(), String> {
         self.conn
@@ -1375,7 +1400,53 @@ mod tests {
         Store { conn }
     }
 
+        /// 索引是**派生数据**:整表重抄之后,它必须完全等于"这一次扫描到的真相"。
+    ///
+    /// 这条测试盯的是最容易漏的一种走偏:逐条 upsert 只能"加和改",**清不掉**
+    /// "索引里有、指针里没有"的行 —— 而那正是取消引用时索引没删干净的形态。
     #[test]
+    fn vault_ref_rebuild_replaces_the_whole_index() {
+        // 用 open_memory()(会跑 init_schema),不能用 mem():后者只有裸连接,
+        // vault_refs 表根本没建出来 —— 那样测的是表不存在,不是对账逻辑。
+        let s = Store::open_memory().unwrap();
+
+        // 第一次对账:两个渠道各引用一条
+        s.vault_ref_rebuild(&[
+            ("4sapi".to_string(), "uuid-a".to_string()),
+            ("hapi".to_string(), "uuid-b".to_string()),
+        ])
+        .unwrap();
+        assert_eq!(s.vault_ref_channels("uuid-a").unwrap(), vec!["4sapi".to_string()]);
+        assert_eq!(s.vault_ref_channels("uuid-b").unwrap(), vec!["hapi".to_string()]);
+
+        // 第二次对账:4sapi 改引用 uuid-c,hapi 取消引用 —— 旧行必须消失
+        s.vault_ref_rebuild(&[
+            ("4sapi".to_string(), "uuid-c".to_string()),
+            ("hapi".to_string(), "uuid-b".to_string()),
+        ])
+        .unwrap();
+        assert!(
+            s.vault_ref_channels("uuid-a").unwrap().is_empty(),
+            "旧的 uuid-a 行必须被清掉,否则列表会说谎"
+        );
+        assert_eq!(s.vault_ref_channels("uuid-c").unwrap(), vec!["4sapi".to_string()]);
+
+        // 第三次对账:什么都不剩(全部取消引用)
+        s.vault_ref_rebuild(&[]).unwrap();
+        assert!(s.vault_ref_pairs().unwrap().is_empty(), "空真相 -> 空索引");
+
+        // 一个条目可以被多个渠道引用(裁决 6)
+        s.vault_ref_rebuild(&[
+            ("4sapi".to_string(), "uuid-shared".to_string()),
+            ("hapi".to_string(), "uuid-shared".to_string()),
+        ])
+        .unwrap();
+        let mut got = s.vault_ref_channels("uuid-shared").unwrap();
+        got.sort();
+        assert_eq!(got, vec!["4sapi".to_string(), "hapi".to_string()]);
+    }
+
+#[test]
     fn consumption_sums_decreases_and_ignores_topups() {
         let s = mem();
         // 余额 100 -> 90 -> 85 -> 充值回 200 -> 195
