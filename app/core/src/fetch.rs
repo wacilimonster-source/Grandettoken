@@ -1034,9 +1034,16 @@ fn credentials(
                     })
                 }
                 Ok(secrets::Resolved::None) => {}
-                // 断链:引用还在但箱子那条被删了。当"没有密钥"处理(发不了请求),
-                // 但界面会单独说清是断链 —— 见 `resolve` 的说明
-                Ok(secrets::Resolved::Dangling(_)) => {}
+                // 断链:引用还在但箱子那条被删了。**发不了请求是必然的**,但不能一声不吭。
+                //
+                // N06(2026-10-21):以前这里什么都不说,于是兜底文案变成"还没填 XX 的密钥"——
+                // 而"断链"和"没配"该去的地方**正好相反**:前者去密钥箱看,后者去渠道卡填。
+                // 用户照着错的话去渠道卡重填,填完仍然不通(引用还在、优先级更高)。
+                Ok(secrets::Resolved::Dangling(vid)) => {
+                    err = Some(format!(
+                        "引用的密钥箱条目已被删除(条目 id={vid})—— 去「密钥箱」检查,或在这里重新选一把"
+                    ));
+                }
                 Err(e) => err = Some(e),
             }
             // WorkBuddy:**桌面端凭据优先**。它比网页会话活得久(accessToken 28 天、
@@ -1900,7 +1907,7 @@ impl Fetcher {
                         v.has_key = if matches!(def.auth, AuthKind::Keyring | AuthKind::WebSession) {
                             let id = def.id.to_string();
                             tokio::task::spawn_blocking(move || {
-                                secrets::get(&id).ok().flatten().is_some()
+                                secrets::channel_key(&id).ok().flatten().is_some()
                             })
                             .await
                             .unwrap_or(false)
@@ -2149,7 +2156,7 @@ impl Fetcher {
                 continue; // 隐藏 = 连凭据都不读(与内置渠道同一条裁决)
             }
             let cid = ch.id.clone();
-            let key = tokio::task::spawn_blocking(move || secrets::get(&cid).ok().flatten())
+            let key = tokio::task::spawn_blocking(move || secrets::channel_key(&cid).ok().flatten())
                 .await
                 .unwrap_or(None);
             match key {

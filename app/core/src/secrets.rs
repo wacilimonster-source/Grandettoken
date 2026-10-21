@@ -163,6 +163,18 @@ pub fn link_clear(channel_id: &str) -> Result<(), String> {
     }
 }
 
+/// 渠道密钥的**值**(引用优先)。与 [`resolve`] 同一口径,只是调用方只关心值。
+///
+/// N05(2026-10-21):`resolve` 上线后,仍有 8 处直接调 `get()` —— 于是引用模式的渠道
+/// 在那些地方读到 None:「显示密钥」说"还没保存"、模型页读不到 4SAPI 的 key、
+/// 「测试连接」说"还没填密钥"、自定义渠道干脆不发请求。同一张卡片上两套真相。
+///
+/// 凡是要拿渠道密钥去**用**的地方,一律走这里(或 `resolve`,需要区分断链时用后者)。
+/// 例外:WorkBuddy 的续期槽位(`refresh_slot`)不是渠道密钥,仍用 `get`。
+pub fn channel_key(provider_id: &str) -> Result<Option<String>, String> {
+    Ok(resolve(provider_id)?.key().map(|s| s.to_string()))
+}
+
 /// 渠道密钥的**唯一读取入口**:先看有没有引用,再退回直接填的值。
 ///
 /// 所有"要用这把 keys 发请求"的地方都该走这里,而不是直接 `get()` ——

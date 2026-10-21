@@ -281,7 +281,7 @@ fn fp_of_any(id: &str) -> String {
     if let Some(def) = providers::find(id) {
         return tokenscope_core::fetch::current_key_fp(def);
     }
-    match secrets::get(id) {
+    match secrets::channel_key(id) {
         Ok(Some(k)) if !k.trim().is_empty() => tokenscope_core::fetch::key_fp(&k),
         _ => String::new(),
     }
@@ -316,10 +316,16 @@ async fn set_key(app: tauri::AppHandle, id: String, key: String) -> Result<(), S
     //
     // 互斥(裁决 7):填了值就把引用清掉。否则读路径**优先看引用**,
     // 用户填的新值会被完全忽略 —— 表现为"保存成功但还在用旧的",最难查的那种。
+    //
+    // ⚠ **顺序:先写值、后清引用**(2026-10-21 修 N03)。反过来的话,
+    // 写值这一步会因为"密钥为空"被拒(`secrets::set` 里 `if key.is_empty()`),
+    // 而那时引用**已经被清掉了** —— 用户看到"保存失败",但原来那份能用的引用没了,
+    // 渠道变成"既没引用也没值"。改成先写后清:写失败时旧引用还在,渠道继续正常工作;
+    // 而"两份都在"的短暂状态完全无害,因为读路径优先看引用。
     let cid = id.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
-        secrets::link_clear(&cid)?;
-        secrets::set(&cid, &key)
+        secrets::set(&cid, &key)?;
+        secrets::link_clear(&cid)
     })
     .await
     .map_err(|e| format!("保存密钥失败: {e}"))??;
@@ -339,10 +345,7 @@ async fn delete_key(app: tauri::AppHandle, id: String) -> Result<String, String>
     key_allowed(&app.state::<AppState>(), &id)?;
     // 自定义渠道:只有凭据管理器里那一份,没有网页会话可清
     if providers::find(&id).is_none() {
-        let del_id = id.clone();
-        tokio::task::spawn_blocking(move || secrets::delete(&del_id))
-            .await
-            .map_err(|e| format!("删除密钥任务失败: {e}"))??;
+        purge_channel_credentials(&app, &id).await?;
         app.state::<AppState>().fetcher.invalidate();
         return Ok("已删除这个自定义渠道的密钥(渠道定义还在,换一把可继续用)".into());
     }
@@ -360,11 +363,7 @@ async fn delete_key(app: tauri::AppHandle, id: String) -> Result<String, String>
             warn = format!(";浏览器登录会话可能没清干净({e}),请在客户端里退出登录一次");
         }
     }
-    // 凭据管理器的删是 RPC:与 key_hint/set_key 同一条纪律,不能直接占着 tokio worker
-    let del_id = id.clone();
-    tokio::task::spawn_blocking(move || secrets::delete(&del_id))
-        .await
-        .map_err(|e| format!("删除密钥任务失败: {e}"))??;
+    purge_channel_credentials(&app, &id).await?;
     // 凭据刚变过:作废"5 秒内复用上次结果",否则紧接着的刷新还会把旧结果(带旧凭据
     // 取到的那份)端上来,用户看到"清掉了却还显示已登录"。
     app.state::<AppState>().fetcher.invalidate();
@@ -373,6 +372,29 @@ async fn delete_key(app: tauri::AppHandle, id: String) -> Result<String, String>
     } else {
         format!("已删除 {} 的密钥{warn}", def.name)
     })
+}
+
+/// 把一个渠道的**全部**密钥痕迹清干净:直接填的值 + 引用指针 + 反查索引行。
+///
+/// 2026-10-21 修 N01/N02:以前各处只删 `TokenScope/<id>`,而密钥箱打通之后
+/// 一个渠道的密钥有**两个来源**,读取时**优先看引用** —— 于是"删除密钥"点了等于没点:
+/// 弹窗说已删除,渠道照样取得到数。这不是文案问题,是凭据真的还在。
+///
+/// 三样必须一起清,少一样就留一条孤儿:
+///   · `secrets::delete`     —— 直接填的值
+///   · `secrets::link_clear` —— 引用指针(**读取时优先级最高的那个**)
+///   · `vault_ref_clear`     —— SQLite 反查索引(不清的话密钥箱还显示"正被它使用")
+async fn purge_channel_credentials(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
+    let cid = id.to_string();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        secrets::delete(&cid)?;
+        secrets::link_clear(&cid)
+    })
+    .await
+    .map_err(|e| format!("删除密钥任务失败: {e}"))??;
+    let store = app.state::<AppState>().store.clone();
+    lock_rw(&store).vault_ref_clear(id)?;
+    Ok(())
 }
 
 // ───────────── 渠道密钥 ↔ 密钥箱(设计稿 product-vault-channel-bridge)─────────────
@@ -1452,11 +1474,20 @@ async fn custom_remove(app: tauri::AppHandle, id: String) -> Result<String, Stri
     };
     let id2 = id.clone();
     save_config_off_main(&st, move |c| c.custom_channels.retain(|x| x.id != id2)).await?;
+    // N02(2026-10-21):删渠道要把**三样**都清干净 —— 直接填的值、引用指针、反查索引行。
+    // 以前只 let _ = secrets::delete():① 引用指针留着,渠道"删了但密钥箱还说正被它使用";
+    // ② 连删失败都被 let _ 吞了,凭据留在系统里没人知道(凭据纪律问题)。
     let cid = id.clone();
-    let _ = tokio::task::spawn_blocking(move || secrets::delete(&cid)).await;
+    let purge = purge_channel_credentials(&app, &cid).await;
     st.fetcher.invalidate();
+    // 渠道定义已经删了,不该因为清凭据失败就把整个操作报成失败 ——
+    // 但也不能静默:如实告诉用户"渠道删了,凭据没清干净"。
+    let purge_note = match purge {
+        Ok(()) => String::new(),
+        Err(e) => format!(" · ⚠ 它的密钥可能没清干净({e}),可在密钥箱里手动检查"),
+    };
     Ok(format!(
-        "已删除自定义渠道「{name}」· 它的历史快照仍在库里(只是不再显示,也不参与合计)"
+        "已删除自定义渠道「{name}」{purge_note} · 它的历史快照仍在库里(只是不再显示,也不参与合计)"
     ))
 }
 
@@ -1480,7 +1511,7 @@ async fn probe_channel(
                 .ok_or_else(|| format!("没有这个自定义渠道:{id}"))?
         };
         let cid = id.clone();
-        let key = tokio::task::spawn_blocking(move || secrets::get(&cid).ok().flatten())
+        let key = tokio::task::spawn_blocking(move || secrets::channel_key(&cid).ok().flatten())
             .await
             .unwrap_or(None);
         let started = std::time::Instant::now();
@@ -1596,7 +1627,7 @@ async fn run_diagnostic(app: tauri::AppHandle) -> Result<String, String> {
                 continue;
             }
             let cid = ch.id.clone();
-            let key = tokio::task::spawn_blocking(move || secrets::get(&cid).ok().flatten())
+            let key = tokio::task::spawn_blocking(move || secrets::channel_key(&cid).ok().flatten())
                 .await
                 .unwrap_or(None);
             match key {
@@ -2493,9 +2524,13 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
     // 落配置 + 落流水(凭据不进去)
     {
         let state = app.state::<AppState>();
-        let mut cfg = lock_rw(&state.config).clone();
-        let notify = cfg.checkin_notify;
-        let entry = cfg.checkin.entry(id.to_string()).or_default();
+        // ⚠ 只取"我要改的那一项",**不整份克隆配置**(2026-10-21 修 N04)。
+        // 以前是 lock_rw(&state.config).clone() 拍一份快照,结束时 cfg.save() 把整份
+        // 旧快照写回磁盘、*lock_rw = cfg 还把内存态一起覆盖 —— 用户在签到跑的那 30~70 秒里
+        // 改的任何设置(关渠道、改刷新间隔)都被悄悄还原。本轮更严重:节拍器从"启动先睡 5 分钟"
+        // 改成"启动立刻跑一轮",撞上这个窗口的概率明显变大。
+        let notify = lock_rw(&state.config).checkin_notify;
+        let mut entry = lock_rw(&state.config).checkin.get(id).cloned().unwrap_or_default();
         let same_day = entry.last_day.as_deref() == Some(today.as_str());
         entry.attempts = if same_day { entry.attempts + 1 } else { 1 };
         entry.last_day = Some(today.clone());
@@ -2556,23 +2591,34 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
                 }),
             );
         }
-        let store = lock_rw(&state.store);
-        if let Err(e) = store.record_checkin(
-            id,
-            now,
-            &today,
-            &out.code(),
-            credits,
-            entry.attempts,
-            entry.last_message.as_deref().unwrap_or(""),
-        ) {
-            eprintln!("{e}");
+        // 先落流水(独立作用域:不拿着 store 锁去取 config 锁,避免锁序问题)
+        {
+            let store = lock_rw(&state.store);
+            if let Err(e) = store.record_checkin(
+                id,
+                now,
+                &today,
+                &out.code(),
+                credits,
+                entry.attempts,
+                entry.last_message.as_deref().unwrap_or(""),
+            ) {
+                eprintln!("{e}");
+            }
         }
-        if let Err(e) = cfg.save(&store) {
-            eprintln!("签到配置落库失败: {e}");
+        // 再**只**把 checkin[id] 合并进当前配置。读的是 live 配置而不是开头那份快照,
+        // 所以用户在签到期间改的其它设置原样保留 —— 这条是 N04 的核心。
+        let merged = {
+            let mut live = lock_rw(&state.config);
+            live.checkin.insert(id.to_string(), entry.clone());
+            live.clone()
+        };
+        {
+            let store = lock_rw(&state.store);
+            if let Err(e) = merged.save(&store) {
+                eprintln!("签到配置落库失败: {e}");
+            }
         }
-        drop(store);
-        *lock_rw(&state.config) = cfg;
     }
     let _ = manual;
     // 真领到了才单独发一条:前端据此播"叮"一声(裁决 8A 的两声之一)。
@@ -2853,7 +2899,7 @@ fn source_base(cfg: &Config, cache: Option<&models::ModelCache>, def: &models::S
 
 /// 该来源的密钥。Go 的列表公开,但写进客户端必须带密钥。
 fn source_key(id: &str) -> Option<String> {
-    secrets::get(id)
+    secrets::channel_key(id)
         .ok()
         .flatten()
         .filter(|k| !k.trim().is_empty())
@@ -3045,7 +3091,7 @@ async fn get_model_catalog(
     }
 
     // 凭据管理器读是 RPC,下沉到阻塞任务(模型页虽然是人点的,但一次要串好几个请求)
-    let key = tokio::task::spawn_blocking(|| secrets::get("4sapi"))
+    let key = tokio::task::spawn_blocking(|| secrets::channel_key("4sapi"))
         .await
         .map_err(|e| format!("读取 4SAPI 密钥失败: {e}"))?
         .ok()
@@ -3516,7 +3562,7 @@ async fn key_reveal(id: String) -> Result<String, String> {
     }
     // 凭据管理器读是 RPC:与 key_hint/set_key 同一条纪律,不下沉就会占住一个 tokio worker
     let rid = id.clone();
-    match tokio::task::spawn_blocking(move || secrets::get(&rid))
+    match tokio::task::spawn_blocking(move || secrets::channel_key(&rid))
         .await
         .map_err(|e| format!("读取凭据失败: {e}"))?
     {

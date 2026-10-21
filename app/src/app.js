@@ -1255,15 +1255,28 @@ let PEEK = { open: false, timer: null, h: 0, w: 0 };
  *   ② 以前用 `new Date()` 算本地日去比对 log 里的 day,而 **Qoder 的周期日从 10:00
  *      起算** —— 10:00 之前必然对不上,明明签了也显示没签。
  * 现在直接用后端算好的 `doneToday`,前端**零日期运算**。 */
-function peekCheckinLine() {
-  let done = 0;
-  let on = 0;
+/** 参与签到统计的渠道:开了签到 + **没被隐藏** + 确实在渠道列表里。
+ *
+ * N11(2026-10-21):隐藏只改 hiddenChannels,**不会**关掉签到开关;而节拍器会跳过隐藏渠道、
+ * 徽标也不给它画。三处口径不一致的后果是:隐藏 Trae 之后顶部一直挂着
+ * "今天还有 1 个渠道没签到" —— 一个永远不会发生的任务被钉在最显眼的位置。
+ * 现在三处都用这一份名单。 */
+function ckActiveIds() {
+  const out = [];
   for (const id of CHECKIN_ON) {
     const s = CK[id];
     if (!s || !s.enabled) continue;
-    on++;
-    if (s.doneToday) done++;
+    const c = CHANNELS.find((x) => x.id === id);
+    if (!c || c.hidden) continue;
+    out.push(id);
   }
+  return out;
+}
+
+function peekCheckinLine() {
+  const ids = ckActiveIds();
+  const on = ids.length;
+  const done = ids.filter((id) => CK[id] && CK[id].doneToday).length;
   return on ? `签到 ${done}/${on}` : "";
 }
 
@@ -2342,6 +2355,17 @@ $("list").addEventListener("click", async (e) => {
           setTimeout(() => el.classList.remove("flash"), 1150);
         }
       });
+    } else if (a === "ckrun") {
+      // N08(2026-10-21):徽标上的「可领」按钮带着 data-act="ckrun",但这个委托
+      // 以前只认 ckstripopen / open-manage / open-models / range —— ckrun 落进来
+      // 就 return 了,而且前面已经 stopPropagation,连展开卡片都没有,点了完全没反应。
+      // 现在与设置页走同一个 ckRun(),首页就能一键领。
+      if (CK_LOG) return;
+      if (CK[id] && CK[id].canTry === false) {
+        showToast("现在还不能领:" + ckHold(CK[id]), true);
+        return;
+      }
+      await ckRun(id);
     } else if (a === "open-manage") {
       openManage();
       const first = act.dataset.first;
@@ -3981,7 +4005,14 @@ function ckText(s) {
   const run = (label, cls) => (canRun ? { btn: label, act: "ckrun", cls } : { btn: ckHold(s), disabled: true });
   if (!s.enabled) {
     // 关着也要把最近一次已知状态带上:上一轮手动验过/刚关掉的人,不该看不到"其实今天已领"
-    const tail = o.startsWith("claimed") || o.startsWith("already") ? " · 今天已领" + n + " 分" : "";
+    // N18(2026-10-21):这里以前写死 " · 今天已领" + n + " 分",n 为空就成「今天已领 分」——
+    // 与 0.1.52 修的是同一个洞,但当时只改了 claimed / already 两条,漏了这一条。
+    const tail =
+      o.startsWith("claimed") || o.startsWith("already")
+        ? hasN
+          ? " · 今天已领" + amt
+          : " · 今天已签到(平台未返回数额)"
+        : "";
     return { text: "签到未开启(开了才会发请求)" + tail, btn: "开启签到", act: "ckenable" };
   }
   if (s.note) return { text: s.note, btn: "去登录", act: "cklogin", warn: true };
@@ -4016,7 +4047,19 @@ function ckText(s) {
   // `recheck` = 上次那条 `auth` 是**旧版本**判的,而凭据链路可能已经修好了。
   // 后端在节拍器重新判定之前会这么报,界面**不该给「去登录」** —— 那会把用户引去网页登录,
   // 而更常见的情况是桌面端凭据本来就好用(2026-10-20 真机就是这么被误导的)。
-  if (o === "recheck") return { text: "正在重新确认凭据…(上次的失效判定已过期,马上会再试一次)" };
+  // N12(2026-10-21):以前这里只给 text、不给 btn,于是 ckRowHtml 连按钮都不画;
+  // 而且"马上会再试一次"在**自动签到关着**时是句假话 —— 什么都不会发生,
+  // 这个状态会一直挂到第二天。后端在这个状态下 can_try 是 true(陈旧的 auth 不挡当天),
+  // 手动点完全跑得动,界面把入口露出来就行。
+  if (o === "recheck")
+    return Object.assign(
+      {
+        text: s.auto
+          ? "正在重新确认凭据…(上次的失效判定已过期,马上会再试一次)"
+          : "上次的凭据失效判定已过期,但自动签到是关着的 —— 点这里手动重试一次",
+      },
+      run("立即重试", "")
+    );
   // `no_cred` = **本机没读到凭据**(没装桌面端 / 没登录 / DPAPI 解不开),
   // 与 `auth`(平台拒绝了这份凭据)是两件事,提示的方向也不同。
   if (o.startsWith("no_cred"))
@@ -4035,15 +4078,10 @@ function ckText(s) {
  * 签到全关时也不出现(没开的人不该被提醒一件他没要求的事)。
  */
 function ckPendingStrip() {
-  let pending = 0;
-  let on = 0;
-  for (const id of CHECKIN_ON) {
-    const s = CK[id];
-    if (!s || !s.enabled) continue;
-    on++;
-    if (!s.doneToday) pending++;
-  }
-  if (!on || !pending) return "";
+  const ids = ckActiveIds();
+  if (!ids.length) return "";
+  const pending = ids.filter((id) => !(CK[id] && CK[id].doneToday)).length;
+  if (!pending) return "";
   return `<button type="button" class="ckstrip" data-act="ckstripopen"
       title="打开「刷新与启动 → 每日签到」">今天还有 <b>${pending}</b> 个渠道没签到 · 去查看</button>`;
 }
@@ -4070,7 +4108,11 @@ function ckBadgeHtml(c) {
   const tip = esc(ckBadgeTip(s));
 
   // claimed = **我们刚替他领到了** → 可以说数额
-  if (o.startsWith("claimed")) return `<span class="ckb ok" title="${tip}">✓${esc(n)}</span>`;
+  // N10(2026-10-21):Trae / WorkBuddy 的接口**经常不返回数额**(本机 10-20、10-21 都是
+  // credits = null)—— 所以"没有数额"是生产常态,不是边缘情况。以前这里出 ✓${n},
+  // n 为空就只剩一个孤零零的 ✓,挂件又只有 380px、tooltip 要悬停才看得见。
+  if (o.startsWith("claimed"))
+    return `<span class="ckb ok" title="${tip}">${n ? "✓" + esc(n) : "✓ 已签"}</span>`;
   // already = **平台侧已签**(可能是他自己在客户端点的)→ 只说"已签",数额进 tooltip。
   // 写成 "+100" 会让人以为是我们领的 —— 签到红线第 2 条(不把点了按钮说成领到了)。
   if (o.startsWith("already")) return `<span class="ckb ok" title="${tip}">✓ 已签</span>`;

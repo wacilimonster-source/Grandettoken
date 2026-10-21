@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>全量代码体检报告 · 第二轮 · Grandettoken v0.1.52 · 2026-10-21</title>
+<style>
+  :root{
+    --bg:#0f1115; --fg:#e6e8ee; --mut:#9aa3b2; --line:#262b36; --card:#151922;
+    --ac:#19b8c4; --ok:#2fbf71; --warn:#f5a623; --bad:#e5484d; --p0:#e5484d; --p1:#f5a623;
+    --p2:#4a9eff; --p3:#8b93a5;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f6f7f9; --fg:#1b1f27; --mut:#5b6472; --line:#dfe3ea; --card:#fff;
+           --p0:#c62b30; --p1:#b5730a; --p2:#1a66c9; --p3:#6b7280; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:15px/1.75 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1080px;margin:0 auto;padding:28px 22px 90px}
+  h1{font-size:26px;margin:0 0 4px}
+  h2{font-size:20px;margin:38px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+  h3{font-size:16px;margin:22px 0 8px}
+  p{margin:8px 0}
+  code{background:rgba(127,127,127,.16);padding:1px 5px;border-radius:4px;font-size:13px;
+    font-family:"Cascadia Mono",Consolas,monospace;word-break:break-all}
+  pre{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px;
+    overflow-x:auto;font-size:12.5px;line-height:1.6;font-family:"Cascadia Mono",Consolas,monospace}
+  .sub{color:var(--mut);font-size:13px}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:rgba(127,127,127,.08);font-weight:600}
+  .tag{display:inline-block;padding:0 8px;border-radius:10px;font-size:12px;border:1px solid var(--line);
+    white-space:nowrap;font-weight:600}
+  .t-p0{color:var(--p0);border-color:var(--p0)}
+  .t-p1{color:var(--p1);border-color:var(--p1)}
+  .t-p2{color:var(--p2);border-color:var(--p2)}
+  .t-p3{color:var(--p3);border-color:var(--p3)}
+  .t-ok{color:var(--ok);border-color:var(--ok)}
+  .t-new{color:var(--ac);border-color:var(--ac)}
+  .note{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:12px 0}
+  .note.warn{border-left:3px solid var(--warn)}
+  .note.bad{border-left:3px solid var(--bad)}
+  .note.ok{border-left:3px solid var(--ok)}
+  .note.info{border-left:3px solid var(--ac)}
+  .verdict{border:1px solid var(--bad);border-left-width:4px;background:var(--card);
+    border-radius:8px;padding:14px 16px;margin:18px 0}
+  .verdict b{color:var(--bad)}
+  .verdict.good{border-color:var(--ok)}
+  .verdict.good b{color:var(--ok)}
+  ul,ol{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+  .cards{margin-top:10px}
+  .bug{background:var(--card);border:1px solid var(--line);border-radius:9px;padding:12px 15px;margin:11px 0}
+  .bug.p0{border-left:4px solid var(--p0)}
+  .bug.p1{border-left:4px solid var(--p1)}
+  .bug.p2{border-left:4px solid var(--p2)}
+  .bug.p3{border-left:4px solid var(--p3)}
+  .bhead{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
+  .bid{color:var(--mut);font-family:"Cascadia Mono",Consolas,monospace;font-size:12.5px}
+  .btitle{font-weight:600;font-size:15px}
+  .bwhere{color:var(--mut);font-size:12.5px;margin:3px 0 0;
+    font-family:"Cascadia Mono",Consolas,monospace}
+  .rows{margin-top:8px}
+  .row{display:flex;gap:9px;margin:5px 0;font-size:14px}
+  .row .k{flex:0 0 5.4em;color:var(--mut);font-size:13px;padding-top:1px}
+  .row .v{flex:1;min-width:0}
+  .fix{color:var(--ok)}
+  .toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:14px 0 4px}
+  .toolbar button{font:inherit;font-size:13px;padding:5px 12px;border-radius:16px;cursor:pointer;
+    background:transparent;color:var(--fg);border:1px solid var(--line)}
+  .toolbar button.on{background:var(--ac);color:#08121a;border-color:var(--ac);font-weight:600}
+  .toolbar input{font:inherit;font-size:13px;padding:5px 10px;border-radius:6px;
+    background:var(--card);color:var(--fg);border:1px solid var(--line);min-width:200px}
+  .hidden{display:none !important}
+  .count{color:var(--mut);font-size:13px;margin-left:auto}
+  .sum{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}
+  .sum .box{flex:1 1 130px;background:var(--card);border:1px solid var(--line);border-radius:9px;padding:11px 13px}
+  .sum .n{font-size:25px;font-weight:700;line-height:1.2}
+  .sum .l{color:var(--mut);font-size:12.5px}
+  .delta{display:inline-block;padding:0 7px;border-radius:10px;font-size:12px;border:1px solid var(--line);
+    white-space:nowrap}
+  .d-ok{color:var(--ok);border-color:var(--ok)}
+  .d-open{color:var(--p1);border-color:var(--p1)}
+  .d-new{color:var(--ac);border-color:var(--ac)}
+  td.now{width:34%}
+  footer{margin-top:44px;padding-top:14px;border-top:1px solid var(--line);color:var(--mut);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Grandettoken 全量代码体检报告 · 第二轮</h1>
+<p class="sub">2026-10-21 · 基于 <code>74afd32</code>（v0.1.52）· 覆盖本轮新增的 5 个提交：签到徽标、陈旧 auth 判定、密钥箱↔渠道密钥打通</p>
+
+<div class="verdict">
+<b>一句话结论：</b>新增的功能<b>能跑、测试也全绿</b>（276 个单测 0 失败、两个 crate 编译零警告、仓库无凭据泄漏），
+但这次新加的两个功能各带进来 <b>一批自己的问题</b>：<b>密钥箱打通</b>功能里，"读密钥"这件事<b>没有走新的统一入口</b>，
+导致引用模式的渠道在<b>一半的路径上读不到密钥</b>、在<b>另一半的路径上又读得到</b>（同一张卡片上两套真相）；
+<b>签到徽标</b>功能里，首页那个"可领"按钮<b>点了没反应</b>，而且"可领"这个状态<b>根本到不了</b>。<br><br>
+<b>上次报告的 53 个问题，修了 1 个（#23），其余 52 个全部还在。</b>
+加上这次新发现的 <b>30 个</b>，当前一共 <b>82 个</b>待修。
+</div>
+
+<div class="sum">
+  <div class="box"><div class="n" style="color:var(--ok)">276</div><div class="l">单元测试通过 / 0 失败</div></div>
+  <div class="box"><div class="n" style="color:var(--p0)">4</div><div class="l">P0 · 本轮新增</div></div>
+  <div class="box"><div class="n" style="color:var(--p1)">8</div><div class="l">P1 · 本轮新增</div></div>
+  <div class="box"><div class="n" style="color:var(--p2)">11</div><div class="l">P2 · 本轮新增</div></div>
+  <div class="box"><div class="n" style="color:var(--p3)">7</div><div class="l">P3 · 本轮新增</div></div>
+  <div class="box"><div class="n" style="color:var(--warn)">52</div><div class="l">上次的遗留未修</div></div>
+</div>
+
+<h2>1. 这次测了什么</h2>
+
+<h3>1.1 新代码范围</h3>
+<p>上一轮报告之后，项目新增了 5 个提交，我把它们全部读了一遍并逐条验证：</p>
+<table>
+<tr><th>提交</th><th>做了什么</th><th>本轮新发现</th></tr>
+<tr><td><code>50158cb</code></td><td>修：升级后当天仍显示"凭据失效"</td><td>1 个 P3（N24 陈旧判定不看日期）</td></tr>
+<tr><td><code>c56f32e</code></td><td>feat：密钥箱与渠道密钥打通（引用，不是复制）</td><td><b>14 个</b>（含 3 个 P0）—— 这一轮的大头</td></tr>
+<tr><td><code>e16d60d</code></td><td>fix：陈旧 auth + 节拍器 5 分钟空窗</td><td>3 个（N22 开机扎堆、N23 本身是好事、N04 被它放大）</td></tr>
+<tr><td><code>2f1dd70</code></td><td>feat：首页卡片展示今日签到徽标</td><td><b>7 个</b>（含 2 个 P1）</td></tr>
+<tr><td><code>74afd32</code></td><td>fix：首页取签到状态 + 数额缺失时的悬空"分"</td><td>4 个（N18 漏改一处、N20 首屏变慢、N25 不重绘）+ 2 个老问题被它放大</td></tr>
+</table>
+
+<h3>1.2 跑起来的验证（全部通过）</h3>
+<table>
+<tr><th>项目</th><th>命令</th><th>结果</th></tr>
+<tr><td>纯逻辑层单元测试</td><td><code>cargo test --locked</code>（app/core）</td><td><b>276 通过 / 0 失败</b> / 6 个真机用例按设计跳过<br><span class="sub">（上一轮 271 个 → 新增 5 个单测：断链区分、空值口径、掩码口径、陈旧 auth、徽标结论）</span></td></tr>
+<tr><td>纯逻辑层编译检查</td><td><code>cargo check --all-targets --locked</code></td><td>干净，零警告</td></tr>
+<tr><td>Tauri 后端编译检查</td><td><code>cargo check --all-targets --locked</code></td><td>干净，零警告</td></tr>
+<tr><td>前端与脚本语法</td><td><code>node --check</code> × 16 个文件</td><td>全部通过</td></tr>
+<tr><td>仓库凭据扫描</td><td><code>build/scan-secrets.ps1</code></td><td>CLEAN — 124 个文件里没有疑似凭据</td></tr>
+</table>
+
+<div class="note warn">
+<b>注意这一轮的一个信号：</b>新增的 5 个单测里，有 2 个<b>把 bug 固化成了"期望行为"</b>——
+<code>mask_keeps_only_tail4</code> 断言 <code>mask_of("ab") == "••••ab"</code>（2 个字符的密钥被完整显示），
+这正是上一轮的 #36。单测绿了，但绿的是错的行为。<b>加测试的时候要先确认"期望值"本身是对的。</b>
+</div>
+
+<h2>2. 本轮新增的 30 个问题</h2>
+
+<div class="toolbar" id="toolbar">
+  <button class="on" data-f="all">全部 30</button>
+  <button data-f="p0">P0 (4)</button>
+  <button data-f="p1">P1 (8)</button>
+  <button data-f="p2">P2 (11)</button>
+  <button data-f="p3">P3 (7)</button>
+  <input id="q" type="search" placeholder="搜索关键字（文件名 / 现象 / 关键词）">
+  <span class="count" id="cnt"></span>
+</div>
+
+<div class="cards" id="cards">
+
+<!-- ============ P0 ============ -->
+<h3>P0 · 会悄悄改坏数据或弄丢凭据</h3>
+
+<div class="bug p0" data-sev="p0">
+  <div class="bhead"><span class="bid">N01</span><span class="tag t-p0">P0</span><span class="tag t-new">新增</span><span class="btitle">引用模式下点「删除密钥」，密钥根本删不掉</span></div>
+  <p class="bwhere">app/src-tauri/src/lib.rs:338-376（<code>delete_key</code>）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">渠道的密钥改成"引用密钥箱"之后，去渠道卡点「删除密钥」，弹了"已删除 XX 的密钥"，<b>但这个渠道照样能取到数、照样能用</b>。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">密钥箱打通后，一个渠道的密钥有两个来源：直接填的（存在凭据管理器的 <code>TokenScope/&lt;渠道id&gt;</code>）和引用（存在 <code>TokenScope:link/&lt;渠道id&gt;</code>，值是 <code>vault:&lt;条目id&gt;</code>）。<code>delete_key</code> 只删了前者，<b>没删引用指针</b>。而读取时<b>优先看引用</b>，所以指针还在 = 密钥还在。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">删除密钥时把引用指针和索引行一起清掉。</span>点「删除密钥」之后，渠道真的变成"未配置密钥"，取数立刻失败并如实告诉你原因。SQLite 里的 <code>vault_refs</code> 索引行也要跟着清，否则密钥箱列表还会说"正被这个渠道使用"。</span></div>
+  </div>
+</div>
+
+<div class="bug p0" data-sev="p0">
+  <div class="bhead"><span class="bid">N02</span><span class="tag t-p0">P0</span><span class="tag t-new">新增</span><span class="btitle">删掉自定义渠道，密钥和引用都留在凭据管理器里</span></div>
+  <p class="bwhere">app/src-tauri/src/lib.rs:1453-1457（<code>custom_remove</code>）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">删掉一个自定义渠道后，它的密钥<b>还留在 Windows 凭据管理器里</b>；密钥箱列表里还会显示"🔗 正被 custom-1 使用"，但 custom-1 这个渠道早就不存在了。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">同 N01：只调了 <code>secrets::delete()</code>，<b>没调 <code>link_clear()</code>，也没清 <code>vault_refs</code> 索引行</b>。而且这里用的是 <code>let _ = …</code>，连删失败都被吞了。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">删除渠道时把三样都清干净：直接填的值、引用指针、索引行。</span>密钥箱列表的"正被谁使用"就变成真的了，删除渠道后也不会有孤儿凭据留在系统里（这是一条凭据纪律问题）。</span></div>
+  </div>
+</div>
+
+<div class="bug p0" data-sev="p0">
+  <div class="bhead"><span class="bid">N03</span><span class="tag t-p0">P0</span><span class="tag t-new">新增</span><span class="btitle">换密钥时先清引用后写值，中途失败 = 密钥配置全没了</span></div>
+  <p class="bwhere">app/src-tauri/src/lib.rs:319-328（<code>set_key</code>）+ app/core/src/secrets.rs:64-72</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">渠道本来在用密钥箱里的那把，用户改填一把新的。保存时如果失败，<b>这个渠道就变成"既没有引用、也没有值"</b> —— 什么密钥都没有了，用户得从头再来一次。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">代码顺序是"先清引用 → 再写新值"。而写值这一步会因为<b>密钥为空</b>被拒（<code>secrets::set</code> 里 <code>if key.is_empty() { return Err("密钥不能为空") }</code>）—— 也就是说，<b>最常见的一次失败，正好发生在引用已经被清掉之后</b>。用户看到"保存失败"，但原来那份能用的引用已经没了。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">改成"先写新值、再清引用"。</span>读取时优先看引用，所以"两份都在"的短暂状态完全无害；一旦写值失败，旧的引用还在，渠道继续正常工作，<b>不会丢配置</b>。</span></div>
+  </div>
+</div>
+
+<div class="bug p0" data-sev="p0">
+  <div class="bhead"><span class="bid">N04</span><span class="tag t-p0">P0</span><span class="tag t-new">新增</span><span class="btitle">【回归】签到把旧配置整份写回磁盘 —— 这次改得更频繁了</span></div>
+  <p class="bwhere">app/src-tauri/src/lib.rs:2496、2571、2575（<code>run_checkin</code>）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">你在设置页改了东西（关掉某个渠道、改刷新间隔），几秒后设置又变回原样。<b>这个问题是上一轮的 #01，一直没修</b>。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">签到开始时把<b>整份设置</b>拍快照（<code>let mut cfg = lock_rw(&state.config).clone()</code>），结束时 <code>cfg.save(&store)</code> 把这份旧快照整份写回去。你在签到跑的那 30~70 秒里做的任何修改都被盖掉。<br><b>本轮变严重了：</b>节拍器从"启动后先睡 5 分钟"改成"<b>启动立刻跑一轮</b>"（<code>checkin_tick_once</code> 挪到了 sleep 前面），签到跑得更频繁，撞上这个窗口的概率明显变大。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">保存时只改"签到进度"这一个字段，绝不整份覆盖。</span>写盘前先读一遍当前配置，只把 <code>checkin[id]</code> 合并进去。签到跑多久都不影响你改设置 —— 而且现在签到跑得更频繁了，这个修复的收益比上一轮更大。</span></div>
+  </div>
+</div>
+
+<!-- ============ P1 ============ -->
+<h3>P1 · 用户肉眼能看见的错</h3>
+
+<div class="bug p1" data-sev="p1">
+  <div class="bhead"><span class="bid">N05</span><span class="tag t-p1">P1</span><span class="tag t-new">新增</span><span class="btitle">读密钥没有走新的统一入口：8 处仍在用旧接口，同一张卡片两套真相</span></div>
+  <p class="bwhere">secrets.rs 的 <code>resolve()</code> 注释写着"所有要用这把 key 发请求的地方都该走这里"——但有 8 处没走</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">渠道引用了密钥箱里的密钥之后：<br>· 点「显示密钥」→ 说"<b>还没有保存密钥</b>"（可卡片上的掩码明明显示着尾 4 位）<br>· 点「复制密钥」→ 同样失败<br>· 模型页 → 读不到 4SAPI 的密钥，价目表和可用模型都出不来<br>· 引用模式的自定义渠道 → <b>根本不发请求</b>，一直"未配置密钥"<br>· 「测试连接」→ 说"还没填密钥"<br>· 体检报告 → 说"还没填密钥"<br>· 隐藏的渠道 → 显示"未配置密钥"</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">8 处还在直接调 <code>secrets::get(渠道id)</code>：<br><code>lib.rs:284</code> 自定义渠道指纹 · <code>lib.rs:1483</code> 测试连接 · <code>lib.rs:1599</code> 体检 · <code>lib.rs:2856</code> 写进客户端用的密钥 · <code>lib.rs:3048</code> 模型页读 4SAPI 密钥 · <code>lib.rs:3519</code> 显示/复制密钥 · <code>fetch.rs:1903</code> 隐藏渠道的"有没有密钥" · <code>fetch.rs:2152</code> 自定义渠道取数。<br>更糟的是：<b>取数走的是新接口、自定义渠道取数走的是旧接口</b> —— 同一个渠道里两个来源互相打架。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">把这 8 处全部换成 <code>secrets::resolve()</code>。</span>引用模式 everywhere 一致：能取到数、能显示密钥、能复制、能写进客户端、模型页能出价目表、测试连接和体检说的是真话。掩码和明文也不会再自相矛盾。</span></div>
+  </div>
+</div>
+
+<div class="bug p1" data-sev="p1">
+  <div class="bhead"><span class="bid">N06</span><span class="tag t-p1">P1</span><span class="tag t-new">新增</span><span class="btitle">"引用的条目被删了"被说成"还没填密钥"，把人引向错误的页面</span></div>
+  <p class="bwhere">app/core/src/fetch.rs:1959-1967、1792-1798</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">密钥箱里那条被删了之后，渠道卡上<b>同时出现两行互相打架的话</b>：<br>· 来源行：<b>「引用的密钥箱条目已删除」</b>（对）<br>· 错误行：<b>「还没填 4SAPI 的密钥」</b>（错）<br>用户跑去渠道卡重填密钥 —— 但真正该去的是密钥箱。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v"><code>Resolved</code> 枚举特意分出了 <code>Dangling</code>（断链）和 <code>None</code>（没配），注释还专门写了"界面必须能区分'没配过'和'引用的条目被删了'——两者该去的地方相反"。但 <code>credentials()</code> 拿到 <code>Dangling</code> 时<b>当成了 <code>None</code></b>，不产生任何错误信息，于是落到了兜底文案"还没填密钥"。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">把"断链"这个信息从 <code>credentials()</code> 一路传到取数失败的文案里。</span>错误行会说「引用的密钥箱条目已被删除（去密钥箱看）」，和来源行一致。两种情况该去的页面不同，用户就不会跑错地方。</span></div>
+  </div>
+</div>
+
+<div class="bug p1" data-sev="p1">
+  <div class="bhead"><span class="bid">N07</span><span class="tag t-p1">P1</span><span class="tag t-new">新增</span><span class="btitle">「删除前拦截」只做在浏览器里，而且用的是可能已经过期的索引</span></div>
+  <p class="bwhere">lib.rs:490-497（<code>vault_ref_channels</code> 注册了但没人调用）· app.js:1818-1820、3919-3939</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">删一把正被渠道用着的密钥时，<b>有时连提示都没有</b>，直接就删了，渠道当场变断链。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">拦截逻辑完全在浏览器里，靠 SQLite 索引 <code>vault_refs</code> 判断"有没有人在用"。而：<br>① 索引读取失败时 <code>loadVaultRefs()</code> 把错误<b>吞掉</b>、把列表清空 → 提示彻底消失；<br>② 索引和真实指针可能已经不一致（见 N08）；<br>③ 后端明明有现成的 <code>vault_ref_channels</code> 命令（注册在 invoke 列表里），<b>前端从来没调用过</b>。<br>而且 <code>vault_delete</code> 本身<b>完全不检查</b>有没有人在用。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">把检查搬进后端 <code>vault_delete</code>，用真实指针而不是索引来判断。</span>删除前一定会拿到"这把正被 XX、YY 使用"的确切清单；索引坏了也不影响判断。读取失败时至少要提示"读不到引用关系，没法确认能不能删"，而不是默默放行。</span></div>
+  </div>
+</div>
+
+<div class="bug p1" data-sev="p1">
+  <div class="bhead"><span class="bid">N08</span><span class="tag t-p1">P1</span><span class="tag t-new">新增</span><span class="btitle">首页徽标上那个"可领"按钮，点了完全没反应</span></div>
+  <p class="bwhere">app/src/app.js:4083（按钮）vs 2328-2378（<code>#list</code> 的点击委托）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">首页渠道卡上出现一个"可领 +100"的蓝色小按钮。<b>点它什么都不发生</b> —— 不领、不提示、连卡片都不展开。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">这个按钮带 <code>data-act="ckrun"</code>，但 <code>ckrun</code> <b>只在设置页的委托处理器里</b>（app.js:2724）被处理。首页列表的委托只认 <code>ckstripopen</code> / <code>open-manage</code> / <code>open-models</code> / <code>range</code> 四个动作，<code>ckrun</code> 落进去就 <code>return</code> 了 —— 而且因为前面调了 <code>e.stopPropagation()</code>，<b>连展开卡片都没有</b>，用户得不到任何反馈。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">把 <code>ckrun</code> 的处理逻辑抽成一个函数，设置页和首页都调它。</span>首页就能一键领积分，不用先跑到设置页 —— 这正是这个徽标设计稿里主打的那一下。</span></div>
+  </div>
+</div>
+
+<div class="bug p1" data-sev="p1">
+  <div class="bhead"><span class="bid">N09</span><span class="tag t-p1">P1</span><span class="tag t-new">新增</span><span class="btitle">"可领"这个状态根本到不了 —— 那枚可点的徽标是死代码</span></div>
+  <p class="bwhere">app/src-tauri/src/lib.rs:2465-2486 · app/src/app.js:4079</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">徽标的"可领"分支<b>永远不会被触发</b>。实际能看到的只有：已签 / 本期无活动 / 待签 / 需登录 / 异常 / 未就绪。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">平台返回"可领"时，落库的是 <code>retry:ready</code>；但 <code>run_checkin</code> <b>总是立刻把 ready 消费掉去领取</b>，然后落库的是<b>领完之后</b>的结果（<code>claimed</code>/<code>already</code>）。所以 <code>last_code</code> 永远不会是 <code>retry:ready</code>，徽标里那个分支是<b>死代码</b>。<br>（顺带：设置页里"今日可领"那几个分支同样是死的。）</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">让"可领"成为一个真实存在的状态。</span>两个方向：① 自动签到时把"可领"这个结论记下来（<code>retry:ready</code>），让徽标能显示"可领 +100"并可点击；② 或者更省事：把徽标的"待签"也做成可点的「领积分」按钮（反正 N08 修好之后点击就能用），配合后端已有的 <code>can_try</code> 判断该不该让点。</span></div>
+  </div>
+</div>
+
+<div class="bug p1" data-sev="p1">
+  <div class="bhead"><span class="bid">N10</span><span class="tag t-p1">P1</span><span class="tag t-new">新增</span><span class="btitle">已领到但平台没给数额时，徽标只剩一个光秃秃的「✓」</span></div>
+  <p class="bwhere">app/src/app.js:4073</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">渠道卡上显示一个小小的 <b>✓</b>，没有别的字。用户不知道这是"已签到"还是别的什么。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">徽标渲染成 <code>✓${n}</code>，而 <code>n</code> 在没有数额时是空串。而 Trae / WorkBuddy 的签到接口<b>恰恰经常不返回数额</b>（本机 10-20、10-21 两天都是 <code>credits = null</code>）—— 所以<b>这才是生产环境下的常态渲染</b>，不是边缘情况。挂件宽度只有 380px，tooltip 要悬停才看得到。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">没有数额时出「✓ 已签」，有数额时出「✓ +100」。</span>一眼就能看懂，不用悬停。提交信息里写的是"徽标同步:没有数额时出「✓ 已签」"，但徽标代码没跟着改 —— 现在补上。</span></div>
+  </div>
+</div>
+
+<div class="bug p1" data-sev="p1">
+  <div class="bhead"><span class="bid">N11</span><span class="tag t-p1">P1</span><span class="tag t-new">新增</span><span class="btitle">顶部"今天还有 N 个没签"提示条，把隐藏渠道也算进去了，永远消不掉</span></div>
+  <p class="bwhere">app/src/app.js:4037-4049（<code>ckPendingStrip</code>）、1258-1268（<code>peekCheckinLine</code>）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">把 Trae 隐藏之后，首页顶部<b>一直</b>显示"今天还有 1 个渠道没签到 · 去查看"，但界面上<b>没有任何徽标</b>，而且今天也不会再去签它了。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">隐藏渠道<b>不会关掉签到开关</b>（隐藏只改 <code>CFG.hiddenChannels</code>），但节拍器<b>会跳过隐藏渠道</b>（lib.rs:2735），徽标也<b>不给隐藏渠道画</b>（app.js:4065）。提示条却没排除隐藏渠道，于是一个"永远不会发生"的任务被一直挂在最显眼的位置。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">提示条和胶囊速览都排除隐藏渠道（以及不在渠道列表里的 id）。</span>提示条只在真的有渠道待签时出现，签完了就消失 —— 它本来的设计就是这样（注释里写着"全部签完就消失，'全部已签'是噪音不是信息"）。</span></div>
+  </div>
+</div>
+
+<div class="bug p1" data-sev="p1">
+  <div class="bhead"><span class="bid">N12</span><span class="tag t-p1">P1</span><span class="tag t-new">新增</span><span class="btitle">"正在重新确认凭据"这个状态既没有按钮，文案还会说谎</span></div>
+  <p class="bwhere">app/src/app.js:4019 · app/src-tauri/src/lib.rs:2408、2732</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">设置页里那个渠道的签到行显示"正在重新确认凭据…(马上会再试一次)"，<b>但连一个按钮都没有</b>。而且如果自动签到是关着的，"马上会再试一次"是<b>假的</b> —— 什么都不会发生，这个状态会一直挂到第二天。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v"><code>ckText()</code> 的 <code>recheck</code> 分支只返回了一个 <code>text</code>，<b>没返回 <code>btn</code></b> → <code>ckRowHtml()</code> 就不渲染按钮。而后端这个状态下 <code>can_try</code> 是 <code>true</code>（陈旧的 auth 不挡当天），<b>手动点完全是可以跑的</b> —— 只是界面没给入口。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">给 <code>recheck</code> 一个「立即重试」按钮；文案按 <code>s.auto</code> 分开说。</span>自动签到开着就说"马上会再试"，关着就说"自动签到已关闭，点这里手动重试"。后端本来就允许跑，界面把入口露出来就行。</span></div>
+  </div>
+</div>
+
+<!-- ============ P2 ============ -->
+<h3>P2 · 边界情况与数字偏差</h3>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">N13</span><span class="tag t-p2">P2</span><span class="tag t-new">新增</span><span class="btitle">引用索引和真实指针没有对账机制，五条路径会让它们永久不一致</span></div>
+  <p class="bwhere">app/core/src/store.rs:1247-1308（<code>vault_refs</code>）· lib.rs:455-472、327-328、484</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">密钥箱列表里的"正被谁使用"会<b>说谎</b>：说某把没人用其实有人用，说某把有人用其实没人用。删前拦截也跟着失灵（见 N07）。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">设计里说得很清楚："这张表里没有任何密钥值，只是 id 之间的关系"、"它只是索引，权威来源是凭据管理器里的指针"。但<b>没有任何一处代码在两者之间做对账</b>，<code>store::vault_ref_of</code> 更是<b>全项目零调用</b>。能走偏的路径至少五条：<br>① 切换引用时索引写失败 → 索引指旧的、指针指新的；<br>② 索引清失败 → 索引说有、指针没了；<br>③ 删自定义渠道时索引没清（N02）；<br>④ 数据库被删/重装但凭据管理器还在 → 索引空了，<b>密钥箱列表全空，可那些密文永远列不出来、也删不掉</b>；<br>⑤ 凭据管理器被清但数据库还在 → 索引说有，渠道其实没密钥了。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">加一个"按指针重建索引"的动作，启动时跑一次；索引写失败不让命令失败而是记下来等重建。</span>索引会自愈，"正被谁使用"永远是真的，"删前拦截"也就靠得住了。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">N14</span><span class="tag t-p2">P2</span><span class="tag t-new">新增</span><span class="btitle">密钥来源写进了已经脱离页面的节点，界面不更新</span></div>
+  <p class="bwhere">app/src/app.js:1870-1889（<code>fillKeySources</code>）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">渠道卡上的"密钥来源"那一行<b>不更新</b>，还是旧内容或空的，最多要等下一次轮询（最长 60 秒）才对。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">代码先 <code>document.querySelector(".ksrc[data-src=...]")</code> 拿到 DOM 节点，<b>然后</b>才 <code>await invoke("key_source")</code>，回来后往那个旧节点上写。而 <code>renderChCards()</code> 会把整个 <code>#chList</code> 重建 —— 等待期间只要发生一次重建（轮询、保存密钥、切渠道可见性…），手里那个节点就成了"游离节点"，写进去<b>永远看不见</b>。<br>这个坑项目<b>在别处已经踩过并写了注释</b>（app.js:2413："手里那份 body 成了游离节点，写进去永远看不见…按当前 DOM 重新查一次"），而且紧挨着的 <code>fillKeyHints()</code> 就做对了。<b>新代码把已经修好的模式又犯了一遍。</b></span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">await 之后重新查一次 DOM 再写。</span>和 <code>fillKeyHints()</code> 保持一致，来源行永远是最新的，不会出现"看着像没生效"。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">N15</span><span class="tag t-p2">P2</span><span class="tag t-new">新增</span><span class="btitle">读密钥来源失败被伪装成"直接填"，用户被推去重配</span></div>
+  <p class="bwhere">app/src/app.js:1881-1887</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">凭据管理器抽风（服务停了、组策略禁用）时，所有渠道卡都显示成"没配来源"的样子，还弹出「或从密钥箱选一把」的下拉框。用户以为自己没配过钥匙，<b>跑去重新配一遍</b> —— 而实际是系统故障。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v"><code>catch</code> 里把错误吞掉，写成 <code>{ mode: "inline" }</code>，还<b>缓存</b>在模块级的 <code>KEYSRC</code> 里。注释说"不显示未经验证的引用状态"，但效果正好相反 —— 显示的是一个<b>假的、且指向另一个方向</b>的状态。<br>同一个文件在别处（key hint，app.js:1798-1805）<b>专门区分过</b>"读取失败"和"没配置"，来源行没有。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">加一个 <code>mode: "error"</code> 状态，渲染成红色的「读取密钥来源失败：原因」。</span>用户看到的是真实故障，不会白折腾一圈重新配密钥。这条正是项目自己的纪律："凭据管理器坏了 ≠ 没配密钥"。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">N16</span><span class="tag t-p2">P2</span><span class="tag t-new">新增</span><span class="btitle">删掉密钥箱条目后，渠道卡还显示"正在使用这把"</span></div>
+  <p class="bwhere">app/src/app.js:2912-2920 · lib.rs:2183-2209（<code>vault_delete</code>）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">在密钥箱里删掉一条正被渠道用着的密钥，渠道卡<b>还是显示"密钥来源 · 引用密钥箱 · 4SAPI/主号"</b>，最长要 60 秒才变。用户以为删除没生效，可能白折腾。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">删除后只调了 <code>loadVault()</code>（重画密钥箱页签），<b>没碰渠道卡</b>。而 <code>KEYSRC</code> 里还是缓存的旧值。另外 <code>vault_delete</code> 也没调 <code>fetcher.invalidate()</code>，取数的 5 秒结果缓存也还留着旧视图。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">删除后同时刷新渠道卡和取数缓存。</span>渠道卡立刻显示「引用的条目已删除」—— 这正是设计稿 §4.5 明确要求的"删完之后渠道卡立刻显示"。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">N17</span><span class="tag t-p2">P2</span><span class="tag t-new">新增</span><span class="btitle">切换引用前只查索引不查密文，可能把能用的密钥换成一个死引用</span></div>
+  <p class="bwhere">app/src-tauri/src/lib.rs:455-468（<code>set_key_ref</code>）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">切到某个密钥箱条目之后，渠道<b>当场变成"没有密钥"</b>，而切换前它是好的。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">存在性检查只查 SQLite 索引（<code>vault_get</code> 在 <code>store</code> 里），<b>不查凭据管理器里有没有密文</b>。这两处是会分开的（比如用户手动在 Windows 凭据管理器里删过那一条，或者 <code>vault_save</code> 的回滚删密文失败了）。索引说"有"，密文其实没了 —— 而代码在这之前已经<b>把用户手填的密钥删掉了</b>。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">动任何东西之前先确认密文真的在（查凭据管理器，不是只查索引）。</span>发现密文没了就明确报错，让用户重新录入。不会把一个能用的渠道改成断链。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">N18</span><span class="tag t-p2">P2</span><span class="tag t-new">新增</span><span class="btitle">"签到未开启"这一行还留着悬空的「分」字</span></div>
+  <p class="bwhere">app/src/app.js:3984</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">签到签到过、然后把开关关掉 → 设置页显示「签到未开启(开了才会发请求) · <b>今天已领 分</b>」。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v"><code>74afd32</code> 这次修的正是"数额缺失时的悬空'分'"，改了 <code>claimed</code> 和 <code>already</code> 两个分支，<b>漏了这一处</b>。而这处的 <code>n</code> 在没有数额时正好是空串（Trae / WorkBuddy 的常态）。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">这一处也用和别处一样的口径：有数额就报数额，没有就明说"平台未返回数额"。</span>不会再出现悬空的"分"。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">N19</span><span class="tag t-p2">P2</span><span class="tag t-new">新增</span><span class="btitle">徽标提示用本地时间判断北京时间的 10:00 边界</span></div>
+  <p class="bwhere">app/src/app.js:4121-4126（<code>ckBadgeTip</code>）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">Qoder 徽标的提示写着「10:00 后可签」，但其实早就过了 10:00（可领时间）—— 误导用户再等好几个小时。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">Qoder 的周期是<b>北京时间 10:00</b> 翻日（<code>day_roll_hour = 10</code>），而代码用的是 <code>new Date().getHours()</code>（<b>本地</b>时）。在 UTC+0 的机器上，本地 09:30 = 北京 17:30，周期早就翻了，但代码算出 9 &lt; 10 → 说"10:00 后可签"。<br>讽刺的是，这个功能的注释里<b>专门写了</b>"凡是'哪一天'的判断，后端算过就别在前端再算一遍"—— 而徽标的日期判断已经改用后端的 <code>doneToday</code> 了，<b>偏偏这个时间判断漏在本地</b>。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">用北京时区算小时，或者干脆让后端把"下一个可签时刻"算好塞进 <code>CheckinState</code>。</span>提示和时间线永远对得上。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">N20</span><span class="tag t-p2">P2</span><span class="tag t-new">新增</span><span class="btitle">首页首屏被一次很重的 IPC 卡住</span></div>
+  <p class="bwhere">app/src/app.js:4965（<code>refresh()</code>）· lib.rs:2629-2665（<code>checkin_state</code>）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">打开挂件时首屏慢半拍sometimes 明显卡一下。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">为了修"首页拿不到签到状态"，<code>refresh()</code> 现在 <code>await loadCheckin()</code> 之后才 <code>render()</code>。而 <code>checkin_state</code> <b>不是一次轻量读库</b>：对每个没签完的渠道，它会走 <code>checkin_credential</code> —— 读 Trae 的 <code>storage.json</code>、解 Qoder 的 <code>auth.v1.dat</code>、<b>跑 WorkBuddy 的令牌续期网络请求</b>、甚至<b>问 webview 要 Cookie（最多等 3 秒）</b>。注释里"它是一次 IPC…放在这里不心疼"低估了成本。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">先 <code>render()</code> 再 <code>await loadCheckin(); render();</code>，或者把凭据探测的结果缓存起来。</span>余额和卡片<b>立刻</b>出来，签到徽标晚 200ms 补上 —— 体验上察觉不到，但首屏不再被 3 秒的 Cookie 超时拖着。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">N21</span><span class="tag t-p2">P2</span><span class="tag t-new">新增</span><span class="btitle">引用查询是同步命令，在主线程上抢数据库锁</span></div>
+  <p class="bwhere">app/src-tauri/src/lib.rs:489-505（<code>vault_ref_map</code> / <code>vault_ref_channels</code>）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">偶尔整个面板卡住一下（鼠标点不动）。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">这两个命令<b>没有 <code>async</code>、没有 <code>spawn_blocking</code></b>，直接在主线程上抢 store 锁。而同一个文件里<b>专门写过这条纪律</b>："同步命令是在主线程上跑的，而这里要写 SQLite 并等 store 锁，90 天清理正持着那把锁时会整窗卡住"。<code>vault_list</code> 当时就是为了这个才改成 async 的，这两个新命令没跟上。而且 <code>vault_ref_map</code> <b>每次渠道卡渲染都调一次</b>。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">照 <code>vault_list</code> 的样子改成 async + <code>spawn_blocking</code>。</span>清理任务或写入在跑的时候，面板不会冻住。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">N22</span><span class="tag t-p2">P2</span><span class="tag t-new">新增</span><span class="btitle">开机时所有签到请求挤在头几秒</span></div>
+  <p class="bwhere">app/src-tauri/src/lib.rs:2711-2718（<code>spawn_checkin_ticker</code>）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">开机后签到集中失败，提示"当前参与用户太多"。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">这轮改动把 <code>checkin_tick_once()</code> 挪到了 <code>sleep</code> 前面（这本身是对的，见 N23），但结果是<b>每次开机，头 4 秒内最多发出 12 个请求</b>（4 个渠道 × 最多 3 个请求，渠道之间只隔 800ms）。Trae 的 <code>9074</code>（当前参与用户太多）正是这种突发流量的典型失败模式。以前这波请求在 5 分钟后，还能错开。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">开机这一轮加随机抖动，或者每轮只处理一个渠道。</span>既保留了"开机立刻判一次"的好处（那正是这次改动的目的），又不会把所有请求堆在开头。</span></div>
+  </div>
+</div>
+
+<div class="bug p2" data-sev="p2">
+  <div class="bhead"><span class="bid">N23</span><span class="tag t-p2">P2</span><span class="tag t-new">新增</span><span class="btitle">【同时是好事】节拍器开机立刻跑一轮 —— 这条本身是对的</span></div>
+  <p class="bwhere">app/src-tauri/src/lib.rs:2711-2718</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">以前启动后要干等 5 分钟才判第一次签到，界面这期间挂的是上次运行留下的结论（"早已过期的凭据失效"），把用户引到死胡同。现在开机立刻判。</span></div>
+    <div class="row"><span class="k">说明</span><span class="v">这个改动<b>修的是真问题</b>，值得保留。它唯一的副作用是 N22（请求扎堆），那才是该修的地方。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">保留这个改动，只把请求节奏调匀。</span>开机就能看到真实的签到状态，不用再等 5 分钟 —— 这条改动是这轮里最有价值的收益之一。</span></div>
+  </div>
+</div>
+
+<!-- ============ P3 ============ -->
+<h3>P3 · 健壮性与使用体验</h3>
+
+<div class="bug p3" data-sev="p3">
+  <div class="bhead"><span class="bid">N24</span><span class="tag t-p3">P3</span><span class="tag t-new">新增</span><span class="btitle">"陈旧 auth"的判定不看日期，昨天的失效也说是"正在重新确认"</span></div>
+  <p class="bwhere">app/core/src/checkin.rs:406-413 · lib.rs:2387-2391</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">升级之后，<b>昨天</b>判出来的"凭据失效"也被显示成"正在重新确认凭据…"，而不是如实说"凭据失效"。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v"><code>auth_is_stale()</code> 只看版本、不看 <code>last_day</code>。升级那一刻，所有历史 <code>auth</code> 记录都变成"陈旧"。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">只有"当天"的 auth 才算需要重新确认。</span>当天的那条仍然会被判陈旧并重新确认（这是这个功能的目的），昨天的则如实显示"凭据失效"，不会把人引到"正在确认"这种没有下文的状态。</span></div>
+  </div>
+</div>
+
+<div class="bug p3" data-sev="p3">
+  <div class="bhead"><span class="bid">N25</span><span class="tag t-p3">P3</span><span class="tag t-new">新增</span><span class="btitle">后台签到完成后，首页徽标不刷新</span></div>
+  <p class="bwhere">app/src/app.js:5014-5016</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">自动签到成功了，首页的徽标还是老样子，要等下一轮取数（最长 60 秒）才变。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">后端发 <code>checkin-updated</code> 事件时，前端只调了 <code>loadCheckin()</code>，<b>没有重绘</b>。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">事件处理改成 <code>loadCheckin().then(() =&gt; render())</code>。</span>签到成功的瞬间徽标就变，配合 <code>checkin-claimed</code> 的提示音，闭环完整。</span></div>
+  </div>
+</div>
+
+<div class="bug p3" data-sev="p3">
+  <div class="bhead"><span class="bid">N26</span><span class="tag t-p3">P3</span><span class="tag t-new">新增</span><span class="btitle">读签到状态失败一次，所有徽标和提示条全部消失</span></div>
+  <p class="bwhere">app/src/app.js:4152-4154</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">一次 IPC 抖动，首页所有签到徽标和顶部提示条<b>一起没了</b>，用户以为今天没签过。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v"><code>catch</code> 里直接 <code>CK = {}</code>，把上一次知道的全部丢掉。这正是这个产品被"界面显示陈旧结论"坑过的那个教训。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">失败时保留上一次的结果，只在真的拿到空列表时才清。</span>界面不会因为一次瞬时故障就"改口"。</span></div>
+  </div>
+</div>
+
+<div class="bug p3" data-sev="p3">
+  <div class="bhead"><span class="bid">N27</span><span class="tag t-p3">P3</span><span class="tag t-new">新增</span><span class="btitle">顶部提示条把"要人工处理"的渠道也算成"待签"</span></div>
+  <p class="bwhere">app/src/app.js:4044</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">某渠道返回"凭据失效"或"接口有变动"，提示条一直说"今天还有 1 个没签到"，但那需要用户动手，不会自己好。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">判据是 <code>!s.doneToday</code>，而 <code>signed_today</code> 对 <code>auth</code>/<code>shape</code> 明确返回 false（这是对的，它们不是"签完了"）。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">提示条只统计"真的能自己去签"的渠道（后端已经有 <code>can_try</code> 这个字段）。</span>需要人工处理的渠道归到自己的提示里，顶部条只管自动能完成的事，不会永远挂着。</span></div>
+  </div>
+</div>
+
+<div class="bug p3" data-sev="p3">
+  <div class="bhead"><span class="bid">N28</span><span class="tag t-p3">P3</span><span class="tag t-new">新增</span><span class="btitle">详情里的"本月共 X 分"没格式化，会出现 100.5 分</span></div>
+  <p class="bwhere">app/src/app.js:877-882</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">卡片详情里写「本月共 100.5 分」，别处同样的数字是「100 分」。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v"><code>monthCredits</code> 是浮点数，这里直接拼字符串；同一个文件里有个 <code>points()</code> 函数专门做格式化，别处都在用。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">改用 <code>points()</code>。</span>全应用数字口径一致。</span></div>
+  </div>
+</div>
+
+<div class="bug p3" data-sev="p3">
+  <div class="bhead"><span class="bid">N29</span><span class="tag t-p3">P3</span><span class="tag t-new">新增</span><span class="btitle">新增自定义渠道时不清引用指针（id 复用时会用错密钥）</span></div>
+  <p class="bwhere">app/src-tauri/src/lib.rs:1424（<code>custom_add</code>）、1349-1360（<code>next_custom_id</code>）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">新建一个自定义渠道、填了新密钥，但这个渠道<b>用的是另一把旧密钥</b>（密钥箱里的那把），而且卡片上会显示"引用密钥箱"。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v"><code>custom_add</code> 只写值、<b>没清引用指针</b>（<code>set_key</code> 那条路清了，这里漏了）。而 <code>next_custom_id</code> 会<b>复用</b>被删掉的渠道的 id（它自己的注释写着"删掉再建不复用旧 id"，但代码其实是复用的）—— 于是新渠道继承了上一个渠道留下的孤儿指针（N02）。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix"><code>custom_add</code> 写值前先清引用（和 <code>set_key</code> 一样）；id 用一个单调递增的计数，不要复用。</span>新渠道一定用你刚填的那把密钥，id 也永远不撞。</span></div>
+  </div>
+</div>
+
+<div class="bug p3" data-sev="p3">
+  <div class="bhead"><span class="bid">N30</span><span class="tag t-p3">P3</span><span class="tag t-new">新增</span><span class="btitle">两处死代码：反查命令注册了没人用，单渠道反查函数零调用</span></div>
+  <p class="bwhere">lib.rs:490-497（<code>vault_ref_channels</code>）· store.rs:1266-1276（<code>vault_ref_of</code>）</p>
+  <div class="rows">
+    <div class="row"><span class="k">现象</span><span class="v">不影响使用，但会误导后来的人：<code>vault_ref_channels</code> 的注释写着"密钥箱列表与<b>删除前拦截</b>都要它"，实际上前端一次都没调过它（反查是在浏览器里用 <code>vault_ref_map</code> 自己过滤的）。</span></div>
+    <div class="row"><span class="k">原因</span><span class="v">实现和接线没对上。</span></div>
+    <div class="row"><span class="k">修复后</span><span class="v"><span class="fix">把 <code>vault_ref_channels</code> 用在 <code>vault_delete</code> 里做真正的拦截（N07），<code>vault_ref_of</code> 用在索引对账里（N13），或者直接删掉。</span>代码和注释一致，索引也有了一个真正的对账来源。</span></div>
+  </div>
+</div>
+
+</div><!-- /cards -->
+
+<h2>3. 上次报告的 53 个问题：修复状态</h2>
+
+<p>逐条核对了一遍当前代码（<code>74afd32</code>）：<b>修了 1 个，其余 52 个原样还在</b>。下面按上次的编号列出，附上"修好之后"是什么样，方便对照。</p>
+
+<table>
+<tr>
+  <th style="width:52px">编号</th><th style="width:52px">严重度</th><th style="width:24%">问题</th>
+  <th class="now">现在的表现</th><th>修好之后</th>
+</tr>
+
+<tr><td><b>#23</b></td><td><span class="delta d-ok">已修 ✓</span></td><td>同一个视图里取了两个"现在"</td><td>已改成只取一次（<code>fetch.rs</code> 用调用方传进来的 <code>updated_at</code>，测试可以钉住合成时刻）</td><td>视图里的所有时间口径永远一致，凌晨跑测试也不会再挂</td></tr>
+
+<tr><td><b>#01</b></td><td><span class="delta d-open">P0 未修</span></td><td>签到把旧的整份设置写回磁盘</td><td>见本轮 N04 —— 这次改得更频繁了，撞上概率变大</td><td>只改签到进度一个字段，签到跑多久都不吞你的设置</td></tr>
+<tr><td><b>#02</b></td><td><span class="delta d-open">P0 未修</span></td><td>续期时把旧 refresh token 擦成空</td><td>注释写着"沿用旧的"，代码写的是空串</td><td>上游不换令牌时旧的那个留着，自动续期不会莫名断掉</td></tr>
+<tr><td><b>#03</b></td><td><span class="delta d-open">P0 未修</span></td><td>WorkBuddy 取数窗口开了 100 年</td><td>比官方控制台的数字偏大</td><td>和上游完全对齐（36.9 天窗口、Status [0,3]、PageSize 100），数字对得上账</td></tr>
+<tr><td><b>#04</b></td><td><span class="delta d-open">P0 未修</span></td><td>诊断日志不遮盖带点的令牌（JWT）</td><td>保险丝是断的，日志可能明文躺着 access token</td><td>JWT 一律遮盖，诊断日志可以放心发给support</td></tr>
+<tr><td><b>#05</b></td><td><span class="delta d-open">P0 未修</span></td><td>日志限流漏了渠道维度</td><td>9 个渠道共用一张限流表，每 60 秒每渠道各写一行</td><td>日志量回到目标的 1/9，"重复了 N 次"终于能用</td></tr>
+
+<tr><td><b>#06</b></td><td><span class="delta d-open">P1 未修</span></td><td>界面把秒当毫秒</td><td>"今日数据自 16:40 起"和变动台账全是 1970 年的时间</td><td>时间显示真实时刻，用户能对上自己什么时候开的机</td></tr>
+<tr><td><b>#07</b></td><td><span class="delta d-open">P1 未修</span></td><td>Qoder 早上开机不补签</td><td>10 点前开机，当天 100 积分静默丢失</td><td>开机补签恢复，当天积分不再白丢</td></tr>
+<tr><td><b>#08</b></td><td><span class="delta d-open">P1 未修</span></td><td>Qoder 把上上个周期"已领"当今天已领</td><td>界面说"今日已签"，积分其实没领</td><td>"今日已签"这句话是真的，当天积分不会被跳过</td></tr>
+<tr><td><b>#09</b></td><td><span class="delta d-open">P1 未修</span></td><td>YAML 引号+行内注释没脱引号</td><td>DSH 配置里同一个模型写两遍，更新被静默丢掉</td><td>带注释的条目能认出来，不会出现重复 id</td></tr>
+<tr><td><b>#10</b></td><td><span class="delta d-open">P1 未修</span></td><td>4SAPI 兜底分支不检查业务返回码</td><td>失败被显示成 ¥187.00，还写进历史快照</td><td>业务失败被如实显示，快照不再被污染</td></tr>
+<tr><td><b>#11</b></td><td><span class="delta d-open">P1 未修</span></td><td>「跳过此版本」被下次保存撤销</td><td>改个无关设置，0.1.48 的更新提示又冒出来</td><td>跳过的版本不再被覆盖，更新提示不反复骚扰</td></tr>
+<tr><td><b>#12</b></td><td><span class="delta d-open">P1 未修</span></td><td>保存失败时内存已改、磁盘没改</td><td>行为按新设置在跑，重启又变回老样子</td><td>落库失败时内存保持原样，界面和实际一致</td></tr>
+<tr><td><b>#13</b></td><td><span class="delta d-open">P1 未修</span></td><td>前端"保存失败就回滚"是空操作</td><td>弹了失败提示，开关还停在改后的位置</td><td>开关真的弹回去，界面不再骗人</td></tr>
+<tr><td><b>#14</b></td><td><span class="delta d-open">P1 未修</span></td><td>密钥数量按指纹缓存、不按渠道</td><td>两个渠道共用一把密钥，数字永远错</td><td>每个渠道各算各的</td></tr>
+<tr><td><b>#15</b></td><td><span class="delta d-open">P1 未修</span></td><td>自定义渠道颜色没转义</td><td>能往界面里注入任意样式</td><td>颜色格式有白名单，注入这条路封死</td></tr>
+<tr><td><b>#16</b></td><td><span class="delta d-open">P1 未修</span></td><td>轮换后的 refresh token 从不使用</td><td>WorkBuddy 约 28 天后自动续期就断了</td><td>轮换链接上，"永不过期"的承诺成立</td></tr>
+<tr><td><b>#17</b></td><td><span class="delta d-open">P1 未修</span></td><td>「删除密钥」没删 WorkBuddy 续期凭据</td><td>点了"清除登录"，渠道照样出数</td><td>真的清了，渠道干净地变"未登录"</td></tr>
+<tr><td><b>#18</b></td><td><span class="delta d-open">P1 未修</span></td><td>换账号后最多 6 小时认不出新凭据</td><td>提示说"重新登录一次"，但重新登录没用</td><td>换账号立刻生效，提示里的建议真的可执行</td></tr>
+
+<tr><td><b>#19</b></td><td><span class="delta d-open">P2 未修</span></td><td>清理旧快照不是一次做完的</td><td>一年趋势里某些天消耗永久偏大</td><td>归档和删除同一事务，长期趋势可信</td></tr>
+<tr><td><b>#20</b></td><td><span class="delta d-open">P2 未修</span></td><td>曲线分桶为 0 会崩溃</td><td>埋着的雷（目前无调用方传 0）</td><td>任何调用方传 0 都安全返回空数组</td></tr>
+<tr><td><b>#21</b></td><td><span class="delta d-open">P2 未修</span></td><td>曲线查询忽略时间上界</td><td>"截至昨天"的曲线混进今天的数据</td><td>行为和签名、注释都对齐</td></tr>
+<tr><td><b>#22</b></td><td><span class="delta d-open">P2 未修</span></td><td>占位卡片单位写错</td><td>百分比渠道吐出来的是 "credits"</td><td>接口数据自洽，消费方不会被误导</td></tr>
+<tr><td><b>#24</b></td><td><span class="delta d-open">P2 未修</span></td><td>过期时间若是字符串 = 永不过期</td><td>死令牌每轮都排第一位，白吃一个 401</td><td>死令牌不再霸占第一位</td></tr>
+<tr><td><b>#25</b></td><td><span class="delta d-open">P2 未修</span></td><td>续期没有加锁</td><td>自动刷新和手动点击撞在一起会刷两次</td><td>同一个令牌绝不会被用两次</td></tr>
+<tr><td><b>#26</b></td><td><span class="delta d-open">P2 未修</span></td><td>子进程超时不看管道读取</td><td>极端情况下整轮轮询卡住不返回</td><td>桌面端程序行为异常也拖不死轮询</td></tr>
+<tr><td><b>#27</b></td><td><span class="delta d-open">P2 未修</span></td><td>写 DSH 时删掉用户自己的 contextWindow</td><td>手写的上下文长度和多模态声明无声消失</td><td>用户手写的配置不会被悄悄抹掉</td></tr>
+<tr><td><b>#28</b></td><td><span class="delta d-open">P2 未修</span></td><td>写 WorkBuddy 只按 id 匹配</td><td>别家来源的同名模型被就地覆盖</td><td>两个来源的同名模型能共存</td></tr>
+<tr><td><b>#29</b></td><td><span class="delta d-open">P2 未修</span></td><td>清理备份可能删掉这次要用的备份</td><td>回滚提示"备份目录是空的"</td><td>回滚永远有备份可用</td></tr>
+<tr><td><b>#30</b></td><td><span class="delta d-open">P2 未修</span></td><td>写 DSH 缩进硬编码 2 空格</td><td>4 空格的配置文件上写失败并回滚</td><td>各种缩进风格都能正常写入</td></tr>
+<tr><td><b>#31</b></td><td><span class="delta d-open">P2 未修</span></td><td>写 YAML 不转义换行</td><td>写进去的值和读出来的不一样</td><td>DSH 拿到的就是原样的东西</td></tr>
+<tr><td><b>#32</b></td><td><span class="delta d-open">P2 未修</span></td><td>分组缺倍率时不给价</td><td>某个模型在价格表里显示不出价格</td><td>只要任何已知分组有价就给价</td></tr>
+<tr><td><b>#33</b></td><td><span class="delta d-open">P2 未修</span></td><td>模型缓存不跟密钥绑定</td><td>换密钥后 24 小时的可用性都是旧的</td><td>换密钥立刻反映实际情况</td></tr>
+<tr><td><b>#34</b></td><td><span class="delta d-open">P2 未修</span></td><td>调休上班日被判成谷价</td><td>一年 6 天显示与真实计费相反</td><td>"现在贵不贵"的提示和真实规则一致</td></tr>
+<tr><td><b>#35</b></td><td><span class="delta d-open">P2 未修</span></td><td>汇率跨月后每 60 秒重试</td><td>接口挂着时整月每分钟戳两次</td><td>失败后有退避，轮询不被拖慢</td></tr>
+<tr><td><b>#36</b></td><td><span class="delta d-open">P2 未修</span></td><td>4 字符内密钥的掩码等于没掩</td><td>短密钥被完整显示 —— <b>本轮还给它补了一条单测把这个行为固化了</b></td><td>任何长度的密钥都真的被遮住</td></tr>
+<tr><td><b>#37</b></td><td><span class="delta d-open">P2 未修</span></td><td>更新与写客户端配置会撞车</td><td>第三方配置停在半写状态且无记录可回滚</td><td>两者彻底互斥，不会停在半路</td></tr>
+<tr><td><b>#38</b></td><td><span class="delta d-open">P2 未修</span></td><td>开机自启只写注册表不落配置</td><td>重启后自己关掉</td><td>开关独立生效，不被别的设置连累</td></tr>
+<tr><td><b>#39</b></td><td><span class="delta d-open">P2 未修</span></td><td>同时加两个自定义渠道会撞 id</td><td>后加的覆盖前一个的密钥</td><td>并发添加不会撞号</td></tr>
+
+<tr><td><b>#40</b></td><td><span class="delta d-open">P3 未修</span></td><td>热键输入框吞掉 Tab 键</td><td>键盘用户出不去</td><td>纯键盘可以正常移动焦点</td></tr>
+<tr><td><b>#41</b></td><td><span class="delta d-open">P3 未修</span></td><td>模型页密钥被渠道列表重绘清掉</td><td>下次刷新就没了</td><td>按承诺的 8 秒自动隐藏</td></tr>
+<tr><td><b>#42</b></td><td><span class="delta d-open">P3 未修</span></td><td>"显示密钥"写进了已删除的节点</td><td>点"显示"没反应也没报错</td><td>拿不到就明确提示，不会静默失败</td></tr>
+<tr><td><b>#43</b></td><td><span class="delta d-open">P3 未修</span></td><td>曲线缓存永不刷新</td><td>曲线和旁边的实时数据自相矛盾</td><td>上下两块口径一致</td></tr>
+<tr><td><b>#44</b></td><td><span class="delta d-open">P3 未修</span></td><td>日志"重复 N 次"引的是新消息</td><td>看不出到底是哪件事在重复</td><td>一眼能看出重复的是什么</td></tr>
+<tr><td><b>#45</b></td><td><span class="delta d-open">P3 未修</span></td><td>自定义渠道探活地址没校验 / {key} 没转义 / 允许 http</td><td>三个小问题叠一起</td><td>不会存进必然失败的配置，Bearer 不会明文裸奔</td></tr>
+<tr><td><b>#46</b></td><td><span class="delta d-open">P3 未修</span></td><td>看日志在异步命令里做阻塞 IO</td><td>日志大时界面卡住</td><td>和其它命令的做法统一，不卡界面</td></tr>
+<tr><td><b>#47</b></td><td><span class="delta d-open">P3 未修</span></td><td>体检报告读的是旧配置</td><td>报告说的不是挂件现在的实际状态</td><td>体检说的就是现状，不会误导</td></tr>
+<tr><td><b>#48</b></td><td><span class="delta d-open">P3 未修</span></td><td>多屏下窗口总被拉回第一块屏</td><td>重启后窗口跑别的屏上了</td><td>窗口留在自己那块屏</td></tr>
+<tr><td><b>#49</b></td><td><span class="delta d-open">P3 未修</span></td><td>保存设置时不跑范围检查</td><td>当前值和重启后的值不一致</td><td>存下去的和当下生效的永远一致</td></tr>
+<tr><td><b>#50</b></td><td><span class="delta d-open">P3 未修</span></td><td>WorkBuddy 登录监听可能起两个</td><td>重复打真实 HTTP 请求</td><td>任何时候只有一个监听在跑</td></tr>
+<tr><td><b>#51</b></td><td><span class="delta d-open">P3 未修</span></td><td>YAML 重复键取第一个</td><td>改了没反应</td><td>改的永远是实际生效的那一个</td></tr>
+<tr><td><b>#52</b></td><td><span class="delta d-open">P3 未修</span></td><td>回滚会把备份目录里所有文件都写回去</td><td>第三方配置目录被塞进杂物</td><td>回滚只动我们改过的文件</td></tr>
+<tr><td><b>#53</b></td><td><span class="delta d-open">P3 未修</span></td><td>写 JSON 会重排第三方文件缩进</td><td>diff 大得吓人</td><td>改动最小化，看得出改了哪几行</td></tr>
+</table>
+
+<h2>4. 建议的修复顺序</h2>
+<p>本轮新增的问题里，有一批是<b>同一个根因</b>（密钥箱打通这套没接完），一起修性价比最高：</p>
+<table>
+<tr><th>批次</th><th>包含</th><th>理由</th></tr>
+<tr><td><b>第一批</b><br>（半天内可完成，收益最大）</td><td>N01 N02 N03 N29 N05</td><td>五个都出在"删/改密钥"这条路上。<b>N01 尤其要抢</b>：用户点了"删除密钥"却没删掉，这比任何显示问题都严重。N05 是 8 处机械替换，一改一片。</td></tr>
+<tr><td><b>第二批</b><br>（半天，一处根因）</td><td>N06 N13 N07 N30 N16 N17</td><td>密钥箱这套的"收尾"没做完：断链信息被丢掉、索引没有对账、删前拦截只在浏览器里、删完不刷新。设计稿里写的几条要求都还差最后一步。</td></tr>
+<tr><td><b>第三批</b><br>（签到徽标）</td><td>N08 N09 N10 N11 N12 N18 N19 N20 N25 N26 N27 N28</td><td>徽标功能能看但不好用。<b>N08 + N09 必须一起修</b>：光修点击没用（状态到不了），光修状态没用（点了没反应）。</td></tr>
+<tr><td><b>第四批</b><br>（上次的遗留，按原来的排法）</td><td>#01 #02 #06 #10 #13 #14 等 52 个</td><td>沿用上一份报告的排法：先修"几行就能改、但每天都在发生"的那些。</td></tr>
+<tr><td><b>第五批</b><br>（打磨）</td><td>剩下的 P2 / P3</td><td>不紧急，但改起来零风险。</td></tr>
+</table>
+
+<div class="note info">
+<b>两条给这轮新代码的具体建议：</b><br>
+① <b>密钥箱这套需要一个"单一事实来源"的收口。</b>现在凭据管理器里的指针是权威、SQLite 索引是副本、浏览器里还有第三份（<code>KEYSRC</code> / <code>VAULTREF</code>）。三份都得对，缺一个对账。建议：<b>读一律走 <code>resolve()</code>，写完立刻刷新索引，启动时按指针重建一次索引</b>。这一步做完，N01/N05/N06/N07/N13/N16/N17 会一起消失。<br>
+② <b>新增的单测要先确认"期望值"本身是对的。</b><code>mask_keeps_only_tail4</code> 把 #36 固化了；<code>signed_today_is_a_positive_conclusion</code> 和 <code>stale_auth_does_not_block_the_day_after_version_change</code> 这两条则是好的样板 —— 它们把设计意图写成了可执行的判据，值得照着这个路子补。
+</div>
+
+<h2>5. 这轮顺便确认过、没问题的部分</h2>
+<ul>
+<li><b>密钥箱的"两种来源互斥"规则</b>——服务名分成 <code>TokenScope</code> / <code>TokenScope:vault</code> / <code>TokenScope:link</code> 三个，删渠道密钥不会碰箱子，删箱子不会碰别处的值。裁决 5（一个渠道一把）和裁决 6（一个条目可被多个引用）都守住了。</li>
+<li><b>断链故意不退回手填值</b>——<code>Resolved::Dangling</code> 的行为和文档完全一致，避免了"我明明删了箱子里的，它还在用旧密钥"这种诡异现象。</li>
+<li><b><code>resolve()</code> 本身</b>——先看引用再看手填，<code>vault:</code> 前缀能挡住"用户手输一把以 vault: 开头的密钥"被误判成指针；<code>key()</code> 让上层不必关心来源。</li>
+<li><b>陈旧 auth 的判据方向是对的</b>——只对 <code>auth</code> 生效、<code>claimed</code>/<code>already</code> 不受版本影响（那俩是平台给的既成事实），这个设计判断正确，只是漏了日期维度（N24）。</li>
+<li><b><code>done_for_day</code> 的三个调用点都换成了 <code>blocks_today</code></b>——界面和节拍器口径一致，不会出现"界面说不能试、节拍器却在跑"或反过来。</li>
+<li><b>签到结果不参与余额渲染</b>——徽标的颜色绝不改金额和状态点；签到失败不会让余额显示成 0。</li>
+<li><b>"开签到默认关"没被破坏</b>——没开的渠道一个请求都不发，徽标也不画。</li>
+<li><b>金额数额只信平台给的字段</b>——Trae/WorkBuddy 不返回数额时，界面明说"平台未返回数额"，不编数字（<code>74afd32</code> 修对了大部分，只漏了一处 N18）。</li>
+</ul>
+
+<h2>6. 一句话总结</h2>
+<div class="verdict good">
+<b>新功能的方向和实现质量都不错</b>——密钥箱用"引用"而不是"复制"是对的（同一把钥匙不存两份、改箱子渠道立刻跟着变），
+"陈旧 auth 要重判"也是对真问题的正确诊断，签到徽标把结论交给后端算（避免前端算日期算错）同样是对的。<br><br>
+<b>但这轮改动都停在了"最后 10%"：</b>密钥箱这套的<b>读路径没有统一</b>（8 处还在用旧接口，同一张卡片两套真相），
+<b>写路径的收尾没做</b>（删密钥不清引用、切引用先删后写），
+签到徽标的<b>点击没接上</b>（首页的委托不认 <code>ckrun</code>）、<b>状态到不了</b>（<code>retry:ready</code> 永远不会被落库）。<br><br>
+<b>建议下一步就做两件事：</b>① 把密钥箱的读写收口到 <code>resolve()</code> 一个入口，并加一次启动对账（能一次解决 6~7 个问题）；
+② 把签到徽标的"可领"这条链路打通（状态落库 + 首页点击），再把"待签"也做成可点的。
+这两件做完，这轮新加的两个功能才算真正落地。
+</div>
+
+<footer>
+报告生成于 2026-10-21 · 基于 <code>74afd32</code>（v0.1.52）· 对比上一份 <code>bug-report-2026-10-20-full-audit.html</code><br>
+自动化验证：<code>cargo test</code> 276 通过 / 0 失败 · <code>cargo check --all-targets</code> 两个 crate 零警告 · <code>node --check</code> 16 文件全过 · <code>scan-secrets.ps1</code> CLEAN（124 文件）<br>
+本轮新增 30 个问题（4 P0 / 8 P1 / 11 P2 / 7 P3）· 上次 53 个中修好 1 个、遗留 52 个
+</footer>
+
+</div>
+
+<script>
+(function () {
+  var cards = Array.prototype.slice.call(document.querySelectorAll('.bug'));
+  var btns  = Array.prototype.slice.call(document.querySelectorAll('#toolbar button'));
+  var q     = document.getElementById('q');
+  var cnt   = document.getElementById('cnt');
+  var cur   = 'all';
+
+  function apply() {
+    var term = (q.value || '').trim().toLowerCase();
+    var shown = 0;
+    cards.forEach(function (c) {
+      var okSev = (cur === 'all') || (c.getAttribute('data-sev') === cur);
+      var okTxt = !term || c.textContent.toLowerCase().indexOf(term) !== -1;
+      var vis = okSev && okTxt;
+      c.classList.toggle('hidden', !vis);
+      if (vis) { shown++; }
+    });
+    document.querySelectorAll('#cards h3').forEach(function (h) {
+      var any = false;
+      var n = h.nextElementSibling;
+      while (n && !n.tagName.match(/^H3$/)) {
+        if (n.classList.contains('bug') && !n.classList.contains('hidden')) { any = true; }
+        n = n.nextElementSibling;
+      }
+      h.classList.toggle('hidden', !any);
+    });
+    cnt.textContent = '显示 ' + shown + ' / ' + cards.length + ' 条';
+  }
+
+  btns.forEach(function (b) {
+    b.addEventListener('click', function () {
+      btns.forEach(function (x) { x.classList.remove('on'); });
+      b.classList.add('on');
+      cur = b.getAttribute('data-f');
+      apply();
+    });
+  });
+  q.addEventListener('input', apply);
+  apply();
+})();
+</script>
+</body>
+</html>
