@@ -68,7 +68,18 @@ pub fn set(provider_id: &str, key: &str) -> Result<(), String> {
     }
     entry(provider_id)?
         .set_password(key)
-        .map_err(|e| format!("写入凭据失败: {e}"))
+        .map_err(|e| {
+            // 写不进去是**真故障**(权限/凭据服务停了),必须留痕 ——
+            // 界面只说"保存失败",用户不知道是不是自己没权限。
+            crate::diaglog::wire(
+                "secret",
+                Some(provider_id),
+                "write",
+                Some(crate::errcodes::CRED_UNREADABLE),
+                &[("source", "keyring")],
+            );
+            format!("写入凭据失败: {e}")
+        })
 }
 
 /// Ok(None) = 服务正常但没配过这把 key;Err = 凭据管理器本身不可用
@@ -79,7 +90,18 @@ pub fn get(provider_id: &str) -> Result<Option<String>, String> {
     match e.get_password() {
         Ok(k) => Ok(Some(k)),
         Err(keyring::Error::NoEntry) => Ok(None),
-        Err(err) => Err(format!("读取凭据失败: {err}")),
+        Err(err) => {
+            // **"凭据库坏了"和"没配"必须分得开** —— 这是两者唯一的分界点,
+            // 以前只有界面文案在分,日志里什么都没有。
+            crate::diaglog::wire(
+                "secret",
+                Some(provider_id),
+                "read",
+                Some(crate::errcodes::CRED_UNREADABLE),
+                &[("source", "keyring"), ("reason", &err.to_string())],
+            );
+            Err(format!("读取凭据失败: {err}"))
+        }
     }
 }
 
@@ -88,7 +110,16 @@ pub fn delete(provider_id: &str) -> Result<(), String> {
         Ok(()) => Ok(()),
         // 本来就没有,视为成功
         Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(format!("删除凭据失败: {e}")),
+        Err(e) => {
+            crate::diaglog::wire(
+                "secret",
+                Some(provider_id),
+                "delete",
+                Some(crate::errcodes::CRED_UNREADABLE),
+                &[("source", "keyring")],
+            );
+            Err(format!("删除凭据失败: {e}"))
+        }
     }
 }
 
@@ -184,7 +215,16 @@ pub fn resolve(channel_id: &str) -> Result<Resolved, String> {
         return match vault_get(&vid)? {
             Some(k) => Ok(Resolved::Vault { id: vid, key: k }),
             // 指针还在、箱子那条没了:如实报断链,不静默退回 inline
-            None => Ok(Resolved::Dangling(vid)),
+            None => {
+                // 断链是**要人去处理**的状态(去密钥箱看),不是"没配"。
+                // 它很罕见(只在用户删了箱子条目时出现),所以记下来不吃日志量。
+                crate::diaglog::write_keyed(
+                    "secret",
+                    &format!("{channel_id}:dangling"),
+                    &format!("引用的密钥箱条目已被删除(条目 id={vid})—— 渠道现在没有可用密钥"),
+                );
+                Ok(Resolved::Dangling(vid))
+            }
         };
     }
     Ok(match get(channel_id)? {

@@ -118,7 +118,11 @@ $knownFixtures = @(
   # never reaches the digest.
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U',
   # A synthetic "very long access token" in diaglog.rs: right shape, invented value.
-  'eyJhbGciOiJIUzI1NiJ9.very-long-access-token-value-0123456789'
+  'eyJhbGciOiJIUzI1NiJ9.very-long-access-token-value-0123456789',
+  # A synthetic query-string secret in fetch.rs (the redaction test): invented value,
+  # never sent anywhere. It has to be >= 32 chars to be caught by the length-based
+  # redaction rule, so it looks like a credential to the scanner - hence this entry.
+  'SUPERSECRETVALUE1234567890ABCDEFGH'
 )
 
 # Skip a hit when it is part of one of the known fixtures. Reported, not silent.

@@ -262,17 +262,28 @@
       </div>
       <pre class="diagout" id="diagOut" style="display:none"></pre>
       <h4>排查日志</h4>
-      <div class="khint" style="margin:0 0 8px">取数失败时,每一步走到哪儿都记在这里(找桌面端 exe → 读凭据 → 解密 → 请求 → 响应)。
-        <b>不含任何密钥或令牌</b> —— 令牌只记"长度 + 指纹前 8 位"。遇到问题时点「复制最近日志」贴过来即可。</div>
+      <div class="khint" style="margin:0 0 8px">取数失败时,每一步走到哪儿都记在这里(选凭据 → 打哪个地址 → 返回什么码 → 耗时多久)。
+        <b>不含任何密钥或令牌</b> —— 令牌只记"长度 + 指纹前 8 位"。
+        出问题时点「导出诊断包」,把那一整份贴过来就行 —— 里面已经有环境、体检和最近的事件,不用再截图。</div>
       <div class="krow" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <span class="kpath" id="logPath" style="font-family:Consolas,monospace;font-size:max(10.5px,calc(10.5px*var(--u)));
           color:var(--tx3);word-break:break-all;flex:1;min-width:120px">—</span>
         <span class="usub" id="logSize"></span>
+        <span class="usub" id="logSession" style="font-family:Consolas,monospace"></span>
       </div>
       <div class="acts" style="margin-top:8px">
-        <button class="btn p" id="btnLogCopy">复制最近日志</button>
+        <button class="btn p" id="btnDiagExport">导出诊断包</button>
+        <button class="btn" id="btnLogCopy">复制最近日志</button>
         <button class="btn" id="btnLogOpen">打开目录</button>
         <button class="btn danger" id="btnLogClear">清空</button>
+      </div>
+      <div class="krow" style="margin-top:8px;align-items:flex-start;gap:8px">
+        <label class="krow" style="flex:1;display:flex;align-items:center;gap:8px;border:0;padding:0;background:none">
+          <input type="checkbox" id="logVerbose">
+          <span class="k1" style="flex:0 0 auto">详细日志</span>
+          <span class="desc">连<b>成功</b>的请求也记下来。排查"余额数字不对"这类问题必须看成功响应,
+            平时用不到 —— 平时只记失败与现场。</span>
+        </label>
       </div>
       <div class="khint" id="logOff" style="display:none;margin:8px 0 0;color:var(--bad)">
         日志已被环境变量 TOKENSCOPE_NODIAG 关闭 —— 去掉它并重启挂件才会重新记录。</div>

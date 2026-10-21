@@ -1241,20 +1241,60 @@ where
     W: FnOnce() -> Result<(), String>,
     V: FnOnce() -> bool,
 {
+    // L1 决策:动的是谁、动哪些文件。**注入是爆炸半径最大的操作** ——
+    // 写坏了不是"挂件少个数字",是 Trae / DSH / ZCode / WorkBuddy 罢工。
+    // 这一层以前一个字都不记,出事时完全无从下手。
+    let mut names: Vec<String> = files
+        .iter()
+        .map(|f| {
+            f.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| f.display().to_string())
+        })
+        .collect();
+    names.truncate(6);
+    let files_desc = names.join(",");
+    crate::diaglog::write_keyed(
+        "inject",
+        &format!("{}:plan", site.label),
+        &format!(
+            "准备写入 {} · 站点 {} · 文件 {}(共 {} 个)",
+            site.client.label(),
+            site.label,
+            files_desc,
+            files.len()
+        ),
+    );
     let dir = match rels {
         Some(rels) => backup_layered(&site.root, files, rels, stamp)?,
         None => backup(&site.root, files, stamp)?,
     };
+    crate::diaglog::write_keyed(
+        "inject",
+        &format!("{}:backup", site.label),
+        &format!("已备份到 {}", pretty(&dir)),
+    );
     if let Err(e) = write() {
-        return Err(match restore(&dir) {
+        let msg = match restore(&dir) {
             Ok(s) => format!("写入失败: {e}｜已按备份整批盖回,未产生半成品。{s}"),
             Err(r) => format!(
                 "写入失败: {e}｜回滚也失败: {r}｜备份仍在 {},可手动还原",
                 pretty(&dir)
             ),
-        });
+        };
+        crate::diaglog::write_keyed(
+            "inject",
+            &format!("{}:write-fail", site.label),
+            &format!("写入失败,已尝试回滚: {e}"),
+        );
+        return Err(msg);
     }
     if !verify() {
+        crate::diaglog::write_keyed(
+            "inject",
+            &format!("{}:verify-fail", site.label),
+            "读回校验没过,正在回滚",
+        );
         return Err(match restore(&dir) {
             Ok(s) => format!("读回校验没过,已回滚到写入前的备份({})。{s}", pretty(&dir)),
             Err(e) => format!(
@@ -1263,6 +1303,11 @@ where
             ),
         });
     }
+    crate::diaglog::write_keyed(
+        "inject",
+        &format!("{}:ok", site.label),
+        &format!("写入并校验通过 · {}", pretty(&dir)),
+    );
     Ok(dir)
 }
 
@@ -3002,6 +3047,13 @@ fn write_dsh_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, String> 
     if plan.same {
         // 内容和盘上一致:不写盘,连备份都不必做
         outcome.same = true;
+        // **"没变化所以没写"也要记**:用户说"我什么都没干它自己坏了"时,
+        // 日志里只有这一行才能说清"这一轮我们其实什么都没动"。
+        crate::diaglog::write_keyed(
+            "inject",
+            &format!("{}:same", site.label),
+            "内容与盘上一致 —— 没有改动,没写盘也没建备份",
+        );
         return Ok(outcome);
     }
     match plan.patch_action {
@@ -3018,6 +3070,17 @@ fn write_dsh_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, String> 
             .push(format!("引用 {name} 原有的值与这次不同,已按这次的内容覆盖")),
         CredAction::Same => {}
     }
+
+    // L1:这次**具体改了什么**。只说"写了"不够 —— 要知道是新增还是覆盖、
+    // 覆盖的是哪条(模型 id)。键名走白名单,值走脱敏。
+    crate::diaglog::write_keyed(
+        "inject",
+        &format!("{}:what", site.label),
+        &format!(
+            "改动内容:新增 {} 条 / 更新 {} 条 · patch 动作 {:?} · 凭据动作 {:?}",
+            outcome.added, outcome.updated, plan.patch_action, plan.cred_action
+        ),
+    );
 
     let stamp = stamp_now();
     let (patch, cred) = (plan.patch.clone(), plan.cred.clone());

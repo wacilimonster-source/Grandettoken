@@ -3675,7 +3675,7 @@ function fmtBytes(n) {
   return (n / 1024 / 1024).toFixed(1) + " MB";
 }
 
-/** 刷新日志卡(路径 / 大小 / 是否被环境变量关掉)。 */
+/** 刷新日志卡(路径 / 大小 / 是否被环境变量关掉 / 详细日志开关 / 会话 id)。 */
 async function refreshLogCard() {
   try {
     const info = await invoke("diag_log_info");
@@ -3686,6 +3686,15 @@ async function refreshLogCard() {
     if (sz) sz.textContent = info.enabled ? fmtBytes(info.size) : "已关闭";
     const off = $("logOff");
     if (off) off.style.display = info.enabled ? "none" : "block";
+    // 详细日志开关:以后端说的为准(它是唯一能改这个开关的地方)
+    const vb = $("logVerbose");
+    if (vb) vb.checked = !!info.verbose;
+    // 会话 id:用户报问题时说出它,就能定位到那一次运行
+    const sid = $("logSession");
+    if (sid && info.session) {
+      sid.textContent = "会话 " + info.session;
+      sid.title = "报问题时把这个号一起说上,能精确定位到那一次运行";
+    }
   } catch (e) {
     const el = $("logPath");
     if (el) el.textContent = "拿不到日志路径:" + e;
@@ -3722,6 +3731,52 @@ if ($("btnLogCopy")) {
       showToast("日志已清空");
     } catch (e) {
       showToast("清空失败:" + e, true);
+    }
+  });
+}
+
+/**
+ * 导出诊断包:环境 + 体检 + 最近的事件,合成**一份**文本。
+ *
+ * 为什么不是让用户贴两样(体检报告 + 日志):合成一份之后用户只贴一样,
+ * 也不用 support 再人工对一遍 —— 这是整个排查链路里最省事的一步。
+ *
+ * 体检要真打一轮请求(最坏十几秒),所以按钮期间禁用,避免连点叠请求。
+ */
+if ($("btnDiagExport")) {
+  $("btnDiagExport").addEventListener("click", async () => {
+    const btn = $("btnDiagExport");
+    btn.disabled = true;
+    const old = btn.textContent;
+    btn.textContent = "导出中…";
+    try {
+      const text = await invoke("diag_export");
+      await invoke("copy_text", { text });
+      showToast("诊断包已复制到剪贴板 · 直接贴给我就行");
+    } catch (e) {
+      showToast("导出诊断包失败:" + e, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = old;
+    }
+  });
+}
+
+/**
+ * 「详细日志」开关:连成功的请求也记下来。
+ *
+ * 默认关 —— 排查"余额数字不对"必须看成功响应,那是唯一能看到"接口到底返了什么"
+ * 的地方;但平时用不到,而且开着日志量会大一截。
+ */
+if ($("logVerbose")) {
+  $("logVerbose").addEventListener("change", async (e) => {
+    const on = e.target.checked;
+    try {
+      await invoke("diag_log_verbose", { on });
+      showToast(on ? "详细日志已打开 · 成功的请求也会记录" : "详细日志已关闭");
+    } catch (err) {
+      e.target.checked = !on; // 没改成就弹回去,别让界面显示着一个没生效的状态
+      showToast("设置失败:" + err, true);
     }
   });
 }

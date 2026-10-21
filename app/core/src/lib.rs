@@ -12,6 +12,7 @@ pub mod checkin;
 pub mod config;
 pub mod custom;
 pub mod diaglog;
+pub mod errcodes;
 pub mod fetch;
 pub mod fx;
 pub mod inject;

@@ -207,6 +207,23 @@ impl Outcome {
             Outcome::Failed(m) => format!("failed:{m}"),
         }
     }
+    /// 结论的**类别**,不含任何文案。
+    ///
+    /// 为什么单独有它:`code()` 里嵌着平台给的 message —— 那是第三方原样返回的
+    /// 任意文本(项目自己的纪律就是"判因只看 code,不看 message 文案"),
+    /// **绝不能进日志**(日志是要贴给 support 看的)。
+    /// 要落结论时用这个,只留类别;平台的业务码另记。
+    pub fn verdict(&self) -> &'static str {
+        match self {
+            Outcome::Claimed(_) => "claimed",
+            Outcome::Already(_) => "already",
+            Outcome::Inactive(_) => "inactive",
+            Outcome::Retry(_) => "retry",
+            Outcome::AuthNeeded => "auth",
+            Outcome::BadShape(_) => "shape",
+            Outcome::Failed(_) => "failed",
+        }
+    }
     /// 平台声明的数额(已领 / 刚领都算)。界面据此显示 "+100 分"。
     pub fn credits(&self) -> Option<f64> {
         match self {
@@ -905,6 +922,23 @@ pub async fn call_with_body(
                 } else {
                     format!("请求失败: {e}")
                 };
+                let code = if e.is_timeout() {
+                    crate::errcodes::TIMEOUT
+                } else {
+                    crate::errcodes::CONNECT
+                };
+                crate::diaglog::wire(
+                    "checkin",
+                    Some(def.id),
+                    "http",
+                    Some(code),
+                    &[
+                        ("url", url),
+                        ("host", &host_of(url)),
+                        ("method", if method == CheckinMethod::Get { "GET" } else { "POST" }),
+                        ("action", if claim { "claim" } else { "status" }),
+                    ],
+                );
                 last = Outcome::Failed(msg);
                 continue;
             }
@@ -912,9 +946,33 @@ pub async fn call_with_body(
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
         if matches!(status.as_u16(), 401 | 403) {
+            // L2:凭据被拒 —— 用户只会说"没领到",日志要能指出是哪一环。
+            crate::diaglog::wire(
+                "checkin",
+                Some(def.id),
+                "http",
+                Some(crate::errcodes::CRED_EXPIRED),
+                &[
+                    ("url", url),
+                    ("host", &host_of(url)),
+                    ("status", &status.as_u16().to_string()),
+                    ("action", if claim { "claim" } else { "status" }),
+                ],
+            );
             return (Outcome::AuthNeeded, None);
         }
         if status.as_u16() == 404 {
+            crate::diaglog::wire(
+                "checkin",
+                Some(def.id),
+                "http",
+                Some(crate::errcodes::HTTP_404),
+                &[
+                    ("url", url),
+                    ("host", &host_of(url)),
+                    ("action", if claim { "claim" } else { "status" }),
+                ],
+            );
             last = Outcome::Inactive(format!("HTTP 404 ({})", host_of(url)));
             continue;
         }
@@ -927,6 +985,22 @@ pub async fn call_with_body(
                 } else {
                     Outcome::BadShape(format!("HTTP {} · 响应不是 JSON", status.as_u16()))
                 };
+                crate::diaglog::wire(
+                    "checkin",
+                    Some(def.id),
+                    "http",
+                    Some(if later {
+                        crate::errcodes::HTTP_5XX
+                    } else {
+                        crate::errcodes::BODY_NOT_JSON
+                    }),
+                    &[
+                        ("url", url),
+                        ("status", &status.as_u16().to_string()),
+                        ("bytes", &text.len().to_string()),
+                        ("action", if claim { "claim" } else { "status" }),
+                    ],
+                );
                 if later {
                     continue;
                 }
@@ -938,6 +1012,28 @@ pub async fn call_with_body(
             "qoder" | "qoder-cn" => parse_qoder(&body, claim),
             _ => parse_workbuddy(&body, claim),
         };
+        // L1:平台给的**业务码**(不看 message 文案 —— 那条红线就是"判因只看 code")。
+        // 平台不返 code 时就空着,绝不编。码也限长:它是第三方给的字符串。
+        let biz = body
+            .get("code")
+            .map(|c| match c {
+                serde_json::Value::String(s) => s.chars().take(24).collect::<String>(),
+                other => other.to_string(),
+            })
+            .unwrap_or_default();
+        crate::diaglog::write_keyed(
+            "checkin",
+            &format!("{}:resp", def.id),
+            &format!(
+                "签到响应 · 动作 {} · HTTP {} · 平台码 {} · 结论 {}",
+                if claim { "claim" } else { "status" },
+                status.as_u16(),
+                if biz.is_empty() { "(没给)" } else { &biz },
+                // ⚠ 只记**类别**,不记 `out.code()` —— 后者嵌着平台给的 message,
+                // 那是第三方原样返回的任意文本,不能进要贴给 support 的日志。
+                out.verdict()
+            ),
+        );
         if status.is_server_error() && matches!(out, Outcome::Failed(_)) {
             last = Outcome::Retry(format!("HTTP {}", status.as_u16()));
             continue;

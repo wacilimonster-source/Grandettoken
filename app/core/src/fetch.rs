@@ -1,4 +1,4 @@
-//! 取数与视图组装。
+﻿//! 取数与视图组装。
 //!
 //! 核心原则:**失败不降级成 0**。取数失败时继续显示上次成功快照并标注时间,
 //! 因为余额类工具最危险的 bug 就是把请求失败渲染成"余额归零",用户会以为欠费了。
@@ -724,12 +724,43 @@ fn same_origin_header(url: &str, header: &str) -> Option<String> {
 }
 
 /// 单次尝试:一个地址、一次请求。返回结果与"这次失败值不值得换域名"。
+///
+/// **这里是 9 个内置渠道取余额的唯一出口** —— 排查用的 L2 日志埋在这一层,
+/// 一次覆盖全部渠道,不用去改 9 个 extractor(见 docs/product/product-logging-observability)。
 async fn fetch_once(
     client: &reqwest::Client,
     def: &providers::ProviderDef,
     url: &str,
     key: &str,
 ) -> (FetchResult, Option<FailKind>) {
+    let started = std::time::Instant::now();
+    let (res, kind, info) = fetch_once_inner(client, def, url, key).await;
+    log_wire(def, url, started.elapsed().as_millis(), &info, &res);
+    (res, kind)
+}
+
+/// 一次请求的"线上事实" —— 只给日志用。
+///
+/// 排查"接口怎么了"最需要的就是这几样:状态码、字节数、响应的**结构**。
+/// 只记结构不记值 —— 响应体里可能有余额、可能有令牌。
+#[derive(Default, Clone)]
+struct WireInfo {
+    status: Option<u16>,
+    bytes: usize,
+    /// 顶层键名列表(JSON 时)或响应片段(非 JSON 时)。**只记结构,不记值**。
+    shape: String,
+    /// 这一层的错误码(传输层 / 状态码 / 业务失败)。
+    code: Option<&'static str>,
+}
+
+/// 真正发请求的那一段(与 [`fetch_once`] 分开,是为了"每个请求只记一行 L2")。
+async fn fetch_once_inner(
+    client: &reqwest::Client,
+    def: &providers::ProviderDef,
+    url: &str,
+    key: &str,
+) -> (FetchResult, Option<FailKind>, WireInfo) {
+    let mut info = WireInfo::default();
     let mut req = match def.method {
         Method::Get => client.get(url),
         Method::PostJson(body) => client
@@ -783,36 +814,65 @@ async fn fetch_once(
         Ok(r) => r,
         Err(e) => {
             let text = e.to_string().to_lowercase();
-            let (msg, kind) = if text.contains("certificate") || text.contains("cert") {
+            let (msg, kind, code) = if text.contains("certificate") || text.contains("cert") {
                 // 证书/时钟问题换域名是同一个答案,别把四个入口各撞 8 秒(P2-24)
-                ("HTTPS 证书校验失败(检查代理拦截或系统时间)".to_string(), FailKind::Business)
+                (
+                    "HTTPS 证书校验失败(检查代理拦截或系统时间)".to_string(),
+                    FailKind::Business,
+                    crate::errcodes::TLS,
+                )
             } else if e.is_timeout() {
-                ("请求超时".to_string(), FailKind::Transport)
+                ("请求超时".to_string(), FailKind::Transport, crate::errcodes::TIMEOUT)
             } else if e.is_connect() {
-                ("无法连接(检查网络或代理)".to_string(), FailKind::Transport)
+                (
+                    "无法连接(检查网络或代理)".to_string(),
+                    FailKind::Transport,
+                    crate::errcodes::CONNECT,
+                )
             } else {
-                (format!("请求失败: {e}"), FailKind::Transport)
+                (
+                    format!("请求失败: {e}"),
+                    FailKind::Transport,
+                    crate::errcodes::CONNECT,
+                )
             };
-            return err_result(def, msg, Some(kind));
+            info.code = Some(code);
+            let (r, k) = err_result(def, msg, Some(kind));
+            return (r, k, info);
         }
     };
 
     let status = resp.status();
+    info.status = Some(status.as_u16());
     // 上限 2 MB:入口被网关换成大 HTML 时不要整包读进内存再解析(P2-24)。
     // 先看 Content-Length,超了**在读之前**就拒;没有长度(分块传输)才按块累加,
     // 一超上限立刻停手 —— 以前 `resp.bytes()` 会先把整包缓进内存再判大小(P2)。
     const MAX_BODY: usize = 2_000_000;
     if let Some(len) = resp.content_length() {
         if len > MAX_BODY as u64 {
-            return err_result(def, format!("响应过大({len} 字节),已丢弃"), Some(FailKind::Server));
+            info.code = Some(crate::errcodes::BODY_SHAPE);
+            let (r, k) = err_result(def, format!("响应过大({len} 字节),已丢弃"), Some(FailKind::Server));
+            return (r, k, info);
         }
     }
     let raw = match read_body_capped(resp, MAX_BODY).await {
-        Ok(b) => b,
-        Err((msg, kind)) => return err_result(def, msg, Some(kind)),
+        Ok(b) => {
+            info.bytes = b.len();
+            b
+        }
+        Err((msg, kind)) => {
+            info.code = Some(crate::errcodes::CONNECT);
+            let (r, k) = err_result(def, msg, Some(kind));
+            return (r, k, info);
+        }
     };
     let body: serde_json::Value = match serde_json::from_slice(&raw) {
-        Ok(v) => v,
+        Ok(v) => {
+            // 顶层键名列表:**只记结构,不记值** —— 值里可能有余额,可能有令牌。
+            // 接口改字段名时,这是唯一能看出"原来叫 X 现在叫 Y"的线索。
+            info.shape = shape_of(&v);
+            v
+        }
         Err(_) => {
             // 响应体不是 JSON 时,**失败类别要跟着状态码走**,不能一律当成 Server。
             //
@@ -822,11 +882,22 @@ async fn fetch_once(
             // 日志写的是"凭据 [手动令牌→不通]",用户永远取不到数。
             // 401/403 说的是"这份凭据不行",与"响应长什么样"无关 —— 语义由状态码定。
             let code = status.as_u16();
-            return err_result(
+            // 2xx 但不是 JSON = **接口结构变了**(网关挡了 / 返回了 HTML),
+            // 不是"业务失败" —— 两者要分开,否则 grep BODY_NOT_JSON 找不到这里。
+            info.code = Some(if status.is_success() {
+                crate::errcodes::BODY_NOT_JSON
+            } else {
+                crate::errcodes::for_status(code)
+            });
+            // 非 JSON 时把响应**开头一小段**记下来(脱敏后)—— 网关回的是 HTML 还是
+            // JSON 错误体,看这一段就知道。
+            info.shape = snippet_of(&raw);
+            let (r, k) = err_result(
                 def,
                 format!("响应不是合法 JSON (HTTP {code})"),
                 Some(kind_for_status(code)),
             );
+            return (r, k, info);
         }
     };
 
@@ -856,7 +927,140 @@ async fn fetch_once(
         Some(FailKind::Business) // HTTP 200 但业务失败
     };
 
-    (result, kind)
+    // 码:状态码优先(HTTP 200 但业务失败是另一回事)
+    if info.code.is_none() {
+        info.code = if !status.is_success() {
+            Some(crate::errcodes::for_status(status.as_u16()))
+        } else if !result.valid {
+            Some(crate::errcodes::BIZ_FAIL)
+        } else {
+            None
+        };
+    }
+
+    (result, kind, info)
+}
+
+/// 响应的**结构**摘要:顶层键名(最多 8 个)。**只记键名,不记值。**
+fn shape_of(body: &serde_json::Value) -> String {
+    let Some(obj) = body.as_object() else {
+        return match body {
+            serde_json::Value::Array(a) => format!("[{} 项]", a.len()),
+            serde_json::Value::Null => "null".into(),
+            other => format!("{}", type_name_of(other)),
+        };
+    };
+    let keys: Vec<&str> = obj.keys().take(8).map(|s| s.as_str()).collect();
+    if obj.len() > 8 {
+        format!("{{{}+{}…}}", keys.join(","), obj.len() - 8)
+    } else {
+        format!("{{{}}}", keys.join(","))
+    }
+}
+
+/// JSON 值的类型名(不记值本身)。
+fn type_name_of(v: &serde_json::Value) -> &'static str {
+    match v {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "bool",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
+}
+
+/// 非 JSON 响应的开头一小段(给日志看,脱敏由 [`crate::diaglog::redact`] 负责)。
+///
+/// ⚠ 这是**唯一一处原始第三方响应内容**进日志字段的地方,所以要额外收紧:
+/// 只留可打印 ASCII、遇到 HTML 标签就截断、限长 80 字节。
+/// 网关回的错误页有时会把请求行原样带回来,那里面可能有令牌。
+fn snippet_of(raw: &[u8]) -> String {
+    let head = String::from_utf8_lossy(&raw[..raw.len().min(200)]);
+    let mut out = String::new();
+    for ch in head.chars() {
+        if ch == '<' {
+            break; // HTML 开始 —— 后面是页面正文,没有排查价值
+        }
+        if ch.is_ascii_graphic() || ch == ' ' {
+            out.push(ch);
+        } else {
+            out.push(' '); // 控制字符/非 ASCII 一律换成空格
+        }
+        if out.len() >= 80 {
+            break;
+        }
+    }
+    out.trim().to_string()
+}
+
+/// 把一次请求记成一行 L2。
+///
+/// **成功的事件不落盘**(只进内存环形缓冲);失败的落盘,并连带写出前后的上下文。
+/// 这是"日志量"和"信息量"不矛盾的关键 —— 平时不占盘,出事才有现场。
+fn log_wire(
+    def: &providers::ProviderDef,
+    url: &str,
+    ms: u128,
+    info: &WireInfo,
+    res: &FetchResult,
+) {
+    let host = providers::url_host(url).unwrap_or_default();
+    let path = url
+        .split_once("://")
+        .map(|(_, rest)| rest.find('/').map(|i| &rest[i..]).unwrap_or("/"))
+        .unwrap_or("/")
+        .to_string();
+    let method = match def.method {
+        Method::Get => "GET",
+        Method::PostJson(_) => "POST",
+    };
+    let status_s = info.status.map(|s| s.to_string()).unwrap_or_default();
+    let ms_s = ms.to_string();
+    let bytes_s = info.bytes.to_string();
+    let mut fields: Vec<(&str, &str)> = vec![
+        ("url", url),
+        ("host", &host),
+        ("path", &path),
+        ("method", method),
+        ("ms", &ms_s),
+    ];
+    // 状态码只在真的拿到响应时才有(连接失败/超时时根本没有 HTTP 状态) ——
+    // 写一个空的状态码会让人以为"服务器回了个空状态"。
+    if info.status.is_some() {
+        fields.push(("status", &status_s));
+    }
+    if info.bytes > 0 {
+        fields.push(("bytes", &bytes_s));
+    }
+    if !info.shape.is_empty() {
+        fields.push(("shape", &info.shape));
+    }
+    crate::diaglog::wire("fetch", Some(def.id), "http", info.code, &fields);
+    // 成功的那次:把解析出的值也记下来(只进内存,除非开了详细日志)。
+    // "余额显示不对"这类问题必须看成功响应,这是唯一能看到"接口到底返了什么"的地方。
+    if res.valid {
+        let rem = res
+            .remaining
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "-".into());
+        let unit = res.unit.clone();
+        crate::diaglog::result(
+            "fetch",
+            Some(def.id),
+            "parse",
+            &[("remaining", &rem), ("unit", &unit), ("kind", kind_str(res.kind))],
+        );
+    }
+}
+
+/// kind → 日志里用的短名(与 serde 的 lowercase 表示一致)。
+fn kind_str(k: Kind) -> &'static str {
+    match k {
+        Kind::Amount => "amount",
+        Kind::Percent => "percent",
+        Kind::Points => "points",
+    }
 }
 
 /// 非 2xx 的状态码 → 失败类别。**唯一口径**:正常分支与"响应体不是 JSON"那条
@@ -938,6 +1142,27 @@ pub async fn fetch_channel(
             let used = Some(url.clone());
             return (result, used, kind);
         }
+        // L1 决策:换下一个入口了 —— 记下"从哪换到哪、为什么换"。
+        // 没有这一行,日志里只会看到"401"和"连不上"混在一起,看不出是哪个域名在坏。
+        let why = match kind {
+            Some(FailKind::Auth) => "凭据被拒",
+            Some(FailKind::Transport) => "传输失败",
+            Some(FailKind::Server) => "服务端错误",
+            Some(FailKind::Client) => "请求有问题",
+            Some(FailKind::Business) => "业务失败",
+            None => "",
+        };
+        let from = providers::url_host(url).unwrap_or_default();
+        let to = order
+            .get(i + 1)
+            .and_then(|u| providers::url_host(u))
+            .unwrap_or_default();
+        crate::diaglog::decision(
+            "fetch",
+            Some(def.id),
+            "attempt",
+            &format!("换下一个入口:{from} → {to}(原因:{why})"),
+        );
         last_kind = kind;
         last = Some(result);
     }
@@ -2032,7 +2257,7 @@ impl Fetcher {
                     let mut used_url = None;
                     // 每个候选凭据试一轮;诊断日志要知道"试了几份、最后卡在哪"。
                     let mut tried: Vec<String> = Vec::new();
-                    for cred in creds.iter() {
+                    for (ci, cred) in creds.iter().enumerate() {
                         last_cred = Some(cred.clone());
                         let desc = cred_desc(def, cred);
                         let (r, url, kind) =
@@ -2056,6 +2281,17 @@ impl Fetcher {
                             break;
                         }
                         if another_credential_may_help(kind) {
+                            // L1:服务器明确拒了这份 → 换下一份。记下"拒了哪份、用哪份顶替"。
+                            // 这一行平时不出现(凭据没被拒时不会走到),出现就说明换过了。
+                            let next = creds.get(ci + 1).map(|c| cred_desc(def, c));
+                            crate::diaglog::write_keyed(
+                                def.id,
+                                "cred-switch",
+                                &format!(
+                                    "换下一份凭据:{desc} 被拒 → {}",
+                                    next.unwrap_or_else(|| "没有更多候选了".into())
+                                ),
+                            );
                             continue;
                         }
                         break;
@@ -2319,6 +2555,154 @@ impl Fetcher {
 mod tests {
     use super::*;
     use chrono::Timelike;
+
+    /// 2026-10-21:端到端验一次"取数失败 → 日志里有一行可用的现场"。
+    ///
+    /// 这条用例守的是整套日志的**存在意义**:以前 9 个内置渠道里只有 WorkBuddy
+    /// 那一路有日志,其余的失败时日志里只有"取数失败"四个字。
+    /// 现在 `fetch_once` 埋一行 L2 —— URL、状态码、耗时、错误码全在里面。
+    #[test]
+    fn a_failed_request_leaves_a_usable_line_in_the_log() {
+        let _lock = crate::diaglog::test_lock();
+        let dir = std::env::temp_dir().join(format!("ts-fetch-log-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let _arm = crate::diaglog::arm_test_dir(dir.clone());
+
+        // 127.0.0.1:1 —— 连都不连得上,必然失败,而且不依赖外网
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let def = providers::find("4sapi").unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (_res, _kind) = rt.block_on(fetch_once(
+            &client,
+            def,
+            "http://127.0.0.1:1/v1/usage",
+            "sk-test-key",
+        ));
+
+        let text = crate::diaglog::read_log();
+        assert!(!text.is_empty(), "失败必须留下日志");
+        assert!(text.contains("E_"), "要有错误码:{text}");
+        assert!(text.contains("127.0.0.1:1"), "要有 URL:{text}");
+        assert!(text.contains("ms="), "要有耗时字段:{text}");
+        assert!(text.contains("host=127.0.0.1"), "要有主机名:{text}");
+        // 连接都没连上 → **没有 HTTP 状态码**。这时刻意不写 status=
+        // (写一个空状态码会让人以为"服务器回了个空状态")。
+        assert!(!text.contains("status="), "连不上时不该有 status=:{text}");
+        // 密钥绝不能出现
+        assert!(!text.contains("sk-test-key"), "密钥不该出现在日志里:{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-10-21:状态码 → 类别 的**两套映射不能打架**。
+    ///
+    /// 取数层把 401/403/407 判成 `Auth`(该换下一份凭据),
+    /// 错误码层必须给同一类结论(要去登录)—— 否则日志里的码会把人引向错误的动作。
+    /// 两套映射以前各写一份,407 那边就对不上(取数层当"凭据被拒",
+    /// 码层说"请求被拒绝,等一等")。
+    #[test]
+    fn status_code_mappings_agree() {
+        for code in 400..=599u16 {
+            let kind = kind_for_status(code);
+            let ec = crate::errcodes::for_status(code);
+            assert!(ec.starts_with("E_"), "{code} 没有对应错误码:{ec}");
+            if kind == FailKind::Auth {
+                assert_eq!(
+                    crate::errcodes::action(ec),
+                    crate::errcodes::Action::Login,
+                    "{code} 在取数层算凭据被拒,码层也要说'去登录'"
+                );
+            }
+            // 5xx / 429 在取数层是可重试的,码层也不该说"要用户动手"
+            if kind == FailKind::Server {
+                assert_eq!(
+                    crate::errcodes::action(ec),
+                    crate::errcodes::Action::Wait,
+                    "{code} ���服务端/限流问题,不该要用户动手"
+                );
+            }
+        }
+    }
+
+    /// 2026-10-21:失败落盘要带上文 —— 单看"HTTP 401"没用,
+    /// 看到"之前换过域名、换过凭据"才知道是谁的问题。
+    #[test]
+    fn a_failure_carries_the_events_that_came_before_it() {
+        let _lock = crate::diaglog::test_lock();
+        let dir = std::env::temp_dir().join(format!("ts-fetch-ctx-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let _arm = crate::diaglog::arm_test_dir(dir.clone());
+
+        // 先来几条"之前发生过的事"(成功的事件默认不落盘,但进内存环形缓冲)
+        crate::diaglog::result(
+            "fetch",
+            Some("4sapi"),
+            "cred",
+            &[("cred_source", "手动粘贴")],
+        );
+        crate::diaglog::result(
+            "fetch",
+            Some("4sapi"),
+            "attempt",
+            &[("host", "api.4sapi.com")],
+        );
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let def = providers::find("4sapi").unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (_res, _kind) = rt.block_on(fetch_once(
+            &client,
+            def,
+            "http://127.0.0.1:1/v1/usage",
+            "sk-test-key",
+        ));
+
+        let text = crate::diaglog::read_log();
+        assert!(text.contains("↳ 上文"), "失败要带上文:{text}");
+        assert!(text.contains("cred_source=手动粘贴"), "上文里有之前的事件:{text}");
+        assert!(text.contains("api.4sapi.com"), "上文里有之前的决策:{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-10-21:URL 里的查询参数如果带密钥,也不能落进日志。
+    #[test]
+    fn a_secret_in_the_query_string_never_reaches_the_log() {
+        let _lock = crate::diaglog::test_lock();
+        let dir = std::env::temp_dir().join(format!("ts-fetch-log2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let _arm = crate::diaglog::arm_test_dir(dir.clone());
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let def = providers::find("4sapi").unwrap();
+        let secret = "SUPERSECRETVALUE1234567890ABCDEFGH";
+        let url = format!("http://127.0.0.1:1/v1/usage?api_key={secret}");
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (_res, _kind) = rt.block_on(fetch_once(&client, def, &url, "sk-test-key"));
+
+        let text = crate::diaglog::read_log();
+        assert!(!text.contains(secret), "查询参数里的密钥不该落盘:{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// 单测里把"读桌面端凭据"关掉:它要起 WorkBuddy 进程、还依赖本机装没装,
     /// 两条都不该出现在单元测试里。测这条路径的用例自己 set_desktop_reader。
