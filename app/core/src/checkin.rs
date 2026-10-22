@@ -173,6 +173,8 @@ pub fn find(id: &str) -> Option<&'static CheckinDef> {
 pub enum Outcome {
     /// 刚领到(credits = 平台声明的数额;拿不到就不给数字)
     Claimed(Option<f64>),
+    /// 领取请求已发出，但状态回查没有给出明确结果；继续回查，不提前宣称成功。
+    Confirming(Option<f64>),
     /// 今天已经签过(可能是用户自己在客户端点的)
     Already(Option<f64>),
     /// 今天没得领(活动未开启/已结束)
@@ -194,10 +196,38 @@ pub enum Outcome {
     Failed(String),
 }
 
+/// WorkBuddy 的业务码 10001 会随接口区域变化含义，解析时必须显式带上来源区域。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkBuddyRegion {
+    Mainland,
+    International,
+    Unknown,
+}
+
+/// 从实际请求域名推断 WorkBuddy 接口区域。未知域名不猜状态。
+pub fn workbuddy_region_for_host(host: &str) -> WorkBuddyRegion {
+    let host = host.to_ascii_lowercase();
+    if host == "workbuddy.cn"
+        || host.ends_with(".workbuddy.cn")
+        || host == "codebuddy.cn"
+        || host.ends_with(".codebuddy.cn")
+    {
+        WorkBuddyRegion::Mainland
+    } else if host == "workbuddy.com"
+        || host.ends_with(".workbuddy.com")
+        || host == "codebuddy.com"
+        || host.ends_with(".codebuddy.com")
+    {
+        WorkBuddyRegion::International
+    } else {
+        WorkBuddyRegion::Unknown
+    }
+}
+
 impl Outcome {
     /// 这次尝试有没有"问出结果"——没有的话(限流/网络)当天还可以再来。
     pub fn retryable(&self) -> bool {
-        matches!(self, Outcome::Retry(_) | Outcome::Failed(_))
+        matches!(self, Outcome::Retry(_) | Outcome::Failed(_) | Outcome::Confirming(_))
     }
     /// 要不要立刻告诉用户(设计稿:只有凭据失效与结构变化值得打断)。
     pub fn needs_user(&self) -> bool {
@@ -207,6 +237,7 @@ impl Outcome {
     pub fn code(&self) -> String {
         match self {
             Outcome::Claimed(_) => "claimed".into(),
+            Outcome::Confirming(_) => "confirming".into(),
             Outcome::Already(_) => "already".into(),
             Outcome::Inactive(m) => format!("inactive:{m}"),
             Outcome::Manual(m) => format!("manual:{m}"),
@@ -225,6 +256,7 @@ impl Outcome {
     pub fn verdict(&self) -> &'static str {
         match self {
             Outcome::Claimed(_) => "claimed",
+            Outcome::Confirming(_) => "confirming",
             Outcome::Already(_) => "already",
             Outcome::Inactive(_) => "inactive",
             Outcome::Manual(_) => "manual",
@@ -237,7 +269,7 @@ impl Outcome {
     /// 平台声明的数额(已领 / 刚领都算)。界面据此显示 "+100 分"。
     pub fn credits(&self) -> Option<f64> {
         match self {
-            Outcome::Claimed(c) | Outcome::Already(c) => *c,
+            Outcome::Claimed(c) | Outcome::Confirming(c) | Outcome::Already(c) => *c,
             _ => None,
         }
     }
@@ -334,7 +366,7 @@ pub fn next_delay(attempts: i64) -> i64 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CheckinCfg {
-    /// 总开关。**默认关**:首次要在渠道卡上点一次「开启签到」才发请求(设计稿裁决 3A)
+    /// 活动监测总开关。关闭后不查询状态也不发领取请求；自动领取由 `auto` 单独控制。
     pub enabled: bool,
     /// 自动签(每天 00:23+抖动,以及开机补跑)。开总开关后默认开
     pub auto: bool,
@@ -365,8 +397,12 @@ pub struct CheckinCfg {
     ///
     /// `None` = 这条记录**早于本字段存在** → 一律视为陈旧:产生它的代码已经不是现在这份了。
     pub last_auth_version: Option<String>,
-    /// 最近一次查询 Qoder 活动列表的时刻。签到开关开着时,即使自动领取关闭也会监测活动。
+    /// 最近一次活动状态查询的时刻。监测开着时,即使自动领取关闭也会继续只读检查。
     pub last_activity_check_at: Option<i64>,
+    /// 最近一次跨渠道活动/签到状态，用于渠道卡和监测提示。
+    pub activity_state: Option<ActivityState>,
+    /// 最近已提示的“活动键 + 状态”，防止每小时重复提醒。
+    pub last_activity_notice_key: Option<String>,
     /// 最近看到的 Qoder 活动快照(最多保留 100 条,用于识别新活动和状态变化)。
     pub activity_history: Vec<QoderActivity>,
     /// 最近一次活动列表中的优先活动,供渠道详情和首页徽标展示。
@@ -388,6 +424,8 @@ impl Default for CheckinCfg {
             last_streak_days: None,
             last_auth_version: None,
             last_activity_check_at: None,
+            activity_state: None,
+            last_activity_notice_key: None,
             activity_history: Vec::new(),
             latest_activity: None,
         }
@@ -597,6 +635,14 @@ fn trae_credits(body: &serde_json::Value) -> Option<f64> {
 /// 必须按 `code + 域名` 判;`active=false` 或 404 = 本期结束。
 /// 另外有实现记录"签到响应里没有数额字段",所以数额拿不到就留 None,不编。
 pub fn parse_workbuddy(body: &serde_json::Value, claiming: bool) -> Outcome {
+    parse_workbuddy_for_region(body, claiming, WorkBuddyRegion::Mainland)
+}
+
+pub fn parse_workbuddy_for_region(
+    body: &serde_json::Value,
+    claiming: bool,
+    region: WorkBuddyRegion,
+) -> Outcome {
     let code = body.get("code").and_then(|c| c.as_i64());
     let msg = body
         .get("msg")
@@ -640,13 +686,11 @@ pub fn parse_workbuddy(body: &serde_json::Value, claiming: bool) -> Outcome {
             }
         }
         Some(10001) => {
-            // 国区:今天已签;国际版:活动未开启。按文案区分(这是唯一必须看文案的地方,
-            // 因为同一个 code 两种含义)。认不出来就当"没活动"(保守:不重试,也不谎报已签)
-            let m = msg.to_lowercase();
-            if m.contains("已签") || m.contains("已领取") || m.contains("already") {
-                Outcome::Already(credits)
-            } else {
-                Outcome::Inactive(msg)
+            // 同一个 code 的语义由实际请求域名决定；未知区域停在待确认，不能猜成已签或无活动。
+            match region {
+                WorkBuddyRegion::Mainland => Outcome::Already(credits),
+                WorkBuddyRegion::International => Outcome::Inactive(msg),
+                WorkBuddyRegion::Unknown => Outcome::BadShape("WorkBuddy 区域未知(code=10001)".into()),
             }
         }
         Some(404) => Outcome::Inactive(msg),
@@ -701,6 +745,26 @@ pub struct QoderActivity {
     pub action_type: String,
     pub claim_status: String,
     pub observed_at: Option<i64>,
+}
+
+/// 跨渠道的最近一次活动判定。不同平台仍使用各自的解析器，前端只消费统一语义。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ActivityState {
+    /// 活动 ID 或“渠道:周期:范围”组成的稳定键。
+    pub key: String,
+    pub title: String,
+    /// claimable / manual / confirming / claimed / device_used / inactive / unknown
+    pub status: String,
+    /// account / device
+    pub scope: String,
+    /// CN / Global / Unknown
+    pub region: String,
+    /// 平台周期键(例如北京时间签到日)。
+    pub period: String,
+    pub reward: Option<f64>,
+    pub observed_at: Option<i64>,
+    pub detail: Option<String>,
 }
 
 /// 从活动响应解析所有活动,不是只挑可签到项。
@@ -1211,7 +1275,11 @@ pub async fn call_with_body(
         let out = match def.id {
             "trae" => parse_trae(&body, claim),
             "qoder" | "qoder-cn" => parse_qoder(&body, claim),
-            _ => parse_workbuddy(&body, claim),
+            _ => parse_workbuddy_for_region(
+                &body,
+                claim,
+                workbuddy_region_for_host(&host_of(url)),
+            ),
         };
         // L1:平台给的**业务码**(不看 message 文案 —— 那条红线就是"判因只看 code")。
         // 平台不返 code 时就空着,绝不编。码也限长:它是第三方给的字符串。
@@ -1524,13 +1592,23 @@ mod tests {
         assert_eq!(parse_trae(&body, false), Outcome::Already(Some(150.0)));
     }
 
-    /// WorkBuddy:10001 在国区是"已签"、认不出文案时当"没活动"(都不重试)。
+    /// WorkBuddy:10001 按请求域名区域解释，未知区域不猜。
     #[test]
-    fn workbuddy_10001_branches_by_message() {
+    fn workbuddy_10001_branches_by_region() {
         let already = json!({"code":10001,"msg":"今日已签到"});
-        assert!(matches!(parse_workbuddy(&already, false), Outcome::Already(_)));
+        assert!(matches!(
+            parse_workbuddy_for_region(&already, false, WorkBuddyRegion::Mainland),
+            Outcome::Already(_)
+        ));
         let inactive = json!({"code":10001,"msg":"签到活动未开启或已过期"});
-        assert!(matches!(parse_workbuddy(&inactive, false), Outcome::Inactive(_)));
+        assert!(matches!(
+            parse_workbuddy_for_region(&inactive, false, WorkBuddyRegion::International),
+            Outcome::Inactive(_)
+        ));
+        assert!(matches!(
+            parse_workbuddy_for_region(&already, false, WorkBuddyRegion::Unknown),
+            Outcome::BadShape(_)
+        ));
     }
 
     /// WorkBuddy:活动关了 / 凭据失效 / 可领 / 领到。

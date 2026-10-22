@@ -55,10 +55,15 @@ async fn home_view(state: State<'_, AppState>) -> Result<view::HomeView, String>
         .iter()
         .map(|d| {
             let c = cfg.checkin.get(d.id).cloned().unwrap_or_default();
+            let activity_ready = c
+                .activity_state
+                .as_ref()
+                .map(|a| a.status == "claimable")
+                .unwrap_or(false);
             view::CheckinInput {
                 id: d.id.to_string(),
                 enabled: c.enabled,
-                done_today: c.blocks_today(&cycle_day_of(d.id, now), APP_VERSION),
+                done_today: c.blocks_today(&cycle_day_of(d.id, now), APP_VERSION) && !activity_ready,
             }
         })
         .collect();
@@ -2478,6 +2483,11 @@ struct CheckinState {
     log: Vec<tokenscope_core::store::CheckinRow>,
     /// Qoder 最近检测到的活动;即使当前活动不能由挂件领取,也展示监测结果。
     latest_activity: Option<checkin::QoderActivity>,
+    /// 跨渠道统一的最近活动状态。
+    activity_state: Option<checkin::ActivityState>,
+    last_activity_check_at: Option<i64>,
+    /// Qoder 返回的活动列表，用于把一个账号下的多个活动分别展示。
+    activity_history: Vec<checkin::QoderActivity>,
     /// **今天这个渠道签完了吗**(claimed / already / inactive)。
     ///
     /// 为什么由后端给、不让前端算:Qoder 的周期日**从 10:00 起算**
@@ -2591,6 +2601,11 @@ fn checkin_state_of(id: &str, cfg: &Config, store: &Store, note: Option<String>)
     let today = cycle_day_of(id, now);
     let done = checkin_blocks_today(&c, &today);
     let waiting = c.next_try_at.map(|t| t > now).unwrap_or(false);
+    let activity_ready = c
+        .activity_state
+        .as_ref()
+        .map(|a| a.status == "claimable")
+        .unwrap_or(false);
     // 陈旧的 `auth` **不要当事实显示**:它是对旧版本那一套凭据的判决,凭据链路
     // 可能早就变了(2026-10-20 真机:启动后 5 分钟内界面一直挂着过期的"凭据失效",
     // 把用户引去网页登录,而那条路还被网关拒)。在节拍器重新判定回来之前,
@@ -2616,16 +2631,19 @@ fn checkin_state_of(id: &str, cfg: &Config, store: &Store, note: Option<String>)
         attempts: c.attempts,
         last_try_at: c.last_try_at,
         next_try_at: c.next_try_at,
-        can_try: c.enabled && !done && !waiting,
+        can_try: c.enabled && (!done || activity_ready) && !waiting,
         needs_user,
         note,
         month_credits,
         // 首页徽标用:今天没有待办了(已签 / 平台说已签 / 本期无活动)。
         // **用后端的 cycle_day** —— Qoder 的"今天"从 10:00 起算,前端按本地日算必错。
-        done_today: c.signed_today(&today),
+        done_today: c.signed_today(&today) && !activity_ready,
         streak_days: c.last_streak_days,
         log,
         latest_activity: c.latest_activity,
+        activity_state: c.activity_state,
+        last_activity_check_at: c.last_activity_check_at,
+        activity_history: c.activity_history,
     }
 }
 
@@ -2638,6 +2656,24 @@ async fn record_qoder_activities(
     now: i64,
 ) -> bool {
     let Some(mut activities) = checkin::qoder_activities(body) else {
+        let period = cycle_day_of(id, now);
+        record_channel_activity(
+            app,
+            id,
+            checkin::ActivityState {
+                key: format!("{}:{}:account", id, period),
+                title: "Qoder 活动状态".into(),
+                status: "unknown".into(),
+                scope: "account".into(),
+                region: if id == "qoder-cn" { "CN" } else { "Global" }.into(),
+                period,
+                reward: None,
+                observed_at: Some(now),
+                detail: Some("平台返回了无法识别的活动结构".into()),
+            },
+            false,
+        )
+        .await;
         return false;
     };
     let def = checkin::find(id);
@@ -2711,6 +2747,46 @@ async fn record_qoder_activities(
             })
             .or_else(|| activities.first())
             .cloned();
+        let period = cycle_day_of(id, now);
+        entry.activity_state = Some(if let Some(activity) = entry.latest_activity.as_ref() {
+            let status = if checkin::qoder_action_claimable(
+                &activity.action_type,
+                &activity.claim_status,
+            ) {
+                "claimable"
+            } else if activity.claim_status == "CLAIMED" {
+                "claimed"
+            } else if activity.claim_status == "CLAIMABLE" {
+                "manual"
+            } else if matches!(activity.claim_status.as_str(), "EXPIRED" | "ENDED") {
+                "inactive"
+            } else {
+                "unknown"
+            };
+            checkin::ActivityState {
+                key: format!("{}:{}", id, activity.id),
+                title: activity.title.clone(),
+                status: status.to_string(),
+                scope: "account".into(),
+                region: if id == "qoder-cn" { "CN" } else { "Global" }.into(),
+                period,
+                reward: None,
+                observed_at: Some(now),
+                detail: Some(format!("{} · {}", activity.action_type, activity.claim_status)),
+            }
+        } else {
+            checkin::ActivityState {
+                key: format!("{}:{}:account", id, period),
+                title: "本期暂无可参与活动".into(),
+                status: "inactive".into(),
+                scope: "account".into(),
+                region: if id == "qoder-cn" { "CN" } else { "Global" }.into(),
+                period,
+                reward: None,
+                observed_at: Some(now),
+                detail: None,
+            }
+        });
     })
     .await;
     if let Err(e) = save_result {
@@ -2720,17 +2796,25 @@ async fn record_qoder_activities(
 
     if let Some(activity) = notice {
         let can_claim = checkin::qoder_action_claimable(&activity.action_type, &activity.claim_status);
-        let _ = app.emit(
-            "checkin-activity",
-            serde_json::json!({
-                "id": id,
-                "name": name,
-                "title": activity.title,
-                "actionType": activity.action_type,
-                "claimStatus": activity.claim_status,
-                "canClaim": can_claim,
-            }),
-        );
+        let auto = {
+            let state = app.state::<AppState>();
+            let cfg = lock_rw(&state.config);
+            cfg.checkin.get(id).map(|c| c.enabled && c.auto).unwrap_or(false)
+        };
+        // 自动模式下，成功回执会作为通知；不再先报“发现可领”再报“已领取”。
+        if !can_claim || !auto {
+            let _ = app.emit(
+                "checkin-activity",
+                serde_json::json!({
+                    "id": id,
+                    "name": name,
+                    "title": activity.title,
+                    "actionType": activity.action_type,
+                    "claimStatus": activity.claim_status,
+                    "canClaim": can_claim,
+                }),
+            );
+        }
     }
     newly_claimable
 }
@@ -2751,6 +2835,182 @@ async fn mark_qoder_activity_check(app: &tauri::AppHandle, id: &str, now: i64) {
 }
 
 const QODER_ACTIVITY_INTERVAL_SEC: i64 = 60 * 60;
+
+fn activity_state_from_outcome(
+    id: &str,
+    outcome: &checkin::Outcome,
+    body: Option<&serde_json::Value>,
+    now: i64,
+) -> checkin::ActivityState {
+    let period = cycle_day_of(id, now);
+    let scope = if id == "trae" { "device" } else { "account" };
+    let trae_device_used = id == "trae"
+        && body
+            .and_then(|v| v.get("code"))
+            .and_then(|v| v.as_i64())
+            == Some(9095);
+    let status = if trae_device_used {
+        "device_used"
+    } else {
+        match outcome {
+            checkin::Outcome::Claimed(_) | checkin::Outcome::Already(_) => "claimed",
+            checkin::Outcome::Inactive(_) => "inactive",
+            checkin::Outcome::Manual(_) => "manual",
+            checkin::Outcome::Retry(reason) if reason == "ready" || reason.starts_with("ready:") => {
+                "claimable"
+            }
+            _ => "unknown",
+        }
+    };
+    let region = match id {
+        "trae" | "workbuddy" | "qoder-cn" => "CN",
+        "qoder" => "Global",
+        _ => "Unknown",
+    };
+    let detail = match status {
+        "unknown" => Some(outcome.verdict().to_string()),
+        "device_used" => Some("Trae 每台设备每日共用一次名额".into()),
+        _ => None,
+    };
+    checkin::ActivityState {
+        key: format!("{}:{}:{}", id, period, scope),
+        title: if id == "trae" {
+            "每日设备签到".into()
+        } else {
+            "每日签到活动".into()
+        },
+        status: status.into(),
+        scope: scope.into(),
+        region: region.into(),
+        period,
+        reward: outcome.credits(),
+        observed_at: Some(now),
+        detail,
+    }
+}
+
+/// 保存非 Qoder 渠道的统一活动状态，并只在活动首次出现/状态变化时提醒。
+async fn record_channel_activity(
+    app: &tauri::AppHandle,
+    id: &str,
+    activity: checkin::ActivityState,
+    announce: bool,
+) {
+    let def = checkin::find(id);
+    let mut should_notify = false;
+    let notice_key = format!("{}:{}", activity.key, activity.status);
+    let state = app.state::<AppState>();
+    let save_result = save_config_off_main(&state, |live| {
+        let entry = live.checkin.entry(id.to_string()).or_default();
+        entry.last_activity_check_at = activity.observed_at;
+        if matches!(activity.status.as_str(), "claimable" | "manual")
+            && entry.last_activity_notice_key.as_deref() != Some(notice_key.as_str())
+        {
+            should_notify = true;
+            entry.last_activity_notice_key = Some(notice_key.clone());
+        }
+        entry.activity_state = Some(activity.clone());
+    })
+    .await;
+    if let Err(e) = save_result {
+        eprintln!("{} 活动状态落库失败: {e}", def.map(|d| d.name).unwrap_or(id));
+    }
+    let _ = app.emit("checkin-updated", serde_json::json!({ "id": id }));
+
+    if !announce || !should_notify {
+        return;
+    }
+    let auto = {
+        let state = app.state::<AppState>();
+        let enabled = lock_rw(&state.config)
+            .checkin
+            .get(id)
+            .map(|c| c.enabled && c.auto)
+            .unwrap_or(false);
+        enabled
+    };
+    // 自动领取的结果事件负责通知；避免同一活动先报发现、再报领到。
+    if activity.status == "claimable" && auto {
+        return;
+    }
+    let _ = app.emit(
+        "checkin-activity",
+        serde_json::json!({
+            "id": id,
+            "name": def.map(|d| d.name).unwrap_or(id),
+            "title": activity.title,
+            "status": activity.status,
+            "scope": activity.scope,
+            "region": activity.region,
+            "canClaim": activity.status == "claimable",
+        }),
+    );
+}
+
+/// Trae / WorkBuddy 每小时只读查询活动状态；自动领取是独立动作。
+async fn monitor_standard_activity(app: &tauri::AppHandle, id: &str) {
+    if UPDATING.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let now = now_ts();
+    let (enabled, hidden, last_check) = {
+        let state = app.state::<AppState>();
+        let cfg = lock_rw(&state.config);
+        let c = cfg.checkin.get(id).cloned().unwrap_or_default();
+        (
+            c.enabled,
+            cfg.hidden_channels.iter().any(|h| h == id),
+            c.last_activity_check_at,
+        )
+    };
+    if !enabled
+        || hidden
+        || last_check
+            .map(|t| now.saturating_sub(t) < QODER_ACTIVITY_INTERVAL_SEC)
+            .unwrap_or(false)
+    {
+        return;
+    }
+    let Ok(busy) = CheckinBusy::acquire(id) else {
+        return;
+    };
+    mark_qoder_activity_check(app, id, now).await;
+
+    let Some(def) = checkin::find(id) else { return };
+    let h = app.clone();
+    let cred = match tokio::task::spawn_blocking(move || checkin_credential(&h, def)).await {
+        Ok(Ok(cred)) => cred,
+        Ok(Err(_)) | Err(_) => {
+            let state = activity_state_from_outcome(id, &checkin::Outcome::AuthNeeded, None, now);
+            record_channel_activity(app, id, checkin::ActivityState {
+                status: "unknown".into(),
+                detail: Some("本机暂未读到登录凭据".into()),
+                ..state
+            }, false).await;
+            return;
+        }
+    };
+    let client = checkin::direct_client();
+    let (out, body) = checkin::call_with_body(&client, def, &cred, false, None).await;
+    let activity = activity_state_from_outcome(id, &out, body.as_ref(), now_ts());
+    let can_auto_claim = out == checkin::Outcome::Retry("ready".into());
+    record_channel_activity(app, id, activity, true).await;
+    drop(busy);
+
+    if can_auto_claim {
+        let should_claim = {
+            let state = app.state::<AppState>();
+            let cfg = lock_rw(&state.config);
+            cfg.checkin.get(id).map(|c| c.enabled && c.auto).unwrap_or(false)
+                && !cfg.hidden_channels.iter().any(|h| h == id)
+        };
+        if should_claim {
+            if let Err(e) = run_checkin(app, id, false).await {
+                eprintln!("{} 新活动自动领取跳过: {e}", def.name);
+            }
+        }
+    }
+}
 
 /// 独立于每日领取的活动监测。签到开关开启即可每小时检查一次,自动领取关闭时也照常发现活动。
 async fn monitor_qoder_activities(app: &tauri::AppHandle, id: &str) {
@@ -2780,12 +3040,37 @@ async fn monitor_qoder_activities(app: &tauri::AppHandle, id: &str) {
     let h = app.clone();
     let cred = match tokio::task::spawn_blocking(move || checkin_credential(&h, def)).await {
         Ok(Ok(cred)) => cred,
-        _ => return,
+        _ => {
+            let activity = checkin::ActivityState {
+                key: format!("{}:{}:account", id, cycle_day_of(id, now)),
+                title: "Qoder 活动状态".into(),
+                status: "unknown".into(),
+                scope: "account".into(),
+                region: if id == "qoder-cn" { "CN" } else { "Global" }.into(),
+                period: cycle_day_of(id, now),
+                reward: None,
+                observed_at: Some(now),
+                detail: Some("本机暂未读到登录凭据".into()),
+            };
+            record_channel_activity(app, id, activity, false).await;
+            return;
+        }
     };
     let client = checkin::direct_client();
     let (out, body) = checkin::call_with_body(&client, def, &cred, false, None).await;
     let Some(body) = body else {
-        let _ = out;
+        let activity = checkin::ActivityState {
+            key: format!("{}:{}:account", id, cycle_day_of(id, now)),
+            title: "Qoder 活动状态".into(),
+            status: "unknown".into(),
+            scope: "account".into(),
+            region: if id == "qoder-cn" { "CN" } else { "Global" }.into(),
+            period: cycle_day_of(id, now),
+            reward: None,
+            observed_at: Some(now),
+            detail: Some(out.verdict().into()),
+        };
+        record_channel_activity(app, id, activity, false).await;
         return;
     };
     let newly_claimable = record_qoder_activities(app, id, &body, now_ts()).await;
@@ -2850,7 +3135,12 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
     // 连续天数:只有 Qoder 的接口给,拿不到就是 None(不编)
     let streak: Option<i64> = status_body.as_ref().and_then(checkin::qoder_streak);
     if let Some(body) = status_body.as_ref() {
-        record_qoder_activities(app, id, body, now).await;
+        if matches!(id, "qoder" | "qoder-cn") {
+            record_qoder_activities(app, id, body, now).await;
+        } else {
+            let activity = activity_state_from_outcome(id, &out, Some(body), now);
+            record_channel_activity(app, id, activity, false).await;
+        }
     }
 
     // 可领 → 领;领完**回查一次**(服务端可能已被客户端自己点掉,那种情况也算成功)
@@ -2867,19 +3157,31 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
             };
             let (back, back_body) =
                 checkin::call_with_body(&client, def, &cred, false, None).await;
+            let checked_at = now_ts();
             if let Some(body) = back_body.as_ref() {
-                record_qoder_activities(app, id, body, now_ts()).await;
+                if matches!(id, "qoder" | "qoder-cn") {
+                    record_qoder_activities(app, id, body, checked_at).await;
+                } else {
+                    let activity = activity_state_from_outcome(id, &back, Some(body), checked_at);
+                    record_channel_activity(app, id, activity, false).await;
+                }
+            } else {
+                let activity = activity_state_from_outcome(id, &back, None, checked_at);
+                record_channel_activity(app, id, activity, false).await;
             }
-            // 回查是**唯一的到账证据**。以前只有 Already 才改判,其余情况一律照抄 claimed:
-            // 于是"领了但没生效"(平台返回 code=0、回查仍说未签)被记成 claimed →
-            // done_for_day 为真 → 节拍器与手动按钮当天都不再试,积分静默丢掉。
+            // 回查是**唯一的成功证据**。只有平台明确说已签才报成功；还可领取时说明
+            // claim 未生效，网络/结构异常时保持“确认中”，不能把请求回执当到账证明。
             out = match &back {
                 // 回查说已签:真领到了,顺手把回查里带的积分数补上
                 checkin::Outcome::Already(c) => checkin::Outcome::Claimed(c.or(credits)),
                 // 回查仍说可领 = 这次领取没生效:降级成可重试,别把这一天记成已领
-                checkin::Outcome::Retry(_) => checkin::Outcome::Retry("claim 未见生效".into()),
-                // 回查本身失败(网络 / 接口变动):保留领取回执,界面如实显示
-                _ => claimed,
+                checkin::Outcome::Retry(reason)
+                    if reason == "ready" || reason.starts_with("ready:") =>
+                {
+                    checkin::Outcome::Retry("claim 未见生效".into())
+                }
+                // 回查暂时给不出明确结论，保留平台 claim 回执并按退避再次查询。
+                _ => checkin::Outcome::Confirming(credits),
             };
         }
     }
@@ -2903,6 +3205,12 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
         entry.attempts = if same_day { entry.attempts + 1 } else { 1 };
         entry.last_day = Some(today.clone());
         entry.last_code = Some(out.code());
+        if matches!(&out, checkin::Outcome::Confirming(_)) {
+            if let Some(activity) = entry.activity_state.as_mut() {
+                activity.status = "confirming".into();
+                activity.detail = Some("平台已收到领取请求，正在确认状态".into());
+            }
+        }
         // 记下"判出这条结论的是哪个版本"。换版本后 `blocks_today` 会认为它陈旧、
         // 给一次重新判定的机会 —— 见 checkin.rs 里 last_auth_version 的说明。
         // 除了 `auth`,**`inactive` / `manual` 也要记**:它们不是平台给的既成事实,
@@ -2952,6 +3260,7 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
             checkin::Outcome::Inactive(m) | checkin::Outcome::Manual(m)
             | checkin::Outcome::Retry(m) | checkin::Outcome::BadShape(m)
             | checkin::Outcome::Failed(m) => Some(m.clone()),
+            checkin::Outcome::Confirming(_) => Some("平台已收到领取请求，正在确认状态".into()),
             _ => None,
         };
 
@@ -3098,7 +3407,12 @@ async fn checkin_now(app: tauri::AppHandle, id: String) -> Result<CheckinState, 
         // 周期日(不是自然日):Qoder 的"今天"从 10:00 起算
         let today = cycle_day_of(&id, now_ts());
         if let Some(c) = cfg.checkin.get(&id) {
-            if checkin_blocks_today(c, &today) {
+            let activity_ready = c
+                .activity_state
+                .as_ref()
+                .map(|a| a.status == "claimable")
+                .unwrap_or(false);
+            if checkin_blocks_today(c, &today) && !activity_ready {
                 return Err(format!(
                     "今天已经处理过了({})",
                     c.last_code.clone().unwrap_or_else(|| "已领".to_string())
@@ -3145,8 +3459,12 @@ async fn checkin_tick_once(app: &tauri::AppHandle) {
     if UPDATING.load(std::sync::atomic::Ordering::Relaxed) {
         return; // 更新期间不签到(报告 P1-15)
     }
-    for def in checkin::CHECKINS.iter().filter(|d| d.auth == checkin::CheckinAuth::QoderApp) {
-        monitor_qoder_activities(app, def.id).await;
+    for def in checkin::CHECKINS {
+        if def.auth == checkin::CheckinAuth::QoderApp {
+            monitor_qoder_activities(app, def.id).await;
+        } else {
+            monitor_standard_activity(app, def.id).await;
+        }
     }
     let (cfg, now) = {
         let state = app.state::<AppState>();
@@ -3162,12 +3480,17 @@ async fn checkin_tick_once(app: &tauri::AppHandle) {
             continue; // 隐藏 = 不读本机登录凭据、也不对外发请求(与取数同口径)
         }
         if !c.auto {
-            continue; // 自动领取关闭,但 Qoder 的活动监测已在上方独立执行
+            continue; // 自动领取关闭;各渠道的只读活动监测已在上方独立执行
         }
         // **逐渠道算周期日**:Qoder 的"今天"从 10:00 起算,不是自然日。
         // 用自然日会让 09:59 与 10:01 混成一天,当天那一期永远领不到。
         let today = checkin::cycle_day(now, def.day_roll_hour);
-        if checkin_blocks_today(c, &today) {
+        let activity_ready = c
+            .activity_state
+            .as_ref()
+            .map(|a| a.status == "claimable")
+            .unwrap_or(false);
+        if checkin_blocks_today(c, &today) && !activity_ready {
             continue;
         }
         if c.next_try_at.map(|t| t > now).unwrap_or(false) {
@@ -3360,7 +3683,8 @@ fn model_spec_with(
         &key,
         context,
         multimodal,
-    ))
+    )
+    .with_api_protocol(models::api_protocol(def.id, model)))
 }
 
 fn inject_opts(cfg: &Config, client: inject::Client) -> inject::Opts {
@@ -3404,7 +3728,7 @@ async fn get_model_catalog(
             || cache
                 .as_ref()
                 .and_then(|c| c.sources.get(def.id))
-                .map(|sc| sc.stale(now))
+                .map(|sc| sc.stale(now) || sc.list_path != def.list_path)
                 .unwrap_or(true);
         if need {
             match models::fetch_source_ids(&client, def, key.as_deref()).await {
@@ -3414,6 +3738,7 @@ async fn get_model_catalog(
                     sc.ids = ids.clone();
                     sc.fetched_at = now;
                     sc.host = host;
+                    sc.list_path = def.list_path.to_string();
                     // 对这个来源而言,"能用"就是列表本身(公开列表 = 它提供这些模型)
                     sc.usable = ids;
                     sc.usable_at = now;
@@ -3432,7 +3757,7 @@ async fn get_model_catalog(
             Some(sc) => (sc.ids.clone(), sc.usable.clone(), sc.usable_at),
             None => (Vec::new(), Vec::new(), 0),
         };
-        let rows = models::rows_from_ids(&ids, &usable, usable_at > 0);
+        let rows = models::rows_from_source_ids(def.id, &ids, &usable, usable_at > 0);
         return Ok(CatalogView {
             source: def.id.to_string(),
             source_name: def.name.to_string(),
@@ -3840,9 +4165,15 @@ async fn copy_model_bundle(
     tokio::task::spawn_blocking(move || {
         let src = need_source(source.clone())?;
         let spec = model_spec_with(&store, &cfg, &src, &model)?;
+        let protocol = spec
+            .api_protocol
+            .ok_or_else(|| format!("官网未公布 {} 的 API 协议，不能生成可靠的接入配置", spec.id))?;
+        let endpoint = spec
+            .endpoint_url()
+            .ok_or_else(|| format!("{} 没有可用的完整端点", spec.id))?;
         let text = format!(
-            "接入地址:{}\n模型名称:{}\nAPI Key:{}",
-            spec.base_url, spec.id, spec.key
+            "接口协议:{}\n接入地址:{}\n完整端点:{}\n模型名称:{}\nAPI Key:{}",
+            protocol.label(), spec.base_url, endpoint, spec.id, spec.key
         );
         copy_to_clipboard(&text)?;
         Ok(format!("已复制:{} + 模型名 + 密钥", spec.base_url))
@@ -3865,9 +4196,11 @@ struct ModelInfoView {
     display_name: String,
     source: String,
     source_name: String,
-    /// base_url(到 /v1 为止)
+    /// 当前模型实际使用的协议。
+    api_type: String,
+    /// 该模型应填写的 base_url;OpenCode Go 按模型协议分别设置。
     base_url: String,
-    /// 完整端点(有的客户端要 `.../chat/completions`)
+    /// 完整请求端点。
     endpoint: String,
     context_tokens: Option<i64>,
     multimodal: bool,
@@ -3901,14 +4234,25 @@ async fn model_info(
             .as_ref()
             .and_then(|c| c.catalog().ok())
             .and_then(|cat| cat.find(&model).cloned());
-        let base = source_base(&cfg, cache.as_ref(), def);
+        let protocol = models::api_protocol(def.id, &model);
+        let base = match protocol {
+            Some(p) if def.id == "opencode-go" => p.base_url().to_string(),
+            Some(_) => source_base(&cfg, cache.as_ref(), def),
+            None => String::new(),
+        };
         let key = source_key(def.id);
         Ok(ModelInfoView {
             id: model.clone(),
             display_name: inject::display_name_of(def.id, &model),
             source: def.id.to_string(),
             source_name: def.name.to_string(),
-            endpoint: format!("{}/chat/completions", base.trim_end_matches('/')),
+            api_type: protocol
+                .map(models::ApiProtocol::label)
+                .unwrap_or("官网未标注协议，暂停自动接入")
+                .to_string(),
+            endpoint: protocol
+                .map(|p| p.endpoint(&base, &model))
+                .unwrap_or_default(),
             base_url: base,
             context_tokens: row
                 .as_ref()

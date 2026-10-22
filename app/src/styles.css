@@ -930,6 +930,29 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 .ckactivity{margin:calc(3px*var(--u)) 0 0;padding-left:calc(4px*var(--u));
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:max(10px,calc(10px*var(--u)));
   color:var(--tx3);line-height:1.5}
+.ck-overview{margin:calc(5px*var(--u)) 0 calc(8px*var(--u));border:1px solid var(--line);
+  border-radius:calc(8px*var(--u));background:#11141b;overflow:hidden}
+.ck-overview-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;
+  padding:calc(7px*var(--u)) calc(9px*var(--u));border-bottom:1px solid var(--line)}
+.ck-overview-head b{font-size:max(11px,calc(11px*var(--u)));color:var(--tx2)}
+.ck-overview-head>span{font-size:max(9px,calc(9.5px*var(--u)));color:var(--tx3);text-align:right}
+.ck-overview-filters{display:flex;gap:calc(5px*var(--u));padding:calc(6px*var(--u)) calc(8px*var(--u));border-bottom:1px solid var(--line)}
+.ckfilter{border:1px solid var(--line2);border-radius:calc(5px*var(--u));padding:calc(3px*var(--u)) calc(7px*var(--u));
+  color:var(--tx3);background:#171b24;font-size:max(9px,calc(9.5px*var(--u)));cursor:pointer}
+.ckfilter.on{border-color:#5976aa;color:#c5d9ff;background:#202b40}
+.ck-activity-list{max-height:calc(210px*var(--u));overflow-y:auto}
+.ck-activity-item{padding:calc(7px*var(--u)) calc(9px*var(--u));border-bottom:1px solid #252b35}
+.ck-activity-item:last-child{border-bottom:0}
+.ck-activity-head,.ck-activity-foot{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.ck-activity-head>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--tx3);font-size:max(9px,calc(9.5px*var(--u)))}
+.ck-activity-status{flex:none;padding:1px calc(5px*var(--u));border:1px solid #3b654f;border-radius:4px;color:#91d7b2;font-size:max(9px,calc(9px*var(--u)))}
+.ck-activity-status.manual,.ck-activity-status.unknown{border-color:#5b6380;color:#bdc9e5}
+.ck-activity-status.confirming{border-color:#705b39;color:#f1cc8c}
+.ck-activity-status.device_used{border-color:#705b39;color:#f1cc8c}
+.ck-activity-status.inactive,.ck-activity-status.claimed{border-color:#3c554d;color:#a9cbbb}
+.ck-activity-title{overflow:hidden;margin:3px 0;color:var(--tx2);font-size:max(10px,calc(10.5px*var(--u)));text-overflow:ellipsis;white-space:nowrap}
+.ck-activity-foot{color:var(--tx3);font-size:max(9px,calc(9.5px*var(--u)))}
+.ck-overview-empty{padding:calc(12px*var(--u));color:var(--tx3);font-size:max(10px,calc(10px*var(--u)));text-align:center}
 .cklog{font-size:max(10px,calc(10.5px*var(--u)));color:var(--tx3);line-height:1.8;
   padding:0 0 calc(4px*var(--u));font-variant-numeric:tabular-nums}
 .cklog .ckd{color:var(--tx2);margin-right:2px}

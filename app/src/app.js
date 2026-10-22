@@ -3111,6 +3111,11 @@ $("manage").addEventListener("click", async (e) => {
   const a = act.dataset.act;
   // ── 模型页:过滤芯片 / 写入预告 / 写入 / 复制三件套 / 回滚 / 开目录 ──
   // ── 签到:开启 / 切自动 / 领一次 / 去登录 ──
+  if (a === "ckfilter") {
+    CK_ACTIVITY_FILTER = act.dataset.filter || "all";
+    renderCheckinSet();
+    return;
+  }
   if (a === "ckenable") {
     const on = !(CK[id] && CK[id].enabled);
     await ckSetEnabled(id, on, null);
@@ -4458,11 +4463,12 @@ function vaultDel(id) {
 
 // ───────────── 每日签到(Trae / WorkBuddy)─────────────
 // 设计见 docs/design/design-auto-checkin-2026-10-13.html。三条不许破的规矩:
-//   ① 独立开关、默认关 —— 关掉就一个请求都不发;
+//   ① 活动监测与自动领取分开控制;关闭监测就一个请求都不发;
 //   ② **不把"点了按钮"说成"领到了"**:数额只显示平台自己给的字段,拿不到就不写数字;
 //   ③ 签到状态**不参与余额渲染** —— 签到失败永远不可能让余额显示成 0。
 let CK = {};            // 渠道 id → checkin_state 的那一条
 let CK_LOG = false;     // 「领积分」正在跑
+let CK_ACTIVITY_FILTER = "all";
 const CHECKIN_ON = new Set(["trae", "workbuddy", "qoder", "qoder-cn"]);
 const CHECKIN_QODER = new Set(["qoder", "qoder-cn"]);
 
@@ -4511,9 +4517,23 @@ function ckText(s) {
           ? " · 今天已领" + amt
           : " · 今天已签到(平台未返回数额)"
         : "";
-    return { text: "签到未开启(开了才会发请求)" + tail, btn: "开启签到", act: "ckenable" };
+    return { text: "活动监测未开启(关闭时不会发请求)" + tail, btn: "开启监测", act: "ckenable" };
   }
   if (s.note) return { text: s.note, btn: "去登录", act: "cklogin", warn: true };
+  const activityState = s.activityState || {};
+  if (activityState.status === "device_used") {
+    return { text: "本设备今日签到名额已用" };
+  }
+  if (activityState.status === "claimable") {
+    const scope = activityState.scope === "device" ? "本设备" : "当前账号";
+    return Object.assign({ text: "发现可领取活动 · " + scope }, run("领取积分", "p"));
+  }
+  if (o.startsWith("confirming")) {
+    return Object.assign(
+      { text: s.lastMessage || "平台已收到领取请求，正在确认状态" },
+      run("重新确认", "")
+    );
+  }
   // 连续天数只有 Qoder 的接口给(streak_days),有就带上 —— 比现有两个渠道多一个可展示项
   const streak = s.streakDays ? " · 连续 " + s.streakDays + " 天" : "";
   if (o.startsWith("claimed"))
@@ -4528,6 +4548,18 @@ function ckText(s) {
       text: (hasN ? "今日已领" + amt : "今日已签到(平台未返回数额)") +
         streak + "(平台侧显示已签到)",
     };
+  if (activityState.status === "manual" && (!o || o.startsWith("inactive"))) {
+    return { text: "有活动:" + (activityState.title || activityTitle || "客户端活动") + " · 需在客户端参与" };
+  }
+  if (activityState.status === "inactive" && !o) {
+    return { text: "本期没有可参与的签到活动" };
+  }
+  if (activityState.status === "claimed" && !o) {
+    return { text: "平台显示本期已领取" };
+  }
+  if (activityState.status === "unknown" && !o) {
+    return { text: "活动状态暂时无法确认" };
+  }
   if (o === "retry:ready") return Object.assign({ text: "今日可领" + n }, run("领积分", "p"));
   // Qoder 的可领短码形如 retry:ready:{活动id} —— 同样落进"可领"
   if (o.startsWith("retry:ready:")) return Object.assign({ text: "今日可领" + n }, run("领积分", "p"));
@@ -4611,6 +4643,23 @@ function ckBadgeHtml(c) {
   const o = String(s.outcome || "");
   const n = s.credits === null || s.credits === undefined ? "" : " +" + s.credits;
   const tip = esc(ckBadgeTip(s));
+  if (s.activityState && s.activityState.status === "claimable") {
+    return s.canTry === false
+      ? `<span class="ckb" title="${tip}">可领取</span>`
+      : `<button class="ckb hot" data-act="ckrun" data-id="${esc(c.id)}" title="${tip}">可领</button>`;
+  }
+  if (s.activityState && s.activityState.status === "device_used")
+    return `<span class="ckb ok" title="${tip}">本设备已签</span>`;
+  if (s.activityState && s.activityState.status === "manual")
+    return `<span class="ckb info" title="${tip}">有活动</span>`;
+  if (s.activityState && s.activityState.status === "inactive" && (!o || o.startsWith("inactive")))
+    return `<span class="ckb ok" title="${tip}">本期无活动</span>`;
+  if (s.activityState && s.activityState.status === "claimed" && !o)
+    return `<span class="ckb ok" title="${tip}">平台已领取</span>`;
+  if (s.activityState && s.activityState.status === "unknown" && !o)
+    return `<span class="ckb" title="${tip}">状态未知</span>`;
+  if (o.startsWith("confirming"))
+    return `<span class="ckb" title="${tip}">确认中</span>`;
 
   // claimed = **我们刚替他领到了** → 可以说数额
   // N10(2026-10-21):Trae / WorkBuddy 的接口**经常不返回数额**(本机 10-20、10-21 都是
@@ -4665,6 +4714,18 @@ function ckBadgeTip(s) {
   if (s.streakDays) bits.push("连续 " + s.streakDays + " 天");
   if (s.latestActivity && s.latestActivity.title)
     bits.push("最近活动: " + s.latestActivity.title);
+  if (s.activityState) {
+    const labels = {
+      claimable: "活动可领取",
+      manual: "活动需客户端参与",
+      confirming: "领取确认中",
+      claimed: "活动已领取",
+      device_used: "本设备今日名额已用",
+      inactive: "本期无可参与活动",
+      unknown: "活动状态暂时无法确认",
+    };
+    bits.push((labels[s.activityState.status] || labels.unknown) + " · " + (s.activityState.scope === "device" ? "设备级" : "账号级"));
+  }
   if (s.monthCredits) bits.push("本月共 " + s.monthCredits + " 分");
   if (s.nextTryAt) {
     const left = Math.ceil((s.nextTryAt * 1000 - Date.now()) / 1000);
@@ -4685,19 +4746,26 @@ function ckRowHtml(id) {
   if (!s) return "";
   const t = ckText(s);
   if (!t) return "";
-  const activity = s.latestActivity;
-  const activityLine =
-    CHECKIN_QODER.has(id) && activity && activity.title
-      ? '<div class="ckactivity" title="' + esc(activity.title) + " · " + esc(activity.actionType || "活动") + " · " + esc(activity.claimStatus || "状态未知") + '">' +
-        "活动监测 · " + esc(activity.title) +
-        (activity.claimStatus === "CLAIMABLE"
-          ? activity.actionType === "CLAIM_BENEFIT" || activity.actionType === "CLAIM_BEFIT"
-            ? " · 签到可领取"
-            : " · 请在 Qoder 查看"
-          : activity.claimStatus === "CLAIMED"
-          ? " · 已领取"
-          : " · " + esc(activity.claimStatus || "进行中")) +
-        "</div>"
+  const activity = s.activityState;
+  const activityLabels = {
+    claimable: "可领取",
+    manual: "需客户端参与",
+    confirming: "领取确认中",
+    claimed: "本期已领取",
+    device_used: "本设备今日名额已用",
+    inactive: "本期无可参与活动",
+    unknown: "状态暂时无法确认",
+  };
+  const scopeLabel = activity && activity.scope === "device" ? "设备级" : "账号级";
+  const regionLabel = activity && activity.region === "CN" ? "国内版" : activity && activity.region === "Global" ? "国际版" : "";
+  const activityLine = activity && s.enabled
+    ? '<div class="ckactivity" title="' + esc(activity.detail || activity.title || "") + '">' +
+      "活动监测 · " + esc(activity.title || "签到状态") + " · " +
+      esc(activityLabels[activity.status] || activityLabels.unknown) + " · " +
+      esc([regionLabel, scopeLabel].filter(Boolean).join(" / ")) +
+      "</div>"
+    : !activity && CHECKIN_QODER.has(id) && s.latestActivity && s.latestActivity.title
+      ? '<div class="ckactivity">活动监测 · ' + esc(s.latestActivity.title) + "</div>"
       : "";
   return (
     '<div class="ckrow' + (t.warn ? " warn" : "") + '" data-id="' + esc(id) + '">' +
@@ -4741,6 +4809,112 @@ async function loadCheckin() {
   }
 }
 
+function activityStatusView(status) {
+  const labels = {
+    claimable: "可领取",
+    manual: "需客户端参与",
+    confirming: "领取确认中",
+    claimed: "已领取",
+    device_used: "设备名额已用",
+    inactive: "本期无活动",
+    unknown: "暂时无法确认",
+  };
+  return { label: labels[status] || labels.unknown, kind: status || "unknown" };
+}
+
+function renderActivityOverview() {
+  const entries = [];
+  const now = Math.floor(Date.now() / 1000);
+  for (const id of CHECKIN_ON) {
+    const state = CK[id];
+    if (!state || !state.enabled) continue;
+    const channel = CHANNELS.find((item) => item.id === id);
+    if (channel && channel.hidden) continue;
+    const region = id === "qoder" ? "国际版" : "国内版";
+    const history = CHECKIN_QODER.has(id) && Array.isArray(state.activityHistory)
+      ? state.activityHistory.filter((item) => state.lastActivityCheckAt
+          ? item.observedAt === state.lastActivityCheckAt
+          : !item.observedAt || now - item.observedAt < 24 * 3600)
+      : [];
+    if (history.length) {
+      for (const item of history) {
+        const canClaim =
+          (item.actionType === "CLAIM_BENEFIT" || item.actionType === "CLAIM_BEFIT") &&
+          item.claimStatus === "CLAIMABLE";
+        const status = canClaim
+          ? "claimable"
+          : item.claimStatus === "CLAIMABLE"
+            ? "manual"
+            : item.claimStatus === "CLAIMED"
+              ? "claimed"
+              : ["EXPIRED", "ENDED"].includes(item.claimStatus)
+                ? "inactive"
+                : "unknown";
+        entries.push({
+          channel: state.name || id,
+          id,
+          key: item.id,
+          title: item.title || "Qoder 活动",
+          status,
+          scope: "账号级",
+          region,
+          observedAt: item.observedAt,
+        });
+      }
+      continue;
+    }
+    const activity = state.activityState;
+    entries.push({
+      channel: state.name || id,
+      id,
+      key: activity && activity.key ? activity.key : id,
+      title: activity && activity.title ? activity.title : "等待首次状态检查",
+      status: activity && activity.status ? activity.status : "unknown",
+      scope: activity && activity.scope === "device" ? "设备级" : "账号级",
+      region: activity && activity.region === "Global" ? "国际版" : activity && activity.region === "CN" ? "国内版" : region,
+      observedAt: activity && activity.observedAt,
+    });
+  }
+  const actionable = entries.filter((item) => ["claimable", "manual", "confirming", "unknown"].includes(item.status));
+  const completed = entries.filter((item) => ["claimed", "device_used", "inactive"].includes(item.status));
+  const visible = entries.filter((item) =>
+    CK_ACTIVITY_FILTER === "action" ? ["claimable", "manual", "confirming", "unknown"].includes(item.status) :
+    CK_ACTIVITY_FILTER === "done" ? ["claimed", "device_used", "inactive"].includes(item.status) : true
+  );
+  const filters = [
+    ["all", "全部 " + entries.length],
+    ["action", "需处理 " + actionable.length],
+    ["done", "已完成 " + completed.length],
+  ];
+  const rows = visible.map((item) => {
+    const badge = activityStatusView(item.status);
+    const time = item.observedAt
+      ? new Date(item.observedAt * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })
+      : "尚未检查";
+    const action = item.status === "claimable"
+      ? '<button class="btn s p" data-act="ckrun" data-id="' + esc(item.id) + '"' +
+        (CK[item.id] && CK[item.id].canTry === false ? " disabled" : "") + '>领取</button>'
+      : "";
+    return '<article class="ck-activity-item">' +
+      '<div class="ck-activity-head"><span>' + esc(item.channel) + " · " + esc(item.region) + " / " + esc(item.scope) + '</span>' +
+      '<span class="ck-activity-status ' + esc(badge.kind) + '">' + esc(badge.label) + '</span></div>' +
+      '<div class="ck-activity-title" title="' + esc(item.key) + '">' + esc(item.title) + '</div>' +
+      '<div class="ck-activity-foot"><span>' + esc(time) + '</span>' + action + '</div>' +
+      '</article>';
+  }).join("");
+  return '<div class="ck-overview"><div class="ck-overview-head"><b>活动状态</b>' +
+    '<span>可领取 ' + entries.filter((x) => x.status === "claimable").length +
+    ' · 客户端参与 ' + entries.filter((x) => x.status === "manual").length +
+    ' · 确认中 ' + entries.filter((x) => x.status === "confirming").length +
+    ' · 已确认 ' + entries.filter((x) => x.status === "claimed" || x.status === "device_used").length + '</span></div>' +
+    '<div class="ck-overview-filters" role="group" aria-label="筛选活动">' + filters.map(([key, label]) =>
+      '<button type="button" class="ckfilter' + (CK_ACTIVITY_FILTER === key ? " on" : "") +
+      '" aria-pressed="' + (CK_ACTIVITY_FILTER === key) + '" data-act="ckfilter" data-filter="' + key + '">' + esc(label) + '</button>'
+    ).join("") + '</div>' +
+    '<div class="ck-activity-list">' + (rows || '<div class="ck-overview-empty">当前筛选下没有活动</div>') + '</div>' +
+    '</div>';
+}
+
 /** 设置页的签到区:每渠道两个开关 + 近 7 天流水 + 免责。 */
 function renderCheckinSet() {
   const box = $("ckSet");
@@ -4769,31 +4943,26 @@ function renderCheckinSet() {
       '<div class="field"><span>' + esc(s ? s.name : id) +
         '<span class="desc">' +
         (on
-          ? (auto
-              ? (CK_ROLL[id] ? "每天 " + CK_ROLL[id] + ":00 后自动领" : "每天 00:23 后自动领") +
-                ",失败当天退避重试"
-              : CHECKIN_QODER.has(id)
-                ? "不自动领取 · 仍每小时监测新活动"
-                : "只保留手动「领积分」按钮")
-          : "关着 —— 一个请求都不发") +
+          ? "活动状态每小时检查；自动领取由下方单独控制"
+          : "已关闭 · 停止活动监测与签到请求") +
         (s && s.monthCredits ? " · 本月已领 " + points(s.monthCredits) + " 分" : "") +
         "</span></span>" +
         '<button class="sw' + (on ? " on" : "") + '" role="switch" aria-checked="' + on +
-        '" data-act="ckenable" data-id="' + esc(id) + '" aria-label="' + esc((s ? s.name : id) + " 签到") + '"></button></div>' +
+        '" data-act="ckenable" data-id="' + esc(id) + '" aria-label="' + esc((s ? s.name : id) + " 活动监测") + '"></button></div>' +
       (on
-        ? '<div class="field"><span>自动签到<span class="desc">' +
-          (CHECKIN_QODER.has(id) ? "关掉后仍每小时监测新活动" : "关掉只留手动按钮") +
+        ? '<div class="field"><span>自动领取<span class="desc">' +
+          (auto ? "可直接领取的活动会自动领取；其他活动仍会提示" : "只监测不自动领取；可领取时提供手动入口") +
           '</span></span>' +
           '<button class="sw' + (auto ? " on" : "") + '" role="switch" aria-checked="' + auto +
-          '" data-act="ckauto" data-id="' + esc(id) + '" aria-label="自动签到"></button></div>'
+          '" data-act="ckauto" data-id="' + esc(id) + '" aria-label="自动领取"></button></div>'
         : "") +
       logs
     );
   }
   box.innerHTML =
-    rows.join("") +
+    renderActivityOverview() + rows.join("") +
     '<div class="khint" style="margin:8px 0 0">签到走<b>直连</b>(不经过系统代理):平台按出口 IP 限流,代理 IP 更容易被拒。' +
-    "Qoder 开启签到后每小时检测活动;关掉自动领取仍会监测。签到状态与余额显示互不影响。</div>";
+    "开启活动监测后，Trae、WorkBuddy、Qoder 都会每小时只读检查；自动领取是独立开关。隐藏渠道停止请求，签到状态与余额互不影响。</div>";
 }
 
 async function ckRun(id) {
@@ -4823,7 +4992,7 @@ async function ckSetEnabled(id, on, auto) {
   );
   if (!(await saveCfg("签到设置"))) return;
   if (on) {
-    showToast("已开启 " + (CK[id] ? CK[id].name : id) + " 签到");
+    showToast("已开启 " + (CK[id] ? CK[id].name : id) + " 活动监测");
   }
   loadCheckin();
 }
@@ -4969,6 +5138,17 @@ function mdlRowHtml(r) {
   if (configured) badges.push('<span class="tagd ok">已配置</span>');
   if (r.tiered) badges.push('<span class="tagd">阶梯</span>');
   if (unusable) badges.push('<span class="tagd bad">不可用</span>');
+  if (MDL.src === "opencode-go") {
+    const apiLabel = {
+      "open-ai-chat-completions": "Chat API",
+      "open-ai-responses": "Responses API",
+      "anthropic-messages": "Anthropic API",
+      "google-generative": "Google API",
+    }[r.apiProtocol];
+    badges.push(apiLabel
+      ? '<span class="tagd" title="官网公布的模型接口协议">' + esc(apiLabel) + "</span>"
+      : '<span class="tagd bad" title="官网模型接口列表未标注该模型协议">协议待确认</span>');
+  }
   const btns = ["trae", "workbuddy", "workbuddy-ai", "zcode", "dsh"]
     .map((id) => {
       const st = MDL.clients.find((x) => x.client === id);
@@ -5052,7 +5232,11 @@ function renderModelsInner() {
   const done = mdlConfiguredIds();
   const isGo = v.source === "opencode-go";
   meta.innerHTML =
-    '<div class="mrow1"><span class="dim">写进客户端 <b>' + esc(v.baseUrl) + "</b></span>" +
+    '<div class="mrow1"><span class="dim">' +
+    (isGo
+      ? "OpenCode Go 按模型选择协议端点（仅兼容的模型可自动写入）"
+      : '写进客户端 <b>' + esc(v.baseUrl) + "</b>") +
+    "</span>" +
     '<span class="dim">' +
     (v.hasPrice ? "单价按站点自动分组折算" : isGo ? "订阅制:不按 token 计价" : "该来源不提供单价") +
     "</span></div>" +
@@ -5227,6 +5411,7 @@ function renderModelSheet() {
     return;
   }
   const blocked = s.previews.find((p) => p.blocked);
+  const blockedIsRuntime = blocked && /正在运行/.test(blocked.blocked);
   const changed = s.previews.some((p) => p.changed);
   const writesSecret = s.previews.some((p) => p.writesSecret);
   const writesSel = s.previews.some((p) => p.writesSelection);
@@ -5272,13 +5457,16 @@ function renderModelSheet() {
       : "") +
     (blocked
       ? '<div class="mdlwarn">' + esc(blocked.blocked) +
-        '<div class="note">退出它之后直接再点一次下面的按钮就行 —— 按钮会自己重查一遍,这个窗口不用关。' +
-        (s.recheckAt ? "(" + esc(s.recheckAt) + " 刚查过,它还在运行)" : "") +
+        '<div class="note">' +
+        (blockedIsRuntime
+          ? "退出它之后直接再点一次下面的按钮就行 —— 按钮会自己重查一遍,这个窗口不用关。" +
+            (s.recheckAt ? "(" + esc(s.recheckAt) + " 刚查过,它还在运行)" : "")
+          : "本次不会修改客户端配置。") +
         "</div></div>"
       : "") +
     '<div class="acts">' +
     (blocked
-      ? /正在运行/.test(blocked.blocked)
+      ? blockedIsRuntime
         // 别在这里禁掉按钮:用户常常是**弹层开着的时候**才去退客户端,禁掉的按钮
         // 点了毫无反应,看着就像"写入没成功"(实机反馈)。所以按钮留着,点它 = 重查。
         ? '<button class="btn p"' + (s.busy ? " disabled" : ' data-act="injectgo"') + ">" +
@@ -5332,6 +5520,7 @@ function infoFields(s) {
   return {
     模型名: i.id || "",
     显示名: i.displayName || "",
+    接口协议: i.apiType || "",
     接口地址: i.baseUrl || "",
     完整端点: i.endpoint || "",
     上下文: i.contextTokens ? String(i.contextTokens) : "",
@@ -5357,8 +5546,9 @@ function infoSheetHtml(s) {
   const tips = {
     模型名: "OpenAI 兼容接口的 model 参数;Trae 里也是它",
     显示名: "WorkBuddy / ZCode 里的名字口径(Trae 用上面的模型名)",
-    接口地址: "base_url,到 /v1 为止",
-    完整端点: "有的客户端要完整地址(…/chat/completions)",
+    接口协议: "OpenCode Go 模型的请求协议；不同模型可能不同",
+    接口地址: "客户端配置中的 base_url",
+    完整端点: "模型实际调用的完整 API 端点",
     上下文: "上下文窗口(token);取不到就不显示",
     图片: "能不能收图",
   };
@@ -5381,8 +5571,8 @@ function infoSheetHtml(s) {
       " 密钥 —— 先在「渠道」页签填一次,这里才有可复制的密钥(地址与模型名照样能复制)。</div>";
   return (
     head +
-    '<div class="note">这些就是挂件往客户端里写的那几个值。自动写入客户端不认的时候,' +
-    "可以对着这几行在客户端自己的「自定义模型」里手填一遍。</div>" +
+    '<div class="note">这里显示官网公布的接口协议与端点。自动写入会检查目标客户端是否支持该协议；' +
+    "不兼容时会阻止写入。需要手动配置时，可复制对应字段。</div>" +
     rows + keyRow +
     '<div class="acts">' +
     '<button class="btn" data-act="infocopyall">复制全部(不含密钥)</button>' +
@@ -5611,9 +5801,14 @@ async function refresh() {
   });
   listen("checkin-activity", (ev) => {
     const d = (ev && ev.payload) || {};
-    const action = d.canClaim ? "发现可领取活动" : "发现新活动";
-    const where = d.canClaim ? "" : " · 可在 Qoder 客户端查看";
-    showToast((d.name || "Qoder") + " " + action + ": " + (d.title || "新活动") + where);
+    const manual = d.status === "manual" || (!d.canClaim && d.claimStatus === "CLAIMABLE");
+    const action = d.canClaim ? "发现可领取活动" : manual ? "发现需手动参与的活动" : "发现新活动";
+    const where = d.canClaim
+      ? " · 可在渠道卡手动领取"
+      : manual
+        ? " · 请在客户端活动页参与"
+        : "";
+    showToast((d.name || "渠道") + " " + action + ": " + (d.title || "新活动") + where);
   });
   listen("channels-updated", (ev) => {
     CHANNELS = ev.payload;

@@ -52,6 +52,115 @@ pub struct SourceDef {
     pub extra_hosts: &'static [&'static str],
 }
 
+/// The public OpenCode Go catalog only returns model IDs. The Go docs list the
+/// API each model accepts, so keep that protocol metadata alongside the list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ApiProtocol {
+    OpenAiChatCompletions,
+    OpenAiResponses,
+    AnthropicMessages,
+    GoogleGenerative,
+}
+
+impl ApiProtocol {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::OpenAiChatCompletions => "OpenAI Chat Completions",
+            Self::OpenAiResponses => "OpenAI Responses",
+            Self::AnthropicMessages => "Anthropic Messages",
+            Self::GoogleGenerative => "Google Generative API",
+        }
+    }
+
+    pub fn base_url(self) -> &'static str {
+        match self {
+            Self::OpenAiChatCompletions | Self::OpenAiResponses => {
+                "https://opencode.ai/inference/go/openai/v1"
+            }
+            Self::AnthropicMessages => "https://opencode.ai/inference/go/anthropic/v1",
+            Self::GoogleGenerative => "https://opencode.ai/inference/go/google/v1beta",
+        }
+    }
+
+    pub fn endpoint(self, base_url: &str, model: &str) -> String {
+        let base = base_url.trim_end_matches('/');
+        match self {
+            Self::OpenAiChatCompletions => format!("{base}/chat/completions"),
+            Self::OpenAiResponses => format!("{base}/responses"),
+            Self::AnthropicMessages => format!("{base}/messages"),
+            Self::GoogleGenerative => {
+                format!("{base}/models/{model}:generateContent")
+            }
+        }
+    }
+
+    pub fn is_openai_chat(self) -> bool {
+        matches!(self, Self::OpenAiChatCompletions)
+    }
+
+    pub fn dsh_api(self) -> Option<&'static str> {
+        match self {
+            Self::OpenAiChatCompletions => Some("openai-completions"),
+            Self::OpenAiResponses => Some("openai-responses"),
+            Self::AnthropicMessages => Some("anthropic-messages"),
+            Self::GoogleGenerative => None,
+        }
+    }
+}
+
+/// Protocol documented for a source/model pair. OpenCode Go's model-list API
+/// does not include this field, so undocumented IDs intentionally return None.
+pub fn api_protocol(source: &str, model: &str) -> Option<ApiProtocol> {
+    if source != "opencode-go" {
+        return Some(ApiProtocol::OpenAiChatCompletions);
+    }
+    let model = model.to_ascii_lowercase();
+    use ApiProtocol::*;
+    match model.as_str() {
+        // OpenAI Responses API.
+        "gpt-6-luna"
+        | "gpt-5.6-luna"
+        | "grok-4.7"
+        | "muse-spark-1.2-contributor"
+        | "muse-spark-1.3-contributor" => Some(OpenAiResponses),
+
+        // Anthropic Messages API.
+        "claude-haiku-5-5"
+        | "minimax-m3"
+        | "qwen3.7-plus"
+        | "qwen3.8-flash"
+        | "qwen3.8-max" => Some(AnthropicMessages),
+
+        // Google Generative API.
+        "gemini-4-argon-contributor" => Some(GoogleGenerative),
+
+        // OpenAI Chat Completions API.
+        "beam-free"
+        | "cat-jam-free"
+        | "deepseek-v4-pro"
+        | "deepseek-v4.1-flash"
+        | "glm-5.2"
+        | "glm-5.3"
+        | "glm-5.3-flash"
+        | "hy3"
+        | "hy4-preview"
+        | "kimi-k2.7-code"
+        | "kimi-k3"
+        | "longcat-2.0"
+        | "longcat-2.5-preview-free"
+        | "mimo-v2.5"
+        | "mimo-v2.5-pro"
+        | "mimo-v2.6-flash"
+        | "mimo-v2.6-pro"
+        | "minimax-m3.1-flash-free"
+        | "space-bunny"
+        | "step-5-preview"
+        | "step-5-preview-free" => Some(OpenAiChatCompletions),
+        _ => None,
+    }
+}
+
 pub const SOURCES: &[SourceDef] = &[
     SourceDef {
         id: "4sapi",
@@ -78,11 +187,12 @@ pub const SOURCES: &[SourceDef] = &[
         id: "opencode-go",
         name: "OpenCode Go",
         api_host: "opencode.ai",
-        list_path: "/zen/go/v1/models",
+        list_path: "/inference/go/v1/models",
         // 实测公开:不带密钥也返回 38 个模型
         list_public: true,
         pricing_path: None,
-        base_url: "https://opencode.ai/zen/go/v1",
+        // Go 的真实端点按模型协议区分;这里仅保留 Chat Completions 的默认值。
+        base_url: "https://opencode.ai/inference/go/openai/v1",
         extra_hosts: &[],
     },
 ];
@@ -226,6 +336,9 @@ pub struct ModelRow {
     /// 哪些分组能用它
     pub groups: Vec<String>,
     pub endpoints: Vec<String>,
+    /// API protocol for providers whose model catalog does not include it.
+    #[serde(default)]
+    pub api_protocol: Option<ApiProtocol>,
     /// 这把 key 能不能调。None = 没取到 /v1/models(没配密钥或请求失败)—— 界面据此
     /// 从「可用」退成「价目表浏览」,不把 160 个都说成可用。
     pub usable: Option<bool>,
@@ -435,6 +548,7 @@ pub fn parse_catalog(v: &Value) -> Result<Catalog, String> {
                 })
                 .unwrap_or_default(),
             endpoints,
+            api_protocol: None,
             usable: None,
         });
     }
@@ -696,6 +810,20 @@ pub fn rows_from_ids(ids: &[String], usable: &[String], usable_known: bool) -> V
     rows
 }
 
+/// Same ID-only list, enriched with the protocol documented for that source.
+pub fn rows_from_source_ids(
+    source: &str,
+    ids: &[String],
+    usable: &[String],
+    usable_known: bool,
+) -> Vec<ModelRow> {
+    let mut rows = rows_from_ids(ids, usable, usable_known);
+    for row in &mut rows {
+        row.api_protocol = api_protocol(source, &row.id);
+    }
+    rows
+}
+
 // ───────────────────────── 缓存与视图 ─────────────────────────
 
 /// 缓存落在 SQLite 的 settings 里(单独一行,不进 Config)。
@@ -733,6 +861,9 @@ pub struct SourceCache {
     pub ids: Vec<String>,
     pub fetched_at: i64,
     pub host: String,
+    /// Which endpoint produced this list. A changed endpoint invalidates the snapshot.
+    #[serde(default)]
+    pub list_path: String,
     /// 该来源这把 key 能调的模型;`usable_at` = 0 表示从没成功取到过
     pub usable: Vec<String>,
     pub usable_at: i64,

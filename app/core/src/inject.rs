@@ -534,6 +534,9 @@ pub struct ModelSpec {
     /// 明文密钥
     pub key: String,
     pub multimodal: bool,
+    /// API protocol selected for this source/model pair. OpenCode Go models
+    /// may use different wire formats; an unknown value is never auto-written.
+    pub api_protocol: Option<crate::models::ApiProtocol>,
 }
 
 impl ModelSpec {
@@ -560,7 +563,24 @@ impl ModelSpec {
             base_url: Self::normalize_base(base_url),
             key: key.to_string(),
             multimodal,
+            api_protocol: Some(crate::models::ApiProtocol::OpenAiChatCompletions),
         }
+    }
+
+    /// Use the documented protocol and endpoint for a source/model pair.
+    pub fn with_api_protocol(mut self, protocol: Option<crate::models::ApiProtocol>) -> Self {
+        self.api_protocol = protocol;
+        if self.source == "opencode-go" {
+            self.base_url = protocol
+                .map(|p| p.base_url().to_string())
+                .unwrap_or_default();
+        }
+        self
+    }
+
+    pub fn endpoint_url(&self) -> Option<String> {
+        self.api_protocol
+            .map(|p| p.endpoint(&self.base_url, &self.id))
     }
 
 /// 去首尾空白与尾斜杠,并剥掉结尾的 `/chat/completions`,得到"到 /v1 为止"的形态。
@@ -585,6 +605,38 @@ fn normalize_base(v: &str) -> String {
     /// 这个来源的域名(判定"这条条目是我们写的")。
     fn hosts(&self) -> Vec<String> {
         crate::models::source_hosts(&self.source)
+    }
+}
+
+/// Prevent a model from being added through a client that sends the wrong wire
+/// protocol. DSH can use its installed Go catalog natively and supports explicit
+/// custom routes for Chat Completions, Responses, and Anthropic Messages.
+fn protocol_blocked(client: Client, spec: &ModelSpec) -> Option<String> {
+    if spec.source != "opencode-go" {
+        return None;
+    }
+    if client == Client::Dsh && dsh_catalog_route("opencode-go", &spec.id) {
+        return None;
+    }
+    match spec.api_protocol {
+        Some(crate::models::ApiProtocol::OpenAiChatCompletions) => None,
+        Some(protocol) if client == Client::Dsh && protocol.dsh_api().is_some() => None,
+        Some(protocol) if client == Client::Dsh => Some(format!(
+            "{} 使用 {}，DeepSeek Harness 的自定义接入不支持该协议；本次未写入。",
+            spec.id,
+            protocol.label()
+        )),
+        Some(protocol) => Some(format!(
+            "{} 使用 {}，而 {} 的自动接入目前只支持 OpenAI Chat Completions；本次未写入。",
+            spec.id,
+            protocol.label(),
+            client.label()
+        )),
+        None => Some(format!(
+            "OpenCode Go 官网端点文档未标注 {} 的 API 协议，无法确认端点；本次未自动写入 {}。",
+            spec.id,
+            client.label()
+        )),
     }
 }
 
@@ -2210,10 +2262,10 @@ fn find_our_custom_id(maps: &[(String, Value)], model: &str) -> Option<String> {
 //   · 路由字段:`api`(`openai-completions` / `openai-responses` / `anthropic-messages`)、
 //     `baseURL`、`apiKeyEnv`、`models[]`(`id`/`name`/`contextWindow`/`maxTokens`/`input`);
 //   · 目录里已有的提供方(如 `opencode-go`)**不给** api / baseURL —— 端点与协议由目录给;
-//     但**只有目录里真有这个模型时**才成立:目录没有的模型拿不到协议,pi-ai 会直接报
-//     `model "…" needs an api` 而把整条 route 判成不可服务(2026-10-20 实测:
+//     但**只有目录里真有这个模型时**才成立:目录没有的模型必须按官网协议写自建 route,
+//     否则 pi-ai 会直接报 `model "…" needs an api` 而把 route 判成不可服务(2026-10-20 实测:
 //     用户点 `minimax-m3.1-flash-free` 就是这条,而它不在 pi-ai 目录里);
-//   · 所以目录里没有的模型改写到自建 route(`opencode-go-custom`):给 `api` + `baseURL`,
+//   · 自建 route 按协议拆分(`opencode-go-custom` / `-custom-responses` / `-custom-anthropic`),
 //     路由名不能与目录 route 重名,否则 pi-ai 会拿目录的协议覆盖掉我们写的;
 //   · pi-ai 不提供的路由必须给 `api` + `baseURL` + **非空** models,所以移除最后一个模型时
 //     连 route 一起收走(留一个空 models 列表会让 pi-ai 把它判成"不可服务");
@@ -2403,12 +2455,41 @@ fn dsh_custom_route(source: &str) -> String {
     format!("{}-custom", dsh_route(source))
 }
 
+/// OpenCode Go's custom models need separate routes because pi-ai selects one
+/// wire protocol per route. Keep the old `-custom` route for Chat Completions.
+fn dsh_custom_route_for(source: &str, protocol: Option<crate::models::ApiProtocol>) -> String {
+    let root = dsh_route(source);
+    match protocol {
+        Some(crate::models::ApiProtocol::OpenAiResponses) => {
+            format!("{root}-custom-responses")
+        }
+        Some(crate::models::ApiProtocol::AnthropicMessages) => {
+            format!("{root}-custom-anthropic")
+        }
+        _ => dsh_custom_route(source),
+    }
+}
+
 /// 这个模型进 DSH 时走哪条 route:
 /// · 来源本身就不在目录里(4SAPI / Hapi) → 只有一条 route,一直都是自建;
 /// · 来源在目录里:目录**真有**这个模型 → 目录 route(协议/端点/目录名都留给 pi-ai,
-///   我们不写 `api`);目录里没有 → 自建 route `-custom`(必须自己给 `api` + `baseURL`,
-///   否则 pi-ai 判它不可服务 —— 这正是 2026-10-20 那次失败的原因)。
+///   我们不写 `api`);目录里没有 → 按协议写入专用自建 route,并给出 `api` + `baseURL`。
+/// 只剩测试在用:生产路径全部改走 `dsh_route_for_protocol`(要带协议)。
+/// 留着不标 `#[cfg(test)]` 的话,lib 编译会报 dead_code。
+#[cfg(test)]
 fn dsh_route_for(spec_source: &str, model: &str) -> String {
+    dsh_route_for_protocol(
+        spec_source,
+        model,
+        Some(crate::models::ApiProtocol::OpenAiChatCompletions),
+    )
+}
+
+fn dsh_route_for_protocol(
+    spec_source: &str,
+    model: &str,
+    protocol: Option<crate::models::ApiProtocol>,
+) -> String {
     let route = dsh_route(spec_source);
     if dsh_catalog(&route).is_none() {
         return route;
@@ -2416,7 +2497,7 @@ fn dsh_route_for(spec_source: &str, model: &str) -> String {
     if dsh_catalog_model(&route, model).is_some() {
         route
     } else {
-        dsh_custom_route(spec_source)
+        dsh_custom_route_for(spec_source, protocol)
     }
 }
 
@@ -2503,13 +2584,25 @@ fn dsh_route_source(route: &str) -> Option<String> {
     }
     crate::models::SOURCES
         .iter()
-        .find(|d| dsh_route(d.id) == route || dsh_custom_route(d.id) == route)
+        .find(|d| {
+            dsh_route(d.id) == route
+                || dsh_custom_route(d.id) == route
+                || (d.id == "opencode-go"
+                    && (dsh_custom_route_for(
+                        d.id,
+                        Some(crate::models::ApiProtocol::OpenAiResponses),
+                    ) == route
+                        || dsh_custom_route_for(
+                            d.id,
+                            Some(crate::models::ApiProtocol::AnthropicMessages),
+                        ) == route))
+        })
         .map(|d| d.id.to_string())
 }
 
 /// 我们写进 DSH 那条 route 的完整块(不带缩进,插入时统一缩进)。
-fn dsh_route_block(spec: &ModelSpec) -> Vec<String> {
-    let route = dsh_route_for(&spec.source, &spec.id);
+fn dsh_route_block(spec: &ModelSpec) -> Result<Vec<String>, String> {
+    let route = dsh_route_for_protocol(&spec.source, &spec.id, spec.api_protocol);
     let catalog = dsh_catalog_route(&route, &spec.id);
     let mut out = vec![format!("{route}:")];
     // 目录 route 的显示名也给我们写的来源名(目录默认是 `opencode-go`,人看不出来是什么)
@@ -2518,7 +2611,14 @@ fn dsh_route_block(spec: &ModelSpec) -> Vec<String> {
         crate::yamledge::scalar_text(&spec.source_name)
     ));
     if !catalog {
-        out.push("  api: openai-completions".to_string());
+        let api = spec
+            .api_protocol
+            .and_then(crate::models::ApiProtocol::dsh_api)
+            .ok_or_else(|| format!("{} 的接口协议不能写入 DeepSeek Harness", spec.id))?;
+        if spec.base_url.trim().is_empty() {
+            return Err(format!("{} 没有可用的接口地址", spec.id));
+        }
+        out.push(format!("  api: {api}"));
         out.push(format!(
             "  baseURL: {}",
             crate::yamledge::scalar_text(&spec.base_url)
@@ -2531,7 +2631,7 @@ fn dsh_route_block(spec: &ModelSpec) -> Vec<String> {
     out.push("  models:".to_string());
     // 列表项比 `models:` 再深 2 列(与用户那份手写文件、以及 DSH 自己的写法一致)
     out.extend(crate::yamledge::indented(&dsh_model_block(spec, &route), 4));
-    out
+    Ok(out)
 }
 
 /// 一条模型条目(`- id: …`,不带缩进)。
@@ -2706,8 +2806,32 @@ fn dsh_put_model(
 /// 写 patch:保证 pi-ai 条目 → config.providers → route → models 这条链都在。
 /// 返回(新文本, 动作)。
 fn dsh_patch_apply(text: &str, spec: &ModelSpec) -> Result<(String, PatchAction), String> {
-    let route = dsh_route_for(&spec.source, &spec.id);
-    let mut lines = crate::yamledge::split(text);
+    let route = dsh_route_for_protocol(&spec.source, &spec.id, spec.api_protocol);
+    let working_text = if spec.source == "opencode-go" {
+        // Migrate only this model from old protocol-specific custom routes. Keep
+        // native catalog routes and any other models/settings untouched.
+        let old_custom_routes = [
+            dsh_custom_route_for(
+                &spec.source,
+                Some(crate::models::ApiProtocol::OpenAiChatCompletions),
+            ),
+            dsh_custom_route_for(
+                &spec.source,
+                Some(crate::models::ApiProtocol::OpenAiResponses),
+            ),
+            dsh_custom_route_for(
+                &spec.source,
+                Some(crate::models::ApiProtocol::AnthropicMessages),
+            ),
+        ]
+        .into_iter()
+        .filter(|old| old != &route)
+        .collect::<Vec<_>>();
+        dsh_patch_remove_routes(text, spec, &old_custom_routes)?.0
+    } else {
+        text.to_string()
+    };
+    let mut lines = crate::yamledge::split(&working_text);
 
     // ① 条目/接口层:缺哪层补哪层,已有的一个字不动
     {
@@ -2769,7 +2893,7 @@ fn dsh_patch_apply(text: &str, spec: &ModelSpec) -> Result<(String, PatchAction)
         if providers.get(&route).is_none() {
             let at = providers.end;
             let pad = providers.indent + 2;
-            let block = crate::yamledge::indented(&dsh_route_block(spec), pad);
+            let block = crate::yamledge::indented(&dsh_route_block(spec)?, pad);
             crate::yamledge::splice(&mut lines, at..at, &block);
         }
     }
@@ -2792,7 +2916,11 @@ fn dsh_patch_apply(text: &str, spec: &ModelSpec) -> Result<(String, PatchAction)
         dsh_set_scalar(&mut lines, &route, "displayName", &spec.source_name)?;
     }
     if !dsh_catalog_route(&route, &spec.id) {
-        dsh_set_scalar(&mut lines, &route, "api", "openai-completions")?;
+        let api = spec
+            .api_protocol
+            .and_then(crate::models::ApiProtocol::dsh_api)
+            .ok_or_else(|| format!("{} 的接口协议不能写入 DeepSeek Harness", spec.id))?;
+        dsh_set_scalar(&mut lines, &route, "api", api)?;
         dsh_set_scalar(&mut lines, &route, "baseURL", &spec.base_url)?;
     }
 
@@ -2814,9 +2942,20 @@ fn dsh_patch_apply(text: &str, spec: &ModelSpec) -> Result<(String, PatchAction)
 /// 会依次试**两条** route:这次该写的那条,以及旧的 `4sapi`(改名前的写法)——
 /// 老版本写进去的条目,新版本也要能取消掉。
 fn dsh_patch_remove(text: &str, spec: &ModelSpec) -> Result<(String, usize), String> {
+    let routes = dsh_routes_for_removal(&spec.source, &spec.id, spec.api_protocol);
+    dsh_patch_remove_routes(text, spec, &routes)
+}
+
+/// Remove one model from selected routes, retaining any routes that still hold
+/// other models. This lets protocol upgrades migrate old custom routes safely.
+fn dsh_patch_remove_routes(
+    text: &str,
+    spec: &ModelSpec,
+    routes: &[String],
+) -> Result<(String, usize), String> {
     let mut removed = 0;
     let mut lines = crate::yamledge::split(text);
-    for route in dsh_routes_for_removal(&spec.source, &spec.id) {
+    for route in routes {
         let span = {
             let root = crate::yamledge::parse(&lines)?;
             let Some(r) = dsh_providers(&root).and_then(|p| p.get(&route)) else {
@@ -2845,30 +2984,49 @@ fn dsh_patch_remove(text: &str, spec: &ModelSpec) -> Result<(String, usize), Str
     }
     // 收空壳:providers 空了连它一起收,config 空了也收(空 mapping 在 YAML 里是 null,
     // 会让 pi-ai 的 schema 直接报"配置不可用")
+    dsh_prune_empty_patch_containers(&mut lines)?;
+    Ok((crate::yamledge::join(&lines), removed))
+}
+
+fn dsh_prune_empty_patch_containers(lines: &mut Vec<String>) -> Result<(), String> {
     for _ in 0..2 {
         let root = crate::yamledge::parse(&lines)?;
         let Some(entry) = dsh_entry(&root) else { break };
         let Some(config) = entry.get("config") else { break };
         if let Some(p) = config.get("providers") {
             if p.children.is_empty() {
-                crate::yamledge::splice(&mut lines, p.start..p.end, &[]);
+                crate::yamledge::splice(lines, p.start..p.end, &[]);
                 continue;
             }
         }
         if config.children.is_empty() {
-            crate::yamledge::splice(&mut lines, config.start..config.end, &[]);
+            crate::yamledge::splice(lines, config.start..config.end, &[]);
         }
         break;
     }
-    Ok((crate::yamledge::join(&lines), removed))
+    Ok(())
 }
 
 /// 取消写入时按这个顺序找:这次写的那条 route → 老版本写的那条 → 目录内有/无两种落点。
 /// 只收**这个来源自己的**键,绝不顺着别人的 route 找 —— 同名模型在别家 route 上时,
 /// 那不是我们这次要删的东西。
-fn dsh_routes_for_removal(source: &str, model: &str) -> Vec<String> {
-    let mut out = vec![dsh_route_for(source, model)];
+fn dsh_routes_for_removal(
+    source: &str,
+    model: &str,
+    protocol: Option<crate::models::ApiProtocol>,
+) -> Vec<String> {
+    let mut out = vec![dsh_route_for_protocol(source, model, protocol)];
     let mut cand = vec![dsh_route(source), dsh_custom_route(source)];
+    if source == "opencode-go" {
+        cand.push(dsh_custom_route_for(
+            source,
+            Some(crate::models::ApiProtocol::OpenAiResponses),
+        ));
+        cand.push(dsh_custom_route_for(
+            source,
+            Some(crate::models::ApiProtocol::AnthropicMessages),
+        ));
+    }
     if source == "4sapi" {
         cand.push("4sapi".to_string()); // 改名前的写法
     }
@@ -2971,7 +3129,7 @@ fn dsh_verify(patch: &Path, cred: &Path, spec: &ModelSpec) -> bool {
     let Ok(root) = crate::yamledge::parse(&crate::yamledge::split(&text)) else {
         return false;
     };
-    let route = dsh_route_for(&spec.source, &spec.id);
+    let route = dsh_route_for_protocol(&spec.source, &spec.id, spec.api_protocol);
     let Some(r) = dsh_providers(&root).and_then(|p| p.get(&route)) else {
         return false;
     };
@@ -3019,7 +3177,11 @@ fn dsh_plan(site: &Site, spec: &ModelSpec) -> Result<DshPlan, String> {
     let patch_text = dsh_read_text(&patch);
     let cred_text = dsh_read_text(&cred);
     let (next_patch, patch_action) = dsh_patch_apply(&patch_text, spec)?;
-    let name = dsh_ref_for(&dsh_route_for(&spec.source, &spec.id));
+    let name = dsh_ref_for(&dsh_route_for_protocol(
+        &spec.source,
+        &spec.id,
+        spec.api_protocol,
+    ));
     // 兜底:引用名不合法会让**整份**凭据文件被拒(连带 pi-ai 全部 route 失效),
     // 所以这里宁可拒写,也不写一个注定把 DSH 弄坏的名字。
     if !dsh_ref_legal(&name) {
@@ -3060,7 +3222,11 @@ fn write_dsh_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, String> 
         PatchAction::Added => outcome.added = 1,
         PatchAction::Updated => outcome.updated = 1,
     }
-    let name = dsh_ref_for(&dsh_route_for(&spec.source, &spec.id));
+    let name = dsh_ref_for(&dsh_route_for_protocol(
+        &spec.source,
+        &spec.id,
+        spec.api_protocol,
+    ));
     match plan.cred_action {
         CredAction::Added => outcome
             .notes
@@ -3117,7 +3283,7 @@ fn remove_dsh_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, String>
 
     // 还有别的 route 在用这些引用名吗?没有才删密钥(别人在用的引用一个都不动)。
     // 名字可能不止一个:旧写法 `4sapi` 与新写法 `foursapi` 的引用名不同,一起收拾。
-    let names: Vec<String> = dsh_routes_for_removal(&spec.source, &spec.id)
+    let names: Vec<String> = dsh_routes_for_removal(&spec.source, &spec.id, spec.api_protocol)
         .iter()
         .map(|r| dsh_ref_for(r))
         .collect();
@@ -3231,7 +3397,9 @@ fn dsh_model_absent(text: &str, source: &str, model: &str) -> bool {
     let Ok(root) = crate::yamledge::parse(&crate::yamledge::split(text)) else {
         return false;
     };
-    dsh_routes_for_removal(source, model).iter().all(|route| {
+    dsh_routes_for_removal(source, model, crate::models::api_protocol(source, model))
+        .iter()
+        .all(|route| {
         dsh_providers(&root)
             .and_then(|p| p.get(route))
             .and_then(|r| r.get("models"))
@@ -3241,7 +3409,7 @@ fn dsh_model_absent(text: &str, source: &str, model: &str) -> bool {
                     .any(|x| x.get("id").and_then(|n| n.scalar()) == Some(model))
             })
             .unwrap_or(true)
-    })
+        })
 }
 
 /// DSH 的默认模型是不是指着这条(只读,不改)。
@@ -3250,7 +3418,7 @@ fn dsh_default_points_at(patch_text: &str, source: &str, model: &str) -> bool {
     let Ok(root) = crate::yamledge::parse(&crate::yamledge::split(patch_text)) else {
         return false;
     };
-    let routes = dsh_routes_for_removal(source, model);
+    let routes = dsh_routes_for_removal(source, model, crate::models::api_protocol(source, model));
     root.children
         .iter()
         .find(|e| e.get("id").and_then(|n| n.scalar()) == Some(DSH_DEFAULT_MODEL_ID))
@@ -3332,7 +3500,8 @@ fn dsh_removal(site: &Site, spec: &ModelSpec) -> (bool, Option<Removal>) {
     let Ok(root) = crate::yamledge::parse(&crate::yamledge::split(&text)) else {
         return (false, None);
     };
-    let Some((route, m)) = dsh_routes_for_removal(&spec.source, &spec.id)
+    let Some((route, m)) =
+        dsh_routes_for_removal(&spec.source, &spec.id, spec.api_protocol)
         .into_iter()
         .find_map(|route| {
             let m = dsh_providers(&root)
@@ -4216,6 +4385,10 @@ pub fn preview(client: Client, spec: &ModelSpec, opts: &Opts) -> Vec<Preview> {
                 p.blocked = Some(msg);
                 return p;
             }
+            if let Some(msg) = protocol_blocked(client, spec) {
+                p.blocked = Some(msg);
+                return p;
+            }
             if let Err(e) = site_readable(&site) {
                 p.blocked = Some(format!("{e}(本次不写,文件原样保留)"));
                 return p;
@@ -4321,7 +4494,11 @@ pub fn preview(client: Client, spec: &ModelSpec, opts: &Opts) -> Vec<Preview> {
                             return p;
                         }
                     };
-                    let route = dsh_route_for(&spec.source, &spec.id);
+                    let route = dsh_route_for_protocol(
+                        &spec.source,
+                        &spec.id,
+                        spec.api_protocol,
+                    );
                     p.action = if plan.same {
                         "已配置,内容和这次要写的一致,无需改动".into()
                     } else if plan.patch_action == PatchAction::Updated {
@@ -4356,19 +4533,37 @@ pub fn preview(client: Client, spec: &ModelSpec, opts: &Opts) -> Vec<Preview> {
                                 .into(),
                         );
                     } else if dsh_catalog(&dsh_route(&spec.source)).is_some() {
+                        let protocol = spec
+                            .api_protocol
+                            .map(crate::models::ApiProtocol::label)
+                            .unwrap_or("未知协议");
+                        let api = spec
+                            .api_protocol
+                            .and_then(crate::models::ApiProtocol::dsh_api)
+                            .unwrap_or("不支持");
                         p.notes.push(format!(
-                            "「{}」不在 pi-ai 目录给 `{}` 的那份模型表里,拿不到协议 —— 所以单独写到\
-                             自建 route「{route}」(openai-completions + 端点)。目录里有那些模型仍留在\
-                             `{}` 上,两边互不影响;以后 DSH 目录里有了它,再写一次就会自动并回去。",
+                            "「{}」不在 pi-ai 目录给 `{}` 的模型表里,按官网协议 {} 单独写到\
+                             自建 route「{route}」(api: {api} + 对应端点)。目录模型仍留在 `{}`,\
+                             两边互不影响;以后目录收录它后,再次写入会自动使用目录 route。",
                             spec.id,
                             dsh_route(&spec.source),
+                            protocol,
                             dsh_route(&spec.source)
                         ));
                     } else {
+                        let protocol = spec
+                            .api_protocol
+                            .map(crate::models::ApiProtocol::label)
+                            .unwrap_or("未知协议");
+                        let api = spec
+                            .api_protocol
+                            .and_then(crate::models::ApiProtocol::dsh_api)
+                            .unwrap_or("不支持");
                         p.notes.push(
-                            "这条 route 不在 pi-ai 的已安装目录里,所以要写全协议(openai-completions)\
-                             与端点 —— 这正是 DSH 的「自定义模型 API」那条路。"
-                                .into(),
+                            format!(
+                                "这条 route 不在 pi-ai 的已安装目录里,按官网协议 {protocol} 写入\
+                                 自定义接入(api: {api} + 对应端点)。"
+                            ),
                         );
                     }
                     let (configured, removal) = dsh_removal(&site, spec);
@@ -4386,6 +4581,18 @@ pub fn preview(client: Client, spec: &ModelSpec, opts: &Opts) -> Vec<Preview> {
                          的模型选择器里选一次(挂件只读它,不替你改)。"
                             .into(),
                     );
+                    if spec.source == "opencode-go" {
+                        p.notes.push(
+                            "若同一模型以前留在旧的 OpenCode Go 自建 route,更新时会迁移该模型;\
+                             旧 route 还有其他模型时会保留它们。"
+                                .into(),
+                        );
+                        p.notes.push(
+                            "OpenCode Go 官方目前将 DeepSeek Harness 列为会话标识支持不完整的客户端;\
+                             部分请求可能缺少 x-opencode-session,因此端点正确也不保证 Go 路由与用量稳定。"
+                                .into(),
+                        );
+                    }
                 }
             }
             p
@@ -4395,6 +4602,9 @@ pub fn preview(client: Client, spec: &ModelSpec, opts: &Opts) -> Vec<Preview> {
 
 /// 执行写入。
 pub fn apply(client: Client, spec: &ModelSpec, opts: &Opts) -> Result<Vec<Report>, String> {
+    if let Some(msg) = protocol_blocked(client, spec) {
+        return Err(msg);
+    }
     let list = sites_of(client);
     if list.is_empty() {
         return Err(format!("没检测到 {} 的配置", client.label()));

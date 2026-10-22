@@ -161,10 +161,17 @@ build/
 |---|---|---|---|
 | 4SAPI | `/v1/models` + `/api/pricing` | 有 | 价目表公开 |
 | Hapi | `/v1/models` | 无(站点不提供) | 否(要密钥) |
-| OpenCode Go | `/zen/go/v1/models` | 无(订阅制) | 是 |
+| OpenCode Go | `/inference/go/v1/models` | 无(订阅制) | 是 |
 
 来源定义在 `core/src/models.rs` 的 `SOURCES`。加一个来源 = 加一条 `SourceDef`
 (列表路径 / 是否有价目表 / 写进客户端的 base_url / 判定用的域名),前端芯片是后端返回的,不用改。
+
+端点按官网协议区分:4SAPI 的模型配置仍使用 `https://4sapi.com/v1`,
+OpenAI Chat Completions 请求落到 `/chat/completions`；OpenCode Go 的公开模型表只返回模型 ID,
+协议按[官方端点表](https://dev.opencode.ai/v2/docs/console/go/)匹配,分别使用
+`/openai/v1/chat/completions`、`/openai/v1/responses`、`/anthropic/v1/messages` 或
+`/google/v1beta/models/<model>:generateContent`。官网文档未标注协议的新模型会暂停自动接入,
+并显示“协议待确认”,不猜通用 Chat API。
 
 **「已配置」按来源判定**:客户端条目里的 `url` 命中哪个来源的域名就属于哪个来源 ——
 同一个模型名可能在多个来源里都有,只看 id 会串台。
@@ -208,7 +215,11 @@ ZCode 是两份 JSON(`schemaVersion` 不是 1 就放弃),Trae 是 SQLite 的 `It
 - **route 键与显示名**:`4sapi` → `foursapi`、`hapi` → `hapi`、`opencode-go` → 同名;
   模型显示名按来源分前缀 `4S-` / `HP-` / `OG `(如 `OG DeepSeek V4.1 Flash`)。
 - **目录内外按模型分派**:pi-ai 已安装目录里有的模型留在目录 route(不写 `api`/`baseURL`,能力照目录抄);
-  目录里没有的写到 `<route>-custom`,自带 `api: openai-completions` + `baseURL`。
+  目录里没有的 OpenCode Go 模型按官网协议写入自建 route:Chat Completions 用
+  `<route>-custom`,Responses 用 `<route>-custom-responses`,Anthropic Messages 用
+  `<route>-custom-anthropic`,并写入匹配的 `api` 与端点。当前 DSH 自建 route 不支持 Google
+  Generative API,协议未知时也会拦截,避免写出无法调用的配置。OpenCode Go 官网目前还将 DSH
+  列为会话标识支持不完整的客户端;写入预览会提示部分请求可能缺少 `x-opencode-session`。
 - **引用名必须合法**:DSH 的凭据引用名要匹配 `^[A-Za-z_][A-Za-z0-9_]*$`,否则整份凭据文件
   连同 pi-ai 全部 route 一起失效 —— 所以 route 键不能以数字开头。
 - 它是唯一**允许在运行中写入**的客户端;`agent-default-model` 只读不写。
@@ -227,8 +238,8 @@ ZCode 是两份 JSON(`schemaVersion` 不是 1 就放弃),Trae 是 SQLite 的 `It
 
 ## 每日签到(Trae / WorkBuddy / Qoder)
 
-四个渠道的每日积分可以替你去领。**默认开**(2026-10-20 裁决):装上就开始自动领,
-在设置里可以逐渠道关掉 —— 关掉后一个请求都不发。
+四个渠道的活动状态每小时检查一次，监测与自动领取分开控制。沿用每渠道原有的监测开关；
+关闭监测后不再发状态查询或领取请求。监测开启、自动领取关闭时仍会读状态，并在可领取时提供手动入口。
 
 - **纯逻辑**在 `core/src/checkin.rs`:签到周期日、抖动的触发时刻、退避序列、幂等(先查后领、领后回查)、
   以及把平台的响应解读成状态机的 `parse_trae` / `parse_workbuddy` / `parse_qoder`。
@@ -238,10 +249,14 @@ ZCode 是两份 JSON(`schemaVersion` 不是 1 就放弃),Trae 是 SQLite 的 `It
   不是自然日:否则 09:59 与 10:01 会混成一天,当天那一期永远领不到。
 - **HTTP 方法逐渠道声明**(`CheckinDef::status_method` / `claim_method`):Trae / WorkBuddy 全是 POST;
   **Qoder 查状态是 GET**(POST 会 404)。
-- **判因只看 `code` / HTTP / 字段结构,不看 message 文案**:9074 的文案是"当前参与用户太多"(真实成因常是设备/IP),
-  10001 在国区是"今天已签"、国际版是"活动未开启" —— 唯一按文案分支的地方就是这里,且只在认得出明确字样时才认。
+- **判因只看 `code` / HTTP / 字段结构 / 请求域名,不看 message 文案**:Trae `9095` 表示本设备今日名额已用；
+  WorkBuddy `10001` 按实际请求域名解释(国区已签、国际版活动未开启)，未知区域不猜状态。
 - **Qoder 的 `actionType` 真机拼写是 `CLAIM_BENEFIT`(带 E)**:写成少一个 E 的 `CLAIM_BEFIT`
   会让"今天可领"被静默判成"本期无打卡活动",用户当天丢 100 分(真机用例抓到过,已留回归用例)。
+- **统一活动状态**保留活动 ID / 周期 / 区域 / 账号或设备范围；活动列表区分可领取、客户端参与、已领取、设备名额已用、无活动与暂时无法确认。
+  新活动与待处理状态按稳定键去重，不按每次轮询重复提醒。Qoder 多活动保留快照并分别展示。
+- **结果回查**是领取成功的唯一证据。领取后状态暂时不可确认时保存为 `confirming` 并退避回查；
+  不提前报成功，也不因未知响应继续写入。明确未领取时回到可重试状态。
 - **请求强制直连**(`direct_client`,`no_proxy`):平台按出口 IP 限流,代理 IP 更容易被拒。
 - **凭据**:
   - Trae:本机登录态(令牌 + `iCubeAuthInfo://icube-dc:` 键名里的设备号);
