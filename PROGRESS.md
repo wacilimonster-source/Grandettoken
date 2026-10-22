@@ -2608,3 +2608,10 @@ tauri-cli 自己的 `ci` 标志(`bundle.rs`:`or_else(|| if ci { Some("".into()) 
   分组与两级行、骨架、横幅、签到 chip、胶囊挑最紧的 + 限定语、吸附分段、非颜色模式、视图缺失兜底)。
   它当场抓出过一个真 bug(`hvApply` 漏带 `totals`,导致风险带静默退回老汇总),已修。
   ⚠️ 未验证:像素与真机几何(两级行实际高度、风险带在三档字号下是否溢出),需要真机复测。
+
+**发版 v0.1.56**(2026-10-22):本地打包 → `latest.json` → GitHub Release 三件套
+(`setup.exe` / `.sig` / `latest.json`)→ `verify-release.js` **13/13 PASS**。
+commit `68d46a9`,tag `v0.1.56`,更新端点已能拉到新清单。
+唯一一处测试口径收紧:`fetch::tests::a_failed_request_leaves_a_usable_line_in_the_log`
+在"透明代理替 127.0.0.1:1 应答 5xx"的环境里会误报,现在按错误码分流 ——
+连接层(E_CONNECT/E_TIMEOUT)才断言没有 status,被代理应答时反过来断言必须是 HTTP 层错误码。
