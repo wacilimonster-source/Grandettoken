@@ -2696,7 +2696,11 @@ core `cargo test --offline` **314 passed / 0 failed / 6 ignored**(净增 3 项:
 `qoder_view_details_claimable_is_manual_not_inactive`、`qoder_manual_blocks_the_day_but_keeps_its_code`,
 以及把 `stale_auth_…` 里"只有 auth 受版本影响"改成 claimed/already 与 inactive/manual 两组)。
 
-**发版 v0.1.57**(本地打包):三处版本号同步 → `bash build/release-local.sh`。
+**发版 v0.1.57**(本地打包,2026-10-22):三处版本号同步 → `bash build/release-local.sh`
+(2m36s)→ `make-latest-json.js` → GitHub Release 三件套(`setup.exe` / `.sig` / `latest.json`)。
+commit `a65fc58`,tag `v0.1.57`,`verify-release.js` **13/13 PASS**,
+`verify-signature.js` **PASS**(公钥真能验这一版的包 —— 已装用户收得到)。
+本次新增的 `build/check-css-forms.js` 已进 CI,`build/visual-forms.js` 是人工工具(要真机窗口)。
 
 ### 复测中又抓到的两处（同一次发版里修掉）
 
@@ -2713,3 +2717,8 @@ core `cargo test --offline` **314 passed / 0 failed / 6 ignored**(净增 3 项:
 **最终复测**(0.1.57 真机):16 场景 × 3 形态,横向/纵向越界 **0**;
 仅剩的"裁切"是风险带副行与「最紧」格的名字(都有省略号、都有 tooltip 与下一行兜底)。
 `cargo test --offline` 314 passed;`check-css-forms.js` PASS;`node --check` 全过。
+
+**发版记录**:安装包 `Grandettoken_0.1.57_x64-setup.exe`(5,146,450 B,
+sha256 `3a5d9425…`)+ `.sig`;release <https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.57>。
+本机已用打包产物覆盖 `%LOCALAPPDATA%\Grandettoken\Grandettoken.exe` 并运行。
+`latest.json` 的 notes 走应用内更新卡,release 正文另写(同一件事的两种长度)。
