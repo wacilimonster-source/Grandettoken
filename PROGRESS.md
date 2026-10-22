@@ -2730,3 +2730,11 @@ Qoder 自动领取与新活动监测；顶部摘要改为聚焦未来 30 天内�
 本地签名 NSIS 安装包 `Grandettoken_0.1.58_x64-setup.exe`（5,175,222 B，SHA-256 `cc03c17c7e1ad0013bf4e968a5fb8dc352f1f60179cc8e01bff4ac0e42434cdb`）及 `.sig` 已发布到 [GitHub Release v0.1.58](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.58)。提交 `5998226`，tag `v0.1.58`。
 
 `node --use-env-proxy build/verify-release.js` **13/13 PASS**；`node build/verify-signature.js` **PASS**（tauri.conf.json 中的公钥验证通过）。
+
+### 发版 v0.1.59（2026-10-22）
+
+优化 Trae、WorkBuddy、Qoder 的活动监测和自动领取，保留既有签到状态并提示需在客户端参与的新活动；按协议修正 OpenCode Go 端点，并明确不兼容目标客户端或未知协议时的处理方式。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.59_x64-setup.exe`（5,196,007 B，SHA-256 `99031f4a271a763287dc098a18a693ac1fcf26d18737c39318b9f4348fe21233`）及 `.sig` 已发布到 [GitHub Release v0.1.59](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.59)。发布提交 `e7cc67f`，tag `v0.1.59`。
+
+`node --use-env-proxy build/verify-release.js` **13/13 PASS**；`node build/verify-signature.js` **PASS**（tauri.conf.json 中的公钥验证通过）。
