@@ -84,12 +84,23 @@ body{
 .upd-ov-in{width:100%;background:var(--bg2);border:1px solid var(--line);border-radius:calc(10px*var(--u));
   padding:calc(12px*var(--u));box-shadow:0 12px 30px -10px #000}
 
-/* ── 消耗汇总(次要信息,压扁成一条) ── */
-.sum{display:flex;align-items:stretch;border-bottom:1px solid var(--line);
-  background:#141720;flex:none}
+/* ── 顶部摘要:临期积分 / 最先到期 / 签到 ── */
+/* 总余额不占摘要位;第一格强调已确认的临期总量,中间格给最早到期来源,签到压成窄列。 */
+.sum{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) minmax(68px,.68fr);
+  align-items:stretch;border-bottom:1px solid var(--line);background:#141720;flex:none}
 .sum:empty{display:none}
-.sum .cell{flex:1;padding:calc(7px*var(--u)) calc(12px*var(--u));border-right:1px solid #232937;min-width:0}
+.sum .cell{padding:calc(7px*var(--u)) calc(12px*var(--u));border-right:1px solid #232937;min-width:0}
+.sum .cell:first-child,.sum .cell:last-child{padding-left:calc(8px*var(--u));padding-right:calc(8px*var(--u))}
 .sum .cell:last-child{border-right:0}
+.sum button.cell{margin:0;border-top:0;border-bottom:0;border-left:0;appearance:none;background:transparent;
+  color:inherit;text-align:left;font:inherit;cursor:pointer}
+.sum button.cell:disabled{cursor:default;opacity:1}
+.sum .risk-cell{background:linear-gradient(115deg,#26221d,#1a1d25)}
+.sum .risk-cell:not(:disabled):hover{background:linear-gradient(115deg,#342a1e,#20232d)}
+.sum .risk-cell.on{box-shadow:inset 0 0 0 1px #a77c3e;background:linear-gradient(115deg,#352a1e,#21232a)}
+.sum .risk-cell:focus-visible{outline:2px solid #8db3ff;outline-offset:-2px}
+.sum .risk-cell .vv{color:var(--warn)}
+.sum .risk-cell:disabled .vv{color:var(--tx3)}
 .sum .lb{font-size:max(11.5px,calc(10.5px*var(--u)));color:var(--tx3);letter-spacing:.08em;margin-bottom:calc(2px*var(--u));
   white-space:nowrap}
 .sum .vv{font-size:calc(14.5px*var(--u));font-weight:600;font-variant-numeric:tabular-nums;
@@ -233,8 +244,21 @@ body{
   overflow:hidden;text-overflow:ellipsis}
 .spark{height:calc(30px*var(--u));display:flex;align-items:flex-end;gap:calc(2px*var(--u));margin-bottom:calc(9px*var(--u))}
 .spark i{flex:1;background:#3d5c92;border-radius:1px;min-height:1px}
+.spark-empty{height:calc(30px*var(--u));display:flex;align-items:center;justify-content:center;
+  margin-bottom:calc(9px*var(--u));font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3)}
 /* 缺口柱:那段没观测,数字只算了一半 —— 斜纹与实心柱在灰度下也能分开 */
 .spark i.gap{background:repeating-linear-gradient(45deg,#5a6c96 0 2px,#2b3448 2px 4px)}
+/* 次要口径与背景解释折叠;只有真实采样缺口才用警示色提示 */
+.detail-notes{margin:calc(3px*var(--u)) 0 calc(6px*var(--u));border-top:1px dashed var(--line)}
+.detail-notes summary{display:flex;align-items:center;justify-content:space-between;cursor:pointer;list-style:none;
+  padding:calc(5px*var(--u)) 0;font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3)}
+.detail-notes summary::-webkit-details-marker{display:none}
+.detail-notes summary::after{content:"展开 +";color:var(--tx3)}
+.detail-notes[open] summary::after{content:"收起 −"}
+.detail-notes.has-gap summary{color:var(--warn)}
+.detail-note-list{display:grid;gap:calc(4px*var(--u));padding:0 0 calc(5px*var(--u));}
+.detail-note-list>div{font-size:max(11.5px,calc(11px*var(--u)));line-height:1.5;color:var(--tx3)}
+.detail-actions{display:flex;justify-content:flex-end;gap:calc(6px*var(--u));flex-wrap:wrap;margin-top:calc(8px*var(--u))}
 /* 变动台账(展开区) */
 .ledger{border:1px solid var(--line);border-radius:calc(8px*var(--u));margin-top:calc(9px*var(--u));
   padding:calc(4px*var(--u)) calc(9px*var(--u));background:var(--bg2)}
@@ -903,6 +927,9 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 .ckrow span{flex:1;min-width:0;line-height:1.5}
 .ckrow.warn{border-color:#6b5327;color:#f0c67a}
 .ckrow .btn.s{flex:none}
+.ckactivity{margin:calc(3px*var(--u)) 0 0;padding-left:calc(4px*var(--u));
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:max(10px,calc(10px*var(--u)));
+  color:var(--tx3);line-height:1.5}
 .cklog{font-size:max(10px,calc(10.5px*var(--u)));color:var(--tx3);line-height:1.8;
   padding:0 0 calc(4px*var(--u));font-variant-numeric:tabular-nums}
 .cklog .ckd{color:var(--tx2);margin-right:2px}

@@ -33,6 +33,203 @@
 use serde::Deserialize;
 use std::path::PathBuf;
 
+/// Qoder 国际版活动 API 用的本机设备身份。
+///
+/// 值只在进程内短期缓存,不序列化、不写日志。`Debug` 故意不派生,
+/// 避免调用方无意把设备令牌打印出来。
+#[derive(Clone)]
+pub struct QoderMachineIdentity {
+    pub machine_token: String,
+    pub machine_type: String,
+    pub machine_code: String,
+    pub client_version: Option<String>,
+    pub machine_os: Option<String>,
+    pub machine_hostname: Option<String>,
+    pub machine_id: Option<String>,
+}
+
+/// 从 Qoder 自带的 UMID helper 读取国际版请求需要的设备头。
+///
+/// Qoder 升级目录会保留多个版本;优先用当前安装根目录,再从版本目录里找最新 helper。
+/// 失败时返回 `None`,调用方仍可带账号令牌查询活动并展示发现结果,但不伪造设备身份。
+pub fn machine_identity(account_id: &str) -> Option<QoderMachineIdentity> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+
+    static CACHE: OnceLock<Mutex<HashMap<String, (Instant, Option<QoderMachineIdentity>)>>> =
+        OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = account_id.trim().to_string();
+    if key.is_empty() || key.len() > 512 {
+        return None;
+    }
+    {
+        let entries = cache.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((loaded_at, identity)) = entries.get(&key) {
+            let ttl = if identity.is_some() {
+                Duration::from_secs(45 * 60)
+            } else {
+                Duration::from_secs(5 * 60)
+            };
+            if loaded_at.elapsed() < ttl {
+                return identity.clone();
+            }
+        }
+    }
+    let identity = machine_identity_uncached(&key);
+    cache
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .insert(key, (Instant::now(), identity.clone()));
+    identity
+}
+
+#[cfg(windows)]
+fn machine_identity_uncached(account_id: &str) -> Option<QoderMachineIdentity> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    #[derive(Deserialize)]
+    struct RuntimeInfo {
+        #[serde(rename = "machineToken")]
+        machine_token: serde_json::Value,
+        #[serde(rename = "machineType")]
+        machine_type: serde_json::Value,
+        #[serde(rename = "machineCode")]
+        machine_code: serde_json::Value,
+    }
+
+    fn value_string(v: &serde_json::Value) -> Option<String> {
+        v.as_str()
+            .map(str::to_string)
+            .or_else(|| v.as_i64().map(|n| n.to_string()))
+            .filter(|s| !s.trim().is_empty())
+    }
+
+    let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from)?;
+    let install = local.join("Programs").join("Qoder");
+    let client_version = std::fs::read_dir(install.join(".qoder-versions"))
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            if !p.is_dir() {
+                return None;
+            }
+            let name = e.file_name().to_string_lossy().to_string();
+            let parts: Option<Vec<u64>> = name.split('.').map(|p| p.parse().ok()).collect();
+            parts.map(|parts| (parts, name))
+        })
+        .max_by(|a, b| a.0.cmp(&b.0))
+        .map(|(_, version)| version);
+    let machine_os = Some(format!(
+        "{}_win32",
+        match std::env::consts::ARCH {
+            "x86_64" => "x86_64",
+            "aarch64" => "aarch64",
+            arch => arch,
+        }
+    ));
+    let machine_hostname = std::env::var("COMPUTERNAME")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| {
+            !s.is_empty()
+                && s.len() <= 96
+                && s.is_ascii()
+                && s.bytes().all(|b| (0x21..=0x7e).contains(&b))
+        });
+    let machine_id = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .and_then(|p| {
+            std::fs::read_to_string(p.join(Region::Global.data_dir()).join("auth.machine-id")).ok()
+        })
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s.len() <= 128 && s.is_ascii());
+    let mut candidates = vec![install.join("resources").join("umid").join("runtime-info.exe")];
+    if let Ok(entries) = std::fs::read_dir(install.join(".qoder-versions")) {
+        let mut versions: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+        versions.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+        candidates.extend(
+            versions
+                .into_iter()
+                .map(|p| p.join("resources").join("umid").join("runtime-info.exe")),
+        );
+    }
+
+    for exe in candidates.into_iter().filter(|p| p.is_file()) {
+        let child_result = Command::new(exe)
+            .args(["prod", "--account-stdin"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn();
+        let Ok(mut child) = child_result else { continue };
+        let Some(mut input) = child.stdin.take() else {
+            let _ = child.kill();
+            continue;
+        };
+        // Qoder 本身把活动账号 UID 传给 helper;stdin 以换行结尾与客户端契约一致。
+        let mut account = serde_json::to_vec(&serde_json::json!({ "account": account_id })).ok()?;
+        account.push(b'\n');
+        if input.write_all(&account).is_err() {
+            let _ = child.kill();
+            continue;
+        }
+        drop(input);
+        // 与 Qoder 自己一致,给 native helper 留 25 秒上限,不能让活动线程无限挂起。
+        let started = std::time::Instant::now();
+        let exited = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Some(status),
+                Ok(None) if started.elapsed() < std::time::Duration::from_secs(25) => {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                Ok(None) | Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                }
+            }
+        };
+        let Some(status) = exited else { continue };
+        let output = match child.wait_with_output() {
+            Ok(out) if status.success() && out.status.success() => out,
+            _ => continue,
+        };
+        let info: RuntimeInfo = match serde_json::from_slice(&output.stdout) {
+            Ok(info) => info,
+            Err(_) => continue,
+        };
+        let (Some(machine_token), Some(machine_type), Some(machine_code)) = (
+            value_string(&info.machine_token),
+            value_string(&info.machine_type),
+            value_string(&info.machine_code),
+        ) else {
+            continue;
+        };
+        return Some(QoderMachineIdentity {
+            machine_token,
+            machine_type,
+            machine_code,
+            client_version,
+            machine_os,
+            machine_hostname,
+            machine_id,
+        });
+    }
+    None
+}
+
+/// 非 Windows 平台没有可读取的 Qoder 桌面 UMID helper。
+#[cfg(not(windows))]
+fn machine_identity_uncached(_account_id: &str) -> Option<QoderMachineIdentity> {
+    None
+}
+
 /// 需要复用桌面端登录态的 Qoder 版本。
 ///
 /// `Default` = 国际版:它是两个 region 里更常见的一个,也让 `QoderCredential::default()`
@@ -112,6 +309,8 @@ impl QoderErr {
 #[derive(Debug, Clone, Default)]
 pub struct QoderCredential {
     pub token: String,
+    /// Qoder 账号 UID,只用于把真实账号标识交给 Qoder 自带的 UMID helper。
+    pub account_id: String,
     /// 上游给的过期时刻(RFC3339 字符串,如 `2026-11-10T06:19:29Z`)。
     /// 保留原串 —— 它带时区后缀,自己 parse 成时间戳只会引入时区 bug。
     pub expires_at: String,
@@ -134,6 +333,12 @@ struct AuthFile {
 
 #[derive(Debug, Deserialize)]
 struct AuthUser {
+    #[serde(default)]
+    id: serde_json::Value,
+    #[serde(default)]
+    uid: serde_json::Value,
+    #[serde(default, rename = "userId")]
+    user_id: serde_json::Value,
     #[serde(default)]
     name: String,
     #[serde(default)]
@@ -302,17 +507,36 @@ pub fn parse_auth_file(plain: &str, region: Region) -> Result<QoderCredential, Q
     if token.is_empty() {
         return Err(QoderErr::NotLoggedIn);
     }
-    let (user_name, _) = match &f.user {
-        Some(u) if !u.name.trim().is_empty() => (u.name.trim().to_string(), u.email.clone()),
-        Some(u) if !u.email.trim().is_empty() => (u.email.trim().to_string(), String::new()),
-        _ => (String::new(), String::new()),
+    let (user_name, account_id) = match &f.user {
+        Some(u) => {
+            let name = if !u.name.trim().is_empty() {
+                u.name.trim().to_string()
+            } else {
+                u.email.trim().to_string()
+            };
+            let account_id = qoder_id_string(&u.id)
+                .or_else(|| qoder_id_string(&u.uid))
+                .or_else(|| qoder_id_string(&u.user_id))
+                .unwrap_or_default();
+            (name, account_id)
+        }
+        None => (String::new(), String::new()),
     };
     Ok(QoderCredential {
         token,
+        account_id,
         expires_at: f.expires_at.trim().to_string(),
         user_name,
         region,
     })
+}
+
+fn qoder_id_string(value: &serde_json::Value) -> Option<String> {
+    value
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| value.as_i64().map(|n| n.to_string()))
+        .filter(|id| !id.trim().is_empty())
 }
 
 /// 读一份凭据(含 DPAPI + AES-GCM 全链路)。

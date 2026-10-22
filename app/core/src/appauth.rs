@@ -57,6 +57,8 @@ impl App {
 pub struct Credential {
     pub token: String,
     pub source: String,
+    /// Qoder UID,仅在调用 Qoder 自带 UMID helper 时使用。
+    pub account_id: Option<String>,
     /// Trae 的纯数字设备号(`iCubeAuthInfo://icube-dc:<数字>` 的键名里那串)。
     /// **签到必需**:缺了或不是客户端注册过的号,接口恒定回 9074("当前参与用户太多")。
     /// 仍然是只读同一份 storage.json,不额外读文件。
@@ -102,6 +104,7 @@ fn qoder_candidates(app: App) -> Vec<Credential> {
             vec![Credential {
                 token: cred.token,
                 source: src,
+                account_id: Some(cred.account_id),
                 device_id: None,
             }]
         }
@@ -139,6 +142,7 @@ fn trae_candidates() -> Vec<Credential> {
             Some(Credential {
                 token,
                 source: (*dir).to_string(),
+                account_id: None,
                 device_id: trae_device_id_from_storage(&raw),
             })
         })
@@ -302,6 +306,7 @@ fn codex_candidates() -> Vec<Credential> {
     vec![Credential {
         token,
         source: "CLI 登录态".into(),
+        account_id: None,
         device_id: None,
     }]
 }

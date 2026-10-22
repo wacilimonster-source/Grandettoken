@@ -2476,6 +2476,8 @@ struct CheckinState {
     streak_days: Option<i64>,
     /// 近 7 天流水
     log: Vec<tokenscope_core::store::CheckinRow>,
+    /// Qoder 最近检测到的活动;即使当前活动不能由挂件领取,也展示监测结果。
+    latest_activity: Option<checkin::QoderActivity>,
     /// **今天这个渠道签完了吗**(claimed / already / inactive)。
     ///
     /// 为什么由后端给、不让前端算:Qoder 的周期日**从 10:00 起算**
@@ -2547,6 +2549,15 @@ fn checkin_credential(app: &tauri::AppHandle, def: &checkin::CheckinDef) -> Resu
                 .ok_or_else(|| {
                     format!("没检测到 {} 登录信息 · 打开一次 Qoder 桌面端即可", def.name)
                 })?;
+            if def.id == "qoder" {
+                let account_id = c.account_id.as_deref().unwrap_or_default();
+                if let Some(identity) = tokenscope_core::qoder::machine_identity(account_id) {
+                    return Ok(checkin::Cred::QoderMachine {
+                        token: c.token,
+                        identity,
+                    });
+                }
+            }
             Ok(checkin::Cred::Qoder(c.token))
         }
     }
@@ -2614,6 +2625,187 @@ fn checkin_state_of(id: &str, cfg: &Config, store: &Store, note: Option<String>)
         done_today: c.signed_today(&today),
         streak_days: c.last_streak_days,
         log,
+        latest_activity: c.latest_activity,
+    }
+}
+
+/// 记录 Qoder 活动变化,并把活动与签到结果分开持久化。
+/// 返回值表示本次新发现了可由挂件领取的活动。
+async fn record_qoder_activities(
+    app: &tauri::AppHandle,
+    id: &str,
+    body: &serde_json::Value,
+    now: i64,
+) -> bool {
+    let Some(mut activities) = checkin::qoder_activities(body) else {
+        return false;
+    };
+    let def = checkin::find(id);
+    let name = def.map(|d| d.name).unwrap_or(id);
+    let mut newly_claimable = false;
+    let mut notice: Option<checkin::QoderActivity> = None;
+    for activity in &mut activities {
+        activity.observed_at = Some(now);
+    }
+
+    let state = app.state::<AppState>();
+    let save_result = save_config_off_main(&state, |live| {
+        let entry = live.checkin.entry(id.to_string()).or_default();
+        entry.last_activity_check_at = Some(now);
+
+        for activity in &activities {
+            let previous = entry
+                .activity_history
+                .iter()
+                .find(|known| known.id == activity.id);
+            let is_new = previous.is_none();
+            let is_claimable = checkin::qoder_action_claimable(
+                &activity.action_type,
+                &activity.claim_status,
+            );
+            let was_claimable = previous
+                .map(|known| {
+                    checkin::qoder_action_claimable(&known.action_type, &known.claim_status)
+                })
+                .unwrap_or(false);
+            if is_claimable && !was_claimable {
+                newly_claimable = true;
+            }
+            if is_new || (is_claimable && !was_claimable) {
+                let prefer_this = notice
+                    .as_ref()
+                    .map(|known| {
+                        checkin::qoder_action_claimable(&activity.action_type, &activity.claim_status)
+                            && !checkin::qoder_action_claimable(
+                                &known.action_type,
+                                &known.claim_status,
+                            )
+                    })
+                    .unwrap_or(true);
+                if prefer_this {
+                    notice = Some(activity.clone());
+                }
+            }
+
+            if let Some(known) = entry
+                .activity_history
+                .iter_mut()
+                .find(|known| known.id == activity.id)
+            {
+                *known = activity.clone();
+            } else {
+                entry.activity_history.push(activity.clone());
+            }
+        }
+        entry
+            .activity_history
+            .sort_by_key(|activity| activity.observed_at.unwrap_or_default());
+        if entry.activity_history.len() > 100 {
+            let excess = entry.activity_history.len() - 100;
+            entry.activity_history.drain(0..excess);
+        }
+        entry.latest_activity = activities
+            .iter()
+            .find(|activity| {
+                checkin::qoder_action_claimable(&activity.action_type, &activity.claim_status)
+            })
+            .or_else(|| activities.first())
+            .cloned();
+    })
+    .await;
+    if let Err(e) = save_result {
+        eprintln!("Qoder 活动状态落库失败: {e}");
+    }
+    let _ = app.emit("checkin-updated", serde_json::json!({ "id": id }));
+
+    if let Some(activity) = notice {
+        let can_claim = checkin::qoder_action_claimable(&activity.action_type, &activity.claim_status);
+        let _ = app.emit(
+            "checkin-activity",
+            serde_json::json!({
+                "id": id,
+                "name": name,
+                "title": activity.title,
+                "actionType": activity.action_type,
+                "claimStatus": activity.claim_status,
+                "canClaim": can_claim,
+            }),
+        );
+    }
+    newly_claimable
+}
+
+/// 记录一次活动监测尝试,凭据暂不可用时也按一小时节奏重试。
+async fn mark_qoder_activity_check(app: &tauri::AppHandle, id: &str, now: i64) {
+    let state = app.state::<AppState>();
+    if let Err(e) = save_config_off_main(&state, |live| {
+        live.checkin
+            .entry(id.to_string())
+            .or_default()
+            .last_activity_check_at = Some(now);
+    })
+    .await
+    {
+        eprintln!("Qoder 活动监测时间落库失败: {e}");
+    }
+}
+
+const QODER_ACTIVITY_INTERVAL_SEC: i64 = 60 * 60;
+
+/// 独立于每日领取的活动监测。签到开关开启即可每小时检查一次,自动领取关闭时也照常发现活动。
+async fn monitor_qoder_activities(app: &tauri::AppHandle, id: &str) {
+    if UPDATING.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let now = now_ts();
+    let (enabled, hidden, last_check) = {
+        let state = app.state::<AppState>();
+        let cfg = lock_rw(&state.config);
+        let c = cfg.checkin.get(id).cloned().unwrap_or_default();
+        (
+            c.enabled,
+            cfg.hidden_channels.iter().any(|h| h == id),
+            c.last_activity_check_at,
+        )
+    };
+    if !enabled || hidden || last_check.map(|t| now.saturating_sub(t) < QODER_ACTIVITY_INTERVAL_SEC).unwrap_or(false) {
+        return;
+    }
+    let Ok(_busy) = CheckinBusy::acquire(id) else {
+        return;
+    };
+    mark_qoder_activity_check(app, id, now).await;
+
+    let Some(def) = checkin::find(id) else { return };
+    let h = app.clone();
+    let cred = match tokio::task::spawn_blocking(move || checkin_credential(&h, def)).await {
+        Ok(Ok(cred)) => cred,
+        _ => return,
+    };
+    let client = checkin::direct_client();
+    let (out, body) = checkin::call_with_body(&client, def, &cred, false, None).await;
+    let Some(body) = body else {
+        let _ = out;
+        return;
+    };
+    let newly_claimable = record_qoder_activities(app, id, &body, now_ts()).await;
+    let has_claim_id = checkin::qoder_pick(&body).claim_id.is_some();
+    drop(_busy);
+
+    if newly_claimable && has_claim_id {
+        // 活动可能在每日首次签到之后才开放,发现新可领项时立刻复用同一领取链路。
+        // 再读一次实时开关,避免用户刚关掉自动领取时仍发出 POST。
+        let auto_enabled_now = {
+            let state = app.state::<AppState>();
+            let cfg = lock_rw(&state.config);
+            cfg.checkin.get(id).map(|c| c.enabled && c.auto).unwrap_or(false)
+                && !cfg.hidden_channels.iter().any(|h| h == id)
+        };
+        if auto_enabled_now {
+            if let Err(e) = run_checkin(app, id, false).await {
+                eprintln!("Qoder 新活动自动领取跳过: {e}");
+            }
+        }
     }
 }
 
@@ -2657,6 +2849,9 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
     let mut credits: Option<f64> = out.credits();
     // 连续天数:只有 Qoder 的接口给,拿不到就是 None(不编)
     let streak: Option<i64> = status_body.as_ref().and_then(checkin::qoder_streak);
+    if let Some(body) = status_body.as_ref() {
+        record_qoder_activities(app, id, body, now).await;
+    }
 
     // 可领 → 领;领完**回查一次**(服务端可能已被客户端自己点掉,那种情况也算成功)
     //
@@ -2670,7 +2865,11 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
                 checkin::Outcome::Claimed(c) | checkin::Outcome::Already(c) => c.or(credits),
                 _ => credits,
             };
-            let back = checkin::call(&client, def, &cred, false, None).await;
+            let (back, back_body) =
+                checkin::call_with_body(&client, def, &cred, false, None).await;
+            if let Some(body) = back_body.as_ref() {
+                record_qoder_activities(app, id, body, now_ts()).await;
+            }
             // 回查是**唯一的到账证据**。以前只有 Already 才改判,其余情况一律照抄 claimed:
             // 于是"领了但没生效"(平台返回 code=0、回查仍说未签)被记成 claimed →
             // done_for_day 为真 → 节拍器与手动按钮当天都不再试,积分静默丢掉。
@@ -2750,7 +2949,8 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
             None
         };
         entry.last_message = match &out {
-            checkin::Outcome::Inactive(m) | checkin::Outcome::Retry(m) | checkin::Outcome::BadShape(m)
+            checkin::Outcome::Inactive(m) | checkin::Outcome::Manual(m)
+            | checkin::Outcome::Retry(m) | checkin::Outcome::BadShape(m)
             | checkin::Outcome::Failed(m) => Some(m.clone()),
             _ => None,
         };
@@ -2945,6 +3145,9 @@ async fn checkin_tick_once(app: &tauri::AppHandle) {
     if UPDATING.load(std::sync::atomic::Ordering::Relaxed) {
         return; // 更新期间不签到(报告 P1-15)
     }
+    for def in checkin::CHECKINS.iter().filter(|d| d.auth == checkin::CheckinAuth::QoderApp) {
+        monitor_qoder_activities(app, def.id).await;
+    }
     let (cfg, now) = {
         let state = app.state::<AppState>();
         let cfg = lock_rw(&state.config).clone();
@@ -2952,11 +3155,14 @@ async fn checkin_tick_once(app: &tauri::AppHandle) {
     };
     for def in checkin::CHECKINS {
         let Some(c) = cfg.checkin.get(def.id) else { continue };
-        if !c.enabled || !c.auto {
-            continue; // 关了就一个请求都不发
+        if !c.enabled {
+            continue; // 总开关关闭 = 不领取也不监测
         }
         if cfg.hidden_channels.iter().any(|h| h == def.id) {
             continue; // 隐藏 = 不读本机登录凭据、也不对外发请求(与取数同口径)
+        }
+        if !c.auto {
+            continue; // 自动领取关闭,但 Qoder 的活动监测已在上方独立执行
         }
         // **逐渠道算周期日**:Qoder 的"今天"从 10:00 起算,不是自然日。
         // 用自然日会让 09:59 与 10:01 混成一天,当天那一期永远领不到。

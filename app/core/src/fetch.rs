@@ -87,6 +87,8 @@ pub struct ChannelView {
     pub windows: Vec<providers::Window>,
     /// 逐笔到期(升序)。积分型渠道才有内容。
     pub expiring: Vec<Expiring>,
+    /// false 时空的 expiring 列表表示“接口没有完整明细”,不能说成“没有到期”。
+    pub expiry_complete: bool,
     /// 近 30 天内会到期的合计;没有则 None
     pub expiring_soon: Option<Expiring>,
     pub extra: Vec<(String, String)>,
@@ -1255,6 +1257,7 @@ fn credentials(
                     out.push(appauth::Credential {
                         token: k,
                         source: String::new(),
+                        account_id: None,
                         device_id: None,
                     })
                 }
@@ -1280,6 +1283,7 @@ fn credentials(
                     out.push(appauth::Credential {
                         token: tok,
                         source: "WorkBuddy 桌面端".into(),
+                        account_id: None,
                         device_id: None,
                     });
                 }
@@ -1289,6 +1293,7 @@ fn credentials(
                     out.push(appauth::Credential {
                         token: session,
                         source: String::new(),
+                        account_id: None,
                         device_id: None,
                     });
                 }
@@ -1573,6 +1578,7 @@ fn build_view(
         unit: result.unit,
         windows: result.windows,
         expiring: result.expiring,
+        expiry_complete: result.expiry_complete,
         expiring_soon: soon,
         extra: result.extra,
         error: result.error,
@@ -1650,6 +1656,7 @@ fn placeholder(def: &providers::ProviderDef) -> ChannelView {
         },
         windows: vec![],
         expiring: vec![],
+        expiry_complete: false,
         expiring_soon: None,
         extra: vec![],
         error: None,
@@ -1757,6 +1764,7 @@ fn build_custom_view(
         unit: ch.normalized_unit(),
         windows: Vec::new(),
         expiring: Vec::new(),
+        expiry_complete: false,
         expiring_soon: None,
         extra: vec![(
             "取数".to_string(),
@@ -1813,6 +1821,7 @@ fn custom_placeholder(
         unit: ch.normalized_unit(),
         windows: Vec::new(),
         expiring: Vec::new(),
+        expiry_complete: false,
         expiring_soon: None,
         extra: vec![("取数".to_string(), "自定义渠道".to_string())],
         error,
@@ -3034,12 +3043,14 @@ mod tests {
         let session = appauth::Credential {
             token: "cookie:session=A; session_2=B".into(),
             source: String::new(),
+            account_id: None,
             device_id: None,
         };
         assert_eq!(auth_label(def, Some(&session)), "浏览器网页会话");
         let pasted = appauth::Credential {
             token: "eyJhbGciOi.abc".into(),
             source: String::new(),
+            account_id: None,
             device_id: None,
         };
         assert_eq!(auth_label(def, Some(&pasted)), "手动粘贴的密钥");
@@ -3322,6 +3333,7 @@ mod tests {
         let mk = |t: &str, src: &str| appauth::Credential {
             token: t.to_string(),
             source: src.to_string(),
+            account_id: None,
             device_id: None,
         };
         let manual = mk("manual-dead-token", "");

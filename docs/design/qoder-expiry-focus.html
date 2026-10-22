@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Grandettoken · 顶部临期摘要</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0e1117;
+        --panel: #171b23;
+        --line: #303746;
+        --text: #f1f4f9;
+        --muted: #919daf;
+        --dim: #707b8c;
+        --blue: #8db3ff;
+        --green: #45d6a1;
+        --amber: #f6bb67;
+        --red: #ff7d82;
+      }
+      * { box-sizing: border-box; }
+      body {
+        min-height: 100vh;
+        margin: 0;
+        padding: 30px 16px 40px;
+        color: var(--text);
+        background: radial-gradient(ellipse at 50% 0%, #222c3b 0, transparent 44%), var(--bg);
+        font: 14px/1.4 Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
+      }
+      .page { width: min(100%, 760px); margin: 0 auto; }
+      .intro { margin: 0 0 18px; }
+      .kicker { color: #91a9d0; font-size: 10px; font-weight: 750; letter-spacing: .14em; }
+      h1 { margin: 5px 0 5px; font-size: 20px; letter-spacing: -.025em; }
+      .intro p { max-width: 640px; margin: 0; color: var(--muted); font-size: 12px; }
+      .layout { display: grid; grid-template-columns: minmax(0, 390px) minmax(210px, 1fr); align-items: start; gap: 22px; }
+
+      .widget {
+        overflow: hidden;
+        width: 390px;
+        max-width: 100%;
+        border: 1px solid #394253;
+        border-radius: 13px;
+        background: var(--panel);
+        box-shadow: 0 22px 58px #0008, 0 2px 8px #0005;
+      }
+      .topbar { display: flex; height: 39px; align-items: center; justify-content: space-between; padding: 0 12px; border-bottom: 1px solid var(--line); background: #1b202a; }
+      .brand { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 700; }
+      .mark { display: grid; width: 17px; height: 17px; place-items: center; border-radius: 5px; color: white; background: linear-gradient(145deg,#9c7bff,#586cf0); font-size: 10px; }
+      .top-actions { display: flex; gap: 13px; color: #b6bfcc; font-size: 10px; }
+
+      .summary { display: grid; grid-template-columns: 1.08fr 1fr .78fr; min-height: 69px; border-bottom: 1px solid #384253; background: #1a1f29; }
+      .summary-cell { min-width: 0; padding: 8px 10px 7px; border-right: 1px solid #303847; }
+      .summary-cell:last-child { border-right: 0; }
+      button.summary-cell { width: 100%; border-top: 0; border-bottom: 0; border-left: 0; appearance: none; color: inherit; text-align: left; font: inherit; cursor: pointer; }
+      .risk-cell { position: relative; background: linear-gradient(120deg, #30281f, #25232a); }
+      .risk-cell:hover { background: linear-gradient(120deg, #3a2d21, #2a2730); }
+      .risk-cell[aria-pressed="true"] { box-shadow: inset 0 0 0 1px #a67a3d; }
+      .risk-cell::after { position: absolute; top: 9px; right: 8px; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 8px #f6bb6770; content: ""; }
+      .cell-label { overflow: hidden; color: #adb6c4; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+      .cell-value { overflow: hidden; margin-top: 2px; font-size: 14px; font-weight: 750; letter-spacing: -.025em; text-overflow: ellipsis; white-space: nowrap; }
+      .risk-cell .cell-value { color: #ffd18b; }
+      .nearest .cell-value { color: #f2f4f8; font-size: 12px; }
+      .checkin .cell-value { font-size: 14px; }
+      .cell-note { overflow: hidden; margin-top: 2px; color: var(--dim); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+      .cell-note .urgent { color: var(--red); }
+      .checkin .cell-value { display: flex; align-items: center; gap: 5px; }
+      .checkin .cell-value i { display: inline-block; width: 5px; height: 3px; border-radius: 5px; background: var(--green); }
+
+      .channels-head { display: flex; height: 30px; align-items: center; justify-content: space-between; padding: 0 12px; border-bottom: 1px solid #303746; color: #d6dce6; font-size: 10px; }
+      .channels-head span:last-child { color: var(--dim); font-size: 9px; }
+      .channel { display: grid; grid-template-columns: 1fr auto 11px; align-items: center; gap: 8px; min-height: 51px; padding: 6px 10px 6px 12px; border-bottom: 1px solid #2b323e; background: #171b23; }
+      .channel:last-of-type { border-bottom: 0; }
+      .channel.is-expiring { background: linear-gradient(90deg, #211e20, #171b23 64%); }
+      .channel[hidden] { display: none; }
+      .identity { display: flex; align-items: center; gap: 8px; min-width: 0; }
+      .icon { display: grid; width: 24px; height: 24px; flex: none; place-items: center; border-radius: 7px; color: #fff; background: #2d3340; font-size: 10px; font-weight: 800; }
+      .icon.orange { background: linear-gradient(145deg,#ff7a37,#d94b29); }
+      .icon.dark { color: #f3f4f6; background: #090b0e; font-size: 15px; }
+      .icon.cyan { color: #56e1c4; background: #102d2b; font-size: 14px; }
+      .icon.green { color: #51e0b2; background: #10312e; }
+      .icon.mint { background: linear-gradient(145deg,#4ce2bd,#14aa8c); }
+      .name-wrap { min-width: 0; }
+      .name-line { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: 11px; font-weight: 700; white-space: nowrap; }
+      .dot { width: 5px; height: 5px; flex: none; border-radius: 50%; background: var(--green); }
+      .badge { padding: 1px 4px; border: 1px solid #3b624f; border-radius: 4px; color: #83e0ad; font-size: 8px; font-weight: 600; }
+      .badge.activity { border-color: #47617c; color: #a7c9fa; background: #26364a; }
+      .desc { overflow: hidden; margin-top: 2px; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+      .desc .risk { color: #f0b967; }
+      .desc .unknown { color: #a6b1c2; }
+      .metric { min-width: 92px; text-align: right; }
+      .metric strong { display: block; color: #42d29e; font-size: 16px; font-weight: 750; font-variant-numeric: tabular-nums; letter-spacing: -.025em; white-space: nowrap; }
+      .metric strong.percent { font-size: 15px; }
+      .metric span { display: block; margin-top: 1px; color: var(--muted); font-size: 9px; white-space: nowrap; }
+      .chev { color: #909bad; font-size: 13px; }
+      .footer { display: flex; height: 31px; align-items: center; justify-content: space-between; padding: 0 12px; border-top: 1px solid var(--line); background: #161b24; color: #c0c8d4; font-size: 10px; }
+      .footer .healthy { color: var(--green); }
+      .footer .links { color: var(--blue); }
+
+      .notes { padding-top: 4px; }
+      .notes h2 { margin: 0 0 10px; font-size: 13px; }
+      .note { margin: 0 0 9px; padding: 10px 11px; border: 1px solid #2c3543; border-radius: 9px; background: #161b24c9; }
+      .note b { display: block; margin-bottom: 3px; font-size: 11px; }
+      .note p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.55; }
+      .note .accent { color: #ffd18b; }
+      .footnote { margin: 11px 2px; color: var(--dim); font-size: 10px; line-height: 1.6; }
+
+      @media (max-width: 670px) {
+        body { padding: 20px 11px 30px; }
+        .layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+        .widget, .notes { width: min(100%, 390px); }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="intro">
+        <div class="kicker">PRODUCT DESIGN · DASHBOARD TOP SUMMARY</div>
+        <h1>把顶部“总余额”换成临期提醒</h1>
+        <p>按当前挂件宽度重排顶部摘要。下方渠道行继续显示各自的余额和到期信息；顶部只回答“近期要用掉多少、最先是哪一笔、还有哪些渠道需要关注”。</p>
+      </header>
+
+      <section class="layout">
+        <article class="widget" aria-label="Grandettoken 挂件首页设计原型">
+          <div class="topbar">
+            <div class="brand"><span class="mark">G</span><span>Grandettoken</span></div>
+            <div class="top-actions"><span>刷新</span><span>置顶</span><span>紧凑</span><span>隐藏</span></div>
+          </div>
+
+          <div class="summary">
+            <button class="summary-cell risk-cell" id="risk-filter" type="button" aria-pressed="false" title="点击筛选有临期积分的渠道">
+              <div class="cell-label">30 天内将过期</div>
+              <div class="cell-value">4,042.98 分</div>
+              <div class="cell-note">2 个渠道 · 点击查看</div>
+            </button>
+            <div class="summary-cell nearest">
+              <div class="cell-label">最先到期</div>
+              <div class="cell-value">WorkBuddy</div>
+              <div class="cell-note"><span class="urgent">10/28 · 剩 6 天</span></div>
+            </div>
+            <div class="summary-cell checkin">
+              <div class="cell-label">签到</div>
+              <div class="cell-value">3/3 <i></i><i></i><i></i></div>
+              <div class="cell-note">今天都完成</div>
+            </div>
+          </div>
+
+          <div class="channels-head"><span id="channel-count">全部渠道　6</span><span id="filter-state">按到期风险优先</span></div>
+
+          <div class="channel" data-channel="4sapi">
+            <div class="identity"><span class="icon orange">4S</span><div class="name-wrap"><div class="name-line">4SAPI <i class="dot"></i></div><div class="desc">本轮额度 ¥200.00 · <span style="color:#94b8ff">现在可申请</span></div></div></div>
+            <div class="metric"><strong>¥138.65</strong><span>剩 69%</span></div><span class="chev">›</span>
+          </div>
+          <div class="channel" data-channel="opencode">
+            <div class="identity"><span class="icon dark">◧</span><div class="name-wrap"><div class="name-line">OpenCode Go <i class="dot"></i></div></div></div>
+            <div class="metric"><strong class="percent">93.0%</strong><span>周期窗 · 22 天 8 小时</span></div><span class="chev">›</span>
+          </div>
+          <div class="channel" data-channel="codex">
+            <div class="identity"><span class="icon">✳</span><div class="name-wrap"><div class="name-line">Codex <i class="dot"></i></div><div class="desc">ChatGPT 订阅 · free</div></div></div>
+            <div class="metric"><strong class="percent">69.0%</strong><span>本月窗 · 29 天</span></div><span class="chev">›</span>
+          </div>
+          <div class="channel" data-channel="qoder">
+            <div class="identity"><span class="icon">Q</span><div class="name-wrap"><div class="name-line">Qoder <i class="dot"></i><i class="badge activity">有活动</i></div><div class="desc"><span class="unknown">逐笔到期信息未提供</span></div></div></div>
+            <div class="metric"><strong>186 分</strong><span>到期时间未知</span></div><span class="chev">›</span>
+          </div>
+          <div class="channel is-expiring" data-channel="trae" data-expiring="true">
+            <div class="identity"><span class="icon green">T</span><div class="name-wrap"><div class="name-line">Trae <i class="dot"></i><i class="badge">✓ 已签</i></div><div class="desc"><span class="risk">近 30 天将过期 1,759.76 分</span></div></div></div>
+            <div class="metric"><strong>1,859.76 分</strong><span>最近 10/31 到期</span></div><span class="chev">›</span>
+          </div>
+          <div class="channel is-expiring" data-channel="workbuddy" data-expiring="true">
+            <div class="identity"><span class="icon mint">W</span><div class="name-wrap"><div class="name-line">WorkBuddy <i class="dot"></i><i class="badge">✓ 已签</i></div><div class="desc"><span class="risk">近 30 天将过期 2,283.22 分</span></div></div></div>
+            <div class="metric"><strong>6,049.34 分</strong><span>最近 10/28 到期</span></div><span class="chev">›</span>
+          </div>
+
+          <div class="footer"><span><span class="healthy">●</span> 6 正常</span><span class="links">设置与管理　·　退出</span></div>
+        </article>
+
+        <aside class="notes">
+          <h2>顶部摘要的职责</h2>
+          <div class="note"><b>左：近期风险总量</b><p><span class="accent">4,042.98 分</span>是未来 30 天有明确到期日的积分合计，不是账户总余额。点击后只保留有临期积分的渠道。</p></div>
+          <div class="note"><b>中：最快要处理的渠道</b><p>显示最早到期的来源和倒计时，让用户不用从几个积分渠道里逐个找日期。</p></div>
+          <div class="note"><b>右：保留签到状态</b><p>继续显示今日完成数，压缩成窄列，不再占用更大的卡片空间。</p></div>
+          <div class="note"><b>未知的明细不算成 0</b><p>Qoder 的逐笔到期信息未提供，因此不计入临期合计；渠道行单独标明“到期时间未知”。</p></div>
+          <p class="footnote">示意日期按 2026-10-22 排列。此原型聚焦顶部摘要，不改动各渠道的余额显示方式。</p>
+        </aside>
+      </section>
+    </main>
+
+    <script>
+      const riskFilter = document.getElementById("risk-filter");
+      const channels = [...document.querySelectorAll(".channel")];
+      const channelCount = document.getElementById("channel-count");
+      const filterState = document.getElementById("filter-state");
+      riskFilter.addEventListener("click", () => {
+        const active = riskFilter.getAttribute("aria-pressed") !== "true";
+        riskFilter.setAttribute("aria-pressed", String(active));
+        let shown = 0;
+        channels.forEach((channel) => {
+          const visible = !active || channel.dataset.expiring === "true";
+          channel.hidden = !visible;
+          if (visible) shown++;
+        });
+        channelCount.textContent = active ? `临期渠道　${shown}` : `全部渠道　${shown}`;
+        filterState.textContent = active ? "仅显示 30 天内将到期" : "按到期风险优先";
+      });
+    </script>
+  </body>
+</html>

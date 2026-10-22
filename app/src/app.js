@@ -236,6 +236,51 @@ function expiringWithin(c, days) {
     .reduce((a, e) => a + e.amount, 0);
 }
 
+/** 积分到期摘要中的有效记录。未知的逐笔到期信息不伪装成“没有临期”。 */
+function expiringEntriesWithin(c, days) {
+  const now = Date.now() / 1000;
+  const limit = now + days * 86400;
+  return (c && c.expiring ? c.expiring : []).filter(
+    (e) => e && Number(e.amount) > 0 && e.at >= now && e.at <= limit
+  );
+}
+
+/** 顶部摘要只统计当前可见、取数有效的积分渠道；逐笔明细未知的渠道单独计数。 */
+function expirySummary() {
+  const channels = CHANNELS.filter(
+    (c) => c.hasKey && !c.hidden && c.valid && c.kind === "points"
+  );
+  const unknown = channels.filter(
+    (c) => c.expiryComplete !== true && Number(c.remaining || 0) > 0
+  );
+  const entries = channels.flatMap((c) =>
+    expiringEntriesWithin(c, 30).map((entry) => ({ channel: c, entry }))
+  );
+  entries.sort((a, b) => a.entry.at - b.entry.at);
+  const total = entries.reduce((sum, x) => sum + Number(x.entry.amount), 0);
+  return {
+    total: Math.round(total * 100) / 100,
+    channels: new Set(entries.map((x) => x.channel.id)).size,
+    entries,
+    first: entries[0] || null,
+    unknown,
+  };
+}
+
+let EXPIRY_FILTER = false;
+function hasConfirmedExpiry(c) {
+  return (
+    c && c.hasKey && !c.hidden && c.valid && c.kind === "points" &&
+    expiringWithin(c, 30) > 0
+  );
+}
+function nearestExpiryAt(c) {
+  return expiringEntriesWithin(c, 30).reduce(
+    (at, e) => (at === null || e.at < at ? e.at : at),
+    null
+  );
+}
+
 function toneOf(c) {
   if (!c.hasKey || !c.valid) return "off";
   // 积分型的风险是"过期",不是"余额低"。看**近 7 天**到期的量占剩余的比例:
@@ -343,7 +388,7 @@ function sortChannels(list) {
 // (设计稿 D01/D02/D03)。判定现在收在后端 `view.rs` 里,前端只保留一份结果:
 // 排序、色调、主数字、陈旧标记都从它读。取不到(旧版后端 / IPC 失败)时,
 // 下面的每个读取口都会退回原来的本地判断,行为不回退。
-let HV = { byId: {}, order: [], risk: null, checkin: null, actionCount: 0, staleCount: 0, errorCount: 0 };
+let HV = { byId: {}, order: [], checkin: null, actionCount: 0, staleCount: 0, errorCount: 0 };
 
 /** 收下一份后端视图。失败时保留上一份 —— 界面退回旧判断,而不是变空白。 */
 function hvApply(v) {
@@ -353,10 +398,7 @@ function hvApply(v) {
   HV = {
     byId,
     order: (v && v.order) || [],
-    risk: (v && v.risk) || null,
     checkin: (v && v.checkin) || null,
-    // 风险带第一/二格要的合计(总余额 / 今日消耗)。没有它 renderRiskBand 会退回老汇总。
-    totals: (v && v.totals) || null,
     actionCount: (v && v.actionCount) || 0,
     staleCount: (v && v.staleCount) || 0,
     errorCount: (v && v.errorCount) || 0,
@@ -457,9 +499,13 @@ function renderRow(c, i) {
   else if (isPts) {
     sub = soon
       ? `近 30 天将过期 ${points(soon.amount)} 分`
-      : c.expiring && c.expiring.length
-        ? "30 天内无到期"
-        : "近期无到期";
+      : !c.expiryComplete
+        ? c.expiring && c.expiring.length
+          ? "到期信息不完整"
+          : "未提供到期明细"
+        : c.expiring && c.expiring.length
+          ? "30 天内无到期"
+          : "没有待到期积分";
   } else if (claim) sub = `本轮额度 ${esc(money(claim.amount))}${claimTail(claim)}`;
   // 以前没开申请制时这里显示「额度 ¥{c.total}」:c.total 是**累计发放**(只增不减),
   // 不是额度上限 → "剩 21%" 会随每次充值一路下滑,与还能用多少钱毫无关系(报告 P1-11)。
@@ -472,7 +518,15 @@ function renderRow(c, i) {
     subVal = c.authSource === "app" ? "需打开应用" : c.authSource === "web" ? "待登录" : "待配置";
   else if (failed) subVal = c.stale ? "上次快照" : "失联";
   else if (mw) subVal = `${esc(mw.label)}窗 · ${fmtReset(resetMs(mw), true)}`;
-  else if (isPts) subVal = soon ? `最近 ${fmtDay(soon.at)} 到期` : "无近期到期";
+  else if (isPts) {
+    subVal = soon
+      ? `最近 ${fmtDay(soon.at)} 到期`
+      : !c.expiryComplete
+        ? "到期未知"
+        : c.expiring && c.expiring.length
+          ? "无近期到期"
+          : "无待到期积分";
+  }
   // 峰谷倒计时交给 1 秒一跳的 ticker 填,不用等下一轮取数
   else if (c.peak)
     subVal = `<span data-peakcd='${JSON.stringify(c.peak)}'>${esc(
@@ -519,7 +573,13 @@ function renderRow(c, i) {
             ? `<div class="expmore">另有 ${list.length - head.length} 笔更晚到期,展开看全部</div>`
             : ""
         }</div>`
-      : `<div class="exps"><div class="expmore">没有待用积分:所有额度包都已用完或已过期</div></div>`;
+      : `<div class="exps"><div class="expmore">${
+          !c.expiryComplete
+            ? "接口未提供完整的逐笔到期信息，无法判断积分包何时到期"
+            : Number(c.remaining || 0) > 0
+              ? "当前剩余积分没有已知到期日"
+              : "当前没有剩余积分"
+        }</div></div>`;
   } else if (wins.length) {
     useHtml = `<div class="wins">${wins
       .map((w) => {
@@ -629,22 +689,18 @@ function renderRow(c, i) {
 function renderDetail(c) {
   const noKey = !c.hasKey;
 
-  // 密钥收纳进「设置与管理」页,行详情只留一个入口 —— 展示与设置分开
-  const manageLink = `<div class="hint" style="margin-top:2px">密钥、刷新与阈值在
-    <span class="lk" data-act="open-manage" data-id="${c.id}">设置与管理</span> 里配置。</div>`;
+  // 行详情只留一个短操作入口;具体设置集中在管理页。
+  const manageLink = `<button class="btn s" data-act="open-manage" data-id="${c.id}">渠道设置</button>`;
 
   if (noKey) {
     // 网页登录型渠道(WorkBuddy):说清为什么不能自动读 —— 桌面客户端把令牌加密了,
     // 只能在本挂件里登录一次网页账号。别让人去开客户端,那没用。
     if (c.authSource === "web") {
       return `<div class="rbody-in">
-        <div class="hint" style="margin:0 0 8px">还没登录 ${esc(
+        <div class="hint" style="margin:0 0 8px">读不到桌面端登录态;请在渠道设置里登录 ${esc(
           c.name
-        )} 账号。它的积分没有开放 API Key,而桌面客户端 5.6.2 起把本机存的令牌改成加密存储,` +
-        `本挂件已读不到;在 <span class="lk" data-act="open-manage" data-id="${c.id}">设置与管理</span> 里点一次「登录 ${esc(
-          c.name
-        )} 账号」即可,登录后自动关窗,不用你复制任何东西。</div>
-        ${manageLink}
+        )} 网页账号。</div>
+        <div class="detail-actions">${manageLink}</div>
       </div>`;
     }
     // 复用本机登录态的渠道:没有"密钥"可填,只能引导用户去客户端登录一次
@@ -652,15 +708,13 @@ function renderDetail(c) {
       return `<div class="rbody-in">
         <div class="hint" style="margin:0 0 8px">未检测到 ${esc(
           c.name
-        )} 的登录信息。它的积分只能用客户端自己的登录态查询,先打开一次 ${esc(
-          c.name
-        )} 并登录,再回来刷新即可。本应用只读那份凭据,不写回、也不刷新。</div>
-        ${manageLink}
+        )} 登录态。打开客户端登录后刷新;挂件只读凭据,不会改写或续期。</div>
+        <div class="detail-actions">${manageLink}</div>
       </div>`;
     }
     return `<div class="rbody-in">
-      <div class="hint" style="margin:0 0 8px">未配置密钥,尚未开始取数。密钥只写入 Windows 凭据管理器,不会进配置文件、数据库或日志。</div>
-      ${manageLink}
+      <div class="hint" style="margin:0 0 8px">未配置密钥,当前没有数据。密钥保存在 Windows 凭据管理器。</div>
+      <div class="detail-actions">${manageLink}</div>
     </div>`;
   }
 
@@ -728,20 +782,13 @@ function renderDetail(c) {
     </div>`;
   }
 
-  // 复用本机登录态的渠道:说清凭据从哪来、为什么不刷新
-  const authHint =
-    c.authSource === "app"
-      ? `<div class="hint" style="margin:0 0 8px">凭据来自本机已登录的 ${esc(
-          c.authLabel
-        )} · 只读复用,不写回、不刷新;失效时打开一次 ${esc(
-          c.name
-        )} 即可(刷新会顶掉客户端手里的登录态,把你挤下线)。</div>`
-      : c.authSource === "web"
-      ? `<div class="hint" style="margin:0 0 8px">登录状态来自你在挂件里登录的 ${esc(
-          c.name
-        )} 网页账号(会话存在挂件的浏览器里,不写凭据库、也不碰桌面客户端);` +
-        `失效时重新登录一次即可,<b>不影响你桌面客户端的登录状态</b>。</div>`
-      : "";
+  // 非错误类背景信息收进可展开说明,避免每个渠道详情都堆长段提示。
+  const dataNotes = [];
+  if (c.authSource === "app") {
+    dataNotes.push(`凭据来自本机已登录的 ${c.authLabel || c.name};挂件只读,不刷新会话。`);
+  } else if (c.authSource === "web") {
+    dataNotes.push(`使用挂件内的 ${c.name} 网页登录态,不影响桌面客户端。`);
+  }
 
   // 曲线:老形状是数组,现在是 { values, gaps, source }(带缺口标注与长期趋势)
   const sv = sparkCache[c.id] || null;
@@ -759,18 +806,37 @@ function renderDetail(c) {
               )}%"></i>`
           )
           .join("");
-      })()}</div>${
-        gapSet.size
-          ? `<div class="hint" style="margin:2px 0 0">斜纹的柱子:那段时间挂件没在运行,数字只算了一半 —— 不是"那几天没花钱"。</div>`
-          : ""
-      }${
-        sv && sv.source === "daily"
-          ? `<div class="hint" style="margin:2px 0 0">更早的部分由日级摘要拼成(90 天明细之外),一天一格。</div>`
-          : ""
-      }`
-    : `<div class="spark">${Array.from({ length: 24 }, () => '<i style="height:2%"></i>').join(
-        ""
-      )}</div>`;
+      })()}</div>`
+    : `<div class="spark-empty">采样不足,暂无趋势</div>`;
+
+  // 说明集中收纳;缺口只在标题上提醒一次,不再在图表、今日统计和估算口径间重复说。
+  const hasCoverageGap = gapSet.size > 0 || !!c.gapDayFrom;
+  if (c.estimated && c.kind === "amount") {
+    dataNotes.push("消耗按本机余额快照变化估算;挂件未运行时段不计入。");
+  }
+  if (hasCoverageGap) {
+    const coverage = [];
+    if (gapSet.size) coverage.push("图中斜纹表示采样不完整,相关消耗可能偏低");
+    if (c.gapDayFrom) coverage.push(`今日从 ${fmtClock(c.gapDayFrom)} 开始统计`);
+    dataNotes.push(coverage.join("; ") + "。");
+  }
+  if (sv && sv.source === "daily") {
+    dataNotes.push("90 天以前的趋势由日级摘要合成。");
+  }
+  if (c.accounts > 1) {
+    dataNotes.push("已更换过密钥;这里只统计当前密钥,旧账户历史不混算。");
+  }
+  if (c.peak && c.peak.tableStale) {
+    dataNotes.push("节假日安排尚未更新,峰谷时段暂按周末规则估算。");
+  }
+  const dataNotesHtml = dataNotes.length
+    ? `<details class="detail-notes${hasCoverageGap ? " has-gap" : ""}">
+        <summary>${hasCoverageGap ? "数据有缺口" : "数据说明"}<span></span></summary>
+        <div class="detail-note-list">${dataNotes
+          .map((note) => `<div>${esc(note)}</div>`)
+          .join("")}</div>
+      </details>`
+    : "";
 
   // 配额型:逐窗明细(剩余% + 相对倒计时 + 本地绝对时间)
   const winKv =
@@ -807,15 +873,7 @@ function renderDetail(c) {
   body.push(winKv);
   body.push(expHtml);
   body.push(sparkHtml);
-  // 观测缺口:今天的数据不是从零点开始的,如实说出来 ——
-  // 否则"今日消耗偏小"永远没有解释,用户只会觉得数字不准
-  if (c.gapDayFrom) {
-    body.push(
-      `<div class="hint" style="margin:8px 0 0">今日数据自 <b>${fmtClock(
-        c.gapDayFrom
-      )}</b> 起 —— 此前挂件没在运行,今日消耗只覆盖之后的时段(不是没花钱)。</div>`
-    );
-  }
+  if (dataNotesHtml) body.push(dataNotesHtml);
   // 变动台账:同方向的连续轮询已聚合成一条(轮询是分钟级的,逐条列出来是噪音);
   // 空档秒数如实标注 —— 一条 +50 里如果揉了几小时的空白,得让用户知道
   const chags = changesCache[c.id];
@@ -842,32 +900,16 @@ function renderDetail(c) {
       })
       .join("")}</div>`);
   }
-  // 换过密钥的渠道:说清"现在这笔账是谁的",旧账不混算但也不消失
-  if (c.accounts > 1) {
-    body.push(
-      `<div class="hint" style="margin:8px 0 0">这个渠道换过密钥:上方消耗只按<b>当前这把</b>推算;更早那本账不参与合计(历史快照仍在库里,只是不混算)。</div>`
-    );
-  }
-  // 节假日表过期:如实提示,不假装知道明年的安排
-  if (c.peak && c.peak.tableStale) {
-    body.push(
-      `<div class="hint" style="margin:8px 0 0">明年的法定节假日安排还没发布,时段提示暂按"周末规则"估算,发布后会随版本更新。</div>`
-    );
-  }
-  if (c.estimated && c.kind === "amount") {
-    body.push(
-      `<div class="hint" style="margin:0 0 8px">消耗为本地快照推算值 —— 该接口只返回当前余额,不含累计消耗;程序未运行的时段不计入。</div>`
-    );
-  }
-  if (authHint) body.push(authHint);
-  // 能提供模型的渠道都给入口:渠道 id 就是来源 id
+  // 不影响余额判断的操作入口收在一排,不再用长段提示夹在数据中间。
+  const actions = [];
   if (MODEL_SOURCES.has(c.id) && !noKey) {
     const v = MDL.views[c.id];
     const n = v ? v.usableCount || v.total : 0;
-    body.push(`<div class="hint" style="margin:0 0 8px">${esc(c.name)} 可用模型${
-      n ? " " + n + " 个" : ""
-    } —— <span class="lk" data-act="open-models" data-id="${c.id}">去「模型」页挑一个,一键配到 Trae / WorkBuddy / ZCode</span>。</div>`);
+    actions.push(`<button class="btn s" data-act="open-models" data-id="${c.id}" title="浏览并配置 ${esc(c.name)} 的模型">模型配置${
+      n ? ` · ${n} 个可用` : ""
+    }</button>`);
   }
+  actions.push(manageLink);
   // 签到详情:卡片上那枚徽标只给"一眼"的结论,这里给完整信息
   // (连续天数、本月合计、上次尝试、下次自动重试)。数据全在已有的 CheckinState 里。
   const cks = CK[c.id];
@@ -891,7 +933,7 @@ function renderDetail(c) {
         `</div>`
     );
   }
-  body.push(manageLink);
+  body.push(`<div class="detail-actions">${actions.join("")}</div>`);
 
   return `<div class="rbody-in">${body.join("")}</div>`;
 }
@@ -1018,52 +1060,62 @@ function listHtmlWithGroups(shown) {
   );
 }
 
-/**
- * 风险带(替换原来的「三格消耗汇总」):总余额 / 最紧 / 签到。
- *
- * 设计 D04:面板最上面这条 55px 的横带以前回答的是"花掉多少",而"还剩多少、
- * 哪家快没了"要往下扫九行才知道 —— 对一个余额挂件来说,那是次要问题。
- * 消耗没有消失,它降成第一格的副行,口径一个字没改。
- */
+/** 顶部临期摘要:30 天内确认到期积分 / 最先到期渠道 / 签到进度。 */
 function renderRiskBand() {
   const box = $("sum");
   if (!box) return;
-  // 风险带是面板的**固定结构**(三格:总余额 / 最紧 / 签到),不是"有数才画"。
-  // 以前没有人民币合计时整条 display:none —— 纯积分用户、冷启动、渠道全隐藏
-  // 三种情况下它都会消失,数据回来时整页向下跳 73px;更糟的是"最紧"和"签到"
-  // 这两格跟金额无关,却陪着一起消失了(2026-10-22 三形态体检 P1-2)。
-  const t = HV && HV.totals ? HV.totals : {};
-  const cnyTxt = t.cny === null || t.cny === undefined ? "——" : money(t.cny);
-  const dayTxt = t.today === null || t.today === undefined ? "——" : money(t.today);
-  // 环比只在"两边都有基线"时算,与底部汇总同一套口径;没有基线就不写涨跌
-  let delta = "";
-  if (t.today != null && t.todayPrev != null && t.todayPrev > 0) {
-    const p = ((t.today - t.todayPrev) / t.todayPrev) * 100;
-    delta = ` ${p >= 0 ? "\u2191" : "\u2193"}${Math.abs(p).toFixed(0)}%`;
-  }
-  const otherTxt = (t.others || []).length
-    ? " · 另 " + t.others.map(otherMoneyTxt).join(" + ")
-    : "";
-  // 一个数都没有时副行留空 —— 写「今日 ——」只是把"没有"说两遍
-  const sub1 = t.cny === null || t.cny === undefined
-    ? (t.others || []).length ? otherTxt.replace(/^ · /, "") : ""
-    : `今日 ${dayTxt}${delta}${otherTxt}`;
+  const summary = expirySummary();
+  const hasConfirmed = summary.total >= 0.01;
+  // 如果一轮新数据已没有可确认的临期积分,退出旧筛选避免渠道列表空白。
+  if (EXPIRY_FILTER && !hasConfirmed) EXPIRY_FILTER = false;
 
-  // ② 最紧:点一下跳到那一行(它是"现在该看谁"的答案,要能一键抵达)
+  const riskLabel = hasConfirmed
+    ? summary.unknown.length ? "近 30 天已确认临期" : "近 30 天将过期"
+    : "近 30 天临期";
+  const riskValue = hasConfirmed
+    ? `${points(summary.total)} 分`
+    : summary.unknown.length
+      ? "待确认"
+      : CHANNELS.length ? "暂无" : "——";
+  const riskSub = hasConfirmed
+    ? EXPIRY_FILTER
+      ? "点击恢复全部渠道"
+      : `${summary.channels} 个渠道${summary.unknown.length ? ` · ${summary.unknown.length} 个明细未知` : " · 点击筛选"}`
+    : summary.unknown.length
+      ? `${summary.unknown.length} 个积分渠道未提供明细`
+      : CHANNELS.length ? "未来 30 天暂无待到期积分" : "等待数据";
+  const riskTitle = EXPIRY_FILTER
+    ? "当前只显示临期积分渠道；点击恢复全部渠道"
+    : hasConfirmed
+      ? "只统计可确认的积分包到期记录；点击筛选临期渠道"
+      : summary.unknown.length
+        ? "有积分渠道未提供逐笔到期信息，无法确认是否临期"
+        : "未来 30 天没有可确认的积分到期记录";
+  const cell1 = `<button type="button" class="cell risk-cell${EXPIRY_FILTER ? " on" : ""}"
+      data-act="expiry-filter" aria-pressed="${EXPIRY_FILTER}" title="${esc(riskTitle)}"${hasConfirmed ? "" : " disabled"}>
+      <div class="lb">${riskLabel}</div>
+      <div class="vv">${riskValue}</div>
+      <div class="sb">${riskSub}</div></button>`;
+
+  // 有明细缺口时标成“最早可确认”,不把未知日期的渠道误排在它之后。
   let cell2 = "";
-  const rc = HV && HV.risk ? CHANNELS.find((c) => c.id === HV.risk) : null;
-  if (rc) {
-    const r = hvRow(rc.id);
-    const sub2 = esc([r && r.qualifier, r && r.secondary].filter(Boolean).join(" · "));
-    cell2 = `<div class="cell" data-act="jump" data-id="${esc(rc.id)}" title="点一下跳到这一行">
-      <div class="lb">最紧</div>
-      <div class="vv" style="color:${TONE_COLOR[hvTone(rc)]}"><span class="rn">${esc(rc.name)}</span> <b>${hvText(r && r.headline)}</b></div>
-      <div class="sb">${sub2 || "——"}</div></div>`;
+  const first = summary.first;
+  if (first) {
+    const days = daysUntil(first.entry.at);
+    const when = days === 0 ? "今天到期" : `剩 ${days} 天`;
+    const dueColor = days <= 7 ? "var(--bad)" : "var(--warn)";
+    const title = `跳转到 ${first.channel.name} 的到期明细`;
+    cell2 = `<div class="cell" data-act="jump" data-id="${esc(first.channel.id)}" title="${esc(title)}">
+      <div class="lb">${summary.unknown.length ? "最早可确认" : "最先到期"}</div>
+      <div class="vv">${esc(first.channel.name)}</div>
+      <div class="sb" style="color:${dueColor}">${fmtDay(first.entry.at)} · ${when}</div></div>`;
+  } else if (summary.unknown.length) {
+    const unknown = summary.unknown[0];
+    cell2 = `<div class="cell"><div class="lb">到期日期未知</div>
+      <div class="vv">${esc(unknown.name)}</div><div class="sb">接口未提供逐笔明细</div></div>`;
   } else {
-    // 没有"最紧"(没有渠道 / 全部隐藏):格子留着,写 —— 。三格是三段固定宽度,
-    // 少一格会让总余额那格突然变宽,切换状态时整条带子跳一下。
-    cell2 = `<div class="cell"><div class="lb">最紧</div>
-      <div class="vv" style="color:var(--tx3)">——</div><div class="sb"></div></div>`;
+    cell2 = `<div class="cell"><div class="lb">最先到期</div>
+      <div class="vv" style="color:var(--tx3)">暂无临期</div><div class="sb">未来 30 天</div></div>`;
   }
 
   // ③ 签到:常驻。全部签完也要留着「✓ 3/3」—— "完成"和"坏了"不能长得一样(D09)
@@ -1082,9 +1134,7 @@ function renderRiskBand() {
       <div class="vv" style="color:var(--tx3)">——</div><div class="sb"></div></div>`;
   }
 
-  box.innerHTML =
-    `<div class="cell"><div class="lb">总余额</div><div class="vv">${cnyTxt}</div>` +
-    `<div class="sb">${sub1}</div></div>${cell2}${cell3}`;
+  box.innerHTML = cell1 + cell2 + cell3;
 }
 
 /** 过滤条:十二个渠道以内靠排序就够,超过才需要搜索(P3)。 */
@@ -1105,11 +1155,16 @@ function renderInner(opts) {
     if (v) prevV[r.dataset.id] = v.textContent;
     if (r.dataset.dtone !== undefined) prevDt[r.dataset.id] = r.dataset.dtone;
   });
-  const sorted = hvSort(CHANNELS); // 后端排好;拿不到视图时 hvSort 内部退回 sortChannels
   // 标题栏挤了 6 个按钮,计数用短写法,完整说法放 tooltip
   // 标题栏改文字按钮后不再放计数(放不下),底栏已有「N 正常 · M 预警」
 
-  renderRiskBand(); // 风险带:总余额 / 最紧 / 签到,三格常驻(没有数字的那格写 ——)
+  renderRiskBand(); // 顶部摘要常驻:临期积分 / 最先到期 / 签到
+  const expiryOnly = EXPIRY_FILTER && currentForm() === "panel";
+  const sorted = expiryOnly
+    ? hvSort(CHANNELS)
+        .filter(hasConfirmedExpiry)
+        .sort((a, b) => (nearestExpiryAt(a) || Infinity) - (nearestExpiryAt(b) || Infinity))
+    : hvSort(CHANNELS); // 后端排好;拿不到视图时 hvSort 内部退回 sortChannels
   syncQBar(); // 渠道多起来(>=12)才把过滤框放出来,平时不占这一行
 
   if (!CHANNELS.length) {
@@ -1137,7 +1192,13 @@ function renderInner(opts) {
   const openId = [...rowOpen].find((x) => shown.some((c) => c.id === x)) || null;
   $("list").innerHTML = configured
     ? failBannerHtml() + ckPendingStrip() + listHtmlWithGroups(shown)
-    : hiddenN && CHANNELS.some((c) => c.hasKey && c.hidden)
+    : expiryOnly
+      ? `<div class="empty">
+          <div class="ek">⌕</div>
+          <b>没有匹配的临期渠道</b>
+          ${CH_Q ? "调整搜索条件,或" : ""}点击顶部临期摘要显示全部渠道
+        </div>`
+      : hiddenN && CHANNELS.some((c) => c.hasKey && c.hidden)
       ? `<div class="empty">
            <div class="ek">&#128065;</div>
            <b>已配置的渠道都被隐藏了</b>
@@ -2562,11 +2623,17 @@ function keyActivate(e) {
 $("list").addEventListener("keydown", keyActivate);
 $("manage").addEventListener("keydown", keyActivate);
 
-// 风险带上的两个动作:跳到最紧的那一行 / 打开签到设置(与 #list 里同名的动作同义)
+// 顶部摘要:筛选临期渠道 / 跳到最先到期的行 / 打开签到设置。
 $("sum").addEventListener("click", async (e) => {
   const act = e.target.closest("[data-act]");
   if (!act) return;
   const a = act.dataset.act;
+  if (a === "expiry-filter") {
+    if (expirySummary().total < 0.01) return;
+    EXPIRY_FILTER = !EXPIRY_FILTER;
+    render({});
+    return;
+  }
   if (a === "jump") {
     const id = act.dataset.id;
     const row = id && document.querySelector(`.row[data-id="${id}"]`);
@@ -4397,6 +4464,7 @@ function vaultDel(id) {
 let CK = {};            // 渠道 id → checkin_state 的那一条
 let CK_LOG = false;     // 「领积分」正在跑
 const CHECKIN_ON = new Set(["trae", "workbuddy", "qoder", "qoder-cn"]);
+const CHECKIN_QODER = new Set(["qoder", "qoder-cn"]);
 
 /** 退避没到 / 今天已处理完:按钮留着但点不动,并写明还要等多久(报告 P0-6)。 */
 function ckHold(s) {
@@ -4426,6 +4494,9 @@ function ckText(s) {
   const n = hasN ? " +" + s.credits : "";
   const amt = hasN ? " +" + s.credits + " 分" : "";
   const o = s.outcome || "";
+  const activityTitle =
+    (s.latestActivity && s.latestActivity.title) ||
+    (o.startsWith("manual:") ? o.slice("manual:".length) : "");
   // 后端把"现在到底能不能点"算好了(can_try = 开关开 && 今天没完结 && 不在退避中)。
   // 以前前端不读它,退避中连点 N 次 = 对平台发 N×3 个请求,越限流撞得越凶。
   const canRun = s.canTry !== false;
@@ -4497,7 +4568,7 @@ function ckText(s) {
   // 不能说成"本期无活动" —— 用户在客户端里明明看得到那一条(2026-10-22 实证)。
   if (o.startsWith("manual"))
     return {
-      text: "有活动:" + (s.lastMessage || "客户端里可领") + " · 只能在客户端打开领取",
+      text: "有活动:" + (activityTitle || "客户端里可查看") + " · 领取入口在客户端",
       warn: false,
     };
   if (o.startsWith("shape")) return { text: "签到接口有变动,已暂停自动签到 · 余额显示不受影响", warn: true };
@@ -4582,7 +4653,7 @@ function ckBadgeTip(s) {
     bits.push("平台显示今天已签到" + (s.credits ? "(数额 " + s.credits + " 分)" : ""));
   else if (o.startsWith("inactive")) bits.push(s.lastMessage || "本期无打卡活动,等下一期");
   else if (o.startsWith("manual"))
-    bits.push("有活动:" + (s.lastMessage || "") + " —— 领取入口在客户端里,挂件领不了");
+    bits.push("有活动:" + (s.latestActivity && s.latestActivity.title ? s.latestActivity.title : o.slice("manual:".length)) + " —— 领取入口在客户端里,挂件领不了");
   else if (o.startsWith("retry:ready"))
     bits.push("今天可领" + (s.credits ? " +" + s.credits + " 分" : ""));
   else if (o.startsWith("auth")) bits.push("凭据失效 —— 打开一次客户端");
@@ -4592,6 +4663,8 @@ function ckBadgeTip(s) {
   else if (o.startsWith("retry")) bits.push("上次没成功,今天还会自动再试");
   else bits.push("今天还没签");
   if (s.streakDays) bits.push("连续 " + s.streakDays + " 天");
+  if (s.latestActivity && s.latestActivity.title)
+    bits.push("最近活动: " + s.latestActivity.title);
   if (s.monthCredits) bits.push("本月共 " + s.monthCredits + " 分");
   if (s.nextTryAt) {
     const left = Math.ceil((s.nextTryAt * 1000 - Date.now()) / 1000);
@@ -4612,6 +4685,20 @@ function ckRowHtml(id) {
   if (!s) return "";
   const t = ckText(s);
   if (!t) return "";
+  const activity = s.latestActivity;
+  const activityLine =
+    CHECKIN_QODER.has(id) && activity && activity.title
+      ? '<div class="ckactivity" title="' + esc(activity.title) + " · " + esc(activity.actionType || "活动") + " · " + esc(activity.claimStatus || "状态未知") + '">' +
+        "活动监测 · " + esc(activity.title) +
+        (activity.claimStatus === "CLAIMABLE"
+          ? activity.actionType === "CLAIM_BENEFIT" || activity.actionType === "CLAIM_BEFIT"
+            ? " · 签到可领取"
+            : " · 请在 Qoder 查看"
+          : activity.claimStatus === "CLAIMED"
+          ? " · 已领取"
+          : " · " + esc(activity.claimStatus || "进行中")) +
+        "</div>"
+      : "";
   return (
     '<div class="ckrow' + (t.warn ? " warn" : "") + '" data-id="' + esc(id) + '">' +
     "<span>" + esc(t.text) + "</span>" +
@@ -4620,7 +4707,7 @@ function ckRowHtml(id) {
         (t.disabled ? " disabled" : "") +
         ">" + esc(t.btn) + "</button>"
       : "") +
-    "</div>"
+    "</div>" + activityLine
   );
 }
 
@@ -4685,14 +4772,18 @@ function renderCheckinSet() {
           ? (auto
               ? (CK_ROLL[id] ? "每天 " + CK_ROLL[id] + ":00 后自动领" : "每天 00:23 后自动领") +
                 ",失败当天退避重试"
-              : "只保留手动「领积分」按钮")
+              : CHECKIN_QODER.has(id)
+                ? "不自动领取 · 仍每小时监测新活动"
+                : "只保留手动「领积分」按钮")
           : "关着 —— 一个请求都不发") +
         (s && s.monthCredits ? " · 本月已领 " + points(s.monthCredits) + " 分" : "") +
         "</span></span>" +
         '<button class="sw' + (on ? " on" : "") + '" role="switch" aria-checked="' + on +
         '" data-act="ckenable" data-id="' + esc(id) + '" aria-label="' + esc((s ? s.name : id) + " 签到") + '"></button></div>' +
       (on
-        ? '<div class="field"><span>自动签到<span class="desc">关掉只留手动按钮</span></span>' +
+        ? '<div class="field"><span>自动签到<span class="desc">' +
+          (CHECKIN_QODER.has(id) ? "关掉后仍每小时监测新活动" : "关掉只留手动按钮") +
+          '</span></span>' +
           '<button class="sw' + (auto ? " on" : "") + '" role="switch" aria-checked="' + auto +
           '" data-act="ckauto" data-id="' + esc(id) + '" aria-label="自动签到"></button></div>'
         : "") +
@@ -4702,7 +4793,7 @@ function renderCheckinSet() {
   box.innerHTML =
     rows.join("") +
     '<div class="khint" style="margin:8px 0 0">签到走<b>直连</b>(不经过系统代理):平台按出口 IP 限流,代理 IP 更容易被拒。' +
-    "签到状态与余额显示互不影响。</div>";
+    "Qoder 开启签到后每小时检测活动;关掉自动领取仍会监测。签到状态与余额显示互不影响。</div>";
 }
 
 async function ckRun(id) {
@@ -5506,7 +5597,7 @@ async function refresh() {
   playEntrance(); // 启动首帧也来一次入场(上面 applyForm 没换形态,不会自动放)
 
   listen("checkin-updated", () => {
-    loadCheckin();
+    loadCheckin().then(() => renderChCards());
   });
 
   listen("checkin-alert", (ev) => {
@@ -5517,6 +5608,12 @@ async function refresh() {
       (d.name || "签到渠道") + "需要处理:" + (d.message || "去渠道卡重新登录一次"),
       true
     );
+  });
+  listen("checkin-activity", (ev) => {
+    const d = (ev && ev.payload) || {};
+    const action = d.canClaim ? "发现可领取活动" : "发现新活动";
+    const where = d.canClaim ? "" : " · 可在 Qoder 客户端查看";
+    showToast((d.name || "Qoder") + " " + action + ": " + (d.title || "新活动") + where);
   });
   listen("channels-updated", (ev) => {
     CHANNELS = ev.payload;

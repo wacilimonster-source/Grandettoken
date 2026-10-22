@@ -64,6 +64,9 @@ pub struct FetchResult {
     /// 逐笔到期(升序)。只有积分型渠道才有。
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub expiring: Vec<Expiring>,
+    /// 是否已拿到完整的逐笔到期信息。false 表示空列表不能解释为“没有积分到期”。
+    #[serde(skip)]
+    pub expiry_complete: bool,
     /// 界面展开区里展示的键值对,顺序敏感故用 Vec
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extra: Vec<(String, String)>,
@@ -510,6 +513,7 @@ pub fn extract_trae(body: &Value) -> FetchResult {
     let mut granted = 0.0;
     let mut used = 0.0;
     let mut counted = 0usize;
+    let mut expiry_complete = true;
     let now = chrono::Utc::now().timestamp();
 
     for p in packs {
@@ -537,10 +541,13 @@ pub fn extract_trae(body: &Value) -> FetchResult {
         let left = (limit - pack_used).max(0.0);
         remaining += left;
 
-        let Some(at) = expires_at else { continue };
         if left < POINTS_EPS {
             continue;
         }
+        let Some(at) = expires_at else {
+            expiry_complete = false;
+            continue;
+        };
         let label = path(
             p,
             &[
@@ -584,6 +591,7 @@ pub fn extract_trae(body: &Value) -> FetchResult {
         total: None, // 积分型没有"额度上限"这个概念,不画进度条
         unit: "credits".into(),
         expiring,
+        expiry_complete,
         extra: vec![
             ("累计发放".into(), format!("{:.0} 积分", total_granted.unwrap_or(granted))),
             ("已使用".into(), format!("{:.2} 积分", total_used.unwrap_or(used))),
@@ -632,6 +640,7 @@ pub fn extract_workbuddy(body: &Value) -> FetchResult {
     let mut granted = 0.0;
     let mut used = 0.0;
     let mut counted = 0usize;
+    let mut expiry_complete = true;
 
     for a in accounts {
         // Status:0 有效,1 退款,2 已过期,3 已用完。退款/已过期的包不该计入余额。
@@ -666,10 +675,13 @@ pub fn extract_workbuddy(body: &Value) -> FetchResult {
         used += (size - left).max(0.0);
         remaining += left;
 
-        let Some(at) = wb_expiry_at(a) else { continue };
         if left < POINTS_EPS {
             continue;
         }
+        let Some(at) = wb_expiry_at(a) else {
+            expiry_complete = false;
+            continue;
+        };
         expiring.push(Expiring {
             at,
             amount: round2(left),
@@ -711,6 +723,7 @@ pub fn extract_workbuddy(body: &Value) -> FetchResult {
         total: None,
         unit: "credits".into(),
         expiring,
+        expiry_complete,
         extra,
         ..Default::default()
     }
@@ -855,10 +868,10 @@ pub fn extract_qoder(body: &Value) -> FetchResult {
         let at = ts_norm(ms);
         // 9999-12-31 之后一律当"不过期"(上游用这个值表示"没有到期日")
         if at >= 253_402_214_400 {
-            extra.push(("到期".into(), "不过期".into()));
+            extra.push(("账户额度到期".into(), "不过期".into()));
         } else if let Some(d) = chrono::DateTime::from_timestamp(at, 0) {
             extra.push((
-                "到期".into(),
+                "账户额度到期".into(),
                 d.with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
                     .format("%Y-%m-%d")
                     .to_string(),
@@ -868,8 +881,8 @@ pub fn extract_qoder(body: &Value) -> FetchResult {
     if body.get("isQuotaExceeded").and_then(|v| v.as_bool()) == Some(true) {
         extra.push(("配额".into(), "已用尽".into()));
     }
-    // 逐笔到期明细本期未接入 —— 如实说,不装作有(设计稿 §2.2)
-    extra.push(("明细".into(), "逐笔到期明细本期未接入".into()));
+    // 账户级 expiresAt 不能代表每一笔积分的到期日;接口没有逐笔数据时必须明确标注。
+    extra.push(("逐笔到期明细".into(), "接口未提供".into()));
 
     FetchResult {
         valid: true,
@@ -879,6 +892,7 @@ pub fn extract_qoder(body: &Value) -> FetchResult {
         // 积分型没有"额度上限"这个概念,不画进度条(与 Trae/WorkBuddy 同口径)
         total: None,
         unit: "credits".into(),
+        expiry_complete: false,
         extra,
         ..Default::default()
     }
@@ -1617,9 +1631,9 @@ mod tests {
         assert_eq!(r.used, Some(14.0));
         assert!(r.total.is_none(), "积分型不画进度条");
         assert_eq!(r.unit, "credits");
-        // 套餐与到期都要如实透出;9999 年那个天文数字要折成"不过期"
+        // 套餐与账户级到期都要如实透出;9999 年那个天文数字要折成"不过期"
         assert!(r.extra.iter().any(|(k, v)| k == "套餐" && v == "personal_standard"));
-        assert!(r.extra.iter().any(|(k, v)| k == "到期" && v == "不过期"));
+        assert!(r.extra.iter().any(|(k, v)| k == "账户额度到期" && v == "不过期"));
     }
 
     /// 两个块都有量时要**相加**(套餐额度 + 加量包),不是取其中一个。

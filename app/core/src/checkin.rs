@@ -121,7 +121,8 @@ pub const CHECKINS: &[CheckinDef] = &[
     //   ① `GET /sash/api/v1/me/campaigns` → 200,活动带 actionType/claimStatus/benefit
     //   ② `POST /sash/api/v1/me/campaigns/{id}/claim` → 200,重复领回 `replayed:true`(幂等)
     //   ③ 活动描述原文「每日 10:00（UTC+8）刷新,领取后 30 天有效」
-    //   ④ 请求头只需 Authorization + Cosy-ClientType + User-Agent(伪设备指纹照样 200)
+    //   ④ 基础头为 Authorization + Cosy-ClientType + User-Agent;国际版另需 Qoder 自带 UMID helper
+    //      返回的 Cosy-MachineToken / Cosy-MachineType / Cosy-MachineCode,否则活动可能被静默过滤
     //
     // 两版是**两套账号**(官方明确不支持跨区迁移),所以是两个独立渠道,不合并。
     CheckinDef {
@@ -364,6 +365,12 @@ pub struct CheckinCfg {
     ///
     /// `None` = 这条记录**早于本字段存在** → 一律视为陈旧:产生它的代码已经不是现在这份了。
     pub last_auth_version: Option<String>,
+    /// 最近一次查询 Qoder 活动列表的时刻。签到开关开着时,即使自动领取关闭也会监测活动。
+    pub last_activity_check_at: Option<i64>,
+    /// 最近看到的 Qoder 活动快照(最多保留 100 条,用于识别新活动和状态变化)。
+    pub activity_history: Vec<QoderActivity>,
+    /// 最近一次活动列表中的优先活动,供渠道详情和首页徽标展示。
+    pub latest_activity: Option<QoderActivity>,
 }
 
 impl Default for CheckinCfg {
@@ -380,6 +387,9 @@ impl Default for CheckinCfg {
             last_credits: None,
             last_streak_days: None,
             last_auth_version: None,
+            last_activity_check_at: None,
+            activity_history: Vec::new(),
+            latest_activity: None,
         }
     }
 }
@@ -681,9 +691,73 @@ const QODER_CLAIM_ACTION: &str = "CLAIM_BENEFIT";
 /// 只做**识别**用,不参与任何写入。
 const QODER_CLAIM_ACTION_ALIASES: &[&str] = &["CLAIM_BEFIT"];
 
+/// Qoder 活动的一份轻量快照,只存用于展示与去重的公开活动信息。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct QoderActivity {
+    /// campaignId;响应未提供时退到 campaignKey 或标题作为稳定去重键。
+    pub id: String,
+    pub title: String,
+    pub action_type: String,
+    pub claim_status: String,
+    pub observed_at: Option<i64>,
+}
+
+/// 从活动响应解析所有活动,不是只挑可签到项。
+///
+/// 返回 `None` 代表响应结构不认识;空 `Vec` 则是合法的空活动列表。
+pub fn qoder_activities(body: &serde_json::Value) -> Option<Vec<QoderActivity>> {
+    let list = body.get("campaigns")?.as_array()?;
+    let mut activities: Vec<QoderActivity> = Vec::with_capacity(list.len());
+    for c in list {
+        let title = qoder_campaign_title(c);
+        let id = c
+            .get("campaignId")
+            .and_then(|v| {
+                v.as_str()
+                    .map(str::to_string)
+                    .or_else(|| v.as_i64().map(|n| n.to_string()))
+            })
+            .or_else(|| {
+                c.get("campaignKey")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            })
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| title.clone());
+        let action_type = c
+            .get("actionType")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let claim_status = c
+            .get("claimStatus")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let activity = QoderActivity {
+            id,
+            title,
+            action_type,
+            claim_status,
+            observed_at: None,
+        };
+        if let Some(index) = activities.iter().position(|a| a.id == activity.id) {
+            activities[index] = activity;
+        } else {
+            activities.push(activity);
+        }
+    }
+    Some(activities)
+}
+
 /// 这个 actionType 算不算"可领的活动"。
 fn is_claim_action(action: &str) -> bool {
     action == QODER_CLAIM_ACTION || QODER_CLAIM_ACTION_ALIASES.contains(&action)
+}
+
+pub fn qoder_action_claimable(action: &str, status: &str) -> bool {
+    is_claim_action(action) && status == "CLAIMABLE"
 }
 
 /// 从查状态响应里挑出"这一期该领的活动"。
@@ -930,7 +1004,7 @@ pub fn direct_client() -> reqwest::Client {
 }
 
 /// 一次请求要带的那份凭据。**只在内存里过一趟**:不落盘、不进日志。
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum Cred {
     /// Trae:本机登录态(令牌 + 纯数字设备号;设备号缺了会恒定 9074)
     Trae { token: String, device_id: String },
@@ -942,6 +1016,11 @@ pub enum Cred {
     Web(String),
     /// Qoder:本机桌面端 `auth.v1.dat` 解出的访问令牌,一律走 `Authorization: Bearer`。
     Qoder(String),
+    /// Qoder 国际版:在 Bearer 之外带上 Qoder 自己生成的设备身份头。
+    QoderMachine {
+        token: String,
+        identity: crate::qoder::QoderMachineIdentity,
+    },
 }
 
 fn apply_cred(req: reqwest::RequestBuilder, cred: &Cred) -> reqwest::RequestBuilder {
@@ -955,6 +1034,26 @@ fn apply_cred(req: reqwest::RequestBuilder, cred: &Cred) -> reqwest::RequestBuil
             None => req.header("Authorization", format!("Bearer {}", key.trim())),
         },
         Cred::Qoder(token) => req.header("Authorization", format!("Bearer {}", token.trim())),
+        Cred::QoderMachine { token, identity } => {
+            let mut req = req
+                .header("Authorization", format!("Bearer {}", token.trim()))
+                .header("Cosy-MachineToken", identity.machine_token.trim())
+                .header("Cosy-MachineType", identity.machine_type.trim())
+                .header("Cosy-MachineCode", identity.machine_code.trim());
+            if let Some(version) = identity.client_version.as_deref() {
+                req = req.header("Cosy-Version", version);
+            }
+            if let Some(machine_os) = identity.machine_os.as_deref() {
+                req = req.header("Cosy-MachineOS", machine_os);
+            }
+            if let Some(hostname) = identity.machine_hostname.as_deref() {
+                req = req.header("Cosy-MachineHostname", hostname);
+            }
+            if let Some(machine_id) = identity.machine_id.as_deref() {
+                req = req.header("Cosy-MachineId", machine_id);
+            }
+            req
+        }
     }
     .header("Content-Type", "application/json")
     .header("Accept", "application/json, text/plain, */*")

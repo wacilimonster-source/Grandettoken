@@ -844,6 +844,7 @@ mod tests {
             unit: String::new(),
             windows: Vec::new(),
             expiring: Vec::new(),
+            expiry_complete: false,
             expiring_soon: None,
             extra: Vec::new(),
             error: None,
