@@ -2722,3 +2722,11 @@ commit `a65fc58`,tag `v0.1.57`,`verify-release.js` **13/13 PASS**,
 sha256 `3a5d9425…`)+ `.sig`;release <https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.57>。
 本机已用打包产物覆盖 `%LOCALAPPDATA%\Grandettoken\Grandettoken.exe` 并运行。
 `latest.json` 的 notes 走应用内更新卡,release 正文另写(同一件事的两种长度)。
+
+### 发版 v0.1.58（2026-10-22）
+
+Qoder 自动领取与新活动监测；顶部摘要改为聚焦未来 30 天内确认到期的积分，可点击筛选渠道，并修正未知到期信息的展示。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.58_x64-setup.exe`（5,175,222 B，SHA-256 `cc03c17c7e1ad0013bf4e968a5fb8dc352f1f60179cc8e01bff4ac0e42434cdb`）及 `.sig` 已发布到 [GitHub Release v0.1.58](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.58)。提交 `5998226`，tag `v0.1.58`。
+
+`node --use-env-proxy build/verify-release.js` **13/13 PASS**；`node build/verify-signature.js` **PASS**（tauri.conf.json 中的公钥验证通过）。
