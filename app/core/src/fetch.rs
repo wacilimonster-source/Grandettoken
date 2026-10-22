@@ -2594,7 +2594,19 @@ mod tests {
         assert!(text.contains("host=127.0.0.1"), "要有主机名:{text}");
         // 连接都没连上 → **没有 HTTP 状态码**。这时刻意不写 status=
         // (写一个空状态码会让人以为"服务器回了个空状态")。
-        assert!(!text.contains("status="), "连不上时不该有 status=:{text}");
+        //
+        // 例外:某些环境(沙箱 / 透明代理)会先替 127.0.0.1:1 应答一个 5xx ——
+        // 那种情况其实是"连上了、只是被中间设备拒了",日志里有 status 是对的。
+        // 只在错误码是连接层(E_CONNECT / E_TIMEOUT)时才断言没有 status;
+        // 否则反过来断言它必须是 HTTP 层的错误码,不许把代理拦截写成"网络断了"。
+        if text.contains("code=E_CONNECT") || text.contains("code=E_TIMEOUT") {
+            assert!(!text.contains("status="), "连不上时不该有 status=:{text}");
+        } else {
+            assert!(
+                text.contains("code=E_HTTP"),
+                "被代理/中间设备应答时,错误码必须是 HTTP 层:{text}"
+            );
+        }
         // 密钥绝不能出现
         assert!(!text.contains("sk-test-key"), "密钥不该出现在日志里:{text}");
         let _ = std::fs::remove_dir_all(&dir);

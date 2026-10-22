@@ -265,6 +265,14 @@ body{
 .rhint{font-size:max(10.5px,calc(10px*var(--u)));color:var(--tx3);margin-top:calc(2px*var(--u));line-height:1.45;opacity:.9}
 .rhint.stale{color:var(--warn);opacity:1}
 
+/* ── 陈旧:四种形态都要看得出"这是旧快照"(设计 P0 验收① / §6.1.2)───────
+   面板有 .rhint 那行字;紧凑条与胶囊里它被折叠掉了(styles.css 的 form-compact 段),
+   所以这里补一个 ~ 前缀与降透明度,让"旧"这件事在四种形态里都看得见。
+   data-state 由后端 core::view 判定,前端不自己算。 */
+.row[data-state="stale"] .val .v{opacity:.72}
+.tilde{font-style:normal;opacity:.8;margin-right:1px}
+body.form-compact .row[data-state="stale"] .val .v::before{content:"~";opacity:.8;margin-right:1px}
+
 /* ── 空态(未配置任何密钥时的引导卡) ── */
 .empty{margin:auto calc(14px*var(--u));width:calc(100% - 28px*var(--u));padding:calc(20px*var(--u)) calc(16px*var(--u));text-align:center;
   color:var(--tx3);font-size:calc(12.5px*var(--u));line-height:1.9;border:1px dashed var(--line2);
@@ -908,3 +916,81 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 .cform .krow{margin-top:calc(6px*var(--u))}
 .cform .inp{flex:1;min-width:0}
 .cform .inp[style]{flex:none}
+
+/* ═══ P1 · 面板重构:风险带 / 两级行 / 分组 ═══════════════════════
+   行高从"一率 84px(实测 101–166)"压回两级:紧急行两行,正常行一行。
+   折叠时不再画第三段(窗口条 / 到期列表 / 日周月)—— 它只在展开区出现。 */
+.row:not(.open) .seg3{display:none}
+.row .r2{display:none}
+.row.urg .r2{display:block;font-size:max(10.5px,calc(10.5px*var(--u)));color:var(--tx3);
+  margin-top:calc(2px*var(--u));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row:not(.urg) .bar{display:none}
+.rhead{padding:calc(5px*var(--u)) calc(12px*var(--u))}
+.row.urg .rhead{padding:calc(9px*var(--u)) calc(12px*var(--u)) calc(7px*var(--u))}
+.row.urg .val .v{font-size:calc(22px*var(--u))}
+
+/* 状态标签:颜色之外的第二个通道(灰度下也读得出来) */
+.qtag{display:inline-block;margin-left:calc(4px*var(--u));padding:0 calc(4px*var(--u));
+  border:1px solid var(--line2);border-radius:calc(4px*var(--u));
+  font-size:max(9.5px,calc(9.5px*var(--u)));color:var(--tx2);vertical-align:1px}
+
+/* 风险带的副行与签到迷你条 */
+.sum .cell .sb{font-size:max(10px,calc(10px*var(--u)));color:var(--tx3);margin-top:calc(2px*var(--u));
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sum .cell[data-act]{cursor:pointer}
+.sum .cell[data-act]:hover{background:#ffffff07}
+.ckseg{display:inline-flex;gap:2px;align-items:center}
+.ckseg i{display:block;width:calc(9px*var(--u));height:calc(3px*var(--u));border-radius:2px;background:#303849}
+.ckseg i.on{background:var(--ok)}
+
+/* 分组标题:九行一样重 = 没有层级 */
+.grp{display:flex;align-items:center;gap:calc(6px*var(--u));
+  padding:calc(6px*var(--u)) calc(12px*var(--u)) calc(3px*var(--u));
+  font-size:max(10.5px,calc(10px*var(--u)));color:var(--tx3);letter-spacing:.08em}
+.grp em{font-style:normal;color:var(--tx2)}
+.grp::after{content:"";flex:1;height:1px;background:var(--line)}
+
+/* 大面积失败横幅:一轮 ≥3 个失败时,问题多半在网络/代理,不在渠道 */
+.fstrip{padding:calc(6px*var(--u)) calc(12px*var(--u));background:#2a1f22;border-bottom:1px solid #4a3038;
+  color:#e6b8b8;font-size:max(10.5px,calc(10.5px*var(--u)))}
+.fstrip b{color:#ff9b93}
+
+/* 冷启动骨架:不要"加载中…"一行字(D14) */
+.sk-wrap{padding:calc(4px*var(--u)) 0}
+.sk-row{display:flex;align-items:center;gap:calc(9px*var(--u));
+  padding:calc(9px*var(--u)) calc(12px*var(--u))}
+.sk-row i{display:block;border-radius:calc(4px*var(--u));background:linear-gradient(90deg,#222836,#2b3242,#222836);
+  background-size:200% 100%;animation:sk 1.4s ease-in-out infinite}
+.sk-ico{width:calc(22px*var(--u));height:calc(22px*var(--u));border-radius:calc(7px*var(--u))!important;flex:none}
+.sk-nm{flex:1;height:calc(11px*var(--u))}
+.sk-v{width:calc(52px*var(--u));height:calc(14px*var(--u));flex:none}
+@keyframes sk{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.sk-foot{padding:calc(6px*var(--u)) calc(12px*var(--u));color:var(--tx3);
+  font-size:max(10.5px,calc(10px*var(--u)));text-align:center}
+
+/* 过滤条 */
+.qbar{padding:calc(5px*var(--u)) calc(12px*var(--u));border-bottom:1px solid var(--line)}
+.qbar .inp{width:100%}
+
+/* ═══ P1/P2 · 折叠形态 ═══════════════════════════════════════════
+   紧凑条:签到 chip 常驻;胶囊:限定语;吸附条:一段一渠道;非颜色模式:文字态 */
+.ckchip{display:inline-flex;align-items:center;flex:none;
+  padding:0 calc(6px*var(--u));height:calc(22px*var(--u));
+  border:1px solid var(--line2);border-radius:calc(6px*var(--u));
+  font-size:max(10px,calc(10px*var(--u)));color:var(--tx2);cursor:pointer;
+  font-variant-numeric:tabular-nums}
+.ckchip:hover{border-color:var(--ac);color:var(--tx)}
+
+/* 胶囊脸的限定语:数值旁边一枚小标签,一屏只说最要紧的那件事 */
+#pillV .pq{font-style:normal;font-size:calc(9.5px*var(--u));color:var(--tx2);
+  border:1px solid var(--line2);border-radius:calc(4px*var(--u));
+  padding:0 calc(3px*var(--u));margin-left:calc(3px*var(--u));vertical-align:2px}
+
+/* 吸附竖条:一段一渠道;陈旧的那段加斜纹(灰度下也分得出来) */
+.dock-body{display:flex!important;flex-direction:column;gap:1px;padding:0!important}
+.dock-body i{display:block;flex:1 1 0;min-height:2px;border-radius:1px}
+.dock-body i.stale{background-image:repeating-linear-gradient(45deg,rgba(0,0,0,.35) 0 2px,transparent 2px 4px)!important}
+
+/* 非颜色模式:条形加纹理,状态写文字 */
+body.texttone .bar i{background-image:repeating-linear-gradient(90deg,rgba(0,0,0,.25) 0 2px,transparent 2px 5px)}
+body.texttone .row .qtag{display:inline-block!important}

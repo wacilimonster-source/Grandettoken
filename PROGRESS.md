@@ -2571,3 +2571,40 @@ tauri-cli 自己的 `ci` 标志(`bundle.rs`:`or_else(|| if ci { Some("".into()) 
   强制置顶(改版时删掉了 `setAlwaysOnTop(true)`),置顶只由标题栏 📌 控制
 - ~~待真机确认:真实密钥下的展示效果~~ 已确认:用户已配好真实密钥,
   面板/紧凑条/胶囊都在跑真实数据(含状态色与阈值染色)
+
+## 首页形态设计稿落地:统一视图模型 + 面板重构(2026-10-22)
+
+依据 `docs/design/design-home-forms-2026-10-21.html`(含同日复核修订)开发。**先落 P0 的地基,再做 P1/P2/P3**——
+设计里那句话是"在它之前改布局,只会让四种形态多一种看起来不一样的方式",所以顺序没有颠倒。
+
+**P0 · 统一视图模型(`app/core/src/view.rs`,约 1200 行 / 21 项单测)**
+七态 `ViewState`(fresh/stale/auth/error/noKey/exhausted/limited;`!valid` 按 `authSource` 分成"鉴权失效"与
+"取数失败",两种出路)、五桶紧迫度(`TIER_ACTION/RATIO/MONEY/POINTS/REST`)、绑定窗(限流窗优先、否则剩余最少)、
+扁平 `Headline{percent,amount,unit,points}`(全空 = 「——」,与"确定是 0"分开写)、列表级 `HomeView`
+(order / risk / actionCount / staleCount / errorCount / checkin / totals)。**没有分母的金额不再被判成健康**:
+进 T2 比绝对额,且低于 `moneyFloor`(¥10)进 T0 且不是绿色 —— D02 修掉。纯函数、可单测。
+配套:`config.rs` 新增 `moneyFloor` / `staleAfterSec`(900)/ `textTone` / `pillDwellSec`(12)/ `showUsed`,
+均靠容器级 `serde(default)` 让老配置自动取默认值;新 IPC 命令 `home_view` 走 `fetch_shared`
+(与 `get_channels` 同一闸门、5 秒近期结果复用,不多打账务接口),签到 `doneToday` 复用 `CheckinCfg::blocks_today`。
+
+**P1 · 面板重构(风险带 / 两级行 / 分组 / 骨架 / 失败横幅)**
+顶部三格消耗换成**风险带**:总余额(副行留今日 + 环比 + 非人民币并列,不折算)/ 最紧(可点,跳过去并展开)/
+签到(常驻,全签完仍显示「✓ 3/3」)。行压回两级:紧急(T0 ∪ 跌破红线)两行 + 进度条,其余一行;
+「更新于」只在陈旧时说;第三段(窗口条 / 到期列表 / 日周月)收进 `.seg3`,只在展开时显示 —— 一屏重新放得下九行。
+冷启动画骨架;一轮 ≥3 个渠道取数失败时出横幅并给「看诊断」;渠道 ≥12 个时给过滤框。
+
+**P2/P3 · 折叠形态与无障碍**
+紧凑条:降级顺序改成"重要性倒序"(第一个 chip = 最紧,永远完整;从最后一个开始去名字/舍小数) + 签到 chip 常驻;
+胶囊:主数字与限定语走后端,告急时锁定**自动**轮播(手动仍可用);吸附竖条:一整块颜色 → 一段一渠道(顺序同面板,
+陈旧的加斜纹);键盘 `Ctrl+1/2/3` 切形态、`↑↓` 走行、`/` 聚焦过滤,Esc 循环补上紧凑条;
+「非颜色模式」每行写文字态;「用掉还是剩余」切换百分比口径(四处同源,一处翻转)。
+
+**验证**
+- core `cargo test --offline`:**311 passed / 1 failed / 6 ignored**,其中 view 21 项全过;
+  唯一失败 `fetch::tests::a_failed_request_leaves_a_usable_line_in_the_log` 是**既有环境故障**
+  (系统代理对 127.0.0.1:1 返回 502 而不是拒连),已在干净 HEAD 上复现确认与本次无关。
+- `node --check app.js` 通过;Tauri 外壳 `cargo check --offline`(msvc)零告警。
+- 新增 **`build/jsdom-smoke.js`**:jsdom 里跑真渲染,**26/26 通过**(风险带三格、总余额并列、
+  分组与两级行、骨架、横幅、签到 chip、胶囊挑最紧的 + 限定语、吸附分段、非颜色模式、视图缺失兜底)。
+  它当场抓出过一个真 bug(`hvApply` 漏带 `totals`,导致风险带静默退回老汇总),已修。
+  ⚠️ 未验证:像素与真机几何(两级行实际高度、风险带在三档字号下是否溢出),需要真机复测。

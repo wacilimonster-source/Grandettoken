@@ -269,8 +269,9 @@ const TONE_HEX = { ok: "#4ade9d", warn: "#f7c355", bad: "#ff6b63", off: "#3a4356
 function dotCls(c) {
   if (!c.hasKey) return "off";
   if (!c.valid) return "st";
-  if (c.limited || toneOf(c) === "bad") return "b";
-  if (toneOf(c) === "warn") return "w";
+  // 阈值判断与行 / 胶囊 / 托盘同源:以后端那一份为准(没有视图时退回本地 toneOf)
+  if (c.limited || hvTone(c) === "bad") return "b";
+  if (hvTone(c) === "warn") return "w";
   return "";
 }
 
@@ -334,6 +335,64 @@ function sortChannels(list) {
     return r === null ? 4000 : r * 100;
   };
   return [...list].sort((a, b) => score(a) - score(b));
+}
+
+// ───────────── 统一视图(core::view::HomeView)─────────────
+//
+// 四种形态以前各自解释一次 `valid / limited / updatedAt`,同一个渠道能给出三种结论
+// (设计稿 D01/D02/D03)。判定现在收在后端 `view.rs` 里,前端只保留一份结果:
+// 排序、色调、主数字、陈旧标记都从它读。取不到(旧版后端 / IPC 失败)时,
+// 下面的每个读取口都会退回原来的本地判断,行为不回退。
+let HV = { byId: {}, order: [], risk: null, checkin: null, actionCount: 0, staleCount: 0, errorCount: 0 };
+
+/** 收下一份后端视图。失败时保留上一份 —— 界面退回旧判断,而不是变空白。 */
+function hvApply(v) {
+  const rows = (v && v.rows) || [];
+  const byId = {};
+  for (const r of rows) byId[r.id] = r;
+  HV = {
+    byId,
+    order: (v && v.order) || [],
+    risk: (v && v.risk) || null,
+    checkin: (v && v.checkin) || null,
+    // 风险带第一/二格要的合计(总余额 / 今日消耗)。没有它 renderRiskBand 会退回老汇总。
+    totals: (v && v.totals) || null,
+    actionCount: (v && v.actionCount) || 0,
+    staleCount: (v && v.staleCount) || 0,
+    errorCount: (v && v.errorCount) || 0,
+  };
+}
+const hvRow = (id) => HV.byId[id] || null;
+
+/** 渠道过滤(P3):渠道一多就只能靠滚,十二个以上才把输入框放出来,平时不占地方。 */
+let CH_Q = "";
+function chFilter(c) {
+  if (!CH_Q) return true;
+  const q = CH_Q.toLowerCase();
+  return (
+    (c.name || "").toLowerCase().includes(q) ||
+    (c.short || "").toLowerCase().includes(q) ||
+    (c.id || "").toLowerCase().includes(q)
+  );
+}
+const HV_TONE = { ok: "ok", warn: "warn", bad: "bad", off: "off" };
+
+/** 色调:后端给了就照它画 —— 面板 / 紧凑条 / 胶囊 / 托盘同一个结论。 */
+function hvTone(c) {
+  const r = hvRow(c.id);
+  return r ? HV_TONE[r.tone] || toneOf(c) : toneOf(c);
+}
+
+/** 排序:后端排好的顺序优先(五桶紧迫度 / 自定义 / 余额 / 消耗)。
+ *  没拿到视图时退回 `sortChannels`,行为与以前一致。 */
+function hvSort(list) {
+  if (!HV.order.length) return sortChannels(list);
+  const rank = new Map(HV.order.map((id, i) => [id, i]));
+  return [...list].sort(
+    (a, b) =>
+      (rank.get(a.id) ?? 9999) - (rank.get(b.id) ?? 9999) ||
+      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+  );
 }
 
 // ───────────── 渲染 ─────────────
@@ -419,7 +478,7 @@ function renderSummary() {
 }
 
 function renderRow(c, i) {
-  const tone = toneOf(c);
+  const tone = hvTone(c); // 与其余三种形态同源(设计 P3 · 状态同源)
   const noKey = !c.hasKey;
   const failed = c.hasKey && !c.valid;
   const r = remainRatio(c);
@@ -435,7 +494,8 @@ function renderRow(c, i) {
   if (noKey) main = "——";
   else if (c.remaining === null) main = "——";
   else if (isPct) {
-    const v = Math.max(0, Math.min(100, mw ? mw.remainPercent : c.remaining));
+    // 主数字取绑定窗的余量;「用掉还是剩余」只在这里翻一次,四处同源
+    const v = dispPct(Math.max(0, Math.min(100, mw ? mw.remainPercent : c.remaining)));
     main = v.toFixed(1) + '<i class="pct">%</i>';
   } else if (isPts) {
     // 积分不带货币符号;整数部分千分位,小数部分照旧
@@ -593,18 +653,37 @@ function renderRow(c, i) {
   // 签到徽标:只在该渠道开了签到时出现,折叠成紧凑条也保留(与 .wmark 同一套机制)
   const ckb = ckBadgeHtml(c);
 
-  const src = c.stale
+  // 「更新于」只在陈旧时说(设计附录 B:`.rhint` 只在 stale 时画)。
+  // 新鲜是默认状态,不值得占一行 —— 那一行本来就是给"这是旧快照"用的。
+  const hv = hvRow(c.id);
+  const isStale = hv ? hv.state === "stale" : !!c.stale;
+  const src = isStale
     ? `<div class="rhint stale">显示的是 ${relTime(c.updatedAt)} 的成功快照${
         c.error ? " · " + esc(c.error) : ""
       }</div>`
-    : `<div class="rhint">更新于 ${relTime(c.updatedAt)}</div>`;
+    : "";
 
-  return `<div class="row" data-id="${c.id}" data-dtone="${dcls}">
+  // 两级行:需要动作的(T0)与已跌破红线的行给两行高与一条进度条,其余只留一行。
+  // 状态标签是"颜色之外"的第二个通道(P4 · 颜色不单独承重)。
+  const urgent = !!(hv && (hv.tier === 0 || hv.tone === "bad"));
+  // 状态标签:颜色之外的第二个通道(P4)。默认只给"需要动作"的挂一枚;
+  // 开了「非颜色模式」后每一行都写文字态 —— 灰度截图下也读得出来(D12)。
+  const TONE_WORD = { ok: "正常", warn: "预警", bad: "告急", off: "无数据" };
+  const qtag =
+    hv && hv.qualifier && hv.qualifier !== "~"
+      ? `<span class="qtag">${esc(hv.qualifier)}</span>`
+      : CFG && CFG.textTone
+        ? `<span class="qtag">${TONE_WORD[tone] || ""}</span>`
+        : "";
+
+  // data-state:后端判的七态,给 CSS 用 —— 紧凑条与胶囊里没有 .rhint 那行字,
+  // 只有靠它才能把"这是旧快照"画出来(设计 P0 验收①)
+  return `<div class="row${urgent ? " urg" : ""}" data-id="${c.id}" data-dtone="${dcls}" data-state="${(hv || {}).state || ""}">
     <div class="rhead" tabindex="0" role="button" aria-expanded="${rowOpen.has(c.id) ? "true" : "false"}">
       <div class="r1">
         ${iconHtml(c, "ico", noKey || failed)}
         <div class="nm">
-          <div class="n"><span class="nn">${esc(c.name)}</span><span class="nsh">${esc(c.short)}</span>${dot}${wmark}${ckb}</div>
+          <div class="n"><span class="nn">${esc(c.name)}</span><span class="nsh">${esc(c.short)}</span>${dot}${wmark}${ckb}${qtag}</div>
           <div class="s">${sub}</div>
         </div>
         <div class="val">
@@ -613,8 +692,9 @@ function renderRow(c, i) {
         </div>
         <div class="caret">&#9654;</div>
       </div>
+      <div class="r2">${hv && hv.secondary ? esc(hv.secondary) : subVal}</div>
       ${bar}
-      ${useHtml}
+      <div class="seg3">${useHtml}</div>
       ${claimWarn}
       ${winWarn}
       ${src}
@@ -961,6 +1041,123 @@ function render(opts) {
   }
 }
 
+/** 主数字的文字写法。四种形态共用它 —— 不再各自拼 percent / money / points。 */
+/** 百分比口径:看剩余还是看用掉(设计 P3)。开了「用掉还是剩余」时,这里一处翻转,
+ *  四个形态都跟着变 —— 口径只能有一处,不然同一份数据会自相矛盾。 */
+function dispPct(remain) {
+  const v = Number(remain);
+  if (!Number.isFinite(v)) return v;
+  return CFG && CFG.showUsed ? 100 - v : v;
+}
+
+function hvText(h) {
+  if (!h) return "——";
+  if (h.percent !== null && h.percent !== undefined) return `${dispPct(h.percent).toFixed(1)}%`;
+  if (h.amount !== null && h.amount !== undefined) return money(h.amount, h.unit || "CNY");
+  if (h.points !== null && h.points !== undefined) return `${points(h.points)} 分`;
+  return "——";
+}
+
+/** 非人民币并列时的写法:只标币种,不折算(Q1 的裁断:静默换算等于改了用户的钱数)。 */
+function otherMoneyTxt(o) {
+  const sym = o.unit === "USD" ? "$" : o.unit === "CNY" ? "¥" : o.unit + " ";
+  return sym + (Math.abs(o.amount) < 100 ? o.amount.toFixed(1) : o.amount.toFixed(0));
+}
+
+/** 一轮里 ≥3 个渠道取不到数:多半是网络或系统代理,不是渠道坏了 —— 明说(D14)。 */
+function failBannerHtml() {
+  const n = (HV && HV.errorCount) || 0;
+  if (n < 3) return "";
+  return `<div class="fstrip"><b>${n}</b> 个渠道取数失败 · 可能是网络或系统代理 ·
+    <span class="lk" data-act="open-diag">看诊断</span></div>`;
+}
+
+/**
+ * 两级行 + 分组(D06):需要动作的、以及已经跌破红线的行单独成组并自动变大,
+ * 其余压成一行。九行长得一模一样,等于没有层级。
+ * 拿不到统一视图时退回"一整段列表",行为不回退。
+ */
+function listHtmlWithGroups(shown) {
+  if (!HV.order.length) return shown.map((c, i) => renderRow(c, i)).join("");
+  // 分组只按 后端 的 T0(需要处理)切 —— 与 HV.actionCount 同一个口径,
+  // 免得标题写 2、下面站了 3 行。行本身的"变大"另算:它还包括已跌破红线的。
+  const urgent = shown.filter((c) => {
+    const r = hvRow(c.id);
+    return !!(r && r.tier === 0);
+  });
+  const rest = shown.filter((c) => urgent.indexOf(c) < 0);
+  const head = (n, t) => `<div class="grp"><span>${t}</span><em>${n}</em></div>`;
+  return (
+    (urgent.length ? head(urgent.length, "需要处理") + urgent.map((c, i) => renderRow(c, i)).join("") : "") +
+    (rest.length
+      ? head(rest.length, urgent.length ? "其余" : "全部渠道") +
+        rest.map((c, i) => renderRow(c, i)).join("")
+      : "")
+  );
+}
+
+/**
+ * 风险带(替换原来的「三格消耗汇总」):总余额 / 最紧 / 签到。
+ *
+ * 设计 D04:面板最上面这条 55px 的横带以前回答的是"花掉多少",而"还剩多少、
+ * 哪家快没了"要往下扫九行才知道 —— 对一个余额挂件来说,那是次要问题。
+ * 消耗没有消失,它降成第一格的副行,口径一个字没改。
+ */
+function renderRiskBand() {
+  const box = $("sum");
+  if (!box) return;
+  const t = HV && HV.totals;
+  const has = t && ((t.cny !== null && t.cny !== undefined) || (t.others || []).length ||
+    (t.today !== null && t.today !== undefined));
+  // 拿不到统一视图时退回原来的三格消耗,行为不回退
+  if (!has) return renderSummary();
+
+  const cnyTxt = t.cny === null || t.cny === undefined ? "——" : money(t.cny);
+  const dayTxt = t.today === null || t.today === undefined ? "——" : money(t.today);
+  // 环比只在"两边都有基线"时算,与底部汇总同一套口径;没有基线就不写涨跌
+  let delta = "";
+  if (t.today != null && t.todayPrev != null && t.todayPrev > 0) {
+    const p = ((t.today - t.todayPrev) / t.todayPrev) * 100;
+    delta = ` ${p >= 0 ? "\u2191" : "\u2193"}${Math.abs(p).toFixed(0)}%`;
+  }
+  const otherTxt = (t.others || []).length
+    ? " · 另 " + t.others.map(otherMoneyTxt).join(" + ")
+    : "";
+
+  // ② 最紧:点一下跳到那一行(它是"现在该看谁"的答案,要能一键抵达)
+  let cell2 = "";
+  const rc = HV.risk && CHANNELS.find((c) => c.id === HV.risk);
+  if (rc) {
+    const r = hvRow(rc.id);
+    const sub2 = esc([r && r.qualifier, r && r.secondary].filter(Boolean).join(" · "));
+    cell2 = `<div class="cell" data-act="jump" data-id="${esc(rc.id)}" title="点一下跳到这一行">
+      <div class="lb">最紧</div>
+      <div class="vv" style="color:${TONE_COLOR[hvTone(rc)]}">${esc(rc.name)} <b>${hvText(r && r.headline)}</b></div>
+      <div class="sb">${sub2 || "——"}</div></div>`;
+  }
+
+  // ③ 签到:常驻。全部签完也要留着「✓ 3/3」—— "完成"和"坏了"不能长得一样(D09)
+  let cell3 = "";
+  const ck = HV.checkin;
+  if (ck) {
+    const segs = Array.from({ length: ck.total }, (_, i) => `<i class="${i < ck.done ? "on" : ""}"></i>`).join("");
+    cell3 = `<div class="cell" data-act="ckstripopen" title="每日签到">
+      <div class="lb">签到</div>
+      <div class="vv">${ck.done >= ck.total ? "\u2713 " : ""}${ck.done}/${ck.total}</div>
+      <div class="sb"><span class="ckseg">${segs}</span></div></div>`;
+  }
+
+  box.innerHTML =
+    `<div class="cell"><div class="lb">总余额</div><div class="vv">${cnyTxt}</div>` +
+    `<div class="sb">今日 ${dayTxt}${delta}${otherTxt}</div></div>${cell2}${cell3}`;
+}
+
+/** 过滤条:十二个渠道以内靠排序就够,超过才需要搜索(P3)。 */
+function syncQBar() {
+  const bar = $("qbar");
+  if (bar) bar.style.display = CHANNELS.length >= 12 ? "" : "none";
+}
+
 function renderInner(opts) {
   // updated=true 只由「数据刷新」调用方传(settings 变更等重渲染不放动效)
   const updated = !!(opts && opts.updated);
@@ -973,27 +1170,34 @@ function renderInner(opts) {
     if (v) prevV[r.dataset.id] = v.textContent;
     if (r.dataset.dtone !== undefined) prevDt[r.dataset.id] = r.dataset.dtone;
   });
-  const sorted = sortChannels(CHANNELS);
+  const sorted = hvSort(CHANNELS); // 后端排好;拿不到视图时 hvSort 内部退回 sortChannels
   // 标题栏挤了 6 个按钮,计数用短写法,完整说法放 tooltip
   // 标题栏改文字按钮后不再放计数(放不下),底栏已有「N 正常 · M 预警」
 
-  renderSummary();
+  renderRiskBand(); // 顶部换成风险带;拿不到视图时它内部退回 renderSummary
+  syncQBar(); // 渠道多起来(>=12)才把过滤框放出来,平时不占这一行
 
   if (!CHANNELS.length) {
-    $("list").innerHTML = `<div class="empty"><b>正在取数…</b>首次启动需要几秒</div>`;
+    // 冷启动画骨架(D14):一行"加载中…"区分不了"正在加载 / 卡住了 / 没配好",
+    // 骨架至少说清"这里有 N 个渠道的位置,正在一个个点亮"。
+    $("list").innerHTML =
+      `<div class="sk-wrap">${Array.from({ length: 6 }, () =>
+        `<div class="sk-row"><i class="sk-ico"></i><i class="sk-nm"></i><i class="sk-v"></i></div>`
+      ).join("")}</div>
+       <div class="sk-foot">正在取数 · 首次启动需要几秒</div>`;
     return;
   }
 
   // 展示区只显示已配置密钥、且未被隐藏的渠道(隐藏的只在管理页出现,用于恢复);
   // 一个都没配时给一张引导卡,全被隐藏时给「去设置恢复」卡
   const hiddenN = CHANNELS.filter((c) => c.hidden).length;
-  const shown = sorted.filter((c) => c.hasKey && !c.hidden);
+  const shown = sorted.filter((c) => c.hasKey && !c.hidden).filter(chFilter);
   const configured = shown.length > 0;
   // 哪些行要展开由 rowOpen 决定(DOM 只是投影):轮询重建后用同一份状态恢复,
   // 行头的 aria-expanded 在 renderRow 里也读它,开合两边永远一致(F2)
   const openId = [...rowOpen].find((x) => shown.some((c) => c.id === x)) || null;
   $("list").innerHTML = configured
-    ? ckPendingStrip() + shown.map((c, i) => renderRow(c, i)).join("")
+    ? failBannerHtml() + ckPendingStrip() + listHtmlWithGroups(shown)
     : hiddenN && CHANNELS.some((c) => c.hasKey && c.hidden)
       ? `<div class="empty">
            <div class="ek">&#128065;</div>
@@ -1005,8 +1209,8 @@ function renderInner(opts) {
          </div>`
       : `<div class="empty">
          <div class="ek">&#128273;</div>
-         <b>还没有可显示的渠道</b>
-         填入至少一个 API Key,在别的应用里登录一次(Trae / Codex 会直接读取),或点一次「登录 WorkBuddy 账号」<br>密钥与登录令牌只写入 Windows 凭据管理器,界面保存后不回显
+         <b>配置第一个渠道</b>
+         支持 9 个内置渠道 + 自定义(自己的取数地址与字段路径)<br>密钥与登录令牌只写入 Windows 凭据管理器,界面保存后不回显
          <div><button class="btn p" data-act="open-manage">去配置密钥</button></div>
        </div>`;
 
@@ -1023,7 +1227,7 @@ function renderInner(opts) {
   // 底栏状态(隐藏渠道不计入,只报个数)
   const withKey = CHANNELS.filter((c) => c.hasKey && !c.hidden);
   const bad = withKey.filter((c) => !c.valid).length;
-  const warn = withKey.filter((c) => c.valid && (c.limited || toneOf(c) === "bad")).length;
+  const warn = withKey.filter((c) => c.valid && (c.limited || hvTone(c) === "bad")).length;
   // 与行内同一套约定:未配置=空心环,失联=斜杠灰点,预警=黄(之前 warn 用了红点,颜色梯度倒挂)
   $("fdot").className =
     "dot" + (bad ? " st" : warn ? " w" : withKey.length ? "" : " off");
@@ -1085,6 +1289,29 @@ function scheduleFitCompact() {
  * → 还超才把尾部渠道收进 "+N"。chip 都是 flex:none,offsetWidth 即自然宽,
  * 窗口当前多宽都不影响测量;量完交给 setCompactW 重钳。
  */
+/**
+ * 紧凑条里的签到 chip:**常驻**。
+ *
+ * 以前它只在"今天还有没签的"时出现 —— 全部签完就什么都不剩,于是"签完了"
+ * 与"这功能坏了 / 没开"在界面上完全同形(D09)。现在它一直在,只是内容不同。
+ * 没开签到(分母为 0)时,按"不该提醒一件用户没要求的事"的老规矩不出现。
+ */
+function compactCheckinChip(list) {
+  const ck = HV && HV.checkin;
+  if (!ck) return null;
+  const el = document.createElement("span");
+  el.className = "ckchip";
+  el.dataset.act = "ckstripopen";
+  el.tabIndex = 0;
+  // 整块是拖动区,chip 要能点、能 Tab 到(与 +N 同一套处理)
+  el.setAttribute("data-tauri-drag-region", "false");
+  const all = ck.done >= ck.total;
+  el.textContent = (all ? "\u2713 " : "") + ck.done + "/" + ck.total;
+  el.title = all ? "今天已全部签到" : `还有 ${ck.total - ck.done} 个渠道没签到`;
+  list.appendChild(el);
+  return el;
+}
+
 function fitCompact() {
   const list = $("list");
   const rows = [...list.querySelectorAll(".row")];
@@ -1093,7 +1320,7 @@ function fitCompact() {
     r.style.display = "";
     r.classList.remove("lv1", "lv2");
   });
-  list.querySelectorAll(".more,.cempty").forEach((el) => el.remove());
+  list.querySelectorAll(".more,.cempty,.ckchip").forEach((el) => el.remove());
   if (!document.body.classList.contains("form-compact")) return;
   // 收起的 8px 竖条没法量;**展开态**(无论是否吸附)都要量 —— 之前整段跳过,
   // 吸附展开后宽度冻结,数值变长被裁、变短则窗口偏宽(报告 B9)。
@@ -1103,8 +1330,12 @@ function fitCompact() {
   const u = fsU();
   const maxW = Math.round(380 * u);
   const gap = 10 * u;
-  // 列表左右留白(11+4) + 右侧按钮组 + 窗口两条竖边框
-  const chrome = Math.round(15 * u) + $("cctl").offsetWidth + 2;
+  // 签到 chip 常驻:先插进去、把它的宽度算进 chrome —— 不预留宽度的话,
+  // 装到最后一步才发现放不下,末尾的渠道会被它挤掉。
+  const ckEl = compactCheckinChip(list);
+  const ckW = ckEl && list.contains(ckEl) ? ckEl.offsetWidth + gap : 0;
+  // 列表左右留白(11+4) + 右侧按钮组 + 窗口两条竖边框 + 签到 chip
+  const chrome = Math.round(15 * u) + $("cctl").offsetWidth + 2 + ckW;
   const moreW = Math.round(28 * u);
 
   if (!rows.length) {
@@ -1139,17 +1370,22 @@ function fitCompact() {
     for (let i = 0; i < n; i++) s += W[lv[i]][i];
     return s;
   };
+  // 降级顺序 = 重要性的倒序(P5 · 降级按重要性,不按宽度):
+  // 第一个 chip 就是"最紧的那一个",永远保持完整(图标 + 名称 + 数值);
+  // 从最后一个开始依次去名字、舍小数,实在装不下才收进 +N。
+  // 以前是"挑当前最宽的降级"—— 最紧的渠道通常名字最长、数值最长,
+  // 于是它第一个被削掉名字,而降级顺序与"哪个最该被看见"毫无关系(D07)。
   const strip = (from, to) => {
     while (total() > maxW) {
-      let bi = -1, bw = 0;
-      for (let i = 0; i < rows.length - hidden; i++)
-        if (lv[i] === from && W[from][i] > bw) { bw = W[from][i]; bi = i; }
+      let bi = -1;
+      for (let i = rows.length - hidden - 1; i >= 1; i--)
+        if (lv[i] === from) { bi = i; break; }
       if (bi < 0) break;
       lv[bi] = to;
     }
   };
-  strip(0, 1); // ① 去名字,从最宽的起
-  strip(1, 2); // ② 舍小数,从最宽的起
+  strip(0, 1); // ① 去名字,从最后一个起
+  strip(1, 2); // ② 舍小数,从最后一个起
   while (rows.length - hidden > 1 && total() > maxW) hidden++; // ③ 尾部收 +N
 
   const n = rows.length - hidden;
@@ -1199,6 +1435,15 @@ function renderPill(sorted) {
   const picked = (CFG && CFG.pillChannels) || [];
   const autoPick = () => {
     const active = sorted.filter((c) => c.hasKey && !c.hidden);
+    // 「最紧」= 后端排好的第一个:五桶紧迫度,先故障、再比例、再绝对额。
+    // 以前这里是 `remainRatio(a) ?? 2` —— 2 比任何真实比例都大,于是没有分母的
+    // 充值型渠道(只剩 ¥0.03 的那种)永远排最后、永远不被胶囊选中(设计 D02)。
+    if (HV.order.length) {
+      const first = HV.order
+        .map((id) => active.find((c) => c.id === id && c.valid))
+        .find(Boolean);
+      if (first) return [first];
+    }
     const tight = active
       .filter((c) => c.valid)
       .sort((a, b) => (remainRatio(a) ?? 2) - (remainRatio(b) ?? 2))[0];
@@ -1432,8 +1677,19 @@ function renderPillFace() {
   const pd = dotCls(c);
   dot.className = "dot" + (pd ? " " + pd : "");
   applyPillAura(AURA_OF[pd] || "fail", remainRatio(c));
+  // 陈旧:胶囊上没有 .rhint 那行字,只在数值前加一个 ~ —— 四种形态里最省地方的一种写法
+  const hvP = hvRow(c.id);
+  const staleTilde = hvP && hvP.state === "stale" ? '<i class="tilde">~</i>' : "";
+  // 主数字优先用后端的(它已经切到绑定窗 —— 短窗限流时大数字跟着变 0%),
+  // 拿不到视图时退回本地算法,行为不回退(D03 在胶囊上的那一半)。
   $("pillV").innerHTML =
-    c.remaining === null
+    staleTilde +
+    (hvP
+      ? hvText(hvP.headline) +
+        (hvP.qualifier && hvP.qualifier !== "~"
+          ? `<i class="pq">${esc(hvP.qualifier)}</i>`
+          : "")
+      : c.remaining === null
       ? "——"
       : c.kind === "percent"
         ? // 比率拿不到时照面板那样显示「——」:以前 `?? 0` 把"没数"画成 0.0%,
@@ -1443,7 +1699,7 @@ function renderPillFace() {
           : `${(remainRatio(c) * 100).toFixed(1)}<i>%</i>`
         : c.kind === "points"
           ? points(c.remaining)
-          : money(c.remaining, c.unit);
+          : money(c.remaining, c.unit));
 
   const bits = [c.name];  // tooltip 是纯文本,不需要转义
   const r = remainRatio(c);
@@ -1631,8 +1887,8 @@ const cardOpen = new Set(); // 展开的卡片 id;轮询重建时保持,不让�
 function chDot(c) {
   if (c.hidden || !c.hasKey) return "off";
   if (!c.valid) return "st";
-  if (c.limited || toneOf(c) === "bad") return "b";
-  if (toneOf(c) === "warn") return "w";
+  if (c.limited || hvTone(c) === "bad") return "b";
+  if (hvTone(c) === "warn") return "w";
   return "";
 }
 
@@ -2252,16 +2508,34 @@ function dockCancelHover() {
   }
 }
 
-/** 竖条只染色,不显示任何数字 —— 状态色是唯一信息。 */
+/**
+ * 竖条:**一段一个渠道**,顺序与面板一致(D10)。
+ *
+ * 以前它是一整块颜色,而且颜色跟着"看不见的胶囊轮播"每 8 秒变一次 ——
+ * 用户既不知道它代表谁,也不知道它为什么在变。现在段数 = 渠道数,
+ * 上下顺序 = 紧迫度顺序,陈旧的那一段加斜纹(P4 · 形状优先于颜色)。
+ */
 function renderDock() {
   const body = $("dockBody");
-  // 跟着胶囊当前那一页走(轮播会换渠道),不是永远的第 0 个:
-  // 之前竖条常年显示第一个渠道的颜色,和胶囊/托盘报的不是同一个渠道(报告 P2-8)
-  const c = PILL.list[PILL.idx] || PILL.list[0] || null;
+  if (!body) return;
   if (!DOCK.on) return;
-  const color = c ? TONE_HEX[toneOf(c)] : "#3a4152";
-  body.style.background = `linear-gradient(180deg, ${color}, ${color}cc)`;
-  body.title = c ? `${c.name} · 移入展开` : "移入展开";
+  const ids = HV.order.length
+    ? HV.order
+    : CHANNELS.filter((c) => c.hasKey && !c.hidden).map((c) => c.id);
+  const segs = ids
+    .map((id) => {
+      const c = CHANNELS.find((x) => x.id === id);
+      if (!c) return "";
+      const r = hvRow(id);
+      const stale = !!(r && r.state === "stale");
+      return `<i data-id="${esc(id)}" style="background:${TONE_HEX[hvTone(c)]}" class="${
+        stale ? "stale" : ""
+      }" title="${esc(c.name)}"></i>`;
+    })
+    .join("");
+  // 没有渠道时退回一块中性色,而不是留一条空白
+  body.innerHTML = segs || '<i style="background:#3a4152" title="移入展开"></i>';
+  body.title = ids.length ? `${ids.length} 个渠道 · 移入展开` : "移入展开";
 }
 
 // ───────────── 设置与管理(四页签;渠道卡渲染见 renderChCards)─────────────
@@ -2331,6 +2605,51 @@ function keyActivate(e) {
 $("list").addEventListener("keydown", keyActivate);
 $("manage").addEventListener("keydown", keyActivate);
 
+// 风险带上的两个动作:跳到最紧的那一行 / 打开签到设置(与 #list 里同名的动作同义)
+$("sum").addEventListener("click", async (e) => {
+  const act = e.target.closest("[data-act]");
+  if (!act) return;
+  const a = act.dataset.act;
+  if (a === "jump") {
+    const id = act.dataset.id;
+    const row = id && document.querySelector(`.row[data-id="${id}"]`);
+    if (!row) return;
+    row.scrollIntoView({ block: "center" });
+    row.classList.add("flash");
+    setTimeout(() => row.classList.remove("flash"), 1150);
+    // 顺手展开:从"最紧"跳过去的人,要看的就是它的原因
+    if (!row.classList.contains("open")) row.querySelector(".rhead").click();
+    return;
+  }
+  if (a === "ckstripopen") {
+    openManage();
+    showTab("run");
+    focusEl($("ckSet"));
+    return;
+  }
+  if (a === "open-diag") {
+    // 诊断卡在「刷新与启动」页签里,直接滚到体检那一段
+    openManage();
+    showTab("run");
+    focusEl($("btnDiag"));
+  }
+});
+
+/** 打开设置页后把某个元素滚到视野中央并闪一下(点"最紧/看诊断"时用)。 */
+function focusEl(el) {
+  if (!el) return;
+  requestAnimationFrame(() => {
+    el.scrollIntoView({ block: "center" });
+    el.classList.add("flash");
+    setTimeout(() => el.classList.remove("flash"), 1150);
+  });
+}
+
+$("chQ").addEventListener("input", (e) => {
+  CH_Q = e.target.value || "";
+  render({}); // 过滤只影响"画哪些行",不重取数
+});
+
 $("list").addEventListener("click", async (e) => {
   // I2:紧凑条的 +N 徽标 —— 展开面板,滚动到第一个被藏渠道并高亮 1 秒
   const more = e.target.closest(".more");
@@ -2364,6 +2683,11 @@ $("list").addEventListener("click", async (e) => {
           setTimeout(() => el.classList.remove("flash"), 1150);
         }
       });
+    } else if (a === "open-diag") {
+      // 大面积失败横幅上的「看诊断」:直接落到体检那一段,不用自己翻
+      openManage();
+      showTab("run");
+      focusEl($("btnDiag"));
     } else if (a === "ckrun") {
       // N08(2026-10-21):徽标上的「可领」按钮带着 data-act="ckrun",但这个委托
       // 以前只认 ckstripopen / open-manage / open-models / range —— ckrun 落进来
@@ -2630,14 +2954,33 @@ $("dockClose").addEventListener("click", () => {
 let pillHover = false, pillTick = 0;
 $("pill").addEventListener("mouseenter", () => (pillHover = true));
 $("pill").addEventListener("mouseleave", () => (pillHover = false));
-setInterval(() => {
-  if (PILL.list.length < 2) return;
-  if (!document.body.className.includes("form-pill")) return;
-  pillTick++;
-  if (pillHover && pillTick % 3 !== 0) return;
-  PILL.idx = (PILL.idx + 1) % PILL.list.length;
-  renderPillFace();
-}, PILL_ROTATE_MS);
+// 轮播节奏用 setTimeout 链而不是 setInterval:停留时长要能读配置
+// (`pillDwellSec`,设计附录 B:默认 12 秒,原写死 8 秒),setInterval 的间隔改不了。
+function pillDwellMs() {
+  const v = (CFG && CFG.pillDwellSec) || 12;
+  return Math.max(4, v) * 1000;
+}
+let pillTimer = null;
+function pillSchedule() {
+  clearTimeout(pillTimer);
+  pillTimer = setTimeout(function pillTickOnce() {
+    if (PILL.list.length >= 2 && document.body.className.includes("form-pill")) {
+      pillTick++;
+      // 悬停时节奏延长 3 倍:暂停曾被误认为轮播坏了(实测踩过),所以只放慢、不暂停
+      const slowed = pillHover && pillTick % 3 !== 0;
+      // 告急时锁定**自动**轮播(Q3):最该被看见的那一页自动走掉,是最容易错过的一次。
+      // 手动翻页不受影响 —— 锁的是"自动",不是"人"。
+      const cur = PILL.list[PILL.idx];
+      const cr = cur && hvRow(cur.id);
+      if (!slowed && !(cr && cr.tier === 0)) {
+        PILL.idx = (PILL.idx + 1) % PILL.list.length;
+        renderPillFace();
+      }
+    }
+    pillSchedule();
+  }, pillDwellMs());
+}
+pillSchedule();
 // 胶囊整块是拖动区(见 index.html),展开只走 ▲ 按钮,避免和拖动抢手势
 
 /** 存配置 + 立刻重取一次:申请状态是后端按配置算的,不重取看不到变化。 */
@@ -3387,6 +3730,16 @@ bindSwitch("cfgSound", "soundOn", (on) => {
 })();
 // 置顶走 set_pin:窗口与配置一起改,失败时 bindSwitch 会回滚开关
 // 吸附开关:关掉时如果正吸附着,立刻解除
+bindSwitch("cfgTextTone", "textTone", (on) => document.body.classList.toggle("texttone", !!on));
+// 「用掉还是剩余」:百分比型看剩余还是看已用(设计 P3),四处同源
+bindSwitch("cfgShowUsed", "showUsed", () => render({}));
+// 余额底线:充值型渠道低于它就算"需要处理",不能因为算不出分母而缺席(D02)
+$("cfgMoneyFloor").addEventListener("change", async () => {
+  const v = Math.max(1, Math.round(Number($("cfgMoneyFloor").value) || 10));
+  CFG.moneyFloor = v;
+  $("cfgMoneyFloor").value = String(v);
+  await saveConfigAndRefresh();
+});
 bindSwitch("cfgDock", "dockEnabled", async (on) => {
   if (!on && DOCK.on) await dockExit(true);
 });
@@ -3457,7 +3810,12 @@ function syncStaticControls() {
   setSwitch("cfgSound", !!CFG.soundOn);
   setSwitch("cfgDock", CFG.dockEnabled);
   setSwitch("cfgPin", CFG.alwaysOnTop);
+  setSwitch("cfgTextTone", !!CFG.textTone);
+  setSwitch("cfgShowUsed", !!CFG.showUsed);
+  const mf = $("cfgMoneyFloor");
+  if (mf) mf.value = String(CFG.moneyFloor > 0 ? CFG.moneyFloor : 10);
   document.body.classList.toggle("pulse", !!CFG.alertPulse);
+  document.body.classList.toggle("texttone", !!CFG.textTone);
 }
 
 function applyConfigToUI() {
@@ -3883,9 +4241,40 @@ document.addEventListener("keydown", (e) => {
     dockLayout(false); // I6:吸附展开态,Esc 收回为竖条(不退出吸附)
   } else if (document.body.className.includes("form-panel")) {
     applyForm("pill");
-  } else {
+  } else if (document.body.className.includes("form-compact")) {
     applyForm("panel");
+  } else {
+    // 胶囊 → 紧凑条:Esc 现在能走完一圈,不再绕开用户待得最久的那一档
+    applyForm("compact");
   }
+});
+
+// 形态快捷键与行间移动(D11):同一个手势在四种形态里做四件不同的事,是
+// "没有肌肉记忆"的根因。这里给出三条统一的:Ctrl+1/2/3 直接切形态,↑↓ 在面板里走行。
+document.addEventListener("keydown", (e) => {
+  if (manageOpen()) return;
+  const t = e.target;
+  const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+  if (e.ctrlKey && !e.altKey && !e.metaKey) {
+    if (e.key === "1") { e.preventDefault(); applyForm("panel"); return; }
+    if (e.key === "2") { e.preventDefault(); applyForm("compact"); return; }
+    if (e.key === "3") { e.preventDefault(); applyForm("pill"); return; }
+  }
+  if (typing) return;
+  if (e.key === "/") {
+    // 只有过滤框可见时才抢这个键,免得面板里按不出别的斜杠输入
+    const q = $("chQ");
+    if (q && q.offsetParent) { e.preventDefault(); q.focus(); }
+    return;
+  }
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  if (!document.body.className.includes("form-panel")) return;
+  const heads = [...document.querySelectorAll("#list .rhead")];
+  if (!heads.length) return;
+  e.preventDefault();
+  const i = heads.indexOf(document.activeElement);
+  if (i < 0) { heads[0].focus(); return; }
+  heads[Math.max(0, Math.min(heads.length - 1, i + (e.key === "ArrowDown" ? 1 : -1)))].focus();
 });
 
 
@@ -4265,6 +4654,19 @@ function ckRowHtml(id) {
       : "") +
     "</div>"
   );
+}
+
+/** 首页的统一视图(七态 / 五桶 / 绑定窗)。
+ *
+ * 取数走 `fetch_shared` —— 与 `get_channels` 同一个闸门、同一份 5 秒内的近期结果,
+ * 所以紧贴着调一次不会多打一次账务接口。失败时保留上一份视图,四个渲染器退回本地判断。
+ */
+async function loadHomeView() {
+  try {
+    hvApply(await invoke("home_view"));
+  } catch (e) {
+    // 视图拿不到不该让首页变空白:渲染器各自退回 toneOf / sortChannels
+  }
 }
 
 async function loadCheckin() {
@@ -5081,6 +5483,7 @@ async function refresh() {
     return;
   }
   CHANNELS = list;
+  await loadHomeView();
   // 签到状态必须**在 render 之前**取好(2026-10-21 修):
   // 以前 loadCheckin() 只在「打开设置页 / 点签到按钮 / 后端推事件」时调用 ——
   // 于是首页从来就没有 CK,徽标一律拿到 undefined 直接不画,用户当然看不到签到。

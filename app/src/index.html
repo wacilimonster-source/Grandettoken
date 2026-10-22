@@ -47,6 +47,10 @@
   </div>
 
   <div class="sum" id="sum"></div>
+  <!-- 渠道过滤:只有渠道多起来(>=12)才显示,平时不占这一行(P3) -->
+  <div class="qbar" id="qbar" style="display:none">
+    <input class="inp" id="chQ" placeholder="过滤渠道…" autocomplete="off" spellcheck="false">
+  </div>
   <div class="list" id="list">
     <div class="empty">加载中…</div>
   </div>
@@ -154,7 +158,8 @@
         <button class="sw" id="cfgPulse" role="switch" aria-checked="false" aria-label="红色告急时呼吸提示"></button></div>
       <div class="field"><span>渠道排序</span>
         <select class="sel" id="cfgSort">
-          <option value="percent">剩余百分比升序</option>
+          <option value="urgency">紧迫度(故障 → 比例 → 绝对额 → 积分)</option>
+          <option value="percent">剩余百分比升序(同紧迫度)</option>
           <option value="balance">余额高 → 低</option>
           <option value="dayUsage">今日消耗高 → 低</option>
           <option value="custom">自定义(在「渠道」页 ↑↓)</option>
@@ -216,6 +221,14 @@
       <div class="khint">Trae 与 WorkBuddy 的每日积分可以替你去领。默认<b>关</b> —— 在渠道卡上点一次「开启签到」才开始发请求;
         关掉后一个请求都不发。用的是平台内部接口,随时可能失效,与官方无关。</div>
       <div id="ckSet"></div>
+
+      <h4>显示</h4>
+      <div class="field"><span>非颜色模式<span class="desc">每行把状态写成文字(正常 / 预警 / 告急),不靠颜色单独承重</span></span>
+        <button class="sw" id="cfgTextTone" role="switch" aria-checked="false" aria-label="非颜色模式"></button></div>
+      <div class="field"><span>用掉还是剩余<span class="desc">百分比型渠道的大数字看"还剩多少"还是"已用多少"</span></span>
+        <button class="sw" id="cfgShowUsed" role="switch" aria-checked="false" aria-label="用掉还是剩余"></button></div>
+      <div class="field"><span>余额底线(元)<span class="desc">充值型渠道低于它算「需要处理」;算不出比例的渠道也据此参与排序</span></span>
+        <input class="sel" id="cfgMoneyFloor" type="number" min="1" step="1" placeholder="10"></div>
 
       <h4>快捷键</h4>
       <div class="field"><span>显示 / 隐藏面板<span class="desc">点框内按下组合键(如 Alt+G);Esc 清除 = 不启用</span></span>

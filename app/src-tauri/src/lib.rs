@@ -10,7 +10,7 @@ use tauri::{Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
 use tokenscope_core::config::Config;
 use tokenscope_core::fetch::{now_ts, ChannelView, Fetcher};
-use tokenscope_core::{appauth, checkin, inject, models, providers, secrets, store::Store, workbuddy};
+use tokenscope_core::{appauth, checkin, inject, models, providers, secrets, store::Store, view, workbuddy};
 
 pub struct AppState {
     pub store: Arc<Mutex<Store>>,
@@ -30,6 +30,40 @@ async fn get_channels(state: State<'_, AppState>) -> Result<Vec<ChannelView>, St
     let fetcher = state.fetcher.clone();
     // fetch_shared:与轮询/托盘刷新共用闸门,手动刷新不再叠加出一份并发请求(报告 O-4)
     Ok(fetcher.fetch_shared(&store).await)
+}
+
+/// 首页四种形态的**统一视图**:一行一个 `FormRow`,加一份排好的顺序与几个计数。
+///
+/// 存在的理由见 `core::view` 的头注:四种形态以前各自解释一次 `valid / limited /
+/// updatedAt`,同一个渠道能给出三种结论。这一条命令之后,前端只负责"画"。
+///
+/// 取数走 `fetch_shared`(与 `get_channels` 同一闸门、同一份 5 秒内的近期结果),
+/// 所以前端连着调这两条不会多打一次账务接口。
+#[tauri::command]
+async fn home_view(state: State<'_, AppState>) -> Result<view::HomeView, String> {
+    let store = state.store.clone();
+    let fetcher = state.fetcher.clone();
+    let views = fetcher.fetch_shared(&store).await;
+
+    let cfg = lock_rw(&state.config).clone();
+    let now = now_ts();
+    // 签到的"今天签完没"由后端判定(Qoder 的周期日从 10:00 起算,前端算必错),
+    // 这里沿用 `checkin_state` 那条链路上的同一个函数。
+    // 隐藏的渠道不必在这里排除:`build_home` 只数排进行列表的那些行,而隐藏的
+    // 渠道根本不进 `rows`(与前端 `ckActiveIds` 的口径仍然是同一个)。
+    let checks: Vec<view::CheckinInput> = checkin::CHECKINS
+        .iter()
+        .map(|d| {
+            let c = cfg.checkin.get(d.id).cloned().unwrap_or_default();
+            view::CheckinInput {
+                id: d.id.to_string(),
+                enabled: c.enabled,
+                done_today: c.blocks_today(&cycle_day_of(d.id, now), APP_VERSION),
+            }
+        })
+        .collect();
+
+    Ok(view::build_home(&views, &checks, &view::ViewInput::from_cfg(&cfg, now)))
 }
 
 #[tauri::command]
@@ -4193,6 +4227,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_channels,
+            home_view,
             get_config,
             set_config,
             set_key,

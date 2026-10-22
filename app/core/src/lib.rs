@@ -23,6 +23,7 @@ pub mod qoder;
 pub mod secrets;
 pub mod store;
 pub mod vault;
+pub mod view;
 pub mod weblogin;
 pub mod workbuddy;
 pub mod yamledge;

@@ -54,7 +54,24 @@ pub struct Config {
     pub warn_percent: f64,
     /// 低于此值标红
     pub crit_percent: f64,
+    /// 胶囊停留秒数(设计附录 B:默认 12)。原写死 8 秒,做得可配。
+    pub pill_dwell_sec: u64,
+    /// 「用掉还是剩余」:百分比型的大数字看剩余(默认)还是已用。四处同源。
+    pub show_used: bool,
+    /// 非颜色模式:状态同时写成文字(正常 / 预警 / 告急 / 陈旧),
+    /// 不靠颜色单独承重 —— 红绿色觉异常的用户只读数字是读不到"这是告警"的(D12)。
+    pub text_tone: bool,
+    /// 「余额底线」(元):充值型渠道低于它就算需要动作。
+    ///
+    /// 为什么必须有:没有分母的充值型渠道算不出比例,而"算不出"曾经被当成"健康"
+    /// —— 于是"只剩 ¥0.03"长期显示绿点、排在还剩 ¥88 的渠道后面(产品设计 D02)。
+    /// 有了底线,金额型永远能参与"最紧"的评选。默认 ¥10(`view::DEFAULT_MONEY_FLOOR`)。
+    pub money_floor: f64,
+    /// 超过多少秒没取到新数据就算「陈旧」(四种形态都要能看出这是旧快照)。
+    /// 0 或负 = 用 `view::DEFAULT_STALE_SEC`。
+    pub stale_after_sec: i64,
     /// 全局快捷键(显示/隐藏面板),Tauri accelerator 格式如 "Alt+KeyG";
+    /// 空串 = 不注册。老配置缺字段时兜成空,不会抢占别人的热键。(显示/隐藏面板),Tauri accelerator 格式如 "Alt+KeyG";
     /// 空串 = 不注册。老配置缺字段时兜成空,不会抢占别人的热键。
     pub hotkey: String,
     pub autostart: bool,
@@ -63,7 +80,10 @@ pub struct Config {
     pub always_on_top: bool,
     /// panel | compact | pill(贴边不是独立形态,是这三种形态之上的吸附态)
     pub form: String,
-    /// percent | balance | dayUsage
+    /// percent | balance | dayUsage | urgency | custom
+    ///
+    /// `urgency`(五桶紧迫度)是新默认;老配置里的 `percent` 在
+    /// `view::ViewInput::from_cfg` 那一层被当成 `urgency` 读 —— 不必改写用户文件。
     pub sort: String,
     /// 字号档位:md(标准) | lg(大) | xl(特大)。倍率映射在前端(FS_U),
     /// 这里只存档位本身 —— 老配置缺字段时 serde default 兜成 md,行为不变。
@@ -174,6 +194,11 @@ impl Default for Config {
             backoff_interval_sec: 900,
             warn_percent: 40.0,
             crit_percent: 15.0,
+            text_tone: false,
+            pill_dwell_sec: 12,
+            show_used: false,
+            money_floor: crate::view::DEFAULT_MONEY_FLOOR,
+            stale_after_sec: crate::view::DEFAULT_STALE_SEC,
             hotkey: String::new(),
             autostart: false,
             always_on_top: true,
