@@ -2704,10 +2704,18 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
         entry.attempts = if same_day { entry.attempts + 1 } else { 1 };
         entry.last_day = Some(today.clone());
         entry.last_code = Some(out.code());
-        // 记下"判出这条 auth 的是哪个版本"。换版本后 `blocks_today` 会认为它陈旧、
+        // 记下"判出这条结论的是哪个版本"。换版本后 `blocks_today` 会认为它陈旧、
         // 给一次重新判定的机会 —— 见 checkin.rs 里 last_auth_version 的说明。
-        // 非 auth 的结论不需要清这个字段:auth_is_stale 只在 last_code 以 auth 开头时才看它。
-        if matches!(out, checkin::Outcome::AuthNeeded) {
+        // 除了 `auth`,**`inactive` / `manual` 也要记**:它们不是平台给的既成事实,
+        // 而是**我们自己的分类器**给出的结论(哪些活动算"打卡")。规则一改,旧结论
+        // 就该重问一次 —— v0.1.57 把 VIEW_DETAILS + CLAIMABLE 从"没活动"改成"有活动",
+        // 不重问的话升级后当天仍然显示"本期无活动"(用户看到的就是"改了也没用")。
+        if matches!(
+            out,
+            checkin::Outcome::AuthNeeded
+                | checkin::Outcome::Inactive(_)
+                | checkin::Outcome::Manual(_)
+        ) {
             entry.last_auth_version = Some(APP_VERSION.to_string());
         }
         entry.last_try_at = Some(now);

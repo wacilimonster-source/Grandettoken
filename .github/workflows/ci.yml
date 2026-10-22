@@ -119,6 +119,15 @@ jobs:
           node --check build/verify-ui-0923.js
           node --check build/shot-panel.js
           node --check build/make-latest-json.js
+          node --check build/check-css-forms.js
+
+      # 形态门守卫:吸附条 / 胶囊 / 紧凑条控件这些"整块容器"的 display 必须挂在
+      # body.<状态> 下。v0.1.56 的吸附条漏了这道门(.dock-body{display:flex!important}),
+      # 面板里它 height:100% 抢走 415px,列表被压成 0 高,整页只剩底栏 ——
+      # 纯 CSS 的错,jsdom 不参与布局,所以单独一道闸。
+      - name: CSS form gate guard
+        shell: pwsh
+        run: node build/check-css-forms.js
 
       # 推送前扫凭据。以前只在本地手动跑 —— 而"只在本地跑"等于"忘了就不跑",
       # 这一步恰恰是最不该忘的。它扫的是 git ls-files,所以 untracked 的文件不会

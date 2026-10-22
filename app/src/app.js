@@ -396,87 +396,6 @@ function hvSort(list) {
 }
 
 // ───────────── 渲染 ─────────────
-function renderSummary() {
-  // 汇总只累加金额型渠道 —— 百分比和金额不能相加;隐藏的渠道不参与;
-  // 币种不是 CNY 的也不参与(DeepSeek 可能返回非人民币余额,混进来就是把美元当人民币加)
-  const am = CHANNELS.filter(
-    (c) =>
-      c.kind === "amount" &&
-      c.hasKey &&
-      c.remaining !== null &&
-      !c.hidden &&
-      (c.unit || "CNY") === "CNY"
-  );
-  // 订阅型套餐(OpenCode Go $10/期)是另一笔:它不是余额差值,但这个周期确实掏了这笔钱。
-  // 后端按天摊好(周期长度从真实重置里学,汇率每月自动取),这里只管加进三格并说明口径。
-  // **必须带 hasKey**:后端会把 plan 连没有密钥的占位视图一起挂上,只按 plan 过滤时
-  // 全新安装(只配了 4SAPI)会凭空多出「OpenCode Go 套餐摊销」那笔钱(F1)。
-  const plans = CHANNELS.filter((c) => !c.hidden && c.hasKey && c.plan);
-  const planSum = (f) => plans.reduce((a, c) => a + (c.plan[f] || 0), 0);
-  const p0 = plans.length ? plans[0].plan : null;
-  const planTip = p0
-    ? ` · 含套餐 $${p0.usd.toFixed(0)}/期 按天摊 ${money(p0.perDay)}/天` +
-      `(周期 ${p0.days.toFixed(1)} 天${p0.learned ? "·实测" : "·按上一期推"},汇率 ${p0.rate}·${p0.rateMonth})`
-    : "";
-  // 被排除在 CNY 合计之外的非人民币渠道要点名:合计里少了谁,用户有权知道(F12)
-  const offCur = CHANNELS.filter(
-    (c) => c.kind === "amount" && c.hasKey && c.remaining !== null && !c.hidden && !am.includes(c)
-  );
-  const offTip = offCur.length
-    ? " · " + offCur.map((c) => `${c.name}(${c.unit || "?"})不是人民币,未计入`).join("、")
-    : "";
-  const sum = (f) => {
-    const vals = am.map((c) => c[f]).filter((v) => v !== null && v !== undefined);
-    if (!vals.length) return null;
-    return vals.reduce((a, b) => a + b, 0);
-  };
-  // 每格显式带上自己的字段名与比对口径 —— 不要拿"是否推算"去推字段名。
-  // prev* = 上一周期同时段(U8 环比):今日 vs 昨日同时段,以此类推
-  const cells = [
-    { label: "今日消耗", field: "day", prev: "dayPrev", cmp: "对比昨日同时段" },
-    { label: "本周消耗", field: "week", prev: "weekPrev", cmp: "对比上周同时段" },
-    { label: "本月消耗", field: "month", prev: "monthPrev", cmp: "对比上月同时段" },
-  ];
-  // 一格数都没有时不留空条 —— 但**只有非人民币渠道**时要把条留着:整条消失
-  // 看起来像挂件坏了,三格「——」才诚实(G1);谁没被计入放在 tooltip 里点名。
-  // 无论如何不做跨币种求和。
-  if (!am.length && !plans.length && !offCur.length) {
-    $("sum").innerHTML = "";
-    return;
-  }
-  // 面上只留「标签 + 金额」,干干净净;口径 / 环比 / 套餐摊销 / 非人民币点名
-  // 全部收进 title —— 之前塞在金额后面,窄窗 + 大字号下被 ellipsis 截成
-  // 「¥123…」,钱和说明两头都看不清(P3-31)。
-  $("sum").innerHTML = cells
-    .map(({ label, field, prev, cmp }) => {
-      const v = sum(field);
-      const add = plans.length ? planSum(field) : 0;
-      // 金额型这一格没数时,套餐那一笔仍然要显示(否则"今日"会因为一家接口挂了而空掉)
-      const total = v === null ? (add > 0 ? add : null) : v + add;
-      const txt = total === null ? "——" : money(total);
-      // 环比只在"本期与上期都有数"的渠道集合上算,两边口径才对称;
-      // 套餐那一笔两边都加(按天摊,只会让比例更平);上期无基线时如实说
-      const both = am.filter((c) => c[field] != null && c[prev] != null);
-      let cur2 = both.reduce((a, c) => a + c[field], 0);
-      let prev2 = both.reduce((a, c) => a + c[prev], 0);
-      if (add > 0) {
-        cur2 += add;
-        prev2 += planSum(prev);
-      }
-      const hasBase = (both.length || add > 0) && prev2 > 0;
-      const tip =
-        `${cmp}:本期 ${txt}` +
-        (hasBase
-          ? ` · 上期 ${money(prev2)} · 环比 ${(((cur2 - prev2) / prev2) * 100).toFixed(1)}%`
-          : " · 上期无同期基线") +
-        planTip +
-        offTip;
-      return `<div class="cell" title="${esc(tip)}"><div class="lb">${label}</div>
-        <div class="vv">${txt}</div></div>`;
-    })
-    .join("");
-}
-
 function renderRow(c, i) {
   const tone = hvTone(c); // 与其余三种形态同源(设计 P3 · 状态同源)
   const noKey = !c.hasKey;
@@ -655,9 +574,12 @@ function renderRow(c, i) {
 
   // 「更新于」只在陈旧时说(设计附录 B:`.rhint` 只在 stale 时画)。
   // 新鲜是默认状态,不值得占一行 —— 那一行本来就是给"这是旧快照"用的。
+  // **失联(auth / 取数失败)也要画**:那时 `c.remaining` 是最近一次成功取到的数,
+  // 不说明的话,大数字看着像刚刚刷出来的 —— 右侧明明写着"失联"(2026-10-22 体检 P1-4)
   const hv = hvRow(c.id);
   const isStale = hv ? hv.state === "stale" : !!c.stale;
-  const src = isStale
+  const isOld = isStale || failed;
+  const src = isOld
     ? `<div class="rhint stale">显示的是 ${relTime(c.updatedAt)} 的成功快照${
         c.error ? " · " + esc(c.error) : ""
       }</div>`
@@ -692,7 +614,7 @@ function renderRow(c, i) {
         </div>
         <div class="caret">&#9654;</div>
       </div>
-      <div class="r2">${hv && hv.secondary ? esc(hv.secondary) : subVal}</div>
+      <div class="r2">${hv && hv.secondary ? esc(hv.secondary) : ""}</div>
       ${bar}
       <div class="seg3">${useHtml}</div>
       ${claimWarn}
@@ -1106,12 +1028,11 @@ function listHtmlWithGroups(shown) {
 function renderRiskBand() {
   const box = $("sum");
   if (!box) return;
-  const t = HV && HV.totals;
-  const has = t && ((t.cny !== null && t.cny !== undefined) || (t.others || []).length ||
-    (t.today !== null && t.today !== undefined));
-  // 拿不到统一视图时退回原来的三格消耗,行为不回退
-  if (!has) return renderSummary();
-
+  // 风险带是面板的**固定结构**(三格:总余额 / 最紧 / 签到),不是"有数才画"。
+  // 以前没有人民币合计时整条 display:none —— 纯积分用户、冷启动、渠道全隐藏
+  // 三种情况下它都会消失,数据回来时整页向下跳 73px;更糟的是"最紧"和"签到"
+  // 这两格跟金额无关,却陪着一起消失了(2026-10-22 三形态体检 P1-2)。
+  const t = HV && HV.totals ? HV.totals : {};
   const cnyTxt = t.cny === null || t.cny === undefined ? "——" : money(t.cny);
   const dayTxt = t.today === null || t.today === undefined ? "——" : money(t.today);
   // 环比只在"两边都有基线"时算,与底部汇总同一套口径;没有基线就不写涨跌
@@ -1123,33 +1044,47 @@ function renderRiskBand() {
   const otherTxt = (t.others || []).length
     ? " · 另 " + t.others.map(otherMoneyTxt).join(" + ")
     : "";
+  // 一个数都没有时副行留空 —— 写「今日 ——」只是把"没有"说两遍
+  const sub1 = t.cny === null || t.cny === undefined
+    ? (t.others || []).length ? otherTxt.replace(/^ · /, "") : ""
+    : `今日 ${dayTxt}${delta}${otherTxt}`;
 
   // ② 最紧:点一下跳到那一行(它是"现在该看谁"的答案,要能一键抵达)
   let cell2 = "";
-  const rc = HV.risk && CHANNELS.find((c) => c.id === HV.risk);
+  const rc = HV && HV.risk ? CHANNELS.find((c) => c.id === HV.risk) : null;
   if (rc) {
     const r = hvRow(rc.id);
     const sub2 = esc([r && r.qualifier, r && r.secondary].filter(Boolean).join(" · "));
     cell2 = `<div class="cell" data-act="jump" data-id="${esc(rc.id)}" title="点一下跳到这一行">
       <div class="lb">最紧</div>
-      <div class="vv" style="color:${TONE_COLOR[hvTone(rc)]}">${esc(rc.name)} <b>${hvText(r && r.headline)}</b></div>
+      <div class="vv" style="color:${TONE_COLOR[hvTone(rc)]}"><span class="rn">${esc(rc.name)}</span> <b>${hvText(r && r.headline)}</b></div>
       <div class="sb">${sub2 || "——"}</div></div>`;
+  } else {
+    // 没有"最紧"(没有渠道 / 全部隐藏):格子留着,写 —— 。三格是三段固定宽度,
+    // 少一格会让总余额那格突然变宽,切换状态时整条带子跳一下。
+    cell2 = `<div class="cell"><div class="lb">最紧</div>
+      <div class="vv" style="color:var(--tx3)">——</div><div class="sb"></div></div>`;
   }
 
   // ③ 签到:常驻。全部签完也要留着「✓ 3/3」—— "完成"和"坏了"不能长得一样(D09)
   let cell3 = "";
-  const ck = HV.checkin;
-  if (ck) {
+  const ck = HV && HV.checkin;
+  // total = 0 时写 —— :一个「✓ 0/0」既不是"签完了"也不是"还有事",
+  // 只是把"没有签到渠道"这件事说了一遍(2026-10-22 体检:全隐藏时它还在)
+  if (ck && ck.total > 0) {
     const segs = Array.from({ length: ck.total }, (_, i) => `<i class="${i < ck.done ? "on" : ""}"></i>`).join("");
     cell3 = `<div class="cell" data-act="ckstripopen" title="每日签到">
       <div class="lb">签到</div>
       <div class="vv">${ck.done >= ck.total ? "\u2713 " : ""}${ck.done}/${ck.total}</div>
       <div class="sb"><span class="ckseg">${segs}</span></div></div>`;
+  } else {
+    cell3 = `<div class="cell"><div class="lb">签到</div>
+      <div class="vv" style="color:var(--tx3)">——</div><div class="sb"></div></div>`;
   }
 
   box.innerHTML =
     `<div class="cell"><div class="lb">总余额</div><div class="vv">${cnyTxt}</div>` +
-    `<div class="sb">今日 ${dayTxt}${delta}${otherTxt}</div></div>${cell2}${cell3}`;
+    `<div class="sb">${sub1}</div></div>${cell2}${cell3}`;
 }
 
 /** 过滤条:十二个渠道以内靠排序就够,超过才需要搜索(P3)。 */
@@ -1174,7 +1109,7 @@ function renderInner(opts) {
   // 标题栏挤了 6 个按钮,计数用短写法,完整说法放 tooltip
   // 标题栏改文字按钮后不再放计数(放不下),底栏已有「N 正常 · M 预警」
 
-  renderRiskBand(); // 顶部换成风险带;拿不到视图时它内部退回 renderSummary
+  renderRiskBand(); // 风险带:总余额 / 最紧 / 签到,三格常驻(没有数字的那格写 ——)
   syncQBar(); // 渠道多起来(>=12)才把过滤框放出来,平时不占这一行
 
   if (!CHANNELS.length) {
@@ -1185,6 +1120,10 @@ function renderInner(opts) {
         `<div class="sk-row"><i class="sk-ico"></i><i class="sk-nm"></i><i class="sk-v"></i></div>`
       ).join("")}</div>
        <div class="sk-foot">正在取数 · 首次启动需要几秒</div>`;
+    // 底栏也要跟着回到"还没数"的状态:以前这里直接 return,底栏留着**上一轮**
+    // 的「8 正常 · 3 预警」—— 刚启动就写着 8 个渠道,而列表里一个都还没有。
+    $("fdot").className = "dot off";
+    $("fstat").textContent = "正在取数…";
     return;
   }
 
@@ -1231,9 +1170,11 @@ function renderInner(opts) {
   // 与行内同一套约定:未配置=空心环,失联=斜杠灰点,预警=黄(之前 warn 用了红点,颜色梯度倒挂)
   $("fdot").className =
     "dot" + (bad ? " st" : warn ? " w" : withKey.length ? "" : " off");
+  // 三段必须**互斥**:以前 正常 = withKey.length - bad,而 warn 是它的子集,
+  // 于是 8 个渠道(3 个预警)写成「8 正常 · 3 预警」,加起来 11 > 8。
   $("fstat").textContent = !withKey.length
     ? (hiddenN ? "渠道已全部隐藏" : "未配置渠道")
-    : `${withKey.length - bad} 正常${warn ? ` · ${warn} 预警` : ""}${bad ? ` · ${bad} 失联` : ""}${hiddenN ? ` · ${hiddenN} 隐藏` : ""}`;
+    : `${withKey.length - bad - warn} 正常${warn ? ` · ${warn} 预警` : ""}${bad ? ` · ${bad} 失联` : ""}${hiddenN ? ` · ${hiddenN} 隐藏` : ""}`;
 
   // 动效 A/B:数据刷新后,值真的变了的行 → 大数字翻页进入 + 一道微光;
   // 值没变的行一动不动 —— 这是「刷新完成」的视觉回执,不是装饰
@@ -1298,7 +1239,9 @@ function scheduleFitCompact() {
  */
 function compactCheckinChip(list) {
   const ck = HV && HV.checkin;
-  if (!ck) return null;
+  // total = 0 时不给 chip:一个「✓ 0/0」既不是"签完了"也不是"还有事",
+  // 只是把"没有签到渠道"这件事说了一遍(2026-10-22 体检:全隐藏时它还在)
+  if (!ck || !ck.total) return null;
   const el = document.createElement("span");
   el.className = "ckchip";
   el.dataset.act = "ckstripopen";
@@ -1336,7 +1279,18 @@ function fitCompact() {
   const ckW = ckEl && list.contains(ckEl) ? ckEl.offsetWidth + gap : 0;
   // 列表左右留白(11+4) + 右侧按钮组 + 窗口两条竖边框 + 签到 chip
   const chrome = Math.round(15 * u) + $("cctl").offsetWidth + 2 + ckW;
-  const moreW = Math.round(28 * u);
+  // `+N` 的宽度**真量一次**(以前写死 28u):"+6" 与 "+12" 差好几像素,
+  // 写死的结果是末尾那个 chip 被裁掉一条边(实测 many 场景 283 > 279)。
+  const moreW = (() => {
+    const probe = document.createElement("div");
+    probe.className = "more";
+    probe.textContent = "+99";
+    probe.style.visibility = "hidden";
+    list.appendChild(probe);
+    const w = probe.offsetWidth;
+    probe.remove();
+    return w || Math.round(28 * u);
+  })();
 
   if (!rows.length) {
     // 空态(没配置 / 全隐藏):一条最小 chip 贴到内容宽,不再空荡 380
@@ -1366,7 +1320,10 @@ function fitCompact() {
   let hidden = 0;
   const total = () => {
     const n = rows.length - hidden;
-    let s = chrome + (n > 1 ? gap * (n - 1) : 0) + (hidden ? moreW : 0);
+    // 间隙数 = chip 之间 + 「最后一个 chip 与 +N 之间」。以前只算 n-1,
+    // 有 +N 时少算一个 gap(10px)—— 末尾 chip 因此被裁掉 4~10px。
+    const gaps = Math.max(0, n - 1 + (hidden ? 1 : 0));
+    let s = chrome + gap * gaps + (hidden ? moreW : 0);
     for (let i = 0; i < n; i++) s += W[lv[i]][i];
     return s;
   };
@@ -4536,6 +4493,13 @@ function ckText(s) {
     return { text: s.lastMessage || "本机没读到签到凭据 · 打开一次客户端即可", warn: true };
   // 无活动与"已结束"分开说:前者是本期没有打卡活动(活动换季),不是失败也不是已签
   if (o.startsWith("inactive")) return { text: s.lastMessage || "本期无打卡活动(等下一期)" };
+  // manual = **有活动,但只能去客户端里领**(Qoder 的 VIEW_DETAILS 类活动)。
+  // 不能说成"本期无活动" —— 用户在客户端里明明看得到那一条(2026-10-22 实证)。
+  if (o.startsWith("manual"))
+    return {
+      text: "有活动:" + (s.lastMessage || "客户端里可领") + " · 只能在客户端打开领取",
+      warn: false,
+    };
   if (o.startsWith("shape")) return { text: "签到接口有变动,已暂停自动签到 · 余额显示不受影响", warn: true };
   if (o.startsWith("failed")) return Object.assign({ text: "上次没成功:" + (s.lastMessage || o.slice(7)) }, run("重试", ""));
   return Object.assign({ text: "今天还没签" }, run("领积分", "p"));
@@ -4588,6 +4552,8 @@ function ckBadgeHtml(c) {
   if (o.startsWith("already")) return `<span class="ckb ok" title="${tip}">✓ 已签</span>`;
   // inactive = 本期无活动:不是"已签",但今天确实没有待办,聚合里算它一份
   if (o.startsWith("inactive")) return `<span class="ckb ok" title="${tip}">本期无活动</span>`;
+  // manual = 有活动,但只能在客户端领:要让人看见"有事可做",所以不用灰色的"本期无活动"
+  if (o.startsWith("manual")) return `<span class="ckb info" title="${tip}">有活动</span>`;
   if (o.startsWith("retry:ready")) {
     // 后端把"能不能点"算好了(canTry):退避中就别给一个点了没反应的按钮
     return s.canTry === false
@@ -4615,6 +4581,8 @@ function ckBadgeTip(s) {
   else if (o.startsWith("already"))
     bits.push("平台显示今天已签到" + (s.credits ? "(数额 " + s.credits + " 分)" : ""));
   else if (o.startsWith("inactive")) bits.push(s.lastMessage || "本期无打卡活动,等下一期");
+  else if (o.startsWith("manual"))
+    bits.push("有活动:" + (s.lastMessage || "") + " —— 领取入口在客户端里,挂件领不了");
   else if (o.startsWith("retry:ready"))
     bits.push("今天可领" + (s.credits ? " +" + s.credits + " 分" : ""));
   else if (o.startsWith("auth")) bits.push("凭据失效 —— 打开一次客户端");

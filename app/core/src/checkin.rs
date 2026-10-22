@@ -176,6 +176,13 @@ pub enum Outcome {
     Already(Option<f64>),
     /// 今天没得领(活动未开启/已结束)
     Inactive(String),
+    /// **有活动,但只能在客户端里领**:Qoder 的 `VIEW_DETAILS` 类活动
+    /// (claimStatus = CLAIMABLE,actionType 不是 CLAIM_BENEFIT)——
+    /// 平台把领取放在活动页里(客户端打开 `growth-page/activity-iframe`),
+    /// 没有给"直接领"的语义。这条要如实说出来,不能并进 Inactive:
+    /// 并进去就是"本期无打卡活动",而用户明明在客户端看得到一个可领的活动
+    /// (2026-10-22 实证:1024 活动 claimable=true,旧口径报"无活动")。
+    Manual(String),
     /// 设备/出口不被接受或限流:当天可退避重试
     Retry(String),
     /// 凭据失效:重试无用,要用户动手
@@ -201,6 +208,7 @@ impl Outcome {
             Outcome::Claimed(_) => "claimed".into(),
             Outcome::Already(_) => "already".into(),
             Outcome::Inactive(m) => format!("inactive:{m}"),
+            Outcome::Manual(m) => format!("manual:{m}"),
             Outcome::Retry(m) => format!("retry:{m}"),
             Outcome::AuthNeeded => "auth".into(),
             Outcome::BadShape(m) => format!("shape:{m}"),
@@ -218,6 +226,7 @@ impl Outcome {
             Outcome::Claimed(_) => "claimed",
             Outcome::Already(_) => "already",
             Outcome::Inactive(_) => "inactive",
+            Outcome::Manual(_) => "manual",
             Outcome::Retry(_) => "retry",
             Outcome::AuthNeeded => "auth",
             Outcome::BadShape(_) => "shape",
@@ -343,12 +352,15 @@ pub struct CheckinCfg {
     pub last_credits: Option<f64>,
     /// 连续签到天数(只有 Qoder 的接口给 `streak_days`;拿不到就是 None,不编)
     pub last_streak_days: Option<i64>,
-    /// 产生 `auth` 结论时运行的版本。用来判断那条 `auth` 是不是**陈旧**的。
+    /// 产生 `auth` / `inactive` / `manual` 结论时运行的版本。用来判断那条结论是不是**陈旧**的。
     ///
     /// 为什么需要它(v0.1.47 真机踩到):v0.1.47 修好了「WorkBuddy 签到只读网页 Cookie、
     /// 取数却用桌面端凭据」这件事,但升级后当天界面仍显示"凭据失效"——
     /// 因为 `auth` 让 `done_for_day` 判当天完结,而那条 `auth` 是**升级前**记下的
     /// (本机 lastTryAt=00:37,升级是 22:48),凭据链路早就变了却没人重新判。
+    ///
+    /// v0.1.57 起也覆盖 `inactive` / `manual`:它们是**我们的分类器**给出的结论
+    /// ("哪些活动算打卡"),规则一改就得重问 —— 与凭据判决是同一类问题。
     ///
     /// `None` = 这条记录**早于本字段存在** → 一律视为陈旧:产生它的代码已经不是现在这份了。
     pub last_auth_version: Option<String>,
@@ -389,6 +401,7 @@ impl CheckinCfg {
         match self.last_code.as_deref() {
             Some(c) => {
                 c.starts_with("claimed") || c.starts_with("already") || c.starts_with("inactive")
+                    || c.starts_with("manual")
                     || c.starts_with("auth")
                     || c.starts_with("shape")
             }
@@ -404,13 +417,20 @@ impl CheckinCfg {
     ///
     /// `inactive`(本期无打卡活动)算"没有待办":不算进去的话,聚合行会永远说
     /// "还有 N 个没签",用户会一直等一个不会到来的签到。
+    ///
+    /// `manual`(有活动,但只能在客户端领)同理:挂件做不了这件事,天天提醒
+    /// "还有 1 个没签"只会变成一个关不掉的噪音 —— 它照样有徽标(「有活动」),
+    /// 只是不进"待签"计数。
     pub fn signed_today(&self, today: &str) -> bool {
         if self.last_day.as_deref() != Some(today) {
             return false;
         }
         match self.last_code.as_deref() {
             Some(c) => {
-                c.starts_with("claimed") || c.starts_with("already") || c.starts_with("inactive")
+                c.starts_with("claimed")
+                    || c.starts_with("already")
+                    || c.starts_with("inactive")
+                    || c.starts_with("manual")
             }
             None => false,
         }
@@ -438,7 +458,30 @@ impl CheckinCfg {
     /// 不担心变成无限重试:`auth` 不可重试(`next_try_at` 为 None),且下次真判出 `auth`
     /// 时会带上当前版本,同一版本内照样当天完结 —— 只有"换版本"这一次会多给一枪。
     pub fn blocks_today(&self, today: &str, version: &str) -> bool {
-        self.done_for_day(today) && !self.auth_is_stale(version)
+        if !self.done_for_day(today) {
+            return false;
+        }
+        // 换了版本:凭据判决(auth)与**我们自己的分类器结论**(inactive / manual)
+        // 都要重问一次。后者是"哪些活动算打卡"这条规则给的,规则一改,旧结论就可能
+        // 是假阴性 —— v0.1.57 就撞上了:Qoder 把当日活动换成 VIEW_DETAILS + CLAIMABLE,
+        // 旧版本记下"本期无打卡活动",升级后当天若不重判,用户看到的还是"软件里没有"。
+        if self.auth_is_stale(version) || self.inactive_is_stale(version) {
+            return false;
+        }
+        true
+    }
+
+    /// 这条 `inactive` / `manual` 是不是旧版本判的。
+    ///
+    /// 与 [`auth_is_stale`](Self::auth_is_stale) 同一个理由,只是对象换成了
+    /// "活动分类"而不是"凭据"。`claimed` / `already` 不看版本 —— 那是平台事实。
+    pub fn inactive_is_stale(&self, version: &str) -> bool {
+        match self.last_code.as_deref() {
+            Some(c) if c.starts_with("inactive") || c.starts_with("manual") => {
+                self.last_auth_version.as_deref() != Some(version)
+            }
+            _ => false,
+        }
     }
 }
 
@@ -661,6 +704,55 @@ pub struct QoderPick {
     pub already: bool,
     /// 有没有任何 CLAIM_BENEFIT 活动(有=活动在;没有=换季了)
     pub has_campaign: bool,
+    /// 有**可领但只能手动领**的活动时,带上它的标题(用于界面直说"有活动:X")。
+    ///
+    /// 2026-10-22 实证:Qoder 把当日活动换成 `VIEW_DETAILS` + `CLAIMABLE`
+    /// (「1024 | Community Boost」),顶层 `claimable` 已经是 true,
+    /// 而旧口径只认 CLAIM_BENEFIT → 报"本期无打卡活动",用户看到的是"软件里没有"。
+    pub manual: Option<String>,
+}
+
+/// 活动标题:优先中文,退英文,再退 campaignKey。
+///
+/// 只在 `placements[].content.{zh,en}.title` 里取 —— 那是客户端弹窗上
+/// 显示的那句话,拿它来告诉用户"是哪个活动"最不容易对错号。
+fn qoder_campaign_title(c: &serde_json::Value) -> String {
+    let mut en = String::new();
+    if let Some(ps) = c.get("placements").and_then(|p| p.as_array()) {
+        for p in ps {
+            let content = p.get("content");
+            if let Some(t) = content
+                .and_then(|x| x.get("zh"))
+                .and_then(|x| x.get("title"))
+                .and_then(|x| x.as_str())
+            {
+                let t = t.trim();
+                if !t.is_empty() {
+                    return t.to_string();
+                }
+            }
+            if en.is_empty() {
+                if let Some(t) = content
+                    .and_then(|x| x.get("en"))
+                    .and_then(|x| x.get("title"))
+                    .and_then(|x| x.as_str())
+                {
+                    let t = t.trim();
+                    if !t.is_empty() {
+                        en = t.to_string();
+                    }
+                }
+            }
+        }
+    }
+    if en.is_empty() {
+        c.get("campaignKey")
+            .and_then(|k| k.as_str())
+            .unwrap_or("有活动")
+            .to_string()
+    } else {
+        en
+    }
 }
 
 fn qoder_benefit_amount(c: &serde_json::Value) -> Option<f64> {
@@ -676,17 +768,23 @@ pub fn qoder_pick(body: &serde_json::Value) -> QoderPick {
         amount: None,
         already: false,
         has_campaign: false,
+        manual: None,
     };
     let Some(list) = body.get("campaigns").and_then(|c| c.as_array()) else {
         return pick;
     };
     for c in list {
         let action = c.get("actionType").and_then(|a| a.as_str()).unwrap_or("");
+        let status = c.get("claimStatus").and_then(|s| s.as_str()).unwrap_or("");
         if !is_claim_action(action) {
-            continue; // VIEW_DETAILS 之类不参与领取
+            // VIEW_DETAILS 之类不参与领取,但"可领"这件事要记下来 ——
+            // 它是"有活动,只能在客户端点",不是"没活动"。
+            if status == "CLAIMABLE" && pick.manual.is_none() {
+                pick.manual = Some(qoder_campaign_title(c));
+            }
+            continue;
         }
         pick.has_campaign = true;
-        let status = c.get("claimStatus").and_then(|s| s.as_str()).unwrap_or("");
         match status {
             "CLAIMABLE" => {
                 if pick.claim_id.is_none() {
@@ -784,7 +882,11 @@ pub fn parse_qoder(body: &serde_json::Value, claiming: bool) -> Outcome {
         return Outcome::Already(pick.amount);
     }
     if !pick.has_campaign {
-        // 只有 VIEW_DETAILS 或空列表 = 本期没有打卡活动(不是失败,也不是已签)
+        // 只有 VIEW_DETAILS 或空列表:先看有没有"可领但只能手动领"的活动
+        if let Some(title) = pick.manual {
+            return Outcome::Manual(title);
+        }
+        // 否则才是真的本期没有打卡活动(不是失败,也不是已签)
         return Outcome::Inactive("本期无打卡活动".into());
     }
     // 有活动但状态既不是 CLAIMABLE 也不是 CLAIMED(如未来状态)→ 结构变了
@@ -1255,14 +1357,31 @@ mod tests {
         assert!(c.auth_is_stale("0.1.48"));
         assert!(!c.blocks_today(today, "0.1.48"));
 
-        // ③ 只有 auth 会被版本影响:claimed / already 是平台给的既成事实
-        for code in ["claimed", "already", "inactive:本期无活动"] {
+        // ③ claimed / already 是平台给的既成事实,任何版本都不重判
+        for code in ["claimed", "already"] {
             let mut d = CheckinCfg::default();
             d.last_day = Some(today.into());
             d.last_code = Some(code.into());
             d.last_auth_version = Some("0.1.0".into());
             assert!(!d.auth_is_stale("0.1.47"), "{code} 不该因版本变化被重判");
+            assert!(!d.inactive_is_stale("0.1.47"), "{code} 不该因版本变化被重判");
             assert!(d.blocks_today(today, "0.1.47"), "{code} 仍应挡住当天");
+        }
+
+        // ③b `inactive` / `manual` 是**我们的分类器**给的结论(v0.1.57 起):
+        // 旧版本判的"本期无活动"要重问 —— Qoder 把活动换成 VIEW_DETAILS + CLAIMABLE 后,
+        // 旧结论就是假阴性,不重判的话升级当天仍然显示"软件里没有"。
+        for code in ["inactive:本期无活动", "manual:1024 活动"] {
+            let mut d = CheckinCfg::default();
+            d.last_day = Some(today.into());
+            d.last_code = Some(code.into());
+            d.last_auth_version = Some("0.1.0".into());
+            assert!(!d.auth_is_stale("0.1.47"), "{code} 不是凭据判决");
+            assert!(d.inactive_is_stale("0.1.47"), "{code} 换版本必须重判");
+            assert!(!d.blocks_today(today, "0.1.47"), "{code} 不该挡住新版本当天");
+            // 同一版本内照样当天完结,不会无限重试
+            d.last_auth_version = Some("0.1.47".into());
+            assert!(d.blocks_today(today, "0.1.47"), "{code} 同版本内当天完结");
         }
 
         // ④ 不是今天的 auth 不影响今天
@@ -1390,6 +1509,80 @@ mod tests {
         );
         assert_eq!(ready_claim_id("already"), None);
         assert_eq!(ready_claim_id("ready:"), Some(""));
+    }
+
+    /// **2026-10-22 真机样本**:当天的活动换成了 `VIEW_DETAILS` + `CLAIMABLE`
+    /// (「1024 | Community Boost」,顶层 `claimable` 已经是 true),
+    /// 旧口径只认 CLAIM_BENEFIT → 回 `Inactive("本期无打卡活动")`,
+    /// 而用户在自己的客户端里明明看得到一个可领的活动 —— 这就是"软件里显示没有"。
+    ///
+    /// 现在的口径:`Manual(标题)` —— 有活动、但只能在客户端点开领,如实说出来。
+    #[test]
+    fn qoder_view_details_claimable_is_manual_not_inactive() {
+        let body = json!({
+            "uid":"01a068b6-c10f-7658-9045-5084b2acb9f2",
+            "showCampaign":true,
+            "claimable":true,
+            "campaigns":[
+                {"campaignId":"01a15d6a-c6df-7e4c-ac3d-b46f98d053f7",
+                 "campaignKey":"act-20261021-273",
+                 "actionType":"VIEW_DETAILS",
+                 "startAt":1792634400,"endAt":1793375940,
+                 "claimStatus":"CLAIMABLE",
+                 "placements":[{"type":"POPUP","campaignUrl":"https://openapi.qoder.sh/growth-page/activity-iframe",
+                   "content":{"en":{"title":"1024 | Community Boost"},
+                              "zh":{"title":"1024 | 创造力集结"}}}]},
+                {"campaignId":"01a159af-8a04-76b8-b0f4-59d8e2b60583",
+                 "campaignKey":"act-20261020-944",
+                 "actionType":"VIEW_DETAILS",
+                 "claimStatus":"CLAIMED"}
+            ]
+        });
+        let pick = qoder_pick(&body);
+        assert!(!pick.has_campaign, "VIEW_DETAILS 不是 CLAIM_BENEFIT");
+        assert_eq!(pick.manual.as_deref(), Some("1024 | 创造力集结"));
+        assert_eq!(parse_qoder(&body, false), Outcome::Manual("1024 | 创造力集结".into()));
+
+        // 没有可领的 VIEW_DETAILS(只有 CLAIMED 的)→ 仍然是"本期无活动",别谎报有活动
+        let quiet = json!({"campaigns":[{"campaignId":"x","actionType":"VIEW_DETAILS","claimStatus":"CLAIMED"}]});
+        assert_eq!(parse_qoder(&quiet, false), Outcome::Inactive("本期无打卡活动".into()));
+
+        // 空列表同理
+        assert_eq!(parse_qoder(&json!({"campaigns":[]}), false), Outcome::Inactive("本期无打卡活动".into()));
+
+        // CLAIM_BENEFIT 可领时仍然优先走"能直接领",不能被 manual 抢走
+        let both = json!({"campaigns":[
+            {"campaignId":"m","actionType":"VIEW_DETAILS","claimStatus":"CLAIMABLE",
+             "placements":[{"content":{"zh":{"title":"活动页"}}}]},
+            {"campaignId":"c","actionType":"CLAIM_BENEFIT","claimStatus":"CLAIMABLE",
+             "benefit":{"kind":"CREDITS","amount":100}}
+        ]});
+        assert_eq!(parse_qoder(&both, false), Outcome::Retry("ready:c".into()));
+    }
+
+    /// `manual` 与 `inactive` 一样算"今天没有待办":挂件做不了这件事,
+    /// 天天在聚合行里喊"还有 N 个没签"只会变成关不掉的噪音。
+    #[test]
+    fn qoder_manual_blocks_the_day_but_keeps_its_code() {
+        let c = CheckinCfg {
+            last_day: Some("2026-10-22".into()),
+            last_code: Some("manual:1024 | 创造力集结".into()),
+            ..Default::default()
+        };
+        assert!(c.done_for_day("2026-10-22"));
+        assert!(c.signed_today("2026-10-22"));
+        // 换一天照样要重新查
+        assert!(!c.done_for_day("2026-10-23"));
+        // 但"同一天完结"要带版本:这条 manual 是旧版本判的(last_auth_version = None)
+        // → 不算完结,节拍器会重问一次(v0.1.57 升级后当天就能看到新结论)
+        assert!(!c.blocks_today("2026-10-22", "0.1.57"));
+        let mut fresh = c.clone();
+        fresh.last_auth_version = Some("0.1.57".into());
+        assert!(fresh.blocks_today("2026-10-22", "0.1.57"), "同一版本内当天完结");
+        assert!(!fresh.blocks_today("2026-10-22", "0.1.58"), "换版本重判");
+        assert_eq!(Outcome::Manual("x".into()).verdict(), "manual");
+        assert_eq!(Outcome::Manual("x".into()).code(), "manual:x");
+        assert_eq!(Outcome::Manual("x".into()).credits(), None);
     }
 
     /// 真机原样的**已领**形态(本机 10-20 就是这个):Already + 数额。

@@ -2615,3 +2615,101 @@ commit `68d46a9`,tag `v0.1.56`,更新端点已能拉到新清单。
 唯一一处测试口径收紧:`fetch::tests::a_failed_request_leaves_a_usable_line_in_the_log`
 在"透明代理替 127.0.0.1:1 应答 5xx"的环境里会误报,现在按错误码分流 ——
 连接层(E_CONNECT/E_TIMEOUT)才断言没有 status,被代理应答时反过来断言必须是 HTTP 层错误码。
+
+## v0.1.57:面板被吸附条压空 / Qoder「有活动却说没有」/ 三形态体检(2026-10-22)
+
+### P0 · 面板整页只剩底栏(`styles.css`)
+
+真机截图一眼看到:标题栏、风险带、底栏都在,中间一大片空白,九行渠道一行不剩。
+量出来的原因:**吸附竖条 `#dockBody` 在面板形态里也是显示的** ——
+v0.1.56 新加的 `.dock-body{display:flex!important}` 没有挂在 `body.docked` 下,
+盖掉了前面的 `.dock-body{display:none}`。它 `height:100%`,在 body 的 flex 列里
+以 `flex-shrink:1` 抢走 415px,`flex:1 1 0%` 的列表被压成 **0 高**。
+修:`body.docked .dock-body{display:flex;…}`(去掉 `!important`,靠状态门拿优先级)。
+
+**防复发**:新增 `build/check-css-forms.js`(纯文本、零依赖)——凡是"基础规则是
+`display:none` 的整块容器"(`.dock-body` / `.pill-body` / `.cctl` / `.manage` …),
+其它规则再给它 display 时必须带 `body.<状态>` 前缀。已接进 CI(`ci.yml`)。
+它当场抓到的就是这条;反向验证(把旧写法放回去)会 FAIL。
+
+### Qoder 签到:活动在,但被判成"本期无打卡活动"(`checkin.rs` / `lib.rs` / `app.js`)
+
+真机取证(2026-10-22 15:5x,国际版,桌面端凭据 `dt-…`):
+
+```
+GET /sash/api/v1/me/campaigns → 200
+{ "showCampaign": true, "claimable": true,
+  "campaigns": [
+    { "campaignKey":"act-20261021-273", "actionType":"VIEW_DETAILS",
+      "claimStatus":"CLAIMABLE", "placements":[{…"title":"1024 | 创造力集结"}] },
+    { "campaignKey":"act-20261020-944", "actionType":"VIEW_DETAILS", "claimStatus":"CLAIMED" } ] }
+```
+
+10-20 那条 `CLAIM_BENEFIT`(每日 100 分)已经不在列表里了;当天的活动换成了
+`VIEW_DETAILS` + `CLAIMABLE`。而 `qoder_pick` 只认 `CLAIM_BENEFIT` →
+`has_campaign=false` → `Inactive("本期无打卡活动")`。用户在客户端明明看得到那一条,
+挂件却说"没有" —— 这是**假阴性**,不是"活动换季"。
+
+修:新增 `Outcome::Manual(标题)` —— **有活动,但只能在客户端里点开领**。
+- `qoder_pick` 记下第一条 `CLAIMABLE` 的非领取类活动及其标题(`placements[].content.zh/en.title`);
+- `parse_qoder` 在"没有 CLAIM_BENEFIT"时先看 `manual`,再退回 `Inactive`;
+- 界面:`manual:*` → 徽标「有活动」(蓝框 `.ckb.info`)+ 文案「有活动:X · 只能在客户端打开领取」;
+- 计数:`manual` 与 `inactive` 一样算"今天没有待办"(`signed_today`),否则聚合行会永远
+  喊"还有 N 个没签" —— 而挂件根本做不了这件事。
+- **不为它发 claim 请求**:客户端对 `VIEW_DETAILS` 只打开活动页(`growth-page/activity-iframe`),
+  没有"直接领"的语义;猜着 POST 可能把活动标成已领却不发奖。
+
+**升级当天的旧结论**:`inactive` / `manual` 是**我们自己的分类器**给的结论(哪些活动算打卡),
+规则一改就得重问。`last_auth_version` 从"只记 auth"扩到也记这两种,`blocks_today` 里
+`inactive_is_stale()` 命中就不挡当天 —— 否则升级后当天仍然显示"本期无活动",
+用户看到的就是"改了也没用"(与 v0.1.47 那次 `auth` 陈旧是同一类问题)。
+
+### 三形态体检:16 场景 × 3 形态(`build/visual-forms.js`,新增)
+
+jsdom 不参与布局,CSS 写错它一声不响(v0.1.56 的吸附条就是这么漏过去的)。
+新脚本连真机 CDP,注入合成数据 → 逐形态 `applyForm` → 截图 + 量**横向越界 / 纵向越界 /
+文本裁切**,产物在 `docs/assets/qa-forms/`(48 张图 + `report.json`)。
+
+> 测试自身的两个坑:① 60 秒轮询会把真实数据灌回来盖掉注入数据 —— `app.js` 顶部是
+> `const invoke = T.core.invoke`(**按值捕获**),改 `T.core.invoke` 没用,必须覆盖
+> `window.refresh` / `window.loadCheckin` 把轮询停掉;② 行内 `.sweep` 微光从 `-360px`
+> 扫进来,会被误报成越界(被祖先 `overflow:hidden` 裁掉的不算)。
+
+设计文档:`docs/design/design-forms-qa-2026-10-22.md`(先出设计再改代码)。修掉的:
+
+| # | 问题 | 修法 |
+|---|---|---|
+| P0-2 | 紧凑条里出现竖排的「需要处理 1」 | `body.form-compact .grp/.fstrip/.sk-wrap{display:none}` |
+| P0-3 | 紧凑条第二行被裁(列表 74px > 卡片 46px) | `body.form-compact .r2{display:none}`;连带把 chip 变窄,能放的渠道从 1 个回到 2 个 |
+| P0-4 | 紧凑条空态文案折行被裁 | 空态改用短句(底栏文案同源)+ `.cempty` 加 `max-width/nowrap/ellipsis` |
+| P1-1 | 紧凑条横向裁切(many 283>279,big 340>321) | `+N` 宽度改成真量(插 `+99` 隐形徽标);间隙数改成 `n-1+(hidden?1:0)` —— 有 `+N` 时少算一个 gap |
+| P1-2 | 没有人民币合计时风险带整条消失(纯积分/冷启动/全隐藏),数据回来整页跳 73px | 风险带常驻,没数的格子写 `——`;删掉已被取代的 `renderSummary()` |
+| P1-3 | 底栏「8 正常 · 3 预警」双算(3 是 8 的子集) | `正常 = withKey.length - bad - warn` |
+| P1-4 | 失联行仍显示旧数值且没有出处 | `isOld = isStale || failed` —— 失联行也画 `.rhint`「显示的是 X 的成功快照」 |
+| P1-5 | 骨架期底栏留着上一轮的「8 正常」 | 骨架分支同时写 `fdot/fstat` =「正在取数…」 |
+| P2-2 | 全隐藏时紧凑条还显示「✓ 0/0」 | `compactCheckinChip` 在 `total === 0` 时不渲染 |
+| P2-3 | 失败横幅随列表滚走 | `.fstrip{position:sticky;top:0}` |
+
+**复测**:16 场景 × 3 形态跑完,紧凑条不再有纵向越界、`scrollWidth ≤ clientWidth`;
+面板无横向越界;`loading/empty/checkin` 三个场景风险带都在;`check-css-forms.js` PASS;
+core `cargo test --offline` **314 passed / 0 failed / 6 ignored**(净增 3 项:
+`qoder_view_details_claimable_is_manual_not_inactive`、`qoder_manual_blocks_the_day_but_keeps_its_code`,
+以及把 `stale_auth_…` 里"只有 auth 受版本影响"改成 claimed/already 与 inactive/manual 两组)。
+
+**发版 v0.1.57**(本地打包):三处版本号同步 → `bash build/release-local.sh`。
+
+### 复测中又抓到的两处（同一次发版里修掉）
+
+1. **紧凑条 `.r2` 的第一版修复没生效**：写成 `body.form-compact .r2`(0,2,1)，
+   压不住面板的 `.row.urg .r2{display:block}`(0,3,0) —— 紧急行照样两行。
+   同一个坑还有 `.rhead` 的内边距与 `.val .v` 的字号：`.row.urg` 那两条都是 (0,3,0)。
+   全部改成 `body.form-compact .row …`(0,3,1)。**教训:CSS 覆盖要看权重，不只看顺序。**
+2. **紧急行的第二行与数值副行重复**：`.r2` 在 `hv.secondary` 为空时回退成 `subVal`，
+   于是 WorkBuddy 那行「无近期到期」出现两次。改成空则空，并加 `.r2:empty{display:none}`。
+3. **「最紧」格把数字裁掉**：`WorkBuddy 1…` —— 省略号吃掉的是数字。名字包一层 `.rn`
+   自己缩，数字不缩（代价是名字剩 5~6 字，接受）。
+4. **全隐藏时风险带还写「✓ 0/0」**：与紧凑条同一个口径，`total === 0` 写 `——`。
+
+**最终复测**(0.1.57 真机):16 场景 × 3 形态,横向/纵向越界 **0**;
+仅剩的"裁切"是风险带副行与「最紧」格的名字(都有省略号、都有 tooltip 与下一行兜底)。
+`cargo test --offline` 314 passed;`check-css-forms.js` PASS;`node --check` 全过。

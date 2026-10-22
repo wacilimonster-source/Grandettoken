@@ -94,6 +94,12 @@ body{
   white-space:nowrap}
 .sum .vv{font-size:calc(14.5px*var(--u));font-weight:600;font-variant-numeric:tabular-nums;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 「最紧」那格是"名字 + 数字":被裁的必须是**名字**,不是数字 ——
+   以前整行一起省略,102px 的格子里先被吃掉的是后面的「1,000分」(显示成「WorkBuddy 1…」)。
+   现在名字可以缩(带省略号),数字不缩。 */
+.sum .vv .rn{display:inline-block;max-width:calc(100% - 46px*var(--u));
+  overflow:hidden;text-overflow:ellipsis;vertical-align:bottom}
+.sum .vv b{white-space:nowrap}
 
 /* ── 渠道列表 ── */
 .list{flex:1;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column}
@@ -415,6 +421,9 @@ body.form-compact .wmark{display:inline}
 .ckb.hot:hover{background:#1c2740;border-color:var(--ac)}
 .ckb.warn{color:#e8c07d;border-color:#6b5a2e;background:#1f1a10;cursor:pointer}
 .ckb.warn:hover{background:#2a2213}
+/* 有活动、但只能在客户端领(Qoder 的 VIEW_DETAILS 活动):比"已签"弱、
+   比"本期无活动"强 —— 蓝框告诉用户"这里还有一件事",但不可点(挂件领不了)。 */
+.ckb.info{color:#cfe0ff;border-color:#3d5a8a;background:#151d2b}
 /* 紧凑条:只留最要紧的两种(可领 / 需处理)看得清,已签与待签压到最小 ——
    46px 单行里塞满四态会把行撑高。 */
 body.form-compact .ckb{font-size:max(9px,calc(8.5px*var(--u)));padding:0 calc(3px*var(--u))}
@@ -494,9 +503,13 @@ body.form-compact .list{display:flex;flex-direction:row;align-items:center;
   padding:calc(8px*var(--u)) calc(4px*var(--u)) calc(8px*var(--u)) calc(11px*var(--u));gap:calc(10px*var(--u));overflow-x:auto;overflow-y:hidden}
 body.form-compact .list::-webkit-scrollbar{height:0}
 body.form-compact .row{border:0;flex:none}
-body.form-compact .rhead{padding:calc(3px*var(--u)) calc(7px*var(--u));cursor:pointer;border-radius:calc(6px*var(--u));
+/* ⚠️ 这几条都要写成 `body.form-compact .row …`(0,3,1):面板的紧急行规则
+   `.row.urg .rhead{padding:9u 12u 7u}` 与 `.row.urg .val .v{font-size:22u}` 是 (0,3,0),
+   只写 `body.form-compact .rhead`(0,2,1)时**压不住**,紧急行在紧凑条里仍然是大内边距 +
+   22px 大数字 —— chip 高 40px,列表 56px > 卡片 46px,上下各裁 5px(2026-10-22 实测)。 */
+body.form-compact .row .rhead{padding:calc(3px*var(--u)) calc(7px*var(--u));cursor:pointer;border-radius:calc(6px*var(--u));
   background:var(--bg3);min-width:0}
-body.form-compact .r1{gap:calc(5px*var(--u))}
+body.form-compact .row .r1{gap:calc(5px*var(--u))}
 body.form-compact .bar,
 body.form-compact .use,
 body.form-compact .wins,
@@ -507,6 +520,21 @@ body.form-compact .claim-warn,
 body.form-compact .win-warn,
 body.form-compact .nm .s,
 body.form-compact .val .p,
+/* 分组标题 / 失败横幅 / 冷启动骨架都是**面板**的纵向结构:紧凑条是横向 chip 流,
+   它们进来就变成一个被压扁的竖排块(v0.1.56 实测:紧凑条里出现竖着写的「需要处理 1」,
+   把整条 chip 挤到右边)。 */
+body.form-compact .grp,
+body.form-compact .fstrip,
+body.form-compact .sk-wrap,
+/* 骨架脚注也是纵向的:它一行字加两行说明,在 46px 的条里撑到 59px(实测 75 > 56) */
+body.form-compact .sk-foot,
+/* 两级行的第二行(紧急行的"绑定窗 / 恢复时间")是面板的结构:
+   紧凑条是单行 chip,它进来就把行高从 46 撑到 74 —— 实测超出卡片 18px,
+   下半截直接被裁;连带把 chip 撑宽,能放的渠道从 3~4 个掉到 1 个。
+   紧急与否已经由 chip 上的「限流 / 低于底线」标签表达。
+   ⚠️ 必须写 `.row .r2`(0,3,1)才压得住 `.row.urg .r2{display:block}`(0,3,0)——
+   只写 `body.form-compact .r2`(0,2,1)时紧急行照样是 block,裁切照旧。 */
+body.form-compact .row .r2,
 body.form-compact .rhead .rhint{display:none}
 body.form-compact .ico{width:calc(16px*var(--u));height:calc(16px*var(--u));font-size:calc(8px*var(--u));border-radius:calc(4px*var(--u))}
 body.form-compact .nm{flex:none;min-width:0}
@@ -517,7 +545,7 @@ body.form-compact .nm .nsh{display:inline;font-size:max(10.5px,calc(10.5px*var(-
 body.form-compact .row.lv1 .nsh,body.form-compact .row.lv2 .nsh{display:none}
 body.form-compact .nm .n{gap:0}
 body.form-compact .nm .n .dot{width:calc(5px*var(--u));height:calc(5px*var(--u))}
-body.form-compact .val .v{font-size:calc(12px*var(--u));font-weight:500}
+body.form-compact .row .val .v{font-size:calc(12px*var(--u));font-weight:500}
 /* 百分号是语义不是精度,L2 也保留;小数位与「分」字到 L2 才舍 */
 body.form-compact .val .v .pct{font-size:inherit}
 body.form-compact .row.lv2 .val .v .dec{display:none}
@@ -525,10 +553,18 @@ body.form-compact .row.lv2 .val .v .unit{display:none}
 /* 空态:紧凑条放不下大引导卡,收成一条最小 chip,窗口跟着贴过去 */
 body.form-compact .list .empty{display:none}
 body.form-compact .cempty{flex:none;background:var(--bg3);border-radius:calc(6px*var(--u));
-  padding:calc(3px*var(--u)) calc(7px*var(--u));font-size:max(11.5px,calc(11.5px*var(--u)));color:var(--tx3);white-space:nowrap}
+  padding:calc(3px*var(--u)) calc(7px*var(--u));font-size:max(11.5px,calc(11.5px*var(--u)));color:var(--tx3);
+  white-space:nowrap;
+  /* 一句话、一行、超出省略:这段文本来自底栏状态,长度不受控 ——
+     以前没 nowrap 也没上限,「正在取数 · 首次启动需要几秒」折成两行,
+     下半截露在 46px 的条外面(实测列表 60px > 卡片 56px)。 */
+  max-width:calc(260px*var(--u));overflow:hidden;text-overflow:ellipsis}
 /* 放不下的渠道收进 +N 徽标 */
 body.form-compact .more{flex:none;font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);padding:calc(3px*var(--u)) 2px;
   font-variant-numeric:tabular-nums}
+/* 过滤条只在面板里成立:紧凑条是横向 chip 流、胶囊只有一个药丸,
+   一条 100% 宽的输入框进来就会把整条撑破(syncQBar 只看渠道数,不看形态)。 */
+body.form-compact .qbar,body.form-pill .qbar{display:none}
 
 /* ── 形态 3:胶囊(只显示最紧张的一个平台) ── */
 /* 不再用 backdrop-filter:透明窗口里浏览器采不到桌面当 backdrop,这属性本来
@@ -924,6 +960,9 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 .row .r2{display:none}
 .row.urg .r2{display:block;font-size:max(10.5px,calc(10.5px*var(--u)));color:var(--tx3);
   margin-top:calc(2px*var(--u));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 没有副行就不占那一行:以前空的时候回退成 subVal,和大数字下面的 .p 一字不差地
+   重复一遍(WorkBuddy 那行「无近期到期」出现两次),现在没有就收起来 */
+.row.urg .r2:empty{display:none}
 .row:not(.urg) .bar{display:none}
 .rhead{padding:calc(5px*var(--u)) calc(12px*var(--u))}
 .row.urg .rhead{padding:calc(9px*var(--u)) calc(12px*var(--u)) calc(7px*var(--u))}
@@ -950,8 +989,11 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 .grp em{font-style:normal;color:var(--tx2)}
 .grp::after{content:"";flex:1;height:1px;background:var(--line)}
 
-/* 大面积失败横幅:一轮 ≥3 个失败时,问题多半在网络/代理,不在渠道 */
-.fstrip{padding:calc(6px*var(--u)) calc(12px*var(--u));background:#2a1f22;border-bottom:1px solid #4a3038;
+/* 大面积失败横幅:一轮 ≥3 个失败时,问题多半在网络/代理,不在渠道。
+   sticky:横幅在 #list 内部(和行一起渲染),滚到下面的渠道时它会跟着滚走 ——
+   而它恰恰是"下面这些数字都不可信"的说明,不该被滚掉。 */
+.fstrip{position:sticky;top:0;z-index:3;
+  padding:calc(6px*var(--u)) calc(12px*var(--u));background:#2a1f22;border-bottom:1px solid #4a3038;
   color:#e6b8b8;font-size:max(10.5px,calc(10.5px*var(--u)))}
 .fstrip b{color:#ff9b93}
 
@@ -986,8 +1028,12 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
   border:1px solid var(--line2);border-radius:calc(4px*var(--u));
   padding:0 calc(3px*var(--u));margin-left:calc(3px*var(--u));vertical-align:2px}
 
-/* 吸附竖条:一段一渠道;陈旧的那段加斜纹(灰度下也分得出来) */
-.dock-body{display:flex!important;flex-direction:column;gap:1px;padding:0!important}
+/* 吸附竖条:一段一渠道;陈旧的那段加斜纹(灰度下也分得出来)
+   ⚠️ 必须挂在 body.docked 下:这里的 display 一旦不加门,就会盖掉上面的
+   `.dock-body{display:none}`(v0.1.56 写成 `.dock-body{display:flex!important}`,
+   结果面板形态也显示竖条 —— 它 height:100% 抢走 415px,列表被压成 0 高,
+   整页只剩底栏)。 */
+body.docked .dock-body{display:flex;flex-direction:column;gap:1px;padding:0!important}
 .dock-body i{display:block;flex:1 1 0;min-height:2px;border-radius:1px}
 .dock-body i.stale{background-image:repeating-linear-gradient(45deg,rgba(0,0,0,.35) 0 2px,transparent 2px 4px)!important}
 
