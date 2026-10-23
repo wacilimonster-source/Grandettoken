@@ -2784,3 +2784,17 @@ Qoder **今天已经处理完**，提示条本不该出现。
 **验证**：`node --check app.js` / `cargo check --offline --all-targets`（exit 0）通过；
 `build/jsdom-smoke.js` **29/29 通过**（新增 3 条：单渠道提示条带渠道名并直接给领取、
 领不了的渠道写清原因、`no_cred` 即使 canTry 也不给空按钮；顺手把 3 条 v0.1.58 之后已过期的风险带断言更新）。
+
+### 发版 v0.1.60（2026-10-23）
+
+签到提示条不再停在旧状态；单渠道待签时直接写明渠道与下一步（点此领取 / 去处理），
+签到设置区补上每渠道今日状态与动作，`done_today` 与 `can_try` 统一口径。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.60_x64-setup.exe`（5,194,095 B，SHA-256
+`12d800fcc1e4cab1bf55f61d9338c7fc679114ef5286bd7c6340a6a5f20e6f67`）及 `.sig` 已发布到
+[GitHub Release v0.1.60](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.60)。
+发布提交 `75d5334`，tag `v0.1.60`。
+
+`node --use-env-proxy build/verify-release.js` **13/13 PASS**；`node build/verify-signature.js`
+**PASS**（公钥能验这一版的包）。本机已用打包产物覆盖
+`%LOCALAPPDATA%\Grandettoken\Grandettoken.exe` 并重启运行（SHA-256 与 target 一致）。
