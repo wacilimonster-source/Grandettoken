@@ -920,6 +920,8 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 
 /* ── 每日签到:渠道卡上的一行 + 设置页的流水 ── */
 .ckwrap{margin-top:calc(7px*var(--u))}
+/* 从提示条落到渠道卡时闪一下那一行 —— .ckrow 自带底色,动画要挂在它身上才看得见 */
+.ckwrap.flash .ckrow{animation:rowflash 1.1s ease}
 .ckrow{display:flex;align-items:center;gap:calc(8px*var(--u));justify-content:space-between;
   font-size:max(11px,calc(11.5px*var(--u)));color:var(--tx2);
   border:1px solid var(--line);background:#15181f;border-radius:calc(7px*var(--u));

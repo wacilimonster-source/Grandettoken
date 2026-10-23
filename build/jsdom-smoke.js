@@ -84,11 +84,49 @@ const HARNESS = `
     ck("面板 render() 全流程不抛异常", false, e.message + " @ " + (e.stack || "").split("\\n")[1]);
   }
 
-  // ── 风险带 ──
-  ck("风险带三格都在(总余额 / 最紧 / 签到)",
-    /总余额/.test(S()) && /最紧/.test(S()) && /签到/.test(S()), S().slice(0, 160));
-  ck("总余额 ¥170.03(非人民币不折算)", /170\\.03/.test(S()), S().slice(0, 160));
-  ck("总余额副行带今日与环比", /今日/.test(S()) && /\\u2191/.test(S()), S().slice(0, 200));
+  // ── 顶部待签提示条:说清"哪个渠道 + 下一步"(2026-10-23) ──
+  // 现场:条上只写「去查看」,点进去是签到设置(只有开关),用户不知道要做什么。
+  try {
+    document.body.className = "form-panel";
+    CHECKIN_ON.add("wb");
+    CFG.checkin = { wb: { enabled: true } };
+    CK = {
+      wb: { id: "wb", name: "WorkBuddy", enabled: true, auto: true,
+            doneToday: false, canTry: true, outcome: "retry:ready" },
+    };
+    render({});
+    const strip = document.querySelector("#list .ckstrip");
+    ck("单渠道待签:条上写渠道名,并直接给「点此领取」", !!strip &&
+      strip.dataset.act === "ckrun" && strip.dataset.id === "wb" &&
+      /WorkBuddy/.test(strip.textContent) && /点此领取/.test(strip.textContent),
+      strip && strip.textContent);
+    CK.wb = Object.assign({}, CK.wb, { canTry: false, outcome: "auth", nextTryAt: null });
+    render({});
+    const strip2 = document.querySelector("#list .ckstrip");
+    ck("领不了的渠道:不画成可领取,写清原因并落到渠道卡", !!strip2 &&
+      strip2.dataset.act === "ckstripopen" && strip2.dataset.id === "wb" &&
+      /凭据失效/.test(strip2.textContent), strip2 && strip2.textContent);
+    CK.wb = Object.assign({}, CK.wb, {
+      canTry: true, outcome: "no_cred:没检测到 WorkBuddy 登录", nextTryAt: null,
+    });
+    render({});
+    const strip3 = document.querySelector("#list .ckstrip");
+    ck("no_cred 即使 canTry 也不给空按钮", !!strip3 &&
+      strip3.dataset.act === "ckstripopen" && /本机没读到凭据/.test(strip3.textContent),
+      strip3 && strip3.textContent);
+  } catch (e) {
+    ck("顶部待签提示条可读且可操作", false, e.message);
+  } finally {
+    CK = {};
+    CFG.checkin = undefined;
+    CHECKIN_ON.delete("wb");
+  }
+
+  // ── 风险带(v0.1.58 起:临期积分 / 最先到期 / 签到,不再放总余额)──
+  ck("风险带三格都在(临期 / 到期 / 签到)",
+    /临期/.test(S()) && /最早可确认|最先到期/.test(S()) && /签到/.test(S()), S().slice(0, 160));
+  ck("临期积分 600 分", /600 分/.test(S()), S().slice(0, 200));
+  ck("临期副行说明渠道数并可点筛选", /个渠道/.test(S()) && /点击筛选/.test(S()), S().slice(0, 200));
   ck("签到常驻 2/3(未签满不出现 ✓)", /2\\/3/.test(S()) && !/\\u2713/.test(S()), S().slice(0, 300));
   ck("最紧那格可点(跳行)", /data-act="jump"/.test(S()));
 

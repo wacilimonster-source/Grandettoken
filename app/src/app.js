@@ -2696,7 +2696,24 @@ $("list").addEventListener("click", async (e) => {
     const id = act.dataset.id;
     const a = act.dataset.act;
     if (a === "ckstripopen") {
-      // 首页顶部「还有 N 个没签」→ 直接落到设置里的签到区,不用自己翻页签
+      if (id) {
+        // 单渠道待签:落到它的渠道卡并展开 —— 「去登录 / 立即重试」那一行在卡片里。
+        // 以前一律跳签到设置区,而那里只有两个开关,用户看完不知道要做什么(2026-10-23)。
+        openManage();
+        showTab("ch");
+        requestAnimationFrame(() => {
+          const card = document.querySelector(`#chList .ccard[data-id="${id}"]`);
+          if (!card) return;
+          cardOpen.add(id);
+          card.classList.add("open");
+          card.scrollIntoView({ block: "center" });
+          const row = card.querySelector(".ckwrap") || card;
+          row.classList.add("flash");
+          setTimeout(() => row.classList.remove("flash"), 1150);
+        });
+        return;
+      }
+      // 多个渠道:落到设置里的签到区(每渠道状态与按钮都画在那里)
       openManage();
       showTab("run");
       requestAnimationFrame(() => {
@@ -4613,14 +4630,52 @@ function ckText(s) {
  *
  * **只在真有未签时出现**:全部签完就消失 —— "全部已签"是噪音不是信息;
  * 签到全关时也不出现(没开的人不该被提醒一件他没要求的事)。
+ *
+ * 2026-10-23 真机:只有一个渠道待签时,条上写「去查看」,点进去是签到设置区
+ * (两个开关 + 流水),看完不知道要做什么 —— 真正的动作在渠道卡上。所以:
+ *   · 只剩一个渠道时,把**渠道名和下一步**写进条上;能自己领就直接给「点此领取」;
+ *   · 领不了(凭据失效 / 退避中 / 接口变动)就写清原因,落点改成**渠道卡的那一行**;
+ *   · 多个渠道时保留汇总 + 去签到区(那里现在也画出每渠道状态与按钮)。
  */
 function ckPendingStrip() {
   const ids = ckActiveIds();
   if (!ids.length) return "";
-  const pending = ids.filter((id) => !(CK[id] && CK[id].doneToday)).length;
-  if (!pending) return "";
+  const pending = ids.filter((id) => !(CK[id] && CK[id].doneToday));
+  if (!pending.length) return "";
+
+  if (pending.length === 1) {
+    const id = pending[0];
+    const s = CK[id] || {};
+    const c = CHANNELS.find((x) => x.id === id) || {};
+    const name = s.name || c.name || id;
+    const detail = (ckText(s) || {}).text || "今天还没签";
+    // `no_cred`(本机没读到凭据)虽然 can_try 是 true,但点一次只会再失败一次;
+    // 该做的是去渠道卡打开客户端 / 重新登录,所以不给「领取」。
+    const noCred = String(s.outcome || "").startsWith("no_cred");
+    if (s.canTry !== false && !noCred) {
+      // 后端把"现在到底能不能点"算好了:能点就直接把动作放在首页,少一次跳转
+      return `<button type="button" class="ckstrip" data-act="ckrun" data-id="${esc(id)}"
+        title="${esc(detail)}">${esc(name)} 今天还没签 · <b>点此领取</b></button>`;
+    }
+    // 不能自己领:别画成"可领取",说清是哪种,并把落点定到渠道卡上那一行
+    return `<button type="button" class="ckstrip" data-act="ckstripopen" data-id="${esc(id)}"
+      title="${esc(detail)}">${esc(name)} 签到待处理:${esc(ckShortReason(s))} · <b>去处理</b></button>`;
+  }
+
   return `<button type="button" class="ckstrip" data-act="ckstripopen"
-      title="打开「刷新与启动 → 每日签到」">今天还有 <b>${pending}</b> 个渠道没签到 · 去查看</button>`;
+      title="打开「刷新与启动 → 每日签到」">今天还有 <b>${pending.length}</b> 个渠道没签到 · 去查看</button>`;
+}
+
+/** 提示条用的短原因 —— 完整说法留在 tooltip 与渠道卡里,这里只够写一行。 */
+function ckShortReason(s) {
+  const o = String((s && s.outcome) || "");
+  if (s && s.nextTryAt && s.nextTryAt * 1000 > Date.now()) return ckHold(s);
+  if (o.startsWith("auth")) return "凭据失效";
+  if (o.startsWith("no_cred")) return "本机没读到凭据";
+  if (o.startsWith("shape")) return "接口有变动";
+  if (o === "recheck") return "正在重新确认";
+  if (o.startsWith("retry")) return "等自动重试";
+  return "点开看详情";
 }
 
 /**
@@ -4792,14 +4847,21 @@ async function loadHomeView() {
   }
 }
 
+/**
+ * 读一次签到状态。**带序号**:两次并发读可能乱序返回 —— 启动时首轮 refresh 与
+ * 后台签到的 `checkin-updated` 就会撞在一起,晚到的旧快照会把新结论盖回去。
+ * 只让最后一次发出的请求落地(与 fetch_shared 的合流同一个道理)。
+ */
+let CK_SEQ = 0;
 async function loadCheckin() {
+  const seq = ++CK_SEQ;
+  let list = null;
   try {
-    const list = await invoke("checkin_state");
-    CK = {};
-    for (const x of list) CK[x.id] = x;
-  } catch (e) {
-    CK = {};
-  }
+    list = await invoke("checkin_state");
+  } catch (e) {}
+  if (seq !== CK_SEQ) return; // 更晚的一次已经发出,这份结果作废
+  CK = {};
+  if (list) for (const x of list) CK[x.id] = x;
   // 渠道卡与设置页都跟着更新(哪个在场更新哪个)
   if (document.body.classList.contains("view-manage")) {
     renderCheckinSet();
@@ -4915,7 +4977,7 @@ function renderActivityOverview() {
     '</div>';
 }
 
-/** 设置页的签到区:每渠道两个开关 + 近 7 天流水 + 免责。 */
+/** 设置页的签到区:每渠道两个开关 + 今日状态(带动作) + 近 7 天流水 + 免责。 */
 function renderCheckinSet() {
   const box = $("ckSet");
   if (!box) return;
@@ -4924,6 +4986,9 @@ function renderCheckinSet() {
     const s = CK[id];
     const on = s ? s.enabled : false;
     const auto = s ? s.auto : true;
+    // 开关下面是"今天到底怎样、该点哪里" —— 只给开关的话,从提示条点进来的人
+    // 看完仍然不知道要做什么(2026-10-23 现场)。ckRowHtml 里的按钮与渠道卡同一个。
+    const stateRow = on ? ckRowHtml(id) : "";
     let logs = "";
     if (s && s.log && s.log.length) {
       logs =
@@ -4956,6 +5021,7 @@ function renderCheckinSet() {
           '<button class="sw' + (auto ? " on" : "") + '" role="switch" aria-checked="' + auto +
           '" data-act="ckauto" data-id="' + esc(id) + '" aria-label="自动领取"></button></div>'
         : "") +
+      (stateRow ? '<div class="ckwrap" data-id="' + esc(id) + '">' + stateRow + "</div>" : "") +
       logs
     );
   }
@@ -4978,7 +5044,10 @@ async function ckRun(id) {
     showToast(String(e), true);
   }
   CK_LOG = false;
-  loadCheckin();
+  await loadCheckin();
+  // 首页那个「点此领取」按完,条上要立刻变成 3/3 或"待处理",不能等下一轮轮询
+  if (manageOpen()) renderChCards();
+  else if (CHANNELS.length) render({ updated: false });
 }
 
 async function ckSetEnabled(id, on, auto) {
@@ -5780,17 +5849,23 @@ async function refresh() {
     if (real !== CFG.alwaysOnTop) CFG.alwaysOnTop = real;
   } catch {}
   applyPinUI();
-  // 启动一律面板形态:安装后(以及每天开机)先看到完整信息,而不是上次留下的
-  // 紧凑条 / 胶囊。CFG.form 仍会记录用户的选择,只是不再用于启动恢复。
-  await applyForm("panel", false);
-  await refresh();
-  playEntrance(); // 启动首帧也来一次入场(上面 applyForm 没换形态,不会自动放)
-
-  listen("checkin-updated", () => {
-    loadCheckin().then(() => renderChCards());
+  // ── 签到事件:必须在首轮 refresh **之前**挂上 ──
+  // 后台签到节拍器在 Rust setup 里立刻跑一轮(`spawn_checkin_ticker`),常常正好赶上
+  // 前端首帧 refresh。以前这些监听写在 refresh 之后:这一轮的事件没人接,CK 就停在
+  // 启动前的旧结论上 —— 2026-10-23 现场,Qoder 10:11 已判 inactive,顶部却一直挂
+  // "还有 1 个渠道没签到",点进签到区也看不到任何能做的事,直到 10:55 手动领一次才消失。
+  await listen("checkin-updated", () => {
+    loadCheckin().then(() => {
+      if (manageOpen()) {
+        renderChCards();
+        fillKeyHints();
+      } else if (CHANNELS.length) {
+        // 首页的提示条 / 风险带也是 CK 的使用者:后台签完要当场收掉那条提示
+        render({ updated: false });
+      }
+    });
   });
-
-  listen("checkin-alert", (ev) => {
+  await listen("checkin-alert", (ev) => {
     // 后端只在"需要用户动手"(凭据失效 / 接口结构变了)时发这条;绿色版从托盘启动时
     // stderr 永远没人看得到(报告 P2-14 / P3-36)。
     const d = (ev && ev.payload) || {};
@@ -5799,7 +5874,7 @@ async function refresh() {
       true
     );
   });
-  listen("checkin-activity", (ev) => {
+  await listen("checkin-activity", (ev) => {
     const d = (ev && ev.payload) || {};
     const manual = d.status === "manual" || (!d.canClaim && d.claimStatus === "CLAIMABLE");
     const action = d.canClaim ? "发现可领取活动" : manual ? "发现需手动参与的活动" : "发现新活动";
@@ -5810,6 +5885,20 @@ async function refresh() {
         : "";
     showToast((d.name || "渠道") + " " + action + ": " + (d.title || "新活动") + where);
   });
+  // 自动签到领到了(后台静默跑,这一声就是收据);手动点的由按钮回执负责,不重响
+  await listen("checkin-claimed", (ev) => {
+    const d = (ev && ev.payload) || {};
+    const cr = d.credits === null || d.credits === undefined ? "" : " +" + d.credits + " 分";
+    beep("ding");
+    showToast((d.name || "签到") + " 今天领到了" + cr);
+  });
+
+  // 启动一律面板形态:安装后(以及每天开机)先看到完整信息,而不是上次留下的
+  // 紧凑条 / 胶囊。CFG.form 仍会记录用户的选择,只是不再用于启动恢复。
+  await applyForm("panel", false);
+  await refresh();
+  playEntrance(); // 启动首帧也来一次入场(上面 applyForm 没换形态,不会自动放)
+
   listen("channels-updated", (ev) => {
     CHANNELS = ev.payload;
     render({ updated: true });
@@ -5821,14 +5910,6 @@ async function refresh() {
     const d = (ev && ev.payload) || {};
     beep("warn");
     showToast(d.body || d.name + " 余额很低", true);
-  });
-
-  // 自动签到领到了(后台静默跑,这一声就是收据);手动点的由按钮回执负责,不重响
-  listen("checkin-claimed", (ev) => {
-    const d = (ev && ev.payload) || {};
-    const cr = d.credits === null || d.credits === undefined ? "" : " +" + d.credits + " 分";
-    beep("ding");
-    showToast((d.name || "签到") + " 今天领到了" + cr);
   });
 
   // WorkBuddy 网页登录的三种结果都走这个事件:抓到令牌 / 用户自己关了窗 / 失败。

@@ -2738,3 +2738,49 @@ Qoder 自动领取与新活动监测；顶部摘要改为聚焦未来 30 天内�
 本地签名 NSIS 安装包 `Grandettoken_0.1.59_x64-setup.exe`（5,196,007 B，SHA-256 `99031f4a271a763287dc098a18a693ac1fcf26d18737c39318b9f4348fe21233`）及 `.sig` 已发布到 [GitHub Release v0.1.59](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.59)。发布提交 `e7cc67f`，tag `v0.1.59`。
 
 `node --use-env-proxy build/verify-release.js` **13/13 PASS**；`node build/verify-signature.js` **PASS**（tauri.conf.json 中的公钥验证通过）。
+
+## 顶部「还有 1 个渠道没签到」挂了 44 分钟 + 点进去无事可做（2026-10-23）
+
+**现象**（用户原话）：「提示栏显示今天还有 1 个渠道没签到，去查看，看了以后也不知道要干什么。
+我手动领取了 Qoder 以后，显示 3/3 了」。
+
+**现场数据**（本机 `tokenscope.db` / `diag.log`）：
+
+```
+10:11:37  qoder  checkin_log = inactive:本期无打卡活动   ← 启动时的自动签到
+10:55:36  qoder  checkin_log = already +100            ← 用户手动领完后再跑一次
+10:55:28  uninstall.exe 被重写                          ← 期间装过一次更新
+```
+
+10:11–10:55 之间 `lastDay=2026-10-23`、`lastCode=inactive`，按 `signed_today`
+Qoder **今天已经处理完**，提示条本不该出现。
+
+**根因（两个，叠在一起）**
+
+1. **启动那一轮签到的事件没人接**。Rust 的 `spawn_checkin_ticker` 在 setup 里
+   **先跑一轮再睡**；前端的 `checkin-updated` 监听却写在首轮 `refresh()` **之后**。
+   启动首帧先拿到的是签到前的 `CK`（Qoder 还是昨天 `manual`，`doneToday=false`），
+   10:11:37 这一轮完成时监听还没挂上 → 事件丢失 → 顶部提示条按旧结论一直挂着。
+   点「去查看」→ 设置页的签到区当时**只有两个开关**，没有任何一行的状态或按钮，
+   所以「不知道要做什么」。
+2. **`done_today` 与 `can_try` 不同口径**：前者用 `signed_today`（不看版本），
+   后者用 `checkin_blocks_today`（换版本后旧 `inactive`/`manual` 要重判）。
+   于是可能出现「这边说已签完、那边还给领取按钮」。
+
+**修法**
+
+- 签到相关监听（updated / alert / activity / claimed）**在首轮 refresh 之前**注册；
+  `checkin-updated` 收到后，首页不在管理页就重画一次（提示条当场收掉）。
+- `loadCheckin` 加**序号**：并发的两次读可能乱序返回，只让最后一次落地 ——
+  否则启动时 refresh 的旧快照会盖掉事件带来的新结论。
+- `done_today` 改用 `checkin_blocks_today`，与 `can_try` / 首页聚合行同一口径。
+- 提示条从「只说数字」改成「说清下一步」：
+  - 只剩一个渠道且 `canTry !== false` → `Qoder 今天还没签 · 点此领取`（直接 `ckrun`）；
+  - 不能自己领（凭据失效 / 退避 / 接口变动）→ 写清原因，点击落到**渠道卡那一行**
+    （「去登录 / 立即重试」在那里），不再跳只有开关的设置区；
+  - 多个渠道 → 保留汇总，设置区里补上每渠道的今日状态与按钮。
+- 手动领完（`ckRun`）立刻重画首页，3/3 不再等下一轮轮询。
+
+**验证**：`node --check app.js` / `cargo check --offline --all-targets`（exit 0）通过；
+`build/jsdom-smoke.js` **29/29 通过**（新增 3 条：单渠道提示条带渠道名并直接给领取、
+领不了的渠道写清原因、`no_cred` 即使 canTry 也不给空按钮；顺手把 3 条 v0.1.58 之后已过期的风险带断言更新）。

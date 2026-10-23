@@ -2637,7 +2637,9 @@ fn checkin_state_of(id: &str, cfg: &Config, store: &Store, note: Option<String>)
         month_credits,
         // 首页徽标用:今天没有待办了(已签 / 平台说已签 / 本期无活动)。
         // **用后端的 cycle_day** —— Qoder 的"今天"从 10:00 起算,前端按本地日算必错。
-        done_today: c.signed_today(&today) && !activity_ready,
+        // 与 can_try / 首页聚合行同一口径:旧的 inactive / manual 换版本后要重判,
+        // 不能一边说"已签完"、另一边还给"领取"按钮。
+        done_today: done && !activity_ready,
         streak_days: c.last_streak_days,
         log,
         latest_activity: c.latest_activity,
