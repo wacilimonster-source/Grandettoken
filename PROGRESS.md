@@ -3043,3 +3043,17 @@ body.compact-on #btnPill{display:none}
 **验证**：`jsdom-smoke` **58/58**（新增顶栏胶囊入口）；无头 Edge + 真实前端 **10/10**：
 默认胶囊可见 → 点击进胶囊 → `▲` 回面板；开启后按钮互换；特大字号开关两种状态都不溢出；
 旧配置升级仍是面板 + 胶囊入口 + 一次提示。
+
+### 发版 v0.1.65（2026-10-23）
+
+修掉关闭紧凑条后胶囊没有可见入口：关闭时顶栏同一位置显示「胶囊」，开启时显示「紧凑」，两者互斥、顶栏宽度不变。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.65_x64-setup.exe`（5,197,288 B，SHA-256
+`7605b7fb08b87a8968d9f70776d0edf3379ca14efd58b0ec9888b3a1ce9c6daa`）及 `.sig` 已发布到
+[GitHub Release v0.1.65](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.65)。
+发布提交 `ec71970`，tag `v0.1.65`。
+
+`node --use-env-proxy build/verify-release.js` **13/13 PASS**（首次因网络瞬断 fetch failed，
+带 `HTTPS_PROXY=127.0.0.1:7897` 重跑通过）；`node build/verify-signature.js` **PASS**（公钥验签）。
+
+本机未用打包产物覆盖正在运行的应用，留给自动更新验证。
