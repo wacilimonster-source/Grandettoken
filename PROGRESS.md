@@ -3182,3 +3182,21 @@ body.compact-on #btnPill{display:none}
 `cargo check`(src-tauri) 通过、零警告；`jsdom-smoke` **67/67**；`check-css-forms` PASS；
 `scan-secrets` CLEAN（176 文件）；`node --check` CI 清单 6/6。回归面复核：前端 jsdom
 断言全过、前后端 54 个 invoke 命令契约对齐、非测试代码 panic 模式扫描无新命中。
+
+### 发版 v0.1.66（2026-10-24）
+
+WorkBuddy AI(国际版)渠道:桌面端凭据只读复用 + 自动续期、积分到账按余额正增量推算
+(界面如实标「推算」)、未装桌面端自动隐藏(用户点过眼睛即彻底让位);渠道卡新增
+「积分获取」(今日 + 近 7 天)与 30 天明细(懒加载);设置页文案三层分流(常驻/? 展开/归档)。
+同轮完成全量测评修复 7 项(见上一节),core 测试 328 条全绿后才发。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.66_x64-setup.exe`（5,208,608 B，SHA-256
+`ef9fba0417d81c67e634edd06f3567311995c3fb0c1a734b72805000f0ca6b0a`）及 `.sig` 已发布到
+[GitHub Release v0.1.66](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.66)。
+发布提交 `9c48869`，tag `v0.1.66`。
+
+`node build/verify-release.js`（`HTTPS_PROXY=127.0.0.1:7897` + `NODE_USE_ENV_PROXY=1`）
+**13/13 PASS**（本机直连 github.com 不通，git 也走该代理）；`node build/verify-signature.js`
+**PASS**（tauri.conf.json 的公钥能验签本版安装包，已装用户收得到）。
+
+本机未用打包产物覆盖正在运行的应用，留给自动更新验证。
