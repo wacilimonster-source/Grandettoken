@@ -2798,3 +2798,29 @@ Qoder **今天已经处理完**，提示条本不该出现。
 `node --use-env-proxy build/verify-release.js` **13/13 PASS**；`node build/verify-signature.js`
 **PASS**（公钥能验这一版的包）。本机已用打包产物覆盖
 `%LOCALAPPDATA%\Grandettoken\Grandettoken.exe` 并重启运行（SHA-256 与 target 一致）。
+
+## 隔一阵闪一个黑框：Qoder 的 helper 没带 CREATE_NO_WINDOW（2026-10-23）
+
+**现象**（用户原话）：「软件会有时候启动一个可见的命令行窗口吗？老是动不动弹出来，
+不要老是动不动弹出来。」
+
+**取证**：
+
+```
+%LOCALAPPDATA%\Programs\Qoder\resources\umid\runtime-info.exe
+  PE OptionalHeader.Subsystem = 3 (Console)      ← 是控制台程序，不是 GUI
+```
+
+`qoder::machine_identity_uncached` 在要设备身份时 `Command::new(runtime-info.exe)`，
+**没有** `CREATE_NO_WINDOW`。挂件自己是 GUI 进程，Windows 给子进程配一个新控制台 →
+每次缓存过期（成功 45 分钟 / 失败 5 分钟）再探测时闪一个黑框；签到凭据探测与活动监测
+都会走这里，所以"隔一阵就来一次"。
+
+其余子进程早就都带了标志：`tasklist` / `clip`（`inject.rs` / `lib.rs`）、
+WorkBuddy 桌面端（`workbuddy.rs`）—— 只有 Qoder 这一条漏了。
+
+**修法**：走与 WorkBuddy 相同的写法，Windows 下 `creation_flags(0x0800_0000)`。
+
+**验证**：`cargo check --offline`（core）+ `cargo check --offline --all-targets`
+（src-tauri）均 exit 0。黑框是否彻底消失需要真机观察一个缓存周期（45 分钟）；
+本机已替换运行。

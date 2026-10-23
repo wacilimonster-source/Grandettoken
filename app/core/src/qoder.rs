@@ -161,7 +161,20 @@ fn machine_identity_uncached(account_id: &str) -> Option<QoderMachineIdentity> {
     }
 
     for exe in candidates.into_iter().filter(|p| p.is_file()) {
-        let child_result = Command::new(exe)
+        // Qoder 的 UMID helper(`runtime-info.exe`)是控制台程序。挂件是 GUI 进程,
+        // 不指定 CREATE_NO_WINDOW 时 Windows 会为它配一个新控制台 —— 真机表现为
+        // 隔一阵就闪一个黑框(缓存过期后每次探测都会再起一次)。与 tasklist / clip /
+        // WorkBuddy 桌面端同一个处理。
+        #[cfg(windows)]
+        let mut cmd = {
+            use std::os::windows::process::CommandExt;
+            let mut c = Command::new(&exe);
+            c.creation_flags(0x0800_0000);
+            c
+        };
+        #[cfg(not(windows))]
+        let mut cmd = Command::new(&exe);
+        let child_result = cmd
             .args(["prod", "--account-stdin"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
