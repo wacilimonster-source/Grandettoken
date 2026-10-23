@@ -9,9 +9,11 @@ const $ = (id) => document.getElementById(id);
 let CHANNELS = [];
 let CFG = null;
 let VER = "";          // app_version 命令回来的版本号,关于页在首检之前也有的显示
-let sparkCache = {};   // { [id]: { values:[], gaps:[], source:"detail"|"daily" } }
-let sparkHours = {};   // { [id]: 当前选中的区间 },渲染详情时据此标记选中项
 let changesCache = {}; // { [id]: 最近变动台账(展开时按需取,不进轮询) }
+let changesState = {}; // { [id]: "loading" | "done" | "error" } —— 台账先画占位,取到再替换
+// 展开区里点了「全部 N 条」的段:{ [id]: { ledger?: true, expiry?: true } }。
+// 跟 rowOpen 一样是**状态**不是 DOM:轮询重画后还在,收起整行时清掉。
+const rowMore = {};
 // 面板里展开的行 id(DOM 上的 .open 只是它的投影):行头的 aria-expanded 与轮询重建后的
 // 恢复都读它。以前 renderRow 里写的是未声明的 `open`,实际解析成 window.open(恒真),
 // 于是每行都发 aria-expanded="true",开合也从不更新(F2)。
@@ -93,10 +95,36 @@ function resetMs(w) {
   return Number.isNaN(t) ? null : t;
 }
 
-/** 台钟 HH:MM(缺口文案用:「今日数据自 10:23 起」)。 */
+/** 台钟 HH:MM(缺口文案、最近变动用)。入参是**秒** —— 与后端 now_ts() / ChangeEntry 同口径。
+    以前按毫秒解释(ts * 1000 漏了),7 天的台账被压成 01:58,见
+    docs/design/design-row-detail-2026-10-23.html §6.1。 */
 function fmtClock(ts) {
-  const d = new Date(ts);
+  const d = new Date(ts * 1000);
   return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+}
+
+/** 折叠行右侧的快照年龄:「12 分钟前快照」;不到一分钟写「刚刚的快照」(「刚刚快照」不通) */
+function snapAge(ts) {
+  const r = relTime(ts);
+  return r === "刚刚" ? "刚刚的快照" : r + "快照";
+}
+
+/** 同一本地日?(跨零点的聚合区间要分开写日期) */
+function sameLocalDay(a, b) {
+  const x = new Date(a * 1000);
+  const y = new Date(b * 1000);
+  return (
+    x.getFullYear() === y.getFullYear() &&
+    x.getMonth() === y.getMonth() &&
+    x.getDate() === y.getDate()
+  );
+}
+
+/** 台账时间戳:今天只写 HH:MM,更早补 MM-DD。 */
+function fmtStamp(ts) {
+  if (sameLocalDay(ts, Date.now() / 1000)) return fmtClock(ts);
+  const d = new Date(ts * 1000);
+  return `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, "0")} ${fmtClock(ts)}`;
 }
 
 /**
@@ -180,6 +208,8 @@ function fmtReset(ms, short) {
   if (h < 24) return short ? h.toFixed(1) + " 小时" : h.toFixed(1) + " 小时后重置";
   const d = Math.floor(h / 24), rh = Math.round(h % 24);
   if (rh === 24) return short ? d + 1 + " 天" : d + 1 + " 天后重置";
+  // 正好整天不写「4 天 0 小时」
+  if (rh === 0) return short ? d + " 天" : d + " 天后重置";
   return short ? d + " 天 " + rh + " 小时" : d + " 天 " + rh + " 小时后重置";
 }
 
@@ -474,11 +504,16 @@ function renderRow(c, i) {
 
   // 积分型:副标题说清"近期会过期多少",这是这个渠道最该被看见的信息
   const soon = c.expiringSoon || null;
-  const soonDays = soon ? daysUntil(soon.at) : null;
 
-  // 第二行给状态语义,大数字下方给数值口径,两处不重复
-  // 副标题只留"状态语义":渠道是否可用。其余说明文字一律不写
-  // (未公开接口、哪个窗口最紧 —— 明细里都有,不必占一行)
+  // 第二行给状态语义,大数字下方给数值口径,两处不重复。
+  // 2026-10-23(设计 docs/design/design-row-detail-2026-10-23.html §5):失败 / 需登录 / 陈旧
+  // 这三种"旧快照"行,同一句话只说一次 —— 状态标签说"坏了",副标题只说原因,
+  // 右侧只说"多久以前的快照"。以前这三样各写两遍,折叠行 94px、五行字。
+  const hv = hvRow(c.id);
+  const isStale = hv ? hv.state === "stale" : !!c.stale;
+  const isOld = isStale || failed;
+  const hasTag = !!(hv && hv.qualifier && hv.qualifier !== "~") || !!(CFG && CFG.textTone);
+
   let sub;
   // web = 挂件内网页登录型(WorkBuddy):没登录时说"未登录 X",不是"未检测到登录"
   // —— 后者会让人以为打开客户端就能修好,而桌面端 5.6.2 起把令牌加密存了(读不到)。
@@ -489,10 +524,16 @@ function renderRow(c, i) {
         : c.authSource === "web"
         ? `未登录 ${esc(c.name)}`
         : "未配置密钥";
-  else if (failed) sub = "取数失败";
+  else if (failed)
+    sub = hasTag
+      ? c.error
+        ? esc(c.error)
+        : ""
+      : `取数失败${c.error ? " · " + esc(c.error) : ""}`;
   else if (wins.length) {
-    // Codex 把套餐放在 extra 里(裁决②:副标题带 free/plus/pro 徽章);OpenCode 无此键,维持空白
-    const plan = (c.extra || []).find((e) => e[0] === "套餐");
+    // Codex 的套餐档位(free/plus/pro)画在副标题里。OpenCode Go 的 extra 里也可能有
+    // 一条「套餐」($10/期 · 未折进消耗),那不是 ChatGPT 订阅 —— 只认 Codex(§6.2)
+    const plan = c.id === "codex" ? (c.extra || []).find((e) => e[0] === "套餐") : null;
     sub = plan ? `ChatGPT 订阅 · <span class="plan">${esc(plan[1])}</span>` : "";
   }
   else if (c.limited) sub = "已限流";
@@ -516,8 +557,14 @@ function renderRow(c, i) {
   let subVal;
   if (noKey)
     subVal = c.authSource === "app" ? "需打开应用" : c.authSource === "web" ? "待登录" : "待配置";
-  else if (failed) subVal = c.stale ? "上次快照" : "失联";
-  else if (mw) subVal = `${esc(mw.label)}窗 · ${fmtReset(resetMs(mw), true)}`;
+  else if (failed) subVal = c.updatedAt ? snapAge(c.updatedAt) : "失联";
+  // 陈旧(取数成功但过期):年龄比"剩多少 / 哪个窗"更重要 —— 数字再准也是旧的
+  else if (isStale) subVal = c.updatedAt ? snapAge(c.updatedAt) : "上次快照";
+  else if (mw) {
+    // 重置时间未知时不再写一个悬空的「—」:写「周期窗 · —」比只写「周期窗」更难读
+    const ms = resetMs(mw);
+    subVal = `${esc(mw.label)}窗${ms !== null ? " · " + fmtReset(ms, true) : ""}`;
+  }
   else if (isPts) {
     subVal = soon
       ? `最近 ${fmtDay(soon.at)} 到期`
@@ -535,6 +582,12 @@ function renderRow(c, i) {
   else if (pct !== null) subVal = `剩 ${pct}%`;
   else subVal = "";
 
+  // 金额型第二行两边都空时给今日消耗兜底:否则整行会比别的行矮一截(Hapi 39px vs 51px)
+  if (!noKey && !failed && c.kind === "amount" && !sub && !subVal && c.day !== null) {
+    sub = `今日 ${money(c.day, c.unit)}${c.estimated ? "(推算)" : ""}`;
+    subVal = "&nbsp;"; // 右侧留一行空位,和别的行一样高(不留就矮 2px)
+  }
+
   // 组合预警(裁决②):周期余量低于标红线 **且** 距重置 >3 天才提示 ——
   // 重置就在眼前的低余量不值得喊,避免天天狼来了
   let winWarn = "";
@@ -551,61 +604,6 @@ function renderRow(c, i) {
   // 状态点(U2 分层):未配置=空心环,失联=斜杠灰点 —— 两种灰色不再共用
   const dcls = dotCls(c);
   const dot = `<span class="dot${dcls ? " " + dcls : ""}"></span>`;
-
-  // 第三段:金额型显示日/周/月;配额型显示三个限流窗口;积分型显示最近的几笔到期
-  let useHtml;
-  if (isPts) {
-    const list = (c.expiring || []).filter((e) => e.at > 0 && daysUntil(e.at) >= 0);
-    const head = list.slice(0, 3);
-    useHtml = head.length
-      ? `<div class="exps">${head
-          .map((e) => {
-            const d = daysUntil(e.at);
-            const cls = expClass(d);
-            return `<div class="exp${cls ? " " + cls : ""}">
-              <span class="ed">${fmtDay(e.at)}<i>${d === 0 ? "今天" : "剩 " + d + " 天"}</i></span>
-              <b class="ea">${points(e.amount)} 分</b>
-              <span class="el">${esc(e.label)}</span>
-            </div>`;
-          })
-          .join("")}${
-          list.length > head.length
-            ? `<div class="expmore">另有 ${list.length - head.length} 笔更晚到期,展开看全部</div>`
-            : ""
-        }</div>`
-      : `<div class="exps"><div class="expmore">${
-          !c.expiryComplete
-            ? "接口未提供完整的逐笔到期信息，无法判断积分包何时到期"
-            : Number(c.remaining || 0) > 0
-              ? "当前剩余积分没有已知到期日"
-              : "当前没有剩余积分"
-        }</div></div>`;
-  } else if (wins.length) {
-    useHtml = `<div class="wins">${wins
-      .map((w) => {
-        const wr = Math.max(0, Math.min(100, w.remainPercent));
-        const lim = w.status === "rate-limited";
-        const wt = lim ? "bad" : wr < CFG.critPercent ? "bad" : wr < CFG.warnPercent ? "warn" : "ok";
-        const ms = resetMs(w);
-        // 倒计时是中性信息用次级色;唯一例外:限流中且 1 小时内重置 → 绿色「马上恢复」
-        const soon = lim && ms !== null && ms - Date.now() < 3600e3;
-        const cd = soon ? '<span class="wt ok">马上恢复</span>' : `<span class="wt">${fmtReset(ms, true)}</span>`;
-        return `<div class="win">
-          <span class="wl">${esc(w.label)}</span>
-          <i class="wb"><i style="width:${wr}%;background:${TONE_HEX[wt]}"></i></i>
-          <b class="wv" style="color:${lim ? "var(--bad)" : TONE_COLOR[wt]}">${wr.toFixed(1)}%</b>
-          ${cd}
-        </div>`;
-      })
-      .join("")}</div>`;
-  } else {
-    const f = (v) => money(v, c.unit);
-    useHtml = `<div class="use">
-      <div>今日<b>${f(c.day)}</b></div>
-      <div>本周<b>${f(c.week)}</b></div>
-      <div>本月<b>${f(c.month)}</b></div>
-    </div>`;
-  }
 
   // 配额型的三条迷你条已经表达了余量,积分型的到期列表也没有"余量比例"可画
   const bar =
@@ -632,18 +630,8 @@ function renderRow(c, i) {
   // 签到徽标:只在该渠道开了签到时出现,折叠成紧凑条也保留(与 .wmark 同一套机制)
   const ckb = ckBadgeHtml(c);
 
-  // 「更新于」只在陈旧时说(设计附录 B:`.rhint` 只在 stale 时画)。
-  // 新鲜是默认状态,不值得占一行 —— 那一行本来就是给"这是旧快照"用的。
-  // **失联(auth / 取数失败)也要画**:那时 `c.remaining` 是最近一次成功取到的数,
-  // 不说明的话,大数字看着像刚刚刷出来的 —— 右侧明明写着"失联"(2026-10-22 体检 P1-4)
-  const hv = hvRow(c.id);
-  const isStale = hv ? hv.state === "stale" : !!c.stale;
-  const isOld = isStale || failed;
-  const src = isOld
-    ? `<div class="rhint stale">显示的是 ${relTime(c.updatedAt)} 的成功快照${
-        c.error ? " · " + esc(c.error) : ""
-      }</div>`
-    : "";
+  // 「更新于」不占行头:CSS 会把陈旧行的数字降透明度,旧快照的年龄由右侧 `.p` 写一次
+  // (2026-10-23 起;以前这里还有一条黄色 `.rhint`,与右侧「上次快照 / 12 分钟前快照」重复)
 
   // 两级行:需要动作的(T0)与已跌破红线的行给两行高与一条进度条,其余只留一行。
   // 状态标签是"颜色之外"的第二个通道(P4 · 颜色不单独承重)。
@@ -674,20 +662,203 @@ function renderRow(c, i) {
         </div>
         <div class="caret">&#9654;</div>
       </div>
-      <div class="r2">${hv && hv.secondary ? esc(hv.secondary) : ""}</div>
+      <div class="r2">${!isOld && hv && hv.secondary ? esc(hv.secondary) : ""}</div>
       ${bar}
-      <div class="seg3">${useHtml}</div>
       ${claimWarn}
       ${winWarn}
-      ${src}
       <span class="sweep"></span>
     </div>
     <div class="rbody" data-body="${c.id}"></div>
   </div>`;
 }
 
+// ───────────── 行展开详情:五段骨架 ─────────────
+// 2026-10-23(docs/design/design-row-detail-2026-10-23.html §4.2):核心 → 明细 → 最近变动 → 签到 → 页脚,
+// 固定顺序,没内容的段不画。同一份列表只画一次:折叠行给结论,展开区给完整列表与动作。
+
+/** ① 核心 · 金额:今日 / 本周 / 本月。 */
+function coreAmount(c) {
+  const f = (v) => money(v, c.unit);
+  return `<div class="sec"><div class="core-use">
+    <div>今日<b>${f(c.day)}</b></div>
+    <div>本周<b>${f(c.week)}</b></div>
+    <div>本月<b>${f(c.month)}</b></div>
+    ${
+      c.estimated
+        ? '<span class="est" title="消耗由本机余额快照变化估算;挂件未运行时段不计入">推算</span>'
+        : ""
+    }
+  </div></div>`;
+}
+
+/** ① 核心 · 配额:一窗一行。重置 < 24 小时写相对时间,更久写「N 天 · MM-DD HH:MM」。 */
+function coreWindows(c) {
+  const rows = (c.windows || []).map((w) => {
+    const wr = Math.max(0, Math.min(100, w.remainPercent));
+    const lim = w.status === "rate-limited";
+    const wt = lim ? "bad" : wr < CFG.critPercent ? "bad" : wr < CFG.warnPercent ? "warn" : "ok";
+    const ms = resetMs(w);
+    let when = "";
+    let whenOk = false;
+    if (ms !== null) {
+      const left = ms - Date.now();
+      if (left <= 0) when = "正在重置";
+      else if (left < 86400e3) when = fmtReset(ms, true) + "后重置";
+      else {
+        // 天数走同一个 fmtReset,别再自己 floor 一次 —— 行头写「19 天」、核心段写「18 天」
+        // 是同一天的两个说法,谁看都会以为出错(2026-10-23 真机复核抓到)
+        const d = new Date(ms);
+        when = `${fmtReset(ms, true)} · ${d.getMonth() + 1}-${String(d.getDate()).padStart(
+          2,
+          "0"
+        )} ${fmtClock(Math.floor(ms / 1000))}`;
+      }
+      // 限流中且 1 小时内重置:写「马上恢复」并染绿 —— 中性倒计时里唯一的好消息
+      if (lim && left > 0 && left < 3600e3) {
+        when = "马上恢复";
+        whenOk = true;
+      }
+    }
+    return `<div class="core-w">
+      <span class="wl">${esc(w.label)}</span>
+      <i class="wb"><i style="width:${wr}%;background:${TONE_HEX[wt]}"></i></i>
+      <b class="wv" style="color:${lim ? "var(--bad)" : TONE_COLOR[wt]}">${wr.toFixed(1)}%</b>
+      <span class="wt${whenOk ? " ok" : ""}">${when}</span>
+    </div>`;
+  });
+  if (!rows.length) {
+    const v =
+      c.remaining === null
+        ? "——"
+        : Math.max(0, Math.min(100, Number(c.remaining))).toFixed(1) + "%";
+    return `<div class="sec"><div class="core-use"><div>当前剩余<b>${v}</b></div></div></div>`;
+  }
+  return `<div class="sec">${rows.join("")}</div>`;
+}
+
+/** ① 核心 · 积分:最近到期的几笔(默认 3 笔,「全部 N 笔」原地展开)。
+ *  后端的逐笔列表**含已过期但还有余量的包**(按到期日升序,见 providers.rs):
+ *  不先分开的话,两笔过期包就把"最近 3 笔"占掉了。未到期的排前面,过期的排在「全部」里。 */
+function corePoints(c, showAll) {
+  const nowS = Date.now() / 1000;
+  const all = (c.expiring || []).filter((e) => e.at > 0);
+  const upcoming = all.filter((e) => e.at >= nowS);
+  const past = all.filter((e) => e.at < nowS);
+  if (!all.length) {
+    return `<div class="sec"><div class="core-empty">${
+      !c.expiryComplete
+        ? "接口未提供完整的逐笔到期信息,无法判断积分包何时到期"
+        : Number(c.remaining || 0) > 0
+          ? "当前剩余积分没有已知到期日"
+          : "当前没有剩余积分"
+    }</div></div>`;
+  }
+  const ordered = [...upcoming, ...past];
+  const head = showAll ? ordered : upcoming.slice(0, 3);
+  const rows = head
+    .map((e) => {
+      const isPast = e.at < nowS;
+      const d = isPast ? null : daysUntil(e.at);
+      const cls = isPast ? "past" : expClass(d);
+      const tail = isPast ? "已过期" : d === 0 ? "今天" : `剩 ${d} 天`;
+      return `<div class="core-exp${cls ? " " + cls : ""}">
+        <span class="ed">${fmtDay(e.at)}<i>${tail}</i></span>
+        <b class="ea">${points(e.amount)} 分</b>
+        <span class="el">${esc(e.label)}</span>
+      </div>`;
+    })
+    .join("");
+  // 一笔未到期的都没有:说清楚,而不是留一个空段标题
+  const none = !upcoming.length && !showAll
+    ? `<div class="core-empty">没有未到期的积分包;另有 ${past.length} 笔已过期</div>`
+    : "";
+  const more =
+    ordered.length > head.length || showAll
+      ? `<button class="sec-more" data-act="sec-more" data-id="${c.id}" data-sec="expiry" aria-expanded="${
+          showAll ? "true" : "false"
+        }">${showAll ? "收起" : `全部 ${ordered.length} 笔`}</button>`
+      : "";
+  return `<div class="sec"><div class="sec-h"><span>即将到期</span>${more}</div>${rows}${none}</div>`;
+}
+
+/** ③ 最近变动:默认 3 条;先画占位,取到再替换。 */
+function ledgerHtml(c, showAll) {
+  const st = changesState[c.id];
+  const list = changesCache[c.id] || [];
+  if (st === "loading") {
+    return `<div class="sec"><div class="sec-h"><span>最近变动</span></div><div class="lg-empty">读取中…</div></div>`;
+  }
+  if (st === "error") {
+    return `<div class="sec"><div class="sec-h"><span>最近变动</span></div><div class="lg-empty">读不到变动记录</div></div>`;
+  }
+  if (!list.length) return "";
+  const head = showAll ? list : list.slice(0, 3);
+  const more =
+    list.length > 3
+      ? `<button class="sec-more" data-act="sec-more" data-id="${c.id}" data-sec="ledger" aria-expanded="${
+          showAll ? "true" : "false"
+        }">${showAll ? "收起" : `全部 ${list.length} 条`}</button>`
+      : "";
+  const rows = head
+    .map((g) => {
+      const amt = Math.abs(g.delta) < 0.005 ? "±0" : money(Math.abs(g.delta), c.unit || "CNY");
+      const cls = g.delta < 0 ? "bad" : "ok";
+      // 时间列只有 84px:今天的区间写 HH:MM–HH:MM(跨零点也只写钟点,紧挨着
+      // 今天的条目看得懂);更早的只写结束时刻 MM-DD HH:MM。以前两头都带日期,
+      // 「10-22 21:00–10-22 21:20」在三档字号下都被省略号切掉(2026-10-23 边界复核)。
+      const when =
+        g.startTs !== g.endTs && sameLocalDay(g.endTs, Date.now() / 1000)
+          ? `${fmtClock(g.startTs)}–${fmtClock(g.endTs)}`
+          : fmtStamp(g.endTs);
+      const tail =
+        g.samples > 1
+          ? `推算消费(${g.samples} 次轮询)`
+          : g.delta < 0
+            ? "推算消费"
+            : "入账(充值/额度)";
+      const gapH =
+        g.gapSecs > 7200 ? `<i class="gap">含 ${Math.round(g.gapSecs / 3600)} 小时未观测</i>` : "";
+      return `<div class="lrow"><span class="lt">${when}</span><b class="${cls}">${
+        g.delta < 0 ? "−" : "+"
+      }${amt}</b><span class="lx">${tail}${gapH}</span></div>`;
+    })
+    .join("");
+  return `<div class="sec"><div class="sec-h"><span>最近变动</span>${more}</div><div class="ledger">${rows}</div></div>`;
+}
+
+/** 失败原因在折叠行被省略号截断时,才把全文补到展开区页脚(设计 §4.3)。 */
+function revealFailFull(rowEl) {
+  if (!rowEl) return;
+  const sub = rowEl.querySelector(".nm .s");
+  const full = rowEl.querySelector(".fn-fail");
+  if (sub && full && sub.scrollWidth > sub.clientWidth + 1) full.hidden = false;
+}
+
+/**
+ * 展开后的滚动定位:动画走完(320ms)再量,否则量到的是展开前的高度。
+ * 卡片比列表还高时让行头贴住列表顶部,否则让卡片下沿进入可视区。
+ */
+const rowRevealTimers = {};
+function scheduleRowReveal(id) {
+  clearTimeout(rowRevealTimers[id]);
+  rowRevealTimers[id] = setTimeout(() => {
+    const row = document.querySelector(`.row[data-id="${id}"]`);
+    const list = $("list");
+    if (!row || !list || !row.classList.contains("open")) return;
+    const lr = list.getBoundingClientRect();
+    const rr = row.getBoundingClientRect();
+    const top = rr.top - lr.top + list.scrollTop;
+    if (rr.height > lr.height || top < list.scrollTop) {
+      list.scrollTop = Math.max(0, top);
+    } else if (top + rr.height > list.scrollTop + lr.height) {
+      list.scrollTop = top + rr.height - lr.height;
+    }
+  }, 340);
+}
+
 function renderDetail(c) {
   const noKey = !c.hasKey;
+  const failed = c.hasKey && !c.valid;
 
   // 行详情只留一个短操作入口;具体设置集中在管理页。
   const manageLink = `<button class="btn s" data-act="open-manage" data-id="${c.id}">渠道设置</button>`;
@@ -718,26 +889,26 @@ function renderDetail(c) {
     </div>`;
   }
 
-  // 申请制额度:把周期口径摊开在详情里(列表行只放状态)
+  const state = hvRow(c.id) || {};
+  const dim = failed || state.state === "stale" || (!state.state && !!c.stale);
+  const more = rowMore[c.id] || {};
+
+  // ① 核心(口径三选一);原来是行头的「第三段」,现在挪进展开区 —— 行头前后一样高
+  let core;
+  if (c.kind === "points") core = corePoints(c, !!more.expiry);
+  else if (c.kind === "percent" && (c.windows || []).length) core = coreWindows(c);
+  else core = coreAmount(c);
+
+  // ② 明细:申请制四项 + extra。已经出现在行头或核心段的不再列(设计 §4.2):
+  // 本轮额度 / 可再申请 / 套餐档位 / 额度包笔数;逐笔到期明细由核心段兜底文案承担。
   const claimKv = [];
   if (c.claim) {
     const cl = c.claim;
-    // 本轮额度是申请制自己的口径(设置页按「元」填),单独用 ¥;
-    // 日均消耗与累计发放都来自该渠道的余额序列,跟着渠道的 unit 走
-    claimKv.push(["本轮额度", money(cl.amount)]);
     claimKv.push([
       "上次申请",
       cl.lastClaimAt
         ? `${fmtDay(cl.lastClaimAt)}(${cl.source === "auto" ? "自动检测" : "手动"})`
         : "未记录",
-    ]);
-    claimKv.push([
-      "可再申请",
-      cl.daysUntilEligible === null || cl.daysUntilEligible === undefined
-        ? "——"
-        : cl.eligible
-          ? "现在可申请"
-          : `再等 ${cl.daysUntilEligible} 天`,
     ]);
     if (cl.dailyBurn !== null && cl.dailyBurn !== undefined) {
       claimKv.push(["日均消耗(推算)", money(cl.dailyBurn, c.unit)]);
@@ -749,158 +920,73 @@ function renderDetail(c) {
       claimKv.push(["累计发放", money(c.total, c.unit)]);
     }
   }
-
-  const kv = [...claimKv, ...(c.extra && c.extra.length ? c.extra : [])];
+  // 只去掉**确实重复**的几条,不再按条数截断:截断会把「统计范围(只取了前 200 笔)」
+  // 「套餐 · 未折进消耗」这类警示悄悄吞掉(2026-10-23 边界复核)。
+  //   套餐         —— 只有 Codex 把它画进了副标题;Qoder / OpenCode Go 的套餐只在这里
+  //   额度包/积分包 —— 笔数,核心段已经逐笔列出(有逐笔数据时才算重复)
+  //   逐笔到期明细  —— 「接口未提供」,核心段的兜底文案已经说了
+  const hasExpList = c.kind === "points" && (c.expiring || []).length > 0;
+  const dupExtra = (k) =>
+    (k === "套餐" && c.id === "codex") ||
+    ((k === "额度包" || k === "积分包") && hasExpList) ||
+    (k === "逐笔到期明细" && c.kind === "points" && !hasExpList);
+  const extras = (c.extra || []).filter(([k]) => !dupExtra(k));
+  // 显示宽度:中日韩字符按 2 计。半栏大约放得下 26 个单位(键 + 值),
+  // 再长就独占一行 —— 按字符数判会把「只取了前 200 笔,实际 230 笔」放进半栏切掉
+  const dispW = (s) => [...String(s)].reduce((n, ch) => n + (/[\u2e80-\uffef]/.test(ch) ? 2 : 1), 0);
+  const kv = [...claimKv, ...extras].map(([k, v]) => [k, String(v), dispW(k) + dispW(v) > 26]);
+  // 窄的在前、宽的在后:宽条目夹在中间会把两栏网格切出半行空洞
+  kv.sort((a, b) => Number(a[2]) - Number(b[2]));
   const kvHtml = kv.length
-    ? `<div class="kv">${kv
-        .map(([k, v]) => `<div><span>${esc(k)}</span><b>${esc(v)}</b></div>`)
-        .join("")}</div>`
+    ? `<div class="sec"><div class="kv">${kv
+        .map(
+          ([k, v, wide]) =>
+            `<div${wide ? ' class="wide"' : ""}><span>${esc(k)}</span><b>${esc(v)}</b></div>`
+        )
+        .join("")}</div></div>`
     : "";
 
-  // 积分型:逐笔到期全量表(到期日 | 剩余 | 来源),近 7/30 天分别红/黄
-  let expHtml = "";
-  if (c.kind === "points" && c.expiring && c.expiring.length) {
-    const rows = c.expiring
-      .map((e) => {
-        const d = daysUntil(e.at);
-        const cls = d !== null && d < 0 ? "past" : expClass(d);
-        const tail = d === null ? "" : d < 0 ? "已过期" : d === 0 ? "今天" : `剩 ${d} 天`;
-        return `<div class="exrow${cls ? " " + cls : ""}">
-          <span class="ed">${fmtDay(e.at)}<i>${tail}</i></span>
-          <b class="ea">${points(e.amount)}</b>
-          <span class="el">${esc(e.label)}</span>
-        </div>`;
-      })
-      .join("");
-    const soon = c.expiringSoon;
-    expHtml = `<div class="extab">
-      <div class="exhead"><span class="ed">到期日</span><span class="ea">剩余积分</span><span class="el">来源</span></div>
-      ${rows}
-      <div class="exfoot">共 ${c.expiring.length} 笔有剩余 · 合计 ${points(c.remaining)} 分${
-        soon ? ` · 近 30 天将过期 ${points(soon.amount)} 分` : ""
-      }</div>
-    </div>`;
+  // ⑤ 页脚说明:凭据来源 / 统计缺口 / 未公开接口。缺口写黄;失败原因被截断时补全文。
+  const notes = [];
+  if (c.gapDayFrom) {
+    notes.push([`今日从 ${fmtClock(c.gapDayFrom)} 起才有数据,今日消耗可能偏低`, "warn"]);
   }
-
-  // 非错误类背景信息收进可展开说明,避免每个渠道详情都堆长段提示。
-  const dataNotes = [];
+  if (c.unstable) {
+    notes.push(["未公开接口:响应结构一变,这个渠道就会显示取数失败", ""]);
+  }
   if (c.authSource === "app") {
-    dataNotes.push(`凭据来自本机已登录的 ${c.authLabel || c.name};挂件只读,不刷新会话。`);
+    notes.push([`凭据来自本机已登录的 ${c.authLabel || c.name};挂件只读,不刷新会话`, ""]);
   } else if (c.authSource === "web") {
-    dataNotes.push(`使用挂件内的 ${c.name} 网页登录态,不影响桌面客户端。`);
-  }
-
-  // 曲线:老形状是数组,现在是 { values, gaps, source }(带缺口标注与长期趋势)
-  const sv = sparkCache[c.id] || null;
-  const sparkVals = sv && sv.values && sv.values.length ? sv.values : [];
-  const gapSet = new Set((sv && sv.gaps) || []);
-  const sparkHtml = sparkVals.length
-    ? `<div class="spark">${(() => {
-        const max = Math.max(...sparkVals, 0.000001);
-        return sparkVals
-          .map(
-            (v, i) =>
-              `<i class="${gapSet.has(i) ? "gap" : ""}" style="height:${Math.max(
-                2,
-                (v / max) * 100
-              )}%"></i>`
-          )
-          .join("");
-      })()}</div>`
-    : `<div class="spark-empty">采样不足,暂无趋势</div>`;
-
-  // 说明集中收纳;缺口只在标题上提醒一次,不再在图表、今日统计和估算口径间重复说。
-  const hasCoverageGap = gapSet.size > 0 || !!c.gapDayFrom;
-  if (c.estimated && c.kind === "amount") {
-    dataNotes.push("消耗按本机余额快照变化估算;挂件未运行时段不计入。");
-  }
-  if (hasCoverageGap) {
-    const coverage = [];
-    if (gapSet.size) coverage.push("图中斜纹表示采样不完整,相关消耗可能偏低");
-    if (c.gapDayFrom) coverage.push(`今日从 ${fmtClock(c.gapDayFrom)} 开始统计`);
-    dataNotes.push(coverage.join("; ") + "。");
-  }
-  if (sv && sv.source === "daily") {
-    dataNotes.push("90 天以前的趋势由日级摘要合成。");
+    notes.push([`使用挂件内的 ${c.name} 网页登录态,不影响桌面客户端`, ""]);
   }
   if (c.accounts > 1) {
-    dataNotes.push("已更换过密钥;这里只统计当前密钥,旧账户历史不混算。");
+    notes.push(["已更换过密钥;这里只统计当前密钥,旧账户历史不混算", ""]);
   }
   if (c.peak && c.peak.tableStale) {
-    dataNotes.push("节假日安排尚未更新,峰谷时段暂按周末规则估算。");
+    notes.push(["节假日安排尚未更新,峰谷时段暂按周末规则估算", ""]);
   }
-  const dataNotesHtml = dataNotes.length
-    ? `<details class="detail-notes${hasCoverageGap ? " has-gap" : ""}">
-        <summary>${hasCoverageGap ? "数据有缺口" : "数据说明"}<span></span></summary>
-        <div class="detail-note-list">${dataNotes
-          .map((note) => `<div>${esc(note)}</div>`)
-          .join("")}</div>
-      </details>`
-    : "";
+  const failFull =
+    failed && c.error ? `<div class="fn-note bad fn-fail" hidden>取数失败:${esc(c.error)}</div>` : "";
 
-  // 配额型:逐窗明细(剩余% + 相对倒计时 + 本地绝对时间)
-  const winKv =
-    c.kind === "percent" && (c.windows || []).length
-      ? `<div class="kv">${c.windows
-          .map((w) => {
-            const ms = resetMs(w);
-            const rem = Math.max(0, Math.min(100, w.remainPercent));
-            const abs = ms === null ? "重置时间未知" : `${fmtReset(ms, false)} · ${new Date(ms).toLocaleString("zh-CN", { hour12: false })}`;
-            return `<div><span>${esc(w.label)}窗 · 剩 ${rem.toFixed(1)}%</span><b>${abs}</b></div>`;
-          })
-          .join("")}</div>`
-      : "";
+  // ③ 最近变动(只金额型) ④ 签到一行(徽标已经说了"签没签",这里只说徽标没说的)
+  const ledger = c.kind === "amount" ? ledgerHtml(c, !!more.ledger) : "";
+  let ckHtml = "";
+  const cks = CK[c.id];
+  if (CHECKIN_ON.has(c.id) && cks && cks.enabled) {
+    const bits = [];
+    if (cks.streakDays) bits.push(`连续 ${cks.streakDays} 天`);
+    if (cks.monthCredits) bits.push(`本月 ${cks.monthCredits} 分`);
+    if (cks.lastTryAt) bits.push(`上次尝试 ${relTime(cks.lastTryAt)}`);
+    if (cks.nextTryAt && cks.nextTryAt * 1000 > Date.now()) bits.push(`下次 ${ckHold(cks)}`);
+    if (bits.length) {
+      ckHtml = `<div class="sec"><div class="ckline">签到 · ${bits.join(" · ")}</div></div>`;
+    }
+  }
 
-  const body = [];
-  body.push(
-    `<div class="seg">
-       ${[[24, "近 24 小时"], [168, "近 7 天"], [720, "近 30 天"], [2160, "近 3 月"], [8760, "近 12 月"]]
-         .map(
-           ([h, label]) =>
-             `<button class="${(sparkHours[c.id] || 24) === h ? "on" : ""}" data-act="range" data-id="${c.id}" data-h="${h}">${label}</button>`
-         )
-         .join("")}
-     </div>`
-  );
-  if (c.error) {
-    body.push(
-      `<div class="hint" style="color:var(--bad);margin:0 0 8px">${esc(c.error)}${
-        c.stale ? " · 下列数值为上次成功快照" : ""
-      }</div>`
-    );
-  }
-  body.push(kvHtml);
-  body.push(winKv);
-  body.push(expHtml);
-  body.push(sparkHtml);
-  if (dataNotesHtml) body.push(dataNotesHtml);
-  // 变动台账:同方向的连续轮询已聚合成一条(轮询是分钟级的,逐条列出来是噪音);
-  // 空档秒数如实标注 —— 一条 +50 里如果揉了几小时的空白,得让用户知道
-  const chags = changesCache[c.id];
-  if (c.kind === "amount" && chags && chags.length) {
-    body.push(`<div class="ledger"><div class="ldh">最近变动<span>共 ${chags.length} 条</span></div>${chags
-      .map((g) => {
-        const amt = Math.abs(g.delta) < 0.005 ? "±0" : money(Math.abs(g.delta), c.unit || "CNY");
-        const cls = g.delta < 0 ? "bad" : "ok";
-        const when =
-          g.startTs === g.endTs
-            ? fmtClock(g.startTs)
-            : `${fmtClock(g.startTs)}–${fmtClock(g.endTs)}`;
-        const tail =
-          g.samples > 1
-            ? `推算消费(${g.samples} 次轮询)`
-            : g.delta < 0
-            ? "推算消费"
-            : "入账(充值/额度)";
-        const gapH =
-          g.gapSecs > 7200 ? `<i class="gap">含 ${Math.round(g.gapSecs / 3600)} 小时未观测</i>` : "";
-        return `<div class="lrow"><span class="lt">${when}</span><b class="${cls}">${
-          g.delta < 0 ? "−" : "+"
-        }${amt}</b><span class="lx">${tail}${gapH}</span></div>`;
-      })
-      .join("")}</div>`);
-  }
-  // 不影响余额判断的操作入口收在一排,不再用长段提示夹在数据中间。
+  // ⑤ 页脚:说明在上、动作在下(右对齐)
+  const notesHtml = notes
+    .map(([t, cls]) => `<div class="fn-note${cls ? " " + cls : ""}">${esc(t)}</div>`)
+    .join("");
   const actions = [];
   if (MODEL_SOURCES.has(c.id) && !noKey) {
     const v = MDL.views[c.id];
@@ -910,32 +996,11 @@ function renderDetail(c) {
     }</button>`);
   }
   actions.push(manageLink);
-  // 签到详情:卡片上那枚徽标只给"一眼"的结论,这里给完整信息
-  // (连续天数、本月合计、上次尝试、下次自动重试)。数据全在已有的 CheckinState 里。
-  const cks = CK[c.id];
-  if (CHECKIN_ON.has(c.id) && cks && cks.enabled) {
-    body.push(
-      `<div class="ckdet">` +
-        `<div class="k1">签到 · ${esc(ckText(cks) ? ckText(cks).text : "今天还没签")}</div>` +
-        (cks.streakDays || cks.monthCredits
-          ? `<div class="k2">${[
-              cks.streakDays ? "连续 " + cks.streakDays + " 天" : "",
-              cks.monthCredits ? "本月共 " + cks.monthCredits + " 分" : "",
-            ]
-              .filter(Boolean)
-              .join(" · ")}</div>`
-          : "") +
-        (cks.lastTryAt
-          ? `<div class="k2">上次尝试 ${relTime(cks.lastTryAt)}${
-              cks.nextTryAt && cks.nextTryAt * 1000 > Date.now() ? " · 下次 " + ckHold(cks) : ""
-            }</div>`
-          : "") +
-        `</div>`
-    );
-  }
-  body.push(`<div class="detail-actions">${actions.join("")}</div>`);
 
-  return `<div class="rbody-in">${body.join("")}</div>`;
+  // 类名用 rb-dim 不用 dim:全局已有 .dim{color:var(--tx3)},撞名会把整张卡的数值再染一层灰
+  return `<div class="rbody-in${dim ? " rb-dim" : ""}">${core}${kvHtml}${ledger}${ckHtml}<div class="foot-det">${notesHtml}${failFull}<div class="fn-act">${actions.join(
+    ""
+  )}</div></div></div>`;
 }
 
 /**
@@ -973,18 +1038,10 @@ function playEntrance() {
  *  后端成功 + 前端抛异常时,用户只看到空白与一句错的提示(报告 P2-33;
  *  renderModels 早就为同一个坑包过一层,主路径漏了)。 */
 function render(opts) {
-  // 轮询会把 #list 与展开行的详情整块重建,新建元素的 scrollTop 天生是 0:
-  // 用户翻到第 14 笔的「逐笔到期」小表会跳回第一笔(报告 P2-29)。
-  // 数值照旧翻页,只把滚动位置补回来(选区随锚节点被移除,需要更细的差量渲染才能保住)。
+  // 轮询会把 #list 与展开行的详情整块重建,新建元素的 scrollTop 天生是 0。
+  // 逐笔到期不再自带内滚(2026-10-23 五段骨架),只剩列表自己的滚动位置要补。
   const listEl = $("list");
   const listTop = listEl ? listEl.scrollTop : 0;
-  const exps = [];
-  if (listEl) {
-    listEl.querySelectorAll(".extab").forEach((t) => {
-      const row = t.closest(".row");
-      if (row && row.dataset.id) exps.push([row.dataset.id, t.scrollTop]);
-    });
-  }
   try {
     renderInner(opts);
   } catch (err) {
@@ -996,13 +1053,7 @@ function render(opts) {
     showToast("渲染出错:" + ((err && err.message) || err), true);
     return;
   }
-  if (listEl) {
-    listEl.scrollTop = listTop;
-    exps.forEach(function (pair) {
-      const t = listEl.querySelector('.row[data-id="' + pair[0] + '"] .extab');
-      if (t) t.scrollTop = pair[1];
-    });
-  }
+  if (listEl) listEl.scrollTop = listTop;
 }
 
 /** 主数字的文字写法。四种形态共用它 —— 不再各自拼 percent / money / points。 */
@@ -1221,6 +1272,7 @@ function renderInner(opts) {
       const c = CHANNELS.find((x) => x.id === openId);
       const body = row.querySelector(".rbody");
       if (c && body) body.innerHTML = renderDetail(c);
+      revealFailFull(row);
     }
   }
 
@@ -2759,61 +2811,77 @@ $("list").addEventListener("click", async (e) => {
       showTab("mdl");
       // 渠道 id 就是来源 id(4sapi / hapi / opencode-go)
       ensureModels(id);
-    } else if (a === "range") {
-      const h = Number(act.dataset.h);
-      sparkHours[id] = h; // 记住选择,轮询重建详情时不会再跳回 24 小时
-      const series = await invoke("get_series", { id, hours: h }).catch(() => null);
-      // await 期间用户可能已经切到别的区间:晚到的旧响应不许盖掉新查询的结果
-      if (series !== null && sparkHours[id] === h) sparkCache[id] = series;
-      const want = sparkHours[id];
-      document
-        .querySelectorAll(`.seg button[data-id="${id}"]`)
-        .forEach((b) => b.classList.toggle("on", Number(b.dataset.h) === want));
+    } else if (a === "sec-more") {
+      // 段标题旁的「全部 N 条」:原地展开 / 收起。状态挂在 rowMore 上,
+      // 轮询重画后还在;收起整行时清掉。
+      const sec = act.dataset.sec;
+      rowMore[id] = rowMore[id] || {};
+      rowMore[id][sec] = !rowMore[id][sec];
       const c = CHANNELS.find((x) => x.id === id);
       const body = document.querySelector(`.rbody[data-body="${id}"]`);
       if (c && body) body.innerHTML = renderDetail(c);
-    }    return;
+      const cur = document.querySelector(`.row[data-id="${id}"]`);
+      revealFailFull(cur);
+    }
+    return;
   }
 
   const head = e.target.closest(".rhead");
   if (!head) return;
+  // 只有面板形态画展开区(紧凑条里 .rbody 是 display:none):在别的形态里点 chip
+  // 以前会悄悄把行记成展开、白取一次台账,切回面板时冒出一张没人点过的展开卡
+  if (!document.body.classList.contains("form-panel")) return;
   const row = head.closest(".row");
   const id = row.dataset.id;
   const was = row.classList.contains("open");
   // 收起的行同时改 aria:开合是可感知状态,不能等下一次轮询重绘才更新(F2)
   document.querySelectorAll(".row").forEach((r) => {
     r.classList.remove("open");
+    // 收起整行(包括"开另一行把它顶掉")时「全部 N 条」复位 —— 状态跟行开合走
+    delete rowMore[r.dataset.id];
     const h = r.querySelector(".rhead");
     if (h) h.setAttribute("aria-expanded", "false");
   });
   rowOpen.clear();
-  if (!was) {
-    rowOpen.add(id);
-    row.classList.add("open");
-    head.setAttribute("aria-expanded", "true");
-    const c = CHANNELS.find((x) => x.id === id);
-    if (c) {
-      if (!sparkCache[id]) {
-        try {
-          sparkCache[id] = await invoke("get_series", { id, hours: 24 });
-        } catch {
-          sparkCache[id] = null;
-        }
-      }
-      // 变动台账每次展开都重取(它扫 7 天明细,很便宜;缓存住反而会显示过期账目)
-      if (c.kind === "amount") {
-        try {
-          changesCache[id] = await invoke("channel_changes", { id, days: 7 });
-        } catch {
-          changesCache[id] = [];
-        }
-      }
-      // 等曲线这段时间里轮询可能把整行换成了新节点:手里那份 body 成了游离节点,
-      // 写进去永远看不见(点开是空白,再点一次才有图)。按当前 DOM 重新查一次。
-      const cur = document.querySelector(`.row[data-id="${id}"]`);
-      const cbody = cur && cur.classList.contains("open") ? cur.querySelector(".rbody") : null;
-      if (cbody) cbody.innerHTML = renderDetail(c);
+  if (was) return;
+  rowOpen.add(id);
+  row.classList.add("open");
+  head.setAttribute("aria-expanded", "true");
+  const c = CHANNELS.find((x) => x.id === id);
+  if (!c) return;
+
+  // 先画后取:手头的数据立刻画出来,展开动画跑起来时内容就在;
+  // 台账先占一行「读取中…」,取到后原地替换。以前是先跑 320ms 动画、再 await 取数,
+  // 内容在动画结束后才蹦进去(设计 §4.1)。
+  const paint = () => {
+    // 期间轮询可能把整行换成了新节点:按当前 DOM 重新查一次,写进游离节点永远看不见
+    const cur = document.querySelector(`.row[data-id="${id}"]`);
+    if (!cur || !cur.classList.contains("open")) return;
+    // 渠道数据也要按**当前**的取:点击时拿到的 c 在 await 期间可能已被轮询换掉,
+    // 用旧对象重画会把刚刷新的数值改回去(2026-10-23 边界复核:¥99.99 → ¥12.40)
+    const cc = CHANNELS.find((x) => x.id === id);
+    const body = cur.querySelector(".rbody");
+    if (cc && body) body.innerHTML = renderDetail(cc);
+    revealFailFull(cur);
+    scheduleRowReveal(id);
+  };
+  // 只有**从没取到过**台账时才画「读取中…」;已有缓存就先画缓存、后台重取,
+  // 否则每次重新展开都会先缩成一行占位再撑开(97px → 248px 的一跳)
+  if (c.kind === "amount" && !(changesCache[id] && changesCache[id].length)) {
+    changesState[id] = "loading";
+  }
+  paint();
+
+  // 变动台账每次展开都重取(它扫 7 天明细,很便宜;缓存住反而会显示过期账目)
+  if (c.kind === "amount") {
+    try {
+      changesCache[id] = await invoke("channel_changes", { id, days: 7 });
+      changesState[id] = "done";
+    } catch {
+      changesCache[id] = [];
+      changesState[id] = "error";
     }
+    paint();
   }
 });
 
@@ -4283,6 +4351,26 @@ document.addEventListener("keydown", (e) => {
     closeUpdOverlay();
   } else if (manageOpen()) {
     closeManage();
+  } else if (
+    document.body.className.includes("form-panel") &&
+    document.querySelector("#list .row.open")
+  ) {
+    // 逐层退:先收起展开的渠道行,再考虑收形态(10-21 设计稿 §6.6「Esc 逐层退」)。
+    // 只认**看得见**的展开行:临期筛选把它藏起来时,rowOpen 里还记着它,
+    // 以前这一下 Esc 就被悄悄吃掉、界面毫无变化(2026-10-23 边界复核)。
+    const focusInRow = document.activeElement && document.activeElement.closest(".row.open");
+    document.querySelectorAll(".row.open").forEach((r) => {
+      r.classList.remove("open");
+      const h = r.querySelector(".rhead");
+      if (h) h.setAttribute("aria-expanded", "false");
+      delete rowMore[r.dataset.id];
+    });
+    rowOpen.clear();
+    // 焦点在被收起的行里(比如停在「渠道设置」上):还给行头,别留在看不见的按钮上
+    if (focusInRow) {
+      const h = focusInRow.querySelector(".rhead");
+      if (h) h.focus();
+    }
   } else if (DOCK.on && DOCK.open) {
     dockLayout(false); // I6:吸附展开态,Esc 收回为竖条(不退出吸附)
   } else if (document.body.className.includes("form-panel")) {

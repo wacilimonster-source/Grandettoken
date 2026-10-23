@@ -133,7 +133,6 @@ const invoke = async (cmd, args) => {
   invokeCalls.push(cmd);
   if (cmd === 'get_config') return JSON.parse(JSON.stringify(CONFIG));
   if (cmd === 'get_channels') return JSON.parse(JSON.stringify(SAMPLE_CHANNELS));
-  if (cmd === 'get_series') return [];
   if (cmd === 'inject_state') return JSON.parse(JSON.stringify(SAMPLE_INJECT));
   if (cmd === 'get_model_catalog') return JSON.parse(JSON.stringify(SAMPLE_CATALOG));
   // 「排查日志」卡:路径/大小/开关状态 + 最近几行。这两条不 mock 的话,

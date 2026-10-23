@@ -140,9 +140,110 @@ const HARNESS = `
     (L().match(/<em>(\\d+)<\\/em>/g) || []).join(" "));
   ck("紧急行画出副行(绑定窗 + 恢复时间)", /5 小时窗/.test(L()));
   ck("状态标签 qtag(颜色之外的第二个通道)", /class="qtag"/.test(L()));
-  ck("「更新于」只在陈旧行出现", (L().match(/class="rhint/g) || []).length === 1,
-    (L().match(/class="rhint/g) || []).length);
-  ck("第三段包进 seg3(折叠时不显示)", /class="seg3"/.test(L()));
+  ck("陈旧行的年龄只写在右侧(.rhint 已退役)", !/class="rhint/.test(L()) && /小时前快照/.test(L()),
+    L().slice(0, 300));
+  ck("折叠行不再画第三段(核心段挪进展开区)", !/class="seg3"/.test(L()) && !/class="wins"/.test(L()));
+  ck("重置时间未知时不写悬空的「窗 · —」", !/窗 · —/.test(L()), L().slice(0, 200));
+
+  // ── 展开区五段骨架(2026-10-23 设计)──
+  try {
+    const four = CHANNELS.find((c) => c.id === "4sapi");
+    const nowS = Math.floor(Date.now() / 1000);
+    changesCache["4sapi"] = Array.from({ length: 12 }, (_, i) => ({
+      startTs: nowS - 1200 - i * 5400, endTs: nowS - 600 - i * 5400, delta: -1.2,
+      remaining: 100, samples: 2, gapSecs: 0,
+    }));
+    changesState["4sapi"] = "done";
+    const d = renderDetail(four);
+    ck("详情五段:核心 / 明细 / 最近变动 / 页脚",
+      /core-use/.test(d) && /class="kv"/.test(d) && /最近变动/.test(d) && /foot-det/.test(d), d.slice(0, 300));
+    ck("详情里没有区间按钮与柱图", !/data-act="range"/.test(d) && !/spark/.test(d), d.slice(0, 300));
+    ck("台账默认 3 条 +「全部 12 条」",
+      (d.match(/class="lrow"/g) || []).length === 3 && /全部 12 条/.test(d),
+      (d.match(/class="lrow"/g) || []).length);
+    ck("台账时间是本地时钟(不再挤在 01:5x)", !/01:5\\d/.test(d) && /\\d{2}:\\d{2}/.test(d), d.match(/\\d{2}:\\d{2}/g));
+    changesState["4sapi"] = "done"; // 缓存留着,不影响别的断言
+  } catch (e) { ck("展开区五段骨架", false, e.message); }
+
+  // ── 失败行去重(§5):标签说一次,副标题只写原因,右侧只写快照年龄 ──
+  try {
+    const home = JSON.parse(JSON.stringify(data.HOME));
+    const r = home.rows.find((x) => x.id === "ds");
+    Object.assign(r, { state: "error", tone: "off", qualifier: "取数失败", headline: {} });
+    hvApply(home);
+    const ds = CHANNELS.find((c) => c.id === "ds");
+    ds.valid = false;
+    ds.error = "HTTP 401";
+    render({});
+    const html = document.querySelector('.row[data-id="ds"]').outerHTML;
+    ck("失败行「取数失败」只出现一次", (html.match(/取数失败/g) || []).length === 1, html);
+    ck("失败行只说一次原因,右侧写快照年龄", (html.match(/HTTP 401/g) || []).length === 1 && /快照/.test(html), html);
+    ck("失败行不再画黄字 rhint", !/rhint/.test(html), html);
+    ds.valid = true;
+    ds.error = null;
+    hvApply(data.HOME);
+    render({});
+  } catch (e) { ck("失败行去重", false, e.message); }
+
+  // ── Codex 专属副标题:OpenCode Go 的「套餐」不能写成 ChatGPT 订阅(§6.2)──
+  try {
+    const cx = CHANNELS.find((c) => c.id === "codex");
+    const oc = CHANNELS.find((c) => c.id === "oc");
+    cx.extra = [["套餐", "plus"]];
+    oc.extra = [["套餐", "$10/期 · 未折进消耗(汇率还没取到)"]];
+    render({});
+    const l = L();
+    const cxRow = document.querySelector('.row[data-id="codex"]').outerHTML;
+    const ocRow = document.querySelector('.row[data-id="oc"]').outerHTML;
+    ck("Codex 副标题写 ChatGPT 订阅", /ChatGPT 订阅/.test(cxRow), cxRow.slice(0, 200));
+    ck("OpenCode Go 不写 ChatGPT 订阅", !/ChatGPT 订阅/.test(ocRow), ocRow.slice(0, 200));
+    ck("视图里没有多余的旧样式类", !/class="(seg|spark|extab|ckdet)"/.test(l));
+    // 套餐不能一律去重:OpenCode Go「未折进消耗」只写在明细里(2026-10-23 边界复核)
+    ck("OpenCode Go 明细保留「套餐 · 未折进消耗」", /未折进消耗/.test(renderDetail(oc)));
+    ck("Codex 明细不重复副标题里的套餐", !/<span>套餐<\\/span>/.test(renderDetail(cx)));
+    cx.extra = [];
+    oc.extra = [];
+    render({});
+  } catch (e) { ck("Codex 专属副标题", false, e.message); }
+
+  // ── 2026-10-23 边界复核修掉的几条 ──
+  try {
+    const nowS = Math.floor(Date.now() / 1000);
+    const wb = CHANNELS.find((c) => c.id === "wb");
+    const bak = wb.expiring;
+    wb.expiring = [
+      { at: nowS - 5 * 86400, amount: 300, label: "过期包A" },
+      { at: nowS - 2 * 86400, amount: 200, label: "过期包B" },
+      { at: nowS + 3 * 86400, amount: 600, label: "签到" },
+      { at: nowS + 9 * 86400, amount: 1500, label: "活动" },
+    ];
+    const d = renderDetail(wb);
+    const firstRow = (d.match(/class="core-exp[^"]*"[\\s\\S]*?<\\/div>/) || [""])[0];
+    ck("积分核心段:已过期的包不占「最近 3 笔」", !/已过期/.test(firstRow) && /全部 4 笔/.test(d), firstRow);
+    wb.expiring = bak;
+
+    const four = CHANNELS.find((c) => c.id === "4sapi");
+    changesCache["4sapi"] = [{ startTs: nowS - 30 * 3600, endTs: nowS - 30 * 3600 + 1200, delta: -1,
+      remaining: 1, samples: 2, gapSecs: 0 }];
+    changesState["4sapi"] = "done";
+    const lt = (renderDetail(four).match(/class="lt">([^<]*)</) || [])[1] || "";
+    ck("更早的台账只写结束时刻(不带两头日期,84px 放得下)", /^\\d{1,2}-\\d{2} \\d{2}:\\d{2}$/.test(lt), lt);
+
+    const ds = CHANNELS.find((c) => c.id === "ds");
+    ds.valid = false;
+    ck("失败卡用 rb-dim,不撞全局 .dim", /rbody-in rb-dim/.test(renderDetail(ds)) && !/rbody-in dim/.test(renderDetail(ds)));
+    ds.valid = true;
+
+    // 紧凑条里点 chip:不把行记成展开,也不取台账
+    document.body.className = "form-compact";
+    rowOpen.clear();
+    render({});
+    const chip = document.querySelector('#list .row[data-id="kimi"] .rhead');
+    if (chip) chip.click();
+    ck("紧凑条点 chip 不偷偷展开行", rowOpen.size === 0, rowOpen.size);
+    document.body.className = "form-panel";
+    render({});
+  } catch (e) { ck("边界复核修掉的几条", false, e.message); }
   ck("排序照后端的 order(限流的排第一)",
     L().indexOf('data-id="claude"') < L().indexOf('data-id="kimi"'), L().indexOf('data-id="claude"') + " vs " + L().indexOf('data-id="kimi"'));
 

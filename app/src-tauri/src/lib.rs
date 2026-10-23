@@ -901,61 +901,6 @@ async fn workbuddy_login(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 展开区曲线的返回:值 + 有缺口的分桶 + 数据来源。
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SeriesView {
-    values: Vec<f64>,
-    /// 有缺口的分桶下标(柱图上打斜纹:那段时间挂件没在跑,柱子只算了一半)
-    gaps: Vec<usize>,
-    /// detail = 全部来自 90 天明细;daily = 含 90 天外的日级摘要(界面写清口径)
-    source: String,
-}
-
-#[tauri::command]
-async fn get_series(app: tauri::AppHandle, id: String, hours: i64) -> Result<SeriesView, String> {
-    // 参数来自前端:负数或超大值会把扫描窗口翻成"全表",而这个查询以前还跑在主线程上
-    // (报告 P3-24 + P1-14)。id 也必须是认得出的渠道,否则白扫一条不存在的序列。
-    // 上限抬到 400 天:长期趋势要用(90 天外的部分由日级摘要补,见 trend_series)。
-    key_allowed(&app.state::<AppState>(), &id)?;
-    let hours = hours.clamp(1, 24 * 400);
-    let store = {
-        let st = app.state::<AppState>();
-        st.store.clone()
-    };
-    let id2 = id.clone();
-    tokio::task::spawn_blocking(move || {
-        // 曲线只画"现在这把钥匙"的账(与消耗推算同一口径);读凭据是阻塞 IO,已在下沉线程里
-        let fp = fp_of_any(&id2);
-        let fpo = if fp.is_empty() { None } else { Some(fp.as_str()) };
-        let to = now_ts();
-        let from = to - hours * 3600;
-        // lock_rw:锁被毒化时也要出图,不能让取数线程的一次 panic 之后所有曲线都空掉
-        let s = lock_rw(&store);
-        let archived = s
-            .daily_summaries(&id2, fpo, from)
-            .map(|v| !v.is_empty())
-            .unwrap_or(false);
-        let (values, gaps) = s
-            .trend_series(
-                &id2,
-                fpo,
-                from,
-                to,
-                24,
-                tokenscope_core::fetch::local_tz_offset(),
-            )
-            .unwrap_or_else(|_| (vec![0.0; 24], Vec::new()));
-        Ok(SeriesView {
-            values,
-            gaps,
-            source: if archived { "daily".into() } else { "detail".into() },
-        })
-    })
-    .await
-    .map_err(|e| format!("取曲线失败: {e}"))?
-}
-
 /// 行详情里的「最近变动」台账:展开时才取,不占轮询、不进视图。
 #[tauri::command]
 async fn channel_changes(
@@ -2209,8 +2154,8 @@ async fn vault_save(
         let now = now_ts();
 
         // 库锁只圈住"读"这一段。下面要调 Windows 凭据管理器(外部 RPC,域账户/组策略
-        // 出问题时可以卡到秒级),以前是持着 store 锁跨 RPC:那段时间里 get_series 等
-        // 主线程命令在同一把锁上排队,整个面板冻住(报告 P1-7)。
+        // 出问题时可以卡到秒级),以前是持着 store 锁跨 RPC:那段时间里 channel_changes
+        // 等主线程命令在同一把锁上排队,整个面板冻住(报告 P1-7)。
         let (all, existing) = {
             let s = lock_rw(&store);
             (
@@ -4840,7 +4785,6 @@ pub fn run() {
             set_key,
             delete_key,
             workbuddy_login,
-            get_series,
             channel_changes,
             set_autostart,
             set_pin,

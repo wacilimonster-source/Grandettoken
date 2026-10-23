@@ -145,64 +145,49 @@ body{
 /* 未配置 / 取数失败:和字母方块的"变灰"语义对齐 */
 .ico.logo.off>img{filter:grayscale(1);opacity:.5}
 
-/* 配额型(OpenCode Go):5 小时 / 本周 / 本月 三个窗口各一行迷你条 */
-.wins{margin-top:calc(8px*var(--u));display:flex;flex-direction:column;gap:calc(5px*var(--u))}
-.win{display:flex;align-items:center;gap:calc(7px*var(--u));font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3)}
-.win .wl{flex:none;width:calc(48px*var(--u))}
-.win .wb{flex:1;height:calc(4px*var(--u));border-radius:calc(3px*var(--u));background:#303849;overflow:hidden}
-.win .wb>i{display:block;height:100%;border-radius:calc(3px*var(--u));
-  transition:width .5s cubic-bezier(.3,1,.4,1)}
-.win .wv{flex:none;width:calc(46px*var(--u));text-align:right;font-size:max(11.5px,calc(11.5px*var(--u)));font-weight:500;
-  font-variant-numeric:tabular-nums}
-/* 重置倒计时:中性次级色(重置快是好事,不参与红黄告警语义) */
-.win .wt{flex:none;width:calc(62px*var(--u));text-align:right;color:var(--tx2);
-  font-size:max(11px,calc(11px*var(--u)));font-variant-numeric:tabular-nums;white-space:nowrap}
-.win .wt.ok{color:var(--ok)}
+/* 展开区核心段(2026-10-23 五段骨架):金额 = 一行三格;配额 = 一窗一行。
+   这两组原来是行头里的「第三段」,现在只在展开区出现 —— 行头展开前后同一个高度。 */
+.core-use{display:flex;align-items:center;font-size:max(11.5px,calc(11px*var(--u)));
+  color:var(--tx3);min-height:calc(20px*var(--u))}
+.core-use div{flex:1;border-left:1px solid #2a3040;padding-left:calc(7px*var(--u));white-space:nowrap}
+.core-use div:first-child{border-left:0;padding-left:0}
+.core-use b{color:var(--tx2);font-weight:500;margin-left:calc(5px*var(--u));font-variant-numeric:tabular-nums}
+/* 推算标记:代替原来那句"消耗按快照估算"的说明(说明收进 title,不再占一行) */
+.est{flex:none;font-size:max(9.5px,calc(9.5px*var(--u)));color:var(--tx3);
+  border:1px solid var(--line2);border-radius:3px;padding:0 calc(3px*var(--u));line-height:1.5}
 
-.use{display:flex;margin-top:calc(7px*var(--u))}
-.use div{flex:1;font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);border-left:1px solid #2a3040;padding-left:calc(7px*var(--u))}
-.use div:first-child{border-left:0;padding-left:0}
-.use b{display:block;font-size:calc(12px*var(--u));color:var(--tx2);font-weight:500;
-  font-variant-numeric:tabular-nums;margin-top:calc(1px*var(--u))}
+.core-w{display:flex;align-items:center;gap:calc(7px*var(--u));
+  font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);min-height:calc(21px*var(--u))}
+.core-w .wl{flex:none;width:calc(48px*var(--u))}
+.core-w .wb{flex:1;height:calc(4px*var(--u));border-radius:calc(3px*var(--u));background:#303849;overflow:hidden}
+.core-w .wb>i{display:block;height:100%;border-radius:calc(3px*var(--u));
+  transition:width .5s cubic-bezier(.3,1,.4,1)}
+.core-w .wv{flex:none;width:calc(46px*var(--u));text-align:right;font-weight:500;
+  font-variant-numeric:tabular-nums}
+/* 重置时间:中性次级色(重置快是好事,不参与红黄告警语义);限流只染百分比 */
+.core-w .wt{flex:none;min-width:calc(104px*var(--u));text-align:right;color:var(--tx2);
+  font-size:max(11px,calc(11px*var(--u)));font-variant-numeric:tabular-nums;white-space:nowrap}
+.core-w .wt.ok{color:var(--ok)}
 
 /* 积分型:大数字后的单位(分),和小数位一样跟着数值走不另设样式 */
 .val .v i.unit{font-style:normal;font-size:inherit;font-weight:inherit;color:inherit;
   margin-left:calc(1px*var(--u))}
 
-/* 积分型:逐笔到期。列表行只放最近的几笔,展开里是全量表 */
-.exps{margin-top:calc(8px*var(--u));display:flex;flex-direction:column;gap:calc(4px*var(--u))}
-.exp{display:flex;align-items:center;gap:calc(8px*var(--u));font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3)}
-.exp .ed{flex:none;width:calc(76px*var(--u));color:var(--tx2);font-variant-numeric:tabular-nums}
-.exp .ed i{font-style:normal;color:var(--tx3);margin-left:calc(4px*var(--u));font-size:max(11.5px,calc(10px*var(--u)))}
-.exp .ea{flex:none;width:calc(80px*var(--u));text-align:right;color:var(--tx2);font-weight:500;
+/* 积分型:最近到期的几笔(核心段;超过 3 笔由「全部 N 笔」原地展开) */
+.core-exp{display:flex;align-items:center;gap:calc(8px*var(--u));
+  font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);min-height:calc(22px*var(--u))}
+.core-exp .ed{flex:none;width:calc(92px*var(--u));color:var(--tx2);font-variant-numeric:tabular-nums}
+.core-exp .ed i{font-style:normal;color:var(--tx3);margin-left:calc(4px*var(--u));
+  font-size:max(11.5px,calc(10px*var(--u)))}
+.core-exp .ea{flex:none;width:calc(78px*var(--u));text-align:right;color:var(--tx2);font-weight:500;
   font-variant-numeric:tabular-nums}
-.exp .el{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.core-exp .el{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* 30 天内黄、7 天内红 —— 只有到期日与数量染色,标签保持中性 */
-.exp.w .ed,.exp.w .ea{color:var(--warn)}
-.exp.b .ed,.exp.b .ea{color:var(--bad)}
-.expmore{font-size:max(11.5px,calc(10.5px*var(--u)));color:var(--tx3);margin-top:calc(2px*var(--u))}
-
-/* 展开详情里的逐笔到期全量表 */
-.extab{margin:0 0 calc(10px*var(--u));max-height:calc(168px*var(--u));overflow-y:auto;
-  border:1px solid var(--line);border-radius:calc(7px*var(--u));background:#ffffff05}
-.extab .exrow,.extab .exhead{display:flex;align-items:center;gap:calc(8px*var(--u));font-size:max(11.5px,calc(11px*var(--u)));
-  padding:calc(4px*var(--u)) calc(9px*var(--u));border-bottom:1px solid #262d3d}
-.extab .exrow:last-of-type{border-bottom:0}
-.extab .exhead{font-size:max(11.5px,calc(10.5px*var(--u)));color:var(--tx3);position:sticky;top:0;
-  background:#171a21;letter-spacing:.04em}
-.extab .ed{flex:none;width:calc(86px*var(--u));color:var(--tx2);font-variant-numeric:tabular-nums}
-.extab .ed i{font-style:normal;color:var(--tx3);margin-left:calc(4px*var(--u));font-size:max(11.5px,calc(10px*var(--u)))}
-.extab .ea{flex:none;width:calc(78px*var(--u));text-align:right;color:var(--tx2);font-weight:500;
-  font-variant-numeric:tabular-nums}
-.extab .el{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  color:var(--tx3)}
-.extab .exrow.w .ed,.extab .exrow.w .ea{color:var(--warn)}
-.extab .exrow.b .ed,.extab .exrow.b .ea{color:var(--bad)}
-.extab .exrow.past{opacity:.55}
-.extab .exfoot{font-size:max(11.5px,calc(10.5px*var(--u)));color:var(--tx3);padding:calc(5px*var(--u)) calc(9px*var(--u));background:#ffffff05;
-  border-top:1px solid var(--line)}
-.extab::-webkit-scrollbar{width:6px}
-.extab::-webkit-scrollbar-thumb{background:var(--line2);border-radius:9px}
+.core-exp.w .ed,.core-exp.w .ea{color:var(--warn)}
+.core-exp.b .ed,.core-exp.b .ea{color:var(--bad)}
+/* 已过期但还有余量的包:只在「全部 N 笔」里出现,排在未到期的后面 */
+.core-exp.past{opacity:.55}
+.core-empty{font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);line-height:1.6}
 .caret{color:var(--tx3);font-size:calc(9px*var(--u));flex:none;width:calc(12px*var(--u));text-align:center;
   transition:transform .25s}
 .row.open .caret{transform:rotate(90deg)}
@@ -222,55 +207,66 @@ body{
   100%{box-shadow:0 0 0 0 rgba(255,107,99,0)}}
 .dot.breath1{animation:breatheOnce 1.2s ease-out 1}
 
-/* ── 展开详情(动效 C:grid 0fr→1fr 真高度过渡,展开 320ms / 收起 200ms)── */
-.rbody{display:grid;grid-template-rows:0fr;transition:grid-template-rows var(--t2) var(--ease)}
-.row.open .rbody{grid-template-rows:1fr;transition-duration:var(--t3)}
-.rbody-in{overflow:hidden;min-height:0;padding:calc(4px*var(--u)) calc(13px*var(--u)) calc(13px*var(--u)) calc(49px*var(--u));background:#ffffff05;
+/* ── 展开详情(动效 C:grid 0fr→1fr 真高度过渡,展开 320ms / 收起 200ms)──
+   2026-10-23 五段骨架:整行一张卡(底色 + 左侧强调竖线),行头前后不变高。
+   竖线用品牌蓝不用状态色 —— 红黄绿已经被状态点与大数字占用;
+   卡比一屏高时,滚到中间也认得出是哪张开着。 */
+/* 收起的行体要真的不可聚焦:内容还留在 DOM 里(下次轮询才重画),只靠 0fr + overflow
+   裁掉的话,Tab 会一路落进看不见的「全部 N 条 / 模型配置 / 渠道设置」(2026-10-23 边界复核)。
+   visibility 跟在高度过渡之后才切到 hidden(延迟 = 收起时长),展开时立刻 visible —— 不影响动画。 */
+.rbody{display:grid;grid-template-rows:0fr;visibility:hidden;
+  transition:grid-template-rows var(--t2) var(--ease),visibility 0s linear var(--t2)}
+.row.open .rbody{grid-template-rows:1fr;visibility:visible;
+  transition:grid-template-rows var(--t3) var(--ease),visibility 0s linear 0s}
+body.form-panel .row{position:relative}
+body.form-panel .row.open{background:var(--bg2)}
+body.form-panel .row.open::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;
+  background:var(--ac);z-index:3;pointer-events:none}
+.rbody-in{overflow:hidden;min-height:0;padding:calc(2px*var(--u)) calc(12px*var(--u)) calc(10px*var(--u));
   transition:padding var(--t2) var(--ease)}
-/* 折叠态必须真的收到 0:上下内边距(4 + 13 = 17px)会把 `0fr` 的轨道撑到 17px ——
-   折叠后留下一道 17px 的残影,里面是详情顶部被切断的内容(用户实测:展开又折叠之后
-   那排「近 24 小时 / 近 7 天 / 近 30 天」剩半截,行也比没展开过的高 17px)。
-   折叠时把上下内边距归零(一起过渡,不跳),左右内边距不影响高度,保留用于对齐。 */
+/* 折叠态必须真的收到 0:上下内边距会把 `0fr` 的轨道撑开,折叠后留下一道残影
+   (2026-10-13 修,v0.1.24)。折叠时把上下内边距归零(一起过渡,不跳)。 */
 .row:not(.open) .rbody-in{padding-top:0;padding-bottom:0}
-.seg{display:flex;gap:calc(4px*var(--u));margin-bottom:calc(9px*var(--u))}
-.seg button{flex:1;font-size:max(11.5px,calc(11px*var(--u)));padding:calc(3px*var(--u)) 0;border:1px solid var(--line);
-  background:var(--bg3);color:var(--tx3);border-radius:calc(5px*var(--u));cursor:pointer;font-family:inherit}
-.seg button.on{background:#7fa2ff1f;border-color:#7fa2ff55;color:#b7ccff}
-.kv{display:grid;grid-template-columns:1fr 1fr;gap:calc(7px*var(--u)) calc(14px*var(--u));margin-bottom:calc(10px*var(--u))}
+/* 段:固定顺序 核心 → 明细 → 最近变动 → 签到 → 页脚;没有内容的段不画 */
+.sec{margin-top:calc(8px*var(--u))}
+.sec-h{display:flex;align-items:center;margin-bottom:calc(2px*var(--u));
+  font-size:max(10.5px,calc(10.5px*var(--u)));color:var(--tx3);letter-spacing:.06em}
+.sec-h span:first-child{flex:1}
+/* 「全部 N 条」是文字按钮:不做描边按钮,不和页脚的「渠道设置」抢眼 */
+.sec-more{border:0;background:none;font:inherit;font-size:max(11px,calc(11px*var(--u)));
+  letter-spacing:0;color:var(--tx2);cursor:pointer;padding:0}
+.sec-more:hover{color:var(--ac)}
+.kv{display:grid;grid-template-columns:1fr 1fr;gap:0 calc(14px*var(--u))}
 .kv div{display:flex;justify-content:space-between;font-size:calc(12px*var(--u));
-  border-bottom:1px dashed #2a3040;padding-bottom:calc(4px*var(--u));gap:calc(6px*var(--u));min-width:0}
+  border-bottom:1px dashed #2a3040;padding:calc(3px*var(--u)) 0;gap:calc(6px*var(--u));min-width:0}
+.kv .wide{grid-column:1/-1}
 .kv span{color:var(--tx3);white-space:nowrap}
 .kv b{font-weight:500;font-variant-numeric:tabular-nums;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
-.spark{height:calc(30px*var(--u));display:flex;align-items:flex-end;gap:calc(2px*var(--u));margin-bottom:calc(9px*var(--u))}
-.spark i{flex:1;background:#3d5c92;border-radius:1px;min-height:1px}
-.spark-empty{height:calc(30px*var(--u));display:flex;align-items:center;justify-content:center;
-  margin-bottom:calc(9px*var(--u));font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3)}
-/* 缺口柱:那段没观测,数字只算了一半 —— 斜纹与实心柱在灰度下也能分开 */
-.spark i.gap{background:repeating-linear-gradient(45deg,#5a6c96 0 2px,#2b3448 2px 4px)}
-/* 次要口径与背景解释折叠;只有真实采样缺口才用警示色提示 */
-.detail-notes{margin:calc(3px*var(--u)) 0 calc(6px*var(--u));border-top:1px dashed var(--line)}
-.detail-notes summary{display:flex;align-items:center;justify-content:space-between;cursor:pointer;list-style:none;
-  padding:calc(5px*var(--u)) 0;font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3)}
-.detail-notes summary::-webkit-details-marker{display:none}
-.detail-notes summary::after{content:"展开 +";color:var(--tx3)}
-.detail-notes[open] summary::after{content:"收起 −"}
-.detail-notes.has-gap summary{color:var(--warn)}
-.detail-note-list{display:grid;gap:calc(4px*var(--u));padding:0 0 calc(5px*var(--u));}
-.detail-note-list>div{font-size:max(11.5px,calc(11px*var(--u)));line-height:1.5;color:var(--tx3)}
+/* 签到:一行。徽标已经说了「签没签 / 能不能领」,这里只说连续天数 / 本月 / 上次尝试 */
+.ckline{font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx2);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 页脚:说明在上、动作在下(右对齐) */
+.foot-det{margin-top:calc(8px*var(--u));padding-top:calc(7px*var(--u));border-top:1px solid var(--line)}
+.fn-note{font-size:max(10.5px,calc(10.5px*var(--u)));color:var(--tx3);line-height:1.55;
+  margin-bottom:calc(5px*var(--u))}
+.fn-note.warn{color:var(--warn)} .fn-note.bad{color:#ff9b93}
+.fn-act{display:flex;justify-content:flex-end;gap:calc(6px*var(--u));flex-wrap:wrap;margin-top:calc(6px*var(--u))}
+/* 取数失败 / 旧快照:内容与说明一起降到 72%,和行头的大数字同一口径。
+   类名不能叫 .dim —— 全局 .dim{color:var(--tx3)} 会把数值再染一层灰 */
+.rbody-in.rb-dim .sec,.rbody-in.rb-dim .ckline{opacity:.72}
 .detail-actions{display:flex;justify-content:flex-end;gap:calc(6px*var(--u));flex-wrap:wrap;margin-top:calc(8px*var(--u))}
-/* 变动台账(展开区) */
-.ledger{border:1px solid var(--line);border-radius:calc(8px*var(--u));margin-top:calc(9px*var(--u));
-  padding:calc(4px*var(--u)) calc(9px*var(--u));background:var(--bg2)}
-.ledger .ldh{display:flex;justify-content:space-between;font-size:max(11.5px,calc(11px*var(--u)));
-  color:var(--tx3);padding:calc(3px*var(--u)) 0 calc(5px*var(--u));border-bottom:1px dashed var(--line)}
-.ledger .lrow{display:flex;gap:calc(8px*var(--u));align-items:baseline;padding:calc(4px*var(--u)) 0;
+/* 变动台账(展开区):去掉外框,和别的段一样靠小标题分隔 */
+.ledger{display:flex;flex-direction:column}
+.ledger .lrow{display:flex;align-items:center;gap:calc(8px*var(--u));min-height:calc(22px*var(--u));
   border-bottom:1px dashed var(--line);font-size:max(11.5px,calc(11.5px*var(--u)))}
 .ledger .lrow:last-child{border-bottom:0}
-.ledger .lt{color:var(--tx3);flex:none;font-variant-numeric:tabular-nums}
+.ledger .lt{color:var(--tx3);flex:none;width:calc(84px*var(--u));font-variant-numeric:tabular-nums;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ledger .lrow b{flex:none;font-weight:600;font-variant-numeric:tabular-nums}
 .ledger .lx{color:var(--tx3);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ledger .lx i{font-style:normal;color:var(--warn);margin-left:calc(5px*var(--u))}
+.lg-empty{font-size:max(11.5px,calc(10.5px*var(--u)));color:var(--tx3);line-height:1.6}
 /* 渠道卡里的「测试连接」结果行(自检报告;不含任何密钥) */
 .prb{font-size:max(11.5px,calc(11.5px*var(--u)));color:var(--tx2);line-height:1.7;
   padding:calc(3px*var(--u)) 0 0 calc(2px*var(--u));word-break:break-all}
@@ -465,12 +461,6 @@ body.form-compact .ckb:empty{display:none}
 .ckstrip:hover{background:#1c2740;border-color:var(--ac)}
 body.form-compact .ckstrip,body.form-pill .ckstrip{display:none}
 
-/* 行详情里的签到区(主卡片只给"一眼",这里给完整信息) */
-.ckdet{border:1px dashed var(--line2);border-radius:calc(7px*var(--u));
-  padding:calc(6px*var(--u)) calc(8px*var(--u));margin:calc(8px*var(--u)) 0}
-.ckdet .k1{font-size:max(11px,calc(11.5px*var(--u)));color:var(--tx2)}
-.ckdet .k2{font-size:max(10px,calc(10.5px*var(--u)));color:var(--tx3);
-  margin-top:calc(3px*var(--u));font-family:Consolas,monospace}
 .nm .s .cy{color:var(--ac)}
 .nm .s .ct{color:var(--tx3)}
 /* Codex 副标题里的套餐小徽章(free/plus/pro) */
@@ -479,7 +469,7 @@ body.form-compact .ckstrip,body.form-pill .ckstrip{display:none}
 
 /* 键盘可达性:所有可点元素统一焦点环(2026-09-23,开关已一并 <button role="switch"> 化) */
 .ib:focus-visible,.tb:focus-visible,.btn:focus-visible,.pick:focus-visible,.sw:focus-visible,
-.seg button:focus-visible,.eye:focus-visible,.sel:focus-visible,.hk-rec:focus-visible,
+.rhead:focus-visible,.sec-more:focus-visible,.eye:focus-visible,.sel:focus-visible,.hk-rec:focus-visible,
 .more:focus-visible,.tabs button:focus-visible{
   outline:2px solid var(--ac);outline-offset:2px}
 
@@ -535,9 +525,6 @@ body.form-compact .row .rhead{padding:calc(3px*var(--u)) calc(7px*var(--u));curs
   background:var(--bg3);min-width:0}
 body.form-compact .row .r1{gap:calc(5px*var(--u))}
 body.form-compact .bar,
-body.form-compact .use,
-body.form-compact .wins,
-body.form-compact .exps,
 body.form-compact .caret,
 body.form-compact .rbody,
 body.form-compact .claim-warn,
@@ -688,9 +675,9 @@ body.xf-in .list,body.xf-in .pill-body{animation:fadeup var(--t2) var(--ease)}
 
 /* H 悬停与按压 */
 .rhead{transition:background var(--t1) ease}
-.btn,.ib,.tb,.seg button,.eye{transition:background var(--t1) ease,color var(--t1) ease,
+.btn,.ib,.tb,.sec-more,.eye{transition:background var(--t1) ease,color var(--t1) ease,
   border-color var(--t1) ease,filter var(--t1) ease}
-.btn:active,.ib:active,.tb:active,.seg button:active{transform:scale(.96)}
+.btn:active,.ib:active,.tb:active{transform:scale(.96)}
 
 /* I 面板入场:行自上而下 30ms 节奏淡入,只在「进入面板形态/从托盘唤出」时放一次 */
 #list.st-in .row{animation:fadeup 240ms var(--ease) both}
@@ -1008,7 +995,6 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 /* ═══ P1 · 面板重构:风险带 / 两级行 / 分组 ═══════════════════════
    行高从"一率 84px(实测 101–166)"压回两级:紧急行两行,正常行一行。
    折叠时不再画第三段(窗口条 / 到期列表 / 日周月)—— 它只在展开区出现。 */
-.row:not(.open) .seg3{display:none}
 .row .r2{display:none}
 .row.urg .r2{display:block;font-size:max(10.5px,calc(10.5px*var(--u)));color:var(--tx3);
   margin-top:calc(2px*var(--u));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

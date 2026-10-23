@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>首页渠道展开区 · 产品设计 · 2026-10-23</title>
+<style>
+:root{--bg:#12141a;--bg2:#191c24;--bg3:#20242e;--line:#2f3648;--line2:#3c445c;
+  --tx:#edf0f6;--tx2:#b6bfce;--tx3:#8d97ab;--ok:#4ade9d;--warn:#f7c355;--bad:#ff6b63;--ac:#7fa2ff}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d0f14;color:var(--tx);font:14px/1.7 "Segoe UI","Microsoft YaHei",sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:40px 28px 80px}
+h1{font-size:26px;margin-bottom:6px}
+h2{font-size:20px;margin:44px 0 12px;padding-top:14px;border-top:1px solid var(--line)}
+h3{font-size:16px;margin:26px 0 8px}
+p,li{color:var(--tx2)}
+p{margin:8px 0}
+ul,ol{margin:8px 0 8px 22px}
+li{margin:3px 0}
+b{color:var(--tx)}
+code{font:12.5px Consolas,monospace;background:#1d2130;border:1px solid var(--line);border-radius:4px;padding:0 4px;color:#c9d4ea}
+a{color:var(--ac)}
+.meta,.muted{color:var(--tx3)}
+.meta{font-size:13px}
+table{width:100%;border-collapse:collapse;margin:10px 0 14px;font-size:13px}
+th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}
+th{background:var(--bg3);color:var(--tx2);font-weight:600}
+td{color:var(--tx2)}
+td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+tr.hi td{background:#1a2133}
+.note{border:1px solid var(--line);border-left:3px solid var(--ac);background:var(--bg2);border-radius:6px;padding:10px 14px;margin:12px 0}
+.note.warn{border-left-color:var(--warn)}
+.note.ok{border-left-color:var(--ok)}
+.shots{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;margin:12px 0}
+.shots figure{flex:none}
+.shots img{display:block;border:1px solid var(--line);border-radius:8px}
+.shots figcaption{font-size:12px;color:var(--tx3);margin-top:5px;max-width:380px}
+.stage{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap;margin:14px 0}
+.cap{font-size:13px;color:var(--tx2);max-width:300px}
+.cap .readout{margin-top:10px;font:12.5px Consolas,monospace;color:var(--ac);white-space:pre-line}
+
+/* ── 原型:尺寸与色值取自 app/src/styles.css(标准字号 --u=1)── */
+.k-win{width:380px;height:560px;background:var(--bg);border:1px solid var(--line);border-radius:12px;flex:none;
+  display:flex;flex-direction:column;overflow:hidden;font-size:13px;line-height:1.5;box-shadow:0 2px 8px -2px rgba(0,0,0,.6)}
+.k-tbar{height:37px;flex:none;display:flex;align-items:center;gap:9px;padding:0 12px;border-bottom:1px solid var(--line);
+  background:linear-gradient(180deg,#1d2129,#171a21);font-size:12px;font-weight:600}
+.k-tbar i{width:17px;height:17px;border-radius:5px;background:linear-gradient(135deg,#5b8cff,#8b5bff)}
+.k-tbar span{flex:1}
+.k-tbar em{font-style:normal;font-weight:400;color:var(--tx2);margin-left:10px}
+.k-sum{height:77px;flex:none;display:grid;grid-template-columns:1.25fr 1fr .7fr;border-bottom:1px solid var(--line)}
+.k-sum>div{padding:9px 12px;border-left:1px solid var(--line);min-width:0}
+.k-sum>div:first-child{border-left:0}
+.k-sum .lb{font-size:11.5px;color:var(--tx3)}
+.k-sum .vv{font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.k-sum .sb{font-size:10.5px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.k-ls{flex:1;overflow-y:auto;position:relative}
+.k-ls::-webkit-scrollbar{width:6px}
+.k-ls::-webkit-scrollbar-thumb{background:var(--line2);border-radius:9px}
+.k-foot{height:31px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;border-top:1px solid var(--line);
+  background:#141720;font-size:11.5px;color:var(--tx3)}
+.k-foot span:nth-child(2){flex:1}
+.k-grp{display:flex;align-items:center;gap:6px;padding:6px 12px 3px;font-size:10.5px;color:var(--tx3);letter-spacing:.08em}
+.k-grp em{font-style:normal;color:var(--tx2)}
+.k-grp::after{content:"";flex:1;height:1px;background:var(--line)}
+
+/* 行:折叠态与 app 现状同尺寸(普通行 5px 上下内边距,紧急行 9/7 + 22px 大数字) */
+.k-row{border-bottom:1px solid #232937;position:relative}
+.k-head{display:flex;align-items:center;gap:9px;padding:5px 12px;cursor:pointer;outline:none}
+.k-head:hover{background:#ffffff07}
+.k-head:focus-visible{box-shadow:inset 0 0 0 2px var(--ac)}
+.k-row.urg .k-head{padding:9px 12px 7px}
+.k-ico{width:28px;height:28px;border-radius:8px;flex:none;display:grid;place-items:center;font-size:11px;font-weight:700;color:#fff}
+.k-nm{flex:1;min-width:0}
+.k-n{font-size:13px;font-weight:500;white-space:nowrap;display:flex;align-items:center;gap:5px}
+.k-s{font-size:11.5px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.k-val{text-align:right;flex:none;font-variant-numeric:tabular-nums}
+.k-v{font-size:20px;font-weight:600;letter-spacing:-.4px;line-height:1.1}
+.k-row.urg .k-v{font-size:22px}
+.k-v i{font-style:normal;font-size:.75em}
+.k-p{font-size:11.5px;color:var(--tx3);margin-top:1px}
+.k-caret{color:var(--tx3);font-size:9px;width:12px;text-align:center;transition:transform .25s}
+.k-row.open .k-caret{transform:rotate(90deg);color:var(--tx2)}
+.dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok);flex:none}
+.dot.w{background:var(--warn)} .dot.st{background:#8d97ab}
+.tag{font-size:9.5px;line-height:1.5;padding:0 4px;border:1px solid var(--line2);border-radius:4px;color:var(--tx2);font-weight:400}
+.tag.ck{border-color:#2f6b4f;color:var(--ok)}
+.plan{font-size:9.5px;padding:0 5px;border-radius:4px;background:rgba(127,162,255,.16);color:#a8c0ff}
+.dim{opacity:.72}
+
+/* 展开:整行一张卡(底色 + 左侧 2px 强调竖线),行头尺寸不变,只有下面这块长高 */
+.k-row.open{background:var(--bg2)}
+.k-row.open::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--ac)}
+.k-body{display:grid;grid-template-rows:0fr;transition:grid-template-rows 200ms cubic-bezier(.2,.8,.2,1)}
+.k-row.open .k-body{grid-template-rows:1fr;transition-duration:320ms}
+.k-in{overflow:hidden;min-height:0;padding:0 12px}
+.k-row.open .k-in{padding:2px 12px 10px}
+.k-sec+.k-sec{margin-top:8px}
+.k-sh{display:flex;align-items:center;font-size:10.5px;color:var(--tx3);letter-spacing:.06em;margin-bottom:2px}
+.k-sh span{flex:1}
+.k-more{border:0;background:none;font:inherit;font-size:11px;color:var(--tx2);cursor:pointer;letter-spacing:0}
+.k-more:hover,.k-more:focus-visible{color:var(--ac);outline:none;text-decoration:underline}
+/* 核心块 ①:金额型 今日/本周/本月 一行 */
+.k-use{display:flex;align-items:center;font-size:11.5px;color:var(--tx3);height:20px}
+.k-use div{flex:1;border-left:1px solid #2a3040;padding-left:7px;white-space:nowrap}
+.k-use div:first-child{border-left:0;padding-left:0}
+.k-use b{color:var(--tx2);font-weight:500;margin-left:5px;font-variant-numeric:tabular-nums}
+.est{flex:none;font-size:9.5px;color:var(--tx3);border:1px solid var(--line2);border-radius:3px;padding:0 3px;line-height:1.5}
+/* 核心块 ②:配额型 一窗一行 */
+.k-w{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--tx3);height:21px}
+.k-w .wl{flex:none;width:44px}
+.k-w .wb{flex:1;height:4px;border-radius:3px;background:#303849;overflow:hidden}
+.k-w .wb i{display:block;height:100%;border-radius:3px;background:var(--ok)}
+.k-w .wv{flex:none;width:42px;text-align:right;color:var(--ok);font-weight:500;font-variant-numeric:tabular-nums}
+.k-w .wt{flex:none;width:112px;text-align:right;color:var(--tx2);white-space:nowrap}
+/* 核心块 ③:积分型 最近到期的几笔 */
+.k-exp{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--tx3);height:22px}
+.k-exp .ed{flex:none;width:96px;color:var(--tx2);font-variant-numeric:tabular-nums}
+.k-exp .ed i{font-style:normal;color:var(--tx3);margin-left:4px;font-size:10.5px}
+.k-exp .ea{flex:none;width:62px;text-align:right;color:var(--tx2);font-weight:500;font-variant-numeric:tabular-nums}
+.k-exp .el{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.k-exp.w .ed,.k-exp.w .ea{color:var(--warn)}
+.k-exp.b .ed,.k-exp.b .ea{color:var(--bad)}
+.k-exp.x,.k-lg.x{display:none}
+.k-sec.all .k-exp.x,.k-sec.all .k-lg.x{display:flex}
+/* 明细 / 最近变动 / 签到 / 页脚 */
+.k-kv{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
+.k-kv div{display:flex;justify-content:space-between;gap:8px;font-size:12px;height:23px;align-items:center;
+  border-bottom:1px dashed var(--line);min-width:0}
+.k-kv span{color:var(--tx3);white-space:nowrap}
+.k-kv b{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.k-kv .wide{grid-column:1/-1}
+.k-lg{display:flex;align-items:center;gap:8px;font-size:11.5px;height:22px;border-bottom:1px dashed #262c3b}
+.k-lg .lt{flex:none;width:72px;color:var(--tx3);font-variant-numeric:tabular-nums;white-space:nowrap}
+.k-lg b{flex:none;width:58px;font-weight:600;font-variant-numeric:tabular-nums}
+.k-lg .lx{flex:1;min-width:0;color:var(--tx3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.k-lg .lx i{font-style:normal;color:var(--warn);margin-left:5px}
+.k-ck{font-size:11.5px;color:var(--tx2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.k-ck span{color:var(--tx3)}
+.k-ft{margin-top:8px;padding-top:7px;border-top:1px solid var(--line)}
+.k-note{font-size:10.5px;color:var(--tx3);line-height:1.55;margin-bottom:5px}
+.k-note.warn{color:var(--warn)} .k-note.bad{color:#ff9b93}
+.k-act{display:flex;align-items:center;gap:6px}
+.k-act span{flex:1;font-size:10.5px;color:var(--tx3)}
+.k-btn{border:1px solid var(--line2);background:var(--bg3);color:var(--tx2);border-radius:6px;font:inherit;font-size:11px;
+  padding:1px 8px;cursor:pointer}
+.k-btn:hover{border-color:var(--ac);color:var(--tx)}
+.k-row.failed .k-sec{opacity:.72}
+.k-ls.nt .k-body,.k-ls.nt .k-caret{transition:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>首页渠道展开区 · 产品设计</h1>
+<div class="meta">2026-10-23 · 依据 v0.1.61(<code>6630600</code>)代码实读 + 无头 Edge 实测 · 本文只做设计,未改动任何代码</div>
+
+<h2 id="s0">0. 结论</h2>
+<p>需求两件事:① 删掉渠道行点开后的<b>日期区间筛选</b>(近 24 小时 / 7 天 / 30 天 / 3 月 / 12 月)和<b>迷你柱图</b>;
+② 把所有渠道的展开交互与展示形式调成一套。</p>
+<p><b>只删这两样不够。</b>它俩本身 53px(连外边距约 71px),而实测一张展开的金额型卡整行 <b>691px</b>,
+是列表可视高(413px)的 1.7 倍 —— 点开任何一行,其余渠道全部被挤出屏外;删完它俩仍有约 620px。
+占地的大头是 12 条「最近变动」(350px)和积分「逐笔到期」表(168px),再加上同一份列表在行头和详情里各画一次。</p>
+<p>建议的方案:</p>
+<ol>
+<li><b>删</b>:区间按钮、迷你柱图、两句只为柱图存在的说明、后端 <code>get_series</code> 命令。变动台账、今日/本周/本月、365 天日级归档都不动。</li>
+<li><b>一套骨架</b>:所有渠道的展开区按固定顺序画五段 —— 核心 · 明细 · 最近变动 · 签到 · 页脚;没有内容的段不画,<b>同一份列表只画一次</b>。</li>
+<li><b>一套交互</b>:点开只往下长,行头一个像素不变;长列表默认 3 条 + 原地「全部 N 条」;展开后自动滚进视野;<code>Esc</code> 先收起展开行。</li>
+<li><b>高度预算</b>:标准字号下,默认展开的整行 ≤ 300px,同屏至少还能完整看到 2 个别的渠道。</li>
+<li><b>顺手修</b>:「最近变动」的时间全错(秒当毫秒,12 条全挤在 <code>01:57–01:58</code> 这两分钟里);折叠的失败行把「取数失败」说三遍。</li>
+</ol>
+<table>
+<tr><th>展开的卡</th><th>现在整行</th><th>剩余高度能放几行</th><th>新方案整行</th><th>剩余高度能放几行</th></tr>
+<tr><td>4SAPI(金额 · 申请制 · 有台账)</td><td class="n">691</td><td class="n">0</td><td class="n" id="m1">288</td><td class="n" id="r1">2</td></tr>
+<tr><td>OpenCode Go(配额 · 三个窗口)</td><td class="n">325</td><td class="n">1</td><td class="n" id="m2">215</td><td class="n" id="r2">3</td></tr>
+<tr><td>WorkBuddy(积分 · 6 笔到期 · 签到)</td><td class="n">604</td><td class="n">0</td><td class="n" id="m3">280</td><td class="n" id="r3">2</td></tr>
+<tr><td>DeepSeek(取数失败 · 旧快照 + 台账)</td><td class="n">702</td><td class="n">0</td><td class="n" id="m4">251</td><td class="n" id="r4">3</td></tr>
+</table>
+<p class="muted">「剩余高度能放几行」= ⌊(413 − 整行) ÷ 51⌋,51 是普通行的实测高度。现状列是 §1 的实测;新方案列是
+<a href="#s4-6">§4.6 原型</a>在同尺寸下的实测。<b>实现后的真应用实测见 <a href="#s11">§11</a></b>(300 / 226 / 272 / 267,同样在预算内)。</p>
+
+<h2 id="s1">1. 现状取证</h2>
+<p><b>怎么量的</b>:无头 Edge 加载真实的 <code>app/src/index.html</code> / <code>app.js</code> / <code>styles.css</code>,
+Tauri 接口全部打桩,喂 7 个渠道的合成数据(字段形状照后端 <code>ChannelView</code>,数字是编的);
+400 × 580 窗口、标准字号,逐个点开行头,等 1.2 秒后量高度、截图。不碰正在运行的应用,不落盘配置。
+截图在 <code>docs/assets/row-detail/</code>。</p>
+<table>
+<tr><th>测量项(px)</th><th>4SAPI</th><th>OpenCode Go</th><th>WorkBuddy</th><th>DeepSeek(失败)</th></tr>
+<tr><td>折叠时整行</td><td class="n">51</td><td class="n">51</td><td class="n">51</td><td class="n">94</td></tr>
+<tr><td>展开后行头(行头自己也变高了)</td><td class="n">94</td><td class="n">120</td><td class="n">141</td><td class="n">137</td></tr>
+<tr><td>  其中「第三段」(只在展开时出现在行头里)</td><td class="n">36</td><td class="n">62</td><td class="n">83</td><td class="n">36</td></tr>
+<tr class="hi"><td>  <b>区间按钮 + 迷你柱图(本次删除)</b></td><td class="n">23 + 30</td><td class="n">23 + 30</td><td class="n">23 + 30</td><td class="n">23 + 30</td></tr>
+<tr><td>  明细 KV</td><td class="n">83</td><td class="n">23 + 53</td><td class="n">53</td><td class="n">23</td></tr>
+<tr><td>  逐笔到期表</td><td class="n">—</td><td class="n">—</td><td class="n">168</td><td class="n">—</td></tr>
+<tr class="hi"><td>  <b>最近变动(12 条)</b></td><td class="n"><b>350</b></td><td class="n">—</td><td class="n">—</td><td class="n"><b>350</b></td></tr>
+<tr><td>  数据说明 / 签到 / 错误提示 / 按钮</td><td class="n">28 / — / — / 20</td><td class="n">— / — / — / 20</td><td class="n">28 / 69 / — / 20</td><td class="n">28 / — / 20 / 20</td></tr>
+<tr><td>展开区合计</td><td class="n">597</td><td class="n">204</td><td class="n">462</td><td class="n">564</td></tr>
+<tr class="hi"><td><b>展开后整行</b>(列表可视高 413)</td><td class="n"><b>691</b></td><td class="n"><b>325</b></td><td class="n"><b>604</b></td><td class="n"><b>702</b></td></tr>
+<tr><td>行滚到顶后,同屏还能完整看到几个别的渠道</td><td class="n">0</td><td class="n">1</td><td class="n">0</td><td class="n">0</td></tr>
+</table>
+<p class="muted">各块之间的外边距没单列(每张卡 55–71px)。折叠行本身就有三种高度:51(多数)/ 39(Hapi,第二行是空的)/ 94(失败行多了两行提示)。</p>
+<div class="shots">
+  <figure><img src="../assets/row-detail/00-collapsed.png" width="400" alt="现状:折叠态">
+    <figcaption>现状 · 折叠。DeepSeek 一行写了「取数失败」三次、「HTTP 401」两次;Hapi 比别的行矮一截。</figcaption></figure>
+  <figure><img src="../assets/row-detail/01-amount-window.png" width="400" alt="现状:4SAPI 展开">
+    <figcaption>现状 · 点开 4SAPI。整个列表只剩这一张卡,「最近变动」露出 3 条就被切断,别的渠道一个都看不到。</figcaption></figure>
+</div>
+<div class="shots">
+  <figure><img src="../assets/row-detail/01-amount-card.png" width="380" alt="4SAPI 整张展开卡">
+    <figcaption>4SAPI 整卡 691px。12 条变动的时间<b>全挤在 01:57–01:58</b>(见 §6.1);行头的今日/本周/本月和下面的详情左边缘不齐。</figcaption></figure>
+  <figure><img src="../assets/row-detail/03-points-card.png" width="380" alt="WorkBuddy 整张展开卡">
+    <figcaption>WorkBuddy 整卡 604px。最近 3 笔到期画了两次;已经展开了,行头还写着「展开看全部」。</figcaption></figure>
+  <figure><img src="../assets/row-detail/02-percent-card.png" width="380" alt="OpenCode Go 整张展开卡">
+    <figcaption>OpenCode Go 整卡 325px。三个窗口画了两次,第二次被挤到省略号(「3.0 小…」「4 天后…」)。</figcaption></figure>
+  <figure><img src="../assets/row-detail/04-failed-card.png" width="380" alt="DeepSeek 整张展开卡">
+    <figcaption>DeepSeek 整卡 702px。「取数失败」「HTTP 401」「上次快照」各出现三次,真正的修复入口在最底下。</figcaption></figure>
+</div>
+
+<h2 id="s2">2. 问题清单</h2>
+<table>
+<tr><th>#</th><th>问题</th><th>证据</th></tr>
+<tr><td>P1</td><td><b>点开一行,其余渠道全部出屏</b>。展开区没有任何高度约束,最长的两样(12 条变动、逐笔到期)默认全量画。</td><td>§1 实测 691 / 604 / 702 &gt; 413</td></tr>
+<tr><td>P2</td><td>靠下的行点开后不滚进视野,要自己往下翻才看得到展开了什么。</td><td>点击委托里没有滚动(<code>app.js:2778-2817</code>);只有「最先到期」跳转会滚(<code>app.js:2641</code>)</td></tr>
+<tr><td>P3</td><td>区间按钮 + 柱图信息量低:24 根柱子没有坐标、没有数值、没有悬停;配额型画的是百分点、金额型画的是钱,同一个图两种单位。<b>用户已裁决删除。</b></td><td><code>app.js:793-810</code>、<code>855-864</code></td></tr>
+<tr><td>P4</td><td><b>同一份列表画两次</b>:配额型的窗口在行头画一次(条 + 倒计时)、详情里又画一次(剩余% + 时间);积分型最近 3 笔在行头一次、到期表里又一次。</td><td>行头 <code>app.js:557-600</code>;详情 <code>760-783</code>、<code>842-852</code></td></tr>
+<tr><td>P5</td><td>积分型行头写「另有 N 笔更晚到期,展开看全部」—— 这一段只在<b>已展开</b>时可见,这句话永远自相矛盾。</td><td><code>app.js:573</code> + <code>styles.css:1011</code></td></tr>
+<tr><td>P6</td><td><b>同一件事说三遍</b>:失败行的「取数失败」(状态标签 / 副标题 / 第二行),「HTTP 401」(第二行 / 黄字 / 详情红字)。</td><td><code>app.js:492</code>、<code>643-645</code>、<code>865-871</code>;后端 <code>view.rs:526-529</code></td></tr>
+<tr><td>P7</td><td>三种口径三种排法;行头与详情两条左边缘(12px / 49px)。缩进后的详情两列每列只剩约 150px,长值被省略。</td><td><code>styles.css:228</code>;OpenCode 截图</td></tr>
+<tr><td>P8</td><td>一次点击,行头和展开区<b>分两段长高</b>:第三段藏在行头里,展开时行头先变高,展开区再长。</td><td><code>styles.css:1011</code></td></tr>
+<tr><td>P9</td><td>展开里又套一层 <code>&lt;details&gt;</code>「数据说明」:黄字「数据有缺口」要再点一下才知道缺在哪。</td><td><code>app.js:832-839</code></td></tr>
+<tr><td>P10</td><td>动画先于数据:先加 <code>.open</code>(320ms 过渡),再 <code>await</code> 柱图和台账,内容在过渡跑完后才写进去。</td><td><code>app.js:2790-2815</code>(读代码推断;本机 IPC 太快,截图里看不出来)</td></tr>
+<tr><td>P11</td><td>键盘:面板里按 <code>Esc</code> 直接收成胶囊,不先收展开行(10-21 设计稿 §6.6 要求逐层退);行头不在统一焦点环列表里。</td><td><code>app.js:4288-4289</code>;<code>styles.css:481-484</code></td></tr>
+</table>
+<h2 id="s3">3. 删什么,留什么</h2>
+<table>
+<tr><th>删</th><th>位置</th><th>说明</th></tr>
+<tr><td>区间按钮(近 24 小时 / 7 天 / 30 天 / 3 月 / 12 月)</td><td><code>app.js:855-864</code>、点击分支 <code>2762-2775</code>;样式 <code>.seg</code> <code>styles.css:235-238</code>、焦点环里的 <code>.seg button</code></td><td>用户需求</td></tr>
+<tr><td>迷你柱图</td><td><code>app.js:793-810</code>、展开时取曲线 <code>2796-2802</code>、<code>sparkCache</code> / <code>sparkHours</code>;样式 <code>.spark*</code> <code>styles.css:245-250</code></td><td>用户需求</td></tr>
+<tr><td>只为柱图存在的两句说明</td><td>「图中斜纹表示采样不完整」「90 天以前的趋势由日级摘要合成」<code>app.js:819</code>、<code>823-825</code></td><td>图没了,说明跟着走</td></tr>
+<tr><td>后端 <code>get_series</code> 命令</td><td><code>src-tauri/src/lib.rs:904-957</code>(含 <code>SeriesView</code>)、注册处 <code>4796</code></td><td>前端不再调用,少一个 IPC 入口</td></tr>
+<tr><td>探针里的桩</td><td><code>build/probe-frontend.js:136</code></td><td>跟着删</td></tr>
+</table>
+<table>
+<tr><th>留</th><th>理由</th></tr>
+<tr><td>「最近变动」台账(<code>channel_changes</code>)</td><td>金额型唯一的逐笔账目,回答"钱花哪了 / 什么时候到账的";只是默认改成 3 条</td></tr>
+<tr><td>今日 / 本周 / 本月消耗、「预计可用 N 天」</td><td>由轮询算出,不依赖柱图那条序列</td></tr>
+<tr><td>core 里的 <code>trend_series</code> 与 365 天日级归档</td><td>README 承诺「90 天明细 + 365 天归档」;删数据不可逆,留着以后想加回趋势是零迁移(见 D3)</td></tr>
+</table>
+
+<h2 id="s4">4. 新方案</h2>
+<h3>4.1 交互:一种手势,一个结果</h3>
+<ul>
+<li><b>点行头 / <code>Enter</code> / <code>Space</code></b>:展开;再点收起。仍是单开(开一行自动收别的)。</li>
+<li><b>行头前后一个像素不变</b>:原来藏在行头里的「第三段」挪进展开区,展开只往下长,用现有的 320 / 200ms 那一个动画。</li>
+<li><b>先画后取</b>:点开立刻用手头数据画全;「最近变动」先占一行「读取中…」,取到后原地替换,取不到写「读不到变动记录」,不留空白。</li>
+<li><b>滚进视野</b>:展开动画结束后,让卡片下沿进入可视区;卡片比列表还高时,让行头贴住列表顶部。</li>
+<li><b>长列表默认 3 条</b>:最近变动、逐笔到期超过 3 条时,段标题右边出「全部 N 条」,原地展开、变成「收起」。收起整行时复位;轮询重画时保留(与 <code>rowOpen</code> 同一个机制)。</li>
+<li><b><code>Esc</code> 逐层退</b>:有展开行先收起它;没有才走原来的「面板 → 胶囊」。<code>↑</code> <code>↓</code> 在行头之间移焦点照旧,行头加进统一焦点环。</li>
+<li><b>从「最先到期」跳过来</b>:照旧滚动 + 闪一下 + 展开,落点正好是核心段的到期列表。</li>
+</ul>
+
+<h3>4.2 骨架:五段,固定顺序,没内容的段不画</h3>
+<table>
+<tr><th>段</th><th>画什么</th><th>规则</th></tr>
+<tr><td>① 核心</td><td>按口径三选一:金额 = 今日 / 本周 / 本月;配额 = 每个窗口一行;积分 = 最近到期的几笔</td><td>展开后第一眼看到的东西;原来行头里的第三段就是它</td></tr>
+<tr><td>② 明细</td><td>两列 KV;键 + 值的显示宽度(中日韩字符按 2 计)超过 26 就独占一行,窄的排前面</td><td>只去<b>确实重复</b>的:本轮额度、可再申请、Codex 的套餐档位、有逐笔列表时的额度包笔数。<b>不按条数截断</b>(落地复核:截断会吞掉「统计范围」「未折进消耗」这类警示)</td></tr>
+<tr><td>③ 最近变动</td><td>只有金额型;默认 3 条 +「全部 N 条」</td><td>今天的写 <code>HH:MM</code>(聚合的写 <code>HH:MM–HH:MM</code>,跨零点也只写钟点),更早的只写结束时刻 <code>MM-DD HH:MM</code>;去掉外框,和别的段一样用小标题</td></tr>
+<tr><td>④ 签到</td><td>只有开了签到的渠道;一行:连续天数 · 本月合计 · 上次尝试</td><td>"今天签没签 / 能不能领"是行头徽标的事,这里只说徽标没说的</td></tr>
+<tr><td>⑤ 页脚</td><td>上:一行小字说明(凭据来源 / 统计缺口 / 未公开接口),没有就不画;下:模型配置 · 渠道设置</td><td>替代原来那层 <code>&lt;details&gt;</code>「数据说明」;缺口写黄。新鲜是默认状态,不写「刚刚更新」</td></tr>
+</table>
+<div class="note ok"><b>一条硬规则:同一份列表只画一次。</b>折叠行负责"结论"(最紧的那个窗、最近的那笔、还剩几天),
+展开区负责"完整列表与动作"。折叠行可以引用列表里的某一项,但不能把列表再画一遍,也不能把同一句提示在两处各写一遍。</div>
+<p>段与段之间只靠 8px 间距和小标题分隔,不再有实线框(台账)和虚线框(签到),五段的视觉重量一致。</p>
+<h3>4.3 三种口径怎么填这五段</h3>
+<table>
+<tr><th>口径</th><th>① 核心</th><th>② 明细(去重后全列)</th><th>⑤ 页脚说明</th></tr>
+<tr><td>金额 · 申请制(4SAPI)</td><td>今日 / 本周 / 本月(推算的标「推算」)</td><td>上次申请 · 日均消耗 · 预计可用 · 累计发放</td><td>今日统计起点晚于零点时写「今日从 HH:MM 起才有数据」(黄)</td></tr>
+<tr><td>金额 · 充值型(DeepSeek / Hapi)</td><td>同上</td><td>赠送 / 充值余额;Hapi 的原始积分与换算</td><td>同上</td></tr>
+<tr><td>配额(OpenCode Go / Codex)</td><td>每窗一行:名称 · 迷你条 · 剩余% · 重置时间(&lt; 24h 写相对,≥ 24h 写「N 天 · MM-DD HH:MM」);限流窗标红</td><td>套餐摊销(独占一行)</td><td>OpenCode Go:「未公开接口,响应结构一变就会取数失败」</td></tr>
+<tr><td>积分(WorkBuddy / Trae / Qoder)</td><td>最近 3 笔到期:日期 · 剩 N 天 · 分数 · 来源;7 天内红、30 天内黄;超过 3 笔出「全部 N 笔」</td><td>累计发放 · 已使用</td><td>凭据来源(读本机桌面端,只读)</td></tr>
+<tr><td>取数失败(任一口径)</td><td colspan="2">照常画五段,数值用上次成功快照、降到 72% 透明度(与陈旧行同一套)</td><td>原因已在折叠行副标题里就不再写;原文太长被省略号截断时,才在这里写全(红字)</td></tr>
+<tr><td>未配置 / 未登录</td><td colspan="3">不画五段:沿用现在的一句引导 +「渠道设置」(<code>app.js:695-719</code>)</td></tr>
+</table>
+<p class="muted">积分渠道接口不给逐笔到期时(Qoder),核心段沿用现有兜底文案「接口未提供完整的逐笔到期信息…」,明细里不再重复列一条「逐笔到期明细:接口未提供」。</p>
+
+<h3>4.4 高度预算</h3>
+<p><b>标准字号下,默认展开(没点「全部 N 条」)的整行 ≤ 300px。</b>列表可视高 413 − 300 = 113,正好再放下两条 51px 的普通行。
+大字号 / 特大字号下窗口按同一个倍率放大(<code>formSize</code>,<code>app.js:2211-2217</code>),验收放宽为「同屏至少还有 1 个别的渠道」。
+用户点了「全部 N 条」不受预算约束 —— 那是他主动要看的。</p>
+<p>预算主要靠两刀:最近变动 12 条 → 3 条(350 → 约 86px);行头不再在展开时长高(第三段 36–83px 挪进核心段,和原来的详情合并成一份)。</p>
+
+<h3>4.5 视觉</h3>
+<ul>
+<li><b>整行一张卡</b>:展开后行头和展开区同一个底色(<code>--bg2</code>),左侧一条 2px 强调色竖线。竖线用品牌蓝不用状态色 —— 红黄绿已经被状态点和大数字占了;卡比一屏高时,滚到中间也认得出是哪张开着。</li>
+<li><b>一条左边缘</b>:所有段与图标左缘对齐(12px),不再缩进到名称列(49px)。明细两列各从约 150px 放宽到约 175px,长值不再被省略。</li>
+<li><b>字号不加新档</b>:段标题 10.5px <code>--tx3</code>(与分组标题同级);正文 11.5px;页脚说明 10.5px。</li>
+<li><b>「全部 N 条」是文字按钮</b>(<code>--tx2</code>,悬停变强调色),不做描边按钮,不和页脚的「渠道设置」抢眼。</li>
+<li><b>动效不新增</b>:沿用 <code>.rbody</code> 的 <code>grid-template-rows 0fr → 1fr</code>。行头不再变高之后,整次展开只剩这一个动画。</li>
+</ul>
+<h3 id="s4-6">4.6 可点原型(与 §1 同一份数据)</h3>
+<div class="stage">
+  <figure><img src="../assets/row-detail/01-amount-window.png" width="400" alt="现状">
+    <figcaption class="muted" style="font-size:12px;margin-top:5px">现状 · 点开 4SAPI</figcaption></figure>
+  <div class="k-win" id="proto">
+    <div class="k-tbar"><i></i><span>Grandettoken</span><em>刷新</em><em>置顶</em><em>紧凑</em><em>隐藏</em></div>
+    <div class="k-sum">
+      <div><div class="lb">近 30 天将过期</div><div class="vv" style="color:var(--warn)">2,253 分</div><div class="sb">2 个渠道 · 点击筛选</div></div>
+      <div><div class="lb">最先到期</div><div class="vv">WorkBuddy</div><div class="sb" style="color:var(--bad)">10-26 · 剩 3 天</div></div>
+      <div><div class="lb">签到</div><div class="vv">✓ 2/2</div><div class="sb" style="color:var(--ok)">▬ ▬</div></div>
+    </div>
+    <div class="k-ls" id="kls">
+      <div class="k-grp"><span>需要处理</span><em>1</em></div>
+      <div class="k-row urg failed" data-id="deepseek">
+        <div class="k-head" role="button" tabindex="0" aria-expanded="false">
+          <div class="k-ico" style="background:#4d6bfe">DS</div>
+          <div class="k-nm"><div class="k-n">DeepSeek <span class="dot st"></span><span class="tag">取数失败</span></div>
+            <div class="k-s">HTTP 401</div></div>
+          <div class="k-val"><div class="k-v dim" style="color:var(--tx3)">¥256<i>.00</i></div><div class="k-p">12 分钟前快照</div></div>
+          <div class="k-caret">▶</div>
+        </div>
+        <div class="k-body"><div class="k-in">
+          <div class="k-sec"><div class="k-use"><div>今日<b>¥3.10</b></div><div>本周<b>¥20.00</b></div><div>本月<b>¥88.00</b></div><span class="est">推算</span></div></div>
+          <div class="k-sec"><div class="k-kv"><div><span>赠送余额</span><b>¥0.00</b></div><div><span>充值余额</span><b>¥256.00</b></div></div></div>
+          <div class="k-sec"><div class="k-sh"><span>最近变动</span><button class="k-more">全部 12 条</button></div>
+            <div class="k-ledger" data-n="12" data-amt="0.80,1.35,1.90,2.45" data-up="7" data-gap="4"></div></div>
+          <div class="k-ft"><div class="k-act"><span></span><button class="k-btn">渠道设置</button></div></div>
+        </div></div>
+      </div>
+      <div class="k-grp"><span>其余</span><em>6</em></div>
+      <div class="k-row open" data-id="4sapi">
+        <div class="k-head" role="button" tabindex="0" aria-expanded="true">
+          <div class="k-ico" style="background:#e8622c">4S</div>
+          <div class="k-nm"><div class="k-n">4SAPI <span class="dot w"></span></div>
+            <div class="k-s">本轮额度 ¥200.00 · 再等 6 天可申请</div></div>
+          <div class="k-val"><div class="k-v" style="color:var(--warn)">¥74<i>.20</i></div><div class="k-p">剩 37%</div></div>
+          <div class="k-caret">▶</div>
+        </div>
+        <div class="k-body"><div class="k-in">
+          <div class="k-sec"><div class="k-use"><div>今日<b>¥12.40</b></div><div>本周<b>¥86.10</b></div><div>本月<b>¥301.55</b></div><span class="est">推算</span></div></div>
+          <div class="k-sec"><div class="k-kv"><div><span>上次申请</span><b>09-29 自动检测</b></div><div><span>日均消耗</span><b>¥9.40</b></div>
+            <div><span>预计可用</span><b>约 8 天</b></div><div><span>累计发放</span><b>¥1,400.00</b></div></div></div>
+          <div class="k-sec"><div class="k-sh"><span>最近变动</span><button class="k-more">全部 12 条</button></div>
+            <div class="k-ledger" data-n="12" data-amt="0.80,1.35,1.90,2.45" data-up="7" data-gap="4"></div></div>
+          <div class="k-ft"><div class="k-note warn">今日从 02:23 起才有数据,今日消耗可能偏低</div>
+            <div class="k-act"><span></span><button class="k-btn">模型配置</button><button class="k-btn">渠道设置</button></div></div>
+        </div></div>
+      </div>
+      <div class="k-row" data-id="codex">
+        <div class="k-head" role="button" tabindex="0" aria-expanded="false">
+          <div class="k-ico" style="background:#10a37f">CX</div>
+          <div class="k-nm"><div class="k-n">Codex <span class="dot"></span></div>
+            <div class="k-s">ChatGPT 订阅 · <span class="plan">plus</span></div></div>
+          <div class="k-val"><div class="k-v" style="color:var(--ok)">42.0<i>%</i></div><div class="k-p">5 小时窗 · 2.0 小时</div></div>
+          <div class="k-caret">▶</div>
+        </div>
+        <div class="k-body"><div class="k-in">
+          <div class="k-sec">
+            <div class="k-w"><span class="wl">5 小时</span><i class="wb"><i style="width:42%"></i></i><b class="wv">42.0%</b><span class="wt">2.0 小时后重置</span></div>
+            <div class="k-w"><span class="wl">本周</span><i class="wb"><i style="width:69%"></i></i><b class="wv">69.0%</b><span class="wt">5 天 · 10-28 14:24</span></div>
+          </div>
+          <div class="k-ft"><div class="k-act"><span></span><button class="k-btn">渠道设置</button></div></div>
+        </div></div>
+      </div>
+      <div class="k-row" data-id="hapi">
+        <div class="k-head" role="button" tabindex="0" aria-expanded="false">
+          <div class="k-ico" style="background:#7c5cff">HP</div>
+          <div class="k-nm"><div class="k-n">Hapi <span class="dot"></span></div><div class="k-s">今日 ¥1.20(推算)</div></div>
+          <div class="k-val"><div class="k-v" style="color:var(--ok)">¥48<i>.60</i></div><div class="k-p">&nbsp;</div></div>
+          <div class="k-caret">▶</div>
+        </div>
+        <div class="k-body"><div class="k-in">
+          <div class="k-sec"><div class="k-use"><div>今日<b>¥1.20</b></div><div>本周<b>¥9.80</b></div><div>本月<b>¥33.40</b></div><span class="est">推算</span></div></div>
+          <div class="k-sec"><div class="k-kv"><div><span>原始积分</span><b>972.00</b></div><div><span>换算</span><b>20 积分 = ¥1</b></div></div></div>
+          <div class="k-sec"><div class="k-sh"><span>最近变动</span><button class="k-more">全部 5 条</button></div>
+            <div class="k-ledger" data-n="5" data-amt="0.20,0.35,0.15,0.40"></div></div>
+          <div class="k-ft"><div class="k-act"><span></span><button class="k-btn">模型配置</button><button class="k-btn">渠道设置</button></div></div>
+        </div></div>
+      </div>
+      <div class="k-row" data-id="opencode-go">
+        <div class="k-head" role="button" tabindex="0" aria-expanded="false">
+          <div class="k-ico" style="background:#2b2b2b">OC</div>
+          <div class="k-nm"><div class="k-n">OpenCode Go <span class="dot"></span></div><div class="k-s"></div></div>
+          <div class="k-val"><div class="k-v" style="color:var(--ok)">82.0<i>%</i></div><div class="k-p">周期窗 · 19 天</div></div>
+          <div class="k-caret">▶</div>
+        </div>
+        <div class="k-body"><div class="k-in">
+          <div class="k-sec">
+            <div class="k-w"><span class="wl">5 小时</span><i class="wb"><i style="width:91.5%"></i></i><b class="wv">91.5%</b><span class="wt">3.0 小时后重置</span></div>
+            <div class="k-w"><span class="wl">本周</span><i class="wb"><i style="width:88%"></i></i><b class="wv">88.0%</b><span class="wt">4 天 · 10-27 14:24</span></div>
+            <div class="k-w"><span class="wl">周期</span><i class="wb"><i style="width:82%"></i></i><b class="wv">82.0%</b><span class="wt">19 天 · 11-11 14:24</span></div>
+          </div>
+          <div class="k-sec"><div class="k-kv"><div class="wide"><span>套餐摊销</span><b>¥2.36/天 · $10/30 天 · 汇率 7.09(2026-10)</b></div></div></div>
+          <div class="k-ft"><div class="k-note">未公开接口:响应结构一变,这个渠道就会显示取数失败</div>
+            <div class="k-act"><span></span><button class="k-btn">模型配置</button><button class="k-btn">渠道设置</button></div></div>
+        </div></div>
+      </div>
+      <div class="k-row" data-id="workbuddy">
+        <div class="k-head" role="button" tabindex="0" aria-expanded="false">
+          <div class="k-ico" style="background:#f5a623">WB</div>
+          <div class="k-nm"><div class="k-n">WorkBuddy <span class="dot w"></span><span class="tag ck">✓ 已签</span></div>
+            <div class="k-s">近 30 天将过期 2,193 分</div></div>
+          <div class="k-val"><div class="k-v" style="color:var(--warn)">5,993<i>分</i></div><div class="k-p">最近 10-26 到期</div></div>
+          <div class="k-caret">▶</div>
+        </div>
+        <div class="k-body"><div class="k-in">
+          <div class="k-sec"><div class="k-sh"><span>即将到期</span><button class="k-more">全部 6 笔</button></div>
+            <div class="k-exp b"><span class="ed">10-26<i>剩 3 天</i></span><b class="ea">600 分</b><span class="el">每日签到</span></div>
+            <div class="k-exp w"><span class="ed">11-01<i>剩 9 天</i></span><b class="ea">1,500 分</b><span class="el">活动奖励 · 1024 创造力集结</span></div>
+            <div class="k-exp w"><span class="ed">11-13<i>剩 21 天</i></span><b class="ea">93 分</b><span class="el">每日签到</span></div>
+            <div class="k-exp x"><span class="ed">12-07<i>剩 45 天</i></span><b class="ea">800 分</b><span class="el">新手礼包</span></div>
+            <div class="k-exp x"><span class="ed">12-22<i>剩 60 天</i></span><b class="ea">2,000 分</b><span class="el">月度赠送</span></div>
+            <div class="k-exp x"><span class="ed">02-20<i>剩 120 天</i></span><b class="ea">1,000 分</b><span class="el">邀请奖励</span></div>
+          </div>
+          <div class="k-sec"><div class="k-kv"><div><span>累计发放</span><b>12000 积分</b></div><div><span>已使用</span><b>6007.00 积分</b></div></div></div>
+          <div class="k-sec"><div class="k-sh"><span>签到</span></div><div class="k-ck">连续 7 天 · 本月 2,100 分 <span>· 上次尝试 5 小时前</span></div></div>
+          <div class="k-ft"><div class="k-note">凭据来自本机已登录的 WorkBuddy 桌面端;挂件只读,不刷新会话</div>
+            <div class="k-act"><span></span><button class="k-btn">渠道设置</button></div></div>
+        </div></div>
+      </div>
+      <div class="k-row" data-id="trae">
+        <div class="k-head" role="button" tabindex="0" aria-expanded="false">
+          <div class="k-ico" style="background:#2fbf71">T</div>
+          <div class="k-nm"><div class="k-n">Trae <span class="dot"></span><span class="tag ck">✓ +60</span></div>
+            <div class="k-s">近 30 天将过期 60 分</div></div>
+          <div class="k-val"><div class="k-v" style="color:var(--ok)">320<i>分</i></div><div class="k-p">最近 10-29 到期</div></div>
+          <div class="k-caret">▶</div>
+        </div>
+        <div class="k-body"><div class="k-in">
+          <div class="k-sec">
+            <div class="k-exp b"><span class="ed">10-29<i>剩 6 天</i></span><b class="ea">60 分</b><span class="el">签到</span></div>
+            <div class="k-exp"><span class="ed">12-02<i>剩 40 天</i></span><b class="ea">260 分</b><span class="el">活动</span></div>
+          </div>
+          <div class="k-sec"><div class="k-sh"><span>签到</span></div><div class="k-ck">连续 3 天 · 本月 420 分 <span>· 上次尝试 3 小时前</span></div></div>
+          <div class="k-ft"><div class="k-note">凭据来自本机已登录的 Trae 桌面端;挂件只读,不刷新会话</div>
+            <div class="k-act"><span></span><button class="k-btn">渠道设置</button></div></div>
+        </div></div>
+      </div>
+    </div>
+    <div class="k-foot"><span class="dot st"></span><span>6 正常 · 1 失联</span><span>设置与管理 | 退出</span></div>
+  </div>
+  <div class="cap"><b>新方案 · 380 × 560 原型</b><br>点行头展开 / 收起;点「全部 N 条」原地展开;
+    Tab 到行头后 Enter 展开、Esc 收起。默认开着 4SAPI:上面的失败行还在屏上,下面的 Codex 露出一截;
+    把这张卡滚到顶时,下面还能完整放下 2 行(见下方实测)。<br>
+    折叠行已按 §5 对齐(失败行只说一次「取数失败」;Hapi 不再矮一截)。
+    <div class="readout" id="readout"></div></div>
+</div>
+
+<h2 id="s5">5. 折叠行顺手对齐(只改文案与显隐)</h2>
+<p>展开区去重之后,折叠行里的重复会成为最显眼的不一致。下面四条不动两级行结构(「需要处理 / 其余」分组、紧急行放大都保留),
+也不影响紧凑条 / 胶囊 / 吸附 —— 它们只用状态标签和大数字。</p>
+<table>
+<tr><th>情形</th><th>现在</th><th>改成</th></tr>
+<tr><td>取数失败 / 需登录</td><td>标签「取数失败」+ 副标题「取数失败」+ 第二行「取数失败 · HTTP 401」+ 黄字「显示的是 12 分钟前的成功快照 · HTTP 401」+ 右侧「上次快照」;94px</td>
+  <td>标签「取数失败」(紧凑条与非颜色模式靠它)· 副标题只写原因「HTTP 401」· 右侧「12 分钟前快照」;不画第二行与黄字</td></tr>
+<tr><td>陈旧(取数成功但过期)</td><td>黄字「显示的是 X 的成功快照」与紧急行第二行「X 前的快照」可能同时出现</td><td>只在右侧写一次「X 前快照」,数字照旧降透明度</td></tr>
+<tr><td>金额型第二行两边都空(Hapi)</td><td>39px,比别的行矮一截</td><td>左侧兜底写「今日 ¥1.20(推算)」,与其余行同高</td></tr>
+<tr><td>配额型重置时间未知</td><td>「周期窗 · —」,破折号悬空</td><td>「周期窗」</td></tr>
+</table>
+
+<h2 id="s6">6. 同一块区域里的三个 bug(一并修)</h2>
+<h3>6.1 「最近变动」的时间全错</h3>
+<p><code>fmtClock(ts)</code>(<code>app.js:97-100</code>)按<b>毫秒</b>解释入参(<code>new Date(ts)</code>),而三处调用传的都是<b>秒</b>:
+台账的 <code>startTs</code> / <code>endTs</code>(<code>app.js:887-888</code>,来自 <code>store.rs:49-58</code> 的 <code>ChangeEntry</code>)和 <code>gapDayFrom</code>(<code>app.js:820</code>)。
+后端时间戳统一是 <code>now_ts()</code> = <code>Local::now().timestamp()</code>(<code>fetch.rs:594-596</code>)。</p>
+<p>实测同一个当前时刻:当秒传进去得 <code>01:58</code>,换成毫秒得 <code>14:24</code>。7 天的跨度被压成约 10 分钟(604800 秒当毫秒 ≈ 605 秒),
+所以 §1 截图里 12 条全挤在 <code>01:57–01:58</code>;「今日从 HH:MM 开始统计」同样是错的。
+修法:<code>fmtClock</code> 改吃秒,与 <code>fmtDay</code>(<code>app.js:224-228</code>)同口径。</p>
+<h3>6.2 OpenCode Go 可能被写成「ChatGPT 订阅」</h3>
+<p>副标题只要在 <code>extra</code> 里找到「套餐」就写「ChatGPT 订阅 · 套餐值」(<code>app.js:493-496</code>,本意只给 Codex);
+而 OpenCode Go 在汇率还没取到时,后端正好往 <code>extra</code> 塞一条「套餐:$10/期 · 未折进消耗(汇率还没取到)」(<code>fetch.rs:357-361</code>),
+副标题就成了「ChatGPT 订阅 · $10/期 · 未折进消耗…」。读代码确认,未在真机复现(要等汇率恰好取不到)。修法:这条副标题只认 Codex。</p>
+<h3>6.3 「未公开接口」没有画出来</h3>
+<p>README 写 OpenCode Go「渠道定义里标了 <code>unstable</code>,界面上可与稳定渠道区分」,<code>app.js:480-481</code> 的注释也说「未公开接口……明细里都有」——
+但 <code>app.js</code> 里没有任何一处读 <code>unstable</code>。新方案把这句放进 OpenCode Go 展开区的页脚说明(§4.3)。</p>
+
+<h2 id="s7">7. 需要拍板</h2>
+<table>
+<tr><th>#</th><th>问题</th><th>建议</th><th>理由</th></tr>
+<tr><td>D1</td><td>原地展开统一卡片,还是改成点进整页「渠道详情」(像「设置与管理」那样盖住列表)?</td><td><b>原地展开</b></td><td>不改"点一下看细节"的习惯,不多一步返回;改动只在渲染层。整页详情留作以后渠道信息再变多时的备选</td></tr>
+<tr><td>D2</td><td>长列表默认显示几条?</td><td><b>3 条 +「全部 N 条」</b></td><td>3 条正好把金额卡压进 300px;5 条多约 44px,同屏只剩 1 个别的渠道</td></tr>
+<tr><td>D3</td><td>后端只删 <code>get_series</code>,还是连 <code>trend_series</code> 与日级归档一起删?</td><td><b>只删命令</b></td><td>README 承诺 365 天归档;删数据不可逆,留着以后加回趋势是零迁移。代价:归档暂时只写不读</td></tr>
+<tr><td>D4</td><td>§5 的折叠行对齐要不要一起做?</td><td><b>一起做</b></td><td>展开区去重后,失败行的三遍重复会成为最刺眼的不一致;四条都只是文案与显隐</td></tr>
+<tr><td>D5</td><td>「数据说明」还要不要折叠?</td><td><b>不折叠,常显在页脚</b></td><td>柱图没了以后只剩一两句;缺口与失败该被直接看见</td></tr>
+<tr><td>D6</td><td>展开行加不加左侧强调竖线?</td><td><b>加,用品牌蓝</b></td><td>卡比一屏高、行头滚出视野时仍认得出是哪张开着;状态色已被占用</td></tr>
+</table>
+
+<h2 id="s8">8. 改动面</h2>
+<table>
+<tr><th>文件</th><th>改动</th></tr>
+<tr><td><code>app/src/app.js</code></td><td><code>renderDetail</code> 重写为五段骨架;<code>renderRow</code> 去掉行头第三段与 §5 的重复提示;点击委托改「先画后取」+ 展开后滚进视野;
+  「全部 N 条」的开合状态(随 <code>rowOpen</code> 一起保留);<code>Esc</code> 先收展开行;<code>fmtClock</code> 改吃秒;Codex 专属副标题;OpenCode Go 的未公开接口说明;
+  删 <code>sparkCache</code> / <code>sparkHours</code> / <code>range</code> 分支 / <code>get_series</code> 调用;<code>render()</code> 里为到期表保存 / 恢复滚动位置的那部分(<code>app.js:981-1003</code>)随 <code>.extab</code> 一起删,列表自己的 <code>scrollTop</code> 保留</td></tr>
+<tr><td><code>app/src/styles.css</code></td><td>删 <code>.seg</code> / <code>.spark*</code> / <code>.extab</code> / 台账外框 / <code>.ckdet</code> 虚线框 / <code>.row:not(.open) .seg3</code>;
+  加展开卡底色与竖线、段标题与间距、「全部 N 条」;<code>.rhead</code> 进统一焦点环;紧凑条里隐藏 <code>.use</code> / <code>.wins</code> / <code>.exps</code> 的规则失去对象,一起删</td></tr>
+<tr><td><code>app/src-tauri/src/lib.rs</code></td><td>删 <code>get_series</code> 与 <code>SeriesView</code>,命令注册表去掉一项</td></tr>
+<tr><td><code>build/jsdom-smoke.js</code></td><td>「第三段包进 seg3」那条断言(<code>jsdom-smoke.js:145</code>)改成新结构;补三条:没有 <code>.seg</code> / <code>.spark</code>、台账默认 3 条、台账时间按本地时钟</td></tr>
+<tr><td><code>build/probe-frontend.js</code></td><td>删 <code>get_series</code> 桩</td></tr>
+<tr><td><code>build/</code>(新增)</td><td>把 §1 的取证脚本正式化成回归脚本:点开每类渠道量整行高度,对照 §4.4 预算</td></tr>
+<tr><td><code>DESIGN.md</code></td><td>§3 信息架构图「展开:区间 / 明细 / 迷你柱图」、§6.2 区间按钮那一行、§8 功能清单 #7 / #26 改成新口径</td></tr>
+</table>
+<p class="muted">core crate 不改(D3)。</p>
+
+<h2 id="s9">9. 验收</h2>
+<ol>
+<li>任何渠道展开后都没有区间按钮与柱图;运行期间不再调用 <code>get_series</code>。</li>
+<li>标准字号:§0 表里四张代表卡默认展开整行 ≤ 300px,行滚到顶后同屏至少再完整看到 2 个别的渠道;大 / 特大字号至少 1 个。</li>
+<li>展开前后行头高度差 0px。</li>
+<li>窗口、到期、台账三种列表在一张卡的 DOM 里各只出现一处。</li>
+<li>「全部 N 条」展开后,轮询重画不收回;收起整行后复位。</li>
+<li>键盘:Tab 到行头 → Enter 展开 → Esc 收起展开行(面板不变形);再按 Esc 才收成胶囊。</li>
+<li>「最近变动」与「今日从 HH:MM 起」显示本地时钟,与系统时间一致。</li>
+<li>失败行折叠时「取数失败」只出现一次;整张卡里失败原因只出现一次。</li>
+<li>紧凑条 / 胶囊 / 吸附:<code>build/visual-forms.js</code> 的截图与改动前一致(展开区只在面板形态出现)。</li>
+<li>从「最先到期」跳过来,落点是核心段的到期列表并闪一下。</li>
+</ol>
+
+<h2 id="s10">10. 明确不做</h2>
+<table>
+<tr><th>不做</th><th>为什么</th></tr>
+<tr><td>换一种趋势图</td><td>用户裁决是删,不是替换;首页的任务是"现在"(10-21 设计稿 §9 同一条)</td></tr>
+<tr><td>动两级行结构、分组与排序</td><td>v0.1.56 刚落地,本次只对齐文案(§5)</td></tr>
+<tr><td>多行同时展开</td><td>DESIGN.md §10 的 B11 仍挂着;多开会让 300px 预算失去意义</td></tr>
+<tr><td>右键菜单 / 行内直接改设置</td><td>10-21 设计稿 Q4 定为 P2;展示区不放设置项(DESIGN.md §3 的约束)</td></tr>
+<tr><td>改后端取数或视图口径</td><td>本次只动渲染层</td></tr>
+</table>
+
+<h2 id="s11">11. 落地复核(2026-10-23,实现后)</h2>
+<p>D1–D6 全部按建议落地。用与 §1 同一套无头 Edge 脚本(真实 <code>index.html</code> / <code>app.js</code> / <code>styles.css</code> +
+打桩 Tauri + 同一份合成数据),400 × 580、标准字号复测:</p>
+<table>
+<tr><th>项</th><th>设计预算 / 预期</th><th>实现后实测</th></tr>
+<tr><td>4SAPI 展开整行</td><td class="n">≤ 300</td><td class="n">300</td></tr>
+<tr><td>OpenCode Go 展开整行</td><td class="n">≤ 300</td><td class="n">226</td></tr>
+<tr><td>WorkBuddy 展开整行</td><td class="n">≤ 300</td><td class="n">272</td></tr>
+<tr><td>DeepSeek(失败)展开整行</td><td class="n">≤ 300</td><td class="n">267</td></tr>
+<tr><td>行头展开前后高度差</td><td class="n">0</td><td class="n">0(50/50、58/58)</td></tr>
+<tr><td>折叠行高度</td><td>普通行一致</td><td class="n">51 / 51 / 51 / 51 / 51 / 50;失败行 59</td></tr>
+</table>
+<ul>
+<li>展开区 <code>data-act="range"</code>、<code>.spark</code>:0 处;运行期间 <code>get_series</code> 调用 <b>0 次</b>。</li>
+<li>「全部 12 条」→ 12 行、整行 498px;轮询重画后仍是 12 行,行也保持展开;再点「收起」回到 3 行。</li>
+<li><code>Esc</code> → 展开行 0,形态仍是 <code>form-panel</code>(不再一步收成胶囊)。</li>
+<li>台账时间显示为本机 <code>14:52–15:12</code>(修前是 12 条 <code>01:5x</code>)。</li>
+<li>OpenCode Go 的周期余量:行头与核心段都写「19 天」(修前核心段会写 18 天)。</li>
+<li><code>build/jsdom-smoke.js</code> <b>40/40 通过</b>(新增:五段骨架 / 无柱图 / 台账 3 条 / 本地时间 / 失败行去重 / Codex 专属副标题);
+<code>cargo check --all-targets</code> exit 0;<code>build/check-css-forms.js</code> PASS。</li>
+</ul>
+<p class="muted">与 §4.6 原型数字的差异(300 vs 288、226 vs 215 等)来自真实组件的行高与文字宽度,均在 300px 预算内。
+真机(非打桩)的像素与滚动体验仍需按 README 的发布流程复测一次。</p>
+
+<h3>11.1 边界复核(同日,30 条用例)</h3>
+<p>三档字号 × 四张卡、跨天台账、含已过期包的积分、限流窗口、需登录 / 陈旧 / 未配置、键盘(Tab / Enter / Esc)、
+临期筛选 + Esc、取数期间轮询、重复展开、紧凑条点 chip。改前 <b>9 / 29</b> 通过,修完 <b>30 / 30</b>(多了一条反向用例)。
+修掉的 11 处见 <code>PROGRESS.md</code> 同名一节;对设计的两处修订已写回上面的 §4.2 表:
+明细<b>不再截成 4 项</b>(只去重),更早的台账<b>只写结束时刻</b>。</p>
+
+<div class="meta" style="margin-top:40px;border-top:1px solid var(--line);padding-top:14px">
+Grandettoken · 首页渠道展开区 · 产品设计 v1 · 2026-10-23 · 基于 <code>6630600</code>。
+§1 的截图与数字来自无头 Edge + 合成数据(Tauri 全部打桩),不碰正在运行的应用、不落盘配置;
+§4.6 原型是独立 HTML,尺寸与色值照 <code>styles.css</code> 标准字号。本文只做设计,未改动任何代码。</div>
+</div>
+<script>
+(function () {
+  const ls = document.getElementById("kls"), out = document.getElementById("readout");
+  const rows = [...ls.querySelectorAll(".k-row")];
+  const pad = (v) => String(v).padStart(2, "0");
+  const fmt = (m) => { m = ((m % 1440) + 1440) % 1440; return pad(Math.floor(m / 60)) + ":" + pad(m % 60); };
+  const NOW = 14 * 60 + 24; // 原型里的"现在":2026-10-23 14:24
+
+  // 最近变动:按 data-* 生成(新 → 旧;今天写 HH:MM–HH:MM,更早写 MM-DD HH:MM)
+  ls.querySelectorAll(".k-ledger").forEach((box) => {
+    const n = +box.dataset.n, amt = box.dataset.amt.split(",");
+    const up = box.dataset.up ? +box.dataset.up : -1, gap = box.dataset.gap ? +box.dataset.gap : -1;
+    let html = "";
+    for (let i = 0; i < n; i++) {
+      const end = NOW - 10 - i * 90, older = end < 0;
+      const t = older ? "10-22 " + fmt(end) : i === up ? fmt(end) : fmt(end - 20) + "–" + fmt(end);
+      const d = i === up ? "+¥200.00" : "−¥" + amt[i % amt.length];
+      const x = i === up ? "入账(充值/额度)" : i === gap ? "推算消费<i>含 3 小时未观测</i>"
+        : "推算消费(" + (2 + (i % 3)) + " 次轮询)";
+      html += '<div class="k-lg' + (i >= 3 ? " x" : "") + '"><span class="lt">' + t + "</span><b>" + d +
+        '</b><span class="lx">' + x + "</span></div>";
+    }
+    box.innerHTML = html;
+  });
+  ls.querySelectorAll(".k-more").forEach((b) => { b.dataset.t = b.textContent; b.setAttribute("aria-expanded", "false"); });
+
+  // §0 表的「新方案」两列:四张代表卡逐个(关掉动画)展开量一次,写回表格
+  const fit = (h) => Math.max(0, Math.floor((ls.clientHeight - h) / 51));
+  const was = rows.filter((r) => r.classList.contains("open"));
+  ls.classList.add("nt");
+  [["4sapi", 1], ["opencode-go", 2], ["workbuddy", 3], ["deepseek", 4]].forEach(([id, k]) => {
+    rows.forEach((r) => r.classList.toggle("open", r.dataset.id === id));
+    const h = Math.round(ls.querySelector('.k-row[data-id="' + id + '"]').getBoundingClientRect().height);
+    document.getElementById("m" + k).textContent = h;
+    document.getElementById("r" + k).textContent = fit(h);
+  });
+  rows.forEach((r) => {
+    r.classList.toggle("open", was.includes(r));
+    r.querySelector(".k-head").setAttribute("aria-expanded", String(was.includes(r)));
+  });
+  void ls.offsetHeight;
+  ls.classList.remove("nt");
+  function readout() {
+    const r = ls.querySelector(".k-row.open");
+    if (!r) { out.textContent = ""; return; }
+    const h = Math.round(r.getBoundingClientRect().height);
+    const all = !!r.querySelector(".k-sec.all");
+    out.textContent = "原型实测 · " + r.dataset.id + "\n整行 " + h + "px / 列表 " + ls.clientHeight + "px\n" +
+      (all ? "已点「全部」,不受 300px 预算约束" : "剩余高度还能放 " + fit(h) + " 行" + (h > 300 ? " · 超预算" : ""));
+  }
+  // 展开后让卡片下沿进入视野;卡片比列表还高时,让行头贴住列表顶部
+  function settle(r, scroll) {
+    setTimeout(() => {
+      if (scroll && r.classList.contains("open")) {
+        const top = r.offsetTop, bot = top + r.offsetHeight;
+        if (r.offsetHeight > ls.clientHeight || top < ls.scrollTop) ls.scrollTop = top;
+        else if (bot > ls.scrollTop + ls.clientHeight) ls.scrollTop = bot - ls.clientHeight;
+      }
+      readout();
+    }, 360);
+  }
+  function toggle(r) {
+    const open = !r.classList.contains("open");
+    rows.forEach((x) => {
+      x.classList.remove("open");
+      x.querySelector(".k-head").setAttribute("aria-expanded", "false");
+      x.querySelectorAll(".k-sec.all").forEach((s) => s.classList.remove("all"));
+      x.querySelectorAll(".k-more").forEach((b) => { b.textContent = b.dataset.t; b.setAttribute("aria-expanded", "false"); });
+    });
+    if (open) { r.classList.add("open"); r.querySelector(".k-head").setAttribute("aria-expanded", "true"); }
+    settle(r, open);
+  }
+  ls.addEventListener("click", (e) => {
+    const more = e.target.closest(".k-more");
+    if (more) {
+      const sec = more.closest(".k-sec"), on = sec.classList.toggle("all");
+      more.textContent = on ? "收起" : more.dataset.t;
+      more.setAttribute("aria-expanded", String(on));
+      settle(more.closest(".k-row"), false);
+      return;
+    }
+    const head = e.target.closest(".k-head");
+    if (head) toggle(head.closest(".k-row"));
+  });
+  ls.addEventListener("keydown", (e) => {
+    const head = e.target.closest && e.target.closest(".k-head");
+    if (head && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggle(head.closest(".k-row")); }
+    if (e.key === "Escape") { const r = ls.querySelector(".k-row.open"); if (r) { e.preventDefault(); toggle(r); r.querySelector(".k-head").focus(); } }
+  });
+  readout();
+})();
+</script>
+</body>
+</html>
