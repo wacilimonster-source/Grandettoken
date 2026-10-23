@@ -2961,3 +2961,17 @@ Tab / Enter / Esc、临期筛选 + Esc、取数期间轮询、重复展开、紧
 顺带:`fmtReset` 不再写「4 天 0 小时」;快照年龄不到一分钟写「刚刚的快照」。
 `build/jsdom-smoke.js` 新增 6 条断言 → **46/46**;`cargo test`(core)**314 passed**;`check-css-forms` PASS。
 依赖真实排版的几条(Tab 顺序、可见性、高度)jsdom 测不了,只在 Edge 脚本里覆盖。
+
+### 发版 v0.1.63（2026-10-23）
+
+首页渠道展开区重做：删掉时间区间与迷你柱图，所有渠道统一为五段骨架与一套交互。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.63_x64-setup.exe`（5,196,372 B，SHA-256
+`9ebf29da1bc92676bf81288f682bc4e906b014ff109cb450268691ed32d9acf0`）及 `.sig` 已发布到
+[GitHub Release v0.1.63](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.63)。
+发布提交 `7a92219`，tag `v0.1.63`（上一版 v0.1.62 是同日另一次发版，本次在其之上）。
+
+`node --use-env-proxy build/verify-release.js` **13/13 PASS**；`node build/verify-signature.js`
+**PASS**（tauri.conf.json 的公钥能验签这一版的安装包）。
+
+本机已安装的仍是 v0.1.62：没有用打包产物覆盖正在运行的应用，留给自动更新验证。
