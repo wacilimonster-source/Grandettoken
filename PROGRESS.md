@@ -2866,6 +2866,16 @@ WorkBuddy 桌面端（`workbuddy.rs`）—— 只有 Qoder 这一条漏了。
 `cargo check --offline --all-targets` exit 0；真机日志确认取数侧用
 `TRAE SOLO CN`/`Trae CN` 都能在 401 后换到可用那份。
 
+### 发版 v0.1.62（2026-10-23）
+
+签到与「测试连接 / 体检」改为与取数同一套多凭据逻辑；Trae 双装时不再误报
+「打开一次客户端」。本地签名 NSIS 安装包 `Grandettoken_0.1.62_x64-setup.exe`
+（5,199,113 B，SHA-256 `d39657eb172464b235bb66401359f31d79e300db0c47ba342fbf1963541d7a97`）
+及 `.sig` 已发布到
+[GitHub Release v0.1.62](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.62)。
+发布提交 `7250cb5`，tag `v0.1.62`。`verify-release.js` **13/13 PASS**；
+`verify-signature.js` **PASS**。本机已用打包产物覆盖运行（exe SHA-256 一致）。
+
 ### 发版 v0.1.61（2026-10-23）
 
 修掉隔一阵闪一个黑框：Qoder 的 `runtime-info.exe` 是控制台程序，现在以隐藏窗口启动；
