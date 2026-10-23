@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>紧凑条改为可选开关 · 产品设计 · 2026-10-23</title>
+<style>
+:root{--bg:#12141a;--bg2:#191c24;--bg3:#20242e;--line:#2f3648;--line2:#3c445c;
+  --tx:#edf0f6;--tx2:#b6bfce;--tx3:#8d97ab;--ok:#4ade9d;--warn:#f7c355;--bad:#ff6b63;--ac:#7fa2ff}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d0f14;color:var(--tx);font:14px/1.7 "Segoe UI","Microsoft YaHei",sans-serif}
+.wrap{max-width:940px;margin:0 auto;padding:40px 28px 80px}
+h1{font-size:26px;margin-bottom:6px}
+h2{font-size:20px;margin:42px 0 12px;padding-top:14px;border-top:1px solid var(--line)}
+h3{font-size:16px;margin:24px 0 8px}
+p,li{color:var(--tx2)} p{margin:8px 0}
+ul,ol{margin:8px 0 8px 22px} li{margin:3px 0}
+b{color:var(--tx)}
+code{font:12.5px Consolas,monospace;background:#1d2130;border:1px solid var(--line);border-radius:4px;padding:0 4px;color:#c9d4ea}
+a{color:var(--ac)}
+.meta,.muted{color:var(--tx3)} .meta{font-size:13px}
+table{width:100%;border-collapse:collapse;margin:10px 0 14px;font-size:13px}
+th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}
+th{background:var(--bg3);color:var(--tx2);font-weight:600}
+td{color:var(--tx2)}
+tr.hi td{background:#1a2133}
+.note{border:1px solid var(--line);border-left:3px solid var(--ac);background:var(--bg2);border-radius:6px;padding:10px 14px;margin:12px 0}
+.note.warn{border-left-color:var(--warn)} .note.ok{border-left-color:var(--ok)}
+
+/* ── 可点原型:一段面板顶栏 + 一行设置 ── */
+.demo{width:400px;margin:14px 0 4px;border:1px solid var(--line);border-radius:12px;background:var(--bg);
+  box-shadow:0 2px 8px -2px rgba(0,0,0,.6);overflow:hidden;font-size:13px}
+.demo .tb{height:38px;display:flex;align-items:center;gap:8px;padding:0 10px 0 12px;
+  background:linear-gradient(180deg,#1d2129,#171a21);border-bottom:1px solid var(--line);font-size:12px;font-weight:600}
+.demo .mark{width:17px;height:17px;border-radius:5px;background:linear-gradient(135deg,#5b8cff,#8b5bff);flex:none}
+.demo .sp{flex:1}
+.demo .b{font-weight:400;color:var(--tx2);padding:2px 6px;border-radius:6px}
+.demo .b:hover{background:#ffffff0d;color:var(--tx)}
+.demo #mBtn{display:none}
+.demo[data-on="1"] #mBtn{display:inline-block}
+.demo .list{padding:10px 12px;color:var(--tx3);font-size:11.5px;line-height:1.7}
+.demo .field{display:flex;align-items:center;gap:12px;padding:9px 12px;border-top:1px solid var(--line);background:var(--bg2)}
+.demo .field .t{flex:1;color:var(--tx2);font-size:12px}
+.demo .field .d{display:block;color:var(--tx3);font-size:10.5px;line-height:1.5;font-weight:400}
+.demo .sw{width:34px;height:19px;border-radius:999px;border:1px solid var(--line2);background:#2a3142;position:relative;cursor:pointer;flex:none}
+.demo .sw::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:#8d97ab;transition:.18s}
+.demo .sw[aria-checked="true"]{background:#2e4a7a;border-color:#4d6ea8}
+.demo .sw[aria-checked="true"]::after{left:17px;background:#bcd0ff}
+.demo .route{padding:7px 12px;border-top:1px solid var(--line);color:var(--tx3);font-size:11px;background:#141720}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>紧凑条改为可选开关 · 产品设计</h1>
+<div class="meta">2026-10-23 · 依据 v0.1.63(<code>a2213b5</code>)代码实读 · 本文只做设计,未改动任何代码</div>
+
+<h2 id="s0">0. 结论</h2>
+<ol>
+<li><b>一个开关</b>:设置 → 显示 → 外观 →「启用紧凑条」,<b>默认关</b>。</li>
+<li><b>关闭时</b>:顶栏不显示「紧凑」按钮;Ctrl+2 不生效;Esc 只在面板 ↔ 胶囊之间走;任何来源的 compact 形态都落脚到面板。</li>
+<li><b>一个收口</b>:所有切换入口都经过 <code>applyFormInner</code>,在那里判一次就够了 —— 以后再加入口也不会漏。</li>
+<li><b>代码不删</b>:紧凑条的布局、宽度重排、条尾按钮、快捷键分支全部保留,打开开关后与今天完全一致。</li>
+</ol>
+
+<h2 id="s1">1. 现状:谁能把窗口变成紧凑条</h2>
+<table>
+<tr><th>入口</th><th>位置</th><th>现在做什么</th><th>关闭时要怎么变</th></tr>
+<tr class="hi"><td>顶栏「紧凑」</td><td><code>index.html:45</code> / <code>app.js:2986-2988</code></td><td>在面板与紧凑条之间来回切</td><td><b>按钮不显示</b></td></tr>
+<tr class="hi"><td><code>Esc</code></td><td><code>app.js:4376-4383</code></td><td>面板 → 胶囊 → 紧凑条 → 面板,走完整一圈</td><td><b>面板 → 胶囊 → 面板</b>,跳过紧凑条</td></tr>
+<tr class="hi"><td><code>Ctrl+2</code></td><td><code>app.js:4394</code></td><td>直接切到紧凑条</td><td><b>不生效</b>(没有这个形态)</td></tr>
+<tr><td>宽度重排</td><td><code>app.js:1493</code></td><td>已经在紧凑条里、chip 变宽时重新钳窗口宽</td><td>不用改:里面先判了 <code>currentForm() === "compact"</code>,进不去就永远不会触发</td></tr>
+<tr><td>旧配置 <code>form</code></td><td><code>app.js:2297-2299</code>、<code>config.rs:82 / 205</code></td><td>只记录用户最后一次形态;<b>启动固定面板</b>(<code>app.js:5984-5986</code>)</td><td>保持启动面板;顺手把陈旧的 <code>"compact"</code> 清成 <code>"panel"</code></td></tr>
+<tr><td>吸附展开</td><td><code>app.js:2442</code></td><td>按 <code>currentForm()</code> 的尺寸展开;吸附本身与形态无关</td><td>不用改:只要当前形态不可能是紧凑条,展开就一定是面板/胶囊</td></tr>
+</table>
+<p><b>用户真正能碰到的只有前三个</b>(按钮 / Esc / Ctrl+2);后三个都是"跟着当前形态走"的派生路径。
+所以只需要:① 藏按钮;② 改 Esc 的落点;③ 关掉 Ctrl+2;④ 在 <code>applyFormInner</code> 兜底。</p>
+
+<h2 id="s2">2. 规则</h2>
+<h3>2.1 配置</h3>
+<p>新增 <code>compactEnabled: bool</code>(Rust <code>compact_enabled</code>),<b>默认 <code>false</code></b>。
+只加字段、不写迁移脚本:配置层已经是 <code>#[serde(rename_all = "camelCase", default)]</code>(<code>config.rs:44-46</code>),
+老配置文件缺这个字段时自动得到 <code>false</code>。</p>
+
+<h3>2.2 单一收口</h3>
+<pre style="background:#1d2130;border:1px solid var(--line);border-radius:6px;padding:10px 14px;overflow:auto;color:#c9d4ea;font:12.5px Consolas,monospace">// applyFormInner(2271)白名单之后
+if (form === "compact" &amp;&amp; !(CFG &amp;&amp; CFG.compactEnabled)) form = "panel";</pre>
+<p>按钮、Esc、Ctrl+2、旧配置、以后新增的入口,全部经过这里。它同时兜住"正在紧凑条时把开关关掉"的情况:
+下一次几何调用会落成面板。</p>
+
+<h3>2.3 顶栏按钮</h3>
+<p>关闭时 <code>#btnC</code> 直接 <code>display:none</code>,<b>不是变灰禁用</b>(需求原话:「不显示这个按钮」)。
+实现上用 body 类而不是内联样式:<code>body:not(.compact-on) #btnC{display:none}</code> —— 配置还没读回来时按钮也默认不出现,不会先闪一下再消失。
+新增 <code>applyCompactUI()</code> 切换 <code>body.compact-on</code>,在 <code>applyConfigToUI()</code>(<code>app.js:3935</code>)和开关回调里各调一次。
+开启后立即出现,不需要重启。</p>
+
+<h3>2.4 行为矩阵</h3>
+<table>
+<tr><th>当前形态</th><th>开启紧凑条 · Esc</th><th>关闭紧凑条 · Esc</th></tr>
+<tr><td>面板</td><td>胶囊</td><td>胶囊</td></tr>
+<tr><td>胶囊</td><td>紧凑条</td><td><b>面板</b></td></tr>
+<tr><td>紧凑条</td><td>面板</td><td>不会出现(进入即被收口到面板)</td></tr>
+</table>
+<table>
+<tr><th>动作</th><th>关闭时</th></tr>
+<tr><td><code>Ctrl+2</code></td><td>忽略:不改形态、不弹提示。为一个没开启的形态弹 toast,比没反应更吵</td></tr>
+<tr><td>设置里打开开关</td><td>按钮立即出现;当前形态不变(还在面板)</td></tr>
+<tr><td>设置里关闭开关</td><td>按钮立即消失;如果此刻正处于紧凑条,立即切回面板(包含吸附展开态,会按面板尺寸重排)</td></tr>
+<tr><td>写入 <code>CFG.form</code></td><td>只在真正切到某形态时写;关闭时永远不会写入 <code>"compact"</code></td></tr>
+</table>
+
+<h3>2.5 不删代码</h3>
+<p>紧凑条的渲染、<code>fitCompact</code>、条尾「▲ 展开 / ● 收成胶囊」、Ctrl+2 分支都保留。
+开关只是入口闸门 —— 关掉再打开,行为与 v0.1.63 完全一致,也不会多出一套需要同步维护的"精简版"。</p>
+<h2 id="s3">3. 设置项与顶栏(可点)</h2>
+<p>开关放在「显示 → 外观」里、字号下面 —— 它改的是<b>形态</b>,和字号同属"外观"这一组。
+文案里要直接说清关闭后的后果(顶栏没有按钮、Esc 少一环),不然用户只会觉得"按钮不见了"。</p>
+<div class="demo" id="demo" data-on="0">
+  <div class="tb"><span class="mark"></span><span>Grandettoken</span><span class="sp"></span>
+    <span class="b">刷新</span><span class="b">置顶</span><span class="b" id="mBtn">紧凑</span><span class="b">隐藏</span></div>
+  <div class="list">渠道列表 · 面板形态(380 × 560)</div>
+  <div class="field"><span class="t">启用紧凑条<span class="d">顶栏的「紧凑」按钮与 380×46 的横向条;关闭后 Esc 只在面板与胶囊之间切换</span></span>
+    <button class="sw" id="mSw" role="switch" aria-checked="false" aria-label="启用紧凑条"></button></div>
+  <div class="route" id="mRoute">Esc:面板 → 胶囊 → 面板(紧凑条不参与)</div>
+</div>
+<p class="muted">点右边的开关看顶栏变化。真实实现里这一行在同一位置,文案照抄。</p>
+
+<h2 id="s4">4. 升级与迁移</h2>
+<ul>
+<li><b>新装</b>:配置里没有这个字段 → 默认 <code>false</code>,顶栏只有「刷新 / 置顶 / 隐藏」。</li>
+<li><b>升级</b>:老配置同样缺字段 → 一律 <code>false</code>。若上次停在紧凑条(<code>CFG.form === "compact"</code>):
+  启动本来就是面板(<code>app.js:5984-5986</code>),所以看不到"被卡在紧凑条";但顶栏按钮的消失会像功能被删了。
+  处理:启动时检测到这种组合,<b>弹一次</b>提示 ——「紧凑条已改为可选:设置 → 显示 → 启用紧凑条」,
+  同时把 <code>CFG.form</code> 清成 <code>"panel"</code> 并保存。下次启动不再提示。
+  不需要新增"提示已展示"字段:清掉 <code>form</code> 本身就是一次性标记。</li>
+<li><b>不改</b>老用户的开关为"开":需求是默认关;用一次紧凑条不等于要永久开启,
+  自动打开会让开关状态取决于一个陈旧值,反而更难解释。</li>
+</ul>
+<div class="note warn"><b>这是本次唯一会让老用户"少一个按钮"的地方。</b>
+所以提示里必须给出路径(设置 → 显示),只说「已改为可选」等于让用户自己去找。</div>
+
+<h2 id="s5">5. 边界</h2>
+<table>
+<tr><th>场景</th><th>行为</th></tr>
+<tr><td>关闭时正在吸附(收起为 8px 竖条)</td><td>不受影响:竖条是吸附态,不是紧凑条;展开时按当前形态(面板)出现</td></tr>
+<tr><td>关闭时正在吸附展开(展开内容恰好是紧凑条)</td><td>立即切成面板,吸附几何跟着重排(<code>applyFormInner</code> 里 <code>DOCK.on &amp;&amp; DOCK.open</code> 那条分支)</td></tr>
+<tr><td>紧凑条关闭 / 胶囊</td><td>胶囊不受影响:轮播、速览、单击展开照旧;Esc 从胶囊回面板</td></tr>
+<tr><td>特大字号</td><td>顶栏少一个按钮,横向更宽裕;此前"设置入口收敛"就是因为特大字号挤掉最右按钮,这次只会更松</td></tr>
+<tr><td>设置保存失败</td><td>界面立即生效(与现有开关同一套 <code>bindSwitch</code>);落盘失败时下次启动回到默认关,不会出现"界面开着、配置关着"的持久错位</td></tr>
+<tr><td>配置文件手工写了 <code>"form": "compact"</code> 且开关关</td><td>收口到面板;下次 <code>applyForm</code> 写入时改成 <code>panel</code></td></tr>
+</table>
+
+<h2 id="s6">6. 需要拍板</h2>
+<table>
+<tr><th>#</th><th>问题</th><th>建议</th><th>理由</th></tr>
+<tr><td>D1</td><td>升级时,上次停在紧凑条的老用户怎么处理?</td><td><b>默认关 + 一次提示</b></td><td>严格遵守"默认关闭";提示给出找回路径。备选:自动为这批用户打开开关(体验更顺,但等于默认值取决于旧状态,不推荐)</td></tr>
+<tr><td>D2</td><td>关闭时从胶囊按 Esc 去哪?</td><td><b>回面板</b></td><td>只剩两种形态时,Esc 在两态之间往返最可预期;停在胶囊会让 Esc"按了没反应"</td></tr>
+<tr><td>D3</td><td>关闭时 Ctrl+2 要不要提示?</td><td><b>静默忽略</b></td><td>快捷键本来就无可见入口;弹提示反而把"没开启的功能"推到眼前</td></tr>
+<tr><td>D4</td><td>开关的位置与名字</td><td><b>显示 → 外观 →「启用紧凑条」</b></td><td>与字号同组;名字直接描述对象,不叫"紧凑模式"(模式容易和"主题"混淆)</td></tr>
+</table>
+
+<h2 id="s7">7. 改动面</h2>
+<table>
+<tr><th>文件</th><th>改动</th></tr>
+<tr><td><code>app/src/index.html</code></td><td>「显示 → 外观」字号下面加一行开关(<code>id="cfgCompact"</code>,<code>role="switch"</code>);<code>#btnC</code> 标签不动,由 JS 控制显隐</td></tr>
+<tr><td><code>app/src/app.js</code></td><td><code>applyFormInner</code> 收口;<code>applyCompactUI()</code>;<code>bindSwitch("cfgCompact", "compactEnabled", …)</code> + 关闭时的回面板;
+  <code>applyConfigToUI</code> 调一次;<code>Esc</code> 胶囊分支按开关选落点;<code>Ctrl+2</code> 加 <code>compactEnabled</code> 判断;
+  启动时旧 <code>form:"compact"</code> 的一次性提示与清值;CFG 兜底默认对象加 <code>compactEnabled: false</code>(<code>app.js:5907</code> 附近)</td></tr>
+<tr><td><code>app/core/src/config.rs</code></td><td><code>compact_enabled: bool</code>,<code>Default</code> 里 <code>false</code>;serde 已带 <code>default</code>,老配置自动兼容</td></tr>
+<tr><td><code>build/jsdom-smoke.js</code></td><td>补断言:默认隐藏按钮;关闭时 <code>applyForm("compact")</code> 落成面板;开启后能进紧凑条;Esc 的两种路线</td></tr>
+<tr><td><code>README.md</code> / <code>DESIGN.md</code></td><td>「四种折叠形态」改成"紧凑条可选(默认关)";信息架构图与形态表标注开关;功能清单加一行</td></tr>
+</table>
+<p class="muted">没有新增 IPC 命令、没有数据库变更、没有改窗口几何逻辑。</p>
+
+<h2 id="s8">8. 验收</h2>
+<ol>
+<li>全新配置:顶栏只有「刷新 / 置顶 / 隐藏」,设置里「启用紧凑条」为关。</li>
+<li>打开开关:按钮<b>立即</b>出现,不重启;点它能进紧凑条;<code>Ctrl+2</code> 能进;<code>Esc</code> 走完整一圈。</li>
+<li>关闭开关:按钮立即消失;<code>Ctrl+2</code> 无反应;<code>Esc</code> 面板 ↔ 胶囊;当时若在紧凑条,立即回面板。</li>
+<li>旧配置 <code>form:"compact"</code> 升级:启动是面板,出现一次提示;重启后不再提示,<code>CFG.form</code> 已是 <code>panel</code>。</li>
+<li>吸附:关闭时收起竖条不受影响、展开是面板;开启时展开紧凑条照旧。</li>
+<li>开关落盘:重启后保持;手动把配置里的 <code>compactEnabled</code> 删掉则回到关。</li>
+<li>胶囊 / 字号 / 置顶 / 吸附 / 其他开关行为不变;<code>jsdom-smoke</code> 与三形态回归通过。</li>
+</ol>
+
+<h2 id="s9">9. 明确不做</h2>
+<table>
+<tr><th>不做</th><th>为什么</th></tr>
+<tr><td>删掉紧凑条代码、样式或快捷键分支</td><td>开关打开后要完全恢复;删了就得维护两套渲染路径</td></tr>
+<tr><td>把胶囊也做成开关</td><td>本次只要求紧凑条;胶囊是"只看最紧一个"的唯一形态,价值不同</td></tr>
+<tr><td>托盘菜单加入口</td><td>形态切换已在顶栏与快捷键里;托盘菜单只放显示/刷新/退出</td></tr>
+<tr><td>恢复"上次形态"启动</td><td>现状就是启动面板;这属于另一个产品决定,不和本次混在一起</td></tr>
+<tr><td>自动为老用户打开开关</td><td>见 §4;默认关是需求,提示负责找回</td></tr>
+</table>
+
+<h2 id="s10">10. 裁决与落地(2026-10-23)</h2>
+<table>
+<tr><th>#</th><th>裁决</th><th>落地</th></tr>
+<tr><td>D1</td><td><b>默认回到首页</b></td><td>新装 / 老配置都默认关;旧 <code>form:"compact"</code> 启动时回面板,并提示一次、把 <code>form</code> 清成 <code>panel</code>(不再重复提示)</td></tr>
+<tr><td>D2</td><td><b>回面板</b></td><td>关闭紧凑条时,胶囊按 <code>Esc</code> 直接回面板</td></tr>
+<tr><td>D3</td><td><b>忽略</b></td><td>关闭时 <code>Ctrl+2</code> 不改形态、不弹提示</td></tr>
+<tr><td>D4</td><td><b>可以</b></td><td>开关在「显示 → 外观 → 启用紧凑条」,文案照 §3</td></tr>
+</table>
+<p><b>实现复核</b>:<code>build/jsdom-smoke.js</code> <b>57/57</b>(新增 11 条:默认隐藏 / 收口 / Esc 两种路线 / Ctrl+2 / 开关状态);
+无头 Edge + 真实前端 <b>18/18</b>(按钮显隐、Esc 与 Ctrl+2、落盘、在紧凑条里关开关立即回面板、旧配置升级提示与清值)。</p>
+
+<div class="meta" style="margin-top:40px;border-top:1px solid var(--line);padding-top:14px">
+Grandettoken · 紧凑条改为可选开关 · 产品设计 v1 · 2026-10-23 · 基于 <code>a2213b5</code>(v0.1.63)。
+本文只做设计:代码、配置与截图均未改动。实现顺序建议:配置字段 → 收口与按钮显隐 → Esc / Ctrl+2 → 设置开关 → 升级提示 → 文档与回归。
+</div>
+
+<script>
+(function () {
+  const demo = document.getElementById("demo");
+  const sw = document.getElementById("mSw");
+  const route = document.getElementById("mRoute");
+  sw.addEventListener("click", () => {
+    const on = sw.getAttribute("aria-checked") !== "true";
+    sw.setAttribute("aria-checked", String(on));
+    demo.dataset.on = on ? "1" : "0";
+    route.textContent = on
+      ? "Esc:面板 → 胶囊 → 紧凑条 → 面板(完整一圈)"
+      : "Esc:面板 → 胶囊 → 面板(紧凑条不参与)";
+  });
+})();
+</script>
+</div>
+</body>
+</html>

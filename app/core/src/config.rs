@@ -80,6 +80,10 @@ pub struct Config {
     pub always_on_top: bool,
     /// panel | compact | pill(贴边不是独立形态,是这三种形态之上的吸附态)
     pub form: String,
+    /// 是否启用紧凑条(380×46)。**默认关**(2026-10-23 用户裁决):
+    /// 关掉后顶栏不显示「紧凑」按钮、Ctrl+2 无效、Esc 只在面板与胶囊之间切换。
+    /// 老配置缺字段时由 serde default 兜成 false,不写迁移脚本。
+    pub compact_enabled: bool,
     /// percent | balance | dayUsage | urgency | custom
     ///
     /// `urgency`(五桶紧迫度)是新默认;老配置里的 `percent` 在
@@ -203,6 +207,7 @@ impl Default for Config {
             autostart: false,
             always_on_top: true,
             form: "panel".into(),
+            compact_enabled: false,
             sort: "percent".into(),
             font_scale: "md".into(),
             pill_channels: Vec::new(),
@@ -473,5 +478,25 @@ mod tests {
             back.selection_prefix.get("workbuddy").map(String::as_str),
             Some("custom-local:")
         );
+    }
+
+    /// 紧凑条开关:老配置缺字段必须兜成关(默认关是 2026-10-23 的裁决),
+    /// 新配置要按 camelCase 往返 —— 前端 `CFG.compactEnabled` 靠它对齐。
+    #[test]
+    fn compact_enabled_defaults_off_and_roundtrips() {
+        let old = r#"{"form":"compact","sort":"percent"}"#;
+        let c: Config = serde_json::from_str(old).unwrap();
+        assert!(!c.compact_enabled, "老配置没有这个字段时必须是关");
+        assert_eq!(c.form, "compact", "旧 form 原样保留,由前端收口到面板");
+
+        let mut c2 = Config::default();
+        c2.compact_enabled = true;
+        let json = serde_json::to_string(&c2).unwrap();
+        assert!(
+            json.contains("\"compactEnabled\":true"),
+            "camelCase 才和前端 CFG 对得上"
+        );
+        let back: Config = serde_json::from_str(&json).unwrap();
+        assert!(back.compact_enabled);
     }
 }

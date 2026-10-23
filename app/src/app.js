@@ -30,6 +30,14 @@ function applyFontScale() {
   document.documentElement.style.setProperty("--u", String(fsU()));
 }
 
+/** 紧凑条开关:body 类控制顶栏「紧凑」的显隐(默认不显示),并同步设置页开关。
+    配置还没读回来时 CFG 为 null —— 保持关闭,不会先闪一下按钮。 */
+function applyCompactUI() {
+  const on = !!(CFG && CFG.compactEnabled);
+  document.body.classList.toggle("compact-on", on);
+  setSwitch("cfgCompact", on);
+}
+
 // ───────────── 格式化 ─────────────
 /** HTML 转义:接口返回的错误文案、渠道名等会直接进 innerHTML。
     CSP 已经挡掉脚本执行,但把数据当 HTML 拼本身就该避免。 */
@@ -2268,8 +2276,16 @@ function formSize(form) {
   return [cw + CARD_MARGIN * 2, ch + CARD_MARGIN * 2];
 }
 
+/** 形态白名单 + 可选形态闸门:紧凑条关闭时,任何来源的 compact 都落成面板。
+ *  按钮 / Esc / Ctrl+2 / 旧配置 / 以后新增的入口都经过这里,只判一次。 */
+function resolveForm(form) {
+  if (!SIZES[form]) return "panel"; // 老配置里的 form 可能是个已废弃的名字
+  if (form === "compact" && !(CFG && CFG.compactEnabled)) return "panel";
+  return form;
+}
+
 async function applyFormInner(form, remember = true) {
-  if (!SIZES[form]) form = "panel"; // 白名单:老配置里的 form 可能是个已废弃的名字
+  form = resolveForm(form);
   // 速览卡片开着时切形态/重排:先收回,否则会出现"class=pill 但窗口还是卡片高"的半截状态
   if (PEEK.open) await pillPeekHide();
   const prevForm = currentForm();
@@ -3861,6 +3877,20 @@ bindSwitch("cfgPin", "alwaysOnTop", async (on) => {
   await invoke("set_pin", { enabled: on });
   applyPinUI();
 });
+// 紧凑条开关:关掉要立刻从紧凑条退回面板。不用 bindSwitch —— 保存失败时
+// saveCfg 会回滚 CFG 并重画静态控件,但 body 上的 compact-on 与顶栏按钮不归它管,
+// 这里在 await 之后按**回滚后的实际值**再刷一次。
+$("cfgCompact").addEventListener("click", async () => {
+  if (!CFG) return;
+  CFG.compactEnabled = !CFG.compactEnabled;
+  applyCompactUI();
+  const ok = await saveCfg("紧凑条设置");
+  if (!ok) {
+    applyCompactUI();
+    return;
+  }
+  if (!CFG.compactEnabled && currentForm() === "compact") await applyForm("panel");
+});
 
 // ───────────── 快捷键录制 ─────────────
 // 存的是 Tauri accelerator 原始格式(KeyG/Digit1 这类 code 名),展示时美化
@@ -3923,6 +3953,7 @@ function syncStaticControls() {
   setSwitch("cfgNotify", CFG.notifyOnCrit !== false);
   setSwitch("cfgSound", !!CFG.soundOn);
   setSwitch("cfgDock", CFG.dockEnabled);
+  setSwitch("cfgCompact", !!CFG.compactEnabled);
   setSwitch("cfgPin", CFG.alwaysOnTop);
   setSwitch("cfgTextTone", !!CFG.textTone);
   setSwitch("cfgShowUsed", !!CFG.showUsed);
@@ -3934,6 +3965,7 @@ function syncStaticControls() {
 
 function applyConfigToUI() {
   if (!CFG) return;
+  applyCompactUI();
   syncStaticControls();
   renderAbout();
 }
@@ -4378,8 +4410,8 @@ document.addEventListener("keydown", (e) => {
   } else if (document.body.className.includes("form-compact")) {
     applyForm("panel");
   } else {
-    // 胶囊 → 紧凑条:Esc 现在能走完一圈,不再绕开用户待得最久的那一档
-    applyForm("compact");
+    // 胶囊 → 紧凑条;关了紧凑条就直接回面板(2026-10-23 裁决 D2)
+    applyForm(CFG && CFG.compactEnabled ? "compact" : "panel");
   }
 });
 
@@ -4391,7 +4423,12 @@ document.addEventListener("keydown", (e) => {
   const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
   if (e.ctrlKey && !e.altKey && !e.metaKey) {
     if (e.key === "1") { e.preventDefault(); applyForm("panel"); return; }
-    if (e.key === "2") { e.preventDefault(); applyForm("compact"); return; }
+    if (e.key === "2") {
+      e.preventDefault();
+      // 紧凑条没开启时静默忽略(2026-10-23 裁决 D3):不为没开启的形态弹提示
+      if (CFG && CFG.compactEnabled) applyForm("compact");
+      return;
+    }
     if (e.key === "3") { e.preventDefault(); applyForm("pill"); return; }
   }
   if (typing) return;
@@ -5905,7 +5942,7 @@ async function refresh() {
     CFG = {
       activeIntervalSec: 60, idleIntervalSec: 300, backoffIntervalSec: 900,
       warnPercent: 40, critPercent: 15, autostart: false,
-      form: "panel", sort: "percent", pillChannels: [],
+      form: "panel", compactEnabled: false, sort: "percent", pillChannels: [],
       fontScale: "md", hiddenChannels: [], hotkey: "", trayShowNumber: true,
       claimChannels: {
         "4sapi": { enabled: true, amount: 200, minIntervalDays: 14, manualLastAt: null, manualSetAt: null },
@@ -5980,6 +6017,15 @@ async function refresh() {
     beep("ding");
     showToast((d.name || "签到") + " 今天领到了" + cr);
   });
+
+  // 紧凑条改成可选(默认关,2026-10-23 裁决 D1):老配置若停在紧凑条,
+  // 回到首页并提示一次。把 CFG.form 清成 panel 就是"只提示一次"的标记,
+  // 不用再加一个"提示已展示"的配置字段。
+  if (CFG && !CFG.compactEnabled && CFG.form === "compact") {
+    CFG.form = "panel";
+    saveCfg("紧凑条设置");
+    showToast("紧凑条已改为可选:设置 → 显示 → 启用紧凑条");
+  }
 
   // 启动一律面板形态:安装后(以及每天开机)先看到完整信息,而不是上次留下的
   // 紧凑条 / 胶囊。CFG.form 仍会记录用户的选择,只是不再用于启动恢复。

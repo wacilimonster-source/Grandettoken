@@ -4,7 +4,7 @@
 > 与 bundle identifier(`com.wacil.tokenscope`)仍沿用旧名 —— 改了会让已装用户收不到更新、
 > 凭据条目全丢。**新代码一律写 Grandettoken,旧名只在这两处出现。**
 
-常驻 Windows 桌面的多平台 AI Token 余额与用量监控小组件。支持四级折叠:完全展开 → 紧凑条 → 胶囊 → 吸附屏幕边缘。
+常驻 Windows 桌面的多平台 AI Token 余额与用量监控小组件。支持三级折叠:完全展开 → 胶囊 → 吸附屏幕边缘;紧凑条(380×46)是可选形态,默认关,在设置 → 显示里启用。
 
 安装 / 使用 / 下载入口看[根 README](../README.md),产品设计看 [DESIGN.md](../DESIGN.md),
 进展与踩坑看 [PROGRESS.md](../PROGRESS.md),本文只讲代码内部的事。

@@ -29,9 +29,25 @@ const dom = new JSDOM(html, { runScripts: "outside-only", pretendToBeVisual: tru
 const w = dom.window;
 
 w.__TAURI__ = {
-  core: { invoke: async () => null },
+  // 真实启动链路会读配置/渠道/视图;全返回 null 的话 init 走到 applyPinUI 会崩
+  // (以前同步断言在 init 恢复之前就退出了,没有暴露)。异步用例要等 init,所以喂真数据。
+  core: {
+    invoke: async (cmd) => {
+      if (cmd === "get_config") return JSON.parse(JSON.stringify(DATA.CFG));
+      if (cmd === "get_channels") return JSON.parse(JSON.stringify(DATA.CHANNELS));
+      if (cmd === "home_view") return JSON.parse(JSON.stringify(DATA.HOME));
+      if (cmd === "checkin_state") return [];
+      if (cmd === "app_version") return "0.0.0-test";
+      return null;
+    },
+  },
   event: { listen: async () => () => {} },
+  dpi: {
+    LogicalSize: class { constructor(w, h) { this.width = w; this.height = h; } },
+    PhysicalPosition: class { constructor(x, y) { this.x = x; this.y = y; } },
+  },
   window: {
+    currentMonitor: async () => null,
     // 窗口对象方法很多(onMoved / 主题 / 拖拽…),用 Proxy 兜住未知的:
     // 监听类方法返回"可解绑的空函数",查询类返回真值。
     getCurrentWindow: () =>
@@ -319,26 +335,87 @@ const HARNESS = `
     ck("视图缺失时退回本地判断(不空白、不抛错)",
       document.getElementById("list").querySelectorAll(".row").length > 0);
   } catch (e) { ck("视图缺失时退回本地判断(不空白、不抛错)", false, e.message); }
+
+  // ── 紧凑条可选开关(2026-10-23)──
+  window.__ASYNC = (async () => {
+    try {
+      // 先让真实 init(读配置 → applyForm(panel) → refresh)跑完,别和用例抢形态
+      await new Promise((r) => setTimeout(r, 400));
+      CHANNELS = data.CHANNELS;
+      CFG = JSON.parse(JSON.stringify(data.CFG));
+      hvApply(data.HOME);
+      DOCK.on = false;
+      rowOpen.clear();
+      document.body.className = "form-panel";
+
+      CFG.compactEnabled = false;
+      applyCompactUI();
+      ck("紧凑条默认关:body 不带 compact-on", !document.body.classList.contains("compact-on"));
+      ck("收口函数:关闭时 compact → panel", resolveForm("compact") === "panel", resolveForm("compact"));
+
+      await applyForm("compact");
+      ck("关闭时切紧凑条会落成面板",
+        document.body.classList.contains("form-panel") && !document.body.classList.contains("form-compact"),
+        document.body.className);
+
+      await applyForm("pill");
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await new Promise((r) => setTimeout(r, 30));
+      ck("关闭时胶囊 Esc 回面板", document.body.classList.contains("form-panel"), document.body.className);
+
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "2", ctrlKey: true, bubbles: true }));
+      await new Promise((r) => setTimeout(r, 30));
+      ck("关闭时 Ctrl+2 不切形态", document.body.classList.contains("form-panel"), document.body.className);
+
+      CFG.compactEnabled = true;
+      applyCompactUI();
+      ck("打开开关后 body 带 compact-on", document.body.classList.contains("compact-on"));
+      ck("收口函数:开启时 compact 放行", resolveForm("compact") === "compact");
+      await applyForm("compact");
+      ck("开启后能进紧凑条", document.body.classList.contains("form-compact"), document.body.className);
+
+      CFG.compactEnabled = false;
+      applyCompactUI();
+      await applyForm("panel");
+      ck("关掉开关后按钮状态同步(无 compact-on)", !document.body.classList.contains("compact-on"));
+    } catch (e) {
+      ck("紧凑条可选开关", false, e.message);
+    }
+  })();
 })();
 `;
 
 w.__DATA = DATA;
-try {
-  w.eval(js + "\n;\n" + HARNESS);
-} catch (e) {
-  console.log("✗ 脚本整体执行抛异常:" + e.message);
-  console.log((e.stack || "").split("\n").slice(0, 4).join("\n"));
-  process.exit(1);
-}
+(async () => {
+  try {
+    w.eval(js + "\n;\n" + HARNESS);
+  } catch (e) {
+    console.log("✗ 脚本整体执行抛异常:" + e.message);
+    console.log((e.stack || "").split("\n").slice(0, 4).join("\n"));
+    process.exit(1);
+  }
+  if (w.__ASYNC) await w.__ASYNC;
 
-const R = w.__R || [];
-let ok = 0, bad = 0;
-for (const r of R) {
-  if (r.ok) { ok++; console.log("  ok   " + r.name); }
-  else { bad++; console.log("  FAIL " + r.name + (r.extra ? " :: " + r.extra : "")); }
-}
-console.log("\n" + (bad ? `✗ ${bad} 项失败` : "✓ 全部通过") + ` (${ok}/${R.length})`);
-process.exit(bad ? 1 : 0);
+  const R = w.__R || [];
+  const css = fs.readFileSync(path.join(SRC, "styles.css"), "utf8");
+  R.push({
+    name: "紧凑条关闭时「紧凑」按钮由 CSS 隐藏",
+    ok: /body:not\(\.compact-on\) #btnC\{display:none\}/.test(css),
+    extra: "styles.css 缺这条规则",
+  });
+  R.push({
+    name: "设置页有紧凑条开关",
+    ok: /id="cfgCompact"/.test(html),
+    extra: "index.html 缺 cfgCompact",
+  });
+  let ok = 0, bad = 0;
+  for (const r of R) {
+    if (r.ok) { ok++; console.log("  ok   " + r.name); }
+    else { bad++; console.log("  FAIL " + r.name + (r.extra ? " :: " + r.extra : "")); }
+  }
+  console.log("\n" + (bad ? `✗ ${bad} 项失败` : "✓ 全部通过") + ` (${ok}/${R.length})`);
+  process.exit(bad ? 1 : 0);
+})();
 
 // ── 合成数据 ──
 function buildData(NOW) {

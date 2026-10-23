@@ -2975,3 +2975,34 @@ Tab / Enter / Esc、临期筛选 + Esc、取数期间轮询、重复展开、紧
 **PASS**（tauri.conf.json 的公钥能验签这一版的安装包）。
 
 本机已安装的仍是 v0.1.62：没有用打包产物覆盖正在运行的应用，留给自动更新验证。
+
+## 紧凑条改为可选开关(2026-10-23,未发版)
+
+**需求与裁决**:紧凑条改成配置项,**默认关**;关闭后不支持切换,顶栏也不显示「紧凑」。
+D1 老用户默认回首页 / D2 胶囊 Esc 回面板 / D3 `Ctrl+2` 忽略 / D4 开关放「显示 → 外观 → 启用紧凑条」。
+设计稿:`docs/design/design-compact-toggle-2026-10-23.html`。
+
+**改法**
+
+- 配置加 `compactEnabled`(Rust `compact_enabled`),默认 `false`;serde 已带 `default`,老配置自动得到关。
+- `resolveForm()` 在 `applyFormInner` 收口:紧凑条关闭时,任何来源的 `compact` 都落成 `panel`。
+  按钮 / Esc / Ctrl+2 / 旧配置 / 吸附展开全部经过这里。
+- 顶栏:`body:not(.compact-on) #btnC{display:none}`;`applyCompactUI()` 切 body 类并同步设置页开关。
+  用 body 类而不是内联样式 —— 配置没读回来时也不会先闪一下按钮。
+- `Esc`:胶囊在启用时 → 紧凑条,未启用 → 面板。`Ctrl+2`:未启用时静默忽略。
+- 设置开关单独绑(`bindSwitch` 只管开关本身):保存失败时 `saveCfg` 会回滚 CFG,
+  这里再按回滚后的值刷一次按钮与 body 类;关掉时若正在紧凑条,立即回面板。
+- 启动:旧配置若停在紧凑条,回首页 + 提示一次「紧凑条已改为可选:设置 → 显示 → 启用紧凑条」,
+  并把 `CFG.form` 清成 `panel`(清值本身就是一次性标记,不新增配置字段)。
+- 紧凑条布局、`fitCompact`、条尾按钮、快捷键分支全部保留,开关打开即恢复原行为。
+
+**验证**
+
+- `build/jsdom-smoke.js` **57/57**(新增 11 条:默认隐藏 / 收口 / Esc 两种路线 / Ctrl+2 / 开关状态 / CSS 与设置项存在)。
+  顺带修了探针环境:`invoke` 不再一律返回 null,补 `dpi` 与 `currentMonitor` 桩,让真实 init 能跑完再跑异步用例。
+- 无头 Edge + 真实 `index.html` / `app.js` / `styles.css` **18/18**:默认按钮 `display:none`、
+  打开后立即出现并落盘、按钮 / Ctrl+2 / Esc 三入口、紧凑条里关开关立即回面板、
+  旧配置 `form:"compact"` 回首页 + 提示 + 配置改成 `panel`。
+- `cargo check`(core / all-targets)通过;`build/check-css-forms.js` PASS。
+
+**未做**:未发版;真机安装包的升级体验仍需打包后复测。
