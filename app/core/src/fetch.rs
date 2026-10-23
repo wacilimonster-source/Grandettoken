@@ -2030,12 +2030,27 @@ impl Fetcher {
             snapshot_count_7d: count_7d,
             accounts,
         };
-        let Some(cred) = creds.first() else {
+        let Some(_) = creds.first() else {
             rep.error = Some(
                 secret_err.unwrap_or_else(|| format!("没检测到 {} 的登录凭据", def.name)),
             );
             rep.elapsed_ms = started.elapsed().as_millis() as u64;
             return rep;
+        };
+        // 与轮询走同一条路:被 401/403 拒过的凭据先沉底,再依次试。
+        //
+        // 2026-10-23 真机:Trae 有两份本机登录态(旧的 TRAE SOLO CN、正在用的
+        // Trae CN)。轮询会"401 → 换下一份"取到数,但「测试连接 / 体检」以前
+        // **只拿 creds.first() 打一次**,于是永远报"登录状态已失效 · 打开一次
+        // Trae 即可"。用户按提示开了客户端也没用 —— 问题在那份旧凭据,不在登录。
+        let creds = {
+            let now = now_ts();
+            let rej = self
+                .rejected
+                .lock()
+                .map(|m| m.clone())
+                .unwrap_or_default();
+            demote_rejected(creds, &rej, now, |t| key_fp(t))
         };
         // 轮询记住的入口优先:测试要回答的是"平时这条路通不通,用的哪个域名"
         let memo = self
@@ -2043,7 +2058,37 @@ impl Fetcher {
             .lock()
             .ok()
             .and_then(|m| m.get(def.id).cloned());
-        let (r, url, _kind) = fetch_channel(&self.http, def, &cred.token, memo.as_deref()).await;
+        let mut chosen: Option<(FetchResult, Option<String>, appauth::Credential)> = None;
+        let mut last: Option<(FetchResult, Option<String>, appauth::Credential)> = None;
+        for cred in &creds {
+            let (r, url, kind) =
+                fetch_channel(&self.http, def, &cred.token, memo.as_deref()).await;
+            // 与轮询同一套降权记账:这次探到的 401 也帮下一轮少打一次。
+            if let Ok(mut m) = self.rejected.lock() {
+                let fp = key_fp(&cred.token);
+                if r.valid {
+                    m.remove(&fp);
+                } else if another_credential_may_help(kind) {
+                    m.insert(fp, now_ts());
+                }
+            }
+            let retry_next = another_credential_may_help(kind);
+            let ok = r.valid;
+            last = Some((r, url, cred.clone()));
+            if ok {
+                chosen = last.clone();
+                break;
+            }
+            if !retry_next {
+                break;
+            }
+        }
+        let Some((r, url, cred)) = chosen.or(last) else {
+            rep.error = Some("没有可用凭据".into());
+            rep.elapsed_ms = started.elapsed().as_millis() as u64;
+            return rep;
+        };
+        rep.auth_label = auth_label(def, Some(&cred));
         rep.ok = r.valid;
         rep.url_used = url;
         rep.remaining = r.remaining;

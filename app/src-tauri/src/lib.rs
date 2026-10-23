@@ -2517,35 +2517,52 @@ struct CheckinState {
 /// 那是取数层的标记),交给 `Cred::Web` 后会走「其余当 Bearer 令牌」那一支,
 /// 正是签到接口要的形态。**绝不能把 `desktop:` 前缀带进来**,那会变成
 /// `Bearer desktop:xxx`,必然 401。
-fn checkin_credential(app: &tauri::AppHandle, def: &checkin::CheckinDef) -> Result<checkin::Cred, String> {
+fn checkin_credentials(app: &tauri::AppHandle, def: &checkin::CheckinDef) -> Result<Vec<checkin::Cred>, String> {
     match def.auth {
         checkin::CheckinAuth::TraeApp => {
-            let c = appauth::candidates(appauth::App::Trae)
-                .into_iter()
-                .next()
-                .ok_or_else(|| "没检测到 Trae 登录信息 · 打开一次 Trae 即可".to_string())?;
-            let device_id = c
-                .device_id
-                .ok_or_else(|| "Trae 的 storage.json 里没读到设备号(签到需要它)".to_string())?;
-            Ok(checkin::Cred::Trae {
-                token: c.token,
-                device_id,
-            })
+            // 双装 Trae(SOLO CN + CN)时可能有两份登录态,其中一份早已作废。
+            // 全部返回,由 `run_checkin` 在 401 时逐份往下试 —— 只取 `.next()` 的话,
+            // 旧那套装在候选首位,签到就天天落 auth,而取数早就用第二份正常出数
+            // (2026-10-23 真机:界面一直喊"打开一次 Trae",打开也没用)。
+            let mut out = Vec::new();
+            let mut missing_device = false;
+            for c in appauth::candidates(appauth::App::Trae) {
+                match c.device_id {
+                    Some(device_id) => out.push(checkin::Cred::Trae {
+                        token: c.token,
+                        device_id,
+                    }),
+                    None => missing_device = true,
+                }
+            }
+            if out.is_empty() {
+                return Err(if missing_device {
+                    "Trae 的 storage.json 里没读到设备号(签到需要它)".into()
+                } else {
+                    "没检测到 Trae 登录信息 · 打开一次 Trae 即可".into()
+                });
+            }
+            Ok(out)
         }
         checkin::CheckinAuth::WebSession => {
             // ① 桌面端凭据优先(与取数同口径)。读不到不是错误 —— 没装桌面端很常见。
             //    `desktop_tokens` 内部已处理"上次续期成果 → 桌面端文件 → 过期自动续期"。
-            if let Some(token) = workbuddy::desktop_tokens(now_ts() * 1000).into_iter().next() {
-                return Ok(checkin::Cred::Web(token));
-            }
+            //    可能有多份(区域不同),同样交给 `run_checkin` 逐份试。
+            let mut out: Vec<checkin::Cred> = workbuddy::desktop_tokens(now_ts() * 1000)
+                .into_iter()
+                .map(checkin::Cred::Web)
+                .collect();
             // ② 兜底:网页会话(手动粘贴的密钥 / 挂件内登录抓到的 Cookie)
-            let session = wb_session_of(app, def.id).ok_or_else(|| {
-                format!(
+            if let Some(session) = wb_session_of(app, def.id) {
+                out.push(checkin::Cred::Web(session));
+            }
+            if out.is_empty() {
+                return Err(format!(
                     "未检测到 {} 登录 · 打开一次桌面端即可(或在本卡片点「重新登录」)",
                     def.name
-                )
-            })?;
-            Ok(checkin::Cred::Web(session))
+                ));
+            }
+            Ok(out)
         }
         checkin::CheckinAuth::QoderApp => {
             let app_kind = if def.id == "qoder-cn" {
@@ -2562,15 +2579,23 @@ fn checkin_credential(app: &tauri::AppHandle, def: &checkin::CheckinDef) -> Resu
             if def.id == "qoder" {
                 let account_id = c.account_id.as_deref().unwrap_or_default();
                 if let Some(identity) = tokenscope_core::qoder::machine_identity(account_id) {
-                    return Ok(checkin::Cred::QoderMachine {
+                    return Ok(vec![checkin::Cred::QoderMachine {
                         token: c.token,
                         identity,
-                    });
+                    }]);
                 }
             }
-            Ok(checkin::Cred::Qoder(c.token))
+            Ok(vec![checkin::Cred::Qoder(c.token)])
         }
     }
+}
+
+/// 只要一份凭据的调用点(活动监测 / 状态探测):取候选表的第一份。
+fn checkin_credential(app: &tauri::AppHandle, def: &checkin::CheckinDef) -> Result<checkin::Cred, String> {
+    checkin_credentials(app, def)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("{} 没有可用签到凭据", def.name))
 }
 
 /// 该渠道的「签到周期日」——幂等键。
@@ -3118,9 +3143,10 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
     let _busy = CheckinBusy::acquire(id).map_err(|_| format!("{} 正在签到,等它跑完再点", def.name))?;
     // 本机凭据要读文件 / 派发主线程,都是阻塞调用:下沉到 spawn_blocking,
     // 否则一个卡住的 Trae storage.json 会占住一个 tokio worker(P1-14 同族)。
-    let cred = {
+    // **可能有多份**:Trae 双装 / WorkBuddy 多区域,旧那份可能早已作废。
+    let creds = {
         let h = app.clone();
-        tokio::task::spawn_blocking(move || checkin_credential(&h, def))
+        tokio::task::spawn_blocking(move || checkin_credentials(&h, def))
             .await
             .map_err(|e| format!("读取签到凭据失败: {e}"))??
     };
@@ -3132,7 +3158,28 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
 
     // 查状态。**用 call_with_body**:Qoder 的连续天数在顶层,需要原始响应;
     // 其他渠道拿到 body 也不用,不额外付成本(同一次请求捎回来而已)。
-    let (mut out, status_body) = checkin::call_with_body(&client, def, &cred, false, None).await;
+    //
+    // 多份凭据时逐份试:只有 401/403(平台明确拒了这份登录态)才换下一份,
+    // 网络/业务失败不换 —— 与取数层同一个判据。只试第一份的话,Trae 装了
+    // SOLO CN + CN 两套时,旧那套会让签到天天落 auth,界面一直喊"打开一次 Trae",
+    // 而取数其实正用第二份正常出数(2026-10-23 真机)。
+    let (cred, mut out, status_body) = {
+        let mut picked = None;
+        for (i, c) in creds.iter().enumerate() {
+            let (o, b) = checkin::call_with_body(&client, def, c, false, None).await;
+            if matches!(o, checkin::Outcome::AuthNeeded) && i + 1 < creds.len() {
+                tokenscope_core::diaglog::write_keyed(
+                    def.id,
+                    "cred-switch",
+                    &format!("签到换下一份凭据:第 {} 份被平台拒绝", i + 1),
+                );
+                continue;
+            }
+            picked = Some((c.clone(), o, b));
+            break;
+        }
+        picked.expect("checkin_credentials 至少返回一份")
+    };
     let mut credits: Option<f64> = out.credits();
     // 连续天数:只有 Qoder 的接口给,拿不到就是 None(不编)
     let streak: Option<i64> = status_body.as_ref().and_then(checkin::qoder_streak);

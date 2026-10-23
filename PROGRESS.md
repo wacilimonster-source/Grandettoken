@@ -2825,6 +2825,47 @@ WorkBuddy 桌面端（`workbuddy.rs`）—— 只有 Qoder 这一条漏了。
 （src-tauri）均 exit 0。黑框是否彻底消失需要真机观察一个缓存周期（45 分钟）；
 本机已替换运行。
 
+## Trae 一直提示「打开一次客户端」：签到与体检只试第一份本机登录态（2026-10-23）
+
+**现象**（用户原话）：「提示我 trae 需要打开一次客户端，我打开了，但是页面还是有提示」。
+诊断包 [5/9] Trae ✗「登录状态已失效 · 打开一次 Trae 即可 —— 显示的是本地快照，取数未通」，
+但同一份日志里 Trae **取数一直是成功的**：
+
+```
+14:25:16.668  trae: 换下一份凭据:手动令牌/TRAE SOLO CN 被拒 → 手动令牌/Trae CN
+14:25:16.748  trae: 取数成功 · 凭据 [TRAE SOLO CN→不通，Trae CN→通]
+14:25:16.521  checkin: 签到 Trae · 结果=auth · 第 3 次
+```
+
+**根因**：本机有两套 Trae 登录态（旧的 `TRAE SOLO CN`、在用的 `Trae CN`），候选顺序把
+旧的那套排在前面。
+
+| 路径 | 以前的行为 | 结果 |
+|---|---|---|
+| 取数 `fetch_all` | 401 → **换下一份**候选 | ✅ 用第二份正常出数 |
+| 签到 `run_checkin` | 只取 `candidates().next()` | ❌ 天天用旧那份 → `auth` |
+| 「测试连接 / 一键体检」`probe_report` | 只取 `creds.first()` | ❌ 假阴性，永远说「打开一次 Trae」 |
+
+后两条正是用户看到的两处提示。打开客户端有时能救活旧那份（这次 14:37 之后
+`TRAE SOLO CN` 又通了），但代码层的口径不一致仍然存在：**取数通、签到/体检不通**。
+签到只取第一份这件事 v0.1.47 就记录为已知问题（见上文「本次未修」），这次一起修。
+
+**修法**
+
+- `checkin_credential` 拆成 `checkin_credentials`：Trae 返回**全部**候选（缺设备号的跳过，
+  继续试下一份）、WorkBuddy 返回桌面端全部令牌 + 网页会话兜底、Qoder 保持单份。
+  只取一份的调用点（活动监测 / 状态探测）用薄包装 `checkin_credential`。
+- `run_checkin` 逐份打 status：只有 `AuthNeeded`（401/403）且还有候选才换下一份，
+  网络 / 业务失败不换（与取数层同一判据）；换的时候落一条 `cred-switch` 诊断。
+  选中的那份继续用于 claim 与回查。
+- `probe_report` 改成与轮询同一条路：先 `demote_rejected` 把被拒过的凭据沉底，
+  再逐份试、只换 Auth；试出来的 401 也写进 `rejected`，帮下一轮轮询少打一次。
+  `authLabel` 报**实际用的那份**，不再固定写第一份。
+
+**验证**：core `cargo test --offline` **314 passed / 0 failed**；
+`cargo check --offline --all-targets` exit 0；真机日志确认取数侧用
+`TRAE SOLO CN`/`Trae CN` 都能在 401 后换到可用那份。
+
 ### 发版 v0.1.61（2026-10-23）
 
 修掉隔一阵闪一个黑框：Qoder 的 `runtime-info.exe` 是控制台程序，现在以隐藏窗口启动；
