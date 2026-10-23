@@ -97,13 +97,11 @@
 
     <!-- 页签 1:渠道 —— 一卡一渠道:显隐/排序/密钥/额度申请全在卡里 -->
     <div class="mbody panel on" data-p="ch">
-      <div class="khint">点卡片展开密钥与额度设置;眼睛 = 显示/隐藏 ——
-        隐藏后不再请求接口、不再读本机登录凭据,历史快照保留,随时可恢复。</div>
+      <div class="khint">点卡片展开密钥与额度设置;眼睛 = 隐藏,隐藏后停止取数、快照保留。<button class="why" data-why="hide" aria-expanded="false" aria-label="隐藏渠道的说明"></button></div>
       <div id="chList"></div>
 
       <h4>自定义渠道</h4>
-      <div class="khint">接一个没有内置支持的取数地址(比如中转站的余额接口)。填完<b>先点「测试」</b>,
-        通过了才能保存 —— 坏配置进不来。密钥只进 Windows 凭据管理器,配置文件里只有字段路径。</div>
+      <div class="khint">填完先点「测试」,通过才能保存 —— 坏配置进不来。<button class="why" data-why="custom" aria-expanded="false" aria-label="自定义渠道的说明"></button></div>
       <div class="cform" id="cForm">
         <div class="krow"><span class="k1">名称</span><input class="inp" id="cName" placeholder="如 我的中转站" autocomplete="off" spellcheck="false"></div>
         <div class="krow"><span class="k1">简称 / 颜色</span>
@@ -149,17 +147,17 @@
     <!-- 页签 3:显示 -->
     <div class="mbody panel" data-p="disp">
       <h4>外观</h4>
-      <div class="field"><span>字号<span class="desc">含紧凑条 / 胶囊,窗口尺寸自动跟随</span></span>
+      <div class="field"><span>字号<span class="desc">窗口尺寸自动跟随</span></span>
         <select class="sel" id="cfgFontScale">
           <option value="md">标准</option>
           <option value="lg">大</option>
           <option value="xl">特大</option>
         </select></div>
-      <div class="field"><span>启用紧凑条<span class="desc">顶栏的「紧凑」按钮与 380×46 的横向条;关闭后顶栏改为「胶囊」按钮,Esc 只在面板与胶囊之间切换</span></span>
+      <div class="field"><span>启用紧凑条<button class="why" data-why="compact" aria-expanded="false" aria-label="紧凑条的说明"></button><span class="desc">关闭后顶栏改为「胶囊」</span></span>
         <button class="sw" id="cfgCompact" role="switch" aria-checked="false" aria-label="启用紧凑条"></button></div>
-      <div class="field"><span>托盘图标显示余额数字<span class="desc">概览缩写(74 / 1.2k / 82),底色即状态色;关闭回到品牌样式</span></span>
+      <div class="field"><span>托盘图标显示余额数字<button class="why" data-why="trayNum" aria-expanded="false" aria-label="托盘数字的说明"></button><span class="desc">底色即状态色</span></span>
         <button class="sw" id="cfgTrayNum" role="switch" aria-checked="true" aria-label="托盘图标显示余额数字"></button></div>
-      <div class="field"><span>红色告急时呼吸提示<span class="desc">仅红色状态点 2 秒一次红晕,是全应用唯一的循环动画;默认关</span></span>
+      <div class="field"><span>红色告急时呼吸提示<button class="why" data-why="pulse" aria-expanded="false" aria-label="呼吸提示的说明"></button><span class="desc">全应用唯一的循环动画</span></span>
         <button class="sw" id="cfgPulse" role="switch" aria-checked="false" aria-label="红色告急时呼吸提示"></button></div>
       <div class="field"><span>渠道排序</span>
         <select class="sel" id="cfgSort">
@@ -187,21 +185,22 @@
         </select></div>
 
       <h4>提醒与声音</h4>
-      <div class="field"><span>跌破红线时发系统通知<span class="desc">只在跌破的那一刻响一次、一天最多一次;通知本身不回跳(插件不支持),窗口藏着时会闪一下任务栏</span></span>
+      <div class="field"><span>跌破红线时发系统通知<button class="why" data-why="notify" aria-expanded="false" aria-label="通知的说明"></button><span class="desc">跌破那刻一次,一天最多一次</span></span>
         <button class="sw" id="cfgNotify" role="switch" aria-checked="true" aria-label="跌破红线时发系统通知"></button></div>
-      <div class="field"><span>提示音<span class="desc">只有两声:签到领到、跌破红线。默认关</span></span>
+      <div class="field"><span>提示音<button class="why" data-why="sound" aria-expanded="false" aria-label="提示音的说明"></button><span class="desc">签到领到 / 跌破红线</span></span>
         <button class="sw" id="cfgSound" role="switch" aria-checked="false" aria-label="提示音"></button></div>
 
       <h4>胶囊轮播</h4>
-      <div class="khint">不选 = 自动显示最紧张的一个;选中的每 8 秒轮播(鼠标停在胶囊上时放慢到 24 秒)。渠道隐藏后自动从轮播中剔除。</div>
+      <div class="khint">不选 = 自动显示最紧张的一个。<button class="why" data-why="pill" aria-expanded="false" aria-label="胶囊轮播的说明"></button></div>
       <div class="picks" id="cfgPill"></div>
-      <div class="field"><span>单击胶囊看速览<span class="desc">弹出今日合计 / 最紧渠道 / 签到三行,4.5 秒自动收回;再点一次立即收回</span></span>
+      <div class="field"><span>单击胶囊看速览<span class="desc">三行速览,4.5 秒自收</span></span>
         <button class="sw" id="cfgPeek" role="switch" aria-checked="true" aria-label="单击胶囊看速览"></button></div>
     </div>
 
     <!-- 页签 3:刷新与启动 -->
     <div class="mbody panel" data-p="run">
       <h4>取数频率</h4>
+      <div class="khint">只查账务接口,不产生 token 费用。<button class="why" data-why="freq" aria-expanded="false" aria-label="取数频率的说明"></button></div>
       <div class="field"><span>面板展开时</span>
         <select class="sel" id="cfgActive">
           <option value="30">30 秒</option><option value="60">1 分钟</option>
@@ -223,27 +222,25 @@
       <div class="field"><span>自动检查更新<span class="desc">每 24 小时最多问一次服务器</span></span>
         <button class="sw" id="cfgAutoUpdate" role="switch" aria-checked="true" aria-label="自动检查更新"></button></div>
       <h4>活动监测与签到</h4>
-      <div class="khint">活动监测只读取平台状态；自动领取单独控制。关闭某渠道的监测后，不再查询或签到。使用平台内部接口，规则可能变化，与官方无关。</div>
+      <div class="khint">只读平台状态;自动领取单独控制。<button class="why" data-why="checkin" aria-expanded="false" aria-label="活动监测的说明"></button></div>
       <div id="ckSet"></div>
 
       <h4>显示</h4>
-      <div class="field"><span>非颜色模式<span class="desc">每行把状态写成文字(正常 / 预警 / 告急),不靠颜色单独承重</span></span>
+      <div class="field"><span>非颜色模式<span class="desc">状态写成文字,不靠颜色</span></span>
         <button class="sw" id="cfgTextTone" role="switch" aria-checked="false" aria-label="非颜色模式"></button></div>
-      <div class="field"><span>用掉还是剩余<span class="desc">百分比型渠道的大数字看"还剩多少"还是"已用多少"</span></span>
+      <div class="field"><span>用掉还是剩余<button class="why" data-why="used" aria-expanded="false" aria-label="用掉还是剩余的说明"></button><span class="desc">只影响百分比型渠道</span></span>
         <button class="sw" id="cfgShowUsed" role="switch" aria-checked="false" aria-label="用掉还是剩余"></button></div>
-      <div class="field"><span>余额底线(元)<span class="desc">充值型渠道低于它算「需要处理」;算不出比例的渠道也据此参与排序</span></span>
+      <div class="field"><span>余额底线(元)<button class="why" data-why="floor" aria-expanded="false" aria-label="余额底线的说明"></button><span class="desc">低于它算「需要处理」</span></span>
         <input class="sel" id="cfgMoneyFloor" type="number" min="1" step="1" placeholder="10"></div>
 
       <h4>快捷键</h4>
-      <div class="field"><span>显示 / 隐藏面板<span class="desc">点框内按下组合键(如 Alt+G);Esc 清除 = 不启用</span></span>
+      <div class="field"><span>显示 / 隐藏面板<button class="why" data-why="hotkey" aria-expanded="false" aria-label="快捷键的说明"></button><span class="desc">点框内直接按组合键</span></span>
         <input class="sel hk-rec" id="cfgHotkey" readonly placeholder="未设置"></div>
     </div>
 
     <!-- 页签 5:密钥箱 —— 本地存各类平台的密钥:密文在 Windows 凭据管理器,这里只列索引 -->
     <div class="mbody panel" data-p="vault">
-      <div class="khint">把各平台的密钥存在这里,平时<b>加密存放</b>(Windows 凭据管理器,绑当前 Windows 账户)。
-        列表只显示平台、标签与尾号 —— 点「显示」才取出明文,8 秒后自动隐;复制走系统剪贴板。
-        <b>不导出、不自动填到任何地方</b>。</div>
+      <div class="khint">列表只显示平台、标签与尾号;点「显示」才出明文,8 秒自动隐。<button class="why" data-why="vault" aria-expanded="false" aria-label="密钥箱的说明"></button></div>
       <input class="inp" id="vaultQ" placeholder="搜索平台 / 标签 / 备注…" autocomplete="off" spellcheck="false">
       <div id="vaultForm"></div>
       <div id="vaultList"></div>
@@ -271,17 +268,14 @@
         </div>
       </div>
       <h4>体检</h4>
-      <div class="khint" style="margin:0 0 8px">逐渠道真打一次接口 + 本机检查(快照库可写、开机自启、系统代理),
-        结果是一份可复制的纯文本报告 —— 里面只有域名、状态与数值,<b>没有任何密钥</b>。</div>
+      <div class="khint" style="margin:0 0 8px">真打一次接口 + 本机检查,产出可复制的纯文本。<button class="why" data-why="diag" aria-expanded="false" aria-label="体检的说明"></button></div>
       <div class="acts">
         <button class="btn p" id="btnDiag">运行体检</button>
         <button class="btn" id="btnDiagCopy" style="display:none">复制报告</button>
       </div>
       <pre class="diagout" id="diagOut" style="display:none"></pre>
       <h4>排查日志</h4>
-      <div class="khint" style="margin:0 0 8px">取数失败时,每一步走到哪儿都记在这里(选凭据 → 打哪个地址 → 返回什么码 → 耗时多久)。
-        <b>不含任何密钥或令牌</b> —— 令牌只记"长度 + 指纹前 8 位"。
-        出问题时点「导出诊断包」,把那一整份贴过来就行 —— 里面已经有环境、体检和最近的事件,不用再截图。</div>
+      <div class="khint" style="margin:0 0 8px">每一步走到哪儿都记在这里,不含任何密钥。<button class="why" data-why="log" aria-expanded="false" aria-label="排查日志的说明"></button></div>
       <div class="krow" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <span class="kpath" id="logPath" style="font-family:Consolas,monospace;font-size:max(10.5px,calc(10.5px*var(--u)));
           color:var(--tx3);word-break:break-all;flex:1;min-width:120px">—</span>
@@ -298,18 +292,20 @@
         <label class="krow" style="flex:1;display:flex;align-items:center;gap:8px;border:0;padding:0;background:none">
           <input type="checkbox" id="logVerbose">
           <span class="k1" style="flex:0 0 auto">详细日志</span>
-          <span class="desc">连<b>成功</b>的请求也记下来。排查"余额数字不对"这类问题必须看成功响应,
-            平时用不到 —— 平时只记失败与现场。</span>
+          <span class="desc">连成功的请求也记</span>
         </label>
       </div>
       <div class="khint" id="logOff" style="display:none;margin:8px 0 0;color:var(--bad)">
         日志已被环境变量 TOKENSCOPE_NODIAG 关闭 —— 去掉它并重启挂件才会重新记录。</div>
-      <h4>数据与隐私</h4>      <div class="khint" style="margin:0">密钥只写入 Windows 凭据管理器,不进配置文件、数据库或日志;
-        快照库在 <span style="font-family:Consolas,monospace">%APPDATA%\com.wacil.tokenscope</span>;
-        Trae / WorkBuddy 只读本机登录凭据,不写回、不刷新 —— 隐藏渠道后连读取也会停止。<br>
+      <h4>数据与隐私</h4>
+      <details class="fold">
+        <summary>密钥只进 Windows 凭据管理器;快照库在本机</summary>
+        <div class="foldin">快照库在 <span style="font-family:Consolas,monospace">%APPDATA%\com.wacil.tokenscope</span>;
+        密钥不进配置文件、数据库或日志。Trae / WorkBuddy 只读本机登录凭据,不写回、不刷新 —— 隐藏渠道后连读取也会停止。<br>
         OpenCode Go 的 $10 套餐按天摊进「今日/本周/本月消耗」:周期长度优先用两次真实重置的间隔,
         还没跨过重置时按"重置日往前推一个整月"算;美元牌价<b>每月</b>向公开汇率接口取一次
         (请求里不含任何账号信息),取不到就沿用上月的并写明是几月的。</div>
+      </details>
     </div>
   </div>
 

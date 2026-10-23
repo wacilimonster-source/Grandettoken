@@ -15,6 +15,7 @@ pub mod diaglog;
 pub mod errcodes;
 pub mod fetch;
 pub mod fx;
+pub mod grants;
 pub mod inject;
 pub mod models;
 pub mod peak;

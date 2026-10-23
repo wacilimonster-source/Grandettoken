@@ -369,6 +369,8 @@ const LOGOS = {
   // 国内版与国际版是**两套账号**,但视觉上是同一个产品 —— 共用同一份官方标,
   // 靠渠道名("Qoder 国内版")与主色区分,不再另画一个图标。
   "qoder-cn": "logos/qoder.png",
+  // WorkBuddy AI(国际版)同理:同一个产品、另一套账号,共用 WorkBuddy 的标。
+  "workbuddy-ai": "logos/workbuddy.png",
 };
 
 /**
@@ -476,6 +478,46 @@ function hvSort(list) {
 }
 
 // ───────────── 渲染 ─────────────
+/** 今日积分到账一行(只有记到账的渠道有 `grantToday`)。
+ *
+ *  口径见 docs/design/design-workbuddy-ai-channel-2026-10-23.html §4.1:
+ *    · 有活跃奖励 → "今日活跃 +30 · 08:12"(不是自己领的就不写"已领取")
+ *    · 只有充值   → "今日新增 +500 · 非活跃"(充值到账 ≠ 活跃获取)
+ *    · 什么都没到 → "今日未获取积分"(确定的结论,不是"读不到")
+ *  `fromApi` 为 false 时补一个"推算" —— 余额正增量反推的,不能当平台确认说。
+ */
+function grantLine(c) {
+  const g = c.grantToday;
+  if (!g) return "";
+  if (g.hasActivity) {
+    const t = g.lastAt ? " · " + fmtClock(g.lastAt) : "";
+    return `今日活跃 +${points(g.activityTotal)}${t}${g.fromApi ? "" : " · 推算"}`;
+  }
+  if (g.total > 0) return `今日新增 +${points(g.total)} · 非活跃`;
+  return "今日未获取积分";
+}
+
+/** 30 天记录明细。懒加载:点「记录」才查库,不在每轮轮询里读。
+ *  倒序 —— 最近的在上;来源如实标(现在全是"推算",接上平台接口后会变"平台确认")。 */
+function grantListHtml(id) {
+  const rows = GRANTS[id];
+  if (!rows) return '<div class="glist"><div class="grow"><span>读取中…</span></div></div>';
+  if (!rows.length)
+    return '<div class="glist"><div class="grow"><span>还没有记录 —— 第一次到账会在下一轮取数后出现</span></div></div>';
+  return `<div class="glist">${rows
+    .slice()
+    // 最近的在上。后端给的是升序(按天分组要顺着看),这里再排一次 ——
+    // 别把"显示顺序"押在调用方的返回顺序上。
+    .sort((a, b) => b.ts - a.ts)
+    .map(
+      (r) =>
+        `<div class="grow"><span>${esc(r.day)} ${fmtClock(r.ts)}</span><b>+${points(
+          r.amount
+        )}</b><i>${r.source === "api" ? "平台确认" : "推算"}</i></div>`
+    )
+    .join("")}</div>`;
+}
+
 function renderRow(c, i) {
   const tone = hvTone(c); // 与其余三种形态同源(设计 P3 · 状态同源)
   const noKey = !c.hasKey;
@@ -546,7 +588,12 @@ function renderRow(c, i) {
   }
   else if (c.limited) sub = "已限流";
   else if (isPts) {
-    sub = soon
+    // 记到账的渠道(WorkBuddy AI):这一行给"今天有没有活跃获取" —— 那是它最该被看见的
+    // 信息,比"近期会过期多少"更天天变。到期信息仍在右侧 `.p` 与展开区里。
+    const gl = grantLine(c);
+    sub = gl
+      ? esc(gl)
+      : soon
       ? `近 30 天将过期 ${points(soon.amount)} 分`
       : !c.expiryComplete
         ? c.expiring && c.expiring.length
@@ -962,7 +1009,11 @@ function renderDetail(c) {
   if (c.unstable) {
     notes.push(["未公开接口:响应结构一变,这个渠道就会显示取数失败", ""]);
   }
-  if (c.authSource === "app") {
+  if (c.id === "workbuddy-ai") {
+    // 这条链路**会续期**(refreshToken 换 accessToken,成果存在我们自己的库里、
+    // 不写回客户端文件),所以不能说"不刷新会话" —— 与其它 app 型渠道分开写。
+    notes.push(["凭据来自本机国际版桌面端,只读复用;过期自动续期,不写回客户端", ""]);
+  } else if (c.authSource === "app") {
     notes.push([`凭据来自本机已登录的 ${c.authLabel || c.name};挂件只读,不刷新会话`, ""]);
   } else if (c.authSource === "web") {
     notes.push([`使用挂件内的 ${c.name} 网页登录态,不影响桌面客户端`, ""]);
@@ -1962,6 +2013,11 @@ function drawTrayIcon() {
     (旧版把这三件事拆在「密钥 / 渠道顺序 / 额度申请」三个分区,是"乱"的根源) */
 const cardOpen = new Set(); // 展开的卡片 id;轮询重建时保持,不让用户白收起
 
+/** 积分获取记录(只有 WorkBuddy AI 这类"只在余额上留痕"的渠道有)。
+ *  `grantOpen` 是展开状态,`GRANTS` 是明细缓存 —— 打开时才查,不在每轮轮询里读库。 */
+const grantOpen = new Set();
+const GRANTS = {};
+
 function chDot(c) {
   if (c.hidden || !c.hasKey) return "off";
   if (!c.valid) return "st";
@@ -1993,6 +2049,70 @@ function revealBoxShow(box, key) {
   box._revealTimer = setTimeout(() => revealBoxHide(box), REVEAL_MS);
 }
 
+/** 设置页的「按需说明」(2026-10-23)。
+ *
+ *  背景:设置页的说明文字曾堆到 936 个汉字(静态),折合约 570px —— 超过一整个面板的高度;
+ *  「密钥只进 Windows 凭据管理器」这一句在界面里出现了 10 次。问题不是"解释太多",而是
+ *  **必读和可选平铺在一起**。所以分三层:
+ *    L1 常驻 —— 一句后果,写在控件旁边(.desc),只在"说错会让人做错事"时出现;
+ *    L2 按需 —— 本表,点「?」原地展开,同一句话全应用只写一份;
+ *    L3 归档 —— 关于页的 <details>,读一次就够的长段落。
+ *  判据一句话:这句话如果说错了,用户会不会做错事?会 → L1;不会 → L2/L3。
+ *
+ *  静态模板用 `<button class="why" data-why="key">` 引用,hydrateWhy() 负责补出说明块;
+ *  动态渲染(渠道卡)也走同一套,重绘后直接再调一次 hydrateWhy 即可(幂等)。
+ */
+const WHY = {
+  hide: "不再请求接口,也不再读取本机登录凭据;已记录的历史快照不删,点「恢复」立即回到取数。",
+  custom: "地址与密钥只发往你填的那个域名;字段路径决定从返回 JSON 的哪一层取余额,换算倍数把它折成元。探活模式只验证可达,不解析金额。",
+  wblogin: "点「登录」会开一个独立窗口加载 www.workbuddy.cn 登录页(微信扫码 / 手机号),登录成功后窗口自己关掉,挂件接着用这份浏览器会话取数 —— 不用复制任何东西,也不动桌面客户端的登录状态。会话约 7 天到期。国内版桌面端 5.6.2 起把本机令牌改为加密存储,已无法自动读取。",
+  appauth: "凭据来自本机已登录的客户端;失效时打开一次客户端即可。隐藏本渠道后连读取也会停止。",
+  compact: "开启后顶栏出现「紧凑」按钮,可切成 380×46 的横向条;Esc 在面板与胶囊之间切换。",
+  trayNum: "托盘图标画概览缩写(74 / 1.2k / 82);关闭后回到品牌样式。",
+  pulse: "只有红色状态点会 2 秒一次红晕。低位持续期间不重复播报,免得常驻桌面一直闪。",
+  notify: "通知本身不支持点击回跳(插件限制),所以窗口藏着时改为闪一下任务栏。",
+  sound: "WebAudio 合成,不新增资源文件;默认关。",
+  pill: "选中的渠道每 8 秒轮播一次,鼠标停在胶囊上时放慢到 24 秒;渠道隐藏后自动从轮播里剔除。",
+  checkin: "使用平台内部接口读取活动状态,规则可能随时变化,与官方无关。签到走直连(不经过系统代理)—— 平台按出口 IP 限流,代理 IP 更容易被拒。关闭某渠道的监测后,不再查询也不再签到;签到状态不参与余额渲染。",
+  freq: "间隔只受对方限流礼貌性约束;连续失败会自动退避,面板展开与折叠可以分别设。",
+  vault: "加密存放在 Windows 凭据管理器(绑当前 Windows 账户);复制走系统剪贴板;不导出、不自动填到任何地方。",
+  diag: "本机检查含快照库可写、开机自启、系统代理;报告里只有域名、状态与数值,没有任何密钥。",
+  log: "令牌只记「长度 + 指纹前 8 位」。出问题时点「导出诊断包」,里面已经有环境、体检与最近事件,不用再截图。",
+  used: "大数字看「还剩多少」还是「已用多少」;金额型永远显示余额。",
+  floor: "算不出比例的渠道(充值型)也据此排序。",
+  hotkey: "如 Alt+G;Esc 清除即不启用。",
+};
+
+/** 把 [data-why] 按钮补成「按钮 + 可展开说明」。幂等,重绘后可直接再调。
+    文案缺失时把按钮一起摘掉 —— 点开一片空白比没有入口更糟。 */
+let whySeq = 0;
+function hydrateWhy(root) {
+  (root || document).querySelectorAll("button.why[data-why]").forEach((btn) => {
+    if (btn.dataset.for) return;
+    const text = WHY[btn.dataset.why];
+    if (!text) { btn.remove(); return; }
+    const box = document.createElement("span");
+    box.className = "whybox";
+    box.dataset.for = btn.dataset.for = "w" + (++whySeq);
+    box.innerHTML = `<span class="whybox-in">${text}</span>`;
+    // 说明块落在**这一行的最后**:副标题(desc)是 L1,必须紧贴标签;
+    // 按钮在横向按钮行(.ccbtns)里时插到整行之后 —— 塞进 flex 行会白占一段宽度。
+    const next = btn.nextElementSibling;
+    const p = btn.parentElement;
+    if (p && p.classList.contains("ccbtns")) p.after(box);
+    else if (next && next.classList.contains("desc")) p.appendChild(box);
+    else btn.after(box);
+  });
+}
+
+function toggleWhy(btn) {
+  const on = btn.getAttribute("aria-expanded") === "true";
+  btn.setAttribute("aria-expanded", String(!on));
+  // 说明块不一定紧跟在按钮后面(见上),按 data-for 找
+  const box = document.querySelector(`.whybox[data-for="${btn.dataset.for}"]`);
+  if (box) box.classList.toggle("on", !on);
+}
+
 function renderChCards() {
   // 重绘前把已显示的密钥收回:明文不许留在 DOM 里过夜(盒子自己的计时器一起清)
   document.querySelectorAll(".reveal-box").forEach((b) => revealBoxHide(b));
@@ -2021,7 +2141,11 @@ function renderChCards() {
       const cc = map[c.id];
       const on = !!(cc && cc.enabled);
       let st;
-      if (c.hidden) st = "已隐藏 · 不再取数(历史快照保留)";
+      if (c.hidden)
+        st = c.autoHidden
+          ? // 系统藏的,不是用户藏的 —— 必须说清区别,否则用户会去设置里找"我什么时候隐藏的"
+            "未检测到登录 · 已自动隐藏(登录后自动出现)"
+          : "已隐藏 · 不再取数(历史快照保留)";
       else if (!c.hasKey) st = isApp ? "未检测到登录" : isWeb ? "未登录" : "未配置";
       else if (c.valid)
         st = isApp
@@ -2036,6 +2160,7 @@ function renderChCards() {
             <button class="btn p" data-act="wblogin" data-id="${c.id}"${WB_LOGGING ? " disabled" : ""}>${
           c.hasKey ? "重新登录 WorkBuddy 账号" : "登录 WorkBuddy 账号"
         }</button>
+            <button class="why" data-why="wblogin" aria-expanded="false" aria-label="登录方式的说明"></button>
           </div>
           <div class="ccbtns">
             <input type="password" id="key-${c.id}" autocomplete="off" spellcheck="false"
@@ -2043,14 +2168,13 @@ function renderChCards() {
               placeholder="${c.hasKey ? "也可粘贴访问密钥 · 留空则不修改" : "或粘贴访问密钥(登录窗口不通时自救)"}">
             <button class="btn" data-act="savekey" data-id="${c.id}">保存</button>
             ${c.hasKey ? `<button class="btn danger" data-act="delkey" data-id="${c.id}">清除登录</button>` : ""}
-          </div>
-          <div class="mini">点「登录」会开一个独立窗口加载 www.workbuddy.cn 登录页(微信扫码 / 手机号)。` +
-          `登录成功后窗口自己关掉,挂件接着用这份浏览器会话取数 —— 不用你复制任何东西,` +
-          `也不会动你桌面客户端的登录状态。会话约 7 天到期,到点了再登一次就行。` +
-          `国内版桌面端 5.6.2 起把本机令牌改为加密存储,已无法自动读取。</div>`
+          </div>`
         : isApp
-        ? `<div class="mini">凭据来自本机已登录的 ${esc(c.name)} 客户端,只读复用、不写回不刷新;` +
-          `失效时打开一次 ${esc(c.name)} 即可;隐藏本渠道后连读取也会停止。</div>`
+        ? `<div class="mini">${
+            // 国际版这条链路**会续期**(refreshToken 换 accessToken,成果存在我们自己的库里、
+            // 不写回客户端文件),照抄别的 app 型渠道写"不刷新"就是错的(设计稿 §6 记过这一条)
+            c.id === "workbuddy-ai" ? "只读复用本机登录,自动续期" : "只读复用本机登录,不写回、不刷新"
+          }<button class="why" data-why="appauth" aria-expanded="false" aria-label="凭据来源的说明"></button></div>`
         : `<div class="ksrc" data-src="${c.id}">${srcRowHtml(c.id)}</div>
           <div class="ccbtns">
             <input type="password" id="key-${c.id}" autocomplete="off" spellcheck="false"
@@ -2063,7 +2187,7 @@ function renderChCards() {
       const claimBlock =
         c.kind === "amount"
           ? `<div class="claim-in">
-              <div class="field"><span>额度申请制<span class="desc">定期申请把余额补到固定上限;上次申请时间由快照跳升自动检测</span></span>
+              <div class="field"><span>额度申请制<span class="desc">余额补到固定上限;申请时间自动检测</span></span>
                 <button class="sw${on ? " on" : ""}" role="switch" aria-checked="${on}" aria-label="额度申请制" data-act="claimtoggle" data-id="${c.id}"></button></div>
               ${on
                 ? `<div class="claim-grid">
@@ -2079,6 +2203,19 @@ function renderChCards() {
             </div>`
           : "";
 
+      // 积分获取(只有记到账的渠道):今日一句 + 近 7 天汇总,「记录」展开 30 天明细。
+      // 记录是**懒加载**的 —— 每轮轮询都查一次 30 天明细纯属浪费。
+      const grantBlock = c.grantToday
+        ? `<div class="krow"><span class="k1" style="flex:1">积分获取
+             <span class="desc">${esc(grantLine(c))}${
+            c.grantWeek && c.grantWeek.days ? ` · 近 7 天 ${c.grantWeek.days} 天有获取` : ""
+          }</span></span>
+             <button class="btn s" data-act="grantlog" data-id="${c.id}">${
+            grantOpen.has(c.id) ? "收起" : "记录"
+          }</button></div>
+           ${grantOpen.has(c.id) ? grantListHtml(c.id) : ""}`
+        : "";
+
       return `<div class="ccard${c.hidden ? " off" : ""}${cardOpen.has(c.id) ? " open" : ""}" data-id="${c.id}">
         <div class="cchead" data-act="chfold" data-id="${c.id}">
           ${iconHtml(c, "ico", !c.hasKey || c.hidden)}
@@ -2087,7 +2224,13 @@ function renderChCards() {
             <div class="ccst">${st}</div>
           </div>
           <button class="eye${c.hidden ? " off" : ""}" data-act="chvis" data-id="${c.id}"
-            title="${c.hidden ? "恢复显示(重新开始取数)" : "隐藏(停止取数,历史快照保留)"}">${c.hidden ? "恢复" : "👁"}</button>
+            title="${
+              c.hidden
+                ? c.autoHidden
+                  ? "仍然显示(当前没检测到登录,登录后会自动恢复取数)"
+                  : "恢复显示(重新开始取数)"
+                : "隐藏(停止取数,历史快照保留)"
+            }">${c.hidden ? (c.autoHidden ? "显示" : "恢复") : "👁"}</button>
           <span class="ccaret">&#9654;</span>
         </div>
         <div class="ccbody">
@@ -2101,6 +2244,7 @@ function renderChCards() {
           : ""
       }
       ${claimBlock}
+      ${grantBlock}
       ${
         c.hasKey && !c.hidden
           ? `<div class="krow"><span class="k1" style="flex:1">连接自检<span class="desc">真打一次接口,不落快照</span></span>
@@ -2125,6 +2269,8 @@ function renderChCards() {
       </div>`;
     })
     .join("");
+  // 卡片里的「?」是动态生成的,补出说明块(幂等;轮询重绘后也不会丢)
+  hydrateWhy($("chList"));
 }
 
 /** 轮询刷新时更新渠道卡;正在输入就不重建,免得把输入内容冲掉。 */function refreshChCards() {
@@ -3211,6 +3357,15 @@ $("manage").addEventListener("input", (e) => {
 });
 
 $("manage").addEventListener("click", async (e) => {
+  // 「?」按需说明:它不带 data-act,必须先于下面的委托处理,否则会被当成卡片折叠/行点击。
+  // 展开状态在 DOM 上(aria-expanded + .on),轮询重绘渠道卡后自然复位 —— 说明是"看一次"的东西,
+  // 不跨重绘保持是对的(用户已经读过了)。
+  const why = e.target.closest("button.why");
+  if (why) {
+    e.stopPropagation();
+    toggleWhy(why);
+    return;
+  }
   const act = e.target.closest("[data-act]");
   if (!act) return;
   const id = act.dataset.id;
@@ -3563,10 +3718,24 @@ $("manage").addEventListener("click", async (e) => {
   } else if (a === "chvis") {
     const hid = CFG.hiddenChannels || (CFG.hiddenChannels = []);
     const at = hid.indexOf(id);
+    const cc = CHANNELS.find((x) => x.id === id);
+    // 点过眼睛 = 用户表过态。记一笔,自动隐藏从此对这个渠道失效 ——
+    // 否则"点了显示、下一轮又被系统藏回去",比没有自动隐藏更让人火大。
+    const ut = CFG.userTouchedChannels || (CFG.userTouchedChannels = []);
+    if (!ut.includes(id)) ut.push(id);
+    // 自动隐藏的渠道:眼睛是「仍然显示」。它本来就不在 hiddenChannels 里,
+    // 走下面那条会把 id 塞进去 —— 那就成了"用户主动隐藏",再也不会自动恢复。
+    if (cc && cc.autoHidden && cc.hidden) {
+      cc.hidden = false;
+      cc.autoHidden = false;
+      render();
+      refreshChCards();
+      await saveConfigAndRefresh();
+      return;
+    }
     at >= 0 ? hid.splice(at, 1) : hid.push(id);
     // **先本地翻一次**:取数有 5 秒去重窗口(fetch_shared),保存后立刻重取可能拿到旧视图,
     // 卡片会原地不动 —— 那就是用户看到的"没反应"。这里先按意图画出结果,下一轮取数再对齐。
-    const cc = CHANNELS.find((x) => x.id === id);
     if (cc) cc.hidden = at < 0;
     render();
     refreshChCards();
@@ -3672,6 +3841,23 @@ $("manage").addEventListener("click", async (e) => {
     cur.manualLastAt = Math.floor(Date.now() / 1000);
     cur.manualSetAt = cur.manualLastAt;
     await saveConfigAndRefresh();
+  } else if (a === "grantlog") {
+    // 展开/收起 30 天记录。第一次展开才查库(见 grantListHtml 的注释)。
+    if (grantOpen.has(id)) {
+      grantOpen.delete(id);
+      renderChCards();
+      return;
+    }
+    grantOpen.add(id);
+    renderChCards();
+    try {
+      GRANTS[id] = await invoke("credit_grants", { id, days: 30 });
+    } catch (e) {
+      GRANTS[id] = [];
+      showToast("读取积分记录失败:" + e, true);
+    }
+    renderChCards();
+    return;
   } else if (a === "claimclear") {
     const cur = CFG.claimChannels[id];
     cur.manualLastAt = null;
@@ -5138,15 +5324,15 @@ function renderCheckinSet() {
       '<div class="field"><span>' + esc(s ? s.name : id) +
         '<span class="desc">' +
         (on
-          ? "活动状态每小时检查；自动领取由下方单独控制"
-          : "已关闭 · 停止活动监测与签到请求") +
+          ? "每小时检查一次"
+          : "已关闭 · 不再请求") +
         (s && s.monthCredits ? " · 本月已领 " + points(s.monthCredits) + " 分" : "") +
         "</span></span>" +
         '<button class="sw' + (on ? " on" : "") + '" role="switch" aria-checked="' + on +
         '" data-act="ckenable" data-id="' + esc(id) + '" aria-label="' + esc((s ? s.name : id) + " 活动监测") + '"></button></div>' +
       (on
         ? '<div class="field"><span>自动领取<span class="desc">' +
-          (auto ? "可直接领取的活动会自动领取；其他活动仍会提示" : "只监测不自动领取；可领取时提供手动入口") +
+          (auto ? "可直接领的自动领" : "只提示,不代领") +
           '</span></span>' +
           '<button class="sw' + (auto ? " on" : "") + '" role="switch" aria-checked="' + auto +
           '" data-act="ckauto" data-id="' + esc(id) + '" aria-label="自动领取"></button></div>'
@@ -5155,10 +5341,7 @@ function renderCheckinSet() {
       logs
     );
   }
-  box.innerHTML =
-    renderActivityOverview() + rows.join("") +
-    '<div class="khint" style="margin:8px 0 0">签到走<b>直连</b>(不经过系统代理):平台按出口 IP 限流,代理 IP 更容易被拒。' +
-    "开启活动监测后，Trae、WorkBuddy、Qoder 都会每小时只读检查；自动领取是独立开关。隐藏渠道停止请求，签到状态与余额互不影响。</div>";
+  box.innerHTML = renderActivityOverview() + rows.join("");
 }
 
 async function ckRun(id) {
@@ -5958,6 +6141,8 @@ async function refresh() {
   }
   applyConfigToUI();
   applyFontScale();
+  // 静态模板里的「?」补出说明块(渠道卡里的是动态的,renderChCards 自己会补)
+  hydrateWhy();
   // 版本号:等首检(最坏 30 秒)才显示,期间关于页是空的。直接问后端要(报告 P2-16)
   invoke("app_version")
     .then((v) => {

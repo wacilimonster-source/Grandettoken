@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>产品设计 · WorkBuddy AI(国际版)渠道:积分 + 当日获取记录 · 2026-10-23</title>
+<style>
+  :root{
+    --bg:#0f1115; --fg:#e6e8ee; --mut:#9aa3b2; --line:#262b36; --card:#151922;
+    --ac:#2f7cf6; --wb:#19b8c4; --wba:#4f7cff; --ok:#2fbf71; --warn:#f5a623; --bad:#e5484d;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f6f7f9; --fg:#1b1f27; --mut:#5b6472; --line:#dfe3ea; --card:#fff; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:15px/1.72 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1080px;margin:0 auto;padding:28px 22px 90px}
+  h1{font-size:26px;margin:0 0 4px}
+  h2{font-size:19px;margin:38px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+  h3{font-size:16px;margin:22px 0 6px}
+  h4{font-size:14px;margin:16px 0 4px;color:var(--mut);font-weight:600}
+  p{margin:8px 0}
+  code{background:rgba(127,127,127,.16);padding:1px 5px;border-radius:4px;font-size:13px;
+    font-family:"Cascadia Mono",Consolas,monospace;word-break:break-all}
+  pre{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px;
+    overflow-x:auto;font-size:12.5px;line-height:1.6;font-family:"Cascadia Mono",Consolas,monospace}
+  .sub{color:var(--mut);font-size:13px}
+  .hand{border:1px solid var(--ac);border-left-width:4px;background:var(--card);
+    border-radius:8px;padding:14px 16px;margin:18px 0}
+  .hand b{color:var(--ac)}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:rgba(127,127,127,.08);font-weight:600;white-space:nowrap}
+  .tag{display:inline-block;padding:0 7px;border-radius:10px;font-size:12px;border:1px solid var(--line);white-space:nowrap}
+  .t-fact{color:var(--ok);border-color:var(--ok)}
+  .t-half{color:var(--warn);border-color:var(--warn)}
+  .t-risk{color:var(--bad);border-color:var(--bad)}
+  .t-tbd{color:var(--mut)}
+  .note{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:10px 0}
+  .note.warn{border-left:3px solid var(--warn)}
+  .note.bad{border-left:3px solid var(--bad)}
+  .note.ok{border-left:3px solid var(--ok)}
+  ul,ol{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+
+  /* ── 面板线框:按真实 380 宽、13px 基准画 ── */
+  .mock{width:380px;border:1px solid var(--line);border-radius:12px;background:var(--card);
+    padding:10px 12px;margin:12px 0;font-size:13px;line-height:1.5}
+  .mock .row{display:flex;align-items:center;gap:8px}
+  .mock .ico{width:26px;height:26px;border-radius:7px;background:var(--wba);color:#fff;
+    display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:600;flex:none}
+  .mock .nm{font-weight:600;font-size:13px}
+  .mock .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);display:inline-block;margin-left:6px;vertical-align:1px}
+  .mock .chip{margin-left:auto;font-size:11.5px;padding:1px 7px;border-radius:10px;
+    border:1px solid var(--line);color:var(--mut);white-space:nowrap}
+  .mock .chip.ok{color:var(--ok);border-color:var(--ok)}
+  .mock .chip.hot{color:var(--ac);border-color:var(--ac)}
+  .mock .big{font-size:24px;font-weight:700;letter-spacing:.5px;margin:6px 0 1px}
+  .mock .big small{font-size:12px;font-weight:500;color:var(--mut);margin-left:3px}
+  .mock .ln{font-size:12px;color:var(--mut)}
+  .mock .ln b{color:var(--fg);font-weight:500}
+  .mock .sep{border-top:1px dashed var(--line);margin:8px 0}
+  .mock .kv{display:flex;justify-content:space-between;font-size:12.5px;padding:2px 0}
+  .mock .kv span:first-child{color:var(--mut)}
+  .bars{display:flex;gap:3px;align-items:flex-end;height:22px;margin-top:4px}
+  .bars i{flex:1;background:#2b3346;border-radius:2px}
+  .bars i.on{background:var(--wba)}
+  .cap{font-size:12px;color:var(--mut);margin:-4px 0 16px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media (max-width:860px){.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>WorkBuddy AI(国际版):积分展示 + 当日获取记录</h1>
+<p class="sub">产品设计 · 2026-10-23 · 依据来自本仓库既有取证(workbuddy.rs / weblogin.rs / 2026-10-13 签到调研)+ 待补的真机探针</p>
+
+<div class="hand">
+<b>一句话:</b>把国际版接成<b>第 10 个内置渠道</b>(id <code>workbuddy-ai</code>),积分型,凭据读本机国际版桌面端,
+展示剩余积分与<b>当日是否已获取积分</b>。国内版与它是<b>两套账号、两套域名、两个渠道条目</b>,不合并。
+“当日获取”按<b>余额正增量</b>记账(国际版没有签到活动),每条记录带 <code>source</code>,界面如实标注“平台确认 / 按余额推算”。
+</div>
+
+<h2 id="s0">0. 先说结论(六条)</h2>
+<table>
+<tr><th>#</th><th>结论</th><th>依据</th></tr>
+<tr><td>1</td><td>国际版必须是<b>独立渠道</b>,不是现有 WorkBuddy 的第二个域名 —— 两套账号、两份凭据,官方不支持跨区迁移(与 Qoder / Qoder 国内版同构)</td><td><span class="tag t-fact">既有裁决</span><code>weblogin.rs:16</code> 裁决 6A;凭据 <code>domain</code> 判区</td></tr>
+<tr><td>2</td><td>凭据走<b>本机桌面端 auth 文件</b>,不走网页登录 —— 国际版被明确排除在网页登录之外</td><td><span class="tag t-fact">代码现状</span><code>weblogin.rs</code> 只认 <code>workbuddy.cn</code> / <code>codebuddy.cn</code></td></tr>
+<tr><td>3</td><td>取数复用同一个计费接口,基址换成 <code>www.workbuddy.ai</code>(备用 <code>www.codebuddy.ai</code>);<code>extract_workbuddy</code> 可直接复用</td><td><span class="tag t-half">半实</span><code>workbuddy.rs:1482</code> 已写好区域路由,响应结构待真机确认</td></tr>
+<tr><td>4</td><td>国际版<b>没有签到活动</b>:<code>daily-checkin</code> 回 <code>10001 活动未开启</code>,与国区“今天已签到”<b>同码异义</b></td><td><span class="tag t-fact">事实</span>2026-10-13 调研;解析已按区域分支</td></tr>
+<tr><td>5</td><td>因此“当日获取”只能先用<b>余额正增量</b>判定,并标注“推算”;平台若另有发放接口,后续只换 <code>source</code>,不动表结构与界面</td><td><span class="tag t-risk">设计取舍</span>见 §3 D2</td></tr>
+<tr><td>6</td><td>记录落<b>新表 <code>credit_grants</code></b>(不是 <code>checkin_log</code>):签到表记的是“尝试”,这里记的是“到账事件”,两者的重试/退避语义完全不同</td><td><span class="tag t-fact">设计判断</span>见 §6</td></tr>
+</table>
+
+<h2 id="s1">1. 为什么是独立渠道</h2>
+
+<table>
+<tr><th></th><th>WorkBuddy(国内版,现有)</th><th>WorkBuddy AI(国际版,本次)</th></tr>
+<tr><td>域名</td><td><code>www.codebuddy.cn</code> / <code>www.workbuddy.cn</code></td><td><code>www.workbuddy.ai</code> / <code>www.codebuddy.ai</code></td></tr>
+<tr><td>账号</td><td>国内账号</td><td>国际账号,<b>不通用</b></td></tr>
+<tr><td>凭据</td><td>网页会话 Cookie(约 7 天)或桌面端令牌</td><td><b>只有</b>桌面端令牌(可自动续期)</td></tr>
+<tr><td>签到</td><td>有(每日 100 分,<code>data.active</code> / <code>today_checked_in</code>)</td><td><b>没有</b>(10001 = 活动未开启)</td></tr>
+<tr><td>渠道 id</td><td><code>workbuddy</code></td><td><code>workbuddy-ai</code></td></tr>
+<tr><td>简称 / 主色</td><td><code>WB</code> / <code>#19b8c4</code>(青)</td><td><code>WBA</code> / <code>#4f7cff</code>(蓝) —— 同一个产品,靠名与色区分</td></tr>
+</table>
+
+<div class="note warn">
+<b>命名冲突要写进注释:</b>模型页的“一键配置到客户端”里已经有一个客户端 id 叫 <code>workbuddy-ai</code>
+(<code>~/.workbuddy-ai/models.json</code>,见 <code>inject.rs:175</code>、<code>app.js:5290</code>)。
+它和渠道 id <b>同名但不同命名空间</b>(一个是“往哪个客户端写配置”,一个是“从哪个渠道取余额”),
+配置键(<code>hiddenChannels</code> / <code>checkin</code> / <code>claimChannels</code>)只认渠道 id,不会串。
+但读代码的人一定会愣一下 —— 两处都加一行注释说明。
+</div>
+
+<div class="note">
+<b>前提:</b>本机装过国际版桌面端、并且登录过一次。国际版<b>没有网页登录路径</b>(裁决 6A 把它排除在外),
+所以没装客户端就用不了 —— 这不是缺陷,是这条渠道的边界。界面要如实说
+「未检测到 WorkBuddy AI 登录信息 · 打开一次桌面端即可」,<b>不给</b>「登录」按钮(点不出东西的按钮比没有更糟)。
+</div>
+
+<h2 id="s2">2. 已经有什么 / 缺什么</h2>
+
+<div class="grid2">
+<div>
+<h4>已经有的(不用重写)</h4>
+<ul>
+<li><code>workbuddy.rs</code> 已能读国际版凭据:<code>is_global()</code> 按 <code>domain</code> 判区</li>
+<li><code>bases_for()</code> 已把国际版路由到 <code>workbuddy.ai</code> / <code>codebuddy.ai</code></li>
+<li>续期基址已按区域分开(<code>chat_base()</code>)</li>
+<li><code>extract_workbuddy()</code> 解析积分包、到期、切片,可直接复用(响应同栈,字段待真机确认)</li>
+<li><code>Outcome</code> 七态、退避、幂等、<code>done_today</code> 由后端算的纪律</li>
+<li>渠道卡“读本机登录”的 UI 路径(<code>authSource === "app"</code>)现成</li>
+</ul>
+</div>
+<div>
+<h4>缺的(本次要补)</h4>
+<ul>
+<li><b>区域过滤的令牌</b>:现在 <code>desktop_tokens()</code> 把国区与国际混在一个列表里</li>
+<li><b>获取事件表</b> <code>credit_grants</code> + 迁移 v4</li>
+<li><b>增量判定</b>:从快照算当日正增量,写事件(幂等)</li>
+<li><b>渠道定义</b>:<code>ProviderDef</code> 一条 + <code>CHECKINS</code> <b>不加</b>(国际版没签到)</li>
+<li><b>界面</b>:积分获取区块 + 30 天记录</li>
+</ul>
+</div>
+</div>
+
+<div class="note bad">
+<b>不补会出事:</b>如果新渠道直接复用 <code>desktop_tokens()</code>,每轮会先拿<b>国区令牌</b>打 <code>workbuddy.ai</code> ——
+必然 401,再换下一份。签到侧已有“401 才换下一份”的逻辑(<code>lib.rs:3111</code>),不会报错,
+但每轮多一次失败请求,日志里天天出现 <code>cred-switch</code>,真正的凭据失效反而被噪音埋掉。
+所以 <b>区域过滤是前置条件,不是优化</b>。
+</div>
+
+<h2 id="s3">3. 三个决策</h2>
+
+<h3>D1 · 渠道形态</h3>
+<table>
+<tr><th>选项</th><th>做法</th><th>代价</th><th>结论</th></tr>
+<tr><td>A 独立渠道</td><td>新增 <code>workbuddy-ai</code>,与 <code>workbuddy</code> 并列</td><td>列表多一行;配置多一套键</td><td><b>推荐</b> —— 账号本来就独立,合并只会让“这 1,240 分是谁的”说不清</td></tr>
+<tr><td>B 卡内切区域</td><td>一张卡,顶部切 国内 / 国际</td><td>凭据、状态、签到全要按区分支;一处判错就串账</td><td>否 —— 复杂度换不来收益</td></tr>
+<tr><td>C 只记获取不显示余额</td><td>不接渠道,只做一个“今日是否获取”的指示</td><td>用户仍要开网页看余额</td><td>否 —— 与产品定位(一屏看清余额)相悖</td></tr>
+</table>
+
+<h3>D2 · “当日已获取积分”怎么判</h3>
+<table>
+<tr><th>选项</th><th>数据来源</th><th>准确性</th><th>现在能做吗</th><th>结论</th></tr>
+<tr><td>A 平台发放/活动接口</td><td>若 <code>workbuddy.ai</code> 有 <code>credit-records</code> / <code>activity</code> 类接口</td><td>准,含“活跃”与“充值”的区分</td><td><b>未知</b> —— 国际版无签到,其它接口未取证</td><td>探针发现即升级,表结构预留 <code>source=api</code></td></tr>
+<tr><td>B 余额正增量</td><td>取数快照:相邻两次 <code>remaining</code> 的<b>正差</b>累加</td><td>近似:能确认“今天多过 N 分”,分不清活跃发放与充值</td><td><b>能,今天就能上</b></td><td><b>先上这个</b>,界面标“推算”</td></tr>
+<tr><td>C 手动打勾</td><td>用户自己在客户端领完回来点一下</td><td>准,但要人记得</td><td>能</td><td>不做默认路径;只在“读不到凭据”时给一个自救入口(暂不做)</td></tr>
+</table>
+
+<div class="note ok">
+<b>为什么 B 不违反“不误报”:</b>它不参与余额渲染,也不说“你领到了”,只说“今天余额比之前多过 +100”。
+措辞上把“获取”与“活跃获取”分开:界面写<b>“今日新增”</b>,长解释放在「?」里写明“按余额正增量推算,含充值”。
+等 A 路线拿到接口,同一行改成“平台确认”,用户不需要重新学。
+</div>
+
+<h3>D3 · 记录口径</h3>
+<ul>
+<li><b>按自然日 00:00 跨日</b>(本地时区)。国际版没有活动周期,不引入 <code>day_roll_hour</code> 的复杂度;
+若以后 A 路线发现活动有刷新时刻,再按渠道加一个字段 —— 那时也只改后端。</li>
+<li><b>“哪一天”由后端算</b>,前端不拿 <code>new Date()</code> 再算一遍。这是 0.1.5x 那条纪律
+(<code>done_today</code> 的注释写得很清楚:前端算必错)。</li>
+<li><b>保留 30 天</b>。签到流水是 7 天(那是“有没有漏领”),获取记录看的是趋势,7 天太短。</li>
+</ul>
+
+<h2 id="s4">4. 交互</h2>
+
+<h3>4.1 首页行:三种状态</h3>
+
+<div class="grid2">
+<div>
+<div class="mock">
+  <div class="row">
+    <div class="ico">WBA</div>
+    <div class="nm">WorkBuddy AI<span class="dot"></span></div>
+    <span class="chip ok">今日 +100</span>
+  </div>
+  <div class="big">1,240<small>分</small></div>
+  <div class="ln">今日新增 <b>+100</b> · 08:12 · 按余额推算</div>
+  <div class="ln">最近到期 30 分 · 10-31</div>
+</div>
+<div class="cap">已获取 —— 徽标给数额,副行给时间与来源</div>
+
+<div class="mock">
+  <div class="row">
+    <div class="ico">WBA</div>
+    <div class="nm">WorkBuddy AI<span class="dot"></span></div>
+    <span class="chip">今日未获取</span>
+  </div>
+  <div class="big">1,240<small>分</small></div>
+  <div class="ln">今日新增 <b>0</b> · 上次获取 昨天 09:40</div>
+  <div class="ln">最近到期 30 分 · 10-31</div>
+</div>
+<div class="cap">未获取 —— 不说“待领取”(没有可点的动作),只说事实</div>
+</div>
+
+<div>
+<div class="mock">
+  <div class="row">
+    <div class="ico">WBA</div>
+    <div class="nm">WorkBuddy AI<span class="dot"></span></div>
+    <span class="chip">今日 +80</span>
+  </div>
+  <div class="big">1,240<small>分</small></div>
+  <div class="ln">今日新增 <b>+80</b> · 14:05 · <span style="color:var(--ok)">平台确认</span></div>
+  <div class="ln">最近到期 30 分 · 10-31</div>
+</div>
+<div class="cap">A 路线升级后:同一行,来源变“平台确认”</div>
+
+<div class="mock">
+  <div class="row">
+    <div class="ico" style="background:#3a4152">WBA</div>
+    <div class="nm" style="color:var(--mut)">WorkBuddy AI</div>
+    <span class="chip">状态未知</span>
+  </div>
+  <div class="big" style="color:var(--mut)">——<small>分</small></div>
+  <div class="ln">取数失败 · 上次成功 12:04 的快照 1,240 分</div>
+  <div class="ln">今日获取记录已停止更新</div>
+</div>
+<div class="cap">失败态 —— 沿用上次快照并标时间,绝不显示成 0</div>
+</div>
+</div>
+
+<h3>4.2 设置页渠道卡</h3>
+
+<div class="mock" style="width:420px">
+  <div class="row">
+    <div class="ico">WBA</div>
+    <div class="nm">WorkBuddy AI<span class="dot"></span></div>
+    <span class="chip" style="margin-left:auto">已读取本机登录</span>
+  </div>
+  <div class="ln" style="margin-top:2px">国际版桌面端凭据 · 只读复用,自动续期</div>
+  <div class="sep"></div>
+  <div class="kv"><span>今日获取</span><span><b>+100</b> · 08:12 · 按余额推算</span></div>
+  <div class="kv"><span>近 7 天</span><span>+520 分 · 5 天有获取</span></div>
+  <div class="bars">
+    <i class="on" style="height:60%"></i><i class="on" style="height:100%"></i><i class="on" style="height:80%"></i>
+    <i style="height:6%"></i><i class="on" style="height:70%"></i><i class="on" style="height:90%"></i><i class="on" style="height:55%"></i>
+  </div>
+  <div class="ln" style="margin-top:2px">10-17 → 10-23</div>
+  <div class="sep"></div>
+  <div class="kv"><span>连接自检</span><span style="color:var(--ac)">测试连接</span></div>
+</div>
+<div class="cap">“获取”是这张卡的主内容;凭据说明保持一句 + 「?」(沿用 2026-10-23 的三层文案规范)</div>
+
+<h3>4.3 记录弹层(点“近 7 天”展开)</h3>
+
+<div class="mock" style="width:420px">
+  <div class="row"><div class="nm">积分获取记录</div><span class="chip" style="margin-left:auto">近 30 天</span></div>
+  <div class="sep"></div>
+  <div class="kv"><span>10-23 08:12</span><span><b>+100</b> · 推算</span></div>
+  <div class="kv"><span>10-22 09:40</span><span><b>+100</b> · 推算</span></div>
+  <div class="kv"><span>10-21 09:12</span><span><b>+100</b> · 推算</span></div>
+  <div class="kv"><span>10-20</span><span style="color:var(--mut)">无获取</span></div>
+  <div class="kv"><span>10-19 09:31</span><span><b>+100</b> · 推算</span></div>
+  <div class="ln" style="margin-top:8px">同一分钟内多次取数只记一条;金额是相邻快照的正差之和。</div>
+</div>
+
+<h2 id="s5">5. 状态与文案</h2>
+
+<table>
+<tr><th>状态</th><th>触发</th><th>徽标</th><th>副行</th><th>颜色</th></tr>
+<tr><td>已获取(平台确认)</td><td>当天有 <code>source=api</code> 的获取事件</td><td>今日 +N</td><td>今日新增 +N · HH:MM · 平台确认</td><td>ok</td></tr>
+<tr><td>已获取(推算)</td><td>当天有 <code>source=delta</code> 的事件</td><td>今日 +N</td><td>今日新增 +N · HH:MM · 按余额推算</td><td>ok</td></tr>
+<tr><td>未获取</td><td>当天无事件,且最后一次取数成功</td><td>今日未获取</td><td>今日新增 0 · 上次获取 X</td><td>静默(灰)</td></tr>
+<tr><td>状态未知</td><td>当天取数一直失败 / 无凭据</td><td>状态未知</td><td>取数失败 · 沿用 HH:MM 快照</td><td>灰</td></tr>
+<tr><td>已隐藏</td><td>配置里 hidden</td><td>—</td><td>不取数、不读凭据、不记账</td><td>—</td></tr>
+</table>
+
+<div class="note warn">
+<b>不做“待领取”这个态:</b>国际版没有可点的领取动作。给一个“待领取”却没有按钮,和 0.1.65 那次
+“紧凑条关了、胶囊没入口”是同一类错 —— 界面承诺了一个用户做不到的动作。
+</div>
+
+<h2 id="s6">6. 数据模型与改动点</h2>
+
+<h4>新表(迁移 v4,幂等)</h4>
+<pre>CREATE TABLE IF NOT EXISTS credit_grants (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel    TEXT    NOT NULL,   -- workbuddy-ai
+  day        TEXT    NOT NULL,   -- 本地自然日 YYYY-MM-DD(后端算)
+  ts         INTEGER NOT NULL,   -- 观测时刻(秒)
+  amount     REAL    NOT NULL,   -- 正增量
+  source     TEXT    NOT NULL,   -- api | delta | manual
+  from_bal   REAL,               -- 观测前后余额(便于解释,不参与判定)
+  to_bal     REAL,
+  UNIQUE(channel, day, ts)       -- 同一秒只记一条,重放不重复
+);</pre>
+
+<h4>判定规则(纯函数,可挂测试)</h4>
+<pre>// 每次成功取数后调用;prev = 上一次成功快照
+fn observe_grant(channel, day, now, prev_bal, cur_bal) -> Option&lt;Grant&gt; {
+    let d = cur_bal - prev_bal;
+    if d &lt;= GRANT_EPS { return None; }          // 0.5 分以下不算
+    Some(Grant { amount: d, source: Delta, .. })
+}</pre>
+<ul>
+<li>只对 <code>workbuddy-ai</code> 生效(以后其它积分渠道可复用,但要单独开开关)。</li>
+<li><b>不跨天合并</b>:昨日最后一次快照 → 今日第一次快照之间的增量,记在<b>今日</b>(用户看到的是“今天到账”)。</li>
+<li>取数失败不写事件,也不推进 <code>prev</code> —— 否则中间漏掉的那段增量会被吞。</li>
+<li>超过 30 天自动清理(与快照同一套清理节奏)。</li>
+</ul>
+
+<h4>改动清单</h4>
+<table>
+<tr><th>文件</th><th>改动</th><th>风险</th></tr>
+<tr><td><code>core/src/providers.rs</code></td><td>新增 <code>workbuddy-ai</code> 一条定义(积分型、workbuddy.ai 基址、复用 <code>extract_workbuddy</code>)</td><td>低</td></tr>
+<tr><td><code>core/src/appauth.rs</code></td><td>新增 <code>App::WorkbuddyAi</code>,<code>candidates()</code> 返回<b>国际版</b>桌面端令牌(带 <code>desktop:</code> 前缀)</td><td>中:App 的 match 分支要逐个补</td></tr>
+<tr><td><code>core/src/workbuddy.rs</code></td><td>新增 <code>desktop_tokens_region(global: bool)</code>;现有 <code>desktop_tokens()</code> 保持兼容(取数侧改调区域版)</td><td>中:改错会让国内版突然读不到令牌</td></tr>
+<tr><td><code>core/src/fetch.rs</code></td><td><code>credentials()</code> 里把 <code>workbuddy</code> 限定国区、新渠道取国际区;401 文案按渠道分</td><td>中</td></tr>
+<tr><td><code>core/src/store.rs</code></td><td>迁移 v4 + <code>credit_grants</code> 增删查</td><td>低(纯新增)</td></tr>
+<tr><td><code>src-tauri/src/lib.rs</code></td><td>取数成功后调 <code>observe_grant</code>;新增 <code>credit_grants</code> 命令(近 30 天)</td><td>低</td></tr>
+<tr><td><code>src/app.js</code> + <code>index.html</code></td><td>行副行、渠道卡获取区块、记录弹层、LOGO 映射</td><td>低</td></tr>
+</table>
+
+<div class="note warn">
+<b>两处文案必须特判,不能照抄 app 型渠道:</b>
+<br>① <b>状态行</b> —— 现有 app 型渠道拼的是「已读取本机登录 · {authLabel}」,而 <code>auth_label()</code> 对 App 返回「本机 WorkBuddy AI」,
+拼出来会是「已读取本机登录 · 本机 WorkBuddy AI」。这条渠道单独拼成「已读取国际版登录 · 自动续期」。
+<br>② <b>卡片里那句 L1</b> —— 现有 app 型渠道写「只读复用本机登录,不写回、不刷新」。
+但这条链路<b>会续期</b>(<code>refreshToken</code> 到期前自动换 <code>accessToken</code>,成果存在我们自己的库里、<b>不写回客户端文件</b>),
+写「不刷新」是错的。这条要写「只读复用,自动续期」。
+</div>
+
+<h2 id="s7">7. 红线</h2>
+<ol>
+<li><b>不把推算说成确认。</b><code>source=delta</code> 必须显式标注,措辞用“今日新增”而不是“今日活跃获取”。</li>
+<li><b>不把“无活动”说成“已领”。</b>10001 在国际版是“活动未开启”,国区是“今天已签” —— 解析必须带区域,现有 <code>parse_workbuddy_for_region</code> 已经是这个形状,别绕开它。</li>
+<li><b>不显示成 0。</b>取数失败沿用上次快照 + 时间 + 真实错误,获取记录停更但不归零。</li>
+<li><b>隐藏即停。</b>隐藏渠道后不请求、不读凭据、不写事件(取数侧已有闸门,新链路要跟着走)。</li>
+<li><b>区域错配不得报“凭据失效”。</b>国区令牌打国际域名是 401,要静默换下一份,不能弹“登录已过期”。</li>
+<li><b>记账幂等。</b>同一时刻重复写不产生第二条;进程重启、补跑、时钟回拨都不重复计。</li>
+</ol>
+
+<h2 id="s8">8. 验收与取证</h2>
+
+<h4>先取证(写代码之前,只读)</h4>
+<pre>node build/probe-workbuddy-ai.js     # 待写:只读,令牌只记长度与前 8 位指纹
+  ① 读 auth 目录,列出每份凭据的 domain / 过期时间(不打印令牌)
+  ② 用国际版令牌打 POST https://www.workbuddy.ai/v2/billing/meter/get-user-resource
+     记录 HTTP / code / Accounts 数组长度 / 字段名(不记具体数值)
+  ③ 试探是否存在发放记录接口:
+     GET  /v2/billing/meter/credit-records
+     GET  /v2/billing/meter/credit-history
+     POST /v2/billing/meter/checkin-activity-status   (预期 10001)
+  ④ 结论写进 docs/research/workbuddy-ai-probe-2026-10-XX.md</pre>
+
+<h4>验收清单</h4>
+<ul>
+<li>国际版与国内版<b>同时在线</b>时,两个渠道各取各的数,互不串账;日志无 <code>cred-switch</code> 噪音。</li>
+<li>只装国内版时,<code>workbuddy-ai</code> 显示“未检测到 WorkBuddy AI 登录信息”,不报错、不重试。</li>
+<li>连续两天:第一天有 +100,第二天 0 —— 首页徽标与副行随之变化,跨天由后端算。</li>
+<li>取数失败 3 轮:余额沿用快照,获取记录不新增,状态转“状态未知”。</li>
+<li>隐藏渠道后抓包确认零请求(与现有 0.1.x 同一条验收手法)。</li>
+<li>迁移:老库(<code>user_version=3</code>)打开后自动建表,数据不动;重复打开幂等。</li>
+</ul>
+
+<h2 id="s9">9. 已确认(2026-10-23)</h2>
+<table>
+<tr><th>#</th><th>问题</th><th>结论</th></tr>
+<tr><td>1</td><td>“活跃获取积分”在国际版里到底是什么形态?</td><td><b>每天要对话一次才会有 +30 积分</b> —— 自动到账,没有可点的领取动作。所以走 D2-B(余额正增量),并把 25–35 认作活跃窗口(取数间隔里的消耗会把净增量压下来)</td></tr>
+<tr><td>2</td><td>“今日未获取”要不要做成提醒?</td><td><b>不做</b>。没有可执行动作的提醒等于骚扰</td></tr>
+<tr><td>3</td><td>记录保留 30 天够不够?</td><td><b>够</b></td></tr>
+</table>
+
+<div class="note ok">
+<b>落地后的口径(与代码一致):</b>
+<code>core::grants::ACTIVITY_GRANT = 30.0</code> / <code>ACTIVITY_TOL = 5.0</code> —— 增量落在
+25–35 之间算“活跃奖励”,≥0.5 的正增量一律记事件(含充值,但界面标“非活跃”)。
+阈值集中在 <code>grants.rs</code> 一处,以后平台改额度(比如 +50)只改这个常量。
+</div>
+
+<h2 id="s10">10. 没凭据自动隐藏（2026-10-23 追加）</h2>
+
+<p>上一条的遗留问题：没装国际版桌面端的人会看到一行「未检测到登录」—— 纯噪音。
+裁决：<b>没检测到凭据就自动隐藏，检测到再自动恢复</b>。两条边界缺一不可：</p>
+
+<table>
+<tr><th>边界</th><th>为什么</th><th>落点</th></tr>
+<tr><td><b>只在从没取到过数时藏</b></td><td>曾经正常取过数、这次瞬时读不到（客户端正在写文件、凭据管理器 RPC 卡一下）就藏起来，用户会以为配置丢了 —— 那种情况应该继续走「沿用旧快照 + 标注时间」</td><td><code>fetch_all</code> 的 <code>creds.is_empty()</code> 分支里<b>缓存中没有该渠道</b>那一支</td></tr>
+<tr><td><b>用户点过眼睛就彻底让位</b></td><td>没有这一条，「点了显示、下一轮又被系统藏回去」比没有自动隐藏更让人火大</td><td><code>Config::user_touched_channels</code>：点眼睛（任意方向）即记一笔</td></tr>
+</table>
+
+<div class="note warn">
+<b>为什么名单里只有国际版：</b>判据不是「有没有凭据」，而是「没凭据是否<b>稳定</b>等于没装」。
+Trae / Codex / Qoder 的凭据会瞬时读不到，加进去会让配置时隐时现；国际版没有网页登录路径
+（裁决 6A），没装桌面端就永远看不到数据 —— 这才符合"没装就等于不存在"。
+</div>
+
+<p><b>界面区分两种"隐藏"</b>：<code>ChannelView.auto_hidden</code> 让"系统藏的"和"用户藏的"说不同的话 ——
+卡片状态写「未检测到登录 · 已自动隐藏(登录后自动出现)」，眼睛变成<b>显示</b>；
+点它只记 <code>userTouchedChannels</code>、<b>不</b>写 <code>hiddenChannels</code>
+（写进去就变成用户主动隐藏，再也不会自动恢复）。</p>
+
+<p class="sub" style="margin-top:26px">实现见 <code>PROGRESS.md</code> 同日条目。</p>
+
+</div>
+</body>
+</html>

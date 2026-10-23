@@ -863,12 +863,15 @@ mod tests {
             updated_at: NOW,
             claim: None,
             hidden: false,
+            auto_hidden: false,
             peak: None,
             gap_day_from: None,
             gap_week_from: None,
             gap_month_from: None,
             gap_days: Vec::new(),
             accounts: 0,
+            grant_today: None,
+            grant_week: None,
         }
     }
 

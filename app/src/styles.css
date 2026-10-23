@@ -336,6 +336,41 @@ body.view-manage #lkKeys{display:none}
   margin:0 0 calc(9px*var(--u));font-weight:600}
 .mbody h4:not(:first-child){margin-top:calc(18px*var(--u))}
 .khint{font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);line-height:1.7;margin:calc(-3px*var(--u)) 0 calc(10px*var(--u))}
+
+/* ── 按需说明(2026-10-23)────────────────────────────────────────────────
+   设置页的文案分三层:常驻一句后果(L1)、点「?」原地展开(L2)、关于页折叠(L3)。
+   判据:这句话说错了,用户会不会做错事? 会 → 常驻;不会 → 收进这里。
+   展开复用行详情那套 grid-template-rows 0fr→1fr,不引新依赖;折叠态把内边距归零,
+   否则 0fr 的轨道会被撑开留一道残影(同 .rbody-in 2026-10-13 那个坑)。 */
+.why{display:inline-flex;align-items:center;justify-content:center;
+  width:calc(14px*var(--u));height:calc(14px*var(--u));margin-left:calc(5px*var(--u));
+  border:1px solid var(--line2);border-radius:50%;background:none;color:var(--tx3);
+  font:inherit;font-size:max(10px,calc(9.5px*var(--u)));line-height:1;cursor:pointer;
+  padding:0;vertical-align:middle;flex:0 0 auto;transition:color var(--t1) ease,border-color var(--t1) ease,background var(--t1) ease}
+.why::before{content:"?"}
+.why:hover{color:var(--tx);border-color:var(--ac)}
+.why[aria-expanded="true"]{color:#0f1218;background:var(--ac);border-color:var(--ac)}
+.why:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
+.whybox{display:grid;grid-template-rows:0fr;transition:grid-template-rows var(--t2) var(--ease)}
+.whybox.on{grid-template-rows:1fr}
+.whybox-in{display:block;overflow:hidden;min-height:0;padding:calc(4px*var(--u)) 0 0;
+  font-size:max(11px,calc(11px*var(--u)));font-weight:400;color:var(--tx3);line-height:1.65;
+  transition:padding var(--t2) var(--ease)}
+.whybox:not(.on) .whybox-in{padding-top:0}
+.whybox-in b{color:var(--tx2);font-weight:500}
+
+/* 长文归档:关于页里读一次就够的段落默认收起,摘要行本身就是结论 */
+.fold{margin:calc(2px*var(--u)) 0 0}
+.fold>summary{display:flex;align-items:flex-start;gap:calc(6px*var(--u));cursor:pointer;list-style:none;
+  font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);line-height:1.7;padding:calc(2px*var(--u)) 0}
+.fold>summary::-webkit-details-marker{display:none}
+.fold>summary::before{content:"\25B8";flex:0 0 auto;transition:transform var(--t1) var(--ease)}
+.fold[open]>summary::before{transform:rotate(90deg)}
+.fold>summary:hover{color:var(--tx2)}
+.fold>summary:focus-visible{outline:2px solid var(--ac);outline-offset:2px;border-radius:calc(3px*var(--u))}
+.foldin{font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);line-height:1.7;padding:calc(4px*var(--u)) 0 0}
+.foldin b{color:var(--tx2);font-weight:500}
+
 .field{display:flex;align-items:center;justify-content:space-between;padding:calc(6px*var(--u)) 0;
   border-bottom:1px solid #232937;font-size:calc(12px*var(--u));gap:calc(10px*var(--u))}
 .field:last-child{border-bottom:0}
@@ -404,6 +439,15 @@ body.view-manage #lkKeys{display:none}
   border-radius:calc(6px*var(--u));color:var(--tx);font-size:calc(12px*var(--u));padding:calc(5px*var(--u)) calc(8px*var(--u));font-family:inherit}
 .ccbtns input[type=password]:focus{outline:none;border-color:var(--ac)}
 .mini{font-size:max(11.5px,calc(11.5px*var(--u)));color:var(--tx3);line-height:1.7}
+/* 积分获取记录(WorkBuddy AI):点「记录」才展开的 30 天明细。
+   金额用等宽数字,右列"推算/平台确认"是**来源**,不是状态 —— 所以不染状态色。 */
+.glist{margin:calc(2px*var(--u)) 0 calc(4px*var(--u));border-top:1px dashed #2a3040;
+  padding-top:calc(5px*var(--u))}
+.grow{display:flex;align-items:baseline;gap:calc(8px*var(--u));padding:calc(2px*var(--u)) 0;
+  font-size:max(11px,calc(11px*var(--u)));color:var(--tx3);line-height:1.5}
+.grow span{flex:1;min-width:0}
+.grow b{color:var(--ok);font-weight:500;font-variant-numeric:tabular-nums}
+.grow i{font-style:normal;font-size:max(10px,calc(10px*var(--u)));opacity:.75}
 .field .desc{display:block;font-size:max(11px,calc(11px*var(--u)));color:var(--tx3);font-weight:400}
 .claim-in{margin-top:calc(8px*var(--u));padding-top:calc(8px*var(--u));border-top:1px dashed var(--line)}
 .claim-grid{display:flex;gap:calc(6px*var(--u));flex-wrap:wrap;align-items:center;

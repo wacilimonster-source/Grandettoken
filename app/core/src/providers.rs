@@ -1129,6 +1129,38 @@ pub const PROVIDERS: &[ProviderDef] = &[
         peak_pricing: false,
         extract: extract_workbuddy,
     },
+    // WorkBuddy AI(国际版):同一个产品的**另一套账号**(官方不支持跨区迁移),
+    // 所以与 `workbuddy` 并列、不合并 —— 与 Qoder / Qoder 国内版同构。
+    //
+    // 三条与国内版不同的地方,改之前先看这里:
+    //   ① 域名 workbuddy.ai / codebuddy.ai。用国区域名打国际版 token 一定 401
+    //      (workbuddy.rs::bases_for 的注释里有真机记录)。
+    //   ② 凭据只有桌面端一条路 —— 国际版被 weblogin 的裁决 6A 排除在网页登录之外,
+    //      所以这里虽然沿用 `WebSession`(借它的凭据链路),界面却按 app 型渲染
+    //      (见 fetch.rs 里 `wb_desktop_only` 的分支)。
+    //   ③ **没有签到**。`daily-checkin` 在国际版回 10001「活动未开启」,与国区
+    //      「今天已签到」同码异义,所以它不进 `checkin::CHECKINS`。
+    //      "今日是否已获取积分"走 `grants` 的余额正增量,不是签到那套。
+    ProviderDef {
+        id: "workbuddy-ai",
+        name: "WorkBuddy AI",
+        short: "WBA",
+        color: "#4f7cff",
+        url: "https://www.workbuddy.ai/v2/billing/meter/get-user-resource",
+        fallback_urls: &["https://www.codebuddy.ai/v2/billing/meter/get-user-resource"],
+        extra_headers: &[
+            ("X-Client-Platform", "web"),
+            ("Origin", "https://www.workbuddy.ai"),
+            ("Referer", "https://www.workbuddy.ai/profile/plans-usage"),
+        ],
+        auth: AuthKind::WebSession,
+        auth_prefix: "Bearer ",
+        method: Method::PostJson(workbuddy_body),
+        unstable: true,
+        default_kind: Kind::Points,
+        peak_pricing: false,
+        extract: extract_workbuddy,
+    },
     ProviderDef {
         id: "codex",
         name: "Codex",
@@ -1197,6 +1229,28 @@ pub const PROVIDERS: &[ProviderDef] = &[
 
 pub fn find(id: &str) -> Option<&'static ProviderDef> {
     PROVIDERS.iter().find(|p| p.id == id)
+}
+
+/// 这个渠道要不要记"积分到账"事件(见 `crate::grants`)。
+///
+/// 现在只有国际版:它没有签到接口,「每天对话一次 +30 积分」只在余额上留痕。
+/// 国内版有签到(`checkin_log`),不需要再猜一遍;以后哪个积分渠道也变成
+/// "只在余额上留痕"的,把 id 加进这里就行 —— 判定逻辑在 `grants` 里,不用改。
+pub fn tracks_grants(id: &str) -> bool {
+    id == "workbuddy-ai"
+}
+
+/// 没检测到凭据时,要不要把这个渠道**自动藏起来**。
+///
+/// 只给"没装就等于不存在"的渠道用。现在只有 WorkBuddy AI(国际版):
+/// 它没有网页登录路径,没装国际版桌面端的人永远看不到数据 —— 列一行"未检测到登录"
+/// 只是噪音。装上并登录后下一轮自动出现,不需要用户去设置里翻。
+///
+/// **不要**把 Trae / Codex / Qoder 加进来:那几条的凭据会瞬时读不到
+/// (文件被客户端占着、凭据管理器 RPC 卡一下),藏起来会让人以为配置丢了。
+/// 判据不是"有没有凭据",而是"没凭据是不是稳定等于没装"。
+pub fn auto_hide_when_no_credential(id: &str) -> bool {
+    id == "workbuddy-ai"
 }
 
 /// 订阅型套餐的**固定期费**(美元)。只有 OpenCode Go 一家:它是 $10/期的包月,

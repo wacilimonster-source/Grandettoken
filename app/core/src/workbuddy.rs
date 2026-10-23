@@ -1279,12 +1279,19 @@ fn push_unique(v: &mut Vec<String>, t: &str) {
     }
 }
 
-/// 读**全部**桌面端候选(顺序:刚续来的 → 上次续期成果 → 桌面端 live → 历史备份)。
+/// 读桌面端候选(顺序:刚续来的 → 上次续期成果 → 桌面端 live → 历史备份)。
 ///
 /// 落库与冷却这些带副作用的都在这一层,判据本身在 [`plan_tokens`](可单测)。
-pub fn desktop_tokens(now_ms: i64) -> Vec<String> {
+///
+/// `region`:`None` = 两个区都要(签到侧"逐份试"的旧口径),
+/// `Some(true)` = 只要国际版,`Some(false)` = 只要国内版。
+///
+/// **为什么要分区**:国际版 token 打国内域名一定 401,反之亦然(2026-10-19 真机:
+/// 两份凭据同时在线)。两个渠道各取各的区,才不会每轮先失败一次 ——
+/// 否则日志里天天是 `cred-switch`,真正的凭据失效反而被噪音埋掉。
+pub fn desktop_tokens_region(now_ms: i64, region: Option<bool>) -> Vec<String> {
     // include_expired = true:过期那份正是续期要的对象(见 plan_tokens 的来由)
-    let creds = match collect_desktop_credentials(now_ms, true) {
+    let mut creds = match collect_desktop_credentials(now_ms, true) {
         Ok(c) => c,
         Err(e) => {
             // 以前这里 unwrap_or_default 一吞,日志里就只剩"取数失败"。
@@ -1297,8 +1304,14 @@ pub fn desktop_tokens(now_ms: i64) -> Vec<String> {
             Vec::new()
         }
     };
+    if let Some(global) = region {
+        creds.retain(|c| c.is_global() == global);
+    }
     let mut stored: Vec<StoredRefresh> = Vec::new();
     for global in [false, true] {
+        if region.map(|want| want != global).unwrap_or(false) {
+            continue;
+        }
         if let Some(s) = load_refreshed(global) {
             stored.push(s);
         }
@@ -1322,7 +1335,12 @@ pub fn desktop_tokens(now_ms: i64) -> Vec<String> {
         "wb",
         "tokens-plan",
         &format!(
-            "凭据编排:桌面端候选 {} 份 · 上次续期成果 {} 份 · 续期成功 {} 份 · 续期失败 {} 条 · 最终可用令牌 {} 个[{}]",
+            "凭据编排({}):桌面端候选 {} 份 · 上次续期成果 {} 份 · 续期成功 {} 份 · 续期失败 {} 条 · 最终可用令牌 {} 个[{}]",
+            match region {
+                Some(true) => "国际版",
+                Some(false) => "国内版",
+                None => "全部",
+            },
             creds.len(),
             stored.len(),
             plan.to_store.len(),
@@ -1336,6 +1354,31 @@ pub fn desktop_tokens(now_ms: i64) -> Vec<String> {
         ),
     );
     plan.tokens
+}
+
+/// 两个区的令牌合并(签到侧"逐份试"的旧口径)。取数侧**不要**用它 ——
+/// 每个渠道只该看自己那个区,见 [`desktop_tokens_region`]。
+pub fn desktop_tokens(now_ms: i64) -> Vec<String> {
+    desktop_tokens_region(now_ms, None)
+}
+
+/// 这台机器当前登着的某个区域的账户号集合(auth 文件里的 `account.uin`,
+/// 续期/换令牌都不变,换账号才变)。
+///
+/// 用途:`fetch` 侧给 WorkBuddy AI 的"积分到账基线"按账户分段 —— 换账号后,
+/// 旧账户的最后余额不该被当成新账户的基线,那会凭空记出一笔大额"到账"。
+/// 只读凭据文件、不触发续期;读不到(没装/没登录)返回空,调用方退回不分段的老口径。
+/// 顺序与去重由 `fetch::accounts_fp` 负责,这里只如实收集。
+pub fn region_account_uins(now_ms: i64, region: bool) -> Vec<String> {
+    collect_desktop_credentials(now_ms, true)
+        .map(|cs| {
+            cs.into_iter()
+                .filter(|c| c.is_global() == region)
+                .map(|c| c.uin)
+                .filter(|u| !u.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// 续期失败的冷却:挂件每 60 秒一轮,不冷却就会拿同一份失效的 refreshToken 每天打 1440 次。

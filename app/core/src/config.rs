@@ -97,6 +97,15 @@ pub struct Config {
     /// 被隐藏的渠道 id:主面板不显示、**不发请求**(App 型也不再读本机登录凭据),
     /// 快照历史保留,随时可恢复。serde default 保证老配置自动兼容。
     pub hidden_channels: Vec<String>,
+    /// 用户**显式动过眼睛**的渠道 id。
+    ///
+    /// 只为一件事存在:让"没凭据就自动隐藏"这类自动行为在用户表态之后彻底让位。
+    /// 自动隐藏是"你还没装,先别占一行";用户点了眼睛就是"我知道,我要看" ——
+    /// 之后再自动藏起来就是跟人对着干。
+    ///
+    /// 与 `hidden_channels` 分开记:那是用户的**结论**,这是"用户是否表过态"。
+    /// 混在一起会让"自动隐藏"和"用户隐藏"再也分不开,恢复逻辑必然出错。
+    pub user_touched_channels: Vec<String>,
     /// 申请制额度规则:渠道 id -> 规则
     pub claim_channels: HashMap<String, ClaimConfig>,
     /// 「自定义排序」下的渠道顺序(渠道 id 数组);未列入的渠道附在末尾
@@ -212,6 +221,7 @@ impl Default for Config {
             font_scale: "md".into(),
             pill_channels: Vec::new(),
             hidden_channels: Vec::new(),
+            user_touched_channels: Vec::new(),
             claim_channels: HashMap::from([(
                 "4sapi".to_string(),
                 ClaimConfig::for_channel("4sapi"),

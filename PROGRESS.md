@@ -3057,3 +3057,128 @@ body.compact-on #btnPill{display:none}
 带 `HTTPS_PROXY=127.0.0.1:7897` 重跑通过）；`node build/verify-signature.js` **PASS**（公钥验签）。
 
 本机未用打包产物覆盖正在运行的应用，留给自动更新验证。
+
+### 设置页文案分三层（2026-10-23，v0.1.65 → 待发版）
+
+**起因**（用户原话）：「感觉现在页面上后台设置的提示词好多，可以做什么优化吗？」
+
+**盘点**：`index.html` 管理页里 9 个 `.khint` + 14 条 `.desc` = **936 个汉字**，按 354px 内容宽折算
+约 31 行、**570px** —— 光说明文字就超过一整个面板（560px）。「密钥只进 Windows 凭据管理器」
+出现 10 次（html 4 + js 6）；关于页 362 字占 39%，其中「数据与隐私」单块约 150 字。
+
+**判断**：问题不是"解释太多"（核心价值第 4 条就是「可解释」），而是**必读与可选平铺在一起**、
+同一句话到处抄。所以做分层，不做删减。判据：这句话如果说错了，用户会不会做错事？会 → 常驻。
+
+**改法**：
+- 新增 `WHY` 文案表（`app.js`，18 条）与 `.why` / `.whybox` 组件：`<button class="why" data-why="key">`
+  点一下原地展开，复用行详情那套 `grid-template-rows:0fr→1fr`，不引新依赖；折叠态把内边距归零
+  （`.rbody-in` 2026-10-13 那个残影坑的同一处理）。`hydrateWhy()` 幂等，轮询重绘渠道卡后直接再调。
+- 关于页「数据与隐私」整段改 `<details class="fold">` 默认收起，摘要行写结论。
+- 渠道卡的 WorkBuddy 登录说明（140 字/卡）从常驻 `.mini` 挪到登录按钮旁的「?」；本机凭据说明压到 15 字。
+- 去掉 L1 与 L2 的重复句（"关闭后顶栏改为胶囊""底色即状态色"等 10 处各说两遍）。
+
+**结果**：常驻 **936 → 319 字**（L2 另有 657 字，点开才出现）。
+
+**验证**：`jsdom-smoke` **62/62**（新增 4 条：文案预算 khint ≤120 字/页且 desc ≤30 字/条、
+每个「?」都有文案、点开再点收回、关于页长文默认收起）；`probe-frontend` ok；`check-css-forms` PASS；
+`node --check app.js` 通过。另用无头 Edge 按真实 380 逻辑宽（500×725@125%）截图复核了
+显示 / 渠道 / 关于三页与展开态：`?` 与标签同行、说明块落在 desc 之后、无残影、无横向溢出。
+
+**踩到的坑**：`?` 一开始放在 `.desc` 之后 —— 因为 `.desc` 是 `display:block`，按钮被挤到单独一行。
+改成「标签 + ? + desc」，并让 `hydrateWhy` 在按钮后面有 `.desc` 时把说明块挂到该行末尾。
+渠道卡里按钮在 `.ccbtns` 横向 flex 行内，说明块必须插到整行之后，否则会白占一段宽度。
+
+### 新增 WorkBuddy AI(国际版)渠道 + 积分获取记录（2026-10-23，v0.1.65 → 待发版）
+
+**需求**（用户原话）：「增加 workbuddyai 也就是国际版渠道的积分获取展示，并且记录当日是否已有活跃获取积分。」
+追加确认：「每天要对话一次才会有 +30 积分」；提醒不做；记录保留 30 天够。
+
+**产品设计**：`docs/design/design-workbuddy-ai-channel-2026-10-23.html`（10 节，含 6 个线框）。
+
+**关键判断**：
+- 独立渠道，不是现有 WorkBuddy 的第二个域名 —— 两套账号、官方不支持跨区迁移（与 qoder / qoder-cn 同构）。
+- 国际版**没有签到**（`daily-checkin` 回 10001「活动未开启」，与国区「今天已签到」同码异义），
+  所以「当日是否已获取」不能走签到，只能从**余额正增量**反推。
+- 反推不能当事实：每条事件带 `source`，界面标「推算」；接上平台发放接口后只换来源，表与界面不动。
+
+**改法**：
+- `core/src/grants.rs`（新）：`detect()`（正增量 ≥0.5）、`is_activity()`（25–35 区间）、
+  `Grant` / `DayGrants` 与 `summarize()`。阈值只此一处，平台改额度只改常量。
+- `store.rs`：迁移 **v4** 新增 `credit_grants`（`UNIQUE(channel, ts)` 防重放）+ `insert_grant` /
+  `grants_since` / `prev_remaining`（严格小于本次 ts，且要排在写快照之前）/ `prune_grants`。
+- `workbuddy.rs`：`desktop_tokens_region(now, Option<bool>)` —— `Some(true)` 国际版、
+  `Some(false)` 国内版、`None` 全部（签到侧旧口径）。**分区是前置条件**：混着给会让每轮先用错区
+  令牌打一次 401，`cred-switch` 噪音把真正的凭据失效埋掉。
+- `providers.rs`：新增 `workbuddy-ai`（积分型、`workbuddy.ai` / `codebuddy.ai`、复用 `extract_workbuddy`）+
+  `tracks_grants(id)` 名单。
+- `fetch.rs`：`wb_desktop_only()` 一处判据 —— 凭据借 `WebSession` 链路，界面按 **app 型**渲染
+  （`auth_source` 改成 `"app"`，没有「重新登录」按钮）；401 文案、凭据标签、`auth_label` 分渠道；
+  取数成功后写事件（排在 `record_fp` 之前）；`ChannelView` 增加 `grantToday` / `grantWeek`，
+  由后端按 `local_day_of(updated_at)` 切天。
+- `lib.rs`：新增 `credit_grants(id, days)` 命令（默认 30、上限 90）。
+- 前端：`grantLine()` 四态文案（活跃 / 只有充值 / 未获取 / 不记）；卡片「积分获取」一行 + 「记录」
+  懒加载 30 天明细（点开才查库）；`LOGO` 复用 WorkBuddy 的标；卡片里那句 L1 单独写
+  「只读复用本机登录,自动续期」—— 照抄别的 app 型渠道的「不刷新」是错的。
+
+**验证**：`cargo test`(core) **326 passed**（新增 11 条：grants 5、store 3、build_view 2、迁移兼容）；
+`cargo check`(src-tauri) 通过；`jsdom-smoke` **64/64**（新增 2 条：积分文案四态、卡片记录入口）；
+`check-css-forms` PASS；`probe-frontend` ok。无头 Edge 按真实 380 逻辑宽截图复核了首页行与渠道卡
+（行：`今日活跃 +30 · 09:33 · 推算`；卡：今日 + 近 7 天 + 3 条记录，倒序）。
+
+**已知边界**：本机没装国际版桌面端时这条渠道显示「未检测到 WorkBuddy AI 登录信息」，
+不提供网页登录入口（裁决 6A）；充值到账会被记成事件，但界面标「非活跃」——不会说成活跃获取。
+
+### WorkBuddy AI 没凭据时自动隐藏（2026-10-23）
+
+**需求**（接上一条）：没装国际版桌面端的人会看到一行"未检测到登录"，是噪音 ——
+「首次检测不到凭据就自动隐藏，检测到再自动恢复」。
+
+**两条边界，缺一不可**：
+1. **只在从没取到过数时藏**。曾经正常取过数、这次瞬时读不到（客户端正在写文件、凭据管理器
+   RPC 卡一下）的，继续走"沿用旧快照 + 标注时间"——藏起来会让人以为配置丢了。
+   实现上落在 `fetch_all` 的 `creds.is_empty()` 分支里"缓存中没有该渠道"那一支。
+2. **用户点过眼睛就彻底让位**。新增 `Config::user_touched_channels`：点过眼睛（任意方向）
+   即记一笔，自动隐藏从此对这个渠道失效。没有这个字段，"点了显示、下一轮又被系统藏回去"
+   比没有自动隐藏更让人火大。
+
+**判据不是"有没有凭据"，而是"没凭据是否稳定等于没装"**：所以名单里只有
+`workbuddy-ai`（国际版没有网页登录路径）。Trae / Codex / Qoder 的凭据会瞬时读不到，
+加进去会让配置"时隐时现"。见 `providers::auto_hide_when_no_credential` 的注释。
+
+**实现**：`ChannelView.auto_hidden`（区分"系统藏的"和"用户藏的"）；`auto_hide_candidates(cfg)`
+（纯函数，已挂单测）；前端卡片状态写「未检测到登录 · 已自动隐藏(登录后自动出现)」，
+眼睛变成「显示」；点击只记 `userTouchedChannels`、**不**写 `hiddenChannels`
+（写进去就变成用户主动隐藏，再也不会自动恢复）。
+
+**验证**：`cargo test`(core) **327 passed**（新增 1 条候选名单单测）；`jsdom-smoke` **67/67**
+（新增 3 条：自动隐藏卡片的文案与眼睛、点击后记表过态且不进用户隐藏清单）；
+`check-css-forms` PASS；`probe-frontend` ok；`cargo check`(src-tauri) 通过。
+无头 Edge 截图复核：首页只剩空态"配置第一个渠道"，管理页卡片正确显示自动隐藏状态。
+
+### 全量测评与修复（2026-10-23）
+
+**问题**：对当前工作树做全量测评（未提交 diff 全读 + 全 crate 风险模式扫描 + 关键路径精读），
+发现 7 项缺陷。最重的一条：**工作树编译不过** —— `FetchResult` 新增的 `grants: Vec<GrantSeed>`
+字段带着 `Serialize` 派生，而 `GrantSeed` 没派生 serde，core 与 src-tauri 双双 E0277。
+上面两条「326/327 passed」在最终树上不可复现（写数字时树还没改坏，收尾时改坏了）。
+
+**修法**（7 项，全部最小改动）：
+- P0+P1 `FetchResult.grants` 是死字段（全库无填充点、无消费点，注释却宣称"台账直读"）：
+  连字段带 `GrantSeed` 一起删除 —— 编译错误随之消失，误导注释不再误导。
+  接平台台账（Accounts[] 的 CreateTime）留待有真机数据的一轮再做。
+- P2 探针 `probe_wbai.rs` 的 `DealName` 按字节切片，中文套餐名 18 字节处必 panic：
+  改 `chars().take(18)`。
+- P2 近 7 天到账窗口 `day0 - 6*86400` 没归零点，DST 切换日窗口会差一小时：
+  起点过一遍 `local_day_start_of`。
+- P3 换国际版账号会把旧账户余额当基线、凭空记一笔大额"到账"：workbuddy-ai 的 key_fp
+  改用「当前登着的 uin 集合」指纹（`fetch::accounts_fp`，排序去重后哈希、与候选顺序无关；
+  空集合退回不分段老口径，老客户端没写 uin 时行为同旧版）。老快照 key_fp 是空串，
+  升级后第一轮按无基线处理 —— 宁可漏记一笔、不可错记一笔。
+- P3 `insert_grant` 旁加守卫注释：将来接台账必须把 ts 改毫秒，否则同秒两笔被 UNIQUE 吞一条。
+- P3 本段写回真实复测数字（前两条的验证声明以此段为准）。
+
+**复测（修完后的同一棵树）**：`cargo test`(core) **328 passed / 0 failed / 6 ignored**
+（较上一条多 1 条 = `accounts_fp` 守卫单测）；`cargo check --all-targets`(core) 与
+`cargo check`(src-tauri) 通过、零警告；`jsdom-smoke` **67/67**；`check-css-forms` PASS；
+`scan-secrets` CLEAN（176 文件）；`node --check` CI 清单 6/6。回归面复核：前端 jsdom
+断言全过、前后端 54 个 invoke 命令契约对齐、非测试代码 panic 模式扫描无新命中。

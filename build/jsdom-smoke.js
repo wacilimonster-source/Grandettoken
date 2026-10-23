@@ -389,6 +389,15 @@ const HARNESS = `
       ck("紧凑条可选开关", false, e.message);
     }
   })();
+
+  // 给外层断言留个后门:CHANNELS / CFG 是 eval 里的 let,外层 window 上看不到
+  // (只有函数声明会挂到 globalThis)。自动隐藏那条用例要直接摆一张卡片出来。
+  window.__TEST = {
+    setChannels: (list) => { CHANNELS = list; },
+    patchCfg: (patch) => Object.assign(CFG, patch),
+    cfg: () => CFG,
+    openManage: () => openManage(),
+  };
 })();
 `;
 
@@ -416,6 +425,138 @@ w.__DATA = DATA;
     ok: /id="cfgCompact"/.test(html) && /id="btnPill"/.test(html),
     extra: "index.html 缺 cfgCompact / btnPill",
   });
+
+  // ── 设置页文案预算(2026-10-23 三层分流)────────────────────────────────
+  // 常驻说明曾经堆到 936 汉字(折合约 570px,超过一整个面板高)。现在的口径:
+  //   L1 常驻 ≤ 每页 120 字、单条 desc ≤ 30 字;L2 全部收进 WHY,点「?」才展开。
+  // 这两条是**回归闸门**:以后再加说明,超预算就在这里红。
+  const cn = (s) => (s.match(/[\u4e00-\u9fa5]/g) || []).length;
+  const doc = w.document;
+  const over = [];
+  doc.querySelectorAll(".mbody").forEach((body) => {
+    const page = body.dataset.p;
+    let sum = 0;
+    body.querySelectorAll(".khint").forEach((el) => {
+      // 「?」展开块是 L2(按需),不算常驻 —— 它只是挂在 .khint 里面
+      const c = el.cloneNode(true);
+      c.querySelectorAll(".whybox").forEach((x) => x.remove());
+      sum += cn(c.textContent);
+    });
+    if (sum > 120) over.push(`${page} khint ${sum} 字`);
+    body.querySelectorAll(".desc").forEach((el) => {
+      const n = cn(el.textContent);
+      if (n > 30) over.push(`${page} desc「${el.textContent.trim().slice(0, 12)}…」${n} 字`);
+    });
+  });
+  R.push({
+    name: "设置页常驻文案在预算内(khint ≤120 字/页,desc ≤30 字/条)",
+    ok: over.length === 0,
+    extra: over.join(" · "),
+  });
+
+  const whys = [...doc.querySelectorAll("#manage button.why[data-why]")];
+  const boxOf = (b) => doc.querySelector(`.whybox[data-for="${b.dataset.for}"]`);
+  R.push({
+    name: "每个「?」都有说明文案(缺文案时按钮应被摘掉)",
+    ok: whys.length > 0 && whys.every((b) => {
+      const box = boxOf(b);
+      return box && cn(box.textContent) > 0;
+    }),
+    extra: `${whys.length} 个按钮,hydrate 未补齐`,
+  });
+
+  const first = whys[0];
+  let toggled = false;
+  if (first) {
+    first.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    const box = boxOf(first);
+    toggled = first.getAttribute("aria-expanded") === "true" && !!box && box.classList.contains("on");
+    // 再点一次要收回:展开是"看一次"的东西,不能点开就关不上
+    first.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    toggled = toggled && first.getAttribute("aria-expanded") === "false" &&
+      !!box && !box.classList.contains("on");
+  }
+  R.push({ name: "点「?」原地展开、再点收回", ok: toggled, extra: "aria-expanded / .on 未同步" });
+
+  const fold = doc.querySelector(".mbody[data-p='about'] details.fold");
+  R.push({
+    name: "关于页长文默认收起(<details> 无 open)",
+    ok: !!fold && !fold.hasAttribute("open") && !!fold.querySelector("summary"),
+    extra: "缺 details.fold 或默认展开",
+  });
+
+  // ── WorkBuddy AI(国际版)的积分获取文案 ─────────────────────────────
+  // 四态必须分得开:活跃 / 只有充值 / 今天没有 / 这个渠道不记到账。
+  // 用户问的是"今天有没有活跃获取",把充值说成活跃就是误报。
+  try {
+    const line = (g) => w.grantLine({ grantToday: g });
+    const active = line({ hasActivity: true, activityTotal: 30, total: 30, lastAt: 1_700_000_000, fromApi: false });
+    const api = line({ hasActivity: true, activityTotal: 30, total: 30, lastAt: 1_700_000_000, fromApi: true });
+    const topup = line({ hasActivity: false, total: 500, lastAt: 1_700_000_000 });
+    const none = line({ hasActivity: false, total: 0 });
+    R.push({
+      name: "积分获取文案:活跃 / 充值 / 未获取 / 不记",
+      ok:
+        /今日活跃 \+30/.test(active) && /推算/.test(active) &&
+        /今日活跃 \+30/.test(api) && !/推算/.test(api) &&
+        /非活跃/.test(topup) && none === "今日未获取积分" && line(null) === "",
+      extra: [active, api, topup, none].join(" | "),
+    });
+  } catch (e) {
+    R.push({ name: "积分获取文案:活跃 / 充值 / 未获取 / 不记", ok: false, extra: e.message });
+  }
+  R.push({
+    name: "渠道卡有「记录」入口(懒加载 30 天明细)",
+    ok: /data-act="grantlog"/.test(js) && /invoke\("credit_grants"/.test(js),
+    extra: "app.js 缺 grantlog 分支或 credit_grants 调用",
+  });
+
+  // ── 没凭据自动隐藏(2026-10-23)────────────────────────────────────
+  // 系统藏的 ≠ 用户藏的:文案必须说清,眼睛的动作也必须变成「仍然显示」。
+  try {
+    w.__TEST.setChannels([
+      {
+        id: "workbuddy-ai", name: "WorkBuddy AI", short: "WBA", color: "#4f7cff",
+        kind: "points", hasKey: false, valid: false, hidden: true, autoHidden: true,
+        authSource: "app", authLabel: "未检测到 WorkBuddy AI 登录信息", remaining: null,
+        unit: "credits", expiring: [], expiryComplete: false, extra: [],
+        error: "没检测到登录", stale: false, updatedAt: 0,
+      },
+    ]);
+    w.__TEST.patchCfg({ hiddenChannels: [] });
+    w.__TEST.openManage();
+    const card = doc.querySelector("#chList .ccard");
+    const st = card ? card.querySelector(".ccst").textContent : "";
+    const eye = card ? card.querySelector(".eye").textContent : "";
+    R.push({
+      name: "自动隐藏的卡片说清是系统藏的,眼睛变成「显示」",
+      ok: !!card && /已自动隐藏/.test(st) && eye === "显示",
+      extra: JSON.stringify({ has: !!card, st, eye }),
+    });
+    // 点「显示」:记"用户表过态",**不**写进 hiddenChannels ——
+    // 写进去就变成用户主动隐藏,以后再也不会自动恢复了。
+    if (card) {
+      card.querySelector(".eye").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    }
+    const cfg = w.__TEST.cfg();
+    R.push({
+      name: "点眼睛记「表过态」且不写进用户隐藏清单",
+      ok: !!cfg.userTouchedChannels && cfg.userTouchedChannels.includes("workbuddy-ai") &&
+        !(cfg.hiddenChannels || []).includes("workbuddy-ai"),
+      extra: JSON.stringify({
+        touched: cfg.userTouchedChannels,
+        hidden: cfg.hiddenChannels,
+      }),
+    });
+  } catch (e) {
+    R.push({ name: "自动隐藏的卡片说清是系统藏的,眼睛变成「显示」", ok: false, extra: e.message });
+  }
+  R.push({
+    name: "点眼睛会记「用户表过态」,自动隐藏从此让位",
+    ok: /userTouchedChannels/.test(js) && /cc\.autoHidden/.test(js),
+    extra: "app.js 的 chvis 分支没处理 autoHidden / userTouched",
+  });
+
   let ok = 0, bad = 0;
   for (const r of R) {
     if (r.ok) { ok++; console.log("  ok   " + r.name); }

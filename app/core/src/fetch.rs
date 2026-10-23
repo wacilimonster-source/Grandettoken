@@ -64,6 +64,10 @@ pub(crate) const BROWSER_UA: &str =
 /// 手动粘贴的密钥),光看字符串分不出来,前缀是唯一无歧义的标记。
 pub const DESKTOP_TOKEN_PREFIX: &str = "desktop:";
 
+/// 积分到账事件的保留期。30 天:界面看的是"最近有没有断",再长就要分页与导出,
+/// 收益不成正比。清理挂在写入之后顺手做(到账是低频事件,不值得单开定时器)。
+pub const GRANT_KEEP_SEC: i64 = 30 * 86_400;
+
 /// 桌面端请求的 UA(与 dsh-connect-workbuddy 同口径:CLI 形态的 CodeBuddy 身份)。
 pub(crate) const DESKTOP_UA: &str = "CLI/2.63.2 CodeBuddy/2.63.2";
 
@@ -123,11 +127,20 @@ pub struct ChannelView {
     /// 用户隐藏了该渠道:不显示、不取数(见 Config::hidden_channels)。
     /// 视图仍会返回,管理页要靠它列出「已隐藏」的卡片。
     pub hidden: bool,
+    /// 这次隐藏是**系统自动**做的(没检测到凭据),不是用户按的眼睛。
+    /// 管理页据此把话说清("未检测到登录 · 已自动隐藏"),眼睛的动作也变成"仍然显示"。
+    pub auto_hidden: bool,
     /// 峰谷计价渠道(DeepSeek)的时段状态;其它渠道 None。
     pub peak: Option<PeakView>,
     /// 观测缺口:今天/本周/本月**从几点起才有数据**(超过 [`OBSERVE_GAP_SEC`] 才算)。
     /// None = 起点没缺口(或这个窗口压根没数据)。
     pub gap_day_from: Option<i64>,
+    /// 今日积分到账。只有 [`providers::tracks_grants`] 的渠道有值:
+    /// `None` = 这个渠道不记到账;`Some(全零)` = 记,但今天还没到账(**确定的"没有"**,
+    /// 与"读不到"要分开 —— 后者用 `stale` / `valid` 表达)。
+    pub grant_today: Option<crate::grants::DayGrants>,
+    /// 近 7 天(含今天)的到账汇总。渠道卡上的「近 7 天 +180 · 6 天有」用它。
+    pub grant_week: Option<crate::grants::DayGrants>,
     pub gap_week_from: Option<i64>,
     pub gap_month_from: Option<i64>,
     /// 有缺口的日子(本地日零点,升序,最近 92 天)—— 柱图/趋势给这些天打斜纹
@@ -643,7 +656,26 @@ pub fn local_tz_offset() -> i64 {
 
 /// 本地日 YYYY-MM-DD(通知去重按它记账:同一天同一渠道只响一次)。
 pub fn local_day_string() -> String {
-    Local::now().format("%Y-%m-%d").to_string()
+    local_day_of(now_ts())
+}
+
+/// 某一时刻落在哪个本地自然日。到账事件按它分天 —— 与 [`local_day_string`] 同一个口径,
+/// 只是允许传时刻(测试要钉住"哪一天",不能用真实时钟)。
+pub fn local_day_of(ts: i64) -> String {
+    Local
+        .timestamp_opt(ts, 0)
+        .single()
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        // 时间戳超出可表示范围(损坏的库 / 时钟乱跳):给一个明确的哨兵,不 panic
+        .unwrap_or_else(|| "1970-01-01".into())
+}
+
+/// 某一时刻所在本地日的零点(秒)。查"今天的事件"时当起点用。
+pub fn local_day_start_of(ts: i64) -> i64 {
+    match Local.timestamp_opt(ts, 0).single() {
+        Some(d) => local_date_start(d.year(), d.month(), d.day()),
+        None => ts - ts.rem_euclid(86_400),
+    }
 }
 
 /// 本地时间 YYYY-MM-DD HH:MM(体检报告抬头用)。
@@ -1199,7 +1231,12 @@ static NO_DESKTOP_READER: fn() -> Vec<String> = Vec::new;
 /// 为什么给全部:同一台机器可能同时登着国内版与国际版(两套凭据各自有效),
 /// 而历史备份里的 token 可能已被上游作废(未过期但 401)—— 上层按 401 换下一份,
 /// 比直接让用户重新登录更省事。
-fn read_desktop_tokens() -> Vec<String> {
+/// 只读某一个区的桌面端候选。`region`:`Some(true)` 国际版 / `Some(false)` 国内版 /
+/// `None` 全部(签到侧逐份试的旧口径)。
+///
+/// 分区不是优化:国际版 token 打国区域名一定 401(反之亦然),两个渠道混用同一份
+/// 列表会让每轮先失败一次,真正的凭据失效被 `cred-switch` 噪音埋掉。
+fn read_desktop_tokens_region(region: Option<bool>) -> Vec<String> {
     if let Ok(g) = DESKTOP_READER.read() {
         if let Some(f) = *g {
             return f();
@@ -1210,10 +1247,50 @@ fn read_desktop_tokens() -> Vec<String> {
         return Vec::new();
     }
     let now_ms = chrono::Local::now().timestamp_millis();
-    // desktop_tokens 内部已经处理:上次续期的成果 → 桌面端文件 → 过期时自动续期
-    crate::workbuddy::desktop_tokens(now_ms)
+    // desktop_tokens_region 内部已经处理:上次续期的成果 → 桌面端文件 → 过期时自动续期
+    crate::workbuddy::desktop_tokens_region(now_ms, region)
         .into_iter()
         .map(|t| format!("{}{}", DESKTOP_TOKEN_PREFIX, t))
+        .collect()
+}
+
+/// 只吃桌面端凭据、没有网页登录入口的渠道(现在只有 WorkBuddy AI 国际版)。
+///
+/// 为什么单拎一个判据而不是再加一个 `AuthKind`:它借用 `WebSession` 的**凭据链路**
+/// (桌面端令牌 + `desktop:` 前缀 + 桌面端 UA),但**界面**要按 app 型渲染
+/// (没有「重新登录」按钮、没有粘贴框)。两件事分开表达,比新增一个枚举分支
+/// 去改 43 处 match 更不容易出错。
+fn wb_desktop_only(id: &str) -> bool {
+    id == "workbuddy-ai"
+}
+
+/// 把账户号集合压成稳定的分段指纹:**这里**负责排序去重 —— 调用方给什么顺序都行
+/// (`demote_rejected` 每轮可能重排候选,指纹不能跟着抖)。空集合 → 空串(不分段的老口径)。
+fn accounts_fp(uins: &[String]) -> String {
+    let mut sorted: Vec<&String> = uins.iter().filter(|u| !u.is_empty()).collect();
+    sorted.sort();
+    sorted.dedup();
+    if sorted.is_empty() {
+        String::new()
+    } else {
+        key_fp(&sorted.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(","))
+    }
+}
+
+/// 本轮"没凭据就自动隐藏"的候选渠道。
+///
+/// 两个条件缺一不可:① 渠道在 `providers::auto_hide_when_no_credential` 名单里
+/// (现在只有国际版 —— 没装就等于不存在);② 用户**没动过眼睛**(动过就是表过态,
+/// 之后一律听用户的)。
+///
+/// 注意这里只决定"候选":真正藏不藏还要看本轮有没有读到凭据(见 `fetch_all`)。
+pub fn auto_hide_candidates(cfg: &Config) -> Vec<String> {
+    providers::PROVIDERS
+        .iter()
+        .map(|p| p.id)
+        .filter(|id| providers::auto_hide_when_no_credential(id))
+        .filter(|id| !cfg.user_touched_channels.iter().any(|t| t == id))
+        .map(str::to_string)
         .collect()
 }
 
@@ -1278,17 +1355,28 @@ fn credentials(
             // refreshToken 30 天,且可续),而网页会话是约 7 天的绝对 TTL ——
             // 2026-10-15 之后连续三天取不到数,就是网页会话到期、而界面仍报"已登录"。
             // 读不到桌面端凭据不是错误(没装桌面端很常见),静默跳过、落到网页会话。
-            if def.id == "workbuddy" {
-                for tok in read_desktop_tokens() {
+            //
+            // 两个区域各取各的(2026-10-23):`workbuddy` 只吃国内版令牌,
+            // `workbuddy-ai` 只吃国际版令牌。混着给会让每轮先用错区令牌打一次 401。
+            if def.id == "workbuddy" || wb_desktop_only(def.id) {
+                let region = Some(wb_desktop_only(def.id));
+                let src = if wb_desktop_only(def.id) {
+                    "WorkBuddy AI 桌面端"
+                } else {
+                    "WorkBuddy 桌面端"
+                };
+                for tok in read_desktop_tokens_region(region) {
                     out.push(appauth::Credential {
                         token: tok,
-                        source: "WorkBuddy 桌面端".into(),
+                        source: src.into(),
                         account_id: None,
                         device_id: None,
                     });
                 }
             }
-            if matches!(def.auth, AuthKind::WebSession) {
+            // 网页会话只属于国内版:国际版被 weblogin 的裁决 6A 排除在外,
+            // 对 wb_desktop_only 的渠道去问会话罐,只会得到一个永远空的候选。
+            if matches!(def.auth, AuthKind::WebSession) && !wb_desktop_only(def.id) {
                 if let Some(session) = web_src.and_then(|f| f(def.id)) {
                     out.push(appauth::Credential {
                         token: session,
@@ -1315,6 +1403,10 @@ fn credentials(
 pub fn expired_credential_msg(def: &providers::ProviderDef) -> Option<String> {
     match def.auth {
         AuthKind::App(app) => Some(format!("登录状态已失效 · 打开一次 {} 即可", app.label())),
+        // 国际版只有桌面端一条路,没有「重新登录」按钮可点 —— 别把它指去网页登录。
+        AuthKind::WebSession if wb_desktop_only(def.id) => Some(
+            "WorkBuddy AI 凭据失效 · 打开一次国际版桌面端即可(它会自动续期)".into(),
+        ),
         // WorkBuddy 现在有两条路:桌面端凭据(可续期)与网页会话(约 7 天绝对 TTL)。
         // 桌面端那条自己会刷新,所以先指向它;网页会话那条按老文案说清"7 天一次"。
         AuthKind::WebSession if def.id == "workbuddy" => Some(
@@ -1336,10 +1428,17 @@ fn auth_label(def: &providers::ProviderDef, cred: Option<&appauth::Credential>) 
         // 三种形态分开报:桌面端凭据 / 浏览器会话 / 用户自己粘的令牌。
         AuthKind::WebSession => match cred {
             Some(c) if c.token.trim().starts_with(DESKTOP_TOKEN_PREFIX) => {
-                "WorkBuddy 桌面端凭据(自动续期)".into()
+                if wb_desktop_only(def.id) {
+                    // 界面上「已读取本机登录 · 国际版桌面端凭据(自动续期)」
+                    "国际版桌面端凭据(自动续期)".into()
+                } else {
+                    "WorkBuddy 桌面端凭据(自动续期)".into()
+                }
             }
             Some(c) if weblogin::cookie_header(&c.token).is_some() => "浏览器网页会话".into(),
             Some(_) => "手动粘贴的密钥".into(),
+            // 国际版没有网页登录可去,措辞跟 app 型渠道一致
+            None if wb_desktop_only(def.id) => format!("未检测到 {} 登录信息", def.name),
             None => format!("未登录 {} 账号", def.name),
         },
         AuthKind::App(app) => match cred {
@@ -1498,6 +1597,33 @@ fn build_view(
     // 成不成功无关。之前取数一失败就把三个窗口一起置 None,汇总里"今日/本周/本月"
     // 会整片显示"数据不足",明明本地有快照。
     let has_amount = result.kind == Kind::Amount && result.remaining.is_some();
+    // 今日 / 近 7 天积分到账(只有记到账的渠道才算):查一次、切两段。
+    // 「今天」由后端按 `updated_at` 算 —— 前端拿 new Date() 再算一遍,跨天/时区/DST
+    // 三处都会对不上(与 done_today 同一条纪律)。查询失败就**不显示**这一行,
+    // 而不是显示"今日未获取":后者是在替平台下结论,我们没有那个证据。
+    let (grant_today, grant_week) = if providers::tracks_grants(def.id) {
+        let day0 = local_day_start_of(updated_at);
+        // 起点再归一次零点:固定减 6*86400 在夏令时切换日会落进隔壁一天的边缘一小时,
+        // 窗口就不再是完整的 7 个自然日(无 DST 时区不受影响,归一化本身是幂等的)。
+        let week_from = local_day_start_of(day0 - 6 * 86_400);
+        match store.grants_since(def.id, week_from) {
+            Ok(rows) => {
+                let today = local_day_of(updated_at);
+                let todays: Vec<crate::grants::Grant> =
+                    rows.iter().filter(|g| g.day == today).cloned().collect();
+                (
+                    Some(crate::grants::summarize(&todays)),
+                    Some(crate::grants::summarize(&rows)),
+                )
+            }
+            Err(e) => {
+                eprintln!("读取积分到账事件失败 {}: {e}", def.id);
+                (None, None)
+            }
+        }
+    } else {
+        (None, None)
+    };
     // 「现在」一律用调用方传进来的 `updated_at`,**不要**在这里再取一次 now_ts():
     // 生产调用方传的就是 now_ts()(见本文件 `let ts = now_ts();`),两者等价;
     // 而测试可以传一个合成时刻,把"今天几点"钉住 —— 之前这里偷偷用真实时钟,
@@ -1585,6 +1711,9 @@ fn build_view(
         limited: result.limited,
         auth_source: match def.auth {
             AuthKind::Keyring => "keyring".into(),
+            // 国际版借的是 WebSession 的凭据链路,但界面必须按 app 型渲染:
+            // 没有「重新登录」按钮,也没有可粘贴的输入框(见 wb_desktop_only)。
+            AuthKind::WebSession if wb_desktop_only(def.id) => "app".into(),
             AuthKind::WebSession => "web".into(),
             AuthKind::App(_) => "app".into(),
         },
@@ -1602,12 +1731,15 @@ fn build_view(
         updated_at,
         claim: claim_for(def, cfg, store, result.remaining, key_fp),
         hidden: false,
+        auto_hidden: false,
         peak,
         gap_day_from,
         gap_week_from,
         gap_month_from,
         gap_days,
         accounts,
+        grant_today,
+        grant_week,
     }
 }
 
@@ -1663,6 +1795,7 @@ fn placeholder(def: &providers::ProviderDef) -> ChannelView {
         limited: false,
         auth_source: match def.auth {
             AuthKind::Keyring => "keyring".into(),
+            AuthKind::WebSession if wb_desktop_only(def.id) => "app".into(),
             AuthKind::WebSession => "web".into(),
             AuthKind::App(_) => "app".into(),
         },
@@ -1679,6 +1812,7 @@ fn placeholder(def: &providers::ProviderDef) -> ChannelView {
         updated_at: 0,
         claim: None,
         hidden: false,
+        auto_hidden: false,
         // 占位(没配密钥/已隐藏)不显示时段与缺口:没有数据可解释,少即是多
         peak: None,
         gap_day_from: None,
@@ -1686,6 +1820,9 @@ fn placeholder(def: &providers::ProviderDef) -> ChannelView {
         gap_month_from: None,
         gap_days: Vec::new(),
         accounts: 1,
+        // 没有凭据 / 自定义渠道:不记到账,也不显示这一行(宁可不显示,不替平台下结论)
+        grant_today: None,
+        grant_week: None,
     }
 }
 
@@ -1790,12 +1927,16 @@ fn build_custom_view(
         updated_at,
         claim: None,
         hidden: false,
+        auto_hidden: false,
         peak: None,
         gap_day_from,
         gap_week_from,
         gap_month_from,
         gap_days,
         accounts,
+        // 自定义渠道不记到账
+        grant_today: None,
+        grant_week: None,
     }
 }
 
@@ -1840,12 +1981,16 @@ fn custom_placeholder(
         updated_at: 0,
         claim: None,
         hidden,
+        auto_hidden: false,
         peak: None,
         gap_day_from: None,
         gap_week_from: None,
         gap_month_from: None,
         gap_days: Vec::new(),
         accounts: 1,
+        // 没有凭据 / 自定义渠道:不记到账,也不显示这一行(宁可不显示,不替平台下结论)
+        grant_today: None,
+        grant_week: None,
     }
 }
 
@@ -2154,6 +2299,9 @@ impl Fetcher {
         // 隐藏 = 不发请求、不读本机登录凭据;仍返回占位视图,管理页要靠它列「已隐藏」卡片。
         // Arc:并发时每渠道克隆一次指针,而不是把 Vec 移进每个 future。
         let hidden: Arc<Vec<String>> = Arc::new(cfg.hidden_channels.clone());
+        // 自动隐藏候选(用户没动过眼睛 + "没装就等于不存在"的渠道)。
+        // 与 hidden 分开:那不是用户的决定,只是"还没装,先别占一行"。
+        let auto_hide: Arc<Vec<String>> = Arc::new(auto_hide_candidates(&cfg));
         // 订阅套餐要用的两份缓存:美元牌价(每月一次)与周期记忆(跨期才更新)。
         // 单独一次短锁读出来 —— 下面的 refresh 会 await,不能带着 MutexGuard 跨过去。
         let (fx_cached, cycle_cached): (Option<FxRate>, Vec<Option<CycleMemo>>) = {
@@ -2176,6 +2324,7 @@ impl Fetcher {
                 .enumerate()
                 .map(|(i, def)| {
                     let hidden = hidden.clone();
+                    let auto_hide = auto_hide.clone();
                     let web_src = web_src.clone();
                     async move {
                     // 隐藏 = 不发请求、**也不读本机登录凭据**(裁决原文)。之前的顺序
@@ -2234,6 +2383,14 @@ impl Fetcher {
                             .first()
                             .map(|c| key_fp(&c.token))
                             .unwrap_or_default()
+                    } else if wb_desktop_only(def.id) && !creds.is_empty() {
+                        // 国际版按"当前登着的账户集合"分段(全量测评 P3-5):换账号后
+                        // 旧余额不再被当成新账户的基线,不会凭空记出大额"到账"。
+                        // auth 文件没写 uin 的老客户端 → 空集合 → 退回不分段,行为同旧版。
+                        // 老快照的 key_fp 是空串,升级后第一轮按"无基线"处理 ——
+                        // 一次性重置,宁可漏记一笔、不可错记一笔。
+                        let now_ms = chrono::Local::now().timestamp_millis();
+                        accounts_fp(&crate::workbuddy::region_account_uins(now_ms, true))
                     } else {
                         String::new()
                     };
@@ -2285,6 +2442,16 @@ impl Fetcher {
                         }
                         let mut v = placeholder(def);
                         v.error = Some(reason);
+                        // 从没取到过数(缓存里没有它)+ 在自动隐藏名单里 + 用户没表过态
+                        // → 当作"没装",连这一行都不占。
+                        //
+                        // **只在没有缓存视图时藏**:有缓存说明它曾经正常取过数,
+                        // 这次读不到多半是瞬时的(客户端正在写文件),藏起来会让人
+                        // 以为配置丢了 —— 那种情况继续走"沿用旧快照 + 标注时间"。
+                        if auto_hide.iter().any(|h| h == def.id) {
+                            v.hidden = true;
+                            v.auto_hidden = true;
+                        }
                         return FetchedOne {
                             i,
                             def,
@@ -2483,6 +2650,48 @@ impl Fetcher {
                         Kind::Percent => "percent",
                         Kind::Points => "points",
                     };
+                    // 积分到账:和**上一份**快照比正增量。必须排在 record_fp 之前 ——
+                    // 写完之后"上一次"就成了自己,永远算出 0。
+                    // 取数失败不会走到这里(失败时 success 是 None),所以中间漏掉的那段
+                    // 增量不会被吞:下一轮仍拿最后一条成功快照当基线。
+                    if providers::tracks_grants(f.def.id) {
+                        if let Some(cur) = res.remaining {
+                            match s.prev_remaining(f.def.id, &f.fp, *ts) {
+                                Ok(Some(prev)) => {
+                                    if let Some(amount) = crate::grants::detect(prev, cur) {
+                                        let g = crate::grants::Grant {
+                                            channel: f.def.id.into(),
+                                            day: local_day_of(*ts),
+                                            ts: *ts,
+                                            amount,
+                                            source: "delta".into(),
+                                            from_bal: Some(prev),
+                                            to_bal: Some(cur),
+                                        };
+                                        match s.insert_grant(&g) {
+                                            Ok(true) => crate::diaglog::write_keyed(
+                                                f.def.id,
+                                                "grant",
+                                                &format!(
+                                                    "积分到账 +{amount:.2}({prev:.2} → {cur:.2})"
+                                                ),
+                                            ),
+                                            Ok(false) => {} // 同一秒的重放,已有记录
+                                            Err(e) => {
+                                                eprintln!("写入积分到账事件失败 {}: {e}", f.def.id)
+                                            }
+                                        }
+                                        // 保留期在这里顺手做:到账是低频事件,不值得单开定时器
+                                        if let Err(e) = s.prune_grants(*ts - GRANT_KEEP_SEC) {
+                                            eprintln!("清理积分到账事件失败 {}: {e}", f.def.id);
+                                        }
+                                    }
+                                }
+                                Ok(None) => {} // 首次取数,没有基线 —— 不是"没到账"
+                                Err(e) => eprintln!("读取上次余额失败 {}: {e}", f.def.id),
+                            }
+                        }
+                    }
                     // 注意顺序:先写快照再组视图 —— 申请制额度的跳升检测要用最新快照
                     if let Err(e) =
                         s.record_fp(f.def.id, &f.fp, *ts, res.remaining, res.used, res.total, kind)
@@ -3544,6 +3753,102 @@ mod tests {
         assert_ne!(a, key_fp("sk-abc124"), "换一位就是另一本账");
         assert_eq!(a.len(), 24, "12 字节的十六进制");
         assert!(!a.contains("abc"), "指纹里不许出现密钥片段");
+    }
+
+    /// 今日到账只挂在 `tracks_grants` 的渠道上,且"没有"与"不记"要分开:
+    /// `Some(全零)` = 记了,今天确实没有;`None` = 这个渠道压根不记(国内版有签到)。
+    #[test]
+    fn grant_today_only_for_tracked_channels() {
+        let store = Store::open_memory().unwrap();
+        let cfg = Config::default();
+        // 钉在"今天正午",与真实钟点解耦(这个文件里已经栽过两次,见 gap 那个用例)
+        let now = local_day_start_of(now_ts()) + 12 * 3600;
+        store
+            .insert_grant(&crate::grants::Grant {
+                channel: "workbuddy-ai".into(),
+                day: local_day_of(now),
+                ts: now - 60,
+                amount: 30.0,
+                source: "delta".into(),
+                from_bal: Some(100.0),
+                to_bal: Some(130.0),
+            })
+            .unwrap();
+
+        let res = FetchResult {
+            valid: true,
+            kind: Kind::Points,
+            unit: "credits".into(),
+            remaining: Some(130.0),
+            ..Default::default()
+        };
+        let wba = providers::find("workbuddy-ai").expect("国际版渠道在表里");
+        let v = build_view(wba, res.clone(), false, now, &store, &cfg, None, "", 1);
+        let gt = v.grant_today.expect("国际版要记到账");
+        assert!(gt.has_activity, "今天有 +30,算活跃获取");
+        assert_eq!(gt.activity_total, 30.0);
+        assert_eq!(gt.total, 30.0);
+
+        // 国内版:不记 —— 它有签到,别拿余额再猜一遍
+        let wb = providers::find("workbuddy").unwrap();
+        let v2 = build_view(wb, res, false, now, &store, &cfg, None, "", 1);
+        assert!(v2.grant_today.is_none());
+    }
+
+    /// 没有到账记录时是 `Some(全零)`,不是 `None` —— "今天没有"是一个确定的结论。
+    #[test]
+    fn no_grant_today_is_a_known_zero() {
+        let store = Store::open_memory().unwrap();
+        let cfg = Config::default();
+        let now = local_day_start_of(now_ts()) + 12 * 3600;
+        let res = FetchResult {
+            valid: true,
+            kind: Kind::Points,
+            unit: "credits".into(),
+            remaining: Some(100.0),
+            ..Default::default()
+        };
+        let wba = providers::find("workbuddy-ai").unwrap();
+        let v = build_view(wba, res, false, now, &store, &cfg, None, "", 1);
+        let gt = v.grant_today.expect("记到账的渠道必须有这一格");
+        assert!(!gt.has_activity);
+        assert_eq!(gt.total, 0.0);
+        assert_eq!(gt.count, 0);
+    }
+
+    /// 自动隐藏只对"没装就等于不存在"的渠道生效,且用户动过眼睛之后彻底让位。
+    #[test]
+    fn auto_hide_candidates_only_for_untouched_wbai() {
+        let mut cfg = Config::default();
+        assert_eq!(
+            auto_hide_candidates(&cfg),
+            vec!["workbuddy-ai".to_string()],
+            "默认只有国际版在名单里"
+        );
+        cfg.user_touched_channels.push("workbuddy-ai".into());
+        assert!(
+            auto_hide_candidates(&cfg).is_empty(),
+            "用户点过眼睛就是表过态,不许再自动藏"
+        );
+        // 国内版有网页登录入口,不在名单里 —— 藏了会让人找不到登录按钮
+        assert!(!providers::auto_hide_when_no_credential("workbuddy"));
+        assert!(providers::auto_hide_when_no_credential("workbuddy-ai"));
+    }
+
+    /// 账户分段指纹(全量测评 P3-5 的判据):与候选顺序无关、换账户必换段、
+    /// 空集合退回空串(= 不分段的老口径,老客户端没写 uin 时的降级路径)。
+    #[test]
+    fn accounts_fp_is_order_insensitive_and_switches_on_account_change() {
+        let both = vec!["10001".to_string(), "10002".to_string()];
+        let mut shuffled = both.clone();
+        shuffled.reverse();
+        assert_eq!(accounts_fp(&both), accounts_fp(&shuffled), "重排候选不许换段");
+        assert_ne!(
+            accounts_fp(&both),
+            accounts_fp(&["10001".to_string()]),
+            "登着的账户集合变了就必须换段"
+        );
+        assert_eq!(accounts_fp(&[]), "", "空集合 = 不分段的老口径");
     }
 
     /// 峰谷状态只挂在标了 `peak_pricing` 的渠道上(DeepSeek),别的渠道一律 None。

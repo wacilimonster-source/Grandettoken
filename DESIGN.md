@@ -52,14 +52,34 @@
 | 金额型 | `amount` | 是 | 今日 / 本周 / 本月消耗 | 有分母才画 | 是 |
 | 配额型 | `percent` | 否,只有已消耗百分比 | 5 小时 / 本周 / 本月 三个限流窗口 | 不画(展开区一窗一行已表达余量) | **否** |
 
-### 2.2 当前四个渠道
+### 2.2 当前渠道(10 个)
 
-| 渠道 | id | 接口 | 类型 | 换算 | 稳定性 |
+| 渠道 | id | 接口 | 类型 | 凭据 | 稳定性 |
 |---|---|---|---|---|---|
-| 4SAPI | `4sapi` | `GET https://4sapi.com/api/usage/token` | 金额型 · **申请制** | 500 000 积分 = ¥1 | 公开 |
-| OpenCode Go | `opencode-go` | `GET https://opencode.ai/zen/go/v1/usage` | 配额型 | 只返回百分比 | **未公开接口**,失败静默降级 |
-| DeepSeek | `deepseek` | `GET https://api.deepseek.com/user/balance` | 金额型 · 充值型 | 直接取 `total_balance` | 公开 |
-| Hapi | `hapi` | `GET https://ai.yuchuantest.com/v1/usage` | 金额型 · 充值型 | 20 积分 = ¥1 | 公开 |
+| 4SAPI | `4sapi` | `GET https://4sapi.com/api/usage/token` | 金额型 · **申请制** | 手填密钥 | 公开 |
+| OpenCode Go | `opencode-go` | `GET https://opencode.ai/zen/go/v1/usage` | 配额型 | 手填密钥 | **未公开接口**,失败静默降级 |
+| DeepSeek | `deepseek` | `GET https://api.deepseek.com/user/balance` | 金额型 · 充值型 | 手填密钥 | 公开 |
+| Hapi | `hapi` | `GET https://ai.yuchuantest.com/v1/usage` | 金额型 · 充值型 | 手填密钥 | 公开 |
+| Trae | `trae` | `POST https://api.trae.cn/…/user_current_entitlement_list` | 积分型 | 本机登录态 | **未公开接口** |
+| WorkBuddy | `workbuddy` | `POST https://www.codebuddy.cn/v2/billing/meter/get-user-resource` | 积分型 | 桌面端凭据 / 网页会话 | **未公开接口** |
+| WorkBuddy AI | `workbuddy-ai` | `POST https://www.workbuddy.ai/v2/billing/meter/get-user-resource` | 积分型 | **只有**桌面端凭据(国际版无网页登录) | **未公开接口** |
+| Codex | `codex` | `GET https://chatgpt.com/backend-api/wham/usage` | 配额型 | 本机登录态 | **未公开接口** |
+| Qoder | `qoder` | `GET https://openapi.qoder.sh/api/v2/quota/usage` | 积分型 | 本机登录态 | **未公开接口** |
+| Qoder 国内版 | `qoder-cn` | `GET https://openapi.qoder.com.cn/api/v2/quota/usage` | 积分型 | 本机登录态 | **未公开接口** |
+
+**WorkBuddy 与 WorkBuddy AI 是两个渠道,不是两个域名**(2026-10-23):两套账号、官方不支持跨区迁移,
+凭据按 `domain` 判区、各取各的令牌(混用必然 401)。国际版**没有签到**(`daily-checkin` 回 10001
+「活动未开启」,与国区「今天已签到」同码异义),所以"今日是否已获取积分"不走签到,走
+**余额正增量**:相邻两次成功取数的 `remaining` 正差 ≥0.5 记一条 `credit_grants`,落在 25–35 之间的
+算"活跃奖励"(用户确认:每天对话一次 +30)。界面写「今日活跃 +30 · 09:35 · **推算**」——
+反推的东西不能当平台确认说;等探到发放接口,同一行改成「平台确认」,表与界面不动。
+
+**没凭据自动隐藏**(2026-10-23):国际版**没有网页登录入口**(裁决 6A),没装桌面端的人永远看不到数据,
+列一行"未检测到登录"只是噪音。所以它默认自动隐藏,装上并登录后下一轮自动出现。
+两条边界:① **只在从没取到过数时藏** —— 曾经正常取过数、这次瞬时读不到,继续沿用旧快照,
+不然用户会以为配置丢了;② **用户点过眼睛就彻底让位** —— 自动行为不许跟人对着干。
+判据不是"有没有凭据",而是"没凭据是否稳定等于没装",所以 Trae / Codex / Qoder 一律不进名单。
+
 
 ### 2.3 三种额度模型
 
@@ -309,6 +329,25 @@
 | **显示** | 渠道排序(剩余百分比升序 / 余额 / 今日消耗 / 自定义顺序)、窗口置顶、余额不足时提醒、失焦后自动折叠 |
 | **阈值** | 标黄 50/40/30/20%;标红 20/15/10/5% |
 | **启动** | 开机自启(静默进托盘) |
+
+**说明文案分三层(2026-10-23)**:设置页的说明曾堆到 **936 个汉字**(9 个 `.khint` + 14 条 `.desc`),
+按 354px 内容宽折算约 31 行、**570px** —— 超过一整个面板的高度;「密钥只进 Windows 凭据管理器」
+这一句在界面里出现了 **10 次**。问题不是"解释太多",而是必读与可选平铺在一起、且同一句话到处抄。
+现在按一条判据分流:**这句话如果说错了,用户会不会做错事?会 → 常驻;不会 → 收起来。**
+
+| 层 | 落点 | 形态 | 预算 |
+|---|---|---|---|
+| **L1 常驻** | 控件旁的 `.desc` / 页头 `.khint` | 一句**后果**,不写原理 | 每页 ≤ 120 字,单条 ≤ 30 字 |
+| **L2 按需** | `<button class="why" data-why="key">` | 点「?」原地展开(`.whybox`,0fr→1fr,与行详情同一套动画) | 文案只在 `app.js` 的 `WHY` 里写一份 |
+| **L3 归档** | 关于页 `<details class="fold">` | 默认收起,摘要行本身就是结论 | 读一次就够的长段落(汇率摊薄、代理限流、版本兼容) |
+
+落地后常驻 **936 → 319 字**(L2 另有 657 字,点开才出现)。`build/jsdom-smoke.js` 把预算写成断言
+(khint ≤ 120 字/页、单条 desc ≤ 30 字),以后再加说明超预算就红。
+
+三条边界:①「?」是真 `<button>`,`aria-expanded` 同步、Tab 可达 —— 不用 `title=` 当唯一解释入口
+(系统 tooltip 延迟 1 秒,触屏与键盘够不着,现有 62 处 `title` 只能当补充);②说明块插在**这一行的最后**
+(按钮在 `.ccbtns` 横向行里时插到整行之后,塞进 flex 会白占宽度);③被移走的说明必须有可见入口 ——
+这轮是"把解释挪近",不是删掉,不能拿"可解释"这条核心价值换整洁。
 
 ---
 

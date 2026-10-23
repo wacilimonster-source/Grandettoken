@@ -3351,6 +3351,22 @@ fn record_checkin_skip(app: &tauri::AppHandle, id: &str, day: &str, now: i64, wh
     let _ = app.emit("checkin-updated", serde_json::json!({ "id": id }));
 }
 
+/// 积分到账记录(近 N 天,默认 30)。渠道卡上「查看记录」用。
+///
+/// 只读 `credit_grants`,不在这里做判定 —— "算不算活跃"的口径在 `core::grants` 里,
+/// 界面拿到金额自己按同一套窗口判断,免得两处口径漂移。
+#[tauri::command]
+async fn credit_grants(
+    state: State<'_, AppState>,
+    id: String,
+    days: Option<i64>,
+) -> Result<Vec<tokenscope_core::grants::Grant>, String> {
+    let days = days.unwrap_or(30).clamp(1, 90);
+    let since = now_ts() - days * 86_400;
+    let store = lock_rw(&state.store);
+    store.grants_since(&id, since)
+}
+
 #[tauri::command]
 async fn checkin_state(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<Vec<CheckinState>, String> {
     let cfg = lock_rw(&state.config).clone();
@@ -4815,6 +4831,7 @@ pub fn run() {
             diag_export,
             checkin_state,
             checkin_now,
+            credit_grants,
             key_reveal,
             key_copy,
             vault_list,

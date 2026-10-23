@@ -87,7 +87,8 @@ impl Store {
     fn migrate(&self) -> Result<(), String> {
         // 2 = vault_items 按 (platform,label) 去重 + 唯一索引(下面那段),老库也补跑
         // 3 = snapshots 加 key_fp(密钥指纹分段,换 key 后两本账不互相推算消耗)
-        const WANT: i64 = 3;
+        // 4 = credit_grants(积分到账事件,WorkBuddy AI 的每日活跃 +30 等)
+        const WANT: i64 = 4;
         let cur: i64 = self
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -168,6 +169,25 @@ impl Store {
             tx.commit()
                 .map_err(|e| format!("提交密钥箱迁移失败: {e}"))?;
         }
+        // 积分到账事件。**纯新增表**,不动任何老表 —— 老库升级上来只会多这一张空表。
+        // UNIQUE(channel, ts):同一秒的重放(重启补跑、时钟回拨)不产生第二条。
+        self.conn
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS credit_grants (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    channel TEXT NOT NULL,
+                    day TEXT NOT NULL,
+                    ts INTEGER NOT NULL,
+                    amount REAL NOT NULL,
+                    source TEXT NOT NULL,
+                    from_bal REAL,
+                    to_bal REAL,
+                    UNIQUE(channel, ts)
+                 );
+                 CREATE INDEX IF NOT EXISTS idx_credit_grants_day
+                    ON credit_grants (channel, day);",
+            )
+            .map_err(|e| format!("建立积分到账事件表失败: {e}"))?;
         self.conn
             .execute_batch(&format!("PRAGMA user_version = {WANT};"))
             .map_err(|e| format!("写数据库版本号失败: {e}"))?;
@@ -423,6 +443,103 @@ impl Store {
             })
             .collect();
         Ok(rows)
+    }
+
+    // ───────────── 积分到账(credit_grants)─────────────
+    // 设计见 docs/design/design-workbuddy-ai-channel-2026-10-23.html。
+    // 与 checkin_log 分开:那张表记的是"签到尝试"(退避、幂等、连签),这张记的是
+    // "到账事件"(可能只是余额正增量推算出来的,没有"尝试"这回事),保留期与查询口径都不同。
+
+    /// 记一条到账事件。`UNIQUE(channel, ts)` 让同一秒的重放落空(进程重启 / 补跑)。
+    /// 返回 true = 真的写进去了 —— 调用方据此打日志,不靠猜。
+    ///
+    /// 守卫:秒级 ts + 这个唯一键意味着**同秒两笔不同数额会被静默吞掉一条**。
+    /// 现在每轮取数至多记一笔(余额正增量推算),碰不到;将来若接平台逐笔台账
+    /// (真机探针:Accounts[] 的 CreateTime 是毫秒),必须把 ts 改存毫秒,
+    /// 否则同秒的两笔充值/发放会丢记录。
+    pub fn insert_grant(&self, g: &crate::grants::Grant) -> Result<bool, String> {
+        let n = self
+            .conn
+            .execute(
+                "INSERT OR IGNORE INTO credit_grants
+                   (channel, day, ts, amount, source, from_bal, to_bal)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![g.channel, g.day, g.ts, g.amount, g.source, g.from_bal, g.to_bal],
+            )
+            .map_err(|e| format!("写入积分到账事件失败: {e}"))?;
+        Ok(n > 0)
+    }
+
+    /// 某渠道从 `since_ts` 起的到账事件,**按时间升序**(界面按天分组要顺着看)。
+    pub fn grants_since(
+        &self,
+        channel: &str,
+        since_ts: i64,
+    ) -> Result<Vec<crate::grants::Grant>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT channel, day, ts, amount, source, from_bal, to_bal
+                 FROM credit_grants
+                 WHERE channel = ?1 AND ts >= ?2
+                 ORDER BY ts ASC",
+            )
+            .map_err(|e| format!("查询积分到账事件失败: {e}"))?;
+        let rows = stmt
+            .query_map(params![channel, since_ts], |r| {
+                Ok(crate::grants::Grant {
+                    channel: r.get(0)?,
+                    day: r.get(1)?,
+                    ts: r.get(2)?,
+                    amount: r.get(3)?,
+                    source: r.get(4)?,
+                    from_bal: r.get(5)?,
+                    to_bal: r.get(6)?,
+                })
+            })
+            .map_err(|e| format!("读取积分到账事件失败: {e}"))?
+            .filter_map(|r| match r {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    // 静默丢行 = 数字悄悄偏小且无从排查(与快照读行同一条纪律)
+                    eprintln!("读取积分到账事件失败(该行已跳过): {e}");
+                    None
+                }
+            })
+            .collect();
+        Ok(rows)
+    }
+
+    /// 最后一次成功快照的余额 —— 算正增量要用它当基线。
+    ///
+    /// `ts` 用**严格小于**:本轮快照还没写(调用方在 `record_fp` 之前调),
+    /// 万一同秒写入两条,也不能拿自己当自己的基线。
+    /// `key_fp` 传空串 = 不分段(本机登录态渠道没有稳定指纹,见 `record_fp` 的注释)。
+    pub fn prev_remaining(
+        &self,
+        provider_id: &str,
+        key_fp: &str,
+        ts: i64,
+    ) -> Result<Option<f64>, String> {
+        match self.conn.query_row(
+            "SELECT remaining FROM snapshots
+             WHERE provider_id = ?1 AND remaining IS NOT NULL AND ts < ?2
+               AND (?3 = '' OR key_fp = ?3)
+             ORDER BY ts DESC LIMIT 1",
+            params![provider_id, ts, key_fp],
+            |r| r.get::<_, f64>(0),
+        ) {
+            Ok(v) => Ok(Some(v)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(format!("读取上次余额失败: {e}")),
+        }
+    }
+
+    /// 清理过期事件。保留期由调用方给(现在 30 天),这里不猜。
+    pub fn prune_grants(&self, before_ts: i64) -> Result<usize, String> {
+        self.conn
+            .execute("DELETE FROM credit_grants WHERE ts < ?1", params![before_ts])
+            .map_err(|e| format!("清理积分到账事件失败: {e}"))
     }
 
     pub fn consumption_since(
@@ -1371,6 +1488,69 @@ mod tests {
         )
         .unwrap();
         Store { conn }
+    }
+
+    /// 走完整建表 + 迁移的库(验新表/迁移用)。`mem()` 只搭了最小的两张表。
+    fn mem_migrated() -> Store {
+        let conn = Connection::open_in_memory().unwrap();
+        let s = Store { conn };
+        s.init_schema().unwrap();
+        s.migrate().unwrap();
+        s
+    }
+
+    #[test]
+    fn grant_rows_roundtrip_and_dedupe_by_second() {
+        let s = mem_migrated();
+        let g = |ts: i64, amount: f64| crate::grants::Grant {
+            channel: "workbuddy-ai".into(),
+            day: "2026-10-23".into(),
+            ts,
+            amount,
+            source: "delta".into(),
+            from_bal: Some(1000.0),
+            to_bal: Some(1000.0 + amount),
+        };
+        assert!(s.insert_grant(&g(200, 30.0)).unwrap());
+        assert!(!s.insert_grant(&g(200, 30.0)).unwrap(), "同一秒重放不该记第二条");
+        assert!(s.insert_grant(&g(100, 500.0)).unwrap());
+
+        let rows = s.grants_since("workbuddy-ai", 0).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].ts, 100, "按时间升序,界面按天分组要顺着看");
+        assert_eq!(rows[1].amount, 30.0);
+        // 别的渠道不串
+        assert!(s.grants_since("workbuddy", 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn prev_remaining_is_strictly_earlier() {
+        let s = mem_migrated();
+        s.record_fp("workbuddy-ai", "", 100, Some(1000.0), None, None, "points").unwrap();
+        s.record_fp("workbuddy-ai", "", 200, Some(1030.0), None, None, "points").unwrap();
+        assert_eq!(s.prev_remaining("workbuddy-ai", "", 200).unwrap(), Some(1000.0));
+        assert_eq!(s.prev_remaining("workbuddy-ai", "", 300).unwrap(), Some(1030.0));
+        assert_eq!(s.prev_remaining("workbuddy-ai", "", 100).unwrap(), None, "首条没有基线");
+        assert_eq!(s.prev_remaining("workbuddy", "", 300).unwrap(), None, "别的渠道不串");
+    }
+
+    #[test]
+    fn prune_grants_keeps_the_window() {
+        let s = mem_migrated();
+        for ts in [100, 200, 300] {
+            let g = crate::grants::Grant {
+                channel: "workbuddy-ai".into(),
+                day: "2026-10-23".into(),
+                ts,
+                amount: 30.0,
+                source: "delta".into(),
+                from_bal: None,
+                to_bal: None,
+            };
+            s.insert_grant(&g).unwrap();
+        }
+        assert_eq!(s.prune_grants(250).unwrap(), 2);
+        assert_eq!(s.grants_since("workbuddy-ai", 0).unwrap().len(), 1);
     }
 
     /// 迁移前的现场:只有 vault_items(且里面已经有重复行),`user_version` 还是 0。
