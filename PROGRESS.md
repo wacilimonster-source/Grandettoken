@@ -2824,3 +2824,16 @@ WorkBuddy 桌面端（`workbuddy.rs`）—— 只有 Qoder 这一条漏了。
 **验证**：`cargo check --offline`（core）+ `cargo check --offline --all-targets`
 （src-tauri）均 exit 0。黑框是否彻底消失需要真机观察一个缓存周期（45 分钟）；
 本机已替换运行。
+
+### 发版 v0.1.61（2026-10-23）
+
+修掉隔一阵闪一个黑框：Qoder 的 `runtime-info.exe` 是控制台程序，现在以隐藏窗口启动；
+`cargo test --offline` **314 passed / 0 failed**。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.61_x64-setup.exe`（5,196,109 B，SHA-256
+`1441cd98bc1be54708649f5454529429f07253471a6d6209eeb18a95d390138b`）及 `.sig` 已发布到
+[GitHub Release v0.1.61](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.61)。
+发布提交 `e5e1cb0`，tag `v0.1.61`。
+
+`node build/verify-release.js` **13/13 PASS**；`node build/verify-signature.js` **PASS**。
+本机已用打包产物覆盖 `%LOCALAPPDATA%\Grandettoken\Grandettoken.exe` 并重启运行。
