@@ -43,6 +43,9 @@
          在特大字号下不再把最右的「隐藏」挤出窗口(实测 405px > 378px)。 -->
     <button class="tb" id="btnP" title="窗口置顶">置顶</button>
     <button class="tb" id="btnC" title="切换紧凑条">紧凑</button>
+    <!-- 紧凑条关闭时的折叠入口:同一位置换成胶囊。两者互斥(见 styles.css),
+         否则顶栏会多一个按钮,特大字号下挤不下。 -->
+    <button class="tb" id="btnPill" title="收成胶囊">胶囊</button>
     <button class="tb" id="btnH" title="隐藏到托盘">隐藏</button>
   </div>
 
@@ -152,7 +155,7 @@
           <option value="lg">大</option>
           <option value="xl">特大</option>
         </select></div>
-      <div class="field"><span>启用紧凑条<span class="desc">顶栏的「紧凑」按钮与 380×46 的横向条;关闭后 Esc 只在面板与胶囊之间切换</span></span>
+      <div class="field"><span>启用紧凑条<span class="desc">顶栏的「紧凑」按钮与 380×46 的横向条;关闭后顶栏改为「胶囊」按钮,Esc 只在面板与胶囊之间切换</span></span>
         <button class="sw" id="cfgCompact" role="switch" aria-checked="false" aria-label="启用紧凑条"></button></div>
       <div class="field"><span>托盘图标显示余额数字<span class="desc">概览缩写(74 / 1.2k / 82),底色即状态色;关闭回到品牌样式</span></span>
         <button class="sw" id="cfgTrayNum" role="switch" aria-checked="true" aria-label="托盘图标显示余额数字"></button></div>

@@ -3002,6 +3002,11 @@ $("btnP").addEventListener("click", () => setPin(!CFG.alwaysOnTop));
 $("btnC").addEventListener("click", () => {
   applyForm(document.body.className.includes("form-compact") ? "panel" : "compact");
 });
+// 紧凑条关闭时顶栏显示的是「胶囊」(两者互斥)。胶囊形态里顶栏是隐藏的,
+// 这里只服务"面板 → 胶囊"这一跳;▲ 仍是回面板的入口。
+$("btnPill").addEventListener("click", () => {
+  applyForm(document.body.className.includes("form-pill") ? "panel" : "pill");
+});
 // 失败必须说出来:invoke 被拒时以前没有 catch,"点了没反应"用户只会以为按钮坏了(F16)
 $("btnH").addEventListener("click", () =>
   invoke("window_cmd", { action: "hide" }).catch((e) => showToast("隐藏失败:" + e, true))

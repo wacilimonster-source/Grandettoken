@@ -67,9 +67,11 @@ body{
 .tb{border:0;background:transparent;color:var(--tx2);cursor:pointer;font-family:inherit;
   font-size:max(11.5px,calc(10.5px*var(--u)));line-height:1.25;padding:calc(3px*var(--u)) calc(6px*var(--u));border-radius:calc(5px*var(--u));flex:none;white-space:nowrap}
 .tb:hover{background:#ffffff12;color:var(--tx)}
-/* 紧凑条是可选形态(默认关):关闭时顶栏不显示「紧凑」。
-   用 body 类而不是内联样式 —— 配置还没读回来时也默认不显示,不会先闪一下再消失。 */
+/* 紧凑条是可选形态(默认关):关闭时顶栏不显示「紧凑」,同一位置换成「胶囊」。
+   两者互斥 —— 顶栏始终只有一个折叠入口,特大字号下不会多挤一个按钮。
+   用 body 类而不是内联样式:配置还没读回来时也默认不显示紧凑,不会先闪一下再消失。 */
 body:not(.compact-on) #btnC{display:none}
+body.compact-on #btnPill{display:none}
 .tb.on{color:#fff;background:var(--ac)}
 /* 文字按钮没法"转",刷新反馈改成脉冲 */
 .tb.spin{animation:pulse .7s ease}

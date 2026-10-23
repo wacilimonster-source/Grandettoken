@@ -88,7 +88,12 @@ if (form === "compact" &amp;&amp; !(CFG &amp;&amp; CFG.compactEnabled)) form = "
 
 <h3>2.3 顶栏按钮</h3>
 <p>关闭时 <code>#btnC</code> 直接 <code>display:none</code>,<b>不是变灰禁用</b>(需求原话:「不显示这个按钮」)。
-实现上用 body 类而不是内联样式:<code>body:not(.compact-on) #btnC{display:none}</code> —— 配置还没读回来时按钮也默认不出现,不会先闪一下再消失。
+但<b>同一位置要换成「胶囊」按钮</b>(<code>#btnPill</code>)—— 否则关闭紧凑条后,胶囊只剩 Esc / Ctrl+3
+两条看不见的路径,用户会以为胶囊也没了(v0.1.64 的真实回退,见 §10.1)。
+开启时反过来:显示「紧凑」、隐藏「胶囊」。两枚按钮由 body 类互斥,顶栏始终只有一个折叠入口,宽度不变。</p>
+<pre style="background:#1d2130;border:1px solid var(--line);border-radius:6px;padding:10px 14px;overflow:auto;color:#c9d4ea;font:12.5px Consolas,monospace">body:not(.compact-on) #btnC{display:none}
+body.compact-on #btnPill{display:none}</pre>
+<p>实现上用 body 类而不是内联样式:配置还没读回来时按钮也默认是「胶囊」,不会先闪一下。
 新增 <code>applyCompactUI()</code> 切换 <code>body.compact-on</code>,在 <code>applyConfigToUI()</code>(<code>app.js:3935</code>)和开关回调里各调一次。
 开启后立即出现,不需要重启。</p>
 
@@ -102,8 +107,9 @@ if (form === "compact" &amp;&amp; !(CFG &amp;&amp; CFG.compactEnabled)) form = "
 <table>
 <tr><th>动作</th><th>关闭时</th></tr>
 <tr><td><code>Ctrl+2</code></td><td>忽略:不改形态、不弹提示。为一个没开启的形态弹 toast,比没反应更吵</td></tr>
-<tr><td>设置里打开开关</td><td>按钮立即出现;当前形态不变(还在面板)</td></tr>
-<tr><td>设置里关闭开关</td><td>按钮立即消失;如果此刻正处于紧凑条,立即切回面板(包含吸附展开态,会按面板尺寸重排)</td></tr>
+<tr><td>顶栏折叠按钮</td><td>关闭时显示「胶囊」:点击收成胶囊,胶囊右侧 `▲` 回面板</td></tr>
+<tr><td>设置里打开开关</td><td>按钮立即换成「紧凑」;当前形态不变(还在面板)</td></tr>
+<tr><td>设置里关闭开关</td><td>按钮立即换成「胶囊」;如果此刻正处于紧凑条,立即切回面板(包含吸附展开态,会按面板尺寸重排)</td></tr>
 <tr><td>写入 <code>CFG.form</code></td><td>只在真正切到某形态时写;关闭时永远不会写入 <code>"compact"</code></td></tr>
 </table>
 
@@ -117,7 +123,7 @@ if (form === "compact" &amp;&amp; !(CFG &amp;&amp; CFG.compactEnabled)) form = "
   <div class="tb"><span class="mark"></span><span>Grandettoken</span><span class="sp"></span>
     <span class="b">刷新</span><span class="b">置顶</span><span class="b" id="mBtn">紧凑</span><span class="b">隐藏</span></div>
   <div class="list">渠道列表 · 面板形态(380 × 560)</div>
-  <div class="field"><span class="t">启用紧凑条<span class="d">顶栏的「紧凑」按钮与 380×46 的横向条;关闭后 Esc 只在面板与胶囊之间切换</span></span>
+  <div class="field"><span class="t">启用紧凑条<span class="d">顶栏的「紧凑」按钮与 380×46 的横向条;关闭后顶栏改为「胶囊」按钮,Esc 只在面板与胶囊之间切换</span></span>
     <button class="sw" id="mSw" role="switch" aria-checked="false" aria-label="启用紧凑条"></button></div>
   <div class="route" id="mRoute">Esc:面板 → 胶囊 → 面板(紧凑条不参与)</div>
 </div>
@@ -172,7 +178,7 @@ if (form === "compact" &amp;&amp; !(CFG &amp;&amp; CFG.compactEnabled)) form = "
 
 <h2 id="s8">8. 验收</h2>
 <ol>
-<li>全新配置:顶栏只有「刷新 / 置顶 / 隐藏」,设置里「启用紧凑条」为关。</li>
+<li>全新配置:顶栏是「刷新 / 置顶 / 胶囊 / 隐藏」,设置里「启用紧凑条」为关;点「胶囊」能进胶囊,`▲` 能回面板。</li>
 <li>打开开关:按钮<b>立即</b>出现,不重启;点它能进紧凑条;<code>Ctrl+2</code> 能进;<code>Esc</code> 走完整一圈。</li>
 <li>关闭开关:按钮立即消失;<code>Ctrl+2</code> 无反应;<code>Esc</code> 面板 ↔ 胶囊;当时若在紧凑条,立即回面板。</li>
 <li>旧配置 <code>form:"compact"</code> 升级:启动是面板,出现一次提示;重启后不再提示,<code>CFG.form</code> 已是 <code>panel</code>。</li>
@@ -201,6 +207,15 @@ if (form === "compact" &amp;&amp; !(CFG &amp;&amp; CFG.compactEnabled)) form = "
 </table>
 <p><b>实现复核</b>:<code>build/jsdom-smoke.js</code> <b>57/57</b>(新增 11 条:默认隐藏 / 收口 / Esc 两种路线 / Ctrl+2 / 开关状态);
 无头 Edge + 真实前端 <b>18/18</b>(按钮显隐、Esc 与 Ctrl+2、落盘、在紧凑条里关开关立即回面板、旧配置升级提示与清值)。</p>
+
+<h3>10.1 复核修正:v0.1.64 关掉紧凑条后胶囊没有入口</h3>
+<p>v0.1.64 按"不显示紧凑按钮"实现后,顶栏只剩「刷新 / 置顶 / 隐藏」——胶囊还能用 Esc / Ctrl+3 进,
+但<b>没有任何可见入口</b>。用户反馈:「只是紧凑不显示,胶囊还要有啊,现在也没法切换到胶囊了。」</p>
+<p><b>修正</b>:关闭紧凑条时,同一位置显示「胶囊」按钮(点击收成胶囊,`▲` 回面板);开启时显示「紧凑」。
+两枚按钮互斥,顶栏宽度不变(特大字号实测 <code>scrollWidth 492 = clientWidth 492</code>)。
+设置文案同步改成「关闭后顶栏改为『胶囊』按钮」。</p>
+<p><b>复核</b>:<code>jsdom-smoke</code> <b>58/58</b>(新增顶栏胶囊入口);无头 Edge <b>10/10</b>:
+默认胶囊可见 → 点击进胶囊 → `▲` 回面板;开启后按钮互换;特大字号开关两种状态都不溢出;旧配置升级仍是面板 + 胶囊入口 + 一次提示。</p>
 
 <div class="meta" style="margin-top:40px;border-top:1px solid var(--line);padding-top:14px">
 Grandettoken · 紧凑条改为可选开关 · 产品设计 v1 · 2026-10-23 · 基于 <code>a2213b5</code>(v0.1.63)。

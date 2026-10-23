@@ -363,6 +363,13 @@ const HARNESS = `
       await new Promise((r) => setTimeout(r, 30));
       ck("关闭时胶囊 Esc 回面板", document.body.classList.contains("form-panel"), document.body.className);
 
+      // 顶栏折叠入口:关紧凑条时是「胶囊」,不能只剩 Esc/Ctrl+3 两条隐藏路径
+      document.body.className = "form-panel";
+      document.getElementById("btnPill").click();
+      await new Promise((r) => setTimeout(r, 30));
+      ck("关闭紧凑条时顶栏「胶囊」能进胶囊", document.body.classList.contains("form-pill"), document.body.className);
+      await applyForm("panel");
+
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "2", ctrlKey: true, bubbles: true }));
       await new Promise((r) => setTimeout(r, 30));
       ck("关闭时 Ctrl+2 不切形态", document.body.classList.contains("form-panel"), document.body.className);
@@ -399,14 +406,15 @@ w.__DATA = DATA;
   const R = w.__R || [];
   const css = fs.readFileSync(path.join(SRC, "styles.css"), "utf8");
   R.push({
-    name: "紧凑条关闭时「紧凑」按钮由 CSS 隐藏",
-    ok: /body:not\(\.compact-on\) #btnC\{display:none\}/.test(css),
-    extra: "styles.css 缺这条规则",
+    name: "关闭紧凑条时顶栏隐藏「紧凑」、显示「胶囊」",
+    ok: /body:not\(\.compact-on\) #btnC\{display:none\}/.test(css) &&
+      /body\.compact-on #btnPill\{display:none\}/.test(css),
+    extra: "styles.css 缺互斥规则",
   });
   R.push({
-    name: "设置页有紧凑条开关",
-    ok: /id="cfgCompact"/.test(html),
-    extra: "index.html 缺 cfgCompact",
+    name: "设置页有紧凑条开关、顶栏有胶囊按钮",
+    ok: /id="cfgCompact"/.test(html) && /id="btnPill"/.test(html),
+    extra: "index.html 缺 cfgCompact / btnPill",
   });
   let ok = 0, bad = 0;
   for (const r of R) {
