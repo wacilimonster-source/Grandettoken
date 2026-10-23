@@ -3000,9 +3000,25 @@ D1 老用户默认回首页 / D2 胶囊 Esc 回面板 / D3 `Ctrl+2` 忽略 / D4 
 
 - `build/jsdom-smoke.js` **57/57**(新增 11 条:默认隐藏 / 收口 / Esc 两种路线 / Ctrl+2 / 开关状态 / CSS 与设置项存在)。
   顺带修了探针环境:`invoke` 不再一律返回 null,补 `dpi` 与 `currentMonitor` 桩,让真实 init 能跑完再跑异步用例。
-- 无头 Edge + 真实 `index.html` / `app.js` / `styles.css` **18/18**:默认按钮 `display:none`、
+- 无头 Edge + 真实 `index.html` / `app.js` / `styles.css` **19/19**:默认按钮 `display:none`、
   打开后立即出现并落盘、按钮 / Ctrl+2 / Esc 三入口、紧凑条里关开关立即回面板、
-  旧配置 `form:"compact"` 回首页 + 提示 + 配置改成 `panel`。
-- `cargo check`(core / all-targets)通过;`build/check-css-forms.js` PASS。
+  旧配置 `form:"compact"` 回首页 + 提示 + 配置改成 `panel`;另含展开区冒烟(整行 300px、
+  无区间/柱图、台账本地时间)与**特大字号顶栏不溢出**(`scrollWidth 492 = clientWidth 492`)。
+- `cargo test`(core)**315 passed**(新增配置兼容单测);`cargo check`(core / all-targets)通过;`build/check-css-forms.js` PASS。
 
-**未做**:未发版;真机安装包的升级体验仍需打包后复测。
+**未做**:真机安装包的升级体验仍需打包后复测。
+
+### 发版 v0.1.64（2026-10-23）
+
+紧凑条改为可选开关，默认关闭：设置 → 显示 → 外观 →「启用紧凑条」；关闭时顶栏不显示「紧凑」、
+`Ctrl+2` 无效、胶囊 `Esc` 回面板。旧配置若停在紧凑条，升级后回首页并提示一次。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.64_x64-setup.exe`（5,195,871 B，SHA-256
+`52b7d5af17010b92223c730f8857a70ffa40160d165f4e8558ccd7de7d7ea7fc`）及 `.sig` 已发布到
+[GitHub Release v0.1.64](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.64)。
+发布提交 `5ca188f`，tag `v0.1.64`。
+
+`node --use-env-proxy build/verify-release.js` **13/13 PASS**；`node build/verify-signature.js`
+**PASS**（tauri.conf.json 的公钥能验签这一版的安装包）。
+
+本机未用打包产物覆盖正在运行的应用，留给自动更新验证。
