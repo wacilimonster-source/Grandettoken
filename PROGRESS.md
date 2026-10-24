@@ -3278,3 +3278,20 @@ core 新增 5 条 ArrivalInfo 单测,全量 333 条全绿后才发。
 - **④ 手动路径凭据失败补流水**:`checkin_now` 里 `run_checkin` 报错且非闸门类拒绝(隐藏/开关/互斥/未知渠道)时,走与节拍器同一条 `record_checkin_skip` —— 「点过但没试成」与「没点过」从此可区分。闸门类拒绝不记,免得误算退避。
 
 **测试**:`cargo check`(src-tauri)通过;core 全量 **333 条全绿**(本次改动集中在 lib.rs/前端,core 无新纯函数);`jsdom-smoke` **67/67**;`node --check` 通过。
+
+### 发版 v0.1.68（2026-10-25）
+
+修跨日签到显示三重失真(见上一节):① 后端按周期日门控短码/数额/活动态(与 doneToday 同口径);
+② 前端跨日定时重取(北京 0 点 / Qoder 10 点当场翻页);③ 活动监测查到「平台侧已签」时记入
+今天的账(带 due_now 信任线,今天已有结论不覆盖);④ 手动路径凭据失败补流水。
+`cargo check` 通过、core 333 条全绿、`jsdom-smoke` 67/67 后发。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.68_x64-setup.exe` 及 `.sig` 已发布到
+[GitHub Release v0.1.68](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.68)。
+发布提交 `39cf19e`，tag `v0.1.68`。
+
+`node build/verify-release.js` **13/13 PASS**;`node build/verify-signature.js` **PASS**
+(tauri.conf.json 的公钥能验签本版安装包,已装用户收得到)。
+
+当晚(10-26 00:00–00:25)留给自动更新后的真机复测:0 点翻页应当场变「待签」,
+00:23+ 自动领取后变「✓已签」;若当天在客户端手动签,一小时内监测应自动认账。
