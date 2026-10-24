@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>签到「到账核对」二次校验 · 设计稿 · Grandettoken · 2026-10-24</title>
+<style>
+  :root{
+    --bg:#0f1115; --fg:#e6e8ee; --mut:#9aa3b2; --line:#262b36; --card:#151922;
+    --soft:#1a1f2a; --ac:#19b8c4; --ok:#2fbf71; --warn:#f5a623; --bad:#e5484d;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f6f7f9; --fg:#1b1f27; --mut:#5b6472; --line:#dfe3ea; --card:#fff;
+           --soft:#eef1f5; --ok:#1d8f52; --warn:#a86a00; --bad:#c62b30; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:15px/1.8 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:980px;margin:0 auto;padding:30px 24px 110px}
+  h1{font-size:27px;line-height:1.35;margin:0 0 6px;letter-spacing:-.3px}
+  h2{font-size:21px;margin:46px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  h3{font-size:16.5px;margin:28px 0 10px}
+  p{margin:9px 0}
+  ul,ol{margin:9px 0 9px 22px;padding:0}
+  li{margin:5px 0}
+  code{background:rgba(127,127,127,.17);padding:1px 5px;border-radius:4px;font-size:12.5px;
+    font-family:"Cascadia Mono",Consolas,monospace;word-break:break-word}
+  pre{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px;
+    overflow-x:auto;font-size:12.5px;line-height:1.65;font-family:"Cascadia Mono",Consolas,monospace}
+  .sub{color:var(--mut);font-size:13px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 17px;margin:14px 0}
+  .note{border-left:3px solid var(--ac);background:var(--card);border-radius:0 8px 8px 0;
+    padding:11px 15px;margin:13px 0}
+  .note.warn{border-left-color:var(--warn)}
+  .note.ok{border-left-color:var(--ok)}
+  .note.bad{border-left-color:var(--bad)}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:7px 11px;text-align:left;vertical-align:top}
+  th{background:var(--soft)}
+  td code{white-space:nowrap}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>签到「到账核对」二次校验</h1>
+<p class="sub">2026-10-24 · v0.1.67 · 前置:<a href="design-auto-checkin-2026-10-13.html">design-auto-checkin-2026-10-13</a></p>
+
+<p class="lead">claim 之后的余额二次校验:用渠道自己的余额快照差值,给「今日已领」补一份
+<em>只见证、不裁决</em> 的到账证据。判定链路一字不动。</p>
+
+<h2 id="why">为什么做</h2>
+<ul>
+  <li>Trae / WorkBuddy 的签到接口<b>经常不返回数额</b>(0.1.5x 系列真机:<code>credits = null</code> 是生产常态),
+      界面只能说「平台未返回数额」—— 领没领到、领了多少,用户无从核对。</li>
+  <li>签到渠道的余额快照<b>本来就在每轮落库</b>(<code>fetch.rs</code> → <code>snapshots</code> 表,provider id 与签到 id 相同),
+      claim 成功后也已经触发 <code>refresh_now</code>。缺的只是把两条线在签到这一侧接起来。</li>
+  <li><code>grants.rs</code> 已论证过余额差值作为证据的纪律(<code>source: "delta"</code> = 按余额推算,不当平台事实);
+      本设计把同一套纪律用在签到上。它与 <code>providers::tracks_grants</code> 的「到账记录」语义不同:
+      那个记<b>所有</b>到账(充值也进),这个只关心 <b>claim 窗口内</b>有没有见到增量。</li>
+</ul>
+
+<h2 id="red">红线映射(只见证,不裁决)</h2>
+<div class="note ok"><b>定位一句话:</b>余额核对只能把结论「确认得更实」,永远不能否决或改写签到结论。</div>
+<table>
+  <tr><th>现有红线</th><th>在本设计中的落法</th></tr>
+  <tr><td>① 按 code 判,不按文案</td><td>判定链路完全不动,回查状态仍是<b>唯一成功证据</b>(<code>run_checkin</code> 的回查分支原样保留)。</td></tr>
+  <tr><td>② 不把「点了按钮」说成「领到了」</td><td>推算出的增量在界面上<b>永远带「按余额推算」标注</b>,与 <code>grants.rs</code> 的 <code>source:"delta"</code> 同一条纪律。</td></tr>
+  <tr><td>③ 签到状态不参与余额渲染</td><td>反向同样成立:核对结论<b>绝不参与</b> <code>done_for_day</code> / <code>signed_today</code> / <code>blocks_today</code>,不改 <code>last_code</code>,不改徽标颜色。</td></tr>
+</table>
+<div class="note warn"><b>明确不做:</b>
+① 不用余额增量把 <code>confirming</code> 升级成 <code>claimed</code>(余额分不清「我们领的」和「恰好充值」);
+② <code>last_credits</code> 不回填余额观察值(<code>checkin_month_credits</code> 的「本月已领」只信平台字段);
+③ <code>checkin_log</code> 流水表一期不动(核对结论落 diaglog,以后要进流水另开带 <code>UNIQUE(channel, day)</code> 的新表)。</div>
+
+<h2 id="model">数据模型</h2>
+<p><code>CheckinCfg</code>(config.json,serde default + camelCase)加一个可选字段,<b>无数据库迁移</b>:</p>
+<pre>pub struct ArrivalInfo {          // core::checkin
+    pub status: String,        // "pending" → "confirmed" | "unseen"
+    pub baseline: f64,         // claim 前最后一份成功快照的余额
+    pub baseline_at: i64,
+    pub delta: Option&lt;f64&gt;,    // 确认时观察到的增量(confirmed 才有)
+    pub observed_at: Option&lt;i64&gt;,
+    pub day: String,           // 签到周期日(Qoder 含 10:00 跨日)= 核对截止线
+}</pre>
+<ul>
+  <li>跨版本兼容:老配置 JSON 没有 <code>arrival</code> → serde default 兜成 <code>None</code>(有测试)。</li>
+  <li>前端只收到<b>今天</b>的核对单(<code>checkin_state_of</code> 里按 <code>a.day == today && last_day == a.day</code> 过滤)——
+      昨天的 confirmed 挂在今天的 already 上会变成误导。</li>
+</ul>
+
+<h2 id="flow">流程(零新增网络请求)</h2>
+<ol>
+  <li><b>基线</b> — <code>run_checkin</code> 在发起 claim 之前,读该渠道最新成功快照
+      (<code>store::latest_snapshot</code>,纯读库)。读不到 → 不核对(<code>arrival = None</code>)。</li>
+  <li><b>即时核对</b> — 回查判 <code>Claimed</code> 后,<code>refresh_now</code> 本来就会跑;跑完再读一次最新快照,
+      喂给 <code>ArrivalInfo::observe</code>。判出的三态写进 <code>entry.arrival</code> 落盘 + diaglog 一行。</li>
+  <li><b>pending 核销</b> — <code>settle_arrivals</code>(挂在 <code>refresh_now</code> 与 <code>poll_loop</code> 的取数完成点,
+      零网络请求):对每个 enabled 渠道的 pending 单子,拿最新快照接着核;状态有迁移就落盘 +
+      <code>checkin-updated</code> 事件。过签到周期日仍无增量 → unseen,不隔天追账。</li>
+</ol>
+<div class="note"><b>锁纪律(N04):</b><code>settle_arrivals</code> 只改 <code>checkin[id].arrival</code> 这一项,读 live 配置合并回去,不整份克隆覆盖用户在签到跑动期间的其它改动。</div>
+
+<h2 id="rules">判定口径(单向,只升不降)</h2>
+<table>
+  <tr><th>观察</th><th>落点</th><th>为什么</th></tr>
+  <tr><td><code>delta &gt;= 0.5</code>(<code>ARRIVAL_EPS</code>,与 <code>grants::GRANT_EPS</code> 同值)</td><td><code>confirmed</code></td><td>有真实正增量 = 到账迹象。确认标准是「有正增量」而非「恰好等于 credits」—— 取数间隔里的消耗会把 +100 压低(与 <code>grants::ACTIVITY_TOL</code> 的容差思路同理)。</td></tr>
+  <tr><td><code>delta &lt;= 0.5</code>,未跨日</td><td><code>pending</code></td><td>发放可能延迟,或被同轮消耗抵消。<b>不判失败。</b></td></tr>
+  <tr><td>未跨日一直 pending → 跨日仍无增量</td><td><code>unseen</code></td><td>截止。「未见增量 ≠ 没领到」,文案必须明说。</td></tr>
+</table>
+<div class="note bad"><b>三态里没有「确认失败」。</b><code>delta ≤ 0</code> 不证明失败:<code>+100</code> 发放与 <code>−120</code> 消耗同轮,净增量就是负的 —— 判失败等于拿消耗当没发放。</div>
+
+<h2 id="ui">界面文案(前端 <code>ckArrivalNote</code>)</h2>
+<table>
+  <tr><th>状态</th><th>ckText claimed 分支追加(替换原「· 已触发到账核对」)</th></tr>
+  <tr><td>confirmed,与平台数额吻合(|delta−credits| ≤ 5)</td><td><code>· 余额已确认到账(增量 +N,与平台数额吻合)</code></td></tr>
+  <tr><td>confirmed,没吻合 / 平台未给数额</td><td><code>· 余额已见增量 +N(按余额推算)</code></td></tr>
+  <tr><td>pending</td><td><code>· 正在核对到账(随下一轮取数更新)</code></td></tr>
+  <tr><td>unseen</td><td><code>· 余额未见增量(可能被消耗抵消,不代表没领到)</code></td></tr>
+  <tr><td>没有核对单(老版本后端 / 没取到基线)</td><td><code>· 已触发到账核对</code>(旧文案兜底)</td></tr>
+</table>
+<ul>
+  <li>同一句话进 <code>ckBadgeTip</code>;徽标颜色、<code>doneToday</code>、「N 个没签」计数<b>一概不读</b> arrival。</li>
+  <li><code>already</code>(平台侧已签,不是我们领的)不核对 —— 没有「到账」可确认;同日早先 claim 留下的核对单<b>保留</b>。</li>
+</ul>
+
+<h2 id="edge">边界</h2>
+<table>
+  <tr><th>情况</th><th>处理</th></tr>
+  <tr><td>发放延迟</td><td>claim 当轮 pending,后续每轮取数继续核(最长到跨日)。</td></tr>
+  <tr><td>消耗抵消</td><td>+100 与 −80 同轮 → delta=+20 仍 confirmed;+100 与 −120 同轮 → pending/unseen,不误报。</td></tr>
+  <tr><td>充值混入</td><td>一期接受:文案永远带「按余额推算」;基线通常只有几分钟旧,窗口很小。</td></tr>
+  <tr><td>换账号</td><td>签到渠道是会话/本机登录态,取数侧基本不落指纹(fp 分段帮不上忙),靠周期日截止 + 文案标注兜底;误报后果仅一句展示文案。</td></tr>
+  <tr><td>渠道隐藏 / 开关关闭</td><td><code>settle_arrivals</code> 只处理 enabled 且未隐藏的渠道,与 <code>run_checkin</code> 闸门同口径。</td></tr>
+  <tr><td>claim 后没取到基线</td><td>不核对,arrival 留空,界面落回旧文案。</td></tr>
+</table>
+
+<h2 id="impl">实现落点(v0.1.67)</h2>
+<ul>
+  <li><code>core/src/checkin.rs</code> — <code>ArrivalInfo</code> + <code>ARRIVAL_EPS</code> + observe 状态机(5 个单测:正增量 / 消耗抵消 / 跨日 / 落定不可改写 / serde 兼容)。</li>
+  <li><code>core/src/store.rs</code> — <code>latest_snapshot(provider_id)</code>。</li>
+  <li><code>src-tauri/src/lib.rs</code> — <code>run_checkin</code> 基线读取 + 即时核对;<code>settle_arrivals</code>(挂 <code>refresh_now</code> / <code>poll_loop</code>);<code>CheckinState.arrival</code> 透出(仅当天)。</li>
+  <li><code>app/src/app.js</code> — <code>ckArrivalNote</code> + ckText claimed 分支 + ckBadgeTip。</li>
+</ul>
+
+</div>
+</body>
+</html>

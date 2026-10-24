@@ -4817,6 +4817,35 @@ function ckHold(s) {
 const CK_ROLL = { trae: 0, workbuddy: 0, qoder: 10, "qoder-cn": 10 };
 
 /**
+ * claim 之后的余额到账核对(**纯证据**,设计见 docs/design/design-arrival-confirm-2026-10-24.html)。
+ *
+ * 判定永远以平台回查为准(签到红线②),所以这里只有「确认得更实」的说法,
+ * **没有「确认失败」**—— 取数间隔里的正常消耗会把 +100 压成负增量
+ * (grants.rs 已论证过),见不到增量只能说"未见",明说"不代表没领到"。
+ * 增量按纪律带「按余额推算」标注,不当平台事实说。
+ *
+ * 返回一句话(不带分隔符);后端还没给核对单(老版本 / 没取到基线)返回 null,
+ * 调用方落回旧文案。
+ */
+function ckArrivalNote(s) {
+  const a = s && s.arrival;
+  if (!a) return null;
+  if (a.status === "confirmed" && a.delta !== null && a.delta !== undefined) {
+    const d = "+" + points(a.delta);
+    const match =
+      s.credits !== null &&
+      s.credits !== undefined &&
+      Math.abs(a.delta - s.credits) <= 5;
+    return match
+      ? "余额已确认到账(增量 " + d + ",与平台数额吻合)"
+      : "余额已见增量 " + d + "(按余额推算)";
+  }
+  if (a.status === "pending") return "正在核对到账(随下一轮取数更新)";
+  if (a.status === "unseen") return "余额未见增量(可能被消耗抵消,不代表没领到)";
+  return null;
+}
+
+/**
  * 状态 → 一行字 + 一个按钮。八种状态照设计稿 7.2 的表。
  *
  * ⚠ **数额可能没有**(2026-10-21 真机):Trae / WorkBuddy 的签到接口常常**不返回**
@@ -4869,13 +4898,16 @@ function ckText(s) {
   }
   // 连续天数只有 Qoder 的接口给(streak_days),有就带上 —— 比现有两个渠道多一个可展示项
   const streak = s.streakDays ? " · 连续 " + s.streakDays + " 天" : "";
-  if (o.startsWith("claimed"))
+  if (o.startsWith("claimed")) {
+    // 到账核对:余额见着增量就说一声;没见着也不谎报失败(消耗可能把发放抵消掉)
+    const an = ckArrivalNote(s);
     return {
       text:
         (hasN ? "今日已领" + amt : "今日已签到(平台未返回数额)") +
         streak +
-        " · 已触发到账核对",
+        (an ? " · " + an : " · 已触发到账核对"),
     };
+  }
   if (o.startsWith("already"))
     return {
       text: (hasN ? "今日已领" + amt : "今日已签到(平台未返回数额)") +
@@ -5068,7 +5100,11 @@ function ckBadgeHtml(c) {
 function ckBadgeTip(s) {
   const o = String(s.outcome || "");
   const bits = [];
-  if (o.startsWith("claimed")) bits.push("今天已领" + (s.credits ? " +" + s.credits + " 分" : ""));
+  if (o.startsWith("claimed")) {
+    bits.push("今天已领" + (s.credits ? " +" + s.credits + " 分" : ""));
+    const an = ckArrivalNote(s);
+    if (an) bits.push(an);
+  }
   else if (o.startsWith("already"))
     bits.push("平台显示今天已签到" + (s.credits ? "(数额 " + s.credits + " 分)" : ""));
   else if (o.startsWith("inactive")) bits.push(s.lastMessage || "本期无打卡活动,等下一期");

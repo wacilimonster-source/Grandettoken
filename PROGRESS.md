@@ -3200,3 +3200,44 @@ WorkBuddy AI(国际版)渠道:桌面端凭据只读复用 + 自动续期、积�
 **PASS**（tauri.conf.json 的公钥能验签本版安装包，已装用户收得到）。
 
 本机未用打包产物覆盖正在运行的应用，留给自动更新验证。
+
+## 签到「到账核对」二次校验:用余额差值见证 claim 真的到账了(2026-10-24,v0.1.66 → v0.1.67)
+
+**动机**:Trae / WorkBuddy 的签到接口经常不返回数额(0.1.5x 起真机:`credits = null` 是生产常态),
+界面只能说「平台未返回数额」,领没领到、领了多少无从核对。而签到渠道的余额快照本来就在每轮落库
+(`fetch.rs` → `snapshots`,provider id 与签到 id 相同),claim 成功后也已经触发 `refresh_now`
+——缺的只是把这两条线在签到这一侧接起来。设计稿:
+[`docs/design/design-arrival-confirm-2026-10-24.html`](docs/design/design-arrival-confirm-2026-10-24.html)。
+
+**定位(只见证,不裁决)**:余额核对是 `claimed` 之后的**纯证据层**,单向工作 ——
+只能把结论「确认得更实」,永远不能否决或改写签到结论。三条红线的落法:
+
+1. 判定链路一字不动:回查状态仍是**唯一成功证据**;明确不做「用余额把 confirming 升级成 claimed」
+   (余额增量分不清「我们领的」和「恰好充值到账」)。
+2. 推算的不当事实说:增量在界面**永远带「按余额推算」标注**(与 `grants.rs` 的 `source:"delta"` 同纪律);
+   `last_credits` 不回填观察值 —— `checkin_month_credits` 的「本月已领」只信平台字段。
+3. 核对结论绝不参与判定:不碰 `last_code` / `done_for_day` / `signed_today` / `blocks_today`,
+   徽标颜色与「N 个没签」计数一概不读它。
+
+**实现**:
+
+- `core/checkin.rs`:`ArrivalInfo { status, baseline, baseline_at, delta, observed_at, day }` +
+  `ARRIVAL_EPS = 0.5`(与 `grants::GRANT_EPS` 同值)。`observe()` 单向判定:
+  正增量(`>= EPS`)→ confirmed;`delta <= EPS` 维持 pending(**没有「确认失败」这个态** ——
+  取数间隔里的消耗会把 +100 压成负数,判失败等于拿消耗当没发放);跨过签到周期日还没见到 → unseen。
+  落定的单子不再改写(confirmed 之后的消耗、unseen 之后的充值都不动它)。
+- `core/store.rs`:`latest_snapshot(provider_id)` —— claim 前读基线、取数后读现值,纯读库。
+- `src-tauri/lib.rs`:`run_checkin` 在发起 claim **前**取基线快照(零网络请求;读不到就不核对);
+  判 `Claimed` 后 `refresh_now` 跑完即时核一次,落 `entry.arrival` + diaglog 一行。
+  新增 `settle_arrivals()`:挂 `refresh_now` / `poll_loop` 的取数完成点,对 pending 单子拿最新快照接着核,
+  状态迁移才落盘 + `checkin-updated` 事件;只改 `checkin[id].arrival` 这一项(N04 锁纪律)。
+  同日没 claim 的后续运行(already / retry)**保留**既有核对单;跨周期日才清。
+  `CheckinState.arrival` 只透出**今天**的单子 —— 昨天的 confirmed 挂在今天的 already 上是误导。
+- `app/src/app.js`:`ckArrivalNote()` —— confirmed 且与平台数额吻合(|delta−credits| ≤ 5)说
+  「余额已确认到账(增量 +N,与平台数额吻合)」;没吻合说「余额已见增量 +N(按余额推算)」;
+  pending「正在核对到账(随下一轮取数更新)」;unseen「余额未见增量(可能被消耗抵消,不代表没领到)」;
+  没有核对单落回旧文案「已触发到账核对」。同一句话进 ckBadgeTip。
+
+**测试**:core 新增 5 条(正增量确认 / 持平·消耗·浮点噪声维持 pending / 跨日落 unseen /
+落定不可改写 / 老配置 JSON 无 arrival 字段的 serde 兼容),core 全量 **333 条全绿**;
+`cargo check`(src-tauri)通过;`jsdom-smoke` **67/67**。

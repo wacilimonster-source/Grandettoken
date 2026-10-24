@@ -445,6 +445,27 @@ impl Store {
         Ok(rows)
     }
 
+    /// 某渠道最新一条**成功**快照的 (ts, remaining)。
+    ///
+    /// 签到的到账核对用(checkin::ArrivalInfo):claim 前读一次当基线,
+    /// claim + 取数之后再读一次比增量 —— 纯读库,零网络请求。
+    /// 读不到(该渠道从未成功取数)返回 None,调用方退化为"不核对"。
+    pub fn latest_snapshot(&self, provider_id: &str) -> Result<Option<(i64, f64)>, String> {
+        self.conn
+            .query_row(
+                "SELECT ts, remaining FROM snapshots
+                 WHERE provider_id = ?1 AND remaining IS NOT NULL
+                 ORDER BY ts DESC LIMIT 1",
+                params![provider_id],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?)),
+            )
+            .map(Some)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                e => Err(format!("读取最新快照失败: {e}")),
+            })
+    }
+
     // ───────────── 积分到账(credit_grants)─────────────
     // 设计见 docs/design/design-workbuddy-ai-channel-2026-10-23.html。
     // 与 checkin_log 分开:那张表记的是"签到尝试"(退避、幂等、连签),这张记的是

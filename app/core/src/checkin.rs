@@ -362,6 +362,78 @@ pub fn next_delay(attempts: i64) -> i64 {
 // 节拍器把 None 读成"不在退避中",于是当天改成每 5 分钟硬撞(报告 P1-2)。
 // 现在"该不该继续当天重试"只由 next_delay 的封顶退避表达一处。
 
+// ───────────── 到账核对(claim 之后的余额二次校验)─────────────
+//
+// 设计见 docs/design/design-arrival-confirm-2026-10-24.html。定位是**只见证,不裁决**:
+//
+//   ① 回查状态仍是唯一成功证据 —— 余额核对只发生在判成 `claimed` **之后**,
+//      永远不能用它把 `confirming` 升级成 `claimed`(余额增量分不清"我们领的"和"充值");
+//   ② 推算的东西不当事实说 —— 增量在界面上永远带「按余额推算」标注,
+//      与 `grants.rs` 的 `source: "delta"` 同一条纪律;
+//   ③ 核对结论绝不参与判定:不碰 `last_code` / `done_for_day` / `blocks_today`,
+//      徽标颜色与"今天已处理"的口径一概不读它。
+//
+// 单向性:判定只有 confirmed / pending / unseen 三态,**没有"确认失败"**。
+// 取数间隔里的正常消耗会把 +100 压成负增量(grants.rs 已论证过),
+// 所以 `delta ≤ 0` 只能落 unseen("未见增量"),文案明说"不代表没领到"。
+
+/// 正增量才算到账迹象。与 `grants::GRANT_EPS` 同值:低于它当浮点噪声。
+pub const ARRIVAL_EPS: f64 = 0.5;
+
+/// 一次到账核对。挂在 `CheckinCfg::arrival` 上,claim 前取基线快照,
+/// 之后每份新快照喂给 [`ArrivalInfo::observe`] 直到三态之一落定。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArrivalInfo {
+    /// `pending`(还没见到正增量)→ `confirmed`(见到了)/ `unseen`(跨日还没见到)。
+    pub status: String,
+    /// claim 前最后一份成功快照的余额与时刻。
+    pub baseline: f64,
+    pub baseline_at: i64,
+    /// 确认时观察到的增量(confirmed 才有)。
+    pub delta: Option<f64>,
+    pub observed_at: Option<i64>,
+    /// 签到周期日(与 `last_day` 同口径,含 Qoder 的 10:00 跨日)。
+    /// 核对的截止线:跨了这一天还没见到增量就落 unseen,不隔天追账。
+    pub day: String,
+}
+
+impl ArrivalInfo {
+    /// claim 前调用:以当时的最新快照为基线开一张核对单。
+    pub fn start(baseline: f64, baseline_at: i64, day: String) -> Self {
+        Self {
+            status: "pending".into(),
+            baseline,
+            baseline_at,
+            delta: None,
+            observed_at: None,
+            day,
+        }
+    }
+
+    /// 拿一份新快照喂给核对。
+    ///
+    /// 判序:先看跨日(过截止线落 unseen),再看增量(正的落 confirmed),
+    /// 都不满足就维持 pending 等下一份快照。**已落定的单子是事实,不再改写**。
+    pub fn observe(&mut self, balance: f64, now: i64, today: &str) {
+        if self.status != "pending" {
+            return;
+        }
+        if today != self.day {
+            // 跨日了还没见到:落 unseen。不判失败 —— 发放可能延迟、也可能被消耗抵消。
+            self.status = "unseen".into();
+            return;
+        }
+        let d = balance - self.baseline;
+        // `>=` 与 grants::detect 同口径:正好到阈值也算(detect 是 `d < EPS → None`)
+        if d >= ARRIVAL_EPS {
+            self.status = "confirmed".into();
+            self.delta = Some(d);
+            self.observed_at = Some(now);
+        }
+    }
+}
+
 /// 签到渠道的配置(每渠道一份)。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -407,6 +479,10 @@ pub struct CheckinCfg {
     pub activity_history: Vec<QoderActivity>,
     /// 最近一次活动列表中的优先活动,供渠道详情和首页徽标展示。
     pub latest_activity: Option<QoderActivity>,
+    /// claim 之后的余额到账核对(**纯证据,不参与判定**,见本文件「到账核对」一节)。
+    /// 只在 `last_code` 是 `claimed` 的那一次写入;`already`(平台侧已签)不核对 ——
+    /// 那不是我们领的,没有"到账"可确认。
+    pub arrival: Option<ArrivalInfo>,
 }
 
 impl Default for CheckinCfg {
@@ -428,6 +504,7 @@ impl Default for CheckinCfg {
             last_activity_notice_key: None,
             activity_history: Vec::new(),
             latest_activity: None,
+            arrival: None,
         }
     }
 }
@@ -1944,5 +2021,80 @@ mod tests {
             last = out;
         }
         panic!("所有桌面端凭据都被签到接口拒绝(最后一份:{last:?})");
+    }
+
+    // ───────────── 到账核对(ArrivalInfo)─────────────
+
+    /// 正增量落 confirmed;数额记下,时刻记下。
+    #[test]
+    fn arrival_positive_delta_confirms() {
+        let mut a = ArrivalInfo::start(1000.0, 100, "2026-10-24".into());
+        a.observe(1100.0, 200, "2026-10-24");
+        assert_eq!(a.status, "confirmed");
+        assert_eq!(a.delta, Some(100.0));
+        assert_eq!(a.observed_at, Some(200));
+    }
+
+    /// 持平 / 消耗抵消 / 浮点噪声都不是"确认失败" —— 维持 pending 等下一份快照。
+    #[test]
+    fn arrival_non_positive_stays_pending() {
+        let mut a = ArrivalInfo::start(1000.0, 100, "2026-10-24".into());
+        a.observe(1000.0, 200, "2026-10-24");
+        assert_eq!(a.status, "pending", "持平不是失败:发放可能还没到");
+        a.observe(940.0, 300, "2026-10-24");
+        assert_eq!(a.status, "pending", "消耗把增量压成负数,更不能判失败");
+        a.observe(1000.4, 400, "2026-10-24");
+        assert_eq!(a.status, "pending", "低于 EPS 的抖动不算");
+        a.observe(1000.5, 500, "2026-10-24");
+        assert_eq!(a.status, "confirmed", "正好到阈值算(grants::detect 同口径)");
+        assert_eq!(a.delta, Some(0.5));
+    }
+
+    /// 跨过签到周期日还没见到增量 → unseen("未见",不是"没领到")。
+    /// Qoder 的周期日从 10:00 起算,cycle_day 的口径必须一致。
+    #[test]
+    fn arrival_day_roll_without_delta_is_unseen() {
+        let mut a = ArrivalInfo::start(1000.0, 100, "2026-10-24".into());
+        a.observe(1000.0, 200, "2026-10-24");
+        assert_eq!(a.status, "pending");
+        a.observe(1000.0, 300, "2026-10-25");
+        assert_eq!(a.status, "unseen");
+        assert_eq!(a.delta, None, "unseen 不该带增量");
+    }
+
+    /// 落定的单子是事实:confirmed / unseen 之后再来快照不再改写。
+    #[test]
+    fn arrival_settled_is_final() {
+        let mut a = ArrivalInfo::start(1000.0, 100, "2026-10-24".into());
+        a.observe(1100.0, 200, "2026-10-24");
+        a.observe(50.0, 300, "2026-10-25");
+        assert_eq!(a.status, "confirmed", "confirmed 之后的消耗不改写结论");
+        assert_eq!(a.delta, Some(100.0));
+
+        let mut b = ArrivalInfo::start(1000.0, 100, "2026-10-24".into());
+        b.observe(1000.0, 300, "2026-10-25");
+        assert_eq!(b.status, "unseen");
+        b.observe(2000.0, 400, "2026-10-25");
+        assert_eq!(b.status, "unseen", "unseen 之后的跳升(充值)也不改写");
+    }
+
+    /// 旧配置 JSON 里没有 arrival 字段:serde default 必须兜住(None),
+    /// 老库升级上来不炸 —— 与 CheckinCfg 其它字段的向后兼容同一套约定。
+    #[test]
+    fn arrival_field_is_backward_compatible() {
+        let old: CheckinCfg =
+            serde_json::from_str(r#"{"enabled":true,"auto":true,"lastCode":"claimed"}"#).unwrap();
+        assert_eq!(old.arrival, None);
+        assert_eq!(old.last_code.as_deref(), Some("claimed"));
+
+        let with_arrival: CheckinCfg = serde_json::from_str(
+            r#"{"enabled":true,"auto":true,
+                "arrival":{"status":"confirmed","baseline":1000,"baselineAt":100,
+                           "delta":100,"observedAt":200,"day":"2026-10-24"}}"#,
+        )
+        .unwrap();
+        let a = with_arrival.arrival.expect("arrival 应该读得回来");
+        assert_eq!(a.status, "confirmed");
+        assert_eq!(a.delta, Some(100.0));
     }
 }

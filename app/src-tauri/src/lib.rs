@@ -1800,6 +1800,8 @@ async fn poll_loop(app: tauri::AppHandle) {    let mut failures = 0u32;
         let _ = app.emit("channels-updated", &views);
         // 跌破红线的系统通知(裁决 3A):只在跌破那一刻、一天一次、按渠道记账
         maybe_notify_crit(&app, &views);
+        // 快照已落库:顺手核一轮待落定的到账核对单(零网络请求,读库比增量)
+        settle_arrivals(&app).await;
     }
 }
 
@@ -1849,6 +1851,8 @@ async fn refresh_now(app: &tauri::AppHandle) {
     let views = fetcher.fetch_shared(&store).await;
     LAST_REFRESH.store(now_ts(), std::sync::atomic::Ordering::Relaxed);
     let _ = app.emit("channels-updated", &views);
+    // 快照已落库:顺手核一轮待落定的到账核对单(零网络请求,读库比增量)
+    settle_arrivals(app).await;
 }
 
 // ───────────── 检查更新 ─────────────
@@ -2443,6 +2447,9 @@ struct CheckinState {
     /// 注意这与 `outcome` 不重复:`outcome` 是给"设置页"看的原始短码(含 reason),
     /// 这里是给"首页徽标"用的**已判定结论**,`already` 也算签完。
     done_today: bool,
+    /// claim 之后的余额到账核对(**纯证据**,前端只把它写进文案,不改徽标与状态)。
+    /// 只透出**今天**的核对单:昨天的 confirmed 跟着今天的 already 显示会变成误导。
+    arrival: Option<checkin::ArrivalInfo>,
 }
 
 /// 该渠道现在能不能拿到签到凭据;拿不到就把原因说清楚(界面照抄)。
@@ -2616,6 +2623,7 @@ fn checkin_state_of(id: &str, cfg: &Config, store: &Store, note: Option<String>)
         activity_state: c.activity_state,
         last_activity_check_at: c.last_activity_check_at,
         activity_history: c.activity_history,
+        arrival: c.arrival.filter(|a| a.day == today && c.last_day.as_deref() == Some(a.day.as_str())),
     }
 }
 
@@ -3141,9 +3149,18 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
     //
     // Qoder 的可领短码是 `retry:ready:{活动id}`(领取地址要这个 id);
     // Trae / WorkBuddy 是固定的 `retry:ready`。两种都要认。
+    //
+    // 到账核对的基线:claim **前**最后一份成功快照(纯读库,零网络请求)。
+    // 读不到(该渠道还没成功取过数)就不核对 —— 宁可没有证据,不发一个多余请求。
+    let mut arrival_base: Option<(i64, f64)> = None;
     if let checkin::Outcome::Retry(m) = &out {
         if m == "ready" || m.starts_with("ready:") {
             let claim_id = checkin::ready_claim_id(m).filter(|s| !s.is_empty());
+            arrival_base = {
+                let st = app.state::<AppState>();
+                let snap = lock_rw(&st.store).latest_snapshot(def.id).ok().flatten();
+                snap
+            };
             let claimed = checkin::call(&client, def, &cred, true, claim_id).await;
             credits = match &claimed {
                 checkin::Outcome::Claimed(c) | checkin::Outcome::Already(c) => c.or(credits),
@@ -3180,9 +3197,38 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
         }
     }
 
-    // 到账核对:立刻取一轮(新包会出现在余额里),失败不影响签到结论
+    // 到账核对:立刻取一轮(新包会出现在余额里),失败不影响签到结论。
+    // 增量是**纯证据**(checkin::ArrivalInfo):见不到正增量就落 pending,
+    // 交给 settle_arrivals 在后续每轮取数里接着核(发放可能延迟/被消耗抵消)。
+    // 这里绝不回改 out —— 回查状态才是唯一成功证据。
+    let mut arrival: Option<checkin::ArrivalInfo> = None;
     if matches!(out, checkin::Outcome::Claimed(_)) {
         refresh_now(app).await;
+        if let Some((base_at, base_bal)) = arrival_base {
+            let mut a = checkin::ArrivalInfo::start(base_bal, base_at, today.clone());
+            let snap = {
+                let st = app.state::<AppState>();
+                let s = lock_rw(&st.store).latest_snapshot(def.id).ok().flatten();
+                s
+            };
+            if let Some((_, bal)) = snap {
+                a.observe(bal, now_ts(), &today);
+            }
+            tokenscope_core::diaglog::write_keyed(
+                "checkin",
+                id,
+                &format!(
+                    "到账核对:{} · 基线 {}@{} · {}",
+                    a.status,
+                    a.baseline,
+                    a.baseline_at,
+                    a.delta
+                        .map(|d| format!("增量 +{d}"))
+                        .unwrap_or_else(|| "未见增量".into())
+                ),
+            );
+            arrival = Some(a);
+        }
     }
 
     // 落配置 + 落流水(凭据不进去)
@@ -3221,6 +3267,14 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
         }
         entry.last_try_at = Some(now);
         entry.last_credits = credits;
+        // 到账核对单:这次真 claim 了才写。今天没 claim(比如 already / retry)时
+        // **保留**既有单子 —— 上面那次 claim 的证据仍然有效;跨了周期日才清,
+        // 否则昨天的 confirmed 会挂在今天的 already 上变成误导。
+        entry.arrival = match arrival {
+            Some(a) => Some(a),
+            None if same_day => entry.arrival.take().filter(|a| a.day == today),
+            None => None,
+        };
         // 签到落一行诊断(**不含凭据**)。以前这条路一个字都不记,排查只能靠数据库反推 ——
         // 2026-10-21 查"为什么显示不出领了多少分"时才发现:Trae / WorkBuddy 的接口
         // 根本不返回数额,而日志里连这条事实都看不到。现在至少能一眼确认
@@ -3311,6 +3365,85 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
     }
     let _ = app.emit("checkin-updated", serde_json::json!({ "id": id }));
     Ok(out)
+}
+
+/// 每轮取数之后:把还没落定的到账核对单(pending)接着往下核。
+///
+/// 挂在 `refresh_now` 与 `poll_loop` 的取数完成点上 —— 快照已经写进库,
+/// 这里只读库比增量,**零网络请求**。claim 当轮就能确认是常态(签到成功后
+/// `run_checkin` 会立刻取一轮);这里兜的是"发放延迟 / 被同轮消耗抵消"的那部分,
+/// 持续核到该渠道的签到周期日为止(`ArrivalInfo::observe` 里跨日落 unseen)。
+///
+/// 纪律:只改 `checkin[id].arrival` 这一项(N04 的锁纪律,不整份克隆覆盖),
+/// 不碰 `last_code` / `outcome` —— 核对是证据,永不回改签到结论。
+async fn settle_arrivals(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let now = now_ts();
+    // ① 读:谁有待落定的核对单,各自的最新快照是什么
+    let mut updates: Vec<(String, checkin::ArrivalInfo)> = Vec::new();
+    {
+        let cfg = lock_rw(&state.config);
+        for def in checkin::CHECKINS {
+            let Some(c) = cfg.checkin.get(def.id) else { continue };
+            if !c.enabled {
+                continue; // 与 run_checkin 的闸门同口径:关了就不动
+            }
+            if cfg.hidden_channels.iter().any(|h| h == def.id) {
+                continue;
+            }
+            let Some(a) = c.arrival.as_ref() else { continue };
+            if a.status != "pending" {
+                continue;
+            }
+            let today = cycle_day_of(def.id, now);
+            let snap = lock_rw(&state.store)
+                .latest_snapshot(def.id)
+                .ok()
+                .flatten();
+            let Some((_, bal)) = snap else { continue };
+            let mut a2 = a.clone();
+            a2.observe(bal, now, &today);
+            if a2 != *a {
+                updates.push((def.id.to_string(), a2));
+            }
+        }
+    }
+    if updates.is_empty() {
+        return;
+    }
+    // ② 写:只合并改动的那几项,再整份落盘(与 run_checkin 的收尾同一套路)
+    let merged = {
+        let mut live = lock_rw(&state.config);
+        for (id, a) in &updates {
+            if let Some(e) = live.checkin.get_mut(id) {
+                e.arrival = Some(a.clone());
+            }
+            tokenscope_core::diaglog::write_keyed(
+                "checkin",
+                id,
+                &format!(
+                    "到账核对:{} · 基线 {}@{} · {}",
+                    a.status,
+                    a.baseline,
+                    a.baseline_at,
+                    a.delta
+                        .map(|d| format!("增量 +{d}"))
+                        .unwrap_or_else(|| "未见增量".into())
+                ),
+            );
+        }
+        live.clone()
+    };
+    {
+        let store = lock_rw(&state.store);
+        if let Err(e) = merged.save(&store) {
+            eprintln!("到账核对落库失败: {e}");
+        }
+    }
+    // ③ 告诉前端:核对单落定了,渠道卡与设置页的文案要当场刷新
+    for (id, _) in &updates {
+        let _ = app.emit("checkin-updated", serde_json::json!({ "id": id }));
+    }
 }
 
 /// 拿不到凭据时也要**留一条流水**。
