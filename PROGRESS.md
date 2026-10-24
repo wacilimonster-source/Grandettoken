@@ -3241,3 +3241,21 @@ WorkBuddy AI(国际版)渠道:桌面端凭据只读复用 + 自动续期、积�
 **测试**:core 新增 5 条(正增量确认 / 持平·消耗·浮点噪声维持 pending / 跨日落 unseen /
 落定不可改写 / 老配置 JSON 无 arrival 字段的 serde 兼容),core 全量 **333 条全绿**;
 `cargo check`(src-tauri)通过;`jsdom-smoke` **67/67**。
+
+### 发版 v0.1.67（2026-10-24）
+
+签到「到账核对」:claim 后用渠道余额快照差值二次确认到账(三态 pending / confirmed / unseen,
+无「确认失败」态),界面如实标「按余额推算」;判定链路与「回查是唯一成功证据」不变,
+核对结论不参与余额渲染与签到判定。设计稿 `docs/design/design-arrival-confirm-2026-10-24.html`。
+core 新增 5 条 ArrivalInfo 单测,全量 333 条全绿后才发。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.67_x64-setup.exe`（5,215,162 B，SHA-256
+`416b9cfed607b420df149caa200d6d40a4665f363919ba951d945fdfbae4b0a7`）及 `.sig` 已发布到
+[GitHub Release v0.1.67](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.67)。
+发布提交 `96ce5bc`，tag `v0.1.67`。
+
+`node build/verify-release.js`（`HTTPS_PROXY=http://127.0.0.1:7897` + `NODE_USE_ENV_PROXY=1`）
+**13/13 PASS**;`node build/verify-signature.js` **PASS**（tauri.conf.json 的公钥能验签本版
+安装包,已装用户收得到）。
+
+本机未用打包产物覆盖正在运行的应用,留给自动更新验证。
