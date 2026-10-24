@@ -2587,7 +2587,16 @@ fn checkin_state_of(id: &str, cfg: &Config, store: &Store, note: Option<String>)
     // 可能早就变了(2026-10-20 真机:启动后 5 分钟内界面一直挂着过期的"凭据失效",
     // 把用户引去网页登录,而那条路还被网关拒)。在节拍器重新判定回来之前,
     // 如实说"正在重新确认",且**不给「去登录」**。
-    let outcome = if c.auth_is_stale(APP_VERSION) {
+    //
+    // 跨日后的旧短码同样不当事实显示(2026-10-25 真机,修「0 点后界面挂着昨天的已签」):
+    // `last_code` 是**周期日作用域**的结论,昨天领过不等于今天领过。以前原样透出,
+    // 0 点一过徽标还挂「✓已签/今日已领」,而 doneToday 已是 false —— 同一屏自相矛盾。
+    // 现在跨日就报空,界面落回「今天还没签 + 领按钮」,与 doneToday 同口径。
+    // Qoder 的 10:00 跨日自动正确:09:59 时周期日还没翻,昨天的结论照常显示。
+    let fresh_day = c.last_day.as_deref() == Some(today.as_str());
+    let outcome = if !fresh_day {
+        String::new()
+    } else if c.auth_is_stale(APP_VERSION) {
         "recheck".to_string()
     } else {
         c.last_code.clone().unwrap_or_default()
@@ -2604,7 +2613,8 @@ fn checkin_state_of(id: &str, cfg: &Config, store: &Store, note: Option<String>)
         enabled: c.enabled,
         auto: c.auto,
         outcome,
-        credits: c.last_credits,
+        // 数额与短码同一个作用域:昨天的 +100 不该挂到今天「已领」的文案里
+        credits: if fresh_day { c.last_credits } else { None },
         attempts: c.attempts,
         last_try_at: c.last_try_at,
         next_try_at: c.next_try_at,
@@ -2620,7 +2630,10 @@ fn checkin_state_of(id: &str, cfg: &Config, store: &Store, note: Option<String>)
         streak_days: c.last_streak_days,
         log,
         latest_activity: c.latest_activity,
-        activity_state: c.activity_state,
+        // 活动状态按 period(观测时的周期日)门控:昨天监测到的「已领取」在今天
+        // 不算事实 —— 不门控的话,徽标刚被空短码翻回「待签」,又从旧活动态翻回
+        // 「平台已领取」,同一份数据两个口径。最新一轮监测永远带着今天的 period。
+        activity_state: c.activity_state.filter(|a| a.period == today),
         last_activity_check_at: c.last_activity_check_at,
         activity_history: c.activity_history,
         arrival: c.arrival.filter(|a| a.day == today && c.last_day.as_deref() == Some(a.day.as_str())),
@@ -2975,6 +2988,14 @@ async fn monitor_standard_activity(app: &tauri::AppHandle, id: &str) {
     let activity = activity_state_from_outcome(id, &out, body.as_ref(), now_ts());
     let can_auto_claim = out == checkin::Outcome::Retry("ready".into());
     record_channel_activity(app, id, activity, true).await;
+
+    // 平台侧已签(通常是用户自己在客户端点的):把这个**平台给的既成事实**记进今天的账。
+    // 以前监测只把结论写进展示字段,不写 lastCode —— 2026-10-25 真机:00:04 在客户端
+    // 签了,00:09 监测问到了 already,doneToday 却一直是 false,首页一直挂「今天还没签」。
+    // 自动领取关着的人受益最大:在客户端签完后,挂件一小时内自己纠正,不用点任何东西。
+    if let checkin::Outcome::Already(cr) = &out {
+        record_observed_already(app, id, def, now, *cr).await;
+    }
     drop(busy);
 
     if can_auto_claim {
@@ -2992,9 +3013,88 @@ async fn monitor_standard_activity(app: &tauri::AppHandle, id: &str) {
     }
 }
 
+/// 活动监测查到「平台侧已签」时,把它记成今天的既成事实(见 `monitor_standard_activity`
+/// 里调用点的注释)。两条保护:
+///   ① **只在 `last_day` 不是今天时写** —— 今天已有结论(run_checkin 或上一轮监测
+///      写过)就不覆盖,`claimed`(我们领的,带核对单)绝不能被改写成 `already`;
+///   ② **只在 `due_now` 之后记** —— 与自动领取同一道「平台的新一天已经开始」信任线
+///      (00:23+抖动)。平台 0 点后可能短暂残留昨天的 `checked_in`,太早信它会把
+///      「昨天已签」记成「今天已签」→ 当天静默丢分(与 Qoder `day_roll_hour` 同一条教训)。
+///
+/// attempts / next_try_at / arrival 一概不动:这是**观察**,不是我们发起的尝试。
+async fn record_observed_already(
+    app: &tauri::AppHandle,
+    id: &str,
+    def: &checkin::CheckinDef,
+    now: i64,
+    credits: Option<f64>,
+) {
+    let today = cycle_day_of(id, now);
+    if !checkin::due_now(now, &today, id, def.day_roll_hour) {
+        return;
+    }
+    let mut wrote = false;
+    let state = app.state::<AppState>();
+    let save_result = save_config_off_main(&state, |live| {
+        let entry = live.checkin.entry(id.to_string()).or_default();
+        if entry.last_day.as_deref() == Some(today.as_str()) {
+            return; // 今天已有结论,不覆盖
+        }
+        entry.last_day = Some(today.clone());
+        entry.last_code = Some("already".into());
+        entry.last_credits = credits;
+        entry.last_try_at = Some(now);
+        entry.last_message = None;
+        wrote = true;
+    })
+    .await;
+    if let Err(e) = save_result {
+        eprintln!("{} 监测结论落库失败: {e}", def.name);
+        return;
+    }
+    if !wrote {
+        return;
+    }
+    tokenscope_core::diaglog::write_keyed(
+        "checkin",
+        id,
+        &format!(
+            "监测发现平台已签 · 记入今日(未代领)· 数额={}",
+            credits
+                .map(|c| format!("{c}"))
+                .unwrap_or_else(|| "平台未返回".into())
+        ),
+    );
+    // 流水也留一行:「平台侧显示已签到(活动监测)」—— 与 run_checkin 的 already 行
+    // 区分开,排查时能看出这条不是我们发起的尝试。
+    let attempts = {
+        let state = app.state::<AppState>();
+        let a = lock_rw(&state.config)
+            .checkin
+            .get(id)
+            .map(|c| c.attempts)
+            .unwrap_or(0);
+        a
+    };
+    {
+        let store = lock_rw(&state.store);
+        if let Err(e) = store.record_checkin(
+            id,
+            now,
+            &today,
+            "already",
+            credits,
+            attempts,
+            "平台侧显示已签到(活动监测)",
+        ) {
+            eprintln!("{e}");
+        }
+    }
+    let _ = app.emit("checkin-updated", serde_json::json!({ "id": id }));
+}
+
 /// 独立于每日领取的活动监测。签到开关开启即可每小时检查一次,自动领取关闭时也照常发现活动。
-async fn monitor_qoder_activities(app: &tauri::AppHandle, id: &str) {
-    if UPDATING.load(std::sync::atomic::Ordering::Relaxed) {
+async fn monitor_qoder_activities(app: &tauri::AppHandle, id: &str) {    if UPDATING.load(std::sync::atomic::Ordering::Relaxed) {
         return;
     }
     let now = now_ts();
@@ -3573,7 +3673,22 @@ async fn checkin_now(app: tauri::AppHandle, id: String) -> Result<CheckinState, 
             }
         }
     }
-    let out = run_checkin(&app, &id, true).await?;
+    // 手动点没跑起来时也要留一条流水 —— 节拍器那条路早就有(record_checkin_skip),
+    // 手动这条路以前一个字都不记:「点过但没试成」与「没点过」在数据里无法区分。
+    // 只记凭据类失败;互斥/隐藏/开关这类「本来就不该跑」的拒绝不记,免得误算退避。
+    let out = match run_checkin(&app, &id, true).await {
+        Ok(o) => o,
+        Err(e) => {
+            let gate_like = ["已隐藏", "开关没开", "正在签到", "未知签到渠道"]
+                .iter()
+                .any(|k| e.contains(k));
+            if !gate_like {
+                let now = now_ts();
+                record_checkin_skip(&app, &id, &cycle_day_of(&id, now), now, &e);
+            }
+            return Err(e);
+        }
+    };
     let state = app.state::<AppState>();
     let cfg = lock_rw(&state.config).clone();
     let store = lock_rw(&state.store);

@@ -6216,6 +6216,29 @@ async function refresh() {
       }
     });
   });
+  // ── 跨日重取:签到短码是**周期日作用域**的,北京 0 点(trae/workbuddy)与
+  // 10 点(Qoder)一翻页,昨天的「已签」必须当场翻成「待签」,不能等下一个事件来撞
+  // (2026-10-25 真机:0 点后界面挂着昨天的已签,直到 00:09 的监测事件才被动刷掉)。
+  // 后端已按周期日门控短码;前端只负责在边界时刻重取一次(loadCheckin 自带重渲)。
+  // 北京 0 点 = UTC 16:00,Qoder 10:00 = UTC 02:00(北京无夏令时,UTC 算术稳定)。
+  {
+    const DAY = 86400000;
+    const msToBoundary = () => {
+      const t = Date.now();
+      const dayStart = Math.floor(t / DAY) * DAY;
+      let at = dayStart + 2 * 3600000; // UTC 02:00(Qoder 跨日)
+      if (at <= t) at = dayStart + 16 * 3600000; // UTC 16:00(北京 0 点)
+      if (at <= t) at = dayStart + DAY + 2 * 3600000;
+      return at - t;
+    };
+    const scheduleRollover = () => {
+      setTimeout(() => {
+        loadCheckin();
+        scheduleRollover();
+      }, msToBoundary());
+    };
+    scheduleRollover();
+  }
   await listen("checkin-alert", (ev) => {
     // 后端只在"需要用户动手"(凭据失效 / 接口结构变了)时发这条;绿色版从托盘启动时
     // stderr 永远没人看得到(报告 P2-14 / P3-36)。

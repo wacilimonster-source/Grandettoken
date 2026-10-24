@@ -3259,3 +3259,22 @@ core 新增 5 条 ArrivalInfo 单测,全量 333 条全绿后才发。
 安装包,已装用户收得到）。
 
 本机未用打包产物覆盖正在运行的应用,留给自动更新验证。
+
+## 跨日「已签」三重失真:0 点后挂昨天的结论、客户端签完说没签(2026-10-25,v0.1.67 → v0.1.68)
+
+**现象(本机 10-25 00:00–00:23 全程实测还原)**:0 点过后界面仍显示 trae/workbuddy「已签/今日已领」(实际今天没签);用户 00:04 在平台客户端手动签了两个(余额快照 00:04:25 +100、00:04:51 +100 为证);00:09 活动监测查到平台如实返回 `already`,界面却翻成「今天还没签」挂着,直到 00:23 节拍器重新查才正确。
+
+**根因(读安装版 tokenscope.db + diaglog 定位,三个漏洞叠加)**:
+
+1. **短码跨日不清**:`lastCode=claimed/already` 是周期日作用域的事实,`checkin_state_of` 却原样透出 —— 0 点后昨天的结论继续渲染成「今日已领」,而 `doneToday`(按周期日算)已是 false,同一屏自相矛盾。
+2. **跨日不重取**:前端只在启动/事件/手动操作后重取签到状态,0 点翻页没有触发器,陈旧像素挂到下一个事件。
+3. **监测到的 already 不落账**:`monitor_standard_activity` 把平台真话只写进展示字段(activity_state),不写 `lastDay/lastCode`、不记流水 —— 00:09 明明问到了「已签」,doneToday 一直 false,首页一直挂「今天还没签」。
+
+**修复(v0.1.68,四条)**:
+
+- **① 按周期日门控透出**(`checkin_state_of`):`lastDay ≠ 当前周期日` 时 outcome 报空、credits 报 None、activityState 按 `period`(观测时的周期日)过滤 —— 前端自然落回「今天还没签 + 领按钮」/「待签」,与 doneToday 从此同口径。Qoder 的 10:00 跨日自动正确(09:59 周期日未翻,昨日结论照常显示)。
+- **② 前端跨日定时重取**:`checkin-updated` 监听旁挂自排定时器,到下一个北京 0 点(UTC 16:00)或 Qoder 10 点(UTC 02:00)就 `loadCheckin()` 重渲 —— 0 点整当场翻页,不等事件来撞。北京无夏令时,UTC 算术稳定。
+- **③ 监测查到 already 落账**(`record_observed_already`):`monitor_standard_activity` 查到 `Already` 且今天尚无结论时,记 `lastDay/lastCode=already/lastCredits` + 流水一行(说明写明「平台侧显示已签到(活动监测)」)+ diaglog + `checkin-updated`。两条保护:今天已有结论不覆盖(我们的 `claimed` 带核对单,绝不能被改写);**只在 `due_now` 之后记** —— 与自动领取同一道「平台新一天已开始」信任线(00:23+抖动),防 0 点后平台短暂残留昨天 `checked_in` 被当成今天已签 → 静默丢分(与 Qoder `day_roll_hour` 同一条教训)。attempts/next_try_at/arrival 一概不动(观察≠尝试)。自动领取关着的人受益最大:客户端签完,挂件一小时内自己纠正。
+- **④ 手动路径凭据失败补流水**:`checkin_now` 里 `run_checkin` 报错且非闸门类拒绝(隐藏/开关/互斥/未知渠道)时,走与节拍器同一条 `record_checkin_skip` —— 「点过但没试成」与「没点过」从此可区分。闸门类拒绝不记,免得误算退避。
+
+**测试**:`cargo check`(src-tauri)通过;core 全量 **333 条全绿**(本次改动集中在 lib.rs/前端,core 无新纯函数);`jsdom-smoke` **67/67**;`node --check` 通过。
