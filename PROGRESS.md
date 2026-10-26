@@ -3317,3 +3317,23 @@ core 新增 5 条 ArrivalInfo 单测,全量 333 条全绿后才发。
 **验证**:`cargo check` / `cargo build`(debug)通过;`jsdom-smoke` **68/68** —— 新增 1 条:
 推一轮 4S 从 ¥120 → ¥118,胶囊必须跟着变。反向验证:把监听换回旧写法,该用例 FAIL
 (`before=¥120.00 after=¥120.00`),与真机现象一致。
+
+### 发版 v0.1.69（2026-10-26）
+
+修胶囊数字不跟随刷新（见上一节）：轮询推送改成 `{ views, home }`，胶囊 / 行色调 / 分组 /
+风险带与面板用同一份数据重算。`cargo check` + `cargo build` 通过、`jsdom-smoke` **68/68**
+（新增 1 条回归用例，反向验证旧写法必 FAIL）后发。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.69_x64-setup.exe`（5,217,837 B，SHA-256
+`1efeca1b29c731f0ee11cf206431955b0aaef02bf01e3a54750959c41a47a00e`）及 `.sig` 已发布到
+[GitHub Release v0.1.69](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.69)。
+发布提交 `e30dbfa`，tag `v0.1.69`。
+
+`node build/verify-release.js` **13/13 PASS**；`node build/verify-signature.js` **PASS**
+（tauri.conf.json 的公钥能验签本版安装包，已装用户收得到）。
+
+顺手修了验签脚本自己的一个环境坑：它用裸 `cargo.exe` 靠 PATH 解析，在受限 PATH
+（代理沙箱 / 精简 CI）下会 `spawnSync cargo.exe ENOENT` —— 报出来像"验签失败"，
+其实是找不到编译器。改成用上面已经算好的 `cargoBin` 绝对路径。
+
+本机未用打包产物覆盖正在运行的应用，留给自动更新验证。
