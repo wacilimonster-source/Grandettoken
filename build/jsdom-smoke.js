@@ -308,6 +308,32 @@ const HARNESS = `
     ck("胶囊带限定语「限流」", /class="pq">限流/.test(v), v);
   } catch (e) { ck("胶囊渲染不抛异常", false, e.message); }
 
+  // ── 轮询推送:胶囊必须跟着**这一轮**的数字走(2026-10-26 真机)──
+  // 现场:4S 余额一直在动、面板数字在变,胶囊一直停在启动时的那个数。
+  // 根因:推送只带 views,而胶囊主数字读的是 home_view 的结论 —— 那一份只在
+  // 启动时取过一次。推送现在带 { views, home },两边必须一起更新。
+  try {
+    CFG.pillChannels = ["4sapi"]; // 固定显示 4S,不靠"最紧"碰运气
+    PILL.idx = 0;
+    renderPill(CHANNELS.slice());
+    const before = document.getElementById("pillV").textContent;
+    const views = JSON.parse(JSON.stringify(data.CHANNELS));
+    views.find((c) => c.id === "4sapi").remaining = 118; // 这一轮花掉 2 块
+    const home = JSON.parse(JSON.stringify(data.HOME));
+    home.rows.find((r) => r.id === "4sapi").headline = { amount: 118, unit: "CNY" };
+    applyChannelsPush({ views, home });
+    const after = document.getElementById("pillV").textContent;
+    ck("推送后胶囊跟着这一轮的数字变(¥120 → ¥118)",
+      /120/.test(before) && /118/.test(after), "before=" + before + " after=" + after);
+  } catch (e) {
+    ck("推送后胶囊跟着这一轮的数字变", false, e.message);
+  } finally {
+    CFG.pillChannels = [];
+    CHANNELS = data.CHANNELS;
+    hvApply(data.HOME);
+    render({});
+  }
+
   // ── 吸附竖条 ──
   try {
     DOCK.on = true;

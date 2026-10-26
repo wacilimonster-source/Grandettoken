@@ -32,21 +32,12 @@ async fn get_channels(state: State<'_, AppState>) -> Result<Vec<ChannelView>, St
     Ok(fetcher.fetch_shared(&store).await)
 }
 
-/// 首页四种形态的**统一视图**:一行一个 `FormRow`,加一份排好的顺序与几个计数。
+/// 把**这一份**取数结果算成首页统一视图。
 ///
-/// 存在的理由见 `core::view` 的头注:四种形态以前各自解释一次 `valid / limited /
-/// updatedAt`,同一个渠道能给出三种结论。这一条命令之后,前端只负责"画"。
-///
-/// 取数走 `fetch_shared`(与 `get_channels` 同一闸门、同一份 5 秒内的近期结果),
-/// 所以前端连着调这两条不会多打一次账务接口。
-#[tauri::command]
-async fn home_view(state: State<'_, AppState>) -> Result<view::HomeView, String> {
-    let store = state.store.clone();
-    let fetcher = state.fetcher.clone();
-    let views = fetcher.fetch_shared(&store).await;
-
-    let cfg = lock_rw(&state.config).clone();
-    let now = now_ts();
+/// `home_view` 命令与轮询推送(`channels-updated`)共用它。两条路径必须用同一个
+/// 函数、喂同一份 views —— 2026-10-26 真机:推送只带了 views,前端手里的视图停在
+/// 启动那一刻,于是面板数字一直在动、胶囊(主数字取自 `headline`)一直是启动时的余额。
+fn home_view_of(cfg: &Config, views: &[ChannelView], now: i64) -> view::HomeView {
     // 签到的"今天签完没"由后端判定(Qoder 的周期日从 10:00 起算,前端算必错),
     // 这里沿用 `checkin_state` 那条链路上的同一个函数。
     // 隐藏的渠道不必在这里排除:`build_home` 只数排进行列表的那些行,而隐藏的
@@ -68,7 +59,53 @@ async fn home_view(state: State<'_, AppState>) -> Result<view::HomeView, String>
         })
         .collect();
 
-    Ok(view::build_home(&views, &checks, &view::ViewInput::from_cfg(&cfg, now)))
+    view::build_home(views, &checks, &view::ViewInput::from_cfg(cfg, now))
+}
+
+/// 首页四种形态的**统一视图**:一行一个 `FormRow`,加一份排好的顺序与几个计数。
+///
+/// 存在的理由见 `core::view` 的头注:四种形态以前各自解释一次 `valid / limited /
+/// updatedAt`,同一个渠道能给出三种结论。这一条命令之后,前端只负责"画"。
+///
+/// 取数走 `fetch_shared`(与 `get_channels` 同一闸门、同一份 5 秒内的近期结果),
+/// 所以前端连着调这两条不会多打一次账务接口。
+#[tauri::command]
+async fn home_view(state: State<'_, AppState>) -> Result<view::HomeView, String> {
+    let store = state.store.clone();
+    let fetcher = state.fetcher.clone();
+    let views = fetcher.fetch_shared(&store).await;
+
+    let cfg = lock_rw(&state.config).clone();
+    Ok(home_view_of(&cfg, &views, now_ts()))
+}
+
+/// 一轮取数的推送载荷:**数据 + 由这份数据算出的统一视图**。
+///
+/// 以前只推 `views` 数组。前端拿到数组只能更新面板(它自己会算行数字),
+/// 而胶囊 / 行色调 / 分组 / 风险带读的是 `home_view` 的结论 —— 那一份只在启动时
+/// 取过一次,于是这些地方全停在启动那一刻(2026-10-26 真机:4S 余额在动,胶囊不动)。
+/// 视图跟着数据一起推,前端就不必再为"补一份视图"多调一次 IPC(那还可能多打一轮账务接口)。
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChannelsPush {
+    views: Vec<ChannelView>,
+    home: view::HomeView,
+}
+
+/// 推送一轮取数结果。两处轮询出口(定时循环 / 手动刷新)都走它,免得再漏掉视图。
+fn emit_channels(app: &tauri::AppHandle, views: &[ChannelView]) {
+    let cfg = {
+        let state = app.state::<AppState>();
+        // 先落到局部变量:直接 return 这个表达式的话,MutexGuard 的临时值
+        // 会在 `state` 之后才析构,借用比 state 活得久(E0597)。
+        let c = lock_rw(&state.config).clone();
+        c
+    };
+    let home = home_view_of(&cfg, views, now_ts());
+    let _ = app.emit(
+        "channels-updated",
+        ChannelsPush { views: views.to_vec(), home },
+    );
 }
 
 #[tauri::command]
@@ -1797,7 +1834,7 @@ async fn poll_loop(app: tauri::AppHandle) {    let mut failures = 0u32;
         // 用户「填好 key 却半天看不到数字」
 
         LAST_REFRESH.store(now_ts(), std::sync::atomic::Ordering::Relaxed);
-        let _ = app.emit("channels-updated", &views);
+        emit_channels(&app, &views);
         // 跌破红线的系统通知(裁决 3A):只在跌破那一刻、一天一次、按渠道记账
         maybe_notify_crit(&app, &views);
         // 快照已落库:顺手核一轮待落定的到账核对单(零网络请求,读库比增量)
@@ -1850,7 +1887,7 @@ async fn refresh_now(app: &tauri::AppHandle) {
     };
     let views = fetcher.fetch_shared(&store).await;
     LAST_REFRESH.store(now_ts(), std::sync::atomic::Ordering::Relaxed);
-    let _ = app.emit("channels-updated", &views);
+    emit_channels(app, &views);
     // 快照已落库:顺手核一轮待落定的到账核对单(零网络请求,读库比增量)
     settle_arrivals(app).await;
 }

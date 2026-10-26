@@ -3295,3 +3295,25 @@ core 新增 5 条 ArrivalInfo 单测,全量 333 条全绿后才发。
 
 当晚(10-26 00:00–00:25)留给自动更新后的真机复测:0 点翻页应当场变「待签」,
 00:23+ 自动领取后变「✓已签」;若当天在客户端手动签,一小时内监测应自动认账。
+
+## 胶囊数字不跟随轮询更新(2026-10-26)
+
+**现象(用户报)**:4S 渠道的余额在动、面板数字跟着变,胶囊一直停在启动时的那个数(托盘与胶囊同源,一起僵住)。
+
+**根因**:v0.1.56 引入统一视图之后,`home_view` 只在启动的那一次 `refresh()` 里取过。后台轮询走
+`channels-updated` 事件,前端监听只做了 `CHANNELS = ev.payload` —— 面板行的大数字是前端自己从
+`remaining` 算的,所以照常更新;而胶囊主数字 / 限定语 / 行色调 / 分组 / 风险带读的都是 `HV`
+(后端 `view.rs` 的结论),那一份永远停在启动那一刻。只报 4S 是因为它的余额变得最勤、最容易被看见。
+
+**修复**:
+
+- `lib.rs`:`home_view` 的计算抽成 `home_view_of(cfg, views, now)`,命令与轮询共用同一份实现;
+  推送载荷改成 `ChannelsPush { views, home }`(camelCase),两处轮询出口(定时循环 / `refresh_now`)
+  统一走 `emit_channels`。视图跟着**这一轮**的 views 一起算,前端不必再补一次 IPC
+  —— 补取 `home_view` 在缓存过期时会多打一轮账务接口。
+- `app.js`:`listen("channels-updated")` 改为 `applyChannelsPush(payload)`:收 `{ views, home }`,
+  先 `hvApply(home)` 再 `render({ updated: true })`;老后端只推数组时退回补取 `home_view`,行为不回退。
+
+**验证**:`cargo check` / `cargo build`(debug)通过;`jsdom-smoke` **68/68** —— 新增 1 条:
+推一轮 4S 从 ¥120 → ¥118,胶囊必须跟着变。反向验证:把监听换回旧写法,该用例 FAIL
+(`before=¥120.00 after=¥120.00`),与真机现象一致。

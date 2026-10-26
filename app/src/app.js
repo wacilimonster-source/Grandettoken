@@ -6159,6 +6159,27 @@ async function refresh() {
   render({ updated: true });
 }
 
+/** 收下一轮轮询推送:`{ views, home }` —— 数据与统一视图**一起**到。
+ *
+ * 只收 views 的话,面板数字会更新(行里的大数字是前端自己从 `remaining` 算的),
+ * 而胶囊主数字 / 行色调 / 分组 / 风险带读的是 `home_view` 的结论 —— 那一份以前
+ * 只在启动时取过一次,于是永远停在启动那一刻(2026-10-26 真机:4S 余额一直在动,
+ * 胶囊一直不动,托盘也跟着胶囊一起僵住)。
+ *
+ * 老后端只推一个 views 数组:退回补取一次 `home_view`(与这一轮同一份取数结果,
+ * 5 秒内复用缓存,不会多打账务接口),行为不回退。
+ */
+function applyChannelsPush(payload) {
+  const legacy = Array.isArray(payload);
+  CHANNELS = legacy ? payload : (payload && payload.views) || [];
+  if (!legacy && payload && payload.home) {
+    hvApply(payload.home);
+    render({ updated: true });
+    return;
+  }
+  loadHomeView().then(() => render({ updated: true }));
+}
+
 (async function init() {
   try {
     CFG = await invoke("get_config");
@@ -6282,10 +6303,7 @@ async function refresh() {
   await refresh();
   playEntrance(); // 启动首帧也来一次入场(上面 applyForm 没换形态,不会自动放)
 
-  listen("channels-updated", (ev) => {
-    CHANNELS = ev.payload;
-    render({ updated: true });
-  });
+  listen("channels-updated", (ev) => applyChannelsPush(ev.payload));
 
   // 跌破红线(Rust 判定、一天一次):播一声预警音(开了才有)+ 应用内提示。
   // 判定不放前端 —— 界面与通知必须用同一个口径,否则会出现"红了但没响"。
