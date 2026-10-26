@@ -92,7 +92,11 @@ fn main() {
   // 不用 shell:true —— 那会把参数拼成命令行,既触发 DEP0190 警告,也让 keyLine
   // 里可能出现的 shell 元字符有解释空间。Windows 上直接调 cargo.exe 即可,
   // PATH 已经过 env.Path 传进子进程(env 是 {...process.env} 的副本)。
-  const cargoExe = process.platform === 'win32' ? 'cargo.exe' : 'cargo';
+  // 但**别**只写 "cargo.exe" 靠 PATH 解析:在受限环境里(代理沙箱、某些 CI 的
+  // 精简 PATH)子进程会直接 ENOENT,看起来像"验签失败"其实是找不到编译器。
+  // cargoBin 上面已经算好了,用绝对路径最稳。
+  const cargoExe =
+    process.platform === 'win32' ? path.join(cargoBin, 'cargo.exe') : 'cargo';
   execFileSync(cargoExe, ['run', '--quiet', '--', keyLine, sigBin, exePath], {
     cwd: proj, env, stdio: 'inherit',
   });
