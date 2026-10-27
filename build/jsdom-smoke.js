@@ -28,16 +28,20 @@ const js = fs.readFileSync(path.join(SRC, "app.js"), "utf8");
 const dom = new JSDOM(html, { runScripts: "outside-only", pretendToBeVisual: true, url: "http://localhost/" });
 const w = dom.window;
 
+const CALLS = Object.create(null);
+w.__CALLS = CALLS;
 w.__TAURI__ = {
   // 真实启动链路会读配置/渠道/视图;全返回 null 的话 init 走到 applyPinUI 会崩
   // (以前同步断言在 init 恢复之前就退出了,没有暴露)。异步用例要等 init,所以喂真数据。
   core: {
     invoke: async (cmd) => {
+      CALLS[cmd] = (CALLS[cmd] || 0) + 1;
       if (cmd === "get_config") return JSON.parse(JSON.stringify(DATA.CFG));
       if (cmd === "get_channels") return JSON.parse(JSON.stringify(DATA.CHANNELS));
       if (cmd === "home_view") return JSON.parse(JSON.stringify(DATA.HOME));
       if (cmd === "checkin_state") return [];
       if (cmd === "app_version") return "0.0.0-test";
+      if (cmd === "vault_list" || cmd === "vault_ref_map") return [];
       return null;
     },
   },
@@ -423,6 +427,9 @@ const HARNESS = `
     patchCfg: (patch) => Object.assign(CFG, patch),
     cfg: () => CFG,
     openManage: () => openManage(),
+    refreshChCards: () => refreshChCards(),
+    fillKeyHints: (force) => fillKeyHints(force),
+    invalidateKeyMeta: (id, kind) => invalidateKeyMeta(id, kind),
   };
 })();
 `;
@@ -582,6 +589,53 @@ w.__DATA = DATA;
     ok: /userTouchedChannels/.test(js) && /cc\.autoHidden/.test(js),
     extra: "app.js 的 chvis 分支没处理 autoHidden / userTouched",
   });
+
+  // ── 设置页密钥元数据缓存(2026-10-27 P2)──────────────────────────────
+  // 打开设置页时每轮轮询都读 key_hint × N + key_source × N;现在只有首次/TTL
+  // 过期/显式失效才读。这里连跑 10 次重绘,断言 RPC 次数不再增长。
+  try {
+    w.__TEST.setChannels([
+      {
+        id: "keychan", name: "KeyChan", short: "KC", color: "#4f7cff",
+        kind: "amount", hasKey: true, valid: true, hidden: false, autoHidden: false,
+        authSource: "keyring", authLabel: "Windows 凭据管理器", remaining: 42,
+        unit: "CNY", expiring: [], expiryComplete: false, extra: [], error: null,
+        stale: false, updatedAt: Math.floor(Date.now() / 1000),
+      },
+    ]);
+    w.__TEST.patchCfg({ hiddenChannels: [], claimChannels: {} });
+    w.__TEST.openManage();
+    await new Promise((r) => setTimeout(r, 60));
+    const hint0 = w.__CALLS.key_hint || 0;
+    const src0 = w.__CALLS.key_source || 0;
+    for (let i = 0; i < 10; i++) {
+      w.__TEST.refreshChCards();
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    await new Promise((r) => setTimeout(r, 40));
+    const hint1 = w.__CALLS.key_hint || 0;
+    const src1 = w.__CALLS.key_source || 0;
+    R.push({
+      name: "设置页连续 10 次重绘不再重复读密钥元数据",
+      ok: hint0 > 0 && src0 > 0 && hint1 === hint0 && src1 === src0,
+      extra: JSON.stringify({ hint0, hint1, src0, src1 }),
+    });
+    // 保存密钥 = 显式失效点:下一次重绘必须重读
+    w.__TEST.invalidateKeyMeta("keychan");
+    w.__TEST.fillKeyHints(true);
+    await new Promise((r) => setTimeout(r, 60));
+    R.push({
+      name: "密钥变更后元数据缓存失效并重读",
+      ok: (w.__CALLS.key_hint || 0) > hint1 && (w.__CALLS.key_source || 0) > src1,
+      extra: JSON.stringify({ hint: w.__CALLS.key_hint, src: w.__CALLS.key_source }),
+    });
+  } catch (e) {
+    R.push({
+      name: "设置页密钥元数据缓存",
+      ok: false,
+      extra: e.message + " @ " + (e.stack || "").split("\n")[1],
+    });
+  }
 
   let ok = 0, bad = 0;
   for (const r of R) {

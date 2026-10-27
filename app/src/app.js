@@ -161,8 +161,13 @@ function peakCountdown(p, nowMs) {
   return left + "后转高峰";
 }
 
-// 1 秒一跳只改文案,不重绘整行 —— 一条消息管一天,不为倒计时加压轮询频率。
-setInterval(() => {
+/**
+ * 峰谷倒计时:只改文案,不重绘整行。
+ *
+ * 显示精度是**分钟**,所以对齐到分钟边界跑一次即可 —— 以前 1 秒一次,每小时
+ * 3600 次回调、每次都扫全文档。定时器误差可能落在边界前几毫秒,统一 +20ms 起跳。
+ */
+function tickPeakCountdowns() {
   const nowMs = Date.now();
   document.querySelectorAll("[data-peakcd]").forEach((el) => {
     let p = null;
@@ -173,7 +178,18 @@ setInterval(() => {
     }
     el.textContent = peakCountdown(p, nowMs);
   });
-}, 1000);
+}
+
+let peakTickTimer = null;
+function schedulePeakTicks() {
+  clearTimeout(peakTickTimer);
+  const delay = 60_000 - (Date.now() % 60_000) + 20;
+  peakTickTimer = setTimeout(() => {
+    tickPeakCountdowns();
+    schedulePeakTicks();
+  }, delay);
+}
+schedulePeakTicks();
 
 /**
  * 提示音两声(裁决 8A:签到结果 + 跌破红线,默认关)。
@@ -1384,6 +1400,8 @@ function renderInner(opts) {
   renderPillPick();
   fitCompact();
   refreshChCards();
+  // 新建的 [data-peakcd] 先填一次文案,别等到下一个整分才出现
+  tickPeakCountdowns();
 }
 
 // 紧凑条实测宽度(已是当前字号档的最终逻辑像素),fitCompact 维护、formSize 取用
@@ -2271,6 +2289,8 @@ function renderChCards() {
     .join("");
   // 卡片里的「?」是动态生成的,补出说明块(幂等;轮询重绘后也不会丢)
   hydrateWhy($("chList"));
+  // 重绘把 .kh / .ksrc 清空了:有缓存就同步贴回去(不产生 RPC)
+  paintCachedKeyMeta();
 }
 
 /** 轮询刷新时更新渠道卡;正在输入就不重建,免得把输入内容冲掉。 */function refreshChCards() {
@@ -2281,24 +2301,13 @@ function renderChCards() {
   fillKeyHints();
 }
 
-/** 异步补每把 key 的尾号(IPC 一次一个,失败就留空,不影响其它信息)。 */
-function fillKeyHints() {
-  CHANNELS.filter((c) => c.hasKey).forEach(async (c) => {
-    try {
-      const hint = await invoke("key_hint", { id: c.id });
-      const el = document.querySelector(`.kh[data-hint="${c.id}"]`);
-      if (el && hint) el.textContent = " · " + hint;
-    } catch (e) {
-      // 凭据管理器坏了 ≠ 没配密钥:把故障如实写出来,否则用户会以为密钥丢了而反复重填
-      // (报告 P2-15)。后端现在区分了这两种情况,这里只负责把它显示出来。
-      const el = document.querySelector(`.kh[data-hint="${c.id}"]`);
-      if (el) {
-        el.textContent = " · 凭据库读取失败:" + String(e);
-        el.classList.add("err");
-      }
-    }
-  });
-  fillKeySources();
+/**
+ * 补每把 key 的尾号:重绘后先用缓存**同步**回填,缺失/过期才异步读一次。
+ * 失败仍把"凭据库读取失败"写出来 —— 凭据管理器坏了 ≠ 没配密钥(报告 P2-15)。
+ */
+function fillKeyHints(force = false) {
+  paintCachedKeyMeta();
+  refreshKeyMeta(force);
 }
 
 // ───────────── 渠道密钥的来源(直接填 / 引用密钥箱)─────────────
@@ -2306,6 +2315,123 @@ function fillKeyHints() {
 // 主线是**引用**:同一把钥匙不存两份,改箱子渠道立刻跟着变。
 const KEYSRC = {};        // 渠道 id → key_source 的结果
 let VAULTREF = [];        // [[渠道 id, 箱子条目 id], ...] 反查用
+
+// 密钥元数据缓存(P2)。打开设置页时,以前每一轮轮询都会读:
+//   key_hint × N + key_source × N + 一次引用表 —— 余额刷新顺带读了一堆
+// 与余额无关的秘密元数据。现在重绘时**同步**用缓存回填,只有缺失或超过 TTL
+// 才异步读一次;保存/删除/引用变化/openManage 时显式失效。
+const KEY_META = {};          // 渠道 id → { hint, hintErr, hintAt, source, sourceAt }
+const KEY_META_TTL = 5 * 60 * 1000;
+let KEY_META_BUSY = null;
+let KEY_META_PENDING = false;
+
+function metaFresh(at) {
+  return !!at && Date.now() - at < KEY_META_TTL;
+}
+
+/** 同步把缓存贴回 DOM:重绘后立刻恢复尾号/来源,不产生任何 RPC。 */
+function paintCachedKeyMeta() {
+  document.querySelectorAll("[data-hint]").forEach((el) => {
+    const m = KEY_META[el.dataset.hint];
+    if (!m || !m.hintAt) return;
+    if (m.hintErr) {
+      el.textContent = " · 凭据库读取失败:" + m.hintErr;
+      el.classList.add("err");
+    } else {
+      el.classList.remove("err");
+      el.textContent = m.hint ? " · " + m.hint : "";
+    }
+  });
+  document.querySelectorAll(".ksrc[data-src]").forEach((box) => {
+    const id = box.dataset.src;
+    const m = KEY_META[id];
+    if (!m || !m.sourceAt || !m.source) return;
+    KEYSRC[id] = m.source;
+    box.innerHTML = srcRowHtml(id);
+  });
+}
+
+/** 显式失效。`kind` = both | hint | source;`id = null` 表示全部渠道。 */
+function invalidateKeyMeta(id = null, kind = "both") {
+  const drop = (cid) => {
+    const m = KEY_META[cid];
+    if (!m) return;
+    if (kind !== "source") {
+      m.hint = null;
+      m.hintErr = null;
+      m.hintAt = 0;
+    }
+    if (kind !== "hint") {
+      m.source = null;
+      m.sourceAt = 0;
+      delete KEYSRC[cid]; // 重绘时先回到占位,别再读旧来源
+    }
+  };
+  if (id) drop(id);
+  else Object.keys(KEY_META).forEach(drop);
+}
+
+async function doRefreshKeyMeta(force) {
+  const wantedHints = CHANNELS.filter(
+    (c) => c.hasKey && (force || !metaFresh((KEY_META[c.id] || {}).hintAt))
+  );
+  const wantedSources = CHANNELS.filter(
+    (c) => c.authSource === "keyring" && (force || !metaFresh((KEY_META[c.id] || {}).sourceAt))
+  );
+  if (!wantedHints.length && !wantedSources.length) return;
+
+  // 「或从密钥箱选一把」要用到箱子列表;用户可能没打开过密钥箱页签,这里按需补一次。
+  if (wantedSources.length) {
+    if (!VAULT.length) {
+      try { VAULT = await invoke("vault_list"); } catch { /* 读不出来就不显示下拉 */ }
+    }
+    await loadVaultRefs();
+  }
+
+  const now = Date.now();
+  await Promise.all([
+    ...wantedHints.map(async (c) => {
+      const m = KEY_META[c.id] || (KEY_META[c.id] = {});
+      try {
+        m.hint = await invoke("key_hint", { id: c.id });
+        m.hintErr = null;
+      } catch (e) {
+        // 凭据管理器坏了 ≠ 没配密钥:把故障如实写出来,否则用户会反复重填
+        m.hint = null;
+        m.hintErr = String(e);
+      }
+      m.hintAt = now;
+    }),
+    ...wantedSources.map(async (c) => {
+      const m = KEY_META[c.id] || (KEY_META[c.id] = {});
+      try {
+        m.source = await invoke("key_source", { id: c.id });
+      } catch (e) {
+        // 读不到来源时退回"直接填"的样子 —— 不显示未经验证的引用状态
+        m.source = { mode: "inline" };
+      }
+      m.sourceAt = now;
+    }),
+  ]);
+  paintCachedKeyMeta();
+}
+
+/** 读一轮元数据(同一时刻只有一个在飞;期间收到 force 会在结束后补跑)。 */
+function refreshKeyMeta(force = false) {
+  if (!manageOpen()) return Promise.resolve();
+  if (KEY_META_BUSY) {
+    KEY_META_PENDING = KEY_META_PENDING || force;
+    return KEY_META_BUSY;
+  }
+  KEY_META_BUSY = doRefreshKeyMeta(force).finally(() => {
+    KEY_META_BUSY = null;
+    if (KEY_META_PENDING) {
+      KEY_META_PENDING = false;
+      refreshKeyMeta(true);
+    }
+  });
+  return KEY_META_BUSY;
+}
 
 /** 一次问出全部引用关系(箱子列表要标"正被谁用")。 */
 async function loadVaultRefs() {
@@ -2369,25 +2495,10 @@ function vaultPickHtml(cid) {
     </div>`;
 }
 
-/** 补每张卡上的来源一行(读到就替换掉占位)。 */
-async function fillKeySources() {
-  // 「或从密钥箱选一把」要用到箱子列表;用户可能没打开过密钥箱页签,这里按需补一次。
-  if (!VAULT.length) {
-    try { VAULT = await invoke("vault_list"); } catch { /* 读不出来就不显示下拉 */ }
-  }
-  await loadVaultRefs();
-  for (const c of CHANNELS) {
-    const box = document.querySelector(`.ksrc[data-src="${c.id}"]`);
-    if (!box) continue;
-    if (c.authSource !== "keyring") { box.innerHTML = ""; continue; }
-    try {
-      KEYSRC[c.id] = await invoke("key_source", { id: c.id });
-    } catch (e) {
-      // 读不到来源时退回"直接填"的样子 —— 不显示未经验证的引用状态
-      KEYSRC[c.id] = { mode: "inline" };
-    }
-    box.innerHTML = srcRowHtml(c.id);
-  }
+/** 补每张卡上的来源一行:缓存同步回填,缺失/过期才异步读(失败仍按原提示回退)。 */
+async function fillKeySources(force = false) {
+  paintCachedKeyMeta();
+  await refreshKeyMeta(force);
 }
 
 
@@ -2774,14 +2885,18 @@ function renderDock() {
 const manageOpen = () => document.body.classList.contains("view-manage");
 
 function openManage() {
+  // 先挂上 view-manage:下面的 fillKeyHints 会检查 manageOpen(),
+  // 类晚加一步就会让这一次读取被当成"页面没打开"而跳过。
+  document.body.classList.add("view-manage");
   // 这些块只在管理页里出现,轮询 render 会因为"页面没打开"跳过它们,
   // 所以打开时主动建一次,不然第一次进来会是空的
+  // 打开设置页 = 缓存失效点:用户可能刚从密钥箱/别的程序改了凭据,重读一次
+  invalidateKeyMeta();
   renderChCards();
-  fillKeyHints();
+  fillKeyHints(true);
   renderPillPick();
   renderAbout(UPD.last); // 版本号与上次检查时间
   loadCheckin();         // 签到状态(渠道卡与设置页都用)
-  document.body.classList.add("view-manage");
   // 键盘用户是从底栏那枚按钮进来的,而它进管理页后就被 CSS 隐藏了 ——
   // 焦点会掉到 body,Tab 一下回到标题栏。把焦点交给页头的「← 返回」,
   // 入口与出口方向一致(鼠标点进来时 :focus-visible 不出环,看不出差别)。
@@ -3601,12 +3716,13 @@ $("manage").addEventListener("click", async (e) => {
     } catch (e) {
       showToast("删除失败:" + e, true);
     }
+    invalidateKeyMeta(null, "source");
     await loadVault();
     // N16:渠道卡上的「密钥来源」也要立刻变 —— 否则它还显示"正在使用这把",
     // 用户以为没删掉(以前要等下一轮轮询,最长 60 秒)。
     if (document.body.classList.contains("view-manage")) {
       renderChCards();
-      fillKeySources();
+      fillKeySources(true);
     }
   } else if (a === "vcopy") {
     try {
@@ -3758,9 +3874,10 @@ $("manage").addEventListener("click", async (e) => {
     try {
       await invoke("set_key", { id, key: val });
       input.value = "";
+      invalidateKeyMeta(id);
       await refresh();
       renderChCards();
-      fillKeyHints(); // 立刻回显尾号:确认"存的是哪把 key"
+      fillKeyHints(true); // 立刻回显尾号:确认"存的是哪把 key"
       // I5 成功反馈:卡片绿色左边框亮 1.4s —— 之前只有失败才提示,存没存上靠猜
       const card = document.querySelector(`.ccard[data-id="${id}"]`);
       if (card) {
@@ -3779,9 +3896,10 @@ $("manage").addEventListener("click", async (e) => {
     const it = VAULT.find((x) => x.id === vid);
     try {
       await invoke("set_key_ref", { id, vaultId: vid });
+      invalidateKeyMeta(id);
       await refresh();
       renderChCards();
-      fillKeyHints();
+      fillKeyHints(true);
       showToast("已改用密钥箱里的那把" + (it ? `(${it.platform} / ${it.label})` : "") + " · 手填的值已清除");
       const card = document.querySelector(`.ccard[data-id="${id}"]`);
       if (card) {
@@ -3795,9 +3913,10 @@ $("manage").addEventListener("click", async (e) => {
     // 取消引用,改回"直接填"。
     try {
       await invoke("clear_key_ref", { id });
+      invalidateKeyMeta(id);
       await refresh();
       renderChCards();
-      fillKeyHints();
+      fillKeyHints(true);
       showToast("已改回直接填 · 现在可以在这个渠道上贴密钥了");
     } catch (err) {
       showToast("取消失败:" + err, true);
@@ -3823,8 +3942,10 @@ $("manage").addEventListener("click", async (e) => {
       // delete_key 现在回一句人话(删了什么 / 浏览器会话清没清干净):照它说的显示,
       // 后端更清楚这次到底动了哪些东西(F17)。老后端返回空时退回原来的文案。
       const msg = await invoke("delete_key", { id });
+      invalidateKeyMeta(id);
       await refresh();
       renderChCards();
+      fillKeyHints(true);
       showToast(msg || "已删除密钥");
     } catch (err) {
       showToast("删除失败:" + err, true);
@@ -4772,8 +4893,11 @@ async function vaultSave() {
     await invoke("vault_save", { item: payload });
     VAULT_EDIT = null;
     VAULT_DRAFT = null; // 存进去了就不再是草稿,免得下次开表单又被回填(F4)
+    // 条目名/尾号变了 → 引用它的渠道卡"密钥来源"要重读
+    invalidateKeyMeta(null, "source");
     showToast(e.id ? "已更新" : "已存进密钥箱");
     await loadVault();
+    if (manageOpen()) await fillKeySources(true);
   } catch (err) {
     showToast(String(err), true);
   }
@@ -6321,14 +6445,17 @@ function applyChannelsPush(payload) {
     if (p.ok) showToast("已登录 WorkBuddy · 读数已刷新");
     else if (p.cancelled) showToast("已取消登录");
     else showToast(p.reason || "登录没成功,请再试一次", true);
+    invalidateKeyMeta();
     renderChCards();
-    fillKeyHints();
+    fillKeyHints(true);
   });
 
   // 从托盘/热键唤回窗口:Rust 侧在「隐藏 → 显示」那一刻发 window-shown,这里重放入场。
   // 不能监听 focus / visibilitychange —— 它们分不清"从托盘唤回"和普通 alt-tab,
   // 每次切走再切回都会重播一遍(报告 B8)。
   listen("window-shown", () => {
+    // 隐藏期间分钟定时器仍会跑,但窗口可能错过最后一次重绘;唤回时先补一次文案
+    tickPeakCountdowns();
     if (currentForm() === "panel") playEntrance();
   });
 

@@ -9,10 +9,14 @@ use crate::custom;
 use crate::fx::{self, FxRate};
 use crate::peak;
 use crate::providers::{self, AuthKind, Expiring, FetchResult, Kind, Method};
-use crate::store::Store;
+use crate::store::{
+    consumed_in_window_rows, consumption_since_rows, daily_coverage_rows, first_ts_rows,
+    last_jump_rows, window_coverage_rows, HistoryRow, Store,
+};
 use crate::secrets;
 use crate::weblogin;
 use chrono::{Datelike, Duration, Local, TimeZone, Utc, Weekday};
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -601,6 +605,18 @@ fn seven_day_burn(store: &Store, id: &str, key_fp: &str, now: i64) -> Option<f64
     } else {
         store.consumed_in_window(id, since, now).ok()?
     };
+    Some(used / (covered as f64 / 86_400.0))
+}
+
+/// 近 7 天日均的批量版本(同一份历史行):覆盖不足 1 天仍然返回 None。
+fn seven_day_burn_rows(rows: &[HistoryRow], now: i64) -> Option<f64> {
+    let since = now - 7 * 86_400;
+    let first = first_ts_rows(rows, since)?;
+    let covered = now - first;
+    if covered < 86_400 {
+        return None;
+    }
+    let used = consumed_in_window_rows(rows, since, now);
     Some(used / (covered as f64 / 86_400.0))
 }
 
@@ -1500,12 +1516,12 @@ fn claim_for(
     store: &Store,
     remaining: Option<f64>,
     key_fp: &str,
+    now: i64,
 ) -> Option<ClaimState> {
     let ccfg = cfg.claim_channels.get(def.id)?;
     if !ccfg.enabled {
         return None;
     }
-    let now = now_ts();
     // 只有"补到本轮额度线附近"的量级变化才算一次申请,并且相邻两条快照不能隔太久
     // (合盖多日后第一轮会把几天的差值合成一个"跳升")—— P2-1
     let fp = if key_fp.is_empty() { None } else { Some(key_fp) };
@@ -1535,6 +1551,30 @@ fn claim_for(
     claim_state(ccfg, auto_at, now, remaining, burn)
 }
 
+/// 申请制判断的批量版本:输入换成已经读出的历史行,不再逐窗口查库。
+/// `now` 由调用方传入 —— 与窗口/缺口共用同一个时刻,避免跨秒后边界测试不稳。
+fn claim_for_rows(
+    def: &providers::ProviderDef,
+    cfg: &Config,
+    rows: &[HistoryRow],
+    remaining: Option<f64>,
+    now: i64,
+) -> Option<ClaimState> {
+    let ccfg = cfg.claim_channels.get(def.id)?;
+    if !ccfg.enabled {
+        return None;
+    }
+    let auto_at = last_jump_rows(
+        rows,
+        now - CLAIM_LOOKBACK_SEC,
+        CLAIM_JUMP_MIN_DELTA,
+        ccfg.amount,
+        2 * 3600,
+    );
+    let burn = seven_day_burn_rows(rows, now);
+    claim_state(ccfg, auto_at, now, remaining, burn)
+}
+
 /// 日/周/月消耗与三个环比(金额型通用)。内置渠道与自定义渠道**共用这一份**,
 /// 口径漂移的机会只留一个。
 #[allow(clippy::type_complexity)]
@@ -1542,7 +1582,7 @@ fn amount_windows(
     store: &Store,
     id: &str,
     key_fp: &str,
-    now: i64,
+    a: AmountAnchors,
 ) -> (
     Option<f64>,
     Option<f64>,
@@ -1561,24 +1601,140 @@ fn amount_windows(
         };
         r.ok().flatten()
     };
-    let today0 = local_midnight_today();
-    let week0 = local_week_start();
-    let month0 = local_month_start();
-    // 只取一次:跨零点时两次调用可能差一个月份(P2-4)
-    let prev0 = local_prev_month_start();
     // 环比口径 = 上一周期的「同时段」:昨日 0 点到昨天此刻、上周同时段、
     // 上月同时段 —— 拿整段上周期比会系统性偏大(它天然比本期多一段尾巴)
     (
-        cons(today0, now),
-        cons(week0, now),
-        cons(month0, now),
-        cons(today0 - 86_400, now - 86_400),
-        cons(week0 - 7 * 86_400, now - 7 * 86_400),
+        cons(a.today0, a.now),
+        cons(a.week0, a.now),
+        cons(a.month0, a.now),
+        cons(a.today0 - 86_400, a.now - 86_400),
+        cons(a.week0 - 7 * 86_400, a.now - 7 * 86_400),
         // 终点必须钳在上月之内:以前把"本月已过秒数"直接加到上月 1 号上,
         // 于是 3 月 31 日时窗口落到 3 月 3 日,本月的消耗被算进"上月同期"基线
         // (短月尤其明显)。同时只取一次 prev_month_start,免得跨零点两次不等。
-        cons(prev0, (prev0 + (now - month0)).min(month0 - 1)),
+        cons(a.prev0, a.month_prev_to()),
     )
+}
+
+/// 一轮批量历史读取的时间锚点。
+///
+/// 六个消耗窗口与三个缺口必须在**同一个时刻**取"今天/本周/本月" ——
+/// 以前两类各算一次,跨零点时可能一边用旧的一天、一边用新的一天(P2-4 同类)。
+#[derive(Clone, Copy)]
+struct AmountAnchors {
+    today0: i64,
+    week0: i64,
+    month0: i64,
+    prev0: i64,
+    now: i64,
+}
+
+impl AmountAnchors {
+    fn at(now: i64) -> Self {
+        Self {
+            today0: local_midnight_today(),
+            week0: local_week_start(),
+            month0: local_month_start(),
+            prev0: local_prev_month_start(),
+            now,
+        }
+    }
+
+    /// 批量读取的起点:同时覆盖上月同期基线、92 天逐日覆盖与 90 天申请跳升。
+    fn history_from(&self) -> i64 {
+        (self.prev0 - 86_400)
+            .min(self.now - 92 * 86_400)
+            .min(self.now - CLAIM_LOOKBACK_SEC)
+    }
+
+    /// 上月同期的终点:必须钳在上月之内(与 `amount_windows` 的原公式一致)。
+    fn month_prev_to(&self) -> i64 {
+        (self.prev0 + (self.now - self.month0)).min(self.month0 - 1)
+    }
+}
+
+/// 金额型渠道的全部窗口统计。批量路径与旧查询路径产出同一个结构,
+/// 调用方不需要知道这一轮走的是哪条路。
+#[derive(Default)]
+struct AmountStats {
+    day: Option<f64>,
+    week: Option<f64>,
+    month: Option<f64>,
+    day_prev: Option<f64>,
+    week_prev: Option<f64>,
+    month_prev: Option<f64>,
+    gap_day_from: Option<i64>,
+    gap_week_from: Option<i64>,
+    gap_month_from: Option<i64>,
+    gap_days: Vec<i64>,
+}
+
+impl AmountStats {
+    /// 批量路径:全部从同一次 `history_between` 的结果里切出来。
+    fn from_rows(rows: &[HistoryRow], a: AmountAnchors) -> Self {
+        Self {
+            day: consumption_since_rows(rows, a.today0, a.now),
+            week: consumption_since_rows(rows, a.week0, a.now),
+            month: consumption_since_rows(rows, a.month0, a.now),
+            day_prev: consumption_since_rows(rows, a.today0 - 86_400, a.now - 86_400),
+            week_prev: consumption_since_rows(rows, a.week0 - 7 * 86_400, a.now - 7 * 86_400),
+            month_prev: consumption_since_rows(rows, a.prev0, a.month_prev_to()),
+            gap_day_from: gap_from_rows(rows, a.today0, a.now),
+            gap_week_from: gap_from_rows(rows, a.week0, a.now),
+            gap_month_from: gap_from_rows(rows, a.month0, a.now),
+            gap_days: daily_coverage_rows(rows, a.now - 92 * 86_400, a.now, local_tz_offset())
+                .into_iter()
+                .filter(|d| gap_of_day(d, a.now))
+                .map(|d| d.day_start)
+                .collect(),
+        }
+    }
+
+    /// 回退路径:与旧版本逐条相同的 SQL 查询(批量读取失败时整块退回)。
+    fn legacy(store: &Store, id: &str, key_fp: &str, a: AmountAnchors) -> Self {
+        let (day, week, month, day_prev, week_prev, month_prev) =
+            amount_windows(store, id, key_fp, a);
+        let fp_opt = if key_fp.is_empty() { None } else { Some(key_fp) };
+        let tz = local_tz_offset();
+        Self {
+            day,
+            week,
+            month,
+            day_prev,
+            week_prev,
+            month_prev,
+            gap_day_from: gap_from(store, id, fp_opt, a.today0, a.now),
+            gap_week_from: gap_from(store, id, fp_opt, a.week0, a.now),
+            gap_month_from: gap_from(store, id, fp_opt, a.month0, a.now),
+            gap_days: store
+                .daily_coverage(id, fp_opt, a.now - 92 * 86_400, a.now, tz)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|d| gap_of_day(d, a.now))
+                .map(|d| d.day_start)
+                .collect(),
+        }
+    }
+}
+
+/// 加载一段历史:成功则把行交给 `from_rows`,失败(含超过 50 万行)整块退回
+/// `legacy`。**不做部分新旧混算** —— 一半窗口用批量、一半用旧查询,数字口径会漂。
+fn with_amount_history<T>(
+    store: &Store,
+    id: &str,
+    key_fp: &str,
+    a: AmountAnchors,
+    from_rows: impl FnOnce(&[HistoryRow]) -> T,
+    legacy: impl FnOnce() -> T,
+) -> T {
+    let fp_opt = if key_fp.is_empty() { None } else { Some(key_fp) };
+    match store.history_between(id, fp_opt, a.history_from(), a.now) {
+        Ok(rows) => from_rows(&rows),
+        Err(e) => {
+            eprintln!("批量读取历史失败 {id}: {e};本轮整块回退到逐窗口查询");
+            legacy()
+        }
+    }
 }
 
 fn build_view(
@@ -1629,11 +1785,48 @@ fn build_view(
     // 而测试可以传一个合成时刻,把"今天几点"钉住 —— 之前这里偷偷用真实时钟,
     // 导致缺口类测试在刚过午夜时必挂(2026-10-21 00:07 真机撞到)。
     let now2 = updated_at;
-    let (day, week, month, day_prev, week_prev, month_prev) = if has_amount {
-        amount_windows(store, def.id, key_fp, now2)
+    // P1:每个金额型渠道每轮只读一次历史,六个消耗窗口、三个缺口、逐日覆盖、
+    // 申请制跳升与近 7 天日均都从同一份行里切出来。读失败(或行数超限)时
+    // **整块**退回旧查询 —— 不允许一半窗口用新路径、一半用旧路径。
+    let anchors = AmountAnchors::at(now2);
+    let (stats, claim) = if has_amount {
+        with_amount_history(
+            store,
+            def.id,
+            key_fp,
+            anchors,
+            |rows| {
+                (
+                    AmountStats::from_rows(rows, anchors),
+                    claim_for_rows(def, cfg, rows, result.remaining, now2),
+                )
+            },
+            || {
+                (
+                    AmountStats::legacy(store, def.id, key_fp, anchors),
+                    claim_for(def, cfg, store, result.remaining, key_fp, now2),
+                )
+            },
+        )
     } else {
-        (None, None, None, None, None, None)
+        // 非金额型没有消耗窗口;申请制状态仍按旧路径查(与旧版本一致)。
+        (
+            AmountStats::default(),
+            claim_for(def, cfg, store, result.remaining, key_fp, now2),
+        )
     };
+    let AmountStats {
+        day,
+        week,
+        month,
+        day_prev,
+        week_prev,
+        month_prev,
+        gap_day_from,
+        gap_week_from,
+        gap_month_from,
+        gap_days,
+    } = stats;
 
     let soon = expiring_soon(&result.expiring, now2);
 
@@ -1656,24 +1849,6 @@ fn build_view(
 
     // ── 观测缺口 / 密钥分段 / 峰谷 ──
     // 缺口与分段只对金额型算(百分比/积分型没有日周月消耗这回事,查了也没处显示)。
-    let fp_opt = if key_fp.is_empty() { None } else { Some(key_fp) };
-    let (gap_day_from, gap_week_from, gap_month_from, gap_days) = if has_amount {
-        let tz = local_tz_offset();
-        (
-            gap_from(store, def.id, fp_opt, local_midnight_today(), now2),
-            gap_from(store, def.id, fp_opt, local_week_start(), now2),
-            gap_from(store, def.id, fp_opt, local_month_start(), now2),
-            store
-                .daily_coverage(def.id, fp_opt, now2 - 92 * 86_400, now2, tz)
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|d| gap_of_day(d, now2))
-                .map(|d| d.day_start)
-                .collect(),
-        )
-    } else {
-        (None, None, None, Vec::new())
-    };
     // 峰谷只看时间,不看数据 —— 但只在挂了"峰谷计价"的渠道上出现(DeepSeek)。
     let peak = if def.peak_pricing {
         let i = peak::info_at(now2);
@@ -1729,7 +1904,7 @@ fn build_view(
         estimated: result.kind == Kind::Amount,
         stale,
         updated_at,
-        claim: claim_for(def, cfg, store, result.remaining, key_fp),
+        claim,
         hidden: false,
         auto_hidden: false,
         peak,
@@ -1747,6 +1922,17 @@ fn build_view(
 /// None = 起点没缺口,或这个窗口压根没有观测 —— 后者是"没数据",不是"有缺口"。
 fn gap_from(store: &Store, id: &str, key_fp: Option<&str>, from_ts: i64, now: i64) -> Option<i64> {
     let cov = store.window_coverage(id, key_fp, from_ts, now).ok()?;
+    let first = cov.first_ts?;
+    if first - from_ts > OBSERVE_GAP_SEC {
+        Some(first)
+    } else {
+        None
+    }
+}
+
+/// [`gap_from`] 的批量版本:覆盖统计直接从已读出的行里算(含无金额的行)。
+fn gap_from_rows(rows: &[HistoryRow], from_ts: i64, now: i64) -> Option<i64> {
+    let cov = window_coverage_rows(rows, from_ts, now);
     let first = cov.first_ts?;
     if first - from_ts > OBSERVE_GAP_SEC {
         Some(first)
@@ -1852,29 +2038,33 @@ fn build_custom_view(
     let now = now_ts();
     // 探活模式没有数值:不装成"消耗"、不画日周月(它只回答"活着吗")
     let has_amount = r.valid && !r.probe_only && r.remaining.is_some();
-    let (day, week, month, day_prev, week_prev, month_prev) = if has_amount {
-        amount_windows(store, &ch.id, key_fp, now)
-    } else {
-        (None, None, None, None, None, None)
-    };
-    let fp_opt = if key_fp.is_empty() { None } else { Some(key_fp) };
-    let (gap_day_from, gap_week_from, gap_month_from, gap_days) = if has_amount {
-        let tz = local_tz_offset();
-        (
-            gap_from(store, &ch.id, fp_opt, local_midnight_today(), now),
-            gap_from(store, &ch.id, fp_opt, local_week_start(), now),
-            gap_from(store, &ch.id, fp_opt, local_month_start(), now),
-            store
-                .daily_coverage(&ch.id, fp_opt, now - 92 * 86_400, now, tz)
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|d| gap_of_day(d, now))
-                .map(|d| d.day_start)
-                .collect(),
+    // 与内置渠道同一条批量路径:一次读取、内存切窗口;失败整块回退。
+    let anchors = AmountAnchors::at(now);
+    let stats = if has_amount {
+        with_amount_history(
+            store,
+            &ch.id,
+            key_fp,
+            anchors,
+            |rows| AmountStats::from_rows(rows, anchors),
+            || AmountStats::legacy(store, &ch.id, key_fp, anchors),
         )
     } else {
-        (None, None, None, Vec::new())
+        AmountStats::default()
     };
+    let AmountStats {
+        day,
+        week,
+        month,
+        day_prev,
+        week_prev,
+        month_prev,
+        gap_day_from,
+        gap_week_from,
+        gap_month_from,
+        gap_days,
+    } = stats;
+    let fp_opt = if key_fp.is_empty() { None } else { Some(key_fp) };
     let (name, short, color) = custom_identity(ch);
     // 失败时"数据是什么时候的"要如实:沿用最近一次成功快照的时刻,不是此刻
     let updated_at = if r.valid {
@@ -1992,6 +2182,56 @@ fn custom_placeholder(
         grant_today: None,
         grant_week: None,
     }
+}
+
+/// 自定义渠道批量取数(P2):与内置渠道**同时**跑,内部最多 4 个并发。
+///
+/// 返回顺序按配置里的原始下标恢复 —— 界面顺序不因并发而变;隐藏渠道连凭据都不读。
+/// 凭据走同一个凭据管理器(账户名 = 渠道 id),密钥纪律与内置渠道完全相同。
+async fn fetch_custom_all<F>(
+    http: &reqwest::Client,
+    channels: &[custom::CustomChannel],
+    hidden: &[String],
+    key_for: F,
+) -> Vec<(custom::CustomChannel, Option<custom::CustomResult>, String)>
+where
+    F: Fn(&str) -> Option<String> + Clone + Send + 'static,
+{
+    // 先把任务收成**拥有所有权**的 (下标, 渠道):直接用 `channels.iter().filter().map()`
+    // 会把 `&CustomChannel` 和异步块绑在一起,泛型 async 在 Tauri 的 `spawn` 下会
+    // 因高阶生命周期推断失败而报 "FnOnce is not general enough"。
+    let jobs: Vec<(usize, custom::CustomChannel)> = channels
+        .iter()
+        .enumerate()
+        .filter(|(_, ch)| !hidden.iter().any(|h| h == &ch.id))
+        .map(|(i, ch)| (i, ch.clone()))
+        .collect();
+
+    let futures = jobs.into_iter().map(|(i, ch)| {
+        let key_for = key_for.clone();
+        async move {
+            let cid = ch.id.clone();
+            let key = tokio::task::spawn_blocking(move || key_for(&cid))
+                .await
+                .unwrap_or(None);
+            match key {
+                None => (i, ch, None, String::new()),
+                Some(k) => {
+                    let fp = key_fp(&k);
+                    let r = custom::fetch_custom(http, &ch, &k).await;
+                    (i, ch, Some(r), fp)
+                }
+            }
+        }
+    });
+
+    let mut out: Vec<(usize, custom::CustomChannel, Option<custom::CustomResult>, String)> =
+        futures::stream::iter(futures).buffer_unordered(4).collect().await;
+    // 并发完成顺序 ≠ 配置顺序:按下标排回来,下游按 id 查找/界面按配置排序都不变。
+    out.sort_by_key(|(i, _, _, _)| *i);
+    out.into_iter()
+        .map(|(_, ch, r, fp)| (ch, r, fp))
+        .collect()
 }
 
 /// 一次「测试连接」的结果。
@@ -2318,7 +2558,7 @@ impl Fetcher {
                 .unwrap_or_else(|p| p.into_inner())
                 .clone();
 
-        let fetched = futures::future::join_all(
+        let builtin = futures::future::join_all(
             providers::PROVIDERS
                 .iter()
                 .enumerate()
@@ -2591,8 +2831,19 @@ impl Fetcher {
                     }
                     }
                 }),
-        )
-        .await;
+        );
+
+        // ── 自定义渠道(裁决 6A):与内置渠道同时取 ──
+        // 天生独立(各自读凭据、各自请求),以前却等内置全部结束后才串行跑,
+        // 每个 8 秒上限 → N 个慢渠道把整轮拖成 N×8 秒。现在两组同时驱动,
+        // 最坏等待取两者较大值;自定义内部再限 4 并发,避免几十个渠道瞬间打满。
+        let custom = fetch_custom_all(
+            &self.http,
+            &cfg.custom_channels,
+            hidden.as_slice(),
+            |id| secrets::channel_key(id).ok().flatten(),
+        );
+        let (fetched, custom_results) = futures::join!(builtin, custom);
 
         let cache_updates: Vec<(String, FetchResult, i64)> = fetched
             .iter()
@@ -2603,28 +2854,6 @@ impl Fetcher {
             })
             .collect();
 
-        // ── 自定义渠道(裁决 6A):没有静态定义,单独取 ──
-        // 数量少(个位数),串行即可;凭据走同一个凭据管理器(账户名 = 渠道 id),
-        // 所以"自定义"在密钥纪律上和内置渠道没有任何区别。
-        let mut custom_results: Vec<(custom::CustomChannel, Option<custom::CustomResult>, String)> =
-            Vec::new();
-        for ch in cfg.custom_channels.iter() {
-            if hidden.iter().any(|h| h == &ch.id) {
-                continue; // 隐藏 = 连凭据都不读(与内置渠道同一条裁决)
-            }
-            let cid = ch.id.clone();
-            let key = tokio::task::spawn_blocking(move || secrets::channel_key(&cid).ok().flatten())
-                .await
-                .unwrap_or(None);
-            match key {
-                None => custom_results.push((ch.clone(), None, String::new())),
-                Some(k) => {
-                    let fp = key_fp(&k);
-                    let r = custom::fetch_custom(&self.http, ch, &k).await;
-                    custom_results.push((ch.clone(), Some(r), fp));
-                }
-            }
-        }
         let mut custom_views: Vec<ChannelView> = Vec::new();
 
         // ── 同步段:一次性锁库完成快照写入与消耗推算,期间不跨 await ──
@@ -3465,7 +3694,7 @@ mod tests {
             .find(|d| d.id == "4sapi")
             .expect("4sapi 应在渠道表里");
 
-        let st = claim_for(def, &cfg, &s, Some(18.99), "").expect("4sapi 默认开启申请制");
+        let st = claim_for(def, &cfg, &s, Some(18.99), "", now).expect("4sapi 默认开启申请制");
         assert_eq!(st.source, "auto");
         assert_eq!(st.last_claim_at, Some(applied_at + 300));
         // 按整天向下取整:差 5 分钟不满 12 天 → 算 11 天,还剩 3 天(宁可保守,
@@ -3479,7 +3708,7 @@ mod tests {
         let mut cfg2 = Config::default();
         cfg2.claim_channels.insert("hapi".into(), ClaimConfig { enabled: true, ..Default::default() });
         let def_h = providers::PROVIDERS.iter().find(|d| d.id == "hapi").unwrap();
-        let st = claim_for(def_h, &cfg2, &s, Some(55.0), "").unwrap();
+        let st = claim_for(def_h, &cfg2, &s, Some(55.0), "", now).unwrap();
         assert_eq!(st.source, "none");
     }
 
@@ -3946,5 +4175,231 @@ mod tests {
             1,
         );
         assert_eq!(v2.gap_day_from, None, "正常开机不该天天挂一行缺口提示");
+    }
+
+    /// P1:金额型渠道一轮 `build_view` 只读一次历史,不再为每个窗口重复查库。
+    #[test]
+    fn build_view_reads_amount_history_once() {
+        let store = Store::open_memory().unwrap();
+        let cfg = Config::default();
+        let def = providers::find("deepseek").unwrap();
+        let now = local_midnight_today() + 12 * 3600;
+        // 同一本账:今天两笔,足够算出当日消耗
+        store
+            .record_fp(def.id, "fpA", now - 2 * 3600, Some(100.0), None, None, "amount")
+            .unwrap();
+        store
+            .record_fp(def.id, "fpA", now - 3600, Some(90.0), None, None, "amount")
+            .unwrap();
+        let res = FetchResult {
+            valid: true,
+            kind: Kind::Amount,
+            unit: "CNY".into(),
+            remaining: Some(90.0),
+            ..Default::default()
+        };
+        crate::store::reset_history_reads();
+        let v = build_view(def, res, false, now, &store, &cfg, None, "fpA", 1);
+        assert_eq!(
+            crate::store::history_read_count(),
+            1,
+            "每轮每个金额渠道只能读一次历史"
+        );
+        assert_eq!(v.day, Some(10.0), "批量路径仍要算出正确窗口");
+    }
+
+    /// 批量读取失败时必须**整块**回退:所有窗口/缺口与正常路径逐值相同。
+    #[test]
+    fn build_view_falls_back_whole_when_history_read_fails() {
+        let store = Store::open_memory().unwrap();
+        let cfg = Config::default();
+        let def = providers::find("deepseek").unwrap();
+        let now = local_midnight_today() + 12 * 3600;
+        let mut rem = 500.0;
+        for i in 0..6 {
+            store
+                .record_fp(
+                    def.id,
+                    "fpA",
+                    now - (40 - i * 3) * 3600,
+                    Some(rem),
+                    None,
+                    None,
+                    "amount",
+                )
+                .unwrap();
+            rem -= 7.0;
+        }
+        let res = FetchResult {
+            valid: true,
+            kind: Kind::Amount,
+            unit: "CNY".into(),
+            remaining: Some(rem),
+            ..Default::default()
+        };
+        let batched = build_view(def, res.clone(), false, now, &store, &cfg, None, "fpA", 1);
+
+        crate::store::force_history_failure(true);
+        let fallback = build_view(def, res, false, now, &store, &cfg, None, "fpA", 1);
+        crate::store::force_history_failure(false);
+
+        assert_eq!(fallback.day, batched.day);
+        assert_eq!(fallback.week, batched.week);
+        assert_eq!(fallback.month, batched.month);
+        assert_eq!(fallback.day_prev, batched.day_prev);
+        assert_eq!(fallback.week_prev, batched.week_prev);
+        assert_eq!(fallback.month_prev, batched.month_prev);
+        assert_eq!(fallback.gap_day_from, batched.gap_day_from);
+        assert_eq!(fallback.gap_week_from, batched.gap_week_from);
+        assert_eq!(fallback.gap_month_from, batched.gap_month_from);
+        assert_eq!(fallback.gap_days, batched.gap_days);
+        assert_eq!(fallback.claim.is_some(), batched.claim.is_some());
+    }
+
+    /// 批量统计与旧查询在所有字段上逐值一致(差额测试的 fetch 侧入口)。
+    #[test]
+    fn batched_amount_stats_match_legacy_queries() {
+        let store = Store::open_memory().unwrap();
+        let def = providers::find("deepseek").unwrap();
+        let now = local_midnight_today() + 15 * 3600;
+        for (i, remain) in [500.0, 480.0, 470.0, 460.0, 430.0].iter().enumerate() {
+            store
+                .record_fp(
+                    def.id,
+                    "fpA",
+                    now - (5 - i as i64) * 3600 - 86_400,
+                    Some(*remain),
+                    None,
+                    None,
+                    "amount",
+                )
+                .unwrap();
+        }
+        store
+            .record_fp(def.id, "fpA", now - 1800, Some(420.0), None, None, "amount")
+            .unwrap();
+
+        let anchors = AmountAnchors::at(now);
+        let rows = store
+            .history_between(def.id, Some("fpA"), anchors.history_from(), now)
+            .unwrap();
+        let batched = AmountStats::from_rows(&rows, anchors);
+        let legacy = AmountStats::legacy(&store, def.id, "fpA", anchors);
+
+        assert_eq!(batched.day, legacy.day);
+        assert_eq!(batched.week, legacy.week);
+        assert_eq!(batched.month, legacy.month);
+        assert_eq!(batched.day_prev, legacy.day_prev);
+        assert_eq!(batched.week_prev, legacy.week_prev);
+        assert_eq!(batched.month_prev, legacy.month_prev);
+        assert_eq!(batched.gap_day_from, legacy.gap_day_from);
+        assert_eq!(batched.gap_week_from, legacy.gap_week_from);
+        assert_eq!(batched.gap_month_from, legacy.gap_month_from);
+        assert_eq!(batched.gap_days, legacy.gap_days);
+    }
+
+    /// 申请制:批量路径(历史行)与旧查询路径给出同一个状态。
+    #[test]
+    fn claim_from_rows_matches_claim_from_store() {
+        let s = Store::open_memory().unwrap();
+        let now = now_ts();
+        let applied_at = now - 12 * 86_400;
+        s.record("4sapi", applied_at, Some(19.0), None, None, "amount").unwrap();
+        s.record("4sapi", applied_at + 300, Some(200.0), None, None, "amount").unwrap();
+        s.record("4sapi", now - 60, Some(18.99), None, None, "amount").unwrap();
+        let cfg = Config::default();
+        let def = providers::PROVIDERS.iter().find(|d| d.id == "4sapi").unwrap();
+
+        let rows = s.history_between(def.id, None, now - CLAIM_LOOKBACK_SEC, now).unwrap();
+        let batched = claim_for_rows(def, &cfg, &rows, Some(18.99), now);
+        let legacy = claim_for(def, &cfg, &s, Some(18.99), "", now);
+        let (a, b) = (batched.expect("两条路都该有申请状态"), legacy.expect("旧路径"));
+        assert_eq!(a.amount, b.amount);
+        assert_eq!(a.last_claim_at, b.last_claim_at);
+        assert_eq!(a.source, b.source);
+        assert_eq!(a.days_until_eligible, b.days_until_eligible);
+        assert_eq!(a.eligible, b.eligible);
+        assert_eq!(a.daily_burn, b.daily_burn);
+        assert_eq!(a.days_of_balance, b.days_of_balance);
+        assert_eq!(a.shortage_risk, b.shortage_risk);
+    }
+
+    /// P2:自定义渠道组内部并发(上限 4)、按配置顺序返回、隐藏渠道不读凭据。
+    #[test]
+    fn custom_channels_fetch_in_parallel_keep_order_and_skip_hidden() {
+        use std::io::{Read, Write};
+        use std::net::{Shutdown, TcpListener};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        fn serve(delay_ms: u64, body: &'static str) -> (String, std::thread::JoinHandle<()>) {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let h = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                // 读到请求头就够(请求体为空)
+                let mut buf = [0u8; 2048];
+                let _ = stream.read(&mut buf);
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.shutdown(Shutdown::Both);
+            });
+            (format!("http://{addr}/"), h)
+        }
+
+        fn channel(id: &str, url: String) -> custom::CustomChannel {
+            custom::CustomChannel {
+                id: id.into(),
+                name: id.into(),
+                url,
+                ..Default::default()
+            }
+        }
+
+        let (u1, h1) = serve(250, "11");
+        let (u2, h2) = serve(250, "22");
+        let channels = vec![
+            channel("c1", u1),
+            channel("c-hidden", "http://127.0.0.1:1/".into()),
+            channel("c2", u2),
+        ];
+        let hidden = vec!["c-hidden".to_string()];
+        let reads = Arc::new(AtomicUsize::new(0));
+        let reads_for_key = reads.clone();
+        let key_for = move |id: &str| {
+            reads_for_key.fetch_add(1, Ordering::SeqCst);
+            Some(format!("test-key-{id}"))
+        };
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let started = std::time::Instant::now();
+        let out = rt.block_on(fetch_custom_all(&client, &channels, &hidden, key_for));
+        let elapsed = started.elapsed();
+        h1.join().unwrap();
+        h2.join().unwrap();
+
+        assert_eq!(out.len(), 2, "隐藏渠道不进结果");
+        assert_eq!(
+            out.iter().map(|(c, _, _)| c.id.as_str()).collect::<Vec<_>>(),
+            vec!["c1", "c2"],
+            "并发完成顺序不能改变配置顺序"
+        );
+        assert_eq!(out[0].1.as_ref().unwrap().remaining, Some(11.0));
+        assert_eq!(out[1].1.as_ref().unwrap().remaining, Some(22.0));
+        assert_eq!(reads.load(Ordering::SeqCst), 2, "隐藏渠道连凭据都不读");
+        assert!(
+            elapsed < std::time::Duration::from_millis(450),
+            "两个各 250ms 的端点应并行完成(串行 ≥500ms),实际 {elapsed:?}"
+        );
     }
 }

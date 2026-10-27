@@ -27,7 +27,7 @@ const MERGE_GAP: i64 = 20 * 60;
 pub const OBSERVE_GAP_SEC: i64 = 10 * 60;
 
 /// 一个窗口里的快照覆盖情况(缺口标注用)。
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct WindowCoverage {
     pub first_ts: Option<i64>,
     pub last_ts: Option<i64>,
@@ -35,12 +35,56 @@ pub struct WindowCoverage {
 }
 
 /// 某一自然日的快照覆盖(长期趋势柱图的"缺口日"判据)。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DayCoverage {
     pub day_start: i64,
     pub first_ts: i64,
     pub last_ts: i64,
     pub count: i64,
+}
+
+/// 一条历史快照。`remaining = None` 的行仍然是一次**观测**(缺口/覆盖要算它),
+/// 只是不能参与余额差推算。
+///
+/// 批量读取(P1)返回这个形状,再交给下面那组纯函数切窗口 —— 同一份历史只从
+/// SQLite 读一次,不再为每个窗口重复执行重叠查询。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HistoryRow {
+    pub ts: i64,
+    pub remaining: Option<f64>,
+}
+
+/// 批量历史读取一次最多带回来的行数。超过就报错,让调用方退回逐窗口查询 ——
+/// 90 天 × 15 秒间隔约 52 万行,一次性展开到内存不划算。
+const MAX_HISTORY_ROWS: usize = 500_000;
+
+/// 一次查询的 SQL 上限。多读一行用来判断"是否超限",不会把超限结果交给调用方。
+const HISTORY_QUERY_LIMIT: usize = MAX_HISTORY_ROWS + 1;
+
+// 测试用:本线程调用过几次 `history_between`。
+//
+// 用 thread_local 而不是全局原子量:`cargo test` 默认多线程跑,每个测试线程
+// 各数各的;`build_view` 本身是同步函数,同样在测试线程里完成。
+#[cfg(test)]
+thread_local! {
+    static HISTORY_READS: std::cell::Cell<usize> = std::cell::Cell::new(0);
+    // 测试钩子:强制 `history_between` 失败,验证调用方会整块回退旧查询。
+    static FORCE_HISTORY_FAIL: std::cell::Cell<bool> = std::cell::Cell::new(false);
+}
+
+#[cfg(test)]
+pub fn reset_history_reads() {
+    HISTORY_READS.with(|c| c.set(0));
+}
+
+#[cfg(test)]
+pub fn history_read_count() -> usize {
+    HISTORY_READS.with(|c| c.get())
+}
+
+#[cfg(test)]
+pub fn force_history_failure(on: bool) {
+    FORCE_HISTORY_FAIL.with(|c| c.set(on));
 }
 
 /// 变动台账的一条(同方向的连续变动已聚合;`delta` 负 = 消费、正 = 入账)。
@@ -88,12 +132,16 @@ impl Store {
         // 2 = vault_items 按 (platform,label) 去重 + 唯一索引(下面那段),老库也补跑
         // 3 = snapshots 加 key_fp(密钥指纹分段,换 key 后两本账不互相推算消耗)
         // 4 = credit_grants(积分到账事件,WorkBuddy AI 的每日活跃 +30 等)
-        const WANT: i64 = 4;
+        // 5 = snapshots 的覆盖索引 idx_snap_fp_cover(P1b:批量历史读取不回表)
+        const WANT: i64 = 5;
         let cur: i64 = self
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap_or(0);
         if cur >= WANT {
+            // 索引是纯优化,不该被版本号永久卡住:上次建失败(磁盘满/被锁)时,
+            // 这次启动再试一遍。CREATE INDEX IF NOT EXISTS 对已存在的索引是空操作。
+            self.ensure_covering_index();
             return Ok(());
         }
         for (table, cols) in [
@@ -191,7 +239,27 @@ impl Store {
         self.conn
             .execute_batch(&format!("PRAGMA user_version = {WANT};"))
             .map_err(|e| format!("写数据库版本号失败: {e}"))?;
+        self.ensure_covering_index();
         Ok(())
+    }
+
+    /// 覆盖索引(P1b):金额型渠道的批量历史读取只取 `(ts, remaining)`,
+    /// 把 `remaining` 放进索引后可以直接走 COVERING INDEX,不再逐行回表。
+    ///
+    /// 纯优化:**失败只记警告**,绝不挡住启动;`user_version` 到了 5 之后
+    /// `migrate` 每次打开仍会尝试一次(`IF NOT EXISTS` 对已存在索引是空操作)。
+    fn ensure_covering_index(&self) {
+        if !self.table_exists("snapshots").unwrap_or(false) {
+            return;
+        }
+        // 旧库若还没补 key_fp 列,这条会报 "no such column" —— 只记警告,
+        // 等迁移补完列后的下一次启动自然建好(顺序不能反,见 migrate)。
+        if let Err(e) = self.conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_snap_fp_cover
+                ON snapshots (provider_id, key_fp, ts, remaining);",
+        ) {
+            eprintln!("建立快照覆盖索引失败(不影响使用,下次启动重试): {e}");
+        }
     }
 
     fn table_exists(&self, table: &str) -> Result<bool, String> {
@@ -424,7 +492,7 @@ impl Store {
                  WHERE provider_id = ?1 AND remaining IS NOT NULL
                    AND ts >= ?2 AND ts <= ?3
                    AND (?4 IS NULL OR key_fp = ?4)
-                 ORDER BY ts ASC",
+                 ORDER BY ts ASC, remaining ASC, id ASC",
             )
             .map_err(|e| format!("查询失败: {e}"))?;
 
@@ -444,6 +512,89 @@ impl Store {
             .collect();
         Ok(rows)
     }
+
+    /// 批量读取一段历史(P1:每个金额型渠道每轮只读一次,之后在内存里切窗口)。
+    ///
+    /// 与 [`Self::rows_between`] 的区别:
+    /// - **不过滤 `remaining IS NULL`** —— 缺口/覆盖统计要看到"取到数但没有金额"
+    ///   的观测;消耗类纯函数自己会跳过它们;
+    /// - 指纹 `Some` / `None` 拆成两条 SQL,而不是 `? IS NULL OR key_fp=?` ——
+    ///   后者会让 SQLite 放弃索引;拆开后 `Some` 能命中
+    ///   `idx_snap_fp_cover(provider_id, key_fp, ts, remaining)` 的覆盖扫描。
+    ///
+    /// 超过 [`MAX_HISTORY_ROWS`] 行返回错误:调用方应整块退回旧查询,不做部分混算。
+    pub fn history_between(
+        &self,
+        provider_id: &str,
+        key_fp: Option<&str>,
+        from_ts: i64,
+        to_ts: i64,
+    ) -> Result<Vec<HistoryRow>, String> {
+        #[cfg(test)]
+        {
+            HISTORY_READS.with(|c| c.set(c.get() + 1));
+            if FORCE_HISTORY_FAIL.with(|c| c.get()) {
+                return Err("测试:强制批量历史读取失败".into());
+            }
+        }
+
+        let sql_fp = "SELECT ts, remaining FROM snapshots
+                      WHERE provider_id = ?1 AND key_fp = ?2
+                        AND ts >= ?3 AND ts <= ?4
+                      ORDER BY ts ASC, remaining ASC, id ASC
+                      LIMIT ?5";
+        let sql_any = "SELECT ts, remaining FROM snapshots
+                       WHERE provider_id = ?1
+                         AND ts >= ?2 AND ts <= ?3
+                       ORDER BY ts ASC, remaining ASC, id ASC
+                       LIMIT ?4";
+        let mut out: Vec<HistoryRow> = Vec::new();
+        match key_fp {
+            Some(fp) => {
+                let mut stmt = self
+                    .conn
+                    .prepare(sql_fp)
+                    .map_err(|e| format!("查询失败: {e}"))?;
+                let rows = stmt
+                    .query_map(
+                        params![provider_id, fp, from_ts, to_ts, HISTORY_QUERY_LIMIT as i64],
+                        |r| {
+                            Ok(HistoryRow {
+                                ts: r.get(0)?,
+                                remaining: r.get(1)?,
+                            })
+                        },
+                    )
+                    .map_err(|e| format!("读取快照失败: {e}"))?;
+                collect_history_rows(rows, &mut out);
+            }
+            None => {
+                let mut stmt = self
+                    .conn
+                    .prepare(sql_any)
+                    .map_err(|e| format!("查询失败: {e}"))?;
+                let rows = stmt
+                    .query_map(
+                        params![provider_id, from_ts, to_ts, HISTORY_QUERY_LIMIT as i64],
+                        |r| {
+                            Ok(HistoryRow {
+                                ts: r.get(0)?,
+                                remaining: r.get(1)?,
+                            })
+                        },
+                    )
+                    .map_err(|e| format!("读取快照失败: {e}"))?;
+                collect_history_rows(rows, &mut out);
+            }
+        }
+        if out.len() > MAX_HISTORY_ROWS {
+            return Err(format!(
+                "历史数据超过 {MAX_HISTORY_ROWS} 行,退回逐窗口查询"
+            ));
+        }
+        Ok(out)
+    }
+
 
     /// 某渠道最新一条**成功**快照的 (ts, remaining)。
     ///
@@ -1495,6 +1646,200 @@ impl Store {
     }
 }
 
+// ───────────── 批量历史(P1)的纯函数 ─────────────
+//
+// 这些函数只接收已经读进内存的行,不碰数据库。公式与原 SQL 查询**逐行一致**
+// (负差值 clamp 成 0、跨窗口起点按时间折算、金额保留两位),用于:
+//   ① `build_view` 每轮只读一次历史,再在内存里切出所有窗口;
+//   ② 与旧查询做逐值差分测试 —— 旧实现保留为 fallback 与测试 oracle。
+
+/// 把游标里的行收进 Vec;坏行记一行日志后跳过(与 `rows_between` 同一条纪律:
+/// 静默丢行 = 数字悄悄偏小且无从排查)。
+fn collect_history_rows<I>(rows: I, out: &mut Vec<HistoryRow>)
+where
+    I: Iterator<Item = rusqlite::Result<HistoryRow>>,
+{
+    for r in rows {
+        match r {
+            Ok(v) => out.push(v),
+            Err(e) => eprintln!("读取快照行失败(该行已跳过): {e}"),
+        }
+    }
+}
+
+/// [`Store::consumption_since`] 的纯函数版本。
+///
+/// 只看 `[from_ts - 86400, to_ts]` 内、余额非空的行 —— 下界与原查询相同:
+/// 窗口起点前一天是"基线"的范围,更早的行不属于这个窗口(否则长期空洞前后的
+/// 两条快照会被按时间折算,数字静默偏大)。
+pub(crate) fn consumption_since_rows(rows: &[HistoryRow], from_ts: i64, to_ts: i64) -> Option<f64> {
+    let lo = from_ts - 86_400;
+    let in_range = |r: &&HistoryRow| {
+        r.remaining.is_some() && r.ts >= lo && r.ts <= to_ts
+    };
+
+    // 窗口内一条都没有:只剩窗口起点之前的基线 —— "这一期还没数据",不是 0。
+    let mut any_in_window = false;
+    let mut has_baseline = false;
+    for r in rows.iter().filter(in_range) {
+        if r.ts >= from_ts {
+            any_in_window = true;
+        }
+        if r.ts <= from_ts {
+            has_baseline = true;
+        }
+    }
+    if !any_in_window {
+        return None;
+    }
+
+    let mut sum = 0.0;
+    if !has_baseline {
+        // 没有基线:退化为「窗口内首快照起算」的下限估算,不足两条不出数。
+        let mut prev: Option<f64> = None;
+        let mut n = 0;
+        for r in rows.iter().filter(in_range).filter(|r| r.ts >= from_ts) {
+            if let Some(v) = r.remaining {
+                if let Some(p) = prev {
+                    sum += (p - v).max(0.0);
+                }
+                prev = Some(v);
+                n += 1;
+            }
+        }
+        if n < 2 {
+            return None;
+        }
+        return Some((sum * 100.0).round() / 100.0);
+    }
+
+    let mut prev: Option<(i64, f64)> = None;
+    for r in rows.iter().filter(in_range) {
+        let Some(remaining) = r.remaining else {
+            continue;
+        };
+        let ts = r.ts;
+        if let Some((pts, prem)) = prev {
+            if pts < from_ts {
+                if ts < from_ts {
+                    prev = Some((ts, remaining));
+                    continue;
+                }
+                // 跨窗口起点的一对:基线→起点的下降发生在窗口外,按时间线性折算。
+                let span = ts - pts;
+                let base = if span > 0 {
+                    let k = (from_ts - pts) as f64 / span as f64;
+                    prem - (prem - remaining) * k
+                } else {
+                    prem
+                };
+                sum += (base - remaining).max(0.0);
+            } else {
+                sum += (prem - remaining).max(0.0);
+            }
+        }
+        prev = Some((ts, remaining));
+    }
+    Some((sum * 100.0).round() / 100.0)
+}
+
+/// [`Store::consumed_in_window`] 的纯函数版本:只累加窗口内相邻快照的下降。
+pub(crate) fn consumed_in_window_rows(rows: &[HistoryRow], from_ts: i64, to_ts: i64) -> f64 {
+    let mut sum = 0.0;
+    let mut prev: Option<f64> = None;
+    for r in rows
+        .iter()
+        .filter(|r| r.ts >= from_ts && r.ts <= to_ts)
+        .filter_map(|r| r.remaining)
+    {
+        if let Some(p) = prev {
+            sum += (p - r).max(0.0);
+        }
+        prev = Some(r);
+    }
+    (sum * 100.0).round() / 100.0
+}
+
+/// [`Store::window_coverage`] 的纯函数版本。覆盖统计**包含** `remaining IS NULL`
+/// 的行 —— 那也是一次"应用在跑"的观测。
+pub(crate) fn window_coverage_rows(rows: &[HistoryRow], from_ts: i64, to_ts: i64) -> WindowCoverage {
+    let mut cov = WindowCoverage::default();
+    for r in rows.iter().filter(|r| r.ts >= from_ts && r.ts <= to_ts) {
+        cov.count += 1;
+        if cov.first_ts.map_or(true, |f| r.ts < f) {
+            cov.first_ts = Some(r.ts);
+        }
+        if cov.last_ts.map_or(true, |l| r.ts > l) {
+            cov.last_ts = Some(r.ts);
+        }
+    }
+    cov
+}
+
+/// [`Store::daily_coverage`] 的纯函数版本。分桶用调用方给的时区偏移,
+/// 与 SQL 的 `(ts + tz) / 86400` 同一个截断口径;行已按 ts 升序,桶天然有序。
+pub(crate) fn daily_coverage_rows(
+    rows: &[HistoryRow],
+    from_ts: i64,
+    to_ts: i64,
+    tz_offset: i64,
+) -> Vec<DayCoverage> {
+    let mut out: Vec<DayCoverage> = Vec::new();
+    for r in rows.iter().filter(|r| r.ts >= from_ts && r.ts <= to_ts) {
+        let day_start = ((r.ts + tz_offset) / 86_400) * 86_400 - tz_offset;
+        match out.last_mut() {
+            Some(last) if last.day_start == day_start => {
+                last.last_ts = last.last_ts.max(r.ts);
+                last.count += 1;
+            }
+            _ => out.push(DayCoverage {
+                day_start,
+                first_ts: r.ts,
+                last_ts: r.ts,
+                count: 1,
+            }),
+        }
+    }
+    out
+}
+
+/// [`Store::last_jump_since`] 的纯函数版本:顺序扫描,取最后一次"像申请的"跳升。
+pub(crate) fn last_jump_rows(
+    rows: &[HistoryRow],
+    from_ts: i64,
+    min_delta: f64,
+    target: f64,
+    max_gap: i64,
+) -> Option<i64> {
+    let mut last = None;
+    let mut prev: Option<(i64, f64)> = None;
+    for (ts, remaining) in rows
+        .iter()
+        .filter(|r| r.ts >= from_ts)
+        .filter_map(|r| r.remaining.map(|v| (r.ts, v)))
+    {
+        if let Some((pts, prem)) = prev {
+            // 只看涨幅会把预扣退还记成申请;落在额度线附近、且相邻两条不能隔太久。
+            if remaining - prem >= min_delta
+                && (target <= 0.0 || (remaining - target).abs() <= target * 0.15)
+                && (max_gap <= 0 || ts - pts <= max_gap)
+            {
+                last = Some(ts);
+            }
+        }
+        prev = Some((ts, remaining));
+    }
+    last
+}
+
+/// [`Store::first_ts_since`] 的纯函数版本(包含 `remaining IS NULL` 的行)。
+pub(crate) fn first_ts_rows(rows: &[HistoryRow], from_ts: i64) -> Option<i64> {
+    rows.iter()
+        .filter(|r| r.ts >= from_ts)
+        .map(|r| r.ts)
+        .min()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2108,5 +2453,380 @@ mod tests {
         assert!((total - 1.0).abs() < 1e-9);
         // 只有"今天"这一天有观测,其余 9 天是"没数据" —— 只有今天可能算缺口
         assert!(gaps.len() <= 1, "没数据的日子不该被标成缺口:{gaps:?}");
+    }
+
+    // ───────────── P1:批量历史 vs 旧查询的差分测试 ─────────────
+
+    /// 把一批 (ts, remaining, fp) 落进库里。`remaining = None` 模拟"取到数但没有金额"。
+    fn seed(store: &Store, provider: &str, rows: &[(i64, Option<f64>, &str)]) {
+        for (ts, remaining, fp) in rows {
+            store
+                .record_fp(provider, fp, *ts, *remaining, None, None, "amount")
+                .unwrap();
+        }
+    }
+
+    /// 同一份数据、同一个窗口:旧 SQL 查询与「批量读取 + 纯函数」必须逐值相等。
+    fn assert_rows_match_legacy(
+        store: &Store,
+        provider: &str,
+        fp: &str,
+        from_ts: i64,
+        to_ts: i64,
+    ) {
+        // 消费/缺口/跳升各自需要不同的读取范围,但都来自同一次查询能覆盖的范围。
+        let history_from = (from_ts - 86_400).min(to_ts - 92 * 86_400);
+        let rows = store
+            .history_between(provider, Some(fp), history_from, to_ts)
+            .unwrap();
+
+        assert_eq!(
+            consumption_since_rows(&rows, from_ts, to_ts),
+            store.consumption_since_fp(provider, fp, from_ts, to_ts).unwrap(),
+            "consumption_since 不一致 provider={provider} fp={fp} from={from_ts} to={to_ts}"
+        );
+        assert_eq!(
+            consumed_in_window_rows(&rows, from_ts, to_ts),
+            store.consumed_in_window_fp(provider, fp, from_ts, to_ts).unwrap(),
+            "consumed_in_window 不一致 provider={provider}"
+        );
+        assert_eq!(
+            window_coverage_rows(&rows, from_ts, to_ts),
+            store.window_coverage(provider, Some(fp), from_ts, to_ts).unwrap(),
+            "window_coverage 不一致 provider={provider}"
+        );
+        assert_eq!(
+            daily_coverage_rows(&rows, from_ts, to_ts, 8 * 3600),
+            store
+                .daily_coverage(provider, Some(fp), from_ts, to_ts, 8 * 3600)
+                .unwrap(),
+            "daily_coverage 不一致 provider={provider}"
+        );
+        assert_eq!(
+            last_jump_rows(&rows, from_ts, 20.0, 100.0, 2 * 3600),
+            store
+                .last_jump_since_fp(provider, fp, from_ts, 20.0, 100.0, 2 * 3600)
+                .unwrap(),
+            "last_jump 不一致 provider={provider}"
+        );
+        assert_eq!(
+            first_ts_rows(&rows, from_ts),
+            store.first_ts_since_fp(provider, fp, from_ts).unwrap(),
+            "first_ts 不一致 provider={provider}"
+        );
+
+        // 旧口径(不限指纹)也必须一致。
+        let any = store
+            .history_between(provider, None, history_from, to_ts)
+            .unwrap();
+        assert_eq!(
+            consumption_since_rows(&any, from_ts, to_ts),
+            store.consumption_since(provider, from_ts, to_ts).unwrap(),
+            "不限指纹的 consumption_since 不一致 provider={provider}"
+        );
+        assert_eq!(
+            window_coverage_rows(&any, from_ts, to_ts),
+            store.window_coverage(provider, None, from_ts, to_ts).unwrap()
+        );
+    }
+
+    /// 固定边界夹具:空、单行、只有基线、跨月、2 月 28/29、3 月 31、闰年、
+    /// 00:00:00、23:59:59、充值(负差值)、重复时间戳。
+    #[test]
+    fn history_rows_match_legacy_on_boundary_fixtures() {
+        let s = mem_migrated();
+        let cases: &[(&str, &[(i64, Option<f64>, &str)], i64, i64)] = &[
+            // 空库
+            ("empty", &[], 1_700_000_000, 1_700_100_000),
+            // 窗口内只有一条(不足两条 → None)
+            ("single", &[(1_700_000_100, Some(50.0), "fp")], 1_700_000_000, 1_700_100_000),
+            // 只有窗口起点之前的基线 → None
+            (
+                "baseline-only",
+                &[(1_699_900_000, Some(80.0), "fp")],
+                1_700_000_000,
+                1_700_100_000,
+            ),
+            // 跨窗口起点:基线在起点前 1 小时,窗口首条在起点后 10 分钟
+            (
+                "crossing",
+                &[
+                    (1_699_996_400, Some(100.0), "fp"),
+                    (1_700_000_600, Some(70.0), "fp"),
+                    (1_700_001_200, Some(65.0), "fp"),
+                ],
+                1_700_000_000,
+                1_700_100_000,
+            ),
+            // 充值(余额上升)按 0 计,不上负消耗
+            (
+                "recharge",
+                &[
+                    (1_700_000_000, Some(100.0), "fp"),
+                    (1_700_000_900, Some(90.0), "fp"),
+                    (1_700_001_800, Some(500.0), "fp"),
+                    (1_700_002_700, Some(480.0), "fp"),
+                ],
+                1_700_000_000,
+                1_700_100_000,
+            ),
+            // 2 月 28/29(2024 闰年):本地日桶按 +8 时区切
+            (
+                "leap",
+                &[
+                    (1_709_107_200, Some(200.0), "fp"), // 2024-02-28 00:00 UTC
+                    (1_709_193_600, Some(190.0), "fp"), // 2024-02-29 00:00 UTC
+                    (1_709_280_000, Some(180.0), "fp"), // 2024-03-01 00:00 UTC
+                ],
+                1_709_100_000,
+                1_709_300_000,
+            ),
+            // 3 月 31 日 + 23:59:59
+            (
+                "month-end",
+                &[
+                    (1_711_843_199, Some(90.0), "fp"), // 2024-03-31 23:59:59 UTC
+                    (1_711_843_200, Some(80.0), "fp"), // 2024-04-01 00:00:00 UTC
+                ],
+                1_711_800_000,
+                1_711_900_000,
+            ),
+            // 重复时间戳:排序必须稳定(ts ASC, id ASC)
+            (
+                "ties",
+                &[
+                    (1_700_000_100, Some(100.0), "fp"),
+                    (1_700_000_100, Some(90.0), "fp"),
+                    (1_700_000_100, Some(80.0), "fp"),
+                    (1_700_000_200, Some(70.0), "fp"),
+                ],
+                1_700_000_000,
+                1_700_100_000,
+            ),
+            // 无金额的观测:覆盖/缺口要算,消耗不能算
+            (
+                "null-remaining",
+                &[
+                    (1_700_000_000, None, "fp"),
+                    (1_700_000_300, Some(50.0), "fp"),
+                    (1_700_000_600, None, "fp"),
+                    (1_700_000_900, Some(40.0), "fp"),
+                ],
+                1_700_000_000,
+                1_700_100_000,
+            ),
+            // 两个指纹交错:分段查询不能串账
+            (
+                "two-accounts",
+                &[
+                    (1_700_000_000, Some(100.0), "fp"),
+                    (1_700_000_100, Some(10.0), "other"),
+                    (1_700_000_200, Some(95.0), "fp"),
+                    (1_700_000_300, Some(9.0), "other"),
+                ],
+                1_700_000_000,
+                1_700_100_000,
+            ),
+        ];
+
+        for (provider, rows, from, to) in cases {
+            seed(&s, provider, rows);
+            assert_rows_match_legacy(&s, provider, "fp", *from, *to);
+        }
+    }
+
+    /// 随机夹具(固定种子):空洞、充值、重复时间戳、两本账交错。
+    /// 200 组落在同一个内存库上,一次跑完;不引入 rand 依赖。
+    #[test]
+    fn history_rows_match_legacy_on_random_fixtures() {
+        let s = mem_migrated();
+        // 简单的 LCG:固定种子 → 每次运行同一组数据,失败可复现。
+        let mut state: u64 = 0x5EED_2026_1027;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            state >> 33
+        };
+
+        let base = 1_700_000_000i64;
+        for g in 0..200 {
+            let provider = format!("rand-{g}");
+            let mut ts = base + (next() % 86_400) as i64;
+            let mut rows: Vec<(i64, Option<f64>, &str)> = Vec::new();
+            let mut bal = 1_000.0f64;
+            for _ in 0..40 {
+                // 0 步 = 重复时间戳;最多 6 小时 = 稀疏观测
+                ts += (next() % (6 * 3600)) as i64 * if next() % 4 == 0 { 1 } else { 0 };
+                let fp = if next() % 2 == 0 { "A" } else { "B" };
+                // 15% 的空金额行;10% 是充值(余额跳升)
+                let remaining = if next() % 100 < 15 {
+                    None
+                } else {
+                    if next() % 10 == 0 {
+                        bal += 300.0;
+                    } else {
+                        bal = (bal - (next() % 100) as f64).max(0.0);
+                    }
+                    Some((bal * 100.0).round() / 100.0)
+                };
+                rows.push((ts, remaining, fp));
+            }
+            seed(&s, &provider, &rows);
+
+            let from = base + (next() % 3_600) as i64;
+            let to = ts + 1;
+            assert_rows_match_legacy(&s, &provider, "A", from, to);
+            assert_rows_match_legacy(&s, &provider, "B", from, to);
+        }
+    }
+
+    /// 批量读取的超限保护:多读一行用来判断"是否超过 50 万行"。
+    #[test]
+    fn history_query_reads_one_extra_row_to_detect_overflow() {
+        assert_eq!(HISTORY_QUERY_LIMIT, MAX_HISTORY_ROWS + 1);
+    }
+
+    // ───────────── P1b:覆盖索引 ─────────────
+
+    fn explain(s: &Store) -> Vec<String> {
+        let mut stmt = s
+            .conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT ts, remaining FROM snapshots
+                  WHERE provider_id = ?1 AND key_fp = ?2
+                    AND ts >= ?3 AND ts <= ?4
+                  ORDER BY ts ASC, remaining ASC, id ASC
+                  LIMIT ?5",
+            )
+            .unwrap();
+        stmt.query_map(params!["p", "fp", 0i64, 10i64, 100i64], |r| r.get(3))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect()
+    }
+
+    #[test]
+    fn history_query_uses_the_covering_index() {
+        let s = mem_migrated();
+        let plan = explain(&s);
+        assert!(
+            plan.iter()
+                .any(|p| p.contains("COVERING INDEX") && p.contains("idx_snap_fp_cover")),
+            "批量历史查询必须走覆盖索引:{plan:?}"
+        );
+    }
+
+    /// 老库(只有 snapshots,没有 key_fp 列)升级:先补列、再建索引,顺序不能反。
+    #[test]
+    fn covering_index_is_built_after_key_fp_column_on_old_db() {
+        let s = mem();
+        s.migrate().unwrap();
+        let n: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                  WHERE type='index' AND name='idx_snap_fp_cover'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "升级后覆盖索引必须存在");
+        let v: i64 = s
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 5, "迁移版本号要推进,否则每次启动都重跑补列");
+    }
+
+    /// 手动性能基准(不进常规测试):
+    ///
+    /// ```text
+    /// set TOKENSCOPE_BENCH_DB=<线上库的拷贝>
+    /// cargo test --release bench_history_batch -- --ignored --nocapture
+    /// ```
+    ///
+    /// 对比「旧路径 13 次重叠查询」与「1 次批量读取 + 内存切窗口」。窗口用近似的
+    /// 相对时间,只比量级,不参与正确性判定(正确性由差分测试守)。
+    #[test]
+    #[ignore = "manual benchmark: set TOKENSCOPE_BENCH_DB to a COPY of tokenscope.db"]
+    fn bench_history_batch() {
+        let Ok(path) = std::env::var("TOKENSCOPE_BENCH_DB") else {
+            eprintln!("跳过:没有设置 TOKENSCOPE_BENCH_DB");
+            return;
+        };
+        let s = Store::open(Path::new(&path)).expect("打开基准库失败(请用拷贝)");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        // 取行数最多的几个真实渠道/指纹组合
+        let mut stmt = s
+            .conn
+            .prepare(
+                "SELECT provider_id, key_fp, COUNT(*) AS n FROM snapshots
+                  WHERE remaining IS NOT NULL AND ts >= ?1
+                  GROUP BY provider_id, key_fp ORDER BY n DESC LIMIT 4",
+            )
+            .unwrap();
+        let targets: Vec<(String, String, i64)> = stmt
+            .query_map(params![now - 92 * 86_400], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+
+        let rounds = 10;
+        for (provider, fp, rows) in targets {
+            let history_from = now - 92 * 86_400;
+
+            let t0 = std::time::Instant::now();
+            for _ in 0..rounds {
+                let h = s
+                    .history_between(&provider, Some(&fp), history_from, now)
+                    .unwrap();
+                let _ = consumption_since_rows(&h, now - 86_400, now);
+                let _ = consumption_since_rows(&h, now - 7 * 86_400, now);
+                let _ = consumption_since_rows(&h, now - 30 * 86_400, now);
+                let _ = consumption_since_rows(&h, now - 2 * 86_400, now - 86_400);
+                let _ = consumption_since_rows(&h, now - 8 * 86_400, now - 7 * 86_400);
+                let _ = consumption_since_rows(&h, history_from, now);
+                let _ = window_coverage_rows(&h, now - 86_400, now);
+                let _ = window_coverage_rows(&h, now - 7 * 86_400, now);
+                let _ = window_coverage_rows(&h, now - 30 * 86_400, now);
+                let _ = daily_coverage_rows(&h, history_from, now, 8 * 3600);
+                let _ = last_jump_rows(&h, now - 90 * 86_400, 20.0, 200.0, 7200);
+                let _ = first_ts_rows(&h, now - 7 * 86_400);
+            }
+            let batch = t0.elapsed().as_secs_f64() * 1000.0 / rounds as f64;
+
+            let t1 = std::time::Instant::now();
+            for _ in 0..rounds {
+                for from in [
+                    now - 86_400,
+                    now - 7 * 86_400,
+                    now - 30 * 86_400,
+                    now - 2 * 86_400,
+                    now - 8 * 86_400,
+                    history_from,
+                ] {
+                    let _ = s.consumption_since_fp(&provider, &fp, from, now);
+                }
+                let _ = s.window_coverage(&provider, Some(&fp), now - 86_400, now);
+                let _ = s.window_coverage(&provider, Some(&fp), now - 7 * 86_400, now);
+                let _ = s.window_coverage(&provider, Some(&fp), now - 30 * 86_400, now);
+                let _ = s.daily_coverage(&provider, Some(&fp), history_from, now, 8 * 3600);
+                let _ = s.last_jump_since_fp(&provider, &fp, now - 90 * 86_400, 20.0, 200.0, 7200);
+                let _ = s.first_ts_since_fp(&provider, &fp, now - 7 * 86_400);
+            }
+            let legacy = t1.elapsed().as_secs_f64() * 1000.0 / rounds as f64;
+            println!(
+                "{provider}/{fp}: rows≈{rows}  批量 {batch:.1} ms  旧路径 {legacy:.1} ms  加速 {:.1}x",
+                legacy / batch.max(0.001)
+            );
+        }
     }
 }
