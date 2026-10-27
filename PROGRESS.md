@@ -3337,3 +3337,41 @@ core 新增 5 条 ArrivalInfo 单测,全量 333 条全绿后才发。
 其实是找不到编译器。改成用上面已经算好的 `cargoBin` 绝对路径。
 
 本机未用打包产物覆盖正在运行的应用，留给自动更新验证。
+
+### 发版 v0.1.70（2026-10-27）
+
+性能优化版本（调研与实施记录见 `docs/research/performance-optimization-2026-10-27.md`）：
+只动**只读计算与调度层**，余额、签到、通知与凭据的判定口径不变。
+
+- **P1 历史窗口单次读取**：`Store::history_between` 一次读出 92 天历史，今日/本周/本月、
+  三个环比、观测缺口、逐日覆盖、申请跳升与近 7 天日均都在内存切出；旧查询保留为运行时
+  回退与测试 oracle，读取失败或超过 50 万行时**整块回退**。
+- **P1b 覆盖索引**：`idx_snap_fp_cover(provider_id, key_fp, ts, remaining)`，迁移版本 5；
+  本机库 23.4 MB → 30.6 MB（+7.2 MB，在预算内），首次启动自动建立，失败只记警告。
+- **P2 自定义渠道并行**：与内置渠道 `futures::join!`，内部 `buffer_unordered(4)`，
+  结果按配置顺序还原；隐藏渠道仍不读凭据。
+- **P2 前端**：峰谷倒计时分钟对齐；设置页密钥尾号/来源 5 分钟缓存 + 显式失效。
+
+**验证**：core **343 passed / 7 ignored**；`build.ps1 check` 双 crate 通过；`jsdom-smoke`
+**70/70**；`probe-frontend` / `check-css-forms` / `check-yaml` / `scan-secrets` 全过；
+release 构建后 CDP 真机 `verify-form`（紧凑条开启时）与 `visual-forms` 24 场景通过，
+库已迁移到 v5 且 `EXPLAIN QUERY PLAN` 命中 `COVERING INDEX idx_snap_fp_cover`。
+
+实测（真实库拷贝，release，10 轮平均）：4 个金额渠道历史计算合计约 **8.9 ms**，
+优化前约 **455 ms**（单渠道 45–57×）。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.70_x64-setup.exe`（5,226,792 B，SHA-256
+`c70ae04b0a1b01e8084508268f32268f596b85965e26d34303f73d93a74bdba1`）及 `.sig` 已发布到
+[GitHub Release v0.1.70](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.70)。
+发布提交 `20c8b07`，tag `v0.1.70`。
+
+`node build/verify-release.js` **13/13 PASS**；`node build/verify-signature.js` **PASS**；
+`node build/verify-updater.js` **PASS**（已装用户收得到）。
+
+> 旧探针说明：`verify-form` 的 compact 用例要求先在内存里打开 `CFG.compactEnabled`
+>（v0.1.58 起默认关）；`verify-settings-entry` 数的是 DOM 节点，会看到 CSS 隐藏的「紧凑」
+> 按钮（compact 关闭时实际可见 4 个）；`verify-ui-0923` 的 U2/U8/U6 断言绑定旧渠道夹具。
+> 发布前已逐条确认这些不是本次回归。
+
+另记：Node 24 的 fetch 不读系统代理，核验脚本在本机需
+`NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:7897` 才能连上 GitHub。
