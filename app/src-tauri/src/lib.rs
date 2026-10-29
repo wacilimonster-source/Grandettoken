@@ -843,6 +843,163 @@ async fn wb_finish_login(app: &tauri::AppHandle) {
     refresh_now(app).await;
 }
 
+// ───────────── Qoder 网页登录(逐包到期专用,2026-10-30)─────────────
+//
+// 设计与排查:docs/product/product-qoder-credit-expiry-2026-10-30.md。逐包到期
+// 明细只在 qoder.com 的网页会话后面,这套会话**只用于账务只读查询**:签到照旧走
+// 桌面 Bearer,余额也照旧 —— 两条链路一概不碰(设计红线)。会话不落盘:留在
+// WebView2 的 profile 里,取数时现读,平台轮换 Cookie 也能跟上(与 WorkBuddy
+// 同一条裁决);判定规则(登录完成路径/Cookie 拼装)都在 core::weblogin,那边有单测。
+
+const QODER_LOGIN_LABEL: &str = "qoder-login";
+/// 入口走登录页 + 回调(与 WorkBuddy 同构),**不要**直接给 /account/usage:
+/// 那样的话首次导航就是"登录完成路径",随后才被 302 到登录页 —— landed 会在
+/// 用户还没登录时就被置真,观察者的"被拒绝"提示立刻误发(真机踩过,2026-10-30)。
+/// 从登录页进:登录完平台自己跳回 /account/usage,那一跳才置 landed。
+const QODER_LOGIN_URL: &str = "https://qoder.com/users/sign-in?oauth_callback=https%3A%2F%2Fqoder.com%2Faccount%2Fusage";
+
+static QODER_LOGIN_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static QODER_LOGIN_CLOSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+static QODER_LANDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Qoder 的网页会话:从主窗口的 Cookie 罐里把 qoder.com 域的全部 Cookie 拼成
+/// `cookie:` 凭据。名单是平台私有的,不按名字挑(core::weblogin::qoder_cookie_credential);
+/// 拿到的东西能不能真取到数,由观察者的探测负责 —— 没登录的访客也可能有几枚营销 Cookie。
+fn qoder_web_session_of(app: &tauri::AppHandle) -> Option<String> {
+    let handle = app.clone();
+    on_main_with_timeout(
+        app,
+        move || {
+            let w = handle.get_webview_window("main")?;
+            let url = format!("https://{}/", tokenscope_core::weblogin::QODER_SITE_HOST)
+                .parse::<tauri::Url>()
+                .ok()?;
+            let Ok(jar) = w.cookies_for_url(url) else {
+                return None;
+            };
+            tokenscope_core::weblogin::qoder_cookie_credential(
+                jar.iter().map(|x| (x.name(), x.value())),
+            )
+        },
+        std::time::Duration::from_secs(3),
+    )
+    .flatten()
+}
+
+/// 取数管线的会话分发。**故意不并进 wb_session_of**:签到凭据兜底(checkin_credentials
+/// 的 WebSession 分支)引用的是那个函数 —— Qoder 的网页会话绝不能漏进签到链路(设计红线)。
+fn web_session_of(app: &tauri::AppHandle, id: &str) -> Option<String> {
+    match id {
+        WB_CHANNEL_ID => wb_session_of(app, id),
+        "qoder" => qoder_web_session_of(app),
+        _ => None,
+    }
+}
+
+/// 收尾:关窗 → 通知界面 → 立刻刷一轮(与 wb_finish_login 同构,去掉签到那一段:
+/// Qoder 的签到走桌面 Bearer,网页会话与它无关)。
+async fn qoderweb_finish_login(app: &tauri::AppHandle) {
+    QODER_LOGIN_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
+    // "这份网页会话从现在起是新鲜的":取数侧按这个年龄出提示(qoder_web_session_hint)。
+    {
+        let st = app.state::<AppState>();
+        let store = lock_rw(&st.store);
+        let _ = store.set_setting(
+            tokenscope_core::weblogin::QODER_WEB_SESSION_AT_KEY,
+            &now_ts().to_string(),
+        );
+    }
+    let handle = app.clone();
+    on_main(app, move || {
+        if let Some(w) = handle.get_webview_window(QODER_LOGIN_LABEL) {
+            let _ = w.close();
+        }
+    });
+    let _ = app.emit("qoderweb-login", serde_json::json!({"ok": true}));
+    app.state::<AppState>().fetcher.invalidate();
+    refresh_now(app).await;
+}
+
+/// 打开 Qoder 网页登录窗(逐包到期用)。已开着就拉到前台。**必须 async**,理由同
+/// workbuddy_login:同步命令在 WebMessageReceived 回调里再建 webview 会冻死(2026-10-08 实测)。
+#[tauri::command]
+async fn qoderweb_login(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window(QODER_LOGIN_LABEL) {
+        let _ = w.show();
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    QODER_LOGIN_DONE.store(false, std::sync::atomic::Ordering::Relaxed);
+    QODER_LANDED.store(false, std::sync::atomic::Ordering::Relaxed);
+    QODER_LOGIN_CLOSED.store(false, std::sync::atomic::Ordering::Relaxed);
+    let url: tauri::Url = QODER_LOGIN_URL
+        .parse()
+        .map_err(|e| format!("登录地址有问题: {e}"))?;
+    tauri::WebviewWindowBuilder::new(&app, QODER_LOGIN_LABEL, tauri::WebviewUrl::External(url))
+        .title("登录 Qoder 网页账号（积分明细用）")
+        .inner_size(560.0, 780.0)
+        .min_inner_size(420.0, 560.0)
+        .resizable(true)
+        .always_on_top(true)
+        .on_navigation(|nav| {
+            if tokenscope_core::weblogin::qoder_is_post_login(nav.as_str()) {
+                QODER_LANDED.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            true
+        })
+        .build()
+        .map_err(|e| format!("登录窗口打不开: {e}"))?;
+    spawn_qoder_login_watcher(app.clone());
+    Ok(())
+}
+
+/// 与 spawn_login_watcher 同一条纪律:判"能不能收工"靠**探测**(真打一次账务接口),
+/// 不靠"cookie 罐里有没有东西";两条状态由主线程侧钩子置位,绝不碰登录窗的 API。
+fn spawn_qoder_login_watcher(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let mut tried = String::new();
+        let mut probes = 0u32;
+        let mut ticks = 0u32;
+        loop {
+            if QODER_LOGIN_CLOSED.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
+            let probe_app = app.clone();
+            let session = tokio::task::spawn_blocking(move || qoder_web_session_of(&probe_app))
+                .await
+                .ok()
+                .flatten();
+            if let Some(session) = session {
+                let fresh = session != tried;
+                if fresh {
+                    tried = session.clone();
+                    probes = 0;
+                }
+                // 新会话立刻验;同一份每 ~6 秒补验一次(用户可能刚点完登录),最多 10 次
+                if fresh || (probes < 10 && ticks % 5 == 0) {
+                    probes += 1;
+                    let fetcher = app.state::<AppState>().fetcher.clone();
+                    if fetcher.probe_qoder_web(&session).await {
+                        qoderweb_finish_login(&app).await;
+                        return;
+                    }
+                    if QODER_LANDED.load(std::sync::atomic::Ordering::Relaxed) && fresh {
+                        let _ = app.emit(
+                            "qoderweb-login",
+                            serde_json::json!({
+                                "ok": false,
+                                "reason": "登录页到了,但用这份会话查积分明细被平台拒绝。会自动再试几次;一直失败的话在渠道卡上点「登录网页版」重来。"
+                            }),
+                        );
+                    }
+                }
+            }
+            ticks += 1;
+            tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+        }
+    });
+}
+
 /// 登录窗开着的时候盯着它,直到会话可用或者窗口被用户关掉。
 ///
 /// 为什么轮询而不是拦导航:控制台是 SPA,登录落地那一跳可能走 pushState,不触发导航
@@ -5116,7 +5273,7 @@ pub fn run() {
             let session_app = app.handle().clone();
             app.state::<AppState>()
                 .fetcher
-                .set_web_credential_source(Box::new(move |id| wb_session_of(&session_app, id)));
+                .set_web_credential_source(Box::new(move |id| web_session_of(&session_app, id)));
 
             // 启动时注册已保存的全局快捷键;被占用不拦启动,但要把原因留给界面
             // (之前只 eprintln,绿色版从托盘启动时没人看得到 stderr —— 报告 P2-14)
@@ -5213,17 +5370,32 @@ pub fn run() {
         // 标位区分,不该再报一次"已取消"。观察者也靠 WB_LOGIN_CLOSED 收工 ——
         // 它因此不用去问一个正在销毁的窗口(那种调用会 panic,见 on_main_with_timeout)。
         .on_window_event(|window, event| {
-            if window.label() != WB_LOGIN_LABEL || !matches!(event, tauri::WindowEvent::Destroyed) {
-                return;
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                // WorkBuddy 登录窗被用户自己关掉(没抓到会话)时,要让界面把「登录中」
+                // 收回去。抓到会话那一次是我们主动关窗的,由 DONE 标位区分。
+                if window.label() == WB_LOGIN_LABEL {
+                    WB_LOGIN_CLOSED.store(true, std::sync::atomic::Ordering::Relaxed);
+                    if WB_LOGIN_DONE.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                        return;
+                    }
+                    let _ = window.emit(
+                        "workbuddy-login",
+                        serde_json::json!({ "ok": false, "cancelled": true }),
+                    );
+                }
+                // Qoder 网页登录窗同一条规矩(两个窗共用这套判定,拆成两个分支而不是
+                // 两个闭包 —— on_window_event 只能挂一次)
+                if window.label() == QODER_LOGIN_LABEL {
+                    QODER_LOGIN_CLOSED.store(true, std::sync::atomic::Ordering::Relaxed);
+                    if QODER_LOGIN_DONE.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                        return;
+                    }
+                    let _ = window.emit(
+                        "qoderweb-login",
+                        serde_json::json!({ "ok": false, "cancelled": true }),
+                    );
+                }
             }
-            WB_LOGIN_CLOSED.store(true, std::sync::atomic::Ordering::Relaxed);
-            if WB_LOGIN_DONE.swap(false, std::sync::atomic::Ordering::Relaxed) {
-                return;
-            }
-            let _ = window.emit(
-                "workbuddy-login",
-                serde_json::json!({ "ok": false, "cancelled": true }),
-            );
         })
         .invoke_handler(tauri::generate_handler![
             get_channels,
@@ -5264,6 +5436,7 @@ pub fn run() {
             checkin_state,
             checkin_now,
             checkin_history,
+            qoderweb_login,
             credit_grants,
             key_reveal,
             key_copy,

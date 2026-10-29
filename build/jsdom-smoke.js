@@ -546,6 +546,49 @@ const HARNESS = `
     fillKeyHints: (force) => fillKeyHints(force),
     invalidateKeyMeta: (id, kind) => invalidateKeyMeta(id, kind),
   };
+
+  // ── Qoder 逐包到期(2026-10-30)──
+  // 三层:明细卡逐包列表(契约含"已过期但还有余量")、无数据的诚实空态、
+  // 渠道卡「登录网页版」入口(只给 qoder,别的渠道不塞)。
+  try {
+    const nowS = Math.floor(Date.now() / 1000);
+    const qd = { id: "qoder", name: "Qoder", short: "QD", color: "#00b3a4", kind: "points",
+      unit: "credits", remaining: 986, valid: true, hasKey: true, authSource: "app",
+      expiring: [
+        { at: nowS - 86400 * 2, amount: 300, label: "Purchased Credits" },
+        { at: nowS + 86400 * 3, amount: 500, label: "Bonus" },
+        { at: nowS + 86400 * 20, amount: 186, label: "积分包" },
+      ], expiryComplete: true, updatedAt: nowS };
+    window.__TEST.setChannels([...data.CHANNELS, qd]);
+    window.__TEST.refreshChCards();
+    const dq = renderDetail(qd);
+    ck("逐包到期:未到期的包带日期与剩余,默认收起,过期的进「全部 3 笔」",
+      /500 分/.test(dq) && /186 分/.test(dq) && /全部 3 笔/.test(dq) && !/300 分/.test(dq),
+      dq.slice(0, 300));
+    ck("有真实包时不再写「接口未提供」", !/接口未提供/.test(dq), (dq.match(/接口未提供/g) || []).join(","));
+
+    window.__TEST.openManage();
+    const qcard = document.querySelector('#chList .ccard[data-id="qoder"]');
+    ck("Qoder 渠道卡有「登录网页版」", !!qcard && /登录网页版/.test(qcard.innerHTML),
+      qcard && qcard.innerHTML.slice(0, 220));
+    const ocard = document.querySelector('#chList .ccard[data-id="ds"]');
+    ck("别的渠道不塞登录入口", !!ocard && !/登录网页版/.test(ocard.innerHTML));
+
+    const qd2 = Object.assign({}, qd, { expiring: [], expiryComplete: false });
+    const dq2 = renderDetail(qd2);
+    ck("没有包数据:空态仍说「接口未提供完整的逐笔到期信息」",
+      /接口未提供完整的逐笔到期信息/.test(dq2), dq2.slice(0, 200));
+    const qd3 = Object.assign({}, qd, { expiring: [], expiryComplete: true });
+    const dq3 = renderDetail(qd3);
+    ck("平台确认无包:说「没有已知到期日」而不是装失败",
+      /没有已知到期日/.test(dq3), dq3.slice(0, 200));
+  } catch (e) {
+    ck("Qoder 逐包到期 UI", false, e.message);
+  } finally {
+    window.__TEST.setChannels(data.CHANNELS);
+    window.__TEST.refreshChCards();
+  }
+
 })();
 `;
 

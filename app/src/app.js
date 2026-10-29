@@ -2084,6 +2084,7 @@ const WHY = {
   hide: "不再请求接口,也不再读取本机登录凭据;已记录的历史快照不删,点「恢复」立即回到取数。",
   custom: "地址与密钥只发往你填的那个域名;字段路径决定从返回 JSON 的哪一层取余额,换算倍数把它折成元。探活模式只验证可达,不解析金额。",
   wblogin: "点「登录」会开一个独立窗口加载 www.workbuddy.cn 登录页(微信扫码 / 手机号),登录成功后窗口自己关掉,挂件接着用这份浏览器会话取数 —— 不用复制任何东西,也不动桌面客户端的登录状态。会话约 7 天到期。国内版桌面端 5.6.2 起把本机令牌改为加密存储,已无法自动读取。",
+  qoderweb: "逐包到期明细(哪些积分哪天过期)只在 qoder.com 的网页会话里提供,桌面端凭据只能拿到汇总 —— 这是平台两套接口的差别(2026-10-30 排查)。点「登录网页版」会开一个独立窗口,登录成功后自动关窗并刷新明细;这套会话只读积分明细,签到与余额照旧走桌面端,互不影响。",
   appauth: "凭据来自本机已登录的客户端;失效时打开一次客户端即可。隐藏本渠道后连读取也会停止。",
   compact: "开启后顶栏出现「紧凑」按钮,可切成 380×46 的横向条;Esc 在面板与胶囊之间切换。",
   trayNum: "托盘图标画概览缩写(74 / 1.2k / 82);关闭后回到品牌样式。",
@@ -2192,7 +2193,15 @@ function renderChCards() {
             // 国际版这条链路**会续期**(refreshToken 换 accessToken,成果存在我们自己的库里、
             // 不写回客户端文件),照抄别的 app 型渠道写"不刷新"就是错的(设计稿 §6 记过这一条)
             c.id === "workbuddy-ai" ? "只读复用本机登录,自动续期" : "只读复用本机登录,不写回、不刷新"
-          }<button class="why" data-why="appauth" aria-expanded="false" aria-label="凭据来源的说明"></button></div>`
+          }<button class="why" data-why="appauth" aria-expanded="false" aria-label="凭据来源的说明"></button></div>` +
+          (c.id === "qoder"
+            ? // 逐包到期明细在 qoder.com 的网页会话后面(桌面 Bearer 只有汇总,
+              // 排查见 docs/product/product-qoder-credit-expiry-2026-10-30.md);
+              // 这套会话只做账务只读,签到与余额的桌面链路一概不碰
+              `<div class="mini">积分包到期明细走网页会话
+                <button class="btn s" data-act="qoderweblogin" data-id="${c.id}"${QODER_LOGGING ? " disabled" : ""}>${QODER_LOGGING ? "登录中…" : "登录网页版"}</button>
+                <button class="why" data-why="qoderweb" aria-expanded="false" aria-label="网页会话的说明"></button></div>`
+            : "")
         : `<div class="ksrc" data-src="${c.id}">${srcRowHtml(c.id)}</div>
           <div class="ccbtns">
             <input type="password" id="key-${c.id}" autocomplete="off" spellcheck="false"
@@ -3864,6 +3873,17 @@ $("manage").addEventListener("click", async (e) => {
     render();
     refreshChCards();
     await saveConfigAndRefresh(); // 隐藏即停止取数:重取一轮,汇总/胶囊/底栏同步
+  } else if (a === "qoderweblogin") {
+    // 打开 Qoder 网页登录窗(逐包到期明细用)。结果走 qoderweb-login 事件,
+    // 与 WorkBuddy 同构:登录窗自动关,前端只管状态与提示。
+    try {
+      await invoke("qoderweb_login");
+      QODER_LOGGING = true;
+      renderChCards();
+      showToast("登录窗口已打开 · 完成登录后会自动关窗");
+    } catch (err) {
+      showToast("打不开登录窗口:" + err, true);
+    }
   } else if (a === "wblogin") {
     // 打开 WorkBuddy 网页登录窗。令牌由 Rust 侧从窗口导航里接住,前端只负责状态与提示,
     // 结果走 workbuddy-login 事件(成功/取消/失败都从那里回)。
@@ -4931,6 +4951,7 @@ function vaultDel(id) {
 //   ① 活动监测与自动领取分开控制;关闭监测就一个请求都不发;
 //   ② **不把"点了按钮"说成"领到了"**:数额只显示平台自己给的字段,拿不到就不写数字;
 //   ③ 签到状态**不参与余额渲染** —— 签到失败永远不可能让余额显示成 0。
+let QODER_LOGGING = false; // 「登录网页版」正在跑(逐包到期会话,qoderweb-login 事件收尾)
 let CK = {};            // 渠道 id → checkin_state 的那一条
 let CK_LOG = false;     // 「领积分」正在跑
 let CK_ACTIVITY_FILTER = "all";
@@ -6658,6 +6679,14 @@ function applyChannelsPush(payload) {
 
   // WorkBuddy 网页登录的三种结果都走这个事件:抓到令牌 / 用户自己关了窗 / 失败。
   // 成功时 Rust 已经立刻刷过一轮(channels-updated 会带出新数值),这里只管按钮与提示。
+  listen("qoderweb-login", (ev) => {
+    QODER_LOGGING = false;
+    const p = ev.payload || {};
+    if (p.ok) showToast("已登录 Qoder 网页 · 积分明细已刷新");
+    else if (p.cancelled) showToast("已取消登录");
+    else showToast(p.reason || "登录没成功,请再试一次", true);
+    renderChCards();
+  });
   listen("workbuddy-login", (ev) => {
     WB_LOGGING = false;
     const p = ev.payload || {};

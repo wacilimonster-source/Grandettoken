@@ -103,6 +103,11 @@ pub fn web_session_hint(at: Option<i64>, now: i64) -> Option<String> {
 /// 主机名做**整串相等**比较,不是后缀匹配:`www.workbuddy.cn.attacker.example/profile`
 /// 这种拼接必须挡掉,否则一个长得像的站点就能让挂件以为登录完成了。
 pub fn is_post_login(url: &str) -> bool {
+    site_post_login(url, &SITE_HOSTS, &POST_LOGIN_PATHS)
+}
+
+/// `is_post_login` 的一般化:主机名整串相等 + 路径在前缀表里(只认 https)。
+fn site_post_login(url: &str, hosts: &[&str], paths: &[&str]) -> bool {
     // 只认 https:会话 cookie 落在 http 页上等于把会话走明文,而且 http 的重定向页
     // 不该被当成"登录完成"(报告 P2-16 的次要点)
     if !url.starts_with("https://") {
@@ -123,11 +128,82 @@ pub fn is_post_login(url: &str) -> bool {
         .split(':')
         .next()
         .unwrap_or(authority);
-    if !SITE_HOSTS.iter().any(|s| host.eq_ignore_ascii_case(s)) {
+    if !hosts.iter().any(|s| host.eq_ignore_ascii_case(s)) {
         return false;
     }
     let path = tail.split(|c| c == '?' || c == '#').next().unwrap_or("");
-    POST_LOGIN_PATHS.iter().any(|p| path.starts_with(p))
+    paths.iter().any(|p| path.starts_with(p))
+}
+
+// ───────────── Qoder 网页会话(2026-10-30)─────────────
+//
+// 排查结论(docs/product/product-qoder-credit-expiry-2026-10-30.md):Qoder 的
+// 逐包到期明细只在 qoder.com 的网页会话后面 —— 桌面 Bearer 能过 openapi 网关,
+// 但那个网关只有汇总;账务明细的 /api/v1 端点与桌面网关是两套后端。
+// 这套会话**只用于账务只读查询**,签到仍走桌面 Bearer,两条链路互不牵连。
+
+/// Qoder 网页站(国际版)。国内版(qoder.com.cn)是另一套账号,与桌面端的两区划分一致,
+/// P0 只接国际版 —— 用户给的用量页就是它。
+pub const QODER_SITE_HOST: &str = "qoder.com";
+
+/// 登录完成后落地的路径。没登录访问 /account/usage 会被 302 到
+/// /users/sign-in?oauth_callback=…(2026-10-30 实测),所以"落在 /account/usage"
+/// 就是"服务端认了这份会话"的证据 —— 与 WorkBuddy 同一条判据思路。
+pub const QODER_POST_LOGIN_PATHS: [&str; 1] = ["/account/usage"];
+
+/// 网页会话验证通过时刻的 settings 键(挂件外壳在登录成功时写,unix 秒字符串)。
+pub const QODER_WEB_SESSION_AT_KEY: &str = "qoder_web_session_at";
+
+/// 会话的年龄提示。Qoder 平台的会话 TTL 没有实测数据(等真机用出第一份再说),
+/// 先沿用 WorkBuddy 的"第 5 天起提示"窗口,措辞里不给具体天数 —— 不编没有证据的数字。
+pub fn qoder_web_session_hint(at: Option<i64>, now: i64) -> Option<String> {
+    let at = at?;
+    let days = (now - at).max(0) / 86_400;
+    (days >= 5).then(|| {
+        format!("网页会话已使用 {days} 天 · 平台会话会过期,失效后点「登录网页版」重登即可,历史数据不丢")
+    })
+}
+
+/// 从 webview 的 Cookie 罐里挑出 Qoder 的会话,拼成 `cookie:` 前缀的凭据。
+///
+/// 与 [`cookie_credential`] 不同:Qoder 的会话 Cookie 名单是平台私有的
+/// (httpOnly,公开 bundle 里看不到名单),**不按名字挑** —— 罐里属于本域的
+/// 全部 Cookie 都拼上,浏览器同源请求本来就带全部匹配 Cookie,这里照抄浏览器行为。
+/// 拿到的会话能不能真取到数,由调用方探测(真打一次账务接口)负责 —— 没登录的
+/// 访客也可能有几枚营销 Cookie,拼出来不算数。
+pub fn qoder_cookie_credential<I, S>(jar: I) -> Option<String>
+where
+    I: IntoIterator<Item = (S, S)>,
+    S: AsRef<str>,
+{
+    let mut out = String::new();
+    for (name, value) in jar {
+        let (name, value) = (name.as_ref(), value.as_ref());
+        // 脏键值一律跳过:控制字符/空格写进请求头会把整条头拆坏,甚至注入新头
+        if name.is_empty()
+            || value.is_empty()
+            || name.chars().any(|c| c.is_control() || c == ' ' || c == '=')
+            || value.chars().any(|c| c.is_control() || c == ' ')
+        {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push_str("; ");
+        }
+        out.push_str(name);
+        out.push('=');
+        out.push_str(value);
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(format!("{COOKIE_PREFIX}{out}"))
+    }
+}
+
+/// 页面落在"Qoder 登录完成后"的路径上吗?
+pub fn qoder_is_post_login(url: &str) -> bool {
+    site_post_login(url, &[QODER_SITE_HOST], &QODER_POST_LOGIN_PATHS)
 }
 
 #[cfg(test)]
@@ -238,5 +314,60 @@ mod tests {
         // 大小写与端口无关(主机名不区分大小写)
         assert!(is_post_login("https://WWW.WorkBuddy.CN:443/profile"));
         assert!(!is_post_login("not a url"));
+    }
+
+    /// Qoder:罐里全部 Cookie 都拼上(名单是平台私有的,不按名字挑),
+    /// 脏键值跳过,空罐不算会话。
+    #[test]
+    fn qoder_credential_takes_all_cookies() {
+        let jar = vec![
+            ("gk", "x"),
+            ("t", "AAA"),
+            ("Hm_lpvt_x", "1"),
+            ("bad name", "v"),   // 键里有空格 → 跳过
+            ("bad\nkey", "v"),   // 控制字符 → 跳过
+            ("ok", ""),          // 空值 → 跳过
+            ("eq=in", "v"),      // 键里有等号会拆坏键值对 → 跳过
+        ];
+        assert_eq!(
+            qoder_cookie_credential(jar).as_deref(),
+            Some("cookie:gk=x; t=AAA; Hm_lpvt_x=1")
+        );
+        assert_eq!(qoder_cookie_credential(Vec::<(&str, &str)>::new()), None);
+        assert_eq!(qoder_cookie_credential(vec![("bad name", "v")]), None);
+        // 值里的空格也不放行(拆坏头部)
+        assert_eq!(qoder_cookie_credential(vec![("t", "A B")]), None);
+    }
+
+    /// Qoder 登录完成判定:落在 /account/usage 才算,登录页与别的路径不算,
+    /// 变形域名 / userinfo / http 全挡。
+    #[test]
+    fn qoder_post_login_paths() {
+        assert!(qoder_is_post_login("https://qoder.com/account/usage"));
+        assert!(qoder_is_post_login("https://qoder.com/account/usage?tab=1"));
+        assert!(qoder_is_post_login("https://Qoder.com:443/account/usage"));
+        // 302 目标(没登录)与首页都不算
+        assert!(!qoder_is_post_login(
+            "https://qoder.com/users/sign-in?oauth_callback=https%3A%2F%2Fqoder.com%2Faccount%2Fusage"
+        ));
+        assert!(!qoder_is_post_login("https://qoder.com/"));
+        assert!(!qoder_is_post_login("https://qoder.com/pricing"));
+        // 变形域名 / userinfo / http
+        assert!(!qoder_is_post_login("https://qoder.com.attacker.example/account/usage"));
+        assert!(!qoder_is_post_login("https://qoder.com@evil.example/account/usage"));
+        assert!(!qoder_is_post_login("http://qoder.com/account/usage"));
+    }
+
+    /// Qoder 会话年龄提示:没记录不说话、前 4 天闭嘴、第 5 天起说话;
+    /// 措辞不给具体 TTL(平台没有实测数据,不编)。
+    #[test]
+    fn qoder_session_hint_window() {
+        let now = 1_793_000_000_i64;
+        assert_eq!(qoder_web_session_hint(None, now), None);
+        assert_eq!(qoder_web_session_hint(Some(now + 60), now), None);
+        assert_eq!(qoder_web_session_hint(Some(now - 4 * 86_400), now), None);
+        let h = qoder_web_session_hint(Some(now - 6 * 86_400), now).unwrap();
+        assert!(h.contains("已使用 6"), "{h}");
+        assert!(!h.contains("7 天"), "不给没证据的 TTL:{h}");
     }
 }

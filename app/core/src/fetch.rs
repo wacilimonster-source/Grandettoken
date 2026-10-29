@@ -8,6 +8,7 @@ use crate::config::{ClaimConfig, Config};
 use crate::custom;
 use crate::fx::{self, FxRate};
 use crate::peak;
+use crate::qoderweb;
 use crate::providers::{self, AuthKind, Expiring, FetchResult, Kind, Method};
 use crate::store::{
     consumed_in_window_rows, consumption_since_rows, daily_coverage_rows, first_ts_rows,
@@ -777,6 +778,14 @@ fn same_origin_header(url: &str, header: &str) -> Option<String> {
 ///
 /// **这里是 9 个内置渠道取余额的唯一出口** —— 排查用的 L2 日志埋在这一层,
 /// 一次覆盖全部渠道,不用去改 9 个 extractor(见 docs/product/product-logging-observability)。
+/// 改写 `extra` 里某个键的值;没有就追加(逐包到期那行在 extract 里先占位,这里改写)。
+fn extra_set(extra: &mut Vec<(String, String)>, key: &str, val: &str) {
+    match extra.iter_mut().find(|(k, _)| k == key) {
+        Some(slot) => slot.1 = val.to_string(),
+        None => extra.push((key.to_string(), val.to_string())),
+    }
+}
+
 async fn fetch_once(
     client: &reqwest::Client,
     def: &providers::ProviderDef,
@@ -2287,6 +2296,12 @@ pub struct Fetcher {
     /// fetch_shared 的门 + 近期结果:手动刷新撞上轮询不再双份请求账务接口(O-4)
     gate: tokio::sync::Mutex<()>,
     last_run: Mutex<Option<(i64, Vec<ChannelView>)>>,
+    /// Qoder 逐包到期(2026-10-30):上次成功抓到的列表 + 时刻。抓取失败时沿用,
+    /// 绝不把"这轮没抓到"渲染成"没有临期"(与余额失联同一原则)。
+    /// 只存内存:重启后退回"等下一轮成功"。
+    qoder_packs: Mutex<Option<(i64, Vec<Expiring>)>>,
+    /// Qoder 逐包端点谁赢了(候选链下标)。
+    qoder_memo: qoderweb::PacksMemo,
     /// 网页登录型渠道的会话来源。外壳在启动时装一个"去 webview 的 Cookie 罐里现取"
     /// 的回调:会话留在 WebView2 的 profile 里(平台自己管过期与轮换),挂件不存副本 ——
     /// 一个是凭据管理器放不下(实测 blob 上限约 1280 字符,而两个会话 Cookie 近 6 KB),
@@ -2327,6 +2342,8 @@ impl Fetcher {
             cfg_cache: Mutex::new(None),
             gate: tokio::sync::Mutex::new(()),
             last_run: Mutex::new(None),
+            qoder_packs: Mutex::new(None),
+            qoder_memo: qoderweb::PacksMemo::default(),
             web_cred_src: Mutex::new(None),
             adopted: Mutex::new(HashSet::new()),
             accounts_cache: Mutex::new(HashMap::new()),
@@ -2358,6 +2375,16 @@ impl Fetcher {
     pub async fn probe(&self, def: &providers::ProviderDef, credential: &str) -> bool {
         let (result, _, _) = fetch_channel(&self.http, def, credential, None).await;
         result.valid
+    }
+
+    /// Qoder 网页会话验证:候选端点里有一条给出"包形状"的响应(哪怕为空)就算有效。
+    /// 不验证就报成功的话,一份被平台拒掉的会话会变成"状态显示已登录、却一直取不到数"
+    /// —— 与 WorkBuddy 的 probe 同一条纪律。会话有效但没有包 ≠ 失败。
+    pub async fn probe_qoder_web(&self, session: &str) -> bool {
+        matches!(
+            qoderweb::fetch_packs(&self.http, session, &self.qoder_memo).await,
+            Ok(_)
+        )
     }
 
     /// 「测试连接」:真打一次接口,把过程如实报出来(设置里那个逐渠道测试按钮)。
@@ -2597,6 +2624,9 @@ impl Fetcher {
                     // 网页登录的会话来源也是阻塞的(要同步问 webview 的 Cookie 罐),
                     // 正好一起待在这个阻塞任务里。
                     let web_src = web_src.clone();
+                    // 逐包到期那步还要再问一次会话(不同的 id),这里先克隆一份:
+                    // 上面那个克隆会被 credentials 的闭包移走(报告 O-5 的同一段路)
+                    let qoder_web_src = web_src.clone();
                     let (creds, secret_err) =
                         tokio::task::spawn_blocking(move || credentials(def, web_src.as_deref()))
                             .await
@@ -2776,6 +2806,98 @@ impl Fetcher {
                             )
                         },
                     );
+
+                    // ── Qoder 逐包到期(2026-10-30,docs/product/product-qoder-credit-expiry-2026-10-30.md)──
+                    // 与余额同一轮但**独立请求**:网页会话只读账务,签到与余额的桌面 Bearer
+                    // 链路一概不碰(设计红线)。三条退路全是"如实":没会话 → 引导登录;
+                    // 这轮失败 → 沿用上次成功列表 + 标时间;从未成功 → 维持"接口未提供",
+                    // 绝不编一个到期日,也不把"没抓到"渲染成"没有临期"。
+                    if def.id == "qoder" && result.valid {
+                        // 会话来源是阻塞派发(要同步问 webview 的 Cookie 罐),不能占着 async worker
+                        let session = tokio::task::spawn_blocking(move || {
+                            qoder_web_src.as_deref().and_then(|f| f("qoder"))
+                        })
+                        .await
+                        .ok()
+                        .flatten();
+                        match session {
+                            Some(sess) => match qoderweb::fetch_packs(&self.http, &sess, &self.qoder_memo).await {
+                                Ok((packs, _)) => {
+                                    let n = packs.len();
+                                    result.expiring = packs.iter().map(|p| p.as_expiring()).collect();
+                                    result.expiry_complete = true;
+                                    extra_set(
+                                        &mut result.extra,
+                                        "逐笔到期明细",
+                                        if n > 0 { "按平台返回" } else { "按平台返回 · 当前没有待到期的积分包" },
+                                    );
+                                    *self
+                                        .qoder_packs
+                                        .lock()
+                                        .unwrap_or_else(|p| p.into_inner()) = Some((now_ts(), result.expiring.clone()));
+                                }
+                                Err(e) => {
+                                    let cached = self
+                                        .qoder_packs
+                                        .lock()
+                                        .unwrap_or_else(|p| p.into_inner())
+                                        .clone();
+                                    match cached {
+                                        Some((ts, packs)) => {
+                                            result.expiring = packs;
+                                            result.expiry_complete = true;
+                                            let when = chrono::DateTime::from_timestamp(ts, 0)
+                                                .map(|d| {
+                                                    d.with_timezone(&chrono::Local)
+                                                        .format("%m-%d %H:%M")
+                                                        .to_string()
+                                                })
+                                                .unwrap_or_default();
+                                            extra_set(
+                                                &mut result.extra,
+                                                "逐笔到期明细",
+                                                &format!("按平台返回 · 沿用 {when} 抓到的列表"),
+                                            );
+                                        }
+                                        None => {
+                                            // 指引按失败原因分叉:被平台拒 = 该去登录;
+                                            // 别的错 = 取数问题,别把用户引去登录窗
+                                            match &e {
+                                                qoderweb::PacksErr::Unauthorized => extra_set(
+                                                    &mut result.extra,
+                                                    "逐笔到期明细",
+                                                    "网页会话未登录 · 渠道卡点「登录网页版」",
+                                                ),
+                                                qoderweb::PacksErr::Other(_) => extra_set(
+                                                    &mut result.extra,
+                                                    "逐笔到期明细",
+                                                    "积分包明细这轮没取到 · 稍后自动重试",
+                                                ),
+                                            }
+                                        }
+                                    }
+                                    // 只记形状不记值:响应里可能有余额与会话
+                                    crate::diaglog::write_keyed(
+                                        "qoder",
+                                        "webpacks",
+                                        &match &e {
+                                            qoderweb::PacksErr::Unauthorized => {
+                                                "所有候选都被平台拒绝(未登录或会话过期)".to_string()
+                                            }
+                                            qoderweb::PacksErr::Other(m) => m.clone(),
+                                        },
+                                    );
+                                }
+                            },
+                            None => {
+                                extra_set(
+                                    &mut result.extra,
+                                    "逐笔到期明细",
+                                    "积分包明细需网页登录 · 渠道卡点「登录网页版」",
+                                );
+                            }
+                        }
+                    }
                     let ts = now_ts();
 
                     if should_clear_memo(result.valid, used_url.is_some()) {
