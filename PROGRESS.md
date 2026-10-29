@@ -3375,3 +3375,42 @@ release 构建后 CDP 真机 `verify-form`（紧凑条开启时）与 `visual-fo
 
 另记：Node 24 的 fetch 不读系统代理，核验脚本在本机需
 `NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:7897` 才能连上 GitHub。
+
+### 发版 v0.1.71（2026-10-29）
+
+签到中心版(设计与现场记录见 `docs/product/product-checkin-center-2026-10-29.md`):
+首页顶部签到格点击后原来落到「刷新与启动」的设置区,与"看签到"的意图错位;
+流水只露 7 天一行小字,而 `checkin_log` 里躺着 400 天全量 —— 本次给数据一个出口。
+
+- **新命令 `checkin_history{days}`**:每渠道按天聚合(`Store::checkin_day_rows`,
+  `GROUP BY day` + `MAX(ts)` 裸列取当天最后一行,与 `checkin_of_day` 判"今天处理过
+  吗"同一口径)+ 逐条明细(`recent_checkins` 增加 `limit` 参数,90 天重试流水 400 条
+  不够)。空槽按"该不该签"分 `missed`(该签没签)/ `no_data`(开启之前),
+  `checkin::day_status` 纯函数统一结论,绝不把"没发生"画成"失败"。
+- **`CheckinCfg.enabled_since`**:`set_config` 合并处记 `enabled` false→true 跳变,
+  关闭清空;老配置(升级前就开着)由查询侧用首条流水时刻兜底。
+- **前端「签到」页签**(管理窗口,排在渠道后):今日总览条(✓ n/n · 本月已领 ·
+  分段跳转)+ 逐渠道状态行(没签排前,复用 `ckRowHtml` 可直接操作)+ 活动状态
+  (原样搬来)+ 近 30 天日历带(领到/平台已签/没签/没签成/无记录五色,悬停当天
+  明细)+ 近 90 天明细表(渠道筛选,上限 120 行)+ 管理开关(从 run 页签整块移入)。
+  「刷新与启动」页签的签到区删除。日期口径全部后端算(周期日),前端零日期运算。
+- **入口**:首页签到格与多渠道待签提示条落 `openCheckinCenter()`;页签只在有渠道
+  开着监测时出现(全关隐藏并退回渠道页)。`checkin-updated` / 手动领取后流水与
+  日历当场刷新。
+
+**验证**:core **346 passed / 7 ignored**(新增 `checkin_day_rows_take_last_row_of_each_day`
+/ `recent_checkins_respects_limit` / `day_status_buckets` 3 条);`cargo check` 双 crate 通过;
+`jsdom-smoke` **82/82**(新增 11 条:页签可见性、五段结构、日历口径、明细筛选、入口链路);
+release 构建后 CDP 真机 `verify-checkin-center` **13/13**(真实库 3 渠道 / 53 条流水),
+`verify-settings-entry` 全过(断言更新到 7 页签;标题栏 5 按钮是 v0.1.59 起的历史遗留,
+一并修正);三档字号页签零溢出;真机截图目检三段(真实数据里 WorkBuddy「漏 4」
+第一次可见 —— 正是这次要给的东西)。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.71_x64-setup.exe`(5,237,243 B,SHA-256
+`af8b57e5b7908cdfedb2086ceb19c190dbd87f37dca494acf7cf0ccc2f94deb8`)及 `.sig` 已发布到
+[GitHub Release v0.1.71](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.71)。
+发布提交 `a51d946`,tag `v0.1.71`。
+
+`node build/verify-release.js` **13/13 PASS**(发布后第一次跑红是 CDN 同步延迟,
+重跑即绿);`node build/verify-signature.js` **PASS**(公钥验签 v0.1.71 安装包);
+`node build/verify-updater.js` **PASS**(已装用户收得到)。
