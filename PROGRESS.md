@@ -3414,3 +3414,42 @@ release 构建后 CDP 真机 `verify-checkin-center` **13/13**(真实库 3 渠�
 `node build/verify-release.js` **13/13 PASS**(发布后第一次跑红是 CDN 同步延迟,
 重跑即绿);`node build/verify-signature.js` **PASS**(公钥验签 v0.1.71 安装包);
 `node build/verify-updater.js` **PASS**(已装用户收得到)。
+
+### 发版 v0.1.72（2026-10-30）
+
+Qoder 积分逐包到期版(排查与设计见 `docs/product/product-qoder-credit-expiry-2026-10-30.md`):
+逐包到期明细只在 qoder.com 的网页会话后面 —— PAT 已证伪(`TOKEN_EXPIRE`),
+桌面 Bearer 的 openapi 网关只有汇总(v2 8 个候选路径 404);逐包字段形状由公开
+SPA bundle(qbase/qoder/0.0.743)的渲染代码确证("Remaining {value} {unit}.
+Expires on {time}")。
+
+- **core::qoderweb(新)**:候选端点链(个人版端点真会话下抓包钉死前按序试,
+  赢家记内存 memo)+ 形状自适应解析(只认能验证的包形状;9999 哨兵滤掉;
+  已过期但有余量的包保留 —— 与 expiring[] 既有契约一致)。
+- **core::weblogin**:qoder 会话抽取(会话 Cookie 名单平台私有,罐里全部 Cookie
+  拼装)+ 登录完成判定,`is_post_login` 一般化出 `site_post_login`。
+- **fetch 合并点**:qoder 渠道每轮余额成功后独立抓一次包 → `expiring[]` +
+  `expiry_complete`;风险带临期格 / 行风险色(toneOf 近 7 天占比)/ 明细卡逐包
+  列表三层自动点亮,前端零新口径。三条退路全是如实:没会话引导登录、被平台拒
+  (PacksErr::Unauthorized)报「未登录」、别的错沿用上次成功列表 + 标时间。
+- **壳**:qoderweb_login 登录窗 + 观察者(探测判收工,与 WB 同纪律)+
+  `web_session_of` 分发 —— **故意不并进 wb_session_of**,签到凭据兜底引用的是
+  那个函数,网页会话绝不漏进签到链路(设计红线)。
+- 真机踩过并修掉:登录入口直接给 /account/usage 会让 landed 在登录前就置真
+  (首次导航即"完成路径",随后才 302),观察者立刻误发「被拒绝」提示 ——
+  入口改走 sign-in + oauth_callback(与 WB 同构)。
+
+**验证**:core **354 passed / 7 ignored**(新增 9 条);`jsdom-smoke` **88/88**
+(新增 6 条);release 构建后 CDP 真机 `verify-qoder-expiry` 全过(入口隔离 /
+登录中状态 / 无会话降级文案 / 误导 toast 已修);回归 `verify-checkin-center` 与
+`verify-settings-entry` 全过。个人版逐包端点的最终钉死在用户首次登录后由
+diaglog(`qoder/webpacks`,只记形状)与候选链自动完成。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.72_x64-setup.exe`(5,246,269 B,SHA-256
+`1fd9af3eea40f59b4be4d8aae946d3c6e98b8fa37853614379b2f87163ce93da`)及 `.sig` 已发布到
+[GitHub Release v0.1.72](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.72)。
+发布提交 `f4486b4`,tag `v0.1.72`。
+
+`node build/verify-release.js` **13/13 PASS**(一次 fetch failed 为网络抖动,
+按 PROGRESS 旧注加代理后全绿);`node build/verify-signature.js` **PASS**;
+`node build/verify-updater.js` **PASS**(已装用户收得到)。
