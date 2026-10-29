@@ -39,7 +39,8 @@ w.__TAURI__ = {
       if (cmd === "get_config") return JSON.parse(JSON.stringify(DATA.CFG));
       if (cmd === "get_channels") return JSON.parse(JSON.stringify(DATA.CHANNELS));
       if (cmd === "home_view") return JSON.parse(JSON.stringify(DATA.HOME));
-      if (cmd === "checkin_state") return [];
+      if (cmd === "checkin_state") return w.__CK_ST || [];
+      if (cmd === "checkin_history") return w.__CK_H || null;
       if (cmd === "app_version") return "0.0.0-test";
       if (cmd === "vault_list" || cmd === "vault_ref_map") return [];
       return null;
@@ -366,6 +367,69 @@ const HARNESS = `
       document.getElementById("list").querySelectorAll(".row").length > 0);
   } catch (e) { ck("视图缺失时退回本地判断(不空白、不抛错)", false, e.message); }
 
+  // ── 签到中心页签(2026-10-29)──
+  // 入口从「刷新与启动」的设置区改成独立页签(docs/product/product-checkin-center-2026-10-29.md)。
+  // 这里验证:页签可见性、五段结构、日历口径(领到/没签/今天待签)、明细表与渠道筛选。
+  try {
+    document.body.className = "form-panel";
+    CHANNELS = data.CHANNELS;
+    CHECKIN_ON.add("wb");
+    CFG.checkin = { wb: { enabled: true, auto: true } };
+    CK = {};
+    ckTabUpdate();
+    ck("CK 未读到:签到页签先藏着(不先给假状态)", document.querySelector('#mTabs [data-p="ck"]').hidden === true);
+    CK = {
+      wb: { id: "wb", name: "WorkBuddy", enabled: true, auto: true, doneToday: true,
+            canTry: false, outcome: "claimed:wb", credits: 100, monthCredits: 3100 },
+    };
+    ckTabUpdate();
+    ck("有渠道开着监测:签到页签出现", document.querySelector('#mTabs [data-p="ck"]').hidden === false);
+    const mkDay = (i, status, credits) => ({
+      day: "2026-10-" + String(i).padStart(2, "0"), ts: 1790000000 + i * 3600,
+      status, credits: credits === undefined ? null : credits, attempts: 1,
+    });
+    CKH = {
+      days: 90,
+      channels: [{ id: "wb", name: "WorkBuddy", enabled: true, auto: true, enabledSince: 1790000000,
+        monthCredits: 3100, today: "2026-10-30",
+        days: Array.from({ length: 30 }, (_, i) => mkDay(i + 1, i === 3 ? "missed" : i === 29 ? "pending" : "claimed", 100)) }],
+      rows: [
+        { id: "wb", name: "WorkBuddy", ts: 1794300000, day: "2026-10-30", outcome: "claimed:wb", credits: 100, attempts: 1, detail: "" },
+        { id: "wb", name: "WorkBuddy", ts: 1793400000, day: "2026-10-28", outcome: "retry:device", credits: null, attempts: 3, detail: "太挤了" },
+      ],
+    };
+    showTab("ck");
+    renderCheckinCenter();
+    const ckc = () => document.getElementById("ckCenter").innerHTML;
+    ck("签到中心五段:今日/活动状态/近 30 天/明细/管理",
+      /今日/.test(ckc()) && /活动状态/.test(ckc()) && /近 30 天/.test(ckc()) &&
+      /明细\\(近 90 天\\)/.test(ckc()) && /管理/.test(ckc()), ckc().slice(0, 160));
+    ck("今日总览:✓ 1/1 + 本月已领 3,100 分", /✓ 1\\/1/.test(ckc()) && /3,100 分/.test(ckc()), ckc().slice(0, 220));
+    ck("今日行:签完的渠道给完整文案(已领 +100 分)", /今日已领 \\+100 分/.test(ckc()), ckc().slice(0, 300));
+    ck("日历带:领到/没签/今天待签三种格都在",
+      !!document.querySelector("#ckCenter .ckc.claimed") &&
+      !!document.querySelector("#ckCenter .ckc.missed") &&
+      !!document.querySelector("#ckCenter .ckc.pending"));
+    ck("日历带汇总:完成 28(今天与漏签不算完成)", /完成 28/.test(ckc()), (ckc().match(/完成 \\d+/g) || []).join(","));
+    ck("明细表:领到 +100 与 未成功 都在", /\\+100/.test(ckc()) && /未成功/.test(ckc()));
+    const chip = document.querySelector('#ckCenter [data-act="ckhfilter"][data-filter="wb"]');
+    if (chip) chip.click();
+    ck("明细渠道筛选可用", !!document.querySelector("#ckCenter .cklr"));
+    CK.wb.enabled = false;
+    ckTabUpdate();
+    ck("全部关闭:签到页签隐藏且自动退回渠道页",
+      document.querySelector('#mTabs [data-p="ck"]').hidden === true &&
+      document.querySelector('#mTabs [data-p="ch"]').classList.contains("on"));
+  } catch (e) {
+    ck("签到中心页签", false, e.message);
+  } finally {
+    CK = {};
+    CKH = null;
+    CKH_FILTER = "all";
+    CFG.checkin = undefined;
+    CHECKIN_ON.delete("wb");
+  }
+
   // ── 紧凑条可选开关(2026-10-23)──
   window.__ASYNC = (async () => {
     try {
@@ -420,6 +484,57 @@ const HARNESS = `
     }
   })();
 
+  // 签到中心入口(异步):点首页签到格 → 落到签到中心页签,数据来自
+  // checkin_state / checkin_history 桩 —— 验证 openCheckinCenter 整条链路。
+  window.__ASYNC2 = (async () => {
+    try {
+      await new Promise((r) => setTimeout(r, 420)); // 等上一个异步块收尾
+      document.body.className = "form-panel";
+      CHANNELS = data.CHANNELS;
+      CFG = JSON.parse(JSON.stringify(data.CFG));
+      hvApply(data.HOME);
+      CHECKIN_ON.add("wb");
+      CFG.checkin = { wb: { enabled: true, auto: true } };
+      window.__CK_ST = [{ id: "wb", name: "WorkBuddy", enabled: true, auto: true, doneToday: true,
+        canTry: false, outcome: "claimed:wb", credits: 100, monthCredits: 3100 }];
+      window.__CK_H = {
+        days: 90,
+        channels: [{ id: "wb", name: "WorkBuddy", enabled: true, auto: true, enabledSince: 1790000000,
+          monthCredits: 3100, today: "2026-10-30",
+          days: Array.from({ length: 30 }, (_, i) => ({
+            day: "2026-10-" + String(i + 1).padStart(2, "0"), ts: 1790000000 + i * 3600,
+            status: i === 29 ? "pending" : "claimed", credits: i === 29 ? null : 100, attempts: 1 })) }],
+        rows: [{ id: "wb", name: "WorkBuddy", ts: 1794300000, day: "2026-10-30", outcome: "claimed:wb", credits: 100, attempts: 1, detail: "" }],
+      };
+      render({ updated: false });
+      const cell = document.querySelector('#sum [data-act="ckstripopen"]');
+      if (!cell) { ck("签到格在场", false, document.getElementById("sum").innerHTML.slice(0, 120)); return; }
+      cell.click();
+      await new Promise((r) => setTimeout(r, 60));
+      const btn = document.querySelector('#mTabs [data-p="ck"]');
+      ck("点首页签到格:落到签到中心页签且页签可见",
+        btn.classList.contains("on") && btn.hidden === false, "hidden=" + btn.hidden);
+      ck("签到中心渲染出今日行与日历带",
+        !!document.querySelector('#ckCenter .ckch[data-ch="wb"]') &&
+        !!document.querySelector("#ckCenter .ckband") &&
+        /今日已领 \\+100 分/.test(document.getElementById("ckCenter").innerHTML),
+        document.getElementById("ckCenter").innerHTML.slice(0, 160));
+    } catch (e) {
+      ck("签到中心入口链路", false, e.message);
+    } finally {
+      window.__CK_ST = null;
+      window.__CK_H = null;
+      CK = {};
+      CKH = null;
+      CFG.checkin = undefined;
+      CHECKIN_ON.delete("wb");
+      CHANNELS = data.CHANNELS;
+      hvApply(data.HOME);
+      document.body.className = "form-panel";
+      render({ updated: false });
+    }
+  })();
+
   // 给外层断言留个后门:CHANNELS / CFG 是 eval 里的 let,外层 window 上看不到
   // (只有函数声明会挂到 globalThis)。自动隐藏那条用例要直接摆一张卡片出来。
   window.__TEST = {
@@ -444,6 +559,7 @@ w.__DATA = DATA;
     process.exit(1);
   }
   if (w.__ASYNC) await w.__ASYNC;
+  if (w.__ASYNC2) await w.__ASYNC2;
 
   const R = w.__R || [];
   const css = fs.readFileSync(path.join(SRC, "styles.css"), "utf8");

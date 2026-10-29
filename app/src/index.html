@@ -88,6 +88,7 @@
     </div>
     <div class="tabs" id="mTabs">
       <button data-p="ch" class="on">渠道</button>
+      <button data-p="ck" hidden>签到</button>
       <button data-p="mdl">模型</button>
       <button data-p="disp">显示</button>
       <button data-p="run">刷新与启动</button>
@@ -124,7 +125,14 @@
       </div>
     </div>
 
-    <!-- 页签 2:模型 —— 4SAPI 可用模型 + 一键配置到客户端(docs/design/design-4sapi-models.html) -->
+    <!-- 页签 2:签到中心 —— 今日状态 + 近 30 天日历 + 90 天流水 + 管理开关
+         (设计见 docs/product/product-checkin-center-2026-10-29.md;全部内容由 JS 渲染,
+          没开任何签到的用户整页签隐藏 —— 不该提醒一件用户没要求的事) -->
+    <div class="mbody panel" data-p="ck">
+      <div id="ckCenter"></div>
+    </div>
+
+    <!-- 页签 3:模型 —— 4SAPI 可用模型 + 一键配置到客户端(docs/design/design-4sapi-models.html) -->
     <div class="mbody panel" data-p="mdl">
       <!-- 来源芯片:4SAPI / Hapi / OpenCode Go;切来源 = 换一整套列表与口径行 -->
       <div class="srcbar" id="mdlSrc"></div>
@@ -221,10 +229,6 @@
         <button class="sw" id="cfgAutostart" role="switch" aria-checked="false" aria-label="开机自启"></button></div>
       <div class="field"><span>自动检查更新<span class="desc">每 24 小时最多问一次服务器</span></span>
         <button class="sw" id="cfgAutoUpdate" role="switch" aria-checked="true" aria-label="自动检查更新"></button></div>
-      <h4>活动监测与签到</h4>
-      <div class="khint">只读平台状态;自动领取单独控制。<button class="why" data-why="checkin" aria-expanded="false" aria-label="活动监测的说明"></button></div>
-      <div id="ckSet"></div>
-
       <h4>显示</h4>
       <div class="field"><span>非颜色模式<span class="desc">状态写成文字,不靠颜色</span></span>
         <button class="sw" id="cfgTextTone" role="switch" aria-checked="false" aria-label="非颜色模式"></button></div>

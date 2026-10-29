@@ -41,14 +41,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   try {
     console.log('=== 设置入口收敛 ===');
 
-    // ① 顶部「设置」已删,标题栏只剩 4 个文字按钮
+    // ① 顶部「设置」已删,标题栏只剩文字按钮(刷新是 v0.1.59 的渠道体检加的)
     const top = JSON.parse(await evalJs(`JSON.stringify({
       btnS: !!document.getElementById('btnS'),
       topButtons: [...document.querySelectorAll('.tbar .tb')].map(b => b.textContent.trim()),
       chip: !!document.getElementById('updChip'),
     })`));
     check('标题栏无 #btnS', top.btnS === false);
-    check('标题栏 4 个文字按钮', top.topButtons.length === 4, top.topButtons.join('/'));
+    check('标题栏文字按钮原样(刷新/置顶/紧凑/胶囊/隐藏)',
+      top.topButtons.join('/') === '刷新/置顶/紧凑/胶囊/隐藏', top.topButtons.join('/'));
 
     // ② 底栏三枚是 <button> 且键盘可达(tabIndex 0、非 disabled)
     const foot = JSON.parse(await evalJs(`JSON.stringify({
@@ -146,7 +147,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
     // ⑥ 设置页内部结构未被波及
     const tabs = JSON.parse(await evalJs(`JSON.stringify([...document.querySelectorAll('#mTabs button')].map(b => b.dataset.p))`));
-    check('设置页 6 个页签原样', tabs.length === 6, tabs.join('/'));
+    check('设置页 7 个页签原样(含签到)',
+      tabs.length === 7 && tabs.join('/') === 'ch/ck/mdl/disp/run/vault/about', tabs.join('/'));
 
     console.log(fails ? `\n${fails} FAILED` : '\nALL PASS');
   } catch (e) {

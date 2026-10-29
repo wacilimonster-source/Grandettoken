@@ -302,6 +302,27 @@ pub fn cycle_day(now_ts: i64, roll_hour: u32) -> String {
     beijing_day(now_ts - (roll_hour as i64) * 3600)
 }
 
+/// 一天的签到结论(签到中心日历带的格子,前端只认这几个词)。
+///
+/// 有流水看**当天最后一行**的短码(与 `CheckinCfg::done_for_day` /
+/// `checkin_of_day` 判"今天处理过了吗"同一口径);没流水的空槽按"该不该签"分:
+/// `pending`(今天还没到结论)/ `missed`(该签没签)/ `no_data`(开启之前,
+/// 记录里本来就不该有 —— 绝不能画成"没签")。有流水但没成功的(重试没成 /
+/// 凭据失效 / 接口变动 / 确认中)一律 `failed`,因为它们都是" attempted 没签成"。
+pub fn day_status(last_outcome: Option<&str>, expected: bool, is_current: bool) -> &'static str {
+    let o = last_outcome.filter(|s| !s.is_empty());
+    match o {
+        Some(o) if o.starts_with("claimed") => "claimed",
+        Some(o) if o.starts_with("already") => "already",
+        Some(o) if o.starts_with("inactive") => "inactive",
+        Some(o) if o.starts_with("manual") => "manual",
+        Some(_) => "failed",
+        None if is_current => "pending",
+        None if expected => "missed",
+        None => "no_data",
+    }
+}
+
 /// 当天该试的时候:跨日时刻之后(社区实测 00:00–00:10 是高峰,00:15–00:45 最好签),
 /// 加上 0–20 分钟抖动(用渠道 id + 日期派生,同一天同一渠道只抖一次,重启不重摇)。
 ///
@@ -483,6 +504,11 @@ pub struct CheckinCfg {
     /// 只在 `last_code` 是 `claimed` 的那一次写入;`already`(平台侧已签)不核对 ——
     /// 那不是我们领的,没有"到账"可确认。
     pub arrival: Option<ArrivalInfo>,
+    /// 活动监测**本次开启**的时刻(unix 秒)。签到中心靠它区分"没签"
+    /// (开启之后该签而没签)与"无数据"(开启之前,记录里本来就不该有)。
+    /// 由后端在 set_config 合并处记(`enabled` false→true 的那一跳),关闭时清空;
+    /// 老配置是 `None`,由查询侧用首条流水时刻兜底。
+    pub enabled_since: Option<i64>,
 }
 
 impl Default for CheckinCfg {
@@ -505,6 +531,7 @@ impl Default for CheckinCfg {
             activity_history: Vec::new(),
             latest_activity: None,
             arrival: None,
+            enabled_since: None,
         }
     }
 }
@@ -1480,6 +1507,29 @@ mod tests {
         // 00:23 的渠道不受影响:仍是自然日
         assert_eq!(cycle_day(at(21, 9, 59), 0), "2026-10-21");
         assert_eq!(cycle_day(at(21, 0, 30), 0), "2026-10-21");
+    }
+
+    /// 日历带的日结论:有流水看最后一行短码;空槽按"该不该签"分三种,
+    /// **绝不能把开启之前画成"没签"** —— 那是把没发生的事说成失败了。
+    #[test]
+    fn day_status_buckets() {
+        // 有流水的天:结论跟最后一行走
+        assert_eq!(day_status(Some("claimed:trae"), true, false), "claimed");
+        assert_eq!(day_status(Some("already"), true, false), "already");
+        assert_eq!(day_status(Some("inactive:qoder"), true, false), "inactive");
+        assert_eq!(day_status(Some("manual:活动名"), true, false), "manual");
+        // 重试没成 / 凭据失效 / 接口变动 / 确认中:都是"attempted 没签成"
+        for o in ["retry:ready", "retry:device", "auth:401", "shape:boom", "no_cred:x", "confirming", "failed:boom"] {
+            assert_eq!(day_status(Some(o), true, false), "failed", "{o}");
+        }
+        // 空槽:今天还没结论 → pending;该签没签 → missed;开启之前 → no_data
+        assert_eq!(day_status(None, true, true), "pending");
+        assert_eq!(day_status(None, true, false), "missed");
+        assert_eq!(day_status(None, false, false), "no_data");
+        // 渠道关着:就算历史上记过流水,空槽也不是"没签"
+        assert_eq!(day_status(None, false, true), "pending");
+        // 空串短码当没流水处理
+        assert_eq!(day_status(Some(""), true, false), "missed");
     }
 
     /// 触发时刻:抖动点之前不算到点,之后(含当天更晚)都算 —— 关机一整天再开机也能补跑。

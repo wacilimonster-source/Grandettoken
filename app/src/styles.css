@@ -995,6 +995,57 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
   padding:0 0 calc(4px*var(--u));font-variant-numeric:tabular-nums}
 .cklog .ckd{color:var(--tx2);margin-right:2px}
 
+/* ── 签到中心(独立页签,docs/product/product-checkin-center-2026-10-29.md)──
+   日历格五色 + 明细表,口径与首页徽标一致:绿 = 完成了,黄 = 要处理,
+   灰 = 没签;虚线 = 无记录(开启之前),绝不把"没发生"画成"失败"。 */
+.cksec{margin:0 0 calc(6px*var(--u))}
+.cksec h4{margin-bottom:calc(2px*var(--u))}
+.ckempty{padding:calc(10px*var(--u));color:var(--tx3);font-size:max(10px,calc(10.5px*var(--u)));text-align:center}
+.cktoday{display:flex;align-items:center;gap:calc(8px*var(--u));flex-wrap:wrap;
+  border:1px solid var(--line);border-radius:calc(7px*var(--u));background:#15181f;
+  padding:calc(6px*var(--u)) calc(9px*var(--u));margin:calc(4px*var(--u)) 0 calc(7px*var(--u))}
+.cktoday b{font-size:calc(13px*var(--u));color:var(--tx);font-variant-numeric:tabular-nums}
+.cktoday.ok b{color:#8ee9b8}
+.cktoday.warn b{color:#f0c67a}
+.cktoday>span{font-size:max(10px,calc(10.5px*var(--u)));color:var(--tx3)}
+.cktoday .ckseg{margin-left:auto}
+.cksi{display:block;width:calc(14px*var(--u));height:calc(4px*var(--u));border-radius:2px;
+  border:0;background:#303849;cursor:pointer;padding:0}
+.cksi.on{background:var(--ok)}
+.cksi:hover{outline:1px solid var(--tx3)}
+.ckch{margin:0 0 calc(8px*var(--u))}
+.ckch>b{display:block;font-size:max(10.5px,calc(11px*var(--u)));color:var(--tx2);margin:0 0 calc(3px*var(--u))}
+.ckch .ckwrap{margin-top:0}
+.ckband{margin:0 0 calc(7px*var(--u))}
+.ckband-name{display:inline-block;min-width:calc(72px*var(--u));font-size:max(10px,calc(10.5px*var(--u)));color:var(--tx2)}
+.ckband-sum{float:right;font-size:max(9px,calc(9.5px*var(--u)));color:var(--tx3);font-variant-numeric:tabular-nums}
+.ckband-cells{display:flex;gap:2px;margin-top:calc(3px*var(--u))}
+.ckc{flex:1;height:calc(10px*var(--u));border-radius:2px;background:transparent;min-width:4px}
+.ckc.claimed{background:var(--ok)}
+.ckc.already,.ckc.inactive{border:1px solid var(--ok);background:#132219}
+.ckc.manual{border:1px solid #3d5a8a;background:#151d2b}
+.ckc.failed{background:#8a6d3b}
+.ckc.missed{background:#303849}
+.ckc.pending{border:1px solid var(--ac);background:#151d2b}
+.ckc.no_data{border:1px dashed #2a3140}
+.cklegend{margin:calc(2px*var(--u)) 0 calc(10px*var(--u));font-size:max(9px,calc(9.5px*var(--u)));
+  color:var(--tx3);display:flex;gap:calc(9px*var(--u));align-items:center;flex-wrap:wrap}
+.cklegend .ckc{flex:none;width:calc(9px*var(--u));height:calc(9px*var(--u))}
+.cktable{border:1px solid var(--line);border-radius:calc(7px*var(--u));background:#11141b;
+  overflow:hidden;max-height:calc(260px*var(--u));overflow-y:auto}
+.cklr{display:grid;grid-template-columns:calc(96px*var(--u)) calc(66px*var(--u)) calc(66px*var(--u)) calc(40px*var(--u)) 1fr;
+  gap:calc(6px*var(--u));padding:calc(4px*var(--u)) calc(9px*var(--u));border-bottom:1px solid #1d222c;
+  font-size:max(9.5px,calc(10px*var(--u)));color:var(--tx3);font-variant-numeric:tabular-nums}
+.cklr:last-child{border-bottom:0}
+.cklr>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.6}
+.cklr .cklt{color:var(--tx3)}
+.cklr .ckln{color:var(--tx2)}
+.cklr.ok .cklo{color:#8ee9b8}
+.cklr.warn{color:#c9a45f}
+.cklr.warn .cklo{color:#f0c67a}
+.cklr .cklv{color:#a9cbbb;text-align:right}
+.ckmore{padding:calc(5px*var(--u));color:var(--tx3);font-size:max(9px,calc(9.5px*var(--u)));text-align:center}
+
 /* ── 隐藏渠道恢复 + 密钥看/复制(v0.1.27)── */
 .eye.off{width:auto;padding:0 calc(9px*var(--u));font-size:max(11px,calc(11.5px*var(--u)));
   color:#f0c67a;border-color:#7a6234}

@@ -290,10 +290,17 @@ async fn set_config(app: tauri::AppHandle, state: State<'_, AppState>, config: C
         // next_try_at / last_try_at / last_credits / last_message)是后端进度。前端提交的永远是
         // 开机那一刻的快照,整份覆盖会把当天「已领 +100」抹回「今天还没签」、退避计数一起清零,
         // 节拍器随后在同一天再签一次(报告 P1-13;与它修掉的「跳过版本被覆盖」是同一个坑)。
+        // enabled_since 也归后端:在 false→true 的那一跳记时刻(签到中心靠它区分
+        // "没签"与"开启之前无数据"),关闭时清掉,再开重新起算。
         let mut ck = cur.checkin.clone();
         for (id, inc) in &incoming.checkin {
             match ck.get_mut(id) {
                 Some(c) => {
+                    if inc.enabled && !c.enabled {
+                        c.enabled_since = Some(now_ts());
+                    } else if !inc.enabled {
+                        c.enabled_since = None;
+                    }
                     c.enabled = inc.enabled;
                     c.auto = inc.auto;
                 }
@@ -301,6 +308,9 @@ async fn set_config(app: tauri::AppHandle, state: State<'_, AppState>, config: C
                     let mut fresh = checkin::CheckinCfg::default();
                     fresh.enabled = inc.enabled;
                     fresh.auto = inc.auto;
+                    if inc.enabled {
+                        fresh.enabled_since = Some(now_ts());
+                    }
                     ck.insert(id.clone(), fresh);
                 }
             }
@@ -2639,7 +2649,7 @@ fn checkin_state_of(id: &str, cfg: &Config, store: &Store, note: Option<String>)
         c.last_code.clone().unwrap_or_default()
     };
     let needs_user = outcome.starts_with("auth") || outcome.starts_with("shape");
-    let log = store.recent_checkins(id, now - 7 * 86_400).unwrap_or_default();
+    let log = store.recent_checkins(id, now - 7 * 86_400, 400).unwrap_or_default();
     let month_credits = store
         // 日期串的兜底返回空串;直接 &today[..7] 会 panic(报告 P2-13)
         .checkin_month_credits(id, today.get(..7).unwrap_or(today.as_str()))
@@ -3731,6 +3741,143 @@ async fn checkin_now(app: tauri::AppHandle, id: String) -> Result<CheckinState, 
     let store = lock_rw(&state.store);
     let _ = out;
     Ok(checkin_state_of(&id, &cfg, &store, None))
+}
+
+/// 签到中心的一天(按天聚合,`day` 已是该渠道的周期日;设计见
+/// docs/product/product-checkin-center-2026-10-29.md)。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckinDayCell {
+    day: String,
+    /// 当天最后一行的时刻;空槽是 None
+    ts: Option<i64>,
+    /// claimed / already / inactive / manual / failed / pending / missed / no_data
+    status: String,
+    credits: Option<f64>,
+    /// 当天流水条数(尝试次数)
+    attempts: i64,
+}
+
+/// 签到中心的单渠道历史。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckinHistoryChannel {
+    id: String,
+    name: String,
+    enabled: bool,
+    auto: bool,
+    /// 本次开启的时刻;None = 老配置(升级前就开着),查询侧已用首条流水时刻兜底
+    enabled_since: Option<i64>,
+    /// 本月真领到的合计(只算 claimed)
+    month_credits: f64,
+    /// 该渠道的周期日"今天"(Qoder 从 10:00 起算 —— 前端零日期运算)
+    today: String,
+    /// 窗口内逐天,时间正序,末格是今天
+    days: Vec<CheckinDayCell>,
+}
+
+/// 明细表的一行:流水 + 它属于哪个渠道(recent_checkins 的行不带渠道)。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckinHistoryRow {
+    id: String,
+    name: String,
+    #[serde(flatten)]
+    row: tokenscope_core::store::CheckinRow,
+}
+
+/// `checkin_history` 的返回:逐天日历 + 逐条明细,一次给全(本地 SQLite,便宜)。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckinHistory {
+    days: u32,
+    channels: Vec<CheckinHistoryChannel>,
+    /// 所有渠道合在一起,新的在前
+    rows: Vec<CheckinHistoryRow>,
+}
+
+/// 签到中心的数据源:每渠道近 `days` 天的逐天结论 + 逐条明细。
+/// 数据全在 `checkin_log`(清理策略留 400 天),这里只是把它取出来;
+/// `checkin_state`(首页徽标用)不动 —— 那边只要 7 天。
+#[tauri::command]
+async fn checkin_history(
+    state: State<'_, AppState>,
+    days: Option<u32>,
+) -> Result<CheckinHistory, String> {
+    let days = days.unwrap_or(90).clamp(7, 365) as i64;
+    let now = now_ts();
+    let cfg = lock_rw(&state.config).clone();
+    let mut channels = Vec::new();
+    let mut rows = Vec::new();
+    {
+        let store = lock_rw(&state.store);
+        for d in checkin::CHECKINS.iter() {
+            let id = d.id;
+            let c = cfg.checkin.get(id).cloned().unwrap_or_default();
+            let today = cycle_day_of(id, now);
+            // 老配置没有 enabled_since:回退到首条流水的时刻 —— 它之前的日子
+            // 本来就没有记录,只能如实说"无数据",不能画成"没签"。
+            let enabled_since = c
+                .enabled_since
+                .or_else(|| store.first_checkin_ts(id).unwrap_or(None));
+            let since_ts = now - (days - 1) * 86_400;
+            let aggs = store.checkin_day_rows(id, &cycle_day_of(id, since_ts)).unwrap_or_default();
+            let by_day: std::collections::HashMap<&str, &tokenscope_core::store::CheckinDayAgg> =
+                aggs.iter().map(|a| (a.day.as_str(), a)).collect();
+            let expect_from = enabled_since
+                .map(|t| checkin::cycle_day(t, d.day_roll_hour))
+                .unwrap_or_default();
+            let mut cells = Vec::with_capacity(days as usize);
+            for i in 0..days {
+                let day = cycle_day_of(id, since_ts + i * 86_400);
+                // 北京无夏令时,ts 每 86_400 秒一步,cycle_day 严格逐日递增 —— 不会重复
+                let agg = by_day.get(day.as_str());
+                // 该不该签:现在开着,且这一天不早于"本次开启日"
+                let expected = c.enabled && !expect_from.is_empty() && expect_from.as_str() <= day.as_str();
+                let (status, ts, credits, attempts) = match agg {
+                    Some(a) => (
+                        checkin::day_status(Some(&a.outcome), expected, day == today),
+                        Some(a.ts),
+                        a.credits,
+                        a.count,
+                    ),
+                    None => (checkin::day_status(None, expected, day == today), None, None, 0),
+                };
+                cells.push(CheckinDayCell {
+                    day,
+                    ts,
+                    status: status.to_string(),
+                    credits,
+                    attempts,
+                });
+            }
+            for r in store.recent_checkins(id, since_ts, 1000).unwrap_or_default() {
+                rows.push(CheckinHistoryRow {
+                    id: id.to_string(),
+                    name: d.name.to_string(),
+                    row: r,
+                });
+            }
+            channels.push(CheckinHistoryChannel {
+                id: id.to_string(),
+                name: d.name.to_string(),
+                enabled: c.enabled,
+                auto: c.auto,
+                enabled_since,
+                month_credits: store
+                    .checkin_month_credits(id, today.get(..7).unwrap_or(today.as_str()))
+                    .unwrap_or(0.0),
+                today,
+                days: cells,
+            });
+        }
+    }
+    rows.sort_by(|a, b| b.row.ts.cmp(&a.row.ts));
+    Ok(CheckinHistory {
+        days: days as u32,
+        channels,
+        rows,
+    })
 }
 
 /// 每日节拍器:每 5 分钟看一次"今天该不该签"。
@@ -5116,6 +5263,7 @@ pub fn run() {
             diag_export,
             checkin_state,
             checkin_now,
+            checkin_history,
             credit_grants,
             key_reveal,
             key_copy,

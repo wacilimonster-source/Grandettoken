@@ -2975,9 +2975,8 @@ $("sum").addEventListener("click", async (e) => {
     return;
   }
   if (a === "ckstripopen") {
-    openManage();
-    showTab("run");
-    focusEl($("ckSet"));
+    // 签到格 = "看签到":落签到中心页签,不再滚到「刷新与启动」里的设置区
+    openCheckinCenter();
     return;
   }
   if (a === "open-diag") {
@@ -3042,17 +3041,8 @@ $("list").addEventListener("click", async (e) => {
         });
         return;
       }
-      // 多个渠道:落到设置里的签到区(每渠道状态与按钮都画在那里)
-      openManage();
-      showTab("run");
-      requestAnimationFrame(() => {
-        const el = $("ckSet");
-        if (el) {
-          el.scrollIntoView({ block: "center" });
-          el.classList.add("flash");
-          setTimeout(() => el.classList.remove("flash"), 1150);
-        }
-      });
+      // 多个渠道:落到签到中心(今日行就在最上面,能直接操作)
+      openCheckinCenter();
     } else if (a === "open-diag") {
       // 大面积失败横幅上的「看诊断」:直接落到体检那一段,不用自己翻
       openManage();
@@ -3219,6 +3209,8 @@ $("mTabs").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-p]");
   if (!b) return;
   showTab(b.dataset.p);
+  // 签到中心:每次切进来都重读一次流水(本地 SQLite,便宜;后台可能刚签完)
+  if (b.dataset.p === "ck") loadCheckinHistory();
   // 模型页签才去取清单:没打开就不打扰接口(价目表一天一次的手动/自动刷新)
   if (b.dataset.p === "mdl") ensureModels();
   // 关于页签里的「排查日志」卡:每次切进来刷新路径与大小(便宜,一次本地文件 stat)
@@ -3489,7 +3481,23 @@ $("manage").addEventListener("click", async (e) => {
   // ── 签到:开启 / 切自动 / 领一次 / 去登录 ──
   if (a === "ckfilter") {
     CK_ACTIVITY_FILTER = act.dataset.filter || "all";
-    renderCheckinSet();
+    renderCkActs();
+    return;
+  }
+  if (a === "ckhfilter") {
+    // 明细表的渠道筛选:只重画流水段,不惊动别的段
+    CKH_FILTER = act.dataset.filter || "all";
+    renderCkHist();
+    return;
+  }
+  if (a === "ckjump") {
+    // 总览条上的分段:落到该渠道的今日行并闪一下
+    const row = document.querySelector('.ckch[data-ch="' + (act.dataset.id || "") + '"]');
+    if (row) {
+      row.scrollIntoView({ block: "center" });
+      row.classList.add("flash");
+      setTimeout(() => row.classList.remove("flash"), 1150);
+    }
     return;
   }
   if (a === "ckenable") {
@@ -5135,7 +5143,7 @@ function ckPendingStrip() {
   }
 
   return `<button type="button" class="ckstrip" data-act="ckstripopen"
-      title="打开「刷新与启动 → 每日签到」">今天还有 <b>${pending.length}</b> 个渠道没签到 · 去查看</button>`;
+      title="打开签到中心">今天还有 <b>${pending.length}</b> 个渠道没签到 · 去查看</button>`;
 }
 
 /** 提示条用的短原因 —— 完整说法留在 tooltip 与渠道卡里,这里只够写一行。 */
@@ -5338,9 +5346,10 @@ async function loadCheckin() {
   if (seq !== CK_SEQ) return; // 更晚的一次已经发出,这份结果作废
   CK = {};
   if (list) for (const x of list) CK[x.id] = x;
-  // 渠道卡与设置页都跟着更新(哪个在场更新哪个)
+  ckTabUpdate();
+  // 渠道卡与签到中心都跟着更新(哪个在场更新哪个)
   if (document.body.classList.contains("view-manage")) {
-    renderCheckinSet();
+    renderCheckinCenter();
     document.querySelectorAll("#chList .ckwrap").forEach((el) => {
       el.innerHTML = ckRowHtml(el.dataset.id);
     });
@@ -5453,55 +5462,259 @@ function renderActivityOverview() {
     '</div>';
 }
 
-/** 设置页的签到区:每渠道两个开关 + 今日状态(带动作) + 近 7 天流水 + 免责。 */
-function renderCheckinSet() {
-  const box = $("ckSet");
+// ───────────── 签到中心(独立页签)─────────────
+// 设计见 docs/product/product-checkin-center-2026-10-29.md。五段:今日总览 + 逐渠道行 /
+// 活动状态 / 近 30 天日历带 / 明细流水(90 天)/ 管理开关。首页签到格与多渠道待签
+// 提示条都落到这里(格子 = 看,提示条 = 办,职责分开)。
+let CKH = null;          // checkin_history 的返回(日历带 + 明细表)
+let CKH_SEQ = 0;         // 与 loadCheckin 同一个道理:晚到的旧快照不许盖新的
+let CKH_FILTER = "all";  // 明细表的渠道筛选
+const CKH_DAYS = 90;     // 明细表窗口(后端 clamp 到 7~365)
+const CKH_BAND = 30;     // 日历带窗口(天)
+const CKH_TABLE_CAP = 120; // 明细表最多画多少行 —— 90 天 × 每小时重试能把表撑到上千行
+
+/** 流水短码 → 结果字。与 ckText 同一口径:already 绝不说成"领到"。 */
+function ckOutcomeLabel(o) {
+  o = String(o || "");
+  if (o.startsWith("claimed")) return "领到";
+  if (o.startsWith("already")) return "平台已签";
+  if (o.startsWith("inactive")) return "无活动";
+  if (o.startsWith("manual")) return "需客户端";
+  if (o.startsWith("confirming")) return "确认中";
+  if (o.startsWith("auth")) return "凭据失效";
+  if (o.startsWith("shape")) return "接口变动";
+  if (o.startsWith("no_cred")) return "没读到凭据";
+  if (o.startsWith("retry")) return "未成功";
+  if (o.startsWith("failed")) return "失败";
+  return o || "—";
+}
+
+/** 后端逐天结论 → 日历格的状态类与说明字。status 由后端给(周期日口径),
+ *  前端只翻译,不算日期。 */
+function ckDayCell(s) {
+  return {
+    claimed: ["领到", "ok"],
+    already: ["平台已签", "ok"],
+    inactive: ["本期无活动", "ok"],
+    manual: ["有活动 · 在客户端", "info"],
+    failed: ["没签成", "warn"],
+    missed: ["没签", ""],
+    pending: ["今天待签", "today"],
+    no_data: ["无记录", "dim"],
+  }[s] || [s, ""];
+}
+
+/** 读一次签到历史(签到中心页签打开时取,后台签完也要重取)。 */
+async function loadCheckinHistory() {
+  const seq = ++CKH_SEQ;
+  let h = null;
+  try {
+    h = await invoke("checkin_history", { days: CKH_DAYS });
+  } catch (e) {}
+  if (seq !== CKH_SEQ) return;
+  CKH = h;
+  renderCkHist();
+}
+
+/** 打开签到中心:首页签到格 / 多渠道待签提示条的落点。 */
+function openCheckinCenter() {
+  openManage();
+  showTab("ck");
+  renderCheckinCenter();
+  loadCheckinHistory();
+}
+
+/** 签到页签的可见性:有渠道开着监测才出现。全部关闭时整页签隐藏(开启入口在
+ *  渠道卡),页签栏少一项比一个空页签干净 —— 与"不该提醒一件用户没要求的事"同一原则。 */
+function ckTabUpdate() {
+  const btn = document.querySelector('#mTabs [data-p="ck"]');
+  if (!btn) return;
+  let any = false;
+  for (const id of CHECKIN_ON) if (CK[id] && CK[id].enabled) { any = true; break; }
+  btn.hidden = !any;
+  if (!any && btn.classList.contains("on")) showTab("ch");
+}
+
+/** 签到中心页签。CK 还没读到时先给一句"正在读取"(宁可晚 200ms,不先给假状态)。 */
+function renderCheckinCenter() {
+  const box = $("ckCenter");
+  if (!box) return;
+  if (!Object.keys(CK).length) {
+    box.innerHTML = '<div class="cksec"><div class="ckempty">正在读取签到状态…</div></div>';
+    return;
+  }
+  let anyOn = false;
+  for (const id of CHECKIN_ON) if (CK[id] && CK[id].enabled) { anyOn = true; break; }
+  if (!anyOn) {
+    box.innerHTML =
+      '<div class="cksec"><div class="ckempty">没有开启活动监测的渠道 —— 在「渠道」页签点开渠道卡,打开「活动监测」即可。</div></div>';
+    return;
+  }
+  box.innerHTML =
+    '<div id="ckTodayBox"></div><div id="ckActsBox"></div><div id="ckHistBox"></div><div id="ckManageBox"></div>';
+  renderCkToday();
+  renderCkActs();
+  renderCkHist();
+  renderCkManage();
+}
+
+/** ① 今日总览条 + ② 今日逐渠道行(没签的排前面,签完的靠后)。 */
+function renderCkToday() {
+  const box = $("ckTodayBox");
+  if (!box) return;
+  const ids = ckActiveIds();
+  if (!ids.length) {
+    box.innerHTML = "";
+    return;
+  }
+  const done = ids.filter((id) => CK[id] && CK[id].doneToday).length;
+  const all = done >= ids.length;
+  const month = ids.reduce((n, id) => n + ((CK[id] && CK[id].monthCredits) || 0), 0);
+  const tone = all ? " ok" : ids.some((id) => CK[id] && CK[id].needsUser) ? " warn" : "";
+  const segs = ids
+    .map((id) =>
+      '<button type="button" class="cksi' + (CK[id] && CK[id].doneToday ? " on" : "") +
+      '" data-act="ckjump" data-id="' + esc(id) + '" aria-label="' + esc((CK[id] && CK[id].name) || id) + '" title="' +
+      esc((CK[id] && CK[id].name) || id) + '"></button>')
+    .join("");
+  // 没签的排前面 —— 从别处跳进来的人,要看的正是没签的那几行
+  const order = ids.slice().sort((a, b) => (CK[a].doneToday ? 1 : 0) - (CK[b].doneToday ? 1 : 0));
+  box.innerHTML =
+    '<div class="cksec"><h4>今日</h4>' +
+    '<div class="cktoday' + tone + '"><b>' + (all ? "✓ " : "") + done + "/" + ids.length +
+    '</b><span>本月已领 ' + points(month) + ' 分</span><span class="ckseg">' + segs + "</span></div>" +
+    order
+      .map(
+        (id) =>
+          '<div class="ckch" data-ch="' + esc(id) + '"><b>' + esc((CK[id] && CK[id].name) || id) + "</b>" +
+          '<div class="ckwrap" data-id="' + esc(id) + '">' + ckRowHtml(id) + "</div></div>"
+      )
+      .join("") +
+    "</div>";
+}
+
+/** ③ 活动状态(原设置页那块原样搬来;筛选只重画这一段,不惊动别的段)。 */
+function renderCkActs() {
+  const box = $("ckActsBox");
+  if (box) box.innerHTML = renderActivityOverview();
+}
+
+/** 日历格的 tooltip:日期 + 结果 + 数额 + 尝试次数,一格说清一天。 */
+function ckCellTitle(cell, name) {
+  const bits = [cell.day];
+  if (cell.ts) {
+    bits.push(new Date(cell.ts * 1000).toLocaleString("zh-CN", { hour12: false }));
+  }
+  const [label] = ckDayCell(cell.status);
+  bits.push(label + (cell.status === "claimed" && cell.credits ? " +" + cell.credits + " 分" : ""));
+  if (cell.attempts > 1) bits.push("尝试 " + cell.attempts + " 次");
+  return (name ? name + " · " : "") + bits.join(" · ");
+}
+
+/** ④ 近 30 天日历带(每渠道一条)+ 明细流水表(90 天,渠道筛选)。 */
+function renderCkHist() {
+  const box = $("ckHistBox");
+  if (!box) return;
+  if (!CKH) {
+    box.innerHTML = '<div class="cksec"><h4>近 30 天</h4><div class="ckempty">正在读取签到记录…</div></div>';
+    return;
+  }
+  const active = new Set(ckActiveIds());
+  // 日历带只画现役渠道(开着监测且没被隐藏):"没签"只对"该签的渠道"有意义;
+  // 关掉/隐藏的渠道,流水仍全量留在下面的明细表里。
+  const bands = CKH.channels
+    .filter((ch) => active.has(ch.id))
+    .map((ch) => {
+      const days = (ch.days || []).slice(-CKH_BAND);
+      if (!days.length) return "";
+      const done30 = days.filter((d) => d.day !== ch.today && ["claimed", "already", "inactive", "manual"].includes(d.status)).length;
+      const miss30 = days.filter((d) => d.status === "missed" || d.status === "failed").length;
+      const cells = days
+        .map((d) => '<i class="ckc ' + d.status + '" title="' + esc(ckCellTitle(d, ch.name)) + '"></i>')
+        .join("");
+      return (
+        '<div class="ckband"><span class="ckband-name">' + esc(ch.name) + "</span>" +
+        '<span class="ckband-cells">' + cells + "</span>" +
+        '<span class="ckband-sum">完成 ' + done30 + (miss30 ? " · 漏 " + miss30 : "") + "</span></div>"
+      );
+    })
+    .join("");
+  const legend =
+    '<div class="cklegend">' +
+    [["claimed", "领到"], ["already", "平台已签"], ["missed", "没签"], ["failed", "没签成"], ["no_data", "无记录"]]
+      .map(([s, label]) => '<i class="ckc ' + s + '"></i>' + esc(label))
+      .join(" ") +
+    "</div>";
+  const names = {};
+  for (const ch of CKH.channels) names[ch.id] = ch.name;
+  const all = CKH.rows || [];
+  const shown = all.filter((r) => CKH_FILTER === "all" || r.id === CKH_FILTER).slice(0, CKH_TABLE_CAP);
+  const chips = [["all", "全部 " + all.length]].concat(
+    CKH.channels.map((ch) => [ch.id, names[ch.id] || ch.id])
+  );
+  const table = shown
+    .map((r) => {
+      const bad = /^(auth|shape|no_cred|failed|retry|confirming)/.test(r.outcome || "");
+      return (
+        '<div class="cklr' + (r.outcome && r.outcome.startsWith("claimed") ? " ok" : bad ? " warn" : "") + '">' +
+        '<span class="cklt">' + esc(new Date(r.ts * 1000).toLocaleString("zh-CN", { hour12: false })) + "</span>" +
+        '<span class="ckln">' + esc(r.name || r.id) + "</span>" +
+        '<span class="cklo">' + esc(ckOutcomeLabel(r.outcome)) + "</span>" +
+        '<span class="cklv">' + (r.credits !== null && r.credits !== undefined ? "+" + points(r.credits) : "") + "</span>" +
+        '<span class="ckld" title="' + esc(r.detail || "") + '">' + esc(r.detail || "") + "</span></div>"
+      );
+    })
+    .join("");
+  box.innerHTML =
+    '<div class="cksec"><h4>近 30 天</h4>' +
+    (bands || '<div class="ckempty">窗口内还没有签到记录</div>') +
+    legend +
+    "</div>" +
+    '<div class="cksec"><h4>明细(近 90 天)</h4>' +
+    '<div class="ck-overview-filters" role="group" aria-label="按渠道筛选">' +
+    chips
+      .map(
+        ([k, label]) =>
+          '<button type="button" class="ckfilter' + (CKH_FILTER === k ? " on" : "") +
+          '" aria-pressed="' + (CKH_FILTER === k) + '" data-act="ckhfilter" data-filter="' + esc(k) + '">' +
+          esc(label) + "</button>"
+      )
+      .join("") +
+    "</div>" +
+    '<div class="cktable">' +
+    (table || '<div class="ckempty">当前筛选下没有流水</div>') +
+    "</div>" +
+    (all.length > shown.length ? '<div class="ckmore">只显示最近 ' + shown.length + " 条(共 " + all.length + " 条)</div>" : "") +
+    "</div>";
+}
+
+/** ⑤ 管理区:每渠道两个开关 + 免责(从「刷新与启动」搬来;今日状态在上面第②段)。 */
+function renderCkManage() {
+  const box = $("ckManageBox");
   if (!box) return;
   const rows = [];
   for (const id of CHECKIN_ON) {
     const s = CK[id];
     const on = s ? s.enabled : false;
     const auto = s ? s.auto : true;
-    // 开关下面是"今天到底怎样、该点哪里" —— 只给开关的话,从提示条点进来的人
-    // 看完仍然不知道要做什么(2026-10-23 现场)。ckRowHtml 里的按钮与渠道卡同一个。
-    const stateRow = on ? ckRowHtml(id) : "";
-    let logs = "";
-    if (s && s.log && s.log.length) {
-      logs =
-        '<div class="cklog">' +
-        s.log
-          .slice(0, 7)
-          .map(
-            (r) =>
-              '<span class="ckd">' + esc(r.day.slice(5)) + "</span>" +
-              esc((r.outcome || "").split(":")[0]) +
-              (r.credits ? " +" + r.credits : "")
-          )
-          .join(" · ") +
-        "</div>";
-    }
     rows.push(
       '<div class="field"><span>' + esc(s ? s.name : id) +
-        '<span class="desc">' +
-        (on
-          ? "每小时检查一次"
-          : "已关闭 · 不再请求") +
-        (s && s.monthCredits ? " · 本月已领 " + points(s.monthCredits) + " 分" : "") +
-        "</span></span>" +
+        '<span class="desc">' + (on ? "每小时检查一次" : "已关闭 · 不再请求") + "</span></span>" +
         '<button class="sw' + (on ? " on" : "") + '" role="switch" aria-checked="' + on +
         '" data-act="ckenable" data-id="' + esc(id) + '" aria-label="' + esc((s ? s.name : id) + " 活动监测") + '"></button></div>' +
       (on
         ? '<div class="field"><span>自动领取<span class="desc">' +
           (auto ? "可直接领的自动领" : "只提示,不代领") +
-          '</span></span>' +
-          '<button class="sw' + (auto ? " on" : "") + '" role="switch" aria-checked="' + auto +
+          '</span></span><button class="sw' + (auto ? " on" : "") + '" role="switch" aria-checked="' + auto +
           '" data-act="ckauto" data-id="' + esc(id) + '" aria-label="自动领取"></button></div>'
-        : "") +
-      (stateRow ? '<div class="ckwrap" data-id="' + esc(id) + '">' + stateRow + "</div>" : "") +
-      logs
+        : "")
     );
   }
-  box.innerHTML = renderActivityOverview() + rows.join("");
+  box.innerHTML =
+    '<div class="cksec"><h4>管理</h4>' + rows.join("") +
+    '<div class="khint">只读平台状态;自动领取单独控制。<button class="why" data-why="checkin" aria-expanded="false" aria-label="活动监测的说明"></button></div></div>';
+  // 段是动态重建的,「?」的水合要跟着跑一遍(与渠道卡同一条规矩)
+  hydrateWhy(box);
 }
 
 async function ckRun(id) {
@@ -5518,9 +5731,12 @@ async function ckRun(id) {
   }
   CK_LOG = false;
   await loadCheckin();
-  // 首页那个「点此领取」按完,条上要立刻变成 3/3 或"待处理",不能等下一轮轮询
-  if (manageOpen()) renderChCards();
-  else if (CHANNELS.length) render({ updated: false });
+  // 首页那个「点此领取」按完,条上要立刻变成 3/3 或"待处理",不能等下一轮轮询;
+  // 签到中心开着时,流水表与日历带也要立刻带上这一次的记录
+  if (manageOpen()) {
+    renderChCards();
+    loadCheckinHistory();
+  } else if (CHANNELS.length) render({ updated: false });
 }
 
 async function ckSetEnabled(id, on, auto) {
@@ -6355,6 +6571,9 @@ function applyChannelsPush(payload) {
       if (manageOpen()) {
         renderChCards();
         fillKeyHints();
+        // 签到中心页签开着:流水与日历跟着后台签到当场更新
+        const ckBtn = document.querySelector('#mTabs [data-p="ck"]');
+        if (ckBtn && ckBtn.classList.contains("on")) loadCheckinHistory();
       } else if (CHANNELS.length) {
         // 首页的提示条 / 风险带也是 CK 的使用者:后台签完要当场收掉那条提示
         render({ updated: false });

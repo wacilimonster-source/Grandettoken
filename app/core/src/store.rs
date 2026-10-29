@@ -1375,6 +1375,20 @@ pub struct CheckinRow {
     pub detail: Option<String>,
 }
 
+/// 一天聚合出的一条签到结论(签到中心的日历带直接用)。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckinDayAgg {
+    pub day: String,
+    /// 当天最后一行的时刻
+    pub ts: i64,
+    /// 当天最后一行的结果短码
+    pub outcome: String,
+    pub credits: Option<f64>,
+    /// 当天的流水条数(尝试次数)
+    pub count: i64,
+}
+
 impl Store {
     /// 记一条签到流水。失败只打日志不打断 —— 签到本身已经发生,记不上账不该回滚事实。
     pub fn record_checkin(
@@ -1397,17 +1411,23 @@ impl Store {
         Ok(())
     }
 
-    /// 某渠道最近的签到流水(新的在前)。
-    pub fn recent_checkins(&self, channel: &str, since_ts: i64) -> Result<Vec<CheckinRow>, String> {
+    /// 某渠道最近的签到流水(新的在前)。`limit` 由调用方定:徽标只要 7 天,
+    /// 签到中心的明细窗口是 90 天,失败重试的一天可能有多条,400 不够用。
+    pub fn recent_checkins(
+        &self,
+        channel: &str,
+        since_ts: i64,
+        limit: usize,
+    ) -> Result<Vec<CheckinRow>, String> {
         let mut stmt = self
             .conn
             .prepare(
                 "SELECT ts, day, outcome, credits, attempts, detail FROM checkin_log
-                 WHERE channel = ?1 AND ts >= ?2 ORDER BY ts DESC LIMIT 400",
+                 WHERE channel = ?1 AND ts >= ?2 ORDER BY ts DESC LIMIT ?3",
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map(params![channel, since_ts], |r| {
+            .query_map(params![channel, since_ts, limit as i64], |r| {
                 Ok(CheckinRow {
                     ts: r.get(0)?,
                     day: r.get(1)?,
@@ -1419,6 +1439,49 @@ impl Store {
             })
             .map_err(|e| e.to_string())?;
         Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// 某渠道**按天聚合**的签到流水:每天取最后一行,新的在前。
+    ///
+    /// 裸列(outcome/credits)配 `MAX(ts)` 是 SQLite 的文档化行为:查询里恰有一个
+    /// min/max 聚合时,裸列取自 max 所在的那一行 —— 节拍器失败重试会让一天有多条,
+    /// 日的结论以当天最后一次为准,与 [`Self::checkin_of_day`] 同一口径。
+    /// `COUNT(*)` 是当天的流水条数(尝试次数),不受该语义影响。
+    pub fn checkin_day_rows(&self, channel: &str, since_day: &str) -> Result<Vec<CheckinDayAgg>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT day, MAX(ts), outcome, credits, COUNT(*) FROM checkin_log
+                 WHERE channel = ?1 AND day >= ?2 GROUP BY day ORDER BY day DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![channel, since_day], |r| {
+                Ok(CheckinDayAgg {
+                    day: r.get(0)?,
+                    ts: r.get(1)?,
+                    outcome: r.get(2)?,
+                    credits: r.get(3)?,
+                    count: r.get(4)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// 该渠道**有记录以来**最早的一条流水时刻。签到中心给老配置兜底:
+    /// `enabled_since` 还没来得及记录(升级前就开着)时,用它当"该签了"的起点 ——
+    /// 它之前的日子本来就没有记录,只能如实说"无数据",不能画成"没签"。
+    pub fn first_checkin_ts(&self, channel: &str) -> Result<Option<i64>, String> {
+        let v: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT MIN(ts) FROM checkin_log WHERE channel = ?1",
+                params![channel],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(v)
     }
 
     /// 某天该渠道的最后一条流水(判"今天处理过了吗")。
@@ -2828,5 +2891,63 @@ mod tests {
                 legacy / batch.max(0.001)
             );
         }
+    }
+
+    /// 按天聚合:一天多条(节拍器重试)时,结论取当天**最后一行**,条数如实报。
+    /// 签到中心的日历带靠它;与 `checkin_of_day` 判"今天处理过了吗"必须同一口径。
+    #[test]
+    fn checkin_day_rows_take_last_row_of_each_day() {
+        let s = mem_migrated();
+        let rec = |ts: i64, day: &str, outcome: &str, credits: Option<f64>| {
+            s.record_checkin("trae", ts, day, outcome, credits, 1, "").unwrap();
+        };
+        // 10-27 三条:两次重试失败,最后一次成功
+        rec(1_794_796_800, "2026-10-27", "retry:ready", None);
+        rec(1_794_800_400, "2026-10-27", "retry:device", None);
+        rec(1_794_804_000, "2026-10-27", "claimed:trae", Some(100.0));
+        // 10-28 一条:平台侧已签
+        rec(1_794_890_400, "2026-10-28", "already", None);
+        // 10-26 的不进窗口
+        rec(1_794_710_400, "2026-10-26", "failed:boom", None);
+
+        let rows = s.checkin_day_rows("trae", "2026-10-27").unwrap();
+        assert_eq!(rows.len(), 2, "窗口外(10-26)不进,10-27/28 各一条: {rows:?}");
+        assert_eq!(rows[0].day, "2026-10-28", "新的在前");
+        assert_eq!(rows[0].outcome, "already");
+        assert_eq!(rows[0].count, 1);
+        assert_eq!(rows[1].day, "2026-10-27");
+        assert_eq!(rows[1].outcome, "claimed:trae", "当天结论以最后一行为准");
+        assert_eq!(rows[1].credits, Some(100.0));
+        assert_eq!(rows[1].count, 3, "当天尝试次数如实报");
+        assert_eq!(rows[1].ts, 1_794_804_000);
+
+        // 渠道隔离:别的渠道一条都不给
+        assert!(s.checkin_day_rows("qoder", "2026-10-26").unwrap().is_empty());
+        // first_checkin_ts:最早一条,给"该签了"的起点兜底
+        assert_eq!(s.first_checkin_ts("trae").unwrap(), Some(1_794_710_400));
+        assert_eq!(s.first_checkin_ts("none").unwrap(), None);
+    }
+
+    /// 明细查询的 limit 是硬闸:签到中心要 90 天 × 多次重试,400 撑不住,
+    /// 但也不能一次捞几万条把界面拖死 —— limit 参数由调用方定。
+    #[test]
+    fn recent_checkins_respects_limit() {
+        let s = mem_migrated();
+        for i in 0..10 {
+            s.record_checkin(
+                "trae",
+                1_794_796_800 + i,
+                "2026-10-27",
+                "retry:ready",
+                None,
+                i,
+                "",
+            )
+            .unwrap();
+        }
+        assert_eq!(s.recent_checkins("trae", 0, 4).unwrap().len(), 4);
+        assert_eq!(s.recent_checkins("trae", 0, 100).unwrap().len(), 10);
+        // 新的在前
+        assert_eq!(s.recent_checkins("trae", 0, 1).unwrap()[0].attempts, 9);
     }
 }
