@@ -19,7 +19,7 @@
 | Hapi | `GET https://ai.yuchuantest.com/v1/usage` | 金额型 | 积分制,20 积分 = ¥1 |
 | Trae | `POST https://api.trae.cn/.../user_current_entitlement_list` | 积分型 | 读本机登录态;两端点互为备份 |
 | WorkBuddy | `POST https://www.codebuddy.cn/v2/billing/meter/get-user-resource` | 积分型 | 读桌面端凭据,accessToken 到期自动 refresh |
-| Codex | `GET https://chatgpt.com/backend-api/wham/usage` | 配额型 | 读本机 Codex 登录态;5 小时/周/月三个窗口 |
+| Codex | `GET https://chatgpt.com/backend-api/wham/usage` + `rate-limit-reset-credits` | 配额型 | 读本机 Codex 登录态;按服务端时长显示窗口、准确重置时间、重置卡数量与到期日 |
 | Qoder | `GET https://openapi.qoder.sh/api/v2/quota/usage` | 积分型 | 国际版;读桌面端 `auth.v1.dat`(Electron safeStorage) |
 | Qoder 国内版 | `GET https://openapi.qoder.com.cn/api/v2/quota/usage` | 积分型 | 国内版;**与上一行是两套账号**,不互通 |
 

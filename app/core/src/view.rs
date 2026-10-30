@@ -843,6 +843,7 @@ mod tests {
             total: None,
             unit: String::new(),
             windows: Vec::new(),
+            reset_credits: None,
             expiring: Vec::new(),
             expiry_complete: false,
             expiring_soon: None,

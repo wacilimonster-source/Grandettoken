@@ -61,6 +61,8 @@ pub struct FetchResult {
     pub unit: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub windows: Vec<Window>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reset_credits: Option<crate::codex::ResetCredits>,
     /// 逐笔到期(升序)。只有积分型渠道才有。
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub expiring: Vec<Expiring>,
@@ -952,7 +954,11 @@ pub fn extract_codex(body: &Value) -> FetchResult {
         })
     };
 
-    let Some(primary) = win("primary_window", true) else {
+    // 升级套餐后可能只有周窗;主窗为空不等于账号无配额。
+    let primary = win("primary_window", true);
+    let has_primary = primary.is_some();
+    let secondary = win("secondary_window", primary.is_none());
+    let Some(primary) = primary.or_else(|| secondary.clone()) else {
         return FetchResult {
             valid: false,
             kind: Kind::Percent,
@@ -961,7 +967,7 @@ pub fn extract_codex(body: &Value) -> FetchResult {
         };
     };
     let mut windows = vec![primary.clone()];
-    if let Some(s) = win("secondary_window", false) {
+    if let Some(s) = secondary.filter(|_| has_primary) {
         windows.push(s);
     }
 
@@ -992,24 +998,32 @@ pub fn extract_codex(body: &Value) -> FetchResult {
         unit: "%".into(),
         limited: limited || primary.status == "rate-limited",
         windows,
+        reset_credits: body.get("rate_limit_reset_credits")
+            .and_then(|v| crate::codex::summary(v, chrono::Utc::now().timestamp())),
         extra,
         ..Default::default()
     }
 }
 
-/// 窗长 → 中文标签。阈值取整档上沿,服务端怎么改窗型都能落进合理名字。
+/// 窗长 → 中文标签。只有精确匹配的时长才用约定俗成的名字。
 /// 0(字段缺失)落兜底名「周期」,不能猜成「5 小时」—— 那是编造服务端没给的信息。
 fn codex_window_label(secs: f64) -> String {
     if secs <= 0.0 {
         "周期".into()
-    } else if secs <= 6.0 * 3600.0 {
+    } else if secs == 5.0 * 3600.0 {
         "5 小时".into()
-    } else if secs <= 36.0 * 3600.0 {
+    } else if secs == 86_400.0 {
         "当日".into()
-    } else if secs <= 9.0 * 86_400.0 {
+    } else if secs == 7.0 * 86_400.0 {
         "本周".into()
-    } else if secs <= 35.0 * 86_400.0 {
+    } else if secs == 30.0 * 86_400.0 {
         "本月".into()
+    } else if secs < 3600.0 {
+        format!("{} 分钟", round1(secs / 60.0))
+    } else if secs < 86_400.0 {
+        format!("{} 小时", round1(secs / 3600.0))
+    } else if secs <= 35.0 * 86_400.0 {
+        format!("{} 天", round1(secs / 86_400.0))
     } else {
         "周期".into()
     }
@@ -1665,6 +1679,24 @@ mod tests {
         assert!(r.error.is_some());
     }
 
+    #[test]
+    fn codex_week_only_after_plan_upgrade_is_a_valid_main_window() {
+        let r = extract_codex(&json!({
+            "plan_type":"pro",
+            "rate_limit": {"primary_window":null, "secondary_window": {
+                "used_percent":12, "limit_window_seconds":604800, "reset_at":1793951075
+            }},
+            "rate_limit_reset_credits":{"available_count":2}
+        }));
+        assert!(r.valid);
+        assert_eq!(r.windows.len(), 1);
+        assert!(r.windows[0].main);
+        assert_eq!(r.windows[0].label, "本周");
+        assert_eq!(r.remaining, Some(88.0));
+        assert_eq!(r.extra[0].1, "pro");
+        assert_eq!(r.reset_credits.unwrap().available_count, Some(2));
+    }
+
     /// Qoder:**本机真机样本**(2026-10-20,personal_standard 档)。
     /// 量全在 addOnQuota,userQuota 全 0 —— 只看 userQuota 会显示成 0(这是最大的坑)。
     #[test]
@@ -1771,6 +1803,8 @@ mod tests {
 
     #[test]
     fn codex_window_labels_scale_with_seconds() {
+        assert_eq!(codex_window_label(900.0), "15 分钟");
+        assert_eq!(codex_window_label(3600.0), "1 小时");
         assert_eq!(codex_window_label(18000.0), "5 小时");
         assert_eq!(codex_window_label(86_400.0), "当日");
         assert_eq!(codex_window_label(604_800.0), "本周");

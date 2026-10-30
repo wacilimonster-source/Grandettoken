@@ -94,6 +94,7 @@ pub struct ChannelView {
     pub total: Option<f64>,
     pub unit: String,
     pub windows: Vec<providers::Window>,
+    pub reset_credits: Option<crate::codex::ResetCredits>,
     /// 逐笔到期(升序)。积分型渠道才有内容。
     pub expiring: Vec<Expiring>,
     /// false 时空的 expiring 列表表示“接口没有完整明细”,不能说成“没有到期”。
@@ -792,8 +793,18 @@ async fn fetch_once(
     url: &str,
     key: &str,
 ) -> (FetchResult, Option<FailKind>) {
+    fetch_once_scoped(client, def, url, key, None).await
+}
+
+async fn fetch_once_scoped(
+    client: &reqwest::Client,
+    def: &providers::ProviderDef,
+    url: &str,
+    key: &str,
+    account_id: Option<&str>,
+) -> (FetchResult, Option<FailKind>) {
     let started = std::time::Instant::now();
-    let (res, kind, info) = fetch_once_inner(client, def, url, key).await;
+    let (res, kind, info) = fetch_once_inner(client, def, url, key, account_id).await;
     log_wire(def, url, started.elapsed().as_millis(), &info, &res);
     (res, kind)
 }
@@ -818,6 +829,7 @@ async fn fetch_once_inner(
     def: &providers::ProviderDef,
     url: &str,
     key: &str,
+    account_id: Option<&str>,
 ) -> (FetchResult, Option<FailKind>, WireInfo) {
     let mut info = WireInfo::default();
     let mut req = match def.method {
@@ -867,6 +879,11 @@ async fn fetch_once_inner(
             _ => v.to_string(),
         };
         req = req.header(*k, val);
+    }
+    if def.id == "codex" {
+        if let Some(id) = account_id {
+            req = req.header("ChatGPT-Account-Id", id);
+        }
     }
 
     let resp = match req.send().await {
@@ -1183,12 +1200,34 @@ pub async fn fetch_channel(
     key: &str,
     last_good: Option<&str>,
 ) -> (FetchResult, Option<String>, Option<FailKind>) {
+    fetch_channel_scoped(client, def, key, last_good, None).await
+}
+
+async fn fetch_channel_scoped(
+    client: &reqwest::Client,
+    def: &providers::ProviderDef,
+    key: &str,
+    last_good: Option<&str>,
+    account_id: Option<&str>,
+) -> (FetchResult, Option<String>, Option<FailKind>) {
     let order = attempt_order(def.url, def.fallback_urls, last_good);
     let mut last: Option<FetchResult> = None;
     let mut last_kind: Option<FailKind> = None;
 
     for (i, url) in order.iter().enumerate() {
-        let (result, kind) = fetch_once(client, def, url, key).await;
+        let (mut result, kind) = if account_id.is_some() {
+            fetch_once_scoped(client, def, url, key, account_id).await
+        } else {
+            fetch_once(client, def, url, key).await
+        };
+        if def.id == "codex" && result.valid {
+            // 可选明细失败不改变配额的有效性。数量可沿用同轮 usage 摘要,
+            // 但不带入上轮/另一账号的卡片,更不能拿空数组伪装成 0 张。
+            result.reset_credits = Some(match fetch_codex_reset_credits(client, key, account_id, crate::codex::RESET_CREDITS_URL).await {
+                Ok(cards) => cards,
+                Err(message) => crate::codex::unavailable(result.reset_credits.take(), message),
+            });
+        }
         // 成功,或者失败类型不值得换域名(密钥错/业务失败)—— 就此打住
         let stop = match kind {
             None => true,
@@ -1236,6 +1275,30 @@ pub async fn fetch_channel(
         None,
         last_kind,
     )
+}
+
+async fn fetch_codex_reset_credits(
+    client: &reqwest::Client,
+    key: &str,
+    account_id: Option<&str>,
+    url: &str,
+) -> Result<crate::codex::ResetCredits, String> {
+    let mut req = client.get(url)
+        .bearer_auth(key.trim()).header("Accept", "application/json")
+        .header("OpenAI-Beta", "codex-1").header("originator", "Codex Desktop")
+        .timeout(std::time::Duration::from_secs(4));
+    if let Some(id) = account_id {
+        req = req.header("ChatGPT-Account-Id", id);
+    }
+    let resp = req.send().await.map_err(|e| {
+        if e.is_timeout() { "重置卡查询超时".to_string() } else { "重置卡查询连接失败".to_string() }
+    })?;
+    if !resp.status().is_success() {
+        return Err(format!("重置卡查询 HTTP {}", resp.status().as_u16()));
+    }
+    let raw = read_body_capped(resp, 512_000).await.map_err(|(msg, _)| msg)?;
+    let body = serde_json::from_slice(&raw).map_err(|_| "重置卡响应不是 JSON".to_string())?;
+    crate::codex::inventory(&body, now_ts()).map_err(str::to_string)
 }
 
 /// 桌面端凭据读取器。**生产环境默认启用**;`cfg!(test)` 下默认**关闭** ——
@@ -1887,6 +1950,7 @@ fn build_view(
         total: result.total,
         unit: result.unit,
         windows: result.windows,
+        reset_credits: result.reset_credits,
         expiring: result.expiring,
         expiry_complete: result.expiry_complete,
         expiring_soon: soon,
@@ -1982,6 +2046,7 @@ fn placeholder(def: &providers::ProviderDef) -> ChannelView {
             _ => "credits".into(),
         },
         windows: vec![],
+        reset_credits: None,
         expiring: vec![],
         expiry_complete: false,
         expiring_soon: None,
@@ -2099,6 +2164,7 @@ fn build_custom_view(
         total: None,
         unit: ch.normalized_unit(),
         windows: Vec::new(),
+        reset_credits: None,
         expiring: Vec::new(),
         expiry_complete: false,
         expiring_soon: None,
@@ -2160,6 +2226,7 @@ fn custom_placeholder(
         total: None,
         unit: ch.normalized_unit(),
         windows: Vec::new(),
+        reset_credits: None,
         expiring: Vec::new(),
         expiry_complete: false,
         expiring_soon: None,
@@ -2474,7 +2541,7 @@ impl Fetcher {
         let mut last: Option<(FetchResult, Option<String>, appauth::Credential)> = None;
         for cred in &creds {
             let (r, url, kind) =
-                fetch_channel(&self.http, def, &cred.token, memo.as_deref()).await;
+                fetch_channel_scoped(&self.http, def, &cred.token, memo.as_deref(), cred.account_id.as_deref()).await;
             // 与轮询同一套降权记账:这次探到的 401 也帮下一轮少打一次。
             if let Ok(mut m) = self.rejected.lock() {
                 let fp = key_fp(&cred.token);
@@ -2752,7 +2819,7 @@ impl Fetcher {
                         last_cred = Some(cred.clone());
                         let desc = cred_desc(def, cred);
                         let (r, url, kind) =
-                            fetch_channel(&self.http, def, &cred.token, memo.as_deref()).await;
+                            fetch_channel_scoped(&self.http, def, &cred.token, memo.as_deref(), cred.account_id.as_deref()).await;
                         result = r;
                         used_url = url;
                         tried.push(format!("{desc}→{}", if result.valid { "通" } else { "不通" }));
@@ -3169,6 +3236,46 @@ impl Fetcher {
 mod tests {
     use super::*;
     use chrono::Timelike;
+
+    #[test]
+    fn codex_reset_credit_read_is_scoped_and_optional_errors_stay_unknown() {
+        use std::io::{Read, Write};
+        let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/reset-credits", server.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for response in [
+                "HTTP/1.1 200 OK\r\nContent-Length: 34\r\nConnection: close\r\n\r\n{\"available_count\":0,\"credits\":[]}",
+                "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            ] {
+                let (mut stream, _) = server.accept().unwrap();
+                stream.set_read_timeout(Some(std::time::Duration::from_secs(3))).unwrap();
+                let mut raw = Vec::new();
+                let mut buf = [0u8; 1024];
+                while !raw.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let n = stream.read(&mut buf).unwrap();
+                    assert!(n > 0);
+                    raw.extend_from_slice(&buf[..n]);
+                }
+                requests.push(String::from_utf8(raw).unwrap().to_lowercase());
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+            requests
+        });
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let empty = rt.block_on(fetch_codex_reset_credits(&client, "test-access", Some("workspace-test"), &url)).unwrap();
+        assert_eq!(empty.available_count, Some(0));
+        let failure = rt.block_on(fetch_codex_reset_credits(&client, "test-access", Some("workspace-test"), &url)).unwrap_err();
+        assert!(failure.contains("403"));
+        assert!(crate::codex::unavailable(None, failure).available_count.is_none());
+        for req in worker.join().unwrap() {
+            assert!(req.starts_with("get /reset-credits"));
+            assert!(req.contains("authorization: bearer test-access"));
+            assert!(req.contains("chatgpt-account-id: workspace-test"));
+            assert!(!req.contains("cookie:"));
+        }
+    }
 
     /// 2026-10-21:端到端验一次"取数失败 → 日志里有一行可用的现场"。
     ///

@@ -227,6 +227,45 @@ const HARNESS = `
     render({});
   } catch (e) { ck("Codex 专属副标题", false, e.message); }
 
+  // ── Codex 套餐升级 / 重置卡 / 精确重置时间 ──
+  try {
+    const cx = CHANNELS.find((c) => c.id === "codex");
+    const saved = { windows: cx.windows, resetCredits: cx.resetCredits, extra: cx.extra, stale: cx.stale };
+    const ts = Math.floor(Date.now() / 1000) + 3600;
+    cx.windows = [{ label: "5 小时", percent: 2, remainPercent: 98, status: "ok", main: true,
+      resetsAt: new Date(ts * 1000).toISOString() }];
+    cx.extra = [["套餐", "plus"]];
+    cx.resetCredits = { availableCount: 0, credits: [], updatedAt: ts - 3600 };
+    let detail = renderDetail(cx);
+    ck("Codex 零张重置卡是确定的数量", /0 张可用/.test(detail) && !/未获取/.test(coreCodexResets(cx)));
+    ck("Codex 每个窗口显示完整本地重置时间和时区", detail.includes(exactLocalTime(ts)) && detail.includes(localZoneLabel()) && /下次重置/.test(detail));
+    cx.resetCredits = { availableCount: null, credits: null, error: "重置卡查询 HTTP 403", updatedAt: 0 };
+    detail = coreCodexResets(cx);
+    ck("Codex 重置卡失败不能渲染成零张", /未获取/.test(detail) && /HTTP 403/.test(detail) && !/0 张/.test(detail));
+    ck("Codex 重置卡失败不影响配额窗口", /98.0%/.test(coreWindows(cx)));
+    cx.resetCredits = { availableCount: 4, credits: null, updatedAt: ts - 3600 };
+    ck("Codex 仅有数量时不编造卡片到期日", /4 张可用/.test(coreCodexResets(cx)) && /明细未提供/.test(coreCodexResets(cx)));
+    cx.resetCredits.credits = [
+      { title: "<img src=x onerror=alert(1)>", expiresAt: ts + 86400 },
+      { title: "额度重置卡", expiresAt: ts + 172800 },
+      { title: "额度重置卡", expiresAt: ts + 259200 },
+      { title: "额度重置卡", expiresAt: null }
+    ];
+    cx.resetCredits.lastRedeemedAt = ts - 7200;
+    detail = coreCodexResets(cx);
+    ck("Codex 卡片标题转义且精确显示到期日", !/<img/.test(detail) && /&lt;img/.test(detail) && detail.includes(exactLocalTime(ts + 86400)));
+    ck("Codex 多张重置卡可以展开且不猜测无日期卡永久有效", /全部 4 张/.test(detail) && !/永久/.test(detail));
+    rowMore.codex = { resets: true };
+    ck("Codex 展开后包含所有卡片及未知到期日", /接口未提供到期日/.test(coreCodexResets(cx)) && /最近用卡重置/.test(coreCodexResets(cx)));
+    delete rowMore.codex;
+    ck("Codex 过时重置时间提示等待刷新", /待刷新/.test(quotaResetCountdown(Date.now() - 1)));
+    cx.resetCredits.credits[0].title = "额度重置卡";
+    cx.stale = true;
+    ck("Codex 陈旧重置卡保留查询时间并标明快照", /查询于/.test(coreCodexResets(cx)) && /上次快照/.test(coreCodexResets(cx)));
+    Object.assign(cx, saved);
+    render({});
+  } catch (e) { ck("Codex 重置卡与时间", false, e.message); }
+
   // ── 2026-10-23 边界复核修掉的几条 ──
   try {
     const nowS = Math.floor(Date.now() / 1000);

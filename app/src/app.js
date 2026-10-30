@@ -178,6 +178,9 @@ function tickPeakCountdowns() {
     }
     el.textContent = peakCountdown(p, nowMs);
   });
+  document.querySelectorAll("[data-reset-at]").forEach((el) => {
+    el.textContent = quotaResetCountdown(Number(el.dataset.resetAt));
+  });
 }
 
 let peakTickTimer = null;
@@ -235,6 +238,23 @@ function fmtReset(ms, short) {
   // 正好整天不写「4 天 0 小时」
   if (rh === 0) return short ? d + " 天" : d + " 天后重置";
   return short ? d + " 天 " + rh + " 小时" : d + " 天 " + rh + " 小时后重置";
+}
+
+function quotaResetCountdown(ms) {
+  return ms <= Date.now() ? "已到重置时间,待刷新" : fmtReset(ms, false);
+}
+
+/** 完整本地时间与时区,避免把卡片到期日和配额重置日混在一起。 */
+function exactLocalTime(ts) {
+  const d = new Date(ts * 1000);
+  if (!Number.isFinite(d.getTime())) return "时间未知";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function localZoneLabel() {
+  const mins = -new Date().getTimezoneOffset();
+  return `本地时间 UTC${mins >= 0 ? "+" : "-"}${String(Math.floor(Math.abs(mins) / 60)).padStart(2, "0")}:${String(Math.abs(mins) % 60).padStart(2, "0")}`;
 }
 
 /**
@@ -601,6 +621,10 @@ function renderRow(c, i) {
     // 一条「套餐」($10/期 · 未折进消耗),那不是 ChatGPT 订阅 —— 只认 Codex(§6.2)
     const plan = c.id === "codex" ? (c.extra || []).find((e) => e[0] === "套餐") : null;
     sub = plan ? `ChatGPT 订阅 · <span class="plan">${esc(plan[1])}</span>` : "";
+    if (c.id === "codex" && c.resetCredits) {
+      const n = c.resetCredits.availableCount;
+      sub += `${sub ? " · " : ""}重置卡 ${n == null ? "未知" : esc(n) + " 张"}`;
+    }
   }
   else if (c.limited) sub = "已限流";
   else if (isPts) {
@@ -764,6 +788,7 @@ function coreAmount(c) {
 
 /** ① 核心 · 配额:一窗一行。重置 < 24 小时写相对时间,更久写「N 天 · MM-DD HH:MM」。 */
 function coreWindows(c) {
+  const codex = c.id === "codex";
   const rows = (c.windows || []).map((w) => {
     const wr = Math.max(0, Math.min(100, w.remainPercent));
     const lim = w.status === "rate-limited";
@@ -790,7 +815,11 @@ function coreWindows(c) {
         whenOk = true;
       }
     }
-    return `<div class="core-w">
+    if (codex) {
+      when = ms === null ? "重置时间未知" : `下次重置 ${exactLocalTime(ms / 1000)} · <span data-reset-at="${ms}">${esc(quotaResetCountdown(ms))}</span>`;
+      whenOk = false;
+    }
+    return `<div class="core-w${codex ? " codex-w" : ""}">
       <span class="wl">${esc(w.label)}</span>
       <i class="wb"><i style="width:${wr}%;background:${TONE_HEX[wt]}"></i></i>
       <b class="wv" style="color:${lim ? "var(--bad)" : TONE_COLOR[wt]}">${wr.toFixed(1)}%</b>
@@ -804,7 +833,30 @@ function coreWindows(c) {
         : Math.max(0, Math.min(100, Number(c.remaining))).toFixed(1) + "%";
     return `<div class="sec"><div class="core-use"><div>当前剩余<b>${v}</b></div></div></div>`;
   }
-  return `<div class="sec">${rows.join("")}</div>`;
+  return `<div class="sec">${codex ? `<div class="sec-h"><span>配额窗口</span><span>${esc(localZoneLabel())}</span></div>` : ""}${rows.join("")}</div>`;
+}
+
+function coreCodexResets(c) {
+  if (c.id !== "codex") return "";
+  const r = c.resetCredits;
+  const n = r && r.availableCount;
+  const count = n == null ? "未获取" : `${esc(n)} 张可用`;
+  const cards = (r && r.credits) || [];
+  const more = !!(rowMore[c.id] || {}).resets;
+  const shown = more ? cards : cards.slice(0, 3);
+  const rows = shown.map((card) => {
+    const at = card.expiresAt;
+    const expires = at == null ? "接口未提供到期日" : `${exactLocalTime(at)} 到期${at * 1000 <= Date.now() ? " · 已到期,待刷新" : ""}`;
+    return `<div class="reset-credit"><span>${esc(card.title)}</span><b>${esc(expires)}</b></div>`;
+  }).join("");
+  const notes = [];
+  if (!r || r.error) notes.push(r && r.error ? r.error : "重置卡信息未获取,刷新后重试");
+  else if (n > 0 && r.credits == null) notes.push("接口仅返回数量,到期明细未提供");
+  else if (n > cards.length) notes.push(`接口返回 ${cards.length} 张到期明细,可用数量以 ${n} 张为准`);
+  if (r && r.lastRedeemedAt) notes.push(`最近用卡重置 ${exactLocalTime(r.lastRedeemedAt)}`);
+  const updated = r && r.updatedAt ? `<div class="fn-note">查询于 ${esc(exactLocalTime(r.updatedAt))}${c.stale || !c.valid ? " · 上次快照" : ""}</div>` : "";
+  const toggle = cards.length > 3 ? `<button class="sec-more" data-act="sec-more" data-id="codex" data-sec="resets" aria-expanded="${more}">${more ? "收起" : `全部 ${cards.length} 张`}</button>` : "";
+  return `<div class="sec codex-resets"><div class="sec-h"><span>重置卡</span><b>${count}</b></div>${rows}${toggle}${notes.map((s) => `<div class="fn-note">${esc(s)}</div>`).join("")}${updated}</div>`;
 }
 
 /** ① 核心 · 积分:最近到期的几笔(默认 3 笔,「全部 N 笔」原地展开)。
@@ -1073,7 +1125,7 @@ function renderDetail(c) {
   actions.push(manageLink);
 
   // 类名用 rb-dim 不用 dim:全局已有 .dim{color:var(--tx3)},撞名会把整张卡的数值再染一层灰
-  return `<div class="rbody-in${dim ? " rb-dim" : ""}">${core}${kvHtml}${ledger}${ckHtml}<div class="foot-det">${notesHtml}${failFull}<div class="fn-act">${actions.join(
+  return `<div class="rbody-in${dim ? " rb-dim" : ""}">${core}${coreCodexResets(c)}${kvHtml}${ledger}${ckHtml}<div class="foot-det">${notesHtml}${failFull}<div class="fn-act">${actions.join(
     ""
   )}</div></div></div>`;
 }

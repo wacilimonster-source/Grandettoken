@@ -3453,3 +3453,25 @@ diaglog(`qoder/webpacks`,只记形状)与候选链自动完成。
 `node build/verify-release.js` **13/13 PASS**(一次 fetch failed 为网络抖动,
 按 PROGRESS 旧注加代理后全绿);`node build/verify-signature.js` **PASS**;
 `node build/verify-updater.js` **PASS**(已装用户收得到)。
+
+### Codex 订阅与重置卡（2026-10-30,v0.1.73 本机版）
+
+用户升级订阅后,实测 `wham/usage` 已返回 `plus`,5 小时/周两个窗口;
+重置卡接口返回 `available_count:0, credits:[]`。原版会更新套餐和窗口,
+但没有重置卡,短窗口只显示相对倒计时。
+
+- 新增只读 `wham/rate-limit-reset-credits` 查询:同一 OAuth + 工作区头,
+  4 秒预算、512 KB 响应上限,失败不影响配额。数量未知与 0 张分开;
+  明细按到期日排序,无日期如实标记,有兑换历史时显示最近 `redeemed_at`。
+- Codex 详情显示每个窗口完整本地重置日期、秒和时区,倒计时每分钟更新;
+  新增重置卡区和查询时间,多卡可展开,副标题显示可用数量。
+- 凭据支持 `CODEX_HOME`,带上 `tokens.account_id`;仅周窗也能取数,
+  15 分钟/1 小时等窗口不再误标“5 小时”。
+- 依据官方 App Server 文档与 CodexBar 的接口契约独立实现,
+  取证与边界见 `docs/research/codex-subscription-2026-10-30.md`。
+
+验证:core **358 passed / 7 ignored**,前端 **98/98**,完整 `cargo check --all-targets`
+与 Release 构建通过（仅现有 corrupt .drectve 链接器噪声,导入表无动态 WebView2Loader）。
+已替换本机安装目录下的 exe 并核对 SHA-256,原版保留为 Grandettoken.pre-codex-0.1.73.exe.bak。
+实机展开 Codex 卡验证 Plus / 两个准确重置时间 / UTC+08:00 / 0 张可用与查询时间均正常,
+截图目检排版通过。真实账号暂无可用卡,有卡分支由夹具覆盖。未创建 GitHub Release。

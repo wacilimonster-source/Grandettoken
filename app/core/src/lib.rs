@@ -9,6 +9,7 @@
 
 pub mod appauth;
 pub mod checkin;
+pub mod codex;
 pub mod config;
 pub mod custom;
 pub mod diaglog;

@@ -57,7 +57,7 @@ impl App {
 pub struct Credential {
     pub token: String,
     pub source: String,
-    /// Qoder UID,仅在调用 Qoder 自带 UMID helper 时使用。
+    /// Qoder UID 或 Codex 当前工作区 ID。Codex 两个账务请求用同一账号头。
     pub account_id: Option<String>,
     /// Trae 的纯数字设备号(`iCubeAuthInfo://icube-dc:<数字>` 的键名里那串)。
     /// **签到必需**:缺了或不是客户端注册过的号,接口恒定回 9074("当前参与用户太多")。
@@ -293,10 +293,10 @@ fn codex_candidates() -> Vec<Credential> {
     let home = std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from);
-    let Some(home) = home else {
-        return Vec::new();
-    };
-    let path = home.join(".codex").join("auth.json");
+    let codex_home = std::env::var_os("CODEX_HOME").filter(|s| !s.is_empty())
+        .map(PathBuf::from).or_else(|| home.map(|h| h.join(".codex")));
+    let Some(codex_home) = codex_home else { return Vec::new(); };
+    let path = codex_home.join("auth.json");
     let Ok(raw) = std::fs::read_to_string(&path) else {
         return Vec::new();
     };
@@ -306,7 +306,9 @@ fn codex_candidates() -> Vec<Credential> {
     vec![Credential {
         token,
         source: "CLI 登录态".into(),
-        account_id: None,
+        account_id: serde_json::from_str::<serde_json::Value>(&raw).ok()
+            .and_then(|v| v.get("tokens")?.get("account_id")?.as_str()
+                .map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)),
         device_id: None,
     }]
 }

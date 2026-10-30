@@ -173,6 +173,13 @@ body.compact-on #btnPill{display:none}
 .core-w .wt{flex:none;min-width:calc(104px*var(--u));text-align:right;color:var(--tx2);
   font-size:max(11px,calc(11px*var(--u)));font-variant-numeric:tabular-nums;white-space:nowrap}
 .core-w .wt.ok{color:var(--ok)}
+.core-w.codex-w{display:grid;grid-template-columns:calc(48px*var(--u)) 1fr calc(46px*var(--u));
+  gap:calc(3px*var(--u)) calc(7px*var(--u));padding:calc(5px*var(--u)) 0}
+.core-w.codex-w .wt{grid-column:1/-1;min-width:0;white-space:normal;text-align:left;line-height:1.5}
+.reset-credit{display:flex;flex-wrap:wrap;justify-content:space-between;gap:calc(3px*var(--u)) calc(8px*var(--u));
+  padding:calc(4px*var(--u)) 0;color:var(--tx3);font-size:max(11px,calc(11px*var(--u)));overflow-wrap:anywhere}
+.reset-credit b{color:var(--tx2);font-weight:500;font-variant-numeric:tabular-nums}
+.codex-resets .sec-h b{color:var(--tx2);font-weight:500}
 
 /* 积分型:大数字后的单位(分),和小数位一样跟着数值走不另设样式 */
 .val .v i.unit{font-style:normal;font-size:inherit;font-weight:inherit;color:inherit;
