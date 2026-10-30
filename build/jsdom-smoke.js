@@ -227,6 +227,66 @@ const HARNESS = `
     render({});
   } catch (e) { ck("Codex 专属副标题", false, e.message); }
 
+  // ── Codex 收起双额度:周主、5 小时次,风险独立 ──
+  try {
+    const cx = CHANNELS.find((c) => c.id === "codex");
+    const saved = { ...cx };
+    const used = CFG.showUsed;
+    const home = JSON.parse(JSON.stringify(data.HOME));
+    const vr = home.rows.find((r) => r.id === "codex");
+    const readRow = () => {
+      const el = document.createElement("div");
+      el.innerHTML = renderRow(cx);
+      return el;
+    };
+    CFG.showUsed = false;
+    cx.remaining = 98;
+    cx.extra = [["套餐", "plus"]];
+    cx.windows = [
+      { label: "5 小时", percent: 15, remainPercent: 85, status: "ok", main: true },
+      { label: "本周", percent: 2, remainPercent: 98, status: "ok", main: false }
+    ]; // 兼容旧快照仍把 primary 标成 main
+    let el = readRow();
+    ck("Codex 收起大数字固定显示周额度", el.querySelector(".val .v").textContent === "本周剩余98.0%");
+    ck("Codex 收起同时显示5小时额度且无需展开", /5 小时剩余85.0%/.test(el.querySelector(".val .p").textContent) && !el.querySelector(".rbody").textContent);
+    ck("Codex 左侧保留套餐与重置卡", /plus/.test(el.querySelector(".nm .s").textContent) && /ChatGPT 订阅/.test(el.innerHTML));
+    CFG.showUsed = true;
+    el = readRow();
+    ck("Codex 两项同步切换已用口径", el.querySelector(".val .v").textContent === "本周已用2.0%" && /5 小时已用15.0%/.test(el.querySelector(".val .p").textContent));
+    CFG.showUsed = false;
+    cx.windows[0].remainPercent = 0;
+    cx.windows[0].status = "rate-limited";
+    Object.assign(vr, { state: "limited", tone: "bad", qualifier: "限流" });
+    hvApply(home);
+    el = readRow();
+    ck("Codex 短期耗尽不替换周主数字", /98.0%/.test(el.querySelector(".val .v").textContent) && /0.0%/.test(el.querySelector(".val .p").textContent));
+    ck("Codex 周与短期分别着色并保留限流提示", el.querySelector(".val .v").getAttribute("style").includes("var(--ok)") && el.querySelector(".quota-secondary b").getAttribute("style").includes("var(--bad)") && /限流/.test(el.querySelector(".nm .n").textContent));
+    cx.windows[0].remainPercent = 85;
+    cx.windows[0].status = "ok";
+    cx.stale = true;
+    cx.updatedAt = Math.floor(Date.now() / 1000) - 600;
+    Object.assign(vr, { state: "stale", tone: "ok", qualifier: "~" });
+    hvApply(home);
+    el = readRow();
+    ck("Codex 旧快照仍显示双额度并在左侧标明年龄", /快照/.test(el.querySelector(".nm .s").textContent) && /85.0%/.test(el.querySelector(".val .p").textContent));
+    cx.valid = false;
+    cx.error = "登录状态已失效";
+    Object.assign(vr, { state: "auth", tone: "off", qualifier: "需登录" });
+    hvApply(home);
+    el = readRow();
+    ck("Codex 取数失败保留旧双额度且明确失败", /快照/.test(el.querySelector(".nm .s").textContent) && /登录状态已失效/.test(el.querySelector(".nm .s").textContent) && el.querySelector(".quota-secondary b").getAttribute("style").includes("var(--tx3)"));
+    cx.valid = true;
+    cx.stale = false;
+    cx.windows = [cx.windows[1]];
+    hvApply(data.HOME);
+    el = readRow();
+    ck("Codex 仅周窗不编造5小时额度", /本周剩余98.0%/.test(el.querySelector(".val .v").textContent) && !el.querySelector(".quota-secondary"));
+    Object.assign(cx, saved);
+    CFG.showUsed = used;
+    hvApply(data.HOME);
+    render({});
+  } catch (e) { ck("Codex 双额度与周优先", false, e.message); }
+
   // ── Codex 套餐升级 / 重置卡 / 精确重置时间 ──
   try {
     const cx = CHANNELS.find((c) => c.id === "codex");
@@ -833,6 +893,37 @@ w.__DATA = DATA;
       ok: false,
       extra: e.message + " @ " + (e.stack || "").split("\n")[1],
     });
+  }
+
+  // 可选:把真实渲染函数的合成行交给浏览器排版检查,不读取用户配置或凭据。
+  if (process.env.CODEX_LAYOUT_FIXTURES) {
+    const base = { ...buildData(NOW).CHANNELS.find((c) => c.id === "codex"),
+      name: "Codex", short: "CX", remaining: 98, valid: true, stale: false,
+      extra: [["套餐", "plus"]], resetCredits: { availableCount: 0 },
+      windows: [
+        { label: "本周", remainPercent: 98, status: "ok", main: true },
+        { label: "5 小时", remainPercent: 85, status: "ok", main: false }
+      ]
+    };
+    const fixtures = [];
+    for (const name of ["normal", "short-limited", "week-low", "stale", "error", "used", "week-only", "long-plan"]) {
+      const c = JSON.parse(JSON.stringify(base));
+      const state = name === "stale" ? "stale" : name === "error" ? "auth" : name === "short-limited" ? "limited" : "fresh";
+      if (name === "short-limited") Object.assign(c.windows[1], { remainPercent: 0, status: "rate-limited" });
+      if (name === "week-low") { c.windows[0].remainPercent = 4; c.remaining = 4; }
+      if (name === "stale" || name === "error") { c.stale = true; c.updatedAt = NOW - 600; }
+      if (name === "error") { c.valid = false; c.error = "登录状态已失效"; }
+      if (name === "week-only") c.windows.pop();
+      if (name === "long-plan") c.extra[0][1] = "enterprise-workspace-subscription";
+      w.__TEST.patchCfg({ showUsed: name === "used" });
+      w.hvApply({ ...DATA.HOME, rows: [{ id: "codex", state,
+        tone: name === "short-limited" || name === "week-low" ? "bad" : "ok",
+        tier: name === "short-limited" || name === "error" ? 0 : 1,
+        secondary: name === "short-limited" ? "5 小时窗 · 2 小时后恢复" : null,
+        qualifier: name === "short-limited" ? "限流" : null, headline: { percent: c.remaining } }] });
+      fixtures.push({ name, markup: w.renderRow(c, 0), dual: name !== "week-only" });
+    }
+    fs.writeFileSync(process.env.CODEX_LAYOUT_FIXTURES, JSON.stringify(fixtures));
   }
 
   let ok = 0, bad = 0;

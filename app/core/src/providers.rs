@@ -954,22 +954,21 @@ pub fn extract_codex(body: &Value) -> FetchResult {
         })
     };
 
-    // 升级套餐后可能只有周窗;主窗为空不等于账号无配额。
-    let primary = win("primary_window", true);
-    let has_primary = primary.is_some();
-    let secondary = win("secondary_window", primary.is_none());
-    let Some(primary) = primary.or_else(|| secondary.clone()) else {
+    // 展示主窗按周优先,与上游 primary/secondary 的传输位置无关。
+    let mut windows: Vec<Window> = [win("primary_window", false), win("secondary_window", false)]
+        .into_iter().flatten().collect();
+    if windows.is_empty() {
         return FetchResult {
             valid: false,
             kind: Kind::Percent,
             error: Some("无可用配额窗口".into()),
             ..Default::default()
         };
-    };
-    let mut windows = vec![primary.clone()];
-    if let Some(s) = secondary.filter(|_| has_primary) {
-        windows.push(s);
     }
+    let main_index = windows.iter().position(|w| w.label == "本周").unwrap_or(0);
+    windows.swap(0, main_index);
+    windows[0].main = true;
+    let main = windows[0].clone();
 
     // 与 OpenCode 同口径:任一窗打满都算限流 —— 只看 primary 会漏报
     // 「5 小时松、周窗已打满」的告急(扫描报告 P2-3)
@@ -988,15 +987,15 @@ pub fn extract_codex(body: &Value) -> FetchResult {
         extra.push(("套餐".into(), plan));
     }
 
-    // 裁决①:大数字固定取 primary 窗(不是最紧窗);副标题会写明窗名。
+    // 主数字取周窗;短期是否限流仍由所有窗口共同决定。
     FetchResult {
         valid: true,
         kind: Kind::Percent,
-        remaining: Some(primary.remain_percent),
-        used: Some(primary.percent),
+        remaining: Some(main.remain_percent),
+        used: Some(main.percent),
         total: Some(100.0),
         unit: "%".into(),
-        limited: limited || primary.status == "rate-limited",
+        limited,
         windows,
         reset_credits: body.get("rate_limit_reset_credits")
             .and_then(|v| crate::codex::summary(v, chrono::Utc::now().timestamp())),
@@ -1638,9 +1637,9 @@ mod tests {
         assert!(r.windows[0].resets_at.as_deref().unwrap().ends_with("+00:00"));
     }
 
-    /// 付费号预期:5 小时 primary + 每周 secondary 两窗,大数字仍取 primary。
+    /// 付费号:周窗是展示主窗,不受上游 primary/secondary 位置影响。
     #[test]
-    fn codex_paid_two_windows_headline_is_primary() {
+    fn codex_paid_two_windows_headline_is_weekly() {
         let r = extract_codex(&json!({
             "plan_type": "plus",
             "rate_limit": {
@@ -1651,9 +1650,12 @@ mod tests {
         }));
         assert!(r.valid);
         assert_eq!(r.windows.len(), 2);
-        assert_eq!(r.windows[0].label, "5 小时");
-        assert_eq!(r.windows[1].label, "本周");
-        assert_eq!(r.remaining, Some(23.5));
+        assert_eq!(r.windows[0].label, "本周");
+        assert_eq!(r.windows[1].label, "5 小时");
+        assert!(r.windows[0].main);
+        assert!(!r.windows[1].main);
+        assert_eq!(r.remaining, Some(61.0));
+        assert_eq!(r.used, Some(39.0));
     }
 
     #[test]
@@ -1670,6 +1672,24 @@ mod tests {
         assert!(r.limited);
         assert_eq!(r.windows[0].status, "rate-limited");
         assert_eq!(r.windows[0].remain_percent, 0.0);
+    }
+
+    #[test]
+    fn codex_weekly_is_primary_even_when_short_window_is_exhausted_or_slots_swap() {
+        for swapped in [false, true] {
+            let week = json!({"used_percent":2,"limit_window_seconds":604800});
+            let short = json!({"used_percent":100,"limit_window_seconds":18000});
+            let (primary, secondary) = if swapped { (week, short) } else { (short, week) };
+            let r = extract_codex(&json!({"plan_type":"plus", "rate_limit":{
+                "primary_window":primary,"secondary_window":secondary
+            }}));
+            assert!(r.valid && r.limited);
+            assert_eq!(r.remaining, Some(98.0));
+            assert_eq!(r.windows[0].label, "本周");
+            assert!(r.windows[0].main);
+            assert_eq!(r.windows[1].status, "rate-limited");
+            assert!(!r.windows[1].main);
+        }
     }
 
     #[test]

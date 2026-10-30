@@ -67,6 +67,10 @@
 | Qoder | `qoder` | `GET https://openapi.qoder.sh/api/v2/quota/usage` | 积分型 | 本机登录态 | **未公开接口** |
 | Qoder 国内版 | `qoder-cn` | `GET https://openapi.qoder.com.cn/api/v2/quota/usage` | 积分型 | 本机登录态 | **未公开接口** |
 
+Codex 收起行的周额度优先设计见
+[双额度与周优先（2026-10-30）](docs/design/design-codex-weekly-2026-10-30.html):
+右上显示本周额度大数字,右下显示 5 小时额度;任一窗口限流仍保留独立告警。
+
 **WorkBuddy 与 WorkBuddy AI 是两个渠道,不是两个域名**(2026-10-23):两套账号、官方不支持跨区迁移,
 凭据按 `domain` 判区、各取各的令牌(混用必然 401)。国际版**没有签到**(`daily-checkin` 回 10001
 「活动未开启」,与国区「今天已签到」同码异义),所以"今日是否已获取积分"不走签到,走

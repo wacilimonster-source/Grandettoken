@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>Codex 双额度与周优先 · 2026-10-30</title>
+<link rel="stylesheet" href="../../app/src/styles.css">
+<style>
+html{overflow:auto}body{width:auto;height:auto;min-height:100vh;border:0;border-radius:0;overflow:auto;display:block;padding:32px;background:#0d0f14;font-size:14px}
+main{max-width:1020px;margin:auto}h1{font-size:24px;margin:0 0 12px}h2{font-size:18px;margin:28px 0 12px}p,li,td{color:var(--tx2);line-height:1.8}ul{padding-left:20px}
+.examples{display:flex;flex-wrap:wrap;gap:20px}.example{width:calc(400px*var(--u));background:var(--bg);border:1px solid var(--line);border-radius:12px;overflow:hidden}.caption{padding:10px 12px;background:var(--bg2);font-size:12px;color:var(--tx3)}
+.prototype-val .v{display:flex;align-items:baseline;justify-content:flex-end;gap:6px;white-space:nowrap}.prototype-val .label{font-size:11.5px;letter-spacing:0;font-weight:400;color:var(--tx3)}.prototype-val .p b{font-weight:500;color:var(--tx2)}
+table{border-collapse:collapse;width:100%}td,th{border:1px solid var(--line);padding:8px;text-align:left}th{background:var(--bg2)}button{padding:7px 12px;margin:0 5px 10px 0;color:var(--tx);background:var(--bg3);border:1px solid var(--line);border-radius:5px;cursor:pointer}
+</style></head><body><main>
+<h1>Codex：收起也能同时看两种额度</h1>
+<p>周额度是长期使用预算，固定放在右上方作为主数字；5 小时额度决定眼下是否可用，放在其下独立显示。两行均明确标注“剩余”，沿用现有行高。以下均为设计用的模拟数据。</p>
+<div><button data-scale="1">标准字号</button><button data-scale="1.15">大字号</button><button data-scale="1.3">超大字号</button></div>
+<div class="examples">
+<section class="example"><div class="caption">正常：周额度大字，短期额度小字</div><div class="row"><div class="rhead"><div class="r1"><div class="ico logo"><img src="../../app/src/logos/chatgpt.svg" alt=""></div><div class="nm"><div class="n">Codex <span class="dot"></span></div><div class="s"><span class="plan">plus</span> · 重置卡 0 张</div></div><div class="val prototype-val"><div class="v" style="color:var(--ok)"><span class="label">本周剩余</span>98.0%</div><div class="p">5 小时剩余 <b>85.0%</b></div></div><div class="caret">▶</div></div></div></div></section>
+<section class="example"><div class="caption">短期耗尽：周数字不变，短期 0% 和限流提示保留</div><div class="row"><div class="rhead"><div class="r1"><div class="ico logo"><img src="../../app/src/logos/chatgpt.svg" alt=""></div><div class="nm"><div class="n">Codex <span class="dot b"></span><span class="qtag">限流</span></div><div class="s"><span class="plan">plus</span> · 重置卡 0 张</div></div><div class="val prototype-val"><div class="v" style="color:var(--ok)"><span class="label">本周剩余</span>98.0%</div><div class="p">5 小时剩余 <b style="color:var(--bad)">0.0%</b></div></div><div class="caret">▶</div></div></div></div></section>
+</div>
+<h2>显示规则</h2><table><tr><th>情况</th><th>结果</th></tr>
+<tr><td>两个窗口均可获取</td><td>上行本周，下行 5 小时；窗口各按自己的余量着色。主数字在面板、紧凑条、胶囊保持周口径。</td></tr>
+<tr><td>5 小时限制触发</td><td>保留周主数字；短期数字标红，并保留整渠道限流状态、排序和恢复时间提示。</td></tr>
+<tr><td>取数失败或旧快照</td><td>仍可查看两项旧数据，数值降灰，左侧优先显示快照年龄或失败原因；展开看完整原因。</td></tr>
+<tr><td>只有一个窗口</td><td>按接口实际返回的窗口显示，继续提供重置倒计时；不补出不存在的窗口或 0%。</td></tr>
+<tr><td>用户选择“已用”</td><td>两项同步改成“已用”，数值都作 100−剩余，风险色仍按实际剩余判断。</td></tr>
+<tr><td>展开详情</td><td>周窗口排在前面，保留两个窗口的完整重置日期、时区、重置卡与查询时间。</td></tr>
+<tr><td>紧凑条</td><td>保留上下两项额度，沿用自动宽度与 +N 收纳；不加高 46px 窗口。</td></tr></table>
+<h2>实现与验收</h2><ul><li>取数层把周窗标为 main，并作为 remaining/used 的来源；无周窗时回落真实首窗。</li><li>视图层分开选择“主数字窗口”和“告警绑定窗口”：前者周优先，后者继续取最紧窗口。</li><li>收起行独立渲染两个窗口，左右两行基线对齐；长套餐名称不挤掉额度。</li><li>验证正常、单窗、短期耗尽、周耗尽、旧数据、已用模式以及三档字号；发布前通过实机布局和自动更新验签。</li></ul>
+</main><script>document.querySelectorAll('[data-scale]').forEach(b=>b.onclick=()=>document.documentElement.style.setProperty('--u',b.dataset.scale));</script></body></html>

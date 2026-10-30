@@ -142,6 +142,11 @@ body.compact-on #btnPill{display:none}
    之前只有整数部分"有样式",看起来像半截数字没渲染好 */
 .val .v i{font-style:normal;font-size:inherit;font-weight:inherit;color:inherit}
 .val .p{font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);margin-top:calc(1px*var(--u))}
+.codex-quota .val .v{display:flex;align-items:baseline;justify-content:flex-end;gap:calc(5px*var(--u));white-space:nowrap}
+.codex-quota .quota-label{font-size:max(11.5px,calc(11px*var(--u)));font-weight:400;letter-spacing:0;color:var(--tx3)}
+.quota-secondary{display:inline-flex;align-items:baseline;gap:calc(6px*var(--u));white-space:nowrap}
+.quota-secondary b{font-size:calc(12px*var(--u));font-weight:500}
+.codex-dual[data-state="stale"] .val .p{opacity:.72}
 .bar{height:calc(4px*var(--u));border-radius:calc(3px*var(--u));background:#303849;overflow:hidden;margin:calc(8px*var(--u)) 0 0}
 .bar>i{display:block;height:100%;border-radius:calc(3px*var(--u));transition:width .5s cubic-bezier(.3,1,.4,1)}
 /* 官方图标:有官方标的渠道用图片,容器仍是原来的圆角方块(尺寸/圆角由各上下文决定) */
@@ -613,6 +618,9 @@ body.form-compact .row.lv1 .nsh,body.form-compact .row.lv2 .nsh{display:none}
 body.form-compact .nm .n{gap:0}
 body.form-compact .nm .n .dot{width:calc(5px*var(--u));height:calc(5px*var(--u))}
 body.form-compact .row .val .v{font-size:calc(12px*var(--u));font-weight:500}
+body.form-compact .row.codex-dual .val .v{line-height:1}
+body.form-compact .row.codex-dual .val .p{display:block;font-size:calc(10.5px*var(--u));line-height:1;margin-top:calc(1px*var(--u))}
+body.form-compact .row.codex-quota .quota-label,body.form-compact .row.codex-dual .quota-secondary b{font-size:calc(10.5px*var(--u))}
 /* 百分号是语义不是精度,L2 也保留;小数位与「分」字到 L2 才舍 */
 body.form-compact .val .v .pct{font-size:inherit}
 body.form-compact .row.lv2 .val .v .dec{display:none}

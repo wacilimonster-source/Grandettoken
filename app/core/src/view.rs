@@ -60,7 +60,7 @@ pub enum ViewState {
     NoKey,
     /// 已用尽:实心方块,写 0 而不是 `—` —— "确定是 0"和"不知道"是两件事
     Exhausted,
-    /// 限流:主数字切到绑定窗(正在被拒的那个),副行"2h 后恢复 · 周期 62%"
+    /// 限流:副行说明绑定窗与恢复时间;Codex 的主数字仍取周窗,其它渠道取绑定窗。
     Limited,
 }
 
@@ -309,7 +309,7 @@ fn reset_secs(w: &Window) -> i64 {
 
 /// 现在的绑定窗:正在被限流的那个优先,其余取剩余最少的那个。
 ///
-/// 这条就是设计里的「绑定窗」:主数字永远取它,而不是后端标了 `main` 的那个窗。
+/// 绑定窗用于风险、排序与恢复时间。Codex 的主数字另按周优先显示。
 /// 长窗打满时短窗跟着显示 0%;短窗限流时长窗退到副行 —— 一个渠道在任何时刻
 /// 只有一个"最紧的窗",四种形态都报它(D03)。
 pub fn binding_window(v: &ChannelView) -> Option<&Window> {
@@ -584,7 +584,11 @@ fn headline_of(v: &ChannelView, state: ViewState) -> Headline {
         return Headline::unknown();
     }
     match v.kind {
-        Kind::Percent => match binding_window(v) {
+        Kind::Percent => match if v.id == "codex" {
+            v.windows.iter().find(|w| w.main).or_else(|| binding_window(v))
+        } else {
+            binding_window(v)
+        } {
             Some(w) => Headline::percent(w.remain_percent),
             None => match v.remaining {
                 Some(r) => Headline::percent(r),
@@ -1090,6 +1094,28 @@ mod tests {
         assert_eq!(row.binding_window.as_deref(), Some("5 小时"));
         assert_eq!(row.headline, Headline::percent(4.0));
         assert_eq!(row.tone, Tone::Bad, "4% < crit 15%");
+    }
+
+    #[test]
+    fn codex_weekly_headline_preserves_short_window_risk_and_recovery() {
+        let input = base_input();
+        let mut week = win("本周", 98.0, "ok", Some(7 * 86_400));
+        week.main = true;
+        let mut v = percent_ch("codex", vec![
+            week, win("5 小时", 0.0, "rate-limited", Some(7200)),
+        ]);
+        let row = row_of(&v, None, &input);
+        assert_eq!(row.headline, Headline::percent(98.0));
+        assert_eq!(row.binding_window.as_deref(), Some("5 小时"));
+        assert_eq!(row.state, ViewState::Limited);
+        assert_eq!(row.tone, Tone::Bad);
+        assert_eq!(row.eta_secs, Some(7200));
+        assert!(row.secondary.unwrap().contains("5 小时窗"));
+        v.windows[1].status = "ok".into();
+        v.windows[1].remain_percent = 4.0;
+        let row = row_of(&v, None, &input);
+        assert_eq!(row.headline, Headline::percent(98.0));
+        assert_eq!(row.tone, Tone::Bad); // 短窗告急仍参与风险判断
     }
 
     // ── 颜色与"确定是 0" ───────────────────────────────────────────

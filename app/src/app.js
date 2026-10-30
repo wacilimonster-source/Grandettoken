@@ -87,12 +87,16 @@ function relTime(ts) {
 }
 
 /**
- * 配额型渠道的主窗口:后端用 `main` 标出来(OpenCode = 「周期」窗,Codex = primary),
+ * 配额型渠道的主窗口:后端用 `main` 标出来(OpenCode = 「周期」窗,Codex = 周窗优先),
  * 大数字与状态色都按它走。老数据没有这个标志时退回「周期」标签,再退到数组首位。
  */
 function mainWindow(c) {
   const wins = c.windows || [];
   if (!wins.length) return null;
+  if (c.id === "codex") {
+    const weekly = wins.find((w) => w.label === "本周");
+    if (weekly) return weekly;
+  }
   return wins.find((w) => w.main) || wins.find((w) => w.label === "周期") || wins[0];
 }
 
@@ -380,6 +384,13 @@ const TONE_COLOR = { ok: "var(--ok)", warn: "var(--warn)", bad: "var(--bad)", of
 // 与 styles.css 的高对比色板保持一致(进度条/托盘角标是内联色,吃不到 CSS 变量)
 const TONE_HEX = { ok: "#4ade9d", warn: "#f7c355", bad: "#ff6b63", off: "#3a4356" };
 
+/** 单个配额的数字只按自己的余量着色;行状态仍可由另一窗口触发限流。 */
+function quotaTone(c, w) {
+  if (!c.hasKey || !c.valid || !w || !Number.isFinite(w.remainPercent)) return "off";
+  if (w.status === "rate-limited" || w.remainPercent < CFG.critPercent) return "bad";
+  return w.remainPercent < CFG.warnPercent ? "warn" : "ok";
+}
+
 /**
  * 状态点分层(U2):未配置 = off(空心灰环,没启用不是故障);
  * 取数失败/失联 = st(灰点加斜杠);其余按阈值红黄绿。
@@ -566,6 +577,9 @@ function renderRow(c, i) {
   // 下面三行各带一条迷你条把 5 小时 / 本周 / 周期都摊开,右侧附重置倒计时
   const wins = isPct && c.windows && c.windows.length ? c.windows : [];
   const mw = wins.length ? mainWindow(c) : null;
+  const codex = c.id === "codex" && !!mw;
+  const fiveHour = codex ? wins.find((w) => w.label === "5 小时") : null;
+  const codexDual = codex && mw.label === "本周" && !!fiveHour && !noKey && c.remaining != null;
 
   let main;
   if (noKey) main = "——";
@@ -620,7 +634,7 @@ function renderRow(c, i) {
     // Codex 的套餐档位(free/plus/pro)画在副标题里。OpenCode Go 的 extra 里也可能有
     // 一条「套餐」($10/期 · 未折进消耗),那不是 ChatGPT 订阅 —— 只认 Codex(§6.2)
     const plan = c.id === "codex" ? (c.extra || []).find((e) => e[0] === "套餐") : null;
-    sub = plan ? `ChatGPT 订阅 · <span class="plan">${esc(plan[1])}</span>` : "";
+    sub = plan ? `<span class="plan" title="ChatGPT 订阅">${esc(plan[1])}</span>` : "";
     if (c.id === "codex" && c.resetCredits) {
       const n = c.resetCredits.availableCount;
       sub += `${sub ? " · " : ""}重置卡 ${n == null ? "未知" : esc(n) + " 张"}`;
@@ -676,6 +690,17 @@ function renderRow(c, i) {
     )}</span>`;
   else if (pct !== null) subVal = `剩 ${pct}%`;
   else subVal = "";
+
+  if (codexDual) {
+    const shortValue = dispPct(Math.max(0, Math.min(100, fiveHour.remainPercent)));
+    subVal = `<span class="quota-secondary"><span>5 小时${CFG.showUsed ? "已用" : "剩余"}</span><b style="color:${TONE_COLOR[quotaTone(c, fiveHour)]}">${shortValue.toFixed(1)}%</b></span>`;
+    // 两项额度占右侧两行,旧数据的年龄移到左侧,仍然显式可见。
+    if (isOld) sub = `${c.updatedAt ? snapAge(c.updatedAt) : "上次快照"}${failed && sub ? " · " + sub : ""}`;
+  }
+  const mainValue = codex && !noKey && c.remaining != null
+    ? `<span class="quota-label">${esc(mw.label)}${CFG.showUsed ? "已用" : "剩余"}</span><span class="quota-number">${main}</span>`
+    : main;
+  const mainTone = codex ? quotaTone(c, mw) : tone;
 
   // 金额型第二行两边都空时给今日消耗兜底:否则整行会比别的行矮一截(Hapi 39px vs 51px)
   if (!noKey && !failed && c.kind === "amount" && !sub && !subVal && c.day !== null) {
@@ -743,7 +768,7 @@ function renderRow(c, i) {
 
   // data-state:后端判的七态,给 CSS 用 —— 紧凑条与胶囊里没有 .rhint 那行字,
   // 只有靠它才能把"这是旧快照"画出来(设计 P0 验收①)
-  return `<div class="row${urgent ? " urg" : ""}" data-id="${c.id}" data-dtone="${dcls}" data-state="${(hv || {}).state || ""}">
+  return `<div class="row${urgent ? " urg" : ""}${codex ? " codex-quota" : ""}${codexDual ? " codex-dual" : ""}" data-id="${c.id}" data-dtone="${dcls}" data-state="${(hv || {}).state || ""}">
     <div class="rhead" tabindex="0" role="button" aria-expanded="${rowOpen.has(c.id) ? "true" : "false"}">
       <div class="r1">
         ${iconHtml(c, "ico", noKey || failed)}
@@ -752,7 +777,7 @@ function renderRow(c, i) {
           <div class="s">${sub}</div>
         </div>
         <div class="val">
-          <div class="v" style="color:${TONE_COLOR[tone]}">${main}</div>
+          <div class="v" style="color:${TONE_COLOR[mainTone]}">${mainValue}</div>
           <div class="p">${subVal}</div>
         </div>
         <div class="caret">&#9654;</div>
