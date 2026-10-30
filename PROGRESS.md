@@ -3523,7 +3523,7 @@ diaglog(`qoder/webpacks`,只记形状)与候选链自动完成。
 
 [GitHub CI](https://github.com/wacilimonster-source/Grandettoken/actions/runs/41031310358) **PASS**。
 
-### Codex 通知随风险窗口（2026-10-30,v0.1.75）
+### 发版 v0.1.75（2026-10-30）
 
 v0.1.74 的收尾审查发现:系统通知 `crit_now/crit_body` 仍取展示主窗,
 周优先后会漏掉短窗低额度通知,且通知百分比可能与实际触发窗口不符。
@@ -3532,3 +3532,13 @@ v0.1.74 的收尾审查发现:系统通知 `crit_now/crit_body` 仍取展示主�
 双额度布局与周主数字沿用 v0.1.74 的实机和 48 个浏览器布局验证结果。
 
 core **361 passed / 7 ignored**（新增通知窗口回归）,完整 all-targets 检查通过。
+
+本机已更新至 v0.1.75,保留原版备份 `Grandettoken.pre-0.1.75.exe.bak`。
+实机再次确认收起行同时显示周与 5 小时额度。
+签名 NSIS 安装包 `Grandettoken_0.1.75_x64-setup.exe`（5,252,469 B,SHA-256
+`24f4231af80c7b337d2b2d6b51c03e2a4c356972e0fe6cb779c41151cea65c9a`）及 `.sig`、
+`latest.json` 已发布至
+[GitHub Release v0.1.75](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.75)。
+发布提交 `6e22423`,tag `v0.1.75`。线上 `verify-release.js` **13/13 PASS**,
+`verify-signature.js` 和 `verify-updater.js` **PASS**;
+[GitHub CI](https://github.com/wacilimonster-source/Grandettoken/actions/runs/41032451875) **PASS**。
