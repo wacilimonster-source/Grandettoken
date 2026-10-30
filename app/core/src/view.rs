@@ -331,6 +331,15 @@ fn is_limited(v: &ChannelView) -> bool {
     v.limited || v.windows.iter().any(|w| w.status == "rate-limited")
 }
 
+/// 通知沿用各渠道既有口径。Codex 周窗是展示重点,通知仍看实际最紧的窗。
+pub fn notification_window(v: &ChannelView) -> Option<&Window> {
+    if v.id == "codex" {
+        binding_window(v)
+    } else {
+        v.windows.iter().find(|w| w.main).or_else(|| v.windows.first())
+    }
+}
+
 fn clamp01(x: f64) -> f64 {
     if x.is_finite() {
         x.clamp(0.0, 1.0)
@@ -1116,6 +1125,23 @@ mod tests {
         let row = row_of(&v, None, &input);
         assert_eq!(row.headline, Headline::percent(98.0));
         assert_eq!(row.tone, Tone::Bad); // 短窗告急仍参与风险判断
+    }
+
+    #[test]
+    fn codex_notifications_follow_actual_risk_instead_of_weekly_headline() {
+        let mut week = win("本周", 87.0, "ok", None);
+        week.main = true;
+        let mut v = percent_ch("codex", vec![week, win("5 小时", 4.0, "ok", None)]);
+        assert_eq!(notification_window(&v).unwrap().label, "5 小时");
+        assert_eq!(notification_window(&v).unwrap().remain_percent, 4.0);
+        v.windows[0].remain_percent = 0.0;
+        v.windows[0].status = "rate-limited".into();
+        assert_eq!(notification_window(&v).unwrap().label, "本周");
+        // 非 Codex 仍按原有主窗判定,不因这次展示调整改变通知口径。
+        v.id = "opencode-go".into();
+        v.windows[0].remain_percent = 87.0;
+        v.windows[0].status = "ok".into();
+        assert_eq!(notification_window(&v).unwrap().label, "本周");
     }
 
     // ── 颜色与"确定是 0" ───────────────────────────────────────────

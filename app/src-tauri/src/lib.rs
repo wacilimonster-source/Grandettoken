@@ -1349,7 +1349,7 @@ static PREV_CRIT: Mutex<Option<HashMap<String, bool>>> = Mutex::new(None);
 
 /// 渠道算不算"跌破红线"。**与前端 `toneOf()` 逐条同口径** —— 两边判据必须一致,
 /// 否则会出现"界面已经飘红、通知却说没事"这种自相矛盾。
-///   百分比型:看主窗剩余;  金额型:剩余 / 本轮额度(拿不到分母就不算,与界面同);
+///   百分比型:Codex 看最紧窗,其它看主窗;金额型:剩余 / 本轮额度;
 ///   积分型:不看余额,只看近 7 天将过期的占比(界面上 >= 30% 就是 bad);
 ///   取不到数 / 已隐藏 一律不算 —— 失联不等于欠费,这是本产品的第一条红线。
 fn crit_now(v: &ChannelView, cfg: &Config) -> bool {
@@ -1358,11 +1358,7 @@ fn crit_now(v: &ChannelView, cfg: &Config) -> bool {
         return false;
     }
     match v.kind {
-        Kind::Percent => v
-            .windows
-            .iter()
-            .find(|w| w.main)
-            .or_else(|| v.windows.first())
+        Kind::Percent => tokenscope_core::view::notification_window(v)
             .map(|w| (w.remain_percent / 100.0).clamp(0.0, 1.0) < cfg.crit_percent / 100.0)
             .unwrap_or(false),
         Kind::Amount => {
@@ -1403,13 +1399,15 @@ fn crit_body(v: &ChannelView) -> String {
     use tokenscope_core::providers::Kind;
     match v.kind {
         Kind::Percent => {
-            let pct = v
-                .windows
-                .iter()
-                .find(|w| w.main)
-                .or_else(|| v.windows.first())
+            let window = tokenscope_core::view::notification_window(v);
+            let pct = window
                 .map(|w| w.remain_percent)
                 .unwrap_or(0.0);
+            if v.id == "codex" {
+                if let Some(w) = window {
+                    return format!("{} {}额度剩余 {:.0}%,已经很低了 · 打开挂件查看", v.name, w.label, pct);
+                }
+            }
             format!("{} 剩余 {:.0}%,已经很低了 · 打开挂件查看", v.name, pct)
         }
         Kind::Amount => match (v.remaining, v.claim.as_ref().map(|c| c.amount)) {

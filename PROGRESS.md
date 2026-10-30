@@ -3489,7 +3489,7 @@ diaglog(`qoder/webpacks`,只记形状)与候选链自动完成。
 [GitHub CI](https://github.com/wacilimonster-source/Grandettoken/actions/runs/41025183619)
 **PASS**（5m35s）:core 单测、两个 crate 的 all-targets 检查、前端语法、CSS 形态守卫与凭据扫描均通过。
 
-### Codex 双额度与周优先（2026-10-30,v0.1.74）
+### 发版 v0.1.74（2026-10-30）
 
 设计先行:见 `docs/design/design-codex-weekly-2026-10-30.html`。
 原收起行只展示一个主数,5 小时与周额度必须点开才能同时看。本次按用户指定,
@@ -3510,3 +3510,25 @@ diaglog(`qoder/webpacks`,只记形状)与候选链自动完成。
 
 本机已更新并实机验证:收起行同时显示本周与 5 小时剩余,展开详情仍为周窗优先,
 准确日期/时区完整,截图目检正常。安装前原版本备份为 `Grandettoken.pre-0.1.74.exe.bak`。
+
+签名 NSIS 安装包 `Grandettoken_0.1.74_x64-setup.exe`（5,252,562 B,SHA-256
+`74882f4e5d65bb8ddc9234769ddefdb688e4d3036b40ece266f48d0d06410ca3`）及 `.sig`、
+`latest.json` 已发布至
+[GitHub Release v0.1.74](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.74)。
+发布提交 `d1e0a6d`,tag `v0.1.74`;草稿三件套核对齐全后公开为 latest。
+
+发布后 `verify-release.js` **13/13 PASS**（线上安装包 hash 与本地一致）,
+`verify-signature.js` **PASS**（现有公钥验证线上安装包）,
+`verify-updater.js` **PASS**（已装用户收到 v0.1.74）。
+
+[GitHub CI](https://github.com/wacilimonster-source/Grandettoken/actions/runs/41031310358) **PASS**。
+
+### Codex 通知随风险窗口（2026-10-30,v0.1.75）
+
+v0.1.74 的收尾审查发现:系统通知 `crit_now/crit_body` 仍取展示主窗,
+周优先后会漏掉短窗低额度通知,且通知百分比可能与实际触发窗口不符。
+新增 core::view::notification_window,Codex 通知按实际最紧窗口判断,
+文案明确写出“5 小时额度”或“本周额度”;其它渠道保留原通知口径。
+双额度布局与周主数字沿用 v0.1.74 的实机和 48 个浏览器布局验证结果。
+
+core **361 passed / 7 ignored**（新增通知窗口回归）,完整 all-targets 检查通过。
