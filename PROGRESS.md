@@ -3573,3 +3573,15 @@ core **361 passed / 7 ignored**（新增通知窗口回归）,完整 all-targets
 签名 NSIS 安装包 `Grandettoken_0.2.0_x64-setup.exe`（5,258,393 B，SHA-256
 `1D687413076DE9D467D3ACBD10001B53A8448D74729722A11E2B0A00EE0859C4`）。
 发布信息与线上校验见下一条记录。
+
+**发布（2026-11-01）**：tag `v0.2.0`，release 提交 `91f6ef6`，
+[GitHub Release v0.2.0](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.2.0)。
+GitHub API 与 `gh release view` 均确认三件套齐全：`Grandettoken_0.2.0_x64-setup.exe`
+（5,258,393 B）、`.sig`（424 B）、`latest.json`（1,075 B）；release 不是 draft / prerelease，
+说明中文完整（513 字符 / 303 汉字）。
+
+`verify-signature.js` **PASS**（`tauri.conf.json` 公钥能验线上安装包）；`verify-updater.js`
+**PASS**（固定更新端点 / 版本 / 签名逐字一致 / URL 指向本 tag / 安装包可下载）。
+`verify-release.js` 本次访问 `github.com/.../releases/latest/download/latest.json` 超时
+（`api.github.com` 可达，三件套、签名与更新链路已由前两项核验）；网络恢复后可重跑，
+不影响已装用户从固定更新端点检查 v0.2.0。
