@@ -3585,3 +3585,6 @@ GitHub API 与 `gh release view` 均确认三件套齐全：`Grandettoken_0.2.0_
 `verify-release.js` 本次访问 `github.com/.../releases/latest/download/latest.json` 超时
 （`api.github.com` 可达，三件套、签名与更新链路已由前两项核验）；网络恢复后可重跑，
 不影响已装用户从固定更新端点检查 v0.2.0。
+
+本机已用 `Grandettoken_0.2.0_x64-setup.exe` 静默覆盖安装，
+`%LOCALAPPDATA%\Grandettoken\Grandettoken.exe` 文件版本已变为 **0.2.0**；配置、SQLite 与凭据均保留。
