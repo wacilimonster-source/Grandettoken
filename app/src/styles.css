@@ -7,17 +7,29 @@
    正文最小字号一律 max(11.5px, …) 兜底 —— 中文在 11px 以下笔画发糊。
    图标字母缩写(4S/OC 之类)是图形不是正文,不设下限,只随 --u 缩放。
 
-   配色(2026-09-18 高对比替换):旧 --tx3:#646d80 在 #12141a 上只有 3.6:1,
+   配色(2026-09-18 高对比替换):旧 --tx3:#646d80 在 #0e1015 上只有 3.6:1,
    不达 WCAG AA;次要层整体提亮到 6~10:1,状态色为小字号各提一档。 */
 :root{
   --u:1;
-  --bg:#12141a; --bg2:#191c24; --bg3:#20242e;
-  --line:#2f3648; --line2:#3c445c;
-  --tx:#edf0f6; --tx2:#b6bfce; --tx3:#8d97ab;
-  --ok:#4ade9d; --warn:#f7c355; --bad:#ff6b63; --ac:#7fa2ff;
+  /* 表面层级:canvas < surface-1 < surface-2 < surface-3 */
+  --bg:#0e1015; --bg2:#141821; --bg3:#191e27; --bg4:#212836;
+  --line:#252b38; --line2:#343d4f;
+  /* 文字四级:数字/名称 → 正文 → 标签 → 装饰 */
+  --tx:#f3f6fb; --tx2:#b7c0d0; --tx3:#8a95a8; --tx4:#5e6a7e;
+  /* 状态色只用于状态,不用于装饰 */
+  --ok:#4fd6a0; --warn:#f3c666; --bad:#ff7b72; --ac:#8aa4ff;
+  --ok-bg:rgba(79,214,160,.09);
+  --warn-bg:rgba(243,198,102,.09);
+  --bad-bg:rgba(255,123,114,.08);
+  /* 字号阶梯(5 档):display / value / body / meta / caption */
+  --fs-display:calc(26px*var(--u)); --lh-display:1.05;
+  --fs-value:calc(22px*var(--u)); --lh-value:1.08;
+  --fs-body:calc(13px*var(--u)); --lh-body:1.45;
+  --fs-meta:max(11.5px,calc(11.5px*var(--u))); --lh-meta:1.5;
+  --fs-cap:max(10.5px,calc(10.5px*var(--u))); --lh-cap:1.4;
   --r:12px;
   /* 动效令牌:短、准、稳、静。曲线快起慢停,永不回弹 */
-  --t1:120ms; --t2:200ms; --t3:320ms;
+  --t1:120ms; --t2:200ms; --t3:280ms;
   --ease:cubic-bezier(.2,.8,.2,1);
 }
 *{box-sizing:border-box;margin:0;padding:0}
@@ -45,11 +57,11 @@ body{
 /* ── 标题栏(拖拽区,固定尺寸下仍可拖动移动) ── */
 .tbar{display:flex;align-items:center;gap:calc(9px*var(--u));
   padding:calc(9px*var(--u)) calc(8px*var(--u)) calc(9px*var(--u)) calc(12px*var(--u));flex:none;
-  background:linear-gradient(180deg,#1d2129,#171a21);border-bottom:1px solid var(--line);
+  background:linear-gradient(180deg,#1a1f28,#141821);border-bottom:1px solid var(--line);
   cursor:move}
 .mark{width:calc(17px*var(--u));height:calc(17px*var(--u));border-radius:calc(5px*var(--u));flex:none;position:relative;
-  background:linear-gradient(135deg,#5b8cff,#8b5bff)}
-.mark::after{content:"";position:absolute;inset:calc(5px*var(--u));border-radius:calc(2px*var(--u));background:#12141a}
+  background:linear-gradient(135deg,#6f8dff,#9b6bff)}
+.mark::after{content:"";position:absolute;inset:calc(5px*var(--u));border-radius:calc(2px*var(--u));background:#0e1015}
 /* 产品名可以让位:更新角标出现时标题栏是够不放不下右侧按钮的,标题是可牺牲的那个
    (它只是装饰,窗口标题/任务栏里还有全名)。min-width:0 才允许 flex 子项缩到内容以下 */
 .tt{font-size:calc(12px*var(--u));font-weight:600;letter-spacing:.02em;white-space:nowrap;
@@ -73,16 +85,50 @@ body{
 body:not(.compact-on) #btnC{display:none}
 body.compact-on #btnPill{display:none}
 .tb.on{color:#fff;background:var(--ac)}
+/* 标题栏:高频动作只留刷新一个图标按钮,其余收进 ⋯ 菜单 */
+.tbi{width:calc(26px*var(--u));height:calc(26px*var(--u));border:0;background:transparent;
+  border-radius:calc(7px*var(--u));color:var(--tx3);display:grid;place-items:center;padding:0;
+  cursor:pointer;flex:none;position:relative;font-family:inherit}
+.tbi:hover{background:#ffffff0b;color:var(--tx)}
+.tbi:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
+.tbi-i{width:calc(15px*var(--u));height:calc(15px*var(--u));display:block}
+.tbi.loading{color:var(--ac);pointer-events:none}
+.tbi.loading::before{content:"";position:absolute;inset:calc(2px*var(--u));border-radius:50%;
+  border:2px solid transparent;border-top-color:var(--ac);border-right-color:var(--ac);
+  animation:spin .8s linear infinite}
+.tbi.done{color:var(--ok)}
+.tbi.done .tbi-i{display:none}
+.tbi.done::after{content:"¹3";font-size:calc(12px*var(--u));font-weight:700;line-height:1}
+@keyframes spin{to{transform:rotate(360deg)}}
+.tb-live{font-size:max(9.5px,calc(9.5px*var(--u)));color:var(--tx4);white-space:nowrap;
+  font-variant-numeric:tabular-nums;margin-right:calc(1px*var(--u))}
+.tb-live:empty{display:none}
+/* ⋯ 菜单:贴着标题栏右下的轻量弹层,不占布局高度 */
+.hmenu{display:none;position:absolute;top:calc(46px*var(--u));right:calc(10px*var(--u));z-index:70;
+  min-width:calc(148px*var(--u));background:var(--bg2);border:1px solid var(--line);
+  border-radius:calc(9px*var(--u));padding:calc(4px*var(--u));
+  box-shadow:0 14px 34px -16px #000,0 0 0 1px rgba(255,255,255,.03) inset}
+.hmenu.on{display:block;animation:hmenuIn 120ms var(--ease)}
+@keyframes hmenuIn{from{opacity:0;transform:translateY(-4px)}}
+.hmenu-i{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;
+  border:0;background:transparent;color:var(--tx2);font:inherit;
+  font-size:max(11.5px,calc(11.5px*var(--u)));padding:calc(7px*var(--u)) calc(8px*var(--u));
+  border-radius:calc(6px*var(--u));cursor:pointer;text-align:left}
+.hmenu-i:hover{background:#ffffff0a;color:var(--tx)}
+.hmenu-i.on{color:var(--ac);background:rgba(138,164,255,.1)}
+.hmenu-k{font-size:max(9.5px,calc(9.5px*var(--u)));color:var(--ac);line-height:1}
+.hmenu-sep{height:1px;background:var(--line);margin:calc(3px*var(--u)) 0}
+.hmenu-i:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
 /* 文字按钮没法"转",刷新反馈改成脉冲 */
 .tb.spin{animation:pulse .7s ease}
 @keyframes pulse{50%{opacity:.35}}
 
 /* 标题旁的更新提示:强调色,不是告警色 —— 更新不是故障 */
-.uchip{flex:none;border:1px solid #7fa2ff66;background:#7fa2ff24;color:#b7ccff;
+.uchip{flex:none;border:1px solid #8aa4ff66;background:#8aa4ff24;color:#b7ccff;
   font-weight:600;font-size:max(11.5px,calc(10px*var(--u)));line-height:1.2;font-family:inherit;
   padding:calc(3px*var(--u)) calc(7px*var(--u));border-radius:999px;cursor:pointer;
   white-space:nowrap;font-variant-numeric:tabular-nums}
-.uchip:hover{background:#7fa2ff3d;color:#d4e0ff}
+.uchip:hover{background:#8aa4ff3d;color:#d4e0ff}
 /* 覆盖在列表上的更新卡 */
 .upd-ov{position:absolute;left:0;right:0;top:calc(80px*var(--u));bottom:calc(34px*var(--u));z-index:5;
   background:#0e1015f2;display:flex;align-items:flex-start;padding:calc(12px*var(--u))}
@@ -91,11 +137,14 @@ body.compact-on #btnPill{display:none}
 
 /* ── 顶部摘要:临期积分 / 最先到期 / 签到 ── */
 /* 总余额不占摘要位;第一格强调已确认的临期总量,中间格给最早到期来源,签到压成窄列。 */
-.sum{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) minmax(68px,.68fr);
-  align-items:stretch;border-bottom:1px solid var(--line);background:#141720;flex:none}
+.sum{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(0,1fr) 66px;
+  align-items:stretch;border-bottom:1px solid var(--line);background:var(--bg2);flex:none;
+  min-height:calc(78px*var(--u))}
 .sum:empty{display:none}
-.sum .cell{padding:calc(7px*var(--u)) calc(12px*var(--u));border-right:1px solid #232937;min-width:0}
-.sum .cell:first-child,.sum .cell:last-child{padding-left:calc(8px*var(--u));padding-right:calc(8px*var(--u))}
+.sum .cell{padding:calc(8px*var(--u)) calc(10px*var(--u));border-right:1px solid var(--line-soft, #1b212b);min-width:0;
+  display:flex;flex-direction:column;justify-content:center}
+.sum .cell:first-child{padding-left:calc(13px*var(--u))}
+.sum .cell:last-child{padding-left:calc(8px*var(--u));padding-right:calc(8px*var(--u))}
 .sum .cell:last-child{border-right:0}
 .sum button.cell{margin:0;border-top:0;border-bottom:0;border-left:0;appearance:none;background:transparent;
   color:inherit;text-align:left;font:inherit;cursor:pointer}
@@ -104,12 +153,24 @@ body.compact-on #btnPill{display:none}
 .sum .risk-cell:not(:disabled):hover{background:linear-gradient(115deg,#342a1e,#20232d)}
 .sum .risk-cell.on{box-shadow:inset 0 0 0 1px #a77c3e;background:linear-gradient(115deg,#352a1e,#21232a)}
 .sum .risk-cell:focus-visible{outline:2px solid #8db3ff;outline-offset:-2px}
-.sum .risk-cell .vv{color:var(--warn)}
-.sum .risk-cell:disabled .vv{color:var(--tx3)}
-.sum .lb{font-size:max(11.5px,calc(10.5px*var(--u)));color:var(--tx3);letter-spacing:.08em;margin-bottom:calc(2px*var(--u));
-  white-space:nowrap}
-.sum .vv{font-size:calc(14.5px*var(--u));font-weight:600;font-variant-numeric:tabular-nums;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sum .risk-cell .hero-v{color:var(--tx)}
+.sum .risk-cell:disabled .hero-v{color:var(--tx3)}
+.sum .lb{font-size:max(10.5px,calc(10.5px*var(--u)));color:var(--tx3);letter-spacing:.1em;margin-bottom:calc(2px*var(--u));
+  white-space:nowrap;font-weight:600}
+.sum .vv{font-size:calc(17px*var(--u));font-weight:650;font-variant-numeric:tabular-nums;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.12}
+.sum .hero-v{font-size:calc(24px*var(--u));font-weight:650;letter-spacing:-.025em;line-height:1.05;
+  font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--tx)}
+.sum .hero-unit{font-size:calc(12px*var(--u));font-weight:600;color:var(--tx3);margin-left:calc(2px*var(--u))}
+.sum .due-name{font-size:max(11.5px,calc(11.5px*var(--u)));font-weight:600;color:var(--tx2);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.25}
+.sum .due-date{font-size:calc(17px*var(--u));font-weight:650;letter-spacing:-.01em;line-height:1.1;
+  font-variant-numeric:tabular-nums;margin-top:calc(1px*var(--u))}
+.sum .sb-row{display:flex;align-items:flex-end;gap:calc(6px*var(--u))}
+.sum .sb-tx{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sum .expbars{display:flex;align-items:flex-end;gap:1px;height:calc(16px*var(--u));flex:none;padding-bottom:1px}
+.sum .expbars i{display:block;width:4px;border-radius:1px 1px 0 0;background:var(--warn)}
+.sum .expbars.is-empty{width:calc(34px*var(--u));height:calc(8px*var(--u));border-bottom:1px dashed var(--line2);opacity:.6}
 /* 「最紧」那格是"名字 + 数字":被裁的必须是**名字**,不是数字 ——
    以前整行一起省略,102px 的格子里先被吃掉的是后面的「1,000分」(显示成「WorkBuddy 1…」)。
    现在名字可以缩(带省略号),数字不缩。 */
@@ -123,7 +184,7 @@ body.compact-on #btnPill{display:none}
 .list::-webkit-scrollbar,.mbody::-webkit-scrollbar{width:8px}
 .list::-webkit-scrollbar-thumb,.mbody::-webkit-scrollbar-thumb{background:var(--line2);
   border-radius:9px;border:2px solid var(--bg)}
-.row{border-bottom:1px solid #232937}
+.row{position:relative;border-bottom:1px solid #1b212b}
 .row:last-child{border-bottom:0}
 .rhead{padding:calc(9px*var(--u)) calc(12px*var(--u)) calc(8px*var(--u));cursor:pointer}
 .rhead:hover{background:#ffffff07}
@@ -131,13 +192,13 @@ body.compact-on #btnPill{display:none}
 .ico{width:calc(28px*var(--u));height:calc(28px*var(--u));border-radius:calc(8px*var(--u));flex:none;display:grid;place-items:center;
   font-size:calc(11px*var(--u));font-weight:700;color:#fff}
 .nm{min-width:0;flex:1}
-.nm .n{font-size:calc(13px*var(--u));font-weight:500;white-space:nowrap;overflow:hidden;
+.nm .n{font-size:calc(13px*var(--u));font-weight:600;white-space:nowrap;overflow:hidden;
   text-overflow:ellipsis;display:flex;align-items:center;gap:calc(5px*var(--u))}
 .nm .nsh{display:none} /* 紧凑条 L0 才亮出缩写名,面板里用全名 */
 .nm .s{font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);margin-top:calc(1px*var(--u));white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
 .val{text-align:right;flex:none;font-variant-numeric:tabular-nums}
-.val .v{font-size:calc(20px*var(--u));font-weight:600;letter-spacing:-.4px;line-height:1.1}
+.val .v{font-size:calc(22px*var(--u));font-weight:600;letter-spacing:-.025em;line-height:1.08}
 /* 数值整体一套样式:小数位 / 百分号不再单独缩小变灰 ——
    之前只有整数部分"有样式",看起来像半截数字没渲染好 */
 .val .v i{font-style:normal;font-size:inherit;font-weight:inherit;color:inherit}
@@ -147,7 +208,7 @@ body.compact-on #btnPill{display:none}
 .quota-secondary{display:inline-flex;align-items:baseline;gap:calc(6px*var(--u));white-space:nowrap}
 .quota-secondary b{font-size:calc(12px*var(--u));font-weight:500}
 .codex-dual[data-state="stale"] .val .p{opacity:.72}
-.bar{height:calc(4px*var(--u));border-radius:calc(3px*var(--u));background:#303849;overflow:hidden;margin:calc(8px*var(--u)) 0 0}
+.bar{height:calc(4px*var(--u));border-radius:calc(3px*var(--u));background:#2b3241;overflow:hidden;margin:calc(8px*var(--u)) 0 0}
 .bar>i{display:block;height:100%;border-radius:calc(3px*var(--u));transition:width .5s cubic-bezier(.3,1,.4,1)}
 /* 官方图标:有官方标的渠道用图片,容器仍是原来的圆角方块(尺寸/圆角由各上下文决定) */
 .ico.logo{background:transparent;padding:0;overflow:hidden}
@@ -158,8 +219,9 @@ body.compact-on #btnPill{display:none}
 /* 展开区核心段(2026-10-23 五段骨架):金额 = 一行三格;配额 = 一窗一行。
    这两组原来是行头里的「第三段」,现在只在展开区出现 —— 行头展开前后同一个高度。 */
 .core-use{display:flex;align-items:center;font-size:max(11.5px,calc(11px*var(--u)));
-  color:var(--tx3);min-height:calc(20px*var(--u))}
-.core-use div{flex:1;border-left:1px solid #2a3040;padding-left:calc(7px*var(--u));white-space:nowrap}
+  color:var(--tx3);min-height:calc(20px*var(--u));background:var(--bg3);border:1px solid var(--line);
+  border-radius:calc(8px*var(--u));padding:calc(6px*var(--u)) calc(10px*var(--u))}
+.core-use div{flex:1;border-left:1px solid #252b38;padding-left:calc(7px*var(--u));white-space:nowrap}
 .core-use div:first-child{border-left:0;padding-left:0}
 .core-use b{color:var(--tx2);font-weight:500;margin-left:calc(5px*var(--u));font-variant-numeric:tabular-nums}
 /* 推算标记:代替原来那句"消耗按快照估算"的说明(说明收进 title,不再占一行) */
@@ -169,7 +231,7 @@ body.compact-on #btnPill{display:none}
 .core-w{display:flex;align-items:center;gap:calc(7px*var(--u));
   font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);min-height:calc(21px*var(--u))}
 .core-w .wl{flex:none;width:calc(48px*var(--u))}
-.core-w .wb{flex:1;height:calc(4px*var(--u));border-radius:calc(3px*var(--u));background:#303849;overflow:hidden}
+.core-w .wb{flex:1;height:calc(4px*var(--u));border-radius:calc(3px*var(--u));background:#2b3241;overflow:hidden}
 .core-w .wb>i{display:block;height:100%;border-radius:calc(3px*var(--u));
   transition:width .5s cubic-bezier(.3,1,.4,1)}
 .core-w .wv{flex:none;width:calc(46px*var(--u));text-align:right;font-weight:500;
@@ -214,7 +276,7 @@ body.compact-on #btnPill{display:none}
    取数失败/失联 = 灰点加斜杠(故障,需要被看见)。形状区分兼顾色盲可用性。 */
 .dot.off{background:transparent;border:calc(1.5px*var(--u)) solid #4a5266;
   width:calc(5px*var(--u));height:calc(5px*var(--u))}
-.dot.st{position:relative;background:#8d97ab}
+.dot.st{position:relative;background:#8a95a8}
 .dot.st::after{content:"";position:absolute;left:50%;top:calc(-2px*var(--u));
   width:calc(1.5px*var(--u));height:calc(10px*var(--u));background:var(--bg);
   transform:translateX(-50%) rotate(45deg)}
@@ -236,8 +298,11 @@ body.compact-on #btnPill{display:none}
 .row.open .rbody{grid-template-rows:1fr;visibility:visible;
   transition:grid-template-rows var(--t3) var(--ease),visibility 0s linear 0s}
 body.form-panel .row{position:relative}
-body.form-panel .row.open{background:var(--bg2)}
-body.form-panel .row.open::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;
+body.form-panel .row.open{background:transparent}
+body.form-panel .row.open .rbody-in{background:var(--bg2);border:1px solid var(--line);
+  border-radius:calc(10px*var(--u));box-shadow:0 12px 28px -22px #000;padding:calc(9px*var(--u)) calc(12px*var(--u)) calc(12px*var(--u))}
+.row:not(.open) .rbody-in{border-color:transparent;box-shadow:none}
+body.form-panel .row.open::after{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;
   background:var(--ac);z-index:3;pointer-events:none}
 .rbody-in{overflow:hidden;min-height:0;padding:calc(2px*var(--u)) calc(12px*var(--u)) calc(10px*var(--u));
   transition:padding var(--t2) var(--ease)}
@@ -255,7 +320,7 @@ body.form-panel .row.open::before{content:"";position:absolute;left:0;top:0;bott
 .sec-more:hover{color:var(--ac)}
 .kv{display:grid;grid-template-columns:1fr 1fr;gap:0 calc(14px*var(--u))}
 .kv div{display:flex;justify-content:space-between;font-size:calc(12px*var(--u));
-  border-bottom:1px dashed #2a3040;padding:calc(3px*var(--u)) 0;gap:calc(6px*var(--u));min-width:0}
+  border-bottom:1px dashed #252b38;padding:calc(3px*var(--u)) 0;gap:calc(6px*var(--u));min-width:0}
 .kv .wide{grid-column:1/-1}
 .kv span{color:var(--tx3);white-space:nowrap}
 .kv b{font-weight:500;font-variant-numeric:tabular-nums;white-space:nowrap;
@@ -280,10 +345,17 @@ body.form-panel .row.open::before{content:"";position:absolute;left:0;top:0;bott
 .ledger .lrow:last-child{border-bottom:0}
 .ledger .lt{color:var(--tx3);flex:none;width:calc(84px*var(--u));font-variant-numeric:tabular-nums;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ledger .lrow b{flex:none;font-weight:600;font-variant-numeric:tabular-nums}
+.ledger .lrow b{flex:none;font-weight:600;font-variant-numeric:tabular-nums;color:var(--tx2)}
+.ledger .lrow b.ok{color:var(--ok)}
 .ledger .lx{color:var(--tx3);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ledger .lx i{font-style:normal;color:var(--warn);margin-left:calc(5px*var(--u))}
 .lg-empty{font-size:max(11.5px,calc(10.5px*var(--u)));color:var(--tx3);line-height:1.6}
+/* 近 7 天消耗:用 channel_changes 的现成台账聚合,不新增后端请求 */
+.sparkbars{display:flex;align-items:flex-end;gap:calc(4px*var(--u));height:calc(42px*var(--u));
+  padding:calc(2px*var(--u)) 0 calc(4px*var(--u));border-bottom:1px dashed var(--line)}
+.sparkbars i{flex:1;min-width:0;display:block;background:var(--ac);opacity:.75;
+  border-radius:2px 2px 0 0}
+.sparkbars i.zero{opacity:.18;background:var(--tx4)}
 /* 渠道卡里的「测试连接」结果行(自检报告;不含任何密钥) */
 .prb{font-size:max(11.5px,calc(11.5px*var(--u)));color:var(--tx2);line-height:1.7;
   padding:calc(3px*var(--u)) 0 0 calc(2px*var(--u));word-break:break-all}
@@ -298,7 +370,7 @@ body.form-panel .row.open::before{content:"";position:absolute;left:0;top:0;bott
 .btn{border:1px solid var(--line2);background:var(--bg3);color:var(--tx2);font-size:max(11.5px,calc(12px*var(--u)));
   padding:calc(4px*var(--u)) calc(9px*var(--u));border-radius:calc(6px*var(--u));cursor:pointer;font-family:inherit}
 .btn:hover{border-color:#55617d;color:var(--tx)}
-.btn.p{background:#7fa2ff1a;border-color:#7fa2ff55;color:#b7ccff}
+.btn.p{background:#8aa4ff1a;border-color:#8aa4ff55;color:#b7ccff}
 .btn.danger:hover{border-color:var(--bad);color:var(--bad)}
 .hint{font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);margin-top:calc(7px*var(--u));line-height:1.7}
 .hint a,.hint .lk{color:var(--tx2);cursor:pointer}
@@ -314,7 +386,8 @@ body.form-panel .row.open::before{content:"";position:absolute;left:0;top:0;bott
    data-state 由后端 core::view 判定,前端不自己算。 */
 .row[data-state="stale"] .val .v{opacity:.72}
 .tilde{font-style:normal;opacity:.8;margin-right:1px}
-body.form-compact .row[data-state="stale"] .val .v::before{content:"~";opacity:.8;margin-right:1px}
+body.form-compact .row[data-state="stale"] .val .v::before,
+body.form-compact .row[data-dtone="st"] .val .v::before{content:"~";opacity:.8;margin-right:1px}
 
 /* ── 空态(未配置任何密钥时的引导卡) ── */
 .empty{margin:auto calc(14px*var(--u));width:calc(100% - 28px*var(--u));padding:calc(20px*var(--u)) calc(16px*var(--u));text-align:center;
@@ -331,18 +404,47 @@ body.view-manage .sum,
 body.view-manage .list{display:none}
 body.view-manage #lkKeys{display:none}
 .mhead{display:flex;align-items:center;gap:calc(8px*var(--u));padding:calc(7px*var(--u)) calc(10px*var(--u));flex:none;
-  border-bottom:1px solid var(--line);background:#141720}
+  border-bottom:1px solid var(--line);background:#141821}
 .mhead .mt{font-size:max(11.5px,calc(11.5px*var(--u)));font-weight:600;letter-spacing:.02em}
 /* 设置页四页签:渠道 / 显示 / 刷新与启动 / 关于 */
-.tabs{display:flex;gap:calc(3px*var(--u));padding:calc(8px*var(--u)) calc(10px*var(--u));flex:none;
-  border-bottom:1px solid var(--line);background:#151823}
+.tabs{display:none;gap:calc(3px*var(--u));padding:calc(8px*var(--u)) calc(10px*var(--u));flex:none;
+  border-bottom:1px solid var(--line);background:var(--bg2)}
 .tabs button{flex:1;border:1px solid transparent;background:transparent;color:var(--tx3);
   font-size:max(11.5px,calc(12px*var(--u)));line-height:1.4;padding:calc(5px*var(--u)) 0;
   border-radius:calc(7px*var(--u));cursor:pointer;font-family:inherit;white-space:nowrap}
 .tabs button:hover{color:var(--tx)}
-.tabs button.on{background:#7fa2ff1f;border-color:#7fa2ff55;color:#b7ccff;font-weight:600}
+.tabs button.on{background:#8aa4ff1f;border-color:#8aa4ff55;color:#b7ccff;font-weight:600}
 .panel{display:none}
 .panel.on{display:block}
+/* 设置索引页:每行一个分区;标题 12.5,摘要 10,行高 56 */
+.mindex{flex:1;min-height:0;overflow-y:auto;padding:calc(8px*var(--u)) calc(10px*var(--u)) 0}
+.mindex.on{display:flex;flex-direction:column}
+.mindex-list{display:flex;flex-direction:column;gap:calc(1px*var(--u))}
+.midx-row{display:flex;align-items:center;gap:calc(10px*var(--u));width:100%;
+  min-height:calc(54px*var(--u));padding:0 calc(8px*var(--u));border:0;
+  border-radius:calc(8px*var(--u));background:transparent;color:inherit;font:inherit;
+  text-align:left;cursor:pointer}
+.midx-row:hover{background:rgba(255,255,255,.032)}
+.midx-row:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
+.midx-ico{width:calc(30px*var(--u));height:calc(30px*var(--u));border-radius:calc(8px*var(--u));
+  display:grid;place-items:center;flex:none;background:rgba(138,164,255,.1);color:var(--ac)}
+.midx-ico svg{width:calc(15px*var(--u));height:calc(15px*var(--u))}
+.midx-ico.mdl{background:rgba(155,107,255,.12);color:#b79aff}
+.midx-ico.ck{background:rgba(79,214,160,.11);color:#7ee2ae}
+.midx-ico.disp{background:rgba(138,149,168,.12);color:var(--tx2)}
+.midx-ico.run{background:rgba(243,198,102,.1);color:#f5d391}
+.midx-ico.vault{background:rgba(255,123,114,.1);color:#ffb3ad}
+.midx-tx{flex:1;min-width:0}
+.midx-tt{display:block;font-size:calc(12.5px*var(--u));font-weight:600;color:var(--tx);
+  line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.midx-ss{display:block;font-size:max(10px,calc(10px*var(--u)));color:var(--tx3);
+  line-height:1.4;margin-top:calc(1px*var(--u));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.midx-chev{width:calc(12px*var(--u));height:calc(12px*var(--u));flex:none;color:var(--tx4)}
+.mindex::-webkit-scrollbar{width:8px}
+.mindex::-webkit-scrollbar-thumb{background:var(--line2);border-radius:9px;border:2px solid var(--bg)}
+.mindex-note{margin-top:auto;padding:calc(12px*var(--u)) 0;text-align:center;
+  font-size:max(9px,calc(9px*var(--u)));color:var(--tx4);border-top:1px solid var(--line)}
+body.manage-index .mhead .mt{letter-spacing:.01em}
 .mbody{flex:1;overflow-y:auto;padding:calc(12px*var(--u)) calc(13px*var(--u)) calc(16px*var(--u))}
 .mbody h4{font-size:calc(12px*var(--u));color:var(--tx3);text-transform:uppercase;letter-spacing:.1em;
   margin:0 0 calc(9px*var(--u));font-weight:600}
@@ -384,14 +486,14 @@ body.view-manage #lkKeys{display:none}
 .foldin b{color:var(--tx2);font-weight:500}
 
 .field{display:flex;align-items:center;justify-content:space-between;padding:calc(6px*var(--u)) 0;
-  border-bottom:1px solid #232937;font-size:calc(12px*var(--u));gap:calc(10px*var(--u))}
+  border-bottom:1px solid #1b212b;font-size:calc(12px*var(--u));gap:calc(10px*var(--u))}
 .field:last-child{border-bottom:0}
 .field>span{flex:1;min-width:0}
 .sw{width:calc(32px*var(--u));height:calc(17px*var(--u));border-radius:99px;background:var(--line2);position:relative;
   cursor:pointer;flex:none;transition:background .2s;border:0;padding:0;font-family:inherit}
 .sw::after{content:"";position:absolute;top:calc(2px*var(--u));left:calc(2px*var(--u));width:calc(13px*var(--u));height:calc(13px*var(--u));
   border-radius:50%;background:#98a2b6;transition:.2s}
-.sw.on{background:#7fa2ff59}
+.sw.on{background:#8aa4ff59}
 .sw.on::after{left:calc(17px*var(--u));background:var(--ac)}
 .sel{background:var(--bg3);border:1px solid var(--line2);color:var(--tx2);border-radius:calc(5px*var(--u));
   font-size:max(11.5px,calc(12px*var(--u)));padding:calc(3px*var(--u)) calc(6px*var(--u));font-family:inherit;flex:none}
@@ -419,7 +521,7 @@ body.view-manage #lkKeys{display:none}
 .pick{border:1px solid var(--line2);background:var(--bg3);color:var(--tx3);font-size:max(11.5px,calc(12px*var(--u)));
   padding:calc(4px*var(--u)) calc(9px*var(--u));border-radius:999px;cursor:pointer;font-family:inherit}
 .pick:hover{border-color:#55617d;color:var(--tx)}
-.pick.on{background:#7fa2ff1f;border-color:#7fa2ff55;color:#b7ccff}
+.pick.on{background:#8aa4ff1f;border-color:#8aa4ff55;color:#b7ccff}
 
 /* ── 渠道卡(设置页「渠道」页签):显隐 + 排序 + 密钥 + 额度申请一卡收纳 ── */
 .ccard{border:1px solid var(--line);border-radius:calc(10px*var(--u));background:var(--bg2);
@@ -444,7 +546,7 @@ body.view-manage #lkKeys{display:none}
 .eye.off{color:var(--tx3);background:transparent;border-style:dashed}
 .ccaret{color:var(--tx3);font-size:calc(9px*var(--u));flex:none;width:calc(12px*var(--u));text-align:center;transition:transform .25s}
 .ccard.open .ccaret{transform:rotate(90deg)}
-.ccbody{display:none;border-top:1px solid var(--line);padding:calc(10px*var(--u)) calc(12px*var(--u)) calc(12px*var(--u));background:#151823}
+.ccbody{display:none;border-top:1px solid var(--line);padding:calc(10px*var(--u)) calc(12px*var(--u)) calc(12px*var(--u));background:#141821}
 .ccard.open .ccbody{display:block}
 .ccbtns{display:flex;gap:calc(6px*var(--u));align-items:center;margin-top:calc(8px*var(--u))}
 .ccbtns input[type=password]{flex:1;min-width:0;background:#0e1015;border:1px solid var(--line2);
@@ -453,7 +555,7 @@ body.view-manage #lkKeys{display:none}
 .mini{font-size:max(11.5px,calc(11.5px*var(--u)));color:var(--tx3);line-height:1.7}
 /* 积分获取记录(WorkBuddy AI):点「记录」才展开的 30 天明细。
    金额用等宽数字,右列"推算/平台确认"是**来源**,不是状态 —— 所以不染状态色。 */
-.glist{margin:calc(2px*var(--u)) 0 calc(4px*var(--u));border-top:1px dashed #2a3040;
+.glist{margin:calc(2px*var(--u)) 0 calc(4px*var(--u));border-top:1px dashed #252b38;
   padding-top:calc(5px*var(--u))}
 .grow{display:flex;align-items:baseline;gap:calc(8px*var(--u));padding:calc(2px*var(--u)) 0;
   font-size:max(11px,calc(11px*var(--u)));color:var(--tx3);line-height:1.5}
@@ -535,8 +637,15 @@ body.form-compact .ckstrip,body.form-pill .ckstrip{display:none}
   outline:2px solid var(--ac);outline-offset:2px}
 
 /* ── 底栏 ── */
-.foot{display:flex;align-items:center;gap:calc(8px*var(--u));padding:calc(7px*var(--u)) calc(12px*var(--u));background:#141720;
+.foot{display:flex;align-items:center;gap:calc(8px*var(--u));padding:calc(7px*var(--u)) calc(12px*var(--u));background:var(--bg2);
   border-top:1px solid var(--line);font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);flex:none}
+.foot #fdot{display:none}
+.foot .fb-dot{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--ok);
+  margin-right:calc(3px*var(--u));vertical-align:1px}
+.foot .fb-dot.warn{background:var(--warn)}
+.foot .fb-dot.bad{background:var(--bad)}
+.foot .fb-dot.off{background:transparent;border:1px solid var(--tx4);width:4px;height:4px}
+.foot .fb-sep{color:var(--line2);margin:0 calc(4px*var(--u))}
 .foot .lk{color:var(--tx2);cursor:pointer}
 .foot .lk:hover{color:var(--ac)}
 /* 底栏链接是 <button>(2026-10-20 收敛设置入口时一起改的):按钮默认的边框/底色/内边距/字体
@@ -584,6 +693,12 @@ body.form-compact .row{border:0;flex:none}
    22px 大数字 —— chip 高 40px,列表 56px > 卡片 46px,上下各裁 5px(2026-10-22 实测)。 */
 body.form-compact .row .rhead{padding:calc(3px*var(--u)) calc(7px*var(--u));cursor:pointer;border-radius:calc(6px*var(--u));
   background:var(--bg3);min-width:0}
+/* 紧凑条只留"图标 + 状态点 + 数值":限定语徽标太宽,会把第三个渠道挤进 +N。
+   风险仍由状态点、数值色和浅色 chip 背景表达。 */
+body.form-compact .qtag{display:none}
+body.form-compact .row.urg .rhead{background:var(--bad-bg);box-shadow:inset 0 0 0 1px rgba(255,123,114,.22)}
+body.form-compact .row.urg[data-dtone="w"] .rhead,
+body.form-compact .row.urg[data-dtone="st"] .rhead{background:var(--warn-bg);box-shadow:inset 0 0 0 1px rgba(243,198,102,.22)}
 body.form-compact .row .r1{gap:calc(5px*var(--u))}
 body.form-compact .bar,
 body.form-compact .caret,
@@ -613,7 +728,8 @@ body.form-compact .nm{flex:none;min-width:0}
 /* 三级降级(裁决 A/B/A):默认 L0=缩写名+精确数;最宽的 chip 先起依次降级 ——
    .lv1 去名字(全名本来就不进紧凑条)、.lv2 再去小数位/「分」字,还装不下才收 +N */
 body.form-compact .nm .nn{display:none}
-body.form-compact .nm .nsh{display:inline;font-size:max(10.5px,calc(10.5px*var(--u)));color:var(--tx2);margin-right:calc(4px*var(--u))}
+/* 图标已经带 2 位缩写,紧凑条不再重复短名 —— 同样 380px 能多放一个渠道 */
+body.form-compact .nm .nsh{display:none}
 body.form-compact .row.lv1 .nsh,body.form-compact .row.lv2 .nsh{display:none}
 body.form-compact .nm .n{gap:0}
 body.form-compact .nm .n .dot{width:calc(5px*var(--u));height:calc(5px*var(--u))}
@@ -644,7 +760,7 @@ body.form-compact .qbar,body.form-pill .qbar{display:none}
 /* ── 形态 3:胶囊(只显示最紧张的一个平台) ── */
 /* 不再用 backdrop-filter:透明窗口里浏览器采不到桌面当 backdrop,这属性本来
    就是空转,还会让 Chromium 给 body 单开一层合成层(整窗暗块的隐患)。 */
-body.form-pill{border-radius:999px;background:#12141af2;border-color:var(--line2)}
+body.form-pill{border-radius:999px;background:#0e1015f2;border-color:var(--line2)}
 body.form-pill .tbar,
 body.form-pill .sum,
 body.form-pill .manage,
@@ -689,7 +805,7 @@ body.form-pill.peek-open{border-radius:calc(16px*var(--u))}
    同优先级按源码顺序取后者 —— 写在中间时,紧凑条/胶囊的 display:flex 会反过来把内容
    重新显示出来,窗口只有 8px 宽,竖条会被挤没(实测:从面板吸附正常,从紧凑条/胶囊吸附看不到竖条)。
    body.docked 自己的背景/边框也一样:写在 form-pill 之前时,胶囊那轮的
-   background:#12141af2 + border-radius:999px 会盖掉透明背景,8px 竖条变成一颗药丸
+   background:#0e1015f2 + border-radius:999px 会盖掉透明背景,8px 竖条变成一颗药丸
    而且两侧各被圆角啃掉几像素(报告 P2-16 同族)。 */
 body.docked{display:flex;border:0;background:transparent;box-shadow:none;margin:0;height:100%}
 body.docked .tbar,
@@ -781,12 +897,12 @@ body.form-compact .ico.logo>.ltr{display:grid;place-items:center;width:100%;heig
   overflow:hidden;text-overflow:ellipsis;opacity:0;pointer-events:none;z-index:60;
   transition:opacity var(--t2) ease,transform var(--t2) var(--ease)}
 #toast.show{opacity:1;transform:translateX(-50%)}
-#toast.bad{border-color:#f0554d66;color:#ff8d86}
+#toast.bad{border-color:#ff7b7266;color:#ff8d86}
 
 /* I3 行内确认(替代原生 confirm):删除密钥这类破坏性动作在卡里就地确认 */
 .cfrm{display:flex;align-items:center;gap:calc(8px*var(--u));flex-wrap:wrap;
   margin-top:calc(8px*var(--u));padding:calc(7px*var(--u)) calc(10px*var(--u));
-  border:1px solid #f0554d40;background:#f0554d14;border-radius:calc(8px*var(--u));
+  border:1px solid #ff7b7240;background:#ff7b7214;border-radius:calc(8px*var(--u));
   font-size:max(11.5px,calc(12px*var(--u)));color:#ff9d97}
 /* I5 密钥保存成功:卡片绿色左边框亮一下,确认"确实存上了" */
 .ccard{transition:box-shadow .5s ease}
@@ -796,7 +912,7 @@ body.form-compact .ico.logo>.ltr{display:grid;place-items:center;width:100%;heig
 body.form-compact .more{cursor:pointer;border-radius:calc(5px*var(--u))}
 body.form-compact .more:hover{color:var(--tx);background:var(--bg3)}
 .row.flash{animation:rowflash 1.1s ease}
-@keyframes rowflash{0%,55%{background:#7fa2ff26}100%{background:transparent}}
+@keyframes rowflash{0%,55%{background:#8aa4ff26}100%{background:transparent}}
 
 /* M5 轮播指示点已随 2026-09-25 方案 B「光环」退役:底部让位给发丝进度条,
    页序改由胶囊 tooltip 的「N/M 轮播」承担(docs/design/design-pill-restyle-5.html) */
@@ -893,7 +1009,7 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 .tagd.bad{border-color:#6b3230;color:var(--bad)}
 .cdots{display:flex;gap:calc(4px*var(--u));flex:none}
 .cdot{width:calc(24px*var(--u));height:calc(19px*var(--u));padding:0;cursor:pointer;font-family:inherit;
-  border:1px solid var(--line2);border-radius:calc(5px*var(--u));background:#1b1f27;color:#8d97ab;
+  border:1px solid var(--line2);border-radius:calc(5px*var(--u));background:#1b1f27;color:#8a95a8;
   font-size:max(9px,calc(9.5px*var(--u)));font-weight:700;line-height:1;
   transition:background var(--t1) ease,border-color var(--t1) ease,color var(--t1) ease}
 .cdot:hover{border-color:#55617d;color:var(--tx2)}
@@ -1025,7 +1141,7 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 .cktoday>span{font-size:max(10px,calc(10.5px*var(--u)));color:var(--tx3)}
 .cktoday .ckseg{margin-left:auto}
 .cksi{display:block;width:calc(14px*var(--u));height:calc(4px*var(--u));border-radius:2px;
-  border:0;background:#303849;cursor:pointer;padding:0}
+  border:0;background:#2b3241;cursor:pointer;padding:0}
 .cksi.on{background:var(--ok)}
 .cksi:hover{outline:1px solid var(--tx3)}
 .ckch{margin:0 0 calc(8px*var(--u))}
@@ -1040,7 +1156,7 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 .ckc.already,.ckc.inactive{border:1px solid var(--ok);background:#132219}
 .ckc.manual{border:1px solid #3d5a8a;background:#151d2b}
 .ckc.failed{background:#8a6d3b}
-.ckc.missed{background:#303849}
+.ckc.missed{background:#2b3241}
 .ckc.pending{border:1px solid var(--ac);background:#151d2b}
 .ckc.no_data{border:1px dashed #2a3140}
 .cklegend{margin:calc(2px*var(--u)) 0 calc(10px*var(--u));font-size:max(9px,calc(9.5px*var(--u)));
@@ -1119,7 +1235,16 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 .row:not(.urg) .bar{display:none}
 .rhead{padding:calc(5px*var(--u)) calc(12px*var(--u))}
 .row.urg .rhead{padding:calc(9px*var(--u)) calc(12px*var(--u)) calc(7px*var(--u))}
-.row.urg .val .v{font-size:calc(22px*var(--u))}
+.row.urg .val .v{font-size:calc(24px*var(--u))}
+.row.urg:not(.open){background:linear-gradient(90deg,var(--bad-bg),rgba(255,123,114,0) 62%)}
+.row.urg[data-dtone="w"]:not(.open),
+.row.urg[data-dtone="st"]:not(.open){background:linear-gradient(90deg,var(--warn-bg),rgba(243,198,102,0) 62%)}
+.row.urg::before{content:"";position:absolute;left:0;top:calc(9px*var(--u));bottom:calc(9px*var(--u));
+  width:2px;border-radius:2px;background:var(--bad);z-index:2;pointer-events:none}
+.row.urg[data-dtone="w"]::before,
+.row.urg[data-dtone="st"]::before{background:var(--warn)}
+.row.urg[data-dtone="off"]::before{background:var(--tx4)}
+.row.open::before{background:var(--ac)}
 
 /* 状态标签:颜色之外的第二个通道(灰度下也读得出来) */
 .qtag{display:inline-block;margin-left:calc(4px*var(--u));padding:0 calc(4px*var(--u));
@@ -1132,7 +1257,7 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 .sum .cell[data-act]{cursor:pointer}
 .sum .cell[data-act]:hover{background:#ffffff07}
 .ckseg{display:inline-flex;gap:2px;align-items:center}
-.ckseg i{display:block;width:calc(9px*var(--u));height:calc(3px*var(--u));border-radius:2px;background:#303849}
+.ckseg i{display:block;width:calc(9px*var(--u));height:calc(3px*var(--u));border-radius:2px;background:#2b3241}
 .ckseg i.on{background:var(--ok)}
 
 /* 分组标题:九行一样重 = 没有层级 */

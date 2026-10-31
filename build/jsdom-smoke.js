@@ -150,6 +150,26 @@ const HARNESS = `
   ck("临期副行说明渠道数并可点筛选", /个渠道/.test(S()) && /点击筛选/.test(S()), S().slice(0, 200));
   ck("签到常驻 2/3(未签满不出现 ✓)", /2\\/3/.test(S()) && !/\\u2713/.test(S()), S().slice(0, 300));
   ck("最紧那格可点(跳行)", /data-act="jump"/.test(S()));
+  ck("摘要英雄数字与单位分开", !!document.querySelector("#sum .hero-v") && !!document.querySelector("#sum .hero-unit"), S().slice(0, 300));
+  ck("摘要画出 7 日临期分布", !!document.querySelector("#sum .expbars"), S().slice(0, 400));
+  ck("最先到期分两行:渠道名 + 日期", !!document.querySelector("#sum .due-name") && !!document.querySelector("#sum .due-date"), S().slice(0, 400));
+  ck("底栏状态各自带状态点", document.querySelectorAll("#fstat .fb-dot").length >= 2,
+    document.getElementById("fstat").innerHTML);
+
+  // ── 颜色纪律:健康行大数字不再染色 ──
+  const ocRow = document.querySelector('.row[data-id="oc"]');
+  const fourRow = document.querySelector('.row[data-id="4sapi"]');
+  const dsRow = document.querySelector('.row[data-id="ds"]');
+  ck("健康行大数字回到主文字色",
+    !!ocRow && ocRow.querySelector(".val .v").getAttribute("style").includes("var(--tx)"),
+    ocRow && ocRow.querySelector(".val .v").getAttribute("style"));
+  ck("预警行仍保留 warn 色",
+    !!fourRow && fourRow.querySelector(".val .v").getAttribute("style").includes("var(--warn)"),
+    fourRow && fourRow.querySelector(".val .v").getAttribute("style"));
+  ck("兜底字母两位大写,绝不落成小写 x",
+    window.shortLabel({ short: "x", name: "Claude Code" }) === "CL" &&
+    window.shortLabel({ short: "x", name: "x" }) === "··",
+    window.shortLabel({ short: "x", name: "Claude Code" }));
 
   // ── 两级行与分组 ──
   ck("分组:「需要处理」与「其余」", /需要处理/.test(L()) && /其余/.test(L()));
@@ -178,11 +198,12 @@ const HARNESS = `
     const d = renderDetail(four);
     ck("详情五段:核心 / 明细 / 最近变动 / 页脚",
       /core-use/.test(d) && /class="kv"/.test(d) && /最近变动/.test(d) && /foot-det/.test(d), d.slice(0, 300));
-    ck("详情里没有区间按钮与柱图", !/data-act="range"/.test(d) && !/spark/.test(d), d.slice(0, 300));
+    ck("详情里有近 7 天消耗柱图", /sparkbars/.test(d) && /近 7 天消耗/.test(d), d.slice(0, 300));
     ck("台账默认 3 条 +「全部 12 条」",
       (d.match(/class="lrow"/g) || []).length === 3 && /全部 12 条/.test(d),
       (d.match(/class="lrow"/g) || []).length);
-    ck("台账时间是本地时钟(不再挤在 01:5x)", !/01:5\\d/.test(d) && /\\d{2}:\\d{2}/.test(d), d.match(/\\d{2}:\\d{2}/g));
+    const ltimes = d.match(/\\d{2}:\\d{2}/g) || [];
+    ck("台账时间是本地时钟(不是同一分钟)", new Set(ltimes).size >= 3, ltimes.join(","));
     changesState["4sapi"] = "done"; // 缓存留着,不影响别的断言
   } catch (e) { ck("展开区五段骨架", false, e.message); }
 
@@ -200,6 +221,9 @@ const HARNESS = `
     ck("失败行「取数失败」只出现一次", (html.match(/取数失败/g) || []).length === 1, html);
     ck("失败行只说一次原因,右侧写快照年龄", (html.match(/HTTP 401/g) || []).length === 1 && /快照/.test(html), html);
     ck("失败行不再画黄字 rhint", !/rhint/.test(html), html);
+    ck("失败行大数字降为 text-3",
+      document.querySelector('.row[data-id="ds"] .val .v').getAttribute("style").includes("var(--tx3)"),
+      document.querySelector('.row[data-id="ds"] .val .v').getAttribute("style"));
     ds.valid = true;
     ds.error = null;
     hvApply(data.HOME);
@@ -260,7 +284,7 @@ const HARNESS = `
     hvApply(home);
     el = readRow();
     ck("Codex 短期耗尽不替换周主数字", /98.0%/.test(el.querySelector(".val .v").textContent) && /0.0%/.test(el.querySelector(".val .p").textContent));
-    ck("Codex 周与短期分别着色并保留限流提示", el.querySelector(".val .v").getAttribute("style").includes("var(--ok)") && el.querySelector(".quota-secondary b").getAttribute("style").includes("var(--bad)") && /限流/.test(el.querySelector(".nm .n").textContent));
+    ck("Codex 周主数字保持中性、短期告警着色并保留限流提示", el.querySelector(".val .v").getAttribute("style").includes("var(--tx)") && el.querySelector(".quota-secondary b").getAttribute("style").includes("var(--bad)") && /限流/.test(el.querySelector(".nm .n").textContent));
     cx.windows[0].remainPercent = 85;
     cx.windows[0].status = "ok";
     cx.stale = true;
@@ -686,6 +710,34 @@ const HARNESS = `
   } finally {
     window.__TEST.setChannels(data.CHANNELS);
     window.__TEST.refreshChCards();
+  }
+
+  // ── 设置索引 + 标题栏 ⋯ 菜单(2026-11-01 精修)──
+  try {
+    openManage();
+    const idxOn = document.body.classList.contains("manage-index");
+    const idxRows = document.querySelectorAll("#mIndexList .midx-row").length;
+    const idxTitle = document.querySelector(".mhead .mt").textContent;
+    ck("设置默认落在索引页(7 个分区)", idxOn && idxRows === 7 && idxTitle === "设置与管理", idxOn + "/" + idxRows + "/" + idxTitle);
+    document.querySelector('#mIndexList [data-p="ch"]').click();
+    ck("点索引行进入子页并更新页头", !document.body.classList.contains("manage-index")
+      && document.querySelector('#mTabs [data-p="ch"]').classList.contains("on")
+      && document.querySelector(".mhead .mt").textContent === "渠道管理",
+      document.querySelector(".mhead .mt").textContent);
+    document.getElementById("btnBack").click();
+    ck("返回键回到索引页", document.body.classList.contains("manage-index")
+      && document.querySelector(".mhead .mt").textContent === "设置与管理",
+      document.querySelector(".mhead .mt").textContent);
+    document.getElementById("btnMenu").click();
+    ck("标题栏 ⋯ 菜单可打开", document.getElementById("hmenu").classList.contains("on")
+      && document.getElementById("btnMenu").getAttribute("aria-expanded") === "true",
+      document.getElementById("btnMenu").getAttribute("aria-expanded"));
+    document.body.click();
+    ck("点菜单外部会关闭", !document.getElementById("hmenu").classList.contains("on"),
+      document.getElementById("hmenu").className);
+    closeManage();
+  } catch (e) {
+    ck("设置索引 / 标题栏菜单", false, e.message);
   }
 
 })();

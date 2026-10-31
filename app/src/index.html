@@ -7,6 +7,19 @@
 </head>
 <body class="form-panel">
 
+  <!-- 图标精灵:标题栏 / 设置索引共用,全部 currentColor,不依赖 emoji -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.35 5.65"/><path d="M20 4.5V11h-6.5"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24" fill="currentColor"><circle cx="5.5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="18.5" cy="12" r="1.5"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 5 7 7-7 7"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/><path d="m3 17 9 5 9-5"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z"/><path d="M19 16.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2Z"/></symbol>
+    <symbol id="i-cal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="16" rx="3"/><path d="M8 3v4M16 3v4M3.5 10h17"/><path d="m8.5 15 2.2 2.2 4.8-4.8"/></symbol>
+    <symbol id="i-display" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="13" rx="2.5"/><path d="M9 21h6M12 17.5V21"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M14 9l2.5 2.5"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.6v.2"/></symbol>
+  </svg>
+
   <!-- 吸附后的竖条:只有一个色块,不显示任何数字;整块可拖动(拖离边缘即解除吸附) -->
   <div class="dock-body" id="dockBody" data-tauri-drag-region="deep" title="移入展开"></div>
 
@@ -37,16 +50,27 @@
     <div class="tt" data-tauri-drag-region>Grandettoken</div>
     <button class="uchip" id="updChip" style="display:none"></button>
     <div class="spacer" data-tauri-drag-region></div>
-    <button class="tb" id="btnR" title="立即刷新">刷新</button>
-    <!-- 设置入口只在底栏一处(2026-10-20 收敛):这里曾经还有一枚「设置」按钮,
-         与底栏「设置与管理」调同一个 openManage(),名字却不同;删掉它也让标题栏
-         在特大字号下不再把最右的「隐藏」挤出窗口(实测 405px > 378px)。 -->
-    <button class="tb" id="btnP" title="窗口置顶">置顶</button>
-    <button class="tb" id="btnC" title="切换紧凑条">紧凑</button>
-    <!-- 紧凑条关闭时的折叠入口:同一位置换成胶囊。两者互斥(见 styles.css),
-         否则顶栏会多一个按钮,特大字号下挤不下。 -->
-    <button class="tb" id="btnPill" title="收成胶囊">胶囊</button>
-    <button class="tb" id="btnH" title="隐藏到托盘">隐藏</button>
+    <span class="tb-live" id="tbLive"></span>
+    <button class="tbi" id="btnR" title="立即刷新" aria-label="立即刷新">
+      <svg class="tbi-i" aria-hidden="true"><use href="#i-refresh"/></svg>
+    </button>
+    <button class="tbi" id="btnMenu" title="更多操作" aria-label="更多操作" aria-haspopup="menu" aria-expanded="false">
+      <svg class="tbi-i" aria-hidden="true"><use href="#i-more"/></svg>
+    </button>
+    <!-- 低频窗口动作收进 ⋯ 菜单;按钮保留在 DOM 里供菜单与键盘复用,
+         视觉上不再占标题栏(2026-11-01 精修)。设置入口仍只在底栏一处。 -->
+    <button class="tb" id="btnP" title="窗口置顶" hidden>置顶</button>
+    <button class="tb" id="btnC" title="切换紧凑条" hidden>紧凑</button>
+    <button class="tb" id="btnPill" title="收成胶囊" hidden>胶囊</button>
+    <button class="tb" id="btnH" title="隐藏到托盘" hidden>隐藏</button>
+  </div>
+  <div class="hmenu" id="hmenu" role="menu" aria-label="窗口操作">
+    <button class="hmenu-i" data-act="pin" role="menuitem"><span class="hmenu-tx">置顶</span><span class="hmenu-k"></span></button>
+    <button class="hmenu-i" data-act="compact" role="menuitem"><span class="hmenu-tx" id="hmenuCompact">胶囊</span><span class="hmenu-k"></span></button>
+    <div class="hmenu-sep" role="separator"></div>
+    <button class="hmenu-i" data-act="hide" role="menuitem"><span class="hmenu-tx">隐藏到托盘</span><span class="hmenu-k"></span></button>
+    <div class="hmenu-sep" role="separator"></div>
+    <button class="hmenu-i" data-act="quit" role="menuitem"><span class="hmenu-tx">退出</span><span class="hmenu-k"></span></button>
   </div>
 
   <div class="sum" id="sum"></div>
@@ -85,6 +109,12 @@
     <div class="mhead">
       <button class="ib" id="btnBack" title="返回展示">&#8592;</button>
       <div class="mt">设置与管理</div>
+    </div>
+    <!-- 索引页:每个分区一行,点进去才是表单。旧页签保留在 DOM 里供外部跳转与测试,
+         视觉上隐藏 —— 380px 放 7 个页签必然截断。 -->
+    <div class="mindex panel" data-p="index">
+      <div class="mindex-list" id="mIndexList"></div>
+      <div class="mindex-note">设置只影响本机 · 密钥在 Windows 凭据管理器</div>
     </div>
     <div class="tabs" id="mTabs">
       <button data-p="ch" class="on">渠道</button>

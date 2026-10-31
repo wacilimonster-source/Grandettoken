@@ -1,0 +1,1358 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grandettoken 界面精修设计 · 2026-11-01</title>
+<link rel="stylesheet" href="../../app/src/styles.css">
+<style>
+/* ══════════════════════════════════════════════════════════════
+   文档壳：与 app 的 styles.css 隔离，只借用 reset 与滚动条习惯。
+   ══════════════════════════════════════════════════════════════ */
+html{overflow:auto;background:#0a0c11}
+body{
+  margin:0;padding:0;width:auto;height:auto;min-height:100vh;border:0;border-radius:0;
+  overflow:auto;display:block;user-select:auto;color:#c3cbda;
+  background:
+    radial-gradient(900px 480px at 50% -8%, #1b2232 0%, rgba(27,34,50,0) 62%),
+    #0a0c11;
+  font:14px/1.7 "Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI","Microsoft YaHei",sans-serif;
+}
+.doc{max-width:1180px;margin:0 auto;padding:52px 32px 120px}
+.doc p{max-width:80ch;color:#b7c0d0;margin:0 0 12px}
+.doc a{color:#a9bbff;text-decoration:none;border-bottom:1px solid rgba(169,187,255,.28)}
+.doc a:hover{color:#d3ddff;border-bottom-color:#a9bbff}
+.doc code{font-family:Consolas,"Cascadia Mono",monospace;font-size:12px;color:#d7e0f2;
+  background:#1a2030;border:1px solid #2a3244;border-radius:4px;padding:1px 5px}
+.doc pre{font-family:Consolas,"Cascadia Mono",monospace;font-size:11.5px;line-height:1.7;
+  color:#c9d4e8;background:#0d1118;border:1px solid #232b3a;border-radius:10px;
+  padding:14px 16px;overflow:auto;margin:12px 0 18px}
+.doc pre code{background:none;border:0;padding:0;color:inherit;font-size:inherit}
+.doc h1{font-size:clamp(30px,4.2vw,46px);line-height:1.12;letter-spacing:-.03em;
+  font-weight:650;color:#f3f6fb;margin:18px 0 14px;max-width:none}
+.doc h2{font-size:22px;line-height:1.3;letter-spacing:-.015em;color:#f3f6fb;font-weight:650;
+  margin:0 0 14px;display:flex;align-items:baseline;gap:10px}
+.doc h2 .no{font-size:11px;letter-spacing:.14em;color:#7f8cff;font-weight:600}
+.doc h3{font-size:15px;line-height:1.4;color:#e6ecf7;font-weight:650;margin:26px 0 8px}
+.doc h4{font-size:12px;letter-spacing:.1em;color:#8a95a8;font-weight:650;margin:18px 0 6px;text-transform:uppercase}
+.doc section{margin-top:60px;scroll-margin-top:24px}
+.eyebrow{font-size:11px;letter-spacing:.18em;color:#8aa4ff;font-weight:600;text-transform:uppercase}
+.lead{font-size:16px;line-height:1.8;color:#c3cbda;max-width:74ch}
+.badges{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 0}
+.badge{display:inline-flex;align-items:center;gap:6px;border:1px solid #2b3344;background:#121722;
+  color:#aab5c8;font-size:10.5px;letter-spacing:.03em;border-radius:999px;padding:4px 10px}
+.badge b{color:#e6ecf7;font-weight:600}
+.badge .b-dot{width:5px;height:5px;border-radius:50%;background:#4fd6a0}
+.badge.design .b-dot{background:#8aa4ff}
+.toc{display:flex;flex-wrap:wrap;gap:6px;margin:26px 0 0;padding:14px 0 0;border-top:1px solid #1e2430}
+.toc a{display:inline-flex;align-items:center;border:1px solid #252d3c;background:#111621;
+  border-radius:7px;padding:5px 9px;font-size:11px;color:#aab5c8;border-bottom:1px solid #252d3c}
+.toc a:hover{color:#e6ecf7;border-color:#3a4560;background:#161c29}
+.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;align-items:start}
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+@media(max-width:980px){.grid2,.grid3,.grid4{grid-template-columns:1fr}}
+.dcard{background:#10141c;border:1px solid #232b3a;border-radius:12px;padding:18px 20px}
+.dcard h3{margin-top:0}
+.note{border-left:2px solid #8aa4ff;background:linear-gradient(90deg,rgba(138,164,255,.08),transparent 70%);
+  padding:10px 14px;border-radius:0 8px 8px 0;margin:14px 0 18px;color:#b7c0d0;font-size:12.5px}
+.note b{color:#dbe4f8}
+.note.warn{border-left-color:#f3c666;background:linear-gradient(90deg,rgba(243,198,102,.08),transparent 70%)}
+.note.bad{border-left-color:#ff7b72;background:linear-gradient(90deg,rgba(255,123,114,.08),transparent 70%)}
+table{width:100%;border-collapse:collapse;font-size:12.5px;margin:12px 0 18px}
+th{text-align:left;font-size:10px;letter-spacing:.1em;color:#8a95a8;font-weight:650;
+  padding:8px 10px;border-bottom:1px solid #2a3244;white-space:nowrap}
+td{padding:9px 10px;border-bottom:1px solid #1c222d;color:#b7c0d0;vertical-align:top}
+td b{color:#f3f6fb;font-weight:600}
+td .sub{display:block;color:#7f8a9d;font-size:10.5px;margin-top:2px}
+td code{font-size:11px}
+tr:last-child td{border-bottom:0}
+.figure{margin:0}
+.figure figcaption,.cap{font-size:11px;color:#7f8a9d;line-height:1.6;margin-top:8px}
+.cap b{color:#b7c0d0;font-weight:600}
+.kv-list{display:flex;flex-direction:column;gap:0}
+.kv-list .kv{display:flex;gap:12px;padding:8px 0;border-bottom:1px solid #1c222d;font-size:12px}
+.kv-list .kv:last-child{border-bottom:0}
+.kv-list .kv span{flex:none;width:92px;color:#7f8a9d}
+.kv-list .kv b{color:#c3cbda;font-weight:500}
+.swatches{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px;margin:12px 0 18px}
+.swatch{border:1px solid #252b38;border-radius:9px;overflow:hidden;background:#10141c}
+.swatch i{display:block;height:52px}
+.swatch div{padding:7px 9px}
+.swatch b{display:block;font-size:11px;color:#e6ecf7;font-weight:600}
+.swatch span{display:block;font-size:9.5px;color:#7f8a9d;font-family:Consolas,monospace;margin-top:1px}
+.swatch em{display:block;font-style:normal;font-size:9.5px;color:#8a95a8;margin-top:3px;line-height:1.45}
+.code-inline{font-family:Consolas,monospace;font-size:11.5px;color:#c9d4e8}
+.rule{height:1px;background:linear-gradient(90deg,#232b3a,transparent);margin:26px 0}
+.checklist{list-style:none;padding:0;margin:10px 0 0;display:flex;flex-direction:column;gap:8px}
+.checklist li{position:relative;padding-left:22px;color:#b7c0d0;font-size:12.5px;line-height:1.65}
+.checklist li::before{content:"";position:absolute;left:0;top:6px;width:12px;height:12px;border-radius:4px;
+  border:1px solid #3a4560;background:#141a25}
+.checklist li.ok::before{content:"✓";display:grid;place-items:center;border-color:#2f6b4f;background:#12251c;
+  color:#7ee2ae;font-size:9px;line-height:1}
+.steps{counter-reset:step;display:flex;flex-direction:column;gap:10px;margin:14px 0 0}
+.step{display:flex;gap:12px;padding:12px 14px;border:1px solid #232b3a;border-radius:9px;background:#10141c}
+.step::before{counter-increment:step;content:counter(step);flex:none;width:22px;height:22px;border-radius:7px;
+  background:rgba(138,164,255,.14);color:#c8d6ff;display:grid;place-items:center;font-size:11px;font-weight:700}
+.step .st{flex:1;min-width:0}
+.step b{display:block;color:#e6ecf7;font-size:12.5px;font-weight:650}
+.step p{margin:3px 0 0;font-size:11.5px;color:#8a95a8;line-height:1.65}
+.tag{display:inline-block;font-size:9px;line-height:1.6;padding:0 5px;border-radius:4px;
+  border:1px solid #3a4560;color:#aab5c8;vertical-align:1px;margin-left:4px}
+.tag.p0{border-color:rgba(255,123,114,.35);color:#ffb3ad;background:rgba(255,123,114,.08)}
+.tag.p1{border-color:rgba(243,198,102,.32);color:#f5d391;background:rgba(243,198,102,.07)}
+.tag.p2{border-color:rgba(79,214,160,.3);color:#93e8c3;background:rgba(79,214,160,.07)}
+
+/* ══════════════════════════════════════════════════════════════
+   诊断图：现状截图 + 编号针
+   ══════════════════════════════════════════════════════════════ */
+.shot{position:relative;display:inline-block;line-height:0;border-radius:13px;overflow:hidden;
+  border:1px solid #232b3a;background:#0a0c11}
+.shot img{display:block;width:380px;height:auto}
+.pin{position:absolute;width:20px;height:20px;border-radius:50%;background:#8aa4ff;color:#0a0c11;
+  display:grid;place-items:center;font-size:10px;font-weight:700;line-height:1;
+  box-shadow:0 0 0 3px rgba(138,164,255,.22);transform:translate(-50%,-50%)}
+.issue-list{display:flex;flex-direction:column;gap:10px;margin:10px 0 0}
+.issue{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid #232b3a;
+  border-radius:9px;background:#10141c}
+.issue .n{flex:none;width:20px;height:20px;border-radius:50%;background:rgba(138,164,255,.14);
+  color:#c8d6ff;display:grid;place-items:center;font-size:10px;font-weight:700}
+.issue .tx{flex:1;min-width:0}
+.issue b{display:block;color:#e6ecf7;font-size:12px;font-weight:650}
+.issue span{display:block;color:#8a95a8;font-size:11px;line-height:1.6;margin-top:1px}
+
+/* ══════════════════════════════════════════════════════════════
+   高保真模拟器：g- 前缀，完全独立于 app 的类名，避免样式串台。
+   ══════════════════════════════════════════════════════════════ */
+:root{
+  --g-bg:#0e1015; --g-surface:#141821; --g-surface2:#191e27; --g-surface3:#212836;
+  --g-line:#252b38; --g-line-soft:#1b212b; --g-line-strong:#343d4f;
+  --g-tx:#f3f6fb; --g-tx2:#b7c0d0; --g-tx3:#8a95a8; --g-tx4:#5e6a7e;
+  --g-ok:#4fd6a0; --g-warn:#f3c666; --g-bad:#ff7b72; --g-ac:#8aa4ff;
+}
+.gtx{
+  position:relative;width:380px;height:560px;flex:none;display:flex;flex-direction:column;overflow:hidden;
+  background:
+    radial-gradient(120% 58% at 50% -10%, #1a2030 0%, rgba(26,32,48,0) 58%),
+    var(--g-bg);
+  border:1px solid var(--g-line);border-radius:12px;
+  box-shadow:0 2px 8px -2px rgba(0,0,0,.6),0 18px 48px -30px rgba(0,0,0,.9),0 0 0 1px rgba(255,255,255,.03) inset;
+  color:var(--g-tx);
+  font:13px/1.45 "Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI","Microsoft YaHei",sans-serif;
+  user-select:none;
+}
+.g-num{font-family:"Segoe UI Variable Display","Segoe UI","Microsoft YaHei UI",sans-serif;font-variant-numeric:tabular-nums}
+.g-head{height:44px;flex:none;display:flex;align-items:center;gap:7px;padding:0 9px 0 13px;
+  border-bottom:1px solid var(--g-line-soft);
+  background:linear-gradient(180deg,rgba(255,255,255,.026),rgba(255,255,255,0))}
+.g-brand{width:18px;height:18px;border-radius:5px;flex:none;position:relative;
+  background:linear-gradient(135deg,#6f8dff,#9b6bff);box-shadow:0 0 0 1px rgba(255,255,255,.08) inset}
+.g-brand::after{content:"";position:absolute;inset:4px;border-radius:2px;background:var(--g-bg)}
+.g-title{font-size:12.5px;font-weight:650;letter-spacing:.01em;white-space:nowrap;margin-right:auto}
+.g-live{font-size:9.5px;color:var(--g-tx4);white-space:nowrap;font-variant-numeric:tabular-nums}
+.g-ico{width:26px;height:26px;border:0;background:transparent;border-radius:7px;color:var(--g-tx3);
+  display:grid;place-items:center;padding:0;cursor:pointer;flex:none;font-family:inherit}
+.g-ico:hover{background:rgba(255,255,255,.06);color:var(--g-tx)}
+.g-ic{width:14px;height:14px;display:block}
+
+/* 摘要：三个信息不同权，风险格单独成卡 */
+.g-sum{height:78px;flex:none;display:grid;grid-template-columns:1.45fr 1fr 66px;
+  border-bottom:1px solid var(--g-line-soft);
+  background:linear-gradient(180deg,rgba(255,255,255,.018),rgba(255,255,255,0))}
+.g-cell{padding:8px 10px;display:flex;flex-direction:column;justify-content:center;min-width:0;
+  border-right:1px solid var(--g-line-soft);overflow:hidden}
+.g-cell:first-child{padding-left:13px}
+.g-cell:last-child{border-right:0;padding-right:9px}
+.g-lab{font-size:9.5px;font-weight:600;letter-spacing:.12em;color:var(--g-tx3);
+  white-space:nowrap;margin-bottom:1px;text-transform:uppercase}
+.g-hero{font-size:24px;font-weight:650;letter-spacing:-.03em;line-height:1.06;
+  font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--g-tx)}
+.g-hero .cur{font-size:14px;font-weight:600;color:var(--g-tx3);margin-right:1px;letter-spacing:0}
+.g-hero .dec{font-size:17px;color:var(--g-tx2);letter-spacing:-.01em}
+.g-hero .unit{font-size:12px;font-weight:600;color:var(--g-tx3);margin-left:2px;letter-spacing:0}
+.g-hmeta{display:flex;align-items:center;gap:5px;font-size:9.5px;color:var(--g-tx3);
+  white-space:nowrap;margin-top:3px;overflow:hidden}
+.g-hmeta b{color:var(--g-tx2);font-weight:600;font-variant-numeric:tabular-nums}
+.g-hmeta .delta{color:var(--g-ok)}
+.g-spark{width:50px;height:16px;margin-left:auto;flex:none;overflow:visible}
+.g-risk-name{font-size:11.5px;font-weight:600;color:var(--g-tx2);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;line-height:1.25}
+.g-risk-v{font-size:20px;font-weight:650;color:var(--g-bad);letter-spacing:-.02em;line-height:1.05;
+  font-variant-numeric:tabular-nums;margin-top:1px}
+.g-risk-date{font-size:17px;font-weight:650;color:var(--g-warn);letter-spacing:-.01em;line-height:1.1;
+  font-variant-numeric:tabular-nums;margin-top:1px}
+.g-risk-v small{font-size:12px;font-weight:600;letter-spacing:0}
+.g-risk-meta{font-size:9.5px;color:var(--g-tx3);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;margin-top:2px}
+.g-ck{align-items:center;text-align:center}
+.g-ck-v{font-size:17px;font-weight:650;line-height:1.1;font-variant-numeric:tabular-nums}
+.g-ck-v small{font-size:11px;color:var(--g-tx3);font-weight:500}
+.g-seg{display:flex;gap:2px;margin-top:4px}
+.g-seg i{width:10px;height:3px;border-radius:2px;background:#2b3241}
+.g-seg i.on{background:var(--g-ok)}
+
+/* 渠道列表 */
+.g-list{flex:1;min-height:0;overflow:hidden;position:relative}
+.g-list::after{content:"";position:absolute;left:0;right:0;bottom:0;height:16px;
+  background:linear-gradient(rgba(14,16,21,0),var(--g-bg));pointer-events:none}
+.g-sec{height:26px;display:flex;align-items:center;gap:6px;padding:0 12px;
+  font-size:9.5px;font-weight:600;letter-spacing:.12em;color:var(--g-tx3);white-space:nowrap}
+.g-sec .n{display:inline-grid;place-items:center;min-width:15px;height:15px;padding:0 4px;
+  border-radius:4px;background:rgba(255,255,255,.05);color:var(--g-tx2);font-size:9px;
+  letter-spacing:0;font-weight:600}
+.g-sec::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--g-line),rgba(37,43,56,0))}
+.g-row{position:relative;display:flex;align-items:center;gap:9px;height:48px;padding:0 10px 0 12px;
+  border-top:1px solid var(--g-line-soft)}
+.g-row:hover{box-shadow:inset 0 0 0 999px rgba(255,255,255,.024)}
+.g-row.urg{height:56px}
+.g-rail{position:absolute;left:0;top:9px;bottom:9px;width:2px;border-radius:2px;background:var(--g-bad)}
+.g-row.urg.warn .g-rail{background:var(--g-warn)}
+.g-row.urg{background:linear-gradient(90deg,rgba(255,123,114,.055),rgba(255,123,114,0) 62%)}
+.g-row.urg.warn{background:linear-gradient(90deg,rgba(243,198,102,.05),rgba(243,198,102,0) 62%)}
+.g-pico{width:26px;height:26px;border-radius:7px;flex:none;display:grid;place-items:center;
+  background:var(--c,#38404f);color:#fff;font-size:9.5px;font-weight:700;letter-spacing:.02em;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.1)}
+.g-pico.logo{background:#0a0c11}
+.g-mid{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:1px}
+.g-name{display:flex;align-items:center;gap:5px;min-width:0;font-size:13px;font-weight:600;
+  line-height:1.25;white-space:nowrap}
+.g-name .nn{overflow:hidden;text-overflow:ellipsis}
+.g-dot{width:5px;height:5px;border-radius:50%;flex:none;background:var(--g-ok)}
+.g-dot.warn{background:var(--g-warn)}
+.g-dot.bad{background:var(--g-bad)}
+.g-dot.off{background:transparent;border:1.5px solid #4a5266;width:4px;height:4px}
+.g-q{flex:none;font-size:9px;line-height:1.55;padding:0 4px;border-radius:4px;
+  border:1px solid var(--g-line-strong);color:var(--g-tx3);background:rgba(255,255,255,.03);
+  font-weight:500;letter-spacing:0;white-space:nowrap}
+.g-q.bad{color:#ffb3ad;border-color:rgba(255,123,114,.3);background:rgba(255,123,114,.09)}
+.g-q.warn{color:#f5d391;border-color:rgba(243,198,102,.28);background:rgba(243,198,102,.08)}
+.g-q.ok{color:#93e8c3;border-color:rgba(79,214,160,.25);background:rgba(79,214,160,.08)}
+.g-meta{font-size:10.5px;color:var(--g-tx3);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;line-height:1.3}
+.g-meta b{color:var(--g-tx2);font-weight:500}
+.g-val{flex:none;min-width:74px;text-align:right;font-variant-numeric:tabular-nums;
+  display:flex;flex-direction:column;justify-content:center;gap:1px}
+.g-v{font-size:21px;font-weight:600;line-height:1.05;letter-spacing:-.025em;color:var(--g-tx);
+  white-space:nowrap;font-variant-numeric:tabular-nums}
+.g-row.urg .g-v{font-size:23px}
+.g-v small{font-size:11.5px;font-weight:600;letter-spacing:0;color:inherit}
+.g-v .unit{font-size:11.5px;font-weight:600;letter-spacing:0;margin-left:1px}
+.g-v.warn{color:var(--g-warn)}
+.g-v.bad{color:var(--g-bad)}
+.g-v.muted{color:var(--g-tx3)}
+.g-sub{font-size:9.5px;color:var(--g-tx3);white-space:nowrap;line-height:1.2}
+.g-sub.warn{color:var(--g-warn)}
+.g-sub.bad{color:#ff9b94}
+.g-chev{width:12px;height:12px;flex:none;color:var(--g-tx4);margin-left:1px;
+  transition:transform .2s,color .12s}
+.g-row:hover .g-chev{color:var(--g-tx2);transform:translateX(1px)}
+.g-foot{height:34px;flex:none;display:flex;align-items:center;gap:9px;padding:0 12px;
+  border-top:1px solid var(--g-line-soft);background:rgba(255,255,255,.012);
+  font-size:10px;color:var(--g-tx3)}
+.g-st{display:inline-flex;align-items:center;gap:4px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.g-st i{width:5px;height:5px;border-radius:50%;background:var(--g-ok)}
+.g-st.warn i{background:var(--g-warn)}
+.g-st.off i{width:4px;height:4px;background:transparent;border:1px solid #4a5266}
+.g-foot .sp{flex:1}
+.g-set{display:inline-flex;align-items:center;gap:4px;color:var(--g-tx2);white-space:nowrap}
+.g-set svg{width:12px;height:12px}
+
+/* 展开卡 */
+.g-detail{width:356px;background:var(--g-surface);border:1px solid var(--g-line);border-radius:10px;
+  overflow:hidden;box-shadow:0 14px 34px -22px #000;color:var(--g-tx);
+  font:13px/1.45 "Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI","Microsoft YaHei",sans-serif;
+  user-select:none}
+.g-dhead{display:flex;align-items:center;gap:9px;height:56px;padding:0 12px;
+  border-bottom:1px solid var(--g-line-soft);
+  background:linear-gradient(180deg,rgba(255,255,255,.02),rgba(255,255,255,0))}
+.g-dbody{padding:12px 12px 14px}
+.g-m3{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--g-line-soft);
+  border:1px solid var(--g-line-soft);border-radius:8px;overflow:hidden}
+.g-m3>div{background:var(--g-surface2);padding:7px 9px}
+.g-m3 span{display:block;font-size:9.5px;color:var(--g-tx3);letter-spacing:.04em;margin-bottom:2px}
+.g-m3 b{font-size:15px;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.g-block{margin-top:12px}
+.g-bh{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px}
+.g-bh b{font-size:10px;font-weight:600;letter-spacing:.1em;color:var(--g-tx3);text-transform:uppercase}
+.g-range{display:inline-flex;border:1px solid var(--g-line);border-radius:6px;overflow:hidden;background:var(--g-surface2)}
+.g-range button{border:0;background:transparent;color:var(--g-tx3);font:inherit;font-size:9.5px;
+  padding:2px 7px;cursor:pointer}
+.g-range button.on{background:rgba(138,164,255,.14);color:#c8d6ff}
+.g-chart{display:block;width:100%;height:46px;overflow:visible}
+.g-cfoot{display:flex;align-items:center;gap:8px;font-size:9px;color:var(--g-tx4);margin-top:2px}
+.g-cfoot .gap{color:var(--g-warn);margin-left:auto}
+.g-kv{display:grid;grid-template-columns:1fr 1fr;gap:0 18px;margin-top:12px}
+.g-kv>div{display:flex;justify-content:space-between;gap:8px;padding:5px 0;
+  border-bottom:1px dashed var(--g-line);font-size:10.5px}
+.g-kv span{color:var(--g-tx3);white-space:nowrap}
+.g-kv b{color:var(--g-tx2);font-weight:500;font-variant-numeric:tabular-nums;white-space:nowrap}
+.g-est{font-style:normal;font-size:8.5px;color:var(--g-tx4);border:1px solid var(--g-line-strong);
+  border-radius:3px;padding:0 3px;margin-left:3px;vertical-align:1px}
+.g-lhead{display:flex;justify-content:space-between;align-items:center;margin-bottom:2px}
+.g-lhead b{font-size:10px;letter-spacing:.1em;color:var(--g-tx3);text-transform:uppercase}
+.g-lhead a{font-size:9.5px;color:var(--g-tx2);cursor:pointer}
+.g-lrow{display:flex;align-items:center;gap:8px;min-height:22px;
+  border-bottom:1px dashed var(--g-line-soft);font-size:10.5px}
+.g-lrow:last-child{border-bottom:0}
+.g-lt{flex:none;width:38px;color:var(--g-tx3);font-variant-numeric:tabular-nums}
+.g-lamt{flex:none;width:58px;text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:var(--g-tx2)}
+.g-lamt.pos{color:var(--g-ok)}
+.g-lx{flex:1;min-width:0;color:var(--g-tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.g-dacts{display:flex;justify-content:flex-end;gap:6px;margin-top:12px}
+.g-btn{border:1px solid var(--g-line-strong);background:var(--g-surface2);color:var(--g-tx2);
+  border-radius:6px;font:inherit;font-size:10.5px;padding:4px 9px;cursor:pointer}
+.g-btn.p{border-color:rgba(138,164,255,.35);background:rgba(138,164,255,.12);color:#c8d6ff}
+
+/* 设置索引 */
+.g-sidx{padding:8px 10px;display:flex;flex-direction:column;gap:2px;flex:1;min-height:0}
+.g-srow{display:flex;align-items:center;gap:10px;height:56px;padding:0 8px;border-radius:8px}
+.g-srow:hover{background:rgba(255,255,255,.032)}
+.g-srow .tile{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;
+  background:rgba(138,164,255,.1);color:var(--g-ac);flex:none}
+.g-srow .tile svg{width:15px;height:15px}
+.g-srow .txt{flex:1;min-width:0}
+.g-srow .tt{font-size:12.5px;font-weight:600;color:var(--g-tx)}
+.g-srow .ss{font-size:10px;color:var(--g-tx3);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;margin-top:1px}
+.g-snote{height:30px;display:flex;align-items:center;justify-content:center;font-size:9px;margin-top:auto;
+  color:var(--g-tx4);border-top:1px solid var(--g-line-soft)}
+
+/* 紧凑条 / 胶囊 / 贴边 */
+.g-compact{width:380px;height:46px;display:flex;align-items:center;gap:6px;padding:0 8px 0 10px;
+  background:var(--g-surface);border:1px solid var(--g-line);border-radius:10px;overflow:hidden;
+  color:var(--g-tx);font:13px/1.45 "Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI",sans-serif;
+  box-shadow:0 2px 8px -2px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.03) inset}
+.g-cchip{display:flex;align-items:center;gap:5px;height:30px;padding:0 7px;border-radius:7px;
+  background:var(--g-surface2);border:1px solid var(--g-line-soft);white-space:nowrap;flex:none}
+.g-cchip.urg{border-color:rgba(255,123,114,.28);
+  background:linear-gradient(90deg,rgba(255,123,114,.1),rgba(255,123,114,.03))}
+.g-cchip .g-pico{width:18px;height:18px;border-radius:5px;font-size:7.5px}
+.g-cshort{font-size:10px;color:var(--g-tx2)}
+.g-cval{font-size:10.5px;font-weight:600;color:var(--g-tx);font-variant-numeric:tabular-nums}
+.g-cval.bad{color:var(--g-bad)}
+.g-cval.warn{color:var(--g-warn)}
+.g-cmore{font-size:10.5px;color:var(--g-tx3);padding:0 2px;font-variant-numeric:tabular-nums}
+.g-cctl{margin-left:auto;display:flex;gap:1px;align-items:center}
+.g-pill{width:238px;height:46px;border-radius:999px;display:flex;align-items:center;gap:8px;
+  padding:0 9px;background:rgba(14,16,21,.96);border:1px solid #2f6b52;position:relative;overflow:hidden;
+  box-shadow:0 0 10px rgba(79,214,160,.16),0 2px 8px -2px rgba(0,0,0,.6);
+  color:var(--g-tx);font:13px/1.45 "Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI",sans-serif}
+.g-pill .g-pico{width:24px;height:24px;border-radius:7px}
+.g-pill .g-v{font-size:15px}
+.g-hair{position:absolute;left:14px;right:14px;bottom:5px;height:2px;border-radius:2px;
+  background:rgba(255,255,255,.08)}
+.g-hair i{display:block;height:100%;width:62%;border-radius:2px;background:var(--g-ok)}
+.g-dock{width:8px;height:64px;border-radius:4px;overflow:hidden;display:flex;flex-direction:column;gap:1px;
+  box-shadow:0 0 0 1px rgba(255,255,255,.06) inset}
+.g-dock i{flex:1;background:var(--g-ok)}
+.g-dock i.w{background:var(--g-warn)}
+.g-dock i.b{background:var(--g-bad)}
+.g-dock i.s{background-image:repeating-linear-gradient(45deg,rgba(0,0,0,.35) 0 2px,rgba(0,0,0,0) 2px 4px)}
+
+/* 状态矩阵 */
+.state-grid{display:grid;grid-template-columns:381px 381px;gap:18px;align-items:start}
+@media(max-width:900px){.state-grid{grid-template-columns:1fr}}
+.state-card{border:1px solid #232b3a;border-radius:10px;overflow:hidden;background:#0e1015}
+.state-card .lab{display:flex;align-items:center;justify-content:space-between;
+  padding:6px 10px;font-size:9.5px;letter-spacing:.08em;color:#8a95a8;background:#111621;
+  border-bottom:1px solid #232b3a}
+.state-card .lab b{color:#c3cbda;font-weight:600;letter-spacing:0}
+.state-card .g-row{border-top:0;background:var(--g-bg)}
+
+/* 现状页签（用来展示拥挤） */
+.g-tabs{display:flex;gap:2px;padding:6px 8px;border-bottom:1px solid var(--g-line-soft);
+  background:var(--g-surface)}
+.g-tabs span{flex:1;text-align:center;font-size:9px;color:var(--g-tx3);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;padding:3px 0;border-radius:4px}
+.g-tabs span.on{background:rgba(138,164,255,.12);color:#c8d6ff}
+</style></head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M20 11a8 8 0 1 0-2.35 5.65"/><path d="M20 4.5V11h-6.5"/>
+  </symbol>
+  <symbol id="i-more" viewBox="0 0 24 24" fill="currentColor">
+    <circle cx="5.5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="18.5" cy="12" r="1.5"/>
+  </symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m9 5 7 7-7 7"/>
+  </symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="3.2"/>
+    <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.9 19.3a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.7 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.7 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.7a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15 4.7a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.3 9c.14.62.66 1.06 1.3 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51.97Z"/>
+  </symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/><path d="m3 17 9 5 9-5"/>
+  </symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z"/>
+    <path d="M19 16.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2Z"/>
+  </symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3.5" y="5" width="17" height="16" rx="3"/><path d="M8 3v4M16 3v4M3.5 10h17"/>
+    <path d="m8.5 15 2.2 2.2 4.8-4.8"/>
+  </symbol>
+  <symbol id="i-display" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3" y="4.5" width="18" height="13" rx="2.5"/><path d="M9 21h6M12 17.5V21"/>
+  </symbol>
+  <symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M14 9l2.5 2.5"/>
+  </symbol>
+  <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.6v.2"/>
+  </symbol>
+  <symbol id="i-codex" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 3.4 18.4 7v9L12 19.6 5.6 16V7L12 3.4Z"/>
+    <path d="m12 7.4 3.4 2v4.2L12 15.6l-3.4-2V9.4l3.4-2Z"/>
+  </symbol>
+</svg>
+
+<div class="doc">
+
+  <!-- ═══════════ 封面 ═══════════ -->
+  <div class="eyebrow">Grandettoken · Design Proposal · 2026-11-01</div>
+  <h1>界面精修：让颜色重新成为信号</h1>
+  <p class="lead">这一轮不新增渠道、不改数据口径、不放大窗口。只做四件事：<b>降噪、立序、加质感、顺手感</b>。
+  核心判断是——现在的界面不是“信息不够”，而是“每个元素都在同时说话”。当所有大数字都染上状态色，
+  颜色就不再是信号；当字号有 9 档、每档只差 0.5px，层级就不再可读。</p>
+  <div class="badges">
+    <span class="badge design"><span class="b-dot"></span><b>状态</b> 已落地 · v0.2.0</span>
+    <span class="badge"><span class="b-dot"></span><b>范围</b> 视觉 / 交互 / 排版</span>
+    <span class="badge"><span class="b-dot"></span><b>约束</b> 400×580 不变 · 四种形态不变</span>
+    <span class="badge"><span class="b-dot"></span><b>原则</b> 不改数据语义与阈值</span>
+  </div>
+  <div class="note" style="margin-top:18px">
+    <b>落地状态(v0.2.0,2026-11-01):</b>本文的标题栏收纳、摘要重排、颜色纪律、行状态轨、
+    设置索引页、展开卡与紧凑条密度均已实现。两处落地差异:①展开区的“余额折线 + 区间切换”
+    改为“近 7 天消耗柱图”(数据来自现有 channel_changes,不新增取数);②第三批可选项中的
+    自定义 tooltip / 贴边轻预览 / 浅色主题未在本轮启用。
+  </div>
+  <nav class="toc">
+    <a href="#diagnosis">01 诊断</a>
+    <a href="#idea">02 设计主张</a>
+    <a href="#tokens">03 设计令牌</a>
+    <a href="#panel">04 主面板</a>
+    <a href="#row">05 行与状态</a>
+    <a href="#detail">06 展开详情</a>
+    <a href="#forms">07 折叠形态</a>
+    <a href="#settings">08 设置与管理</a>
+    <a href="#motion">09 交互与动效</a>
+    <a href="#ship">10 落地计划</a>
+  </nav>
+
+  <!-- ═══════════ 01 诊断 ═══════════ -->
+  <section id="diagnosis">
+    <h2><span class="no">01</span> 诊断：不是不好看，是没有“安静的地方”</h2>
+    <p>下面这张是当前版本的真实截图（6 个渠道、含 1 个失联、1 个限流）。功能都对，问题在视觉权重：
+    眼睛第一眼看到的是“一排彩色数字”，而不是“哪一个真的需要处理”。</p>
+    <div class="grid2" style="grid-template-columns:400px 1fr">
+      <figure class="figure">
+        <div class="shot">
+          <img src="../assets/row-detail/00-collapsed.png" alt="当前面板截图">
+          <span class="pin" style="left:92%;top:5%">1</span>
+          <span class="pin" style="left:50%;top:14%">2</span>
+          <span class="pin" style="left:20%;top:23%">3</span>
+          <span class="pin" style="left:80%;top:38%">4</span>
+          <span class="pin" style="left:28%;top:48%">5</span>
+          <span class="pin" style="left:7%;top:44%">6</span>
+        </div>
+        <figcaption><b>现状</b> · 600×870 原始截图缩放到 380 宽。编号对应右侧问题。</figcaption>
+      </figure>
+      <div>
+        <div class="issue-list">
+          <div class="issue"><span class="n">1</span><div class="tx"><b>标题栏像工具条</b>
+            <span>“刷新 / 置顶 / 紧凑 / 隐藏”四个文字按钮与品牌名同权重；没有主次，也没有图标语言。</span></div></div>
+          <div class="issue"><span class="n">2</span><div class="tx"><b>摘要三等分，语义却不等权</b>
+            <span>临期总量是风险、最先到期是风险、签到是待办，却共用同一排格子；最先到期的渠道名与日期挤在一行，长名字会被截断，而签到也占掉了一个格子。</span></div></div>
+          <div class="issue"><span class="n">3</span><div class="tx"><b>10–11px 标签密集，层级靠 0.5px</b>
+            <span>9 档字号（10.5/11/11.5/12/12.5/13/13.5/14/20）在 100% 缩放下几乎不可分辨，读起来是“糊成一片”。</span></div></div>
+          <div class="issue"><span class="n">4</span><div class="tx"><b>每个大数字都在染色</b>
+            <span>绿、黄、红同时出现时，状态色退化成装饰；健康行本来不需要被强调。视线失去落点。</span></div></div>
+          <div class="issue"><span class="n">5</span><div class="tx"><b>同一件事说了两到三遍</b>
+            <span>“取数失败”在状态标签、副标题、橙色提示行各出现一次；行高被重复信息撑开。</span></div></div>
+          <div class="issue"><span class="n">6</span><div class="tx"><b>兜底字母块像“关闭按钮”</b>
+            <span>自定义渠道兜底字母用了小写 x，与右上角关闭图标同形；品牌识别也断掉。</span></div></div>
+        </div>
+        <div class="note" style="margin-top:14px">
+          <b>一句话总结：</b>现在的界面在“正确地展示所有信息”，但还没有“决定先让用户看什么”。
+          精修的目标不是加装饰，而是<b>重新分配注意力</b>。
+        </div>
+      </div>
+    </div>
+    <table>
+      <tr><th style="width:26%">问题</th><th style="width:34%">用户实际感受</th><th>设计对策</th></tr>
+      <tr><td><b>颜色过载</b><span class="sub">7 行里 5 行有大面积彩色数字</span></td>
+        <td>“看起来一直在报警，但其实只有两个真有事。”</td>
+        <td>健康数值回到主文字色；状态色只留给 warn / bad / 失联，并用左侧 2px 状态轨 + 浅色底强调。</td></tr>
+      <tr><td><b>层级过密</b><span class="sub">9 档字号 + 6 种灰</span></td>
+        <td>“盯着看才分得清哪个是标题、哪个是说明。”</td>
+        <td>收敛到 5 档字号 + 4 级文字色；说明文字只降一级，不再用 0.5px 玩微差。</td></tr>
+      <tr><td><b>结构平</b><span class="sub">摘要、分组、底栏都是同一套横条节奏</span></td>
+        <td>“像一张 Excel，不像一个挂件。”</td>
+        <td>摘要改为“英雄数字 + 风险卡 + 签到微件”；底栏变成可点的状态过滤器；展开区做成内嵌仪表卡。</td></tr>
+      <tr><td><b>重复表达</b><span class="sub">失败原因出现 2–3 次</span></td>
+        <td>“行被撑高了，反而更难扫。”</td>
+        <td>一处说结论（状态标签）、一处说原因（副标题）、一处说时间（右侧口径），每处只说一次。</td></tr>
+    </table>
+  </section>
+
+  <!-- ═══════════ 02 设计主张 ═══════════ -->
+  <section id="idea">
+    <h2><span class="no">02</span> 设计主张：静默仪表 <span style="font-size:12px;color:#7f8a9d;letter-spacing:.06em">QUIET INSTRUMENT</span></h2>
+    <p>像一块好的仪表盘：平时安静，出事时一眼看见。三条原则，按优先级排列：</p>
+    <div class="grid3">
+      <div class="dcard">
+        <h3>① 颜色是信号，不是装饰</h3>
+        <p style="font-size:12px;margin-bottom:0">健康 = 主文字色 + 一枚小绿点。只有 warn / bad / 失联才配拥有颜色。
+        颜色出现得越少，出现时越有分量。</p>
+      </div>
+      <div class="dcard">
+        <h3>② 数字是主角，标签是注脚</h3>
+        <p style="font-size:12px;margin-bottom:0">用一套专门的展示数字字体（Segoe UI Variable Display），
+        24–26px、负字距、等宽数字；标签退到 10.5px 并提高字距。先看到数，再看到解释。</p>
+      </div>
+      <div class="dcard">
+        <h3>③ 结构有呼吸，状态有形状</h3>
+        <p style="font-size:12px;margin-bottom:0">摘要、分组、行、展开卡各自有清楚的边界与 8px 节奏。
+        状态不只靠颜色：左侧竖轨、文字标签、点状/斜线/空心三种形状同时存在。</p>
+      </div>
+    </div>
+    <div class="note">
+      <b>不做什么：</b>不加渐变按钮、不加玻璃拟态、不加装饰性插画、不做浅色主题（沿用既有“只做深色”的裁决）。
+      精修靠的是<b>比例、留白、字重、颜色纪律</b>，不是更多效果。
+    </div>
+  </section>
+
+  <!-- ═══════════ 03 设计令牌 ═══════════ -->
+  <section id="tokens">
+    <h2><span class="no">03</span> 设计令牌：把“感觉”变成可复用的数值</h2>
+    <p>现有 <code>:root</code> 只有颜色变量，字号与间距散落在 CSS/JS 内联样式里。这一轮先把令牌补齐，
+    后续改版只动一处。颜色沿用既有色相，整体降低一点饱和度、拉开表面层级。</p>
+
+    <h3>3.1 颜色</h3>
+    <div class="swatches">
+      <div class="swatch"><i style="background:#0e1015"></i><div><b>canvas</b><span>#0E1015</span><em>面板底 / 画布</em></div></div>
+      <div class="swatch"><i style="background:#141821"></i><div><b>surface-1</b><span>#141821</span><em>标题栏 / 摘要带</em></div></div>
+      <div class="swatch"><i style="background:#191e27"></i><div><b>surface-2</b><span>#191E27</span><em>卡片 / chip / 输入底</em></div></div>
+      <div class="swatch"><i style="background:#212836"></i><div><b>surface-3</b><span>#212836</span><em>抬升控件 / 选中底</em></div></div>
+      <div class="swatch"><i style="background:#252b38"></i><div><b>line</b><span>#252B38</span><em>主分割线 / 描边</em></div></div>
+      <div class="swatch"><i style="background:#1b212b"></i><div><b>line-soft</b><span>#1B212B</span><em>行分割线</em></div></div>
+      <div class="swatch"><i style="background:#343d4f"></i><div><b>line-strong</b><span>#343D4F</span><em>焦点 / 强描边</em></div></div>
+      <div class="swatch"><i style="background:#f3f6fb"></i><div><b>text</b><span>#F3F6FB</span><em>数字 / 名称</em></div></div>
+      <div class="swatch"><i style="background:#b7c0d0"></i><div><b>text-2</b><span>#B7C0D0</span><em>正文 / 次级</em></div></div>
+      <div class="swatch"><i style="background:#8a95a8"></i><div><b>text-3</b><span>#8A95A8</span><em>标签 / 说明</em></div></div>
+      <div class="swatch"><i style="background:#5e6a7e"></i><div><b>text-4</b><span>#5E6A7E</span><em>装饰 / 箭头</em></div></div>
+      <div class="swatch"><i style="background:#8aa4ff"></i><div><b>accent</b><span>#8AA4FF</span><em>交互 / 选中</em></div></div>
+      <div class="swatch"><i style="background:#4fd6a0"></i><div><b>ok</b><span>#4FD6A0</span><em>仅状态</em></div></div>
+      <div class="swatch"><i style="background:#f3c666"></i><div><b>warn</b><span>#F3C666</span><em>仅状态</em></div></div>
+      <div class="swatch"><i style="background:#ff7b72"></i><div><b>bad</b><span>#FF7B72</span><em>仅状态</em></div></div>
+    </div>
+    <p><b>状态色纪律（最重要的一条）：</b>大数字默认使用 <code>--text</code>。只有以下三类允许染色：</p>
+    <table>
+      <tr><th style="width:20%">场景</th><th style="width:20%">数值颜色</th><th>辅助通道</th></tr>
+      <tr><td><b>正常 / 宽裕</b></td><td><code>--text</code></td><td>小绿点 + 灰色进度；不额外强调</td></tr>
+      <tr><td><b>预警</b></td><td><code>--warn</code></td><td>2px 琥珀左轨 + 浅琥珀底 + 文字标签（如“低于底线”）</td></tr>
+      <tr><td><b>告急 / 限流</b></td><td><code>--bad</code></td><td>2px 红左轨 + 浅红底 + “限流”标签</td></tr>
+      <tr><td><b>失联 / 旧快照</b></td><td><code>--text-3</code>，数值前加 <code>~</code></td><td>灰斜线点 + “取数失败”标签 + 右侧显示快照年龄</td></tr>
+      <tr><td><b>未配置</b></td><td><code>--text-4</code>（——）</td><td>空心灰环 → 语义是“没启用”，不是“坏了”</td></tr>
+    </table>
+    <div class="note warn">
+      <b>对比度：</b><code>text-3 #8A95A8</code> 在 <code>#0E1015</code> 上约 6.3:1，小字达标；
+      <code>text-4</code> 只用于箭头、占位、装饰，不承载必须读到的信息。状态色同时保留文字标签，色盲用户不丢信息。
+    </div>
+
+    <h3>3.2 字号与字重</h3>
+    <table>
+      <tr><th>令牌</th><th>字号 / 行高</th><th>字重</th><th>用途</th></tr>
+      <tr><td><code>--fs-display</code></td><td>26 / 1.05</td><td>650</td><td>摘要英雄数字、告急行大数字</td></tr>
+      <tr><td><code>--fs-value</code></td><td>22 / 1.08</td><td>600</td><td>渠道行主数值</td></tr>
+      <tr><td><code>--fs-body</code></td><td>13 / 1.45</td><td>500–600</td><td>渠道名、设置项标题</td></tr>
+      <tr><td><code>--fs-meta</code></td><td>11.5 / 1.5</td><td>400–500</td><td>副标题、说明文字</td></tr>
+      <tr><td><code>--fs-caption</code></td><td>10.5 / 1.4</td><td>600 + 0.08em 字距</td><td>分组标签、口径、列标题</td></tr>
+    </table>
+    <p>数字统一 <code>font-variant-numeric: tabular-nums</code> + <code>letter-spacing:-.02em</code>，
+    字体栈优先 <code>"Segoe UI Variable Display"</code>（Windows 11 自带），回落 <code>Segoe UI</code>。
+    中文正文仍用 <code>"Microsoft YaHei UI"</code>，最小 10.5px。</p>
+
+    <h3>3.3 间距 / 圆角 / 层级</h3>
+    <div class="grid3">
+      <div class="dcard">
+        <h4 style="margin-top:0">间距（8px 节奏）</h4>
+        <div class="kv-list">
+          <div class="kv"><span>微</span><b>4 / 6px</b></div>
+          <div class="kv"><span>常规</span><b>8 / 10 / 12px</b></div>
+          <div class="kv"><span>区块</span><b>16 / 20 / 24px</b></div>
+          <div class="kv"><span>行内左右</span><b>12px（与标题对齐）</b></div>
+        </div>
+      </div>
+      <div class="dcard">
+        <h4 style="margin-top:0">圆角</h4>
+        <div class="kv-list">
+          <div class="kv"><span>面板</span><b>12px</b></div>
+          <div class="kv"><span>卡片 / 展开</span><b>10px</b></div>
+          <div class="kv"><span>控件 / 图标</span><b>6–8px</b></div>
+          <div class="kv"><span>标签 / 胶囊</span><b>4px / 999px</b></div>
+        </div>
+      </div>
+      <div class="dcard">
+        <h4 style="margin-top:0">层级</h4>
+        <div class="kv-list">
+          <div class="kv"><span>E0</span><b>无阴影，仅底色区分</b></div>
+          <div class="kv"><span>E1</span><b>内高光 1px rgba(255,255,255,.04)</b></div>
+          <div class="kv"><span>E2</span><b>0 14px 34px -22px #000</b></div>
+          <div class="kv"><span>E3</span><b>仅展开卡 / 弹层</b></div>
+        </div>
+      </div>
+    </div>
+    <div class="note">
+      <b>窗口约束仍在：</b>外阴影外延必须 ≤10px 透明边距，否则被窗口边界裁成硬边。
+      面板外形继续用 <code>0 2px 8px -2px rgba(0,0,0,.6)</code>；E2/E3 只用于<b>卡片内部</b>的展开区与弹层。
+    </div>
+  </section>
+
+  <!-- ═══════════ 04 主面板 ═══════════ -->
+  <section id="panel">
+    <h2><span class="no">04</span> 主面板：先看见“有没有事”，再看“有多少”</h2>
+    <p>左右同宽对比：左边是现状，右边是提案。请重点看三处——标题栏只剩一个高频动作、摘要条的风险格不再截断、
+    大数字里只有两个还带颜色。</p>
+    <div class="grid2" style="grid-template-columns:400px 400px;gap:36px">
+      <figure class="figure">
+        <div class="shot"><img src="../assets/row-detail/00-collapsed.png" alt="现状面板"></div>
+        <figcaption><b>现状</b> · 四个文字按钮、三等分摘要、七行彩色数字。</figcaption>
+      </figure>
+      <figure class="figure">
+        <!-- 高保真提案 -->
+        <div class="gtx">
+          <div class="g-head">
+            <span class="g-brand"></span>
+            <span class="g-title">Grandettoken</span>
+            <span class="g-live">刚刚</span>
+            <button class="g-ico" title="立即刷新"><svg class="g-ic"><use href="#i-refresh"/></svg></button>
+            <button class="g-ico" title="更多"><svg class="g-ic"><use href="#i-more"/></svg></button>
+          </div>
+          <div class="g-sum">
+            <div class="g-cell">
+              <div class="g-lab">近 30 天将过期</div>
+              <div class="g-hero g-num">2,253<span class="unit">分</span></div>
+              <div class="g-hmeta">2 个渠道 · 可筛选
+                <svg class="g-spark" viewBox="0 0 50 16" aria-hidden="true">
+                  <rect x="1" y="10" width="4" height="6" rx="1" fill="#f3c666" opacity=".35"/>
+                  <rect x="8" y="7" width="4" height="9" rx="1" fill="#f3c666" opacity=".45"/>
+                  <rect x="15" y="11" width="4" height="5" rx="1" fill="#f3c666" opacity=".3"/>
+                  <rect x="22" y="4" width="4" height="12" rx="1" fill="#f3c666" opacity=".7"/>
+                  <rect x="29" y="8" width="4" height="8" rx="1" fill="#f3c666" opacity=".5"/>
+                  <rect x="36" y="2" width="4" height="14" rx="1" fill="#f3c666" opacity=".9"/>
+                  <rect x="43" y="9" width="4" height="7" rx="1" fill="#f3c666" opacity=".4"/>
+                </svg>
+              </div>
+            </div>
+            <div class="g-cell">
+              <div class="g-lab">最先到期</div>
+              <div class="g-risk-name">WorkBuddy</div>
+              <div class="g-risk-date g-num">10-26</div>
+              <div class="g-risk-meta">剩 3 天 · 2,193 分</div>
+            </div>
+            <div class="g-cell g-ck">
+              <div class="g-lab">签到</div>
+              <div class="g-ck-v g-num">2<small>/3</small></div>
+              <div class="g-seg"><i class="on"></i><i class="on"></i><i></i></div>
+            </div>
+          </div>
+          <div class="g-list">
+            <div class="g-sec"><span>需要处理</span><span class="n">2</span></div>
+
+            <div class="g-row urg bad">
+              <span class="g-rail"></span>
+              <span class="g-pico" style="--c:#d97757">CL</span>
+              <div class="g-mid">
+                <div class="g-name"><span class="nn">Claude Code</span><i class="g-dot bad"></i><span class="g-q bad">限流</span></div>
+                <div class="g-meta">5 小时窗 · 2.0 小时后恢复</div>
+              </div>
+              <div class="g-val">
+                <div class="g-v bad g-num">0.0<small>%</small></div>
+                <div class="g-sub bad">周期窗</div>
+              </div>
+              <svg class="g-chev"><use href="#i-chev"/></svg>
+            </div>
+
+            <div class="g-row urg warn">
+              <span class="g-rail"></span>
+              <span class="g-pico" style="--c:#4d6bfe">DS</span>
+              <div class="g-mid">
+                <div class="g-name"><span class="nn">DeepSeek</span><i class="g-dot warn"></i><span class="g-q warn">取数失败</span></div>
+                <div class="g-meta">HTTP 401 · 上次成功取数 12 分钟前</div>
+              </div>
+              <div class="g-val">
+                <div class="g-v muted g-num">~¥256.00</div>
+                <div class="g-sub">旧快照</div>
+              </div>
+              <svg class="g-chev"><use href="#i-chev"/></svg>
+            </div>
+
+            <div class="g-sec"><span>其他</span><span class="n">6</span></div>
+
+            <div class="g-row">
+              <span class="g-pico" style="--c:#e8622c">4S</span>
+              <div class="g-mid">
+                <div class="g-name"><span class="nn">4SAPI</span><i class="g-dot warn"></i></div>
+                <div class="g-meta">额度 ¥500 · 12 天后可申请</div>
+              </div>
+              <div class="g-val">
+                <div class="g-v warn g-num">¥120.00</div>
+                <div class="g-sub">剩余 24%</div>
+              </div>
+              <svg class="g-chev"><use href="#i-chev"/></svg>
+            </div>
+
+            <div class="g-row">
+              <span class="g-pico" style="--c:#f5a623">OC</span>
+              <div class="g-mid">
+                <div class="g-name"><span class="nn">OpenCode Go</span><i class="g-dot"></i></div>
+                <div class="g-meta">19 天后重置</div>
+              </div>
+              <div class="g-val">
+                <div class="g-v g-num">62.0<small>%</small></div>
+                <div class="g-sub">周期窗</div>
+              </div>
+              <svg class="g-chev"><use href="#i-chev"/></svg>
+            </div>
+
+            <div class="g-row">
+              <span class="g-pico" style="--c:#12b886">WB</span>
+              <div class="g-mid">
+                <div class="g-name"><span class="nn">WorkBuddy</span><i class="g-dot"></i><span class="g-q ok">已签</span></div>
+                <div class="g-meta">今日活跃 +30 · 09:35</div>
+              </div>
+              <div class="g-val">
+                <div class="g-v g-num">5,993<span class="unit">分</span></div>
+                <div class="g-sub">最近 10-26 到期</div>
+              </div>
+              <svg class="g-chev"><use href="#i-chev"/></svg>
+            </div>
+
+            <div class="g-row">
+              <span class="g-pico logo"><svg width="17" height="17" viewBox="0 0 24 24" style="color:#fff"><use href="#i-codex"/></svg></span>
+              <div class="g-mid">
+                <div class="g-name"><span class="nn">Codex</span><i class="g-dot"></i><span class="g-q">plus</span></div>
+                <div class="g-meta">重置卡 0 张</div>
+              </div>
+              <div class="g-val">
+                <div class="g-v g-num">42.0<small>%</small></div>
+                <div class="g-sub">5 小时 88.0%</div>
+              </div>
+              <svg class="g-chev"><use href="#i-chev"/></svg>
+            </div>
+
+            <div class="g-row">
+              <span class="g-pico" style="--c:#19b8c4">HA</span>
+              <div class="g-mid">
+                <div class="g-name"><span class="nn">Hapi</span><i class="g-dot"></i></div>
+                <div class="g-meta">本周 ¥12.40 · 推算</div>
+              </div>
+              <div class="g-val">
+                <div class="g-v g-num">¥48.60</div>
+                <div class="g-sub">今日 ¥0.00</div>
+              </div>
+              <svg class="g-chev"><use href="#i-chev"/></svg>
+            </div>
+          </div>
+          <div class="g-foot">
+            <span class="g-st"><i></i>6 正常</span>
+            <span class="g-st warn"><i></i>2 预警</span>
+            <span class="g-st off"><i></i>1 失联</span>
+            <span class="sp"></span>
+            <span class="g-set"><svg><use href="#i-gear"/></svg>设置与管理</span>
+          </div>
+        </div>
+        <figcaption><b>提案</b> · 同一份数据、同一个 380×560 内容区；保留现有的临期 / 最先到期 / 签到口径，只重排权重。</figcaption>
+      </figure>
+    </div>
+
+    <h3>4.1 标题栏：一个高频动作 + 一个收纳入口</h3>
+    <p>刷新是唯一的高频动作，留在明面；置顶、紧凑条、隐藏到托盘都是低频窗口动作，收进 <code>⋯</code> 菜单。
+    “设置与管理”仍然只保留底栏一个入口（沿用 2026-10-20 的收敛裁决），菜单里不出现设置项。</p>
+    <div class="grid2">
+      <div class="dcard">
+        <h4 style="margin-top:0">推荐：品牌 + 状态 + 刷新 + ⋯</h4>
+        <div class="kv-list">
+          <div class="kv"><span>高度</span><b>44px</b></div>
+          <div class="kv"><span>品牌标</span><b>18px，圆角 5px</b></div>
+          <div class="kv"><span>刷新</span><b>26×26 图标按钮，加载时变进度环</b></div>
+          <div class="kv"><span>⋯ 菜单</span><b>置顶 / 紧凑条 / 隐藏到托盘 / 退出</b></div>
+        </div>
+      </div>
+      <div class="dcard">
+        <h4 style="margin-top:0">保守方案（不改结构，仅重排）</h4>
+        <p style="font-size:12px;margin-bottom:8px">保留四个文字按钮，但收成一组：字号 11.5 → 11，间距 6px，
+        用 1px 分隔线分成“刷新｜置顶 紧凑 隐藏”，并给刷新一个强调色。
+        优点是零学习成本；缺点是 380px 下标题可用宽度仍然只有约 78px。</p>
+        <div class="note" style="margin:0">建议先做推荐方案；如果用户反馈“找不到紧凑/隐藏”，再把菜单项放回明面。</div>
+      </div>
+    </div>
+
+    <h3>4.2 摘要条：英雄数字 + 风险卡 + 签到微件</h3>
+    <p>三格不再等宽：左边 1.45fr 给临期总量与 7 日到期分布，中间 1fr 单独成“风险卡”，
+    右边 66px 只放签到。风险格把渠道名与日期<b>分两行</b>，从结构上消除长名字被截断的问题。</p>
+    <table>
+      <tr><th style="width:22%">元素</th><th>规格</th><th>数据纪律</th></tr>
+      <tr><td><b>临期总量</b></td><td>24px / 650；“分”12px text-3</td><td>只统计可确认的到期记录；明细未知时写“待确认”，不把未知当 0</td></tr>
+      <tr><td><b>7 日到期分布</b></td><td>10.5px；迷你柱 50×16</td><td>未来 7 天无到期时画虚线基线 + “暂无”，不画假柱子</td></tr>
+      <tr><td><b>最先到期</b></td><td>名称 11.5px；日期 17px；剩余天数 9.5px</td><td>名称不截断，必要时换行；无到期时写“暂无临期”，不写 0</td></tr>
+      <tr><td><b>签到</b></td><td>17px 分数 + 3 段迷你条</td><td>total=0 时显示“——”而不是 0/0；完成后保留 ✓ 形态</td></tr>
+    </table>
+    <div class="note">
+      <b>为什么可以加 7 日分布：</b>临期明细（expiring[]）已经在本地视图里，按到期日聚合成 7 个柱子即可，
+      不新增取数请求。若未来想改成“总余额 / 最紧 / 签到”，三格布局可以直接复用；但临期信息必须另有入口，不能消失。
+    </div>
+  </section>
+
+  <!-- ═══════════ 05 行与状态 ═══════════ -->
+  <section id="row">
+    <h2><span class="no">05</span> 渠道行：一行只回答一个问题</h2>
+    <p>健康行 48px、告急行 56px。行内固定三块：<b>身份</b>（图标 + 名称 + 状态点 + 标签）、<b>解释</b>（一行副标题）、
+    <b>数值</b>（主数值 + 口径）。多出来的信息一律进展开区。</p>
+
+    <h3>5.1 解剖</h3>
+    <div style="display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start">
+      <div class="state-card" style="width:381px;flex:none">
+        <div class="lab"><b>告急行 · 56px</b><span>状态轨 + 浅色底</span></div>
+        <div class="g-row urg bad" style="height:56px">
+          <span class="g-rail"></span>
+          <span class="g-pico" style="--c:#d97757">CL</span>
+          <div class="g-mid">
+            <div class="g-name"><span class="nn">Claude Code</span><i class="g-dot bad"></i><span class="g-q bad">限流</span></div>
+            <div class="g-meta">5 小时窗 · 2.0 小时后恢复</div>
+          </div>
+          <div class="g-val">
+            <div class="g-v bad g-num">0.0<small>%</small></div>
+            <div class="g-sub bad">周期窗</div>
+          </div>
+          <svg class="g-chev"><use href="#i-chev"/></svg>
+        </div>
+      </div>
+      <div style="flex:1;min-width:300px">
+        <div class="kv-list">
+          <div class="kv"><span>① 状态轨</span><b>2px，上下各内缩 9px；只有告急/预警行出现</b></div>
+          <div class="kv"><span>② 图标</span><b>26×26，圆角 7；官方标保留，兜底字母用 2 位大写</b></div>
+          <div class="kv"><span>③ 名称</span><b>13px / 600；状态点 5px；标签 9px</b></div>
+          <div class="kv"><span>④ 副标题</span><b>10.5px / text-3；只说原因或口径，不重复数值</b></div>
+          <div class="kv"><span>⑤ 主数值</span><b>23px / 600；数字与单位同一字号</b></div>
+          <div class="kv"><span>⑥ 右侧口径</span><b>9.5px；如“周期窗 / 剩余 24% / 旧快照”</b></div>
+          <div class="kv"><span>⑦ 展开箭头</span><b>12px，text-4；hover 右移 1px；展开后旋转 90°</b></div>
+        </div>
+      </div>
+    </div>
+
+    <h3>5.2 状态矩阵</h3>
+    <p>六种状态并排。注意：颜色只出现在需要处理的两行；正常行的数值是白色的，绿点与灰色辅助信息已经足够表达“正常”。</p>
+    <div class="state-grid">
+      <div class="state-card">
+        <div class="lab"><b>正常 · 宽裕</b><span>绿色仅作点</span></div>
+        <div class="g-row">
+          <span class="g-pico" style="--c:#f5a623">OC</span>
+          <div class="g-mid"><div class="g-name"><span class="nn">OpenCode Go</span><i class="g-dot"></i></div>
+            <div class="g-meta">19 天后重置</div></div>
+          <div class="g-val"><div class="g-v g-num">62.0<small>%</small></div><div class="g-sub">周期窗</div></div>
+          <svg class="g-chev"><use href="#i-chev"/></svg>
+        </div>
+      </div>
+      <div class="state-card">
+        <div class="lab"><b>预警 · 低于底线</b><span>琥珀数值 + 浅底</span></div>
+        <div class="g-row" style="background:linear-gradient(90deg,rgba(243,198,102,.05),rgba(243,198,102,0) 62%)">
+          <span class="g-rail" style="background:var(--g-warn)"></span>
+          <span class="g-pico" style="--c:#e8622c">4S</span>
+          <div class="g-mid"><div class="g-name"><span class="nn">4SAPI</span><i class="g-dot warn"></i><span class="g-q warn">低于底线</span></div>
+            <div class="g-meta">额度 ¥500 · 12 天后可申请</div></div>
+          <div class="g-val"><div class="g-v warn g-num">¥120.00</div><div class="g-sub">剩余 24%</div></div>
+          <svg class="g-chev"><use href="#i-chev"/></svg>
+        </div>
+      </div>
+      <div class="state-card">
+        <div class="lab"><b>告急 · 限流</b><span>红色数值 + 状态轨</span></div>
+        <div class="g-row" style="height:56px;background:linear-gradient(90deg,rgba(255,123,114,.055),rgba(255,123,114,0) 62%)">
+          <span class="g-rail"></span>
+          <span class="g-pico" style="--c:#d97757">CL</span>
+          <div class="g-mid"><div class="g-name"><span class="nn">Claude Code</span><i class="g-dot bad"></i><span class="g-q bad">限流</span></div>
+            <div class="g-meta">2.0 小时后恢复</div></div>
+          <div class="g-val"><div class="g-v bad g-num">0.0<small>%</small></div><div class="g-sub bad">周期窗</div></div>
+          <svg class="g-chev"><use href="#i-chev"/></svg>
+        </div>
+      </div>
+      <div class="state-card">
+        <div class="lab"><b>失联 / 旧快照</b><span>灰数值 + ~ 前缀</span></div>
+        <div class="g-row" style="background:linear-gradient(90deg,rgba(243,198,102,.04),rgba(243,198,102,0) 62%)">
+          <span class="g-rail" style="background:var(--g-warn)"></span>
+          <span class="g-pico" style="--c:#4d6bfe">DS</span>
+          <div class="g-mid"><div class="g-name"><span class="nn">DeepSeek</span><i class="g-dot warn"></i><span class="g-q warn">取数失败</span></div>
+            <div class="g-meta">HTTP 401</div></div>
+          <div class="g-val"><div class="g-v muted g-num">~¥256.00</div><div class="g-sub">12 分钟前快照</div></div>
+          <svg class="g-chev"><use href="#i-chev"/></svg>
+        </div>
+      </div>
+      <div class="state-card">
+        <div class="lab"><b>未配置密钥</b><span>空心环 ≠ 故障</span></div>
+        <div class="g-row">
+          <span class="g-pico" style="--c:#343d4f">HA</span>
+          <div class="g-mid"><div class="g-name"><span class="nn">Hapi</span><i class="g-dot off"></i></div>
+            <div class="g-meta">未配置密钥</div></div>
+          <div class="g-val"><div class="g-v muted g-num">——</div><div class="g-sub">待配置</div></div>
+          <svg class="g-chev"><use href="#i-chev"/></svg>
+        </div>
+      </div>
+      <div class="state-card">
+        <div class="lab"><b>展开态</b><span>蓝色轨 + 内嵌卡</span></div>
+        <div class="g-row" style="background:var(--g-surface2);box-shadow:inset 2px 0 0 var(--g-ac)">
+          <span class="g-pico" style="--c:#e8622c">4S</span>
+          <div class="g-mid"><div class="g-name"><span class="nn">4SAPI</span><i class="g-dot warn"></i></div>
+            <div class="g-meta">额度 ¥500 · 12 天后可申请</div></div>
+          <div class="g-val"><div class="g-v warn g-num">¥120.00</div><div class="g-sub">剩余 24%</div></div>
+          <svg class="g-chev" style="transform:rotate(90deg);color:var(--g-ac)"><use href="#i-chev"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <h3>5.3 写法规则</h3>
+    <table>
+      <tr><th style="width:30%">位置</th><th>只写什么</th><th>不写什么</th></tr>
+      <tr><td><b>状态标签</b></td><td>结论：限流 / 低于底线 / 取数失败 / 已签 / plus</td><td>不写原因，不写时间</td></tr>
+      <tr><td><b>副标题</b></td><td>原因或口径：HTTP 401 / 5 小时窗 · 2.0 小时后恢复 / 12 天后可申请</td><td>不重复结论，不重复右侧数字</td></tr>
+      <tr><td><b>右侧口径</b></td><td>数值的解释：周期窗 / 剩余 24% / 12 分钟前快照</td><td>不写长句；超过 12 字进展开区</td></tr>
+      <tr><td><b>展开区</b></td><td>完整重置时间、逐笔到期、变动台账、图表</td><td>不重复收起行已有的结论</td></tr>
+    </table>
+    <div class="note bad">
+      <b>必须修掉的重复：</b>当前“取数失败”行会同时出现状态标签、副标题“取数失败 · HTTP 401”、
+      橙色提示“显示的是 12 分钟前的成功快照 · HTTP 401”。提案压成：标签“取数失败” + 副标题“HTTP 401” +
+      右侧“12 分钟前快照”，行高从约 76px 回到 56px。
+    </div>
+
+    <h3>5.4 兜底图标</h3>
+    <p>没有官方标的渠道，兜底块改成“品牌色 12% 底 + 2 位大写字母 + 1px 内描边”，字母颜色用品牌色提亮，
+    不再出现小写 <code>x</code>。字母优先取 <code>short</code>，缺失时取名称首两个汉字/字母；永远不使用关闭符号
+    <code>×</code> / <code>x</code> 作为兜底。</p>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <span class="g-pico" style="--c:#e8622c">4S</span>
+      <span class="g-pico" style="--c:#f5a623">OC</span>
+      <span class="g-pico" style="--c:#4d6bfe">DS</span>
+      <span class="g-pico" style="--c:#12b886">WB</span>
+      <span class="g-pico" style="--c:#d97757">CL</span>
+      <span class="g-pico" style="--c:#19b8c4">HA</span>
+      <span class="g-pico" style="--c:#343d4f">HA</span>
+      <span class="cap" style="margin:0 0 0 6px">正常 / 未配置（灰）</span>
+    </div>
+  </section>
+
+  <!-- ═══════════ 06 展开详情 ═══════════ -->
+  <section id="detail">
+    <h2><span class="no">06</span> 展开详情：从“信息堆”变成“仪表卡”</h2>
+    <p>展开区不再整行铺底色，而是一张内嵌卡（356px = 380 − 左右 12px）。固定五段：
+    <b>核心三数 → 走势 → 口径 → 变动 → 动作</b>。每段只承担一种信息，段与段之间用 12px 与一条极淡的分割线。</p>
+    <div class="note warn">
+      <b>落地差异:</b>实际版本用 <code>channel_changes</code> 聚合出“近 7 天消耗”柱图，
+      而不是余额折线；24 小时 / 7 天 / 30 天 / 3 月 / 12 月的区间切换需要新的历史查询，留待后续。
+      柱图标题与空日都如实标注“推算 / 无记录”。
+    </div>
+    <div style="display:flex;gap:32px;flex-wrap:wrap;align-items:flex-start">
+      <div class="gtx" style="height:auto;padding:12px;background:#0e1015">
+        <div class="g-detail">
+          <div class="g-dhead">
+            <span class="g-pico" style="--c:#e8622c">4S</span>
+            <div class="g-mid">
+              <div class="g-name"><span class="nn">4SAPI</span><i class="g-dot warn"></i><span class="g-q">申请制</span></div>
+              <div class="g-meta">额度 ¥500 · 12 天后可申请</div>
+            </div>
+            <div class="g-val">
+              <div class="g-v warn g-num">¥120.00</div>
+              <div class="g-sub">剩余 24%</div>
+            </div>
+            <svg class="g-chev" style="transform:rotate(90deg);color:var(--g-ac)"><use href="#i-chev"/></svg>
+          </div>
+          <div class="g-dbody">
+            <div class="g-m3">
+              <div><span>今日消耗</span><b>¥12.40</b></div>
+              <div><span>本周消耗</span><b>¥86.10</b></div>
+              <div><span>本月消耗</span><b>¥301.55</b></div>
+            </div>
+
+            <div class="g-block">
+              <div class="g-bh">
+                <b>余额走势</b>
+                <div class="g-range"><button class="on">7 天</button><button>30 天</button><button>12 月</button></div>
+              </div>
+              <svg class="g-chart" viewBox="0 0 332 46" preserveAspectRatio="none" aria-hidden="true">
+                <defs>
+                  <linearGradient id="area" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0" stop-color="#8aa4ff" stop-opacity=".26"/>
+                    <stop offset="1" stop-color="#8aa4ff" stop-opacity="0"/>
+                  </linearGradient>
+                </defs>
+                <path d="M0 15 C20 13,32 19,52 16 S88 22,108 19 S146 25,166 23 S204 28,224 26 S262 31,284 29 S320 34,332 33 L332 46 L0 46 Z" fill="url(#area)"/>
+                <path d="M0 15 C20 13,32 19,52 16 S88 22,108 19 S146 25,166 23 S204 28,224 26 S262 31,284 29 S320 34,332 33"
+                  fill="none" stroke="#8aa4ff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" opacity=".9"/>
+                <line x1="0" y1="38" x2="332" y2="38" stroke="#343d4f" stroke-width="1" stroke-dasharray="3 4"/>
+                <circle cx="332" cy="33" r="2.4" fill="#0e1015" stroke="#8aa4ff" stroke-width="1.4"/>
+              </svg>
+              <div class="g-cfoot"><span>10-26</span><span>10-28</span><span>10-30</span><span>11-01</span>
+                <span class="gap">数据缺口 3 小时</span></div>
+            </div>
+
+            <div class="g-kv">
+              <div><span>本轮额度</span><b>¥500.00</b></div>
+              <div><span>上次申请</span><b>10-20</b></div>
+              <div><span>可再申请</span><b>12 天后</b></div>
+              <div><span>日均消耗<em class="g-est">推算</em></span><b>¥9.40</b></div>
+              <div><span>预计可用</span><b>约 8 天</b></div>
+              <div><span>累计发放</span><b>¥1,400.00</b></div>
+            </div>
+
+            <div class="g-block">
+              <div class="g-lhead"><b>最近变动</b><a>全部 12 条</a></div>
+              <div class="g-lrow"><span class="g-lt">10:24</span><span class="g-lamt">−¥1.35</span><span class="g-lx">推算消费 · 3 次轮询</span></div>
+              <div class="g-lrow"><span class="g-lt">10:18</span><span class="g-lamt">−¥2.45</span><span class="g-lx">推算消费 · 4 次轮询</span></div>
+              <div class="g-lrow"><span class="g-lt">09:58</span><span class="g-lamt pos">+¥500.00</span><span class="g-lx">入账 · 充值 / 额度</span></div>
+            </div>
+
+            <div class="g-dacts">
+              <button class="g-btn">模型配置</button>
+              <button class="g-btn p">渠道设置</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="flex:1;min-width:300px">
+        <h3 style="margin-top:0">结构规则</h3>
+        <div class="kv-list">
+          <div class="kv"><span>内嵌卡</span><b>356px，圆角 10，1px 描边，E2 阴影；不再整行铺 bg2</b></div>
+          <div class="kv"><span>核心三数</span><b>三列等宽、1px 分隔；标签 9.5px、数值 15px</b></div>
+          <div class="kv"><span>走势</span><b>46px 高；面积渐变 26% → 0；末尾一个空心点</b></div>
+          <div class="kv"><span>口径</span><b>2 列 × 3 行；虚线分隔；推算值挂小 `推算` 标签</b></div>
+          <div class="kv"><span>变动</span><b>默认 3 条；时间 38px、金额 58px、说明自适应</b></div>
+          <div class="kv"><span>颜色</span><b>支出用 text-2，入账用 ok；不再把每笔支出染红</b></div>
+          <div class="kv"><span>动作</span><b>右下角两个 ghost 按钮，不与数据行抢眼</b></div>
+        </div>
+        <div class="note">
+          <b>动效：</b>展开 280ms ease-out，内容在 60ms 后淡入上浮 4px；收起 180ms。
+          滚动区留在 <code>.rbody</code> 内部，卡片圆角与阴影不随滚动裁切。
+        </div>
+        <div class="note warn">
+          <b>数据诚实：</b>“日均消耗 / 预计可用”继续标“推算”；缺口超过 10 分钟继续写“数据缺口 X 小时”。
+          图表只画有快照的点，不用插值补洞。
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ 07 折叠形态 ═══════════ -->
+  <section id="forms">
+    <h2><span class="no">07</span> 折叠形态：沿同一套颜色纪律</h2>
+    <p>紧凑条、胶囊、贴边不重新发明一套视觉，只沿用“中性数值 + 风险着色 + 2px 状态轨/点”。</p>
+    <div style="display:flex;flex-direction:column;gap:22px">
+      <figure class="figure">
+        <div class="g-compact">
+          <div class="g-cchip"><span class="g-pico" style="--c:#e8622c">4S</span><i class="g-dot warn"></i><span class="g-cval warn">¥120</span></div>
+          <div class="g-cchip"><span class="g-pico" style="--c:#f5a623">OC</span><i class="g-dot"></i><span class="g-cval">62.0%</span></div>
+          <div class="g-cchip urg"><span class="g-pico" style="--c:#d97757">CL</span><i class="g-dot bad"></i><span class="g-cval bad">0.0%</span></div>
+          <span class="g-cmore">+6</span>
+          <div class="g-cctl">
+            <button class="g-ico" title="展开面板" style="width:22px;height:22px"><svg class="g-ic" style="transform:rotate(-90deg)"><use href="#i-chev"/></svg></button>
+            <button class="g-ico" title="收成胶囊" style="width:22px;height:22px">
+              <svg class="g-ic" viewBox="0 0 24 24" fill="currentColor" style="width:7px;height:7px"><circle cx="12" cy="12" r="8"/></svg>
+            </button>
+          </div>
+        </div>
+        <figcaption><b>紧凑条</b> · 380×46。chip 高 30、圆角 7；图标已带 2 位缩写，不再重复短名，能多放一个渠道。</figcaption>
+      </figure>
+
+      <div style="display:flex;gap:36px;flex-wrap:wrap;align-items:flex-end">
+        <figure class="figure">
+          <div class="g-pill">
+            <span class="g-pico" style="--c:#f5a623">OC</span>
+            <span class="g-v g-num">62.0<small>%</small></span>
+            <span class="g-q">周期窗</span>
+            <span style="flex:1"></span>
+            <svg class="g-chev" style="color:var(--g-tx3)"><use href="#i-chev"/></svg>
+            <div class="g-hair"><i></i></div>
+          </div>
+          <figcaption><b>胶囊</b> · 238×46。光环改细：1px 状态边 + 10px 柔光；数值保留状态色（它是唯一的数）。</figcaption>
+        </figure>
+        <figure class="figure">
+          <div class="g-dock">
+            <i></i><i></i><i class="w"></i><i class="b"></i><i class="s"></i><i class="w"></i><i></i>
+          </div>
+          <figcaption><b>贴边</b> · 8×64。一段一渠道；旧快照用斜纹，与面板里的 <code>~</code> 同义。</figcaption>
+        </figure>
+      </div>
+    </div>
+    <div class="note">
+      <b>胶囊的例外：</b>面板与紧凑条里健康数值用白色，是因为同一屏有 6–9 个数字需要比较；
+      胶囊一次只显示一个数，颜色反而是最快的状态通道，所以保留着色，但把光晕从 6px/35% 降到 10px/16%，避免“发光玩具”。
+    </div>
+  </section>
+
+  <!-- ═══════════ 08 设置与管理 ═══════════ -->
+  <section id="settings">
+    <h2><span class="no">08</span> 设置与管理：从 7 个页签到一个索引页</h2>
+    <p>当前 380px 里塞 7 个页签，特大字号下每个只剩约 48px，“刷新与启动”必然被截。
+    目标方案把设置首页改成<b>索引列表</b>：每行一个分区、一行摘要、一个箭头；点进去才是表单页。
+    这同时解决了页签溢出、每页只有 480px 可滚动高度、以及“不知道该去哪”的三个问题。</p>
+    <div class="grid2" style="grid-template-columns:400px 400px;gap:36px">
+      <figure class="figure">
+        <div class="gtx" style="height:300px">
+          <div class="g-head">
+            <button class="g-ico" title="返回" style="margin-left:-3px">←</button>
+            <span class="g-title">设置与管理</span>
+          </div>
+          <div class="g-tabs">
+            <span class="on">渠道</span><span>签到</span><span>模型</span><span>显示</span>
+            <span>刷新与启动</span><span>密钥箱</span><span>关于</span>
+          </div>
+          <div style="padding:14px 13px;color:var(--g-tx3);font-size:11px;line-height:1.7">
+            页签均分 356px：<b style="color:var(--g-tx2)">每个约 48px</b>。<br>
+            “刷新与启动”5 个汉字 ≈ 58px，特大字号下更宽 → 截断或挤压。<br><br>
+            下方表单还要在约 480px 里滚动，说明文字与控件混排。
+          </div>
+          <div class="g-foot" style="margin-top:auto">
+            <span class="g-st"><i></i>6</span><span class="g-st warn"><i></i>2</span><span class="g-st off"><i></i>1</span>
+            <span class="sp"></span><span class="g-set"><svg><use href="#i-gear"/></svg>设置与管理</span>
+          </div>
+        </div>
+        <figcaption><b>现状</b> · 7 个页签等分，长标签必截。</figcaption>
+      </figure>
+      <figure class="figure">
+        <div class="gtx">
+          <div class="g-head">
+            <button class="g-ico" title="返回" style="margin-left:-3px">←</button>
+            <span class="g-title">设置与管理</span>
+            <span class="g-live">v0.1.75</span>
+          </div>
+          <div class="g-sidx">
+            <div class="g-srow">
+              <span class="tile"><svg><use href="#i-layers"/></svg></span>
+              <div class="txt"><div class="tt">渠道管理</div><div class="ss">9 个渠道 · 2 个需处理</div></div>
+              <svg class="g-chev"><use href="#i-chev"/></svg>
+            </div>
+            <div class="g-srow">
+              <span class="tile" style="background:rgba(155,107,255,.12);color:#b79aff"><svg><use href="#i-spark"/></svg></span>
+              <div class="txt"><div class="tt">模型与客户端</div><div class="ss">5 个客户端 · 已配置 12 个模型</div></div>
+              <svg class="g-chev"><use href="#i-chev"/></svg>
+            </div>
+            <div class="g-srow">
+              <span class="tile" style="background:rgba(79,214,160,.11);color:#7ee2ae"><svg><use href="#i-cal"/></svg></span>
+              <div class="txt"><div class="tt">每日签到</div><div class="ss">今日 2/3 · 09:35 已完成</div></div>
+              <svg class="g-chev"><use href="#i-chev"/></svg>
+            </div>
+            <div class="g-srow">
+              <span class="tile" style="background:rgba(138,149,168,.12);color:#b7c0d0"><svg><use href="#i-display"/></svg></span>
+              <div class="txt"><div class="tt">外观与显示</div><div class="ss">标准字号 · 紧凑条关 · 排序：紧迫度</div></div>
+              <svg class="g-chev"><use href="#i-chev"/></svg>
+            </div>
+            <div class="g-srow">
+              <span class="tile" style="background:rgba(243,198,102,.1);color:#f5d391"><svg><use href="#i-refresh"/></svg></span>
+              <div class="txt"><div class="tt">刷新与启动</div><div class="ss">面板 1 分钟 · 折叠 5 分钟 · 开机自启关</div></div>
+              <svg class="g-chev"><use href="#i-chev"/></svg>
+            </div>
+            <div class="g-srow">
+              <span class="tile" style="background:rgba(255,123,114,.1);color:#ffb3ad"><svg><use href="#i-key"/></svg></span>
+              <div class="txt"><div class="tt">密钥箱</div><div class="ss">6 把密钥 · 最近保存 3 天前</div></div>
+              <svg class="g-chev"><use href="#i-chev"/></svg>
+            </div>
+            <div class="g-srow">
+              <span class="tile" style="background:rgba(138,149,168,.12);color:#b7c0d0"><svg><use href="#i-info"/></svg></span>
+              <div class="txt"><div class="tt">关于与诊断</div><div class="ss">v0.1.75 · 上次检查 2 天前</div></div>
+              <svg class="g-chev"><use href="#i-chev"/></svg>
+            </div>
+          </div>
+          <div class="g-snote">设置只影响本机 · 密钥在 Windows 凭据管理器</div>
+        </div>
+        <figcaption><b>提案</b> · 索引页：每行 56px，标题 12.5px，摘要 10px；<code>Esc</code> 逐级返回。</figcaption>
+      </figure>
+    </div>
+
+    <h3>8.1 表单页规格</h3>
+    <div class="grid2">
+      <div class="dcard">
+        <h3 style="margin-top:0">行与分组</h3>
+        <div class="kv-list">
+          <div class="kv"><span>行高</span><b>44px；说明另起一行时 56px</b></div>
+          <div class="kv"><span>标签</span><b>12.5px / 500 / text</b></div>
+          <div class="kv"><span>说明</span><b>11px / text-3；最多一行，超长进「?」</b></div>
+          <div class="kv"><span>分组</span><b>卡片之间 18px；组标题 10.5px + 0.1em</b></div>
+          <div class="kv"><span>分割</span><b>行内 1px line-soft；最后一行为 0</b></div>
+        </div>
+      </div>
+      <div class="dcard">
+        <h3 style="margin-top:0">控件</h3>
+        <div class="kv-list">
+          <div class="kv"><span>开关</span><b>34×20，轨道 999；开 = accent 实心</b></div>
+          <div class="kv"><span>下拉</span><b>高 28，底色 surface-2，focus 描边 accent</b></div>
+          <div class="kv"><span>输入</span><b>高 30，等宽字体用于密钥/路径</b></div>
+          <div class="kv"><span>按钮</span><b>主按钮 accent 12% 底 + 35% 边；危险操作 ghost</b></div>
+          <div class="kv"><span>焦点</span><b>2px accent + 2px offset；行内元素用 inset 环</b></div>
+        </div>
+      </div>
+    </div>
+    <div class="note">
+      <b>过渡方案：</b>如果这一轮不改导航结构，先把 7 个页签改成横向可滚动的 pill 行：
+      高 32、gap 6、左右渐隐遮罩、当前项 accent 底；这能立刻消除截断，但不如索引页清楚。
+    </div>
+  </section>
+
+  <!-- ═══════════ 09 交互与动效 ═══════════ -->
+  <section id="motion">
+    <h2><span class="no">09</span> 交互与动效：只动“有语义的变化”</h2>
+    <h3>9.1 交互表</h3>
+    <table>
+      <tr><th style="width:20%">场景</th><th style="width:40%">行为</th><th>反馈</th></tr>
+      <tr><td><b>行 hover</b></td><td>整行浅色抬升，箭头右移 1px、变成 text-2</td><td>120ms；不位移整行，避免列表抖动</td></tr>
+      <tr><td><b>行点击</b></td><td>单开；再点收起；自动滚到完整可见</td><td>展开 280ms，箭头 90°；焦点留在行头</td></tr>
+      <tr><td><b>刷新</b></td><td>图标变成 16px 进度环，真实请求结束才停</td><td>完成后图标短暂变 ✓ 800ms；变化行扫一道 5% 微光</td></tr>
+      <tr><td><b>⋯ 菜单</b></td><td>置顶 / 紧凑条 / 隐藏 / 退出</td><td>120ms 淡入；Esc / 点外部关闭；方向键切换</td></tr>
+      <tr><td><b>底栏状态</b></td><td>点“6 / 2 / 1”按状态过滤；再点取消</td><td>选中项加 accent 底；列表即时过滤，不重新取数</td></tr>
+      <tr><td><b>键盘</b></td><td>↑↓ 移动行焦点，Enter 展开，R 刷新，Esc 逐层退</td><td>焦点环 2px accent；不改变既有 Tab 顺序</td></tr>
+      <tr><td><b>设置索引</b></td><td>点行进入子页；返回回索引；Esc 回面板</td><td>120ms 淡入 + 6px 上浮；返回保留滚动位置</td></tr>
+    </table>
+
+    <h3>9.2 动效令牌</h3>
+    <table>
+      <tr><th>令牌</th><th>值</th><th>用途</th></tr>
+      <tr><td><code>--dur-1</code></td><td>120ms</td><td>hover / press / 菜单 / 焦点</td></tr>
+      <tr><td><code>--dur-2</code></td><td>200ms</td><td>淡入 / 数字滚动 / 表单切换</td></tr>
+      <tr><td><code>--dur-3</code></td><td>280ms</td><td>行展开 / 面板入场</td></tr>
+      <tr><td><code>--ease-out</code></td><td><code>cubic-bezier(.16,1,.3,1)</code></td><td>进入 / 展开：快起慢停</td></tr>
+      <tr><td><code>--ease-soft</code></td><td><code>cubic-bezier(.4,0,.2,1)</code></td><td>颜色 / 透明度</td></tr>
+    </table>
+    <div class="note">
+      铁律不变：只动 <code>transform</code> / <code>opacity</code>；不回弹；无常驻循环
+      （告急呼吸仍默认关）；<code>prefers-reduced-motion</code> 下全部压到 0.01ms。
+    </div>
+
+    <h3>9.3 一个完整的小场景</h3>
+    <div class="steps">
+      <div class="step"><div class="st"><b>刷新</b><p>点刷新 → 图标收成进度环 → 取数期间不重复触发；完成的瞬间，只有值变了的行扫过 5% 微光。</p></div></div>
+      <div class="step"><div class="st"><b>数字滚动</b><p>新值从下方 6px 淡入，旧值幽灵上移淡出，200ms；值没变就不播。</p></div></div>
+      <div class="step"><div class="st"><b>风险变化</b><p>某渠道跌破红线：左轨从 0 长到 2px、底色淡入 200ms、数值变 red 200ms；状态点只播一次 1.2s 红晕，不循环。</p></div></div>
+      <div class="step"><div class="st"><b>展开</b><p>点击行 → 卡片从 0fr 到 1fr，280ms；内容在 60ms 后淡入上浮 4px；箭头同步转 90°。</p></div></div>
+      <div class="step"><div class="st"><b>收起</b><p>180ms 收回；折叠后用 <code>visibility:hidden</code> 延迟切换，Tab 不会落进看不见的按钮。</p></div></div>
+    </div>
+  </section>
+
+  <!-- ═══════════ 10 落地计划 ═══════════ -->
+  <section id="ship">
+    <h2><span class="no">10</span> 落地计划：先做“降噪立序”，再做“结构升级”</h2>
+    <p>建议分三批。第一批只改视觉与文案，不动 DOM 结构，风险最低、用户当天就能感知；第二批才动标题栏、展开卡和设置导航。</p>
+
+    <h3>10.1 第一批 · 降噪立序 <span class="tag p0">P0</span></h3>
+    <div class="grid2">
+      <div class="dcard">
+        <h3 style="margin-top:0">改什么</h3>
+        <ul class="checklist">
+          <li>补齐 5 档字号、4 级文字色、状态语义令牌</li>
+          <li>大数字默认白色；warn / bad / 失联才染色</li>
+          <li>告急行加 2px 状态轨 + 浅色底</li>
+          <li>摘要条改 1.45fr / 1fr / 66px，风险格名称独立一行</li>
+          <li>删掉失败行的重复提示，行高回到 56px</li>
+          <li>兜底字母改 2 位大写，禁止小写 x / ×</li>
+          <li>底栏状态可点过滤；设置入口保持一处</li>
+        </ul>
+      </div>
+      <div class="dcard">
+        <h3 style="margin-top:0">为什么先做</h3>
+        <p style="font-size:12px">这七条全部是“呈现层”改动，不碰取数、排序、阈值与存储。用户感知最强：
+        界面立刻从“彩色报表”变成“安静仪表”。预计 1–2 天，回归范围集中在
+        <code>renderRow</code> / <code>renderRiskBand</code> / <code>styles.css</code>。</p>
+      </div>
+    </div>
+
+    <h3>10.2 第二批 · 质感与顺手 <span class="tag p1">P1</span></h3>
+    <ul class="checklist">
+      <li>标题栏：刷新图标 + ⋯ 菜单（置顶 / 紧凑 / 隐藏 / 退出）</li>
+      <li>刷新进度环 + 完成 ✓ + 变化行微光</li>
+      <li>展开区改成 356px 内嵌仪表卡：三数 / 走势 / 口径 / 变更 / 动作</li>
+      <li>摘要 7 日迷你走势（复用本地快照，不新增请求）</li>
+      <li>设置首页改索引列表；子页返回栈与焦点管理</li>
+      <li>紧凑条 / 胶囊 / 贴边按同一套颜色纪律重绘</li>
+    </ul>
+
+    <h3>10.3 第三批 · 可选 <span class="tag p2">P2</span></h3>
+    <ul class="checklist">
+      <li>横向滚动 pill 页签（如果暂不做索引页）</li>
+      <li>轻量自定义 tooltip（替代系统 1 秒延迟）</li>
+      <li>基金/浅色主题的令牌预埋（本轮不启用）</li>
+      <li>贴边悬停轻预览（一行摘要，点击才展开完整面板）</li>
+    </ul>
+
+    <h3>10.4 需要同步的验证</h3>
+    <table>
+      <tr><th style="width:32%">文件 / 脚本</th><th>原因</th></tr>
+      <tr><td><code>build/jsdom-smoke.js</code></td><td>常驻文案预算、设置页字数、行结构断言；改文案后需同步期望值</td></tr>
+      <tr><td><code>build/visual-forms.js</code></td><td>三档字号 × 形态的越界检查；行高、摘要高度变化后需重跑</td></tr>
+      <tr><td><code>build/verify-ui-0923.js</code> / <code>verify-focus-ring.js</code></td><td>动效与焦点环断言</td></tr>
+      <tr><td><code>build/verify-form.js</code></td><td>固定窗口尺寸与形态切换；本轮不改尺寸，应保持全绿</td></tr>
+      <tr><td>README / docs/assets 截图</td><td>面板结构变化后需要重新截图，避免公开门面与实现不一致</td></tr>
+    </table>
+
+    <h3>10.5 验收口径</h3>
+    <ul class="checklist">
+      <li>380×560 内，2 个告急 + 5 个正常行完整可见；md / lg / xl 三档字号均不越界</li>
+      <li>除 warn / bad / 失联外，大数字均为 text 色；灰度截图仍能分辨三种灰色状态</li>
+      <li>“取数失败”只出现一次结论；原因与快照年龄各出现一次</li>
+      <li>摘要中最先到期的渠道名不截断（可换行）；日期与剩余天数完整</li>
+      <li>所有交互可键盘到达；焦点环可见；Esc 逐层退出</li>
+      <li>prefers-reduced-motion 下无位移动画；无新的常驻循环</li>
+      <li>取数失败 / 旧快照 / 未配置仍绝不渲染成“余额归零”</li>
+    </ul>
+  </section>
+
+  <!-- ═══════════ 附录 ═══════════ -->
+  <section id="appendix">
+    <h2><span class="no">附</span> 附录：可直接落地的令牌草案</h2>
+    <pre><code>:root{
+  /* 表面 */
+  --bg:#0e1015; --bg2:#141821; --bg3:#191e27; --bg4:#212836;
+  --line:#252b38; --line-soft:#1b212b; --line-strong:#343d4f;
+  /* 文字 */
+  --tx:#f3f6fb; --tx2:#b7c0d0; --tx3:#8a95a8; --tx4:#5e6a7e;
+  /* 状态（只用于状态，不用于装饰） */
+  --ok:#4fd6a0; --warn:#f3c666; --bad:#ff7b72; --ac:#8aa4ff;
+  --ok-bg:rgba(79,214,160,.09);
+  --warn-bg:rgba(243,198,102,.09);
+  --bad-bg:rgba(255,123,114,.08);
+  /* 字号 / 行高 */
+  --fs-display:calc(26px*var(--u)); --lh-display:1.05;
+  --fs-value:calc(22px*var(--u));   --lh-value:1.08;
+  --fs-body:calc(13px*var(--u));    --lh-body:1.45;
+  --fs-meta:max(11.5px,calc(11.5px*var(--u))); --lh-meta:1.5;
+  --fs-cap:max(10.5px,calc(10.5px*var(--u)));  --lh-cap:1.4;
+  /* 圆角 / 间距 */
+  --r-panel:12px; --r-card:10px; --r-ctl:8px; --r-chip:6px; --r-tag:4px;
+  --sp-1:4px; --sp-2:6px; --sp-3:8px; --sp-4:12px; --sp-5:16px; --sp-6:24px;
+  /* 动效 */
+  --dur-1:120ms; --dur-2:200ms; --dur-3:280ms;
+  --ease-out:cubic-bezier(.16,1,.3,1);
+  --ease-soft:cubic-bezier(.4,0,.2,1);
+}</code></pre>
+    <p>迁移顺序：先把新令牌追加到 <code>:root</code>（旧变量保留，避免一次性改爆）；
+    再逐块替换字号与颜色；最后删除旧值。状态色从 JS 内联样式迁到语义类
+    <code>.t-ok / .t-warn / .t-bad / .t-off</code>，JS 只负责加类名。</p>
+    <div class="note warn">
+      <b>不要一次改完。</b>这套设计里最容易被低估的是“大数字变白”带来的连锁反应：
+      行内状态点、进度条、告警文案都要跟着重新校准。建议第一批先把令牌与颜色纪律落下去，
+      截图确认“视线是否真的落到风险行”，再动结构与设置导航。
+    </div>
+    <div class="rule"></div>
+    <p class="cap">配套文档：<a href="../../DESIGN.md">DESIGN.md</a>（产品设计基线） ·
+    <a href="../../PROGRESS.md">PROGRESS.md</a>（实现进展） ·
+    <a href="design-row-detail-2026-10-23.html">行详情五段骨架</a> ·
+    <a href="design-codex-weekly-2026-10-30.html">Codex 周优先</a>。
+    本稿所有数字均为模拟数据，仅用于设计评审。</p>
+  </section>
+
+</div>
+</body></html>

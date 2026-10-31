@@ -1,33 +1,33 @@
 {
  "normal/panel": {
-  "form": "form-panel st-bad",
+  "form": "compact-on form-panel st-bad",
   "win": [
    400,
    580
   ],
   "list": {
-   "h": 415,
-   "sh": 489,
-   "w": 371,
-   "sw": 371,
+   "h": 396,
+   "sh": 513,
+   "w": 370,
+   "sw": 370,
    "rows": 8
   },
   "tbar": {
    "l": 11,
    "t": 11,
-   "w": 379,
-   "h": 39
+   "w": 378,
+   "h": 45
   },
   "sum": {
    "l": 11,
-   "t": 50,
-   "w": 379,
-   "h": 73
+   "t": 56,
+   "w": 378,
+   "h": 86
   },
   "foot": {
    "l": 11,
    "t": 537,
-   "w": 379,
+   "w": 378,
    "h": 32
   },
   "cctl": {
@@ -50,22 +50,19 @@
   },
   "overflow": [],
   "vover": [],
-  "cut": [
-   "span.rn 'Claude Code' 83>56",
-   "div.sb '限流 · 5 小时窗 · 2.0 小' 191>102"
-  ]
+  "cut": []
  },
  "normal/compact": {
-  "form": "form-compact st-bad",
+  "form": "compact-on form-compact st-bad",
   "win": [
-   286,
-   66
+   392,
+   67
   ],
   "list": {
    "h": 39,
    "sh": 39,
-   "w": 207,
-   "sw": 207,
+   "w": 312,
+   "sw": 312,
    "rows": 8
   },
   "tbar": {
@@ -87,8 +84,8 @@
    "h": 0
   },
   "cctl": {
-   "l": 217,
-   "t": 21,
+   "l": 323,
+   "t": 22,
    "w": 58,
    "h": 24
   },
@@ -109,10 +106,10 @@
   "cut": []
  },
  "normal/pill": {
-  "form": "form-pill st-bad",
+  "form": "compact-on form-pill st-bad",
   "win": [
    184,
-   66
+   67
   ],
   "list": {
    "h": 0,
@@ -148,8 +145,8 @@
   "pill": {
    "l": 11,
    "t": 11,
-   "w": 163,
-   "h": 45
+   "w": 162,
+   "h": 46
   },
   "dock": {
    "l": 0,
@@ -161,35 +158,35 @@
   "vover": [],
   "cut": []
  },
- "many/panel": {
-  "form": "form-panel st-bad",
+ "loading/panel": {
+  "form": "compact-on st-bad form-panel",
   "win": [
    400,
    580
   ],
   "list": {
-   "h": 384,
-   "sh": 731,
-   "w": 371,
-   "sw": 371,
-   "rows": 13
+   "h": 396,
+   "sh": 396,
+   "w": 378,
+   "sw": 378,
+   "rows": 0
   },
   "tbar": {
    "l": 11,
    "t": 11,
-   "w": 379,
-   "h": 39
+   "w": 378,
+   "h": 45
   },
   "sum": {
    "l": 11,
-   "t": 50,
-   "w": 379,
-   "h": 73
+   "t": 56,
+   "w": 378,
+   "h": 86
   },
   "foot": {
    "l": 11,
    "t": 537,
-   "w": 379,
+   "w": 378,
    "h": 32
   },
   "cctl": {
@@ -212,22 +209,337 @@
   },
   "overflow": [],
   "vover": [],
-  "cut": [
-   "span.rn 'Claude Code' 83>56",
-   "div.sb '限流 · 5 小时窗 · 2.0 小' 191>102"
-  ]
+  "cut": []
  },
- "many/compact": {
-  "form": "form-compact st-bad",
+ "loading/compact": {
+  "form": "compact-on st-bad form-compact",
   "win": [
-   286,
-   66
+   174,
+   67
+  ],
+  "list": {
+   "h": 16,
+   "sh": 16,
+   "w": 94,
+   "sw": 94,
+   "rows": 0
+  },
+  "tbar": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "sum": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "foot": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "cctl": {
+   "l": 105,
+   "t": 22,
+   "w": 58,
+   "h": 24
+  },
+  "pill": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "dock": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "overflow": [],
+  "vover": [],
+  "cut": []
+ },
+ "loading/pill": {
+  "form": "compact-on st-bad form-pill",
+  "win": [
+   184,
+   67
+  ],
+  "list": {
+   "h": 0,
+   "sh": 0,
+   "w": 0,
+   "sw": 0,
+   "rows": 0
+  },
+  "tbar": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "sum": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "foot": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "cctl": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "pill": {
+   "l": 11,
+   "t": 11,
+   "w": 162,
+   "h": 46
+  },
+  "dock": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "overflow": [],
+  "vover": [],
+  "cut": []
+ },
+ "empty/panel": {
+  "form": "compact-on form-panel st-fail",
+  "win": [
+   400,
+   580
+  ],
+  "list": {
+   "h": 396,
+   "sh": 396,
+   "w": 378,
+   "sw": 378,
+   "rows": 0
+  },
+  "tbar": {
+   "l": 11,
+   "t": 11,
+   "w": 378,
+   "h": 45
+  },
+  "sum": {
+   "l": 11,
+   "t": 56,
+   "w": 378,
+   "h": 86
+  },
+  "foot": {
+   "l": 11,
+   "t": 537,
+   "w": 378,
+   "h": 32
+  },
+  "cctl": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "pill": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "dock": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "overflow": [],
+  "vover": [],
+  "cut": []
+ },
+ "empty/compact": {
+  "form": "compact-on form-compact st-fail",
+  "win": [
+   200,
+   67
   ],
   "list": {
    "h": 39,
    "sh": 39,
-   "w": 207,
-   "sw": 207,
+   "w": 120,
+   "sw": 120,
+   "rows": 0
+  },
+  "tbar": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "sum": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "foot": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "cctl": {
+   "l": 131,
+   "t": 22,
+   "w": 58,
+   "h": 24
+  },
+  "pill": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "dock": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "overflow": [],
+  "vover": [],
+  "cut": []
+ },
+ "empty/pill": {
+  "form": "compact-on form-pill st-fail",
+  "win": [
+   167,
+   67
+  ],
+  "list": {
+   "h": 0,
+   "sh": 0,
+   "w": 0,
+   "sw": 0,
+   "rows": 0
+  },
+  "tbar": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "sum": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "foot": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "cctl": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "pill": {
+   "l": 11,
+   "t": 11,
+   "w": 146,
+   "h": 46
+  },
+  "dock": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "overflow": [],
+  "vover": [],
+  "cut": []
+ },
+ "many/panel": {
+  "form": "compact-on form-panel st-bad",
+  "win": [
+   400,
+   580
+  ],
+  "list": {
+   "h": 364,
+   "sh": 763,
+   "w": 370,
+   "sw": 370,
+   "rows": 13
+  },
+  "tbar": {
+   "l": 11,
+   "t": 11,
+   "w": 378,
+   "h": 45
+  },
+  "sum": {
+   "l": 11,
+   "t": 56,
+   "w": 378,
+   "h": 86
+  },
+  "foot": {
+   "l": 11,
+   "t": 537,
+   "w": 378,
+   "h": 32
+  },
+  "cctl": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "pill": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "dock": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "overflow": [],
+  "vover": [],
+  "cut": []
+ },
+ "many/compact": {
+  "form": "compact-on form-compact st-bad",
+  "win": [
+   392,
+   67
+  ],
+  "list": {
+   "h": 39,
+   "sh": 39,
+   "w": 312,
+   "sw": 312,
    "rows": 13
   },
   "tbar": {
@@ -249,8 +561,8 @@
    "h": 0
   },
   "cctl": {
-   "l": 217,
-   "t": 21,
+   "l": 323,
+   "t": 22,
    "w": 58,
    "h": 24
   },
@@ -271,10 +583,10 @@
   "cut": []
  },
  "many/pill": {
-  "form": "form-pill st-bad",
+  "form": "compact-on form-pill st-bad",
   "win": [
    184,
-   66
+   67
   ],
   "list": {
    "h": 0,
@@ -310,8 +622,8 @@
   "pill": {
    "l": 11,
    "t": 11,
-   "w": 163,
-   "h": 45
+   "w": 162,
+   "h": 46
   },
   "dock": {
    "l": 0,
@@ -324,34 +636,34 @@
   "cut": []
  },
  "big/panel": {
-  "form": "form-panel st-bad",
+  "form": "compact-on form-panel st-bad",
   "win": [
    400,
    580
   ],
   "list": {
-   "h": 415,
-   "sh": 415,
-   "w": 379,
-   "sw": 379,
+   "h": 396,
+   "sh": 396,
+   "w": 378,
+   "sw": 378,
    "rows": 4
   },
   "tbar": {
    "l": 11,
    "t": 11,
-   "w": 379,
-   "h": 39
+   "w": 378,
+   "h": 45
   },
   "sum": {
    "l": 11,
-   "t": 50,
-   "w": 379,
-   "h": 73
+   "t": 56,
+   "w": 378,
+   "h": 86
   },
   "foot": {
    "l": 11,
    "t": 537,
-   "w": 379,
+   "w": 378,
    "h": 32
   },
   "cctl": {
@@ -374,23 +686,19 @@
   },
   "overflow": [],
   "vover": [],
-  "cut": [
-   "div.sb '今日 ¥13,579.67 ↑125' 160>102",
-   "span.rn '某个名字特别特别长的中转站渠道' 218>56",
-   "div.sb '低于底线 · 今日 ¥12,345.' 155>102"
-  ]
+  "cut": []
  },
  "big/compact": {
-  "form": "form-compact st-bad",
+  "form": "compact-on form-compact st-bad",
   "win": [
-   306,
-   66
+   360,
+   67
   ],
   "list": {
    "h": 39,
    "sh": 39,
-   "w": 227,
-   "sw": 227,
+   "w": 280,
+   "sw": 280,
    "rows": 4
   },
   "tbar": {
@@ -412,8 +720,8 @@
    "h": 0
   },
   "cctl": {
-   "l": 237,
-   "t": 21,
+   "l": 291,
+   "t": 22,
    "w": 58,
    "h": 24
   },
@@ -434,10 +742,10 @@
   "cut": []
  },
  "big/pill": {
-  "form": "form-pill st-bad",
+  "form": "compact-on form-pill st-bad",
   "win": [
    268,
-   66
+   67
   ],
   "list": {
    "h": 0,
@@ -473,8 +781,8 @@
   "pill": {
    "l": 11,
    "t": 11,
-   "w": 247,
-   "h": 45
+   "w": 246,
+   "h": 46
   },
   "dock": {
    "l": 0,
@@ -486,35 +794,35 @@
   "vover": [],
   "cut": []
  },
- "checkin/panel": {
-  "form": "form-panel st-ok",
+ "fails/panel": {
+  "form": "compact-on form-panel st-bad",
   "win": [
    400,
    580
   ],
   "list": {
-   "h": 415,
-   "sh": 415,
-   "w": 379,
-   "sw": 379,
-   "rows": 4
+   "h": 396,
+   "sh": 542,
+   "w": 370,
+   "sw": 370,
+   "rows": 8
   },
   "tbar": {
    "l": 11,
    "t": 11,
-   "w": 379,
-   "h": 39
+   "w": 378,
+   "h": 45
   },
   "sum": {
    "l": 11,
-   "t": 50,
-   "w": 379,
-   "h": 73
+   "t": 56,
+   "w": 378,
+   "h": 86
   },
   "foot": {
    "l": 11,
    "t": 537,
-   "w": 379,
+   "w": 378,
    "h": 32
   },
   "cctl": {
@@ -537,21 +845,178 @@
   },
   "overflow": [],
   "vover": [],
-  "cut": [
-   "span.rn 'WorkBuddy' 77>56"
-  ]
+  "cut": []
  },
- "checkin/compact": {
-  "form": "form-compact st-ok",
+ "fails/compact": {
+  "form": "compact-on form-compact st-bad",
   "win": [
-   306,
-   66
+   392,
+   67
   ],
   "list": {
    "h": 39,
    "sh": 39,
-   "w": 227,
-   "sw": 227,
+   "w": 312,
+   "sw": 312,
+   "rows": 8
+  },
+  "tbar": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "sum": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "foot": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "cctl": {
+   "l": 323,
+   "t": 22,
+   "w": 58,
+   "h": 24
+  },
+  "pill": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "dock": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "overflow": [],
+  "vover": [],
+  "cut": []
+ },
+ "fails/pill": {
+  "form": "compact-on form-pill st-bad",
+  "win": [
+   184,
+   67
+  ],
+  "list": {
+   "h": 0,
+   "sh": 0,
+   "w": 0,
+   "sw": 0,
+   "rows": 8
+  },
+  "tbar": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "sum": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "foot": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "cctl": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "pill": {
+   "l": 11,
+   "t": 11,
+   "w": 162,
+   "h": 46
+  },
+  "dock": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "overflow": [],
+  "vover": [],
+  "cut": []
+ },
+ "checkin/panel": {
+  "form": "compact-on form-panel st-ok",
+  "win": [
+   400,
+   580
+  ],
+  "list": {
+   "h": 396,
+   "sh": 396,
+   "w": 378,
+   "sw": 378,
+   "rows": 4
+  },
+  "tbar": {
+   "l": 11,
+   "t": 11,
+   "w": 378,
+   "h": 45
+  },
+  "sum": {
+   "l": 11,
+   "t": 56,
+   "w": 378,
+   "h": 86
+  },
+  "foot": {
+   "l": 11,
+   "t": 537,
+   "w": 378,
+   "h": 32
+  },
+  "cctl": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "pill": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "dock": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "overflow": [],
+  "vover": [],
+  "cut": []
+ },
+ "checkin/compact": {
+  "form": "compact-on form-compact st-ok",
+  "win": [
+   294,
+   67
+  ],
+  "list": {
+   "h": 39,
+   "sh": 39,
+   "w": 214,
+   "sw": 214,
    "rows": 4
   },
   "tbar": {
@@ -573,8 +1038,8 @@
    "h": 0
   },
   "cctl": {
-   "l": 237,
-   "t": 21,
+   "l": 225,
+   "t": 22,
    "w": 58,
    "h": 24
   },
@@ -595,10 +1060,10 @@
   "cut": []
  },
  "checkin/pill": {
-  "form": "form-pill st-ok",
+  "form": "compact-on form-pill st-ok",
   "win": [
    178,
-   66
+   67
   ],
   "list": {
    "h": 0,
@@ -634,8 +1099,485 @@
   "pill": {
    "l": 11,
    "t": 11,
-   "w": 157,
+   "w": 156,
+   "h": 46
+  },
+  "dock": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "overflow": [],
+  "vover": [],
+  "cut": []
+ },
+ "auth/panel": {
+  "form": "compact-on form-panel st-bad",
+  "win": [
+   400,
+   580
+  ],
+  "list": {
+   "h": 396,
+   "sh": 496,
+   "w": 370,
+   "sw": 370,
+   "rows": 8
+  },
+  "tbar": {
+   "l": 11,
+   "t": 11,
+   "w": 378,
    "h": 45
+  },
+  "sum": {
+   "l": 11,
+   "t": 56,
+   "w": 378,
+   "h": 86
+  },
+  "foot": {
+   "l": 11,
+   "t": 537,
+   "w": 378,
+   "h": 32
+  },
+  "cctl": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "pill": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "dock": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "overflow": [],
+  "vover": [],
+  "cut": []
+ },
+ "auth/compact": {
+  "form": "compact-on st-bad form-compact",
+  "win": [
+   322,
+   67
+  ],
+  "list": {
+   "h": 39,
+   "sh": 39,
+   "w": 242,
+   "sw": 242,
+   "rows": 8
+  },
+  "tbar": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "sum": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "foot": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "cctl": {
+   "l": 253,
+   "t": 22,
+   "w": 58,
+   "h": 24
+  },
+  "pill": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "dock": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "overflow": [],
+  "vover": [],
+  "cut": []
+ },
+ "auth/pill": {
+  "form": "compact-on form-pill st-bad",
+  "win": [
+   216,
+   67
+  ],
+  "list": {
+   "h": 0,
+   "sh": 0,
+   "w": 0,
+   "sw": 0,
+   "rows": 8
+  },
+  "tbar": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "sum": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "foot": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "cctl": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "pill": {
+   "l": 11,
+   "t": 11,
+   "w": 194,
+   "h": 46
+  },
+  "dock": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "overflow": [],
+  "vover": [],
+  "cut": []
+ },
+ "xl/panel": {
+  "form": "compact-on form-panel st-bad",
+  "win": [
+   515,
+   748
+  ],
+  "list": {
+   "h": 564,
+   "sh": 564,
+   "w": 494,
+   "sw": 494,
+   "rows": 8
+  },
+  "tbar": {
+   "l": 11,
+   "t": 11,
+   "w": 494,
+   "h": 45
+  },
+  "sum": {
+   "l": 11,
+   "t": 56,
+   "w": 494,
+   "h": 86
+  },
+  "foot": {
+   "l": 11,
+   "t": 705,
+   "w": 494,
+   "h": 32
+  },
+  "cctl": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "pill": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "dock": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "overflow": [],
+  "vover": [],
+  "cut": []
+ },
+ "xl/compact": {
+  "form": "compact-on form-compact st-bad",
+  "win": [
+   498,
+   80
+  ],
+  "list": {
+   "h": 39,
+   "sh": 39,
+   "w": 418,
+   "sw": 418,
+   "rows": 8
+  },
+  "tbar": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "sum": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "foot": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "cctl": {
+   "l": 429,
+   "t": 28,
+   "w": 58,
+   "h": 24
+  },
+  "pill": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "dock": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "overflow": [],
+  "vover": [],
+  "cut": []
+ },
+ "xl/pill": {
+  "form": "compact-on form-pill st-bad",
+  "win": [
+   216,
+   80
+  ],
+  "list": {
+   "h": 0,
+   "sh": 0,
+   "w": 0,
+   "sw": 0,
+   "rows": 8
+  },
+  "tbar": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "sum": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "foot": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "cctl": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "pill": {
+   "l": 11,
+   "t": 11,
+   "w": 194,
+   "h": 58
+  },
+  "dock": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "overflow": [],
+  "vover": [],
+  "cut": []
+ },
+ "texttone/panel": {
+  "form": "compact-on form-panel st-bad",
+  "win": [
+   400,
+   580
+  ],
+  "list": {
+   "h": 396,
+   "sh": 513,
+   "w": 370,
+   "sw": 370,
+   "rows": 8
+  },
+  "tbar": {
+   "l": 11,
+   "t": 11,
+   "w": 378,
+   "h": 45
+  },
+  "sum": {
+   "l": 11,
+   "t": 56,
+   "w": 378,
+   "h": 86
+  },
+  "foot": {
+   "l": 11,
+   "t": 537,
+   "w": 378,
+   "h": 32
+  },
+  "cctl": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "pill": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "dock": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "overflow": [],
+  "vover": [],
+  "cut": []
+ },
+ "texttone/compact": {
+  "form": "compact-on form-compact st-bad",
+  "win": [
+   392,
+   67
+  ],
+  "list": {
+   "h": 39,
+   "sh": 39,
+   "w": 312,
+   "sw": 312,
+   "rows": 8
+  },
+  "tbar": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "sum": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "foot": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "cctl": {
+   "l": 323,
+   "t": 22,
+   "w": 58,
+   "h": 24
+  },
+  "pill": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "dock": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "overflow": [],
+  "vover": [],
+  "cut": []
+ },
+ "texttone/pill": {
+  "form": "compact-on form-pill st-bad",
+  "win": [
+   184,
+   67
+  ],
+  "list": {
+   "h": 0,
+   "sh": 0,
+   "w": 0,
+   "sw": 0,
+   "rows": 8
+  },
+  "tbar": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "sum": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "foot": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "cctl": {
+   "l": 0,
+   "t": 0,
+   "w": 0,
+   "h": 0
+  },
+  "pill": {
+   "l": 11,
+   "t": 11,
+   "w": 162,
+   "h": 46
   },
   "dock": {
    "l": 0,

@@ -185,6 +185,7 @@ function tickPeakCountdowns() {
   document.querySelectorAll("[data-reset-at]").forEach((el) => {
     el.textContent = quotaResetCountdown(Number(el.dataset.resetAt));
   });
+  updateHeaderLive();
 }
 
 let peakTickTimer = null;
@@ -381,8 +382,12 @@ function toneOf(c) {
 }
 
 const TONE_COLOR = { ok: "var(--ok)", warn: "var(--warn)", bad: "var(--bad)", off: "var(--tx3)" };
+/** 大数字默认回到主文字色:颜色只留给 warn / bad / off。
+ *  healthy 行的小绿点、进度条、状态标签已经足够表达"正常"。 */
+const toneFg = (t) => (t === "ok" ? "var(--tx)" : TONE_COLOR[t] || "var(--tx)");
+const toneFgSoft = (t) => (t === "ok" ? "var(--tx2)" : TONE_COLOR[t] || "var(--tx2)");
 // 与 styles.css 的高对比色板保持一致(进度条/托盘角标是内联色,吃不到 CSS 变量)
-const TONE_HEX = { ok: "#4ade9d", warn: "#f7c355", bad: "#ff6b63", off: "#3a4356" };
+const TONE_HEX = { ok: "#4fd6a0", warn: "#f3c666", bad: "#ff7b72", off: "#3a4356" };
 
 /** 单个配额的数字只按自己的余量着色;行状态仍可由另一窗口触发限流。 */
 function quotaTone(c, w) {
@@ -426,12 +431,24 @@ const LOGOS = {
  * 官方标同时内嵌一个字母方块副本(.ltr):紧凑条 16px 档位位图会糊,
  * 由 CSS 切换到字母显示(U6),面板/管理页仍显示官方标。
  */
+/** 兜底字母:2 位大写;短名不足两位时取名称前两个字。
+ *  绝不能落成小写 x / × —— 那和"关闭"同形,用户会以为能点。 */
+function shortLabel(c) {
+  const raw = String((c && c.short) || "").trim();
+  const name = String((c && c.name) || "").trim();
+  let out = raw.length >= 2 ? raw.slice(0, 2) : (name || raw || "?").replace(/\s+/g, "").slice(0, 2);
+  out = out.toUpperCase();
+  if (!out || out === "X" || out === "×") out = "··";
+  return out;
+}
+
 function iconHtml(c, cls = "ico", off = false) {
   const src = LOGOS[c.id];
+  const label = shortLabel(c);
   if (!src) {
-    return `<div class="${cls}" style="background:${off ? "#3c445c" : c.color}">${esc(c.short)}</div>`;
+    return `<div class="${cls}" title="${esc(c.name)}" style="background:${off ? "#343d4f" : c.color}">${esc(label)}</div>`;
   }
-  return `<div class="${cls} logo${off ? " off" : ""}" style="--cc:${off ? "#3c445c" : c.color}"><img src="${src}" alt="${esc(c.short)}"><span class="ltr">${esc(c.short)}</span></div>`;
+  return `<div class="${cls} logo${off ? " off" : ""}" style="--cc:${off ? "#343d4f" : c.color}"><img src="${src}" alt="${esc(label)}"><span class="ltr">${esc(label)}</span></div>`;
 }
 
 /** 自定义排序下的完整顺序:配置里列出的 + 未列入的(附在末尾,新增渠道不会丢)。 */
@@ -693,14 +710,19 @@ function renderRow(c, i) {
 
   if (codexDual) {
     const shortValue = dispPct(Math.max(0, Math.min(100, fiveHour.remainPercent)));
-    subVal = `<span class="quota-secondary"><span>5 小时${CFG.showUsed ? "已用" : "剩余"}</span><b style="color:${TONE_COLOR[quotaTone(c, fiveHour)]}">${shortValue.toFixed(1)}%</b></span>`;
+    subVal = `<span class="quota-secondary"><span>5 小时${CFG.showUsed ? "已用" : "剩余"}</span><b style="color:${toneFgSoft(quotaTone(c, fiveHour))}">${shortValue.toFixed(1)}%</b></span>`;
     // 两项额度占右侧两行,旧数据的年龄移到左侧,仍然显式可见。
     if (isOld) sub = `${c.updatedAt ? snapAge(c.updatedAt) : "上次快照"}${failed && sub ? " · " + sub : ""}`;
   }
+  // 失联 / 旧快照:数值降为 text-3 并加 ~,不让"上次成功值"看起来像当前值。
+  // 紧凑条里由 CSS 的 ::before 画 ~(省一个节点),面板里用真实节点。
+  const compactNow = document.body.className.includes("form-compact");
   const mainValue = codex && !noKey && c.remaining != null
     ? `<span class="quota-label">${esc(mw.label)}${CFG.showUsed ? "已用" : "剩余"}</span><span class="quota-number">${main}</span>`
-    : main;
-  const mainTone = codex ? quotaTone(c, mw) : tone;
+    : isOld && !compactNow
+      ? `<i class="tilde">~</i>${main}`
+      : main;
+  const mainTone = isOld ? "off" : codex ? quotaTone(c, mw) : tone;
 
   // 金额型第二行两边都空时给今日消耗兜底:否则整行会比别的行矮一截(Hapi 39px vs 51px)
   if (!noKey && !failed && c.kind === "amount" && !sub && !subVal && c.day !== null) {
@@ -777,7 +799,7 @@ function renderRow(c, i) {
           <div class="s">${sub}</div>
         </div>
         <div class="val">
-          <div class="v" style="color:${TONE_COLOR[mainTone]}">${mainValue}</div>
+          <div class="v" style="color:${toneFg(mainTone)}">${mainValue}</div>
           <div class="p">${subVal}</div>
         </div>
         <div class="caret">&#9654;</div>
@@ -847,7 +869,7 @@ function coreWindows(c) {
     return `<div class="core-w${codex ? " codex-w" : ""}">
       <span class="wl">${esc(w.label)}</span>
       <i class="wb"><i style="width:${wr}%;background:${TONE_HEX[wt]}"></i></i>
-      <b class="wv" style="color:${lim ? "var(--bad)" : TONE_COLOR[wt]}">${wr.toFixed(1)}%</b>
+      <b class="wv" style="color:${lim ? "var(--bad)" : toneFg(wt)}">${wr.toFixed(1)}%</b>
       <span class="wt${whenOk ? " ok" : ""}">${when}</span>
     </div>`;
   });
@@ -927,6 +949,36 @@ function corePoints(c, showAll) {
         }">${showAll ? "收起" : `全部 ${ordered.length} 笔`}</button>`
       : "";
   return `<div class="sec"><div class="sec-h"><span>即将到期</span>${more}</div>${rows}${none}</div>`;
+}
+
+/** 近 7 天消耗柱:直接聚合 channel_changes 的现成台账,不新增取数。
+ *  零消耗的日子画一根很淡的基线;标题写"无记录",不把缺失数据说成 0。 */
+function spendBars(c) {
+  if (c.kind !== "amount" || changesState[c.id] === "loading") return "";
+  const list = changesCache[c.id] || [];
+  if (!list.length) return "";
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const days = Array(7).fill(0);
+  for (const g of list) {
+    if (!(g.delta < 0)) continue;
+    const d = new Date(g.endTs * 1000);
+    d.setHours(0, 0, 0, 0);
+    const idx = Math.round((today.getTime() - d.getTime()) / 86400000);
+    if (idx >= 0 && idx < 7) days[6 - idx] += -g.delta;
+  }
+  const max = Math.max(...days);
+  if (!(max > 0)) return "";
+  const bars = days
+    .map((v, i) => {
+      const date = new Date(today.getTime() - (6 - i) * 86400000);
+      const ds = `${date.getMonth() + 1}-${String(date.getDate()).padStart(2, "0")}`;
+      const tip = v > 0 ? `${ds} · ${money(v, c.unit || "CNY")}` : `${ds} · 无记录`;
+      const h = Math.max(2, Math.round((v / max) * 34));
+      return `<i class="${v > 0 ? "" : "zero"}" style="height:calc(${h}px*var(--u))" title="${esc(tip)}"></i>`;
+    })
+    .join("");
+  return `<div class="sec"><div class="sec-h"><span>近 7 天消耗</span><span>推算</span></div><div class="sparkbars">${bars}</div></div>`;
 }
 
 /** ③ 最近变动:默认 3 条;先画占位,取到再替换。 */
@@ -1122,6 +1174,7 @@ function renderDetail(c) {
 
   // ③ 最近变动(只金额型) ④ 签到一行(徽标已经说了"签没签",这里只说徽标没说的)
   const ledger = c.kind === "amount" ? ledgerHtml(c, !!more.ledger) : "";
+  const spend = c.kind === "amount" ? spendBars(c) : "";
   let ckHtml = "";
   const cks = CK[c.id];
   if (CHECKIN_ON.has(c.id) && cks && cks.enabled) {
@@ -1150,7 +1203,7 @@ function renderDetail(c) {
   actions.push(manageLink);
 
   // 类名用 rb-dim 不用 dim:全局已有 .dim{color:var(--tx3)},撞名会把整张卡的数值再染一层灰
-  return `<div class="rbody-in${dim ? " rb-dim" : ""}">${core}${coreCodexResets(c)}${kvHtml}${ledger}${ckHtml}<div class="foot-det">${notesHtml}${failFull}<div class="fn-act">${actions.join(
+  return `<div class="rbody-in${dim ? " rb-dim" : ""}">${core}${spend}${coreCodexResets(c)}${kvHtml}${ledger}${ckHtml}<div class="foot-det">${notesHtml}${failFull}<div class="fn-act">${actions.join(
     ""
   )}</div></div></div>`;
 }
@@ -1264,6 +1317,28 @@ function listHtmlWithGroups(shown) {
 }
 
 /** 顶部临期摘要:30 天内确认到期积分 / 最先到期渠道 / 签到进度。 */
+/** 未来 7 天的临期分布:按本地日切桶,用迷你柱表示"哪几天集中到期"。
+ *  没有可确认的到期记录时只画一条虚线基线 —— 不虚构柱子。 */
+function expiry7Bars(summary) {
+  const base = new Date();
+  base.setHours(0, 0, 0, 0);
+  const baseSec = base.getTime() / 1000;
+  const buckets = Array(7).fill(0);
+  for (const x of (summary && summary.entries) || []) {
+    const idx = Math.floor((x.entry.at - baseSec) / 86400);
+    if (idx >= 0 && idx < 7) buckets[idx] += Number(x.entry.amount) || 0;
+  }
+  const max = Math.max(...buckets);
+  if (!(max > 0)) return '<span class="expbars is-empty" aria-hidden="true"></span>';
+  return `<span class="expbars" aria-hidden="true">${buckets
+    .map((v) => {
+      const h = Math.max(2, Math.round((v / max) * 14));
+      const op = (0.3 + 0.6 * (v / max)).toFixed(2);
+      return `<i style="height:calc(${h}px*var(--u));opacity:${op}"></i>`;
+    })
+    .join("")}</span>`;
+}
+
 function renderRiskBand() {
   const box = $("sum");
   if (!box) return;
@@ -1276,7 +1351,7 @@ function renderRiskBand() {
     ? summary.unknown.length ? "近 30 天已确认临期" : "近 30 天将过期"
     : "近 30 天临期";
   const riskValue = hasConfirmed
-    ? `${points(summary.total)} 分`
+    ? points(summary.total)
     : summary.unknown.length
       ? "待确认"
       : CHANNELS.length ? "暂无" : "——";
@@ -1297,8 +1372,10 @@ function renderRiskBand() {
   const cell1 = `<button type="button" class="cell risk-cell${EXPIRY_FILTER ? " on" : ""}"
       data-act="expiry-filter" aria-pressed="${EXPIRY_FILTER}" title="${esc(riskTitle)}"${hasConfirmed ? "" : " disabled"}>
       <div class="lb">${riskLabel}</div>
-      <div class="vv">${riskValue}</div>
-      <div class="sb">${riskSub}</div></button>`;
+      <div class="vv">${hasConfirmed
+        ? `<span class="hero-v">${points(summary.total)}</span><span class="hero-unit">分</span>`
+        : `<span class="hero-v" style="color:var(--tx3)">${riskValue}</span>`}</div>
+      <div class="sb sb-row"><span class="sb-tx">${riskSub}</span>${expiry7Bars(summary)}</div></button>`;
 
   // 有明细缺口时标成“最早可确认”,不把未知日期的渠道误排在它之后。
   let cell2 = "";
@@ -1310,15 +1387,20 @@ function renderRiskBand() {
     const title = `跳转到 ${first.channel.name} 的到期明细`;
     cell2 = `<div class="cell" data-act="jump" data-id="${esc(first.channel.id)}" title="${esc(title)}">
       <div class="lb">${summary.unknown.length ? "最早可确认" : "最先到期"}</div>
-      <div class="vv">${esc(first.channel.name)}</div>
-      <div class="sb" style="color:${dueColor}">${fmtDay(first.entry.at)} · ${when}</div></div>`;
+      <div class="due-name">${esc(first.channel.name)}</div>
+      <div class="due-date" style="color:${dueColor}">${fmtDay(first.entry.at)}</div>
+      <div class="sb">${when} · ${points(first.entry.amount)} 分</div></div>`;
   } else if (summary.unknown.length) {
     const unknown = summary.unknown[0];
     cell2 = `<div class="cell"><div class="lb">到期日期未知</div>
-      <div class="vv">${esc(unknown.name)}</div><div class="sb">接口未提供逐笔明细</div></div>`;
+      <div class="due-name">${esc(unknown.name)}</div>
+      <div class="due-date" style="color:var(--tx3)">——</div>
+      <div class="sb">接口未提供逐笔明细</div></div>`;
   } else {
     cell2 = `<div class="cell"><div class="lb">最先到期</div>
-      <div class="vv" style="color:var(--tx3)">暂无临期</div><div class="sb">未来 30 天</div></div>`;
+      <div class="due-name" style="color:var(--tx3)">暂无临期</div>
+      <div class="due-date" style="color:var(--tx3)">——</div>
+      <div class="sb">未来 30 天</div></div>`;
   }
 
   // ③ 签到:常驻。全部签完也要留着「✓ 3/3」—— "完成"和"坏了"不能长得一样(D09)
@@ -1328,12 +1410,12 @@ function renderRiskBand() {
   // 只是把"没有签到渠道"这件事说了一遍(2026-10-22 体检:全隐藏时它还在)
   if (ck && ck.total > 0) {
     const segs = Array.from({ length: ck.total }, (_, i) => `<i class="${i < ck.done ? "on" : ""}"></i>`).join("");
-    cell3 = `<div class="cell" data-act="ckstripopen" title="每日签到">
+    cell3 = `<div class="cell ck-cell" data-act="ckstripopen" title="每日签到">
       <div class="lb">签到</div>
       <div class="vv">${ck.done >= ck.total ? "\u2713 " : ""}${ck.done}/${ck.total}</div>
       <div class="sb"><span class="ckseg">${segs}</span></div></div>`;
   } else {
-    cell3 = `<div class="cell"><div class="lb">签到</div>
+    cell3 = `<div class="cell ck-cell"><div class="lb">签到</div>
       <div class="vv" style="color:var(--tx3)">——</div><div class="sb"></div></div>`;
   }
 
@@ -1381,7 +1463,7 @@ function renderInner(opts) {
     // 底栏也要跟着回到"还没数"的状态:以前这里直接 return,底栏留着**上一轮**
     // 的「8 正常 · 3 预警」—— 刚启动就写着 8 个渠道,而列表里一个都还没有。
     $("fdot").className = "dot off";
-    $("fstat").textContent = "正在取数…";
+    $("fstat").innerHTML = '<span class="fb-dot off"></span>正在取数…';
     return;
   }
 
@@ -1435,11 +1517,16 @@ function renderInner(opts) {
   // 与行内同一套约定:未配置=空心环,失联=斜杠灰点,预警=黄(之前 warn 用了红点,颜色梯度倒挂)
   $("fdot").className =
     "dot" + (bad ? " st" : warn ? " w" : withKey.length ? "" : " off");
-  // 三段必须**互斥**:以前 正常 = withKey.length - bad,而 warn 是它的子集,
-  // 于是 8 个渠道(3 个预警)写成「8 正常 · 3 预警」,加起来 11 > 8。
-  $("fstat").textContent = !withKey.length
-    ? (hiddenN ? "渠道已全部隐藏" : "未配置渠道")
-    : `${withKey.length - bad - warn} 正常${warn ? ` · ${warn} 预警` : ""}${bad ? ` · ${bad} 失联` : ""}${hiddenN ? ` · ${hiddenN} 隐藏` : ""}`;
+  // 三段必须**互斥**:正常 = 总数 - 失联 - 预警;每个数字前面带自己的状态点。
+  const normalN = withKey.length - bad - warn;
+  $("fstat").innerHTML = !withKey.length
+    ? `<span class="fb-dot off"></span>${hiddenN ? "渠道已全部隐藏" : "未配置渠道"}`
+    : [
+        normalN ? `<span class="fb-dot"></span>${normalN} 正常` : "",
+        warn ? `<span class="fb-dot warn"></span>${warn} 预警` : "",
+        bad ? `<span class="fb-dot bad"></span>${bad} 失联` : "",
+        hiddenN ? `<span class="fb-dot off"></span>${hiddenN} 隐藏` : "",
+      ].filter(Boolean).join('<span class="fb-sep">·</span>');
 
   // 动效 A/B:数据刷新后,值真的变了的行 → 大数字翻页进入 + 一道微光;
   // 值没变的行一动不动 —— 这是「刷新完成」的视觉回执,不是装饰
@@ -1479,6 +1566,8 @@ function renderInner(opts) {
   refreshChCards();
   // 新建的 [data-peakcd] 先填一次文案,别等到下一个整分才出现
   tickPeakCountdowns();
+  updateHeaderLive();
+  if (manageOpen() && document.body.classList.contains("manage-index")) renderManageIndex();
 }
 
 // 紧凑条实测宽度(已是当前字号档的最终逻辑像素),fitCompact 维护、formSize 取用
@@ -2628,6 +2717,7 @@ function resolveForm(form) {
 }
 
 async function applyFormInner(form, remember = true) {
+  setHeaderMenu(false);
   form = resolveForm(form);
   // 速览卡片开着时切形态/重排:先收回,否则会出现"class=pill 但窗口还是卡片高"的半截状态
   if (PEEK.open) await pillPeekHide();
@@ -2971,6 +3061,7 @@ function renderDock() {
 const manageOpen = () => document.body.classList.contains("view-manage");
 
 function openManage() {
+  setHeaderMenu(false);
   // 先挂上 view-manage:下面的 fillKeyHints 会检查 manageOpen(),
   // 类晚加一步就会让这一次读取被当成"页面没打开"而跳过。
   document.body.classList.add("view-manage");
@@ -2983,6 +3074,7 @@ function openManage() {
   renderPillPick();
   renderAbout(UPD.last); // 版本号与上次检查时间
   loadCheckin();         // 签到状态(渠道卡与设置页都用)
+  showTab("index");      // 默认落在索引页,31 号起不再把 7 个页签挤进 380px
   // 键盘用户是从底栏那枚按钮进来的,而它进管理页后就被 CSS 隐藏了 ——
   // 焦点会掉到 body,Tab 一下回到标题栏。把焦点交给页头的「← 返回」,
   // 入口与出口方向一致(鼠标点进来时 :focus-visible 不出环,看不出差别)。
@@ -3000,7 +3092,7 @@ function closeManage(restoreFocus = true) {
   const ae = document.activeElement;
   const mgr = $("manage");
   const fromManage = !ae || ae === document.body || (mgr && mgr.contains(ae));
-  document.body.classList.remove("view-manage");
+  document.body.classList.remove("view-manage", "manage-index");
   // restoreFocus=false 给"切形态顺手关掉管理页"那条路:底栏只在面板形态存在,
   // 切紧凑条/胶囊时还给一个 display:none 的按钮,浏览器会立刻丢给 body,等于白聚焦。
   if (restoreFocus && fromManage && document.body.classList.contains("form-panel")) {
@@ -3250,14 +3342,91 @@ function showToast(msg, bad) {
   toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
 }
 
+// ───────────── 标题栏收纳菜单(2026-11-01 精修)─────────────
+// 刷新留在明面;置顶 / 紧凑(或胶囊) / 隐藏 / 退出低频,收进 ⋯。
+let HMENU_OPEN = false;
+function updateHeaderMenu() {
+  const m = $("hmenu");
+  if (!m) return;
+  const pinOn = !!(CFG && CFG.alwaysOnTop);
+  const pin = m.querySelector('[data-act="pin"]');
+  if (pin) {
+    pin.classList.toggle("on", pinOn);
+    const tx = pin.querySelector(".hmenu-tx");
+    const k = pin.querySelector(".hmenu-k");
+    if (tx) tx.textContent = pinOn ? "取消置顶" : "置顶";
+    if (k) k.textContent = pinOn ? "✓" : "";
+  }
+  const comp = $("hmenuCompact");
+  if (comp) comp.textContent = CFG && CFG.compactEnabled ? "紧凑条" : "胶囊";
+}
+function setHeaderMenu(open) {
+  const m = $("hmenu");
+  const b = $("btnMenu");
+  if (!m || !b) return;
+  const was = HMENU_OPEN;
+  HMENU_OPEN = !!open;
+  if (open) updateHeaderMenu();
+  m.classList.toggle("on", !!open);
+  b.setAttribute("aria-expanded", String(!!open));
+  if (open) {
+    const first = m.querySelector("button[data-act]");
+    if (first) first.focus();
+  } else if (was) {
+    const ae = document.activeElement;
+    if (ae && m.contains(ae)) b.focus();
+  }
+}
+$("btnMenu").addEventListener("click", (e) => {
+  e.stopPropagation();
+  setHeaderMenu(!HMENU_OPEN);
+});
+$("hmenu").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-act]");
+  if (!b) return;
+  const act = b.dataset.act;
+  setHeaderMenu(false);
+  if (act === "pin") $("btnP").click();
+  else if (act === "compact") (CFG && CFG.compactEnabled ? $("btnC") : $("btnPill")).click();
+  else if (act === "hide") $("btnH").click();
+  else if (act === "quit") $("lkQuit").click();
+});
+$("hmenu").addEventListener("keydown", (e) => {
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  e.preventDefault();
+  const items = [...$("hmenu").querySelectorAll("button[data-act]")];
+  if (!items.length) return;
+  const i = items.indexOf(document.activeElement);
+  const next = e.key === "ArrowDown" ? (i + 1) % items.length : (i - 1 + items.length) % items.length;
+  items[next].focus();
+});
+document.addEventListener("click", (e) => {
+  if (HMENU_OPEN && !e.target.closest("#hmenu,#btnMenu")) setHeaderMenu(false);
+});
+
+/** 标题栏右侧的"上次更新":取所有可见渠道里最新的 updatedAt,分钟级刷新。 */
+function updateHeaderLive() {
+  const el = $("tbLive");
+  if (!el) return;
+  const ts = Math.max(0, ...CHANNELS.filter((c) => c.hasKey && !c.hidden).map((c) => c.updatedAt || 0));
+  el.textContent = ts ? relTime(ts) : "";
+}
+
 $("btnR").addEventListener("click", async () => {
   // M2 真实进度:取数期间按钮持续脉冲(禁用),完成后才停 —— 动画结束 = 数据已更新,
   // 不再固定 720ms 空转导致用户重复点(报告 B6 的后续修正)
   const btn = $("btnR");
   if (btn.classList.contains("loading")) return;
   btn.classList.add("loading");
-  await refresh();
-  btn.classList.remove("loading");
+  btn.setAttribute("aria-busy", "true");
+  try {
+    await refresh();
+    btn.classList.add("done");
+    setTimeout(() => btn.classList.remove("done"), 800);
+  } finally {
+    btn.classList.remove("loading");
+    btn.removeAttribute("aria-busy");
+  }
   const bad = CHANNELS.filter((c) => c.hasKey && !c.hidden && !c.valid).length;
   showToast(bad ? `${bad} 个渠道取数失败` : "已更新 · 刚刚", bad > 0);
 });
@@ -3280,17 +3449,86 @@ $("mdlR").addEventListener("click", () => loadModels(true));
 
 // 注意别直接写 addEventListener("click", closeManage):那样 click 的 Event 会
 // 落到 closeManage(restoreFocus) 这个形参上(Event 恒为真,行为碰巧对,但语义是错的)。
-$("btnBack").addEventListener("click", () => closeManage());
-// 设置页页签:渠道 / 显示 / 刷新与启动 / 关于
+$("btnBack").addEventListener("click", () => {
+  if (manageOpen() && !document.body.classList.contains("manage-index")) {
+    showTab("index");
+    const back = $("btnBack");
+    if (back) back.focus();
+    return;
+  }
+  closeManage();
+});
+// 设置页:索引 → 子页。旧页签仍在 DOM 里(CSS 隐藏),外部跳转与测试继续可用。
+const TAB_TITLES = {
+  index: "设置与管理", ch: "渠道管理", ck: "每日签到", mdl: "模型与客户端",
+  disp: "外观与显示", run: "刷新与启动", vault: "密钥箱", about: "关于与诊断",
+};
+const FONT_NAME = { md: "标准", lg: "大", xl: "特大" };
+const SORT_NAME = {
+  urgency: "紧迫度", percent: "剩余百分比", balance: "余额",
+  dayUsage: "今日消耗", custom: "自定义",
+};
+const idxMin = (sec) => `${Math.max(1, Math.round(Number(sec || 0) / 60))} 分钟`;
+
+/** 设置索引:每行一个分区 + 一行当前状态。只在索引页可见时重建。 */
+function renderManageIndex() {
+  const box = $("mIndexList");
+  if (!box) return;
+  const withKey = CHANNELS.filter((c) => c.hasKey && !c.hidden);
+  const actions = Number((HV && HV.actionCount) || 0);
+  const ck = HV && HV.checkin;
+  const ckOn = !!(ck && ck.total > 0);
+  const font = FONT_NAME[(CFG && CFG.fontScale) || "md"] || "标准";
+  const compact = CFG && CFG.compactEnabled ? "紧凑条开" : "紧凑条关";
+  const sort = SORT_NAME[(CFG && CFG.sort) || "urgency"] || "紧迫度";
+  const run = CFG
+    ? `面板 ${idxMin(CFG.activeIntervalSec)} · 折叠 ${idxMin(CFG.idleIntervalSec)}${
+        CFG.autostart ? " · 开机自启" : ""
+      }`
+    : "—";
+  const last = CFG && CFG.lastCheckAt;
+  const about = `${VER || "—"} · 上次检查 ${
+    last ? new Date(last * 1000).toLocaleDateString("zh-CN") : "从未"
+  }`;
+  const row = (p, icon, title, sub, cls = "") => `<button type="button" class="midx-row" data-p="${p}">
+    <span class="midx-ico ${cls}"><svg aria-hidden="true"><use href="#${icon}"/></svg></span>
+    <span class="midx-tx"><span class="midx-tt">${esc(title)}</span><span class="midx-ss">${esc(sub)}</span></span>
+    <svg class="midx-chev" aria-hidden="true"><use href="#i-chev"/></svg></button>`;
+  box.innerHTML = [
+    row("ch", "i-layers", "渠道管理",
+      withKey.length ? `${withKey.length} 个渠道${actions ? ` · ${actions} 个需处理` : ""}` : "尚未配置渠道"),
+    row("mdl", "i-spark", "模型与客户端", "4SAPI · Hapi · OpenCode Go", "mdl"),
+    row("ck", "i-cal", "每日签到",
+      ckOn ? `今日 ${ck.done}/${ck.total}${ck.done >= ck.total ? " · 已完成" : ""}` : "未开启签到", "ck"),
+    row("disp", "i-display", "外观与显示", `${font}字号 · ${compact} · 排序：${sort}`, "disp"),
+    row("run", "i-refresh", "刷新与启动", run, "run"),
+    row("vault", "i-key", "密钥箱", "查看 / 搜索本机密钥", "vault"),
+    row("about", "i-info", "关于与诊断", about),
+  ].join("");
+}
+
 function showTab(name) {
   const btns = [...$("mTabs").children];
   const b = btns.find((x) => x.dataset.p === name);
-  if (!b) return;
+  if (name !== "index" && !b) return;
   for (const x of btns) x.classList.toggle("on", x === b);
   document
     .querySelectorAll("#manage .panel")
     .forEach((p) => p.classList.toggle("on", p.dataset.p === name));
+  document.body.classList.toggle("manage-index", name === "index");
+  const mt = document.querySelector(".mhead .mt");
+  if (mt) mt.textContent = TAB_TITLES[name] || "设置与管理";
+  const back = $("btnBack");
+  if (back) back.title = name === "index" ? "关闭设置" : "返回设置索引";
+  if (name === "index") {
+    renderManageIndex();
+    return;
+  }
 }
+$("mIndexList").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-p]");
+  if (b) showTab(b.dataset.p);
+});
 $("mTabs").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-p]");
   if (!b) return;
@@ -3335,6 +3573,7 @@ function applyPinUI() {
     sw.classList.toggle("on", on);
     sw.setAttribute("aria-checked", String(on));
   }
+  updateHeaderMenu();
 }
 
 $("btnP").addEventListener("click", () => setPin(!CFG.alwaysOnTop));
@@ -4300,6 +4539,7 @@ bindSwitch("cfgPin", "alwaysOnTop", async (on) => {
 $("cfgCompact").addEventListener("click", async () => {
   if (!CFG) return;
   CFG.compactEnabled = !CFG.compactEnabled;
+  updateHeaderMenu();
   applyCompactUI();
   const ok = await saveCfg("紧凑条设置");
   if (!ok) {
@@ -4788,6 +5028,10 @@ listen("update-progress", (ev) => onUpdProgress(ev.payload));
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
+  if (HMENU_OPEN) {
+    setHeaderMenu(false);
+    return;
+  }
   // 覆盖层最优先:它盖在所有内容上,Esc 却先去关设置页/收形态,
   // 用户按半天 Esc 都关不掉眼前那个下载框(报告 P2-16)
   if (MDL.sheet) {
@@ -4799,7 +5043,11 @@ document.addEventListener("keydown", (e) => {
   } else if (ovOpen()) {
     closeUpdOverlay();
   } else if (manageOpen()) {
-    closeManage();
+    if (!document.body.classList.contains("manage-index")) {
+      showTab("index");
+      const back = $("btnBack");
+      if (back) back.focus();
+    } else closeManage();
   } else if (
     document.body.className.includes("form-panel") &&
     document.querySelector("#list .row.open")

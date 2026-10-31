@@ -101,7 +101,10 @@ const CH = [
         dsDtone: byId('deepseek') ? byId('deepseek').dataset.dtone : null,
         dsSub: byId('deepseek') ? byId('deepseek').querySelector('.nm .s').textContent : null,
         sumCells: [...document.querySelectorAll('#sum .cell')].map((c) => c.textContent.trim()),
-        deltaEls: [...document.querySelectorAll('#sum .delta')].map((d) => d.className + ':' + d.textContent),
+        sumHero: !!document.querySelector('#sum .hero-v'),
+        sumBars: !!document.querySelector('#sum .expbars'),
+        dueName: !!document.querySelector('#sum .due-name'),
+        dueDate: !!document.querySelector('#sum .due-date'),
         swButtons: [...document.querySelectorAll('.sw')].map((s) => s.tagName + ':' + (s.getAttribute('role') || '')),
         ltrCount: document.querySelectorAll('.ico .ltr').length,
         footDot: q('#fdot').className,
@@ -113,10 +116,9 @@ const CH = [
     check('I1 排序控件存在且与配置一致', !!r1.sortCtl && r1.sortCtl === r1.sortCfg, r1.sortCtl + ' / ' + r1.sortCfg);
     check('U2 失联渠道状态点 = dot st(斜杠)', r1.dsDot === 'dot st', r1.dsDot);
     check('U2 行 data-dtone = st', r1.dsDtone === 'st', r1.dsDtone);
-    check('U2 失联副标题 = 取数失败', r1.dsSub === '取数失败', r1.dsSub);
-    check('U8 汇总条有环比箭头', r1.deltaEls.some((d) => d.includes('delta up') || d.includes('delta dn')), JSON.stringify(r1.deltaEls));
-    check('U8 今日 ↑24%((12.4-10)/10)', r1.deltaEls.some((d) => d.includes('↑24%')), JSON.stringify(r1.deltaEls));
-    check('U8 本周 ↓6%((86.1-92)/92=-6.4)', r1.deltaEls.some((d) => d.includes('↓6%')), JSON.stringify(r1.deltaEls));
+    check('U2 失联副标题只说一次取数失败', /取数失败/.test(r1.dsSub), r1.dsSub);
+    check('U8 摘要三格:英雄数字 / 最先到期 / 签到', r1.sumCells.length === 3 && r1.sumHero && r1.dueName && r1.dueDate, JSON.stringify({ n: r1.sumCells.length, hero: r1.sumHero, name: r1.dueName, date: r1.dueDate }));
+    check('U8 摘要画出 7 日临期分布', r1.sumBars, String(r1.sumBars));
     check('U7 开关已是 button[role=switch]', r1.swButtons.length > 0 && r1.swButtons.every((s) => s === 'BUTTON:switch'), JSON.stringify(r1.swButtons));
     check('U6 官方标内嵌字母副本(.ltr,2 个官方标渠道)', r1.ltrCount === 2, String(r1.ltrCount));
     check('底栏状态点分层(有失联 → st)', r1.footDot === 'dot st', r1.footDot);

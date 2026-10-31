@@ -4322,13 +4322,17 @@ mod tests {
             ..Default::default()
         };
         let ds = providers::find("deepseek").expect("渠道在表里");
-        let v = build_view(ds, res.clone(), false, now_ts(), &store, &cfg, None, "fpA", 1);
+        // 用固定日期,不跟真实时钟走:节假日表覆盖 2026 年,按设计从 2026-11 起
+        // 会如实报 table_stale(等待次年安排)。这里验的是"表有效时 peak 状态正常",
+        // 固定到 2026-06,避免每年 11 月都红一次。
+        let now = Utc.with_ymd_and_hms(2026, 6, 15, 4, 0, 0).unwrap().timestamp();
+        let v = build_view(ds, res.clone(), false, now, &store, &cfg, None, "fpA", 1);
         let p = v.peak.expect("DeepSeek 该有峰谷状态");
         assert!(p.next_change_at.is_some(), "总能算出下一次切换");
-        assert!(!p.table_stale, "2026 年内表没过期");
+        assert!(!p.table_stale, "2026-06 时表还有效");
 
         let api = providers::find("4sapi").unwrap();
-        let v2 = build_view(api, res, false, now_ts(), &store, &cfg, None, "fpA", 1);
+        let v2 = build_view(api, res, false, now, &store, &cfg, None, "fpA", 1);
         assert!(v2.peak.is_none(), "中转站没有峰谷时段这回事");
     }
 

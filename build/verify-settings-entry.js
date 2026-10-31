@@ -44,12 +44,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     // ① 顶部「设置」已删,标题栏只剩文字按钮(刷新是 v0.1.59 的渠道体检加的)
     const top = JSON.parse(await evalJs(`JSON.stringify({
       btnS: !!document.getElementById('btnS'),
-      topButtons: [...document.querySelectorAll('.tbar .tb')].map(b => b.textContent.trim()),
+      btnR: !!document.getElementById('btnR'),
+      btnMenu: !!document.getElementById('btnMenu'),
+      legacyHidden: [...document.querySelectorAll('.tbar .tb')].every(b => b.hidden),
       chip: !!document.getElementById('updChip'),
     })`));
     check('标题栏无 #btnS', top.btnS === false);
-    check('标题栏文字按钮原样(刷新/置顶/紧凑/胶囊/隐藏)',
-      top.topButtons.join('/') === '刷新/置顶/紧凑/胶囊/隐藏', top.topButtons.join('/'));
+    check('标题栏收敛为刷新 + ⋯ 菜单(低频动作已收纳)',
+      top.btnR && top.btnMenu && top.legacyHidden,
+      JSON.stringify({ r: top.btnR, menu: top.btnMenu, legacyHidden: top.legacyHidden }));
 
     // ② 底栏三枚是 <button> 且键盘可达(tabIndex 0、非 disabled)
     const foot = JSON.parse(await evalJs(`JSON.stringify({
