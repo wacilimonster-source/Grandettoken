@@ -2791,6 +2791,18 @@ function updateSizeClass() {
   const eh = chh / u;
   document.body.dataset.w = ew < 380 ? "xs" : ew < 520 ? "sm" : ew < 720 ? "md" : "lg";
   document.body.dataset.h = eh < 560 ? "xs" : eh < 760 ? "sm" : "lg";
+  updateResetButton();
+}
+
+/** 自定义尺寸时显示右下角“默认大小”按钮;回到默认后自动隐藏。 */
+function updateResetButton() {
+  const btn = $("rzReset");
+  const [dw, dh] = panelDefaultSize();
+  const custom =
+    currentForm() === "panel" && !DOCK.on &&
+    (Math.abs(SIZE.panelW - dw) > 1 || Math.abs(SIZE.panelH - dh) > 1);
+  document.body.classList.toggle("custom-size", custom);
+  if (btn) btn.title = `恢复默认大小 (${dw} × ${dh})`;
 }
 
 function updateSizeBadge() {
@@ -2867,10 +2879,10 @@ if (typeof appWindow.onResized === "function") appWindow.onResized(async () => {
   const form = currentForm();
   if (DOCK.on || form === "pill" || form === "docked") return;
   if (form !== "panel" && form !== "compact") return;
-  await readSizeFromWindow();
-  updateSizeClass();
   RESIZING = true;
   document.body.classList.add("resizing");
+  await readSizeFromWindow();
+  updateSizeClass();
   clearTimeout(DOCK.settleTimer);
   setDockPreview(null);
   updateSizeBadge();
@@ -2960,6 +2972,12 @@ if (window.ResizeObserver) {
     resetPanelSize();
   });
 })();
+
+$("rzReset").addEventListener("click", (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  resetPanelSize();
+});
 
 /** 形态白名单 + 可选形态闸门:紧凑条关闭时,任何来源的 compact 都落成面板。
  *  按钮 / Esc / Ctrl+2 / 旧配置 / 以后新增的入口都经过这里,只判一次。 */
@@ -7322,7 +7340,7 @@ function applyChannelsPush(payload) {
       if (!CFG || CFG.resizeHintSeen) return;
       CFG.resizeHintSeen = true;
       saveCfg();
-      showToast("现在可拖动窗口边缘调整大小 · 右下角也可拖");
+      showToast("现在可拖动边缘调整大小 · 变大后可一键恢复默认");
     }, 1500);
   }
 

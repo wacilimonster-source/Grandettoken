@@ -106,9 +106,9 @@
   "cut": []
  },
  "normal/pill": {
-  "form": "compact-on st-ok form-pill",
+  "form": "compact-on form-pill st-bad",
   "win": [
-   164,
+   184,
    67
   ],
   "list": {
@@ -116,7 +116,7 @@
    "sh": 0,
    "w": 0,
    "sw": 0,
-   "rows": 9
+   "rows": 8
   },
   "tbar": {
    "l": 0,
@@ -145,7 +145,7 @@
   "pill": {
    "l": 11,
    "t": 11,
-   "w": 142,
+   "w": 162,
    "h": 46
   },
   "dock": {
@@ -159,7 +159,7 @@
   "cut": []
  },
  "loading/panel": {
-  "form": "compact-on st-ok form-panel",
+  "form": "compact-on st-bad form-panel",
   "win": [
    400,
    580
@@ -214,15 +214,15 @@
  "loading/compact": {
   "form": "compact-on st-ok form-compact",
   "win": [
-   240,
+   358,
    67
   ],
   "list": {
    "h": 39,
    "sh": 39,
-   "w": 160,
-   "sw": 160,
-   "rows": 0
+   "w": 278,
+   "sw": 278,
+   "rows": 9
   },
   "tbar": {
    "l": 0,
@@ -243,7 +243,7 @@
    "h": 0
   },
   "cctl": {
-   "l": 171,
+   "l": 289,
    "t": 22,
    "w": 58,
    "h": 24
@@ -265,7 +265,7 @@
   "cut": []
  },
  "loading/pill": {
-  "form": "compact-on st-ok form-pill",
+  "form": "compact-on form-pill st-ok",
   "win": [
    164,
    67
@@ -275,7 +275,7 @@
    "sh": 0,
    "w": 0,
    "sw": 0,
-   "rows": 0
+   "rows": 9
   },
   "tbar": {
    "l": 0,
@@ -1272,7 +1272,7 @@
   "cut": []
  },
  "xl/panel": {
-  "form": "compact-on form-panel st-bad",
+  "form": "compact-on form-panel custom-size st-bad",
   "win": [
    463,
    619

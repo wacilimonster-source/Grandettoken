@@ -653,6 +653,20 @@ body.form-compact .rz-grip,body.form-pill .rz-grip,body.docked .rz-grip{display:
   font-size:max(9px,calc(9.5px*var(--u)));font-variant-numeric:tabular-nums;
   opacity:0;pointer-events:none;transition:opacity var(--t1) ease}
 .rz-size.on{opacity:1}
+/* 自定义尺寸时才出现的“回到默认大小”按钮:放到右下角、footer 上方,
+   不参与默认布局;拖动中隐藏,松手后出现。 */
+.rz-reset{display:none;position:absolute;right:calc(12px*var(--u));bottom:calc(42px*var(--u));
+  z-index:68;align-items:center;gap:calc(3px*var(--u));border:1px solid #3d5a8a;
+  background:#151d2b;color:#cfe0ff;border-radius:999px;padding:calc(2px*var(--u)) calc(8px*var(--u));
+  font:inherit;font-size:max(9.5px,calc(9.5px*var(--u)));cursor:pointer;white-space:nowrap;
+  box-shadow:0 4px 12px -6px #000}
+body.form-panel.custom-size .rz-reset{display:inline-flex}
+body.resizing .rz-reset{display:none!important}
+body.form-compact .rz-reset,body.form-pill .rz-reset,body.docked .rz-reset{display:none!important}
+.rz-reset:hover{background:#1c2740;border-color:var(--ac)}
+.rz-reset:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
+/* 松手后尺寸标签让位给“默认大小”按钮;拖动中仍显示实时尺寸 */
+body.custom-size:not(.resizing) .rz-size{display:none}
 
 /* ── 底栏 ── */
 .foot{display:flex;align-items:center;gap:calc(8px*var(--u));padding:calc(7px*var(--u)) calc(12px*var(--u));background:var(--bg2);
