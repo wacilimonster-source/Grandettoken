@@ -3668,5 +3668,5 @@ GitHub API 与 `gh release view` 均确认三件套齐全：`Grandettoken_0.3.0_
 三件套齐全：`Grandettoken_0.3.2_x64-setup.exe`（5,267,030 B，SHA-256
 `C6F160F83B9FD6FCFAD077A1C0ADF9DC2AAF1BF402DAC0B06DF6F12347058243`）、`.sig`、
 `latest.json`；`verify-signature` 与 `verify-updater` **PASS**，GitHub API 确认非 draft/prerelease。
-`verify-release` 仍受本机 `github.com/.../latest/download` 网络超时影响；签名/更新链路已独立核验。
-本机已覆盖安装 0.3.2，`%LOCALAPPDATA%\Grandettoken\Grandettoken.exe` 版本 0.3.2，安装后已启动。
+`verify-release` **PASS**（更新端点、三件套、签名、sha256、仓库元数据全部通过），
+签名/更新链路独立核验亦 PASS。本机已覆盖安装 0.3.2，`%LOCALAPPDATA%\Grandettoken\Grandettoken.exe` 版本 0.3.2，安装后已启动。
