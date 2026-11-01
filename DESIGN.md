@@ -1177,8 +1177,8 @@ Qoder 逐包到期 PASS。安装包与发布信息见 `PROGRESS.md` 的 v0.2.0 �
 - `WS_THICKFRAME` 出现(原生 undecorated resize border 需要);`WS_MAXIMIZEBOX` 仍不存在。
   `verify-form` 与 `win-style.ps1` 的断言已同步。
 - 卡片右下角 7px 手柄:pointerdown 起 manual drag,`setSize` 节流到 rAF;双击恢复默认。
-- 自定义尺寸时右下角浮出「↺ 默认大小」按钮(默认尺寸/拖动中/折叠形态隐藏);
-  点击恢复 400×580。复位路径共四条:浮动按钮、双击手柄、`⋯` 菜单、设置页。
+- 自定义尺寸时页脚「设置与管理」左边出现「↺ 默认」(默认尺寸/折叠形态隐藏);
+  点击恢复 400×580。复位路径共四条:页脚按钮、双击手柄、`⋯` 菜单、设置页。
 - 配置新增 `winW/winH`(内容逻辑 px)、`compactMaxW`、`resizeHintSeen`;命令
   `save_window_size` 只更新传入字段;启动时先恢复尺寸再夹位置。
 - `onResized` 记当前形态尺寸;`SIZE_APPLYING` 屏蔽程序化 setSize;`RESIZING` 期间

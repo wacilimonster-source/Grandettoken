@@ -2764,11 +2764,12 @@ function formSize(form) {
 
 /** 从真实窗口读回内容尺寸。只记当前形态该记的那一份:
  *  面板记 panelW/H;紧凑条记 compactW;胶囊/贴边不记(它们的宽度由内容/贴边算)。 */
-async function readSizeFromWindow() {
-  const sf = (await appWindow.scaleFactor()) || 1;
-  const sz = await appWindow.outerSize();
-  const cw = Math.max(1, Math.round(sz.width / sf - CARD_MARGIN * 2));
-  const ch = Math.max(1, Math.round(sz.height / sf - CARD_MARGIN * 2));
+function readSizeFromWindow() {
+  // window.innerWidth/Height 已经是当前档位的 CSS(逻辑)像素,和 Tauri 的
+  // LogicalSize 同单位;每帧读它不需要 IPC。以前每帧 scaleFactor+outerSize
+  // 两次 IPC,是拖拽卡顿的主要来源。
+  const cw = Math.max(1, Math.round(window.innerWidth - CARD_MARGIN * 2));
+  const ch = Math.max(1, Math.round(window.innerHeight - CARD_MARGIN * 2));
   const form = currentForm();
   if (form === "panel") {
     const b = panelBounds();
@@ -2783,26 +2784,34 @@ async function readSizeFromWindow() {
 }
 
 /** 有效宽度/高度断点:用内容 / 字号倍率,保证 lg/xl 下信息密度一致。 */
+let lastCustomSize = null;
 function updateSizeClass() {
   const u = fsU();
   const cw = Math.max(1, window.innerWidth - CARD_MARGIN * 2);
   const chh = Math.max(1, window.innerHeight - CARD_MARGIN * 2);
   const ew = cw / u;
   const eh = chh / u;
-  document.body.dataset.w = ew < 380 ? "xs" : ew < 520 ? "sm" : ew < 720 ? "md" : "lg";
-  document.body.dataset.h = eh < 560 ? "xs" : eh < 760 ? "sm" : "lg";
+  const wc = ew < 380 ? "xs" : ew < 520 ? "sm" : ew < 720 ? "md" : "lg";
+  const hc = eh < 560 ? "xs" : eh < 760 ? "sm" : "lg";
+  // 只在跨断点时写 dataset:每帧都写会触发整页样式重算,拖拽会明显发涩。
+  if (document.body.dataset.w !== wc) document.body.dataset.w = wc;
+  if (document.body.dataset.h !== hc) document.body.dataset.h = hc;
   updateResetButton();
 }
 
-/** 自定义尺寸时显示右下角“默认大小”按钮;回到默认后自动隐藏。 */
+/** 自定义尺寸时在页脚“设置与管理”左边显示“↺ 默认”;默认尺寸隐藏,不挡数据。 */
 function updateResetButton() {
-  const btn = $("rzReset");
+  const btn = $("lkReset");
   const [dw, dh] = panelDefaultSize();
   const custom =
     currentForm() === "panel" && !DOCK.on &&
     (Math.abs(SIZE.panelW - dw) > 1 || Math.abs(SIZE.panelH - dh) > 1);
-  document.body.classList.toggle("custom-size", custom);
-  if (btn) btn.title = `恢复默认大小 (${dw} × ${dh})`;
+  if (custom !== lastCustomSize) {
+    lastCustomSize = custom;
+    document.body.classList.toggle("custom-size", custom);
+    if (btn) btn.style.display = custom ? "" : "none";
+  }
+  if (btn && custom) btn.title = `恢复默认大小 (${dw} × ${dh})`;
 }
 
 function updateSizeBadge() {
@@ -2838,6 +2847,8 @@ function endResize() {
   RESIZING = false;
   document.body.classList.remove("resizing");
   markSelfMove(600);
+  readSizeFromWindow();
+  updateSizeClass();
   if (currentForm() === "panel") {
     const w = Math.round(SIZE.panelW), h = Math.round(SIZE.panelH);
     CFG.winW = w;
@@ -2874,22 +2885,30 @@ function resetPanelSize() {
 
 // 用户 resize(原生 undecorated 边框或右下角手柄)的收尾:
 // onResized 只负责记账 + 280ms 静止;程序化 setSize 用 SIZE_APPLYING 屏蔽。
-if (typeof appWindow.onResized === "function") appWindow.onResized(async () => {
+let resizeFrame = 0;
+if (typeof appWindow.onResized === "function") appWindow.onResized(() => {
   if (SIZE_APPLYING) return;
   const form = currentForm();
   if (DOCK.on || form === "pill" || form === "docked") return;
   if (form !== "panel" && form !== "compact") return;
-  RESIZING = true;
-  document.body.classList.add("resizing");
-  await readSizeFromWindow();
-  updateSizeClass();
-  clearTimeout(DOCK.settleTimer);
-  setDockPreview(null);
-  updateSizeBadge();
+  if (!RESIZING) {
+    RESIZING = true;
+    document.body.classList.add("resizing");
+    clearTimeout(DOCK.settleTimer);
+    setDockPreview(null);
+  }
   if (!MANUAL_RESIZING) {
     clearTimeout(resizeIdleTimer);
     resizeIdleTimer = setTimeout(endResize, 280);
   }
+  // 一帧只做一次同步记账;不再每帧两次 IPC。
+  if (resizeFrame) return;
+  resizeFrame = requestAnimationFrame(() => {
+    resizeFrame = 0;
+    readSizeFromWindow();
+    updateSizeClass();
+    updateSizeBadge();
+  });
 });
 
 if (typeof appWindow.onScaleChanged === "function") {
@@ -2900,39 +2919,35 @@ if (typeof appWindow.onScaleChanged === "function") {
   });
 }
 
-// 视口宽度变化的兜底(字号切换、设置页内容变化等不一定触发 onResized)
-if (window.ResizeObserver) {
-  let roFrame = 0;
-  const ro = new ResizeObserver(() => {
-    if (roFrame) return;
-    roFrame = requestAnimationFrame(() => {
-      roFrame = 0;
-      updateSizeClass();
-    });
-  });
-  ro.observe(document.body);
-}
-
 // 右下角可见手柄:原生边框在窗口最外缘(10px 透明边距里),这个手柄把
 // “右下角可以拉”变成看得见、且不必精确命中 4px 系统边框的入口。
 (function initResizeGrip() {
   const g = $("rzGrip");
   if (!g) return;
-  let drag = null, frame = 0;
+  let drag = null, pending = null, busy = false;
+  const flush = () => {
+    if (busy || !pending) return;
+    const [nw, nh] = pending;
+    pending = null;
+    busy = true;
+    appWindow.setSize(new T.dpi.LogicalSize(nw + CARD_MARGIN * 2, nh + CARD_MARGIN * 2))
+      .catch(() => {})
+      .finally(() => {
+        busy = false;
+        // 拖拽比 IPC 快时只保留最新目标尺寸,避免 setSize 排队导致"越拖越落后"。
+        if (pending) requestAnimationFrame(flush);
+      });
+  };
   const apply = () => {
-    if (!drag || frame) return;
-    frame = requestAnimationFrame(() => {
-      frame = 0;
-      if (!drag) return;
-      const b = panelBounds();
-      const nw = clampNum(drag.w + (drag.cx - drag.sx), b.minW, b.maxW);
-      const nh = clampNum(drag.h + (drag.cy - drag.sy), b.minH, b.maxH);
-      if (nw === SIZE.panelW && nh === SIZE.panelH) return;
-      SIZE.panelW = nw;
-      SIZE.panelH = nh;
-      appWindow.setSize(new T.dpi.LogicalSize(nw + CARD_MARGIN * 2, nh + CARD_MARGIN * 2)).catch(() => {});
-      updateSizeBadge();
-    });
+    if (!drag) return;
+    const b = panelBounds();
+    const nw = clampNum(drag.w + (drag.cx - drag.sx), b.minW, b.maxW);
+    const nh = clampNum(drag.h + (drag.cy - drag.sy), b.minH, b.maxH);
+    if (nw === SIZE.panelW && nh === SIZE.panelH) return;
+    SIZE.panelW = nw;
+    SIZE.panelH = nh;
+    pending = [nw, nh];
+    if (!busy) requestAnimationFrame(flush);
   };
   g.addEventListener("pointerdown", (e) => {
     if (currentForm() !== "panel" || DOCK.on) return;
@@ -2973,7 +2988,7 @@ if (window.ResizeObserver) {
   });
 })();
 
-$("rzReset").addEventListener("click", (e) => {
+$("lkReset").addEventListener("click", (e) => {
   e.preventDefault();
   e.stopPropagation();
   resetPanelSize();
@@ -3076,8 +3091,16 @@ async function applyFormInner(form, remember = true, forceSize = false) {
         await appWindow.setMaxSize(new T.dpi.LogicalSize(w, h));
       }
     }
-    await readSizeFromWindow();
-    updateSizeClass();
+    // 用请求的尺寸记账(不依赖 setSize 后 innerWidth 是否已刷新);下一次
+    // onResized 只做同步读回,不再触发 IPC。
+    if (form === "panel") {
+      SIZE.panelW = Math.round(w - CARD_MARGIN * 2);
+      SIZE.panelH = Math.round(h - CARD_MARGIN * 2);
+    } else if (form === "compact") {
+      compactW = Math.round(w - CARD_MARGIN * 2);
+    }
+    // 等一帧让 WebView 的 innerWidth/Height 跟上,再切断点/按钮。
+    setTimeout(updateSizeClass, 30);
     // 视口变化后重新量一次紧凑条,决定尾巴要收几个进 "+N"
     scheduleFitCompact();
   } catch (e) {
@@ -3959,7 +3982,7 @@ function setDockPreview(side) {
 }
 async function previewTick() {
   const now = Date.now();
-  if (now - previewAt < 100) return;
+  if (now - previewAt < 180) return;
   previewAt = now;
   if (!CFG || !CFG.dockEnabled || DOCK.on || DOCK.selfMove || RESIZING) return setDockPreview(null);
   try {

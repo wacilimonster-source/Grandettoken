@@ -212,17 +212,17 @@
   "cut": []
  },
  "loading/compact": {
-  "form": "compact-on st-ok form-compact",
+  "form": "compact-on st-bad form-compact",
   "win": [
-   358,
+   240,
    67
   ],
   "list": {
    "h": 39,
    "sh": 39,
-   "w": 278,
-   "sw": 278,
-   "rows": 9
+   "w": 160,
+   "sw": 160,
+   "rows": 0
   },
   "tbar": {
    "l": 0,
@@ -243,7 +243,7 @@
    "h": 0
   },
   "cctl": {
-   "l": 289,
+   "l": 171,
    "t": 22,
    "w": 58,
    "h": 24
@@ -265,9 +265,9 @@
   "cut": []
  },
  "loading/pill": {
-  "form": "compact-on form-pill st-ok",
+  "form": "compact-on st-bad form-pill",
   "win": [
-   164,
+   184,
    67
   ],
   "list": {
@@ -275,7 +275,7 @@
    "sh": 0,
    "w": 0,
    "sw": 0,
-   "rows": 9
+   "rows": 0
   },
   "tbar": {
    "l": 0,
@@ -304,7 +304,7 @@
   "pill": {
    "l": 11,
    "t": 11,
-   "w": 142,
+   "w": 162,
    "h": 46
   },
   "dock": {
@@ -1113,17 +1113,17 @@
   "cut": []
  },
  "auth/panel": {
-  "form": "compact-on form-panel st-bad",
+  "form": "compact-on form-panel st-ok",
   "win": [
    400,
    580
   ],
   "list": {
    "h": 396,
-   "sh": 496,
+   "sh": 569,
    "w": 370,
    "sw": 370,
-   "rows": 8
+   "rows": 9
   },
   "tbar": {
    "l": 11,
@@ -1166,17 +1166,17 @@
   "cut": []
  },
  "auth/compact": {
-  "form": "compact-on st-bad form-compact",
+  "form": "compact-on form-compact st-ok",
   "win": [
-   322,
+   348,
    67
   ],
   "list": {
    "h": 39,
    "sh": 39,
-   "w": 242,
-   "sw": 242,
-   "rows": 8
+   "w": 268,
+   "sw": 268,
+   "rows": 9
   },
   "tbar": {
    "l": 0,
@@ -1197,7 +1197,7 @@
    "h": 0
   },
   "cctl": {
-   "l": 253,
+   "l": 279,
    "t": 22,
    "w": 58,
    "h": 24
@@ -1219,9 +1219,9 @@
   "cut": []
  },
  "auth/pill": {
-  "form": "compact-on form-pill st-bad",
+  "form": "compact-on form-pill st-ok",
   "win": [
-   216,
+   164,
    67
   ],
   "list": {
@@ -1229,7 +1229,7 @@
    "sh": 0,
    "w": 0,
    "sw": 0,
-   "rows": 8
+   "rows": 9
   },
   "tbar": {
    "l": 0,
@@ -1258,7 +1258,7 @@
   "pill": {
    "l": 11,
    "t": 11,
-   "w": 194,
+   "w": 142,
    "h": 46
   },
   "dock": {
@@ -1380,7 +1380,7 @@
  "xl/pill": {
   "form": "compact-on form-pill st-bad",
   "win": [
-   216,
+   215,
    80
   ],
   "list": {

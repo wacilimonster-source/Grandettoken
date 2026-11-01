@@ -140,13 +140,20 @@ const check = (name, ok, detail) => {
     await sleep(900);
     const after = await state();
     check('右下角手柄能拉大', after.w > before.w && after.h > before.h, `${before.w}×${before.h} → ${after.w}×${after.h}`);
-    const resetVisible = await ev(`getComputedStyle(document.getElementById('rzReset')).display`, true);
+    const resetVisible = await ev(`getComputedStyle(document.getElementById('lkReset')).display`, true);
     check('自定义尺寸显示“默认大小”按钮', resetVisible !== 'none', resetVisible);
-    await ev(`document.getElementById('rzReset').click()`);
+    const resetLayout = JSON.parse(await ev(`(() => {
+      const b = document.getElementById('lkReset'), k = document.getElementById('lkKeys');
+      return JSON.stringify({ parent: b.parentElement.className,
+        beforeSettings: !!(b.compareDocumentPosition(k) & 4) });
+    })()`));
+    check('默认大小按钮在页脚、位于设置与管理左边',
+      /foot/.test(resetLayout.parent) && resetLayout.beforeSettings, JSON.stringify(resetLayout));
+    await ev(`document.getElementById('lkReset').click()`);
     await sleep(700);
     const reset = await state();
     check('点“默认大小”按钮回到 400×580', reset.w === 400 && reset.h === 580, `${reset.w}×${reset.h}`);
-    const resetHidden = await ev(`getComputedStyle(document.getElementById('rzReset')).display`, true);
+    const resetHidden = await ev(`getComputedStyle(document.getElementById('lkReset')).display`, true);
     check('默认尺寸隐藏“默认大小”按钮', resetHidden === 'none', resetHidden);
 
     // 5. 字号变大:只长到新的最小尺寸,不回到默认

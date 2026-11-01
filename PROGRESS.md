@@ -3647,3 +3647,18 @@ GitHub API 与 `gh release view` 均确认三件套齐全：`Grandettoken_0.3.0_
 `latest.json`；`verify-signature` 与 `verify-updater` **PASS**，GitHub API 确认非 draft/prerelease。
 `verify-release` 仍受本机 `github.com/.../latest/download` 网络超时影响；签名/更新链路已独立核验。
 本机已覆盖安装 0.3.1，`%LOCALAPPDATA%\Grandettoken\Grandettoken.exe` 版本 0.3.1，安装后已启动。
+
+### 发版 v0.3.2（2026-11-01）
+
+- **恢复默认移到页脚**：自定义尺寸时，页脚「设置与管理」左边出现「↺ 默认」；
+  默认尺寸/折叠形态隐藏，不再浮在数据上方。复位入口仍为四条：页脚按钮、双击手柄、
+  `⋯` 菜单、设置 → 显示。
+- **拖拽性能**：`onResized` 不再每帧调用 `scaleFactor + outerSize` 两次 IPC，
+  改为同步读 `innerWidth/Height` + 单帧 rAF；`data-w/h` 只在跨断点时写入；
+  手动右下角手柄的 `setSize` 合并为“同时最多一个在途”，避免 IPC 排队越拖越落后；
+  拖拽中关闭装饰过渡/动画；窗口移动的吸附预览由 100ms 节流到 180ms；移除重复的
+  `ResizeObserver` 回调。
+- 验证：core **361**；jsdom **120/120**；`verify-resize` 增加“页脚位置/在设置与管理左边”
+  断言后全 PASS；三形态视觉 **30/30 无越界**；`verify-ui` 17、设置入口、签到中心、
+  焦点环、形态尺寸 PASS；Codex **48/48**；Qoder PASS。
+- 安装包与发布信息见下一条记录。

@@ -353,6 +353,7 @@
          而设置入口收敛到这一处之后,它就成了键盘用户唯一的入口(2026-10-20)。 -->
     <button type="button" class="lk" id="lkUpd" style="display:none"></button>
     <div class="spacer"></div>
+    <button type="button" class="lk" id="lkReset" style="display:none" title="恢复默认大小">↺ 默认</button>
     <button type="button" class="lk" id="lkKeys">设置与管理</button>
     <span style="color:var(--line2)">|</span>
     <button type="button" class="lk" id="lkQuit">退出</button>
@@ -361,7 +362,6 @@
   <!-- 面板右下角可见缩放手柄 + 拖动时的实时尺寸 -->
   <div class="rz-grip" id="rzGrip" title="拖动调整大小;双击恢复默认" role="presentation"></div>
   <div class="rz-size" id="rzSize" aria-hidden="true"></div>
-  <button class="rz-reset" id="rzReset" type="button" title="恢复默认大小">↺ 默认大小</button>
 
   <!-- 轻量提示条:刷新回执 / 操作失败,替代原生 alert -->
   <div id="toast" role="status"></div>
