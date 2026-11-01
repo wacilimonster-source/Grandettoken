@@ -153,7 +153,7 @@ Codex 收起行的周额度优先设计见
 
 ### 4.2 关键设计决策
 
-**① 所有形态固定尺寸,不可拖拽改变大小。**
+**① 所有形态固定尺寸,不可拖拽改变大小。**(2026-11-01 起面板/紧凑条可缩放,见 §14;胶囊/贴边仍固定。)
 `resizable:false` + `maximizable:false`,每次切换形态都 `setResizable(false)` 并把 min/max 钳到当前尺寸。
 > 机制的真相(实测):Windows 对**程序化** `SetWindowPos` 不套用 tracking 约束,`setMinSize/setMaxSize` 调用会成功返回但拦不住 `setSize(500,600)`。真正挡住用户拖拽的是窗口样式里**没有 `WS_THICKFRAME`(缩放边框)和 `WS_MAXIMIZEBOX`**。`build/win-style.ps1` 读 `GWL_STYLE` 做这条断言(实测 `0x14ca0000`,两个位都不在)。min/max 保留作兜底,但不要再把它当成固定尺寸的机制。
 
@@ -1151,6 +1151,44 @@ harness home 根下。所以 DSH 的备份目录里多一份 `.inject-layout.jso
 core **361 passed / 7 ignored**;jsdom **120/120**;三形态 × 三档字号视觉回归 **30/30 无越界**;
 `verify-ui-0923` 17 条、设置入口、签到中心、焦点环、形态尺寸全部 PASS;Codex 布局 **48/48**;
 Qoder 逐包到期 PASS。安装包与发布信息见 `PROGRESS.md` 的 v0.2.0 条目。
+
+---
+
+## 14. 可缩放面板 v0.3.0(2026-11-01)
+
+设计/技术方案:[`docs/product/product-resizable-panel-2026-11-01.md`](docs/product/product-resizable-panel-2026-11-01.md)。
+第 4 节“所有形态固定尺寸”对**面板/紧凑条**不再成立;胶囊/贴边仍固定。
+
+### 14.1 范围与尺寸
+
+| 形态 | 内容 | 窗口 | 缩放 |
+|---|---|---|---|
+| 面板 | 340×460 – 740×920,默认 380×560 | 360×480 – 760×940,默认 400×580 | 四边 + 四角;原生 undecorated border + 右下角手柄 |
+| 紧凑条 | 220–580 × 46 | 内容宽+20 × 66 | 只允许左右;宽度作为 max,拉宽只露出更多 chip |
+| 胶囊 | 132–280 × 46 | 内容宽+20 × 66 | 锁死 |
+| 贴边 | 8×64 | 8×64 | 锁死 |
+
+### 14.2 技术
+
+- `tauri.conf.json` `resizable:true`;`applyFormInner` 对 panel/compact `setResizable(true)`、
+  对 pill `false`;dock 布局里 `setResizable(false)`。`maximizable` 仍为 false。
+- `WS_THICKFRAME` 出现(原生 undecorated resize border 需要);`WS_MAXIMIZEBOX` 仍不存在。
+  `verify-form` 与 `win-style.ps1` 的断言已同步。
+- 卡片右下角 7px 手柄:pointerdown 起 manual drag,`setSize` 节流到 rAF;双击恢复默认。
+- 配置新增 `winW/winH`(内容逻辑 px)、`compactMaxW`、`resizeHintSeen`;命令
+  `save_window_size` 只更新传入字段;启动时先恢复尺寸再夹位置。
+- `onResized` 记当前形态尺寸;`SIZE_APPLYING` 屏蔽程序化 setSize;`RESIZING` 期间
+  跳过贴边 settle/preview;resize 结束 280ms 后保存尺寸与位置。
+- 断点用“内容宽 / 字号倍率”:xs <380(摘要两行)、sm 380–519(默认)、md 520–719
+  (舒展/常驻进度条/详情 3 列)、lg ≥720(两列渠道网格,分组/失败/展开行跨列)。
+- 字号只改排版和最小尺寸;字号变大时窗口只长到新的 min,不自动缩回默认。
+- 紧凑条 `compactMaxW` 上限;`fitCompact` 用这个 max;拉宽只露出更多 chip,不留空宽。
+
+### 14.3 验证
+
+core **361**;jsdom **120/120**;`verify-resize` 尺寸/持久化/两列/手柄/字号全 PASS;
+三形态 × 三档字号视觉 **30/30 无越界**;`verify-ui` 17、设置入口、签到中心、焦点环、
+形态尺寸 PASS;Codex **48/48**;Qoder PASS。安装包与发布信息见 `PROGRESS.md` v0.3.0。
 
 ---
 

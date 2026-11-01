@@ -3588,3 +3588,30 @@ GitHub API 与 `gh release view` 均确认三件套齐全：`Grandettoken_0.2.0_
 
 本机已用 `Grandettoken_0.2.0_x64-setup.exe` 静默覆盖安装，
 `%LOCALAPPDATA%\Grandettoken\Grandettoken.exe` 文件版本已变为 **0.2.0**；配置、SQLite 与凭据均保留。
+
+### 发版 v0.3.0（2026-11-01）
+
+设计/技术方案：`docs/product/product-resizable-panel-2026-11-01.md`。本轮只做“非胶囊形态的缩放与自适应”，
+不改渠道口径、不改默认尺寸。
+
+- **范围**：面板内容 340×460 – 740×920（窗口 360×480 – 760×940，默认 400×580）；
+  紧凑条内容 220–580 × 46（只允许左右，拉宽只露出更多 chip）；胶囊/贴边锁死。
+- **M0 实测**：`startResizeDragging` 在真实 pointerdown 下不稳定；改用 **Tauri 原生 undecorated
+  resize border**（`resizable:true` + `WS_THICKFRAME`）+ 卡片右下角 7px 手柄（manual pointer
+  drag，`setSize` 节流到 rAF）。`WS_MAXIMIZEBOX` 仍关闭；`start-resize-dragging` 权限未启用。
+- **几何/持久化**：`SIZE` 独立保存面板内容尺寸；`applyFormInner` 只在形态变化/首次时设尺寸，
+  不再把用户刚拉大的窗口冲掉；`SIZE_APPLYING` 屏蔽程序化 setSize，`RESIZING` 期间跳过贴边
+  settle/preview；resize 结束 280ms 后保存尺寸与位置。新增配置 `winW/winH/compactMaxW/resizeHintSeen`
+  与 `save_window_size` 命令；启动时先恢复尺寸再夹位置。
+- **自适应**（按内容宽 / 字号倍率）：xs <380（摘要两行、隐藏 7 日柱/标题更新时间）、
+  sm 380–519（默认）、md 520–719（舒展、常驻金额行进度条、详情 3 列）、lg ≥720（渠道两列网格，
+  分组/失败横幅/展开行跨列）；面板高度过矮时隐藏摘要次要副行。
+- **字号**：只改排版和最小尺寸；字号变大时窗口只长到新的 min，不自动缩回默认。
+- **设置**：显示页新增「窗口尺寸 + 恢复默认」；`⋯` 菜单新增「恢复默认大小」；右下角手柄双击复位；
+  首次升级出现一次「可拖动边缘调整大小」提示。
+- **测试**：core **361 passed / 7 ignored**；jsdom **120/120**；新增 `verify-resize`
+  （四档尺寸/持久化/两列/紧凑条/胶囊/手柄/字号）全 PASS；三形态 × 三档字号视觉 **30/30 无越界**；
+  `verify-ui-0923` 17、设置入口、签到中心、焦点环、形态尺寸 PASS；Codex 布局 **48/48**；Qoder 逐包到期 PASS。
+- **构建**：三处版本同步为 **0.3.0**；签名 NSIS 安装包 `Grandettoken_0.3.0_x64-setup.exe`
+  （5,266,439 B，SHA-256 `E9BDD9555D4417CC3342CE3C049B10C8A17DE097823BCA8B0B99E4CEB3FAFB7A`）。
+  发布与线上校验见下一条记录。

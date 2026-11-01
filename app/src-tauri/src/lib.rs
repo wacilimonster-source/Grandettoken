@@ -278,6 +278,18 @@ async fn set_config(app: tauri::AppHandle, state: State<'_, AppState>, config: C
         if incoming.win_y.is_none() {
             incoming.win_y = cur.win_y;
         }
+        if incoming.win_w.is_none() {
+            incoming.win_w = cur.win_w;
+        }
+        if incoming.win_h.is_none() {
+            incoming.win_h = cur.win_h;
+        }
+        if incoming.compact_max_w.is_none() {
+            incoming.compact_max_w = cur.compact_max_w;
+        }
+        if !incoming.resize_hint_seen {
+            incoming.resize_hint_seen = cur.resize_hint_seen;
+        }
         // 选中项口径是后端从客户端文件里读出来的(前端手里永远是旧的):
         // 整份覆盖会把刚学会的抹掉,所以后端已知的键以库里为准。
         let mut merged = cur.selection_prefix.clone();
@@ -2267,6 +2279,30 @@ async fn save_window_pos(state: State<'_, AppState>, x: i32, y: i32) -> Result<(
     save_config_off_main(&state, move |c| {
         c.win_x = Some(x);
         c.win_y = Some(y);
+    })
+    .await
+}
+
+/// 保存面板/紧凑条尺寸。只更新传入的字段,不整份覆盖配置。
+/// 前端在 resize 结束 250ms 防抖后调用一次,不做高频写盘。
+#[tauri::command]
+async fn save_window_size(
+    state: State<'_, AppState>,
+    w: Option<u32>,
+    h: Option<u32>,
+    compact_max_w: Option<u32>,
+) -> Result<(), String> {
+    refuse_if_config_broken()?;
+    save_config_off_main(&state, move |c| {
+        if let Some(w) = w {
+            c.win_w = Some(w.clamp(200, 2000));
+        }
+        if let Some(h) = h {
+            c.win_h = Some(h.clamp(200, 2000));
+        }
+        if let Some(cw) = compact_max_w {
+            c.compact_max_w = Some(cw.clamp(150, 1200));
+        }
     })
     .await
 }
@@ -5232,6 +5268,16 @@ pub fn run() {
             // 置顶 + 上次位置是持久化设置:启动时按配置应用,折叠形态没有置顶按钮也生效
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.set_always_on_top(config.always_on_top);
+                // 先恢复尺寸,再用**新尺寸**夹位置:否则宽窗口在屏幕边缘会被
+                // 按旧尺寸裁进屏幕,恢复位置后右/下边又探出去。
+                if config.form == "panel" {
+                    if let (Some(cw), Some(ch)) = (config.win_w, config.win_h) {
+                        let _ = w.set_size(tauri::LogicalSize::new(
+                            cw as f64 + 20.0,
+                            ch as f64 + 20.0,
+                        ));
+                    }
+                }
                 // 恢复窗口位置(报告 O-6)。多屏环境下副屏拔掉后旧坐标落在屏幕外,
                 // 窗口"消失"又无从找回 —— 所以按当前可用显示器裁一遍。
                 if let (Some(x), Some(y)) = (config.win_x, config.win_y) {
@@ -5413,6 +5459,7 @@ pub fn run() {
             install_update,
             skip_update_version,
             save_window_pos,
+            save_window_size,
             app_version,
             take_startup_error,
             get_model_catalog,

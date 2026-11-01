@@ -347,6 +347,16 @@ const MEASURE = `(() => {
       CFG.textTone = false;
       CFG.fontScale = "md";
       Object.assign(CFG, d.CFG);
+      // 每个场景都从默认面板尺寸开始,避免上一个场景拉大的尺寸污染截图。
+      // 字号档位改变时最小尺寸仍会按 u 放大(这是产品规则)。
+      SIZE.panelW = 380; SIZE.panelH = 560; SIZE.form = "none";
+      // 上一个场景/手动调试可能留着展开行;视觉基线必须是收起态。
+      rowOpen.clear();
+      document.querySelectorAll('#list .row.open').forEach((r) => {
+        r.classList.remove('open');
+        const h = r.querySelector('.rhead');
+        if (h) h.setAttribute('aria-expanded', 'false');
+      });
       return "ok";
     })()`);
 

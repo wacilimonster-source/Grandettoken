@@ -1,12 +1,10 @@
 // End-to-end check for the window forms. For every form it asserts:
 //   1. body class and the real window size change together (the original bug
 //      left the window at panel size while the DOM had already switched)
-//   2. the window reports resizable=false
-// Then it reads the Win32 style bits: a resizable window carries WS_THICKFRAME
-// (the drag border) and WS_MAXIMIZEBOX; fixed-size means both are absent.
-// Note: min/max size setters do NOT clamp programmatic SetWindowPos on Windows
-// (they only bound user-initiated tracking), so the style bits are the real
-// evidence that a user cannot drag the window bigger.
+//   2. panel/compact report resizable=true, pill reports false
+// Then it reads the Win32 style bits: panel (last form in the loop) must carry
+// WS_THICKFRAME (the undecorated resize border) and must NOT carry WS_MAXIMIZEBOX
+// (we still do not expose system maximize). min/max are ranges for panel/compact.
 //
 // Usage: launch-debug.ps1 first, then  node build/verify-form.js [port]
 const { execSync } = require('child_process');
@@ -145,8 +143,8 @@ async function cornerAlpha(send, evalJs) {
       form === 'pill'
         ? near(state.h, eh) && state.w >= 150 && state.w <= 264
         : form === 'compact'
-          ? near(state.h, eh) && state.w >= 150 && state.w <= 402
-          : near(state.w, ew) && near(state.h, eh);
+          ? near(state.h, eh) && state.w >= 150 && state.w <= 620
+          : state.w >= 340 + 20 && state.w <= 740 + 20 && state.h >= 460 + 20 && state.h <= 920 + 20;
     const classOk = state.bodyClass.includes('form-' + form);
     // 行可见性:面板必须显示全部行(紧凑条藏起来的行要还原);
     // 紧凑条若有隐藏行,数目必须和 "+N" 徽标对得上
@@ -163,7 +161,9 @@ async function cornerAlpha(send, evalJs) {
       corner = await cornerAlpha(send, evalJs);
       cornerOk = corner.cornerAlpha === 0 && corner.centerAlpha > 200;
     }
-    const pass = sizeOk && classOk && state.resizable === false && rowsOk && cornerOk;
+    const wantResizable = form === 'panel' || form === 'compact';
+    const resizableOk = state.resizable === wantResizable;
+    const pass = sizeOk && classOk && resizableOk && rowsOk && cornerOk;
     if (!pass) ok = false;
     rows.push({ form, ...state, ew, eh, sizeOk, classOk, rowsOk, corner, cornerOk, pass });
   }
@@ -184,8 +184,8 @@ async function cornerAlpha(send, evalJs) {
   console.log('=== form verification ===');
   for (const r of rows) {
     console.log(
-      `  ${r.form.padEnd(8)} body=${r.bodyClass.padEnd(18)} tbar=${r.tbar.padEnd(6)} window=${r.w}x${r.h} expected=${r.form === 'pill' ? '150~264' : r.form === 'compact' ? '150~402' : r.ew}x${r.eh}  ` +
-      `switch=${r.sizeOk && r.classOk ? 'PASS' : 'FAIL'}  resizable=${r.resizable ? 'YES(BAD)' : 'no'}  ` +
+      `  ${r.form.padEnd(8)} body=${r.bodyClass.padEnd(18)} tbar=${r.tbar.padEnd(6)} window=${r.w}x${r.h} expected=${r.form === 'pill' ? '150~264' : r.form === 'compact' ? '150~620' : '340~760 x 480~940'}  ` +
+      `switch=${r.sizeOk && r.classOk ? 'PASS' : 'FAIL'}  resizable=${r.resizable ? 'yes' : 'no'}  ` +
       `rows=${r.visible}/${r.rows}${r.badge ? ' (' + r.badge + ')' : ''} ${r.rowsOk ? 'PASS' : 'FAIL(rows)'}`
     );
     if (r.corner) {
@@ -202,12 +202,12 @@ async function cornerAlpha(send, evalJs) {
   } else {
     const thick = (style & WS_THICKFRAME) !== 0;
     const maxbox = (style & WS_MAXIMIZEBOX) !== 0;
-    const fixed = !thick && !maxbox;
-    if (!fixed) ok = false;
+    const styleOk = thick && !maxbox;
+    if (!styleOk) ok = false;
     console.log(
       `  win32 style          0x${style.toString(16).padStart(8, '0')}  ` +
-      `WS_THICKFRAME(drag border)=${thick ? 'YES(BAD)' : 'no'}  WS_MAXIMIZEBOX=${maxbox ? 'YES(BAD)' : 'no'}  ` +
-      `fixed-size=${fixed ? 'PASS' : 'FAIL'}`
+      `WS_THICKFRAME(resize border)=${thick ? 'yes' : 'NO(BAD)'}  ` +
+      `WS_MAXIMIZEBOX=${maxbox ? 'YES(BAD)' : 'no'}  panel-resizable=${styleOk ? 'PASS' : 'FAIL'}`
     );
   }
 

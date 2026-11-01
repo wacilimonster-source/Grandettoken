@@ -106,9 +106,9 @@
   "cut": []
  },
  "normal/pill": {
-  "form": "compact-on form-pill st-bad",
+  "form": "compact-on st-ok form-pill",
   "win": [
-   184,
+   164,
    67
   ],
   "list": {
@@ -116,7 +116,7 @@
    "sh": 0,
    "w": 0,
    "sw": 0,
-   "rows": 8
+   "rows": 9
   },
   "tbar": {
    "l": 0,
@@ -145,7 +145,7 @@
   "pill": {
    "l": 11,
    "t": 11,
-   "w": 162,
+   "w": 142,
    "h": 46
   },
   "dock": {
@@ -159,7 +159,7 @@
   "cut": []
  },
  "loading/panel": {
-  "form": "compact-on st-bad form-panel",
+  "form": "compact-on st-ok form-panel",
   "win": [
    400,
    580
@@ -212,16 +212,16 @@
   "cut": []
  },
  "loading/compact": {
-  "form": "compact-on st-bad form-compact",
+  "form": "compact-on st-ok form-compact",
   "win": [
-   174,
+   240,
    67
   ],
   "list": {
-   "h": 16,
-   "sh": 16,
-   "w": 94,
-   "sw": 94,
+   "h": 39,
+   "sh": 39,
+   "w": 160,
+   "sw": 160,
    "rows": 0
   },
   "tbar": {
@@ -243,7 +243,7 @@
    "h": 0
   },
   "cctl": {
-   "l": 105,
+   "l": 171,
    "t": 22,
    "w": 58,
    "h": 24
@@ -265,9 +265,9 @@
   "cut": []
  },
  "loading/pill": {
-  "form": "compact-on st-bad form-pill",
+  "form": "compact-on st-ok form-pill",
   "win": [
-   184,
+   164,
    67
   ],
   "list": {
@@ -304,7 +304,7 @@
   "pill": {
    "l": 11,
    "t": 11,
-   "w": 162,
+   "w": 142,
    "h": 46
   },
   "dock": {
@@ -371,16 +371,16 @@
   "cut": []
  },
  "empty/compact": {
-  "form": "compact-on form-compact st-fail",
+  "form": "compact-on st-fail form-compact",
   "win": [
-   200,
+   240,
    67
   ],
   "list": {
    "h": 39,
    "sh": 39,
-   "w": 120,
-   "sw": 120,
+   "w": 160,
+   "sw": 160,
    "rows": 0
   },
   "tbar": {
@@ -402,7 +402,7 @@
    "h": 0
   },
   "cctl": {
-   "l": 131,
+   "l": 171,
    "t": 22,
    "w": 58,
    "h": 24
@@ -1274,32 +1274,32 @@
  "xl/panel": {
   "form": "compact-on form-panel st-bad",
   "win": [
-   515,
-   748
+   463,
+   619
   ],
   "list": {
-   "h": 564,
-   "sh": 564,
-   "w": 494,
-   "sw": 494,
+   "h": 365,
+   "sh": 513,
+   "w": 434,
+   "sw": 434,
    "rows": 8
   },
   "tbar": {
    "l": 11,
    "t": 11,
-   "w": 494,
+   "w": 442,
    "h": 45
   },
   "sum": {
    "l": 11,
    "t": 56,
-   "w": 494,
-   "h": 86
+   "w": 442,
+   "h": 155
   },
   "foot": {
    "l": 11,
-   "t": 705,
-   "w": 494,
+   "t": 576,
+   "w": 442,
    "h": 32
   },
   "cctl": {
@@ -1327,14 +1327,14 @@
  "xl/compact": {
   "form": "compact-on form-compact st-bad",
   "win": [
-   498,
+   326,
    80
   ],
   "list": {
    "h": 39,
    "sh": 39,
-   "w": 418,
-   "sw": 418,
+   "w": 246,
+   "sw": 246,
    "rows": 8
   },
   "tbar": {
@@ -1356,7 +1356,7 @@
    "h": 0
   },
   "cctl": {
-   "l": 429,
+   "l": 257,
    "t": 28,
    "w": 58,
    "h": 24

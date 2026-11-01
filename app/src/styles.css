@@ -351,10 +351,11 @@ body.form-panel .row.open::after{content:"";position:absolute;left:0;top:0;botto
 .ledger .lx i{font-style:normal;color:var(--warn);margin-left:calc(5px*var(--u))}
 .lg-empty{font-size:max(11.5px,calc(10.5px*var(--u)));color:var(--tx3);line-height:1.6}
 /* 近 7 天消耗:用 channel_changes 的现成台账聚合,不新增后端请求 */
-.sparkbars{display:flex;align-items:flex-end;gap:calc(4px*var(--u));height:calc(42px*var(--u));
-  padding:calc(2px*var(--u)) 0 calc(4px*var(--u));border-bottom:1px dashed var(--line)}
-.sparkbars i{flex:1;min-width:0;display:block;background:var(--ac);opacity:.75;
-  border-radius:2px 2px 0 0}
+.sparkbars{display:flex;align-items:flex-end;justify-content:center;gap:calc(6px*var(--u));
+  height:calc(42px*var(--u));padding:calc(2px*var(--u)) 0 calc(4px*var(--u));
+  border-bottom:1px dashed var(--line)}
+.sparkbars i{flex:1 1 0;min-width:0;max-width:calc(44px*var(--u));display:block;background:var(--ac);
+  opacity:.75;border-radius:2px 2px 0 0}
 .sparkbars i.zero{opacity:.18;background:var(--tx4)}
 /* 渠道卡里的「测试连接」结果行(自检报告;不含任何密钥) */
 .prb{font-size:max(11.5px,calc(11.5px*var(--u)));color:var(--tx2);line-height:1.7;
@@ -401,7 +402,7 @@ body.form-compact .row[data-dtone="st"] .val .v::before{content:"~";opacity:.8;m
 .manage{display:none;flex:1;min-height:0;flex-direction:column}
 body.view-manage .manage{display:flex}
 body.view-manage .sum,
-body.view-manage .list{display:none}
+body.view-manage .list{display:none!important}
 body.view-manage #lkKeys{display:none}
 .mhead{display:flex;align-items:center;gap:calc(8px*var(--u));padding:calc(7px*var(--u)) calc(10px*var(--u));flex:none;
   border-bottom:1px solid var(--line);background:#141821}
@@ -635,6 +636,23 @@ body.form-compact .ckstrip,body.form-pill .ckstrip{display:none}
 .rhead:focus-visible,.sec-more:focus-visible,.eye:focus-visible,.sel:focus-visible,.hk-rec:focus-visible,
 .more:focus-visible,.tabs button:focus-visible{
   outline:2px solid var(--ac);outline-offset:2px}
+
+/* ── 面板缩放:右下角可见手柄 + 拖动时的实时尺寸 ──
+   原生 undecorated resize 边框在窗口最外缘(10px 透明边距里),这个手柄把
+   “右下角可以拉”做成看得见的入口,也方便双击复位。 */
+.rz-grip{position:absolute;right:calc(3px*var(--u));bottom:calc(3px*var(--u));
+  width:calc(7px*var(--u));height:calc(7px*var(--u));z-index:66;cursor:nwse-resize;
+  opacity:.45;border-radius:2px;
+  background:linear-gradient(135deg,transparent 44%,var(--tx4) 45%,var(--tx4) 55%,transparent 56%,
+    transparent 69%,var(--tx4) 70%,var(--tx4) 80%,transparent 81%)}
+.rz-grip:hover,body.resizing .rz-grip{opacity:1}
+body.form-compact .rz-grip,body.form-pill .rz-grip,body.docked .rz-grip{display:none}
+.rz-size{position:absolute;right:calc(12px*var(--u));bottom:calc(40px*var(--u));z-index:67;
+  padding:calc(1px*var(--u)) calc(6px*var(--u));border-radius:calc(5px*var(--u));
+  background:var(--bg3);border:1px solid var(--line2);color:var(--tx2);
+  font-size:max(9px,calc(9.5px*var(--u)));font-variant-numeric:tabular-nums;
+  opacity:0;pointer-events:none;transition:opacity var(--t1) ease}
+.rz-size.on{opacity:1}
 
 /* ── 底栏 ── */
 .foot{display:flex;align-items:center;gap:calc(8px*var(--u));padding:calc(7px*var(--u)) calc(12px*var(--u));background:var(--bg2);
@@ -1314,6 +1332,50 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 body.docked .dock-body{display:flex;flex-direction:column;gap:1px;padding:0!important}
 .dock-body i{display:block;flex:1 1 0;min-height:2px;border-radius:1px}
 .dock-body i.stale{background-image:repeating-linear-gradient(45deg,rgba(0,0,0,.35) 0 2px,transparent 2px 4px)!important}
+
+/* ═══ 面板自适应(v0.3.0):按有效宽度/高度切布局 ═══
+   data-w / data-h 由 app.js 的 updateSizeClass() 写在 body 上;
+   断点用“内容宽 / 字号倍率”,所以 lg/xl 下信息密度与 md 一致。 */
+body.form-panel[data-w="xs"] .tb-live{display:none}
+body.form-panel[data-w="xs"] .sum{grid-template-columns:minmax(0,1fr) 66px;
+  grid-template-areas:"hero ck" "risk risk";min-height:calc(104px*var(--u))}
+body.form-panel[data-w="xs"] .sum .cell:nth-child(1){grid-area:hero}
+body.form-panel[data-w="xs"] .sum .cell:nth-child(2){grid-area:risk;border-right:0;
+  border-top:1px solid var(--line-soft)}
+body.form-panel[data-w="xs"] .sum .ck-cell{grid-area:ck}
+body.form-panel[data-w="xs"] .sum .expbars{display:none}
+body.form-panel[data-w="xs"] .kv{grid-template-columns:1fr}
+body.form-panel[data-w="xs"] .core-use{padding:calc(6px*var(--u)) calc(8px*var(--u))}
+
+body.form-panel[data-w="md"] .sum .cell,
+body.form-panel[data-w="lg"] .sum .cell{padding:calc(10px*var(--u)) calc(12px*var(--u))}
+body.form-panel[data-w="md"] .sum .cell:first-child,
+body.form-panel[data-w="lg"] .sum .cell:first-child{padding-left:calc(15px*var(--u))}
+body.form-panel[data-w="md"] .rhead,
+body.form-panel[data-w="lg"] .rhead{padding-left:calc(16px*var(--u));padding-right:calc(16px*var(--u))}
+body.form-panel[data-w="md"] .row:not(.urg) .bar,
+body.form-panel[data-w="lg"] .row:not(.urg) .bar{display:block}
+body.form-panel[data-w="md"] .kv,
+body.form-panel[data-w="lg"] .kv{grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
+body.form-panel[data-w="md"] .mbody,
+body.form-panel[data-w="md"] .mindex,
+body.form-panel[data-w="lg"] .mbody,
+body.form-panel[data-w="lg"] .mindex{max-width:calc(640px*var(--u));margin-left:auto;margin-right:auto;width:100%}
+
+body.form-panel[data-w="lg"] .list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:0 calc(12px*var(--u));align-content:start}
+body.form-panel[data-w="lg"] .list>.grp,
+body.form-panel[data-w="lg"] .list>.fstrip,
+body.form-panel[data-w="lg"] .list>.ckstrip,
+body.form-panel[data-w="lg"] .list>.sk-wrap,
+body.form-panel[data-w="lg"] .list>.empty{grid-column:1/-1}
+body.form-panel[data-w="lg"] .list>.row.open,
+body.form-panel[data-w="lg"] .list>.row.urg{grid-column:1/-1}
+body.form-panel[data-w="lg"] .list>.row{min-width:0}
+
+body.form-panel[data-h="xs"] .sum{min-height:calc(72px*var(--u))}
+body.form-panel[data-h="xs"] .sum .cell:nth-child(1) .sb{display:none}
+body.form-panel[data-h="xs"] .sum .expbars{display:none}
 
 /* 非颜色模式:条形加纹理,状态写文字 */
 body.texttone .bar i{background-image:repeating-linear-gradient(90deg,rgba(0,0,0,.25) 0 2px,transparent 2px 5px)}

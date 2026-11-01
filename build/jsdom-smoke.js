@@ -1075,6 +1075,7 @@ function buildData(NOW) {
     alertPulse: false, peekOnClick: true, alwaysOnTop: false, dockEnabled: false,
     activeIntervalSec: 60, idleIntervalSec: 300, backoffIntervalSec: 900, trayShowNumber: true,
     autostart: false, autoCheckUpdate: true, notifyOnCrit: true, soundOn: false,
+    resizeHintSeen: true,
     modelShowAll: false, modelGroup: null, modelBaseUrl: null,
     claimChannels: { "4sapi": { enabled: true, amount: 500, minIntervalDays: 14 } },
   };

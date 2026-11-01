@@ -1,6 +1,7 @@
-# Read GWL_STYLE of the running app window. Fixed-size contract:
-# a resizable window carries WS_THICKFRAME (0x00040000, the drag border) and
-# WS_MAXIMIZEBOX (0x00010000); both must be absent.
+# Read GWL_STYLE of the running app window.
+# 0.3.0 contract: panel/compact carry WS_THICKFRAME (0x00040000, the undecorated
+# resize border); WS_MAXIMIZEBOX (0x00010000) is still absent. pill/dock are
+# switched to resizable=false at runtime.
 # ASCII-only, like every other .ps1 here.
 $ErrorActionPreference = 'Stop'
 Add-Type -Namespace W -Name U -MemberDefinition @'

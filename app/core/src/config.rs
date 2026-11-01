@@ -131,6 +131,15 @@ pub struct Config {
     /// (扫描报告 O-6)。None = 从没存过,按配置文件的默认摆放。
     pub win_x: Option<i32>,
     pub win_y: Option<i32>,
+    /// 主窗口内容尺寸(逻辑 px,不含四周 10px 透明边距)。None = 用默认 380×560。
+    /// 存内容而不是窗口尺寸:DPI/字号变化时窗口边距不变,恢复逻辑更简单。
+    pub win_w: Option<u32>,
+    pub win_h: Option<u32>,
+    /// 紧凑条的内容最大宽度(逻辑 px)。用户把条拉宽只是提高这个上限,
+    /// 实际宽度仍由 chip 内容决定,不留空宽。
+    pub compact_max_w: Option<u32>,
+    /// 首次升级提示“可拖动边缘调整大小”是否已经展示过。
+    pub resize_hint_seen: bool,
     /// 写进客户端的 4SAPI 入口(如 `https://4sapi.com/v1`)。None = 用挂件实测可用的域名。
     /// 用户手配的三个客户端里写的是三个不同域名(.org/.cn/.com),所以这里显式可配。
     pub model_base_url: Option<String>,
@@ -235,6 +244,10 @@ impl Default for Config {
             skipped_version: None,
             win_x: None,
             win_y: None,
+            win_w: None,
+            win_h: None,
+            compact_max_w: None,
+            resize_hint_seen: false,
             model_base_url: None,
             model_group: None,
             model_show_all: false,

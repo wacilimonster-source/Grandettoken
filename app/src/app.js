@@ -804,7 +804,9 @@ function renderRow(c, i) {
         </div>
         <div class="caret">&#9654;</div>
       </div>
-      <div class="r2">${!isOld && hv && hv.secondary ? esc(hv.secondary) : ""}</div>
+      <div class="r2">${
+        !isOld && hv && hv.secondary && !claimWarn && !winWarn ? esc(hv.secondary) : ""
+      }</div>
       ${bar}
       ${claimWarn}
       ${winWarn}
@@ -1627,7 +1629,7 @@ function fitCompact() {
   if (DOCK.on && !DOCK.open) return;
 
   const u = fsU();
-  const maxW = Math.round(380 * u);
+  const maxW = compactMaxPx();
   const gap = 10 * u;
   // 签到 chip 常驻:先插进去、把它的宽度算进 chrome —— 不预留宽度的话,
   // 装到最后一步才发现放不下,末尾的渠道会被它挤掉。
@@ -2693,20 +2695,271 @@ function renderPillPick() {
 // 见 styles.css body 的注释);实际尺寸走 formSize(),内容按字号档位 × 倍率。
 const CARD_MARGIN = 10; // 逻辑 px,固定不随字号缩放
 const SIZES = {
-  panel: [380, 560],
+  panel: [380, 560],   // 仅作 resolveForm 白名单与默认值来源
   compact: [380, 46],
   pill: [200, 46],
 };
+// 面板内容尺寸范围(u=1 时);窗口 = 内容 + 20
+const PANEL_MIN = [340, 460];
+const PANEL_DEFAULT = [380, 560];
+const PANEL_MAX = [740, 920];
+const COMPACT_MIN_W = 220;
+const COMPACT_MAX_W = 580;
+const COMPACT_H = 46;
+const clampNum = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+// 面板尺寸是**用户资产**:换形态/轮询/字号都不能把它冲掉。
+// panelW/H 是内容逻辑 px;compact 用已有的 compactW 变量。
+const SIZE = { panelW: 380, panelH: 560, form: "panel", ready: false };
+let SIZE_APPLYING = false;   // 程序化 setSize 期间忽略 onResized
+let RESIZING = false;        // 用户正在 resize(原生边框或右下角手柄)
+let MANUAL_RESIZING = false; // 右下角手柄的 pointer 拖拽
+let resizeIdleTimer = null;
+let sizeSaveTimer = null;
+let resizeBadgeTimer = null;
 let pillW = 200; // 胶囊实测内容宽(已是当前档位的最终逻辑像素),fitPill 维护
 
-/** 当前字号档位下某形态的**窗口**尺寸(内容 × 倍率 + 两侧透明边距)。 */
+function panelBounds() {
+  const u = fsU();
+  return {
+    minW: Math.round(PANEL_MIN[0] * u), minH: Math.round(PANEL_MIN[1] * u),
+    maxW: Math.round(PANEL_MAX[0] * u), maxH: Math.round(PANEL_MAX[1] * u),
+  };
+}
+function panelDefaultSize() {
+  const u = fsU();
+  return [Math.round(PANEL_DEFAULT[0] * u), Math.round(PANEL_DEFAULT[1] * u)];
+}
+function panelSizeFromCfg() {
+  const d = panelDefaultSize();
+  const b = panelBounds();
+  const w = Number(CFG && CFG.winW) || d[0];
+  const h = Number(CFG && CFG.winH) || d[1];
+  return [clampNum(Math.round(w), b.minW, b.maxW), clampNum(Math.round(h), b.minH, b.maxH)];
+}
+function compactMaxPx() {
+  const u = fsU();
+  const raw = Number(CFG && CFG.compactMaxW) || Math.round(380 * u);
+  return clampNum(Math.round(raw), Math.round(COMPACT_MIN_W * u), Math.round(COMPACT_MAX_W * u));
+}
+
+/** 当前字号档位下某形态的**窗口**尺寸(内容 + 两侧透明边距)。 */
 function formSize(form) {
   const u = fsU();
-  const base = SIZES[form] || SIZES.panel;
-  const cw = form === "pill" ? pillW : form === "compact" ? compactW : Math.round(base[0] * u);
+  if (form === "panel") {
+    const b = panelBounds();
+    const base = SIZE.ready ? [SIZE.panelW, SIZE.panelH] : panelSizeFromCfg();
+    const cw = clampNum(base[0], b.minW, b.maxW);
+    const ch = clampNum(base[1], b.minH, b.maxH);
+    return [cw + CARD_MARGIN * 2, ch + CARD_MARGIN * 2];
+  }
+  if (form === "compact") {
+    const cw = clampNum(compactW, Math.round(COMPACT_MIN_W * u), compactMaxPx());
+    return [cw + CARD_MARGIN * 2, Math.round(COMPACT_H * u) + CARD_MARGIN * 2];
+  }
+  const base = SIZES[form] || SIZES.pill;
+  const cw = form === "pill" ? pillW : Math.round(base[0] * u);
   const ch = Math.round(base[1] * u);
   return [cw + CARD_MARGIN * 2, ch + CARD_MARGIN * 2];
 }
+
+/** 从真实窗口读回内容尺寸。只记当前形态该记的那一份:
+ *  面板记 panelW/H;紧凑条记 compactW;胶囊/贴边不记(它们的宽度由内容/贴边算)。 */
+async function readSizeFromWindow() {
+  const sf = (await appWindow.scaleFactor()) || 1;
+  const sz = await appWindow.outerSize();
+  const cw = Math.max(1, Math.round(sz.width / sf - CARD_MARGIN * 2));
+  const ch = Math.max(1, Math.round(sz.height / sf - CARD_MARGIN * 2));
+  const form = currentForm();
+  if (form === "panel") {
+    const b = panelBounds();
+    SIZE.panelW = clampNum(cw, b.minW, b.maxW);
+    SIZE.panelH = clampNum(ch, b.minH, b.maxH);
+  } else if (form === "compact") {
+    const u = fsU();
+    // 不在读回时按旧 max 钳:用户往右拖就是要提高 max。
+    compactW = clampNum(cw, Math.round(COMPACT_MIN_W * u), Math.round(COMPACT_MAX_W * u));
+  }
+  return [cw, ch];
+}
+
+/** 有效宽度/高度断点:用内容 / 字号倍率,保证 lg/xl 下信息密度一致。 */
+function updateSizeClass() {
+  const u = fsU();
+  const cw = Math.max(1, window.innerWidth - CARD_MARGIN * 2);
+  const chh = Math.max(1, window.innerHeight - CARD_MARGIN * 2);
+  const ew = cw / u;
+  const eh = chh / u;
+  document.body.dataset.w = ew < 380 ? "xs" : ew < 520 ? "sm" : ew < 720 ? "md" : "lg";
+  document.body.dataset.h = eh < 560 ? "xs" : eh < 760 ? "sm" : "lg";
+}
+
+function updateSizeBadge() {
+  const el = $("rzSize");
+  if (!el) return;
+  const form = currentForm();
+  if (form === "panel") el.textContent = Math.round(SIZE.panelW) + " × " + Math.round(SIZE.panelH);
+  else if (form === "compact") el.textContent = Math.round(compactW) + " × " + COMPACT_H;
+  else return;
+  el.classList.add("on");
+  clearTimeout(resizeBadgeTimer);
+  resizeBadgeTimer = setTimeout(() => el.classList.remove("on"), 900);
+}
+
+async function savePosSoon() {
+  if (DOCK.on) return;
+  try {
+    const pos = await appWindow.outerPosition();
+    const x = pos.x, y = pos.y;
+    if (CFG.winX !== x || CFG.winY !== y) {
+      CFG.winX = x;
+      CFG.winY = y;
+      invoke("save_window_pos", { x, y }).catch(() => {});
+    }
+  } catch {}
+}
+
+function endResize() {
+  if (MANUAL_RESIZING) return; // 手柄拖拽由 pointerup 收尾
+  clearTimeout(resizeIdleTimer);
+  resizeIdleTimer = null;
+  if (!RESIZING) return;
+  RESIZING = false;
+  document.body.classList.remove("resizing");
+  markSelfMove(600);
+  if (currentForm() === "panel") {
+    const w = Math.round(SIZE.panelW), h = Math.round(SIZE.panelH);
+    CFG.winW = w;
+    CFG.winH = h;
+    invoke("save_window_size", { w, h, compactMaxW: null }).catch(() => {});
+  } else if (currentForm() === "compact") {
+    const cm = Math.round(compactW);
+    CFG.compactMaxW = cm;
+    invoke("save_window_size", { w: null, h: null, compactMaxW: cm }).catch(() => {});
+    // 拉宽只提高 max;内容不够宽时回到内容宽,不留空白
+    fitCompact();
+  }
+  savePosSoon();
+  if (manageOpen()) {
+    renderManageIndex();
+    syncStaticControls();
+  }
+}
+
+function resetPanelSize() {
+  const [w, h] = panelDefaultSize();
+  SIZE.panelW = w;
+  SIZE.panelH = h;
+  SIZE.form = "panel";
+  if (CFG) {
+    CFG.winW = w;
+    CFG.winH = h;
+  }
+  invoke("save_window_size", { w, h, compactMaxW: null }).catch(() => {});
+  syncStaticControls();
+  applyForm("panel", true, true);
+  showToast("已恢复默认大小");
+}
+
+// 用户 resize(原生 undecorated 边框或右下角手柄)的收尾:
+// onResized 只负责记账 + 280ms 静止;程序化 setSize 用 SIZE_APPLYING 屏蔽。
+if (typeof appWindow.onResized === "function") appWindow.onResized(async () => {
+  if (SIZE_APPLYING) return;
+  const form = currentForm();
+  if (DOCK.on || form === "pill" || form === "docked") return;
+  if (form !== "panel" && form !== "compact") return;
+  await readSizeFromWindow();
+  updateSizeClass();
+  RESIZING = true;
+  document.body.classList.add("resizing");
+  clearTimeout(DOCK.settleTimer);
+  setDockPreview(null);
+  updateSizeBadge();
+  if (!MANUAL_RESIZING) {
+    clearTimeout(resizeIdleTimer);
+    resizeIdleTimer = setTimeout(endResize, 280);
+  }
+});
+
+if (typeof appWindow.onScaleChanged === "function") {
+  appWindow.onScaleChanged(async () => {
+    if (SIZE_APPLYING) return;
+    await readSizeFromWindow();
+    updateSizeClass();
+  });
+}
+
+// 视口宽度变化的兜底(字号切换、设置页内容变化等不一定触发 onResized)
+if (window.ResizeObserver) {
+  let roFrame = 0;
+  const ro = new ResizeObserver(() => {
+    if (roFrame) return;
+    roFrame = requestAnimationFrame(() => {
+      roFrame = 0;
+      updateSizeClass();
+    });
+  });
+  ro.observe(document.body);
+}
+
+// 右下角可见手柄:原生边框在窗口最外缘(10px 透明边距里),这个手柄把
+// “右下角可以拉”变成看得见、且不必精确命中 4px 系统边框的入口。
+(function initResizeGrip() {
+  const g = $("rzGrip");
+  if (!g) return;
+  let drag = null, frame = 0;
+  const apply = () => {
+    if (!drag || frame) return;
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      if (!drag) return;
+      const b = panelBounds();
+      const nw = clampNum(drag.w + (drag.cx - drag.sx), b.minW, b.maxW);
+      const nh = clampNum(drag.h + (drag.cy - drag.sy), b.minH, b.maxH);
+      if (nw === SIZE.panelW && nh === SIZE.panelH) return;
+      SIZE.panelW = nw;
+      SIZE.panelH = nh;
+      appWindow.setSize(new T.dpi.LogicalSize(nw + CARD_MARGIN * 2, nh + CARD_MARGIN * 2)).catch(() => {});
+      updateSizeBadge();
+    });
+  };
+  g.addEventListener("pointerdown", (e) => {
+    if (currentForm() !== "panel" || DOCK.on) return;
+    e.preventDefault();
+    e.stopPropagation();
+    try { g.setPointerCapture(e.pointerId); } catch {}
+    MANUAL_RESIZING = true;
+    RESIZING = true;
+    document.body.classList.add("resizing");
+    drag = { sx: e.screenX, sy: e.screenY, w: SIZE.panelW, h: SIZE.panelH, cx: e.screenX, cy: e.screenY };
+    updateSizeBadge();
+    // setPointerCapture 在部分注入/合成事件下不生效;窗口级监听兜底。
+    const onMove = (ev) => {
+      if (!drag) return;
+      ev.preventDefault();
+      drag.cx = ev.screenX;
+      drag.cy = ev.screenY;
+      apply();
+    };
+    const onUp = (ev) => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      if (!drag) return;
+      drag = null;
+      MANUAL_RESIZING = false;
+      try { g.releasePointerCapture(ev.pointerId); } catch {}
+      endResize();
+    };
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  });
+  g.addEventListener("dblclick", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    resetPanelSize();
+  });
+})();
 
 /** 形态白名单 + 可选形态闸门:紧凑条关闭时,任何来源的 compact 都落成面板。
  *  按钮 / Esc / Ctrl+2 / 旧配置 / 以后新增的入口都经过这里,只判一次。 */
@@ -2716,7 +2969,7 @@ function resolveForm(form) {
   return form;
 }
 
-async function applyFormInner(form, remember = true) {
+async function applyFormInner(form, remember = true, forceSize = false) {
   setHeaderMenu(false);
   form = resolveForm(form);
   // 速览卡片开着时切形态/重排:先收回,否则会出现"class=pill 但窗口还是卡片高"的半截状态
@@ -2753,6 +3006,7 @@ async function applyFormInner(form, remember = true) {
     return;
   }
   const [w, h] = formSize(form);
+  SIZE_APPLYING = true;
   try {
     // 改尺寸在 Windows 上会连带挪动窗口(被工作区/边缘约束顶开),那一发 moved
     // 不是用户拖的:不标 selfMove 的话松手判定会把它当成"拖到边缘",切个形态就自己吸附上了(报告 P1-8)
@@ -2760,14 +3014,31 @@ async function applyFormInner(form, remember = true) {
     // 先解除上一形态的钳位,否则新尺寸会被旧 min/max 卡住
     await appWindow.setMinSize(null);
     await appWindow.setMaxSize(null);
-    await appWindow.setResizable(false);
-    // Tauri 2 的 LogicalSize 在 dpi 命名空间(v1 才在 window 下),
-    // 写错命名空间会抛 TypeError 并被这里的 catch 吞掉,窗口尺寸就永远不变
-    await appWindow.setSize(new T.dpi.LogicalSize(w, h));
-    await appWindow.setMinSize(new T.dpi.LogicalSize(w, h));
-    await appWindow.setMaxSize(new T.dpi.LogicalSize(w, h));
+    // 面板/紧凑条:开启原生 undecorated resize 边框(窗口最外缘);胶囊/贴边仍锁死
+    const resizable = form === "panel" || form === "compact";
+    await appWindow.setResizable(resizable);
+    const u = fsU();
+    if (form === "panel") {
+      const b = panelBounds();
+      await appWindow.setMinSize(new T.dpi.LogicalSize(b.minW + CARD_MARGIN * 2, b.minH + CARD_MARGIN * 2));
+      await appWindow.setMaxSize(new T.dpi.LogicalSize(b.maxW + CARD_MARGIN * 2, b.maxH + CARD_MARGIN * 2));
+      if (!SIZE.ready || SIZE.form !== "panel" || forceSize) {
+        await appWindow.setSize(new T.dpi.LogicalSize(w, h));
+      }
+      SIZE.form = "panel";
+      SIZE.ready = true;
+    } else if (form === "compact") {
+      await appWindow.setMinSize(new T.dpi.LogicalSize(Math.round(COMPACT_MIN_W * u) + CARD_MARGIN * 2, Math.round(COMPACT_H * u) + CARD_MARGIN * 2));
+      await appWindow.setMaxSize(new T.dpi.LogicalSize(Math.round(COMPACT_MAX_W * u) + CARD_MARGIN * 2, Math.round(COMPACT_H * u) + CARD_MARGIN * 2));
+      await appWindow.setSize(new T.dpi.LogicalSize(w, h));
+      SIZE.form = "compact";
+    } else {
+      await appWindow.setSize(new T.dpi.LogicalSize(w, h));
+      await appWindow.setMinSize(new T.dpi.LogicalSize(w, h));
+      await appWindow.setMaxSize(new T.dpi.LogicalSize(w, h));
+      SIZE.form = form;
+    }
     // 收尾校验:类与尺寸必须成对落地。IPC 偶发丢失/交叠时这里兜底
-    // (踩过:轮询的胶囊重排与用户点展开并发,类=panel 但尺寸=46 → 窗口缩成顶栏)
     const sf = (await appWindow.scaleFactor()) || 1;
     const sz = await appWindow.outerSize();
     if (Math.abs(sz.width - w * sf) > 2 || Math.abs(sz.height - h * sf) > 2) {
@@ -2775,13 +3046,26 @@ async function applyFormInner(form, remember = true) {
       await appWindow.setMinSize(null);
       await appWindow.setMaxSize(null);
       await appWindow.setSize(new T.dpi.LogicalSize(w, h));
-      await appWindow.setMinSize(new T.dpi.LogicalSize(w, h));
-      await appWindow.setMaxSize(new T.dpi.LogicalSize(w, h));
+      if (form === "panel") {
+        const b = panelBounds();
+        await appWindow.setMinSize(new T.dpi.LogicalSize(b.minW + CARD_MARGIN * 2, b.minH + CARD_MARGIN * 2));
+        await appWindow.setMaxSize(new T.dpi.LogicalSize(b.maxW + CARD_MARGIN * 2, b.maxH + CARD_MARGIN * 2));
+      } else if (form === "compact") {
+        await appWindow.setMinSize(new T.dpi.LogicalSize(Math.round(COMPACT_MIN_W * u) + CARD_MARGIN * 2, Math.round(COMPACT_H * u) + CARD_MARGIN * 2));
+        await appWindow.setMaxSize(new T.dpi.LogicalSize(Math.round(COMPACT_MAX_W * u) + CARD_MARGIN * 2, Math.round(COMPACT_H * u) + CARD_MARGIN * 2));
+      } else {
+        await appWindow.setMinSize(new T.dpi.LogicalSize(w, h));
+        await appWindow.setMaxSize(new T.dpi.LogicalSize(w, h));
+      }
     }
+    await readSizeFromWindow();
+    updateSizeClass();
     // 视口变化后重新量一次紧凑条,决定尾巴要收几个进 "+N"
     scheduleFitCompact();
   } catch (e) {
     console.error("切换形态失败", e);
+  } finally {
+    SIZE_APPLYING = false;
   }
   // 必须 await:applyFormInner 本身在几何队列里,不加 await 就等于让队列提前认为这一环
   // 完成,而 clampToMonitor 还在拿"上一环未落地时"的尺寸算坐标、并排到队尾之后才落地
@@ -2804,8 +3088,8 @@ function enqueueGeom(fn) {
   return geomQueue;
 }
 
-function applyForm(form, remember = true) {
-  return enqueueGeom(() => applyFormInner(form, remember));
+function applyForm(form, remember = true, forceSize = false) {
+  return enqueueGeom(() => applyFormInner(form, remember, forceSize));
 }
 
 /** 把窗口夹进当前显示器:胶囊在屏幕角落时展开成面板会"长出"屏幕,看不全。 */
@@ -2901,14 +3185,18 @@ async function dockLayoutNow(open) {
     // 吸附的几何链一样是 6 连 await:用形态切换那一档掩护,不然尾部的 moved
     // 会被当成用户拖拽 —— 而吸附态误判的后果正是"自己吸成 8px 竖条"(G2)
     markSelfMove(FORM_SELF_MOVE_MS);
+    SIZE_APPLYING = true;
     await appWindow.setMinSize(null);
     await appWindow.setMaxSize(null);
+    await appWindow.setResizable(false);
     await appWindow.setSize(new T.dpi.LogicalSize(w, h));
     await appWindow.setPosition(new T.dpi.PhysicalPosition(x, y));
     await appWindow.setMinSize(new T.dpi.LogicalSize(w, h));
     await appWindow.setMaxSize(new T.dpi.LogicalSize(w, h));
   } catch (e) {
     console.error("吸附尺寸切换失败", e);
+  } finally {
+    SIZE_APPLYING = false;
   }
   DOCK.open = open;
   document.body.classList.toggle("docked", !open);
@@ -2939,8 +3227,10 @@ async function dockExitNow(keepPos) {
   try {
     // 与 dockLayoutNow 同理:解除吸附也是多连 await 的几何链,用长档掩护(G2)
     markSelfMove(FORM_SELF_MOVE_MS);
+    SIZE_APPLYING = true;
     await appWindow.setMinSize(null);
     await appWindow.setMaxSize(null);
+    await appWindow.setResizable(currentForm() !== "pill");
     const pos = await appWindow.outerPosition();
     await appWindow.setSize(new T.dpi.LogicalSize(w, h));
     if (info) {
@@ -2951,10 +3241,24 @@ async function dockExitNow(keepPos) {
       const y = keepPos ? Math.max(info.top, Math.min(maxY, pos.y)) : Math.max(info.top + 60, Math.min(maxY, pos.y));
       await appWindow.setPosition(new T.dpi.PhysicalPosition(x, y));
     }
-    await appWindow.setMinSize(new T.dpi.LogicalSize(w, h));
-    await appWindow.setMaxSize(new T.dpi.LogicalSize(w, h));
+    if (currentForm() === "panel") {
+      const b = panelBounds();
+      await appWindow.setMinSize(new T.dpi.LogicalSize(b.minW + CARD_MARGIN * 2, b.minH + CARD_MARGIN * 2));
+      await appWindow.setMaxSize(new T.dpi.LogicalSize(b.maxW + CARD_MARGIN * 2, b.maxH + CARD_MARGIN * 2));
+    } else if (currentForm() === "compact") {
+      const u = fsU();
+      await appWindow.setMinSize(new T.dpi.LogicalSize(Math.round(COMPACT_MIN_W * u) + CARD_MARGIN * 2, Math.round(COMPACT_H * u) + CARD_MARGIN * 2));
+      await appWindow.setMaxSize(new T.dpi.LogicalSize(Math.round(COMPACT_MAX_W * u) + CARD_MARGIN * 2, Math.round(COMPACT_H * u) + CARD_MARGIN * 2));
+    } else {
+      await appWindow.setMinSize(new T.dpi.LogicalSize(w, h));
+      await appWindow.setMaxSize(new T.dpi.LogicalSize(w, h));
+    }
+    await readSizeFromWindow();
+    updateSizeClass();
   } catch (e) {
     console.error("解除吸附失败", e);
+  } finally {
+    SIZE_APPLYING = false;
   }
   await invoke("set_pin", { enabled: !!(CFG && CFG.alwaysOnTop) }).catch(() => {});
   render();
@@ -2966,7 +3270,7 @@ function dockExit(keepPos) {
 
 /** 松手判定:停止移动 250ms 后看窗口是不是贴着屏幕左/右边缘。 */
 function scheduleSettleCheck() {
-  if (DOCK.selfMove) return;
+  if (RESIZING || DOCK.selfMove) return;
   clearTimeout(DOCK.settleTimer);
   DOCK.settleTimer = setTimeout(async () => {
     if (DOCK.selfMove) return;
@@ -3072,6 +3376,7 @@ function openManage() {
   renderChCards();
   fillKeyHints(true);
   renderPillPick();
+  syncStaticControls(); // 窗口尺寸可能在设置页关闭期间被拖动过
   renderAbout(UPD.last); // 版本号与上次检查时间
   loadCheckin();         // 签到状态(渠道卡与设置页都用)
   showTab("index");      // 默认落在索引页,31 号起不再把 7 个页签挤进 380px
@@ -3388,6 +3693,7 @@ $("hmenu").addEventListener("click", (e) => {
   setHeaderMenu(false);
   if (act === "pin") $("btnP").click();
   else if (act === "compact") (CFG && CFG.compactEnabled ? $("btnC") : $("btnPill")).click();
+  else if (act === "reset-size") resetPanelSize();
   else if (act === "hide") $("btnH").click();
   else if (act === "quit") $("lkQuit").click();
 });
@@ -3637,7 +3943,7 @@ async function previewTick() {
   const now = Date.now();
   if (now - previewAt < 100) return;
   previewAt = now;
-  if (!CFG || !CFG.dockEnabled || DOCK.on || DOCK.selfMove) return setDockPreview(null);
+  if (!CFG || !CFG.dockEnabled || DOCK.on || DOCK.selfMove || RESIZING) return setDockPreview(null);
   try {
     const info = await monitorInfo();
     if (!info) return;
@@ -4391,11 +4697,18 @@ bindSelect("cfgSort", "sort", String);
 bindSelect("cfgWarn", "warnPercent");
 bindSelect("cfgCrit", "critPercent");
 // 字号:换档要同时写 --u、按新倍率重新钳窗口尺寸、重量紧凑条截断
+$("btnResetSize").addEventListener("click", () => resetPanelSize());
+
 $("cfgFontScale").addEventListener("change", () => {
   CFG.fontScale = $("cfgFontScale").value;
   saveCfg();
   applyFontScale();
-  applyForm(currentForm());
+  // 字号只改排版和最小尺寸;用户手动拉大的窗口不缩回默认。
+  const b = panelBounds();
+  SIZE.panelW = clampNum(SIZE.panelW, b.minW, b.maxW);
+  SIZE.panelH = clampNum(SIZE.panelH, b.minH, b.maxH);
+  applyForm(currentForm(), true, true);
+  updateSizeClass();
   render();
 });
 bindSwitch("cfgAutostart", "autostart", (on) => invoke("set_autostart", { enabled: on }));
@@ -4616,6 +4929,8 @@ function syncStaticControls() {
   setSwitch("cfgShowUsed", !!CFG.showUsed);
   const mf = $("cfgMoneyFloor");
   if (mf) mf.value = String(CFG.moneyFloor > 0 ? CFG.moneyFloor : 10);
+  const ws = $("winSizeDesc");
+  if (ws) ws.textContent = Math.round(SIZE.panelW) + " × " + Math.round(SIZE.panelH) + " · 拖动边缘调整";
   document.body.classList.toggle("pulse", !!CFG.alertPulse);
   document.body.classList.toggle("texttone", !!CFG.textTone);
 }
@@ -6884,6 +7199,15 @@ function applyChannelsPush(payload) {
   }
   applyConfigToUI();
   applyFontScale();
+  // 先把面板尺寸从配置里取出来:启动 Rust 只在 form=panel 时设过窗口尺寸,
+  // 上次停在胶囊/紧凑条时这里要用配置值恢复。
+  {
+    const [w, h] = panelSizeFromCfg();
+    SIZE.panelW = w;
+    SIZE.panelH = h;
+    SIZE.ready = true;
+    syncStaticControls();
+  }
   // 静态模板里的「?」补出说明块(渠道卡里的是动态的,renderChCards 自己会补)
   hydrateWhy();
   // 版本号:等首检(最坏 30 秒)才显示,期间关于页是空的。直接问后端要(报告 P2-16)
@@ -6988,9 +7312,19 @@ function applyChannelsPush(payload) {
 
   // 启动一律面板形态:安装后(以及每天开机)先看到完整信息,而不是上次留下的
   // 紧凑条 / 胶囊。CFG.form 仍会记录用户的选择,只是不再用于启动恢复。
-  await applyForm("panel", false);
+  await applyForm("panel", false, true);
+  updateSizeClass();
   await refresh();
   playEntrance(); // 启动首帧也来一次入场(上面 applyForm 没换形态,不会自动放)
+  // 一次性提示:手柄/边框不可见,不说一句很难发现(0.3.0 升级后只出现一次)
+  if (CFG && !CFG.resizeHintSeen) {
+    setTimeout(() => {
+      if (!CFG || CFG.resizeHintSeen) return;
+      CFG.resizeHintSeen = true;
+      saveCfg();
+      showToast("现在可拖动窗口边缘调整大小 · 右下角也可拖");
+    }, 1500);
+  }
 
   listen("channels-updated", (ev) => applyChannelsPush(ev.payload));
 
