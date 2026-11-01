@@ -156,6 +156,8 @@ Codex 收起行的周额度优先设计见
 **① 所有形态固定尺寸,不可拖拽改变大小。**(2026-11-01 起面板/紧凑条可缩放,见 §14;胶囊/贴边仍固定。)
 `resizable:false` + `maximizable:false`,每次切换形态都 `setResizable(false)` 并把 min/max 钳到当前尺寸。
 > 机制的真相(实测):Windows 对**程序化** `SetWindowPos` 不套用 tracking 约束,`setMinSize/setMaxSize` 调用会成功返回但拦不住 `setSize(500,600)`。真正挡住用户拖拽的是窗口样式里**没有 `WS_THICKFRAME`(缩放边框)和 `WS_MAXIMIZEBOX`**。`build/win-style.ps1` 读 `GWL_STYLE` 做这条断言(实测 `0x14ca0000`,两个位都不在)。min/max 保留作兜底,但不要再把它当成固定尺寸的机制。
+>
+> **2026-11-01(v0.3.0)**:面板/紧凑条改为可缩放,`WS_THICKFRAME` 现在**存在**(由 Tauri 的 undecorated resize border 使用);`WS_MAXIMIZEBOX` 仍不存在。胶囊/贴边在运行时 `setResizable(false)` 并保留精确 min/max。详见 §14。
 
 **② 窗口 `transparent:true` + `shadow:false`,body 自己就是那张卡片。**
 圆角外是真透明,不再有窗口底色露角。面板圆角 12 / 紧凑条 10 / 胶囊 999。
@@ -507,7 +509,7 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 | 17 | 开机自启(HKCU Run,每次启动按 `current_exe()` 重写路径) | ✅ | `autostart` |
 | 18 | 全局置顶唯一写入口(窗口状态与配置一起改) | ✅ | `set_pin` |
 | 19 | ACL 权限集(形态切换 / 贴边移动 / 拖拽所需) | ✅ | `capabilities/default.json` |
-| 20 | 固定尺寸窗口样式(无 `WS_THICKFRAME` / `WS_MAXIMIZEBOX`) | ✅ | `tauri.conf.json` + `win-style.ps1` 断言 |
+| 20 | 窗口样式:面板/紧凑条有 `WS_THICKFRAME`、无 `WS_MAXIMIZEBOX`;胶囊/贴边运行时锁死 | ✅ | `tauri.conf.json` + `win-style.ps1` + `verify-form.js` |
 | 21 | 模型页命令组(取清单 / 预告 / 写入 / 状态 / 回滚 / 复制三件套 / 开目录) | ✅ | `src/lib.rs` |
 
 ### 8.3 前端 `app/src`

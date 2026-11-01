@@ -168,7 +168,7 @@ async function cornerAlpha(send, evalJs) {
     rows.push({ form, ...state, ew, eh, sizeOk, classOk, rowsOk, corner, cornerOk, pass });
   }
 
-  // Win32 style bits: fixed-size window must have no resize border / maximize box
+  // Win32 style bits: panel (last form) must have the resize border, never a maximize box
   let style = null;
   let styleErr = null;
   try {
