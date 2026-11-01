@@ -3639,3 +3639,11 @@ GitHub API 与 `gh release view` 均确认三件套齐全：`Grandettoken_0.3.0_
   400×580 / 默认尺寸隐藏按钮”三条断言全 PASS;三形态视觉 **30/30 无越界**;`verify-ui` 17、
   设置入口、签到中心、焦点环、形态尺寸 PASS;Codex **48/48**;Qoder PASS。
 - 安装包与发布信息见下一条记录。
+
+**发布（2026-11-01）**：tag `v0.3.1`，release 提交 `c855852`，
+[GitHub Release v0.3.1](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.3.1)。
+三件套齐全：`Grandettoken_0.3.1_x64-setup.exe`（5,266,413 B，SHA-256
+`C7622C6645DCDCE85CBED0ED098BA51133E7D92FFB4E101BE9233C65D41736FC`）、`.sig`、
+`latest.json`；`verify-signature` 与 `verify-updater` **PASS**，GitHub API 确认非 draft/prerelease。
+`verify-release` 仍受本机 `github.com/.../latest/download` 网络超时影响；签名/更新链路已独立核验。
+本机已覆盖安装 0.3.1，`%LOCALAPPDATA%\Grandettoken\Grandettoken.exe` 版本 0.3.1，安装后已启动。
