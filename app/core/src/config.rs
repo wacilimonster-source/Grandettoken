@@ -183,6 +183,34 @@ pub struct Config {
     /// 排查"余额数字不对"这类必须看成功响应的问题时才打开。
     /// 打开后日志量大得多(挂件最坏情况一天上万次请求),所以默认关。
     pub diag_verbose: bool,
+    /// 同步到手机：总开关。默认关；开启后按 `syncPublishIntervalSec` 发布。
+    pub sync_enabled: bool,
+    /// 中继类型。v1 只有 "gist"。
+    pub sync_relay_kind: String,
+    /// Gist ID（32 位十六进制）。None = 还没建组。
+    pub sync_relay_id: Option<String>,
+    /// 本机写入者 ID（`s_` + 32 hex）。复制安装目录后必须重新生成。
+    pub sync_source: Option<String>,
+    /// 密钥代数。新组从 0 开始；轮换时新建组，不做循环递增。
+    pub sync_key_epoch: u8,
+    /// 发布间隔（秒）。内容哈希不变时不写入。
+    pub sync_publish_interval_sec: u64,
+    /// 要发布的渠道 id；空 = 全部非隐藏渠道。
+    pub sync_channels: Vec<String>,
+    /// 自定义渠道 id → 统一同步平台标签。同标签跨机合并。
+    pub sync_platform_labels: HashMap<String, String>,
+    /// 最近一次成功上传的 unix 秒。
+    pub sync_last_upload_at: Option<i64>,
+    /// 最近一次发布失败的稳定错误码 + 简短说明（不含响应体/密钥）。
+    pub sync_last_error: Option<String>,
+    pub sync_last_error_at: Option<i64>,
+    /// 限流退避截止（unix 秒）。到点前后台不再自动发布。
+    pub sync_next_allowed_at: Option<i64>,
+    /// 桌面 OAuth App 的公开 client_id。维护者注册后可编译进包，也可在配置里覆盖（开发用）。
+    pub sync_oauth_client_id: Option<String>,
+    /// 已连接 GitHub 账号的 login / id（非密钥，仅用于本机状态展示）。
+    pub sync_github_login: Option<String>,
+    pub sync_github_user_id: Option<i64>,
 }
 
 /// 签到渠道的出厂配置:**全部默认开**(2026-10-20 用户裁决)。
@@ -260,6 +288,21 @@ impl Default for Config {
             custom_channels: Vec::new(),
             peek_on_click: true,
             diag_verbose: false,
+            sync_enabled: false,
+            sync_relay_kind: "gist".into(),
+            sync_relay_id: None,
+            sync_source: None,
+            sync_key_epoch: 0,
+            sync_publish_interval_sec: 60,
+            sync_channels: Vec::new(),
+            sync_platform_labels: HashMap::new(),
+            sync_last_upload_at: None,
+            sync_last_error: None,
+            sync_last_error_at: None,
+            sync_next_allowed_at: None,
+            sync_oauth_client_id: None,
+            sync_github_login: None,
+            sync_github_user_id: None,
         }
     }
 }
@@ -308,6 +351,46 @@ impl Config {
         if self.sort != "balance" && self.sort != "dayUsage" && self.sort != "custom" {
             self.sort = "percent".into();
         }
+        if self.sync_relay_kind != "gist" {
+            self.sync_relay_kind = "gist".into();
+        }
+        self.sync_publish_interval_sec = self.sync_publish_interval_sec.clamp(30, 3600);
+        if let Some(id) = &self.sync_relay_id {
+            if !crate::sync::code::valid_gist_id(id) {
+                self.sync_relay_id = None;
+            }
+        }
+        if let Some(source) = &self.sync_source {
+            if crate::sync::crypto::normalize_source(source).is_none() {
+                self.sync_source = None;
+            }
+        }
+        self.sync_channels.retain(|id| !id.trim().is_empty());
+        self.sync_channels.sort();
+        self.sync_channels.dedup();
+        self.sync_platform_labels.retain(|k, v| {
+            !k.trim().is_empty() && !v.trim().is_empty() && v.chars().count() <= 40
+        });
+        if let Some(e) = &self.sync_last_error {
+            let clean: String = e
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(200)
+                .collect();
+            self.sync_last_error = if clean.trim().is_empty() {
+                None
+            } else {
+                Some(clean)
+            };
+        }
+        self.sync_oauth_client_id = clean_short(self.sync_oauth_client_id.take(), 64);
+        self.sync_github_login = clean_short(self.sync_github_login.take(), 40);
+        if self.sync_github_user_id.map_or(false, |id| id <= 0) {
+            self.sync_github_user_id = None;
+        }
+        if self.sync_next_allowed_at.map_or(false, |t| t <= 0) {
+            self.sync_next_allowed_at = None;
+        }
         // 升级后新增的签到渠道要补进表里(否则老用户永远看不到它的开关)。
         // **只补缺的,不动已有的**:用户显式关掉的渠道必须保持关着 ——
         // 整表覆盖会把它们又打开,那是"擅自改用户设置"。
@@ -326,6 +409,18 @@ impl Config {
         let json = serde_json::to_string(self).map_err(|e| e.to_string())?;
         store.set_setting("config", &json)
     }
+}
+
+fn clean_short(value: Option<String>, max: usize) -> Option<String> {
+    value
+        .map(|s| {
+            s.trim()
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(max)
+                .collect::<String>()
+        })
+        .filter(|s| !s.is_empty())
 }
 
 #[cfg(test)]

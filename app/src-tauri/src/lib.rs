@@ -12,6 +12,14 @@ use tokenscope_core::config::Config;
 use tokenscope_core::fetch::{now_ts, ChannelView, Fetcher};
 use tokenscope_core::{appauth, checkin, inject, models, providers, secrets, store::Store, view, workbuddy};
 
+mod sync_cmds;
+pub use sync_cmds::{
+    sync_create, sync_delete_relay, sync_disconnect_github, sync_forget, sync_github_status,
+    sync_join, sync_oauth_cancel, sync_oauth_poll, sync_oauth_start, sync_preview,
+    sync_publish_now, sync_read_group, sync_recovery_candidates, sync_restore_group, sync_rotate, sync_set_channels, sync_set_enabled,
+    sync_set_interval, sync_set_oauth_client_id, sync_set_platform_label, sync_status,
+};
+
 pub struct AppState {
     pub store: Arc<Mutex<Store>>,
     pub config: Mutex<Config>,
@@ -149,7 +157,7 @@ static CONFIG_BROKEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicB
 /// 必须自己排,否则"后改的先落库"会把配置倒回旧值(P3-35 的一小半)。
 static CFG_WRITE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-async fn save_config_off_main(
+pub(crate) async fn save_config_off_main(
     state: &AppState,
     mutate: impl FnOnce(&mut Config),
 ) -> Result<(), String> {
@@ -242,7 +250,7 @@ fn report_fatal(stage: &str, e: &str) -> String {
     line
 }
 
-fn refuse_if_config_broken() -> Result<(), String> {
+pub(crate) fn refuse_if_config_broken() -> Result<(), String> {
     if CONFIG_BROKEN.load(std::sync::atomic::Ordering::Relaxed) {
         return Err(
             "配置读取失败,现在按默认设置运行(你隐藏的渠道也在按默认取数)。\
@@ -1319,7 +1327,7 @@ fn window_cmd(app: tauri::AppHandle, action: String) -> Result<(), String> {
 /// 全局锁序约定:**先 store 后 config**。所有同时拿两把锁的命令都必须按这个
 /// 顺序,否则与 check_update / skip_update_version(store→config)交错时会 AB-BA 死锁。
 /// 锁一律走 `lock_rw` 毒化恢复:一次 panic 不该把后续所有命令永久卡死。
-fn lock_rw<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+pub(crate) fn lock_rw<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
 }
 
@@ -2016,6 +2024,8 @@ async fn poll_loop(app: tauri::AppHandle) {    let mut failures = 0u32;
         maybe_notify_crit(&app, &views);
         // 快照已落库:顺手核一轮待落定的到账核对单(零网络请求,读库比增量)
         settle_arrivals(&app).await;
+        // 同步发布:到点才后台跑,不阻塞取数循环
+        sync_cmds::maybe_publish(&app, &views);
     }
 }
 
@@ -2801,7 +2811,7 @@ fn cycle_day_of(id: &str, now: i64) -> String {
 /// 当前版本。用来判断一条 `auth` 结论是不是**陈旧**的 —— 见
 /// [`checkin::CheckinCfg::blocks_today`] 的说明:v0.1.47 升级后当天仍显示
 /// "凭据失效",就是因为旧的 `auth` 把当天挡住了,而凭据链路其实已经修好。
-const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// 「今天还用不用再试」。三处调用点(状态展示 / 手动按钮 / 自动节拍器)必须同口径,
 /// 否则会出现"界面说不能试、节拍器却在试"这种自相矛盾。
@@ -5023,6 +5033,26 @@ async fn open_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
     .map_err(|e| format!("打开失败: {e}"))?
 }
 
+/// 只允许打开 GitHub 官方设备授权页。同步授权流程之外的 URL 一律拒绝。
+#[tauri::command]
+async fn open_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    let allowed = [
+        "https://github.com/login/device",
+        "https://github.com/settings/developers",
+    ];
+    if !allowed.contains(&url.as_str()) {
+        return Err("不允许打开这个地址".into());
+    }
+    tokio::task::spawn_blocking(move || {
+        use tauri_plugin_opener::OpenerExt;
+        app.opener()
+            .open_url(url, None::<&str>)
+            .map_err(|e| format!("打开失败: {e}"))
+    })
+    .await
+    .map_err(|e| format!("打开失败: {e}"))?
+}
+
 /// 排查日志的落点与大小(设置页要显示"日志在哪儿、多大")。
 /// 只报路径,不读内容 —— 打开/复制是另外两条命令,便于前端按需触发。
 #[derive(Debug, Clone, serde::Serialize)]
@@ -5258,6 +5288,14 @@ pub fn run() {
                 }
             };
 
+            // 同步组使用独立记录，避免签到、窗口和其他设置的旧快照覆盖它。
+            // 配置损坏时不能用默认值迁移，保留原数据供恢复。
+            if !CONFIG_BROKEN.load(std::sync::atomic::Ordering::Relaxed) {
+                if let Err(e) = tokenscope_core::sync::profile::migrate(&store, &config) {
+                    startup_error = note(startup_error, format!("同步设置读取失败: {e}"));
+                }
+            }
+
             // 注册表与配置对齐:开机自启以配置为准,并刷新为当前 exe 路径,
             // 用户挪动 exe 后无需重新设置自启。构建目录里的开发版不写键,
             // 旧版残留的自启项要让用户看得见(光靠新版删会被旧版开机时写回来)。
@@ -5472,6 +5510,7 @@ pub fn run() {
             model_info,
             copy_text,
             open_path,
+            open_url,
             diag_log_info,
             diag_log_tail,
             open_log_dir,
@@ -5501,6 +5540,27 @@ pub fn run() {
             custom_test,
             custom_add,
             custom_remove,
+            sync_status,
+            sync_preview,
+            sync_create,
+            sync_join,
+            sync_publish_now,
+            sync_read_group,
+            sync_recovery_candidates,
+            sync_restore_group,
+            sync_set_enabled,
+            sync_set_channels,
+            sync_set_interval,
+            sync_set_platform_label,
+            sync_rotate,
+            sync_forget,
+            sync_disconnect_github,
+            sync_delete_relay,
+            sync_github_status,
+            sync_oauth_start,
+            sync_oauth_poll,
+            sync_oauth_cancel,
+            sync_set_oauth_client_id,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

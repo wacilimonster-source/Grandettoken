@@ -57,6 +57,148 @@ pub fn mask_of(key: &str) -> String {
     format!("••••{tail}")
 }
 
+// ── 同步协议的凭据 ────────────────────────────────────────────────────────
+//
+// 与渠道密钥、密钥箱分开服务名:删渠道密钥不会碰到同步主密钥,反之亦然。
+// 账号名约定:
+//   key:<gist_id>  → 该中继的主密钥(64 位十六进制,32 字节)
+//   oauth          → 本机 GitHub OAuth token(gist scope,Device Flow 取得)
+const SYNC_SERVICE: &str = "TokenScope:sync";
+
+fn sync_entry(id: &str) -> Result<keyring::Entry, String> {
+    if id.trim().is_empty() || id.chars().any(|c| c.is_control()) {
+        return Err("同步凭据名不合法".into());
+    }
+    keyring::Entry::new(SYNC_SERVICE, id).map_err(|e| format!("凭据库不可用: {e}"))
+}
+
+pub fn sync_set(id: &str, value: &str) -> Result<(), String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err("同步凭据不能为空".into());
+    }
+    sync_entry(id)?
+        .set_password(value)
+        .map_err(|e| format!("写入同步凭据失败: {e}"))
+}
+
+pub fn sync_get(id: &str) -> Result<Option<String>, String> {
+    let e = sync_entry(id)?;
+    match e.get_password() {
+        Ok(v) => Ok(Some(v)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(err) => Err(format!("读取同步凭据失败: {err}")),
+    }
+}
+
+pub fn sync_delete(id: &str) -> Result<(), String> {
+    match sync_entry(id)?.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(format!("删除同步凭据失败: {e}")),
+    }
+}
+
+/// 当前中继的主密钥账号名。轮换时旧中继的密钥可以保留到删除旧中继为止。
+pub fn sync_key_account(gist_id: &str) -> String {
+    format!("key:{gist_id}")
+}
+
+/// 本机 GitHub OAuth token 的账号名。由 Device Flow 取得，不随同步码复制。
+pub const SYNC_OAUTH_ACCOUNT: &str = "oauth";
+
+/// 从 keyring 的 Windows 目标名中提取同步中继 ID，不读取其他凭据的内容。
+fn sync_relay_from_target(target: &str) -> Option<String> {
+    let id = target.strip_prefix("key:")?.strip_suffix(".TokenScope:sync")?;
+    crate::sync::code::valid_gist_id(id).then(|| id.to_string())
+}
+
+/// 找回配置被旧版本覆盖后的同步组。只枚举目标名，密钥仍经 keyring 单独读取。
+#[cfg(windows)]
+pub fn sync_list_relay_ids() -> Result<Vec<String>, String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{GetLastError, ERROR_NOT_FOUND};
+    use windows_sys::Win32::Security::Credentials::{
+        CredEnumerateW, CredFree, CREDENTIALW, CRED_TYPE_GENERIC,
+    };
+
+    let filter: Vec<u16> = std::ffi::OsStr::new("key:*")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut count = 0u32;
+    let mut entries: *mut *mut CREDENTIALW = std::ptr::null_mut();
+    // Windows owns this array until CredFree; do not read CredentialBlob.
+    if unsafe { CredEnumerateW(filter.as_ptr(), 0, &mut count, &mut entries) } == 0 {
+        let error = unsafe { GetLastError() };
+        return if error == ERROR_NOT_FOUND {
+            Ok(Vec::new())
+        } else {
+            Err(format!("读取本机同步凭据列表失败（Windows 错误 {error}）"))
+        };
+    }
+    struct CredentialList(*mut *mut CREDENTIALW);
+    impl Drop for CredentialList {
+        fn drop(&mut self) {
+            unsafe { CredFree(self.0.cast()) };
+        }
+    }
+    let _guard = CredentialList(entries);
+    let mut ids = Vec::new();
+    for index in 0..count as usize {
+        let entry = unsafe { *entries.add(index) };
+        if entry.is_null() || unsafe { (*entry).Type } != CRED_TYPE_GENERIC {
+            continue;
+        }
+        let target = unsafe { (*entry).TargetName };
+        if target.is_null() { continue; }
+        let mut len = 0usize;
+        while len < 32_768 && unsafe { *target.add(len) } != 0 { len += 1; }
+        if len == 32_768 { continue; }
+        let name = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(target, len) });
+        if let Some(id) = sync_relay_from_target(&name) { ids.push(id); }
+    }
+    ids.sort();
+    ids.dedup();
+    Ok(ids)
+}
+
+#[cfg(not(windows))]
+pub fn sync_list_relay_ids() -> Result<Vec<String>, String> {
+    Err("自动查找旧同步组仅支持 Windows 凭据管理器".into())
+}
+
+#[cfg(test)]
+mod sync_recovery_tests {
+    use super::sync_relay_from_target;
+
+    #[test]
+    fn only_accepts_sync_keyring_targets_with_valid_gist_ids() {
+        let id = "00112233445566778899aabbccddeeff";
+        assert_eq!(sync_relay_from_target(&format!("key:{id}.TokenScope:sync")).as_deref(), Some(id));
+        assert!(sync_relay_from_target("oauth.TokenScope:sync").is_none());
+        assert!(sync_relay_from_target(&format!("key:{id}.TokenScope:vault")).is_none());
+        assert!(sync_relay_from_target("key:broken.TokenScope:sync").is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires an interactive Windows credential store"]
+    fn windows_can_find_a_stored_sync_key_without_reading_other_secrets() {
+        let mut random = [0u8; 16];
+        getrandom::getrandom(&mut random).unwrap();
+        let id = crate::sync::crypto::hex_encode(&random);
+        let account = super::sync_key_account(&id);
+        struct Cleanup(String);
+        impl Drop for Cleanup {
+            fn drop(&mut self) { let _ = super::sync_delete(&self.0); }
+        }
+        let _cleanup = Cleanup(account.clone());
+        super::sync_set(&account, "temporary-test-value").unwrap();
+        assert!(super::sync_list_relay_ids().unwrap().contains(&id));
+    }
+}
+
 fn entry(provider_id: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new(SERVICE, provider_id).map_err(|e| format!("凭据库不可用: {e}"))
 }

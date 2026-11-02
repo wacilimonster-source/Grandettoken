@@ -9,6 +9,12 @@ const $ = (id) => document.getElementById(id);
 let CHANNELS = [];
 let CFG = null;
 let VER = "";          // app_version 命令回来的版本号,关于页在首检之前也有的显示
+let SYNC_STATUS = null; // 同步状态缓存(sync_status 命令),设置索引与同步子页共用
+let SYNC_STATUS_ERROR = null;
+let SYNC_STATUS_REV = 0;
+let SYNC_RECOVERY_BUSY = false;
+let SYNC_CODE_REVEALED = false;
+let SYNC_AUTH = null;   // 桌面 Device Flow 在途会话(只存 user_code 与计时,不存 device_code)
 let changesCache = {}; // { [id]: 最近变动台账(展开时按需取,不进轮询) }
 let changesState = {}; // { [id]: "loading" | "done" | "error" } —— 台账先画占位,取到再替换
 // 展开区里点了「全部 N 条」的段:{ [id]: { ledger?: true, expiry?: true } }。
@@ -3421,6 +3427,7 @@ function openManage() {
   renderAbout(UPD.last); // 版本号与上次检查时间
   loadCheckin();         // 签到状态(渠道卡与设置页都用)
   showTab("index");      // 默认落在索引页,31 号起不再把 7 个页签挤进 380px
+  loadSyncStatus();      // 索引里的「同步到手机」需要状态摘要
   // 键盘用户是从底栏那枚按钮进来的,而它进管理页后就被 CSS 隐藏了 ——
   // 焦点会掉到 body,Tab 一下回到标题栏。把焦点交给页头的「← 返回」,
   // 入口与出口方向一致(鼠标点进来时 :focus-visible 不出环,看不出差别)。
@@ -3428,6 +3435,7 @@ function openManage() {
   if (back) back.focus();
 }
 function closeManage(restoreFocus = true) {
+  hideSyncCode();
   // 关掉设置页时把过期的弹层与编辑态一起作废:否则重开设置页会直接停在
   // 几分钟前那个「写入 · 确认」弹层上,而且还能点(报告 P2-31)
   MDL.sheet = null;
@@ -3809,6 +3817,7 @@ $("btnBack").addEventListener("click", () => {
 const TAB_TITLES = {
   index: "设置与管理", ch: "渠道管理", ck: "每日签到", mdl: "模型与客户端",
   disp: "外观与显示", run: "刷新与启动", vault: "密钥箱", about: "关于与诊断",
+  sync: "同步到手机",
 };
 const FONT_NAME = { md: "标准", lg: "大", xl: "特大" };
 const SORT_NAME = {
@@ -3849,12 +3858,38 @@ function renderManageIndex() {
       ckOn ? `今日 ${ck.done}/${ck.total}${ck.done >= ck.total ? " · 已完成" : ""}` : "未开启签到", "ck"),
     row("disp", "i-display", "外观与显示", `${font}字号 · ${compact} · 排序：${sort}`, "disp"),
     row("run", "i-refresh", "刷新与启动", run, "run"),
+    row("sync", "i-sync", "同步到手机", syncSummary(), "sync"),
     row("vault", "i-key", "密钥箱", "查看 / 搜索本机密钥", "vault"),
     row("about", "i-info", "关于与诊断", about),
   ].join("");
 }
 
+function syncSummary() {
+  const s = SYNC_STATUS;
+  if (SYNC_STATUS_ERROR) return "同步设置读取失败 · 点击重试";
+  if (!s) return "打开查看 · 手机只读";
+  if (s.nextAllowedAt && s.nextAllowedAt > Date.now() / 1000) {
+    return "限流中 · " + untilTime(s.nextAllowedAt) + "重试";
+  }
+  if (!s.relayId) return s.hasGithub ? "未建组 · 已连接 GitHub" : "未启用 · 手机只读";
+  if (!s.hasKey) return "同步码读取失败 · 请找回旧组";
+  if (!s.source) return "本机发布来源缺失 · 已暂停";
+  if (!s.hasGithub) return "已暂停 · GitHub 未连接";
+  if (!s.enabled) return "已暂停 · 手机只读";
+  if (s.lastError) return "发布失败 · " + String(s.lastError).slice(0, 42);
+  return s.lastUploadAt ? `已开启 · 上次 ${relTime(s.lastUploadAt)}` : "已开启 · 等待首次发布";
+}
+
+function untilTime(ts) {
+  const delta = Math.max(0, Math.ceil(Number(ts) - Date.now() / 1000));
+  if (delta < 60) return `${delta} 秒后`;
+  if (delta < 3600) return `${Math.ceil(delta / 60)} 分钟后`;
+  return `${Math.ceil(delta / 3600)} 小时后`;
+}
+
 function showTab(name) {
+  if (name !== "sync") hideSyncCode();
+  else SYNC_CODE_REVEALED = true;
   const btns = [...$("mTabs").children];
   const b = btns.find((x) => x.dataset.p === name);
   if (name !== "index" && !b) return;
@@ -3871,6 +3906,7 @@ function showTab(name) {
     renderManageIndex();
     return;
   }
+  if (name === "sync") loadSyncStatus();
 }
 $("mIndexList").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-p]");
@@ -3894,6 +3930,616 @@ $("mTabs").addEventListener("click", (e) => {
     loadVault();
   }
 });
+
+// ───────────── 同步到手机 ─────────────
+// 状态与子页共用 SYNC_STATUS；app.js 末尾的 bindSyncUI 绑定按钮。
+function hideSyncCode() {
+  SYNC_CODE_REVEALED = false;
+  if ($("syncCompareInput")) $("syncCompareInput").value = "";
+  if ($("syncRecoveryInput")) $("syncRecoveryInput").value = "";
+  if ($("syncCompareResult")) $("syncCompareResult").textContent = "";
+  renderSync();
+}
+
+async function loadSyncStatus() {
+  const revision = ++SYNC_STATUS_REV;
+  try {
+    const status = await invoke("sync_status");
+    if (revision !== SYNC_STATUS_REV) return true;
+    SYNC_STATUS = status;
+    SYNC_STATUS_ERROR = null;
+  } catch (e) {
+    if (revision !== SYNC_STATUS_REV) return false;
+    SYNC_STATUS = null;
+    SYNC_STATUS_ERROR = String(e);
+  }
+  renderSync();
+  if (manageOpen() && document.body.classList.contains("manage-index")) renderManageIndex();
+  return !SYNC_STATUS_ERROR;
+}
+
+function renderSync() {
+  const s = SYNC_STATUS;
+  const setup = $("syncSetup");
+  const panel = $("syncPanel");
+  if (!setup || !panel) return;
+  const failed = !!SYNC_STATUS_ERROR;
+  $("syncStatusLoading").hidden = !!s || failed;
+  $("syncStatusError").hidden = !failed;
+  $("syncStatusErrorText").textContent = failed
+    ? "同步设置读取失败，未创建新组。请重试：" + SYNC_STATUS_ERROR : "";
+  $("syncGithubCard").hidden = !s;
+  $("syncCodeCard").hidden = !(s && s.relayId);
+  if (!s) {
+    setup.hidden = true;
+    panel.hidden = true;
+    $("syncRecovery").hidden = true;
+    return;
+  }
+  const hasGithub = !!(s && s.hasGithub);
+  const configured = !!(s && s.relayId);
+
+  // GitHub 连接卡在“未建组 / 已建组”两种状态下都要可见。
+  const githubReady = s && s.oauthClientConfigured;
+  $("syncGithubState").textContent = hasGithub
+    ? `已连接 @${s.githubLogin || "GitHub"}`
+    : githubReady
+      ? "未连接"
+      : "OAuth App 未配置";
+  $("syncGithubDot").className =
+    "dot " + (hasGithub ? "ok" : githubReady ? "warn" : "mut");
+  $("syncGithubMeta").textContent = hasGithub
+    ? "仅 gist 权限"
+    : githubReady
+      ? "未授权"
+      : "缺少 client_id";
+  $("syncGithubHint").textContent = hasGithub
+    ? "每台电脑独立授权同一个 GitHub 账号；OAuth 令牌只存 Windows 凭据管理器，不进配置、日志或同步码。"
+    : githubReady
+      ? "通过 GitHub 官方浏览器页面授权，无需填写 PAT。授权前不会创建 Gist、不会上传数据。"
+      : "在 GitHub → Settings → Developer settings → OAuth Apps 创建桌面 App，勾选 Enable Device Flow，把公开的 Client ID 填到下面。只需开发者配置一次。";
+  $("syncClientIdBox").hidden = !!githubReady;
+  $("syncClientIdSaveRow").hidden = !!githubReady;
+  $("syncGithubConnect").hidden = hasGithub;
+  $("syncGithubReauth").hidden = !hasGithub;
+  $("syncGithubDisconnect").hidden = !hasGithub;
+  $("syncCreateBtn").disabled = !hasGithub;
+  $("syncJoinBtn").disabled = !hasGithub;
+  $("syncRotateBtn").disabled = !hasGithub;
+  $("syncRecoveryScan").disabled = !hasGithub || SYNC_RECOVERY_BUSY;
+  $("syncRecoveryImport").disabled = !hasGithub || SYNC_RECOVERY_BUSY;
+
+  setup.hidden = configured;
+  panel.hidden = !configured;
+  if (!configured) return;
+
+  $("syncCodeText").textContent = !s.codeText
+    ? "无法读取同步码，请重试或找回旧同步组"
+    : SYNC_CODE_REVEALED ? s.codeText : "GT1.••••••••••••••••（已隐藏）";
+  $("syncCopyBtn").disabled = !s.codeText;
+  $("syncRevealBtn").disabled = !s.codeText;
+  $("syncRevealBtn").textContent = SYNC_CODE_REVEALED ? "隐藏同步码" : "显示同步码";
+  $("syncRevealBtn").setAttribute("aria-pressed", String(SYNC_CODE_REVEALED));
+  $("syncErr").textContent = s.keyError
+    ? "本机同步密钥读取失败：" + s.keyError + "。请重试或找回旧同步组。"
+    : !s.source
+      ? "本机发布来源无法确认，自动发布不可用；同步码仍可用于读取。请从原电脑备份恢复发布状态。"
+      : s.lastError || "";
+  $("syncDot").className =
+    "dot " + (!s.enabled ? "o" : s.lastError ? "b" : s.hasGithub && s.hasKey ? "" : "w");
+  $("syncState").textContent = !s.hasKey ? "同步码不可用" : !s.source ? "发布来源缺失" : !s.enabled ? "已暂停" : s.lastError ? "发布失败" : "已开启";
+  const parts = [];
+  if (s.lastUploadAt) parts.push("上次上传 " + relTime(s.lastUploadAt));
+  parts.push(s.hasKey ? "主密钥在本机" : "主密钥缺失");
+  parts.push(s.hasGithub ? "GitHub 已授权" : "GitHub 未连接");
+  if (s.pendingSeq) parts.push(`待重试 seq ${s.pendingSeq}`);
+  if (s.nextAllowedAt && s.nextAllowedAt > Date.now() / 1000) {
+    parts.push("限流至 " + untilTime(s.nextAllowedAt));
+  }
+  $("syncMeta").textContent = parts.join(" · ");
+  $("syncRelayHint").textContent = "中继 " + s.relayId.slice(0, 10) + "… · 可与手机设置中的中继辅助核对";
+  $("syncPublishBtn").disabled = !s.hasKey || !s.source || !s.hasGithub;
+
+  const interval = $("syncInterval");
+  if (interval) interval.value = String(s.intervalSec || 60);
+  const enabled = $("syncEnabled");
+  if (enabled) {
+    enabled.checked = !!s.enabled;
+    enabled.disabled = !s.enabled && (!s.hasKey || !s.source || !s.hasGithub);
+  }
+
+  const box = $("syncChannels");
+  if (box) {
+    const selected = new Set(
+      (s.channels || []).length ? s.channels : (CHANNELS || []).map((c) => c.id)
+    );
+    box.innerHTML = (CHANNELS || [])
+      .filter((c) => !c.hidden && !c.autoHidden)
+      .map(
+        (c) =>
+          `<label class="row"><input type="checkbox" data-ch="${esc(c.id)}" ${
+            selected.has(c.id) ? "checked" : ""
+          }><span>${esc(c.name)}</span></label>`
+      )
+      .join("");
+  }
+  renderSyncLabels();
+}
+
+function renderSyncLabels() {
+  const box = $("syncLabels");
+  if (!box) return;
+  const custom = (CHANNELS || []).filter((c) => String(c.id).startsWith("custom-"));
+  if (!custom.length) {
+    box.innerHTML = "";
+    return;
+  }
+  const labels = (SYNC_STATUS && SYNC_STATUS.platformLabels) || {};
+  box.innerHTML = custom
+    .map(
+      (c) => `<label class="lbl"><span>${esc(c.name)} 的同步标签</span>
+        <input class="inp" data-label="${esc(c.id)}" value="${esc(labels[c.id] || "")}"
+          placeholder="如 my-relay（同标签跨机合并）" autocomplete="off" spellcheck="false"></label>`
+    )
+    .join("");
+}
+
+async function syncCreate() {
+  const btn = $("syncCreateBtn");
+  btn.disabled = true;
+  try {
+    try {
+      await invoke("sync_create", { allowExisting: false });
+    } catch (e) {
+      if (!String(e).includes("SYNC_OLD_GROUP_FOUND")) throw e;
+      if (!confirm("检测到本机保留着旧同步组。建议先找回旧组，以便继续使用以前的同步码。\n\n仍要创建新的同步组吗？")) {
+        syncOpenRecovery();
+        return;
+      }
+      await invoke("sync_create", { allowExisting: true });
+    }
+    const loaded = await loadSyncStatus();
+    showToast(loaded ? "同步组已创建 · 同步码已就绪" : "同步组已创建，但状态读取失败，请重试", !loaded);
+  } catch (e) {
+    showToast("创建同步组失败:" + e, true);
+  } finally {
+    renderSync();
+  }
+}
+
+async function syncJoin() {
+  const code = ($("syncJoinCode").value || "").trim();
+  if (!code) return showToast("请填写同步码", true);
+  const btn = $("syncJoinBtn");
+  btn.disabled = true;
+  try {
+    await invoke("sync_join", { code });
+    $("syncJoinCode").value = "";
+    await loadSyncStatus();
+    showToast("已加入同步组");
+  } catch (e) {
+    showToast("加入失败:" + e, true);
+  } finally {
+    renderSync();
+  }
+}
+
+async function syncPublish() {
+  const btn = $("syncPublishBtn");
+  btn.disabled = true;
+  try {
+    await invoke("sync_publish_now");
+    await loadSyncStatus();
+    showToast("已发布");
+  } catch (e) {
+    showToast("发布失败:" + e, true);
+  } finally {
+    renderSync();
+  }
+}
+
+async function syncPreview() {
+  const out = $("syncPreviewOut");
+  try {
+    const snap = await invoke("sync_preview");
+    out.textContent = JSON.stringify(snap, null, 2);
+    showToast("这是本机将上传的明文快照");
+  } catch (e) {
+    out.textContent = String(e);
+    showToast("预览失败:" + e, true);
+  }
+}
+
+async function syncGroup() {
+  const out = $("syncPreviewOut");
+  try {
+    const r = await invoke("sync_read_group");
+    out.textContent = JSON.stringify(r, null, 2);
+    if (r.kind === "loaded") showToast(`组内 ${r.merged.sources} 个来源`);
+    else showToast("组未变化");
+  } catch (e) {
+    out.textContent = String(e);
+    showToast("读取组状态失败:" + e, true);
+  }
+}
+
+async function syncRotate() {
+  if (!SYNC_STATUS || !SYNC_STATUS.relayId) return;
+  if (!confirm("重新生成会创建新的同步组。已配对的手机和其他电脑需要使用新码，才能接收本机的新数据。\n\n旧组不会自动删除，旧码仍可能读取旧组的数据。继续？")) return;
+  const expectedRelayId = SYNC_STATUS.relayId;
+  try {
+    $("syncRotateBtn").disabled = true;
+    const r = await invoke("sync_rotate", { expectedRelayId });
+    SYNC_CODE_REVEALED = true;
+    $("syncCompareInput").value = "";
+    $("syncCompareResult").textContent = "";
+    await loadSyncStatus();
+    showToast("已生成新同步码" + (r.oldRelayId ? "；旧中继未删除" : ""));
+  } catch (e) {
+    showToast("重新生成失败:" + e, true);
+  } finally {
+    renderSync();
+  }
+}
+
+async function syncScanRecovery() {
+  if (SYNC_RECOVERY_BUSY) return;
+  const list = $("syncRecoveryList");
+  if (!SYNC_STATUS || !SYNC_STATUS.hasGithub) {
+    list.textContent = "请先连接创建旧组时使用的 GitHub 账号。";
+    return;
+  }
+  SYNC_RECOVERY_BUSY = true;
+  renderSync();
+  list.textContent = "正在查找并验证本机旧同步组…";
+  try {
+    const result = await invoke("sync_recovery_candidates");
+    const rows = (result.candidates || []).map((c) =>
+      `<div class="sync-recovery-row"><span>中继 ${esc(String(c.gistId).slice(0, 10))}…<br><span class="khint">${c.hasLocalSource ? "已验证 · 本机发布来源可恢复" : "已验证 · 本机发布来源未确认"}</span></span>
+       <button class="btn" data-recover-id="${esc(c.gistId)}" data-epoch="${Number(c.keyEpoch) || 0}">恢复</button></div>`
+    );
+    if (!rows.length) rows.push('<div class="khint">没有找到可验证的旧组；如有旧同步码，可在下方输入。</div>');
+    if (result.unverified) rows.push(`<div class="khint">另有 ${Number(result.unverified)} 个本机记录未能验证，请检查网络和账号，或输入旧码。</div>`);
+    if (result.truncated) rows.push('<div class="khint">本次只检查了前 24 个记录；也可直接输入旧码。</div>');
+    list.innerHTML = rows.join("");
+  } catch (e) {
+    list.textContent = "查找失败：" + String(e) + "。请重试或输入旧同步码。";
+  } finally {
+    SYNC_RECOVERY_BUSY = false;
+    renderSync();
+  }
+}
+
+function syncOpenRecovery() {
+  $("syncRecovery").hidden = false;
+  $("syncRecoveryList").textContent = SYNC_STATUS && SYNC_STATUS.hasGithub
+    ? "" : "请先连接创建旧组时使用的 GitHub 账号。";
+  $("syncRecovery").scrollIntoView({ block: "nearest" });
+  if (SYNC_STATUS && SYNC_STATUS.hasGithub) syncScanRecovery();
+}
+
+async function syncRestoreGroup(gistId, code, keyEpoch) {
+  if (SYNC_RECOVERY_BUSY || !SYNC_STATUS) return;
+  if (!confirm("恢复后会切换到所选同步组，当前组不会删除。自动发布先暂停，确认发布状态后可重新开启。继续？")) return;
+  const expectedCurrent = SYNC_STATUS.relayId || null;
+  SYNC_RECOVERY_BUSY = true;
+  renderSync();
+  try {
+    const result = await invoke("sync_restore_group", {
+      gistId: gistId || null,
+      code: code || null,
+      keyEpoch: keyEpoch == null ? null : keyEpoch,
+      expectedCurrent,
+    });
+    $("syncRecoveryInput").value = "";
+    $("syncRecovery").hidden = true;
+    SYNC_CODE_REVEALED = true;
+    await loadSyncStatus();
+    showToast(result.hasLocalSource
+      ? "已找回旧同步组 · 自动发布已暂停"
+      : "旧同步码已找回，但本机发布来源未确认，请先恢复原发布状态", !result.hasLocalSource);
+  } catch (e) {
+    showToast("找回失败：" + e, true);
+  } finally {
+    SYNC_RECOVERY_BUSY = false;
+    renderSync();
+  }
+}
+
+async function syncForget() {
+  if (!SYNC_STATUS || !SYNC_STATUS.relayId) return;
+  if (!confirm("退出同步组会删除本机主密钥和发布状态；GitHub 上的密文不会自动删除。继续？")) return;
+  const expectedRelayId = SYNC_STATUS.relayId;
+  try {
+    await invoke("sync_forget", { expectedRelayId });
+    await loadSyncStatus();
+    showToast("已退出同步组");
+  } catch (e) {
+    showToast("退出失败:" + e, true);
+  }
+}
+
+async function syncDisconnect() {
+  if (!confirm("断开 GitHub 授权后，本机将不能再发布；手机仍可用同步码匿名读取。继续？")) return;
+  try {
+    await invoke("sync_disconnect_github");
+    await loadSyncStatus();
+    showToast("已断开 GitHub 授权");
+  } catch (e) {
+    showToast("断开失败:" + e, true);
+  }
+}
+
+async function syncSetChannelsFromUI() {
+  const ids = [...document.querySelectorAll("#syncChannels input[data-ch]")]
+    .filter((x) => x.checked)
+    .map((x) => x.dataset.ch);
+  if (!ids.length) {
+    showToast("至少选择一个渠道", true);
+    renderSync();
+    return;
+  }
+  try {
+    await invoke("sync_set_channels", { channels: ids });
+    await loadSyncStatus();
+  } catch (e) {
+    showToast("保存发布渠道失败:" + e, true);
+  }
+}
+
+async function syncSetEnabledFromUI(on) {
+  try {
+    await invoke("sync_set_enabled", { enabled: on });
+    await loadSyncStatus();
+  } catch (e) {
+    showToast("切换失败:" + e, true);
+    renderSync();
+  }
+}
+
+async function syncSetIntervalFromUI(sec) {
+  try {
+    await invoke("sync_set_interval", { seconds: Number(sec) });
+    await loadSyncStatus();
+  } catch (e) {
+    showToast("保存间隔失败:" + e, true);
+  }
+}
+
+async function syncSetLabel(id, label) {
+  try {
+    await invoke("sync_set_platform_label", { channelId: id, label });
+    await loadSyncStatus();
+  } catch (e) {
+    showToast("保存同步标签失败:" + e, true);
+  }
+}
+
+// ── 桌面 GitHub Device Flow(不手填 PAT) ───────────────────────────────
+async function syncGithubConnect() {
+  if (SYNC_AUTH) return;
+  const btn = $("syncGithubConnect");
+  btn.disabled = true;
+  try {
+    const r = await invoke("sync_oauth_start");
+    SYNC_AUTH = {
+      userCode: r.userCode,
+      verificationUri: r.verificationUri,
+      expiresAt: Date.now() / 1000 + Number(r.expiresIn || 900),
+      interval: Math.max(5, Number(r.interval || 5)),
+      timer: null,
+    };
+    $("syncUserCode").textContent = r.userCode;
+    $("syncAuthStatus").textContent = `等待授权 · ${Math.max(1, Math.round(Number(r.expiresIn || 900) / 60))} 分钟内有效`;
+    $("syncAuth").hidden = false;
+    syncAuthSchedule(SYNC_AUTH.interval);
+  } catch (e) {
+    showToast("连接 GitHub 失败:" + e, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function syncAuthSchedule(sec) {
+  if (!SYNC_AUTH) return;
+  clearTimeout(SYNC_AUTH.timer);
+  SYNC_AUTH.timer = setTimeout(syncAuthPoll, Math.max(5, Number(sec) || 5) * 1000);
+}
+
+async function syncAuthPoll() {
+  if (!SYNC_AUTH) return;
+  if (Date.now() / 1000 >= SYNC_AUTH.expiresAt) {
+    await syncAuthCancel(true);
+    showToast("GitHub 授权码已过期，请重新连接", true);
+    return;
+  }
+  try {
+    const r = await invoke("sync_oauth_poll");
+    if (!SYNC_AUTH) return; // 等待期间用户已取消/页面已关闭
+    if (r.kind === "pending") {
+      $("syncAuthStatus").textContent = "等待你在 GitHub 授权…";
+      syncAuthSchedule(r.interval);
+    } else if (r.kind === "authorized") {
+      clearTimeout(SYNC_AUTH.timer);
+      SYNC_AUTH = null;
+      $("syncAuth").hidden = true;
+      await loadSyncStatus();
+      showToast("已连接 @" + r.login);
+    } else if (r.kind === "error") {
+      clearTimeout(SYNC_AUTH.timer);
+      SYNC_AUTH = null;
+      $("syncAuthStatus").textContent = r.message;
+      showToast("GitHub 授权失败:" + r.message, true);
+    } else {
+      clearTimeout(SYNC_AUTH.timer);
+      SYNC_AUTH = null;
+      $("syncAuth").hidden = true;
+    }
+  } catch (e) {
+    $("syncAuthStatus").textContent = "轮询失败，稍后重试";
+    syncAuthSchedule(5);
+  }
+}
+
+async function syncAuthCancel(silent = false) {
+  if (SYNC_AUTH) clearTimeout(SYNC_AUTH.timer);
+  SYNC_AUTH = null;
+  $("syncAuth").hidden = true;
+  try { await invoke("sync_oauth_cancel"); } catch { /* 已经取消 */ }
+  if (!silent) showToast("已取消 GitHub 授权");
+}
+
+async function syncAuthCopyOpen() {
+  if (!SYNC_AUTH) return;
+  try { await invoke("copy_text", { text: SYNC_AUTH.userCode }); } catch { /* 手动抄写 */ }
+  try {
+    await invoke("open_url", { url: SYNC_AUTH.verificationUri });
+    $("syncAuthStatus").textContent = "已复制授权码。请在 GitHub 页面输入它，并确认只授予 gist 权限。";
+  } catch (e) {
+    showToast("打开浏览器失败:" + e, true);
+  }
+}
+
+async function syncAuthOpenPage() {
+  if (!SYNC_AUTH) return;
+  try {
+    await invoke("open_url", { url: SYNC_AUTH.verificationUri });
+  } catch (e) {
+    showToast("打开浏览器失败:" + e, true);
+  }
+}
+
+async function syncGithubDisconnect() {
+  if (!confirm("断开后本机停止发布，但保留同步组和主密钥；重新授权即可恢复。继续？")) return;
+  try {
+    await invoke("sync_disconnect_github");
+    await loadSyncStatus();
+    showToast("已断开 GitHub 授权");
+  } catch (e) {
+    showToast("断开失败:" + e, true);
+  }
+}
+
+async function syncSaveClientId() {
+  const id = ($("syncClientId").value || "").trim();
+  if (!id) return showToast("请填写 OAuth App Client ID", true);
+  try {
+    await invoke("sync_set_oauth_client_id", { clientId: id });
+    $("syncClientId").value = "";
+    await loadSyncStatus();
+    showToast("Client ID 已保存");
+  } catch (e) {
+    showToast("保存 Client ID 失败:" + e, true);
+  }
+}
+
+async function syncOpenDevSettings() {
+  try {
+    await invoke("open_url", { url: "https://github.com/settings/developers" });
+  } catch (e) {
+    showToast("打开 GitHub 失败:" + e, true);
+  }
+}
+
+function bindSyncUI() {
+  if (!$("syncCreateBtn")) return;
+  $("syncStatusRetry").addEventListener("click", () => {
+    SYNC_STATUS_ERROR = null;
+    renderSync();
+    loadSyncStatus();
+  });
+  $("syncCreateBtn").addEventListener("click", syncCreate);
+  $("syncJoinBtn").addEventListener("click", syncJoin);
+  $("syncPublishBtn").addEventListener("click", syncPublish);
+  $("syncPreviewBtn").addEventListener("click", syncPreview);
+  $("syncGroupBtn").addEventListener("click", syncGroup);
+  $("syncRotateBtn").addEventListener("click", syncRotate);
+  $("syncForgetBtn").addEventListener("click", syncForget);
+  $("syncGithubConnect").addEventListener("click", syncGithubConnect);
+  $("syncGithubReauth").addEventListener("click", syncGithubConnect);
+  $("syncGithubDisconnect").addEventListener("click", syncGithubDisconnect);
+  $("syncSaveClientId").addEventListener("click", syncSaveClientId);
+  $("syncOpenDevSettings").addEventListener("click", syncOpenDevSettings);
+  $("syncAuthCopy").addEventListener("click", syncAuthCopyOpen);
+  $("syncAuthOpen").addEventListener("click", syncAuthOpenPage);
+  $("syncAuthCancel").addEventListener("click", () => syncAuthCancel(false));
+  $("syncAuth").addEventListener("click", (e) => {
+    if (e.target === $("syncAuth")) syncAuthCancel(false);
+  });
+  $("syncOptionsBtn").addEventListener("click", () => {
+    const box = $("syncOptions");
+    box.hidden = !box.hidden;
+    $("syncOptionsBtn").setAttribute("aria-expanded", String(!box.hidden));
+    if (box.hidden) {
+      $("syncCompareInput").value = "";
+      $("syncCompareResult").textContent = "";
+      $("syncCompare").hidden = true;
+    }
+  });
+  $("syncCompareOpen").addEventListener("click", () => {
+    $("syncCompare").hidden = !$("syncCompare").hidden;
+    $("syncCompareInput").value = "";
+    $("syncCompareResult").textContent = "";
+  });
+  $("syncCompareBtn").addEventListener("click", () => {
+    const old = $("syncCompareInput").value.trim();
+    const current = (SYNC_STATUS && SYNC_STATUS.codeText) || "";
+    $("syncCompareResult").textContent = !current ? "当前同步码无法读取，请先找回。"
+      : !old ? "请先输入旧同步码。"
+      : old === current ? "两次同步码完全相同。" : "同步码不同，属于不同的同步凭据。";
+    $("syncCompareInput").value = "";
+  });
+  $("syncRecoverOpen").addEventListener("click", syncOpenRecovery);
+  $("syncRecoverOpenSetup").addEventListener("click", syncOpenRecovery);
+  $("syncRecoveryScan").addEventListener("click", syncScanRecovery);
+  $("syncRecoveryClose").addEventListener("click", () => {
+    $("syncRecovery").hidden = true;
+    $("syncRecoveryInput").value = "";
+  });
+  $("syncRecoveryImport").addEventListener("click", () => {
+    const code = $("syncRecoveryInput").value.trim();
+    if (!code) return showToast("请先输入旧同步码", true);
+    syncRestoreGroup(null, code, null);
+  });
+  $("syncRecoveryList").addEventListener("click", (e) => {
+    const button = e.target.closest("button[data-recover-id]");
+    if (button) syncRestoreGroup(button.dataset.recoverId, null, Number(button.dataset.epoch));
+  });
+  $("syncRevealBtn").addEventListener("click", () => {
+    SYNC_CODE_REVEALED = !SYNC_CODE_REVEALED;
+    renderSync();
+  });
+  $("syncCopyBtn").addEventListener("click", async () => {
+    const text = (SYNC_STATUS && SYNC_STATUS.codeText) || "";
+    if (!text) return showToast("没有可复制的同步码", true);
+    try {
+      await invoke("copy_text", { text });
+      showToast("同步码已复制");
+    } catch (e) {
+      showToast("复制失败:" + e, true);
+    }
+  });
+  $("syncInterval").addEventListener("change", (e) => syncSetIntervalFromUI(e.target.value));
+  $("syncEnabled").addEventListener("change", (e) => syncSetEnabledFromUI(e.target.checked));
+  $("syncChannels").addEventListener("change", (e) => {
+    if (e.target.matches("input[data-ch]")) syncSetChannelsFromUI();
+  });
+  $("syncLabels").addEventListener("change", (e) => {
+    const id = e.target.dataset.label;
+    if (id) syncSetLabel(id, e.target.value);
+  });
+  loadSyncStatus();
+  listen("sync-status", (e) => {
+    SYNC_STATUS_REV++;
+    SYNC_STATUS = e.payload;
+    SYNC_STATUS_ERROR = null;
+    renderSync();
+    if (manageOpen() && document.body.classList.contains("manage-index")) renderManageIndex();
+  });
+  listen("sync-error", (e) => showToast("同步失败:" + e.payload, true));
+}
+bindSyncUI();
+
 // 置顶:窗口状态与配置一起改(见 Rust 的 set_pin),按钮与设置项共用同一个值
 async function setPin(enabled) {
   try {

@@ -25,6 +25,7 @@ pub mod qoder;
 pub mod qoderweb;
 pub mod secrets;
 pub mod store;
+pub mod sync;
 pub mod vault;
 pub mod view;
 pub mod weblogin;

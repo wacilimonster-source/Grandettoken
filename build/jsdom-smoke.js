@@ -718,7 +718,17 @@ const HARNESS = `
     const idxOn = document.body.classList.contains("manage-index");
     const idxRows = document.querySelectorAll("#mIndexList .midx-row").length;
     const idxTitle = document.querySelector(".mhead .mt").textContent;
-    ck("设置默认落在索引页(7 个分区)", idxOn && idxRows === 7 && idxTitle === "设置与管理", idxOn + "/" + idxRows + "/" + idxTitle);
+    ck("设置默认落在索引页(含同步，共 8 个分区)", idxOn && idxRows === 8 && !!document.querySelector('#mIndexList [data-p="sync"]') && idxTitle === "设置与管理", idxOn + "/" + idxRows + "/" + idxTitle);
+    const savedSyncStatus = SYNC_STATUS;
+    SYNC_STATUS = { relayId: "test", hasGithub: true, hasKey: true, enabled: true, oauthClientConfigured: true, codeText: "GT1.test-secret", channels: [] };
+    renderSync();
+    ck("同步码隐藏状态不显示明文", !document.getElementById("syncCodeText").textContent.includes("test-secret"));
+    document.getElementById("syncRevealBtn").click();
+    ck("用户主动显示同步码", document.getElementById("syncCodeText").textContent === "GT1.test-secret");
+    showTab("index");
+    ck("离开同步页时隐藏同步码", !document.getElementById("syncCodeText").textContent.includes("test-secret"));
+    SYNC_STATUS = savedSyncStatus;
+    renderSync();
     document.querySelector('#mIndexList [data-p="ch"]').click();
     ck("点索引行进入子页并更新页头", !document.body.classList.contains("manage-index")
       && document.querySelector('#mTabs [data-p="ch"]').classList.contains("on")
@@ -780,6 +790,8 @@ w.__DATA = DATA;
     const page = body.dataset.p;
     let sum = 0;
     body.querySelectorAll(".khint").forEach((el) => {
+      // 互斥的恢复/设置状态不会同时显示，不应把隐藏面板里的文案累加。
+      if (el.closest("[hidden]")) return;
       // 「?」展开块是 L2(按需),不算常驻 —— 它只是挂在 .khint 里面
       const c = el.cloneNode(true);
       c.querySelectorAll(".whybox").forEach((x) => x.remove());

@@ -435,6 +435,7 @@ body.view-manage #lkKeys{display:none}
 .midx-ico.disp{background:rgba(138,149,168,.12);color:var(--tx2)}
 .midx-ico.run{background:rgba(243,198,102,.1);color:#f5d391}
 .midx-ico.vault{background:rgba(255,123,114,.1);color:#ffb3ad}
+.midx-ico.sync{background:rgba(79,214,160,.11);color:#7ee2ae}
 .midx-tx{flex:1;min-width:0}
 .midx-tt{display:block;font-size:calc(12.5px*var(--u));font-weight:600;color:var(--tx);
   line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -451,6 +452,57 @@ body.manage-index .mhead .mt{letter-spacing:.01em}
   margin:0 0 calc(9px*var(--u));font-weight:600}
 .mbody h4:not(:first-child){margin-top:calc(18px*var(--u))}
 .khint{font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);line-height:1.7;margin:calc(-3px*var(--u)) 0 calc(10px*var(--u))}
+
+/* ── 同步到手机 ───────────────────────────────────────────────────────── */
+.sync-github{padding:calc(2px*var(--u)) 0 calc(8px*var(--u));
+  border-bottom:1px solid var(--line);margin-bottom:calc(10px*var(--u))}
+.sync-head{display:flex;align-items:center;flex-wrap:wrap;gap:calc(7px*var(--u));padding:calc(2px*var(--u)) 0 calc(8px*var(--u));
+  border-bottom:1px solid var(--line);margin-bottom:calc(8px*var(--u))}
+.sync-github .sync-head{border-bottom:0;margin-bottom:calc(4px*var(--u));padding-bottom:0}
+.sync-head b{font-size:max(11.5px,calc(12px*var(--u)))}
+.sync-auth{position:fixed;inset:0;z-index:120;display:flex;align-items:center;justify-content:center;
+  background:rgba(8,10,15,.78);padding:calc(18px*var(--u))}
+.sync-auth[hidden]{display:none}
+.sync-auth-card{width:100%;max-width:calc(340px*var(--u));background:var(--bg2);
+  border:1px solid var(--line2);border-radius:calc(12px*var(--u));padding:calc(16px*var(--u));
+  box-shadow:0 18px 40px -18px #000}
+.sync-auth-title{font-size:max(12.5px,calc(13px*var(--u)));font-weight:650;color:var(--tx)}
+.sync-auth-code{font:700 calc(22px*var(--u))/1.2 Consolas,"Cascadia Mono",monospace;
+  letter-spacing:.12em;color:#b7ccff;background:var(--bg3);border:1px solid var(--line2);
+  border-radius:calc(8px*var(--u));padding:calc(14px*var(--u)) calc(10px*var(--u));
+  text-align:center;user-select:all;word-break:break-all}
+.sync-code{font:max(10.5px,calc(11px*var(--u)))/1.55 Consolas,"Cascadia Mono",monospace;
+  color:var(--tx2);background:var(--bg3);border:1px solid var(--line2);
+  border-radius:calc(6px*var(--u));padding:calc(8px*var(--u));word-break:break-all;user-select:all}
+.sync-warning{color:var(--warn);background:var(--warn-bg);border:1px solid var(--line2);
+  border-radius:calc(7px*var(--u));padding:calc(9px*var(--u));margin-bottom:calc(10px*var(--u));
+  display:flex;flex-wrap:wrap;align-items:center;gap:calc(8px*var(--u))}
+.sync-options,.sync-recovery-list{margin:calc(8px*var(--u)) 0}
+.sync-options{padding:calc(8px*var(--u));background:var(--bg3);border-radius:calc(7px*var(--u))}
+.sync-input{display:block;width:100%;resize:vertical;font-family:Consolas,monospace;
+  margin:calc(5px*var(--u)) 0 calc(7px*var(--u));user-select:text}
+.sync-recovery-row{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  border-bottom:1px solid var(--line);padding:calc(7px*var(--u)) 0}
+#syncCodeCard[hidden],#syncGithubCard[hidden],#syncSetup[hidden],#syncPanel[hidden],
+#syncStatusLoading[hidden],#syncStatusError[hidden],#syncOptions[hidden],#syncCompare[hidden],
+#syncRecovery[hidden],#syncClientIdBox[hidden],#syncClientIdSaveRow[hidden]{display:none!important}
+.sync-channels{display:grid;grid-template-columns:1fr 1fr;gap:calc(4px*var(--u)) calc(8px*var(--u))}
+.sync-channels .row{display:flex;align-items:center;gap:calc(5px*var(--u));
+  font-size:max(11px,calc(11.5px*var(--u)));color:var(--tx2);min-width:0}
+.sync-channels .row span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sync-channels .row input{accent-color:var(--ac);flex:none}
+.sync-labels{display:flex;flex-direction:column;gap:calc(5px*var(--u));margin-top:calc(7px*var(--u))}
+.sync-labels:empty{display:none}
+.sync-labels .lbl{display:flex;align-items:center;gap:calc(6px*var(--u));
+  font-size:max(10.5px,calc(11px*var(--u)));color:var(--tx3)}
+.sync-labels .lbl .inp{flex:1;min-width:0}
+.sync-pre{white-space:pre-wrap;word-break:break-all;
+  font:max(10px,calc(10.5px*var(--u)))/1.55 Consolas,"Cascadia Mono",monospace;
+  color:var(--tx3);background:var(--bg3);border:1px solid var(--line);border-radius:calc(6px*var(--u));
+  padding:calc(8px*var(--u));max-height:calc(180px*var(--u));overflow:auto;margin:calc(6px*var(--u)) 0 0}
+.sync-pre:empty{display:none}
+#syncErr{color:var(--bad);white-space:pre-wrap;margin:0 0 calc(7px*var(--u))}
+#syncErr:empty{display:none}
 
 /* ── 按需说明(2026-10-23)────────────────────────────────────────────────
    设置页的文案分三层:常驻一句后果(L1)、点「?」原地展开(L2)、关于页折叠(L3)。
@@ -1213,6 +1265,13 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
   margin-top:calc(7px*var(--u));font-size:max(11px,calc(11.5px*var(--u)))}
 .krow .k1{flex:1;min-width:0;color:var(--tx2);word-break:break-all}
 .krow .khint{font-family:Consolas,monospace;color:var(--tx3)}
+/* 同步表单的输入框:原来 .inp 只在模型/自定义渠道的局部作用域里有深色样式,
+   放进 .krow 会露出浏览器默认白底,和整个面板打架。 */
+.krow .inp{flex:1;min-width:0;background:var(--bg3);border:1px solid var(--line2);color:var(--tx);
+  border-radius:calc(5px*var(--u));padding:calc(5px*var(--u)) calc(7px*var(--u));
+  font:max(11px,calc(11.5px*var(--u)))/1.4 inherit;outline:none}
+.krow .inp:focus{border-color:var(--ac)}
+.krow .inp::placeholder{color:var(--tx3)}
 /* 断链提醒:引用的箱子条目被删了 —— 必须与"未配置密钥"看起来不同,
    否则用户会去渠道卡重填(错误的方向),而不是去密钥箱看 */
 .krow.warn{border-color:#8a6d2f;background:#1f1a10}

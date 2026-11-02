@@ -1135,6 +1135,15 @@ impl Store {
         Ok(())
     }
 
+    /// 删除一行设置。同步退出组时用它清掉 state / watermark；
+    /// 不写成空串，避免“存在但解析失败”被当成存储损坏。
+    pub fn delete_setting(&self, key: &str) -> Result<(), String> {
+        self.conn
+            .execute("DELETE FROM settings WHERE key = ?1", params![key])
+            .map_err(|e| format!("删除设置 {key} 失败: {e}"))?;
+        Ok(())
+    }
+
     /// 归档时往分界线**之后**多看多久,专门用来接住跨边界的那一笔(见 `archive_before` 的注)。
     /// 取一天:比任何渠道的轮询间隔都宽得多,笔记本睡眠/挂件暂停留出的空档也盖得住。
     const ARCHIVE_LOOKBACK_SEC: i64 = 86_400;
