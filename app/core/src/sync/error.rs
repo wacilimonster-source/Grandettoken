@@ -25,6 +25,7 @@ pub const GIST_ID_INVALID: &str = "SYNC_GIST_ID_INVALID";
 pub const SOURCE_INVALID: &str = "SYNC_SOURCE_INVALID";
 pub const LIMIT: &str = "SYNC_LIMIT";
 pub const STORE: &str = "SYNC_STORE";
+pub const QR: &str = "SYNC_QR";
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct SyncError {

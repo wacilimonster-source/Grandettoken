@@ -7,8 +7,9 @@ use std::collections::BTreeMap;
 
 use crate::checkin;
 use crate::config::Config;
-use crate::fetch::{local_tz_offset, ChannelView};
+use crate::fetch::{current_key_fp, key_fp as credential_fp, local_tz_offset, ChannelView};
 use crate::providers::{self, Kind};
+use crate::secrets;
 use crate::store::Store;
 
 use super::model::{
@@ -139,7 +140,24 @@ fn build_channel(view: &ChannelView, cfg: &Config, store: &Store, now: i64) -> C
         stale: view.stale,
         error_code,
         updated_at: view.updated_at.max(1),
-        history: build_history(view, store, now, &unit),
+        history: {
+            let key_fp = history_key_fp(view);
+            build_history(
+                HistoryInput {
+                    channel_id: &view.id,
+                    unit: &unit,
+                    accounts: view.accounts,
+                    current_remaining: view.remaining,
+                    updated_at: view.updated_at,
+                    day_today: view.day,
+                    gap_day_from: view.gap_day_from,
+                    gap_days: &view.gap_days,
+                    key_fp: key_fp.as_deref(),
+                },
+                store,
+                now,
+            )
+        },
     }
 }
 
@@ -164,29 +182,117 @@ fn short_reset_text(s: &str) -> String {
         .to_string()
 }
 
-fn build_history(view: &ChannelView, store: &Store, now: i64, unit: &str) -> Vec<HistoryPoint> {
-    let tz = local_tz_offset();
-    let day_start = ((now + tz).div_euclid(86_400)) * 86_400 - tz;
-    let from = day_start - (MAX_HISTORY as i64 - 1) * 86_400;
-    let summaries = store.daily_summaries(&view.id, None, from).unwrap_or_default();
-    let mut by_day = BTreeMap::new();
-    for s in summaries {
-        by_day.insert(s.day_start, s);
+pub(crate) struct HistoryInput<'a> {
+    pub channel_id: &'a str,
+    pub unit: &'a str,
+    /// 这个渠道历史上有几本账（不同 key 指纹）。
+    pub accounts: i64,
+    pub current_remaining: Option<f64>,
+    pub updated_at: i64,
+    /// 今天的实时消耗（`ChannelView.day`），历史日没有这个值。
+    pub day_today: Option<f64>,
+    pub gap_day_from: Option<i64>,
+    pub gap_days: &'a [i64],
+    /// 当前凭据指纹；None = 不区分/取不到。
+    pub key_fp: Option<&'a str>,
+}
+
+/// 内置 Keyring 渠道用当前密钥指纹；自定义渠道解析本机密钥后取指纹。
+/// App/WebSession 型凭据会轮换，返回 None（与桌面曲线同一口径）。
+fn history_key_fp(view: &ChannelView) -> Option<String> {
+    if let Some(def) = providers::PROVIDERS.iter().find(|p| p.id == view.id) {
+        let fp = current_key_fp(def);
+        return if fp.is_empty() { None } else { Some(fp) };
     }
+    let fp = secrets::resolve(&view.id)
+        .ok()
+        .and_then(|r| r.key().map(credential_fp))
+        .unwrap_or_default();
+    if fp.is_empty() {
+        None
+    } else {
+        Some(fp)
+    }
+}
+
+/// 最近 7 个自然日的余额 + 消耗。
+///
+/// - `balance`：当天最后一条**成功**快照；没有观测就是 null。
+/// - `spent`：今天用 `ChannelView.day`（今天到目前为止），历史日只用完整覆盖的
+///   `daily_summary`；有缺口的历史日给 null，不拿部分数据冒充全天。
+/// - `complete`：这一天有没有完整观测。缺口日/采样不足为 false，手机据此断线。
+/// - `revised_at`：真实最后观测时间；没有观测时用当天零点，**绝不用 now**，
+///   否则合并时一条空历史会压过另一台电脑的真实记录。
+/// - 多本账但取不到当前指纹时整段返回空历史，绝不把两个账户拼成一条线。
+pub(crate) fn build_history(input: HistoryInput<'_>, store: &Store, now: i64) -> Vec<HistoryPoint> {
+    let tz = local_tz_offset();
+    let today_start = ((now + tz).div_euclid(86_400)) * 86_400 - tz;
+    let from = today_start - (MAX_HISTORY as i64 - 1) * 86_400;
     let tz_label = offset_label(tz);
+    let unknown_accounts = input.accounts > 1 && input.key_fp.is_none();
+
     (0..MAX_HISTORY)
         .map(|i| {
             let start = from + i as i64 * 86_400;
-            let summary = by_day.get(&start);
+            let end = start + 86_400;
+            let is_today = start == today_start;
+
+            let last = if !unknown_accounts && start <= now {
+                let to = end.saturating_sub(1).min(now);
+                store
+                    .last_snapshot_between(input.channel_id, input.key_fp, start, to)
+                    .ok()
+                    .flatten()
+                    .or_else(|| {
+                        if is_today {
+                            input
+                                .current_remaining
+                                .map(|v| (input.updated_at.max(1), v))
+                        } else {
+                            None
+                        }
+                    })
+            } else {
+                None
+            };
+
+            let balance = last.and_then(|(_, v)| decimal_string(v));
+            let has_data = last.is_some() || (is_today && input.day_today.is_some());
+            let gap = input.gap_days.contains(&start)
+                || (is_today && input.gap_day_from.is_some());
+            let complete = !unknown_accounts
+                && has_data
+                && !gap
+                // 今天还没有实时 day 值 = 消耗未知，不能标成完整。
+                && (!is_today || input.day_today.is_some());
+
+            // 最近 7 天在明细快照里：用与桌面 day/week/month 相同的余额差规则。
+            // daily_summary 只在 90 天归档后才有内容，不能拿来算最近一周。
+            let spent = if unknown_accounts || !complete {
+                None
+            } else if is_today {
+                input.day_today.and_then(decimal_string)
+            } else {
+                let consumed = match input.key_fp {
+                    Some(fp) => store
+                        .consumed_in_window_fp(input.channel_id, fp, start, end - 1),
+                    None => store.consumed_in_window(input.channel_id, start, end - 1),
+                };
+                consumed.ok().and_then(decimal_string)
+            };
+
+            let revised_at = last.map(|(ts, _)| ts).unwrap_or(start).max(1);
+
             HistoryPoint {
                 period_start: start,
-                period_end: start + 86_400,
+                period_end: end,
                 time_zone: tz_label.clone(),
-                unit: unit.to_string(),
-                balance: None,
-                spent: summary.and_then(|s| decimal_string(s.consumed)),
+                unit: input.unit.to_string(),
+                balance,
+                spent,
                 estimated: true,
-                revised_at: summary.map(|s| s.last_ts.min(now).max(1)).unwrap_or(now),
+                complete,
+                revised_at,
             }
         })
         .collect()
@@ -356,5 +462,88 @@ mod tests {
         assert_eq!(totals.others.len(), 1);
         assert_eq!(totals.others[0].unit, "USD");
         assert_eq!(totals.others[0].amount, "1.25");
+    }
+
+    #[test]
+    fn last_snapshot_between_is_scoped_to_current_fingerprint() {
+        let store = Store::open_memory().unwrap();
+        let now = 1_793_500_800;
+        let tz = local_tz_offset();
+        let day = ((now + tz).div_euclid(86_400)) * 86_400 - tz;
+        store.record_fp("x", "a", day + 10, Some(10.0), None, None, "amount").unwrap();
+        store.record_fp("x", "a", day + 20, Some(20.0), None, None, "amount").unwrap();
+        store.record_fp("x", "b", day + 30, Some(30.0), None, None, "amount").unwrap();
+        assert_eq!(
+            store.last_snapshot_between("x", Some("a"), day, day + 86_399).unwrap(),
+            Some((day + 20, 20.0))
+        );
+        assert_eq!(
+            store.last_snapshot_between("x", Some("b"), day, day + 86_399).unwrap(),
+            Some((day + 30, 30.0))
+        );
+        assert_eq!(
+            store.last_snapshot_between("x", Some("c"), day, day + 86_399).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn history_uses_current_account_and_preserves_gaps() {
+        let store = Store::open_memory().unwrap();
+        let now = 1_793_500_800;
+        let tz = local_tz_offset();
+        let today_start = ((now + tz).div_euclid(86_400)) * 86_400 - tz;
+        let yesterday = today_start - 86_400;
+        let fp_a = "aaaaaaaaaaaaaaaaaaaaaaaa";
+        let fp_b = "bbbbbbbbbbbbbbbbbbbbbbbb";
+
+        // 昨天：A 110→100（花 10），B 60→40（花 20）。
+        store.record_fp("deepseek", fp_a, yesterday + 3_600, Some(110.0), None, None, "amount").unwrap();
+        store.record_fp("deepseek", fp_a, yesterday + 7_200, Some(100.0), None, None, "amount").unwrap();
+        store.record_fp("deepseek", fp_b, yesterday + 3_600, Some(60.0), None, None, "amount").unwrap();
+        store.record_fp("deepseek", fp_b, yesterday + 7_200, Some(40.0), None, None, "amount").unwrap();
+        // 今天：A 记录 88。
+        store.record_fp("deepseek", fp_a, today_start + 3_600, Some(88.0), None, None, "amount").unwrap();
+
+        let input = |fp: Option<&'static str>, accounts: i64| HistoryInput {
+            channel_id: "deepseek",
+            unit: "CNY",
+            accounts,
+            current_remaining: Some(88.0),
+            updated_at: today_start + 3_600,
+            day_today: Some(1.2),
+            gap_day_from: None,
+            gap_days: &[],
+            key_fp: fp,
+        };
+
+        let a = build_history(input(Some(fp_a), 2), &store, now);
+        assert_eq!(a.len(), MAX_HISTORY);
+        let y = a.iter().find(|p| p.period_start == yesterday).unwrap();
+        assert_eq!(y.spent.as_deref(), Some("10"));
+        assert_eq!(y.balance.as_deref(), Some("100"));
+        assert!(y.complete);
+        assert_eq!(y.revised_at, yesterday + 7_200);
+        let today = a.last().unwrap();
+        assert_eq!(today.spent.as_deref(), Some("1.2"));
+        assert_eq!(today.balance.as_deref(), Some("88"));
+        assert!(today.complete);
+
+        let b = build_history(input(Some(fp_b), 2), &store, now);
+        let yb = b.iter().find(|p| p.period_start == yesterday).unwrap();
+        assert_eq!(yb.spent.as_deref(), Some("20"));
+        assert_eq!(yb.balance.as_deref(), Some("40"));
+
+        // 多本账但取不到当前指纹：整段不可信，不能把 A/B 拼起来。
+        let unknown = build_history(input(None, 2), &store, now);
+        assert!(unknown
+            .iter()
+            .all(|p| p.spent.is_none() && p.balance.is_none() && !p.complete));
+
+        // 两天前没有观测：null + complete=false；revised_at 是当天零点，不是 now。
+        let gap_day = today_start - 2 * 86_400;
+        let g = a.iter().find(|p| p.period_start == gap_day).unwrap();
+        assert!(g.spent.is_none() && g.balance.is_none() && !g.complete);
+        assert_eq!(g.revised_at, gap_day);
     }
 }

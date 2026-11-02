@@ -129,7 +129,15 @@ pub struct HistoryPoint {
     pub spent: Option<String>,
     #[serde(default)]
     pub estimated: bool,
+    /// 该窗口是否有完整观测；false 表示有缺口（`spent` 可能为 null）。
+    /// 缺省 true 兼容旧 fixture / 旧载荷。
+    #[serde(default = "default_true")]
+    pub complete: bool,
     pub revised_at: i64,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -14,6 +14,12 @@ let SYNC_STATUS_ERROR = null;
 let SYNC_STATUS_REV = 0;
 let SYNC_RECOVERY_BUSY = false;
 let SYNC_CODE_REVEALED = false;
+// 二维码和同步码默认直接显示（用户确认）；「隐藏同步码」只做临时遮挡。
+// 缓存按同步码文本区分；隐藏时仍立刻从 DOM 移除，避免截图或辅助工具读到旧码。
+let SYNC_QR_CODE = "";
+let SYNC_QR_SVG = "";
+let SYNC_QR_BUSY = "";
+let SYNC_QR_FAILED = "";
 let SYNC_AUTH = null;   // 桌面 Device Flow 在途会话(只存 user_code 与计时,不存 device_code)
 let changesCache = {}; // { [id]: 最近变动台账(展开时按需取,不进轮询) }
 let changesState = {}; // { [id]: "loading" | "done" | "error" } —— 台账先画占位,取到再替换
@@ -2117,10 +2123,16 @@ function trayNumber(c) {
 /**
  * 托盘图标。两种画法(设置→显示→托盘数字切换):
  *  - 数字式:状态色整底 + 白色粗体概览数(描深边保证任意底色可读)——扫一眼托盘要的就是这个;
- *  - 品牌式:渐变方块 + 右下状态角点(无可信数字时的回退,也是开关关闭的样式)。
+ *  - 品牌式:应用图标 + 右下状态角点(无可信数字时的回退,也是开关关闭的样式)。
  * 32×32 画布,系统按 DPI 缩到 16~24px;tooltip 永远带完整信息。
  */
 let trayKey = "";
+const trayBrand = new Image();
+trayBrand.onload = () => {
+  trayKey = "";
+  drawTrayIcon();
+};
+trayBrand.src = "brand/logo.png";
 function drawTrayIcon() {
   const c = PILL.list[PILL.idx] || null;
   const tone = c ? toneOf(c) : "off";
@@ -2163,18 +2175,14 @@ function drawTrayIcon() {
     g.fillStyle = "#fff";
     g.fillText(num, S / 2, S * 0.54);
   } else {
-    roundRect();
-    const grad = g.createLinearGradient(0, 0, S, S);
-    grad.addColorStop(0, "#5b8cff");
-    grad.addColorStop(1, "#8b5bff");
-    g.fillStyle = grad;
-    g.fill();
-    g.globalCompositeOperation = "destination-out"; // 中间挖空,和标题栏图标同款
-    g.beginPath();
-    if (g.roundRect) g.roundRect(10, 10, 12, 12, 3);
-    else g.rect(10, 10, 12, 12);
-    g.fill();
-    g.globalCompositeOperation = "source-over";
+    if (trayBrand.complete && trayBrand.naturalWidth) {
+      g.drawImage(trayBrand, 0, 0, S, S);
+    } else {
+      // 图片加载前仍有可见的托盘图标;加载完成后自动重画。
+      roundRect();
+      g.fillStyle = "#293243";
+      g.fill();
+    }
     g.beginPath();
     g.arc(22.5, 22.5, 7, 0, Math.PI * 2); // 右下角标
     g.fillStyle = TONE_HEX[tone];
@@ -3889,7 +3897,11 @@ function untilTime(ts) {
 
 function showTab(name) {
   if (name !== "sync") hideSyncCode();
-  else SYNC_CODE_REVEALED = true;
+  // 用户确认：进入同步页直接显示同步码和二维码；「隐藏同步码」只作为临时遮挡。
+  else {
+    SYNC_CODE_REVEALED = true;
+    renderSync();
+  }
   const btns = [...$("mTabs").children];
   const b = btns.find((x) => x.dataset.p === name);
   if (name !== "index" && !b) return;
@@ -3974,6 +3986,7 @@ function renderSync() {
     setup.hidden = true;
     panel.hidden = true;
     $("syncRecovery").hidden = true;
+    renderSyncQr(null);
     return;
   }
   const hasGithub = !!(s && s.hasGithub);
@@ -4009,6 +4022,7 @@ function renderSync() {
   $("syncRecoveryScan").disabled = !hasGithub || SYNC_RECOVERY_BUSY;
   $("syncRecoveryImport").disabled = !hasGithub || SYNC_RECOVERY_BUSY;
 
+  renderSyncQr(configured ? s : null);
   setup.hidden = configured;
   panel.hidden = !configured;
   if (!configured) return;
@@ -4064,6 +4078,55 @@ function renderSync() {
       .join("");
   }
   renderSyncLabels();
+}
+
+function renderSyncQr(s) {
+  const box = $("syncQr");
+  if (!box) return;
+  const code = SYNC_CODE_REVEALED && s && s.codeText ? s.codeText : "";
+  if (!code) {
+    box.hidden = true;
+    box.replaceChildren();
+    box.dataset.code = "";
+    SYNC_QR_CODE = "";
+    SYNC_QR_SVG = "";
+    SYNC_QR_BUSY = "";
+    SYNC_QR_FAILED = "";
+    return;
+  }
+  box.hidden = false;
+  if (SYNC_QR_FAILED === code) {
+    box.textContent = "二维码生成失败，请手动输入同步码。";
+    return;
+  }
+  if (SYNC_QR_CODE === code && SYNC_QR_SVG) {
+    if (box.dataset.code !== code) {
+      box.innerHTML = SYNC_QR_SVG;
+      box.dataset.code = code;
+    }
+    return;
+  }
+  if (SYNC_QR_BUSY === code) return;
+  SYNC_QR_BUSY = code;
+  box.dataset.code = "";
+  box.innerHTML = '<span class="khint">正在生成二维码…</span>';
+  invoke("sync_qr_svg")
+    .then((svg) => {
+      if (SYNC_QR_BUSY === code) SYNC_QR_BUSY = "";
+      if (!SYNC_CODE_REVEALED || !SYNC_STATUS || SYNC_STATUS.codeText !== code) return;
+      SYNC_QR_CODE = code;
+      SYNC_QR_SVG = svg;
+      box.innerHTML = svg;
+      box.dataset.code = code;
+    })
+    .catch(() => {
+      if (SYNC_QR_BUSY === code) SYNC_QR_BUSY = "";
+      if (!SYNC_CODE_REVEALED || !SYNC_STATUS || SYNC_STATUS.codeText !== code) return;
+      box.replaceChildren();
+      box.textContent = "二维码生成失败，请手动输入同步码。";
+      box.dataset.code = "";
+      SYNC_QR_FAILED = code;
+    });
 }
 
 function renderSyncLabels() {

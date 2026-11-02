@@ -365,6 +365,7 @@
         <div class="khint" id="syncErr"></div>
         <h4>当前同步码</h4>
         <div class="sync-code" id="syncCodeText">——</div>
+        <div class="sync-qr" id="syncQr" role="img" aria-label="当前同步码二维码" hidden></div>
         <div class="acts" style="margin-top:6px">
           <button class="btn p" id="syncCopyBtn">复制同步码</button>
           <button class="btn" id="syncRevealBtn" aria-pressed="true">隐藏同步码</button>
@@ -384,7 +385,7 @@
             <div class="acts"><button class="btn" id="syncCompareBtn">本地核对</button><span class="khint" id="syncCompareResult" role="status"></span></div>
           </div>
         </div>
-        <div class="khint">手机端请手动输入同步码。</div>
+        <div class="khint">手机端点「扫描二维码」对准这里显示的二维码，也可以手动输入同步码。同步码和二维码包含解密密钥，请勿截图外传；点「隐藏同步码」可临时遮挡。</div>
       </div>
 
       <div id="syncGithubCard" hidden>

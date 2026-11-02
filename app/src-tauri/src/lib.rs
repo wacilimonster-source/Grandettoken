@@ -16,7 +16,8 @@ mod sync_cmds;
 pub use sync_cmds::{
     sync_create, sync_delete_relay, sync_disconnect_github, sync_forget, sync_github_status,
     sync_join, sync_oauth_cancel, sync_oauth_poll, sync_oauth_start, sync_preview,
-    sync_publish_now, sync_read_group, sync_recovery_candidates, sync_restore_group, sync_rotate, sync_set_channels, sync_set_enabled,
+    sync_publish_now, sync_qr_svg, sync_read_group, sync_recovery_candidates, sync_restore_group,
+    sync_rotate, sync_set_channels, sync_set_enabled,
     sync_set_interval, sync_set_oauth_client_id, sync_set_platform_label, sync_status,
 };
 
@@ -5561,6 +5562,7 @@ pub fn run() {
             sync_oauth_poll,
             sync_oauth_cancel,
             sync_set_oauth_client_id,
+            sync_qr_svg,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

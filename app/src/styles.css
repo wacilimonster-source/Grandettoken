@@ -60,8 +60,7 @@ body{
   background:linear-gradient(180deg,#1a1f28,#141821);border-bottom:1px solid var(--line);
   cursor:move}
 .mark{width:calc(17px*var(--u));height:calc(17px*var(--u));border-radius:calc(5px*var(--u));flex:none;position:relative;
-  background:linear-gradient(135deg,#6f8dff,#9b6bff)}
-.mark::after{content:"";position:absolute;inset:calc(5px*var(--u));border-radius:calc(2px*var(--u));background:#0e1015}
+  background:url("brand/logo.png") center/contain no-repeat}
 /* 产品名可以让位:更新角标出现时标题栏是够不放不下右侧按钮的,标题是可牺牲的那个
    (它只是装饰,窗口标题/任务栏里还有全名)。min-width:0 才允许 flex 子项缩到内容以下 */
 .tt{font-size:calc(12px*var(--u));font-weight:600;letter-spacing:.02em;white-space:nowrap;
@@ -474,6 +473,11 @@ body.manage-index .mhead .mt{letter-spacing:.01em}
 .sync-code{font:max(10.5px,calc(11px*var(--u)))/1.55 Consolas,"Cascadia Mono",monospace;
   color:var(--tx2);background:var(--bg3);border:1px solid var(--line2);
   border-radius:calc(6px*var(--u));padding:calc(8px*var(--u));word-break:break-all;user-select:all}
+.sync-qr{display:flex;align-items:center;justify-content:center;width:fit-content;max-width:100%;
+  margin:calc(8px*var(--u)) auto;padding:calc(8px*var(--u));background:#fff;
+  border-radius:calc(7px*var(--u));color:#111;font-size:max(11px,calc(11.5px*var(--u)))}
+.sync-qr[hidden]{display:none!important}
+.sync-qr svg{display:block;width:min(220px,100%);height:auto}
 .sync-warning{color:var(--warn);background:var(--warn-bg);border:1px solid var(--line2);
   border-radius:calc(7px*var(--u));padding:calc(9px*var(--u));margin-bottom:calc(10px*var(--u));
   display:flex;flex-wrap:wrap;align-items:center;gap:calc(8px*var(--u))}

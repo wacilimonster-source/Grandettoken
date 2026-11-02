@@ -617,6 +617,43 @@ impl Store {
             })
     }
 
+    /// 某日窗口内最后一条**成功**快照的 (ts, remaining)。
+    ///
+    /// 同步历史用：`balance` 取当天最后一个观测值。按 `key_fp` 分段，
+    /// 避免换 key 后把另一个账户的余额拼进同一本账。
+    pub fn last_snapshot_between(
+        &self,
+        provider_id: &str,
+        key_fp: Option<&str>,
+        from_ts: i64,
+        to_ts: i64,
+    ) -> Result<Option<(i64, f64)>, String> {
+        let sql_fp = "SELECT ts, remaining FROM snapshots
+                      WHERE provider_id = ?1 AND key_fp = ?2
+                        AND ts >= ?3 AND ts <= ?4 AND remaining IS NOT NULL
+                      ORDER BY ts DESC LIMIT 1";
+        let sql_any = "SELECT ts, remaining FROM snapshots
+                       WHERE provider_id = ?1
+                         AND ts >= ?2 AND ts <= ?3 AND remaining IS NOT NULL
+                       ORDER BY ts DESC LIMIT 1";
+        let result = match key_fp {
+            Some(fp) => self.conn.query_row(
+                sql_fp,
+                params![provider_id, fp, from_ts, to_ts],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?)),
+            ),
+            None => self.conn.query_row(
+                sql_any,
+                params![provider_id, from_ts, to_ts],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?)),
+            ),
+        };
+        result.map(Some).or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            e => Err(format!("读取日末快照失败: {e}")),
+        })
+    }
+
     // ───────────── 积分到账(credit_grants)─────────────
     // 设计见 docs/design/design-workbuddy-ai-channel-2026-10-23.html。
     // 与 checkin_log 分开:那张表记的是"签到尝试"(退避、幂等、连签),这张记的是

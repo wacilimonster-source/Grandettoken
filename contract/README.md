@@ -122,6 +122,7 @@ gt-relay-<随机>（Secret Gist）
           "balance": null,
           "spent": "1.2",
           "estimated": true,
+          "complete": true,
           "revisedAt": 1793500850
         }
       ]
@@ -180,8 +181,18 @@ gt-relay-<随机>（Secret Gist）
 ### 5.4 history
 
 - 最近 7 个自然日，按电脑本地日切分；`timeZone` 是偏移字符串（如 `+08:00`）。
-- 每条包含 `periodStart`、`periodEnd`、`unit`、`balance`、`spent`、`estimated`、`revisedAt`。
-- 历史缺口不补 0；`balance`/`spent` 可为 `null`。
+- 每条包含 `periodStart`、`periodEnd`、`unit`、`balance`、`spent`、`estimated`、
+  `complete`、`revisedAt`。
+- `balance` = 当天**最后一条成功快照**的余额；没有观测就是 `null`。
+- `spent`：今天用电脑端的实时 `day`（今天到目前为止）；历史日从**明细快照**按
+  与桌面 `day/week/month` 相同的余额差规则计算。缺口日给 `null`，不拿部分数据
+  冒充全天，也不补 0。`daily_summary` 是 90 天归档后的长期底料，不能拿来算最近一周。
+- `complete`：`false` = 当天采样有缺口；手机据此把曲线断开/标注。
+  缺省 `true`，兼容旧载荷与旧 fixture。
+- `revisedAt`：真实最后观测时间；没有观测时用当天零点，**绝不用读取时刻**，
+  否则一条空历史会在跨来源合并时压过另一台电脑的真实记录。
+- 按**当前 key 指纹**分段：同一渠道换 key 后只发布当前账户的历史，不把两个账户
+  的余额差拼成消费。多本账但取不到当前指纹时整段历史为空，不猜。
 - 合并时按 `(platformId, periodStart, periodEnd, unit)` 去重；同窗口取最大 `revisedAt`，
   同刻按 `source` 字典序；不跨来源求和或拼接成虚假连续记录。
 

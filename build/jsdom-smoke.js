@@ -42,6 +42,7 @@ w.__TAURI__ = {
       if (cmd === "checkin_state") return w.__CK_ST || [];
       if (cmd === "checkin_history") return w.__CK_H || null;
       if (cmd === "app_version") return "0.0.0-test";
+      if (cmd === "sync_qr_svg") return '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h1v1H0z"/></svg>';
       if (cmd === "vault_list" || cmd === "vault_ref_map") return [];
       return null;
     },
@@ -720,15 +721,35 @@ const HARNESS = `
     const idxTitle = document.querySelector(".mhead .mt").textContent;
     ck("设置默认落在索引页(含同步，共 8 个分区)", idxOn && idxRows === 8 && !!document.querySelector('#mIndexList [data-p="sync"]') && idxTitle === "设置与管理", idxOn + "/" + idxRows + "/" + idxTitle);
     const savedSyncStatus = SYNC_STATUS;
-    SYNC_STATUS = { relayId: "test", hasGithub: true, hasKey: true, enabled: true, oauthClientConfigured: true, codeText: "GT1.test-secret", channels: [] };
+    const testSync = { relayId: "test", hasGithub: true, hasKey: true, enabled: true, oauthClientConfigured: true, codeText: "GT1.test-secret", channels: [] };
+    SYNC_STATUS = testSync;
+    SYNC_CODE_REVEALED = false;
     renderSync();
-    ck("同步码隐藏状态不显示明文", !document.getElementById("syncCodeText").textContent.includes("test-secret"));
+    ck("点隐藏后不显示明文", !document.getElementById("syncCodeText").textContent.includes("test-secret"));
+    SYNC_CODE_REVEALED = true;
+    renderSync();
+    ck("进入同步页直接显示同步码", document.getElementById("syncCodeText").textContent === "GT1.test-secret");
     document.getElementById("syncRevealBtn").click();
-    ck("用户主动显示同步码", document.getElementById("syncCodeText").textContent === "GT1.test-secret");
+    ck("点隐藏后不显示明文", !document.getElementById("syncCodeText").textContent.includes("test-secret"));
+    document.getElementById("syncRevealBtn").click();
+    ck("再次显示同步码", document.getElementById("syncCodeText").textContent === "GT1.test-secret");
     showTab("index");
     ck("离开同步页时隐藏同步码", !document.getElementById("syncCodeText").textContent.includes("test-secret"));
     SYNC_STATUS = savedSyncStatus;
     renderSync();
+    window.__ASYNC3 = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      SYNC_STATUS = testSync;
+      SYNC_CODE_REVEALED = true;
+      renderSync();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      ck("二维码与同步码同时生成", !!document.querySelector("#syncQr svg"),
+        (document.getElementById("syncQr").innerHTML || "").slice(0, 120) + " busy=" + SYNC_QR_BUSY + " failed=" + SYNC_QR_FAILED + " code=" + SYNC_QR_CODE + " revealed=" + SYNC_CODE_REVEALED + " statusCode=" + (SYNC_STATUS && SYNC_STATUS.codeText));
+      SYNC_CODE_REVEALED = false;
+      renderSync();
+      SYNC_STATUS = savedSyncStatus;
+      renderSync();
+    })();
     document.querySelector('#mIndexList [data-p="ch"]').click();
     ck("点索引行进入子页并更新页头", !document.body.classList.contains("manage-index")
       && document.querySelector('#mTabs [data-p="ch"]').classList.contains("on")
@@ -764,6 +785,7 @@ w.__DATA = DATA;
   }
   if (w.__ASYNC) await w.__ASYNC;
   if (w.__ASYNC2) await w.__ASYNC2;
+  if (w.__ASYNC3) await w.__ASYNC3;
 
   const R = w.__R || [];
   const css = fs.readFileSync(path.join(SRC, "styles.css"), "utf8");

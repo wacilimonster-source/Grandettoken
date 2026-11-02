@@ -311,6 +311,16 @@ pub async fn sync_status(state: State<'_, AppState>) -> Result<SyncStatus, Strin
     status_of(state.inner())
 }
 
+/// 同步码二维码：只在用户主动「显示」时调用；SVG 只进当前 WebView。
+#[tauri::command]
+pub async fn sync_qr_svg(state: State<'_, AppState>) -> Result<String, String> {
+    let cfg = cfg_of(state.inner())?;
+    let (master, relay_id, _) = master_of(&cfg)?;
+    let mut code = SyncCode::new(relay_id, master);
+    code.key_epoch = cfg.sync_key_epoch;
+    sync::qr::svg(&code.encode()).map_err(err_str)
+}
+
 // ── 桌面 GitHub Device Flow ───────────────────────────────────────────────
 //
 // 桌面端不再手填 PAT：Rust 申请 device code，前端只看到 user_code 与验证地址；

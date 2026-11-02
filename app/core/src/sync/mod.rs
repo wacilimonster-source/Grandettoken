@@ -20,6 +20,7 @@ pub mod model;
 pub mod platform;
 pub mod publish;
 pub mod profile;
+pub mod qr;
 
 pub use builder::{build_snapshot, BuildInput};
 pub use code::{SyncCode, RelayKind};
