@@ -3765,3 +3765,20 @@ resource_package_quota / … / total_quota / lastResetAt / nextResetAt`),
 - **验证**:core **405 passed**;真机 CDP 三档宽度(459 / 最窄 332 / 极端 300)实量,
   无溢出;紧凑条 `display:none` 且切回面板自动恢复(第一次实现漏了这条,
   截图里倒计时凭空消失 —— 已在 `fitCodexResetLabels` 里跳过不可见节点并重算)。
+
+**发布（2026-11-03）**：tag `v0.3.8`，release 提交 `623ab28`，
+[GitHub Release v0.3.8](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.3.8)。
+三件套齐全：`Grandettoken_0.3.8_x64-setup.exe`（5,582,390 B，SHA-256
+`7AC52CC8E673C222AFFA5A77D405C069D1250BBC2610CFB0F3F9D484B4909948`）、`.sig`、
+`latest.json`；GitHub API 确认非 draft / prerelease，且 v0.3.8 为当前 latest。
+本机已静默覆盖安装，`%LOCALAPPDATA%\Grandettoken\Grandettoken.exe` 文件版本 0.3.8。
+
+> 本版含另一会话的 2 项 PC 显示精修(同一提交):渠道详情页脚不再堆「未公开接口」
+> 「凭据来自…」这类固定套话;签到徽标统一成「✓ 已签」,数额改放 tooltip
+> (以前 Qoder 上是「✓ +100」、别的渠道是「已签」,同一枚徽标两种画法)。
+>
+> **验证**:core `405 passed`;`check-css-forms` / `verify-settings-entry` /
+> `verify-focus-ring` / `verify-resize` 全 PASS;CDP 真机另跑一组断言
+> (Codex 倒计时文案与副标题不溢出、页脚两类套话确实消失、周窗口径说明在场、
+> claimed/already 徽标文案与 tooltip 数额),9 项全 PASS;
+> 发布资源与本地产物逐字节一致(exe / .sig / latest.json)。
