@@ -8075,7 +8075,10 @@ function applyChannelsPush(payload) {
   listen("qoderweb-login", (ev) => {
     QODER_LOGGING = false;
     const p = ev.payload || {};
-    if (p.ok) showToast("已登录 Qoder 网页 · 积分明细已刷新");
+    // ok + detail = 会话确实被平台接受了,但逐包结构还没认出来:不许说成"失败",
+    // 也不许说成"明细已刷新" —— 两句都是假话(2026-11-03 真机,见 core::qoderweb)。
+    if (p.ok && p.detail) showToast(p.detail);
+    else if (p.ok) showToast("已登录 Qoder 网页 · 积分明细已刷新");
     else if (p.cancelled) showToast("已取消登录");
     else showToast(p.reason || "登录没成功,请再试一次", true);
     renderChCards();

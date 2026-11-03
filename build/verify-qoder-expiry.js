@@ -57,8 +57,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       return JSON.stringify({ extra: q.extra || [], expiryComplete: q.expiryComplete, expiring: (q.expiring || []).length });
     })()`, true));
     const line = (extra.extra.find((x) => x[0] === "逐笔到期明细") || [])[1] || "(无该行)";
+    // 「结构还没识别」= 会话有效但平台换了返回结构(2026-11-03 真机),也是如实的一种
     check(`「逐笔到期明细」行如实(当前:${line})`,
-      /需网页登录|未登录|接口未提供|按平台返回/.test(line), line);
+      /需网页登录|未登录|接口未提供|按平台返回|结构还没识别/.test(line), line);
     console.log(`  info  expiring=${extra.expiring} 条 · expiryComplete=${extra.expiryComplete}`);
   } catch (e) {
     console.log('  FAIL  脚本异常 · ' + e.message);

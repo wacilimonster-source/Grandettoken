@@ -919,7 +919,11 @@ fn web_session_of(app: &tauri::AppHandle, id: &str) -> Option<String> {
 
 /// 收尾:关窗 → 通知界面 → 立刻刷一轮(与 wb_finish_login 同构,去掉签到那一段:
 /// Qoder 的签到走桌面 Bearer,网页会话与它无关)。
-async fn qoderweb_finish_login(app: &tauri::AppHandle) {
+///
+/// `note` 是"登录成功但有保留"的说明(目前只有一种:会话被平台接受、逐包接口的
+/// 响应结构挂件还没认出来)。**这种情况仍按登录成功收尾** —— 会话本身是真的有效,
+/// 把窗口留在那儿让用户对着它等,只会让人以为登录没成。
+async fn qoderweb_finish_login(app: &tauri::AppHandle, note: Option<String>) {
     QODER_LOGIN_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
     // "这份网页会话从现在起是新鲜的":取数侧按这个年龄出提示(qoder_web_session_hint)。
     {
@@ -936,7 +940,10 @@ async fn qoderweb_finish_login(app: &tauri::AppHandle) {
             let _ = w.close();
         }
     });
-    let _ = app.emit("qoderweb-login", serde_json::json!({"ok": true}));
+    let _ = app.emit(
+        "qoderweb-login",
+        serde_json::json!({"ok": true, "detail": note}),
+    );
     app.state::<AppState>().fetcher.invalidate();
     refresh_now(app).await;
 }
@@ -1000,18 +1007,59 @@ fn spawn_qoder_login_watcher(app: tauri::AppHandle) {
                 if fresh || (probes < 10 && ticks % 5 == 0) {
                     probes += 1;
                     let fetcher = app.state::<AppState>().fetcher.clone();
-                    if fetcher.probe_qoder_web(&session).await {
-                        qoderweb_finish_login(&app).await;
-                        return;
-                    }
-                    if QODER_LANDED.load(std::sync::atomic::Ordering::Relaxed) && fresh {
-                        let _ = app.emit(
-                            "qoderweb-login",
-                            serde_json::json!({
-                                "ok": false,
-                                "reason": "登录页到了,但用这份会话查积分明细被平台拒绝。会自动再试几次;一直失败的话在渠道卡上点「登录网页版」重来。"
-                            }),
-                        );
+                    match fetcher.probe_qoder_web(&session).await {
+                        tokenscope_core::fetch::QoderWebProbe::Packed => {
+                            qoderweb_finish_login(&app, None).await;
+                            return;
+                        }
+                        // 会话有效、只是结构没认出来:登录是成功的,别让用户去重登。
+                        // 诊断里已经有结构草图(见 core::qoderweb::shape_sketch),
+                        // 这条提示只需要说清"不是你的问题、也不是网络问题"。
+                        tokenscope_core::fetch::QoderWebProbe::Unrecognized(_) => {
+                            qoderweb_finish_login(
+                                &app,
+                                Some(
+                                    "已登录 Qoder 网页 · 但积分明细接口的返回结构还没识别(已记入诊断)。余额与签到不受影响"
+                                        .to_string(),
+                                ),
+                            )
+                            .await;
+                            return;
+                        }
+                        // 被平台拒 / 网络失败:只有"确实落到登录完成页、且刚换了会话"才说话,
+                        // 还停在登录页说明人家正要登录,别抢着报错。
+                        tokenscope_core::fetch::QoderWebProbe::Rejected => {
+                            tokenscope_core::diaglog::write_keyed(
+                                "qoder",
+                                "webauth",
+                                "登录轮询:网页会话被平台拒绝(401/403)",
+                            );
+                            if QODER_LANDED.load(std::sync::atomic::Ordering::Relaxed) && fresh {
+                                let _ = app.emit(
+                                    "qoderweb-login",
+                                    serde_json::json!({
+                                        "ok": false,
+                                        "reason": "登录页到了,但用这份会话查积分明细被平台拒绝。会自动再试几次;一直失败的话在渠道卡上点「登录网页版」重来。"
+                                    }),
+                                );
+                            }
+                        }
+                        tokenscope_core::fetch::QoderWebProbe::Failed(detail) => {
+                            tokenscope_core::diaglog::write_keyed(
+                                "qoder",
+                                "webauth",
+                                &format!("登录轮询:验证请求失败 · {detail}"),
+                            );
+                            if QODER_LANDED.load(std::sync::atomic::Ordering::Relaxed) && fresh {
+                                let _ = app.emit(
+                                    "qoderweb-login",
+                                    serde_json::json!({
+                                        "ok": false,
+                                        "reason": "登录页到了,但查积分明细的请求没打通(网络或接口地址变了)。会自动再试几次。"
+                                    }),
+                                );
+                            }
+                        }
                     }
                 }
             }

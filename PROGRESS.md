@@ -3701,3 +3701,33 @@ GitHub API 与 `gh release view` 均确认三件套齐全：`Grandettoken_0.3.0_
 `latest.json`；`verify-signature` 与 `verify-updater` **PASS**，GitHub API 确认
 非 draft / prerelease，且 v0.3.6 为当前 latest。本机已静默覆盖安装，
 `%LOCALAPPDATA%\Grandettoken\Grandettoken.exe` 文件版本 0.3.6，安装后已启动。
+
+### 修复 · Qoder 网页会话"登录成功却取不到逐包明细"（2026-11-03，未发布）
+
+**用户报**:PC 端 Qoder 网页登录成功,界面提示已登录,但明细一直取不到。
+**真机取证**(诊断包 18:29):`/api/v2/me/usages/big_model_credits` 回 **200 + JSON**
+—— 平台认了会话,失败在解析,不在登录。旧解析只认顶层 `details[]` 与一层 `data`
+信封,而个人版 v2 顶层只有汇总(`user_id / quota_key / status / plan_quota /
+resource_package_quota / … / total_quota / lastResetAt / nextResetAt`),
+逐包数据在更深层级 → 三个候选全判"不像包列表";登录轮询又把它报成"被平台拒绝",
+把用户引向无用的重登。
+
+- **找包不看层级**:`core::qoderweb::collect_packs` 在整棵树里找"成组的包"
+  (深度上限 4);判据不变(剩余量 + 到期时刻同时在场),并要求成组 ——
+  数组,或每个值都是包的对象映射。单个汇总对象(如带账户级到期日的 `plan_quota`)
+  不会被误当成一个积分包。上限 200 个包,按 (来源,余量,到期) 去重。
+- **失败分三档**:`PacksErr` 新增 `Unrecognized`(会话有效、结构没认出),
+  与 `Unauthorized`(该重登)、`Other`(网络)在渠道卡文案上各说各话。
+- **登录成功的定义**:新增 `QoderWebProbe` 四态;会话被接受就按成功收尾(关窗、
+  写 `qoder_web_session_at`),只多带一句"结构还没识别"。`qoderweb-login`
+  事件新增 `detail` 字段,前端按它出 toast,不再假称"明细已刷新"。
+- **诊断能定位**:失败时日志落 `shape_sketch`(键名 + 值类型,零值泄漏);
+  键名截到 31 字符 —— 兜底脱敏会把 ≥32 字符连续串掩成 `«secret len=…»`,
+  真机那个 32 字符的顶层键正好被它吃掉。
+- **真机验证(18:52 重装 0.3.7)**:重新登录网页版后逐包明细直接出来,
+  日志里再无 `qoder / webpacks` 失败行 —— 逐包数据确实在 v2 响应的更深层级,
+  递归找包就是缺的那一块;端点与判据均未改动。
+- **顺带确认**:同一份网页会话在 18:28 还是 200,18:3x~18:46 就变 401(应用未重启),
+  网页会话比预期短命;失败分档后提示的"点登录网页版"正好是正确动作。
+- **验证**:core `404 passed`;`cargo check`(外壳)、`node --check`;
+  `verify-qoder-expiry.js` 断言补上"结构还没识别"这一种如实文案。

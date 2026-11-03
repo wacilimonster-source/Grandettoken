@@ -2351,6 +2351,20 @@ struct FetchedOne {
     success: Option<(FetchResult, i64)>,
 }
 
+/// Qoder 网页会话的验证结果。**三档对应三种完全不同的用户动作**:
+/// 去登录 / 不用做什么(等挂件适配) / 检查网络。
+#[derive(Debug, Clone, PartialEq)]
+pub enum QoderWebProbe {
+    /// 会话有效,且拿到逐包数据
+    Packed,
+    /// 平台明确拒了这份会话(401/403 / TOKEN_*)—— 该重新登录
+    Rejected,
+    /// 会话有效,但响应里找不到逐包数据 —— 挂件这一侧的问题
+    Unrecognized(String),
+    /// 网络 / 拿不到 JSON 之类的真失败
+    Failed(String),
+}
+
 /// 取数器。持有 HTTP 客户端和上次成功结果的缓存,失败时用于降级显示。
 pub struct Fetcher {
     pub http: reqwest::Client,
@@ -2447,11 +2461,17 @@ impl Fetcher {
     /// Qoder 网页会话验证:候选端点里有一条给出"包形状"的响应(哪怕为空)就算有效。
     /// 不验证就报成功的话,一份被平台拒掉的会话会变成"状态显示已登录、却一直取不到数"
     /// —— 与 WorkBuddy 的 probe 同一条纪律。会话有效但没有包 ≠ 失败。
-    pub async fn probe_qoder_web(&self, session: &str) -> bool {
-        matches!(
-            qoderweb::fetch_packs(&self.http, session, &self.qoder_memo).await,
-            Ok(_)
-        )
+    ///
+    /// 三档必须分开(2026-11-03):**会话被拒**要让用户去重登;**结构没认出来**是挂件
+    /// 这一侧的事,重登一百次也没用;其余才是网络问题。以前只回 bool,后两种被并成
+    /// "登录失败 · 被平台拒绝",实测把用户引向了无用的重登。
+    pub async fn probe_qoder_web(&self, session: &str) -> QoderWebProbe {
+        match qoderweb::fetch_packs(&self.http, session, &self.qoder_memo).await {
+            Ok(_) => QoderWebProbe::Packed,
+            Err(qoderweb::PacksErr::Unauthorized) => QoderWebProbe::Rejected,
+            Err(qoderweb::PacksErr::Unrecognized(detail)) => QoderWebProbe::Unrecognized(detail),
+            Err(qoderweb::PacksErr::Other(detail)) => QoderWebProbe::Failed(detail),
+        }
     }
 
     /// 「测试连接」:真打一次接口,把过程如实报出来(设置里那个逐渠道测试按钮)。
@@ -2928,12 +2948,18 @@ impl Fetcher {
                                         }
                                         None => {
                                             // 指引按失败原因分叉:被平台拒 = 该去登录;
+                                            // 结构没认出来 = 挂件的事,别让用户白重登;
                                             // 别的错 = 取数问题,别把用户引去登录窗
                                             match &e {
                                                 qoderweb::PacksErr::Unauthorized => extra_set(
                                                     &mut result.extra,
                                                     "逐笔到期明细",
                                                     "网页会话未登录 · 渠道卡点「登录网页版」",
+                                                ),
+                                                qoderweb::PacksErr::Unrecognized(_) => extra_set(
+                                                    &mut result.extra,
+                                                    "逐笔到期明细",
+                                                    "登录是好的,但积分明细接口的返回结构还没识别 · 已记入诊断",
                                                 ),
                                                 qoderweb::PacksErr::Other(_) => extra_set(
                                                     &mut result.extra,
@@ -2951,6 +2977,8 @@ impl Fetcher {
                                             qoderweb::PacksErr::Unauthorized => {
                                                 "所有候选都被平台拒绝(未登录或会话过期)".to_string()
                                             }
+                                            // 这一条是"平台换结构"的现场:结构草图在里面
+                                            qoderweb::PacksErr::Unrecognized(m) => m.clone(),
                                             qoderweb::PacksErr::Other(m) => m.clone(),
                                         },
                                     );
