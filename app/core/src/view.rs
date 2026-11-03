@@ -860,6 +860,7 @@ mod tests {
             reset_credits: None,
             expiring: Vec::new(),
             expiry_complete: false,
+            account_expiry: None,
             expiring_soon: None,
             extra: Vec::new(),
             error: None,

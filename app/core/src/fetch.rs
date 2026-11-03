@@ -99,6 +99,9 @@ pub struct ChannelView {
     pub expiring: Vec<Expiring>,
     /// false 时空的 expiring 列表表示“接口没有完整明细”,不能说成“没有到期”。
     pub expiry_complete: bool,
+    /// 账户额度有效期(Qoder):账户级字段,与逐笔 `expiring` 严格分开。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_expiry: Option<providers::AccountExpiry>,
     /// 近 30 天内会到期的合计;没有则 None
     pub expiring_soon: Option<Expiring>,
     pub extra: Vec<(String, String)>,
@@ -1953,6 +1956,7 @@ fn build_view(
         reset_credits: result.reset_credits,
         expiring: result.expiring,
         expiry_complete: result.expiry_complete,
+        account_expiry: result.account_expiry,
         expiring_soon: soon,
         extra: result.extra,
         error: result.error,
@@ -2049,6 +2053,7 @@ fn placeholder(def: &providers::ProviderDef) -> ChannelView {
         reset_credits: None,
         expiring: vec![],
         expiry_complete: false,
+        account_expiry: None,
         expiring_soon: None,
         extra: vec![],
         error: None,
@@ -2167,6 +2172,7 @@ fn build_custom_view(
         reset_credits: None,
         expiring: Vec::new(),
         expiry_complete: false,
+        account_expiry: None,
         expiring_soon: None,
         extra: vec![(
             "取数".to_string(),
@@ -2229,6 +2235,7 @@ fn custom_placeholder(
         reset_credits: None,
         expiring: Vec::new(),
         expiry_complete: false,
+        account_expiry: None,
         expiring_soon: None,
         extra: vec![("取数".to_string(), "自定义渠道".to_string())],
         error,

@@ -50,7 +50,7 @@ body{
      2+(8-2)=8px,安全;更大的"0 18px 48px"会伸到 50px+,必裁。 */
   margin:10px;height:calc(100% - 20px);position:relative;
   box-shadow:0 2px 8px -2px rgba(0,0,0,.6),0 0 0 1px #ffffff08 inset;
-  font:calc(13px*var(--u))/1.5 "Segoe UI","Microsoft YaHei",sans-serif;
+  font:calc(13.5px*var(--u))/1.5 "Segoe UI","Microsoft YaHei",sans-serif;
   display:flex;flex-direction:column;user-select:none;
 }
 
@@ -63,24 +63,24 @@ body{
   background:url("brand/logo.png") center/contain no-repeat}
 /* 产品名可以让位:更新角标出现时标题栏是够不放不下右侧按钮的,标题是可牺牲的那个
    (它只是装饰,窗口标题/任务栏里还有全名)。min-width:0 才允许 flex 子项缩到内容以下 */
-.tt{font-size:calc(12px*var(--u));font-weight:600;letter-spacing:.02em;white-space:nowrap;
+.tt{font-size:calc(13px*var(--u));font-weight:600;letter-spacing:.02em;white-space:nowrap;
   min-width:0;overflow:hidden;text-overflow:ellipsis}
-.tt small{font-weight:400;color:var(--tx3);margin-left:calc(5px*var(--u));font-size:max(11.5px,calc(11px*var(--u)))}
+.tt small{font-weight:400;color:var(--tx3);margin-left:calc(5px*var(--u));font-size:max(12px,calc(12px*var(--u)))}
 .spacer{flex:1}
 .ib{width:calc(24px*var(--u));height:calc(24px*var(--u));border:0;background:transparent;border-radius:calc(6px*var(--u));color:var(--tx2);
   cursor:pointer;display:grid;place-items:center;font-size:calc(13px*var(--u));flex:none;font-family:inherit}
 .ib:hover{background:#ffffff12;color:var(--tx)}
 .ib svg{display:block}
 /* 选中态用实心强调色:emoji 图标改不了颜色,所以图标统一换成 currentColor 的 SVG */
-.ib.on{color:#fff;background:var(--ac)}
-.ib.on:hover{background:#93b1ff;color:#fff}
+.ib.on{color:var(--btn-text);background:var(--ac)}
+.ib.on:hover{background:color-mix(in srgb,var(--ac) 85%,var(--tx));color:var(--btn-text)}
 /* 面板标题栏的文字按钮:比图标直白;10.5px 太小,按 11.5px 下限抬了 */
 .tb{border:0;background:transparent;color:var(--tx2);cursor:pointer;font-family:inherit;
-  font-size:max(11.5px,calc(10.5px*var(--u)));line-height:1.25;padding:calc(3px*var(--u)) calc(5px*var(--u));border-radius:calc(5px*var(--u));flex:none;white-space:nowrap}
+  font-size:max(12px,calc(11.5px*var(--u)));line-height:1.25;padding:calc(3px*var(--u)) calc(5px*var(--u));border-radius:calc(5px*var(--u));flex:none;white-space:nowrap}
 .tb:hover{background:#ffffff12;color:var(--tx)}
 /* 顶栏固定四枚入口:刷新 / 置顶 / 隐藏 / 胶囊(2026-11-03 用户裁决)。
    紧凑条仍在设置 → 显示里开启;顶栏不再随 compact-on 换按钮。 */
-.tb.on{color:#fff;background:var(--ac)}
+.tb.on{color:var(--btn-text);background:var(--ac)}
 /* 标题栏:刷新是唯一的图标按钮,置顶/隐藏/胶囊用文字按钮 */
 .tbi{width:calc(26px*var(--u));height:calc(26px*var(--u));border:0;background:transparent;
   border-radius:calc(7px*var(--u));color:var(--tx3);display:grid;place-items:center;padding:0;
@@ -96,7 +96,7 @@ body{
 .tbi.done .tbi-i{display:none}
 .tbi.done::after{content:"¹3";font-size:calc(12px*var(--u));font-weight:700;line-height:1}
 @keyframes spin{to{transform:rotate(360deg)}}
-.tb-live{font-size:max(9.5px,calc(9.5px*var(--u)));color:var(--tx4);white-space:nowrap;
+.tb-live{font-size:max(10.5px,calc(10.5px*var(--u)));color:var(--tx4);white-space:nowrap;
   font-variant-numeric:tabular-nums;margin-right:calc(1px*var(--u))}
 .tb-live:empty{display:none}
 /* 文字按钮没法"转",刷新反馈改成脉冲 */
@@ -111,7 +111,7 @@ body{
 .uchip:hover{background:#8aa4ff3d;color:#d4e0ff}
 /* 覆盖在列表上的更新卡 */
 .upd-ov{position:absolute;left:0;right:0;top:calc(80px*var(--u));bottom:calc(34px*var(--u));z-index:5;
-  background:#0e1015f2;display:flex;align-items:flex-start;padding:calc(12px*var(--u))}
+  background:color-mix(in srgb,var(--bg) 95%,transparent);display:flex;align-items:flex-start;padding:calc(12px*var(--u))}
 .upd-ov-in{width:100%;background:var(--bg2);border:1px solid var(--line);border-radius:calc(10px*var(--u));
   padding:calc(12px*var(--u));box-shadow:0 12px 30px -10px #000}
 
@@ -175,20 +175,20 @@ body{
 .nm .n{font-size:calc(13px*var(--u));font-weight:600;white-space:nowrap;overflow:hidden;
   text-overflow:ellipsis;display:flex;align-items:center;gap:calc(5px*var(--u))}
 .nm .nsh{display:none} /* 紧凑条 L0 才亮出缩写名,面板里用全名 */
-.nm .s{font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);margin-top:calc(1px*var(--u));white-space:nowrap;
+.nm .s{font-size:max(12px,calc(12px*var(--u)));color:var(--tx3);margin-top:calc(1px*var(--u));white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
 .val{text-align:right;flex:none;font-variant-numeric:tabular-nums}
 .val .v{font-size:calc(22px*var(--u));font-weight:600;letter-spacing:-.025em;line-height:1.08}
 /* 数值整体一套样式:小数位 / 百分号不再单独缩小变灰 ——
    之前只有整数部分"有样式",看起来像半截数字没渲染好 */
 .val .v i{font-style:normal;font-size:inherit;font-weight:inherit;color:inherit}
-.val .p{font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);margin-top:calc(1px*var(--u))}
+.val .p{font-size:max(12px,calc(12px*var(--u)));color:var(--tx3);margin-top:calc(1px*var(--u))}
 .codex-quota .val .v{display:flex;align-items:baseline;justify-content:flex-end;gap:calc(5px*var(--u));white-space:nowrap}
-.codex-quota .quota-label{font-size:max(11.5px,calc(11px*var(--u)));font-weight:400;letter-spacing:0;color:var(--tx3)}
+.codex-quota .quota-label{font-size:max(12px,calc(12px*var(--u)));font-weight:400;letter-spacing:0;color:var(--tx3)}
 .quota-secondary{display:inline-flex;align-items:baseline;gap:calc(6px*var(--u));white-space:nowrap}
-.quota-secondary b{font-size:calc(12px*var(--u));font-weight:500}
+.quota-secondary b{font-size:calc(13px*var(--u));font-weight:500}
 .codex-dual[data-state="stale"] .val .p{opacity:.72}
-.bar{height:calc(4px*var(--u));border-radius:calc(3px*var(--u));background:#2b3241;overflow:hidden;margin:calc(8px*var(--u)) 0 0}
+.bar{height:calc(4px*var(--u));border-radius:calc(3px*var(--u));background:var(--bg3);overflow:hidden;margin:calc(8px*var(--u)) 0 0}
 .bar>i{display:block;height:100%;border-radius:calc(3px*var(--u));transition:width .5s cubic-bezier(.3,1,.4,1)}
 /* 官方图标:有官方标的渠道用图片,容器仍是原来的圆角方块(尺寸/圆角由各上下文决定) */
 .ico.logo{background:transparent;padding:0;overflow:hidden}
@@ -198,10 +198,10 @@ body{
 
 /* 展开区核心段(2026-10-23 五段骨架):金额 = 一行三格;配额 = 一窗一行。
    这两组原来是行头里的「第三段」,现在只在展开区出现 —— 行头展开前后同一个高度。 */
-.core-use{display:flex;align-items:center;font-size:max(11.5px,calc(11px*var(--u)));
+.core-use{display:flex;align-items:center;font-size:max(12px,calc(12px*var(--u)));
   color:var(--tx3);min-height:calc(20px*var(--u));background:var(--bg3);border:1px solid var(--line);
   border-radius:calc(8px*var(--u));padding:calc(6px*var(--u)) calc(10px*var(--u))}
-.core-use div{flex:1;border-left:1px solid #252b38;padding-left:calc(7px*var(--u));white-space:nowrap}
+.core-use div{flex:1;border-left:1px solid var(--line);padding-left:calc(7px*var(--u));white-space:nowrap}
 .core-use div:first-child{border-left:0;padding-left:0}
 .core-use b{color:var(--tx2);font-weight:500;margin-left:calc(5px*var(--u));font-variant-numeric:tabular-nums}
 /* 推算标记:代替原来那句"消耗按快照估算"的说明(说明收进 title,不再占一行) */
@@ -209,9 +209,9 @@ body{
   border:1px solid var(--line2);border-radius:3px;padding:0 calc(3px*var(--u));line-height:1.5}
 
 .core-w{display:flex;align-items:center;gap:calc(7px*var(--u));
-  font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);min-height:calc(21px*var(--u))}
+  font-size:max(12px,calc(12px*var(--u)));color:var(--tx3);min-height:calc(21px*var(--u))}
 .core-w .wl{flex:none;width:calc(48px*var(--u))}
-.core-w .wb{flex:1;height:calc(4px*var(--u));border-radius:calc(3px*var(--u));background:#2b3241;overflow:hidden}
+.core-w .wb{flex:1;height:calc(4px*var(--u));border-radius:calc(3px*var(--u));background:var(--bg3);overflow:hidden}
 .core-w .wb>i{display:block;height:100%;border-radius:calc(3px*var(--u));
   transition:width .5s cubic-bezier(.3,1,.4,1)}
 .core-w .wv{flex:none;width:calc(46px*var(--u));text-align:right;font-weight:500;
@@ -226,7 +226,7 @@ body{
 /* 口径说明(周窗清零 / 5 小时窗恢复):比数值再低一档,只在 Codex 出现一次。
    别染成告警色 —— 它是解释,不是风险。 */
 .core-note{margin-top:calc(2px*var(--u));color:var(--tx3);
-  font-size:max(10.5px,calc(10px*var(--u)));line-height:1.5;opacity:.85}
+  font-size:max(11.5px,calc(11px*var(--u)));line-height:1.5;opacity:.85}
 .reset-credit{display:flex;flex-wrap:wrap;justify-content:space-between;gap:calc(3px*var(--u)) calc(8px*var(--u));
   padding:calc(4px*var(--u)) 0;color:var(--tx3);font-size:max(11px,calc(11px*var(--u)));overflow-wrap:anywhere}
 .reset-credit b{color:var(--tx2);font-weight:500;font-variant-numeric:tabular-nums}
@@ -238,7 +238,7 @@ body{
 
 /* 积分型:最近到期的几笔(核心段;超过 3 笔由「全部 N 笔」原地展开) */
 .core-exp{display:flex;align-items:center;gap:calc(8px*var(--u));
-  font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);min-height:calc(22px*var(--u))}
+  font-size:max(12px,calc(12px*var(--u)));color:var(--tx3);min-height:calc(22px*var(--u))}
 .core-exp .ed{flex:none;width:calc(92px*var(--u));color:var(--tx2);font-variant-numeric:tabular-nums}
 .core-exp .ed i{font-style:normal;color:var(--tx3);margin-left:calc(4px*var(--u));
   font-size:max(11.5px,calc(10px*var(--u)))}
@@ -250,7 +250,7 @@ body{
 .core-exp.b .ed,.core-exp.b .ea{color:var(--bad)}
 /* 已过期但还有余量的包:只在「全部 N 笔」里出现,排在未到期的后面 */
 .core-exp.past{opacity:.55}
-.core-empty{font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);line-height:1.6}
+.core-empty{font-size:max(12px,calc(12px*var(--u)));color:var(--tx3);line-height:1.6}
 .caret{color:var(--tx3);font-size:calc(9px*var(--u));flex:none;width:calc(12px*var(--u));text-align:center;
   transition:transform .25s}
 .row.open .caret{transform:rotate(90deg)}
@@ -310,7 +310,7 @@ body.form-panel .row.open::after{content:"";position:absolute;left:0;top:0;botto
 .kv b{font-weight:500;font-variant-numeric:tabular-nums;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
 /* 签到:一行。徽标已经说了「签没签 / 能不能领」,这里只说连续天数 / 本月 / 上次尝试 */
-.ckline{font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx2);
+.ckline{font-size:max(12px,calc(12px*var(--u)));color:var(--tx2);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* 页脚:说明在上、动作在下(右对齐) */
 .foot-det{margin-top:calc(8px*var(--u));padding-top:calc(7px*var(--u));border-top:1px solid var(--line)}
@@ -357,12 +357,12 @@ body.form-panel .row.open::after{content:"";position:absolute;left:0;top:0;botto
 .btn:hover{border-color:#55617d;color:var(--tx)}
 .btn.p{background:#8aa4ff1a;border-color:#8aa4ff55;color:#b7ccff}
 .btn.danger:hover{border-color:var(--bad);color:var(--bad)}
-.hint{font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);margin-top:calc(7px*var(--u));line-height:1.7}
+.hint{font-size:max(12px,calc(12px*var(--u)));color:var(--tx3);margin-top:calc(7px*var(--u));line-height:1.7}
 .hint a,.hint .lk{color:var(--tx2);cursor:pointer}
 .hint a:hover,.hint .lk:hover{color:var(--ac)}
 /* 行尾的"数据是什么时候的"(报告 P1-12):产品纪律是"失败时继续显示上次成功快照并标注
    时间",但收起态以前根本没把这一行画出来。紧凑条里由上面 form-compact 规则收起。 */
-.rhint{font-size:max(10.5px,calc(10px*var(--u)));color:var(--tx3);margin-top:calc(2px*var(--u));line-height:1.45;opacity:.9}
+.rhint{font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);margin-top:calc(2px*var(--u));line-height:1.45;opacity:.9}
 .rhint.stale{color:var(--warn);opacity:1}
 
 /* ── 陈旧:四种形态都要看得出"这是旧快照"(设计 P0 验收① / §6.1.2)───────
@@ -389,7 +389,7 @@ body.view-manage .sum,
 body.view-manage .list{display:none!important}
 body.view-manage #lkKeys{display:none}
 .mhead{display:flex;align-items:center;gap:calc(8px*var(--u));padding:calc(7px*var(--u)) calc(10px*var(--u));flex:none;
-  border-bottom:1px solid var(--line);background:#141821}
+  border-bottom:1px solid var(--line);background:var(--bg2)}
 .mhead .mt{font-size:max(11.5px,calc(11.5px*var(--u)));font-weight:600;letter-spacing:.02em}
 /* 设置页四页签:渠道 / 显示 / 刷新与启动 / 关于 */
 .tabs{display:none;gap:calc(3px*var(--u));padding:calc(8px*var(--u)) calc(10px*var(--u));flex:none;
@@ -435,7 +435,7 @@ body.manage-index .mhead .mt{letter-spacing:.01em}
 .mbody h4{font-size:calc(12px*var(--u));color:var(--tx3);text-transform:uppercase;letter-spacing:.1em;
   margin:0 0 calc(9px*var(--u));font-weight:600}
 .mbody h4:not(:first-child){margin-top:calc(18px*var(--u))}
-.khint{font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);line-height:1.7;margin:calc(-3px*var(--u)) 0 calc(10px*var(--u))}
+.khint{font-size:max(12px,calc(12px*var(--u)));color:var(--tx3);line-height:1.7;margin:calc(-3px*var(--u)) 0 calc(10px*var(--u))}
 
 /* ── 同步到手机 ───────────────────────────────────────────────────────── */
 .sync-github{padding:calc(2px*var(--u)) 0 calc(8px*var(--u));
@@ -518,13 +518,13 @@ body.manage-index .mhead .mt{letter-spacing:.01em}
 /* 长文归档:关于页里读一次就够的段落默认收起,摘要行本身就是结论 */
 .fold{margin:calc(2px*var(--u)) 0 0}
 .fold>summary{display:flex;align-items:flex-start;gap:calc(6px*var(--u));cursor:pointer;list-style:none;
-  font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);line-height:1.7;padding:calc(2px*var(--u)) 0}
+  font-size:max(12px,calc(12px*var(--u)));color:var(--tx3);line-height:1.7;padding:calc(2px*var(--u)) 0}
 .fold>summary::-webkit-details-marker{display:none}
 .fold>summary::before{content:"\25B8";flex:0 0 auto;transition:transform var(--t1) var(--ease)}
 .fold[open]>summary::before{transform:rotate(90deg)}
 .fold>summary:hover{color:var(--tx2)}
 .fold>summary:focus-visible{outline:2px solid var(--ac);outline-offset:2px;border-radius:calc(3px*var(--u))}
-.foldin{font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);line-height:1.7;padding:calc(4px*var(--u)) 0 0}
+.foldin{font-size:max(12px,calc(12px*var(--u)));color:var(--tx3);line-height:1.7;padding:calc(4px*var(--u)) 0 0}
 .foldin b{color:var(--tx2);font-weight:500}
 
 .field{display:flex;align-items:center;justify-content:space-between;padding:calc(6px*var(--u)) 0;
@@ -542,11 +542,11 @@ body.manage-index .mhead .mt{letter-spacing:.01em}
 .sel:focus{outline:none;border-color:var(--ac)}
 /* 快捷键录制框:等待录入时给虚线提示,聚焦后实线 */
 .hk-rec{width:calc(140px*var(--u));text-align:center;cursor:pointer;font-variant-numeric:tabular-nums;border-style:dashed}
-.hk-rec:hover{border-color:#55617d;color:var(--tx)}
+.hk-rec:hover{border-color:var(--tx3);color:var(--tx)}
 .hk-rec:focus{border-style:solid;cursor:text}
 
 /* ── 关于 / 检查更新 ── */
-.usub{color:var(--tx3);font-size:max(11.5px,calc(11px*var(--u)));font-weight:400}
+.usub{color:var(--tx3);font-size:max(12px,calc(12px*var(--u)));font-weight:400}
 .field .usub{margin-left:calc(6px*var(--u))}
 .ublk{display:block;margin:calc(2px*var(--u)) 0 calc(8px*var(--u))}
 .ublk.bad{color:var(--bad)}
@@ -584,14 +584,14 @@ body.manage-index .mhead .mt{letter-spacing:.01em}
 .eye{flex:none;width:calc(28px*var(--u));height:calc(28px*var(--u));border-radius:calc(7px*var(--u));
   border:1px solid var(--line2);background:var(--bg3);color:var(--tx2);cursor:pointer;
   display:grid;place-items:center;font-size:calc(13px*var(--u));font-family:inherit}
-.eye:hover{border-color:#55617d;color:var(--tx)}
+.eye:hover{border-color:var(--tx3);color:var(--tx)}
 .eye.off{color:var(--tx3);background:transparent;border-style:dashed}
 .ccaret{color:var(--tx3);font-size:calc(9px*var(--u));flex:none;width:calc(12px*var(--u));text-align:center;transition:transform .25s}
 .ccard.open .ccaret{transform:rotate(90deg)}
-.ccbody{display:none;border-top:1px solid var(--line);padding:calc(10px*var(--u)) calc(12px*var(--u)) calc(12px*var(--u));background:#141821}
+.ccbody{display:none;border-top:1px solid var(--line);padding:calc(10px*var(--u)) calc(12px*var(--u)) calc(12px*var(--u));background:var(--bg2)}
 .ccard.open .ccbody{display:block}
 .ccbtns{display:flex;gap:calc(6px*var(--u));align-items:center;margin-top:calc(8px*var(--u))}
-.ccbtns input[type=password]{flex:1;min-width:0;background:#0e1015;border:1px solid var(--line2);
+.ccbtns input[type=password]{flex:1;min-width:0;background:var(--bg);border:1px solid var(--line2);
   border-radius:calc(6px*var(--u));color:var(--tx);font-size:calc(12px*var(--u));padding:calc(5px*var(--u)) calc(8px*var(--u));font-family:inherit}
 .ccbtns input[type=password]:focus{outline:none;border-color:var(--ac)}
 .mini{font-size:max(11.5px,calc(11.5px*var(--u)));color:var(--tx3);line-height:1.7}
@@ -608,7 +608,7 @@ body.manage-index .mhead .mt{letter-spacing:.01em}
 .claim-in{margin-top:calc(8px*var(--u));padding-top:calc(8px*var(--u));border-top:1px dashed var(--line)}
 .claim-grid{display:flex;gap:calc(6px*var(--u));flex-wrap:wrap;align-items:center;
   font-size:calc(12px*var(--u));color:var(--tx3)}
-.claim-grid input{width:calc(64px*var(--u));background:#0e1015;border:1px solid var(--line2);
+.claim-grid input{width:calc(64px*var(--u));background:var(--bg);border:1px solid var(--line2);
   border-radius:calc(6px*var(--u));color:var(--tx);font-size:calc(12px*var(--u));padding:calc(4px*var(--u)) calc(7px*var(--u));font-family:inherit}
 .claim-grid input[type=date]{width:calc(128px*var(--u))}
 .claim-grid input:focus{outline:none;border-color:var(--ac)}
@@ -621,7 +621,7 @@ body.manage-index .mhead .mt{letter-spacing:.01em}
 .btn:disabled:hover{filter:none}
 
 /* 撑不到下次申请 / 周期余量告急的提示(列表行内) */
-.claim-warn,.win-warn{font-size:max(11.5px,calc(11px*var(--u)));color:var(--warn);margin-top:calc(6px*var(--u));line-height:1.6}
+.claim-warn,.win-warn{font-size:max(12px,calc(12px*var(--u)));color:var(--warn);margin-top:calc(6px*var(--u));line-height:1.6}
 .win-warn{color:var(--bad)}
 /* 紧凑条里的警示角标:整句放不下(compact 已隐藏上面两行),只挂一枚 ⚠ */
 .wmark{display:none;font-size:max(10px,calc(9.5px*var(--u)));line-height:1;margin-left:calc(2px*var(--u))}
@@ -641,7 +641,7 @@ body.form-compact .wmark{display:inline}
   border-radius:calc(4px*var(--u));border:1px solid var(--line2);
   background:#181c24;color:var(--tx3);white-space:nowrap;
   font-family:inherit;cursor:default;vertical-align:middle}
-.ckb.ok{color:#8ee9b8;border-color:#2f6b43;background:#132219}
+.ckb.ok{color:var(--ok);border-color:var(--ok);background:var(--ok-bg)}
 .ckb.hot{color:#cfe0ff;border-color:#3d5a8a;background:#151d2b;cursor:pointer}
 .ckb.hot:hover{background:#1c2740;border-color:var(--ac)}
 .ckb.warn{color:#e8c07d;border-color:#6b5a2e;background:#1f1a10;cursor:pointer}
@@ -678,51 +678,9 @@ body.form-compact .ckstrip,body.form-pill .ckstrip{display:none}
 .more:focus-visible,.tabs button:focus-visible{
   outline:2px solid var(--ac);outline-offset:2px}
 
-/* ── 面板缩放:透明边距里的 8 方向命中层 + 右下角可见手柄 ──
-   原生 undecorated 边框只有窗口最外缘 3 物理像素可命中,而卡片可见边缘在 10px
-   透明边距里,用户拖卡片边缘时根本碰不到它。这里在透明边距上叠一圈命中层,
-   由前端接管拖动;面板 8 个方向,紧凑条只留左右(高度锁死)。 */
-.rz-frame{display:none;position:fixed;inset:0;z-index:65;pointer-events:none}
-body.form-panel .rz-frame,body.form-compact .rz-frame{display:block}
-body.docked .rz-frame,body.dock-open .rz-frame{display:none}
-.rz-z{position:absolute;pointer-events:auto}
-.rz-n,.rz-s{left:0;right:0;height:10px;cursor:ns-resize}
-.rz-n{top:0}
-.rz-s{bottom:0}
-.rz-w,.rz-e{top:0;bottom:0;width:10px;cursor:ew-resize}
-.rz-w{left:0}
-.rz-e{right:0}
-.rz-nw,.rz-ne,.rz-sw,.rz-se{width:10px;height:10px;z-index:1}
-.rz-nw{left:0;top:0;cursor:nwse-resize}
-.rz-ne{right:0;top:0;cursor:nesw-resize}
-.rz-sw{left:0;bottom:0;cursor:nesw-resize}
-.rz-se{right:0;bottom:0;cursor:nwse-resize}
-body.form-compact .rz-n,body.form-compact .rz-s,
-body.form-compact .rz-nw,body.form-compact .rz-ne,
-body.form-compact .rz-sw,body.form-compact .rz-se{display:none}
-/* 可见手柄:把“右下角可以拉”做成看得见的入口,也方便双击复位。 */
-.rz-grip{position:absolute;right:calc(3px*var(--u));bottom:calc(3px*var(--u));
-  width:calc(9px*var(--u));height:calc(9px*var(--u));z-index:66;cursor:nwse-resize;
-  opacity:.5;border-radius:2px;
-  background:linear-gradient(135deg,transparent 44%,var(--tx4) 45%,var(--tx4) 55%,transparent 56%,
-    transparent 69%,var(--tx4) 70%,var(--tx4) 80%,transparent 81%)}
-.rz-grip:hover,body.resizing .rz-grip{opacity:1}
-body.form-compact .rz-grip,body.form-pill .rz-grip,body.docked .rz-grip,
-body.dock-open .rz-grip{display:none}
-.rz-size{position:absolute;right:calc(12px*var(--u));bottom:calc(40px*var(--u));z-index:67;
-  padding:calc(1px*var(--u)) calc(6px*var(--u));border-radius:calc(5px*var(--u));
-  background:var(--bg3);border:1px solid var(--line2);color:var(--tx2);
-  font-size:max(9px,calc(9.5px*var(--u)));font-variant-numeric:tabular-nums;
-  opacity:0;pointer-events:none;transition:opacity var(--t1) ease}
-.rz-size.on{opacity:1}
-/* 拖动期间关掉所有装饰动画/过渡,避免和窗口 resize 抢主线程;松手后自动恢复。 */
-body.resizing *{transition:none!important;animation:none!important}
-/* 拖拽中的尺寸标签始终保持轻量,不参与布局 */
-.rz-size{will-change:opacity}
-
 /* ── 底栏 ── */
 .foot{display:flex;align-items:center;gap:calc(8px*var(--u));padding:calc(7px*var(--u)) calc(12px*var(--u));background:var(--bg2);
-  border-top:1px solid var(--line);font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);flex:none}
+  border-top:1px solid var(--line);font-size:max(12px,calc(12px*var(--u)));color:var(--tx3);flex:none}
 .foot #fdot{display:none}
 .foot .fb-dot{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--ok);
   margin-right:calc(3px*var(--u));vertical-align:1px}
@@ -792,9 +750,7 @@ body.form-compact .win-warn,
 body.form-compact .nm .s,
 body.form-compact .val .p,
 /* 分组标题 / 失败横幅 / 冷启动骨架都是**面板**的纵向结构:紧凑条是横向 chip 流,
-   它们进来就变成一个被压扁的竖排块(v0.1.56 实测:紧凑条里出现竖着写的「需要处理 1」,
-   把整条 chip 挤到右边)。 */
-body.form-compact .grp,
+   它们进来就变成一个被压扁的竖排块(v0.1.56 实测)。 */
 body.form-compact .fstrip,
 body.form-compact .sk-wrap,
 /* 骨架脚注也是纵向的:它一行字加两行说明,在 46px 的条里撑到 59px(实测 75 > 56) */
@@ -838,16 +794,15 @@ body.form-compact .cempty{flex:none;background:var(--bg3);border-radius:calc(6px
      下半截露在 46px 的条外面(实测列表 60px > 卡片 56px)。 */
   max-width:calc(260px*var(--u));overflow:hidden;text-overflow:ellipsis}
 /* 放不下的渠道收进 +N 徽标 */
-body.form-compact .more{flex:none;font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3);padding:calc(3px*var(--u)) 2px;
+body.form-compact .more{flex:none;font-size:max(12px,calc(12px*var(--u)));color:var(--tx3);padding:calc(3px*var(--u)) 2px;
   font-variant-numeric:tabular-nums}
 /* 过滤条只在面板里成立:紧凑条是横向 chip 流、胶囊只有一个药丸,
    一条 100% 宽的输入框进来就会把整条撑破(syncQBar 只看渠道数,不看形态)。 */
-body.form-compact .qbar,body.form-pill .qbar{display:none}
 
 /* ── 形态 3:胶囊(只显示最紧张的一个平台) ── */
 /* 不再用 backdrop-filter:透明窗口里浏览器采不到桌面当 backdrop,这属性本来
    就是空转,还会让 Chromium 给 body 单开一层合成层(整窗暗块的隐患)。 */
-body.form-pill{border-radius:999px;background:#0e1015f2;border-color:var(--line2)}
+body.form-pill{border-radius:999px;background:color-mix(in srgb,var(--bg) 97%,transparent);border-color:var(--line2)}
 body.form-pill .tbar,
 body.form-pill .sum,
 body.form-pill .manage,
@@ -1080,7 +1035,7 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 /* 模型行:名称 + 五个客户端按钮 + 标签 + 单价 */
 .mrow{border:1px solid var(--line);background:var(--bg2);border-radius:calc(9px*var(--u));
   padding:calc(7px*var(--u)) calc(9px*var(--u));margin-bottom:calc(6px*var(--u))}
-.mrow.done{border-color:#2f6b43}
+.mrow.done{border-color:var(--ok)}
 .mtop{display:flex;justify-content:space-between;align-items:baseline;gap:calc(8px*var(--u))}
 .mname{font-family:Consolas,monospace;font-weight:600;color:var(--tx);
   font-size:max(11.5px,calc(12.5px*var(--u)));word-break:break-all}
@@ -1100,7 +1055,7 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
   font-size:max(9px,calc(9.5px*var(--u)));font-weight:700;line-height:1;
   transition:background var(--t1) ease,border-color var(--t1) ease,color var(--t1) ease}
 .cdot:hover{border-color:#55617d;color:var(--tx2)}
-.cdot.on{background:#16321f;border-color:#2f6b43;color:#7ce9a8}
+.cdot.on{background:var(--ok-bg);border-color:var(--ok);color:var(--ok)}
 .cdot.run{border-color:#7a6234;color:var(--warn)}
 .cdot.no{opacity:.35;cursor:default}
 .cdot:disabled{cursor:default}
@@ -1142,8 +1097,8 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 /* 写入结果框:接管退役的 .mdlok 那套绿框;哪一家没写成时框内会带 .mdlwarn,
    用 :has() 把整框转红,失败一眼可见(WebView2 的 Chromium ≥105,与文件里已在用的
    grid-template-rows:0fr 过渡同代) */
-.okbox{border:1px solid #2f6b43;background:#132219;border-radius:calc(6px*var(--u));
-  padding:calc(6px*var(--u)) calc(8px*var(--u));color:#8ee9b8;margin:calc(5px*var(--u)) 0;
+.okbox{border:1px solid var(--ok);background:var(--ok-bg);border-radius:calc(6px*var(--u));
+  padding:calc(6px*var(--u)) calc(8px*var(--u));color:var(--ok);margin:calc(5px*var(--u)) 0;
   font-size:max(10.5px,calc(11px*var(--u)))}
 .okbox:has(.mdlwarn){border-color:#6b3230;background:#241512;color:#ffb4b0}
 .mdlprev{padding-bottom:calc(5px*var(--u));border-bottom:1px solid var(--line)}
@@ -1158,10 +1113,10 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
   border:1px solid var(--line);background:#15181f;border-radius:calc(7px*var(--u));color:var(--tx3);
   font-size:max(11px,calc(11.5px*var(--u)));transition:border-color var(--t1) ease,background var(--t1) ease,color var(--t1) ease}
 .srcbar-i:hover{border-color:#55617d;color:var(--tx2)}
-.srcbar-i.on{background:#22304a;border-color:#4b6fa8;color:#cfe0ff}
+.srcbar-i.on{background:var(--ac-bg);border-color:color-mix(in srgb,var(--ac) 45%,transparent);color:var(--ac)}
 .srcbar-i i{display:block;font-style:normal;font-size:max(10px,calc(10px*var(--u)));color:var(--tx3)}
 .srcbar-i.on i{color:#9fb6e6}
-.tagd.ok{border-color:#2f6b43;color:#7ce9a8}
+.tagd.ok{border-color:var(--ok);color:var(--ok)}
 
 /* 弹层:面板内覆盖(复用更新提示那套机制),按钮固定底部、内容自己滚 */
 .modl-ov{position:absolute;inset:0;z-index:40;display:flex;align-items:flex-end;
@@ -1195,7 +1150,7 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 .ck-overview-filters{display:flex;gap:calc(5px*var(--u));padding:calc(6px*var(--u)) calc(8px*var(--u));border-bottom:1px solid var(--line)}
 .ckfilter{border:1px solid var(--line2);border-radius:calc(5px*var(--u));padding:calc(3px*var(--u)) calc(7px*var(--u));
   color:var(--tx3);background:#171b24;font-size:max(9px,calc(9.5px*var(--u)));cursor:pointer}
-.ckfilter.on{border-color:#5976aa;color:#c5d9ff;background:#202b40}
+.ckfilter.on{border-color:color-mix(in srgb,var(--ac) 45%,transparent);color:var(--ac);background:var(--ac-bg)}
 .ck-activity-list{max-height:calc(210px*var(--u));overflow-y:auto}
 .ck-activity-item{padding:calc(7px*var(--u)) calc(9px*var(--u));border-bottom:1px solid #252b35}
 .ck-activity-item:last-child{border-bottom:0}
@@ -1292,12 +1247,12 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 /* 「密钥来源」区块与"从密钥箱选"的下拉(v0.1.49) */
 .ksrc:empty{display:none}
 .ksrc .ccbtns{margin-top:calc(6px*var(--u))}
-.kref{flex:1;min-width:0;background:#0e1015;border:1px solid var(--line2);color:var(--tx2);
+.kref{flex:1;min-width:0;background:var(--bg);border:1px solid var(--line2);color:var(--tx2);
   border-radius:calc(7px*var(--u));padding:calc(5px*var(--u)) calc(6px*var(--u));
   font-size:max(11px,calc(11.5px*var(--u)))}
 .kref:focus{outline:none;border-color:var(--ac)}
-.reveal{font-family:Consolas,monospace;font-size:max(10.5px,calc(11px*var(--u)));color:#8ee9b8;
-  word-break:break-all;background:#132219;border:1px solid #2f6b43;border-radius:calc(7px*var(--u));
+.reveal{font-family:Consolas,monospace;font-size:max(10.5px,calc(11px*var(--u)));color:var(--ok);
+  word-break:break-all;background:var(--ok-bg);border:1px solid var(--ok);border-radius:calc(7px*var(--u));
   padding:calc(6px*var(--u)) calc(8px*var(--u))}
 
 /* ── 密钥箱(v0.1.28)── */
@@ -1355,11 +1310,6 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 .ckseg i.on{background:var(--ok)}
 
 /* 分组标题:九行一样重 = 没有层级 */
-.grp{display:flex;align-items:center;gap:calc(6px*var(--u));
-  padding:calc(6px*var(--u)) calc(12px*var(--u)) calc(3px*var(--u));
-  font-size:max(10.5px,calc(10px*var(--u)));color:var(--tx3);letter-spacing:.08em}
-.grp em{font-style:normal;color:var(--tx2)}
-.grp::after{content:"";flex:1;height:1px;background:var(--line)}
 
 /* 大面积失败横幅:一轮 ≥3 个失败时,问题多半在网络/代理,不在渠道。
    sticky:横幅在 #list 内部(和行一起渲染),滚到下面的渠道时它会跟着滚走 ——
@@ -1380,11 +1330,9 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 .sk-v{width:calc(52px*var(--u));height:calc(14px*var(--u));flex:none}
 @keyframes sk{0%{background-position:200% 0}100%{background-position:-200% 0}}
 .sk-foot{padding:calc(6px*var(--u)) calc(12px*var(--u));color:var(--tx3);
-  font-size:max(10.5px,calc(10px*var(--u)));text-align:center}
+  font-size:max(11.5px,calc(11px*var(--u)));text-align:center}
 
 /* 过滤条 */
-.qbar{padding:calc(5px*var(--u)) calc(12px*var(--u));border-bottom:1px solid var(--line)}
-.qbar .inp{width:100%}
 
 /* ═══ P1/P2 · 折叠形态 ═══════════════════════════════════════════
    紧凑条:签到 chip 常驻;胶囊:限定语;吸附条:一段一渠道;非颜色模式:文字态 */
@@ -1440,7 +1388,6 @@ body.form-panel[data-w="lg"] .mindex{max-width:calc(640px*var(--u));margin-left:
 
 body.form-panel[data-w="lg"] .list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
   gap:0 calc(12px*var(--u));align-content:start}
-body.form-panel[data-w="lg"] .list>.grp,
 body.form-panel[data-w="lg"] .list>.fstrip,
 body.form-panel[data-w="lg"] .list>.ckstrip,
 body.form-panel[data-w="lg"] .list>.sk-wrap,
@@ -1456,3 +1403,255 @@ body.form-panel[data-h="xs"] .sum .expbars{display:none}
 /* 非颜色模式:条形加纹理,状态写文字 */
 body.texttone .bar i{background-image:repeating-linear-gradient(90deg,rgba(0,0,0,.25) 0 2px,transparent 2px 5px)}
 body.texttone .row .qtag{display:inline-block!important}
+
+
+/* ═══════════════════════════════════════════════════════════════════════
+   PC 视觉精修 V2(2026-11-03 设计稿 + 交接规格)
+   石墨 / 暖雾白两套语义令牌;首页卡片、三格摘要、详情底部弹层、设置索引。
+   既有四种形态的规则保留,这里只覆盖面板形态的呈现。
+   ═══════════════════════════════════════════════════════════════════════ */
+:root{
+  --bg:#15181b; --bg2:#1d2125; --bg3:#262b30; --bg4:#2d3339;
+  --line:#30363b; --line2:#3a4147;
+  --tx:#f0f2ed; --tx2:#afb8bb; --tx3:#849095; --tx4:#6b767b;
+  --ok:#8bc9a2; --warn:#edc185; --bad:#ef9d94; --ac:#d3e6a3;
+  --ok-bg:#8bc9a214; --warn-bg:#edc18512; --bad-bg:#ef9d9414;
+  --ac-bg:#d3e6a313; --btn-text:#25301c; --shadow:#0005;
+  --surface:#1d2125; --raised:#262b30; --lime:#d3e6a3;
+}
+body.light{
+  color-scheme:light;
+  --bg:#f6f7f3; --bg2:#ffffff; --bg3:#eef1e9; --bg4:#e6e9e0;
+  --line:#dce0d6; --line2:#cbd1c4;
+  --tx:#272e28; --tx2:#606d62; --tx3:#6b756a; --tx4:#8b938a;
+  --ok:#427650; --warn:#946120; --bad:#b7483c; --ac:#4c632f;
+  --ok-bg:#e7f0e9; --warn-bg:#fdf3e3; --bad-bg:#fdeeea;
+  --ac-bg:#e9efdf; --btn-text:#fff; --shadow:#20302012;
+  --surface:#ffffff; --raised:#eef1e9; --lime:#4c632f;
+}
+body.light{box-shadow:0 2px 8px -2px #2030201f,0 0 0 1px #ffffff80 inset}
+body.light .tbar{background:linear-gradient(180deg,#fbfcf8,#f1f3ec)}
+body.light .mhead,body.light .tabs{background:var(--bg2)}
+body.light .ib:hover,body.light .tb:hover,body.light .tbi:hover{background:#0000000b}
+body.light .row .rhead:hover{background:#00000005}
+body.light .upd-ov{background:#f6f7f3f2}
+body.light .sync-auth{background:#e9ece3c7}
+body.light .dot.off{border-color:#a9b1a4}
+body.light .dot.st{background:#9aa298}
+body.light .bar,body.light .core-w .wb{background:var(--bg3)}
+body.light .core-use div{border-left-color:var(--line)}
+
+/* ── 三格摘要(临期积分 / 最先到期 / 每日签到)── */
+.sum{display:grid;grid-template-columns:minmax(0,1.18fr) minmax(0,1fr) minmax(0,.82fr);
+  gap:calc(9px*var(--u));padding:calc(14px*var(--u)) calc(20px*var(--u)) calc(12px*var(--u));min-height:0;
+  background:transparent;border-bottom:0;align-items:stretch}
+.sum .cell{display:flex;flex-direction:column;justify-content:center;min-width:0;position:relative;
+  padding:calc(12px*var(--u)) calc(13px*var(--u));border:1px solid var(--line)!important;
+  border-radius:calc(11px*var(--u));background:var(--bg2);text-align:left;color:var(--tx);
+  font:inherit;margin:0;appearance:none;transition:background var(--t1),border-color var(--t1)}
+.sum .cell:first-child,.sum .cell:last-child{padding:calc(12px*var(--u)) calc(13px*var(--u))}
+.sum button.cell{cursor:pointer}
+.sum button.cell:not(:disabled):hover{background:var(--bg3);border-color:var(--line2)}
+.sum button.cell:disabled{cursor:default}
+.sum .risk-cell{background:var(--bg2)}
+.sum .risk-cell.has-risk{background:var(--warn-bg);border-color:color-mix(in srgb,var(--warn) 30%,var(--line))!important}
+.sum .risk-cell.on{box-shadow:inset 0 0 0 1px var(--warn);background:var(--warn-bg)}
+.sum .metric-label,.sum .lb{display:flex;align-items:center;gap:calc(5px*var(--u));
+  font-size:max(12px,calc(11.5px*var(--u)));color:var(--tx2);letter-spacing:0;font-weight:500;
+  margin:0 0 calc(4px*var(--u));white-space:nowrap}
+.sum .metric-label svg,.sum .lb svg{width:calc(12px*var(--u));height:calc(12px*var(--u));color:var(--tx3)}
+.sum .vv,.sum .metric-number{font-size:calc(27px*var(--u));font-weight:550;letter-spacing:-.04em;
+  line-height:1.25;font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--tx);
+  display:flex;align-items:baseline;min-width:0}
+.sum .hero-v{font-size:inherit;font-weight:inherit;letter-spacing:inherit;line-height:inherit;color:inherit}
+.sum .hero-unit{font-size:calc(13px*var(--u));font-weight:400;color:var(--tx3);margin-left:calc(3px*var(--u));letter-spacing:0}
+.sum .due-name{font-size:max(12px,calc(12px*var(--u)));font-weight:450;color:var(--tx2);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;line-height:1.4;max-width:100%}
+.sum .due-date{font-size:calc(26px*var(--u));font-weight:550;letter-spacing:-.035em;line-height:1.25;
+  font-variant-numeric:tabular-nums;margin:calc(3px*var(--u)) 0 calc(2px*var(--u));color:var(--tx)}
+.sum .metric-sub,.sum .sb{font-size:max(12px,calc(11.5px*var(--u)));color:var(--tx3);line-height:1.5;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:calc(2px*var(--u))}
+.sum .sb-row{display:flex;align-items:flex-end;gap:calc(6px*var(--u));overflow:visible}
+.sum .sb-tx{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sum .expbars{display:flex;align-items:flex-end;gap:1px;height:calc(15px*var(--u));flex:none;padding-bottom:1px}
+.sum .expbars i{display:block;width:3px;border-radius:1px 1px 0 0;background:var(--warn)}
+.sum .expbars.is-empty{display:none}
+.sum .ck-cell .ckseg{display:flex;gap:2px}
+.sum .ck-cell .ckseg i{display:block;width:calc(10px*var(--u));height:3px;border-radius:2px;background:var(--line2)}
+.sum .ck-cell .ckseg i.on{background:var(--ok)}
+.sum .check-cell .hero-v{color:var(--ok)}
+
+/* ── 渠道卡片 ── */
+body.form-panel .list{display:grid;grid-template-columns:minmax(0,1fr);grid-auto-rows:max-content;
+  gap:calc(9px*var(--u));align-content:start;padding:0 calc(20px*var(--u)) calc(18px*var(--u));background:transparent}
+body.form-panel[data-w="lg"] .list{grid-template-columns:repeat(2,minmax(0,1fr));gap:calc(10px*var(--u))}
+body.form-panel[data-w="lg"] .list>.row,
+body.form-panel[data-w="lg"] .list>.row.urg,
+body.form-panel[data-w="lg"] .list>.row.open{grid-column:auto}
+body.form-panel .list>.fstrip,body.form-panel .list>.ckstrip,
+body.form-panel .list>.sk-wrap,body.form-panel .list>.empty{grid-column:1/-1}
+body.form-panel .row{border:1px solid var(--line);border-radius:calc(10px*var(--u));
+  background:var(--bg2);overflow:hidden;min-width:0;min-height:min-content;
+  transition:border-color var(--t1),background var(--t1)}
+body.form-panel .row:hover{border-color:var(--line2);background:var(--bg3)}
+body.form-panel .row:last-child{border-bottom:1px solid var(--line)}
+body.form-panel .row.urg{background:var(--bg2);box-shadow:none}
+body.form-panel .row.urg::before{display:none}
+body.form-panel .row[data-dtone="b"]{border-color:color-mix(in srgb,var(--bad) 30%,var(--line))}
+body.form-panel .row[data-dtone="w"]{border-color:color-mix(in srgb,var(--warn) 30%,var(--line))}
+body.form-panel .row[data-state="stale"]{border-color:color-mix(in srgb,var(--bad) 26%,var(--line))}
+body.form-panel .row .rhead{padding:calc(14px*var(--u)) calc(14px*var(--u))}
+body.form-panel .row .rhead:hover{background:transparent}
+body.form-panel .row .r1{display:grid;grid-template-columns:auto minmax(0,1fr) auto;
+  gap:calc(10px*var(--u));align-items:center}
+body.form-panel .row .ico{width:calc(30px*var(--u));height:calc(30px*var(--u));border-radius:calc(8px*var(--u))}
+body.form-panel .row .nm .n{font-size:calc(13.5px*var(--u))}
+body.form-panel .row .nm .s{font-size:max(12px,calc(12px*var(--u)));line-height:1.5}
+body.form-panel .row .val{text-align:right;justify-self:end}
+body.form-panel .row .val .v{font-size:calc(30px*var(--u));font-weight:550;letter-spacing:-.04em;line-height:1.15}
+body.form-panel .row.urg .val .v{font-size:calc(30px*var(--u))}
+body.form-panel .row .val .p{font-size:max(12px,calc(12px*var(--u)));color:var(--tx3);margin-top:calc(2px*var(--u))}
+body.form-panel .row .caret{display:none}
+body.form-panel .row .r2{display:flex;align-items:center;gap:calc(5px*var(--u));min-height:calc(22px*var(--u));
+  margin-top:calc(12px*var(--u));padding-top:calc(9px*var(--u));border-top:1px solid var(--line);
+  font-size:max(12px,calc(12px*var(--u)));color:var(--tx2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+body.form-panel .row .r2:empty{display:none}
+body.form-panel .row .r2 svg{width:calc(11px*var(--u));height:calc(11px*var(--u));color:var(--tx3);flex:none}
+body.form-panel .row .r2 .end{margin-left:auto;color:var(--tx3);flex:none;padding-left:calc(6px*var(--u))}
+body.form-panel .row .bar{display:block;height:calc(3px*var(--u));margin:calc(10px*var(--u)) 0 0;
+  border-radius:calc(3px*var(--u));background:var(--bg3);overflow:hidden}
+body.form-panel .row .bar>i{border-radius:inherit}
+body.form-panel .row[data-railwarn="1"] .r2,body.form-panel .row[data-railwarn="1"] .r2 svg{color:var(--warn)}
+
+/* 双列卡片:品牌一行,主数字第二行,状态轨贴底 */
+body.form-panel[data-w="lg"] .row .r1{grid-template-columns:auto minmax(0,1fr);align-items:center;row-gap:calc(13px*var(--u))}
+body.form-panel[data-w="lg"] .row .r1 .val{grid-column:1/-1;justify-self:stretch;display:flex;
+  align-items:baseline;justify-content:space-between;gap:calc(10px*var(--u));text-align:left;margin:0}
+body.form-panel[data-w="lg"] .row .r1 .val .p{margin-top:0;text-align:right}
+body.form-panel[data-w="lg"] .row .r1 .nm{grid-column:2;grid-row:1}
+
+/* ── 详情底部弹层 ── */
+.shade{position:absolute;inset:calc(55px*var(--u)) 0 calc(43px*var(--u));z-index:30;
+  background:#00000066;display:flex;align-items:flex-end;backdrop-filter:blur(3px);
+  animation:fadeIn var(--t2) var(--ease)}
+.shade[hidden]{display:none!important}
+.detail{width:100%;max-height:100%;background:var(--bg);border-top:1px solid var(--line);
+  border-radius:calc(16px*var(--u)) calc(16px*var(--u)) 0 0;box-shadow:0 -12px 40px #00000038;
+  display:flex;flex-direction:column;min-height:0;animation:sheetIn .22s var(--ease)}
+.detail-head{flex:none;display:flex;align-items:center;gap:calc(10px*var(--u));
+  padding:calc(15px*var(--u)) calc(20px*var(--u)) calc(12px*var(--u));border-bottom:1px solid var(--line)}
+.detail-head .ico{width:calc(30px*var(--u));height:calc(30px*var(--u))}
+.detail-title{min-width:0;flex:1}
+.detail-title b{display:block;font-size:calc(15px*var(--u));font-weight:600;letter-spacing:-.01em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.detail-title p{font-size:max(12px,calc(12px*var(--u)));color:var(--tx3);margin:calc(2px*var(--u)) 0 0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.detail-close{width:calc(28px*var(--u));height:calc(28px*var(--u));border:0;border-radius:calc(7px*var(--u));
+  display:grid;place-items:center;background:transparent;color:var(--tx2);flex:none;cursor:pointer}
+.detail-close:hover{background:var(--bg3);color:var(--tx)}
+.detail-close svg{width:calc(15px*var(--u));height:calc(15px*var(--u))}
+.detail-body{min-height:0;overflow-y:auto;padding:calc(18px*var(--u)) calc(20px*var(--u)) calc(22px*var(--u));
+  scrollbar-width:thin;scrollbar-color:var(--line2) transparent}
+.detail-body::-webkit-scrollbar{width:8px}
+.detail-body::-webkit-scrollbar-thumb{background:var(--line2);border-radius:9px;border:2px solid var(--bg)}
+.detail-hero{font-size:calc(42px*var(--u));font-weight:500;letter-spacing:-.05em;line-height:1.15;
+  font-variant-numeric:tabular-nums;margin:calc(2px*var(--u)) 0 calc(3px*var(--u));
+  display:flex;align-items:baseline;gap:calc(7px*var(--u));flex-wrap:wrap}
+.detail-hero .unit,.detail-hero small{font-size:calc(13px*var(--u));font-weight:400;letter-spacing:0;color:var(--tx2)}
+.detail-caption{font-size:max(12px,calc(12px*var(--u)));color:var(--tx3);line-height:1.7;margin-bottom:calc(18px*var(--u))}
+.detail-caption b{color:var(--tx2);font-weight:500}
+.detail .rbody-in{padding:0;background:transparent;border:0;box-shadow:none}
+.detail .foot-det{margin-top:calc(18px*var(--u));padding-top:calc(12px*var(--u))}
+.detail .fn-act{display:flex;gap:calc(8px*var(--u));margin-top:calc(12px*var(--u))}
+.detail .fn-act .btn{flex:1;justify-content:center}
+@keyframes sheetIn{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+
+/* 积分到期:最近一笔 + 逐笔明细(WorkBuddy / Trae / WorkBuddy AI 共用) */
+.expiry-summary{padding:calc(15px*var(--u)) calc(16px*var(--u));border:1px solid var(--line);
+  border-radius:calc(10px*var(--u));background:var(--bg2);margin:calc(16px*var(--u)) 0 calc(14px*var(--u))}
+.expiry-summary.urgent{background:var(--warn-bg);border-color:color-mix(in srgb,var(--warn) 35%,var(--line))}
+.expiry-kicker{display:flex;align-items:center;gap:calc(6px*var(--u));
+  font-size:max(12px,calc(12px*var(--u)));color:var(--tx2)}
+.expiry-kicker svg{width:calc(14px*var(--u));height:calc(14px*var(--u));color:var(--tx3)}
+.expiry-date{font-size:calc(23px*var(--u));font-weight:550;letter-spacing:-.035em;margin:calc(8px*var(--u)) 0 calc(4px*var(--u));
+  line-height:1.35;font-variant-numeric:tabular-nums;color:var(--tx)}
+.expiry-date small{font-size:calc(13px*var(--u));font-weight:400;color:var(--tx2);margin-left:calc(8px*var(--u));letter-spacing:0}
+.expiry-summary.urgent .expiry-date{color:var(--warn)}
+.expiry-meta{display:flex;justify-content:space-between;gap:calc(10px*var(--u));
+  font-size:max(12px,calc(12px*var(--u)));color:var(--tx2);line-height:1.6}
+.expiry-meta strong{font-weight:500;color:var(--tx)}
+.expiry-summary.urgent .expiry-meta strong{color:var(--warn)}
+.expiry-table{border:1px solid var(--line);border-radius:calc(9px*var(--u));overflow:hidden;background:var(--bg2)}
+.expiry-entry{padding:calc(11px*var(--u)) calc(13px*var(--u));display:flex;justify-content:space-between;
+  align-items:center;gap:calc(14px*var(--u))}
+.expiry-entry+.expiry-entry{border-top:1px solid var(--line)}
+.expiry-entry b{display:block;font-size:max(12px,calc(12px*var(--u)));line-height:1.6;font-weight:500;
+  font-variant-numeric:tabular-nums;color:var(--tx)}
+.expiry-entry p{font-size:max(12px,calc(12px*var(--u)));color:var(--tx3);margin:calc(2px*var(--u)) 0 0;line-height:1.6}
+.expiry-amount{text-align:right;white-space:nowrap}
+.expiry-amount strong{display:block;font-size:calc(16px*var(--u));font-weight:550;
+  font-variant-numeric:tabular-nums;color:var(--tx)}
+.expiry-amount small{color:var(--tx3);font-size:max(12px,calc(11.5px*var(--u)))}
+.expiry-entry.urgent .expiry-amount strong,.expiry-entry.urgent .expiry-amount p{color:var(--warn)}
+.expiry-entry.past{opacity:.6}
+.expiry-footnote{font-size:max(12px,calc(11.5px*var(--u)));color:var(--tx3);line-height:1.8;margin:calc(9px*var(--u)) 0 0}
+.expiry-section-label{font-size:max(12px,calc(11.5px*var(--u)));color:var(--tx3);letter-spacing:.05em;
+  margin:calc(14px*var(--u)) 0 calc(7px*var(--u))}
+.expiry-empty{padding:calc(14px*var(--u)) calc(16px*var(--u));border:1px dashed var(--line2);
+  border-radius:calc(9px*var(--u));color:var(--tx3);font-size:max(12px,calc(12px*var(--u)));line-height:1.8}
+.expiry-account-note{font-size:max(12px,calc(11.5px*var(--u)));color:var(--tx2);line-height:1.8;
+  margin:calc(8px*var(--u)) 0 calc(10px*var(--u))}
+.expiry-link{background:none;border:0;padding:0;color:var(--ac);font:inherit;font-size:inherit;
+  cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+
+/* 设置索引:分组卡片外观,沿用真实入口 */
+.mindex-list{gap:calc(9px*var(--u))}
+.midx-row{background:var(--bg2);border:1px solid var(--line);border-radius:calc(11px*var(--u));
+  min-height:calc(56px*var(--u))}
+.midx-row:hover{background:var(--bg3);border-color:var(--line2)}
+.midx-ico,.midx-ico.mdl,.midx-ico.ck,.midx-ico.disp,.midx-ico.run,.midx-ico.vault,.midx-ico.sync{
+  background:var(--ac-bg);color:var(--ac)}
+.mindex-note{font-size:max(11.5px,calc(11px*var(--u)));color:var(--tx3)}
+
+@media(prefers-reduced-motion:reduce){
+  .detail,.shade{animation:none}
+}
+
+body.form-panel .row .r2 .rt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+body.form-panel .row .r2 .end{margin-left:auto}
+.expiry-section-label .sec-more{float:none}
+.expiry-section-label{display:flex;align-items:center;justify-content:space-between;gap:8px}
+/* 暖白主题:Codex 官方标是纯白 fill,浅底上必须反相;置灰态仍要保留去色语义 */
+body.light .ico.logo img[src*="chatgpt"]{filter:invert(1)}
+body.light .ico.logo.off img[src*="chatgpt"]{filter:invert(1) grayscale(1);opacity:.5}
+/* 暖白主题:胶囊与设置卡里仍是写死的深色表面,统一换成令牌 */
+body.light.form-pill{background:#f6f7f3f7}
+body.light .ccbody{background:var(--bg2)}
+body.light .ccbtns input[type=password],body.light .claim-grid input,body.light .kref{background:var(--bg);color:var(--tx)}
+body.form-panel .row .rhead:focus-visible{outline-offset:-2px;border-radius:calc(9px*var(--u))}
+/* 主题分段控件(设置 → 显示) */
+.seg{display:flex;gap:calc(3px*var(--u));padding:calc(3px*var(--u));flex:none;
+  background:var(--bg);border:1px solid var(--line2);border-radius:calc(8px*var(--u))}
+.seg button{min-height:calc(26px*var(--u));padding:0 calc(10px*var(--u));border:0;border-radius:calc(5px*var(--u));
+  background:transparent;color:var(--tx2);font:inherit;font-size:max(12px,calc(12px*var(--u)));
+  cursor:pointer;white-space:nowrap}
+.seg button:hover{background:var(--bg3);color:var(--tx)}
+.seg button[aria-pressed="true"]{background:var(--ac);color:var(--btn-text);font-weight:600}
+.seg button[aria-pressed="true"]:hover{background:var(--ac);color:var(--btn-text)}
+/* 主按钮 / 选中芯片:鼠尾草绿是选中与主操作色,不再用旧蓝 */
+.btn.p{background:var(--ac);border-color:var(--ac);color:var(--btn-text);font-weight:600}
+.btn.p:hover{background:color-mix(in srgb,var(--ac) 88%,var(--tx));border-color:transparent;color:var(--btn-text)}
+.uchip{border-color:color-mix(in srgb,var(--ac) 45%,transparent);background:var(--ac-bg);color:var(--ac)}
+.uchip:hover{background:color-mix(in srgb,var(--ac) 20%,transparent);color:var(--tx)}
+.pick.on{background:var(--ac-bg);border-color:color-mix(in srgb,var(--ac) 45%,transparent);color:var(--ac)}
+.tabs button.on{background:var(--ac-bg);border-color:color-mix(in srgb,var(--ac) 45%,transparent);color:var(--ac)}
+@keyframes rowflash{0%,55%{background:var(--ac-bg)}100%{background:transparent}}
+.sw::after{background:var(--tx3)}
+.sw.on{background:color-mix(in srgb,var(--ac) 32%,transparent)}
+.sw.on::after{background:var(--bg);left:calc(17px*var(--u))}
+.btn:hover{border-color:var(--tx3);color:var(--tx)}
+.hk-rec:hover{border-color:var(--line2);color:var(--tx)}
+/* 单行窗:卡片内边距略收紧,保证 4 个渠道在一屏内完整可见 */
+body.layout-single .row .rhead{padding:calc(12px*var(--u))}
+body.layout-single .row .r2{margin-top:calc(10px*var(--u));padding-top:calc(8px*var(--u))}

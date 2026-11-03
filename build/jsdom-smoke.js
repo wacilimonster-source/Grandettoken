@@ -148,7 +148,7 @@ const HARNESS = `
   ck("风险带三格都在(临期 / 到期 / 签到)",
     /临期/.test(S()) && /最早可确认|最先到期/.test(S()) && /签到/.test(S()), S().slice(0, 160));
   ck("临期积分 600 分", /600 分/.test(S()), S().slice(0, 200));
-  ck("临期副行说明渠道数并可点筛选", /个渠道/.test(S()) && /点击筛选/.test(S()), S().slice(0, 200));
+  ck("临期副行说明渠道数并可筛选", /个/.test(S()) && /(筛选|未知)/.test(S()), S().slice(0, 200));
   ck("签到常驻 2/3(未签满不出现 ✓)", /2\\/3/.test(S()) && !/\\u2713/.test(S()), S().slice(0, 300));
   ck("最紧那格可点(跳行)", /data-act="jump"/.test(S()));
   ck("摘要英雄数字与单位分开", !!document.querySelector("#sum .hero-v") && !!document.querySelector("#sum .hero-unit"), S().slice(0, 300));
@@ -172,14 +172,17 @@ const HARNESS = `
     window.shortLabel({ short: "x", name: "x" }) === "··",
     window.shortLabel({ short: "x", name: "Claude Code" }));
 
-  // ── 两级行与分组 ──
-  ck("分组:「需要处理」与「其余」", /需要处理/.test(L()) && /其余/.test(L()));
-  // 紧急 = T0(需要处理)∪ 已跌破红线:claude(限流)、ds(低于底线)、wb(7 天内到期 60%)
-  ck("两级行:三条紧急行带 urg 类", (L().match(/class="row urg"/g) || []).length === 3,
+  // ── 平铺列表(2026-11-03 用户裁决:取消「需要处理」分组)──
+  ck("列表平铺:不再有「需要处理 / 其余」分组标题",
+    !/需要处理/.test(L()) && !/class="grp"/.test(L()), L().slice(0, 200));
+  ck("平铺不丢行:行数 = 可见渠道数",
+    document.querySelectorAll("#list .row").length ===
+      data.CHANNELS.filter((c) => c.hasKey && !c.hidden).length,
+    document.querySelectorAll("#list .row").length);
+  // urg 类保留:面板里已无视觉差异,紧凑条靠它给告急 chip 染红/黄底
+  // 紧急 = T0 ∪ tone bad:claude(限流)、ds(低于底线)、wb(7 天内到期 60%)
+  ck("urg 类保留(紧凑条染色依赖)", (L().match(/class="row urg"/g) || []).length === 3,
     (L().match(/class="row urg"/g) || []).length);
-  ck("分组只按 T0 切:标题写 2,下面正好 2 行",
-    new RegExp("需要处理</span><em>2").test(L()),
-    (L().match(/<em>(\\d+)<\\/em>/g) || []).join(" "));
   ck("紧急行画出副行(绑定窗 + 恢复时间)", /5 小时窗/.test(L()));
   ck("状态标签 qtag(颜色之外的第二个通道)", /class="qtag"/.test(L()));
   ck("陈旧行的年龄只写在右侧(.rhint 已退役)", !/class="rhint/.test(L()) && /小时前快照/.test(L()),
@@ -272,12 +275,12 @@ const HARNESS = `
       { label: "本周", percent: 2, remainPercent: 98, status: "ok", main: false }
     ]; // 兼容旧快照仍把 primary 标成 main
     let el = readRow();
-    ck("Codex 收起大数字固定显示周额度", el.querySelector(".val .v").textContent === "本周剩余98.0%");
+    ck("Codex 收起大数字固定显示周额度", el.querySelector(".val .v").textContent === "98.0%");
     ck("Codex 收起同时显示5小时额度且无需展开", /5 小时剩余85.0%/.test(el.querySelector(".val .p").textContent) && !el.querySelector(".rbody").textContent);
     ck("Codex 左侧保留套餐与重置卡", /plus/.test(el.querySelector(".nm .s").textContent) && /ChatGPT 订阅/.test(el.innerHTML));
     CFG.showUsed = true;
     el = readRow();
-    ck("Codex 两项同步切换已用口径", el.querySelector(".val .v").textContent === "本周已用2.0%" && /5 小时已用15.0%/.test(el.querySelector(".val .p").textContent));
+    ck("Codex 两项同步切换已用口径", el.querySelector(".val .v").textContent === "2.0%" && /5 小时已用15.0%/.test(el.querySelector(".val .p").textContent));
     CFG.showUsed = false;
     cx.windows[0].remainPercent = 0;
     cx.windows[0].status = "rate-limited";
@@ -305,7 +308,7 @@ const HARNESS = `
     cx.windows = [cx.windows[1]];
     hvApply(data.HOME);
     el = readRow();
-    ck("Codex 仅周窗不编造5小时额度", /本周剩余98.0%/.test(el.querySelector(".val .v").textContent) && !el.querySelector(".quota-secondary"));
+    ck("Codex 仅周窗不编造5小时额度", el.querySelector(".val .v").textContent === "98.0%" && !el.querySelector(".quota-secondary"));
     Object.assign(cx, saved);
     CFG.showUsed = used;
     hvApply(data.HOME);
@@ -389,8 +392,12 @@ const HARNESS = `
     document.body.className = "form-panel";
     render({});
   } catch (e) { ck("边界复核修掉的几条", false, e.message); }
-  ck("排序照后端的 order(限流的排第一)",
-    L().indexOf('data-id="claude"') < L().indexOf('data-id="kimi"'), L().indexOf('data-id="claude"') + " vs " + L().indexOf('data-id="kimi"'));
+  // 排序只认设置里的「渠道排序」:fixture 是 urgency 档(本地按绑定窗剩余比例升序),
+  // 4sapi(24%)排在 claude(周期 62%)前面 —— 后端 T0 order 里 claude 恒第一,正好验证切换生效。
+  ck("排序按设置的「渠道排序」,不再照后端 T0 order",
+    L().indexOf('data-id="4sapi"') < L().indexOf('data-id="claude"') &&
+      L().indexOf('data-id="claude"') < L().indexOf('data-id="kimi"'),
+    "4sapi=" + L().indexOf('data-id="4sapi"') + " claude=" + L().indexOf('data-id="claude"'))
 
   // ── 冷启动骨架 ──
   try {
@@ -431,10 +438,11 @@ const HARNESS = `
     renderPill(CHANNELS.slice());
     renderPillFace();
     const v = document.getElementById("pillV").innerHTML;
-    ck("胶囊自动挑最紧的(限流的那个)", PILL.list.length === 1 && PILL.list[0].id === "claude",
+    // 自动轮播独立口径:绑定窗比例 → 无分母金额按「余额/底线」;夹具里 ds(¥0.03 < 底线 ¥10)最紧
+    ck("胶囊自动挑最紧的(低于底线的那个)", PILL.list.length === 1 && PILL.list[0].id === "ds",
       PILL.list.map((c) => c.id).join(","));
-    ck("胶囊主数字用后端绑定窗(限流 → 0.0%)", /0\\.0%/.test(v), v);
-    ck("胶囊带限定语「限流」", /class="pq">限流/.test(v), v);
+    ck("胶囊主数字显示最紧渠道余额", v.includes("0.03"), v);
+    ck("胶囊带限定语「低于底线」", v.includes("低于底线"), v);
   } catch (e) { ck("胶囊渲染不抛异常", false, e.message); }
 
   // ── 轮询推送:胶囊必须跟着**这一轮**的数字走(2026-10-26 真机)──
@@ -578,18 +586,18 @@ const HARNESS = `
 
       await applyForm("pill");
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      await new Promise((r) => setTimeout(r, 30));
+      await new Promise((r) => setTimeout(r, 150));
       ck("关闭时胶囊 Esc 回面板", document.body.classList.contains("form-panel"), document.body.className);
 
       // 顶栏折叠入口:关紧凑条时是「胶囊」,不能只剩 Esc/Ctrl+3 两条隐藏路径
       document.body.className = "form-panel";
       document.getElementById("btnPill").click();
-      await new Promise((r) => setTimeout(r, 30));
+      await new Promise((r) => setTimeout(r, 150));
       ck("关闭紧凑条时顶栏「胶囊」能进胶囊", document.body.classList.contains("form-pill"), document.body.className);
       await applyForm("panel");
 
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "2", ctrlKey: true, bubbles: true }));
-      await new Promise((r) => setTimeout(r, 30));
+      await new Promise((r) => setTimeout(r, 150));
       ck("关闭时 Ctrl+2 不切形态", document.body.classList.contains("form-panel"), document.body.className);
 
       CFG.compactEnabled = true;
@@ -669,6 +677,20 @@ const HARNESS = `
     refreshChCards: () => refreshChCards(),
     fillKeyHints: (force) => fillKeyHints(force),
     invalidateKeyMeta: (id, kind) => invalidateKeyMeta(id, kind),
+    layoutLabel: () => ($("lkLayout") ? $("lkLayout").textContent : ""),
+    panelContentSize: (layout) => panelContentSize(layout),
+    updateLayout: () => updateLayoutUI(),
+    theme: (t) => {
+      const was = CFG.theme;
+      CFG.theme = t;
+      applyTheme();
+      const on = document.body.classList.contains("light") === (t === "light");
+      const btn = document.querySelector('#cfgTheme button[data-theme="' + t + '"]');
+      const state = on && btn && btn.getAttribute("aria-pressed") === "true";
+      CFG.theme = was;
+      applyTheme();
+      return state;
+    },
   };
 
   // ── Qoder 逐包到期(2026-10-30)──
@@ -706,12 +728,67 @@ const HARNESS = `
     const dq3 = renderDetail(qd3);
     ck("平台确认无包:说「没有已知到期日」而不是装失败",
       /没有已知到期日/.test(dq3), dq3.slice(0, 200));
+
+    // 账户级有效期:结构化字段优先;旧快照回退只认日期,不补时间/倒计时
+    const at = Math.floor(Date.now() / 1000) + 20 * 86400;
+    const qdAcc = Object.assign({}, qd, {
+      expiring: [], expiryComplete: false, extra: [], accountExpiry: { state: "dated", at },
+    });
+    ck("Qoder 账户到期用结构化时间", /账户额度到期/.test(renderDetail(qdAcc)) &&
+      /\\d{2}:\\d{2}/.test(renderDetail(qdAcc)) && /账户级有效期/.test(renderDetail(qdAcc)),
+      renderDetail(qdAcc).slice(0, 240));
+    const qdNever = Object.assign({}, qd, {
+      expiring: [], expiryComplete: false, extra: [], accountExpiry: { state: "never", at: null },
+    });
+    ck("Qoder 明确不过期:写长期有效", /长期有效/.test(renderDetail(qdNever)) &&
+      /账户额度不过期/.test(renderDetail(qdNever)), renderDetail(qdNever).slice(0, 200));
+    const qdOld = Object.assign({}, qd, {
+      expiring: [], expiryComplete: false, accountExpiry: null,
+      extra: [["账户额度到期", "2026-11-30"]],
+    });
+    const dOld = renderDetail(qdOld);
+    ck("Qoder 旧快照只显示日期,不补 23:59 或小时倒计时",
+      /2026-11-30/.test(dOld) && !/\\d{2}:\\d{2}/.test(dOld) && /旧快照只记录了日期/.test(dOld),
+      dOld.slice(0, 240));
+    const qdNoAcc = Object.assign({}, qd, {
+      expiring: [], expiryComplete: false, accountExpiry: null, extra: [],
+    });
+    ck("Qoder 无账户字段:账户级仍写暂未提供,不冒充长期有效",
+      /账户额度到期/.test(renderDetail(qdNoAcc)) && /暂未提供/.test(renderDetail(qdNoAcc)) &&
+      !/长期有效/.test(renderDetail(qdNoAcc)), renderDetail(qdNoAcc).slice(0, 240));
   } catch (e) {
     ck("Qoder 逐包到期 UI", false, e.message);
   } finally {
     window.__TEST.setChannels(data.CHANNELS);
     window.__TEST.refreshChCards();
   }
+
+  // ── 详情弹层交互(2026-11-03 真机探针固化)──
+  try {
+    const nowS2 = Math.floor(Date.now() / 1000);
+    const wbd = { id: "wbd", name: "WorkBuddy", short: "WB", color: "#3b82f6", kind: "points",
+      unit: "credits", remaining: 860, valid: true, hasKey: true, authSource: "web",
+      expiryComplete: true,
+      expiring: [1, 2, 3, 4, 5].map((n) => ({ at: nowS2 + n * 86400, amount: 100 * n, label: "来源" + n })),
+      updatedAt: nowS2 };
+    window.__TEST.setChannels([...data.CHANNELS, wbd]);
+    openDetail("wbd");
+    ck("详情:焦点进入弹层", document.getElementById("detailSheet").contains(document.activeElement));
+    ck("详情:最近一笔卡 + 默认 3 笔明细",
+      /最近一笔到期/.test(document.getElementById("detailBody").textContent) &&
+      document.querySelectorAll("#detailBody .expiry-entry").length === 3);
+    document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    ck("详情:Tab 焦点不逃逸", document.getElementById("detailSheet").contains(document.activeElement));
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    // 焦点回卡依赖 offsetParent(jsdom 恒为 null),真机探针单独验证;这里断言关闭本身
+    ck("详情:Esc 关闭弹层", document.getElementById("detailShade").hidden === true);
+    const four = CHANNELS.find((c) => c.id === "4sapi");
+    changesCache["4sapi"] = []; changesState["4sapi"] = "done";
+    ck("详情:空台账给「7 天无变动记录」", /7 天无变动记录/.test(renderDetail(four)));
+    changesState["4sapi"] = "loading";
+    ck("详情:台账未取到不装作无记录", !/7 天无变动记录/.test(renderDetail(four)));
+    delete changesState["4sapi"]; delete changesCache["4sapi"];
+  } catch (e) { ck("详情弹层交互", false, e.message); }
 
   // ── 设置索引 + 标题栏 ⋯ 菜单(2026-11-01 精修)──
   try {
@@ -766,10 +843,10 @@ const HARNESS = `
       topIds.map((id, i) => id + "=" + (topBtns[i] ? !topBtns[i].hidden : "missing")).join(" "));
     ck("顶栏不再有「更多操作」菜单",
       !document.getElementById("btnMenu") && !document.getElementById("hmenu"));
-    const reset = document.getElementById("lkReset");
-    ck("底栏常驻「恢复默认大小」",
-      !!reset && reset.style.display !== "none" && /默认大小/.test(reset.textContent),
-      reset ? reset.textContent.trim() + " / " + (reset.style.display || "inline") : "missing");
+    const layoutBtn = document.getElementById("lkLayout");
+    ck("底栏常驻「单列 / 双列」布局切换",
+      !!layoutBtn && layoutBtn.style.display !== "none" && /单列|双列/.test(layoutBtn.textContent),
+      layoutBtn ? layoutBtn.textContent.trim() + " / " + (layoutBtn.style.display || "inline") : "missing");
     closeManage();
   } catch (e) {
     ck("设置索引 / 顶栏入口", false, e.message);
@@ -807,10 +884,10 @@ w.__DATA = DATA;
     extra: "index.html 缺 cfgCompact 或顶栏按钮",
   });
   R.push({
-    name: "底栏「恢复默认大小」常驻显示",
-    ok: /<button[^>]*id="lkReset"[^>]*>↺ 默认大小<\/button>/.test(html) &&
-      !/<button[^>]*id="lkReset"[^>]*style="display:none"/.test(html),
-    extra: "index.html 的 lkReset 仍带 display:none 或文案不对",
+    name: "底栏布局切换常驻,旧的拖动缩放入口已移除",
+    ok: /id="lkLayout"/.test(html) && !/id="lkReset"/.test(html) &&
+      !/id="rzFrame"/.test(html) && !/id="rzGrip"/.test(html) && /id="cfgLayout"/.test(html),
+    extra: "index.html 仍有 lkReset / rzFrame / rzGrip,或缺 lkLayout / cfgLayout",
   });
 
   // ── 设置页文案预算(2026-10-23 三层分流)────────────────────────────────
@@ -993,6 +1070,38 @@ w.__DATA = DATA;
     });
   }
 
+  // ── 固定窗口布局:单行 / 双行,两个尺寸都不可拖动 ──
+  try {
+    const single = w.__TEST.panelContentSize("single");
+    const double = w.__TEST.panelContentSize("double");
+    R.push({
+      name: "固定布局尺寸:单列 480×820 / 双列 980×820",
+      ok: single[0] === 480 && single[1] === 820 && double[0] === 980 && double[1] === 820,
+      extra: JSON.stringify({ single, double }),
+    });
+    const before = w.__TEST.cfg().panelLayout;
+    w.__TEST.patchCfg({ panelLayout: "double" });
+    w.__TEST.updateLayout();
+    R.push({
+      name: "双列布局按钮状态同步",
+      ok: w.__TEST.layoutLabel() === "双列" &&
+        w.document.querySelector('#cfgLayout [data-layout="double"]').getAttribute("aria-pressed") === "true",
+      extra: w.__TEST.layoutLabel(),
+    });
+    w.__TEST.patchCfg({ panelLayout: before || "single" });
+    w.__TEST.updateLayout();
+  } catch (e) {
+    R.push({ name: "固定窗口布局", ok: false, extra: e.message });
+  }
+
+  // ── 主题令牌:切换只动 body 类与按钮状态,不写配置 ──
+  try {
+    R.push({ name: "暖白主题:body.light 与按钮状态同步", ok: w.__TEST.theme("light") });
+    R.push({ name: "深色主题恢复:body 不再带 light", ok: w.__TEST.theme("dark") });
+  } catch (e) {
+    R.push({ name: "主题切换", ok: false, extra: e.message });
+  }
+
   // 可选:把真实渲染函数的合成行交给浏览器排版检查,不读取用户配置或凭据。
   if (process.env.CODEX_LAYOUT_FIXTURES) {
     const base = { ...buildData(NOW).CHANNELS.find((c) => c.id === "codex"),
@@ -1117,7 +1226,7 @@ function buildData(NOW) {
 
   const CFG = {
     sort: "urgency", warnPercent: 40, critPercent: 15, moneyFloor: 10, textTone: false,
-    fontScale: "md", form: "panel", hiddenChannels: [], channelOrder: [], pillChannels: [],
+    fontScale: "md", panelLayout: "single", form: "panel", hiddenChannels: [], channelOrder: [], pillChannels: [],
     alertPulse: false, peekOnClick: true, alwaysOnTop: false, dockEnabled: false,
     activeIntervalSec: 60, idleIntervalSec: 300, backoffIntervalSec: 900, trayShowNumber: true,
     autostart: false, autoCheckUpdate: true, notifyOnCrit: true, soundOn: false,

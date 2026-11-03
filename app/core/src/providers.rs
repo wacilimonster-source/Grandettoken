@@ -33,6 +33,28 @@ pub struct Expiring {
     pub label: String,
 }
 
+/// 账户级有效期的三态。**不能把「未知」并进「不过期」**:Qoder 只有账户
+/// 到期时间,逐笔积分有效期是另一回事(见 design-pc-polish-v2 §9.3)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AccountExpiryState {
+    /// 有可靠的到期时刻
+    Dated,
+    /// 上游明确表示不过期(哨兵日期)
+    Never,
+    /// 字段存在但无法解释
+    Unknown,
+}
+
+/// 账户额度有效期。与 `Expiring` 分开:它描述的是**账户**,不是每一笔积分。
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountExpiry {
+    pub state: AccountExpiryState,
+    /// `Dated` 时为归一化 Unix 秒,其余状态为 null
+    pub at: Option<i64>,
+}
+
 /// OpenCode Go 的三个限流窗口。任一触顶都会限流,所以三个都要显示。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,6 +95,9 @@ pub struct FetchResult {
     /// 是否已拿到完整的逐笔到期信息。false 表示空列表不能解释为“没有积分到期”。
     #[serde(skip)]
     pub expiry_complete: bool,
+    /// 账户额度有效期(Qoder)。与逐笔 `expiring` 严格分开。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_expiry: Option<AccountExpiry>,
     /// 界面展开区里展示的键值对,顺序敏感故用 Vec
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extra: Vec<(String, String)>,
@@ -871,18 +896,56 @@ pub fn extract_qoder(body: &Value) -> FetchResult {
     }
     // 到期:本机是 253402214400000(= 9999-12-31,即"不过期")。
     // 直接印这个天文数字对用户没有意义,折算成人话。
-    if let Some(ms) = body.get("expiresAt").and_then(num) {
-        let at = ts_norm(ms);
-        // 9999-12-31 之后一律当"不过期"(上游用这个值表示"没有到期日")
-        if at >= 253_402_214_400 {
-            extra.push(("账户额度到期".into(), "不过期".into()));
-        } else if let Some(d) = chrono::DateTime::from_timestamp(at, 0) {
-            extra.push((
-                "账户额度到期".into(),
-                d.with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
-                    .format("%Y-%m-%d")
-                    .to_string(),
-            ));
+    //
+    // 结构化 `account_expiry` 给界面精确到分钟;`extra` 继续保留日期文案,
+    // 老快照 / 同步消费者读到的内容不变(design-pc-polish-v2 §9.3)。
+    let mut account_expiry = None;
+    if let Some(v) = body.get("expiresAt") {
+        let parsed = match v {
+            Value::Number(_) => num(v).map(|ms| account_expiry_at(ts_norm(ms))),
+            Value::String(s) => {
+                let t = s.trim();
+                if t.is_empty() {
+                    Some(AccountExpiry {
+                        state: AccountExpiryState::Unknown,
+                        at: None,
+                    })
+                } else {
+                    chrono::DateTime::parse_from_rfc3339(t)
+                        .ok()
+                        .map(|d| account_expiry_at(d.timestamp()))
+                        .or(Some(AccountExpiry {
+                            state: AccountExpiryState::Unknown,
+                            at: None,
+                        }))
+                }
+            }
+            Value::Null => None,
+            _ => Some(AccountExpiry {
+                state: AccountExpiryState::Unknown,
+                at: None,
+            }),
+        };
+        if let Some(acc) = parsed {
+            match acc.state {
+                AccountExpiryState::Never => {
+                    extra.push(("账户额度到期".into(), "不过期".into()))
+                }
+                AccountExpiryState::Dated => {
+                    if let Some(at) = acc.at {
+                        if let Some(d) = chrono::DateTime::from_timestamp(at, 0) {
+                            extra.push((
+                                "账户额度到期".into(),
+                                d.with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+                                    .format("%Y-%m-%d")
+                                    .to_string(),
+                            ));
+                        }
+                    }
+                }
+                AccountExpiryState::Unknown => {}
+            }
+            account_expiry = Some(acc);
         }
     }
     if body.get("isQuotaExceeded").and_then(|v| v.as_bool()) == Some(true) {
@@ -900,8 +963,29 @@ pub fn extract_qoder(body: &Value) -> FetchResult {
         total: None,
         unit: "credits".into(),
         expiry_complete: false,
+        account_expiry,
         extra,
         ..Default::default()
+    }
+}
+
+/// 账户级到期归一化:9999-12-31 之后一律当「不过期」,0/负数当未知。
+fn account_expiry_at(at: i64) -> AccountExpiry {
+    if at >= 253_402_214_400 {
+        AccountExpiry {
+            state: AccountExpiryState::Never,
+            at: None,
+        }
+    } else if at > 0 {
+        AccountExpiry {
+            state: AccountExpiryState::Dated,
+            at: Some(at),
+        }
+    } else {
+        AccountExpiry {
+            state: AccountExpiryState::Unknown,
+            at: None,
+        }
     }
 }
 
@@ -1805,6 +1889,49 @@ mod tests {
         // 套餐与账户级到期都要如实透出;9999 年那个天文数字要折成"不过期"
         assert!(r.extra.iter().any(|(k, v)| k == "套餐" && v == "personal_standard"));
         assert!(r.extra.iter().any(|(k, v)| k == "账户额度到期" && v == "不过期"));
+        // 结构化字段:哨兵日期 = 不过期,at 必须是 null(不能把 9999 年当倒计时)
+        let acc = r.account_expiry.expect("account expiry");
+        assert_eq!(acc.state, AccountExpiryState::Never);
+        assert_eq!(acc.at, None);
+    }
+
+    /// 账户有效期:日期可精确到分钟;RFC3339 字符串也认;非法值归未知,不猜。
+    #[test]
+    fn qoder_account_expiry_states_are_structured() {
+        let r = extract_qoder(&json!({
+            "userQuota": { "remaining": 10.0 },
+            "expiresAt": 1793951075000_i64
+        }));
+        let acc = r.account_expiry.expect("dated");
+        assert_eq!(acc.state, AccountExpiryState::Dated);
+        assert_eq!(acc.at, Some(1_793_951_075));
+
+        let want = chrono::DateTime::parse_from_rfc3339("2026-11-30T23:59:00+08:00")
+            .unwrap()
+            .timestamp();
+        let r = extract_qoder(&json!({
+            "userQuota": { "remaining": 10.0 },
+            "expiresAt": "2026-11-30T23:59:00+08:00"
+        }));
+        assert_eq!(r.account_expiry.unwrap().at, Some(want));
+
+        let r = extract_qoder(&json!({
+            "userQuota": { "remaining": 10.0 },
+            "expiresAt": "not a date"
+        }));
+        assert_eq!(r.account_expiry.unwrap().state, AccountExpiryState::Unknown);
+
+        let r = extract_qoder(&json!({ "userQuota": { "remaining": 10.0 } }));
+        assert!(r.account_expiry.is_none(), "缺失字段保持 None,不编造未知/不过期");
+
+        // 前端契约:字段名 accountExpiry,state 小写,at 为 Unix 秒
+        let r = extract_qoder(&json!({
+            "userQuota": { "remaining": 10.0 },
+            "expiresAt": 1793951075000_i64
+        }));
+        let j = serde_json::to_value(&r).unwrap();
+        assert_eq!(j["accountExpiry"]["state"], "dated");
+        assert_eq!(j["accountExpiry"]["at"], 1_793_951_075);
     }
 
     /// 两个块都有量时要**相加**(套餐额度 + 加量包),不是取其中一个。

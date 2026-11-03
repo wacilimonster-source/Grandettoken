@@ -42,6 +42,19 @@ function applyFontScale() {
   document.documentElement.style.setProperty("--u", String(fsU()));
 }
 
+/** 主题:深石墨(默认)/ 暖雾白。变量与组件样式在 styles.css 末尾的 V2 段。 */
+function applyTheme() {
+  const light = !!(CFG && CFG.theme === "light");
+  document.body.classList.toggle("light", light);
+  const grp = $("cfgTheme");
+  if (grp) {
+    grp.querySelectorAll("button[data-theme]").forEach((b) => {
+      const on = (b.dataset.theme === "light") === light;
+      b.setAttribute("aria-pressed", String(on));
+    });
+  }
+}
+
 /** 紧凑条开关:body 类记录开关状态(供测试与后续样式使用),并同步设置页开关。
     顶栏固定四枚按钮,不再随这个开关换「紧凑/胶囊」(2026-11-03)。 */
 function applyCompactUI() {
@@ -87,6 +100,39 @@ function expClass(days, warnDays = 30, critDays = 7) {
   if (days <= critDays) return "b";
   if (days <= warnDays) return "w";
   return "";
+}
+
+/** 到期相对时间。今天/明天按**本地自然日**判断,不用"不足 24 小时"顶替今天;
+ *  跨过到期时刻一律写「已到期,待刷新」,不出现负数倒计时。 */
+function expiryRelative(ts) {
+  if (!Number.isFinite(ts) || ts <= 0) return "时间未知";
+  const diff = ts * 1000 - Date.now();
+  if (diff <= 0) return "已到期,待刷新";
+  const mins = Math.floor(diff / 60000);
+  if (mins < 60) return `${Math.max(1, mins)} 分钟后到期`;
+  const d = new Date(ts * 1000);
+  const now = new Date();
+  const day0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const target = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const days = Math.round((target - day0) / 86400000);
+  if (days === 0) return "今天到期";
+  if (days === 1) return "明天到期";
+  return `${days} 天后到期`;
+}
+
+/** 可被 60 秒 ticker 原地更新的相对时间(不重建整页)。 */
+function expiryRelativeSpan(ts) {
+  return `<span data-exp-at="${Number(ts)}">${expiryRelative(Number(ts))}</span>`;
+}
+
+/** 到期日期/时间拆分(绝对日期 + 本地时钟)。 */
+function expiryParts(ts) {
+  const d = new Date(ts * 1000);
+  const p = (n) => String(n).padStart(2, "0");
+  return {
+    date: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`,
+    time: `${p(d.getHours())}:${p(d.getMinutes())}`,
+  };
 }
 
 function relTime(ts) {
@@ -204,6 +250,19 @@ function tickPeakCountdowns() {
     el.textContent =
       mode === "off" ? "" : "·" + (mode === "short" ? fmtResetTightShort(ms, nowMs) : fmtResetTight(ms, nowMs));
   });
+  // 到期相对时间:每分钟原地更新,跨过到期时刻立刻变成「已到期,待刷新」
+  let expCrossed = false;
+  document.querySelectorAll("[data-exp-at]").forEach((el) => {
+    const at = Number(el.dataset.expAt);
+    if (!Number.isFinite(at)) return;
+    const before = el.textContent;
+    const after = expiryRelative(at);
+    if (before && before !== after && before !== "已到期,待刷新" && after === "已到期,待刷新") {
+      expCrossed = true;
+    }
+    el.textContent = after;
+  });
+  if (expCrossed) render({});
   updateHeaderLive();
 }
 
@@ -307,12 +366,6 @@ function fmtResetTightShort(ms, nowMs) {
  * 挂 `data-reset-tight` 给每分钟的对齐 ticker 更新;`data-tight-mode` 由
  * [`fitCodexResetLabels`] 在放不下时降级(full → short → off)。
  */
-function codexResetInline(w) {
-  const ms = resetMs(w);
-  if (ms === null) return "";
-  return `<span data-reset-tight="${ms}" data-tight-mode="full">·${esc(fmtResetTight(ms))}</span>`;
-}
-
 /**
  * 面板被拉窄时,先缩短**倒计时**,别让它把左侧副标题(套餐 · 重置卡)挤成省略号。
  *
@@ -414,9 +467,19 @@ function expiringEntriesWithin(c, days) {
   const now = Date.now() / 1000;
   const limit = now + days * 86400;
   return (c && c.expiring ? c.expiring : []).filter(
-    (e) => e && Number(e.amount) > 0 && e.at >= now && e.at <= limit
+    (e) =>
+      e &&
+      Number.isFinite(Number(e.at)) &&
+      Number.isFinite(Number(e.amount)) &&
+      Number(e.amount) > 0 &&
+      e.at >= now &&
+      e.at <= limit
   );
 }
+
+/** 顶部摘要的临期窗口(天)。只影响首页摘要 / 临期筛选;
+ *  详情仍列全部记录,风控 / 通知 / 30 日历史查询不跟着改窗口。 */
+const SUMMARY_EXPIRY_DAYS = 7;
 
 /** 顶部摘要只统计当前可见、取数有效的积分渠道；逐笔明细未知的渠道单独计数。 */
 function expirySummary() {
@@ -427,7 +490,7 @@ function expirySummary() {
     (c) => c.expiryComplete !== true && Number(c.remaining || 0) > 0
   );
   const entries = channels.flatMap((c) =>
-    expiringEntriesWithin(c, 30).map((entry) => ({ channel: c, entry }))
+    expiringEntriesWithin(c, SUMMARY_EXPIRY_DAYS).map((entry) => ({ channel: c, entry }))
   );
   entries.sort((a, b) => a.entry.at - b.entry.at);
   const total = entries.reduce((sum, x) => sum + Number(x.entry.amount), 0);
@@ -444,11 +507,11 @@ let EXPIRY_FILTER = false;
 function hasConfirmedExpiry(c) {
   return (
     c && c.hasKey && !c.hidden && c.valid && c.kind === "points" &&
-    expiringWithin(c, 30) > 0
+    expiringWithin(c, SUMMARY_EXPIRY_DAYS) > 0
   );
 }
 function nearestExpiryAt(c) {
-  return expiringEntriesWithin(c, 30).reduce(
+  return expiringEntriesWithin(c, SUMMARY_EXPIRY_DAYS).reduce(
     (at, e) => (at === null || e.at < at ? e.at : at),
     null
   );
@@ -481,7 +544,7 @@ const TONE_COLOR = { ok: "var(--ok)", warn: "var(--warn)", bad: "var(--bad)", of
 const toneFg = (t) => (t === "ok" ? "var(--tx)" : TONE_COLOR[t] || "var(--tx)");
 const toneFgSoft = (t) => (t === "ok" ? "var(--tx2)" : TONE_COLOR[t] || "var(--tx2)");
 // 与 styles.css 的高对比色板保持一致(进度条/托盘角标是内联色,吃不到 CSS 变量)
-const TONE_HEX = { ok: "#4fd6a0", warn: "#f3c666", bad: "#ff7b72", off: "#3a4356" };
+const TONE_HEX = { ok: "#8bc9a2", warn: "#edc185", bad: "#ef9d94", off: "#3a4356" };
 
 /** 单个配额的数字只按自己的余量着色;行状态仍可由另一窗口触发限流。 */
 function quotaTone(c, w) {
@@ -604,35 +667,12 @@ function hvApply(v) {
 }
 const hvRow = (id) => HV.byId[id] || null;
 
-/** 渠道过滤(P3):渠道一多就只能靠滚,十二个以上才把输入框放出来,平时不占地方。 */
-let CH_Q = "";
-function chFilter(c) {
-  if (!CH_Q) return true;
-  const q = CH_Q.toLowerCase();
-  return (
-    (c.name || "").toLowerCase().includes(q) ||
-    (c.short || "").toLowerCase().includes(q) ||
-    (c.id || "").toLowerCase().includes(q)
-  );
-}
 const HV_TONE = { ok: "ok", warn: "warn", bad: "bad", off: "off" };
 
 /** 色调:后端给了就照它画 —— 面板 / 紧凑条 / 胶囊 / 托盘同一个结论。 */
 function hvTone(c) {
   const r = hvRow(c.id);
   return r ? HV_TONE[r.tone] || toneOf(c) : toneOf(c);
-}
-
-/** 排序:后端排好的顺序优先(五桶紧迫度 / 自定义 / 余额 / 消耗)。
- *  没拿到视图时退回 `sortChannels`,行为与以前一致。 */
-function hvSort(list) {
-  if (!HV.order.length) return sortChannels(list);
-  const rank = new Map(HV.order.map((id, i) => [id, i]));
-  return [...list].sort(
-    (a, b) =>
-      (rank.get(a.id) ?? 9999) - (rank.get(b.id) ?? 9999) ||
-      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
-  );
 }
 
 // ───────────── 渲染 ─────────────
@@ -713,9 +753,6 @@ function renderRow(c, i) {
   // 申请制额度(4SAPI):分母是本轮额度,副标题给周期状态
   const claim = c.claim || null;
 
-  // 积分型:副标题说清"近期会过期多少",这是这个渠道最该被看见的信息
-  const soon = c.expiringSoon || null;
-
   // 第二行给状态语义,大数字下方给数值口径,两处不重复。
   // 2026-10-23(设计 docs/design/design-row-detail-2026-10-23.html §5):失败 / 需登录 / 陈旧
   // 这三种"旧快照"行,同一句话只说一次 —— 状态标签说"坏了",副标题只说原因,
@@ -756,16 +793,17 @@ function renderRow(c, i) {
     // 记到账的渠道(WorkBuddy AI):这一行给"今天有没有活跃获取" —— 那是它最该被看见的
     // 信息,比"近期会过期多少"更天天变。到期信息仍在右侧 `.p` 与展开区里。
     const gl = grantLine(c);
+    const soon7 = expiringWithin(c, SUMMARY_EXPIRY_DAYS);
     sub = gl
       ? esc(gl)
-      : soon
-      ? `近 30 天将过期 ${points(soon.amount)} 分`
+      : soon7 > 0
+      ? `近 ${SUMMARY_EXPIRY_DAYS} 天将过期 ${points(soon7)} 分`
       : !c.expiryComplete
         ? c.expiring && c.expiring.length
           ? "到期信息不完整"
           : "未提供到期明细"
         : c.expiring && c.expiring.length
-          ? "30 天内无到期"
+          ? `近 ${SUMMARY_EXPIRY_DAYS} 天无到期`
           : "没有待到期积分";
   } else if (claim) sub = `本轮额度 ${esc(money(claim.amount))}${claimTail(claim)}`;
   // 以前没开申请制时这里显示「额度 ¥{c.total}」:c.total 是**累计发放**(只增不减),
@@ -786,13 +824,9 @@ function renderRow(c, i) {
     subVal = `${esc(mw.label)}窗${ms !== null ? " · " + fmtReset(ms, true) : ""}`;
   }
   else if (isPts) {
-    subVal = soon
-      ? `最近 ${fmtDay(soon.at)} 到期`
-      : !c.expiryComplete
-        ? "到期未知"
-        : c.expiring && c.expiring.length
-          ? "无近期到期"
-          : "无待到期积分";
+    // 最近到期由卡片底部的状态轨承担(日期 + 数量 + 相对时间);
+    // 右侧限定语不再重复一次,把空间留给大数字。
+    subVal = "";
   }
   // 峰谷倒计时交给 1 秒一跳的 ticker 填,不用等下一轮取数
   else if (c.peak)
@@ -811,14 +845,9 @@ function renderRow(c, i) {
   // 失联 / 旧快照:数值降为 text-3 并加 ~,不让"上次成功值"看起来像当前值。
   // 紧凑条里由 CSS 的 ::before 画 ~(省一个节点),面板里用真实节点。
   const compactNow = document.body.className.includes("form-compact");
-  // 周窗的重置倒计时并进数值标签(2026-11-03 设计 §3.1 方案 D):
-  // 「本周剩余·4天7小时 49.0%」一行说完,不新增行高。左侧副标题(套餐 · 重置卡)
-  // 保持不动 —— 面板被拉到最窄时由 fitCodexResetLabels() 先缩短倒计时再退让。
-  const mainValue = codex && !noKey && c.remaining != null
-    ? `<span class="quota-label">${esc(mw.label)}${CFG.showUsed ? "已用" : "剩余"}${codexResetInline(mw)}</span><span class="quota-number">${main}</span>`
-    : isOld && !compactNow
-      ? `<i class="tilde">~</i>${main}`
-      : main;
+  // Codex 的窗口名与重置时间由状态轨承担(「本周窗 · N 天后重置」);
+  // 主数字只留百分比,避免「本周剩余」与「本周窗」在同一张卡上重复。
+  const mainValue = isOld && !compactNow ? `<i class="tilde">~</i>${main}` : main;
   const mainTone = isOld ? "off" : codex ? quotaTone(c, mw) : tone;
 
   // 金额型第二行两边都空时给今日消耗兜底:否则整行会比别的行矮一截(Hapi 39px vs 51px)
@@ -885,10 +914,77 @@ function renderRow(c, i) {
         ? `<span class="qtag">${TONE_WORD[tone] || ""}</span>`
         : "";
 
+  // 卡片状态轨:第三行说清"接下来会发生什么"(到期 / 重置 / 快照),
+  // 不重复大数字。积分型的最近一笔到期在这里常驻 —— 不用先触发告警。
+  let railLeft = sub || "";
+  let railRight = subVal || "";
+  let railWarn = false;
+  if (noKey || failed || isStale) {
+    // 原因与快照年龄已经分别写在 .s / .p 里,状态轨不再重复(HUD 同一句话只说一次)
+    railLeft = "";
+    railRight = "";
+  } else if (isPts) {
+    const upcoming = (c.expiring || [])
+      .filter((e) => e && Number(e.amount) > 0 && e.at * 1000 > Date.now())
+      .sort((a, b) => a.at - b.at);
+    if (upcoming.length) {
+      const e = upcoming[0];
+      railLeft = `最近 ${fmtDay(e.at)} ${fmtClock(e.at)} 到期 · ${points(e.amount)} 分`;
+      railRight = expiryRelativeSpan(e.at);
+      railWarn = e.at * 1000 - Date.now() <= 7 * 86400e3;
+    } else {
+      // 没有逐笔明细时,Qoder 的账户级有效期是唯一能确认的时间信息;
+      // 它仍然只代表账户,不能写成"积分全部到期"。
+      const acc = accountExpiryOf(c);
+      if (acc && acc.state === "dated" && acc.at) {
+        railLeft = `账户额度 ${expiryParts(acc.at).date} ${expiryParts(acc.at).time} 到期`;
+        railRight = expiryRelativeSpan(acc.at);
+        railWarn = acc.at * 1000 - Date.now() <= 7 * 86400e3;
+      } else if (acc && acc.state === "never") {
+        railLeft = "账户额度不过期";
+        railRight = "逐笔到期未知";
+      } else if (acc && acc.state === "dateOnly") {
+        railLeft = `账户额度 ${acc.at} 到期`;
+        railRight = "逐笔到期未知";
+      } else if (Number(c.remaining || 0) <= 0) {
+        railLeft = "当前没有剩余积分";
+        railRight = "";
+      } else if (!c.expiryComplete) {
+        railLeft = "逐笔到期时间暂未提供";
+        railRight = "到期未知";
+      } else {
+        railLeft = "当前剩余积分没有已知到期日";
+        railRight = "";
+      }
+    }
+  } else if (mw) {
+    // 后端视图的 secondary 信息量更大(绑定窗 + 恢复时间),优先用它;
+    // 拿不到时给窗口重置时间,不重复右侧 `.p` 的窗口限定语。
+    const sec = hv && hv.secondary && !claimWarn && !winWarn ? esc(hv.secondary) : "";
+    if (sec) railLeft = sec;
+    else {
+      const ms = resetMs(mw);
+      railLeft = ms !== null
+        ? `${mw.label}窗 · ${fmtReset(ms, true)}后重置`
+        : "配额窗口 · 按重置恢复,不折算金额";
+    }
+    railRight = "";
+  } else if (c.kind === "amount") {
+    // 副标题已经说了申请制 / 峰谷;状态轨给"今天花了多少"和剩余比例,
+    // 两条信息不重复。没有今日数据时如实写"暂无",不补 0。
+    railLeft = c.day !== null
+      ? `今日 ${money(c.day, c.unit)}${c.estimated ? " · 推算" : ""}`
+      : c.peak
+        ? esc(peakParts(c).label)
+        : "今日消耗暂无";
+    railRight = pct !== null ? `剩 ${pct}%` : hv && hv.qualifier ? esc(hv.qualifier) : "";
+  }
+  const railIcon = isPts || mw ? "#i-clock" : failed || isStale ? "#i-info" : "#i-info";
+
   // data-state:后端判的七态,给 CSS 用 —— 紧凑条与胶囊里没有 .rhint 那行字,
   // 只有靠它才能把"这是旧快照"画出来(设计 P0 验收①)
-  return `<div class="row${urgent ? " urg" : ""}${codex ? " codex-quota" : ""}${codexDual ? " codex-dual" : ""}" data-id="${c.id}" data-dtone="${dcls}" data-state="${(hv || {}).state || ""}">
-    <div class="rhead" tabindex="0" role="button" aria-expanded="${rowOpen.has(c.id) ? "true" : "false"}">
+  return `<div class="row${urgent ? " urg" : ""}${codex ? " codex-quota" : ""}${codexDual ? " codex-dual" : ""}" data-id="${c.id}" data-kind="${c.kind}" data-railwarn="${railWarn ? "1" : "0"}" data-dtone="${dcls}" data-state="${(hv || {}).state || ""}">
+    <div class="rhead" tabindex="0" role="button" aria-haspopup="dialog" aria-label="查看 ${esc(c.name)} 详情">
       <div class="r1">
         ${iconHtml(c, "ico", noKey || failed)}
         <div class="nm">
@@ -902,14 +998,18 @@ function renderRow(c, i) {
         <div class="caret">&#9654;</div>
       </div>
       <div class="r2">${
-        !isOld && hv && hv.secondary && !claimWarn && !winWarn ? esc(hv.secondary) : ""
+        railLeft || railRight
+          ? `<svg aria-hidden="true"><use href="${railIcon}"/></svg><span class="rt">${railLeft}</span>${
+              railRight ? `<span class="end">${railRight}</span>` : ""
+            }`
+          : ""
       }</div>
       ${bar}
       ${claimWarn}
       ${winWarn}
       <span class="sweep"></span>
     </div>
-    <div class="rbody" data-body="${c.id}"></div>
+    <div class="rbody" data-body="${c.id}" hidden></div>
   </div>`;
 }
 
@@ -1008,49 +1108,165 @@ function coreCodexResets(c) {
   return `<div class="sec codex-resets"><div class="sec-h"><span>重置卡</span><b>${count}</b></div>${rows}${toggle}${notes.map((s) => `<div class="fn-note">${esc(s)}</div>`).join("")}${updated}</div>`;
 }
 
-/** ① 核心 · 积分:最近到期的几笔(默认 3 笔,「全部 N 笔」原地展开)。
- *  后端的逐笔列表**含已过期但还有余量的包**(按到期日升序,见 providers.rs):
- *  不先分开的话,两笔过期包就把"最近 3 笔"占掉了。未到期的排前面,过期的排在「全部」里。 */
-function corePoints(c, showAll) {
-  const nowS = Date.now() / 1000;
-  const all = (c.expiring || []).filter((e) => e.at > 0);
-  const upcoming = all.filter((e) => e.at >= nowS);
-  const past = all.filter((e) => e.at < nowS);
-  if (!all.length) {
-    return `<div class="sec"><div class="core-empty">${
-      !c.expiryComplete
-        ? "接口未提供完整的逐笔到期信息,无法判断积分包何时到期"
-        : Number(c.remaining || 0) > 0
-          ? "当前剩余积分没有已知到期日"
-          : "当前没有剩余积分"
-    }</div></div>`;
+/** 账户级有效期:新字段优先;老快照只对 Qoder 回退 `extra` 的日期文案。
+ *  回退严格只认「YYYY-MM-DD」/「不过期」,不把任意 extra 解释成日期。 */
+function accountExpiryOf(c) {
+  if (c && c.accountExpiry && c.accountExpiry.state) return c.accountExpiry;
+  if (!c || (c.id !== "qoder" && c.id !== "qoder-cn")) return null;
+  const line = (c.extra || []).find(([k]) => k === "账户额度到期");
+  if (!line) return null;
+  const v = String(line[1] || "").trim();
+  if (v === "不过期") return { state: "never", at: null };
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return { state: "dateOnly", at: v };
+  return { state: "unknown", at: null };
+}
+
+/** 账户额度到期卡(Qoder):账户级时间与逐笔积分到期严格分开展示。 */
+function accountExpiryHtml(c) {
+  const acc = accountExpiryOf(c);
+  if (!acc) {
+    return `<div class="expiry-summary">
+      <div class="expiry-kicker"><svg aria-hidden="true"><use href="#i-clock"/></svg>账户额度到期</div>
+      <div class="expiry-date" style="color:var(--tx3)">暂未提供</div>
+      <div class="expiry-meta"><span>尚无法确认账户有效期</span><strong>账户级有效期</strong></div>
+    </div>`;
   }
-  const ordered = [...upcoming, ...past];
-  const head = showAll ? ordered : upcoming.slice(0, 3);
+  if (acc.state === "dated" && acc.at) {
+    const p = expiryParts(acc.at);
+    const urgent = acc.at * 1000 - Date.now() <= 7 * 86400e3;
+    return `<div class="expiry-summary${urgent ? " urgent" : ""}">
+      <div class="expiry-kicker"><svg aria-hidden="true"><use href="#i-clock"/></svg>账户额度到期</div>
+      <div class="expiry-date">${p.date}<small>${p.time}</small></div>
+      <div class="expiry-meta"><span>${expiryRelativeSpan(acc.at)}</span><strong>账户级有效期</strong></div>
+    </div>`;
+  }
+  if (acc.state === "never") {
+    return `<div class="expiry-summary">
+      <div class="expiry-kicker"><svg aria-hidden="true"><use href="#i-clock"/></svg>账户额度到期</div>
+      <div class="expiry-date">长期有效</div>
+      <div class="expiry-meta"><span>账户额度不过期</span><strong>账户级有效期</strong></div>
+    </div>`;
+  }
+  if (acc.state === "dateOnly") {
+    // 旧快照只有日期:只显示这一天,不补 23:59、不画小时倒计时
+    return `<div class="expiry-summary">
+      <div class="expiry-kicker"><svg aria-hidden="true"><use href="#i-clock"/></svg>账户额度到期</div>
+      <div class="expiry-date">${esc(acc.at)}</div>
+      <div class="expiry-meta"><span>旧快照只记录了日期</span><strong>账户级有效期</strong></div>
+    </div>`;
+  }
+  return `<div class="expiry-summary">
+    <div class="expiry-kicker"><svg aria-hidden="true"><use href="#i-clock"/></svg>账户额度到期</div>
+    <div class="expiry-date">暂未提供</div>
+    <div class="expiry-meta"><span>尚无法确认账户有效期</span><strong>账户级有效期</strong></div>
+  </div>`;
+}
+
+/** 积分到期:WorkBuddy / Trae / WorkBuddy AI / Qoder 共用的唯一组件。
+ *  `expiring` 与 `expiryComplete` 是唯一数据源;不从渠道名或文案猜日期。 */
+function pointsExpiryHtml(c, showAll) {
+  const nowS = Date.now() / 1000;
+  const isQoder = c.id === "qoder" || c.id === "qoder-cn";
+  const all = (c.expiring || []).filter(
+    (e) => e && Number(e.at) > 0 && Number.isFinite(Number(e.at)) && Number.isFinite(Number(e.amount))
+  );
+  const upcoming = all.filter((e) => e.at > nowS).sort((a, b) => a.at - b.at);
+  const past = all.filter((e) => e.at <= nowS).sort((a, b) => b.at - a.at);
+  let html = isQoder ? accountExpiryHtml(c) : "";
+
+  if (!all.length) {
+    const unknownItemized = c.expiryComplete !== true;
+    if (isQoder) {
+      // 账户卡已经说明了账户级有效期;这里只补"逐笔未知"这一行,
+      // 不再叠一张「暂未提供」的大卡(两句话说的是同一件事)。
+      html += `<div class="expiry-table"><div class="expiry-entry">
+        <div><b>逐笔积分到期</b><p>${
+          unknownItemized ? "当前未提供逐笔明细" : "当前剩余积分没有已知到期日"
+        }</p></div>
+        <span class="setting-end">${unknownItemized ? "未知" : "无记录"}</span></div></div>`;
+      html += `<p class="expiry-footnote">${
+        unknownItemized
+          ? "接口未提供完整的逐笔到期信息;账户有效期与逐笔积分到期不同,不能据此判断所有积分的到期时间。"
+          : "账户有效期与逐笔积分到期不同,不能据此判断所有积分在同一时间到期。"
+      }</p>`;
+      return html;
+    }
+    const note = unknownItemized
+      ? "接口未提供完整的逐笔到期信息,无法判断积分包何时到期"
+      : Number(c.remaining || 0) > 0
+        ? "当前剩余积分没有已知到期日"
+        : "当前没有剩余积分";
+    html += `<div class="expiry-summary">
+      <div class="expiry-kicker"><svg aria-hidden="true"><use href="#i-clock"/></svg>${
+        unknownItemized ? "逐笔到期时间暂未提供" : "最近一笔到期"
+      }</div>
+      <div class="expiry-date">暂未提供</div>
+      <div class="expiry-meta"><span>${note}</span><strong>${unknownItemized ? "到期信息不完整" : "到期信息完整"}</strong></div>
+    </div>`;
+    html += `<p class="expiry-footnote">${unknownItemized
+      ? "渠道尚未返回完整的逐笔到期信息;已知记录会照常显示,不把未知说成「无到期」。"
+      : "接口已返回完整明细,但没有可用于展示的到期记录。"}</p>`;
+    return html;
+  }
+
+  const first = upcoming[0];
+  if (first) {
+    const p = expiryParts(first.at);
+    const urgent = first.at * 1000 - Date.now() <= 7 * 86400e3;
+    html += `<div class="expiry-summary${urgent ? " urgent" : ""}">
+      <div class="expiry-kicker"><svg aria-hidden="true"><use href="#i-clock"/></svg>${c.expiryComplete === false ? "最近已知到期" : "最近一笔到期"}</div>
+      <div class="expiry-date">${p.date}<small>${p.time}</small></div>
+      <div class="expiry-meta"><span>${expiryRelativeSpan(first.at)}</span><strong>${points(first.amount)} 积分将到期</strong></div>
+    </div>`;
+  } else {
+    html += `<div class="expiry-summary">
+      <div class="expiry-kicker"><svg aria-hidden="true"><use href="#i-clock"/></svg>最近一笔到期</div>
+      <div class="expiry-date" style="color:var(--tx3)">没有未到期</div>
+      <div class="expiry-meta"><span>已知积分包均已过期,等待下次刷新</span><strong>${past.length} 笔已到期</strong></div>
+    </div>`;
+  }
+
+  const head = showAll ? [...upcoming, ...past] : upcoming.length ? upcoming.slice(0, 3) : past.slice(0, 3);
+  const total = upcoming.length + past.length;
   const rows = head
     .map((e) => {
-      const isPast = e.at < nowS;
-      const d = isPast ? null : daysUntil(e.at);
-      const cls = isPast ? "past" : expClass(d);
-      const tail = isPast ? "已过期" : d === 0 ? "今天" : `剩 ${d} 天`;
-      return `<div class="core-exp${cls ? " " + cls : ""}">
-        <span class="ed">${fmtDay(e.at)}<i>${tail}</i></span>
-        <b class="ea">${points(e.amount)} 分</b>
-        <span class="el">${esc(e.label)}</span>
+      const isPast = e.at <= nowS;
+      const p = expiryParts(e.at);
+      const urgent = !isPast && e.at * 1000 - Date.now() <= 7 * 86400e3;
+      return `<div class="expiry-entry core-exp${isPast ? " past" : urgent ? " urgent" : ""}" title="${points(e.amount)} 分 · ${esc(e.label || "积分")}">
+        <div><b>${p.date} ${p.time}</b><p>${esc(e.label || "积分")}</p></div>
+        <div class="expiry-amount"><strong>${points(e.amount)} <small>分</small></strong>
+          <p>${isPast ? "已到期,待刷新" : expiryRelativeSpan(e.at)}</p></div>
       </div>`;
     })
     .join("");
-  // 一笔未到期的都没有:说清楚,而不是留一个空段标题
-  const none = !upcoming.length && !showAll
-    ? `<div class="core-empty">没有未到期的积分包;另有 ${past.length} 笔已过期</div>`
+  const more = total > head.length || showAll
+    ? `<button class="sec-more" data-act="sec-more" data-id="${c.id}" data-sec="expiry" aria-expanded="${showAll ? "true" : "false"}">${
+        showAll ? "收起" : `全部 ${total} 笔`
+      }</button>`
     : "";
-  const more =
-    ordered.length > head.length || showAll
-      ? `<button class="sec-more" data-act="sec-more" data-id="${c.id}" data-sec="expiry" aria-expanded="${
-          showAll ? "true" : "false"
-        }">${showAll ? "收起" : `全部 ${ordered.length} 笔`}</button>`
-      : "";
-  return `<div class="sec"><div class="sec-h"><span>即将到期</span>${more}</div>${rows}${none}</div>`;
+  html += `<div class="expiry-section-label">逐笔到期明细 · 最近到期优先${
+    more ? `<span style="float:right">${more}</span>` : ""
+  }</div><div class="expiry-table">${rows}</div>`;
+
+  const notes = [];
+  if (!upcoming.length) notes.push("没有未到期的已知积分包;已到期记录保留在列表里。");
+  if (c.expiryComplete !== true) {
+    notes.push("到期信息不完整:以上只是已获取的记录,不能当作全部积分的最近到期。");
+  }
+  const sumExp = all.reduce((n, e) => n + Number(e.amount || 0), 0);
+  const remain = Number(c.remaining || 0);
+  if (c.expiryComplete === true && remain - sumExp > 0.01) {
+    notes.push(`已知到期记录合计 ${points(sumExp)} 分,少于当前余额 ${points(remain)} 分;其余积分没有已知到期日。`);
+  } else if (c.expiryComplete === true && sumExp - remain > 0.01) {
+    notes.push(`已知到期记录合计 ${points(sumExp)} 分,多于当前余额 ${points(remain)} 分;总额仍以后端余额为准。`);
+  }
+  notes.push("每笔显示尚未使用的积分;不同来源的积分分别到期。");
+  html += `<p class="expiry-footnote">${notes.map(esc).join("<br>")}</p>`;
+  if (isQoder) {
+    html += `<p class="expiry-footnote">账户有效期与逐笔积分到期不同,不能据此判断所有积分在同一时间到期。</p>`;
+  }
+  return html;
 }
 
 /** 近 7 天消耗柱:直接聚合 channel_changes 的现成台账,不新增取数。
@@ -1093,7 +1309,11 @@ function ledgerHtml(c, showAll) {
   if (st === "error") {
     return `<div class="sec"><div class="sec-h"><span>最近变动</span></div><div class="lg-empty">读不到变动记录</div></div>`;
   }
-  if (!list.length) return "";
+  if (!list.length) {
+    // 确实取到了台账但没有变动:如实说"无记录";没取过则不装作知道
+    if (st !== "done") return "";
+    return `<div class="sec"><div class="sec-h"><span>最近变动</span></div><div class="lg-empty">7 天无变动记录</div></div>`;
+  }
   const head = showAll ? list : list.slice(0, 3);
   const more =
     list.length > 3
@@ -1158,7 +1378,7 @@ function scheduleRowReveal(id) {
   }, 340);
 }
 
-function renderDetail(c) {
+function renderDetail(c, inDialog = false) {
   const noKey = !c.hasKey;
   const failed = c.hasKey && !c.valid;
 
@@ -1195,9 +1415,10 @@ function renderDetail(c) {
   const dim = failed || state.state === "stale" || (!state.state && !!c.stale);
   const more = rowMore[c.id] || {};
 
-  // ① 核心(口径三选一);原来是行头的「第三段」,现在挪进展开区 —— 行头前后一样高
+  // ① 核心(口径三选一);积分型统一走「最近一笔 + 逐笔明细」组件,
+  // 不再按 id 分支 —— WorkBuddy / Trae / WorkBuddy AI / Qoder 共用同一套。
   let core;
-  if (c.kind === "points") core = corePoints(c, !!more.expiry);
+  if (c.kind === "points") core = pointsExpiryHtml(c, !!more.expiry);
   else if (c.kind === "percent" && (c.windows || []).length) core = coreWindows(c);
   else core = coreAmount(c);
 
@@ -1231,7 +1452,9 @@ function renderDetail(c) {
   const dupExtra = (k) =>
     (k === "套餐" && c.id === "codex") ||
     ((k === "额度包" || k === "积分包") && hasExpList) ||
-    (k === "逐笔到期明细" && c.kind === "points" && !hasExpList);
+    (k === "逐笔到期明细" && c.kind === "points" && !hasExpList) ||
+    // 账户额度到期已经由积分组件顶部的账户卡说了,不再在明细里重复
+    (k === "账户额度到期" && c.kind === "points" && !!accountExpiryOf(c));
   const extras = (c.extra || []).filter(([k]) => !dupExtra(k));
   // 显示宽度:中日韩字符按 2 计。半栏大约放得下 26 个单位(键 + 值),
   // 再长就独占一行 —— 按字符数判会把「只取了前 200 笔,实际 230 笔」放进半栏切掉
@@ -1291,12 +1514,218 @@ function renderDetail(c) {
       n ? ` · ${n} 个可用` : ""
     }</button>`);
   }
-  actions.push(manageLink);
+  // 弹层底部已有「刷新 / 设置与管理」动作条,详情正文不再重复同一入口
+  if (!inDialog) actions.push(manageLink);
 
   // 类名用 rb-dim 不用 dim:全局已有 .dim{color:var(--tx3)},撞名会把整张卡的数值再染一层灰
   return `<div class="rbody-in${dim ? " rb-dim" : ""}">${core}${spend}${coreCodexResets(c)}${kvHtml}${ledger}${ckHtml}<div class="foot-det">${notesHtml}${failFull}<div class="fn-act">${actions.join(
     ""
   )}</div></div></div>`;
+}
+
+// ───────────── 渠道详情弹层(单例) ─────────────
+// 同一份 renderDetail 既供弹层使用,也保留给测试与旧入口;DOM 里只有这一个弹层,
+// 轮询更新只换内容,不新开第二个 dialog。
+let DETAIL_ID = null;
+let DETAIL_FOCUS = null;
+let DETAIL_BUSY = false;
+
+const KIND_CAPTION = {
+  points: "积分 · 逐笔到期",
+  percent: "配额 · 按窗口恢复",
+  amount: "余额 · 本地快照推算消耗",
+};
+
+/** 弹层顶部的大数字:与卡片主数字同一口径,只放大。 */
+function detailHeroHtml(c) {
+  if (!c.hasKey) return `<div class="detail-hero" style="color:var(--tx3)">——</div>`;
+  if (c.remaining === null || c.remaining === undefined) {
+    return `<div class="detail-hero" style="color:var(--tx3)">——</div>`;
+  }
+  if (c.kind === "percent") {
+    const mw = mainWindow(c);
+    const v = dispPct(Math.max(0, Math.min(100, mw ? mw.remainPercent : c.remaining)));
+    return `<div class="detail-hero">${v.toFixed(1)}<span class="unit">%</span></div>`;
+  }
+  if (c.kind === "points") {
+    return `<div class="detail-hero">${points(c.remaining)}<span class="unit">积分</span></div>`;
+  }
+  const [int, dec] = money(c.remaining, c.unit).split(".");
+  return `<div class="detail-hero"><span class="unit">${esc(curSign(c.unit).trim())}</span>${int}${
+    dec ? `<span class="unit">.${dec}</span>` : ""
+  }</div>`;
+}
+
+function detailHeaderHtml(c) {
+  const failed = c.hasKey && !c.valid;
+  const sub = c.authLabel || KIND_CAPTION[c.kind] || "";
+  return `${iconHtml(c, "ico", !c.hasKey || failed)}
+    <div class="detail-title"><b id="detailName">${esc(c.name)}</b><p>${esc(sub)}</p></div>
+    <button type="button" class="detail-close" data-act="detail-close" aria-label="关闭详情">
+      <svg aria-hidden="true"><use href="#i-close"/></svg>
+    </button>`;
+}
+
+function renderDetailSheet() {
+  if (!DETAIL_ID) return;
+  const c = CHANNELS.find((x) => x.id === DETAIL_ID);
+  if (!c) {
+    closeDetail(false);
+    showToast("这个渠道已隐藏或移除,详情已关闭", true);
+    return;
+  }
+  const body = $("detailBody");
+  const keepTop = body ? body.scrollTop : 0;
+  // 轮询重画时保留弹层内的键盘焦点:按 data-act / data-sec 找回同一个控件
+  const sheet = $("detailSheet");
+  const active = document.activeElement;
+  const inSheet = !!(active && sheet && sheet.contains(active) && active !== sheet);
+  const focusSel = inSheet
+    ? [
+        active.dataset.act ? `[data-act="${active.dataset.act}"]` : "",
+        active.dataset.sec ? `[data-sec="${active.dataset.sec}"]` : "",
+      ].join("")
+    : "";
+  $("detailHead").innerHTML = detailHeaderHtml(c);
+  const state = hvRow(c.id) || {};
+  const stale = c.stale || state.state === "stale" || !c.valid;
+  const caption = [
+    KIND_CAPTION[c.kind] || "",
+    stale ? (c.valid ? "上次快照" : "取数失败 · 保留上次快照") : "",
+    c.updatedAt ? `更新于 ${relTime(c.updatedAt)}` : "",
+  ].filter(Boolean).join(" · ");
+  body.innerHTML =
+    detailHeroHtml(c) +
+    `<div class="detail-caption">${esc(caption)}</div>` +
+    renderDetail(c, true) +
+    `<div class="detail-actions"><button type="button" class="btn" data-act="detail-refresh"${
+      DETAIL_BUSY ? " disabled" : ""
+    }>${DETAIL_BUSY ? "刷新中…" : c.valid ? "刷新数据" : "重试连接"}</button>
+      <button type="button" class="btn p" data-act="detail-manage">设置与管理</button></div>`;
+  body.scrollTop = keepTop;
+  if (focusSel) {
+    const el = sheet.querySelector(focusSel);
+    if (el) el.focus({ preventScroll: true });
+    else sheet.focus({ preventScroll: true });
+  }
+  // 弹层里没有折叠行,失败全文直接展开(否则它永远停在 hidden)
+  document.querySelectorAll("#detailBody .fn-fail").forEach((el) => {
+    el.hidden = false;
+  });
+}
+
+/** 详情打开时把背景区域对读屏器隐藏(视觉遮罩已盖住,这里补语义层)。 */
+function setBackdropHidden(on) {
+  document.querySelectorAll("body > *").forEach((el) => {
+    if (el.classList.contains("shade") || el.id === "toast") return;
+    if (on) {
+      if (el.getAttribute("aria-hidden") !== "true") {
+        el.setAttribute("aria-hidden", "true");
+        el.dataset.ah = "1";
+      }
+    } else if (el.dataset && el.dataset.ah === "1") {
+      el.removeAttribute("aria-hidden");
+      delete el.dataset.ah;
+    }
+  });
+}
+
+function openDetail(id, trigger) {
+  const c = CHANNELS.find((x) => x.id === id);
+  if (!c) return;
+  if (!DETAIL_ID) DETAIL_FOCUS = trigger || document.activeElement;
+  DETAIL_ID = id;
+  const shade = $("detailShade");
+  shade.hidden = false;
+  setBackdropHidden(true);
+  document.body.classList.add("detail-open");
+  renderDetailSheet();
+  if ($("detailBody")) $("detailBody").scrollTop = 0;
+  // 焦点进入弹层本身(而不是直接落在关闭按钮上):避免一打开就出现一圈按钮焦点框,
+  // Tab 的第一站仍是关闭按钮。
+  const sheet = $("detailSheet");
+  if (sheet) sheet.focus();
+}
+
+function closeDetail(restoreFocus = true) {
+  const id = DETAIL_ID;
+  DETAIL_ID = null;
+  const shade = $("detailShade");
+  if (shade) shade.hidden = true;
+  setBackdropHidden(false);
+  document.body.classList.remove("detail-open");
+  const head = $("detailHead");
+  const body = $("detailBody");
+  if (head) head.innerHTML = "";
+  if (body) body.innerHTML = "";
+  if (!restoreFocus) return;
+  // 焦点回到触发元素(卡片或"最先到期"格);元素消失时退回当前筛选芯片。
+  const trigger = DETAIL_FOCUS;
+  DETAIL_FOCUS = null;
+  const card = id && document.querySelector(`.row[data-id="${id}"] .rhead`);
+  const fallback = document.querySelector("#sum button:not(:disabled)") || $("lkKeys");
+  if (trigger && trigger.isConnected && trigger.offsetParent !== null) trigger.focus();
+  else if (card && card.offsetParent !== null) card.focus();
+  else if (fallback) fallback.focus();
+}
+
+/** 弹层里的动作:展开明细段 / 刷新 / 去设置。 */
+async function detailAction(act) {
+  const id = DETAIL_ID;
+  const a = act.dataset.act;
+  if (a === "detail-close") {
+    closeDetail();
+    return;
+  }
+  if (a === "sec-more") {
+    const sec = act.dataset.sec;
+    const cid = act.dataset.id || id;
+    rowMore[cid] = rowMore[cid] || {};
+    rowMore[cid][sec] = !rowMore[cid][sec];
+    renderDetailSheet();
+    // 重画后把焦点交回同一个「全部 / 收起」按钮,键盘用户不会掉到 body
+    const again = document.querySelector(`#detailBody .sec-more[data-sec="${sec}"]`);
+    if (again) again.focus();
+    return;
+  }
+  if (a === "detail-refresh") {
+    if (DETAIL_BUSY) return;
+    DETAIL_BUSY = true;
+    renderDetailSheet();
+    try {
+      await refresh();
+      showToast("已刷新 · " + (CHANNELS.find((x) => x.id === id) ? "刚刚" : "渠道已移除"), false);
+    } finally {
+      DETAIL_BUSY = false;
+      renderDetailSheet();
+      const again = document.querySelector('#detailBody [data-act="detail-refresh"]');
+      if (again) again.focus();
+    }
+    return;
+  }
+  if (a === "detail-manage" || a === "open-manage") {
+    closeDetail(false);
+    openManage();
+    showTab("ch");
+    const cid = act.dataset.id || id;
+    requestAnimationFrame(() => {
+      const card = cid && document.querySelector(`#chList .ccard[data-id="${cid}"]`);
+      if (card) {
+        card.classList.add("open");
+        card.scrollIntoView({ block: "center" });
+        card.classList.add("flash");
+        setTimeout(() => card.classList.remove("flash"), 1150);
+      }
+    });
+    return;
+  }
+  if (a === "open-models") {
+    const cid = act.dataset.id || id;
+    closeDetail(false);
+    openManage();
+    showTab("mdl");
+    ensureModels(cid);
+  }
 }
 
 /**
@@ -1383,30 +1812,6 @@ function failBannerHtml() {
     <span class="lk" data-act="open-diag">看诊断</span></div>`;
 }
 
-/**
- * 两级行 + 分组(D06):需要动作的、以及已经跌破红线的行单独成组并自动变大,
- * 其余压成一行。九行长得一模一样,等于没有层级。
- * 拿不到统一视图时退回"一整段列表",行为不回退。
- */
-function listHtmlWithGroups(shown) {
-  if (!HV.order.length) return shown.map((c, i) => renderRow(c, i)).join("");
-  // 分组只按 后端 的 T0(需要处理)切 —— 与 HV.actionCount 同一个口径,
-  // 免得标题写 2、下面站了 3 行。行本身的"变大"另算:它还包括已跌破红线的。
-  const urgent = shown.filter((c) => {
-    const r = hvRow(c.id);
-    return !!(r && r.tier === 0);
-  });
-  const rest = shown.filter((c) => urgent.indexOf(c) < 0);
-  const head = (n, t) => `<div class="grp"><span>${t}</span><em>${n}</em></div>`;
-  return (
-    (urgent.length ? head(urgent.length, "需要处理") + urgent.map((c, i) => renderRow(c, i)).join("") : "") +
-    (rest.length
-      ? head(rest.length, urgent.length ? "其余" : "全部渠道") +
-        rest.map((c, i) => renderRow(c, i)).join("")
-      : "")
-  );
-}
-
 /** 顶部临期摘要:30 天内确认到期积分 / 最先到期渠道 / 签到进度。 */
 /** 未来 7 天的临期分布:按本地日切桶,用迷你柱表示"哪几天集中到期"。
  *  没有可确认的到期记录时只画一条虚线基线 —— 不虚构柱子。 */
@@ -1439,59 +1844,61 @@ function renderRiskBand() {
   if (EXPIRY_FILTER && !hasConfirmed) EXPIRY_FILTER = false;
 
   const riskLabel = hasConfirmed
-    ? summary.unknown.length ? "近 30 天已确认临期" : "近 30 天将过期"
-    : "近 30 天临期";
+    ? summary.unknown.length ? "已确认临期" : "临期积分"
+    : "临期积分";
   const riskValue = hasConfirmed
     ? points(summary.total)
     : summary.unknown.length
-      ? "待确认"
+      ? "已知 0"
       : CHANNELS.length ? "暂无" : "——";
   const riskSub = hasConfirmed
     ? EXPIRY_FILTER
       ? "点击恢复全部渠道"
-      : `${summary.channels} 个渠道${summary.unknown.length ? ` · ${summary.unknown.length} 个明细未知` : " · 点击筛选"}`
+      : summary.unknown.length
+        ? `${summary.channels} 渠道 · ${summary.unknown.length} 未知`
+        : `${summary.channels} 个渠道 · 筛选`
     : summary.unknown.length
-      ? `${summary.unknown.length} 个积分渠道未提供明细`
-      : CHANNELS.length ? "未来 30 天暂无待到期积分" : "等待数据";
+      ? "部分渠道到期信息未知"
+      : CHANNELS.length ? `${SUMMARY_EXPIRY_DAYS} 天内暂无到期` : "等待数据";
   const riskTitle = EXPIRY_FILTER
     ? "当前只显示临期积分渠道；点击恢复全部渠道"
     : hasConfirmed
-      ? "只统计可确认的积分包到期记录；点击筛选临期渠道"
+      ? `未来 ${SUMMARY_EXPIRY_DAYS} 天可确认的积分到期合计 · 点击筛选临期渠道${
+          summary.unknown.length ? `；另有 ${summary.unknown.length} 个渠道到期明细未知` : ""
+        }`
       : summary.unknown.length
         ? "有积分渠道未提供逐笔到期信息，无法确认是否临期"
-        : "未来 30 天没有可确认的积分到期记录";
-  const cell1 = `<button type="button" class="cell risk-cell${EXPIRY_FILTER ? " on" : ""}"
-      data-act="expiry-filter" aria-pressed="${EXPIRY_FILTER}" title="${esc(riskTitle)}"${hasConfirmed ? "" : " disabled"}>
-      <div class="lb">${riskLabel}</div>
-      <div class="vv">${hasConfirmed
+        : `未来 ${SUMMARY_EXPIRY_DAYS} 天没有可确认的积分到期记录`;
+  const riskCount = hasConfirmed ? `${points(summary.total)} 分` : "";
+  const cell1 = `<button type="button" class="cell metric risk-cell${EXPIRY_FILTER ? " on" : ""}${hasConfirmed ? " has-risk" : ""}"
+      data-act="expiry-filter" aria-pressed="${EXPIRY_FILTER}" title="${esc(riskCount ? riskCount + " · " + riskTitle : riskTitle)}"${hasConfirmed ? "" : " disabled"}>
+      <div class="metric-label lb"><svg aria-hidden="true"><use href="#i-clock"/></svg>${riskLabel}</div>
+      <div class="metric-number vv">${hasConfirmed
         ? `<span class="hero-v">${points(summary.total)}</span><span class="hero-unit">分</span>`
         : `<span class="hero-v" style="color:var(--tx3)">${riskValue}</span>`}</div>
-      <div class="sb sb-row"><span class="sb-tx">${riskSub}</span>${expiry7Bars(summary)}</div></button>`;
+      <div class="metric-sub sb sb-row"><span class="sb-tx">${riskSub}</span>${expiry7Bars(summary)}</div></button>`;
 
   // 有明细缺口时标成“最早可确认”,不把未知日期的渠道误排在它之后。
   let cell2 = "";
   const first = summary.first;
   if (first) {
     const days = daysUntil(first.entry.at);
-    const when = days === 0 ? "今天到期" : `剩 ${days} 天`;
-    const dueColor = days <= 7 ? "var(--bad)" : "var(--warn)";
-    const title = `跳转到 ${first.channel.name} 的到期明细`;
-    cell2 = `<div class="cell" data-act="jump" data-id="${esc(first.channel.id)}" title="${esc(title)}">
-      <div class="lb">${summary.unknown.length ? "最早可确认" : "最先到期"}</div>
-      <div class="due-name">${esc(first.channel.name)}</div>
-      <div class="due-date" style="color:${dueColor}">${fmtDay(first.entry.at)}</div>
-      <div class="sb">${when} · ${points(first.entry.amount)} 分</div></div>`;
+    const when = days === 0 ? "今天" : `剩 ${days} 天`;
+    const dueColor = days <= 7 ? "var(--warn)" : "var(--tx)";
+    const title = `打开 ${first.channel.name} 的到期明细 · ${fmtDay(first.entry.at)} · ${points(first.entry.amount)} 分`;
+    cell2 = `<button type="button" class="cell metric" data-act="jump" data-id="${esc(first.channel.id)}" title="${esc(title)}">
+      <div class="metric-label lb">${summary.unknown.length ? "最早可确认" : "最先到期"}</div>
+      <div class="metric-number due-date" style="color:${dueColor}">${fmtDay(first.entry.at)}<small style="font-size:11px;color:var(--tx3);margin-left:5px;letter-spacing:0">${when}</small></div>
+      <div class="metric-sub"><span class="due-name">${esc(first.channel.name)} · ${points(first.entry.amount)} 分</span></div></button>`;
   } else if (summary.unknown.length) {
     const unknown = summary.unknown[0];
-    cell2 = `<div class="cell"><div class="lb">到期日期未知</div>
-      <div class="due-name">${esc(unknown.name)}</div>
-      <div class="due-date" style="color:var(--tx3)">——</div>
-      <div class="sb">接口未提供逐笔明细</div></div>`;
+    cell2 = `<div class="cell metric"><div class="metric-label lb">到期日期未知</div>
+      <div class="metric-number due-date" style="color:var(--tx3)">——</div>
+      <div class="metric-sub"><span class="due-name">${esc(unknown.name)} · 逐笔未知</span></div></div>`;
   } else {
-    cell2 = `<div class="cell"><div class="lb">最先到期</div>
-      <div class="due-name" style="color:var(--tx3)">暂无临期</div>
-      <div class="due-date" style="color:var(--tx3)">——</div>
-      <div class="sb">未来 30 天</div></div>`;
+    cell2 = `<div class="cell metric"><div class="metric-label lb">最先到期</div>
+      <div class="metric-number due-date" style="color:var(--tx3)">暂无</div>
+      <div class="metric-sub"><span class="due-name">暂无已知到期记录</span></div></div>`;
   }
 
   // ③ 签到:常驻。全部签完也要留着「✓ 3/3」—— "完成"和"坏了"不能长得一样(D09)
@@ -1501,24 +1908,20 @@ function renderRiskBand() {
   // 只是把"没有签到渠道"这件事说了一遍(2026-10-22 体检:全隐藏时它还在)
   if (ck && ck.total > 0) {
     const segs = Array.from({ length: ck.total }, (_, i) => `<i class="${i < ck.done ? "on" : ""}"></i>`).join("");
-    cell3 = `<div class="cell ck-cell" data-act="ckstripopen" title="每日签到">
-      <div class="lb">签到</div>
-      <div class="vv">${ck.done >= ck.total ? "\u2713 " : ""}${ck.done}/${ck.total}</div>
-      <div class="sb"><span class="ckseg">${segs}</span></div></div>`;
+    const done = ck.done >= ck.total;
+    cell3 = `<button type="button" class="cell metric ck-cell check-cell" data-act="ckstripopen" title="${ck.done}/${ck.total} · 每日签到">
+      <div class="metric-label lb">每日签到</div>
+      <div class="metric-number vv">${done ? "\u2713 " : ""}<span class="hero-v">${ck.done}</span><span class="hero-unit">/${ck.total}</span></div>
+      <div class="metric-sub"><span class="ckseg" aria-hidden="true">${segs}</span></div></button>`;
   } else {
-    cell3 = `<div class="cell ck-cell"><div class="lb">签到</div>
-      <div class="vv" style="color:var(--tx3)">——</div><div class="sb"></div></div>`;
+    cell3 = `<div class="cell metric ck-cell"><div class="metric-label lb">每日签到</div>
+      <div class="metric-number vv" style="color:var(--tx3)">——</div><div class="metric-sub">未启用</div></div>`;
   }
 
   box.innerHTML = cell1 + cell2 + cell3;
 }
 
-/** 过滤条:十二个渠道以内靠排序就够,超过才需要搜索(P3)。 */
-function syncQBar() {
-  const bar = $("qbar");
-  if (bar) bar.style.display = CHANNELS.length >= 12 ? "" : "none";
-}
-
+/** 过滤条:默认收起,放大镜展开;渠道多起来(>=12)时仍自动放出输入框。 */
 function renderInner(opts) {
   // updated=true 只由「数据刷新」调用方传(settings 变更等重渲染不放动效)
   const updated = !!(opts && opts.updated);
@@ -1536,12 +1939,12 @@ function renderInner(opts) {
 
   renderRiskBand(); // 顶部摘要常驻:临期积分 / 最先到期 / 签到
   const expiryOnly = EXPIRY_FILTER && currentForm() === "panel";
+  // 排序只听设置里的「渠道排序」(2026-11-03 用户裁决):
+  // 限流 / 失效不再被强制排到前排,排序口径只有一个来源。
   const sorted = expiryOnly
-    ? hvSort(CHANNELS)
-        .filter(hasConfirmedExpiry)
+    ? CHANNELS.filter(hasConfirmedExpiry)
         .sort((a, b) => (nearestExpiryAt(a) || Infinity) - (nearestExpiryAt(b) || Infinity))
-    : hvSort(CHANNELS); // 后端排好;拿不到视图时 hvSort 内部退回 sortChannels
-  syncQBar(); // 渠道多起来(>=12)才把过滤框放出来,平时不占这一行
+    : sortChannels(CHANNELS);
 
   if (!CHANNELS.length) {
     // 冷启动画骨架(D14):一行"加载中…"区分不了"正在加载 / 卡住了 / 没配好",
@@ -1561,18 +1964,16 @@ function renderInner(opts) {
   // 展示区只显示已配置密钥、且未被隐藏的渠道(隐藏的只在管理页出现,用于恢复);
   // 一个都没配时给一张引导卡,全被隐藏时给「去设置恢复」卡
   const hiddenN = CHANNELS.filter((c) => c.hidden).length;
-  const shown = sorted.filter((c) => c.hasKey && !c.hidden).filter(chFilter);
+  const shown = sorted.filter((c) => c.hasKey && !c.hidden);
   const configured = shown.length > 0;
-  // 哪些行要展开由 rowOpen 决定(DOM 只是投影):轮询重建后用同一份状态恢复,
-  // 行头的 aria-expanded 在 renderRow 里也读它,开合两边永远一致(F2)
-  const openId = [...rowOpen].find((x) => shown.some((c) => c.id === x)) || null;
+
   $("list").innerHTML = configured
-    ? failBannerHtml() + ckPendingStrip() + listHtmlWithGroups(shown)
+    ? failBannerHtml() + ckPendingStrip() + shown.map((c, i) => renderRow(c, i)).join("")
     : expiryOnly
       ? `<div class="empty">
           <div class="ek">⌕</div>
           <b>没有匹配的临期渠道</b>
-          ${CH_Q ? "调整搜索条件,或" : ""}点击顶部临期摘要显示全部渠道
+          点击顶部临期摘要显示全部渠道
         </div>`
       : hiddenN && CHANNELS.some((c) => c.hasKey && c.hidden)
       ? `<div class="empty">
@@ -1592,17 +1993,6 @@ function renderInner(opts) {
 
   // 列表已经落到 DOM 里,现在才有真实宽度可量:把 Codex 的倒计时按当前面板宽度收一档
   if (configured) fitCodexResetLabels();
-
-  if (configured && openId) {
-    const row = document.querySelector(`.row[data-id="${openId}"]`);
-    if (row) {
-      row.classList.add("open");
-      const c = CHANNELS.find((x) => x.id === openId);
-      const body = row.querySelector(".rbody");
-      if (c && body) body.innerHTML = renderDetail(c);
-      revealFailFull(row);
-    }
-  }
 
   // 底栏状态(隐藏渠道不计入,只报个数)
   const withKey = CHANNELS.filter((c) => c.hasKey && !c.hidden);
@@ -1658,6 +2048,8 @@ function renderInner(opts) {
   renderPillPick();
   fitCompact();
   refreshChCards();
+  // 弹层开着时只换内容:保持滚动位置与展开状态,不新开第二个 dialog
+  if (DETAIL_ID) renderDetailSheet();
   // 新建的 [data-peakcd] 先填一次文案,别等到下一个整分才出现
   tickPeakCountdowns();
   updateHeaderLive();
@@ -1841,20 +2233,23 @@ function renderPill(sorted) {
   PILL.sorted = sorted;
   const picked = (CFG && CFG.pillChannels) || [];
   const autoPick = () => {
-    const active = sorted.filter((c) => c.hasKey && !c.hidden);
-    // 「最紧」= 后端排好的第一个:五桶紧迫度,先故障、再比例、再绝对额。
-    // 以前这里是 `remainRatio(a) ?? 2` —— 2 比任何真实比例都大,于是没有分母的
-    // 充值型渠道(只剩 ¥0.03 的那种)永远排最后、永远不被胶囊选中(设计 D02)。
-    if (HV.order.length) {
-      const first = HV.order
-        .map((id) => active.find((c) => c.id === id && c.valid))
-        .find(Boolean);
-      if (first) return [first];
-    }
-    const tight = active
-      .filter((c) => c.valid)
-      .sort((a, b) => (remainRatio(a) ?? 2) - (remainRatio(b) ?? 2))[0];
-    return tight ? [tight] : [];
+    // 自动轮播是「最紧张的一个」,口径独立于列表排序(列表顺序只按设置):
+    // 绑定窗比例升序 → 无分母金额型按「余额 / 底线」贴近度 → 积分按 7 日到期占比。
+    const active = CHANNELS.filter((c) => c.hasKey && !c.hidden && c.valid);
+    const tightness = (c) => {
+      const r = remainRatio(c);
+      if (r !== null) return r;
+      if (c.kind === "amount" && c.remaining !== null) {
+        const floor = (CFG && CFG.moneyFloor) || 10;
+        return Math.max(0, Math.min(1, c.remaining / floor));
+      }
+      if (c.kind === "points") {
+        return 1 - Math.min(1, expiringWithin(c, SUMMARY_EXPIRY_DAYS) / Math.max(1, c.remaining || 1));
+      }
+      return 2;
+    };
+    const first = [...active].sort((a, b) => tightness(a) - tightness(b))[0];
+    return first ? [first] : [];
   };
   // 固定列表里的渠道可能全被「隐藏」了(显隐功能):降级为自动挑选。
   // 不能落进 renderPillFace 的「取数失败」兜底 —— 那是与事实相反的故障告警,
@@ -2789,46 +3184,31 @@ function renderPillPick() {
 // 见 styles.css body 的注释);实际尺寸走 formSize(),内容按字号档位 × 倍率。
 const CARD_MARGIN = 10; // 逻辑 px,固定不随字号缩放
 const SIZES = {
-  panel: [380, 560],   // 仅作 resolveForm 白名单与默认值来源
+  panel: [480, 820],   // 仅作 resolveForm 白名单;真实尺寸由 panelContentSize() 决定
   compact: [380, 46],
   pill: [200, 46],
 };
 // 面板内容尺寸范围(u=1 时);窗口 = 内容 + 20
-const PANEL_MIN = [340, 460];
-const PANEL_DEFAULT = [380, 560];
-const PANEL_MAX = [740, 920];
+const clampNum = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+// 面板只有两个固定尺寸(内容逻辑 px,随字号倍率缩放)。不再支持用户拖动缩放。
+// 单列:一列卡片,宽高按 4 个渠道一屏可见设计;双列:两列卡片,与单列同高。
+const PANEL_SINGLE = [480, 820];
+const PANEL_DOUBLE = [980, 820];
 const COMPACT_MIN_W = 220;
 const COMPACT_MAX_W = 580;
 const COMPACT_H = 46;
-const clampNum = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-// 面板尺寸是**用户资产**:换形态/轮询/字号都不能把它冲掉。
-// panelW/H 是内容逻辑 px;compact 用已有的 compactW 变量。
-const SIZE = { panelW: 380, panelH: 560, form: "panel", ready: false };
-let SIZE_APPLYING = false;   // 程序化 setSize 期间忽略 onResized
-let RESIZING = false;        // 用户正在 resize(原生边框或右下角手柄)
-let MANUAL_RESIZING = false; // 右下角手柄的 pointer 拖拽
-let resizeIdleTimer = null;
-let sizeSaveTimer = null;
-let resizeBadgeTimer = null;
+let SIZE_APPLYING = false;   // 程序化 setSize 期间忽略缩放回调
+let RESIZING = false;        // 保留给吸附松手判定;固定尺寸下恒为 false
 let pillW = 200; // 胶囊实测内容宽(已是当前档位的最终逻辑像素),fitPill 维护
 
-function panelBounds() {
-  const u = fsU();
-  return {
-    minW: Math.round(PANEL_MIN[0] * u), minH: Math.round(PANEL_MIN[1] * u),
-    maxW: Math.round(PANEL_MAX[0] * u), maxH: Math.round(PANEL_MAX[1] * u),
-  };
+function panelLayout() {
+  return CFG && CFG.panelLayout === "double" ? "double" : "single";
 }
-function panelDefaultSize() {
+/** 当前字号档位下的面板内容尺寸(逻辑 px)。 */
+function panelContentSize(layout = panelLayout()) {
   const u = fsU();
-  return [Math.round(PANEL_DEFAULT[0] * u), Math.round(PANEL_DEFAULT[1] * u)];
-}
-function panelSizeFromCfg() {
-  const d = panelDefaultSize();
-  const b = panelBounds();
-  const w = Number(CFG && CFG.winW) || d[0];
-  const h = Number(CFG && CFG.winH) || d[1];
-  return [clampNum(Math.round(w), b.minW, b.maxW), clampNum(Math.round(h), b.minH, b.maxH)];
+  const spec = layout === "double" ? PANEL_DOUBLE : PANEL_SINGLE;
+  return [Math.round(spec[0] * u), Math.round(spec[1] * u)];
 }
 function compactMaxPx() {
   const u = fsU();
@@ -2840,10 +3220,7 @@ function compactMaxPx() {
 function formSize(form) {
   const u = fsU();
   if (form === "panel") {
-    const b = panelBounds();
-    const base = SIZE.ready ? [SIZE.panelW, SIZE.panelH] : panelSizeFromCfg();
-    const cw = clampNum(base[0], b.minW, b.maxW);
-    const ch = clampNum(base[1], b.minH, b.maxH);
+    const [cw, ch] = panelContentSize();
     return [cw + CARD_MARGIN * 2, ch + CARD_MARGIN * 2];
   }
   if (form === "compact") {
@@ -2856,29 +3233,18 @@ function formSize(form) {
   return [cw + CARD_MARGIN * 2, ch + CARD_MARGIN * 2];
 }
 
-/** 从真实窗口读回内容尺寸。只记当前形态该记的那一份:
- *  面板记 panelW/H;紧凑条记 compactW;胶囊/贴边不记(它们的宽度由内容/贴边算)。 */
+/** 从真实窗口读回内容尺寸。面板是固定尺寸,不读回;紧凑条按内容宽记账。 */
 function readSizeFromWindow() {
-  // window.innerWidth/Height 已经是当前档位的 CSS(逻辑)像素,和 Tauri 的
-  // LogicalSize 同单位;每帧读它不需要 IPC。以前每帧 scaleFactor+outerSize
-  // 两次 IPC,是拖拽卡顿的主要来源。
   const cw = Math.max(1, Math.round(window.innerWidth - CARD_MARGIN * 2));
   const ch = Math.max(1, Math.round(window.innerHeight - CARD_MARGIN * 2));
-  const form = currentForm();
-  if (form === "panel") {
-    const b = panelBounds();
-    SIZE.panelW = clampNum(cw, b.minW, b.maxW);
-    SIZE.panelH = clampNum(ch, b.minH, b.maxH);
-  } else if (form === "compact") {
+  if (currentForm() === "compact") {
     const u = fsU();
-    // 不在读回时按旧 max 钳:用户往右拖就是要提高 max。
     compactW = clampNum(cw, Math.round(COMPACT_MIN_W * u), Math.round(COMPACT_MAX_W * u));
   }
   return [cw, ch];
 }
 
 /** 有效宽度/高度断点:用内容 / 字号倍率,保证 lg/xl 下信息密度一致。 */
-let lastCustomSize = null;
 function updateSizeClass() {
   const u = fsU();
   const cw = Math.max(1, window.innerWidth - CARD_MARGIN * 2);
@@ -2887,37 +3253,46 @@ function updateSizeClass() {
   const eh = chh / u;
   const wc = ew < 380 ? "xs" : ew < 520 ? "sm" : ew < 720 ? "md" : "lg";
   const hc = eh < 560 ? "xs" : eh < 760 ? "sm" : "lg";
-  // 只在跨断点时写 dataset:每帧都写会触发整页样式重算,拖拽会明显发涩。
   if (document.body.dataset.w !== wc) document.body.dataset.w = wc;
   if (document.body.dataset.h !== hc) document.body.dataset.h = hc;
-  updateResetButton();
+  updateLayoutUI();
 }
 
-/** 底栏常驻「↺ 默认大小」(2026-11-03 用户裁决):不再只在自定义尺寸时出现。
-    标题里带当前默认尺寸;custom-size 类仍保留,供样式区分“当前不是默认值”。 */
-function updateResetButton() {
-  const btn = $("lkReset");
-  const [dw, dh] = panelDefaultSize();
-  const custom =
-    currentForm() === "panel" && !DOCK.on &&
-    (Math.abs(SIZE.panelW - dw) > 1 || Math.abs(SIZE.panelH - dh) > 1);
-  if (custom !== lastCustomSize) {
-    lastCustomSize = custom;
-    document.body.classList.toggle("custom-size", custom);
+/** 底栏与设置里的「单列 / 双列」状态同源。 */
+function updateLayoutUI() {
+  const layout = panelLayout();
+  const label = layout === "double" ? "双列" : "单列";
+  const btn = $("lkLayout");
+  if (btn) {
+    btn.textContent = label;
+    btn.title = `当前${label} · 点击切换为${layout === "double" ? "单列" : "双列"}`;
   }
-  if (btn) btn.title = custom ? `恢复默认大小 (${dw} × ${dh})` : `当前已是默认大小 (${dw} × ${dh})`;
+  const grp = $("cfgLayout");
+  if (grp) {
+    grp.querySelectorAll("button[data-layout]").forEach((b) => {
+      b.setAttribute("aria-pressed", String(b.dataset.layout === layout));
+    });
+  }
+  document.body.classList.toggle("layout-single", layout === "single");
+  document.body.classList.toggle("layout-double", layout === "double");
 }
 
-function updateSizeBadge() {
-  const el = $("rzSize");
-  if (!el) return;
-  const form = currentForm();
-  if (form === "panel") el.textContent = Math.round(SIZE.panelW) + " × " + Math.round(SIZE.panelH);
-  else if (form === "compact") el.textContent = Math.round(compactW) + " × " + COMPACT_H;
-  else return;
-  el.classList.add("on");
-  clearTimeout(resizeBadgeTimer);
-  resizeBadgeTimer = setTimeout(() => el.classList.remove("on"), 900);
+/** 切到指定的固定布局。先落盘再改窗口,失败时 saveCfg 会回滚并重画按钮。 */
+async function setPanelLayout(layout) {
+  const next = layout === "double" ? "double" : "single";
+  if (panelLayout() === next) {
+    updateLayoutUI();
+    return;
+  }
+  CFG.panelLayout = next;
+  updateLayoutUI();
+  const saved = await saveCfg("窗口布局");
+  if (!saved) updateLayoutUI();
+  if (currentForm() === "panel") await applyForm("panel", false, true);
+  render({});
+}
+function togglePanelLayout() {
+  return setPanelLayout(panelLayout() === "double" ? "single" : "double");
 }
 
 async function savePosSoon() {
@@ -2933,217 +3308,13 @@ async function savePosSoon() {
   } catch {}
 }
 
-function endResize() {
-  if (MANUAL_RESIZING) return; // 手柄拖拽由 pointerup 收尾
-  clearTimeout(resizeIdleTimer);
-  resizeIdleTimer = null;
-  if (!RESIZING) return;
-  RESIZING = false;
-  document.body.classList.remove("resizing");
-  markSelfMove(600);
-  readSizeFromWindow();
-  updateSizeClass();
-  if (currentForm() === "panel") {
-    const w = Math.round(SIZE.panelW), h = Math.round(SIZE.panelH);
-    CFG.winW = w;
-    CFG.winH = h;
-    invoke("save_window_size", { w, h, compactMaxW: null }).catch(() => {});
-  } else if (currentForm() === "compact") {
-    const cm = Math.round(compactW);
-    CFG.compactMaxW = cm;
-    invoke("save_window_size", { w: null, h: null, compactMaxW: cm }).catch(() => {});
-    // 拉宽只提高 max;内容不够宽时回到内容宽,不留空白
-    fitCompact();
-  }
-  savePosSoon();
-  if (manageOpen()) {
-    renderManageIndex();
-    syncStaticControls();
-  }
-}
-
-function resetPanelSize() {
-  const [w, h] = panelDefaultSize();
-  SIZE.panelW = w;
-  SIZE.panelH = h;
-  SIZE.form = "panel";
-  if (CFG) {
-    CFG.winW = w;
-    CFG.winH = h;
-  }
-  invoke("save_window_size", { w, h, compactMaxW: null }).catch(() => {});
-  syncStaticControls();
-  applyForm("panel", true, true);
-  showToast("已恢复默认大小");
-}
-
-// 用户 resize(原生 undecorated 边框或右下角手柄)的收尾:
-// onResized 只负责记账 + 280ms 静止;程序化 setSize 用 SIZE_APPLYING 屏蔽。
-let resizeFrame = 0;
-if (typeof appWindow.onResized === "function") appWindow.onResized(() => {
-  if (SIZE_APPLYING) return;
-  const form = currentForm();
-  if (DOCK.on || form === "pill" || form === "docked") return;
-  if (form !== "panel" && form !== "compact") return;
-  if (!RESIZING) {
-    RESIZING = true;
-    document.body.classList.add("resizing");
-    clearTimeout(DOCK.settleTimer);
-    setDockPreview(null);
-  }
-  if (!MANUAL_RESIZING) {
-    clearTimeout(resizeIdleTimer);
-    resizeIdleTimer = setTimeout(endResize, 280);
-  }
-  // 一帧只做一次同步记账;不再每帧两次 IPC。
-  if (resizeFrame) return;
-  resizeFrame = requestAnimationFrame(() => {
-    resizeFrame = 0;
-    readSizeFromWindow();
-    updateSizeClass();
-    updateSizeBadge();
-    // 面板被拖着改宽时,Codex 的「·4天7小时」要跟着收/放;每帧只量一行,可以接受
-    if (form === "panel") fitCodexResetLabels();
-  });
-});
-
+// DPI / 显示器缩放变化后按固定尺寸重新落一次;不再有用户拖拽 resize。
 if (typeof appWindow.onScaleChanged === "function") {
   appWindow.onScaleChanged(async () => {
     if (SIZE_APPLYING) return;
-    await readSizeFromWindow();
-    updateSizeClass();
+    await applyForm(currentForm(), false, true);
   });
 }
-
-// 透明边距里的缩放任层(2026-11-03):原生 undecorated 边框只有最外缘 3 物理像素
-// 可命中,用户拖卡片可见边缘时其实落在内容区 —— 所以由前端接管。
-// 面板 8 个方向;紧凑条只留左右(高度锁死)。右下角可见手柄是同一套拖拽逻辑。
-(function initResizeHandles() {
-  const frame = $("rzFrame");
-  const grip = $("rzGrip");
-  if (!frame) return;
-  let drag = null, pending = null, busy = false;
-
-  const dims = () => {
-    if (currentForm() === "compact") {
-      const u = fsU();
-      const h = Math.round(COMPACT_H * u);
-      // 上限用全局 COMPACT_MAX_W,不是当前 compactMaxW —— 否则用户永远拉不宽,
-      // 而 endResize -> fitCompact 正是靠这次拖动把 compactMaxW 提高。
-      return { w: compactW, h, minW: Math.round(COMPACT_MIN_W * u), maxW: Math.round(COMPACT_MAX_W * u), minH: h, maxH: h };
-    }
-    return { w: SIZE.panelW, h: SIZE.panelH, ...panelBounds() };
-  };
-
-  const flush = () => {
-    if (busy || !pending) return;
-    const p = pending;
-    pending = null;
-    busy = true;
-    // setSize 以左上角为锚点;拉左边/上边时再补一次 setPosition,让对边留在原地。
-    // screenX/Y 与 LogicalPosition 同为逻辑像素,不需要额外换算 DPI。
-    appWindow.setSize(new T.dpi.LogicalSize(p.w + CARD_MARGIN * 2, p.h + CARD_MARGIN * 2))
-      .then(() => (p.x === null ? null : appWindow.setPosition(new T.dpi.LogicalPosition(p.x, p.y))))
-      .catch(() => {})
-      .finally(() => {
-        busy = false;
-        // 拖拽比 IPC 快时只保留最新目标尺寸,避免 IPC 排队导致“越拖越落后”。
-        if (pending) requestAnimationFrame(flush);
-      });
-  };
-
-  const apply = (ev) => {
-    if (!drag) return;
-    const d = dims();
-    const dx = ev.screenX - drag.sx;
-    const dy = ev.screenY - drag.sy;
-    let w = drag.w;
-    let h = drag.h;
-    if (drag.dir.includes("e")) w = drag.w + dx;
-    if (drag.dir.includes("w")) w = drag.w - dx;
-    if (drag.dir.includes("s")) h = drag.h + dy;
-    if (drag.dir.includes("n")) h = drag.h - dy;
-    w = clampNum(Math.round(w), d.minW, d.maxW);
-    h = clampNum(Math.round(h), d.minH, d.maxH);
-    const movingX = drag.dir.includes("w");
-    const movingY = drag.dir.includes("n");
-    // 只拉右边/下边时不需要动位置;左/上方向必须把另一轴也带上,
-    // 否则 LogicalPosition(y=null) 会在 IPC 里失败,窗口只变宽不变位。
-    const x = movingX ? Math.round(drag.x + (drag.w - w)) : drag.x;
-    const y = movingY ? Math.round(drag.y + (drag.h - h)) : drag.y;
-    const px = movingX || movingY ? x : null;
-    const py = movingX || movingY ? y : null;
-    // 已到最小/最大尺寸时不要每帧再发同一个 setSize。
-    if (w === drag.lastW && h === drag.lastH && px === drag.lastX && py === drag.lastY) return;
-    drag.lastW = w;
-    drag.lastH = h;
-    drag.lastX = px;
-    drag.lastY = py;
-    if (currentForm() === "compact") compactW = w;
-    else {
-      SIZE.panelW = w;
-      SIZE.panelH = h;
-    }
-    pending = { w, h, x: px, y: py };
-    if (!busy) requestAnimationFrame(flush);
-  };
-
-  const begin = (el, dir, e) => {
-    if (e.button !== 0 || DOCK.on) return false;
-    const form = currentForm();
-    if (form !== "panel" && !(form === "compact" && (dir === "e" || dir === "w"))) return false;
-    e.preventDefault();
-    e.stopPropagation();
-    try { el.setPointerCapture(e.pointerId); } catch {}
-    MANUAL_RESIZING = true;
-    RESIZING = true;
-    document.body.classList.add("resizing");
-    const d = dims();
-    drag = {
-      dir, sx: e.screenX, sy: e.screenY, w: d.w, h: d.h,
-      x: window.screenX, y: window.screenY,
-    };
-    updateSizeBadge();
-    // setPointerCapture 在部分注入/合成事件下不生效;窗口级监听兜底。
-    const onMove = (ev) => {
-      if (!drag) return;
-      ev.preventDefault();
-      apply(ev);
-    };
-    const onUp = (ev) => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
-      if (!drag) return;
-      drag = null;
-      MANUAL_RESIZING = false;
-      try { el.releasePointerCapture(ev.pointerId); } catch {}
-      endResize();
-    };
-    window.addEventListener("pointermove", onMove, { passive: false });
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
-    return true;
-  };
-
-  for (const z of frame.querySelectorAll(".rz-z")) {
-    z.addEventListener("pointerdown", (e) => begin(z, z.dataset.dir, e));
-  }
-  if (grip) {
-    grip.addEventListener("pointerdown", (e) => begin(grip, "se", e));
-    grip.addEventListener("dblclick", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      resetPanelSize();
-    });
-  }
-})();
-
-$("lkReset").addEventListener("click", (e) => {
-  e.preventDefault();
-  e.stopPropagation();
-  resetPanelSize();
-});
 
 /** 形态白名单 + 可选形态闸门:紧凑条关闭时,任何来源的 compact 都落成面板。
  *  按钮 / Esc / Ctrl+2 / 旧配置 / 以后新增的入口都经过这里,只判一次。 */
@@ -3188,38 +3359,35 @@ async function applyFormInner(form, remember = true, forceSize = false) {
     if (DOCK.open) dockLayout(true);
     return;
   }
-  const [w, h] = formSize(form);
+  let [w, h] = formSize(form);
+  if (form === "panel") {
+    // 固定尺寸也要尊重物理屏幕:大字号档在 1080p 上会超出工作区。
+    // 窗口按显示器尺寸钳制(列表自身滚动,标题栏 / 页脚始终可见)。
+    const mon = await T.window.currentMonitor();
+    const sf = (await appWindow.scaleFactor()) || 1;
+    if (mon) {
+      const maxW = Math.floor(mon.size.width / sf) - 2;
+      const maxH = Math.floor(mon.size.height / sf) - 48; // 任务栏余量
+      w = Math.min(w, maxW);
+      h = Math.min(h, maxH);
+    }
+  }
   SIZE_APPLYING = true;
   try {
     // 改尺寸在 Windows 上会连带挪动窗口(被工作区/边缘约束顶开),那一发 moved
     // 不是用户拖的:不标 selfMove 的话松手判定会把它当成"拖到边缘",切个形态就自己吸附上了(报告 P1-8)
     markSelfMove(FORM_SELF_MOVE_MS);
-    // 先解除上一形态的钳位,否则新尺寸会被旧 min/max 卡住
+    // 先解除上一形态的钳位,再按固定尺寸落一次。
     await appWindow.setMinSize(null);
     await appWindow.setMaxSize(null);
-    // 面板/紧凑条:开启原生 undecorated resize 边框(窗口最外缘);胶囊/贴边仍锁死
-    const resizable = form === "panel" || form === "compact";
-    await appWindow.setResizable(resizable);
-    const u = fsU();
-    if (form === "panel") {
-      const b = panelBounds();
-      await appWindow.setMinSize(new T.dpi.LogicalSize(b.minW + CARD_MARGIN * 2, b.minH + CARD_MARGIN * 2));
-      await appWindow.setMaxSize(new T.dpi.LogicalSize(b.maxW + CARD_MARGIN * 2, b.maxH + CARD_MARGIN * 2));
-      if (!SIZE.ready || SIZE.form !== "panel" || forceSize) {
-        await appWindow.setSize(new T.dpi.LogicalSize(w, h));
-      }
-      SIZE.form = "panel";
-      SIZE.ready = true;
-    } else if (form === "compact") {
-      await appWindow.setMinSize(new T.dpi.LogicalSize(Math.round(COMPACT_MIN_W * u) + CARD_MARGIN * 2, Math.round(COMPACT_H * u) + CARD_MARGIN * 2));
-      await appWindow.setMaxSize(new T.dpi.LogicalSize(Math.round(COMPACT_MAX_W * u) + CARD_MARGIN * 2, Math.round(COMPACT_H * u) + CARD_MARGIN * 2));
+    // 取消自由拖动缩放:所有形态都关掉原生 resize 边框。
+    await appWindow.setResizable(false);
+    if (form === "panel" || form === "compact") {
       await appWindow.setSize(new T.dpi.LogicalSize(w, h));
-      SIZE.form = "compact";
     } else {
       await appWindow.setSize(new T.dpi.LogicalSize(w, h));
       await appWindow.setMinSize(new T.dpi.LogicalSize(w, h));
       await appWindow.setMaxSize(new T.dpi.LogicalSize(w, h));
-      SIZE.form = form;
     }
     // 收尾校验:类与尺寸必须成对落地。IPC 偶发丢失/交叠时这里兜底
     const sf = (await appWindow.scaleFactor()) || 1;
@@ -3229,26 +3397,13 @@ async function applyFormInner(form, remember = true, forceSize = false) {
       await appWindow.setMinSize(null);
       await appWindow.setMaxSize(null);
       await appWindow.setSize(new T.dpi.LogicalSize(w, h));
-      if (form === "panel") {
-        const b = panelBounds();
-        await appWindow.setMinSize(new T.dpi.LogicalSize(b.minW + CARD_MARGIN * 2, b.minH + CARD_MARGIN * 2));
-        await appWindow.setMaxSize(new T.dpi.LogicalSize(b.maxW + CARD_MARGIN * 2, b.maxH + CARD_MARGIN * 2));
-      } else if (form === "compact") {
-        await appWindow.setMinSize(new T.dpi.LogicalSize(Math.round(COMPACT_MIN_W * u) + CARD_MARGIN * 2, Math.round(COMPACT_H * u) + CARD_MARGIN * 2));
-        await appWindow.setMaxSize(new T.dpi.LogicalSize(Math.round(COMPACT_MAX_W * u) + CARD_MARGIN * 2, Math.round(COMPACT_H * u) + CARD_MARGIN * 2));
-      } else {
+      if (form !== "panel" && form !== "compact") {
         await appWindow.setMinSize(new T.dpi.LogicalSize(w, h));
         await appWindow.setMaxSize(new T.dpi.LogicalSize(w, h));
       }
     }
-    // 用请求的尺寸记账(不依赖 setSize 后 innerWidth 是否已刷新);下一次
-    // onResized 只做同步读回,不再触发 IPC。
-    if (form === "panel") {
-      SIZE.panelW = Math.round(w - CARD_MARGIN * 2);
-      SIZE.panelH = Math.round(h - CARD_MARGIN * 2);
-    } else if (form === "compact") {
-      compactW = Math.round(w - CARD_MARGIN * 2);
-    }
+    // 紧凑条的宽度仍按内容记账;面板尺寸由布局固定,不记账。
+    if (form === "compact") compactW = Math.round(w - CARD_MARGIN * 2);
     // 等一帧让 WebView 的 innerWidth/Height 跟上,再切断点/按钮。
     setTimeout(updateSizeClass, 30);
     // 视口变化后重新量一次紧凑条,决定尾巴要收几个进 "+N"
@@ -3283,6 +3438,8 @@ function enqueueGeom(fn) {
 }
 
 function applyForm(form, remember = true, forceSize = false) {
+  // 切形态前先关详情:胶囊/紧凑条没有底部弹层的落点
+  if (DETAIL_ID && form !== "panel") closeDetail(false);
   return enqueueGeom(() => applyFormInner(form, remember, forceSize));
 }
 
@@ -3424,7 +3581,7 @@ async function dockExitNow(keepPos) {
     SIZE_APPLYING = true;
     await appWindow.setMinSize(null);
     await appWindow.setMaxSize(null);
-    await appWindow.setResizable(currentForm() !== "pill");
+    await appWindow.setResizable(false);
     const pos = await appWindow.outerPosition();
     await appWindow.setSize(new T.dpi.LogicalSize(w, h));
     if (info) {
@@ -3435,15 +3592,7 @@ async function dockExitNow(keepPos) {
       const y = keepPos ? Math.max(info.top, Math.min(maxY, pos.y)) : Math.max(info.top + 60, Math.min(maxY, pos.y));
       await appWindow.setPosition(new T.dpi.PhysicalPosition(x, y));
     }
-    if (currentForm() === "panel") {
-      const b = panelBounds();
-      await appWindow.setMinSize(new T.dpi.LogicalSize(b.minW + CARD_MARGIN * 2, b.minH + CARD_MARGIN * 2));
-      await appWindow.setMaxSize(new T.dpi.LogicalSize(b.maxW + CARD_MARGIN * 2, b.maxH + CARD_MARGIN * 2));
-    } else if (currentForm() === "compact") {
-      const u = fsU();
-      await appWindow.setMinSize(new T.dpi.LogicalSize(Math.round(COMPACT_MIN_W * u) + CARD_MARGIN * 2, Math.round(COMPACT_H * u) + CARD_MARGIN * 2));
-      await appWindow.setMaxSize(new T.dpi.LogicalSize(Math.round(COMPACT_MAX_W * u) + CARD_MARGIN * 2, Math.round(COMPACT_H * u) + CARD_MARGIN * 2));
-    } else {
+    if (currentForm() !== "panel" && currentForm() !== "compact") {
       await appWindow.setMinSize(new T.dpi.LogicalSize(w, h));
       await appWindow.setMaxSize(new T.dpi.LogicalSize(w, h));
     }
@@ -3536,9 +3685,7 @@ function renderDock() {
   const body = $("dockBody");
   if (!body) return;
   if (!DOCK.on) return;
-  const ids = HV.order.length
-    ? HV.order
-    : CHANNELS.filter((c) => c.hasKey && !c.hidden).map((c) => c.id);
+  const ids = sortChannels(CHANNELS).map((c) => c.id);
   const segs = ids
     .map((id) => {
       const c = CHANNELS.find((x) => x.id === id);
@@ -3559,6 +3706,8 @@ function renderDock() {
 const manageOpen = () => document.body.classList.contains("view-manage");
 
 function openManage() {
+  // 详情弹层在最上层:任何入口进设置页都先把弹层收掉,不能让它盖着设置页
+  if (DETAIL_ID) closeDetail(false);
   // 先挂上 view-manage:下面的 fillKeyHints 会检查 manageOpen(),
   // 类晚加一步就会让这一次读取被当成"页面没打开"而跳过。
   document.body.classList.add("view-manage");
@@ -3569,7 +3718,7 @@ function openManage() {
   renderChCards();
   fillKeyHints(true);
   renderPillPick();
-  syncStaticControls(); // 窗口尺寸可能在设置页关闭期间被拖动过
+  syncStaticControls(); // 关闭设置页时同步可能变化的状态
   renderAbout(UPD.last); // 版本号与上次检查时间
   loadCheckin();         // 签到状态(渠道卡与设置页都用)
   showTab("index");      // 默认落在索引页,31 号起不再把 7 个页签挤进 380px
@@ -3643,13 +3792,8 @@ $("sum").addEventListener("click", async (e) => {
   }
   if (a === "jump") {
     const id = act.dataset.id;
-    const row = id && document.querySelector(`.row[data-id="${id}"]`);
-    if (!row) return;
-    row.scrollIntoView({ block: "center" });
-    row.classList.add("flash");
-    setTimeout(() => row.classList.remove("flash"), 1150);
-    // 顺手展开:从"最紧"跳过去的人,要看的就是它的原因
-    if (!row.classList.contains("open")) row.querySelector(".rhead").click();
+    // 从"最先到期"点进去,要看的就是它的逐笔到期 —— 直接打开同一个详情弹层
+    if (id) openDetail(id, act);
     return;
   }
   if (a === "ckstripopen") {
@@ -3675,9 +3819,37 @@ function focusEl(el) {
   });
 }
 
-$("chQ").addEventListener("input", (e) => {
-  CH_Q = e.target.value || "";
-  render({}); // 过滤只影响"画哪些行",不重取数
+// 详情弹层:点遮罩空白关闭;弹层内动作走 detailAction。
+$("detailShade").addEventListener("click", async (e) => {
+  if (e.target === $("detailShade")) {
+    closeDetail();
+    return;
+  }
+  const act = e.target.closest("[data-act]");
+  if (!act) return;
+  e.stopPropagation();
+  await detailAction(act);
+});
+
+// 焦点收拢在弹层内:Tab / Shift+Tab 不逃到背后的卡片和底栏
+$("detailSheet").addEventListener("keydown", (e) => {
+  if (e.key !== "Tab") return;
+  const sheet = $("detailSheet");
+  const f = [
+    ...sheet.querySelectorAll(
+      'button:not([disabled]),[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
+    ),
+  ].filter((el) => el.offsetParent !== null || el === document.activeElement);
+  if (!f.length) return;
+  const first = f[0];
+  const last = f[f.length - 1];
+  if (e.shiftKey && (document.activeElement === first || document.activeElement === sheet)) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
 });
 
 $("list").addEventListener("click", async (e) => {
@@ -3738,6 +3910,7 @@ $("list").addEventListener("click", async (e) => {
       }
       await ckRun(id);
     } else if (a === "open-manage") {
+      if (DETAIL_ID) closeDetail(false);
       openManage();
       const first = act.dataset.first;
       if (first) {
@@ -3758,67 +3931,37 @@ $("list").addEventListener("click", async (e) => {
       ensureModels(id);
     } else if (a === "sec-more") {
       // 段标题旁的「全部 N 条」:原地展开 / 收起。状态挂在 rowMore 上,
-      // 轮询重画后还在;收起整行时清掉。
+      // 轮询重画后还在。弹层开着时优先刷新弹层。
       const sec = act.dataset.sec;
       rowMore[id] = rowMore[id] || {};
       rowMore[id][sec] = !rowMore[id][sec];
-      const c = CHANNELS.find((x) => x.id === id);
-      const body = document.querySelector(`.rbody[data-body="${id}"]`);
-      if (c && body) body.innerHTML = renderDetail(c);
-      const cur = document.querySelector(`.row[data-id="${id}"]`);
-      revealFailFull(cur);
+      if (DETAIL_ID === id) renderDetailSheet();
+      else {
+        const c = CHANNELS.find((x) => x.id === id);
+        const body = document.querySelector(`.rbody[data-body="${id}"]`);
+        if (c && body) body.innerHTML = renderDetail(c);
+        const cur = document.querySelector(`.row[data-id="${id}"]`);
+        revealFailFull(cur);
+      }
     }
     return;
   }
 
   const head = e.target.closest(".rhead");
   if (!head) return;
-  // 只有面板形态画展开区(紧凑条里 .rbody 是 display:none):在别的形态里点 chip
-  // 以前会悄悄把行记成展开、白取一次台账,切回面板时冒出一张没人点过的展开卡
+  // 面板里的卡片点击 = 打开单例详情弹层(紧凑条里点 chip 仍是展开面板的旧路径)
   if (!document.body.classList.contains("form-panel")) return;
   const row = head.closest(".row");
   const id = row.dataset.id;
-  const was = row.classList.contains("open");
-  // 收起的行同时改 aria:开合是可感知状态,不能等下一次轮询重绘才更新(F2)
-  document.querySelectorAll(".row").forEach((r) => {
-    r.classList.remove("open");
-    // 收起整行(包括"开另一行把它顶掉")时「全部 N 条」复位 —— 状态跟行开合走
-    delete rowMore[r.dataset.id];
-    const h = r.querySelector(".rhead");
-    if (h) h.setAttribute("aria-expanded", "false");
-  });
-  rowOpen.clear();
-  if (was) return;
-  rowOpen.add(id);
-  row.classList.add("open");
-  head.setAttribute("aria-expanded", "true");
   const c = CHANNELS.find((x) => x.id === id);
   if (!c) return;
+  openDetail(id, head);
 
-  // 先画后取:手头的数据立刻画出来,展开动画跑起来时内容就在;
-  // 台账先占一行「读取中…」,取到后原地替换。以前是先跑 320ms 动画、再 await 取数,
-  // 内容在动画结束后才蹦进去(设计 §4.1)。
-  const paint = () => {
-    // 期间轮询可能把整行换成了新节点:按当前 DOM 重新查一次,写进游离节点永远看不见
-    const cur = document.querySelector(`.row[data-id="${id}"]`);
-    if (!cur || !cur.classList.contains("open")) return;
-    // 渠道数据也要按**当前**的取:点击时拿到的 c 在 await 期间可能已被轮询换掉,
-    // 用旧对象重画会把刚刷新的数值改回去(2026-10-23 边界复核:¥99.99 → ¥12.40)
-    const cc = CHANNELS.find((x) => x.id === id);
-    const body = cur.querySelector(".rbody");
-    if (cc && body) body.innerHTML = renderDetail(cc);
-    revealFailFull(cur);
-    scheduleRowReveal(id);
-  };
-  // 只有**从没取到过**台账时才画「读取中…」;已有缓存就先画缓存、后台重取,
-  // 否则每次重新展开都会先缩成一行占位再撑开(97px → 248px 的一跳)
-  if (c.kind === "amount" && !(changesCache[id] && changesCache[id].length)) {
-    changesState[id] = "loading";
-  }
-  paint();
-
-  // 变动台账每次展开都重取(它扫 7 天明细,很便宜;缓存住反而会显示过期账目)
+  // 金额型的「最近变动」仍按需取:先画占位,取到后只刷新当前弹层。
   if (c.kind === "amount") {
+    // 已有缓存就先画缓存,后台重取;从没取到过才写「读取中…」
+    if (!(changesCache[id] && changesCache[id].length)) changesState[id] = "loading";
+    renderDetailSheet();
     try {
       changesCache[id] = await invoke("channel_changes", { id, days: 7 });
       changesState[id] = "done";
@@ -3826,7 +3969,8 @@ $("list").addEventListener("click", async (e) => {
       changesCache[id] = [];
       changesState[id] = "error";
     }
-    paint();
+    // 期间可能已切换/关闭弹层:只刷新仍是同一个 ID 的那一个
+    if (DETAIL_ID === id) renderDetailSheet();
   }
 });
 
@@ -3847,9 +3991,8 @@ function showToast(msg, bad) {
 /** 标题栏右侧的"上次更新":取所有可见渠道里最新的 updatedAt,分钟级刷新。 */
 function updateHeaderLive() {
   const el = $("tbLive");
-  if (!el) return;
   const ts = Math.max(0, ...CHANNELS.filter((c) => c.hasKey && !c.hidden).map((c) => c.updatedAt || 0));
-  el.textContent = ts ? relTime(ts) : "";
+  if (el) el.textContent = ts ? relTime(ts) : "";
 }
 
 $("btnR").addEventListener("click", async () => {
@@ -3916,10 +4059,10 @@ function renderManageIndex() {
   const box = $("mIndexList");
   if (!box) return;
   const withKey = CHANNELS.filter((c) => c.hasKey && !c.hidden);
-  const actions = Number((HV && HV.actionCount) || 0);
   const ck = HV && HV.checkin;
   const ckOn = !!(ck && ck.total > 0);
   const font = FONT_NAME[(CFG && CFG.fontScale) || "md"] || "标准";
+  const theme = CFG && CFG.theme === "light" ? "浅色" : "深色";
   const compact = CFG && CFG.compactEnabled ? "紧凑条开" : "紧凑条关";
   const sort = SORT_NAME[(CFG && CFG.sort) || "urgency"] || "紧迫度";
   const run = CFG
@@ -3937,14 +4080,14 @@ function renderManageIndex() {
     <svg class="midx-chev" aria-hidden="true"><use href="#i-chev"/></svg></button>`;
   box.innerHTML = [
     row("ch", "i-layers", "渠道管理",
-      withKey.length ? `${withKey.length} 个渠道${actions ? ` · ${actions} 个需处理` : ""}` : "尚未配置渠道"),
+      withKey.length ? `${withKey.length} 个渠道` : "尚未配置渠道"),
     row("mdl", "i-spark", "模型与客户端", "4SAPI · Hapi · OpenCode Go", "mdl"),
     row("ck", "i-cal", "每日签到",
       ckOn ? `今日 ${ck.done}/${ck.total}${ck.done >= ck.total ? " · 已完成" : ""}` : "未开启签到", "ck"),
-    row("disp", "i-display", "外观与显示", `${font}字号 · ${compact} · 排序：${sort}`, "disp"),
+    row("disp", "i-display", "外观与显示", `${theme}主题 · ${font}字号 · ${compact} · 排序：${sort}`, "disp"),
     row("run", "i-refresh", "刷新与启动", run, "run"),
-    row("sync", "i-sync", "同步到手机", syncSummary(), "sync"),
     row("vault", "i-key", "密钥箱", "查看 / 搜索本机密钥", "vault"),
+    row("sync", "i-sync", "同步到手机", syncSummary(), "sync"),
     row("about", "i-info", "关于与诊断", about),
   ].join("");
 }
@@ -4722,6 +4865,11 @@ $("btnH").addEventListener("click", () =>
 $("lkQuit").addEventListener("click", () =>
   invoke("window_cmd", { action: "quit" }).catch((e) => showToast("退出失败:" + e, true))
 );
+$("lkLayout").addEventListener("click", (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  togglePanelLayout();
+});
 $("lkKeys").addEventListener("click", openManage);
 // 紧凑条上的两个方向:展开一级 / 再收一级
 $("btnExpand").addEventListener("click", () => applyForm("panel"));
@@ -5520,20 +5668,31 @@ bindSelect("cfgBackoff", "backoffIntervalSec");
 bindSelect("cfgSort", "sort", String);
 bindSelect("cfgWarn", "warnPercent");
 bindSelect("cfgCrit", "critPercent");
-// 字号:换档要同时写 --u、按新倍率重新钳窗口尺寸、重量紧凑条截断
-$("btnResetSize").addEventListener("click", () => resetPanelSize());
-
+// 字号:换档写 --u 并按新倍率重落固定窗口尺寸;紧凑条重新截断
 $("cfgFontScale").addEventListener("change", () => {
   CFG.fontScale = $("cfgFontScale").value;
   saveCfg();
   applyFontScale();
-  // 字号只改排版和最小尺寸;用户手动拉大的窗口不缩回默认。
-  const b = panelBounds();
-  SIZE.panelW = clampNum(SIZE.panelW, b.minW, b.maxW);
-  SIZE.panelH = clampNum(SIZE.panelH, b.minH, b.maxH);
-  applyForm(currentForm(), true, true);
+  applyForm(currentForm(), false, true);
   updateSizeClass();
   render();
+});
+
+// 主题:即时预览 → 真实落盘;失败由 saveCfg() 回滚 CFG 并调用 syncStaticControls(含 applyTheme)
+$("cfgTheme").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-theme]");
+  if (!btn) return;
+  const next = btn.dataset.theme === "light" ? "light" : "dark";
+  if ((CFG.theme || "dark") === next) return;
+  CFG.theme = next;
+  applyTheme();
+  await saveCfg("主题");
+  applyTheme();
+});
+
+$("cfgLayout").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-layout]");
+  if (btn) setPanelLayout(btn.dataset.layout);
 });
 bindSwitch("cfgAutostart", "autostart", (on) => invoke("set_autostart", { enabled: on }));
 bindSwitch("cfgAutoUpdate", "autoCheckUpdate");
@@ -5736,6 +5895,8 @@ function syncStaticControls() {
   set("cfgWarn", CFG.warnPercent);
   set("cfgCrit", CFG.critPercent);
   set("cfgFontScale", CFG.fontScale || "md");
+  applyTheme();
+  updateLayoutUI();
   const hk = $("cfgHotkey");
   if (hk) hk.value = hkLabel(CFG.hotkey) || "未设置";
   setSwitch("cfgAutostart", CFG.autostart);
@@ -5752,8 +5913,6 @@ function syncStaticControls() {
   setSwitch("cfgShowUsed", !!CFG.showUsed);
   const mf = $("cfgMoneyFloor");
   if (mf) mf.value = String(CFG.moneyFloor > 0 ? CFG.moneyFloor : 10);
-  const ws = $("winSizeDesc");
-  if (ws) ws.textContent = Math.round(SIZE.panelW) + " × " + Math.round(SIZE.panelH) + " · 拖动边缘调整";
   document.body.classList.toggle("pulse", !!CFG.alertPulse);
   document.body.classList.toggle("texttone", !!CFG.textTone);
 }
@@ -6166,6 +6325,12 @@ listen("update-progress", (ev) => onUpdProgress(ev.payload));
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
+  // 详情弹层盖在最上层:Esc 只关它,同一次按键不能再把窗口收成胶囊。
+  if (DETAIL_ID) {
+    e.preventDefault();
+    closeDetail();
+    return;
+  }
   // 覆盖层最优先:它盖在所有内容上,Esc 却先去关设置页/收形态,
   // 用户按半天 Esc 都关不掉眼前那个下载框(报告 P2-16)
   if (MDL.sheet) {
@@ -6231,12 +6396,6 @@ document.addEventListener("keydown", (e) => {
     if (e.key === "3") { e.preventDefault(); applyForm("pill"); return; }
   }
   if (typing) return;
-  if (e.key === "/") {
-    // 只有过滤框可见时才抢这个键,免得面板里按不出别的斜杠输入
-    const q = $("chQ");
-    if (q && q.offsetParent) { e.preventDefault(); q.focus(); }
-    return;
-  }
   if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
   if (!document.body.className.includes("form-panel")) return;
   const heads = [...document.querySelectorAll("#list .rhead")];
@@ -8006,7 +8165,7 @@ function applyChannelsPush(payload) {
       activeIntervalSec: 60, idleIntervalSec: 300, backoffIntervalSec: 900,
       warnPercent: 40, critPercent: 15, autostart: false,
       form: "panel", compactEnabled: false, sort: "percent", pillChannels: [],
-      fontScale: "md", hiddenChannels: [], hotkey: "", trayShowNumber: true,
+      fontScale: "md", theme: "dark", panelLayout: "single", hiddenChannels: [], hotkey: "", trayShowNumber: true,
       claimChannels: {
         "4sapi": { enabled: true, amount: 200, minIntervalDays: 14, manualLastAt: null, manualSetAt: null },
       },
@@ -8016,15 +8175,6 @@ function applyChannelsPush(payload) {
   }
   applyConfigToUI();
   applyFontScale();
-  // 先把面板尺寸从配置里取出来:启动 Rust 只在 form=panel 时设过窗口尺寸,
-  // 上次停在胶囊/紧凑条时这里要用配置值恢复。
-  {
-    const [w, h] = panelSizeFromCfg();
-    SIZE.panelW = w;
-    SIZE.panelH = h;
-    SIZE.ready = true;
-    syncStaticControls();
-  }
   // 静态模板里的「?」补出说明块(渠道卡里的是动态的,renderChCards 自己会补)
   hydrateWhy();
   // 版本号:等首检(最坏 30 秒)才显示,期间关于页是空的。直接问后端要(报告 P2-16)
@@ -8133,15 +8283,6 @@ function applyChannelsPush(payload) {
   updateSizeClass();
   await refresh();
   playEntrance(); // 启动首帧也来一次入场(上面 applyForm 没换形态,不会自动放)
-  // 一次性提示:手柄/边框不可见,不说一句很难发现(0.3.0 升级后只出现一次)
-  if (CFG && !CFG.resizeHintSeen) {
-    setTimeout(() => {
-      if (!CFG || CFG.resizeHintSeen) return;
-      CFG.resizeHintSeen = true;
-      saveCfg();
-      showToast("现在可拖动边缘调整大小 · 变大后可一键恢复默认");
-    }, 1500);
-  }
 
   listen("channels-updated", (ev) => applyChannelsPush(ev.payload));
 

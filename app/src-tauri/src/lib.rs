@@ -5358,12 +5358,22 @@ pub fn run() {
                 // 先恢复尺寸,再用**新尺寸**夹位置:否则宽窗口在屏幕边缘会被
                 // 按旧尺寸裁进屏幕,恢复位置后右/下边又探出去。
                 if config.form == "panel" {
-                    if let (Some(cw), Some(ch)) = (config.win_w, config.win_h) {
-                        let _ = w.set_size(tauri::LogicalSize::new(
-                            cw as f64 + 20.0,
-                            ch as f64 + 20.0,
-                        ));
-                    }
+                    // 面板只有「单行窗 / 双行窗」两个固定尺寸,不再恢复用户拖动过的尺寸。
+                    let u = match config.font_scale.as_str() {
+                        "lg" => 1.15,
+                        "xl" => 1.3,
+                        _ => 1.0,
+                    };
+                    let (cw, ch) = if config.panel_layout == "double" {
+                        (980.0, 820.0)
+                    } else {
+                        (480.0, 820.0)
+                    };
+                    let _ = w.set_resizable(false);
+                    let _ = w.set_size(tauri::LogicalSize::new(
+                        cw * u + 20.0,
+                        ch * u + 20.0,
+                    ));
                 }
                 // 恢复窗口位置(报告 O-6)。多屏环境下副屏拔掉后旧坐标落在屏幕外,
                 // 窗口"消失"又无从找回 —— 所以按当前可用显示器裁一遍。

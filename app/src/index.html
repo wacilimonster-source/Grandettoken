@@ -18,6 +18,9 @@
     <symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M14 9l2.5 2.5"/></symbol>
     <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.6v.2"/></symbol>
     <symbol id="i-sync" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h14M14 3l4 4-4 4"/><path d="M20 17H6M10 13l-4 4 4 4"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
   </svg>
 
   <!-- 吸附后的竖条:只有一个色块,不显示任何数字;整块可拖动(拖离边缘即解除吸附) -->
@@ -62,11 +65,7 @@
   </div>
 
   <div class="sum" id="sum"></div>
-  <!-- 渠道过滤:只有渠道多起来(>=12)才显示,平时不占这一行(P3) -->
-  <div class="qbar" id="qbar" style="display:none">
-    <input class="inp" id="chQ" placeholder="过滤渠道…" autocomplete="off" spellcheck="false">
-  </div>
-  <div class="list" id="list">
+  <div class="list" id="list" role="region" aria-label="渠道列表">
     <div class="empty">加载中…</div>
   </div>
 
@@ -174,14 +173,22 @@
     <!-- 页签 3:显示 -->
     <div class="mbody panel" data-p="disp">
       <h4>外观</h4>
-      <div class="field"><span>字号<span class="desc">只改文字大小;窗口可拖动调整</span></span>
+      <div class="field"><span>主题<span class="desc">深石墨 / 暖雾白,即时预览</span></span>
+        <div class="seg" id="cfgTheme" role="group" aria-label="主题">
+          <button type="button" data-theme="dark" aria-pressed="true">深色</button>
+          <button type="button" data-theme="light" aria-pressed="false">浅色</button>
+        </div></div>
+      <div class="field"><span>字号<span class="desc">只改文字大小;窗口尺寸固定</span></span>
         <select class="sel" id="cfgFontScale">
           <option value="md">标准</option>
           <option value="lg">大</option>
           <option value="xl">特大</option>
         </select></div>
-      <div class="field"><span>窗口尺寸<span class="desc" id="winSizeDesc">拖动边缘调整;右下角可拖</span></span>
-        <button type="button" class="btn s" id="btnResetSize">恢复默认</button></div>
+      <div class="field"><span>窗口布局<span class="desc">固定尺寸,不能拖动缩放</span></span>
+        <div class="seg" id="cfgLayout" role="group" aria-label="窗口布局">
+          <button type="button" data-layout="single" aria-pressed="true">单列</button>
+          <button type="button" data-layout="double" aria-pressed="false">双列</button>
+        </div></div>
       <div class="field"><span>启用紧凑条<button class="why" data-why="compact" aria-expanded="false" aria-label="紧凑条的说明"></button><span class="desc">关闭后顶栏仍可用「胶囊」收起</span></span>
         <button class="sw" id="cfgCompact" role="switch" aria-checked="false" aria-label="启用紧凑条"></button></div>
       <div class="field"><span>托盘图标显示余额数字<button class="why" data-why="trayNum" aria-expanded="false" aria-label="托盘数字的说明"></button><span class="desc">底色即状态色</span></span>
@@ -468,28 +475,20 @@
          而设置入口收敛到这一处之后,它就成了键盘用户唯一的入口(2026-10-20)。 -->
     <button type="button" class="lk" id="lkUpd" style="display:none"></button>
     <div class="spacer"></div>
-    <button type="button" class="lk" id="lkReset" title="恢复默认大小">↺ 默认大小</button>
+    <button type="button" class="lk" id="lkLayout" title="切换单列 / 双列窗口">单列</button>
     <button type="button" class="lk" id="lkKeys">设置与管理</button>
     <span style="color:var(--line2)">|</span>
     <button type="button" class="lk" id="lkQuit">退出</button>
   </div>
 
-  <!-- 窗口四周的缩放任层:压在 10px 透明边距上,不遮卡片内容。
-       原生 undecorated 边框只有 3 物理像素可命中,用户拖可见卡片边缘时拖不到它,
-       所以由前端接管 8 个方向(面板)与左右方向(紧凑条)。 -->
-  <div class="rz-frame" id="rzFrame" aria-hidden="true">
-    <div class="rz-z rz-n" data-dir="n"></div>
-    <div class="rz-z rz-s" data-dir="s"></div>
-    <div class="rz-z rz-w" data-dir="w"></div>
-    <div class="rz-z rz-e" data-dir="e"></div>
-    <div class="rz-z rz-nw" data-dir="nw"></div>
-    <div class="rz-z rz-ne" data-dir="ne"></div>
-    <div class="rz-z rz-sw" data-dir="sw"></div>
-    <div class="rz-z rz-se" data-dir="se"></div>
+  <!-- 渠道详情:单例底部弹层。标题栏与页脚之间的遮罩 + 上缘圆角 16 的弹层;
+       头部固定、主体独立滚动、动作区贴底。 -->
+  <div class="shade" id="detailShade" hidden>
+    <section class="detail" id="detailSheet" role="dialog" aria-modal="true" aria-labelledby="detailName" tabindex="-1">
+      <div class="detail-head" id="detailHead"></div>
+      <div class="detail-body" id="detailBody"></div>
+    </section>
   </div>
-  <!-- 面板右下角可见缩放手柄 + 拖动时的实时尺寸 -->
-  <div class="rz-grip" id="rzGrip" title="拖动调整大小;双击恢复默认" role="presentation"></div>
-  <div class="rz-size" id="rzSize" aria-hidden="true"></div>
 
   <!-- 轻量提示条:刷新回执 / 操作失败,替代原生 alert -->
   <div id="toast" role="status"></div>

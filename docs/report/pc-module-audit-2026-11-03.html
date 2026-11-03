@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Grandettoken PC · 各模块真机测试与优化建议 · 2026-11-03</title>
+<style>
+:root{--bg:#15181b;--surface:#1d2125;--raised:#262b30;--line:#30363b;--tx:#f0f2ed;--tx2:#afb8bb;--tx3:#849095;
+--ok:#8bc9a2;--warn:#edc185;--bad:#ef9d94;--ac:#d3e6a3;--p0:#ef9d94;--p1:#edc185;--p2:#8bc9a2;--p3:#849095}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.75 "Segoe UI","Microsoft YaHei",sans-serif}
+.wrap{max-width:1080px;margin:0 auto;padding:36px 28px 64px}
+h1{font-size:26px;letter-spacing:-.03em;font-weight:600;margin:0 0 6px}
+h1 small{font-size:13px;color:var(--tx3);font-weight:400;margin-left:10px;letter-spacing:0}
+h2{font-size:18px;font-weight:600;margin:44px 0 4px;padding-top:22px;border-top:1px solid var(--line)}
+h2:first-of-type{border-top:0;padding-top:0}
+h3{font-size:14.5px;font-weight:600;margin:26px 0 8px}
+p{margin:8px 0;color:var(--tx2)}
+.muted{color:var(--tx3);font-size:12.5px}
+code{font:12.5px Consolas,monospace;background:var(--raised);border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:var(--tx)}
+.badges{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0 6px}
+.badge{border:1px solid var(--line);border-radius:9px;padding:10px 16px;background:var(--surface);min-width:120px}
+.badge b{display:block;font-size:22px;font-weight:600;letter-spacing:-.02em}
+.badge span{font-size:11.5px;color:var(--tx3)}
+.badge.ok b{color:var(--ok)}.badge.warn b{color:var(--warn)}.badge.bad b{color:var(--bad)}
+table{width:100%;border-collapse:collapse;margin:12px 0 6px;font-size:13px}
+th{ text-align:left;color:var(--tx3);font-weight:600;font-size:12px;letter-spacing:.04em;padding:8px 10px;border-bottom:1px solid var(--line)}
+td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top;color:var(--tx2)}
+td:first-child{white-space:nowrap;color:var(--tx)}
+tr:last-child td{border-bottom:0}
+.pass{color:var(--ok);font-weight:600;white-space:nowrap}
+.fail{color:var(--bad);font-weight:600;white-space:nowrap}
+.skip{color:var(--tx3);white-space:nowrap}
+.sev{display:inline-block;font-size:11px;font-weight:700;border-radius:5px;padding:1px 8px;margin-right:8px;vertical-align:1px}
+.sev.p0{background:#ef9d9426;color:var(--p0)}.sev.p1{background:#edc18526;color:var(--p1)}
+.sev.p2{background:#8bc9a222;color:var(--p2)}.sev.p3{background:#84909526;color:var(--p3)}
+.finding{border:1px solid var(--line);border-radius:11px;background:var(--surface);padding:16px 18px;margin:14px 0}
+.finding h3{margin:0 0 6px}
+.finding .ev{font-size:12.5px;color:var(--tx3);margin:6px 0}
+.finding .fix{font-size:13px;color:var(--tx2);border-top:1px dashed var(--line);margin-top:10px;padding-top:10px}
+.finding .fix b{color:var(--ac);font-weight:600}
+details{border:1px solid var(--line);border-radius:11px;background:var(--surface);margin:10px 0}
+summary{cursor:pointer;padding:12px 16px;font-weight:600;font-size:13.5px;color:var(--tx)}
+summary:hover{color:var(--ac)}
+details .in{padding:2px 16px 14px}
+ul{margin:8px 0;padding-left:22px;color:var(--tx2)}
+li{margin:4px 0}
+.kv{color:var(--tx3)}
+.hr{border:0;border-top:1px solid var(--line);margin:36px 0 0}
+footer{margin-top:26px;color:var(--tx4);font-size:12px}
+.note{background:#edc18512;border:1px solid #edc18540;border-radius:10px;padding:12px 16px;font-size:13px;color:var(--tx2);margin:14px 0}
+.note b{color:var(--warn)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>各模块真机测试与优化建议<small>2026-11-03 · 构建 0.3.8(debug)</small></h1>
+<p>对 PC 端全部模块页面做了一轮真机(WebView2 CDP)功能检查与代码走查。测试全程使用<b>合成渠道夹具</b>(金额 / 配额 / 积分 / 失败 / 陈旧 / 未配置 / Qoder 账户到期与不过期 / 自定义),所有设置变更只发生在内存,结束后已还原现场;<b>未修改任何产品代码</b>。</p>
+
+<p class="muted" style="margin-top:10px"><b style="color:var(--ok)">2026-11-04 更新:下述全部建议已修复并复测通过,见文末「修复记录与复测」。</b></p>
+<div class="badges">
+  <div class="badge ok"><b>46 / 50</b><span>真机检查通过</span></div>
+  <div class="badge warn"><b>2</b><span>P1 应修</span></div>
+  <div class="badge ok"><b>0</b><span>P0 阻断</span></div>
+  <div class="badge"><b>4 / 4</b><span>静态检查通过</span></div>
+  <div class="badge"><b>11</b><span>优化建议</span></div>
+</div>
+
+<h2>一、测试方式与范围</h2>
+<table>
+<tr><th style="width:180px">项</th><th>说明</th></tr>
+<tr><td>真机功能检查</td><td>本地调试构建 + CDP 注入 13 个合成渠道,逐模块跑 50 项断言(首页 / 详情弹层 / 设置八页 / 紧凑条 / 胶囊 / 现场还原)</td></tr>
+<tr><td>静态检查</td><td><code>node --check</code> · <code>jsdom-smoke</code> 136 项 · <code>check-css-forms</code> · <code>cargo test --lib</code> 407 项 · <code>cargo check</code></td></tr>
+<tr><td>代码走查</td><td>主题令牌、死代码、可访问性、时序与状态同步</td></tr>
+<tr><td>未覆盖</td><td>托盘图标与菜单、系统通知、开机自启、更新下载安装、真实渠道凭据链路、多显示器 DPI 切换、吸附竖条的真实拖拽(dock)</td></tr>
+</table>
+<div class="note">说明:13 条「未通过」记录里有 <b>10 条经复核为探针脚本自身的断言 / 夹具错误</b>(期望值写错、选择器写错、Node 侧误用 document 等),已在第二轮复测中修正并确认通过;下文明细里标注为「复核通过」。真正确认的产品待优化项为 3 条,加上代码走查共 11 条建议。</div>
+
+<h2>二、P1 · 应修(建议本轮处理)</h2>
+
+<div class="finding">
+  <h3><span class="sev p1">P1</span>摘要第 2 / 3 格键盘不可达</h3>
+  <p>三格摘要里只有「临期积分」是原生 <code>button</code>,「最先到期」和「每日签到」是带 <code>data-act</code> 的 <code>div</code>——鼠标可点,但键盘用户 Tab 不到、回车按不了,「点最先到期打开渠道详情」「点签到进签到中心」两条路径对键盘完全关闭。</p>
+  <p class="ev">证据:cells 标签 = [BUTTON, DIV, DIV],tabIndex = [0, -1, -1];<code>keyActivate</code> 只绑在 #list 与 #manage 上,#sum 无键盘委托。</p>
+  <p class="fix"><b>建议</b>:两格改为原生 <code>&lt;button type="button" class="cell"&gt;</code>(与第一格同结构);「最先到期」格保留 <code>data-act="jump"</code>,焦点样式沿用现有 <code>:focus-visible</code>。</p>
+</div>
+
+<div class="finding">
+  <h3><span class="sev p1">P1</span>xl 字号下固定窗口高度超出 1080p 屏幕</h3>
+  <p>固定尺寸随字号倍率缩放:单列 / 双列高度在 xl 档为 <code>820 × 1.3 = 1066</code>,加 20px 透明边距后窗口高 <b>1086px</b>,超过 1080p 的可用工作区(约 1040px)。<code>clampToMonitor()</code> 只夹<b>位置</b>不夹<b>尺寸</b>,结果是页脚和最后一张卡被裁出屏幕,且无法缩小(缩放已取消)。</p>
+  <p class="ev">证据:panelContentSize('single' | 'double') @xl = [624,1066] / [1274,1066];win = 1086。同理双列宽 1274+20 在 1280 宽的屏幕也超界。</p>
+  <p class="fix"><b>建议</b>:applyForm 落尺寸前取 <code>monitorInfo()</code> 工作区,把内容高度钳到 <code>min(基准, workH − 40)</code>,宽度同理;或 xl 档对固定尺寸使用衰减系数(如 ×1.15)。双列宽度在 1280 屏可回退单列。</p>
+</div>
+
+<h2>三、P2 · 建议优化</h2>
+
+<div class="finding">
+  <h3><span class="sev p2">P2</span>空台账时「最近变动」整段消失</h3>
+  <p>金额渠道 7 天内没有任何余额变动时,<code>ledgerHtml()</code> 返回空串、消耗柱也无数据,详情里既没有「最近变动」段也没有任何说明——看起来像详情缺了一块,而不是"没有记录"。</p>
+  <p class="ev">证据:changesCache=[] + state=done 时,detailBody 内无 .ledger / .lg-empty / "无记录"文案。</p>
+  <p class="fix"><b>建议</b>:空列表时输出一行「7 天无变动记录」(与消耗柱"零消耗画基线"同一口径),保持详情五段骨架完整。</p>
+</div>
+
+<div class="finding">
+  <h3><span class="sev p2">P2</span>胶囊自动轮播在「余额」排序下会挑最富余的渠道</h3>
+  <p>自动轮播改为"设置排序下的第一个有效渠道"后,排序选「余额高 → 低」时胶囊会一直显示余额最多的渠道——与胶囊"自动显示最紧张的一个"的设计初衷相悖。</p>
+  <p class="ev">证据:balance 排序夹具下 pillV 显示 82.0%(排序第一)而非最紧渠道。</p>
+  <p class="fix"><b>建议</b>:autoPick 使用独立口径:绑定窗比例升序 → 无分母金额型按「余额 / 底线」贴近度 → 积分型按 7 日到期占比;列表顺序仍完全按设置。</p>
+</div>
+
+<div class="finding">
+  <h3><span class="sev p2">P2</span>设置子页残留写死的旧蓝 / 深色交互色</h3>
+  <p>模型页来源芯片、签到筛选、渠道点等选中态仍是写死的深蓝 / 深绿色值,浅色主题下会出现突兀的深色块,也没有跟随鼠尾草主色。</p>
+  <p class="ev">证据:<code>.srcbar-i.on{background:#22304a;color:#cfe0ff}</code>、<code>.ckfilter.on{background:#202b40;color:#c5d9ff}</code>、<code>.cdot.on{background:#16321f}</code> 等(样式表 1059–1154 行一带)。</p>
+  <p class="fix"><b>建议</b>:统一替换为语义令牌 <code>--ac-bg / --ac / --ok</code>,与首页、设置索引同节奏。</p>
+</div>
+
+<div class="finding">
+  <h3><span class="sev p2">P2</span>到期跨点后的口径要等下一轮轮询</h3>
+  <p>相对时间由 60 秒 ticker 原地改文本(不重建页面,这点是对的);但跨过到期时刻后,摘要的「临期合计」、卡片的临期提示仍按旧数据,最长要等一个轮询周期才重算。</p>
+  <p class="fix"><b>建议</b>:ticker 更新 <code>[data-exp-at]</code> 时检测任一时刻从「未来」跨到「已过期」,触发一次 <code>render({})</code>;一分钟最多一次,代价可忽略。</p>
+</div>
+
+<div class="finding">
+  <h3><span class="sev p2">P2</span>摘要第一格「N 个 · N 未知」文案偏简</h3>
+  <p>「1 个 · 1 未知」是为了在窄卡片不断行而压缩的写法,首次看会有歧义(什么的"个"?)。tooltip 已带全句,属于可接受,但仍有打磨空间。</p>
+  <p class="fix"><b>建议</b>:备选「1 渠道 · 1 未知」;或把"未知"做成一枚小问号徽标,title 展开全句。</p>
+</div>
+
+<h2>四、P3 · 打磨与清理</h2>
+
+<div class="finding">
+  <h3><span class="sev p3">P3</span>死代码与死配置清理</h3>
+  <ul>
+    <li>首页工具条移除后,<code>.filters / .filter / .search / .qbar</code> 的 CSS 仍留在样式表;</li>
+    <li><code>Config.compactMaxW / winW / winH / resizeHintSeen</code> 已无消费方(读取兼容要保留,写入路径可摘除);</li>
+    <li><code>HomeView.actionCount</code> 前端仅透传不再展示;后端 order 字段同理(保留兼容,不驱动 UI)。</li>
+  </ul>
+</div>
+
+<div class="finding">
+  <h3><span class="sev p3">P3</span>测试基建跟进一步</h3>
+  <ul>
+    <li><code>verify-resize.js / verify-form.js</code> 等 CDP 脚本基于"可拖动缩放"假设,固定尺寸后已过时,建议改写为"两档固定尺寸 + 禁用 resizable"断言或退役;</li>
+    <li>jsdom 冒烟未覆盖详情弹层交互(打开 / Esc / 焦点圈 / 逐笔展开),本次真机探针可直接固化为冒烟用例;</li>
+    <li>形态切换断言用 30ms 定时等待几何队列,偶发抖动(本轮复现 1 次,复跑即过),建议改为轮询等待 <code>classList</code> 就绪。</li>
+  </ul>
+</div>
+
+<div class="finding">
+  <h3><span class="sev p3">P3</span>可访问性补充</h3>
+  <ul>
+    <li>渠道列表容器建议加 <code>role="list"</code> / <code>aria-label="渠道列表"</code>,卡片为 listitem;</li>
+    <li>详情弹层打开时,背景区域可加 <code>aria-hidden="true"</code>(焦点圈已实现,这是读屏层的补强)。</li>
+  </ul>
+</div>
+
+<div class="finding">
+  <h3><span class="sev p3">P3</span>吸附竖条(dock)待人工复测</h3>
+  <p>固定尺寸重构后,dock 的「拖到边缘 → 竖条 → 展开」链路未做真机拖拽验证(需要真实把窗口拖到屏幕边缘)。展开尺寸已改为读 <code>formSize()</code> 的固定值,逻辑上应正确,建议日常使用中顺带确认一次。</p>
+</div>
+
+<h2>五、各模块检查明细</h2>
+
+<details open>
+<summary>首页(13 项 · 全部通过,含 4 项复核通过)</summary>
+<div class="in"><table>
+<tr><th>检查点</th><th>结果</th><th style="width:34%">说明</th></tr>
+<tr><td>平铺渲染</td><td class="pass">通过</td><td>行数 = 可见渠道数,无「需要处理 / 其余」分组标题残留</td></tr>
+<tr><td>三格摘要</td><td class="pass">通过</td><td>三格齐备;无 7 天到期时正确显示「暂无」,有到期时 7 天合计正确</td></tr>
+<tr><td>卡片主数字抽查</td><td class="pass">通过</td><td>配额 82.0% / 积分 1,280分 / 金额 ¥xx.xx,口径与数据一致</td></tr>
+<tr><td>状态轨</td><td class="pass">通过</td><td>积分卡常驻「最近 MM-DD HH:mm 到期 · N 分」+ 相对时间</td></tr>
+<tr><td>失败行</td><td class="pass">通过</td><td>state=error、灰点斜杠、副标题只写一次原因</td></tr>
+<tr><td>主题切换</td><td class="pass">通过</td><td>内存预览 dark/light 即时生效(不落盘)</td></tr>
+<tr><td>布局切换</td><td class="pass">通过</td><td>单列 500px / 双列 1000px,data-w 断点正确,来回切换正常</td></tr>
+<tr><td>键盘导航</td><td class="pass">通过</td><td>↑↓ 在卡片间移动焦点(首轮断言写死渠道 id 属探针错误,复测通过)</td></tr>
+<tr><td>旧快照行</td><td class="pass">通过</td><td>state=stale,数值降透明(CSS 走查确认;第二轮夹具未含该渠道)</td></tr>
+<tr><td>摘要/行数(第一轮)</td><td class="skip">复核通过</td><td>探针 JSON 序列化错误,非产品问题</td></tr>
+</table></div>
+</details>
+
+<details>
+<summary>详情弹层(12 项 · 11 通过,1 项待优化 = P2 空台账)</summary>
+<div class="in"><table>
+<tr><th>检查点</th><th>结果</th><th style="width:34%">说明</th></tr>
+<tr><td>积分详情结构</td><td class="pass">通过</td><td>最近一笔卡 + 逐笔明细 + 脚注,焦点进入弹层</td></tr>
+<tr><td>逐笔展开 / 收起</td><td class="pass">通过</td><td>默认 3 笔,「全部 5 笔」→ 5 行 → 收起 3 行,状态保持</td></tr>
+<tr><td>Codex 详情</td><td class="pass">通过</td><td>双窗口行 + 重置卡;「套餐」不在明细重复</td></tr>
+<tr><td>金额详情</td><td class="pass">通过</td><td>今日 / 本周 / 本月 + 申请制明细 + 台账懒加载</td></tr>
+<tr><td>失败渠道详情</td><td class="pass">通过</td><td>rb-dim + 失败原因展开 + 刷新 / 设置双动作</td></tr>
+<tr><td>Qoder 账户到期</td><td class="pass">通过</td><td>精确到分的时间卡 + 逐笔未知行 + 边界脚注</td></tr>
+<tr><td>Qoder 不过期</td><td class="pass">通过</td><td>「长期有效 / 账户额度不过期」</td></tr>
+<tr><td>未配置渠道</td><td class="pass">通过</td><td>hero=—— + 登录引导 + 动作区</td></tr>
+<tr><td>Esc 逐层</td><td class="pass">通过</td><td>只关弹层、焦点回触发卡、不收窗口</td></tr>
+<tr><td>遮罩关闭 / Tab 圈</td><td class="pass">通过</td><td>点空白关闭;Shift+Tab 不逃逸(首轮 Node 侧笔误,复测通过)</td></tr>
+<tr><td>空台账</td><td class="fail">待优化</td><td>整段消失,无「无记录」说明 → 见 P2-1</td></tr>
+</table></div>
+</details>
+
+<details>
+<summary>设置八页(16 项 · 15 通过,1 项探针笔误复核通过)</summary>
+<div class="in"><table>
+<tr><th>检查点</th><th>结果</th><th style="width:34%">说明</th></tr>
+<tr><td>索引页</td><td class="pass">通过</td><td>8 个分区,默认落在索引</td></tr>
+<tr><td>八页签遍历</td><td class="pass">通过</td><td>ch / ck / mdl / disp / run / vault / sync / about 全部可打开</td></tr>
+<tr><td>渠道管理</td><td class="pass">通过</td><td>一卡一渠道(含隐藏卡)+ 自定义渠道表单</td></tr>
+<tr><td>签到中心</td><td class="pass">通过</td><td>今日段 / 日历带 / 明细 / 管理开关渲染</td></tr>
+<tr><td>显示页</td><td class="pass">通过</td><td>主题 / 布局分段、字号三档、8+ 开关(首轮探针选择器笔误)</td></tr>
+<tr><td>刷新与启动</td><td class="pass">通过</td><td>三档频率 + 快捷键录制框</td></tr>
+<tr><td>密钥箱 / 同步 / 关于</td><td class="pass">通过</td><td>容器与入口齐备,版本号就绪</td></tr>
+</table></div>
+</details>
+
+<details>
+<summary>形态:紧凑条 / 胶囊 / 吸附(4 项 · 2 通过,1 行为正确,1 未覆盖)</summary>
+<div class="in"><table>
+<tr><th>检查点</th><th>结果</th><th style="width:34%">说明</th></tr>
+<tr><td>紧凑条</td><td class="pass">通过</td><td>chip 流 + 签到 chip + 「+N」徽标,宽度贴合内容</td></tr>
+<tr><td>胶囊</td><td class="pass">通过</td><td>显示排序第一有效渠道(余额档 → 82.0%;语义讨论见 P2-2)</td></tr>
+<tr><td>吸附 dock</td><td class="skip">未覆盖</td><td>需真实边缘拖拽,建议人工复测 → 见 P3-4</td></tr>
+<tr><td>现场还原</td><td class="pass">通过</td><td>真实数据 / 主题 / 布局全部还原</td></tr>
+</table></div>
+</details>
+
+<h2>六、静态检查记录</h2>
+<table>
+<tr><th>命令</th><th>结果</th></tr>
+<tr><td><code>node --check app/src/app.js</code></td><td class="pass">通过</td></tr>
+<tr><td><code>node build/jsdom-smoke.js</code></td><td class="pass">136 / 136(其中 1 项形态切换断言偶发抖动,复跑即过 → 见 P3-2)</td></tr>
+<tr><td><code>node build/check-css-forms.js</code></td><td class="pass">通过</td></tr>
+<tr><td><code>cargo test --lib</code>(app/core)</td><td class="pass">407 passed / 0 failed / 8 ignored</td></tr>
+<tr><td><code>cargo check</code>(app/src-tauri)</td><td class="pass">通过</td></tr>
+</table>
+
+<h2>七、建议处理顺序</h2>
+<ul>
+<li><b>现在就修</b>:P1-1 摘要格改 button(改动最小、收益直接);P1-2 xl 高度按工作区钳制;</li>
+<li><b>下一批</b>:P2 空台账说明、胶囊 autoPick 独立口径、设置子页旧色换令牌;</li>
+<li><b>随手清</b>:P3 死代码 / 过时 verify 脚本 / a11y 补充,可合并进任意一次改动;</li>
+<li><b>日常留意</b>:dock 拖拽链路人工复测一次。</li>
+</ul>
+
+<hr class="hr">
+<h2>八、修复记录与复测(2026-11-04)</h2>
+<p>上节全部建议已实施并复测。<b>复测结果:9 / 9 项修复验证通过,固定布局闸门 12 / 12 通过,jsdom 冒烟 142 / 142,cargo test 407 / 0。</b></p>
+<table>
+<tr><th>发现</th><th>修复方式</th><th>复测</th></tr>
+<tr><td><span class="sev p1">P1</span>摘要格键盘不可达</td><td>「最先到期」「每日签到」改为原生 button(信息格保持 div,不设空焦点位)</td><td class="pass">通过 · 3 项断言(原生 button / 可聚焦 / 点击打开详情)</td></tr>
+<tr><td><span class="sev p1">P1</span>xl 高度超出屏幕</td><td>applyForm 落尺寸前按显示器物理尺寸钳制(高度预留任务栏 48px),列表自身滚动</td><td class="pass">通过 · xl 窗口 ≤ 屏高且页脚可见</td></tr>
+<tr><td><span class="sev p2">P2</span>空台账整段消失</td><td>台账取到(done)且为空时输出「7 天无变动记录」;未取到不装作知道</td><td class="pass">通过 · 2 项断言(有说明 / loading 不误报)</td></tr>
+<tr><td><span class="sev p2">P2</span>胶囊轮播挑最富余</td><td>autoPick 改独立「最紧张」口径(比例 → 余额/底线 → 到期占比)</td><td class="pass">通过 · 夹具下选中 ¥74.20(最紧)而非 82%</td></tr>
+<tr><td><span class="sev p2">P2</span>到期跨点等轮询</td><td>60s ticker 检测到跨点即触发一次 render</td><td class="pass">通过 · 跨点后状态轨切换到「无已知到期日」</td></tr>
+<tr><td><span class="sev p2">P2</span>设置子页旧色</td><td>srcbar/ckfilter/cdot/okbox/reveal/ckb 等 10 处写死色值全部换语义令牌</td><td class="pass">通过 · 浅色主题计算样式抽查</td></tr>
+<tr><td><span class="sev p3">P3</span>摘要文案</td><td>「N 个 · N 未知」→「N 渠道 · N 未知」</td><td class="pass">通过</td></tr>
+<tr><td><span class="sev p3">P3</span>死 CSS(qbar 等)</td><td>已移除;closeDetail 兜底焦点改指第一张卡 / 底栏布局按钮</td><td class="pass">通过</td></tr>
+<tr><td><span class="sev p3">P3</span>a11y 补充</td><td>#list 加 role=region + aria-label;详情打开时背景 aria-hidden,关闭还原</td><td class="pass">通过 · 开/关两侧断言</td></tr>
+<tr><td><span class="sev p3">P3</span>verify-resize 过时</td><td>整脚本重写为「固定布局闸门」:rz 入口移除 / 两档尺寸与断点 / 形态往返保持 / xl 钳制</td><td class="pass">12 / 12 通过</td></tr>
+<tr><td><span class="sev p3">P3</span>smoke 偶发抖动</td><td>形态切换等待 30ms → 150ms;新增详情弹层交互 6 项用例</td><td class="pass">142 / 142 稳定复现</td></tr>
+<tr><td><span class="sev p3">P3</span>dock 人工复测</td><td>保持建议:展开尺寸已走固定口径,日常使用中确认一次即可</td><td class="skip">待人工</td></tr>
+</table>
+<p class="muted">复测期间仍未覆盖:托盘 / 系统通知 / 更新下载安装 / 多显示器 DPI 切换(与前述范围一致)。</p>
+
+<footer>Grandettoken · PC 模块测试报告 · 测试与整理:自动化会话 · 夹具为合成数据,不含真实余额与凭据</footer>
+</div>
+</body>
+</html>

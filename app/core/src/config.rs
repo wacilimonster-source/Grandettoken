@@ -92,6 +92,12 @@ pub struct Config {
     /// 字号档位:md(标准) | lg(大) | xl(特大)。倍率映射在前端(FS_U),
     /// 这里只存档位本身 —— 老配置缺字段时 serde default 兜成 md,行为不变。
     pub font_scale: String,
+    /// 主题:dark(深石墨) | light(暖雾白)。老配置缺字段兜成 dark;
+    /// 非法值在 sanitize 里回退,不让一个手改的字符串把界面染成空白。
+    pub theme: String,
+    /// 面板布局:single(单行窗,一列) | double(双行窗,两列)。
+    /// 两种都是固定尺寸,不再支持用户拖动缩放。
+    pub panel_layout: String,
     /// 胶囊形态固定显示哪些渠道(按顺序轮播);空 = 自动显示最紧张的一个
     pub pill_channels: Vec<String>,
     /// 被隐藏的渠道 id:主面板不显示、**不发请求**(App 型也不再读本机登录凭据),
@@ -256,6 +262,8 @@ impl Default for Config {
             compact_enabled: false,
             sort: "percent".into(),
             font_scale: "md".into(),
+            theme: "dark".into(),
+            panel_layout: "single".into(),
             pill_channels: Vec::new(),
             hidden_channels: Vec::new(),
             user_touched_channels: Vec::new(),
@@ -344,6 +352,12 @@ impl Config {
         }
         if self.font_scale != "lg" && self.font_scale != "xl" {
             self.font_scale = "md".into();
+        }
+        if self.theme != "light" {
+            self.theme = "dark".into();
+        }
+        if self.panel_layout != "double" {
+            self.panel_layout = "single".into();
         }
         if self.form != "compact" && self.form != "pill" {
             self.form = "panel".into();
@@ -443,6 +457,31 @@ mod tests {
         assert!(c.hidden_channels.is_empty());
         // 老配置没有 alertPulse:呼吸动画默认关
         assert!(!c.alert_pulse);
+        // 老配置没有 theme:默认深石墨,不能变成空串
+        assert_eq!(c.theme, "dark");
+        // 老配置没有 panelLayout:默认单行窗
+        assert_eq!(c.panel_layout, "single");
+    }
+
+    #[test]
+    fn theme_is_sanitized_and_light_roundtrips() {
+        let mut c = Config::default();
+        c.theme = "light".into();
+        let back: Config = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+        assert_eq!(back.theme, "light");
+
+        let mut bad = Config::default();
+        bad.theme = "midnight".into();
+        bad.sanitize();
+        assert_eq!(bad.theme, "dark", "非法主题必须回退,不能让界面没有令牌");
+
+        let mut layout = Config::default();
+        layout.panel_layout = "double".into();
+        layout.sanitize();
+        assert_eq!(layout.panel_layout, "double");
+        layout.panel_layout = "triple".into();
+        layout.sanitize();
+        assert_eq!(layout.panel_layout, "single");
     }
 
     #[test]
