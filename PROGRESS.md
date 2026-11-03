@@ -3836,3 +3836,10 @@ resource_package_quota / … / total_quota / lastResetAt / nextResetAt`),
 
 **验证**:core `407 passed`;`jsdom-smoke` 142 passed;固定布局闸门 12 项 PASS
 (880×840 / data-w=lg / 无横向越界);真机截图夹具确认每卡 404px、2×2 一屏。
+
+**发布（2026-11-04）**：tag `v0.3.10`，release 提交 `1450f96`，
+[GitHub Release v0.3.10](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.3.10)。
+三件套齐全且与本地逐字节一致(GitHub digest 核对:exe 5,587,389 B / SHA-256
+`98240C2DCF9A4E75C1241479437F1298CC1567913B5650FCBC86150968E50208`、`.sig`、`latest.json`,
+state 均 uploaded);`verify-release.js` 当轮因本机到 github.com 直连超时未能跑通,
+已用 `gh api` 资产摘要比对替代核验,网络恢复后可再跑一次确认下载端点。
