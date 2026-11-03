@@ -3841,5 +3841,8 @@ resource_package_quota / … / total_quota / lastResetAt / nextResetAt`),
 [GitHub Release v0.3.10](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.3.10)。
 三件套齐全且与本地逐字节一致(GitHub digest 核对:exe 5,587,389 B / SHA-256
 `98240C2DCF9A4E75C1241479437F1298CC1567913B5650FCBC86150968E50208`、`.sig`、`latest.json`,
-state 均 uploaded);`verify-release.js` 当轮因本机到 github.com 直连超时未能跑通,
-已用 `gh api` 资产摘要比对替代核验,网络恢复后可再跑一次确认下载端点。
+state 均 uploaded);`verify-release.js` 首轮因本机到 github.com 直连超时未跑通,改用 `gh api` 资产
+digest 比对先行核验(三件套与本地逐字节一致);网络恢复后复跑 **10 项全 PASS**
+(下载端点 200 / SHA 一致 / 三件套齐 / 非 draft / 说明完整 / repo public)。
+另记一个坑:从 Git Bash 用 `cmd /c start ... /S` 装机,`/S` 会被路径转换吃掉,
+安装器挂在前台等待 —— 用 PowerShell `Start-Process -ArgumentList '/S' -Wait` 才可靠。
