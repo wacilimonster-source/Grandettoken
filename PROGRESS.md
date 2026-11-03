@@ -3688,7 +3688,16 @@ GitHub API 与 `gh release view` 均确认三件套齐全：`Grandettoken_0.3.0_
   标题不被截断(实测 title 77.8px,`scrollWidth==clientWidth`)。
 - **底栏**:`lkReset` 文案「↺ 默认大小」常驻,不再只在自定义尺寸时显示;
   复位路径三条:底栏、双击手柄、设置页。
-- **验证**:`node --check`;jsdom **128/128**;`verify-settings-entry` 去掉旧的 7 页签
-  断言后全 PASS(新增四按钮/无菜单/底栏常驻/6 种组合零溢出);`verify-resize`
-  **全 PASS**,新增透明边距 8 命中层、右/下/左/上真实拖动(含窗口位置联动)、
-  默认尺寸下按钮仍常驻等断言;真实 CDP 鼠标在四条边各拖 4px 均生效。
+- **验证**:`node --check`;core **400 + 6 fixtures**;jsdom **128/128**;
+  `verify-settings-entry` 去掉旧的 7 页签断言后全 PASS(新增四按钮/无菜单/
+  底栏常驻/6 种组合零溢出);`verify-resize` **全 PASS**,新增透明边距 8 命中层、
+  右/下/左/上真实拖动(含窗口位置联动)、默认尺寸下按钮仍常驻等断言;
+  真实 CDP 鼠标在四条边各拖 4px 均生效。
+
+**发布（2026-11-03）**：tag `v0.3.6`，release 提交 `bf50165`，
+[GitHub Release v0.3.6](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.3.6)。
+三件套齐全：`Grandettoken_0.3.6_x64-setup.exe`（5,580,538 B，SHA-256
+`61a84b0927feae2932f5eebfa06306d977e214bb6903a7c85b8ab723274ed6fa`）、`.sig`、
+`latest.json`；`verify-signature` 与 `verify-updater` **PASS**，GitHub API 确认
+非 draft / prerelease，且 v0.3.6 为当前 latest。本机已静默覆盖安装，
+`%LOCALAPPDATA%\Grandettoken\Grandettoken.exe` 文件版本 0.3.6，安装后已启动。
