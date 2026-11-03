@@ -5365,7 +5365,7 @@ pub fn run() {
                         _ => 1.0,
                     };
                     let (cw, ch) = if config.panel_layout == "double" {
-                        (980.0, 820.0)
+                        (860.0, 820.0)
                     } else {
                         (480.0, 820.0)
                     };

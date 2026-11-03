@@ -3827,3 +3827,12 @@ resource_package_quota / … / total_quota / lastResetAt / nextResetAt`),
 `30D5EE352A9C15C92C5DC474FE853D944C57E2798F615835710AB518D5782CCA`）、`.sig`、
 `latest.json`；`verify-release.js` 9 项全 PASS(安装包可下载、SHA 一致、三件套齐、
 非 draft/prerelease、说明完整、repo public)。
+
+### 调整 · 双列窗口卡片收窄（2026-11-04，v0.3.10）
+
+**裁决**(用户):双列的每张卡片不需要和单列一样宽 —— 980 宽下每卡 465px,
+与单列 440 几乎等宽,两张大卡并排显得空。双列内容宽 **980 → 860**(窗口 880×840),
+每卡 **404px**,仍高于 740 的双列断点;单列 480×820 不变。
+
+**验证**:core `407 passed`;`jsdom-smoke` 142 passed;固定布局闸门 12 项 PASS
+(880×840 / data-w=lg / 无横向越界);真机截图夹具确认每卡 404px、2×2 一屏。

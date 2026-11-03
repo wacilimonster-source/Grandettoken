@@ -44,7 +44,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     check('拖动缩放入口已移除(rzFrame/rzGrip)', gone.frame && gone.grip, JSON.stringify(gone));
 
     // 2. 两档固定尺寸
-    for (const [layout, wantW, wantH, wantWcls] of [['single', 500, 840, 'sm'], ['double', 1000, 840, 'lg']]) {
+    for (const [layout, wantW, wantH, wantWcls] of [['single', 500, 840, 'sm'], ['double', 880, 840, 'lg']]) {
       await evalJs(`(()=>{CFG.panelLayout='${layout}';updateLayoutUI();applyForm('panel',false,true);})()`);
       await sleep(900);
       const s = JSON.parse(await evalJs(`(()=>{const btn=document.querySelector('.tbar').getBoundingClientRect();

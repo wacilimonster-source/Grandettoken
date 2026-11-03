@@ -3193,7 +3193,7 @@ const clampNum = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 // 面板只有两个固定尺寸(内容逻辑 px,随字号倍率缩放)。不再支持用户拖动缩放。
 // 单列:一列卡片,宽高按 4 个渠道一屏可见设计;双列:两列卡片,与单列同高。
 const PANEL_SINGLE = [480, 820];
-const PANEL_DOUBLE = [980, 820];
+const PANEL_DOUBLE = [860, 820];
 const COMPACT_MIN_W = 220;
 const COMPACT_MAX_W = 580;
 const COMPACT_H = 46;

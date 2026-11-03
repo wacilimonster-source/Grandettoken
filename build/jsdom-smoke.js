@@ -586,18 +586,18 @@ const HARNESS = `
 
       await applyForm("pill");
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      await new Promise((r) => setTimeout(r, 150));
+      await new Promise((r) => { const t0 = Date.now(); (function p(){ if (document.body.classList.contains("form-panel") || Date.now() - t0 > 1500) return r(); setTimeout(p, 15); })(); });
       ck("关闭时胶囊 Esc 回面板", document.body.classList.contains("form-panel"), document.body.className);
 
       // 顶栏折叠入口:关紧凑条时是「胶囊」,不能只剩 Esc/Ctrl+3 两条隐藏路径
       document.body.className = "form-panel";
       document.getElementById("btnPill").click();
-      await new Promise((r) => setTimeout(r, 150));
+      await new Promise((r) => { const t0 = Date.now(); (function p(){ if (document.body.classList.contains("form-panel") || Date.now() - t0 > 1500) return r(); setTimeout(p, 15); })(); });
       ck("关闭紧凑条时顶栏「胶囊」能进胶囊", document.body.classList.contains("form-pill"), document.body.className);
       await applyForm("panel");
 
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "2", ctrlKey: true, bubbles: true }));
-      await new Promise((r) => setTimeout(r, 150));
+      await new Promise((r) => { const t0 = Date.now(); (function p(){ if (document.body.classList.contains("form-pill") || Date.now() - t0 > 1500) return r(); setTimeout(p, 15); })(); });
       ck("关闭时 Ctrl+2 不切形态", document.body.classList.contains("form-panel"), document.body.className);
 
       CFG.compactEnabled = true;
@@ -1075,8 +1075,8 @@ w.__DATA = DATA;
     const single = w.__TEST.panelContentSize("single");
     const double = w.__TEST.panelContentSize("double");
     R.push({
-      name: "固定布局尺寸:单列 480×820 / 双列 980×820",
-      ok: single[0] === 480 && single[1] === 820 && double[0] === 980 && double[1] === 820,
+      name: "固定布局尺寸:单列 480×820 / 双列 860×820",
+      ok: single[0] === 480 && single[1] === 820 && double[0] === 860 && double[1] === 820,
       extra: JSON.stringify({ single, double }),
     });
     const before = w.__TEST.cfg().panelLayout;
