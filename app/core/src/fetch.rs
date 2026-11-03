@@ -3590,6 +3590,7 @@ mod tests {
         let def = providers::find("opencode-go").unwrap();
         let mut v = placeholder(def);
         v.windows = vec![providers::Window {
+            key: "monthly".into(),
             label: "周期".into(),
             percent: 10.0,
             remain_percent: 90.0,
@@ -3652,6 +3653,7 @@ mod tests {
 
         let mut v = placeholder(def);
         v.windows = vec![providers::Window {
+            key: "monthly".into(),
             label: "周期".into(),
             percent: 10.0,
             remain_percent: 90.0,
@@ -3714,6 +3716,7 @@ mod tests {
         let mk = |reset: &str| {
             let mut v = placeholder(def);
             v.windows = vec![providers::Window {
+                key: "monthly".into(),
                 label: "周期".into(),
                 percent: 50.0,
                 remain_percent: 50.0,
@@ -4103,6 +4106,7 @@ mod tests {
         let mut v = placeholder(def);
         v.windows = vec![
             providers::Window {
+                key: "5h".into(),
                 label: "5 小时".into(),
                 percent: 10.0,
                 remain_percent: 90.0,
@@ -4111,6 +4115,7 @@ mod tests {
                 main: false,
             },
             providers::Window {
+                key: "weekly".into(),
                 label: "周".into(),
                 percent: 20.0,
                 remain_percent: 80.0,
@@ -4125,6 +4130,7 @@ mod tests {
         let mut w = placeholder(def);
         w.windows = vec![
             providers::Window {
+                key: "5h".into(),
                 label: "5 小时".into(),
                 percent: 10.0,
                 remain_percent: 90.0,
@@ -4133,6 +4139,7 @@ mod tests {
                 main: false,
             },
             providers::Window {
+                key: "monthly".into(),
                 label: "周期".into(),
                 percent: 20.0,
                 remain_percent: 80.0,

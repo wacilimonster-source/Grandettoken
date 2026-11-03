@@ -829,6 +829,7 @@ mod tests {
 
     fn win(label: &str, remain: f64, status: &str, resets_in: Option<i64>) -> Window {
         Window {
+            key: String::new(),
             label: label.into(),
             percent: 100.0 - remain,
             remain_percent: remain,

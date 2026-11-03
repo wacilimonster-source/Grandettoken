@@ -37,6 +37,10 @@ pub struct Expiring {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Window {
+    /// 稳定窗口键（5h/weekly/monthly/rolling 等）。标签只负责显示，
+    /// 小部件和详情按这个键选择窗口，不能靠中文文案。
+    #[serde(default)]
+    pub key: String,
     pub label: String,
     /// 已消耗百分比
     pub percent: f64,
@@ -237,6 +241,7 @@ pub fn extract_opencode_go(body: &Value) -> FetchResult {
         // 同函数里 resets_at 缺失走 None(界面显示「—」)才是本文件的既定口径。
         let pct = w.get("percent").and_then(num)?;
         Some(Window {
+            key: key.into(),
             label: label.into(),
             percent: pct,
             // 上游 percent 偶发 >100(超用),余量钳到 0 —— 别把负数发给界面,
@@ -934,11 +939,12 @@ pub fn extract_codex(body: &Value) -> FetchResult {
         }
     };
 
-    let win = |key: &str, is_main: bool| -> Option<Window> {
-        let w = rl.get(key)?;
+    let win = |field: &str, is_main: bool| -> Option<Window> {
+        let w = rl.get(field)?;
         let used = w.get("used_percent").and_then(num)?;
         let secs = w.get("limit_window_seconds").and_then(num).unwrap_or(0.0);
         Some(Window {
+            key: codex_window_key(secs),
             label: codex_window_label(secs),
             percent: round1(used),
             remain_percent: round1((100.0 - used).max(0.0)),
@@ -1001,6 +1007,23 @@ pub fn extract_codex(body: &Value) -> FetchResult {
             .and_then(|v| crate::codex::summary(v, chrono::Utc::now().timestamp())),
         extra,
         ..Default::default()
+    }
+}
+
+/// 窗长 → 稳定键。选择语义只认键，不认中文标签。
+fn codex_window_key(secs: f64) -> String {
+    if secs == 5.0 * 3600.0 {
+        "5h".into()
+    } else if secs == 86_400.0 {
+        "daily".into()
+    } else if secs == 7.0 * 86_400.0 {
+        "weekly".into()
+    } else if secs == 30.0 * 86_400.0 {
+        "monthly".into()
+    } else if secs > 0.0 {
+        format!("seconds:{}", secs.round() as i64)
+    } else {
+        "unknown".into()
     }
 }
 

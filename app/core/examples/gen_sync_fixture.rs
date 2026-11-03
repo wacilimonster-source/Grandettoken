@@ -90,10 +90,12 @@ fn main() {
                 total: None,
                 percent: Some("42".into()),
                 windows: vec![WindowSnapshot {
-                    label: "5 小时".into(),
+                    key: "monthly".into(),
+                    label: "周期".into(),
                     remain_percent: Some("42".into()),
                     reset_at: Some(1_793_504_800),
                     reset_text: Some("18:00".into()),
+                    main: true,
                 }],
                 expiring: vec![],
                 day: None,

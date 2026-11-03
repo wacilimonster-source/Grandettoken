@@ -170,7 +170,17 @@ gt-relay-<随机>（Secret Gist）
 - `percent` 只用于 `quota`；金额与百分比不能相加。
 - 积分、配额不参与金额合计。
 
-### 5.3 platformId
+### 5.3 windows
+
+- `windows[]` 每个窗口包含 `key`、`label`、`remainPercent`、`resetAt`/`resetText`、`main`。
+- `key` 是稳定选择键，不能由中文 `label` 反推；当前约定：`5h`、`weekly`、`monthly`、
+  `daily`、`rolling`，未知窗口可为空或 `seconds:<n>`。
+- `main` 标记电脑端主窗：Codex 为周窗口，OpenCode Go 为按套餐周期的月窗口。
+- 旧电脑端可能没有 `key`/`main`：Android 退回按主窗或第一个窗口显示，不报错。
+- 小部件选择键是 `platformId + key`；同一 Codex 的 `weekly` 与 `5h` 可同时存在，
+  同一 `platformId + key` 只能出现一次。`label` 只用于展示，改名不改变选择。
+
+### 5.4 platformId
 
 - 内置平台：协议枚举，等于 provider id（`deepseek` / `trae` / `workbuddy-ai` ...）。
 - 自定义平台：`custom:<统一同步平台标签>`。标签小写、空白转 `-`、只留 `[a-z0-9.-]`，
@@ -178,7 +188,7 @@ gt-relay-<随机>（Secret Gist）
 - 没有标签时退回 `custom:<本机渠道 id>`（稳定但只在当前电脑有意义），UI 必须提示用户设置标签。
 - 严禁把 URL、凭据指纹、邮箱或显示名直接当 `platformId`。
 
-### 5.4 history
+### 5.5 history
 
 - 最近 7 个自然日，按电脑本地日切分；`timeZone` 是偏移字符串（如 `+08:00`）。
 - 每条包含 `periodStart`、`periodEnd`、`unit`、`balance`、`spent`、`estimated`、
@@ -196,7 +206,7 @@ gt-relay-<随机>（Secret Gist）
 - 合并时按 `(platformId, periodStart, periodEnd, unit)` 去重；同窗口取最大 `revisedAt`，
   同刻按 `source` 字典序；不跨来源求和或拼接成虚假连续记录。
 
-### 5.5 checkin
+### 5.6 checkin
 
 - `date` 为 UTC+8 业务日；`timeZone` 固定 `Asia/Shanghai`。
 - `itemId` 可跨来源去重。v1 每渠道一份凭据，使用 `<platformId>:main`；

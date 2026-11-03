@@ -95,10 +95,12 @@ fn build_channel(view: &ChannelView, cfg: &Config, store: &Store, now: i64) -> C
         .iter()
         .take(MAX_WINDOWS)
         .map(|w| super::model::WindowSnapshot {
+            key: w.key.clone(),
             label: sanitize_name(&w.label, "窗口"),
             remain_percent: decimal_string(w.remain_percent),
             reset_at: None,
             reset_text: w.resets_at.as_deref().map(short_reset_text),
+            main: w.main,
         })
         .collect();
 

@@ -99,6 +99,9 @@ pub struct ChannelSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowSnapshot {
+    /// 稳定窗口键；旧电脑端可能没有，手机按主窗回退。
+    #[serde(default)]
+    pub key: String,
     pub label: String,
     #[serde(default)]
     pub remain_percent: Option<String>,
@@ -107,6 +110,9 @@ pub struct WindowSnapshot {
     pub reset_at: Option<i64>,
     #[serde(default)]
     pub reset_text: Option<String>,
+    /// 电脑端的主窗标记：Codex=周、OpenCode Go=月。
+    #[serde(default)]
+    pub main: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
