@@ -3731,3 +3731,16 @@ resource_package_quota / … / total_quota / lastResetAt / nextResetAt`),
   网页会话比预期短命;失败分档后提示的"点登录网页版"正好是正确动作。
 - **验证**:core `404 passed`;`cargo check`(外壳)、`node --check`;
   `verify-qoder-expiry.js` 断言补上"结构还没识别"这一种如实文案。
+
+**发布（2026-11-03）**：tag `v0.3.7`，release 提交 `38c1811`，
+[GitHub Release v0.3.7](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.3.7)。
+三件套齐全：`Grandettoken_0.3.7_x64-setup.exe`（5,580,782 B，SHA-256
+`2B4C5BB87F1B2CFF5E5E1881759BE2699665DA499763CBAEF4DB1096F304E97`）、`.sig`、
+`latest.json`；GitHub API 确认非 draft / prerelease，且 v0.3.7 为当前 latest。
+本机已静默覆盖安装，`%LOCALAPPDATA%\Grandettoken\Grandettoken.exe` 文件版本 0.3.7。
+
+> 本机这次 `node build/verify-release.js` 跑不通（`fetch failed`）：`github.com` 直连
+> 超时（`api.github.com` 与 `curl` 拉 api 都正常，gh 上传也成功）—— 是这台机器的
+> 网络状况，不是发布缺陷。等价核验改用 `gh release download` 取回三件套，
+> 与本地产物**逐字节比对**：exe / .sig / latest.json 全部一致，清单里的
+> version / url / signature 与 `.sig` 内容也逐项对上。
