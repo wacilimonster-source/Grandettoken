@@ -42,8 +42,8 @@ function applyFontScale() {
   document.documentElement.style.setProperty("--u", String(fsU()));
 }
 
-/** 紧凑条开关:body 类控制顶栏「紧凑」的显隐(默认不显示),并同步设置页开关。
-    配置还没读回来时 CFG 为 null —— 保持关闭,不会先闪一下按钮。 */
+/** 紧凑条开关:body 类记录开关状态(供测试与后续样式使用),并同步设置页开关。
+    顶栏固定四枚按钮,不再随这个开关换「紧凑/胶囊」(2026-11-03)。 */
 function applyCompactUI() {
   const on = !!(CFG && CFG.compactEnabled);
   document.body.classList.toggle("compact-on", on);
@@ -2268,7 +2268,7 @@ const WHY = {
   wblogin: "点「登录」会开一个独立窗口加载 www.workbuddy.cn 登录页(微信扫码 / 手机号),登录成功后窗口自己关掉,挂件接着用这份浏览器会话取数 —— 不用复制任何东西,也不动桌面客户端的登录状态。会话约 7 天到期。国内版桌面端 5.6.2 起把本机令牌改为加密存储,已无法自动读取。",
   qoderweb: "逐包到期明细(哪些积分哪天过期)只在 qoder.com 的网页会话里提供,桌面端凭据只能拿到汇总 —— 这是平台两套接口的差别(2026-10-30 排查)。点「登录网页版」会开一个独立窗口,登录成功后自动关窗并刷新明细;这套会话只读积分明细,签到与余额照旧走桌面端,互不影响。",
   appauth: "凭据来自本机已登录的客户端;失效时打开一次客户端即可。隐藏本渠道后连读取也会停止。",
-  compact: "开启后顶栏出现「紧凑」按钮,可切成 380×46 的横向条;Esc 在面板与胶囊之间切换。",
+  compact: "开启后可切成 380×46 的横向条;顶栏固定四枚入口不再显示「紧凑」,用 Ctrl+2 切换紧凑条,Esc 在面板与胶囊之间切换。",
   trayNum: "托盘图标画概览缩写(74 / 1.2k / 82);关闭后回到品牌样式。",
   pulse: "只有红色状态点会 2 秒一次红晕。低位持续期间不重复播报,免得常驻桌面一直闪。",
   notify: "通知本身不支持点击回跳(插件限制),所以窗口藏着时改为闪一下任务栏。",
@@ -2813,7 +2813,8 @@ function updateSizeClass() {
   updateResetButton();
 }
 
-/** 自定义尺寸时在页脚“设置与管理”左边显示“↺ 默认”;默认尺寸隐藏,不挡数据。 */
+/** 底栏常驻「↺ 默认大小」(2026-11-03 用户裁决):不再只在自定义尺寸时出现。
+    标题里带当前默认尺寸;custom-size 类仍保留,供样式区分“当前不是默认值”。 */
 function updateResetButton() {
   const btn = $("lkReset");
   const [dw, dh] = panelDefaultSize();
@@ -2823,9 +2824,8 @@ function updateResetButton() {
   if (custom !== lastCustomSize) {
     lastCustomSize = custom;
     document.body.classList.toggle("custom-size", custom);
-    if (btn) btn.style.display = custom ? "" : "none";
   }
-  if (btn && custom) btn.title = `恢复默认大小 (${dw} × ${dh})`;
+  if (btn) btn.title = custom ? `恢复默认大小 (${dw} × ${dh})` : `当前已是默认大小 (${dw} × ${dh})`;
 }
 
 function updateSizeBadge() {
@@ -2933,53 +2933,100 @@ if (typeof appWindow.onScaleChanged === "function") {
   });
 }
 
-// 右下角可见手柄:原生边框在窗口最外缘(10px 透明边距里),这个手柄把
-// “右下角可以拉”变成看得见、且不必精确命中 4px 系统边框的入口。
-(function initResizeGrip() {
-  const g = $("rzGrip");
-  if (!g) return;
+// 透明边距里的缩放任层(2026-11-03):原生 undecorated 边框只有最外缘 3 物理像素
+// 可命中,用户拖卡片可见边缘时其实落在内容区 —— 所以由前端接管。
+// 面板 8 个方向;紧凑条只留左右(高度锁死)。右下角可见手柄是同一套拖拽逻辑。
+(function initResizeHandles() {
+  const frame = $("rzFrame");
+  const grip = $("rzGrip");
+  if (!frame) return;
   let drag = null, pending = null, busy = false;
+
+  const dims = () => {
+    if (currentForm() === "compact") {
+      const u = fsU();
+      const h = Math.round(COMPACT_H * u);
+      // 上限用全局 COMPACT_MAX_W,不是当前 compactMaxW —— 否则用户永远拉不宽,
+      // 而 endResize -> fitCompact 正是靠这次拖动把 compactMaxW 提高。
+      return { w: compactW, h, minW: Math.round(COMPACT_MIN_W * u), maxW: Math.round(COMPACT_MAX_W * u), minH: h, maxH: h };
+    }
+    return { w: SIZE.panelW, h: SIZE.panelH, ...panelBounds() };
+  };
+
   const flush = () => {
     if (busy || !pending) return;
-    const [nw, nh] = pending;
+    const p = pending;
     pending = null;
     busy = true;
-    appWindow.setSize(new T.dpi.LogicalSize(nw + CARD_MARGIN * 2, nh + CARD_MARGIN * 2))
+    // setSize 以左上角为锚点;拉左边/上边时再补一次 setPosition,让对边留在原地。
+    // screenX/Y 与 LogicalPosition 同为逻辑像素,不需要额外换算 DPI。
+    appWindow.setSize(new T.dpi.LogicalSize(p.w + CARD_MARGIN * 2, p.h + CARD_MARGIN * 2))
+      .then(() => (p.x === null ? null : appWindow.setPosition(new T.dpi.LogicalPosition(p.x, p.y))))
       .catch(() => {})
       .finally(() => {
         busy = false;
-        // 拖拽比 IPC 快时只保留最新目标尺寸,避免 setSize 排队导致"越拖越落后"。
+        // 拖拽比 IPC 快时只保留最新目标尺寸,避免 IPC 排队导致“越拖越落后”。
         if (pending) requestAnimationFrame(flush);
       });
   };
-  const apply = () => {
+
+  const apply = (ev) => {
     if (!drag) return;
-    const b = panelBounds();
-    const nw = clampNum(drag.w + (drag.cx - drag.sx), b.minW, b.maxW);
-    const nh = clampNum(drag.h + (drag.cy - drag.sy), b.minH, b.maxH);
-    if (nw === SIZE.panelW && nh === SIZE.panelH) return;
-    SIZE.panelW = nw;
-    SIZE.panelH = nh;
-    pending = [nw, nh];
+    const d = dims();
+    const dx = ev.screenX - drag.sx;
+    const dy = ev.screenY - drag.sy;
+    let w = drag.w;
+    let h = drag.h;
+    if (drag.dir.includes("e")) w = drag.w + dx;
+    if (drag.dir.includes("w")) w = drag.w - dx;
+    if (drag.dir.includes("s")) h = drag.h + dy;
+    if (drag.dir.includes("n")) h = drag.h - dy;
+    w = clampNum(Math.round(w), d.minW, d.maxW);
+    h = clampNum(Math.round(h), d.minH, d.maxH);
+    const movingX = drag.dir.includes("w");
+    const movingY = drag.dir.includes("n");
+    // 只拉右边/下边时不需要动位置;左/上方向必须把另一轴也带上,
+    // 否则 LogicalPosition(y=null) 会在 IPC 里失败,窗口只变宽不变位。
+    const x = movingX ? Math.round(drag.x + (drag.w - w)) : drag.x;
+    const y = movingY ? Math.round(drag.y + (drag.h - h)) : drag.y;
+    const px = movingX || movingY ? x : null;
+    const py = movingX || movingY ? y : null;
+    // 已到最小/最大尺寸时不要每帧再发同一个 setSize。
+    if (w === drag.lastW && h === drag.lastH && px === drag.lastX && py === drag.lastY) return;
+    drag.lastW = w;
+    drag.lastH = h;
+    drag.lastX = px;
+    drag.lastY = py;
+    if (currentForm() === "compact") compactW = w;
+    else {
+      SIZE.panelW = w;
+      SIZE.panelH = h;
+    }
+    pending = { w, h, x: px, y: py };
     if (!busy) requestAnimationFrame(flush);
   };
-  g.addEventListener("pointerdown", (e) => {
-    if (currentForm() !== "panel" || DOCK.on) return;
+
+  const begin = (el, dir, e) => {
+    if (e.button !== 0 || DOCK.on) return false;
+    const form = currentForm();
+    if (form !== "panel" && !(form === "compact" && (dir === "e" || dir === "w"))) return false;
     e.preventDefault();
     e.stopPropagation();
-    try { g.setPointerCapture(e.pointerId); } catch {}
+    try { el.setPointerCapture(e.pointerId); } catch {}
     MANUAL_RESIZING = true;
     RESIZING = true;
     document.body.classList.add("resizing");
-    drag = { sx: e.screenX, sy: e.screenY, w: SIZE.panelW, h: SIZE.panelH, cx: e.screenX, cy: e.screenY };
+    const d = dims();
+    drag = {
+      dir, sx: e.screenX, sy: e.screenY, w: d.w, h: d.h,
+      x: window.screenX, y: window.screenY,
+    };
     updateSizeBadge();
     // setPointerCapture 在部分注入/合成事件下不生效;窗口级监听兜底。
     const onMove = (ev) => {
       if (!drag) return;
       ev.preventDefault();
-      drag.cx = ev.screenX;
-      drag.cy = ev.screenY;
-      apply();
+      apply(ev);
     };
     const onUp = (ev) => {
       window.removeEventListener("pointermove", onMove);
@@ -2988,18 +3035,26 @@ if (typeof appWindow.onScaleChanged === "function") {
       if (!drag) return;
       drag = null;
       MANUAL_RESIZING = false;
-      try { g.releasePointerCapture(ev.pointerId); } catch {}
+      try { el.releasePointerCapture(ev.pointerId); } catch {}
       endResize();
     };
     window.addEventListener("pointermove", onMove, { passive: false });
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onUp);
-  });
-  g.addEventListener("dblclick", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    resetPanelSize();
-  });
+    return true;
+  };
+
+  for (const z of frame.querySelectorAll(".rz-z")) {
+    z.addEventListener("pointerdown", (e) => begin(z, z.dataset.dir, e));
+  }
+  if (grip) {
+    grip.addEventListener("pointerdown", (e) => begin(grip, "se", e));
+    grip.addEventListener("dblclick", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      resetPanelSize();
+    });
+  }
 })();
 
 $("lkReset").addEventListener("click", (e) => {
@@ -3017,7 +3072,6 @@ function resolveForm(form) {
 }
 
 async function applyFormInner(form, remember = true, forceSize = false) {
-  setHeaderMenu(false);
   form = resolveForm(form);
   // 速览卡片开着时切形态/重排:先收回,否则会出现"class=pill 但窗口还是卡片高"的半截状态
   if (PEEK.open) await pillPeekHide();
@@ -3420,7 +3474,6 @@ function renderDock() {
 const manageOpen = () => document.body.classList.contains("view-manage");
 
 function openManage() {
-  setHeaderMenu(false);
   // 先挂上 view-manage:下面的 fillKeyHints 会检查 manageOpen(),
   // 类晚加一步就会让这一次读取被当成"页面没打开"而跳过。
   document.body.classList.add("view-manage");
@@ -3704,68 +3757,7 @@ function showToast(msg, bad) {
   toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
 }
 
-// ───────────── 标题栏收纳菜单(2026-11-01 精修)─────────────
-// 刷新留在明面;置顶 / 紧凑(或胶囊) / 隐藏 / 退出低频,收进 ⋯。
-let HMENU_OPEN = false;
-function updateHeaderMenu() {
-  const m = $("hmenu");
-  if (!m) return;
-  const pinOn = !!(CFG && CFG.alwaysOnTop);
-  const pin = m.querySelector('[data-act="pin"]');
-  if (pin) {
-    pin.classList.toggle("on", pinOn);
-    const tx = pin.querySelector(".hmenu-tx");
-    const k = pin.querySelector(".hmenu-k");
-    if (tx) tx.textContent = pinOn ? "取消置顶" : "置顶";
-    if (k) k.textContent = pinOn ? "✓" : "";
-  }
-  const comp = $("hmenuCompact");
-  if (comp) comp.textContent = CFG && CFG.compactEnabled ? "紧凑条" : "胶囊";
-}
-function setHeaderMenu(open) {
-  const m = $("hmenu");
-  const b = $("btnMenu");
-  if (!m || !b) return;
-  const was = HMENU_OPEN;
-  HMENU_OPEN = !!open;
-  if (open) updateHeaderMenu();
-  m.classList.toggle("on", !!open);
-  b.setAttribute("aria-expanded", String(!!open));
-  if (open) {
-    const first = m.querySelector("button[data-act]");
-    if (first) first.focus();
-  } else if (was) {
-    const ae = document.activeElement;
-    if (ae && m.contains(ae)) b.focus();
-  }
-}
-$("btnMenu").addEventListener("click", (e) => {
-  e.stopPropagation();
-  setHeaderMenu(!HMENU_OPEN);
-});
-$("hmenu").addEventListener("click", (e) => {
-  const b = e.target.closest("button[data-act]");
-  if (!b) return;
-  const act = b.dataset.act;
-  setHeaderMenu(false);
-  if (act === "pin") $("btnP").click();
-  else if (act === "compact") (CFG && CFG.compactEnabled ? $("btnC") : $("btnPill")).click();
-  else if (act === "reset-size") resetPanelSize();
-  else if (act === "hide") $("btnH").click();
-  else if (act === "quit") $("lkQuit").click();
-});
-$("hmenu").addEventListener("keydown", (e) => {
-  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-  e.preventDefault();
-  const items = [...$("hmenu").querySelectorAll("button[data-act]")];
-  if (!items.length) return;
-  const i = items.indexOf(document.activeElement);
-  const next = e.key === "ArrowDown" ? (i + 1) % items.length : (i - 1 + items.length) % items.length;
-  items[next].focus();
-});
-document.addEventListener("click", (e) => {
-  if (HMENU_OPEN && !e.target.closest("#hmenu,#btnMenu")) setHeaderMenu(false);
-});
+// 顶栏固定四枚入口(刷新 / 置顶 / 隐藏 / 胶囊),不再有弹出菜单。
 
 /** 标题栏右侧的"上次更新":取所有可见渠道里最新的 updatedAt,分钟级刷新。 */
 function updateHeaderLive() {
@@ -4619,6 +4611,7 @@ function applyPinUI() {
   const btn = $("btnP");
   btn.classList.toggle("on", on);
   btn.title = on ? "已置顶(点击取消)" : "窗口置顶";
+  btn.setAttribute("aria-pressed", String(on));
   const dock = $("cfgDock");
   if (dock) {
     dock.classList.toggle("on", !!CFG.dockEnabled);
@@ -4629,15 +4622,11 @@ function applyPinUI() {
     sw.classList.toggle("on", on);
     sw.setAttribute("aria-checked", String(on));
   }
-  updateHeaderMenu();
 }
 
 $("btnP").addEventListener("click", () => setPin(!CFG.alwaysOnTop));
-$("btnC").addEventListener("click", () => {
-  applyForm(document.body.className.includes("form-compact") ? "panel" : "compact");
-});
-// 紧凑条关闭时顶栏显示的是「胶囊」(两者互斥)。胶囊形态里顶栏是隐藏的,
-// 这里只服务"面板 → 胶囊"这一跳;▲ 仍是回面板的入口。
+// 顶栏第四枚固定「胶囊」:紧凑条开关只留在设置里,不再在顶栏出现「紧凑」。
+// 胶囊形态里顶栏是隐藏的,这里只服务"面板 → 胶囊"这一跳;▲ 仍是回面板的入口。
 $("btnPill").addEventListener("click", () => {
   applyForm(document.body.className.includes("form-pill") ? "panel" : "pill");
 });
@@ -5597,12 +5586,11 @@ bindSwitch("cfgPin", "alwaysOnTop", async (on) => {
   applyPinUI();
 });
 // 紧凑条开关:关掉要立刻从紧凑条退回面板。不用 bindSwitch —— 保存失败时
-// saveCfg 会回滚 CFG 并重画静态控件,但 body 上的 compact-on 与顶栏按钮不归它管,
+// saveCfg 会回滚 CFG 并重画静态控件,但 body 上的 compact-on 不归它管,
 // 这里在 await 之后按**回滚后的实际值**再刷一次。
 $("cfgCompact").addEventListener("click", async () => {
   if (!CFG) return;
   CFG.compactEnabled = !CFG.compactEnabled;
-  updateHeaderMenu();
   applyCompactUI();
   const ok = await saveCfg("紧凑条设置");
   if (!ok) {
@@ -6093,10 +6081,6 @@ listen("update-progress", (ev) => onUpdProgress(ev.payload));
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  if (HMENU_OPEN) {
-    setHeaderMenu(false);
-    return;
-  }
   // 覆盖层最优先:它盖在所有内容上,Esc 却先去关设置页/收形态,
   // 用户按半天 Esc 都关不掉眼前那个下载框(报告 P2-16)
   if (MDL.sheet) {

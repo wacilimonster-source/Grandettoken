@@ -8,6 +8,11 @@
 > 实际采用 **Tauri 原生 undecorated resize border**（`resizable:true` + `WS_THICKFRAME`）+
 > 卡片右下角 7px 可见手柄（manual pointer drag）。下面的“方案 B”保留为原提案，落地以本注、
 > §3.1 的“M0 实测结果”和代码为准。权限 `core:window:allow-start-resize-dragging` 未启用。
+>
+> **再次修订（2026-11-03）**:`WM_NCHITTEST` 实测原生边框只有最外缘 3 物理像素可命中，
+> 用户拖卡片可见边缘时拖不到。已在 10px 透明边距上增加 8 方向命中层（前端 manual drag，
+> 左/上边同时 setPosition），顶栏改为刷新/置顶/隐藏/胶囊四枚，恢复默认常驻底栏；
+> 本文里的 `⋯` 菜单与“仅自定义尺寸显示页脚按钮”等描述均已过时。
 
 ## 0. 先说人话
 

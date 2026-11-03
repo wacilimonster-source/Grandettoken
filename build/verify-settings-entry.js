@@ -41,18 +41,30 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   try {
     console.log('=== 设置入口收敛 ===');
 
-    // ① 顶部「设置」已删,标题栏只剩文字按钮(刷新是 v0.1.59 的渠道体检加的)
+    // ① 顶部「设置」已删;2026-11-03 起顶栏固定四枚入口,不再有 ⋯ 菜单
     const top = JSON.parse(await evalJs(`JSON.stringify({
       btnS: !!document.getElementById('btnS'),
-      btnR: !!document.getElementById('btnR'),
       btnMenu: !!document.getElementById('btnMenu'),
-      legacyHidden: [...document.querySelectorAll('.tbar .tb')].every(b => b.hidden),
+      hmenu: !!document.getElementById('hmenu'),
+      btnC: !!document.getElementById('btnC'),
+      buttons: ['btnR','btnP','btnH','btnPill'].map(id => {
+        const b = document.getElementById(id);
+        return b && { id, hidden: b.hidden, text: b.textContent.trim() };
+      }),
       chip: !!document.getElementById('updChip'),
+      reset: (() => { const b = document.getElementById('lkReset');
+        return b && { hidden: b.hidden, display: getComputedStyle(b).display, text: b.textContent.trim() }; })(),
     })`));
     check('标题栏无 #btnS', top.btnS === false);
-    check('标题栏收敛为刷新 + ⋯ 菜单(低频动作已收纳)',
-      top.btnR && top.btnMenu && top.legacyHidden,
-      JSON.stringify({ r: top.btnR, menu: top.btnMenu, legacyHidden: top.legacyHidden }));
+    check('顶栏固定刷新/置顶/隐藏/胶囊四枚',
+      top.buttons.every((b) => b && !b.hidden),
+      JSON.stringify(top.buttons));
+    check('顶栏不再有 ⋯ 菜单与「紧凑」按钮',
+      !top.btnMenu && !top.hmenu && !top.btnC,
+      JSON.stringify({ menu: top.btnMenu, hmenu: top.hmenu, compact: top.btnC }));
+    check('底栏「恢复默认大小」常驻',
+      !!top.reset && !top.reset.hidden && top.reset.display !== 'none' && /默认大小/.test(top.reset.text),
+      JSON.stringify(top.reset));
 
     // ② 底栏三枚是 <button> 且键盘可达(tabIndex 0、非 disabled)
     const foot = JSON.parse(await evalJs(`JSON.stringify({
@@ -150,8 +162,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
     // ⑥ 设置页内部结构未被波及
     const tabs = JSON.parse(await evalJs(`JSON.stringify([...document.querySelectorAll('#mTabs button')].map(b => b.dataset.p))`));
-    check('设置页 7 个页签原样(含签到)',
-      tabs.length === 7 && tabs.join('/') === 'ch/ck/mdl/disp/run/vault/about', tabs.join('/'));
+    check('设置页 8 个页签原样(含签到/同步)',
+      tabs.length === 8 && tabs.join('/') === 'ch/ck/mdl/disp/run/vault/about/sync', tabs.join('/'));
 
     console.log(fails ? `\n${fails} FAILED` : '\nALL PASS');
   } catch (e) {

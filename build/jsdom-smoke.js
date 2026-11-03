@@ -759,16 +759,20 @@ const HARNESS = `
     ck("返回键回到索引页", document.body.classList.contains("manage-index")
       && document.querySelector(".mhead .mt").textContent === "设置与管理",
       document.querySelector(".mhead .mt").textContent);
-    document.getElementById("btnMenu").click();
-    ck("标题栏 ⋯ 菜单可打开", document.getElementById("hmenu").classList.contains("on")
-      && document.getElementById("btnMenu").getAttribute("aria-expanded") === "true",
-      document.getElementById("btnMenu").getAttribute("aria-expanded"));
-    document.body.click();
-    ck("点菜单外部会关闭", !document.getElementById("hmenu").classList.contains("on"),
-      document.getElementById("hmenu").className);
+    const topIds = ["btnR", "btnP", "btnH", "btnPill"];
+    const topBtns = topIds.map((id) => document.getElementById(id));
+    ck("顶栏固定四枚:刷新/置顶/隐藏/胶囊",
+      topBtns.every(Boolean) && topBtns.every((el) => el.hidden === false),
+      topIds.map((id, i) => id + "=" + (topBtns[i] ? !topBtns[i].hidden : "missing")).join(" "));
+    ck("顶栏不再有「更多操作」菜单",
+      !document.getElementById("btnMenu") && !document.getElementById("hmenu"));
+    const reset = document.getElementById("lkReset");
+    ck("底栏常驻「恢复默认大小」",
+      !!reset && reset.style.display !== "none" && /默认大小/.test(reset.textContent),
+      reset ? reset.textContent.trim() + " / " + (reset.style.display || "inline") : "missing");
     closeManage();
   } catch (e) {
-    ck("设置索引 / 标题栏菜单", false, e.message);
+    ck("设置索引 / 顶栏入口", false, e.message);
   }
 
 })();
@@ -790,15 +794,23 @@ w.__DATA = DATA;
   const R = w.__R || [];
   const css = fs.readFileSync(path.join(SRC, "styles.css"), "utf8");
   R.push({
-    name: "关闭紧凑条时顶栏隐藏「紧凑」、显示「胶囊」",
-    ok: /body:not\(\.compact-on\) #btnC\{display:none\}/.test(css) &&
-      /body\.compact-on #btnPill\{display:none\}/.test(css),
-    extra: "styles.css 缺互斥规则",
+    name: "顶栏固定四枚,不再有「紧凑」按钮与弹出菜单",
+    ok: /id="btnR"/.test(html) && /id="btnP"/.test(html) && /id="btnH"/.test(html) &&
+      /id="btnPill"/.test(html) && !/id="btnC"/.test(html) && !/id="btnMenu"/.test(html) &&
+      !/id="hmenu"/.test(html) && !/\.hmenu\{/.test(css),
+    extra: "index.html/styles.css 仍残留旧顶栏入口",
   });
   R.push({
-    name: "设置页有紧凑条开关、顶栏有胶囊按钮",
-    ok: /id="cfgCompact"/.test(html) && /id="btnPill"/.test(html),
-    extra: "index.html 缺 cfgCompact / btnPill",
+    name: "设置页有紧凑条开关、顶栏四枚按钮齐全",
+    ok: /id="cfgCompact"/.test(html) &&
+      ["btnR", "btnP", "btnH", "btnPill"].every((id) => html.includes(`id="${id}"`)),
+    extra: "index.html 缺 cfgCompact 或顶栏按钮",
+  });
+  R.push({
+    name: "底栏「恢复默认大小」常驻显示",
+    ok: /<button[^>]*id="lkReset"[^>]*>↺ 默认大小<\/button>/.test(html) &&
+      !/<button[^>]*id="lkReset"[^>]*style="display:none"/.test(html),
+    extra: "index.html 的 lkReset 仍带 display:none 或文案不对",
   });
 
   // ── 设置页文案预算(2026-10-23 三层分流)────────────────────────────────

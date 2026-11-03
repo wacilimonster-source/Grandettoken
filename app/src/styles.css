@@ -55,7 +55,7 @@ body{
 }
 
 /* ── 标题栏(拖拽区,固定尺寸下仍可拖动移动) ── */
-.tbar{display:flex;align-items:center;gap:calc(9px*var(--u));
+.tbar{display:flex;align-items:center;gap:calc(7px*var(--u));
   padding:calc(9px*var(--u)) calc(8px*var(--u)) calc(9px*var(--u)) calc(12px*var(--u));flex:none;
   background:linear-gradient(180deg,#1a1f28,#141821);border-bottom:1px solid var(--line);
   cursor:move}
@@ -76,15 +76,12 @@ body{
 .ib.on:hover{background:#93b1ff;color:#fff}
 /* 面板标题栏的文字按钮:比图标直白;10.5px 太小,按 11.5px 下限抬了 */
 .tb{border:0;background:transparent;color:var(--tx2);cursor:pointer;font-family:inherit;
-  font-size:max(11.5px,calc(10.5px*var(--u)));line-height:1.25;padding:calc(3px*var(--u)) calc(6px*var(--u));border-radius:calc(5px*var(--u));flex:none;white-space:nowrap}
+  font-size:max(11.5px,calc(10.5px*var(--u)));line-height:1.25;padding:calc(3px*var(--u)) calc(5px*var(--u));border-radius:calc(5px*var(--u));flex:none;white-space:nowrap}
 .tb:hover{background:#ffffff12;color:var(--tx)}
-/* 紧凑条是可选形态(默认关):关闭时顶栏不显示「紧凑」,同一位置换成「胶囊」。
-   两者互斥 —— 顶栏始终只有一个折叠入口,特大字号下不会多挤一个按钮。
-   用 body 类而不是内联样式:配置还没读回来时也默认不显示紧凑,不会先闪一下再消失。 */
-body:not(.compact-on) #btnC{display:none}
-body.compact-on #btnPill{display:none}
+/* 顶栏固定四枚入口:刷新 / 置顶 / 隐藏 / 胶囊(2026-11-03 用户裁决)。
+   紧凑条仍在设置 → 显示里开启;顶栏不再随 compact-on 换按钮。 */
 .tb.on{color:#fff;background:var(--ac)}
-/* 标题栏:高频动作只留刷新一个图标按钮,其余收进 ⋯ 菜单 */
+/* 标题栏:刷新是唯一的图标按钮,置顶/隐藏/胶囊用文字按钮 */
 .tbi{width:calc(26px*var(--u));height:calc(26px*var(--u));border:0;background:transparent;
   border-radius:calc(7px*var(--u));color:var(--tx3);display:grid;place-items:center;padding:0;
   cursor:pointer;flex:none;position:relative;font-family:inherit}
@@ -102,22 +99,6 @@ body.compact-on #btnPill{display:none}
 .tb-live{font-size:max(9.5px,calc(9.5px*var(--u)));color:var(--tx4);white-space:nowrap;
   font-variant-numeric:tabular-nums;margin-right:calc(1px*var(--u))}
 .tb-live:empty{display:none}
-/* ⋯ 菜单:贴着标题栏右下的轻量弹层,不占布局高度 */
-.hmenu{display:none;position:absolute;top:calc(46px*var(--u));right:calc(10px*var(--u));z-index:70;
-  min-width:calc(148px*var(--u));background:var(--bg2);border:1px solid var(--line);
-  border-radius:calc(9px*var(--u));padding:calc(4px*var(--u));
-  box-shadow:0 14px 34px -16px #000,0 0 0 1px rgba(255,255,255,.03) inset}
-.hmenu.on{display:block;animation:hmenuIn 120ms var(--ease)}
-@keyframes hmenuIn{from{opacity:0;transform:translateY(-4px)}}
-.hmenu-i{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;
-  border:0;background:transparent;color:var(--tx2);font:inherit;
-  font-size:max(11.5px,calc(11.5px*var(--u)));padding:calc(7px*var(--u)) calc(8px*var(--u));
-  border-radius:calc(6px*var(--u));cursor:pointer;text-align:left}
-.hmenu-i:hover{background:#ffffff0a;color:var(--tx)}
-.hmenu-i.on{color:var(--ac);background:rgba(138,164,255,.1)}
-.hmenu-k{font-size:max(9.5px,calc(9.5px*var(--u)));color:var(--ac);line-height:1}
-.hmenu-sep{height:1px;background:var(--line);margin:calc(3px*var(--u)) 0}
-.hmenu-i:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
 /* 文字按钮没法"转",刷新反馈改成脉冲 */
 .tb.spin{animation:pulse .7s ease}
 @keyframes pulse{50%{opacity:.35}}
@@ -693,16 +674,37 @@ body.form-compact .ckstrip,body.form-pill .ckstrip{display:none}
 .more:focus-visible,.tabs button:focus-visible{
   outline:2px solid var(--ac);outline-offset:2px}
 
-/* ── 面板缩放:右下角可见手柄 + 拖动时的实时尺寸 ──
-   原生 undecorated resize 边框在窗口最外缘(10px 透明边距里),这个手柄把
-   “右下角可以拉”做成看得见的入口,也方便双击复位。 */
+/* ── 面板缩放:透明边距里的 8 方向命中层 + 右下角可见手柄 ──
+   原生 undecorated 边框只有窗口最外缘 3 物理像素可命中,而卡片可见边缘在 10px
+   透明边距里,用户拖卡片边缘时根本碰不到它。这里在透明边距上叠一圈命中层,
+   由前端接管拖动;面板 8 个方向,紧凑条只留左右(高度锁死)。 */
+.rz-frame{display:none;position:fixed;inset:0;z-index:65;pointer-events:none}
+body.form-panel .rz-frame,body.form-compact .rz-frame{display:block}
+body.docked .rz-frame,body.dock-open .rz-frame{display:none}
+.rz-z{position:absolute;pointer-events:auto}
+.rz-n,.rz-s{left:0;right:0;height:10px;cursor:ns-resize}
+.rz-n{top:0}
+.rz-s{bottom:0}
+.rz-w,.rz-e{top:0;bottom:0;width:10px;cursor:ew-resize}
+.rz-w{left:0}
+.rz-e{right:0}
+.rz-nw,.rz-ne,.rz-sw,.rz-se{width:10px;height:10px;z-index:1}
+.rz-nw{left:0;top:0;cursor:nwse-resize}
+.rz-ne{right:0;top:0;cursor:nesw-resize}
+.rz-sw{left:0;bottom:0;cursor:nesw-resize}
+.rz-se{right:0;bottom:0;cursor:nwse-resize}
+body.form-compact .rz-n,body.form-compact .rz-s,
+body.form-compact .rz-nw,body.form-compact .rz-ne,
+body.form-compact .rz-sw,body.form-compact .rz-se{display:none}
+/* 可见手柄:把“右下角可以拉”做成看得见的入口,也方便双击复位。 */
 .rz-grip{position:absolute;right:calc(3px*var(--u));bottom:calc(3px*var(--u));
-  width:calc(7px*var(--u));height:calc(7px*var(--u));z-index:66;cursor:nwse-resize;
-  opacity:.45;border-radius:2px;
+  width:calc(9px*var(--u));height:calc(9px*var(--u));z-index:66;cursor:nwse-resize;
+  opacity:.5;border-radius:2px;
   background:linear-gradient(135deg,transparent 44%,var(--tx4) 45%,var(--tx4) 55%,transparent 56%,
     transparent 69%,var(--tx4) 70%,var(--tx4) 80%,transparent 81%)}
 .rz-grip:hover,body.resizing .rz-grip{opacity:1}
-body.form-compact .rz-grip,body.form-pill .rz-grip,body.docked .rz-grip{display:none}
+body.form-compact .rz-grip,body.form-pill .rz-grip,body.docked .rz-grip,
+body.dock-open .rz-grip{display:none}
 .rz-size{position:absolute;right:calc(12px*var(--u));bottom:calc(40px*var(--u));z-index:67;
   padding:calc(1px*var(--u)) calc(6px*var(--u));border-radius:calc(5px*var(--u));
   background:var(--bg3);border:1px solid var(--line2);color:var(--tx2);

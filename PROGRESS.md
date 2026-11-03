@@ -3670,3 +3670,25 @@ GitHub API 与 `gh release view` 均确认三件套齐全：`Grandettoken_0.3.0_
 `latest.json`；`verify-signature` 与 `verify-updater` **PASS**，GitHub API 确认非 draft/prerelease。
 `verify-release` **PASS**（更新端点、三件套、签名、sha256、仓库元数据全部通过），
 签名/更新链路独立核验亦 PASS。本机已覆盖安装 0.3.2，`%LOCALAPPDATA%\Grandettoken\Grandettoken.exe` 版本 0.3.2，安装后已启动。
+
+### 发版 v0.3.6 · 顶栏四入口与边缘缩放修复（2026-11-03）
+
+**用户裁决**:顶栏固定「刷新 / 置顶 / 隐藏 / 胶囊」四枚,不要右上角「更多操作」;
+「恢复默认大小」放到底栏;顶栏也不要退出。PC 端要能正常拖动放大缩小。
+
+- **缩放根因**:`isResizable()===true`、`WS_THICKFRAME` 都在,但 `WM_NCHITTEST` 实测
+  原生缩放带只有窗口最外缘 **3 物理像素**(150% DPI 下约 2 CSS px);卡片可见边缘在
+  10px 透明边距里,用户拖可见边缘时命中内容区,所以"拖不动"。右下角手柄一直可用。
+- **修法**:在透明边距上新增 `.rz-frame` 命中层(四边 + 四角,10px),pointerdown 后
+  manual drag;`setSize` 仍合并为同时最多一个在途,拉左/上边时补 `setPosition`
+  (LogicalPosition,对边不动)。面板八方向,紧凑条只左右;胶囊/贴边/吸附态不启用。
+  可见手柄从 7px 增到 9px,双击复位保留。
+- **顶栏**:删除 `btnMenu`/`hmenu`/`btnC` 及全部菜单 JS/CSS;`btnR/btnP/btnH/btnPill`
+  常驻。标题栏 gap 9→7、文字按钮横向 padding 6→5,保证标准字号 + 更新角标时
+  标题不被截断(实测 title 77.8px,`scrollWidth==clientWidth`)。
+- **底栏**:`lkReset` 文案「↺ 默认大小」常驻,不再只在自定义尺寸时显示;
+  复位路径三条:底栏、双击手柄、设置页。
+- **验证**:`node --check`;jsdom **128/128**;`verify-settings-entry` 去掉旧的 7 页签
+  断言后全 PASS(新增四按钮/无菜单/底栏常驻/6 种组合零溢出);`verify-resize`
+  **全 PASS**,新增透明边距 8 命中层、右/下/左/上真实拖动(含窗口位置联动)、
+  默认尺寸下按钮仍常驻等断言;真实 CDP 鼠标在四条边各拖 4px 均生效。

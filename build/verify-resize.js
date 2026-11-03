@@ -153,10 +153,69 @@ const check = (name, ok, detail) => {
     await sleep(700);
     const reset = await state();
     check('点“默认大小”按钮回到 400×580', reset.w === 400 && reset.h === 580, `${reset.w}×${reset.h}`);
-    const resetHidden = await ev(`getComputedStyle(document.getElementById('lkReset')).display`, true);
-    check('默认尺寸隐藏“默认大小”按钮', resetHidden === 'none', resetHidden);
+    const resetDefault = await ev(`getComputedStyle(document.getElementById('lkReset')).display`, true);
+    check('默认尺寸仍常驻“默认大小”按钮', resetDefault !== 'none', resetDefault);
 
-    // 5. 字号变大:只长到新的最小尺寸,不回到默认
+    // 5. 透明边距缩放任层:右/下/左/上各拖一次
+    const zoneCount = await ev(`document.querySelectorAll('#rzFrame .rz-z').length`, true);
+    check('透明边距有 8 个缩放任层', zoneCount === 8, String(zoneCount));
+
+    const dragZone = (sel, dx, dy) => ev(`(async () => {
+      const el = document.querySelector(${JSON.stringify(sel)});
+      const r = el.getBoundingClientRect();
+      const sx = window.screenX + r.x + r.width / 2;
+      const sy = window.screenY + r.y + r.height / 2;
+      const fire = (target, type, x, y) => target.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerId: 77, pointerType: 'mouse', isPrimary: true,
+        button: 0, buttons: type === 'pointerup' ? 0 : 1, screenX: x, screenY: y,
+      }));
+      fire(el, 'pointerdown', sx, sy);
+      await new Promise((r) => setTimeout(r, 60));
+      fire(window, 'pointermove', sx + ${dx}, sy + ${dy});
+      await new Promise((r) => setTimeout(r, 200));
+      fire(window, 'pointerup', sx + ${dx}, sy + ${dy});
+    })()`, true);
+
+    await ev(`(async () => { resetPanelSize(); await new Promise(r => setTimeout(r, 700)); })()`, true);
+    let edge = await state();
+    await dragZone('.rz-e', 8, 0); await sleep(900);
+    let moved = await state();
+    check('拖右边缘能变宽', moved.w > edge.w && moved.h === edge.h,
+      `${edge.w}×${edge.h} → ${moved.w}×${moved.h}`);
+
+    await ev(`(async () => { resetPanelSize(); await new Promise(r => setTimeout(r, 700)); })()`, true);
+    edge = await state();
+    await dragZone('.rz-s', 0, 8); await sleep(900);
+    moved = await state();
+    check('拖下边缘能变高', moved.h > edge.h && moved.w === edge.w,
+      `${edge.w}×${edge.h} → ${moved.w}×${moved.h}`);
+
+    // 先离开屏幕左上角:窗口贴边时系统会拒绝负坐标,左/上缩放无法验证“对边不动”。
+    await ev(`(async () => {
+      const win = window.__TAURI__.window.getCurrentWindow();
+      await win.setPosition(new window.__TAURI__.dpi.PhysicalPosition(300, 200));
+      await new Promise(r => setTimeout(r, 300));
+      resetPanelSize();
+      await new Promise(r => setTimeout(r, 700));
+    })()`, true);
+    edge = await state();
+    const edgeX = await ev(`window.screenX`, true);
+    await dragZone('.rz-w', -8, 0); await sleep(900);
+    moved = await state();
+    const edgeX2 = await ev(`window.screenX`, true);
+    check('拖左边缘能变宽且窗口左移', moved.w > edge.w && edgeX2 < edgeX,
+      `${edge.w} → ${moved.w}, screenX ${edgeX} → ${edgeX2}`);
+
+    await ev(`(async () => { resetPanelSize(); await new Promise(r => setTimeout(r, 700)); })()`, true);
+    edge = await state();
+    const edgeY = await ev(`window.screenY`, true);
+    await dragZone('.rz-n', 0, -8); await sleep(900);
+    moved = await state();
+    const edgeY2 = await ev(`window.screenY`, true);
+    check('拖上边缘能变高且窗口上移', moved.h > edge.h && edgeY2 < edgeY,
+      `${edge.h} → ${moved.h}, screenY ${edgeY} → ${edgeY2}`);
+
+    // 6. 字号变大:只长到新的最小尺寸,不回到默认
     await ev(`(() => { const s = document.getElementById('cfgFontScale'); s.value = 'xl'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
     await sleep(900);
     const xl = await state();
@@ -167,7 +226,7 @@ const check = (name, ok, detail) => {
     await sleep(700);
     await ev(`(async () => { resetPanelSize(); await new Promise(r => setTimeout(r, 700)); })()`, true);
 
-    // 6. 恢复默认(尺寸 + 紧凑 max)
+    // 7. 恢复默认(尺寸 + 紧凑 max)
     const end = await state();
     const endCfg = JSON.parse(await cfg());
     check('恢复默认 400×580', end.w === 400 && end.h === 580, `${end.w}×${end.h}`);
