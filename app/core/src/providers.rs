@@ -949,13 +949,7 @@ pub fn extract_codex(body: &Value) -> FetchResult {
             percent: round1(used),
             remain_percent: round1((100.0 - used).max(0.0)),
             status: if used >= 100.0 { "rate-limited".into() } else { "ok".into() },
-            resets_at: w
-                .get("reset_at")
-                .and_then(num)
-                .filter(|s| *s > 0.0)
-                .and_then(|s| {
-                    chrono::DateTime::from_timestamp(ts_norm(s), 0).map(|d| d.to_rfc3339())
-                }),
+            resets_at: codex_reset_at(w),
             main: is_main,
         })
     };
@@ -1008,6 +1002,30 @@ pub fn extract_codex(body: &Value) -> FetchResult {
         extra,
         ..Default::default()
     }
+}
+
+/// 窗口的重置时刻(RFC3339)。**两种上游口径都要认**:
+///
+/// · `reset_at` —— 绝对时刻(unix 秒;老版给过毫秒,统一走 [`ts_norm`]);
+/// · `reset_after_seconds` —— 还能撑多久。样本里两个字段常常同时出现,但也有版本
+///   只给后者。只认前者的后果是 `resetsAt = None`,界面上"本周还剩多久重置"整块消失,
+///   而数据其实就在响应里。
+///
+/// 换算必须在**取数这一刻**做完:前端只认绝对时间,界面开着不动也不会漂。
+fn codex_reset_at(w: &Value) -> Option<String> {
+    let at = w
+        .get("reset_at")
+        .and_then(num)
+        .filter(|s| *s > 0.0)
+        .map(ts_norm)
+        .or_else(|| {
+            w.get("reset_after_seconds")
+                .and_then(num)
+                // 上限一年:再大就不是"剩余时长"了,宁可不显示也不画出一个荒唐日期
+                .filter(|s| *s > 0.0 && *s <= 365.0 * 86_400.0)
+                .map(|s| chrono::Utc::now().timestamp() + s as i64)
+        })?;
+    chrono::DateTime::from_timestamp(at, 0).map(|d| d.to_rfc3339())
 }
 
 /// 窗长 → 稳定键。选择语义只认键，不认中文标签。
@@ -1713,6 +1731,30 @@ mod tests {
             assert_eq!(r.windows[1].status, "rate-limited");
             assert!(!r.windows[1].main);
         }
+    }
+
+    /// 只给 `reset_after_seconds` 的响应也要能算出"什么时候重置":
+    /// 换算成绝对时刻下发,并且取数时刻是**现在**(不是 1970,也不是 5 万年后)。
+    #[test]
+    fn codex_reset_after_seconds_becomes_absolute_time() {
+        let before = chrono::Utc::now().timestamp();
+        let r = extract_codex(&json!({"plan_type":"plus", "rate_limit":{
+            "primary_window":{"used_percent":10,"limit_window_seconds":604800,
+                              "reset_after_seconds":3600}
+        }}));
+        let at = r.windows[0].resets_at.as_deref().expect("reset_after_seconds 该被换算");
+        let ts = chrono::DateTime::parse_from_rfc3339(at).unwrap().timestamp();
+        assert!((ts - (before + 3600)).abs() <= 5, "换算结果应≈现在+3600,实际 {ts}");
+
+        // 两个都在时以 reset_at 为准(绝对时刻不需要猜)
+        let r = extract_codex(&json!({"rate_limit":{"primary_window":{
+            "used_percent":1,"limit_window_seconds":604800,
+            "reset_at":1793951075,"reset_after_seconds":3600
+        }}}));
+        assert_eq!(
+            r.windows[0].resets_at.as_deref(),
+            Some("2026-11-06T07:44:35+00:00")
+        );
     }
 
     #[test]

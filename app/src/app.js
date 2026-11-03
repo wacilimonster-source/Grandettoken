@@ -197,6 +197,13 @@ function tickPeakCountdowns() {
   document.querySelectorAll("[data-reset-at]").forEach((el) => {
     el.textContent = quotaResetCountdown(Number(el.dataset.resetAt));
   });
+  // Codex 数值标签里的极简倒计时:按同一份降级档位重算,别把 fit 收窄的那一档冲掉
+  document.querySelectorAll("[data-reset-tight]").forEach((el) => {
+    const ms = Number(el.dataset.resetTight);
+    const mode = el.dataset.tightMode || "full";
+    el.textContent =
+      mode === "off" ? "" : "·" + (mode === "short" ? fmtResetTightShort(ms, nowMs) : fmtResetTight(ms, nowMs));
+  });
   updateHeaderLive();
 }
 
@@ -259,6 +266,81 @@ function fmtReset(ms, short) {
 
 function quotaResetCountdown(ms) {
   return ms <= Date.now() ? "已到重置时间,待刷新" : fmtReset(ms, false);
+}
+
+/**
+ * 极简倒计时(数值行标签用):「4天7小时」「5.2小时」「37分钟」「待刷新」。
+ *
+ * 为什么不直接用 `fmtReset(ms, true)`:那个带空格(「4 天 7 小时」),在数值行里
+ * 实测多占 51px,面板拉到最窄(340)时会把左侧副标题挤成省略号。
+ * 口径与 `fmtReset` 一致,只是去掉空格和「后重置」这类可以省的字。
+ */
+function fmtResetTight(ms, nowMs) {
+  const left = ms - (nowMs || Date.now());
+  if (left <= 0) return "待刷新";
+  const m = Math.max(1, Math.round(left / 60000));
+  // 「1 分钟」不用「不足」—— 那个词留给"确实不到一分钟"的情况
+  if (m < 60) return m === 1 && left < 60e3 ? "不足1分钟" : m + "分钟";
+  const h = left / 3600e3;
+  if (h < 24) return h.toFixed(1) + "小时";
+  const d = Math.floor(h / 24);
+  const rh = Math.round(h % 24);
+  if (rh === 24) return d + 1 + "天";
+  if (rh === 0) return d + "天";
+  return d + "天" + rh + "小时";
+}
+
+/** 再短一档(只有天数/小时):窄面板放不下「4天7小时」时先退到这里。 */
+function fmtResetTightShort(ms, nowMs) {
+  const left = ms - (nowMs || Date.now());
+  if (left <= 0) return "待刷新";
+  const h = left / 3600e3;
+  if (h >= 24) return Math.floor(h / 24) + "天";
+  if (h >= 1) return h.toFixed(0) + "小时";
+  return Math.max(1, Math.round(left / 60000)) + "分钟";
+}
+
+/**
+ * 数值标签里那一段重置倒计时(Codex 专用):`·4天7小时`。
+ *
+ * 没有 `resetsAt` → 空串(不写「—」占位,那一行已经够挤)。
+ * 挂 `data-reset-tight` 给每分钟的对齐 ticker 更新;`data-tight-mode` 由
+ * [`fitCodexResetLabels`] 在放不下时降级(full → short → off)。
+ */
+function codexResetInline(w) {
+  const ms = resetMs(w);
+  if (ms === null) return "";
+  return `<span data-reset-tight="${ms}" data-tight-mode="full">·${esc(fmtResetTight(ms))}</span>`;
+}
+
+/**
+ * 面板被拉窄时,先缩短**倒计时**,别让它把左侧副标题(套餐 · 重置卡)挤成省略号。
+ *
+ * 为什么渲染后再量:数值列的宽度是内容决定的(`flex:none`),标签一长,左侧就窄;
+ * 只有真实布局才知道差多少。降级顺序 full → short → off,退到底就是改动前的样子,
+ * 三种形态都不会溢出,也不需要给每一行写死宽度。
+ */
+function fitCodexResetLabels() {
+  document.querySelectorAll(".row.codex-quota [data-reset-tight]").forEach((el) => {
+    const ms = Number(el.dataset.resetTight);
+    // 紧凑条里这段是 `display:none`,量出来全是 0 —— 不能据此降级:否则切回面板时
+    // 倒计时会带着"已经收掉"的状态凭空消失(2026-11-03 真机截图抓到一次)。
+    if (!el.getClientRects().length) {
+      el.dataset.tightMode = "full";
+      el.textContent = "·" + fmtResetTight(ms);
+      return;
+    }
+    const row = el.closest(".row");
+    const s = row && row.querySelector(".nm .s");
+    if (!s) return;
+    const fits = () => s.scrollWidth <= s.clientWidth + 1;
+    if (fits()) return;
+    el.dataset.tightMode = "short";
+    el.textContent = "·" + fmtResetTightShort(ms);
+    if (fits()) return;
+    el.dataset.tightMode = "off";
+    el.textContent = "";
+  });
 }
 
 /** 完整本地时间与时区,避免把卡片到期日和配额重置日混在一起。 */
@@ -729,8 +811,11 @@ function renderRow(c, i) {
   // 失联 / 旧快照:数值降为 text-3 并加 ~,不让"上次成功值"看起来像当前值。
   // 紧凑条里由 CSS 的 ::before 画 ~(省一个节点),面板里用真实节点。
   const compactNow = document.body.className.includes("form-compact");
+  // 周窗的重置倒计时并进数值标签(2026-11-03 设计 §3.1 方案 D):
+  // 「本周剩余·4天7小时 49.0%」一行说完,不新增行高。左侧副标题(套餐 · 重置卡)
+  // 保持不动 —— 面板被拉到最窄时由 fitCodexResetLabels() 先缩短倒计时再退让。
   const mainValue = codex && !noKey && c.remaining != null
-    ? `<span class="quota-label">${esc(mw.label)}${CFG.showUsed ? "已用" : "剩余"}</span><span class="quota-number">${main}</span>`
+    ? `<span class="quota-label">${esc(mw.label)}${CFG.showUsed ? "已用" : "剩余"}${codexResetInline(mw)}</span><span class="quota-number">${main}</span>`
     : isOld && !compactNow
       ? `<i class="tilde">~</i>${main}`
       : main;
@@ -894,7 +979,10 @@ function coreWindows(c) {
         : Math.max(0, Math.min(100, Number(c.remaining))).toFixed(1) + "%";
     return `<div class="sec"><div class="core-use"><div>当前剩余<b>${v}</b></div></div></div>`;
   }
-  return `<div class="sec">${codex ? `<div class="sec-h"><span>配额窗口</span><span>${esc(localZoneLabel())}</span></div>` : ""}${rows.join("")}</div>`;
+  return `<div class="sec">${codex ? `<div class="sec-h"><span>配额窗口</span><span>${esc(localZoneLabel())}</span></div>` : ""}${rows.join("")}${
+    // 口径说明只放一次:周窗到点清零,5 小时窗到点恢复 —— 两件事措辞不能混
+    codex ? `<div class="core-note">周窗到期即清零,不滚存;5 小时窗按滚动恢复</div>` : ""
+  }</div>`;
 }
 
 function coreCodexResets(c) {
@@ -1160,22 +1248,11 @@ function renderDetail(c) {
         .join("")}</div></div>`
     : "";
 
-  // ⑤ 页脚说明:凭据来源 / 统计缺口 / 未公开接口。缺口写黄;失败原因被截断时补全文。
+  // ⑤ 页脚说明:只留跟当前数据状态有关的提示(统计缺口 / 换过密钥 / 峰谷规则陈旧)。
+  // 接口是否稳定、凭据从哪来属于固定套话,不再展示(2026-11-03)。
   const notes = [];
   if (c.gapDayFrom) {
     notes.push([`今日从 ${fmtClock(c.gapDayFrom)} 起才有数据,今日消耗可能偏低`, "warn"]);
-  }
-  if (c.unstable) {
-    notes.push(["未公开接口:响应结构一变,这个渠道就会显示取数失败", ""]);
-  }
-  if (c.id === "workbuddy-ai") {
-    // 这条链路**会续期**(refreshToken 换 accessToken,成果存在我们自己的库里、
-    // 不写回客户端文件),所以不能说"不刷新会话" —— 与其它 app 型渠道分开写。
-    notes.push(["凭据来自本机国际版桌面端,只读复用;过期自动续期,不写回客户端", ""]);
-  } else if (c.authSource === "app") {
-    notes.push([`凭据来自本机已登录的 ${c.authLabel || c.name};挂件只读,不刷新会话`, ""]);
-  } else if (c.authSource === "web") {
-    notes.push([`使用挂件内的 ${c.name} 网页登录态,不影响桌面客户端`, ""]);
   }
   if (c.accounts > 1) {
     notes.push(["已更换过密钥;这里只统计当前密钥,旧账户历史不混算", ""]);
@@ -1512,6 +1589,9 @@ function renderInner(opts) {
          支持 9 个内置渠道 + 自定义(自己的取数地址与字段路径)<br>密钥与登录令牌只写入 Windows 凭据管理器,界面保存后不回显
          <div><button class="btn p" data-act="open-manage">去配置密钥</button></div>
        </div>`;
+
+  // 列表已经落到 DOM 里,现在才有真实宽度可量:把 Codex 的倒计时按当前面板宽度收一档
+  if (configured) fitCodexResetLabels();
 
   if (configured && openId) {
     const row = document.querySelector(`.row[data-id="${openId}"]`);
@@ -2922,6 +3002,8 @@ if (typeof appWindow.onResized === "function") appWindow.onResized(() => {
     readSizeFromWindow();
     updateSizeClass();
     updateSizeBadge();
+    // 面板被拖着改宽时,Codex 的「·4天7小时」要跟着收/放;每帧只量一行,可以接受
+    if (form === "panel") fitCodexResetLabels();
   });
 });
 
@@ -3171,6 +3253,9 @@ async function applyFormInner(form, remember = true, forceSize = false) {
     setTimeout(updateSizeClass, 30);
     // 视口变化后重新量一次紧凑条,决定尾巴要收几个进 "+N"
     scheduleFitCompact();
+    // 形态换了,DOM 宽度也变了:Codex 倒计时的降级档要按新宽度重算
+    // (紧凑条里它被 display:none 掉,那次量不到,切回面板必须重新量)
+    setTimeout(fitCodexResetLabels, 30);
   } catch (e) {
     console.error("切换形态失败", e);
   } finally {
@@ -6591,12 +6676,10 @@ function ckBadgeHtml(c) {
   if (o.startsWith("confirming"))
     return `<span class="ckb" title="${tip}">确认中</span>`;
 
-  // claimed = **我们刚替他领到了** → 可以说数额
-  // N10(2026-10-21):Trae / WorkBuddy 的接口**经常不返回数额**(本机 10-20、10-21 都是
-  // credits = null)—— 所以"没有数额"是生产常态,不是边缘情况。以前这里出 ✓${n},
-  // n 为空就只剩一个孤零零的 ✓,挂件又只有 380px、tooltip 要悬停才看得见。
-  if (o.startsWith("claimed"))
-    return `<span class="ckb ok" title="${tip}">${n ? "✓" + esc(n) : "✓ 已签"}</span>`;
+  // claimed = **我们刚替他领到了** → 与 already 一样只说「已签」,数额进 tooltip。
+  // 2026-11-03:以前 claimed 有数额就画「✓ +100」,而 Qoder 的领取接口每次都回数额,
+  // 于是同一枚徽标在 Qoder 上是 +100、在其它渠道是「已签」—— 统一成「已签」。
+  if (o.startsWith("claimed")) return `<span class="ckb ok" title="${tip}">✓ 已签</span>`;
   // already = **平台侧已签**(可能是他自己在客户端点的)→ 只说"已签",数额进 tooltip。
   // 写成 "+100" 会让人以为是我们领的 —— 签到红线第 2 条(不把点了按钮说成领到了)。
   if (o.startsWith("already")) return `<span class="ckb ok" title="${tip}">✓ 已签</span>`;
