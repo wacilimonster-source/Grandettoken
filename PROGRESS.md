@@ -3820,3 +3820,10 @@ resource_package_quota / … / total_quota / lastResetAt / nextResetAt`),
 `jsdom-smoke` **142 passed**(新增详情弹层交互 6 项)全过;真机 CDP:模块扫描 9 项、
 修复验证 10 项、固定布局闸门 12 项全部 PASS(合成夹具,不触真实凭据;
 `verify-resize` 用内存预览切换布局,不写用户配置)。
+
+**发布（2026-11-04）**：tag `v0.3.9`，release 提交 `66c054f`，
+[GitHub Release v0.3.9](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.3.9)。
+三件套齐全：`Grandettoken_0.3.9_x64-setup.exe`（5,587,683 B，SHA-256
+`30D5EE352A9C15C92C5DC474FE853D944C57E2798F615835710AB518D5782CCA`）、`.sig`、
+`latest.json`；`verify-release.js` 9 项全 PASS(安装包可下载、SHA 一致、三件套齐、
+非 draft/prerelease、说明完整、repo public)。
