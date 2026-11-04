@@ -3889,3 +3889,9 @@ Android 0.1.8 安装包均为 HTTP 200。
 - core `407 passed / 8 ignored`，同步夹具 6 passed；`jsdom-smoke` 154/154；CSS 形态检查 PASS；`node --check app.js`。
 - PC 0.3.12 release 二进制构建成功；CDP 抓真实标题栏（深/浅）确认 20px 标记与 `mark-ink.png` 生效。
 - Android debug `assembleDebug` + `testDebugUnitTest` 通过；release 0.1.9（versionCode 10）签名 APK 构建成功，SHA-256 `fa4945abd77f5eef4c38cffebfa70aa696635edcb71aec1e5433b318327b17dd`，证书 `CN=Grandettoken Android Release`；Pixel 模拟器先装官方 0.1.8 再覆盖 0.1.9，`install -r` 成功、启动无 FATAL。
+
+**发布（2026-11-04）**
+- PC：tag `v0.3.12`，release 提交 `9e8ae74`。签名安装包 `Grandettoken_0.3.12_x64-setup.exe` 5,531,126 字节，SHA-256 `eb25f4f669142bda43397358b5507e65729c4017aaa3983a006c8ea2071abe1a`；`.sig` 与 `latest.json` 三件套上传后 digest 与本地一致。`verify-release.js` **14 项全 PASS**（更新端点 200 / 版本 0.3.12 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft / 说明完整 / latest 端点指向 0.3.12 / 仓库公开）。
+- Android：`android-v0.1.9` 发布正式签名 APK（versionCode 10，11,035,136 字节，SHA-256 `fa4945abd77f5eef4c38cffebfa70aa696635edcb71aec1e5433b318327b17dd`，证书 `CN=Grandettoken Android Release`）；公开下载后 SHA 与本地一致。`android-stable/android-latest.json` 已重签为 0.1.9 并更新（1295 字节，digest `07754c294cc982569dd213df57b719d7bb245af11f31a54a35fb2fb9b51fa4cd`），线上清单用 `manifest-public.txt` 回验 Ed25519 签名、版本、大小、哈希和下载地址均通过。
+- 模拟器：Pixel API 14 先装官方 0.1.8（versionCode 9），再覆盖安装 0.1.9（versionCode 10），`install -r` 成功、启动无 FATAL；APK 内已确认 `ic_launcher_background/foreground/monochrome` 三层资源。
+- 创建 Android release 后已显式 `gh release edit v0.3.12 --latest`，`releases/latest` 仍为 `v0.3.12`，没有再被 `android-v0.1.9` 抢占。
