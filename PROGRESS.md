@@ -3846,3 +3846,10 @@ digest 比对先行核验(三件套与本地逐字节一致);网络恢复后复�
 (下载端点 200 / SHA 一致 / 三件套齐 / 非 draft / 说明完整 / repo public)。
 另记一个坑:从 Git Bash 用 `cmd /c start ... /S` 装机,`/S` 会被路径转换吃掉,
 安装器挂在前台等待 —— 用 PowerShell `Start-Process -ArgumentList '/S' -Wait` 才可靠。
+
+**更新端点修复（2026-11-04，v0.3.10 已发布后）**：其他机器 0.3.7 检查更新报
+"Could not fetch a valid release JSON"。根因:`releases/latest/download/latest.json`
+的「latest」被旧 release **`android-v0.1.8`** 占用(端点 302 → android-v0.1.8 → 404),
+与 tag 版本无关。`gh release edit v0.3.10 --latest` 归位后端点 200、指向 0.3.10。
+`verify-release.js` 补第 7.5 项:更新端点本体必须指向当前版本的 latest.json(此前
+只核直链,正是这次的漏网处);复跑 **11 项全 PASS**。

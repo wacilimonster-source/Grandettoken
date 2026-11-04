@@ -93,6 +93,21 @@ const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
   if (notes.length > 20 && cjk > 20 && replacement === 0) ok('notes intact', `${notes.length} chars, ${cjk} CJK, 0 replacement chars`);
   else bad('notes intact', `len=${notes.length} cjk=${cjk} replacement=${replacement}`);
 
+  // 7.5 更新端点本体(latest 词面必须指向本 tag 的 latest.json —— 2026-11-04 踩过:
+  // 旧 android-* release 被标成 Latest,latest/download 404,老版本更新全部断)
+  try {
+    const res = await fetch(ENDPOINT, { redirect: 'follow' });
+    if (!res.ok) {
+      bad('update endpoint serves latest.json', `HTTP ${res.status}（检查 GitHub「Latest」标记是否被旧 release 占用）`);
+    } else {
+      const ep = await res.json();
+      if (ep.version !== VERSION) bad('update endpoint version', `${ep.version} != ${VERSION}`);
+      else ok('update endpoint serves this version', `latest/download → ${ep.version}`);
+    }
+  } catch (e) {
+    bad('update endpoint serves latest.json', String(e.message || e));
+  }
+
   // 8. 仓库元数据:门面三件套
   const repo = await (await fetch(`https://api.github.com/repos/${OWNER}/${REPO}`, { headers: H })).json();
   ok('description set', (repo.description || '').slice(0, 60));
