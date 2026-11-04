@@ -13,6 +13,7 @@ use tokenscope_core::fetch::{now_ts, ChannelView, Fetcher};
 use tokenscope_core::{appauth, checkin, inject, models, providers, secrets, store::Store, view, workbuddy};
 
 mod sync_cmds;
+mod download;
 pub use sync_cmds::{
     sync_create, sync_delete_relay, sync_disconnect_github, sync_forget, sync_github_status,
     sync_join, sync_oauth_cancel, sync_oauth_poll, sync_oauth_start, sync_preview,
@@ -5568,6 +5569,7 @@ pub fn run() {
             copy_model_bundle,
             model_info,
             copy_text,
+            download::download_link,
             open_path,
             open_url,
             diag_log_info,

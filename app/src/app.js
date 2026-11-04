@@ -6118,6 +6118,27 @@ function onUpdProgress(p) {
 
 $("btnCheck").addEventListener("click", () => checkUpdate(true));
 
+for (const [id, platform, label] of [
+  ["btnCopyWindowsDownload", "windows", "Windows 安装包"],
+  ["btnCopyAndroidDownload", "android", "安卓 APK"],
+]) {
+  $(id).addEventListener("click", async () => {
+    const btn = $(id);
+    btn.disabled = true;
+    btn.textContent = "正在获取…";
+    try {
+      const text = await invoke("download_link", { platform });
+      await invoke("copy_text", { text });
+      showToast(label + "下载直链已复制");
+    } catch (e) {
+      showToast("复制下载直链失败：" + e, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "复制下载直链";
+    }
+  });
+}
+
 // ───────────── 排查日志(设置页 · 关于页签)─────────────
 // 用户报"某渠道取不到数"时,这一段是唯一能把现场带回来的东西:
 // 路径 + 大小 + 最近若干行,一键复制 / 打开目录 / 清空。

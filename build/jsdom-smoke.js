@@ -34,8 +34,11 @@ w.__TAURI__ = {
   // 真实启动链路会读配置/渠道/视图;全返回 null 的话 init 走到 applyPinUI 会崩
   // (以前同步断言在 init 恢复之前就退出了,没有暴露)。异步用例要等 init,所以喂真数据。
   core: {
-    invoke: async (cmd) => {
+    invoke: async (cmd, args) => {
       CALLS[cmd] = (CALLS[cmd] || 0) + 1;
+      if (w.__DOWNLOAD_INVOKE && ["download_link", "copy_text"].includes(cmd)) {
+        return w.__DOWNLOAD_INVOKE(cmd, args);
+      }
       if (cmd === "get_config") return JSON.parse(JSON.stringify(DATA.CFG));
       if (cmd === "get_channels") return JSON.parse(JSON.stringify(DATA.CHANNELS));
       if (cmd === "home_view") return JSON.parse(JSON.stringify(DATA.HOME));
@@ -869,6 +872,34 @@ w.__DATA = DATA;
   if (w.__ASYNC3) await w.__ASYNC3;
 
   const R = w.__R || [];
+  // 真正点击分享按钮，覆盖获取/复制两阶段失败与重试。
+  for (const [id, platform] of [
+    ["btnCopyWindowsDownload", "windows"], ["btnCopyAndroidDownload", "android"],
+  ]) {
+    const btn = w.document.getElementById(id);
+    for (const failure of ["download_link", "copy_text", null]) {
+      const calls = [];
+      let finish;
+      w.__DOWNLOAD_INVOKE = async (cmd, args) => {
+        calls.push({ cmd, args });
+        if (cmd === "download_link") await new Promise((resolve) => { finish = resolve; });
+        if (cmd === failure) throw new Error("模拟失败");
+        return "https://example.com/" + platform;
+      };
+      btn.click();
+      btn.click();
+      R.push({ name: platform + " 获取时禁用按钮，阻止重复点击 " + failure,
+        ok: btn.disabled && btn.textContent === "正在获取…" && calls.length === 1 });
+      finish();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const copied = calls.find((c) => c.cmd === "copy_text");
+      R.push({ name: platform + " 分享下载 " + (failure || "成功重试"),
+        ok: calls[0].args.platform === platform && !btn.disabled && btn.textContent === "复制下载直链" &&
+          (failure === "download_link" ? !copied : copied.args.text === "https://example.com/" + platform) &&
+          w.document.getElementById("toast").textContent.includes(failure ? "复制下载直链失败" : "下载直链已复制") });
+    }
+  }
+  delete w.__DOWNLOAD_INVOKE;
   const css = fs.readFileSync(path.join(SRC, "styles.css"), "utf8");
   R.push({
     name: "顶栏固定四枚,不再有「紧凑」按钮与弹出菜单",
