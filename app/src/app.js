@@ -2607,7 +2607,7 @@ trayBrand.onload = () => {
   trayKey = "";
   drawTrayIcon();
 };
-trayBrand.src = "brand/logo.png";
+trayBrand.src = "brand/logo-tray.png";
 function drawTrayIcon() {
   const c = PILL.list[PILL.idx] || null;
   const tone = c ? toneOf(c) : "off";
@@ -2658,13 +2658,15 @@ function drawTrayIcon() {
       g.fillStyle = "#293243";
       g.fill();
     }
+    // 右下角标:logo-tray.png 里的 G 已缩到 78%,这里只画底色环 + 状态点。
     g.beginPath();
-    g.arc(22.5, 22.5, 7, 0, Math.PI * 2); // 右下角标
+    g.arc(S * 0.74, S * 0.74, S * 0.185, 0, Math.PI * 2);
+    g.fillStyle = "#12141a";
+    g.fill();
+    g.beginPath();
+    g.arc(S * 0.74, S * 0.74, S * 0.13, 0, Math.PI * 2);
     g.fillStyle = TONE_HEX[tone];
     g.fill();
-    g.lineWidth = 2;
-    g.strokeStyle = "#12141a";
-    g.stroke();
   }
 
   // 像素走 base64:4096 字节的 RGBA 若按数组过 IPC 会变成两万多字符的 JSON,

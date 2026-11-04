@@ -3874,3 +3874,18 @@ Rust 工程验证，复用完整源文件并移除 Tauri 命令宏，4 项解析
 配置中的公钥对公开安装包验签通过。`verify-release.js` 经系统代理运行全部 PASS，
 桌面 latest 更新端点为 0.3.11。独立下载模块再次实际取链，Windows 0.3.11 和
 Android 0.1.8 安装包均为 HTTP 200。
+
+## 2026-11-04 · 新品牌标 G 表盘（v0.3.12 / Android 0.1.9）
+
+**背景（用户裁决）**：旧标是像素云，16–17px 只剩低对比噪点；用户要求把“葛朗台、精打细算”融进去。方案定为 **G 表盘 + 金币横针**：G 是名字，右上 56° 开口圆环是表盘，横针是三枚叠起的金币（葛朗台式数清每一枚 token）；16px 时金币堆自然收成一根金针，不牺牲 G 的识别。
+
+**实现**
+- `build/gen-icons.js` 重写为几何生成器（只依赖 Node 内置模块）：同一套 100×100 几何输出 1024 母版、Windows 16–256 `icon.ico`、前端 `logo/mark/mark-ink/logo-tray`、Android 432 背景/前景/单色三层；母版在 `app/branding/logo-source.png`。
+- 标题栏 `.mark` 改用 20px 无底标 `brand/mark.png`；`body.light` 换 `mark-ink.png`，白 G 不在暖白标题栏上消失。
+- 托盘用 `brand/logo-tray.png`（G 缩到 78%），右下状态点改画深色底环 + 更小的状态点，不再压住 G。
+- Android 自适应图标改为 background + foreground 分层，G 占画布 60%；新增 `mipmap-anydpi-v33` 单色层；删除旧的 `ic_launcher_art` 占位矢量/PNG。
+
+**验证**
+- core `407 passed / 8 ignored`，同步夹具 6 passed；`jsdom-smoke` 154/154；CSS 形态检查 PASS；`node --check app.js`。
+- PC 0.3.12 release 二进制构建成功；CDP 抓真实标题栏（深/浅）确认 20px 标记与 `mark-ink.png` 生效。
+- Android debug `assembleDebug` + `testDebugUnitTest` 通过；release 0.1.9（versionCode 10）签名 APK 构建成功，SHA-256 `fa4945abd77f5eef4c38cffebfa70aa696635edcb71aec1e5433b318327b17dd`，证书 `CN=Grandettoken Android Release`；Pixel 模拟器先装官方 0.1.8 再覆盖 0.1.9，`install -r` 成功、启动无 FATAL。

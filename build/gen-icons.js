@@ -1,124 +1,148 @@
-// 从同一张母版生成 Windows、标题栏/托盘及 Android 启动图标。
-// 只依赖 Node 内置模块;母版须为非交错的 8 位 RGB/RGBA 正方形 PNG。
+// 从同一套几何生成 Windows、标题栏/托盘及 Android 图标。
+//
+// 几何是唯一母版:G 表盘(圆环右上 56° 开口)+ 横针位置的三枚金币。
+// `app/branding/logo-source.png` 是这套几何的 1024px 预览,方便在文件管理器里查看;
+// 真正的尺寸/裁切规则全在这个脚本里。只依赖 Node 内置模块。
 const zlib = require("zlib");
 const fs = require("fs");
 const path = require("path");
 
 const root = path.join(__dirname, "..");
-const source = path.join(root, "app", "branding", "logo-source.png");
+const masterDir = path.join(root, "app", "branding");
 const winDir = path.join(root, "app", "src-tauri", "icons");
 const webDir = path.join(root, "app", "src", "brand");
 const androidDir = path.join(root, "android", "app", "src", "main", "res", "drawable-nodpi");
 const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
-function paeth(a, b, c) {
-  const p = a + b - c;
-  const da = Math.abs(p - a), db = Math.abs(p - b), dc = Math.abs(p - c);
-  return da <= db && da <= dc ? a : db <= dc ? b : c;
+// ── 几何(100×100 坐标) ─────────────────────────────────────────────
+const TILE_RX = 23;          // 圆角半径(%)
+const RING_R = 27;           // 圆环中心线半径
+const STROKE = 10;           // 圆环笔画
+const GAP_START = -80;       // 开口下沿(度,0=右,顺时针)
+const GAP_END = -24;         // 开口上沿
+const COINS = [              // 横针 = 三枚叠起的金币,自下而上收窄
+  { x: 59, y: 52.2, w: 18, h: 3.6 },
+  { x: 60, y: 48.2, w: 16, h: 3.6 },
+  { x: 61, y: 44.2, w: 14, h: 3.6 },
+];
+const LIGHT = { ring: [0xee, 0xf3, 0xff], coin: [0xf2, 0xc0, 0x63] };
+const INK = { ring: [0x1a, 0x21, 0x30], coin: [0xb0, 0x74, 0x1a] };
+const MONO = { ring: [255, 255, 255], coin: [255, 255, 255] };
+
+const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+const mix = (a, b, t) => [
+  Math.round(a[0] + (b[0] - a[0]) * t),
+  Math.round(a[1] + (b[1] - a[1]) * t),
+  Math.round(a[2] + (b[2] - a[2]) * t),
+];
+
+function insideTile(x, y, inset, radius) {
+  const lo = inset, hi = 100 - inset;
+  const cx = clamp(x, lo + radius, hi - radius);
+  const cy = clamp(y, lo + radius, hi - radius);
+  return Math.hypot(x - cx, y - cy) <= radius;
 }
 
-function decodePng(file) {
-  const bytes = fs.readFileSync(file);
-  if (!bytes.subarray(0, 8).equals(signature)) throw new Error("图标母版不是 PNG");
-  let width, height, channels, depth, interlace;
-  const chunks = [];
-  for (let pos = 8; pos + 12 <= bytes.length;) {
-    const len = bytes.readUInt32BE(pos);
-    const type = bytes.toString("ascii", pos + 4, pos + 8);
-    const data = bytes.subarray(pos + 8, pos + 8 + len);
-    if (data.length !== len) throw new Error("PNG 数据不完整");
-    if (type === "IHDR") {
-      width = data.readUInt32BE(0);
-      height = data.readUInt32BE(4);
-      depth = data[8];
-      channels = data[9] === 2 ? 3 : data[9] === 6 ? 4 : 0;
-      interlace = data[12];
-    } else if (type === "IDAT") chunks.push(data);
-    else if (type === "IEND") break;
-    pos += len + 12;
+// 右上开口:角度落在开口扇区内的环带被挖掉,再用两个圆头盖补回端点。
+function inRing(x, y) {
+  const dx = x - 50, dy = y - 50;
+  const d = Math.hypot(dx, dy);
+  if (Math.abs(d - RING_R) <= STROKE / 2) {
+    const a = (Math.atan2(dy, dx) * 180) / Math.PI;
+    if (!(a >= GAP_START && a <= GAP_END)) return true;
   }
-  if (!width || width !== height || depth !== 8 || !channels || interlace !== 0) {
-    throw new Error("图标母版须为非交错的 8 位 RGB/RGBA 正方形 PNG");
+  for (const deg of [GAP_START, GAP_END]) {
+    const rad = (deg * Math.PI) / 180;
+    const cx = 50 + RING_R * Math.cos(rad);
+    const cy = 50 + RING_R * Math.sin(rad);
+    if (Math.hypot(x - cx, y - cy) <= STROKE / 2) return true;
   }
-  const raw = zlib.inflateSync(Buffer.concat(chunks));
-  const stride = width * channels;
-  if (raw.length !== (stride + 1) * height) throw new Error("PNG 扫描行长度不符");
-  const pixels = Buffer.alloc(width * height * 4);
-  let previous = Buffer.alloc(stride);
-  let row = Buffer.alloc(stride);
-  let offset = 0;
-  for (let y = 0; y < height; y++) {
-    const filter = raw[offset++];
-    if (filter > 4) throw new Error(`不支持 PNG filter ${filter}`);
-    for (let x = 0; x < stride; x++) {
-      const left = x >= channels ? row[x - channels] : 0;
-      const up = previous[x];
-      const upperLeft = x >= channels ? previous[x - channels] : 0;
-      const predictor = filter === 0 ? 0 : filter === 1 ? left : filter === 2 ? up
-        : filter === 3 ? Math.floor((left + up) / 2) : paeth(left, up, upperLeft);
-      row[x] = (raw[offset++] + predictor) & 255;
-    }
-    for (let x = 0; x < width; x++) {
-      const from = x * channels, to = (y * width + x) * 4;
-      pixels[to] = row[from];
-      pixels[to + 1] = row[from + 1];
-      pixels[to + 2] = row[from + 2];
-      pixels[to + 3] = channels === 4 ? row[from + 3] : 255;
-    }
-    [previous, row] = [row, previous];
-  }
-  return { size: width, pixels };
+  return false;
 }
 
-// 按像素面积做缩小采样,并在 alpha 加权后计算颜色,避免透明边出现黑边。
-function resize(image, size) {
-  const scale = image.size / size;
-  if (scale < 1) throw new Error(`图标母版小于 ${size}×${size}`);
+function inCapsule(x, y, r) {
+  const rad = r.h / 2;
+  const cy = r.y + rad;
+  const cx = clamp(x, r.x + rad, r.x + r.w - rad);
+  return Math.hypot(x - cx, y - cy) <= rad;
+}
+
+// 金币先判:横针压在圆环上时,金色盖住白色。
+function markAt(x, y, opt) {
+  const pivot = opt.markPivot || 0;
+  const scale = opt.markScale || 1;
+  const tx = opt.markTx || 0;
+  const ty = opt.markTy || 0;
+  const mx = pivot + (x - pivot - tx) / scale;
+  const my = pivot + (y - pivot - ty) / scale;
+  for (const coin of COINS) if (inCapsule(mx, my, coin)) return opt.colors.coin;
+  if (inRing(mx, my)) return opt.colors.ring;
+  return null;
+}
+
+const SAMPLE = [0, 0, 0, 0];
+function tileColor(x, y, rim) {
+  const t = clamp((x + y) / 200, 0, 1);
+  let rgb = t < 0.55
+    ? mix([0x1b, 0x23, 0x37], [0x12, 0x17, 0x22], t / 0.55)
+    : mix([0x12, 0x17, 0x22], [0x0c, 0x0f, 0x16], (t - 0.55) / 0.45);
+  const glow = clamp(1 - Math.hypot(x - 50, y - 42) / 62, 0, 1) * 0.2;
+  rgb = mix(rgb, [0x5b, 0x8c, 0xff], glow);
+  if (rim && insideTile(x, y, 0.6, 22.4) && !insideTile(x, y, 1.8, 21.2)) {
+    rgb = mix(rgb, [255, 255, 255], 0.09);
+  }
+  return rgb;
+}
+
+function sample(x, y, opt) {
+  if (opt.tile) {
+    if (opt.rounded && !insideTile(x, y, 0, TILE_RX)) return (SAMPLE[3] = 0), SAMPLE;
+    const mark = opt.mark ? markAt(x, y, opt) : null;
+    if (mark) {
+      SAMPLE[0] = mark[0]; SAMPLE[1] = mark[1]; SAMPLE[2] = mark[2]; SAMPLE[3] = 1;
+      return SAMPLE;
+    }
+    const rgb = tileColor(x, y, opt.rim !== false);
+    SAMPLE[0] = rgb[0]; SAMPLE[1] = rgb[1]; SAMPLE[2] = rgb[2]; SAMPLE[3] = 1;
+    return SAMPLE;
+  }
+  if (opt.mark) {
+    const mark = markAt(x, y, opt);
+    if (!mark) return (SAMPLE[3] = 0), SAMPLE;
+    SAMPLE[0] = mark[0]; SAMPLE[1] = mark[1]; SAMPLE[2] = mark[2]; SAMPLE[3] = 1;
+    return SAMPLE;
+  }
+  return (SAMPLE[3] = 0), SAMPLE;
+}
+
+function render(size, opt, crop) {
+  const area = crop || { x: 0, y: 0, w: 100, h: 100 };
+  const n = size <= 48 ? 6 : size <= 160 ? 4 : size <= 512 ? 3 : 2;
   const out = Buffer.alloc(size * size * 4);
-  for (let y = 0; y < size; y++) {
-    const y0 = y * scale, y1 = (y + 1) * scale;
-    for (let x = 0; x < size; x++) {
-      const x0 = x * scale, x1 = (x + 1) * scale;
-      let r = 0, g = 0, b = 0, a = 0;
-      for (let sy = Math.floor(y0); sy < Math.min(image.size, Math.ceil(y1)); sy++) {
-        const wy = Math.min(y1, sy + 1) - Math.max(y0, sy);
-        for (let sx = Math.floor(x0); sx < Math.min(image.size, Math.ceil(x1)); sx++) {
-          const wx = Math.min(x1, sx + 1) - Math.max(x0, sx);
-          const i = (sy * image.size + sx) * 4;
-          const weight = wx * wy * image.pixels[i + 3] / 255;
-          r += image.pixels[i] * weight;
-          g += image.pixels[i + 1] * weight;
-          b += image.pixels[i + 2] * weight;
-          a += weight;
+  for (let py = 0; py < size; py++) {
+    for (let px = 0; px < size; px++) {
+      let ar = 0, ag = 0, ab = 0, aa = 0;
+      for (let sy = 0; sy < n; sy++) {
+        for (let sx = 0; sx < n; sx++) {
+          const x = area.x + ((px + (sx + 0.5) / n) * area.w) / size;
+          const y = area.y + ((py + (sy + 0.5) / n) * area.h) / size;
+          const s = sample(x, y, opt);
+          ar += s[0] * s[3]; ag += s[1] * s[3]; ab += s[2] * s[3]; aa += s[3];
         }
       }
-      const i = (y * size + x) * 4;
-      if (a) {
-        out[i] = Math.round(r / a);
-        out[i + 1] = Math.round(g / a);
-        out[i + 2] = Math.round(b / a);
-        out[i + 3] = Math.round(255 * a / (scale * scale));
+      const i = (py * size + px) * 4;
+      if (aa > 0) {
+        out[i] = Math.round(ar / aa);
+        out[i + 1] = Math.round(ag / aa);
+        out[i + 2] = Math.round(ab / aa);
       }
+      out[i + 3] = Math.round((255 * aa) / (n * n));
     }
   }
   return out;
 }
 
-// Windows 及标题栏图标使用带抗锯齿的圆角;Android 的形状由系统裁切。
-function rounded(pixels, size) {
-  const out = Buffer.from(pixels);
-  const radius = size * 0.2;
-  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
-    const px = x + 0.5, py = y + 0.5;
-    const cx = Math.min(Math.max(px, radius), size - radius);
-    const cy = Math.min(Math.max(py, radius), size - radius);
-    const coverage = Math.max(0, Math.min(1, radius + 0.5 - Math.hypot(px - cx, py - cy)));
-    const alpha = (y * size + x) * 4 + 3;
-    out[alpha] = Math.round(out[alpha] * coverage);
-  }
-  return out;
-}
-
+// ── PNG / ICO ────────────────────────────────────────────────────────
 function crc32(buf) {
   let crc = 0xffffffff;
   for (const byte of buf) {
@@ -168,28 +192,38 @@ function ico(entries) {
   return Buffer.concat([header, directory, ...entries.map((entry) => entry.data)]);
 }
 
-// 自适应图标 108dp 中的安全区为中心 66dp。将完整画面缩入安全区,
-// 向外延伸边缘颜色填满背景,避免圆形/方圆形启动器裁掉主体。
-function androidArt(image) {
-  const size = 432, innerSize = 264, inset = (size - innerSize) / 2;
-  const inner = resize(image, innerSize);
-  const out = Buffer.alloc(size * size * 4);
-  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
-    const sx = Math.max(0, Math.min(innerSize - 1, x - inset));
-    const sy = Math.max(0, Math.min(innerSize - 1, y - inset));
-    inner.copy(out, (y * size + x) * 4, (sy * innerSize + sx) * 4, (sy * innerSize + sx + 1) * 4);
-  }
-  return png(size, out);
+// ── 输出 ────────────────────────────────────────────────────────────
+const tile = { tile: true, rounded: true, mark: true, rim: true, colors: LIGHT };
+const markCrop = { x: 15, y: 15, w: 70, h: 70 };
+const icons = new Map();
+
+fs.mkdirSync(masterDir, { recursive: true });
+fs.mkdirSync(winDir, { recursive: true });
+fs.mkdirSync(webDir, { recursive: true });
+fs.mkdirSync(androidDir, { recursive: true });
+
+for (const size of [16, 24, 32, 48, 64, 128, 256]) {
+  icons.set(size, png(size, render(size, tile)));
 }
 
-const image = decodePng(source);
-for (const dir of [winDir, webDir, androidDir]) fs.mkdirSync(dir, { recursive: true });
-const sizes = [16, 24, 32, 48, 64, 128, 256];
-const icons = new Map(sizes.map((size) => [size, png(size, rounded(resize(image, size), size))]));
+fs.writeFileSync(path.join(masterDir, "logo-source.png"), png(1024, render(1024, tile)));
 fs.writeFileSync(path.join(winDir, "32x32.png"), icons.get(32));
 fs.writeFileSync(path.join(winDir, "128x128.png"), icons.get(128));
 fs.writeFileSync(path.join(winDir, "icon.png"), icons.get(256));
-fs.writeFileSync(path.join(winDir, "icon.ico"), ico(sizes.map((size) => ({ size, data: icons.get(size) }))));
+fs.writeFileSync(path.join(winDir, "icon.ico"), ico([16, 24, 32, 48, 64, 128, 256].map((size) => ({ size, data: icons.get(size) }))));
+
 fs.writeFileSync(path.join(webDir, "logo.png"), icons.get(128));
-fs.writeFileSync(path.join(androidDir, "ic_launcher_art.png"), androidArt(image));
-console.log("图标已从 app/branding/logo-source.png 生成到 Windows、标题栏/托盘及 Android 资源目录。");
+fs.writeFileSync(path.join(webDir, "mark.png"), png(128, render(128, { tile: false, mark: true, colors: LIGHT }, markCrop)));
+fs.writeFileSync(path.join(webDir, "mark-ink.png"), png(128, render(128, { tile: false, mark: true, colors: INK }, markCrop)));
+fs.writeFileSync(path.join(webDir, "logo-tray.png"), png(128, render(128, { ...tile, markScale: 0.78, markPivot: 0, markTy: -1 })));
+
+// Android 自适应图标:背景铺满、前景 G 占画布 60%(66dp 安全区内),系统只负责裁切。
+fs.writeFileSync(path.join(androidDir, "ic_launcher_background.png"), png(432, render(432, { tile: true, rounded: false, mark: false, rim: false })));
+fs.writeFileSync(path.join(androidDir, "ic_launcher_foreground.png"), png(432, render(432, { tile: false, mark: true, colors: LIGHT, markScale: 0.9375, markPivot: 50 })));
+fs.writeFileSync(path.join(androidDir, "ic_launcher_monochrome.png"), png(432, render(432, { tile: false, mark: true, colors: MONO, markScale: 0.9375, markPivot: 50 })));
+
+console.log("品牌图标已生成:");
+console.log("  母版  app/branding/logo-source.png (1024)");
+console.log("  Windows app/src-tauri/icons/{32,128,256}.png + icon.ico (16–256)");
+console.log("  前端  app/src/brand/{logo,mark,mark-ink,logo-tray}.png (128)");
+console.log("  Android drawable-nodpi/ic_launcher_{background,foreground,monochrome}.png (432)");

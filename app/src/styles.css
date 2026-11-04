@@ -59,8 +59,11 @@ body{
   padding:calc(9px*var(--u)) calc(8px*var(--u)) calc(9px*var(--u)) calc(12px*var(--u));flex:none;
   background:linear-gradient(180deg,#1a1f28,#141821);border-bottom:1px solid var(--line);
   cursor:move}
-.mark{width:calc(17px*var(--u));height:calc(17px*var(--u));border-radius:calc(5px*var(--u));flex:none;position:relative;
-  background:url("brand/logo.png") center/contain no-repeat}
+/* 2026-11-04 新品牌标:标题栏用无底 G(金币横针),不再套 17px 圆角方块。
+   light 主题单独换墨色版,否则白 G 在暖白标题栏上看不见。 */
+.mark{width:calc(20px*var(--u));height:calc(20px*var(--u));flex:none;position:relative;
+  background:url("brand/mark.png") center/contain no-repeat}
+body.light .mark{background-image:url("brand/mark-ink.png")}
 /* 产品名可以让位:更新角标出现时标题栏是够不放不下右侧按钮的,标题是可牺牲的那个
    (它只是装饰,窗口标题/任务栏里还有全名)。min-width:0 才允许 flex 子项缩到内容以下 */
 .tt{font-size:calc(13px*var(--u));font-weight:600;letter-spacing:.02em;white-space:nowrap;
