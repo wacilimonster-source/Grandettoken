@@ -3866,3 +3866,11 @@ Windows 使用桌面 latest 清单，Android 使用独立的 `android-stable` �
 Tauri 测试外壳仍有仓库历史记录中的 Windows 入口点加载错误，下载模块通过独立临时
 Rust 工程验证，复用完整源文件并移除 Tauri 命令宏，4 项解析测试全部通过。
 该工程实际调用 `download_link`，Windows 0.3.10 与 Android 0.1.8 的安装包直链均返回 HTTP 200。
+
+2026-11-04 已发布 [v0.3.11](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.3.11)，
+源码与 tag 对应提交 `12fc07b`。签名安装包大小 5,593,085 字节，SHA-256 为
+`12112fd61b3efb656125c822a1fd1f183369b619209b506db5461d208e5df9b6`。
+安装包、`.sig`、`latest.json` 上传前后哈希一致，公开下载后哈希与本地一致，
+配置中的公钥对公开安装包验签通过。`verify-release.js` 经系统代理运行全部 PASS，
+桌面 latest 更新端点为 0.3.11。独立下载模块再次实际取链，Windows 0.3.11 和
+Android 0.1.8 安装包均为 HTTP 200。
