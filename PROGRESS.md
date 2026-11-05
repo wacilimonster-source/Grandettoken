@@ -3917,3 +3917,47 @@ Android 0.1.8 安装包均为 HTTP 200。
 - 网络备注：本机直连 github.com 超时（`fetch failed`），经系统代理 `127.0.0.1:7897` + Node 24 `NODE_USE_ENV_PROXY=1` 复跑通过；`gh` 走 api.github.com 未受影响。
 
 
+
+## 2026-11-06 · 全端文案体检与提示语统一（v0.3.14 / Android 0.1.10）
+
+**背景**：对三个端约 1,000 条用户可见文案做全面体检（方案见
+`docs/design/design-copy-audit-2026-11-06.html`），按裁决全选推荐项执行：自称「挂件」、
+底栏「告急」、密钥才带剪贴板提醒、小组件单位「分」、「可直接粘贴给 AI 排查」、
+confirm 迁行内条。
+
+**实现**
+- 标点基线（句中半角、句末全角）：PC sync 区/确认框/模型页、`download.rs`、
+  `core/sync` 五文件、`sync_cmds.rs`、Android 全部用户文案，全角 `，；：（）` 归零。
+- 错误收编：reqwest/updater 英文原文不再直出（8 处，原文经 `diaglog::write_keyed`
+  进日志）；updater 新增 `updater_err()` 分类（签名/网络/下载）；errcodes 兜底补出路。
+- SYNC_* 码对用户隐藏：Android `SyncViewModel` 只显示 message，PC `syncUserMsg()`
+  剥前缀（20+ 处），码保留在诊断卡与日志。
+- 签到统一：三态「已领到/平台已签/没签成」，按钮收敛 5 动词，活动标签三表合一
+  （`ACTIVITY_LABELS`），事件 toast 精简。
+- toast：剪贴板回执三分类；删 3 处冗余回执（弹层已刷新/体检完成/Client ID 已保存）。
+- 交互：7 处原生 `confirm()` → `armConfirm()` 行内确认条；模型三件套回执去重。
+- Android 0.1.10：小组件「N 分」、`updateFailText()` UPDATE_* 中文映射、
+  应用名统一 Grandettoken Sync、「数据较旧」收敛、`渠道总览` 入 strings.xml。
+
+**测试门禁**
+- `cargo test`（core + src-tauri）、`jsdom-smoke` **154/154**（3 条断言随新文案更新）、
+  `check-css-forms` 907 规则 PASS、`node --check`、Android `testDebugUnitTest` 全绿。
+- 构建期修两处：`crit_body` 金额型 format 占位符与参数不符（cargo check 被
+  管道 tail 掩盖退出码，release build 兜住）；发版辅助脚本中 keytool 中文 locale
+  输出与 DPAPI 密码 UTF-16LE 编码两处解析问题。
+
+**发布（2026-11-06）**
+- tag `v0.3.14`，release 提交 `0385c63`。签名安装包
+  `Grandettoken_0.3.14_x64-setup.exe` 5,531,338 字节，SHA-256
+  `8e2b0c21af7179a1d55c99078b2c28a110324743273a4d557028576b9e389271`；
+  `.sig` 424 字节；`latest.json` 1,096 字节（更新说明首次用 `--notes-file` 传入）。
+  `verify-release.js` **14 项全 PASS**（更新端点 200、版本/签名/URL 一致、安装包
+  可下载且 SHA 一致、三件套齐、非 draft、说明完整、latest 端点指向 0.3.14、仓库公开）。
+- Android `android-v0.1.10` 发布正式签名 APK（versionCode 11，11,035,536 字节，
+  SHA-256 `aa69baa38d5caeeee770ca91993015db5e6b8f216d77d1b2a3c2cdd64fbc5dfd`，
+  证书 `CN=Grandettoken Android Release`）；公开下载后 SHA 与本地一致。
+  `android-stable/android-latest.json` 重签为 0.1.10 并更新（1,450 字节），
+  线上清单用 `manifest-public.txt` 回验 Ed25519 签名、版本、大小、哈希、下载地址全通过。
+- `gh release edit v0.3.14 --latest` 已归位，`releases/latest` 指向 v0.3.14。
+- 附带：android/ 源码树与发版辅助脚本（`build/android-release.ps1`、
+  `build/sign-android-manifest.py`）首次入库；文案体检设计文档随本提交入库。
