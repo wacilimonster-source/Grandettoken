@@ -4088,7 +4088,7 @@ function renderManageIndex() {
       ckOn ? `今日 ${ck.done}/${ck.total}${ck.done >= ck.total ? " · 已完成" : ""}` : "未开启签到", "ck"),
     row("disp", "i-display", "外观与显示", `${theme}主题 · ${font}字号 · ${compact} · 排序: ${sort}`, "disp"),
     row("run", "i-refresh", "刷新与启动", run, "run"),
-    row("vault", "i-key", "密钥箱", "查看 / 搜索本机密钥", "vault"),
+    row("vault", "i-key", "密钥箱", "查看、新增与管理本机密钥", "vault"),
     row("sync", "i-sync", "同步到手机", syncSummary(), "sync"),
     row("about", "i-info", "关于与诊断", about),
   ].join("");
@@ -4140,6 +4140,22 @@ function showTab(name) {
     renderManageIndex();
     return;
   }
+  // 页签的「进入时读一次」集中在这里:索引页(mIndexList)与旧页签栏都走 showTab。
+  // 以前这些只挂在 mTabs 的 click 上,而旧页签栏被 CSS 隐藏 —— 从索引点进密钥箱
+  // 时列表根本没读过,画面上没有条目也没有「新增」,像坏了。
+  // 签到中心:每次切进来都重读一次流水(本地 SQLite,便宜;后台可能刚签完)
+  if (name === "ck") loadCheckinHistory();
+  // 模型页签才去取清单:没打开就不打扰接口(价目表一天一次的手动/自动刷新)
+  if (name === "mdl") ensureModels();
+  // 关于页签里的「排查日志」卡:每次切进来刷新路径与大小(便宜,一次本地文件 stat)
+  if (name === "about") refreshLogCard();
+  // 密钥箱:每次切进来都重新读索引(列表不需要解密,读起来很便宜);
+  // 重新渲染也会把已显示的明文收回
+  if (name === "vault") {
+    VAULT_REVEAL = {};
+    clearTimeout(vaultRevealTimer);
+    loadVault();
+  }
   if (name === "sync") loadSyncStatus();
 }
 $("mIndexList").addEventListener("click", (e) => {
@@ -4150,19 +4166,6 @@ $("mTabs").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-p]");
   if (!b) return;
   showTab(b.dataset.p);
-  // 签到中心:每次切进来都重读一次流水(本地 SQLite,便宜;后台可能刚签完)
-  if (b.dataset.p === "ck") loadCheckinHistory();
-  // 模型页签才去取清单:没打开就不打扰接口(价目表一天一次的手动/自动刷新)
-  if (b.dataset.p === "mdl") ensureModels();
-  // 关于页签里的「排查日志」卡:每次切进来刷新路径与大小(便宜,一次本地文件 stat)
-  if (b.dataset.p === "about") refreshLogCard();
-  // 密钥箱:每次切进来都重新读索引(列表不需要解密,读起来很便宜);
-  // 重新渲染也会把已显示的明文收回
-  if (b.dataset.p === "vault") {
-    VAULT_REVEAL = {};
-    clearTimeout(vaultRevealTimer);
-    loadVault();
-  }
 });
 
 // ───────────── 同步到手机 ─────────────
@@ -5106,7 +5109,7 @@ $("manage").addEventListener("input", (e) => {
   if (e.target && e.target.id === "vaultQ") {
     VAULT_Q = e.target.value || "";
     renderVault();
-  } else if (e.target && e.target.closest && e.target.closest("#vaultForm .kform")) {
+  } else if (e.target && e.target.closest && e.target.closest("#vaultForm .vform")) {
     // 密钥箱表单:输入即记草稿。提交前的任何重绘(显示明文 / 改搜索词)都靠它回填(F4)。
     // 监听挂在常驻的 #manage 上,表单 innerHTML 被重建也不会掉。
     const val = (id) => {
@@ -5119,6 +5122,22 @@ $("manage").addEventListener("input", (e) => {
       key: val("vKey"),
       note: val("vNote"),
     };
+  }
+});
+
+// 密钥箱表单的键盘约定:Esc 取消,回车保存(焦点在按钮上时交给按钮自己的 click)。
+// e.isComposing 必须放行 —— 中文输入法用回车确认候选词,不能顺手把表单提交了。
+$("manage").addEventListener("keydown", (e) => {
+  if (!e.target || !e.target.closest || !e.target.closest("#vaultForm .vform")) return;
+  if (e.isComposing || e.keyCode === 229) return;
+  if (e.key === "Escape") {
+    e.preventDefault();
+    VAULT_EDIT = null;
+    VAULT_DRAFT = null;
+    renderVault();
+  } else if (e.key === "Enter" && !e.target.closest("button")) {
+    e.preventDefault();
+    vaultSave();
   }
 });
 
@@ -5337,13 +5356,20 @@ $("manage").addEventListener("click", async (e) => {
     VAULT_EDIT = { platform: act.dataset.id || "", label: "", key: "", note: "" };
     VAULT_DRAFT = null; // 换目标就丢草稿,不然会拿上一张表单里敲的内容回填(F4)
     renderVault();
-    setTimeout(() => { const el = $("vPlat"); if (el) el.focus(); }, 30);
+    focusVaultForm();
+  } else if (a === "vqclear") {
+    VAULT_Q = "";
+    const q = $("vaultQ");
+    if (q) q.value = "";
+    renderVault();
+    if (q) q.focus();
   } else if (a === "vedit") {
     const it = VAULT.find((x) => x.id === id);
     if (it) {
       VAULT_EDIT = { id: it.id, platform: it.platform, label: it.label, key: "", note: it.note };
       VAULT_DRAFT = null; // 同上:改另一条时以它自己的值为准
       renderVault();
+      focusVaultForm();
     }
   } else if (a === "vcancel") {
     VAULT_EDIT = null;
@@ -6515,10 +6541,32 @@ async function loadVault() {
   renderVault();
 }
 
+/** 表单在列表上方:从底部分组点「新增 / 改」时,滚过去并聚焦第一个输入框。 */
+function focusVaultForm() {
+  setTimeout(() => {
+    const form = $("vaultForm");
+    if (form && form.scrollIntoView) form.scrollIntoView({ block: "nearest" });
+    const el = $("vPlat");
+    if (el) el.focus({ preventScroll: true });
+  }, 30);
+}
+
+/** 保存/更新成功后就地亮一下那一行(表单已收起,列表可能已经滚到别处)。 */
+function flashVaultRow(id) {
+  const row = document.querySelector(`#vaultList .vrow[data-id="${id}"]`);
+  if (!row) return false;
+  const item = row.closest(".vitem");
+  if (!item) return false;
+  item.classList.add("flash");
+  if (row.scrollIntoView) row.scrollIntoView({ block: "nearest" });
+  setTimeout(() => item.classList.remove("flash"), 1150);
+  return true;
+}
+
 function vaultGrouped() {
   const out = new Map();
   for (const it of VAULT) {
-    if (VAULT_Q && !`${it.platform} ${it.label} ${it.note}`.toLowerCase().includes(VAULT_Q.toLowerCase())) continue;
+    if (VAULT_Q && !`${it.platform} ${it.label} ${it.note} ${it.hint}`.toLowerCase().includes(VAULT_Q.toLowerCase())) continue;
     if (!out.has(it.platform)) out.set(it.platform, []);
     out.get(it.platform).push(it);
   }
@@ -6536,39 +6584,61 @@ function renderVault() {
   const e = VAULT_EDIT;
   const d = VAULT_DRAFT;
   form.innerHTML = e
-    ? `<div class="kform">
-        <div class="kf"><span>平台</span><input class="inp" id="vPlat" list="vPlatList" value="${esc(d ? d.platform : e.platform)}" placeholder="如 4SAPI">
+    ? `<div class="vform">
+        <div class="vform-head"><b>${e.id ? "编辑密钥" : "新增密钥"}</b><span>${
+        e.id ? "密钥留空 = 不改这把" : "保存后列表只留尾 4 位"
+      }</span></div>
+        <div class="vf"><span>平台</span><input class="inp" id="vPlat" list="vPlatList" value="${esc(d ? d.platform : e.platform)}" placeholder="如 4SAPI">
           <datalist id="vPlatList">${VAULT_PLATFORM_HINT.map((p) => `<option value="${esc(p)}">`).join("")}</datalist></div>
-        <div class="kf"><span>标签</span><input class="inp" id="vLabel" value="${esc(d ? d.label : e.label)}" placeholder="如 主号 / 备用"></div>
-        <div class="kf"><span>密钥</span><input class="inp" id="vKey" type="password" autocomplete="off" value="${esc(
+        <div class="vf"><span>标签</span><input class="inp" id="vLabel" value="${esc(d ? d.label : e.label)}" placeholder="如 主号 / 备用"></div>
+        <div class="vf"><span>密钥</span><input class="inp" id="vKey" type="password" autocomplete="off" value="${esc(
           d ? d.key : ""
-        )}" placeholder="${
-          e.id ? "留空 = 不改这把" : "粘贴密钥"
-        }"></div>
-        <div class="kf"><span>备注</span><input class="inp" id="vNote" value="${esc(d ? d.note : e.note)}" placeholder="选填,如 充值用的那个"></div>
-        <div class="acts">
+        )}" placeholder="${e.id ? "留空 = 不改这把" : "粘贴密钥"}"></div>
+        <div class="vf"><span>备注</span><input class="inp" id="vNote" value="${esc(d ? d.note : e.note)}" placeholder="选填,如 充值用的那个"></div>
+        <div class="vform-acts">
           <button class="btn p" data-act="vsave">保存</button>
           <button class="btn" data-act="vcancel">取消</button>
-          <span class="note" style="margin-left:6px">密钥写进 Windows 凭据管理器,列表里只留尾 4 位</span>
+          <span class="vform-note">密钥写进 Windows 凭据管理器;按 Esc 取消,回车保存。</span>
         </div>
       </div>`
     : "";
 
+  const qclear = $("vaultQClear");
+  if (qclear) qclear.hidden = !VAULT_Q;
+
+  const groups = vaultGrouped();
+  const shown = [...groups.values()].reduce((n, arr) => n + arr.length, 0);
+  const meta = $("vaultMeta");
+  if (meta) {
+    meta.textContent = VAULT_ERR
+      ? "读取失败"
+      : VAULT_Q
+      ? `匹配 ${shown} 把 / 共 ${VAULT.length} 把`
+      : `${VAULT.length} 把 · ${groups.size} 个平台`;
+  }
+
   // 读失败:说清是"读不出来"并给重试,绝不画成"密钥箱是空的 + 新增一把"(F3)
   if (VAULT_ERR) {
-    list.innerHTML = `<div class="empty">读不出密钥箱:${esc(VAULT_ERR)}
-      <div style="margin-top:8px"><button class="btn p" data-act="vreload">重试</button></div>
-      <div class="note" style="margin-top:6px">列表(以及里面的密钥)并没有丢,只是这一次没读出来</div></div>`;
+    list.innerHTML = `<div class="empty"><div class="ek"><svg aria-hidden="true"><use href="#i-key"/></svg></div>
+      <b class="badc">读不出密钥箱</b>
+      <span>${esc(VAULT_ERR)}</span>
+      <div><button class="btn p" data-act="vreload">重试</button></div>
+      <div class="note">列表(以及里面的密钥)并没有丢,只是这一次没读出来</div></div>`;
     return;
   }
 
   if (!VAULT.length) {
-    list.innerHTML = `<div class="empty">密钥箱是空的<div style="margin-top:8px"><button class="btn p" data-act="vnew">新增一把密钥</button></div></div>`;
+    list.innerHTML = `<div class="empty"><div class="ek"><svg aria-hidden="true"><use href="#i-key"/></svg></div>
+      <b>密钥箱还是空的</b>
+      <span>把常用平台的密钥存进来,换机或重填时不用再翻聊天记录。</span>
+      <div><button class="btn p" data-act="vnew">新增一把密钥</button></div></div>`;
     return;
   }
-  const groups = vaultGrouped();
   if (!groups.size) {
-    list.innerHTML = `<div class="empty">没有匹配的条目</div>`;
+    list.innerHTML = `<div class="empty"><div class="ek"><svg aria-hidden="true"><use href="#i-search"/></svg></div>
+      <b>没有匹配的条目</b>
+      <span>「${esc(VAULT_Q)}」没有命中平台、标签、备注或尾号。</span>
+      <div><button class="btn" data-act="vqclear">清除搜索</button></div></div>`;
     return;
   }
   list.innerHTML = [...groups.entries()]
@@ -6578,25 +6648,42 @@ function renderVault() {
           const plain = VAULT_REVEAL[it.id];
           // 反查:这把钥匙正被哪些渠道引用(裁决 4 —— 删前要说清后果,平时要看得见)
           const refs = refChannelsOf(it.id);
-          const refLine = refs.length
-            ? `<br><span class="dim">🔗 正被 ${refs.map((c) => esc(channelName(c))).join("、")} 使用</span>`
-            : `<br><span class="dim">未被任何渠道使用</span>`;
-          return `<div class="krow"><span class="k1">${esc(it.label)} · <span class="khint">${esc(it.hint)}</span>
-            ${it.note ? `<br><span class="dim">${esc(it.note)}</span>` : ""}
-            <br><span class="dim">${new Date(it.createdAt * 1000).toLocaleDateString("zh-CN")} 建${
-              it.updatedAt !== it.createdAt ? " · " + new Date(it.updatedAt * 1000).toLocaleDateString("zh-CN") + " 改" : ""
-            }</span>${refLine}</span>
-            <button class="btn s" data-act="vcopy" data-id="${esc(it.id)}" title="明文不回界面,直接进剪贴板">复制</button>
-            <button class="btn s" data-act="vreveal" data-id="${esc(it.id)}" title="显示明文,8 秒后自动隐">${
-              plain ? "收起" : "显示"
-            }</button>
-            <button class="btn s" data-act="vedit" data-id="${esc(it.id)}">改</button>
-            <button class="btn s danger" data-act="vdel" data-id="${esc(it.id)}">删</button></div>
-            ${plain ? `<div class="reveal" style="margin:-2px 0 6px">${esc(plain)}</div>` : ""}`;
+          const created = new Date(it.createdAt * 1000).toLocaleDateString("zh-CN");
+          const updated =
+            it.updatedAt !== it.createdAt
+              ? new Date(it.updatedAt * 1000).toLocaleDateString("zh-CN") + " 改"
+              : "";
+          return `<div class="vitem">
+            <div class="vrow" data-id="${esc(it.id)}">
+              <div class="vrow-main">
+                <div class="vrow-t"><b>${esc(it.label)}</b><span class="vrow-hint">${esc(it.hint)}</span></div>
+                ${it.note ? `<div class="vrow-sub">${esc(it.note)}</div>` : ""}
+                <div class="vrow-sub vrow-meta">
+                  <span>${created} 建${updated ? " · " + updated : ""}</span>
+                  <span class="vrow-ref${refs.length ? " on" : ""}">${
+                    refs.length
+                      ? "正被 " + esc(refs.map((c) => channelName(c)).join("、")) + " 使用"
+                      : "未被任何渠道使用"
+                  }</span>
+                </div>
+              </div>
+              <div class="vrow-acts">
+                <button class="btn s" data-act="vcopy" data-id="${esc(it.id)}" title="明文不回界面,直接进剪贴板">复制</button>
+                <button class="btn s" data-act="vreveal" data-id="${esc(it.id)}" title="显示明文,8 秒后自动隐">${
+                  plain ? "收起" : "显示"
+                }</button>
+                <button class="btn s" data-act="vedit" data-id="${esc(it.id)}">改</button>
+                <button class="btn s danger" data-act="vdel" data-id="${esc(it.id)}">删</button>
+              </div>
+            </div>
+            ${plain ? `<div class="reveal vrow-reveal">${esc(plain)}</div>` : ""}
+          </div>`;
         })
         .join("");
-      return `<div class="pf"><b>${esc(plat)}</b><span>${items.length} 把</span>
-        <span style="margin-left:auto"><button class="btn s" data-act="vnew" data-id="${esc(plat)}">+ 新增</button></span></div>${rows}`;
+      return `<div class="vgroup">
+        <div class="pf"><b>${esc(plat)}</b><span class="pcount">${items.length} 把</span>
+          <button class="btn s" data-act="vnew" data-id="${esc(plat)}" title="在 ${esc(plat)} 下新增一把">新增</button></div>
+        ${rows}</div>`;
     })
     .join("");
 }
@@ -6613,13 +6700,23 @@ async function vaultSave() {
     note: ($("vNote").value || "").trim(),
   };
   try {
-    await invoke("vault_save", { item: payload });
+    const saved = await invoke("vault_save", { item: payload });
     VAULT_EDIT = null;
     VAULT_DRAFT = null; // 存进去了就不再是草稿,免得下次开表单又被回填(F4)
     // 条目名/尾号变了 → 引用它的渠道卡"密钥来源"要重读
     invalidateKeyMeta(null, "source");
     showToast(e.id ? "已更新" : "已存进密钥箱");
     await loadVault();
+    if (saved && saved.id) {
+      // 搜索词可能把刚存的那条挡住:清掉筛选再亮一次,否则"已存进密钥箱"之后
+      // 眼前什么都没变,用户会以为没存上。
+      if (!flashVaultRow(saved.id) && VAULT_Q) {
+        VAULT_Q = "";
+        if ($("vaultQ")) $("vaultQ").value = "";
+        renderVault();
+        flashVaultRow(saved.id);
+      }
+    }
     if (manageOpen()) await fillKeySources(true);
   } catch (err) {
     showToast(String(err), true);
@@ -6628,7 +6725,7 @@ async function vaultSave() {
 
 /** 删除要内联确认(与渠道密钥删除同一套做法,不用原生 confirm)。 */
 function vaultDel(id) {
-  const row = document.querySelector(`.krow [data-act="vdel"][data-id="${id}"]`);
+  const row = document.querySelector(`.vrow [data-act="vdel"][data-id="${id}"]`);
   if (!row) return;
   // N07(2026-10-21):这里**不再**用索引判断"有没有人在用" —— 拦截已经搬到后端,
   // 而且后端扫的是真实指针(书架)。索引读坏了、过期了都不影响判断。
@@ -7217,9 +7314,8 @@ async function loadCheckinHistory() {
 /** 打开签到中心:首页签到格 / 多渠道待签提示条的落点。 */
 function openCheckinCenter() {
   openManage();
-  showTab("ck");
+  showTab("ck"); // 流水由 showTab 统一读取,这里只补页面本身的渲染
   renderCheckinCenter();
-  loadCheckinHistory();
 }
 
 /** 签到页签的可见性:有渠道开着监测才出现。全部关闭时整页签隐藏(开启入口在

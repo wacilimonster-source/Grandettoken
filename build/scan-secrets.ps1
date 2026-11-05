@@ -122,7 +122,11 @@ $knownFixtures = @(
   # A synthetic query-string secret in fetch.rs (the redaction test): invented value,
   # never sent anywhere. It has to be >= 32 chars to be caught by the length-based
   # redaction rule, so it looks like a credential to the scanner - hence this entry.
-  'SUPERSECRETVALUE1234567890ABCDEFGH'
+  'SUPERSECRETVALUE1234567890ABCDEFGH',
+  # Kotlin: `storePassword = System.getenv("GRANDETTOKEN_ANDROID_STORE_PASSWORD")`.
+  # The unquoted-password rule captures `System.getenv` and mistakes the env lookup
+  # for a literal value. Nothing secret is stored in the file.
+  'System.getenv'
 )
 
 # Skip a hit when it is part of one of the known fixtures. Reported, not silent.

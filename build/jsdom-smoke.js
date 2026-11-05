@@ -46,7 +46,8 @@ w.__TAURI__ = {
       if (cmd === "checkin_history") return w.__CK_H || null;
       if (cmd === "app_version") return "0.0.0-test";
       if (cmd === "sync_qr_svg") return '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h1v1H0z"/></svg>';
-      if (cmd === "vault_list" || cmd === "vault_ref_map") return [];
+      if (cmd === "vault_list") return w.__VAULT || [];
+      if (cmd === "vault_ref_map") return w.__VAULTREF || [];
       return null;
     },
   },
@@ -850,6 +851,53 @@ const HARNESS = `
     ck("底栏常驻「单列 / 双列」布局切换",
       !!layoutBtn && layoutBtn.style.display !== "none" && /单列|双列/.test(layoutBtn.textContent),
       layoutBtn ? layoutBtn.textContent.trim() + " / " + (layoutBtn.style.display || "inline") : "missing");
+    // 从索引进子页必须触发该页签的「进入时读一次」:密钥箱以前只在隐藏的旧页签栏
+    // 的 click 里 loadVault,索引行点进去是个空面板,连「新增一把密钥」都没有。
+    document.querySelector('#mIndexList [data-p="vault"]').click();
+    window.__ASYNC3 = (window.__ASYNC3 || Promise.resolve()).then(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const vaultHtml = document.getElementById("vaultList").innerHTML;
+      ck("从索引进密钥箱:读出列表并给出新增入口", /新增一把密钥/.test(vaultHtml), vaultHtml.slice(0, 100));
+
+      // 非空列表:平台分组卡 / 条目行 / 引用说明 / 顶部计数
+      const nowTs = Math.floor(Date.now() / 1000);
+      window.__VAULT = [
+        { id: "v1", platform: "4SAPI", label: "主号", hint: "••••abcd", note: "充值用的那个",
+          createdAt: nowTs, updatedAt: nowTs },
+        { id: "v2", platform: "4SAPI", label: "备用", hint: "••••wxyz", note: "",
+          createdAt: nowTs, updatedAt: nowTs },
+      ];
+      window.__VAULTREF = [["4sapi", "v1"]];
+      await loadVault();
+      ck("密钥箱非空:平台卡 + 两条条目", /class="vgroup"/.test(document.getElementById("vaultList").innerHTML)
+        && document.querySelectorAll("#vaultList .vitem").length === 2,
+        document.querySelectorAll("#vaultList .vitem").length);
+      ck("密钥箱计数读作 2 把 · 1 个平台",
+        document.getElementById("vaultMeta").textContent === "2 把 · 1 个平台",
+        document.getElementById("vaultMeta").textContent);
+      ck("被引用的条目写明正被谁使用", /正被 4SAPI 使用/.test(document.getElementById("vaultList").innerHTML));
+      // 分组「新增」:带入平台,表单可 Esc 取消
+      document.querySelector('#vaultList .pf [data-act="vnew"]').click();
+      ck("分组新增自动带入平台", !!document.querySelector("#vaultForm .vform")
+        && document.getElementById("vPlat").value === "4SAPI");
+      document.querySelector("#vaultForm .vform").dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true })
+      );
+      ck("表单 Esc 取消后收起", !document.querySelector("#vaultForm .vform"));
+      // 搜索无结果:给清除入口;点一下恢复整份列表
+      const vq = document.getElementById("vaultQ");
+      vq.value = "不存在的关键词";
+      vq.dispatchEvent(new Event("input", { bubbles: true }));
+      ck("搜索无结果给出清除入口", /清除搜索/.test(document.getElementById("vaultList").innerHTML)
+        && document.getElementById("vaultQClear").hidden === false);
+      document.querySelector('[data-act="vqclear"]').click();
+      ck("清除搜索恢复列表", document.querySelectorAll("#vaultList .vitem").length === 2
+        && document.getElementById("vaultQClear").hidden === true);
+
+      delete window.__VAULT;
+      delete window.__VAULTREF;
+      showTab("index");
+    });
     closeManage();
   } catch (e) {
     ck("设置索引 / 顶栏入口", false, e.message);

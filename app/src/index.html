@@ -21,6 +21,8 @@
     <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
     <symbol id="i-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.8" cy="10.8" r="6.3"/><path d="m15.4 15.4 4.4 4.4"/></symbol>
   </svg>
 
   <!-- 吸附后的竖条:只有一个色块,不显示任何数字;整块可拖动(拖离边缘即解除吸附) -->
@@ -276,10 +278,24 @@
 
     <!-- 页签 5:密钥箱 —— 本地存各类平台的密钥:密文在 Windows 凭据管理器,这里只列索引 -->
     <div class="mbody panel" data-p="vault">
-      <div class="khint">列表只显示平台、标签与尾号;点「显示」才出明文,8 秒自动隐。<button class="why" data-why="vault" aria-expanded="false" aria-label="密钥箱的说明"></button></div>
-      <input class="inp" id="vaultQ" placeholder="搜索平台 / 标签 / 备注…" autocomplete="off" spellcheck="false">
+      <div class="vault-top">
+        <div class="vault-search">
+          <svg class="vault-search-i" aria-hidden="true"><use href="#i-search"/></svg>
+          <input class="inp" id="vaultQ" type="text" placeholder="搜索平台 / 标签 / 备注 / 尾号…" autocomplete="off" spellcheck="false" aria-label="搜索密钥">
+          <button class="vault-qclear" id="vaultQClear" data-act="vqclear" aria-label="清除搜索" title="清除搜索" hidden><svg aria-hidden="true"><use href="#i-close"/></svg></button>
+        </div>
+        <button class="btn p vault-add" data-act="vnew" title="新增一把密钥"><svg aria-hidden="true"><use href="#i-plus"/></svg>新增</button>
+      </div>
+      <div class="vault-meta">
+        <span id="vaultMeta">正在读取…</span>
+        <button class="why" data-why="vault" aria-expanded="false" aria-label="密钥箱的说明"></button>
+      </div>
       <div id="vaultForm"></div>
       <div id="vaultList"></div>
+      <div class="vault-foot">
+        <span>列表只显示平台、标签与尾号;「显示」的明文 8 秒后自动收起。</span>
+        <span>密钥加密存放在 Windows 凭据管理器(绑定当前 Windows 账户),不上传、不导出;复制后剪贴板对其他程序可见。</span>
+      </div>
     </div>
 
     <!-- 页签 6:关于 -->
