@@ -3910,3 +3910,10 @@ Android 0.1.8 安装包均为 HTTP 200。
 - release 二进制（深色 500px 面板）CDP 实测：点「刚刚」→ `#btnR.loading` → 完成后 `done` 勾选态（computed `::after` 为 `"✓"`）→ 800ms 后图标恢复、文字「刚刚」、toast「已更新 · 刚刚」；顶栏横向溢出 0，按钮 51×26，图标 15×15；文字完整落在按钮命中区内。深色常态/悬停截图确认药丸悬停区把文字与图标包在一起。
 - signed NSIS `Grandettoken_0.3.13_x64-setup.exe` **5,530,864 B**，SHA-256 `e27abee19d34877a68c2df3c46d28e6ca6e6bae96d397a31b15d27cecedf0067`；`.sig` 已生成，import table 无 `WebView2Loader.dll`。
 
+**发布（2026-11-05）**
+- tag `v0.3.13`，release 提交 `04e3ab6`，[GitHub Release v0.3.13](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.3.13)，并已 `gh release edit v0.3.13 --latest` 归位（`releases/latest` 不再被 Android release 占用）。
+- 三件套上传后与本地逐字节一致（GitHub digest 核对：exe `e27abee1…` / sig `692059b9…` / latest.json `5172fda1…`，尺寸 5,530,864 / 424 / 1,218 B）。
+- `verify-release.js` **14 项全 PASS**：更新端点 200、版本/签名/URL 一致、安装包可下载且 SHA 一致、三件套齐、非 draft、说明完整、latest 端点指向 0.3.13、仓库公开。
+- 网络备注：本机直连 github.com 超时（`fetch failed`），经系统代理 `127.0.0.1:7897` + Node 24 `NODE_USE_ENV_PROXY=1` 复跑通过；`gh` 走 api.github.com 未受影响。
+
+
