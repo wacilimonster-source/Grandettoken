@@ -86,7 +86,7 @@ class WidgetFormatterTest {
         )
         assertEquals("月", WidgetFormatter.tag(openCode, "monthly"))
         assertEquals("月", WidgetFormatter.tag(openCode, null))
-        assertEquals("月额度（按套餐周期）", WidgetFormatter.configLabel(openCode, "monthly"))
+        assertEquals("月额度(按套餐周期)", WidgetFormatter.configLabel(openCode, "monthly"))
     }
 
     @Test

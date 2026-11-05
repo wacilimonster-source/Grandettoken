@@ -75,11 +75,12 @@ jobs:
           echo "RUSTFLAGS=-C linker=$mingw\gcc.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           gcc -v
 
-      - name: cargo test (core, 229 tests)
+      - name: cargo test (core, 422 tests, 9 ignored)
         shell: pwsh
         working-directory: app/core
-        # 4 条 #[ignore] 是真机用例(要读本机凭据、要打真接口),runner 上没有
-        # 这些前提,跳过是对的。它们在任何环境都不该自动跑 —— 见各用例的注释。
+        # 8 条 #[ignore] 是真机用例 / 基准(要读本机凭据、要打真接口、要写真实文件),
+        # doc-test 里另有 1 条忽略的示例。runner 上没有这些前提,跳过是对的。
+        # 它们在任何环境都不该自动跑 —— 见各用例的注释。
         run: cargo test --locked
 
       - name: cargo check --all-targets (core)

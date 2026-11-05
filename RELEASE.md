@@ -32,6 +32,19 @@
 
 ## 每次发版(本地打包)
 
+### 0. 发版前回归门禁(全绿才动手打包)
+
+```bash
+cd app/core && cargo test --locked && cd ../..     # core 单测(真机用例自动忽略)
+node build/check-css-forms.js                      # CSS 形态门守卫
+NODE_PATH=<装了 jsdom 的 node_modules> node build/jsdom-smoke.js   # 前端冒烟
+cd android && ./gradlew.bat :app:testDebugUnitTest && cd ..        # 动过 android/ 必跑
+```
+
+Android 这条是 2026-11-06 的教训:v0.3.14「全端文案统一」改动了小组件文案,
+配套用例从入库第一天起就是红的,但发版验证没跑 Gradle,直到全量测试才抓到。
+文案 / 快照结构这类跨端改动,`android/` 有 diff 就必须跑这条。
+
 ### 1. 版本号**三处**同步
 
 `app/src-tauri/Cargo.toml`、`app/src-tauri/tauri.conf.json`、**`app/src-tauri/Cargo.lock`**

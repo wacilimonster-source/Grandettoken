@@ -32,6 +32,9 @@ function makeEl(id) {
     id, innerHTML: '', textContent: '', value: '', dataset: {},
     style: { setProperty() {}, removeProperty() {}, getPropertyValue: () => '' },
     addEventListener() {}, appendChild() {}, after() {}, remove() {}, focus() {},
+    // renderSyncQr 用它清空二维码容器(真浏览器与 jsdom 都有);缺了会在同步状态
+    // 渲染路径上抛 UNHANDLED(2026-11-06,Image 补上后才露出来的第二个缺口)。
+    replaceChildren() {},
     setAttribute() {}, getAttribute: () => null, matches: () => false,
     getBoundingClientRect: () => ({ width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 }),
     querySelector: () => makeEl('q'),
@@ -211,6 +214,13 @@ const ctx = {
     fontSize: '14px',
   }),
   requestAnimationFrame: (f) => setTimeout(() => f(0), 0),
+  // app.js 顶层会 `new Image()` 预载托盘品牌图(brand/logo-tray.png)。假 DOM 缺这个
+  // 构造器时,脚本执行在那一行当场中断、后面的顶层声明(LOG_INFO 等)根本没建立,
+  // 探针只能报出一串级联的 TDZ 假故障(2026-11-06 实测)。最小实现就够:
+  // onload 不触发 —— 它只是"位图到了就重画一次"的增强路径,不触发不影响初始渲染。
+  Image: class Image {
+    constructor() { this.src = ''; this.onload = null; this.onerror = null; }
+  },
   Math, Date, JSON, Number, String, Object, Array, Set, Map,
   parseInt, parseFloat, isNaN, Promise, Error,
 };
