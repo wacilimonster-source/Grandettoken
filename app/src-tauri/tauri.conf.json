@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Grandettoken",
   "mainBinaryName": "Grandettoken",
-  "version": "0.3.13",
+  "version": "0.3.14",
   "identifier": "com.wacil.tokenscope",
   "build": {
     "frontendDist": "../src"
@@ -41,7 +41,7 @@
       "icons/icon.ico"
     ],
     "shortDescription": "多平台 Token 余额监控",
-    "longDescription": "常驻桌面的多平台 AI Token 余额与用量监控小组件,支持四级折叠",
+    "longDescription": "常驻桌面的多平台 AI Token 余额与用量监控挂件,支持四级折叠",
     "createUpdaterArtifacts": true,
     "windows": {
       "nsis": {

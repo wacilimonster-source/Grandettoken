@@ -142,7 +142,11 @@ fn apply_hotkey(app: &tauri::AppHandle, state: &AppState, want: &str) -> Result<
     }
     manager
         .register(want.as_str())
-        .map_err(|e| format!("注册 {want} 失败(可能已被其它程序占用): {e}"))?;
+        .map_err(|e| {
+            // {e} 是全局热键注册表的英文原文:用户面给结论,原文进日志
+            tokenscope_core::diaglog::write_keyed("hotkey", "register", &format!("注册 {want} 失败: {e}"));
+            format!("快捷键 {want} 注册失败,可能被其它程序占用")
+        })?;
     if let Some(old) = cur.take() {
         let _ = manager.unregister(old.as_str());
     }
@@ -1121,7 +1125,7 @@ fn spawn_login_watcher(app: tauri::AppHandle) {
                             "workbuddy-login",
                             serde_json::json!({
                                 "ok": false,
-                                "reason": "登录是成功了,但挂件用这份会话取数被平台拒绝。平台网页会话实测约 7 天过期(绝对 TTL,挂件每分钟打接口也续不上命),还是先在渠道卡上点「重新登录」;访问密钥那条备选路要标准版以上的账号才能建(入口 www.workbuddy.cn/profile/keys)。"
+                                "reason": "登录是成功了,但用这份会话取数被平台拒绝 —— 在渠道卡上点「重新登录」即可。平台网页会话实测约 7 天过期,自动续不上;备选的访问密钥要标准版以上账号才能建(www.workbuddy.cn/profile/keys)。"
                             }),
                         );
                     }
@@ -1475,21 +1479,20 @@ fn crit_body(v: &ChannelView) -> String {
                 .unwrap_or(0.0);
             if v.id == "codex" {
                 if let Some(w) = window {
-                    return format!("{} {}额度剩余 {:.0}%,已经很低了 · 打开挂件查看", v.name, w.label, pct);
+                    return format!("{} {}额度剩 {:.0}% · 打开挂件查看", v.name, w.label, pct);
                 }
             }
-            format!("{} 剩余 {:.0}%,已经很低了 · 打开挂件查看", v.name, pct)
+            format!("{} 额度剩 {:.0}% · 打开挂件查看", v.name, pct)
         }
         Kind::Amount => match (v.remaining, v.claim.as_ref().map(|c| c.amount)) {
             (Some(r), Some(d)) if d > 0.0 => format!(
-                "{} 剩余 ¥{:.2}({:.0}%),本轮额度 ¥{:.0} · 打开挂件查看",
+                "{} 剩 ¥{:.2} / 本轮 ¥{:.0} · 打开挂件查看",
                 v.name,
                 r,
-                (r / d * 100.0).clamp(0.0, 100.0),
                 d
             ),
             (Some(r), _) => format!("{} 余额只剩 ¥{:.2} · 打开挂件查看", v.name, r),
-            _ => format!("{} 余额很低 · 打开挂件查看", v.name),
+            _ => format!("{} 余额告急 · 打开挂件查看", v.name),
         },
         Kind::Points => {
             // crit_now 已经保证"没有数值不报警",这里拿到的一定是数字;
@@ -1506,7 +1509,7 @@ fn crit_body(v: &ChannelView) -> String {
                     .filter(|e| e.at <= now_ts() + 7 * 86_400)
                     .map(|e| e.amount)
                     .sum();
-                format!("{} 有 {:.0} 分将在 7 天内过期(共 {:.0} 分)· 打开挂件查看", v.name, within, r)
+                format!("{} 有 {:.0} 分将在 7 天内过期(共 {:.0} 分) · 打开挂件查看", v.name, within, r)
             }
         }
     }
@@ -2257,10 +2260,32 @@ async fn check_update(
         // 网络不通、限流、清单格式不对都走这里。自动检查时前端不会显示它
         Err(e) => UpdateState {
             checked_now: true,
-            error: Some(e.to_string()),
+            error: Some(updater_err(&e)),
             ..UpdateState::idle(&current)
         },
     })
+}
+
+/// updater 的错误原文是英文(如 "error downloading ..."):分类成一句中文给用户,
+/// 原文写进诊断日志 —— 报障链路照样能搜到。
+fn updater_err(e: impl std::fmt::Display) -> String {
+    let raw = e.to_string();
+    let low = raw.to_lowercase();
+    let msg = if low.contains("signature") || low.contains("verify") || low.contains("integrity") {
+        "签名校验没过,安装包可能不完整"
+    } else if low.contains("network")
+        || low.contains("connect")
+        || low.contains("timeout")
+        || low.contains("timed out")
+    {
+        "连不上更新服务器,检查网络后重试"
+    } else if low.contains("download") || low.contains("request") || low.contains("send") {
+        "下载没完成,点「重试更新」再试一次"
+    } else {
+        "更新没成,稍后重试"
+    };
+    tokenscope_core::diaglog::write_keyed("updater", "error", &raw);
+    format!("更新没成: {msg}")
 }
 
 /// 下载并安装。Windows 上 install 那一步会直接退出进程,
@@ -2280,11 +2305,11 @@ async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
     }
     let _upd_guard = FlagGuard(&UPDATING);
     UPDATING.store(true, std::sync::atomic::Ordering::Relaxed);
-    let updater = app.updater_builder().build().map_err(|e| e.to_string())?;
+    let updater = app.updater_builder().build().map_err(updater_err)?;
     let update = updater
         .check()
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(updater_err)?
         .ok_or_else(|| "没有可用的更新".to_string())?;
 
     let mut received: u64 = 0;
@@ -2318,7 +2343,7 @@ async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
             },
         )
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(updater_err)?;
     let _ = app.emit("update-progress", serde_json::json!({ "phase": "finished" }));
     Ok(())
 }
@@ -3646,7 +3671,7 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
         if matches!(&out, checkin::Outcome::Confirming(_)) {
             if let Some(activity) = entry.activity_state.as_mut() {
                 activity.status = "confirming".into();
-                activity.detail = Some("平台已收到领取请求，正在确认状态".into());
+                activity.detail = Some("平台已收到领取请求,正在确认状态".into());
             }
         }
         // 记下"判出这条结论的是哪个版本"。换版本后 `blocks_today` 会认为它陈旧、
@@ -3706,7 +3731,7 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
             checkin::Outcome::Inactive(m) | checkin::Outcome::Manual(m)
             | checkin::Outcome::Retry(m) | checkin::Outcome::BadShape(m)
             | checkin::Outcome::Failed(m) => Some(m.clone()),
-            checkin::Outcome::Confirming(_) => Some("平台已收到领取请求，正在确认状态".into()),
+            checkin::Outcome::Confirming(_) => Some("平台已收到领取请求,正在确认状态".into()),
             _ => None,
         };
 
@@ -3955,7 +3980,7 @@ async fn checkin_now(app: tauri::AppHandle, id: String) -> Result<CheckinState, 
                 .unwrap_or(false);
             if checkin_blocks_today(c, &today) && !activity_ready {
                 return Err(format!(
-                    "今天已经处理过了({})",
+                    "今天已处理过({})",
                     c.last_code.clone().unwrap_or_else(|| "已领".to_string())
                 ));
             }
@@ -3963,9 +3988,9 @@ async fn checkin_now(app: tauri::AppHandle, id: String) -> Result<CheckinState, 
                 let left = (t - now_ts()).max(0);
                 if left > 0 {
                     return Err(if left >= 60 {
-                        format!("太挤了,约 {} 分钟后再试", left / 60)
+                        format!("平台太挤,约 {} 分钟后再试", left / 60)
                     } else {
-                        format!("太挤了,约 {} 秒后再试", left)
+                        format!("平台太挤,约 {} 秒后再试", left)
                     });
                 }
             }
@@ -4860,7 +4885,7 @@ async fn copy_model_bundle(
         let spec = model_spec_with(&store, &cfg, &src, &model)?;
         let protocol = spec
             .api_protocol
-            .ok_or_else(|| format!("官网未公布 {} 的 API 协议，不能生成可靠的接入配置", spec.id))?;
+            .ok_or_else(|| format!("官网未公布 {} 的 API 协议,不能生成可靠的接入配置", spec.id))?;
         let endpoint = spec
             .endpoint_url()
             .ok_or_else(|| format!("{} 没有可用的完整端点", spec.id))?;
@@ -4869,7 +4894,8 @@ async fn copy_model_bundle(
             protocol.label(), spec.base_url, endpoint, spec.id, spec.key
         );
         copy_to_clipboard(&text)?;
-        Ok(format!("已复制:{} + 模型名 + 密钥", spec.base_url))
+        // 前端在 msg 后统一拼「· 剪贴板对其他程序可见」,这里别再重复「已复制」
+        Ok("已复制 接口地址 + 模型名 + 密钥".to_string())
     })
     .await
     .map_err(|e| format!("复制失败: {e}"))?
@@ -5430,7 +5456,7 @@ pub fn run() {
                 *lock_rw(&app.state::<AppState>().startup_error) = Some(msg);
             }
 
-            let refresh = MenuItem::with_id(app, "refresh", "立即刷新", true, None::<&str>)?;
+            let refresh = MenuItem::with_id(app, "refresh", "刷新", true, None::<&str>)?;
             let show = MenuItem::with_id(app, "show", "显示面板", true, None::<&str>)?;
             let sep = PredefinedMenuItem::separator(app)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;

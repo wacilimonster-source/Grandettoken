@@ -1,6 +1,6 @@
-//! 独立保存同步设置，避免其他功能用旧的整份 Config 覆盖同步组。
+//! 独立保存同步设置,避免其他功能用旧的整份 Config 覆盖同步组。
 //!
-//! 这里只存组标识和发布设置；主密钥仍只在系统凭据库中。
+//! 这里只存组标识和发布设置;主密钥仍只在系统凭据库中。
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -87,7 +87,7 @@ impl SyncProfile {
     }
 }
 
-/// 升级时只迁移一次，绝不以旧 Config 覆盖已经存在的独立同步配置。
+/// 升级时只迁移一次,绝不以旧 Config 覆盖已经存在的独立同步配置。
 pub fn migrate(store: &Store, legacy: &Config) -> Result<(), String> {
     if store.get_setting(PROFILE_KEY)?.is_none() {
         save(store, &SyncProfile::from_config(legacy))?;
@@ -97,18 +97,18 @@ pub fn migrate(store: &Store, legacy: &Config) -> Result<(), String> {
 
 pub fn load(store: &Store) -> Result<SyncProfile, String> {
     let raw = store.get_setting(PROFILE_KEY)?
-        .ok_or("同步配置尚未初始化，请重启应用后重试")?;
+        .ok_or("同步配置尚未初始化,请重启应用后重试")?;
     let value: serde_json::Value = serde_json::from_str(&raw)
-        .map_err(|_| "同步配置无法读取，已保留原始数据，请重试或恢复设置")?;
-    // Option 字段缺失时 serde 默认按 None 处理；同步组 ID 缺失不能误判成未建组。
+        .map_err(|_| "同步配置无法读取,已保留原始数据,请重试或恢复设置")?;
+    // Option 字段缺失时 serde 默认按 None 处理;同步组 ID 缺失不能误判成未建组。
     let required = serde_json::to_value(SyncProfile::from_config(&Config::default()))
         .map_err(|_| "同步配置校验失败")?;
-    let present = value.as_object().ok_or("同步配置格式不正确，已保留原始数据")?;
+    let present = value.as_object().ok_or("同步配置格式不正确,已保留原始数据")?;
     if required.as_object().unwrap().keys().any(|key| !present.contains_key(key)) {
-        return Err("同步配置不完整，已保留原始数据，请恢复设置".into());
+        return Err("同步配置不完整,已保留原始数据,请恢复设置".into());
     }
     let profile: SyncProfile = serde_json::from_value(value)
-        .map_err(|_| "同步配置无法读取，已保留原始数据，请重试或恢复设置")?;
+        .map_err(|_| "同步配置无法读取,已保留原始数据,请重试或恢复设置")?;
     profile.validate()?;
     Ok(profile)
 }

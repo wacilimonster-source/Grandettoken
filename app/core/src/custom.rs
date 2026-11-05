@@ -194,7 +194,9 @@ pub async fn fetch_custom(
             } else if e.is_connect() {
                 "无法连接(检查网络或代理)".to_string()
             } else {
-                format!("请求失败: {e}")
+                // 原始 reqwest 错误只进日志,用户面给一句可读的
+                crate::diaglog::write_keyed("custom", "reqwest", &format!("请求失败: {e}"));
+                "请求没发出去(网络或代理问题)".to_string()
             }
         });
     let resp = match resp {

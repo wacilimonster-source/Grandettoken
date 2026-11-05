@@ -1289,7 +1289,9 @@ pub async fn call_with_body(
                 } else if e.is_connect() {
                     "无法连接(检查网络)".to_string()
                 } else {
-                    format!("请求失败: {e}")
+                    // 原始 reqwest 错误只进日志,用户面给一句可读的
+                    crate::diaglog::write_keyed(def.id, "reqwest", &format!("请求失败: {e}"));
+                    "请求没发出去(检查网络)".to_string()
                 };
                 let code = if e.is_timeout() {
                     crate::errcodes::TIMEOUT

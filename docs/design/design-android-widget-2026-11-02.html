@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Grandettoken · Android 桌面小部件产品设计</title>
+  <style>
+    :root{color-scheme:dark;--bg:#0c0f14;--panel:#151a22;--panel2:#1a202a;--stroke:#2a303b;--text:#f0f2f4;--muted:#99a3b1;--muted2:#717d8d;--mint:#8de3bc;--amber:#edbb77;--red:#f39393;--blue:#aebeff;--radius:18px}
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{margin:0;background:radial-gradient(ellipse 75% 30% at 75% 2%,#172c2a 0%,transparent 70%),var(--bg);color:var(--text);font:14px/1.65 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+    button,input{font:inherit} button{color:inherit;cursor:pointer} button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid var(--mint);outline-offset:3px}
+    a{color:#a8d7c4;text-decoration-color:#5c8d79;text-underline-offset:3px}
+    .page{max-width:1180px;margin:auto;padding:32px 28px 80px}
+    .topline{display:flex;align-items:center;justify-content:space-between;gap:16px;color:var(--muted);font-size:11px;letter-spacing:.12em;text-transform:uppercase}
+    .brand{display:flex;align-items:center;gap:10px;font-weight:750;color:#d9e6df}.brand-mark{display:grid;place-items:center;width:26px;height:26px;border:1px solid #6aa78c;border-radius:8px;background:#193a30;color:var(--mint);font-size:13px}
+    .hero{padding:76px 0 42px;max-width:810px}.eyebrow{color:var(--mint);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+    h1{font-size:clamp(35px,5.5vw,62px);line-height:1.13;letter-spacing:-.055em;margin:17px 0 19px;font-weight:720}.hero p{max-width:680px;color:#aab4c1;font-size:16px;line-height:1.8;margin:0}
+    .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:25px}.chip{border:1px solid #384b42;border-radius:100px;background:#182b24;padding:5px 11px;color:#c5ddcf;font-size:11px}
+    .preview-shell{border:1px solid #303947;border-radius:25px;overflow:hidden;background:#11161d;box-shadow:0 25px 70px #0004}
+    .preview-top{padding:20px 24px;border-bottom:1px solid var(--stroke);display:flex;justify-content:space-between;align-items:center;gap:14px}.preview-top strong{font-size:15px}.preview-top span{color:var(--muted2);font-size:11px}
+    .preview-grid{display:grid;grid-template-columns:1fr 380px;min-height:660px}.stage{position:relative;display:grid;place-items:center;overflow:hidden;padding:34px;background:radial-gradient(circle at 40% 25%,#324846 0,transparent 40%),linear-gradient(135deg,#1a252e,#121820 72%)}
+    .phone{position:relative;width:300px;height:598px;border:7px solid #090d11;border-radius:42px;overflow:hidden;box-shadow:0 22px 60px #0009,0 0 0 1px #52605f;background:radial-gradient(ellipse 100% 55% at 18% 50%,#5b756e 0,transparent 65%),radial-gradient(ellipse 100% 50% at 100% 27%,#344d50 0,transparent 68%),linear-gradient(150deg,#152b36 2%,#516b64 50%,#1a2d2b 100%)}
+    .phone:before{content:"";position:absolute;width:410px;height:300px;left:-70px;bottom:46px;transform:rotate(-32deg);border-radius:52%;background:linear-gradient(130deg,#89a39a44,#1a272a11);filter:blur(5px)}
+    .statusbar{position:relative;display:flex;justify-content:space-between;padding:13px 18px 0;font-size:10px;font-weight:700;letter-spacing:.02em}.phone-clock{position:relative;margin:36px 19px 18px;color:#f8fdfb}.phone-clock .time{font-size:40px;letter-spacing:-.05em;line-height:1;font-weight:300}.phone-clock .date{font-size:10px;margin-top:6px;color:#e0ebe6}
+    .widget-slot{position:relative;padding:0 13px}.widget{border:1px solid #ffffff22;background:linear-gradient(145deg,#1b232aef,#10151dee);box-shadow:0 10px 24px #0004;border-radius:17px;overflow:hidden}
+    .widget.strip{height:83px;padding:11px 9px 9px 12px;display:grid;grid-template-columns:minmax(0,1fr) 40px;gap:4px}.strip-values{min-width:0;display:grid;grid-auto-columns:minmax(0,1fr);grid-auto-flow:column;align-items:center}.strip-cell{min-width:0;overflow:hidden;padding:0 4px;border-right:1px solid #ffffff10;background:none;border-top:0;border-bottom:0;border-left:0;text-align:left}.strip-cell:first-child{padding-left:0}.strip-cell span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.strip-cell .name{font-size:10px;color:#a4b2ae}.strip-cell .value{font-size:12px;line-height:1.45;font-weight:700;letter-spacing:-.025em}.strip-cell .flag{color:var(--amber);margin-left:2px}.strip-side{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;min-width:0}.refresh{display:grid;place-items:center;border:0;background:#ffffff10;border-radius:50%;width:29px;height:29px;font-size:17px;line-height:1;color:#c9d9d3}.refresh:hover{background:#ffffff1c}.strip-side .refresh{width:36px;height:36px}.strip-time{font-size:9px;line-height:1.1;color:#a4b2ae;white-space:nowrap;text-align:center}.strip-time em{display:block;font-style:normal}.strip-time.warn{color:var(--amber)}.strip-time.error{color:var(--red)}
+    .widget.card{padding:9px 12px 8px}.widget-head{display:flex;align-items:center;gap:7px;margin-bottom:4px}.widget-head .mini-mark{display:grid;place-items:center;width:20px;height:20px;border-radius:6px;background:#214a3b;color:#a6edc9;font-weight:800;font-size:9px}.widget-head .title{font-size:11px;font-weight:700;flex:1}.widget-head .refresh{width:28px;height:28px;font-size:15px}.channel-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3px 8px}.channel-row{display:grid;grid-template-columns:20px minmax(0,1fr);grid-template-rows:auto auto;align-content:center;align-items:center;column-gap:7px;width:100%;min-width:0;min-height:44px;padding:3px 0;border:0;background:none;text-align:left}.channel-icon{display:grid;place-items:center;grid-row:span 2;width:20px;height:20px;border-radius:7px;font-size:9px;font-weight:800}.channel-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;line-height:1.3;color:#b4c1bb}.channel-note{font-size:9px;color:var(--amber)}.channel-value{overflow:hidden;text-overflow:ellipsis;font-size:11px;line-height:1.3;font-weight:700;white-space:nowrap}.widget-foot{display:flex;justify-content:space-between;gap:5px;padding-top:4px;font-size:9px;line-height:1.2;color:#a2b2aa}.widget-foot .alert{color:var(--amber)}.widget-foot .alert.error{color:var(--red)}
+    .widget-empty{min-height:83px;padding:16px 14px;display:flex;align-items:center;gap:11px}.widget-empty.card-empty{min-height:155px}.widget-empty strong{font-size:11px}.widget-empty small{display:block;font-size:9px;color:#a8b5ae}.widget-empty button{margin-left:auto;border:1px solid #7bb69b;background:#224032;border-radius:20px;padding:4px 9px;font-size:9px;white-space:nowrap}
+    .phone-apps{position:absolute;bottom:45px;left:20px;right:20px;display:flex;justify-content:space-between}.app{width:42px;height:42px;border-radius:13px;display:grid;place-items:center;background:#dfe8df28;border:1px solid #ffffff1a;color:#e8f0ec;font-size:15px;font-weight:650}.phone-bar{position:absolute;bottom:8px;left:50%;transform:translateX(-50%);width:83px;height:4px;border-radius:4px;background:#ffffffe0}
+    .controls{padding:30px 28px;background:#151b23;display:flex;flex-direction:column;gap:25px}.controls h2{font-size:22px;letter-spacing:-.03em;line-height:1.3;margin:4px 0 8px}.controls p{font-size:12px;color:var(--muted);margin:0}.control-title{font-size:11px;font-weight:700;color:#cbd5d0;margin-bottom:9px}.seg{display:flex;flex-wrap:wrap;gap:6px}.seg button{border:1px solid #394450;border-radius:9px;background:#1e2730;color:#9eabb1;padding:7px 11px;font-size:11px}.seg button[aria-pressed="true"]{background:#24483a;border-color:#589b79;color:#c5f3d8}.edit-button{width:100%;border:1px solid #6ea88a;background:#234233;border-radius:10px;padding:11px;color:#d5f6df;font-weight:700;font-size:12px}.edit-button:disabled{opacity:.45;cursor:not-allowed}.hint{padding:12px;border-left:2px solid #7caf95;background:#1c2b27;color:#b4cdc0!important;border-radius:0 9px 9px 0}.demo-note{font-size:10px!important;color:#7f8f99!important;margin-top:auto!important}
+    .config{position:absolute;inset:0;z-index:3;background:#0f141b;color:#f1f3f5;display:none;padding:18px 15px 14px}.config.open{display:flex;flex-direction:column}.config-bar{display:flex;align-items:center;justify-content:space-between;font-size:10px;color:#acb8b1;margin-bottom:24px}.config h3{margin:0;font-size:19px;letter-spacing:-.025em}.config .sub{font-size:10px;color:#91a09b;margin:5px 0 14px}.config-list{display:flex;flex-direction:column;gap:7px;overflow:auto}.config-row{display:flex;align-items:center;gap:8px;min-height:42px;padding:8px;border-radius:10px;background:#1a2229}.config-row label{display:flex;align-items:center;gap:8px;min-width:0;flex:1;font-size:10px}.config-row input{accent-color:#8de3bc}.config-row label span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.move{border:0;background:#2b373a;border-radius:6px;color:#c7d9d0;width:25px;height:25px;font-size:13px}.move:disabled{opacity:.3;cursor:default}.config-msg{font-size:9px;color:#e6b879;min-height:19px;margin-top:7px}.config-actions{display:flex;gap:7px;margin-top:auto}.config-actions button{border:0;border-radius:9px;padding:10px;font-size:11px;font-weight:700}.config-actions .cancel{background:#293238;flex:1}.config-actions .save{background:#9cdbb8;color:#13231b;flex:2}
+    .toast{position:absolute;z-index:4;bottom:24px;left:50%;transform:translateX(-50%);max-width:250px;white-space:nowrap;background:#e2eee7;color:#1a2921;padding:7px 11px;border-radius:20px;font-size:9px;opacity:0;pointer-events:none;transition:opacity .2s}.toast.show{opacity:1}
+    .section{margin-top:74px}.section-head{display:flex;align-items:baseline;gap:14px;margin-bottom:20px}.section-head .num{color:#7ca28e;font-size:11px;letter-spacing:.12em}.section-head h2{margin:0;font-size:24px;letter-spacing:-.035em}.section-head p{margin:0;color:var(--muted);font-size:12px}
+    .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.box{background:#151b23;border:1px solid #2a323d;border-radius:var(--radius);padding:21px}.box .kicker{color:var(--mint);font-size:10px;letter-spacing:.12em;font-weight:700}.box h3{font-size:16px;margin:8px 0}.box p,.box li{color:#aab4c0;font-size:12px;line-height:1.8}.box p{margin:0}.box ul{padding-left:18px;margin:8px 0 0}.box b{color:#e5ece8}.flow .number{display:inline-grid;place-items:center;width:27px;height:27px;border-radius:9px;background:#244638;color:#b5eed1;font-weight:700;font-size:12px;margin-bottom:4px}
+    .table-wrap{overflow-x:auto;border:1px solid #2a323d;border-radius:16px}table{width:100%;border-collapse:collapse;background:#151b23;text-align:left;min-width:650px}th{color:#83939d;font-size:10px;letter-spacing:.06em;background:#1a222b}td,th{padding:13px 16px;border-bottom:1px solid #29313b;vertical-align:top}td{font-size:12px;color:#b3bec6}td:first-child{color:#e5ede8;font-weight:700;width:150px}tr:last-child td{border-bottom:0}code{font-family:Consolas,monospace;color:#c8dbd0;background:#26342e;padding:2px 5px;border-radius:5px}
+    .callout{background:#30271b;border:1px solid #665137;border-radius:16px;padding:19px 22px;color:#dbcfba;font-size:12px;line-height:1.9}.callout strong{display:block;color:#f0ca91;font-size:13px;margin-bottom:5px}.links{display:flex;gap:13px;flex-wrap:wrap;font-size:11px;color:var(--muted)}.footer{margin-top:55px;border-top:1px solid var(--stroke);padding-top:20px;color:var(--muted2);font-size:11px}
+    @media(max-width:850px){.preview-grid{grid-template-columns:1fr}.stage{min-height:655px}.controls{gap:20px}.grid3{grid-template-columns:1fr}.hero{padding-top:55px}}
+    @media(max-width:500px){.page{padding:22px 16px 55px}.hero{padding-top:48px}h1{font-size:38px}.preview-top{align-items:flex-start;flex-direction:column}.stage{padding:23px 10px;min-height:632px}.phone{width:min(300px,calc(100vw - 82px))}.controls{padding:24px 20px}.section-head{flex-wrap:wrap;gap:8px}.section{margin-top:55px}.topline>span{display:none}}
+    @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.toast{transition:none}}
+  </style>
+</head>
+<body>
+<main class="page">
+  <div class="topline"><div class="brand"><span class="brand-mark">G</span> GRANDETTOKEN <span style="color:#63766e">/</span> ANDROID WIDGET</div><span>产品设计 · 2026.11.02</span></div>
+  <header class="hero">
+    <div class="eyebrow">A quieter way to keep track</div>
+    <h1>打开桌面，<br>就看到你的额度。</h1>
+    <p>为 Grandettoken 手机端设计的渠道总览小部件。选好关心的渠道和顺序，在小米手机桌面直接看余额、配额和积分。</p>
+    <div class="chips"><span class="chip">HyperOS 3 优先验证</span><span class="chip">4×1 横条 + 4×2 卡片</span><span class="chip">手动选择与排序</span><span class="chip">复用现有同步数据</span></div>
+  </header>
+
+  <section class="preview-shell" aria-labelledby="preview-title">
+    <div class="preview-top"><strong id="preview-title">交互预览</strong><span>示例数据 · 可切换尺寸、状态和渠道</span></div>
+    <div class="preview-grid">
+      <div class="stage">
+        <div class="phone" aria-label="手机桌面示意">
+          <div class="statusbar"><span>14:36</span><span>◉  ▰  ▰</span></div>
+          <div class="phone-clock"><div class="time">14:36</div><div class="date">星期一 · 11月2日</div></div>
+          <div class="widget-slot" id="widget-slot"></div>
+          <div class="phone-apps" aria-hidden="true"><div class="app">◉</div><div class="app">◈</div><div class="app">♫</div><div class="app">▦</div></div>
+          <div class="phone-bar" aria-hidden="true"></div>
+          <div class="config" id="config" aria-hidden="true">
+            <div class="config-bar"><span>‹ &nbsp; GRAND​​ETTOKEN</span><span id="config-size">4×1 横条</span></div>
+            <h3>选择显示的渠道</h3><p class="sub" id="config-sub"></p>
+            <div class="config-list" id="config-list"></div><div class="config-msg" id="config-msg" aria-live="polite"></div>
+            <div class="config-actions"><button class="cancel" id="cancel-config">取消</button><button class="save" id="save-config">保存</button></div>
+          </div>
+          <div class="toast" id="toast" role="status"></div>
+        </div>
+      </div>
+      <div class="controls">
+        <div><div class="eyebrow">Design preview</div><h2>你的桌面，你的顺序。</h2><p>选择你想看的尺寸和状态，点击下方按钮试排渠道。手机里的数值均为示意，不连接真实数据。</p></div>
+        <div><div class="control-title">选择尺寸</div><div class="seg" id="size-controls"><button data-size="strip" aria-pressed="true">4×1 横条</button><button data-size="card" aria-pressed="false">4×2 卡片</button></div></div>
+        <div><div class="control-title">模拟状态</div><div class="seg" id="state-controls"><button data-state="normal" aria-pressed="true">正常</button><button data-state="stale" aria-pressed="false">数据较旧</button><button data-state="error" aria-pressed="false">同步失败</button><button data-state="unpaired" aria-pressed="false">未加入</button></div></div>
+        <button class="edit-button" id="edit-config">选择并排序渠道 →</button>
+        <p class="hint">4×1 以省空间为主，4×2 留给更完整的渠道列表。两个小部件可以分别选择不同的渠道。</p>
+        <p class="demo-note">设计交互示意，不会读取账户、访问网络或更改 App 设置。实际可见行数、添加入口和触控体验以真机为准。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section"><div class="section-head"><span class="num">01 / CONCEPT</span><h2>两个尺寸，同一份数据</h2><p>已讨论确认的范围与建议的首版细节</p></div>
+    <div class="grid3">
+      <article class="box"><div class="kicker">CONFIRMED · 4×1</div><h3>横条，快速扫一眼</h3><p>横向放置渠道名称与核心数值。设计建议最多选择 <b>3 个</b>；空间或系统字体不足时减少可见项，提示还有几项，点击进入 App。</p></article>
+      <article class="box"><div class="kicker">CONFIRMED · 4×2</div><h3>卡片，看得更从容</h3><p>以两列网格列出渠道、数值与必要状态。设计建议最多选择 <b>4 个</b>；配额窗口有明确标签，异常渠道可直接标记“较旧”。</p></article>
+      <article class="box"><div class="kicker">CONFIRMED · PERSONAL</div><h3>手动固定，顺序不乱</h3><p>每个小部件单独选渠道并排序；App 首页排序变化不影响它。横条从左到右排列，卡片先左后右、再到下一行。容量和比例需在真实桌面与字体大小下验证。</p></article>
+    </div>
+  </section>
+
+  <section class="section"><div class="section-head"><span class="num">02 / JOURNEY</span><h2>从添加到查看</h2></div>
+    <div class="grid3 flow">
+      <article class="box"><div class="number">1</div><h3>添加到桌面</h3><p>桌面双指捏合 → 小部件 → 搜索 / 安卓小部件 → Grandettoken → 选择尺寸。不同系统版本的入口名称可能略有不同。</p></article>
+      <article class="box"><div class="number">2</div><h3>选择渠道并排序</h3><p>首次添加后进入配置页，勾选渠道，调整前后顺序并保存。两个尺寸各自配置；重复添加时每一份独立保存。</p></article>
+      <article class="box"><div class="number">3</div><h3>看状态，按需刷新</h3><p>点渠道进入对应详情；点刷新按钮拉取同步组。之后可从 App 设置中的“小部件”管理每一份配置；系统支持时也可从桌面编辑。</p></article>
+    </div>
+  </section>
+
+  <section class="section"><div class="section-head"><span class="num">03 / CONTENT</span><h2>显示什么，怎么理解</h2></div>
+    <div class="table-wrap"><table><thead><tr><th>项目</th><th>设计规则</th><th>例子 / 说明</th></tr></thead><tbody>
+      <tr><td>金额型</td><td>显示原始币种与余额；不同币种不直接相加。</td><td>4SAPI ¥76.50，DeepSeek ¥256.00。</td></tr>
+      <tr><td>配额型</td><td>标明百分比对应的时间窗口；仅有主百分比时按已有字段显示，不猜测窗口。</td><td>Codex 周剩 65%；有空间且数据存在时再显示 5 小时窗口。</td></tr>
+      <tr><td>积分型</td><td>显示积分数与单位；到期明细进入渠道详情查看。</td><td>Qoder 148 积分。</td></tr>
+      <tr><td>无值 / 不可用</td><td>无值显示“—”；已选渠道从同步组消失时显示“渠道不可用”，保留选择供调整。</td><td>不将缺失、失败或无记录显示为 0；不拿被移除渠道的旧值冒充现值。</td></tr>
+      <tr><td>时间</td><td>“最早采集”指当前<b>可见、且有有效值的渠道</b>中最早的电脑端成功采集时间；日期不是当天时显示日期。存在无值时同时提示“数据不完整”。</td><td>手机刚同步成功也不能把旧的电脑数据写成“刚刚更新”；时间异常显示“时间异常”。</td></tr>
+      <tr><td>放不下时</td><td>在不低于可读字号的前提下，优先保证数值、单位、状态；缩短名称，必要时按已选顺序减少可见渠道并提示“+N”，点击进入 App；已保存的选择不变。</td><td>不靠截掉小数或币种符号伪造完整数值；详情显示完整内容。</td></tr>
+    </tbody></table></div>
+  </section>
+
+  <section class="section"><div class="section-head"><span class="num">04 / STATES</span><h2>让旧数据一眼可辨</h2><p>状态变化保留可理解的下一步</p></div>
+    <div class="table-wrap"><table><thead><tr><th>状态</th><th>小部件展示</th><th>用户可以做什么</th></tr></thead><tbody>
+      <tr><td>未加入同步组</td><td>“先加入同步组”，不显示示例数值。</td><td>点卡片打开 App 的加入同步组页面。</td></tr>
+      <tr><td>已加入，无缓存</td><td>“等待首次同步”；首次加载时不显示虚构余额。</td><td>打开 App 或点击刷新；电脑需要先发布数据。</td></tr>
+      <tr><td>某渠道较旧</td><td>当上游标记失败 / 陈旧，或采集时间已达 2 小时，在下次小部件更新时标记该渠道较旧，并保留其可信值和时间。</td><td>点渠道查看详情；通过文字与图标提示，不只依赖颜色。</td></tr>
+      <tr><td>手机同步失败 / 离线</td><td>保留上次可信数据，提示“同步失败”或“离线”及最早采集时间；不把失败当成 0。</td><td>检查网络、点刷新或打开 App 查看原因；限流时给出稍后重试的提示。</td></tr>
+      <tr><td>渠道移除或退出组</td><td>渠道移除时显示不可用；清缓存、退出组或切组时立即清除旧组显示，不能残留旧余额。</td><td>重新选择渠道或加入新组。桌面本身会展示数值，请按自己的隐私需要摆放。</td></tr>
+    </tbody></table></div>
+  </section>
+
+  <section class="section"><div class="section-head"><span class="num">05 / FRESHNESS</span><h2>刷新的是同步快照</h2></div>
+    <div class="grid3">
+      <article class="box"><div class="kicker">SOURCE</div><h3>电脑先采集、再发布</h3><p>电脑向各渠道取数并发布加密快照，手机读取并解密。电脑离线或未发布时，手机刷新不会让电脑重新取数。</p></article>
+      <article class="box"><div class="kicker">BACKGROUND</div><h3>复用一套后台同步</h3><p>沿用手机现有的 15 / 30 / 60 分钟后台设置和同一份缓存；系统可能延后执行，不承诺准点或实时。</p></article>
+      <article class="box"><div class="kicker">MANUAL</div><h3>手动刷新有反馈</h3><p>点击后显示刷新中 / 成功 / 失败；建议 App 和小部件共用 30 秒手动节流，合并与后台重叠的请求，并遵守服务端限流。数据未变化时仍保留原采集时间。</p></article>
+    </div>
+  </section>
+
+  <section class="section"><div class="section-head"><span class="num">06 / HYPEROS 3</span><h2>小米手机的适配路线</h2></div>
+    <div class="callout"><strong>4×1 是目标尺寸，仍需在你的 HyperOS 3 真机上验证。</strong>本方案建议先使用原生 Android App Widget。Android 文档提供 4×1 尺寸设计参考；小米公布的“小米专属小部件”规范列出的是 2×2、4×2、4×4。两套体系不同，不能据此认定原生 4×1 一定支持或一定不支持。先用最小原型验证原生入口、实际占格、字体和点击；若实际不支持，再讨论替代方案，不自动把 4×1 改成别的尺寸。</div>
+    <div class="grid3" style="margin-top:12px">
+      <article class="box"><div class="kicker">01 · FIND</div><h3>添加入口</h3><p>原生小部件走系统支持的安卓小部件入口，不依赖小米专属小部件审核；不同桌面版本的入口与展示需实测。</p></article>
+      <article class="box"><div class="kicker">02 · FIT</div><h3>真实占格</h3><p>分别测试 4×1、4×2，检查桌面行列设置、大字体、长名称、深浅壁纸和横竖屏下的可读性。</p></article>
+      <article class="box"><div class="kicker">03 · UPDATE</div><h3>后台可靠性</h3><p>测试熄屏、省电、网络恢复、重启及系统限制；若刷新长期延迟，先给出有针对性的系统设置引导。</p></article>
+    </div>
+  </section>
+
+  <section class="section"><div class="section-head"><span class="num">07 / DELIVERY</span><h2>后续开发的验收重点</h2></div>
+    <div class="grid3">
+      <article class="box"><h3>配置与交互</h3><ul><li>两种尺寸均可添加，独立选渠道、排序、保存和重新编辑；删除一份不影响另一份。</li><li>按渠道进入对应详情；刷新有明确反馈；字号放大后仍可操作。</li></ul></article>
+      <article class="box"><h3>数据与异常</h3><ul><li>上游采集时间、手机同步时间分开；304 不改变采集时间；过旧、离线、缺失、限流均不伪装为正常新数据。</li><li>退出或切换同步组后，桌面不残留旧组信息。</li></ul></article>
+      <article class="box"><h3>耗电与隐私</h3><ul><li>多个小部件共用同步任务；快速连续点击和与后台任务重叠不会造成请求风暴。</li><li>小部件只显示所选内容，不显示同步码、Token 或密钥；真机检查电量与后台限制。</li></ul></article>
+    </div>
+    <p style="color:#92a09f;font-size:12px;margin-top:16px">客户端已实现并通过 Android 模拟器交互测试；HyperOS 3 真机的 4×1/4×2 占格、字体缩放和后台刷新仍需验收。本文是产品设计及交互示意；容量、刷新交互和视觉样式以真机结果为准。</p>
+  </section>
+
+  <footer class="footer"><div class="links"><span>参考资料</span><a href="https://dev.mi.com/xiaomihyperos/documentation/detail?pId=1664" target="_blank" rel="noopener noreferrer">小米小部件设计规范 ↗</a><a href="https://dev.mi.com/xiaomihyperos/documentation/detail?pId=1588" target="_blank" rel="noopener noreferrer">小米与原生小部件入口 ↗</a><a href="https://developer.android.com/design/ui/mobile/guides/widgets/sizing" target="_blank" rel="noopener noreferrer">Android 小部件尺寸 ↗</a><a href="https://developer.android.com/reference/androidx/work/PeriodicWorkRequest" target="_blank" rel="noopener noreferrer">Android 周期后台任务 ↗</a></div></footer>
+</main>
+<script>
+  (() => {
+    'use strict';
+    const channels = [
+      { id:'4sapi', name:'4SAPI', value:'¥76.50', tint:'#624135', color:'#ffbf94', symbol:'4S' },
+      { id:'codex', name:'Codex', value:'周剩 65%', tint:'#39504a', color:'#b8e9d4', symbol:'C' },
+      { id:'qoder', name:'Qoder', value:'148 积分', tint:'#4d4062', color:'#dbc0ff', symbol:'Q' },
+      { id:'deepseek', name:'DeepSeek', value:'¥256.00', tint:'#36445e', color:'#b7caff', symbol:'D' },
+      { id:'workbuddy', name:'WorkBuddy', value:'320 积分', tint:'#594b37', color:'#ffdca1', symbol:'W' },
+      { id:'opencode', name:'OpenCode Go', value:'剩 82%', tint:'#474c35', color:'#d9eaa6', symbol:'O' }
+    ];
+    const byId = Object.fromEntries(channels.map(c => [c.id,c]));
+    const limits = {strip:3,card:4};
+    const selections = {strip:['4sapi','codex','qoder'],card:['4sapi','codex','qoder','deepseek']};
+    let size='strip', state='normal', draft=[], timer;
+    const slot=document.getElementById('widget-slot'), overlay=document.getElementById('config');
+    const toastEl=document.getElementById('toast');
+    function toast(message){ toastEl.textContent=message;toastEl.classList.add('show');clearTimeout(timer);timer=setTimeout(()=>toastEl.classList.remove('show'),1800); }
+    function render(){
+      const selected=selections[size].map(id=>byId[id]);
+      document.getElementById('edit-config').disabled = state==='unpaired';
+      if(state==='unpaired'){
+        slot.innerHTML=`<div class="widget widget-empty ${size==='card'?'card-empty':''}"><span class="brand-mark">G</span><div><strong>先加入同步组</strong><small>连接电脑后显示渠道数据</small></div><button id="open-pair">去连接</button></div>`;
+        document.getElementById('open-pair').addEventListener('click',()=>toast('示意：打开加入同步组页面'));return;
+      }
+      const time=state==='stale'?'10:30':'14:30';
+      const status=state==='error'?'同步失败':state==='stale'?'有渠道较旧':'数据正常';
+      if(size==='strip'){
+        slot.innerHTML=`<div class="widget strip"><div class="strip-values">${selected.map((c,i)=>`<button class="strip-cell" data-channel="${c.id}" aria-label="查看 ${c.name} 详情"><span class="name">${c.name}${state==='stale'&&i===selected.length-1?'<b class="flag"> !</b>':''}</span><span class="value">${c.value}</span></button>`).join('')}</div><div class="strip-side"><button class="refresh" aria-label="刷新同步组">↻</button><span class="strip-time ${state==='error'?'error':state==='stale'?'warn':''}"><em>${state==='normal'?'最早':state==='error'?'失败':'较旧'}</em>${time}</span></div></div>`;
+      }else{
+        slot.innerHTML=`<div class="widget card"><div class="widget-head"><span class="mini-mark">G</span><span class="title">渠道总览</span><button class="refresh" aria-label="刷新同步组">↻</button></div><div class="channel-grid">${selected.map((c,i)=>`<button class="channel-row" data-channel="${c.id}" aria-label="查看 ${c.name} 详情"><span class="channel-icon" style="background:${c.tint};color:${c.color}">${c.symbol}</span><span class="channel-name">${c.name}${state==='stale'&&i===selected.length-1?' <span class="channel-note">较旧</span>':''}</span><span class="channel-value">${c.value}</span></button>`).join('')}</div><div class="widget-foot"><span>最早采集 ${time}</span><span class="${state==='normal'?'':`alert ${state==='error'?'error':''}`}" >${status}</span></div></div>`;
+      }
+      slot.querySelector('.refresh').addEventListener('click',()=>toast('示意：刷新同步组，不访问网络'));
+      slot.querySelectorAll('[data-channel]').forEach(el=>el.addEventListener('click',()=>toast(`示意：打开 ${byId[el.dataset.channel].name} 详情`)));
+    }
+    function renderConfig(){
+      const list=document.getElementById('config-list');
+      document.getElementById('config-size').textContent=size==='strip'?'4×1 横条':'4×2 卡片';
+      document.getElementById('config-sub').textContent=`已选 ${draft.length} / ${limits[size]} · 用箭头调整显示顺序`;
+      const ordered=[...draft,...channels.map(c=>c.id).filter(id=>!draft.includes(id))];
+      list.innerHTML=ordered.map(id=>{const c=byId[id],index=draft.indexOf(id);return `<div class="config-row"><label><input type="checkbox" data-id="${id}" ${index>=0?'checked':''}><span>${c.name}</span></label>${index>=0?`<button class="move" data-up="${id}" aria-label="${c.name} 上移" ${index===0?'disabled':''}>↑</button><button class="move" data-down="${id}" aria-label="${c.name} 下移" ${index===draft.length-1?'disabled':''}>↓</button>`:''}</div>`}).join('');
+      list.querySelectorAll('input').forEach(el=>el.addEventListener('change',()=>{
+        const id=el.dataset.id;
+        if(el.checked){if(draft.length>=limits[size]){document.getElementById('config-msg').textContent=`最多选择 ${limits[size]} 个渠道，请先取消其他渠道。`;el.checked=false;return}draft.push(id)}else{draft=draft.filter(v=>v!==id)}
+        document.getElementById('config-msg').textContent='';renderConfig();
+      }));
+      list.querySelectorAll('[data-up],[data-down]').forEach(el=>el.addEventListener('click',()=>{const id=el.dataset.up||el.dataset.down,i=draft.indexOf(id),j=i+(el.dataset.up?-1:1);if(j>=0&&j<draft.length){[draft[i],draft[j]]=[draft[j],draft[i]];renderConfig()}}));
+    }
+    function closeConfig(){overlay.classList.remove('open');overlay.setAttribute('aria-hidden','true');document.getElementById('edit-config').focus()}
+    document.getElementById('size-controls').addEventListener('click',e=>{const button=e.target.closest('[data-size]');if(!button)return;size=button.dataset.size;document.querySelectorAll('[data-size]').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));render()});
+    document.getElementById('state-controls').addEventListener('click',e=>{const button=e.target.closest('[data-state]');if(!button)return;state=button.dataset.state;document.querySelectorAll('[data-state]').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));render()});
+    document.getElementById('edit-config').addEventListener('click',()=>{draft=[...selections[size]];document.getElementById('config-msg').textContent='';renderConfig();overlay.classList.add('open');overlay.setAttribute('aria-hidden','false');overlay.querySelector('input').focus()});
+    document.getElementById('cancel-config').addEventListener('click',closeConfig);
+    document.getElementById('save-config').addEventListener('click',()=>{if(!draft.length){document.getElementById('config-msg').textContent='请至少选择一个渠道。';return}selections[size]=[...draft];closeConfig();render();toast('已保存（示意）')});
+    render();
+  })();
+</script>
+</body>
+</html>

@@ -1,7 +1,7 @@
 //! GitHub Gist 传输层。
 //!
 //! 只做三件事：读全部来源文件、只 PATCH 自己的来源文件、创建/删除中继。
-//! 所有响应都做截断与大小检查；错误只保留状态码与错误码，不把响应体带出去。
+//! 所有响应都做截断与大小检查;错误只保留状态码与错误码,不把响应体带出去。
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -32,7 +32,7 @@ pub struct GistLoad {
     pub id: String,
     pub files: Vec<GistFile>,
     pub etag: Option<String>,
-    /// GitHub 账号 ID；加入已有组时用来拒绝不同账号。
+    /// GitHub 账号 ID;加入已有组时用来拒绝不同账号。
     pub owner_id: Option<i64>,
 }
 
@@ -94,7 +94,7 @@ impl GistClient {
         if body.len() > MAX_RESPONSE_BYTES {
             return Err(SyncError::new(
                 TOO_LARGE,
-                format!("Gist 响应 {} 字节，超过上限", body.len()),
+                format!("Gist 响应 {} 字节,超过上限", body.len()),
             ));
         }
         let parsed: GistResponse = serde_json::from_slice(&body).map_err(|e| {
@@ -146,7 +146,7 @@ impl GistClient {
         }))
     }
 
-    /// 只更新一个文件。请求体里只出现这一个文件，绝不整份回写 files。
+    /// 只更新一个文件。请求体里只出现这一个文件,绝不整份回写 files。
     pub async fn patch_file(
         &self,
         gist_id: &str,
@@ -190,9 +190,9 @@ impl GistClient {
 
     /// 创建 secret gist。返回 (gist_id, etag)。
     ///
-    /// `file_name` 允许是初始化占位文件（`gt_init.txt`）：创建 Gist 之前拿不到
-    /// 服务端生成的 gist ID，而加密子密钥又绑定 gist ID，所以只能先用占位文件
-    /// 建组，拿到 ID 后再 PATCH 真正的来源文件。
+    /// `file_name` 允许是初始化占位文件(`gt_init.txt`)：创建 Gist 之前拿不到
+    /// 服务端生成的 gist ID,而加密子密钥又绑定 gist ID,所以只能先用占位文件
+    /// 建组,拿到 ID 后再 PATCH 真正的来源文件。
     pub async fn create_gist(
         &self,
         file_name: &str,
@@ -235,7 +235,7 @@ impl GistClient {
         Ok((parsed.id, meta.etag))
     }
 
-    /// 删除一个文件（只用于建组后的占位文件）。传 null 是 GitHub 的删除语义。
+    /// 删除一个文件(只用于建组后的占位文件)。传 null 是 GitHub 的删除语义。
     pub async fn delete_file(&self, gist_id: &str, file_name: &str) -> Result<(), SyncError> {
         if !valid_gist_id(gist_id) {
             return Err(SyncError::new(GIST_ID_INVALID, "Gist ID 格式不正确"));
@@ -266,7 +266,7 @@ impl GistClient {
         Err(status_error(status, &meta))
     }
 
-    /// 删除中继。404 视为已不存在（幂等）。
+    /// 删除中继。404 视为已不存在(幂等)。
     pub async fn delete_gist(&self, gist_id: &str) -> Result<(), SyncError> {
         if !valid_gist_id(gist_id) {
             return Err(SyncError::new(GIST_ID_INVALID, "Gist ID 格式不正确"));
@@ -342,7 +342,7 @@ fn status_error(status: StatusCode, meta: &ResponseMeta) -> SyncError {
             return SyncError::new(RATE_LIMITED, "GitHub 限流")
                 .with_retry(meta.retry_after, meta.reset_at);
         }
-        return SyncError::new(FORBIDDEN, "GitHub 拒绝访问（权限不足）");
+        return SyncError::new(FORBIDDEN, "GitHub 拒绝访问(权限不足)");
     }
     if status == StatusCode::NOT_FOUND {
         return SyncError::new(NOT_FOUND, "Gist 不存在或不可访问");
@@ -351,14 +351,14 @@ fn status_error(status: StatusCode, meta: &ResponseMeta) -> SyncError {
         return SyncError::new(CONFLICT, "Gist 并发更新冲突");
     }
     if status == StatusCode::UNPROCESSABLE_ENTITY {
-        return SyncError::new(PAYLOAD_INVALID, "GitHub 拒绝了请求体（422）");
+        return SyncError::new(PAYLOAD_INVALID, "GitHub 拒绝了请求体(422)");
     }
     if status == StatusCode::TOO_MANY_REQUESTS {
-        return SyncError::new(RATE_LIMITED, "GitHub 限流（429）")
+        return SyncError::new(RATE_LIMITED, "GitHub 限流(429)")
             .with_retry(meta.retry_after, meta.reset_at);
     }
     if status.is_server_error() {
-        return SyncError::new(UPSTREAM, format!("GitHub 服务端错误（{code}）"));
+        return SyncError::new(UPSTREAM, format!("GitHub 服务端错误({code})"));
     }
     SyncError::new(UPSTREAM, format!("GitHub 返回 {code}"))
 }

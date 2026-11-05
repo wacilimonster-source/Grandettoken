@@ -1,0 +1,2297 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Grandettoken Sync · Android 产品设计</title>
+<style>
+/* ============================================================
+   文档外壳：沿用 docs/design/design-spec.html 的浅色看板语言
+   ============================================================ */
+:root{
+  --bg:#f4f5f8; --card:#fff; --line:#e2e5ea; --line2:#eef0f4;
+  --tx:#171b22; --tx2:#5a6272; --tx3:#8b93a3;
+  --ac:#3d6fb5; --acb:#eef4fc;
+  --ok:#1f8a5c; --okb:#edf8f2;
+  --warn:#b8730a; --warnb:#fdf7ea;
+  --bad:#c0392b; --badb:#fdf0ee;
+  --mono:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;
+  --doc-font:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--tx);font:14px/1.75 var(--doc-font);padding:38px 24px 90px}
+.wrap{max-width:1180px;margin:0 auto}
+header{margin-bottom:26px}
+.kicker{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--tx3);font-weight:700}
+h1{font-size:30px;line-height:1.28;margin:9px 0 12px;letter-spacing:-.5px}
+.lede{color:var(--tx2);font-size:15px;max-width:82ch}
+.meta{margin-top:17px;display:flex;flex-wrap:wrap;gap:8px}
+.meta span{font-size:12px;color:var(--tx2);background:var(--card);border:1px solid var(--line);
+  border-radius:999px;padding:3px 12px}
+.meta span.hi{background:var(--acb);border-color:#cfe0f7;color:#2d5b97;font-weight:600}
+
+.toc{display:flex;flex-wrap:wrap;gap:7px;margin:24px 0 8px;padding:14px 16px;
+  background:var(--card);border:1px solid var(--line);border-radius:12px}
+.toc a{font-size:12.5px;color:var(--tx2);text-decoration:none;padding:3px 9px;border-radius:7px}
+.toc a:hover{background:var(--acb);color:var(--ac)}
+
+section{margin-top:46px;scroll-margin-top:18px}
+h2{font-size:19px;margin:0 0 8px;padding-bottom:10px;border-bottom:1px solid var(--line);
+  display:flex;align-items:baseline;gap:10px}
+h2 .no{font:700 12px/1 var(--mono);color:var(--ac);background:var(--acb);
+  border:1px solid #d6e4f8;border-radius:6px;padding:4px 7px;flex:none;position:relative;top:-1px}
+h2 .sub{font-size:12.5px;font-weight:400;color:var(--tx3);margin-left:auto}
+h3{font-size:14px;margin:26px 0 9px;color:var(--tx)}
+h4{font-size:13px;margin:18px 0 7px;color:var(--tx2)}
+p{max-width:86ch}
+p + p{margin-top:9px}
+.sec-note{font-size:13px;color:var(--tx3);margin:10px 0 18px;max-width:86ch}
+ul,ol{margin:8px 0 0 20px}
+li{font-size:13.5px;color:var(--tx2);margin:5px 0}
+li b{color:var(--tx)}
+strong{font-weight:650}
+code,.mono{font-family:var(--mono);font-size:12.5px}
+code{background:#f0f2f6;border:1px solid #e6e9ef;border-radius:5px;padding:1px 5px;color:#334155}
+a{color:var(--ac)}
+hr{border:0;border-top:1px solid var(--line);margin:26px 0}
+
+/* 卡片 / 网格 */
+.card{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:18px 20px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+@media(max-width:880px){.grid2,.grid3,.grid4{grid-template-columns:1fr}}
+
+/* 提示条 */
+.note{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--ac);
+  border-radius:10px;padding:13px 16px;font-size:13px;color:var(--tx2)}
+.note b{color:var(--tx)}
+.note.ok{border-left-color:var(--ok);background:#fbfdfc}
+.note.warn{border-left-color:var(--warn);background:#fffdf8}
+.note.bad{border-left-color:var(--bad);background:#fffbfa}
+.note + .note{margin-top:10px}
+.note .t{display:block;font-weight:700;color:var(--tx);margin-bottom:3px;font-size:13px}
+
+/* 表格 */
+.tbl{width:100%;border-collapse:separate;border-spacing:0;background:var(--card);
+  border:1px solid var(--line);border-radius:12px;overflow:hidden;font-size:12.8px}
+.tbl th{background:#f8f9fb;color:var(--tx2);font-weight:650;text-align:left;
+  padding:10px 13px;border-bottom:1px solid var(--line);white-space:nowrap}
+.tbl td{padding:10px 13px;border-bottom:1px solid var(--line2);color:var(--tx2);vertical-align:top}
+.tbl tr:last-child td{border-bottom:0}
+.tbl td b{color:var(--tx);font-weight:650}
+.tbl .num{font-family:var(--mono);font-size:12px;white-space:nowrap}
+.tag{display:inline-block;font-size:11px;font-weight:700;border-radius:5px;padding:1px 7px;
+  border:1px solid var(--line);background:#f7f8fa;color:var(--tx2);white-space:nowrap}
+.tag.ok{background:var(--okb);border-color:#c8e8d8;color:var(--ok)}
+.tag.warn{background:var(--warnb);border-color:#f0dfb8;color:var(--warn)}
+.tag.bad{background:var(--badb);border-color:#f2cec9;color:var(--bad)}
+.tag.ac{background:var(--acb);border-color:#cfe0f7;color:var(--ac)}
+
+/* 架构图 */
+.arch{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;background:var(--card);
+  border:1px solid var(--line);border-radius:13px;padding:20px}
+.arch-node{flex:1;min-width:190px;background:#f8f9fb;border:1px solid var(--line);
+  border-radius:10px;padding:14px 15px}
+.arch-node.accent{background:var(--acb);border-color:#cfe0f7}
+.arch-node b{display:block;font-size:13.5px;margin-bottom:4px}
+.arch-node span{display:block;font-size:12.5px;color:var(--tx2)}
+.arch-node em{display:block;font:11.5px/1.5 var(--mono);color:var(--tx3);margin-top:7px;font-style:normal}
+.arch-arrow{display:flex;align-items:center;justify-content:center;flex:none;width:100px;
+  color:var(--tx3);font-size:11.5px;text-align:center;line-height:1.4;padding:6px}
+@media(max-width:880px){.arch-arrow{width:100%;height:36px}}
+
+/* 流程 */
+.flow{display:flex;gap:0;flex-wrap:wrap;background:var(--card);border:1px solid var(--line);
+  border-radius:13px;padding:18px}
+.flow-step{flex:1;min-width:150px;position:relative;padding:0 14px}
+.flow-step:not(:last-child)::after{content:"→";position:absolute;right:-4px;top:2px;color:var(--tx3)}
+.flow-step .n{width:23px;height:23px;border-radius:50%;background:var(--acb);color:var(--ac);
+  border:1px solid #cfe0f7;display:grid;place-items:center;font:700 11px/1 var(--mono);margin-bottom:7px}
+.flow-step b{display:block;font-size:13px;margin-bottom:3px}
+.flow-step span{font-size:12px;color:var(--tx3);line-height:1.55;display:block}
+
+/* ============================================================
+   原型：深色 App 语言（与 app/src/styles.css 同源）
+   ============================================================ */
+.stage{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;overflow-x:auto}
+.stage-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+.stage-head b{font-size:13.5px}
+.stage-head .hint{font-size:12px;color:var(--tx3)}
+.proto-row{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap;justify-content:center}
+.proto-side{width:236px;flex:none}
+.proto-notes{width:262px;flex:none}
+.proto-notes .card{padding:14px 15px}
+.proto-notes .nt{font-size:13.5px;font-weight:650;margin:2px 0 6px;color:var(--tx)}
+.proto-notes .nb{font-size:12px;line-height:1.65;color:var(--tx2)}
+.proto-notes .nh{font-size:11.5px;line-height:1.6;color:var(--tx3);margin-top:3px}
+.proto-side .slist{background:#f8f9fb;border:1px solid var(--line);border-radius:11px;padding:7px}
+.proto-side .slist button{display:flex;align-items:center;gap:9px;width:100%;border:0;background:transparent;
+  color:var(--tx2);font:12.5px/1.4 var(--doc-font);text-align:left;padding:8px 9px;border-radius:7px;cursor:pointer}
+.proto-side .slist button:hover{background:#eef1f6;color:var(--tx)}
+.proto-side .slist button.on{background:var(--acb);color:var(--ac);font-weight:650}
+.proto-side .slist .k{font:700 10px/1 var(--mono);color:var(--tx3);width:16px;flex:none}
+.proto-side .slist button.on .k{color:var(--ac)}
+.proto-side .legend{margin-top:12px;font-size:11.5px;color:var(--tx3);line-height:1.65}
+.proto-side .legend b{color:var(--tx2)}
+.demo-bar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:13px;align-items:center}
+.demo-bar .lbl{font-size:11.5px;color:var(--tx3);margin-right:2px}
+.demo-bar button{border:1px solid var(--line);background:#fff;color:var(--tx2);font:11.5px/1 var(--doc-font);
+  padding:5px 9px;border-radius:7px;cursor:pointer}
+.demo-bar button:hover{border-color:#c9d3e2;color:var(--tx)}
+.demo-bar button.on{background:var(--acb);border-color:#cfe0f7;color:var(--ac)}
+
+/* 手机框 */
+.phone{width:382px;height:824px;flex:none;background:#05070b;border:1px solid #2a3140;
+  border-radius:40px;padding:10px;position:relative;
+  box-shadow:0 28px 60px -28px rgba(10,15,30,.55),0 0 0 1px #ffffff0a inset}
+.phone::after{content:"";position:absolute;top:16px;left:50%;transform:translateX(-50%);
+  width:10px;height:10px;border-radius:50%;background:#05070b;border:1px solid #2a3140;z-index:5}
+.phone-screen{width:100%;height:100%;border-radius:31px;overflow:hidden;position:relative;
+  display:flex;flex-direction:column;background:var(--a-bg);
+  --a-bg:#0e1015; --a-bg2:#141821; --a-bg3:#191e27; --a-bg4:#212836;
+  --a-line:#252b38; --a-line2:#343d4f;
+  --a-tx:#f3f6fb; --a-tx2:#b7c0d0; --a-tx3:#8a95a8; --a-tx4:#5e6a7e;
+  --a-ok:#4fd6a0; --a-warn:#f3c666; --a-bad:#ff7b72; --a-ac:#8aa4ff;
+  color:var(--a-tx);font:13px/1.5 var(--doc-font);
+  --u:1;
+}
+.a-status{display:flex;align-items:center;justify-content:space-between;padding:9px 18px 3px;
+  font-size:10.5px;color:var(--a-tx3);letter-spacing:.02em;flex:none;
+  font-variant-numeric:tabular-nums}
+.a-status .cam{width:7px;height:7px;border-radius:50%;background:#2a3140;display:inline-block;
+  margin:0 5px;vertical-align:0}
+.a-screens{position:relative;flex:1;min-height:0}
+.a-screen{position:absolute;inset:0;display:none;flex-direction:column;overflow:hidden}
+.a-screen.active{display:flex;animation:scrIn 180ms cubic-bezier(.2,.8,.2,1)}
+@keyframes scrIn{from{opacity:.4;transform:translateY(4px)}}
+.a-appbar{display:flex;align-items:center;gap:8px;padding:8px 12px;flex:none;
+  border-bottom:1px solid var(--a-line);background:linear-gradient(180deg,#171c25,#12161d)}
+.a-appbar .ttl{font-size:13px;font-weight:650;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.a-appbar .sub{display:block;font-size:10.5px;color:var(--a-tx3);font-weight:400;margin-top:1px}
+.a-appbar .sp{flex:1}
+.a-ib{width:30px;height:30px;border:0;background:transparent;border-radius:8px;color:var(--a-tx2);
+  display:grid;place-items:center;cursor:pointer;flex:none;font-family:inherit;padding:0}
+.a-ib:hover{background:#ffffff12;color:var(--a-tx)}
+.a-ib:focus-visible,.a-btn:focus-visible,.a-nav button:focus-visible{outline:2px solid var(--a-ac);outline-offset:2px}
+.a-ib svg{width:17px;height:17px;display:block}
+.a-ib.loading{pointer-events:none;position:relative;color:transparent}
+.a-ib.loading::before{content:"";position:absolute;inset:6px;border-radius:50%;
+  border:2px solid transparent;border-top-color:var(--a-ac);border-right-color:var(--a-ac);
+  animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.a-body{flex:1;overflow-y:auto;padding:12px 12px 18px;min-height:0}
+.a-body::-webkit-scrollbar{width:7px}
+.a-body::-webkit-scrollbar-thumb{background:#3a4353;border-radius:9px;border:2px solid var(--a-bg)}
+
+/* 手机底部导航 */
+.a-nav{display:flex;flex:none;border-top:1px solid var(--a-line);background:#11151c;padding:5px 4px 7px}
+.a-nav.hidden{display:none}
+.a-nav button{flex:1;border:0;background:transparent;color:var(--a-tx4);font:10.5px/1.3 var(--doc-font);
+  display:flex;flex-direction:column;align-items:center;gap:3px;padding:3px 0;cursor:pointer;border-radius:8px}
+.a-nav button svg{width:19px;height:19px;display:block}
+.a-nav button.on{color:var(--a-ac)}
+.a-nav button:hover{background:#ffffff08}
+/* 系统手势区：让底部导航不贴死屏幕边缘 */
+.a-home{height:18px;flex:none;display:flex;align-items:center;justify-content:center}
+.a-home::after{content:"";width:96px;height:3px;border-radius:99px;background:#3a4353}
+
+/* 通用手机组件 */
+.a-card{background:var(--a-bg2);border:1px solid var(--a-line);border-radius:11px;padding:12px}
+.a-card + .a-card{margin-top:10px}
+.a-sec{font-size:10.5px;letter-spacing:.12em;color:var(--a-tx3);font-weight:700;margin:15px 2px 7px}
+.a-sec:first-child{margin-top:0}
+.a-rowline{display:flex;align-items:center;gap:8px}
+.a-sp{flex:1}
+.dot{width:6px;height:6px;border-radius:50%;display:inline-block;flex:none;background:var(--a-tx4)}
+.dot.ok{background:var(--a-ok)} .dot.warn{background:var(--a-warn)} .dot.bad{background:var(--a-bad)}
+.dot.mut{background:var(--a-tx4)}
+.a-muted{color:var(--a-tx3)}
+.a-tiny{font-size:10.5px;color:var(--a-tx3);line-height:1.5}
+/* 文档区域（手机框外）的 a-tiny 用文档的灰度，避免未定义的 --a-tx3 */
+.wrap .a-tiny{color:var(--tx3);font-size:11px}
+.phone .a-tiny,.pcwin .a-tiny{color:var(--a-tx3);font-size:10.5px}
+.hidden{display:none!important}
+.a-btn{border:1px solid var(--a-line2);background:var(--a-bg3);color:var(--a-tx2);font:12px/1 var(--doc-font);
+  padding:9px 13px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.a-btn:hover{border-color:#4a556b;color:var(--a-tx)}
+.a-btn.primary{background:var(--a-ac);border-color:var(--a-ac);color:#0b1020;font-weight:700}
+.a-btn.primary:hover{background:#a3b9ff;color:#0b1020}
+.a-btn.block{width:100%}
+.a-btn.ghost{background:transparent}
+.a-btn.danger{color:var(--a-bad);border-color:#4a2a2a;background:#1c1416}
+.a-btn.danger:hover{background:#26181a}
+.a-btn:disabled{opacity:.55;cursor:default}
+.a-chip{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;color:var(--a-tx2);
+  background:var(--a-bg3);border:1px solid var(--a-line);border-radius:999px;padding:3px 8px}
+.a-chip.ok{color:var(--a-ok);background:rgba(79,214,160,.09);border-color:rgba(79,214,160,.25)}
+.a-chip.warn{color:var(--a-warn);background:rgba(243,198,102,.09);border-color:rgba(243,198,102,.25)}
+.a-chip.bad{color:var(--a-bad);background:rgba(255,123,114,.08);border-color:rgba(255,123,114,.25)}
+
+/* 摘要条 */
+.a-sum{display:flex;border:1px solid var(--a-line);border-radius:11px;overflow:hidden;background:var(--a-bg2);margin-bottom:11px}
+.a-sum .c{flex:1;padding:10px 11px;border-right:1px solid var(--a-line);min-width:0}
+.a-sum .c:last-child{border-right:0}
+.a-sum .lb{font-size:10px;color:var(--a-tx3);letter-spacing:.05em;white-space:nowrap}
+.a-sum .v{font-size:17px;font-weight:650;font-variant-numeric:tabular-nums;line-height:1.25;margin-top:2px;white-space:nowrap}
+.a-sum .v small{font-size:10.5px;font-weight:400;color:var(--a-tx3);margin-left:3px}
+.a-sum .d{font-size:10px;color:var(--a-tx3);margin-top:2px;white-space:nowrap}
+.a-sum .d.up{color:var(--a-bad)} .a-sum .d.down{color:var(--a-ok)}
+
+/* 设备卡 */
+.a-dev{display:flex;align-items:center;gap:11px;background:var(--a-bg2);border:1px solid var(--a-line);
+  border-radius:11px;padding:12px;cursor:pointer;text-align:left;width:100%;font-family:inherit;color:inherit}
+.a-dev + .a-dev{margin-top:9px}
+.a-dev:hover{background:#191f29;border-color:#313a4b}
+.a-dev.offline{opacity:.62}
+.a-dev .ic{width:34px;height:34px;border-radius:9px;flex:none;display:grid;place-items:center;
+  background:#232b3a;color:#a9bdff;font-size:11px;font-weight:700}
+.a-dev .nm{flex:1;min-width:0}
+.a-dev .nm b{display:block;font-size:12.5px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.a-dev .nm span{display:block;font-size:10.5px;color:var(--a-tx3);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.a-dev .rt{text-align:right;flex:none}
+.a-dev .rt b{display:block;font-size:12px;font-variant-numeric:tabular-nums}
+.a-dev .rt span{font-size:10px;color:var(--a-tx3)}
+
+/* 渠道卡 */
+.a-ch{background:var(--a-bg2);border:1px solid var(--a-line);border-radius:11px;overflow:hidden}
+.a-ch + .a-ch{margin-top:8px}
+.a-ch-head{display:flex;align-items:center;gap:10px;width:100%;border:0;background:transparent;
+  color:inherit;font-family:inherit;text-align:left;padding:11px 12px;cursor:pointer}
+.a-ch-head:hover{background:#ffffff05}
+.a-ch-ico{width:28px;height:28px;border-radius:8px;flex:none;display:grid;place-items:center;
+  color:#fff;font-size:10px;font-weight:700}
+.a-ch-main{flex:1;min-width:0}
+.a-ch-top{display:flex;align-items:baseline;gap:8px}
+.a-ch-name{font-size:12px;font-weight:600;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.a-ch-val{font-size:18px;font-weight:650;letter-spacing:-.3px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.a-ch-val i{font-style:normal;font-size:10.5px;font-weight:400;color:var(--a-tx3);margin-left:2px}
+.a-ch-sub{display:flex;align-items:center;gap:5px;margin-top:3px;font-size:10px;color:var(--a-tx3)}
+.a-ch-sub .r{margin-left:auto;white-space:nowrap}
+.a-bar{height:4px;border-radius:3px;background:#2a3240;overflow:hidden;margin-top:8px}
+.a-bar i{display:block;height:100%;border-radius:3px;background:var(--a-ok)}
+.a-bar i.warn{background:var(--a-warn)} .a-bar i.bad{background:var(--a-bad)}
+.a-ch-body{max-height:0;overflow:hidden;transition:max-height .26s cubic-bezier(.2,.8,.2,1)}
+.a-ch.open .a-ch-body{max-height:320px}
+.a-ch-body-in{padding:0 12px 12px 50px;background:#ffffff04}
+.a-kv{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;margin:4px 0 9px}
+.a-kv div{display:flex;justify-content:space-between;gap:8px;font-size:10.5px;
+  border-bottom:1px dashed #29313e;padding-bottom:4px}
+.a-kv span{color:var(--a-tx3)} .a-kv b{font-weight:500;font-variant-numeric:tabular-nums;text-align:right}
+.a-spark{height:28px;display:flex;align-items:flex-end;gap:2px;margin:6px 0 10px}
+.a-spark i{flex:1;background:#37527f;border-radius:1px;min-height:2px}
+.a-spark i.hi{background:#5b7fc4}
+
+/* 横幅 */
+.a-banner{display:flex;flex-direction:column;gap:1px;border-radius:9px;padding:9px 11px;margin-bottom:10px;
+  font-size:11px;border:1px solid var(--a-line);background:var(--a-bg3)}
+.a-banner.hidden{display:none}
+.a-banner b{font-size:11.5px;font-weight:650}
+.a-banner span{font-size:10.5px;color:var(--a-tx3)}
+.a-banner.warn{background:rgba(243,198,102,.08);border-color:rgba(243,198,102,.3);color:#f6d58f}
+.a-banner.bad{background:rgba(255,123,114,.08);border-color:rgba(255,123,114,.32);color:#ffb3ad}
+.a-banner.muted{background:#181d25;border-color:#2c3442;color:var(--a-tx2)}
+
+/* 空状态 */
+.a-empty{display:flex;flex-direction:column;align-items:center;text-align:center;padding:34px 18px 20px}
+.a-empty .fig{width:96px;height:96px;border-radius:26px;background:
+  radial-gradient(circle at 32% 28%,#8aa4ff33,transparent 55%),
+  linear-gradient(145deg,#1b2230,#121722);border:1px solid #2c3546;
+  display:grid;place-items:center;margin-bottom:17px;position:relative}
+.a-empty .fig::before{content:"";position:absolute;inset:23px;border-radius:12px;
+  border:2px dashed #4a5870;opacity:.8}
+.a-empty .fig svg{width:30px;height:30px;color:#9db4ff;position:relative}
+.a-empty h5{font-size:15px;font-weight:650;margin-bottom:6px}
+.a-empty p{font-size:11.5px;color:var(--a-tx3);line-height:1.65;max-width:250px;margin-bottom:18px}
+
+/* 扫码框 */
+.a-scan{height:228px;border-radius:13px;background:
+  radial-gradient(120px 90px at 50% 44%,#1c2434,#0b0e14 72%);
+  border:1px solid #2a3240;position:relative;overflow:hidden;margin-bottom:13px}
+.a-scan .corner{position:absolute;width:26px;height:26px;border:2px solid #8aa4ff;border-radius:3px}
+.a-scan .c1{top:18px;left:18px;border-right:0;border-bottom:0}
+.a-scan .c2{top:18px;right:18px;border-left:0;border-bottom:0}
+.a-scan .c3{bottom:18px;left:18px;border-right:0;border-top:0}
+.a-scan .c4{bottom:18px;right:18px;border-left:0;border-top:0}
+.a-scan .laser{position:absolute;left:22px;right:22px;height:1px;background:linear-gradient(90deg,transparent,#8aa4ff,transparent);
+  animation:laser 2.4s ease-in-out infinite}
+@keyframes laser{0%,100%{top:38px;opacity:.25}50%{top:176px;opacity:.9}}
+.a-scan .hintbox{position:absolute;left:0;right:0;bottom:40px;text-align:center;font-size:10.5px;color:var(--a-tx3)}
+.a-divider{display:flex;align-items:center;gap:9px;color:var(--a-tx4);font-size:10px;margin:12px 0}
+.a-divider::before,.a-divider::after{content:"";flex:1;height:1px;background:var(--a-line)}
+.a-input{display:flex;align-items:center;gap:7px;background:var(--a-bg3);border:1px solid var(--a-line2);
+  border-radius:9px;padding:9px 10px}
+.a-input input{flex:1;min-width:0;background:transparent;border:0;outline:0;color:var(--a-tx);
+  font:11.5px/1.4 var(--mono)}
+.a-input input::placeholder{color:var(--a-tx4)}
+.a-error{display:none;margin-top:9px;border-radius:9px;padding:9px 11px;font-size:10.5px;
+  color:#ffb3ad;background:rgba(255,123,114,.08);border:1px solid rgba(255,123,114,.3)}
+.a-error.show{display:block}
+
+/* 设置项 */
+.a-set{display:flex;align-items:center;gap:10px;padding:11px 12px;border-bottom:1px solid var(--a-line);
+  background:var(--a-bg2);font-size:12px}
+.a-set:first-child{border-radius:11px 11px 0 0}
+.a-set:last-child{border-bottom:0;border-radius:0 0 11px 11px}
+.a-set .l{flex:1;min-width:0}
+.a-set .l b{display:block;font-size:12px;font-weight:550}
+.a-set .l span{display:block;font-size:10px;color:var(--a-tx3);margin-top:2px;line-height:1.45}
+.a-set .r{font-size:11px;color:var(--a-tx3);flex:none}
+.a-switch{width:38px;height:22px;border-radius:99px;background:#2b3341;border:1px solid #3a4456;
+  position:relative;cursor:pointer;flex:none;transition:background .16s}
+.a-switch::after{content:"";position:absolute;width:16px;height:16px;border-radius:50%;background:#8a95a8;
+  top:2px;left:2px;transition:left .16s,background .16s}
+.a-switch.on{background:rgba(138,164,255,.28);border-color:#6b82c4}
+.a-switch.on::after{left:18px;background:#b7ccff}
+.a-opt{display:flex;gap:5px;flex-wrap:wrap}
+.a-opt button{border:1px solid var(--a-line2);background:var(--a-bg3);color:var(--a-tx3);
+  font:10.5px/1 var(--doc-font);padding:5px 8px;border-radius:6px;cursor:pointer}
+.a-opt button.on{background:rgba(138,164,255,.14);border-color:#5f79bd;color:#b7ccff}
+
+/* 详情页大数字 */
+.a-hero{padding:6px 2px 12px}
+.a-hero .lb{font-size:10.5px;color:var(--a-tx3);letter-spacing:.08em}
+.a-hero .v{font-size:33px;font-weight:700;letter-spacing:-1px;line-height:1.1;font-variant-numeric:tabular-nums;margin-top:3px}
+.a-hero .v i{font-style:normal;font-size:13px;font-weight:400;color:var(--a-tx3);margin-left:3px}
+.a-hero .d{font-size:11px;color:var(--a-tx3);margin-top:4px}
+.a-seg{display:flex;gap:4px;background:var(--a-bg3);border:1px solid var(--a-line);border-radius:8px;padding:3px;margin:10px 0 12px}
+.a-seg button{flex:1;border:0;background:transparent;color:var(--a-tx3);font:10.5px/1 var(--doc-font);
+  padding:6px 0;border-radius:6px;cursor:pointer}
+.a-seg button.on{background:#2b3446;color:#c9d6f5}
+
+/* 时间线 */
+.a-tl{position:relative;margin-left:5px;padding-left:17px}
+.a-tl::before{content:"";position:absolute;left:4px;top:4px;bottom:4px;width:1px;background:var(--a-line2)}
+.a-tl .it{position:relative;padding:0 0 14px}
+.a-tl .it::before{content:"";position:absolute;left:-16px;top:5px;width:7px;height:7px;border-radius:50%;
+  background:var(--a-bg);border:1.5px solid var(--a-tx4)}
+.a-tl .it.ok::before{border-color:var(--a-ok);background:var(--a-ok)}
+.a-tl .it.warn::before{border-color:var(--a-warn);background:var(--a-warn)}
+.a-tl .it.bad::before{border-color:var(--a-bad);background:var(--a-bad)}
+.a-tl .it b{display:block;font-size:11.5px;font-weight:550}
+.a-tl .it span{display:block;font-size:10px;color:var(--a-tx3);margin-top:1px}
+
+/* ============================================================
+   原型：PC 设置窗
+   ============================================================ */
+.pcwin{width:930px;max-width:100%;flex:1;min-width:520px;background:#0e1015;border:1px solid #252b38;
+  border-radius:13px;overflow:hidden;color:#f3f6fb;font:13px/1.5 var(--doc-font);
+  box-shadow:0 26px 60px -30px rgba(10,15,30,.5);
+  --a-bg:#0e1015; --a-bg2:#141821; --a-bg3:#191e27; --a-bg4:#212836;
+  --a-line:#252b38; --a-line2:#343d4f;
+  --a-tx:#f3f6fb; --a-tx2:#b7c0d0; --a-tx3:#8a95a8; --a-tx4:#5e6a7e;
+  --a-ok:#4fd6a0; --a-warn:#f3c666; --a-bad:#ff7b72; --a-ac:#8aa4ff}
+.pc-title{display:flex;align-items:center;gap:8px;padding:9px 12px;background:linear-gradient(180deg,#1a1f28,#141821);
+  border-bottom:1px solid var(--a-line);font-size:12px;font-weight:600;cursor:default}
+.pc-title .mk{width:15px;height:15px;border-radius:4px;background:linear-gradient(135deg,#6f8dff,#9b6bff);position:relative;flex:none}
+.pc-title .mk::after{content:"";position:absolute;inset:4px;border-radius:2px;background:#0e1015}
+.pc-title .sp{flex:1}
+.pc-title .wc{font-size:12px;color:var(--a-tx3);letter-spacing:2px}
+.pc-body{display:flex;min-height:980px}
+.pc-side{width:152px;flex:none;background:#11151c;border-right:1px solid var(--a-line);padding:10px 7px}
+.pc-side .sh{font-size:10px;letter-spacing:.12em;color:var(--a-tx4);font-weight:700;padding:4px 8px 7px}
+.pc-side button{display:flex;align-items:center;gap:7px;width:100%;border:0;background:transparent;
+  color:var(--a-tx3);font:12px/1.4 var(--doc-font);text-align:left;padding:7px 9px;border-radius:7px;cursor:pointer}
+.pc-side button:hover{background:#ffffff08;color:var(--a-tx2)}
+.pc-side button.on{background:rgba(138,164,255,.12);color:#b7ccff;font-weight:600}
+.pc-main{flex:1;min-width:0;padding:18px 20px 22px;overflow-y:auto;max-height:980px}
+.pc-main::-webkit-scrollbar{width:8px}
+.pc-main::-webkit-scrollbar-thumb{background:#333a4a;border-radius:9px;border:2px solid #0e1015}
+.pc-h{display:flex;align-items:flex-start;gap:10px;margin-bottom:3px}
+.pc-h h5{font-size:15px;font-weight:650}
+.pc-h .sp{flex:1}
+.pc-sub{font-size:11.5px;color:var(--a-tx3);margin-bottom:14px;line-height:1.6}
+.pc-tabs{display:flex;gap:3px;border-bottom:1px solid var(--a-line);margin:0 0 15px}
+.pc-tabs button{border:0;background:transparent;color:var(--a-tx3);font:11.5px/1 var(--doc-font);
+  padding:8px 11px;border-radius:7px 7px 0 0;cursor:pointer;border-bottom:2px solid transparent}
+.pc-tabs button:hover{color:var(--a-tx2);background:#ffffff06}
+.pc-tabs button.on{color:#b7ccff;border-bottom-color:var(--a-ac)}
+.pc-panel{display:none}
+.pc-panel.active{display:block;animation:scrIn 160ms ease}
+.pc-card{background:var(--a-bg2);border:1px solid var(--a-line);border-radius:11px;padding:13px 14px;margin-bottom:12px}
+.pc-card .ch{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.pc-card .ch b{font-size:12px;font-weight:600}
+.pc-card .ch .sp{flex:1}
+.pc-card .ch .hint{font-size:10.5px;color:var(--a-tx3)}
+.pc-switchrow{display:flex;align-items:center;gap:12px;padding:12px 14px;background:linear-gradient(115deg,#1b2230,#151a22);
+  border:1px solid #2d3748;border-radius:11px;margin-bottom:12px}
+.pc-switchrow .l{flex:1;min-width:0}
+.pc-switchrow .l b{display:block;font-size:13px;font-weight:650}
+.pc-switchrow .l span{display:block;font-size:10.5px;color:var(--a-tx3);margin-top:2px;line-height:1.5}
+.pc-kv{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+.pc-kv .c{background:#10141b;border:1px solid var(--a-line);border-radius:8px;padding:8px 10px}
+.pc-kv .c .lb{font-size:9.5px;color:var(--a-tx3);letter-spacing:.06em}
+.pc-kv .c .v{font-size:13px;font-weight:650;font-variant-numeric:tabular-nums;margin-top:2px}
+.pc-kv .c .v.ok{color:var(--a-ok)}
+.pc-field{display:flex;align-items:center;gap:8px;margin-top:9px}
+.pc-field label{font-size:11px;color:var(--a-tx3);width:72px;flex:none}
+.pc-field input{flex:1;background:#10141b;border:1px solid var(--a-line2);border-radius:7px;
+  color:var(--a-tx);font:11.5px/1.4 var(--doc-font);padding:7px 9px;outline:0}
+.pc-field input:focus{border-color:#5f79bd}
+.pc-note{font-size:10.5px;color:var(--a-tx3);line-height:1.6;margin-top:8px}
+.pc-code{background:#0b0e14;border:1px solid var(--a-line2);border-radius:8px;padding:9px 10px;
+  font:11px/1.5 var(--mono);color:#b7c0d0;word-break:break-all}
+.pc-qr{background:#fff;border-radius:10px;padding:9px;display:inline-flex;line-height:0}
+.pc-qr svg{display:block}
+.pc-code-row{display:flex;gap:12px;align-items:flex-start}
+.pc-code-row .codebox{flex:1;min-width:0}
+.pc-btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
+.pc-btn{border:1px solid var(--a-line2);background:var(--a-bg3);color:var(--a-tx2);
+  font:11.5px/1 var(--doc-font);padding:7px 10px;border-radius:7px;cursor:pointer;
+  display:inline-flex;align-items:center;gap:5px}
+.pc-btn:hover{border-color:#4a556b;color:var(--a-tx)}
+.pc-btn.primary{background:rgba(138,164,255,.16);border-color:#5f79bd;color:#c9d6f5;font-weight:600}
+.pc-btn.primary:hover{background:rgba(138,164,255,.26)}
+.pc-btn.danger{color:#ff9a93;border-color:#4a2a2a;background:#1c1416}
+.pc-check{display:flex;align-items:center;gap:8px;padding:8px 9px;border:1px solid var(--a-line);
+  border-radius:7px;background:#10141b;font-size:11.5px;color:var(--a-tx2);cursor:pointer}
+.pc-check input{accent-color:#8aa4ff;width:14px;height:14px}
+.pc-checks{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.pc-danger{border-color:#4a2a2a;background:#180f11}
+.pc-danger .ch b{color:#ffb3ad}
+
+/* ── 桌面设置面板：按现有 400×580 顶部导航，不用左右分栏 ── */
+.pcp-wrap{display:flex;justify-content:center;padding:4px 0}
+.pcp{width:400px;height:580px;flex:none;background:#0e1015;border:1px solid #252b38;
+  border-radius:12px;overflow:hidden;display:flex;flex-direction:column;color:#f3f6fb;
+  font:12px/1.5 var(--doc-font);
+  box-shadow:0 24px 56px -28px rgba(10,15,30,.55),0 0 0 1px #ffffff08 inset;
+  --a-bg:#0e1015; --a-bg2:#141821; --a-bg3:#191e27; --a-bg4:#212836;
+  --a-line:#252b38; --a-line2:#343d4f;
+  --a-tx:#f3f6fb; --a-tx2:#b7c0d0; --a-tx3:#8a95a8; --a-tx4:#5e6a7e;
+  --a-ok:#4fd6a0; --a-warn:#f3c666; --a-bad:#ff7b72; --a-ac:#8aa4ff}
+.pcp-title{display:flex;align-items:center;gap:7px;padding:8px 10px;flex:none;
+  background:linear-gradient(180deg,#1a1f28,#141821);border-bottom:1px solid var(--a-line);
+  font-size:11.5px;font-weight:600}
+.pcp-title .mk{width:14px;height:14px;border-radius:4px;background:linear-gradient(135deg,#6f8dff,#9b6bff);position:relative;flex:none}
+.pcp-title .mk::after{content:"";position:absolute;inset:4px;border-radius:2px;background:#0e1015}
+.pcp-title .sp{flex:1}
+.pcp-title .wc{font-size:11px;color:var(--a-tx3);letter-spacing:2px}
+.pcp-head{display:flex;align-items:center;gap:8px;padding:7px 10px;flex:none;
+  border-bottom:1px solid var(--a-line);background:#141821}
+.pcp-back{width:24px;height:24px;border:0;background:transparent;border-radius:6px;color:var(--a-tx2);
+  font:14px/1 var(--doc-font);cursor:pointer;display:grid;place-items:center;padding:0}
+.pcp-back:hover{background:#ffffff0d;color:var(--a-tx)}
+.pcp-back:focus-visible,.pcp-idx-row:focus-visible,.pcp-btn:focus-visible{outline:2px solid var(--a-ac);outline-offset:2px}
+.pcp-title2{font-size:11.5px;font-weight:600;letter-spacing:.01em}
+.pcp-index{flex:1;min-height:0;overflow-y:auto;padding:8px 10px 0;display:flex;flex-direction:column}
+.pcp-index.hidden{display:none!important}
+.pcp-idx-row{display:flex;align-items:center;gap:10px;width:100%;min-height:50px;padding:0 8px;
+  border:0;border-radius:8px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer;flex:none}
+.pcp-idx-row:hover{background:rgba(255,255,255,.035)}
+.pcp-idx-row .ico{width:28px;height:28px;border-radius:8px;flex:none;display:grid;place-items:center;
+  background:rgba(138,164,255,.1);color:var(--a-ac);font-size:13px}
+.pcp-idx-row .ico.sync{background:rgba(138,164,255,.16);color:#b7ccff}
+.pcp-idx-row .ico.g{background:rgba(138,149,168,.12);color:var(--a-tx2)}
+.pcp-idx-row .ico.y{background:rgba(243,198,102,.1);color:#f5d391}
+.pcp-idx-row .ico.p{background:rgba(155,107,255,.12);color:#b79aff}
+.pcp-idx-row .ico.k{background:rgba(255,123,114,.1);color:#ffb3ad}
+.pcp-idx-row .tx{flex:1;min-width:0}
+.pcp-idx-row .tx b{display:block;font-size:12px;font-weight:600;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pcp-idx-row .tx span{display:block;font-size:9.5px;color:var(--a-tx3);line-height:1.4;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pcp-idx-row .chev{width:10px;height:10px;flex:none;color:var(--a-tx4);font-size:14px;line-height:1}
+.pcp-idx-note{margin-top:auto;padding:10px 0;text-align:center;font-size:9px;color:var(--a-tx4);
+  border-top:1px solid var(--a-line)}
+.pcp-page{flex:1;min-height:0;overflow-y:auto;padding:11px 12px 16px}
+.pcp-page.hidden{display:none!important}
+.pcp-page::-webkit-scrollbar{width:7px}
+.pcp-page::-webkit-scrollbar-thumb{background:#333a4a;border-radius:9px;border:2px solid var(--a-bg)}
+.pcp-sec{font-size:9.5px;letter-spacing:.1em;color:var(--a-tx4);font-weight:700;margin:14px 1px 6px}
+.pcp-sec:first-child{margin-top:0}
+.pcp-note{font-size:10px;color:var(--a-tx3);line-height:1.6;margin-top:6px}
+.pcp-code{background:#0b0e14;border:1px solid var(--a-line2);border-radius:7px;padding:7px 8px;
+  font:10px/1.5 var(--mono);color:#b7c0d0;word-break:break-all;margin-top:8px}
+.pcp-qr{background:#fff;border-radius:8px;padding:7px;display:inline-flex;line-height:0;align-self:center}
+.pcp-code-stack{display:flex;flex-direction:column;align-items:stretch;gap:8px}
+.pcp-btns{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}
+.pcp-btn{border:1px solid var(--a-line2);background:var(--a-bg3);color:var(--a-tx2);
+  font:10.5px/1 var(--doc-font);padding:6px 8px;border-radius:6px;cursor:pointer}
+.pcp-btn:hover{border-color:#4a556b;color:var(--a-tx)}
+.pcp-btn.primary{background:rgba(138,164,255,.16);border-color:#5f79bd;color:#c9d6f5;font-weight:600}
+.pcp-btn.danger{color:#ff9a93;border-color:#4a2a2a;background:#1c1416}
+.pcp-card{background:var(--a-bg2);border:1px solid var(--a-line);border-radius:10px;padding:11px 12px;margin-bottom:10px}
+.pcp-card .ch{display:flex;align-items:center;gap:7px;margin-bottom:8px}
+.pcp-card .ch b{font-size:11px;font-weight:600}
+.pcp-card .ch .sp{flex:1}
+.pcp-card .ch .hint{font-size:9.5px;color:var(--a-tx3)}
+.pcp-kv{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.pcp-kv .c{background:#10141b;border:1px solid var(--a-line);border-radius:7px;padding:7px 8px}
+.pcp-kv .c .lb{font-size:9px;color:var(--a-tx3);letter-spacing:.05em}
+.pcp-kv .c .v{font-size:11.5px;font-weight:650;font-variant-numeric:tabular-nums;margin-top:1px}
+.pcp-kv .c .v.ok{color:var(--a-ok)}
+.pcp-switchrow{display:flex;align-items:center;gap:10px;padding:10px 12px;background:linear-gradient(115deg,#1b2230,#151a22);
+  border:1px solid #2d3748;border-radius:10px;margin-bottom:10px}
+.pcp-switchrow .l{flex:1;min-width:0}
+.pcp-switchrow .l b{display:block;font-size:11.5px;font-weight:650}
+.pcp-switchrow .l span{display:block;font-size:9.5px;color:var(--a-tx3);margin-top:1px;line-height:1.45}
+.pcp-checks{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.pcp-check{display:flex;align-items:center;gap:6px;padding:6px 7px;border:1px solid var(--a-line);
+  border-radius:6px;background:#10141b;font-size:10px;color:var(--a-tx2);cursor:pointer}
+.pcp-check input{accent-color:#8aa4ff;width:12px;height:12px}
+.pcp-opt{display:flex;gap:4px;flex-wrap:wrap}
+.pcp-opt button{border:1px solid var(--a-line2);background:var(--a-bg3);color:var(--a-tx3);
+  font:10px/1 var(--doc-font);padding:5px 7px;border-radius:5px;cursor:pointer}
+.pcp-opt button.on{background:rgba(138,164,255,.14);border-color:#5f79bd;color:#b7ccff}
+
+/* 视觉令牌 */
+.sw-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:9px}
+.sw{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.sw .chip{height:52px;display:flex;align-items:center;justify-content:center;font:11px/1.3 var(--mono);color:#fff}
+.sw .info{padding:8px 10px}
+.sw .nm{font-size:11.5px;font-weight:650}
+.sw .hx{font:10.5px/1.4 var(--mono);color:var(--tx3);margin-top:1px}
+.sw .use{font-size:10.5px;color:var(--tx2);margin-top:4px;line-height:1.45}
+.type-row{display:flex;align-items:baseline;gap:14px;padding:8px 0;border-bottom:1px solid var(--line2)}
+.type-row:last-child{border-bottom:0}
+.type-row .nm{width:116px;flex:none;font-size:11.5px;color:var(--tx3)}
+.type-row .demo{flex:1;color:var(--tx);min-width:0}
+.type-row .spec{width:150px;flex:none;font:10.5px/1.4 var(--mono);color:var(--tx3);text-align:right}
+
+/* 状态矩阵 */
+.matrix td:first-child{white-space:nowrap}
+
+/* 验收 */
+.checklist{list-style:none;margin:0}
+.checklist li{display:flex;gap:9px;align-items:flex-start;padding:9px 0;border-bottom:1px solid var(--line2);
+  font-size:13px;color:var(--tx2);margin:0}
+.checklist li:last-child{border-bottom:0}
+.checklist .box{width:16px;height:16px;border:1.5px solid #c9d0dc;border-radius:4px;flex:none;margin-top:2px;
+  background:#fff;position:relative}
+.checklist .box::after{content:"";position:absolute;left:4px;top:1px;width:5px;height:9px;
+  border:2px solid transparent;border-right-color:var(--ok);border-bottom-color:var(--ok);
+  transform:rotate(40deg);opacity:0}
+.checklist li.done .box::after{opacity:1}
+
+/* 模态 / toast */
+.modal{position:fixed;inset:0;background:rgba(16,22,34,.48);backdrop-filter:blur(2px);
+  display:none;align-items:center;justify-content:center;padding:22px;z-index:80}
+.modal.show{display:flex}
+.modal-card{width:min(620px,100%);max-height:86vh;overflow:auto;background:var(--card);
+  border:1px solid var(--line);border-radius:14px;box-shadow:0 30px 70px -30px rgba(10,20,40,.5)}
+.modal-head{display:flex;align-items:center;gap:10px;padding:15px 18px;border-bottom:1px solid var(--line)}
+.modal-head b{font-size:14px}
+.modal-head .sp{flex:1}
+.modal-head button{border:0;background:transparent;color:var(--tx3);font-size:19px;cursor:pointer;line-height:1}
+.modal-body{padding:16px 18px}
+.modal-foot{display:flex;justify-content:flex-end;gap:8px;padding:13px 18px;border-top:1px solid var(--line);background:#fafbfc}
+.modal pre{background:#0f141c;color:#d7e0ee;border-radius:9px;padding:13px 14px;overflow:auto;
+  font:11.5px/1.65 var(--mono);max-height:320px}
+.modal .danger{color:var(--bad);font-weight:600}
+.toast{position:fixed;left:50%;bottom:28px;transform:translate(-50%,14px);background:#171b22;color:#fff;
+  font-size:12.5px;padding:9px 15px;border-radius:9px;opacity:0;pointer-events:none;transition:.22s;z-index:99;
+  box-shadow:0 12px 30px -12px rgba(0,0,0,.5)}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+
+@media(max-width:760px){
+  body{padding:24px 14px 60px}
+  h1{font-size:24px}
+  .proto-side{width:100%}
+  .proto-notes{width:100%}
+  .phone{transform-origin:top left}
+  .pc-body{flex-direction:column}
+  .pc-side{width:100%;border-right:0;border-bottom:1px solid var(--a-line);display:flex;gap:4px;overflow-x:auto}
+  .pc-side .sh{display:none}
+  .pc-side button{width:auto;white-space:nowrap}
+  .pc-kv{grid-template-columns:1fr}
+  .pc-checks{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">Product Design · Draft v1.4 · 业务决策已确认 / 待开发</div>
+  <h1>Grandettoken Sync：一个同步码，一个合并的余额视图</h1>
+  <p class="lede">不改现有桌面端的取数逻辑，只新增一个“查询结果发布”模块：同一个同步码下的每台电脑把查询结果加密写进 GitHub，也读取组内其他电脑的结果；手机只凭同步码匿名读取、解密、合并展示。手机不区分是哪台电脑；保留匿名慢速模式，可选登录 GitHub 提速。</p>
+  <div class="meta">
+    <span class="hi">一个同步码 = 一个同步组</span>
+    <span class="hi">匿名可用 · 登录提速</span>
+    <span>Secret Gist 中转</span>
+    <span>AES-256-GCM 端到端加密</span>
+    <span>手机只读</span>
+    <span>开源 monorepo</span>
+    <span>2026-11-02</span>
+  </div>
+</header>
+
+<nav class="toc">
+  <a href="#review">评审修订与登录流程</a>
+  <a href="#decisions">0 决策摘要</a>
+  <a href="#position">1 产品定位</a>
+  <a href="#relay">2 中继方案</a>
+  <a href="#security">3 安全模型</a>
+  <a href="#pairing">4 同步码与配对</a>
+  <a href="#ia">5 信息架构</a>
+  <a href="#android">6 Android 交互原型</a>
+  <a href="#pc">7 PC 端交互原型</a>
+  <a href="#visual">8 视觉设计</a>
+  <a href="#states">9 状态与异常</a>
+  <a href="#contract">10 数据契约</a>
+  <a href="#acceptance">11 验收标准</a>
+  <a href="#milestones">12 里程碑</a>
+  <a href="#app-update">14 Android 检查更新</a>
+</nav>
+
+
+<section id="review">
+  <h2><span class="no">R1</span>评审修订 · 2026-11-02<span class="sub">本节优先于下方旧版原型和示例；尚未实现</span></h2>
+  <div class="note warn"><span class="t">结论：方向合理，修正协议与授权边界后再进入 M0</span>保留“桌面取数 → 白名单 DTO → 加密 Gist → 手机只读”的架构。业务决策已确认：匿名慢速、登录提速、统一同步平台标签、电脑同步历史、隐藏仅影响当前来源，签到汇总纳入开发计划。原型为交互示意，授权页与协议尚未实现。本文验收项均为待验证，未勾选不代表测试失败。</div>
+  <h3>已由用户确认</h3>
+  <ul>
+    <li><b>始终按平台合并，只显示最新一条，不求和。</b>不同账号也按此规则，接受其中一个账号不展示；改显示名不会拆行。</li>
+    <li><b>多电脑限定同一个 GitHub 账号。</b>每台电脑单独取得该账号授权；同步码不授予 Gist 写权限，不复制其他电脑的 OAuth 令牌。</li>
+    <li><b>手机增加 GitHub 登录以支持频繁刷新。</b>保留匿名慢速模式（前台默认 5 分钟），登录可选（前台默认 60 秒）。</li>
+  </ul>
+  <h3>手机 GitHub 登录流程（方案）</h3>
+  <ol>
+    <li><b>先扫描同步码。</b>本地严格校验长度、版本、CRC 后取数，至少验证一份有效密文才原子保存新组；配对失败保留原组。空组不能证明密钥正确，桌面必须先发布可验证快照。</li>
+    <li><b>展示提速入口。</b>配对完成页：“登录 GitHub，开启每分钟刷新”；次按钮“暂不登录，5 分钟刷新”。设置 → GitHub 连接提供相同入口。登录账号与同步组分开，手机可使用不同于电脑的 GitHub 账号。</li>
+    <li><b>使用 Device Flow。</b>单独注册手机专用 OAuth App 并开启 device flow；APK 只包含公开 client_id，不包含 client_secret。POST https://github.com/login/device/code，不请求 gist、repo、user、邮箱等 scope；只读取公开可访问的 Gist。必须在 M0 用真实 Secret Gist 验证无 scope 的授权读取和额度头。</li>
+    <li><b>打开官方授权页。</b>App 展示 GitHub 返回的 user_code、倒计时、“复制授权码并打开 GitHub”与“取消”。通过系统浏览器 / Custom Tab 打开 https://github.com/login/device，不在 App 内收集 GitHub 密码。说明复制的授权码不是同步码，二者不可混淆。</li>
+    <li><b>等待授权。</b>按返回 interval 轮询 token endpoint；authorization_pending 继续，slow_down 增加间隔，access_denied / expired_token 停止并提供重试。离开页面取消本次流程；恢复页面后按过期时间处理，禁止无界后台轮询。</li>
+    <li><b>验证并启用。</b>GET /user 显示所连 GitHub 账号，再以 Bearer token 读取已配对 Gist，检查 X-RateLimit-*。全部成功后加密保存 token；前台默认 60 秒轮询（可选 1 / 2 / 5 分钟），后台仍为 WorkManager 15 / 30 / 60 分钟尽力调度，不承诺准点。</li>
+    <li><b>异常与退出。</b>401 停止使用 token，保留缓存，提示重新登录并降为匿名 5 分钟策略；403 不一律视为限流，区分权限与额度；429 按限流处理。退出登录删除本机 token、取消旧任务并重新调度匿名任务，不退出同步组；提供 GitHub 官方应用授权管理入口供撤销授权。退出同步组清除该组密钥、缓存、ETag 和序号水位，不自动撤销 GitHub 登录。</li>
+  </ol>
+  <div class="note">手机专用 OAuth App 不与桌面写入授权共用，避免历史授权 scope 被扩大复用；校验实际返回 scope，发现非预期写权限则不保存并引导撤销授权。这里的“只读”来自最小 OAuth 权限和手机请求路径，而 AES 共享密钥本身不区分读写者；若持码者另有中继写权限，仍可能伪造有效密文。</div>
+  <h3>请求预算与调度修正</h3>
+  <table class="tbl"><thead><tr><th>模式</th><th>建议预算</th><th>工程约束</th></tr></thead><tbody>
+    <tr><td>手机匿名</td><td>5 分钟一次，约 12 次/小时；主限额通常 60 次/小时/IP</td><td>匿名 304 也计入保守预算；多手机和同出口其他应用共享，不能保证不被限流</td></tr>
+    <tr><td>手机登录</td><td>60 秒一次，约 60 次/小时；主限额通常 5000 次/小时/用户</td><td>与同账号其他 token/客户端共享；正确授权的 304 不消耗主限额，不代表免二级限流</td></tr>
+    <tr><td>所有模式</td><td>前台、后台、手动刷新共用串行调度器</td><td>手动刷新重置下一轮定时器；遵守 Retry-After、remaining=0 时的 reset；其余二级限流指数退避加抖动，重启后保留暂停截止时间</td></tr>
+  </tbody></table>
+  <h3>必须落实的技术优化</h3>
+  <ol>
+    <li><b>稳定平台标识。</b>增加 platformId 作为合并键，id 仅表示本机渠道。内置平台用协议枚举；现有 custom-1/custom-2 是本机编号，绝不能跨机当平台键。自定义平台使用用户选择的统一“同步平台标签”确定 platformId；同标签合并，改显示名不改变身份，不上传 URL 或凭据指纹。按有效 updatedAt 排序；相同时间按 source 字典序确定性选取整条记录，禁止跨来源拼接余额与消耗。</li>
+    <li><b>区分心跳、观测和读取。</b>at 表示发布，updatedAt 表示最后成功取数，receivedAt 表示手机读取；304 不能刷新观测时间。stale = 上游失败或观测超时，与手机网络失败分开；组里一条新鲜渠道不能掩盖其他陈旧渠道。时效阈值依据取数周期与协议容差，不能随手机前后台刷新周期变化。</li>
+    <li><b>防覆盖与回环。</b>只 PATCH 本来源文件，不整份回写 files，不回发组内合并结果。source 使用随机 128 位标识；复制安装目录需重新生成 source。发布与序号持久化串行；先持久化序号及本次密文再发送，超时重试使用原密文。seq 更小拒绝，相同 seq 且相同密文视为幂等，相同 seq 不同密文报冲突。新安装无历史水位，不能承诺识别所有回放。</li>
+    <li><b>补齐加密契约。</b>M0 固定 HKDF salt、UTF-8 info、AAD 字节编码、base64url 无填充规则、16 字节 GCM tag。建议按 relayId + source + keyEpoch 派生来源子密钥，96 位 nonce 用系统 CSPRNG；外壳版本参与认证。keyEpoch 初始 0；新组重置而不循环递增一字节。golden fixtures 覆盖错误密钥、AAD、截断和篡改。</li>
+    <li><b>明确本地安全存储。</b>Android Keystore 保存本机包装密钥，以它加密同步主密钥、OAuth token 与缓存，密文进应用私有目录；主密钥做 HKDF 时只短暂进入内存。Keystore 不作为任意字节保险箱。敏感文件排除备份/迁移，密钥失效时重新配对；退出组取消 WorkManager 并清除缓存。诊断禁止包含 token、同步码、Authorization、余额与原始响应。</li>
+    <li><b>修正轮换语义。</b>创建新 Gist + 新主密钥，先发布并验证，再切换本机；所有其他电脑和手机重新加入。失败保留原配置。旧中继停止写入；删除旧中继单独确认。无法远程清除旧手机缓存，也无法保证旧手机知道新组存在。新组创建后若其他电脑仍写旧组，必须提示迁移未完成。</li>
+    <li><b>补齐单位与统计口径。</b>渠道必须携带 unit/currency；金额精度统一十进制定点字符串，缺失为 null，拒绝 NaN/Infinity。按币种分组汇总，积分和配额不参与金额合计。若展示折合 CNY，必须另定汇率来源、时间与缺失规则。day/week/month 携带 periodStart/periodEnd/timeZone；跨时区不同窗口不得直接相加。</li>
+    <li><b>电脑同步历史（已确认）。</b>桌面随快照发布最近 7 天脱敏聚合历史，新手机首次加入即可读取已有历史。按 platformId 和统计窗口确定性去重，同平台同窗口取最新修订，不跨来源求和或拼接成虚假连续记录；缺口保留 null，详情显示“历史不足”。历史与余额使用相同加密、白名单和资源限制，不上传原始请求、账号或逐笔敏感记录。</li>
+    <li><b>防截断和资源耗尽。</b>检查 Gist 顶层与文件级 truncated；限制来源文件数、单文件和响应总字节、数组长度。超限显示不完整，不更新为完整视图；只处理匹配命名规则的文件。若回退 raw_url，只允许经验证的 HTTPS GitHub 内容域名，限制重定向且不转发 Authorization。404 表示不存在或不可访问，不能断言已删除。</li>
+    <li><b>自由文本仍可能泄密。</b>显示名也可能含邮箱、URL 或密钥，白名单结构无法自动保证“零泄露”。同步显示名需单独净化、限制长度、默认内置名称；导出预览和哨兵泄露测试同时覆盖自由文本。禁止直接序列化 ChannelView，其含 auth_label、error、extra 等敏感字段。</li>
+  </ol>
+  <h3>本轮确认的业务决策</h3>
+  <ul>
+    <li><b>匿名模式保留。</b>扫码即可使用，前台默认 5 分钟；可选登录 GitHub 提速至默认 60 秒，后台均为 15 / 30 / 60 分钟尽力调度。</li>
+    <li><b>统一同步平台标签。</b>自定义渠道在桌面选择统一标签映射为 platformId；同标签始终合并，修改显示名不改变合并身份。</li>
+    <li><b>历史由电脑同步。</b>发布最近 7 天脱敏聚合历史，手机不以加入时间作为历史起点；桌面历史不足时明确显示缺口。</li>
+    <li><b>隐藏/取消发布只影响当前电脑。</b>当前来源的新完整快照移除对应渠道及历史，不下发全组隐藏标记；其他来源仍可发布、展示。旧缓存需保留缺失/陈旧提示，不能声称远程删除所有历史副本。</li>
+    <li><b>签到汇总必须列入开发计划。</b>覆盖桌面明细发布、跨来源去重、手机汇总、跨日重置和异常验收。不得取任意最新来源的 total/done 冒充全组统计；平台多账号如何计数及“已完成/未知/不支持”的最终口径在 M0 设计任务中细化，开发前确认，不自行认定为按平台一项。</li>
+  </ul>
+  <h3>实施与验收调整</h3>
+  <p>M0 增加桌面浏览器授权与 gist scope 验证、无 scope 手机 OAuth → Secret Gist 认证读取、两台同账号电脑分别 PATCH、跨语言加密向量与匿名/登录限流验证。通过后再实现 UI。登录流程与令牌生命周期纳入 M3，原 0.5 天协议和总工期估算需重估，不能当交付承诺。</p>
+  <p>增加验收：多手机共享账号预算；授权拒绝/过期/slow_down/401；截断响应；重复 seq 和回放；未来时钟；心跳不改变余额时效；来源消失或解密失败保留旧值但标记未知；多币种不误加；跨时区统计不误合；轮换中断可恢复；退出后无后台任务；字体 200% 和 TalkBack。网络正常时扫码展示的 5 秒作为性能目标而非任何网络下的保证。</p>
+  <h3>官方依据</h3>
+  <p><a href="https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api">GitHub 条件请求与退避</a> · <a href="https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api">GitHub 主限额</a> · <a href="https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps">OAuth Device Flow</a> · <a href="https://docs.github.com/en/rest/gists/gists">Gist API 与截断</a> · <a href="https://developer.android.com/privacy-and-security/keystore">Android Keystore</a> · <a href="https://developer.android.com/develop/background-work/background-tasks/persistent/getting-started/define-work">WorkManager 调度</a>。核对日期：2026-11-02。</p>
+</section>
+
+<!-- ============================================================ 0 -->
+<section id="decisions">
+  <h2><span class="no">00</span>决策摘要<span class="sub">这轮拍板的模型变化，以及它带来的产品形态</span></h2>
+  <table class="tbl">
+    <thead><tr><th style="width:132px">问题</th><th style="width:180px">结论</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><b>数据模型</b></td><td><span class="tag ac">一个同步码 = 一个同步组</span></td><td>组内每台电脑都能写、也能读其他电脑的快照；手机只读。手机界面不出现设备名，只显示合并后的渠道。</td></tr>
+      <tr><td><b>中转形态</b></td><td><span class="tag ac">Secret Gist + 密文</span></td><td>手机端可以匿名读取，因此不需要 GitHub 账号。Gist 里只有密文，链接泄露也读不到余额。</td></tr>
+      <tr><td><b>手机账号</b></td><td><span class="tag ok">可选登录</span></td><td>匿名慢速可用，登录提速；只输入/扫描同步码加入同步组。同步码里包含 gist ID 和解密密钥。</td></tr>
+      <tr><td><b>刷新策略</b></td><td><span class="tag">前台轮询 + 后台慢速</span></td><td>匿名前台默认 5 分钟、登录默认 60 秒；后台 15 / 30 / 60 分钟可选。不做常驻前台服务，不承诺秒级推送。</td></tr>
+      <tr><td><b>开源方式</b></td><td><span class="tag ac">同仓库 monorepo</span></td><td>Android 作为顶层 <code>android/</code> 工程；协议与测试向量放 <code>contract/</code>，双端共用。</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note ok" style="margin-top:14px">
+    <span class="t">核心变化：从“多设备列表”改成“一个合并视图”</span>
+    不再有“设备”页、设备卡、设备切换。手机只关心<b>同步组</b>：组内所有电脑发布的渠道合并成一份列表。同一渠道在多台电脑上都出现时，取最新的一条，<b>不求和</b>。电脑端是完整的读写节点；手机端只是只读消费者。
+  </div>
+
+  <div class="note warn" style="margin-top:10px">
+    <span class="t">先把“免账号”说准确</span>
+    免的是<b>手机端</b>的 GitHub 账号。电脑端仍然需要一次 GitHub 授权，因为要往 GitHub 写文件；这枚令牌只存在电脑的 Windows 凭据管理器里，<b>不进同步码、不进 gist、不进日志</b>。手机读到的是密文，解密密钥只在同步码和本机安全存储里。
+  </div>
+</section>
+
+<!-- ============================================================ 1 -->
+<section id="position">
+  <h2><span class="no">01</span>产品定位<span class="sub">它解决什么问题，不解决什么问题</span></h2>
+  <p>桌面端已经能回答“哪个渠道快没钱了”。手机端的价值不是把桌面面板缩小，而是<b>离开电脑时仍然能看一眼</b>：出门前确认余额、收到“跌破红线”提醒后点开看是哪一家、在另一台电脑上确认家里那台机器是否还在正常取数。</p>
+
+  <div class="grid3" style="margin-top:16px">
+    <div class="card">
+      <h4 style="margin-top:0">核心用户故事</h4>
+      <ul>
+        <li>我在外面，想知道同步组里所有电脑的 DeepSeek 还剩多少钱。</li>
+        <li>我有两台电脑，想把它们的数据合成一份来看。</li>
+        <li>手机收到“余额跌破 ¥10”，点开能看到是哪个渠道、什么时候的数据。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4 style="margin-top:0">明确不做</h4>
+      <ul>
+        <li>手机不能改配置、不能填密钥、不能签到。</li>
+        <li>不做设备列表、设备切换或“数据来自哪台电脑”。</li>
+        <li>不做实时推送（GitHub 中转本身没有推送通道）。</li>
+        <li>不做账号体系、不做多人共享同一个同步码。</li>
+        <li>不在手机上保存 GitHub PAT。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4 style="margin-top:0">成功标准</h4>
+      <ul>
+        <li>扫码后 5 秒内看到同步组的合并数据。</li>
+        <li>gist 里搜不到任何密钥、Cookie、邮箱或本机路径。</li>
+        <li>组内某台电脑休眠/断网时，手机明确显示“陈旧”，绝不显示“余额 0”。</li>
+        <li>手机丢失后，电脑端轮换同步码即可让旧码失效。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ 2 -->
+<section id="relay">
+  <h2><span class="no">02</span>中继方案<span class="sub">为什么手机可以不要账号，以及代价是什么</span></h2>
+  <p class="sec-note">GitHub 在这里不是消息队列，而是一个“用户自有的加密文件柜”。理解这一点，后面的所有设计都顺了。</p>
+
+  <div class="arch">
+    <div class="arch-node">
+      <b>每台电脑 · 读写</b>
+      <span>取数 → 白名单 DTO → 加密上传</span>
+      <em>同时读取组内其他电脑的快照</em>
+    </div>
+    <div class="arch-arrow">AES-256-GCM<br>写入自己的文件 →</div>
+    <div class="arch-node accent">
+      <b>GitHub Secret Gist</b>
+      <span>一个同步码 = 一个同步组</span>
+      <em>每台电脑一个密文文件，互不覆盖</em>
+    </div>
+    <div class="arch-arrow">← 匿名只读<br>读取全部文件</div>
+    <div class="arch-node">
+      <b>任意台手机 · 只读</b>
+      <span>同步码 → 解密 → 按渠道合并</span>
+      <em>不区分设备，不写回</em>
+    </div>
+  </div>
+
+  <div class="note" style="margin-top:12px">
+    <span class="t">一个同步码 = 一个同步组</span>
+    组内没有“主设备”或“从设备”。每台电脑都是写入者：只写自己的 <code>gt_&lt;source&gt;.json</code>，因此不会互相覆盖；同时它也会读取组内全部文件，用于组状态与可选的合并预览。手机只是消费者：读取全部文件、解密、按渠道合并成一份列表。手机界面不出现设备名，也没有设备切换。
+  </div>
+
+  <h3>2.1 为什么是 Secret Gist，而不是私有仓库</h3>
+  <table class="tbl">
+    <thead><tr><th>方案</th><th>手机要不要账号</th><th>读取限额</th><th>内容可见性</th><th>结论</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>Secret Gist</b><br><span class="a-tiny">不公开列出，凭 ID 可读</span></td>
+        <td><span class="tag ok">不需要</span></td>
+        <td>匿名按出口 IP 60 次/小时；仅已正确授权的 304 有主限额豁免</td>
+        <td>只有密文；元数据可能带所有者登录名</td>
+        <td><span class="tag ok">推荐 v1</span></td>
+      </tr>
+      <tr>
+        <td><b>私有仓库</b></td>
+        <td><span class="tag bad">需要只读 PAT 或 OAuth</span></td>
+        <td>已登录 5000 次/小时</td>
+        <td>仓库私有，但手机仍要保存令牌</td>
+        <td>与“手机免账号”冲突，暂不选</td>
+      </tr>
+      <tr>
+        <td><b>公开仓库 + 密文</b></td>
+        <td><span class="tag ok">不需要</span></td>
+        <td>未登录 60 次/小时</td>
+        <td>密文公开、历史不可撤回、仓库元数据公开</td>
+        <td>不如 Secret Gist</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="note" style="margin-top:14px">
+    <span class="t">关键事实：Secret Gist 可以匿名读取</span>
+    GitHub 的 secret gist 不会出现在发现页或你的主页列表里，但知道 gist ID 的人可以直接通过 API 读取它。不要把 gist ID 的长度当作官方保证的熵；它只是定位符，不是安全密钥。我们再把内容整体加密，于是“知道 ID”最多只能拿到一段密文。这就是手机端不需要账号的原因。
+  </div>
+
+  <div class="grid2" style="margin-top:14px">
+    <div class="card">
+      <h4 style="margin-top:0">电脑端要做的事</h4>
+      <ul>
+        <li>点击 <b>“连接 GitHub”</b>，通过系统浏览器在 GitHub 官方页面授权，仅申请 <code>gist</code> scope；不要求用户创建或填写 PAT。</li>
+        <li>浏览器授权取得的 OAuth token 存 Windows 凭据管理器，服务名建议 <code>TokenScope:sync</code>。</li>
+        <li>首次创建 secret gist；之后每台电脑只 PATCH 自己的文件。</li>
+        <li>读取组内全部文件，用于组状态与可选的合并预览。</li>
+        <li>发布间隔默认 1 分钟；只从本机取数生成 DTO，禁止把合并结果再次发布。哈希不含 seq/at/nonce；最长 15 分钟发布一次心跳（技术建议），渠道 updatedAt 不随心跳变化。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4 style="margin-top:0">手机端要做的事</h4>
+      <ul>
+        <li>只保存同步码里的 32 字节密钥（Android Keystore）。</li>
+        <li>GET gist → 解密全部文件 → 按渠道合并 → 本地缓存。</li>
+        <li>匿名前台默认 5 分钟、登录默认 60 秒；后台 15 分钟起。</li>
+        <li>遇到 403 限流自动退避，不弹错误轰炸。</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>2.2 需要如实说明的代价</h3>
+  <ul>
+    <li><b>不是实时。</b>最快也就是 60 秒一次，后台 15 分钟。余额监控够用，但别期待“秒级”。</li>
+    <li><b>同一渠道会合并成一条。</b>如果两台电脑配置了同一个渠道，手机取 <code>updatedAt</code> 最新的一条；如果两台电脑配的是不同账号，也只会显示最新的那个。v1 不按设备或账号拆行；自定义平台按统一同步平台标签合并，改显示名不拆行。</li>
+    <li><b>Secret Gist 不是私有仓库。</b>知道 ID 的人能读到密文；gist API 响应里可能带所有者登录名。介意的话，只能换成私有仓库 + 手机令牌，但那就不满足“手机免账号”了。</li>
+    <li><b>GitHub 可能被墙或限流。</b>这是可选功能，默认关闭；开启时明确告知会向 <code>github.com</code> 发起请求。</li>
+    <li><b>Gist API 单文件内容超过 1 MB 可能截断。</b>这不是存储上限；客户端必须检查文件级与列表级 truncated，不能把截断内容当作完整快照。</li>
+  </ul>
+
+  <h3>2.3 请求预算</h3>
+  <table class="tbl">
+    <thead><tr><th>端</th><th>动作</th><th>频率</th><th>每小时请求</th><th>限额</th></tr></thead>
+    <tbody>
+      <tr><td>电脑</td><td>读取组内（条件 GET）+ 写自己的文件（必要时 PATCH）</td><td>1 分钟</td><td>约 120</td><td>已登录 5000</td></tr>
+      <tr><td>手机前台</td><td>条件 GET</td><td>匿名 5 分钟 / 登录 60 秒</td><td>约 12 / 60</td><td>匿名按 IP 60；登录通常按用户 5000</td></tr>
+      <tr><td>手机后台</td><td>条件 GET</td><td>15 分钟</td><td>4</td><td>同上</td></tr>
+    </tbody>
+  </table>
+  <p class="a-tiny" style="margin-top:7px;color:var(--tx3)">匿名前台默认 5 分钟，登录默认 60 秒；如果用户手动刷新频繁，客户端仍需做 30 秒本地节流。未登录限额按出口 IP 计算，移动网络 NAT 下可能被同一 IP 的其他请求提前耗尽 —— 实现必须处理 403，并按 Retry-After / reset 退避。</p>
+</section>
+
+<!-- ============================================================ 3 -->
+<section id="security">
+  <h2><span class="no">03</span>安全模型<span class="sub">“只中转查询后的数据”在工程上怎么保证</span></h2>
+
+  <div class="note ok">
+    <span class="t">一句话原则</span>
+    同步载荷不是“把现有配置脱敏”，而是<b>从零定义一个只包含展示字段的 DTO</b>。任何新增字段都必须显式加入白名单，默认不上传。
+  </div>
+
+  <h3>3.1 资产放在哪里</h3>
+  <table class="tbl">
+    <thead><tr><th>资产</th><th>存放位置</th><th>谁能拿到</th></tr></thead>
+    <tbody>
+      <tr><td><b>渠道 API Key / Cookie / Refresh Token</b></td><td>Windows 凭据管理器 <code>TokenScope</code></td><td>本机 Windows 账户</td></tr>
+      <tr><td><b>GitHub OAuth token（gist scope）</b></td><td>Windows 凭据管理器 <code>TokenScope:sync</code></td><td>本机 Windows 账户</td></tr>
+      <tr><td><b>同步密钥（32 字节）</b></td><td>电脑凭据管理器 + 手机 Android Keystore</td><td>扫码那一刻的两端</td></tr>
+      <tr><td><b>快照明文</b></td><td>两端内存 + 手机本地缓存</td><td>设备持有者</td></tr>
+      <tr><td><b>快照密文</b></td><td>GitHub secret gist</td><td>知道 gist ID 的任何人（但无法解密）</td></tr>
+    </tbody>
+  </table>
+
+  <h3>3.2 威胁模型</h3>
+  <table class="tbl">
+    <thead><tr><th>场景</th><th>攻击者能做什么</th><th>缓解</th></tr></thead>
+    <tbody>
+      <tr><td>gist 链接泄露</td><td>下载密文、看到文件数量与更新时间</td><td>端到端加密；写入者 ID 也是随机不透明值</td></tr>
+      <tr><td>同步码被拍照</td><td>读取该同步码下所有数据源的余额</td><td>同步码当密码对待；电脑端可随时轮换</td></tr>
+      <tr><td>手机丢失</td><td>解锁后能看到已同步数据</td><td>系统锁屏 + Android Keystore；远程轮换同步码</td></tr>
+      <tr><td>GitHub 账号被盗</td><td>写入脏数据、删除 gist；仍读不到历史明文</td><td>解密失败会被识别；序号校验；轮换 gist</td></tr>
+      <tr><td>PC 被入侵</td><td>本来就能读本机数据</td><td>系统账户边界，不是同步功能能解决的</td></tr>
+      <tr><td>手机被恶意 App 读取</td><td>尝试读本地缓存</td><td>Keystore + 应用私有目录；不导出明文</td></tr>
+    </tbody>
+  </table>
+
+  <h3>3.3 加密细节</h3>
+  <table class="tbl">
+    <thead><tr><th style="width:150px">项</th><th>选择</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td>算法</td><td><code>AES-256-GCM</code></td><td>Rust 端已有 <code>aes-gcm</code> 依赖；Android <code>javax.crypto</code> 原生支持</td></tr>
+      <tr><td>密钥派生</td><td><code>HKDF-SHA256</code>，info = <code>grandettoken-sync-v1</code></td><td>同步码里放主密钥，按用途派生，便于以后分区</td></tr>
+      <tr><td>Nonce</td><td>每次 12 字节随机，随密文一起存</td><td>GCM 要求 nonce 不重复；随机 96 位足够</td></tr>
+      <tr><td>AAD</td><td><code>v1|&lt;source&gt;|&lt;keyEpoch&gt;</code></td><td>防止把 A 电脑的密文挪到 B 电脑文件下</td></tr>
+      <tr><td>文件格式</td><td>JSON 外壳：<code>{"v":1,"n":"...","c":"..."}</code></td><td>gist 内容按文本存储；便于排查，不把二进制塞进文本</td></tr>
+      <tr><td>完整性</td><td>GCM 认证标签 + 明文内单调 <code>seq</code></td><td>篡改会解密失败；回放旧快照会被序号拒绝</td></tr>
+      <tr><td>填充</td><td>可选：按 4 KB 块补齐</td><td>隐藏精确载荷大小；v1 可不做</td></tr>
+    </tbody>
+  </table>
+
+  <h3>3.4 白名单：上传字段与禁止字段</h3>
+  <div class="grid2" style="margin-top:10px">
+    <div class="card" style="border-color:#c8e8d8">
+      <h4 style="margin-top:0;color:var(--ok)">允许上传</h4>
+      <ul>
+        <li>渠道 <code>id</code>、显示名、类型（金额/配额/积分）</li>
+        <li>余额、总额、百分比、重置时间、到期批次</li>
+        <li>今日/本周/本月消耗，是否推算值</li>
+        <li>失败状态（错误码）、快照时间、是否陈旧</li>
+        <li>随机写入者 ID（仅用于合并与诊断，界面不展示）、单调序号</li>
+        <li>签到汇总（总数/已完成）</li>
+      </ul>
+    </div>
+    <div class="card" style="border-color:#f2cec9">
+      <h4 style="margin-top:0;color:var(--bad)">永远不上传</h4>
+      <ul>
+        <li>API Key、Cookie、OAuth refresh token</li>
+        <li><code>auth_source</code>、<code>auth_label</code>、<code>accounts</code></li>
+        <li>原始错误文本、上游 URL、响应体</li>
+        <li>本机路径、日志、SQLite 文件</li>
+        <li>GitHub OAuth token / PAT、同步密钥本身</li>
+        <li>邮箱、用户名、设备序列号</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="note bad" style="margin-top:14px">
+    <span class="t">工程上必须有的“泄露测试”</span>
+    测试数据里塞入假 key、Cookie、邮箱、Windows 路径 → 加密 → 解密 → 断言明文里搜不到这些模式；同时断言 <code>SyncSnapshot</code> 没有 <code>#[serde(flatten)]</code>、没有 <code>serde_json::Value</code> 兜底字段。这条测试比任何文档都重要。
+  </div>
+</section>
+
+<!-- ============================================================ 4 -->
+<section id="pairing">
+  <h2><span class="no">04</span>同步码与配对<span class="sub">电脑生成一次，手机扫一次</span></h2>
+
+  <h3>4.1 同步码里有什么</h3>
+  <table class="tbl">
+    <thead><tr><th>字段</th><th>长度</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><code>magic</code></td><td>3 字节</td><td>固定 <code>GT1</code>，区分协议版本</td></tr>
+      <tr><td><code>version</code></td><td>1 字节</td><td>当前为 1</td></tr>
+      <tr><td><code>relayKind</code></td><td>1 字节</td><td>1 = secret gist；2 = 预留私有仓库</td></tr>
+      <tr><td><code>keyEpoch</code></td><td>1 字节</td><td>轮换时递增，AAD 会带上它</td></tr>
+      <tr><td><code>relayId</code></td><td>16 字节</td><td>gist 的 32 位十六进制 ID 折成 16 字节</td></tr>
+      <tr><td><code>syncKey</code></td><td>32 字节</td><td>随机主密钥，HKDF 的输入</td></tr>
+      <tr><td><code>crc32</code></td><td>4 字节</td><td>抄错时立刻发现，不用等网络请求</td></tr>
+    </tbody>
+  </table>
+  <p style="margin-top:10px">编码成 <code>GT1.&lt;base64url&gt;</code>，82 个字符（58 字节 → 78 字符无填充 base64url，另加 GT1. 前缀）。二维码是主入口；复制粘贴是备选。用户已确认：电脑同步页进入后直接显示同步码和二维码，同时保留「隐藏同步码」按钮做临时遮挡；同步码仍可一键轮换。</p>
+
+  <h3>4.2 配对流程</h3>
+  <div class="flow">
+    <div class="flow-step"><div class="n">1</div><b>电脑创建/加入</b><span>设置 → 同步 → 启用。创建时生成 32 字节主密钥；加入时导入同步码中的同一主密钥。</span></div>
+    <div class="flow-step"><div class="n">2</div><b>展示二维码</b><span>同步码 = gist ID + 密钥。二维码只在本机显示，不经过网络。</span></div>
+    <div class="flow-step"><div class="n">3</div><b>手机扫描</b><span>校验 magic/CRC → 立即读取组内全部文件。</span></div>
+    <div class="flow-step"><div class="n">4</div><b>合并解密</b><span>解出所有快照，按渠道取最新合并；密钥写入 Keystore。</span></div>
+    <div class="flow-step"><div class="n">5</div><b>完成</b><span>合并面板出现数据；后续按刷新策略更新。</span></div>
+  </div>
+
+  <h3 id="desktop-auth">4.3 桌面端浏览器授权（替代手填 PAT）</h3>
+  <div class="note ok"><span class="t">已确认的产品流程</span>桌面与手机均通过 GitHub 官方浏览器页面授权；桌面必须授权才能发布，手机保留匿名慢速。v1 桌面采用与手机一致的 Device Flow，不提供手填 PAT 入口。授权得到的 OAuth token 是内部凭据，不作为用户填写项。</div>
+  <ol>
+    <li><b>连接。</b>设置 → 同步 → GitHub 连接，未连接时显示“连接 GitHub”，说明“用于发布加密同步数据”。用户点击后创建本次授权请求；浏览器未授权前不创建 Gist、不上传数据。仅开启同步开关不直接打开浏览器。</li>
+    <li><b>显示授权码。</b>使用独立的桌面 OAuth App（维护者注册并开启 Device Flow），请求 GitHub device code，scope 仅为 gist。桌面程序只内置公开 client_id，不内置 client_secret；与手机只读 OAuth App 分离。弹层显示 user_code、有效期、“复制授权码并打开 GitHub”、“重新打开授权页”和“取消”；同步码与此次短期授权码明确区分。</li>
+    <li><b>官方浏览器授权。</b>用户主动点击后复制 user_code 并通过系统默认浏览器打开 https://github.com/login/device；若复制失败仍显示可手动输入的授权码。程序不收集 GitHub 密码或二次验证码，不使用内嵌网页登录。提示只输入本机刚发起的授权码，并核对官方授权页上的应用名称和 gist 权限。</li>
+    <li><b>等待与取消。</b>按响应 interval 轮询 token endpoint，authorization_pending 继续等待，slow_down 按新的 interval 降速；拒绝、授权码过期、device_flow_disabled、网络失败有独立状态与重试入口。只允许一个在途授权；取消/关闭弹层/退出程序停止轮询并丢弃 device_code，重试申请新码。若取消后收到迟到 token，不保存、不启用同步。倒计时采用 GitHub expires_in，不固定写死。</li>
+    <li><b>验证账号与权限。</b>取得 token 后 GET /user 获取账号 ID/login，并检查实际授权 scope；缺 gist 或出现非预期额外 scope 时不完成连接，引导用户在 GitHub 撤销旧授权后重试。连接卡显示“已连接 @账号 · gist 权限”，便于确认浏览器登录了哪个账号；账号信息只用于本机授权状态，不进入同步载荷或通用导出诊断。</li>
+    <li><b>创建或加入。</b>验证成功且安全保存凭据后，再让用户选择“创建同步组”或“输入同步码加入”。创建使用 public=false；加入时校验密文和 Gist owner.id，必须等于当前授权账号 ID。账号不一致则保留原组，提示“请使用创建该同步组的 GitHub 账号重新授权”；不通过试写别人的 Gist 检测权限，不自动另建空组冒充加入成功。</li>
+    <li><b>保存与发布。</b>token 由 Rust 端直接写入 Windows 凭据管理器，不经过前端 JS、URL、日志、配置或剪贴板；前端仅接收状态、账号与错误码。先完成凭据保存及本地组配置原子提交，再启动发布；保存失败提示本机安全存储不可用，不报告“连接成功”。每台电脑独立授权同一 GitHub 账号，手机登录仍可使用其他账号。</li>
+  </ol>
+  <p class="sec-note">gist scope 可读写授权账号的 Gist，不能限制为单个同步组文件。授权前应如实说明这一权限范围；客户端只操作本同步功能创建或明确加入的 Gist。Device Flow 沿用手机方案；GitHub 对普通原生客户端更推荐 PKCE，当前选择为统一无回调交互，M0 应验证流程并记录该取舍，未来可保持界面不变迁移至 PKCE。</p>
+  <h4>重新授权、断开与远端撤销</h4>
+  <ul>
+    <li><b>重新授权：</b>保留当前连接，暂停发布，在临时授权上下文中验证新 token；成功后原子替换。失败/取消恢复原连接。已有组只接受相同 GitHub 账号，切换账号需先明确退出当前组，不删除旧中继。</li>
+    <li><b>失效：</b>401 停止请求，显示“GitHub 授权已失效，请重新授权”，保留组信息和本机数据，不循环登录。若 token 返回 expires_in，保存到期时间并提前提示；v1 不申请 offline_access、不依赖自动刷新 token，过期走重新授权。403 区分权限缺失和限流，429 按响应头退避。</li>
+    <li><b>断开连接：</b>用户确认后停止本机读写任务、清除本机 OAuth 凭据与登录状态；保留组信息和同步密钥以便同账号重新授权，不删除 Gist，也不影响其他电脑和手机。单独的“退出同步组”才删除本机组密钥。界面明确区分暂停同步、断开连接和退出组。</li>
+    <li><b>撤销远端授权：</b>提供 GitHub 官方应用授权管理页入口；说明撤销桌面 OAuth App 授权可能使其他已授权电脑也失效。普通本机断开不自动执行全局撤销，不在客户端内置 client_secret 调用管理接口。</li>
+  </ul>
+  <h4>开发与验收补充</h4>
+  <p>M0 完成独立桌面 OAuth App 注册、Device Flow 与 gist scope 实测、同账号多电脑读写及不同账号拒绝加入；M1 提供 Rust 端授权会话、凭据管理器与任务暂停/恢复；M2 完成授权弹层、账号展示、重新授权和断开。验收覆盖浏览器未打开、复制失败、授权拒绝/过期/slow_down、取消迟到响应、重复点击、错误账号、权限不足、凭据保存失败、401、403/429，以及断开不影响其他节点。所有 token/device_code 不进入前端状态、日志或诊断。</p>
+  <p class="sec-note">依据：<a href="https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps">GitHub OAuth Device Flow</a> · <a href="https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/best-practices-for-creating-an-oauth-app">GitHub 原生客户端授权建议</a>。本节仅更新设计，不注册应用、不启动实现。</p>
+  <h3>4.4 失败分支</h3>
+  <table class="tbl">
+    <thead><tr><th>现象</th><th>手机端文案</th><th>用户动作</th></tr></thead>
+    <tbody>
+      <tr><td>CRC 不匹配 / 长度不对</td><td>“同步码不完整，请重新扫描”</td><td>回到电脑重新扫码；不写入任何状态</td></tr>
+      <tr><td>gist 404</td><td>“电脑端的中继已被删除”</td><td>电脑重新创建同步码</td></tr>
+      <tr><td>所有文件都解不开</td><td>“同步码与中继不匹配”</td><td>确认是否轮换过；重新扫码</td></tr>
+      <tr><td>部分文件解不开</td><td>“1 个数据源无法解密”</td><td>其他数据源正常合并；在电脑端检查那台电脑的同步状态</td></tr>
+      <tr><td>403 限流</td><td>“请求太频繁，稍后自动重试”</td><td>无需操作；按 Retry-After / reset 退避</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note" style="margin-top:12px">
+    <span class="t">没有设备注册表</span>
+    同一个同步码可以给任意多台电脑和任意多台手机使用。电脑加入时需要同步码 + 中继所属的同一个 GitHub 账号授权；手机加入时只需要同步码。组内没有“添加设备/移除设备”的服务端状态，也不需要手机审核。轮换同步码 = 换一个新的组。
+  </div>
+</section>
+
+<!-- ============================================================ 5 -->
+<section id="ia">
+  <h2><span class="no">05</span>信息架构<span class="sub">手机两个入口加详情；电脑只有一个设置子页</span></h2>
+  <div class="grid2">
+    <div class="card">
+      <h4 style="margin-top:0">Android</h4>
+      <ul>
+        <li><b>面板</b>（首页）— 同步组合并后的渠道列表；一个渠道一行</li>
+        <li><b>设置</b> — 同步组、刷新与通知、数据与诊断、关于</li>
+        <li><b>加入同步组</b> — 扫码 / 手动输入（首次或更换同步码）</li>
+        <li><b>渠道详情</b> — 从面板的渠道卡展开后进入</li>
+        <li><b>同步诊断</b> — 从设置进入，看最近读取、合并冲突与解密失败</li>
+        <li><b>关于与更新</b> — 当前版本、每天自动检查、手动检查、下载与系统安装；未配对也可访问</li>
+      </ul>
+      <p class="a-tiny" style="margin-top:8px;color:var(--tx3)">底部只放两个入口：面板 / 设置。加入同步组是动作，不是常驻导航；没有设备列表。</p>
+    </div>
+    <div class="card">
+      <h4 style="margin-top:0">Windows 桌面端</h4>
+      <ul>
+        <li><b>设置 → 同步</b>（新子页）</li>
+        <li>总开关：同步到手机（默认关闭）</li>
+        <li>同步组状态：组内数据源数、组内最后更新</li>
+        <li>同步码卡片：二维码、复制、重新生成</li>
+        <li>发布内容：逐渠道勾选</li>
+        <li>发布频率：1 分钟 / 5 分钟</li>
+        <li>GitHub 连接：连接 GitHub / 已连接账号 / 重新授权 / 断开</li>
+        <li>安全与诊断：预览载荷、最近上传、删除中继数据</li>
+      </ul>
+      <p class="a-tiny" style="margin-top:8px;color:var(--tx3)">电脑是读写节点：发布自己的快照，也读取组内其他快照；主面板仍显示本机取数，避免界面突然变化。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ 6 -->
+<section id="android">
+  <h2><span class="no">06</span>Android 交互原型<span class="sub">点左侧切换页面；点渠道卡、刷新按钮都可交互</span></h2>
+
+  <div class="stage">
+    <div class="stage-head">
+      <div><b>交互原型 · 382 × 824</b> <span class="hint">（示意数据；二维码为装饰图，不可扫描）</span></div>
+      <div class="demo-bar" id="demo-bar">
+        <span class="lbl">演示状态</span>
+        <button data-state="normal" class="on" onclick="setDemo('normal')">正常</button>
+        <button data-state="stale" onclick="setDemo('stale')">陈旧</button>
+        <button data-state="offline" onclick="setDemo('offline')">全部离线</button>
+        <button data-state="bad" onclick="setDemo('bad')">解密失败</button>
+      </div>
+    </div>
+
+    <div class="proto-row">
+      <div class="proto-side">
+        <div class="slist" id="screen-index">
+          <button data-index="empty" onclick="showScreen('empty')"><span class="k">A</span>空状态 · 未加入</button>
+          <button data-index="pair" onclick="showScreen('pair')"><span class="k">B</span>扫码 / 输入同步码</button>
+          <button data-index="dashboard" class="on" onclick="showScreen('dashboard')"><span class="k">C</span>合并面板</button>
+          <button data-index="detail" onclick="showScreen('detail')"><span class="k">D</span>渠道详情</button>
+          <button data-index="settings" onclick="showScreen('settings')"><span class="k">E</span>同步设置</button>
+          <button data-index="status" onclick="showScreen('status')"><span class="k">F</span>状态与诊断</button>
+        </div>
+        <div class="legend">
+          <b>交互说明</b><br>
+          渠道卡 → 展开摘要<br>
+          展开后的「查看详情」→ 渠道详情<br>
+          右上角刷新 → 900ms 加载态<br>
+          设置 → 同步诊断 → 时间线<br>
+          没有设备列表，也没有设备切换
+        </div>
+      </div>
+
+      <div class="phone">
+        <div class="phone-screen">
+          <div class="a-status"><span>14:02</span><span><span class="cam"></span></span><span>5G · 82%</span></div>
+
+          <div class="a-screens">
+
+            <!-- A 空状态 -->
+            <section class="a-screen" data-screen="empty" data-nav="dashboard">
+              <div class="a-appbar">
+                <div class="ttl">面板</div>
+                <div class="sp"></div>
+                <button class="a-ib" aria-label="加入同步组" onclick="showScreen('pair')">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+                </button>
+              </div>
+              <div class="a-body">
+                <div class="a-empty">
+                  <div class="fig">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
+                  </div>
+                  <h5>还没有加入同步组</h5>
+                  <p>在电脑端打开 Grandettoken → 设置 → 同步，启用后用手机扫描二维码。</p>
+                  <button class="a-btn primary block" onclick="showScreen('pair')" style="max-width:230px">扫描同步码</button>
+                  <button class="a-btn ghost block" onclick="showScreen('pair')" style="max-width:230px;margin-top:9px">手动输入</button>
+                </div>
+                <div class="a-card" style="background:#131923;border-color:#2a3446">
+                  <div class="a-rowline"><span class="a-chip ok">只读</span><span class="a-tiny">手机只接收查询结果，不上传任何密钥</span></div>
+                  <p class="a-tiny" style="margin-top:7px">同一个同步码就是一个同步组。组内所有电脑的数据会合并成一份视图，不区分是哪台电脑。</p>
+                </div>
+              </div>
+            </section>
+
+            <!-- B 扫码 -->
+            <section class="a-screen" data-screen="pair">
+              <div class="a-appbar">
+                <button class="a-ib" aria-label="返回" onclick="showScreen('dashboard')">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+                </button>
+                <div class="ttl">加入同步组<span class="sub">扫描电脑上的二维码</span></div>
+              </div>
+              <div class="a-body">
+                <div class="a-scan">
+                  <span class="corner c1"></span><span class="corner c2"></span>
+                  <span class="corner c3"></span><span class="corner c4"></span>
+                  <span class="laser"></span>
+                  <div class="hintbox">对准电脑屏幕上的同步码</div>
+                </div>
+                <div class="a-divider">或手动输入</div>
+                <div class="a-input">
+                  <input id="pair-input" value="GT1.eyJ2IjoxLCJrIjoiZ2lzdCJ9.example" spellcheck="false" aria-label="同步码">
+                  <button class="a-btn ghost" style="padding:5px 7px" onclick="toast('已粘贴')">粘贴</button>
+                </div>
+                <div class="a-error" id="pair-error">
+                  <b>同步码校验失败</b><br>请确认完整复制，或回到电脑重新扫描。
+                </div>
+                <button class="a-btn primary block" id="pair-btn" style="margin-top:13px" onclick="pairNow()">加入</button>
+                <p class="a-tiny" style="text-align:center;margin-top:9px">连接时会读取组内全部文件，不会上传任何内容。</p>
+                <div style="text-align:center;margin-top:16px">
+                  <button class="a-btn ghost" style="font-size:10.5px;padding:4px 6px" onclick="togglePairError()">演示：同步码错误</button>
+                </div>
+              </div>
+            </section>
+
+            <!-- C 合并面板 -->
+            <section class="a-screen active" data-screen="dashboard" data-nav="dashboard">
+              <div class="a-appbar">
+                <div class="ttl">同步组<span class="sub" id="group-sub">2 分钟前 · 9 个渠道</span></div>
+                <div class="sp"></div>
+                <button class="a-ib" id="phone-refresh" aria-label="刷新" onclick="refreshPhone()">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 6.3"/><path d="M20 4v7h-7"/></svg>
+                </button>
+              </div>
+              <div class="a-body">
+                <div class="a-banner hidden" id="dash-banner"></div>
+
+                <div class="a-sum">
+                  <div class="c"><div class="lb">人民币余额</div><div class="v">¥1,284<small>.50</small></div><div class="d">3 个金额型</div></div>
+                  <div class="c"><div class="lb">今日消耗</div><div class="v">¥12<small>.40</small></div><div class="d up">较昨日 +8%</div></div>
+                  <div class="c" style="max-width:74px"><div class="lb">签到</div><div class="v">3<small>/4</small></div><div class="d">还差 1</div></div>
+                </div>
+
+                <div class="a-sec">需要处理 · 1</div>
+                <div class="a-ch">
+                  <button class="a-ch-head" data-toggle onclick="toggleChannel(this)">
+                    <div class="a-ch-ico" style="background:#1f3d6b">DS</div>
+                    <div class="a-ch-main">
+                      <div class="a-ch-top"><span class="a-ch-name">DeepSeek</span><span class="a-ch-val">¥88.00</span></div>
+                      <div class="a-ch-sub"><span class="dot warn"></span>低于底线 ¥10 · 充值型<span class="r">今日 ¥1.20</span></div>
+                      <div class="a-bar"><i class="warn" style="width:44%"></i></div>
+                    </div>
+                  </button>
+                  <div class="a-ch-body"><div class="a-ch-body-in">
+                    <div class="a-kv">
+                      <div><span>今日</span><b>¥1.20</b></div>
+                      <div><span>本周</span><b>¥8.40</b></div>
+                      <div><span>本月</span><b>¥23.60</b></div>
+                      <div><span>更新</span><b>2 分钟前</b></div>
+                    </div>
+                    <button class="a-btn block" style="font-size:11px;padding:6px" onclick="showScreen('detail')">查看详情</button>
+                  </div></div>
+                </div>
+
+                <div class="a-sec">全部渠道 · 9</div>
+
+                <div class="a-ch">
+                  <button class="a-ch-head" data-toggle onclick="toggleChannel(this)">
+                    <div class="a-ch-ico" style="background:#25324a">4S</div>
+                    <div class="a-ch-main">
+                      <div class="a-ch-top"><span class="a-ch-name">4SAPI</span><span class="a-ch-val">¥320.00</span></div>
+                      <div class="a-ch-sub"><span class="dot ok"></span>申请制 · 单次额度 ¥200<span class="r">今日 ¥3.50</span></div>
+                      <div class="a-bar"><i style="width:62%"></i></div>
+                    </div>
+                  </button>
+                  <div class="a-ch-body"><div class="a-ch-body-in">
+                    <div class="a-kv"><div><span>剩余</span><b>¥320.00</b></div><div><span>单次额度</span><b>¥200.00</b></div><div><span>本周</span><b>¥12.00</b></div><div><span>更新</span><b>2 分钟前</b></div></div>
+                    <button class="a-btn block" style="font-size:11px;padding:6px" onclick="showScreen('detail')">查看详情</button>
+                  </div></div>
+                </div>
+
+                <div class="a-ch">
+                  <button class="a-ch-head" data-toggle onclick="toggleChannel(this)">
+                    <div class="a-ch-ico" style="background:#2c2340">OC</div>
+                    <div class="a-ch-main">
+                      <div class="a-ch-top"><span class="a-ch-name">OpenCode Go</span><span class="a-ch-val">42<i>%</i></span></div>
+                      <div class="a-ch-sub"><span class="dot warn"></span>配额型 · $10/期 · 不折算金额<span class="r">剩 2 天</span></div>
+                      <div class="a-bar"><i class="warn" style="width:42%"></i></div>
+                    </div>
+                  </button>
+                  <div class="a-ch-body"><div class="a-ch-body-in">
+                    <div class="a-kv"><div><span>剩余</span><b>42%</b></div><div><span>周期</span><b>5 小时</b></div><div><span>重置</span><b>18:00</b></div><div><span>更新</span><b>2 分钟前</b></div></div>
+                    <button class="a-btn block" style="font-size:11px;padding:6px" onclick="showScreen('detail')">查看详情</button>
+                  </div></div>
+                </div>
+
+                <div class="a-ch">
+                  <button class="a-ch-head" data-toggle onclick="toggleChannel(this)">
+                    <div class="a-ch-ico" style="background:#1f3a34">CX</div>
+                    <div class="a-ch-main">
+                      <div class="a-ch-top"><span class="a-ch-name">Codex</span><span class="a-ch-val">61<i>%</i></span></div>
+                      <div class="a-ch-sub"><span class="dot ok"></span>配额型 · 周额度优先<span class="r">周剩 61%</span></div>
+                      <div class="a-bar"><i style="width:61%"></i></div>
+                    </div>
+                  </button>
+                  <div class="a-ch-body"><div class="a-ch-body-in">
+                    <div class="a-kv"><div><span>周剩余</span><b>61%</b></div><div><span>5 小时</span><b>78%</b></div><div><span>重置</span><b>周一 00:00</b></div><div><span>更新</span><b>2 分钟前</b></div></div>
+                    <button class="a-btn block" style="font-size:11px;padding:6px" onclick="showScreen('detail')">查看详情</button>
+                  </div></div>
+                </div>
+
+                <div class="a-ch">
+                  <button class="a-ch-head" data-toggle onclick="toggleChannel(this)">
+                    <div class="a-ch-ico" style="background:#3a2a1c">TR</div>
+                    <div class="a-ch-main">
+                      <div class="a-ch-top"><span class="a-ch-name">Trae</span><span class="a-ch-val">1,240<i>分</i></span></div>
+                      <div class="a-ch-sub"><span class="dot ok"></span>积分型 · 最近到期 11-06<span class="r">+180 今日</span></div>
+                      <div class="a-bar"><i style="width:72%"></i></div>
+                    </div>
+                  </button>
+                  <div class="a-ch-body"><div class="a-ch-body-in">
+                    <div class="a-kv"><div><span>积分</span><b>1,240</b></div><div><span>最近到期</span><b>11-06 · 300</b></div><div><span>近 7 天到账</span><b>+180</b></div><div><span>更新</span><b>2 分钟前</b></div></div>
+                    <button class="a-btn block" style="font-size:11px;padding:6px" onclick="showScreen('detail')">查看详情</button>
+                  </div></div>
+                </div>
+
+                <div class="a-ch" style="border-color:#3b3426">
+                  <button class="a-ch-head" data-toggle onclick="toggleChannel(this)">
+                    <div class="a-ch-ico" style="background:#3a2f1b">HP</div>
+                    <div class="a-ch-main">
+                      <div class="a-ch-top"><span class="a-ch-name">Hapi</span><span class="a-ch-val">¥12.60</span></div>
+                      <div class="a-ch-sub"><span class="dot warn"></span>取数失败 · 沿用 14:02 快照<span class="r">陈旧 14 分钟</span></div>
+                      <div class="a-bar"><i class="warn" style="width:18%"></i></div>
+                    </div>
+                  </button>
+                  <div class="a-ch-body"><div class="a-ch-body-in">
+                    <div class="a-kv"><div><span>状态</span><b>取数失败</b></div><div><span>错误码</span><b>UPSTREAM_502</b></div><div><span>最后成功</span><b>14:02</b></div><div><span>重试</span><b>15 分钟后</b></div></div>
+                    <p class="a-tiny" style="margin-bottom:8px">错误文本已降级为错误码，不会把上游响应或密钥带出来。</p>
+                    <button class="a-btn block" style="font-size:11px;padding:6px" onclick="showScreen('detail')">查看详情</button>
+                  </div></div>
+                </div>
+
+                <p class="a-tiny" style="margin:11px 2px 0">还有 3 个渠道（2 个已隐藏）· 同一渠道只显示最新一条 · 不跨数据源求和</p>
+              </div>
+            </section>
+
+            <!-- D 渠道详情 -->
+            <section class="a-screen" data-screen="detail">
+              <div class="a-appbar">
+                <button class="a-ib" aria-label="返回面板" onclick="showScreen('dashboard')">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+                </button>
+                <div class="ttl">DeepSeek<span class="sub">金额型 · 充值型</span></div>
+                <div class="sp"></div>
+                <span class="a-chip warn">低于底线</span>
+              </div>
+              <div class="a-body">
+                <div class="a-hero">
+                  <div class="lb">当前余额</div>
+                  <div class="v">¥88<i>.00</i></div>
+                  <div class="d"><span class="dot warn" style="vertical-align:1px"></span> 低于 ¥10 底线会被标记；当前仍高于底线，进度条按单次额度展示</div>
+                </div>
+
+                <div class="a-seg">
+                  <button class="on" onclick="seg(this)">今日</button>
+                  <button onclick="seg(this)">本周</button>
+                  <button onclick="seg(this)">本月</button>
+                </div>
+
+                <div class="a-card">
+                  <div class="a-rowline"><b style="font-size:11.5px">近 7 天余额</b><span class="a-sp"></span><span class="a-tiny">含 1 个数据缺口</span></div>
+                  <div class="a-spark" aria-label="近 7 天余额示意曲线">
+                    <i style="height:88%"></i><i style="height:84%" class="hi"></i><i style="height:80%"></i><i style="height:74%"></i><i style="height:70%"></i><i style="height:64%" class="hi"></i><i style="height:58%"></i>
+                  </div>
+                  <div class="a-kv" style="grid-template-columns:repeat(3,1fr)">
+                    <div style="display:block"><span>今日</span><b style="display:block;font-size:14px;margin-top:2px">¥1.20</b></div>
+                    <div style="display:block"><span>本周</span><b style="display:block;font-size:14px;margin-top:2px">¥8.40</b></div>
+                    <div style="display:block"><span>本月</span><b style="display:block;font-size:14px;margin-top:2px">¥23.60</b></div>
+                  </div>
+                  <p class="a-tiny" style="margin-top:7px">消耗由余额差值推算；电脑未运行的时段会形成缺口，数字可能偏小。</p>
+                </div>
+
+                <div class="a-card">
+                  <div class="a-kv">
+                    <div><span>数据来源</span><b>同步组</b></div>
+                    <div><span>合并方式</span><b>同一渠道取最新</b></div>
+                    <div><span>更新时刻</span><b>14:02:11</b></div>
+                    <div><span>是否陈旧</span><b>否</b></div>
+                    <div><span>是否推算</span><b>是</b></div>
+                    <div><span>刷新间隔</span><b>1 分钟</b></div>
+                  </div>
+                  <p class="a-tiny">这是只读快照。手机端不显示是哪台电脑写入的，也不能充值、改配置或手动取数。</p>
+                </div>
+              </div>
+            </section>
+
+            <!-- E 设置 -->
+            <section class="a-screen" data-screen="settings" data-nav="settings">
+              <div class="a-appbar">
+                <div class="ttl">设置</div>
+                <div class="sp"></div>
+              </div>
+              <div class="a-body">
+                <div class="a-sec">同步组</div>
+                <div class="a-card" style="padding:0;overflow:hidden">
+                  <div class="a-set">
+                    <div class="l"><b>已加入同步组</b><span>同步码 <span class="mono" style="font-size:10px">GT1.…7f3k</span> · 手机只读</span></div>
+                    <span class="a-chip ok">已加密</span>
+                  </div>
+                  <div class="a-set">
+                    <div class="l"><b>同步诊断</b><span>最近读取、合并冲突、解密失败</span></div>
+                    <button class="a-btn ghost" style="font-size:10.5px;padding:5px 8px" onclick="showScreen('status')">查看</button>
+                  </div>
+                  <div class="a-set">
+                    <div class="l"><b>更换同步码</b><span>退出当前组，重新扫码加入另一个组</span></div>
+                    <button class="a-btn ghost" style="font-size:10.5px;padding:5px 8px" onclick="showScreen('pair')">更换</button>
+                  </div>
+                </div>
+
+                <div class="a-sec">GitHub 连接（可选）</div>
+                <div class="a-card"><b>匿名慢速模式</b><p class="a-tiny">当前前台每 5 分钟刷新；登录后可每分钟刷新。</p><a href="#review">查看 GitHub 官方授权流程</a></div>
+                <div class="a-sec">刷新</div>
+                <div class="a-card" style="padding:12px">
+                  <div class="a-rowline" style="margin-bottom:9px"><b style="font-size:11.5px">前台刷新</b><span class="a-sp"></span><span class="a-tiny">App 打开时</span></div>
+                  <div class="a-opt" id="fg-opt">
+                    <button disabled title="登录后可选">60 秒（登录）</button>
+                    <button class="on" onclick="opt(this,'fg')">5 分钟</button>
+                    <button disabled title="登录后可选">2 分钟（登录）</button>
+                    <button onclick="opt(this,'fg')">手动</button>
+                  </div>
+                  <div class="a-rowline" style="margin:14px 0 9px"><b style="font-size:11.5px">后台刷新</b><span class="a-sp"></span><span class="a-tiny">Android 最短 15 分钟</span></div>
+                  <div class="a-opt" id="bg-opt">
+                    <button onclick="opt(this,'bg')">关闭</button>
+                    <button class="on" onclick="opt(this,'bg')">15 分钟</button>
+                    <button onclick="opt(this,'bg')">30 分钟</button>
+                    <button onclick="opt(this,'bg')">60 分钟</button>
+                  </div>
+                  <p class="a-tiny" style="margin-top:9px">GitHub 中转没有推送通道；后台刷新是定时拉取，不会常驻前台服务。</p>
+                </div>
+
+                <div class="a-sec">通知</div>
+                <div class="a-card" style="padding:0;overflow:hidden">
+                  <div class="a-set">
+                    <div class="l"><b>余额跌破底线</b><span>电脑端已经判定过，手机只负责提醒</span></div>
+                    <div class="a-switch on" role="switch" aria-checked="true" onclick="flip(this)"></div>
+                  </div>
+                  <div class="a-set">
+                    <div class="l"><b>同步组长时间未更新</b><span>所有数据源都超过 3 倍刷新间隔</span></div>
+                    <div class="a-switch on" role="switch" aria-checked="true" onclick="flip(this)"></div>
+                  </div>
+                  <div class="a-set">
+                    <div class="l"><b>同步失败</b><span>限流和网络错误不重复打扰</span></div>
+                    <div class="a-switch" role="switch" aria-checked="false" onclick="flip(this)"></div>
+                  </div>
+                </div>
+
+                <div class="a-sec">数据与关于</div>
+                <div class="a-card" style="padding:0;overflow:hidden">
+                  <div class="a-set">
+                    <div class="l"><b>清除本地缓存</b><span>不影响电脑端与 GitHub 上的密文</span></div>
+                    <button class="a-btn ghost" style="font-size:10.5px;padding:5px 8px" onclick="toast('缓存已清除')">清除</button>
+                  </div>
+                  <div class="a-set">
+                    <div class="l"><b>退出同步组</b><span>删除本机密钥；需要重新扫码</span></div>
+                    <button class="a-btn ghost" style="font-size:10.5px;padding:5px 8px" onclick="showScreen('empty')">退出</button>
+                  </div>
+                  <div class="a-set">
+                    <div class="l"><b>版本与检查更新</b><span>1.0.0 · 稳定版 · 每天自动检查</span></div>
+                    <a href="#app-update">检查更新流程</a>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- F 诊断 -->
+            <section class="a-screen" data-screen="status">
+              <div class="a-appbar">
+                <button class="a-ib" aria-label="返回设置" onclick="showScreen('settings')">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+                </button>
+                <div class="ttl">同步诊断<span class="sub">只包含时间、状态与错误码</span></div>
+              </div>
+              <div class="a-body">
+                <div class="a-card" style="background:#131923;margin-bottom:11px">
+                  <div class="a-rowline"><span class="dot ok"></span><b style="font-size:11.5px">同步组可访问</b><span class="a-sp"></span><span class="a-tiny">下次 14:03</span></div>
+                  <p class="a-tiny" style="margin-top:5px">gist 已读取 · 2 个数据源 · 合并 9 个渠道 · 最近成功 14:02:11</p>
+                </div>
+
+                <div class="a-banner bad" style="display:flex">
+                  <b>1 个数据源解密失败</b>
+                  <span>SYNC_DECRYPT_FAILED · 其他数据源正常合并</span>
+                </div>
+                <div class="a-rowline" style="gap:7px;margin-bottom:12px">
+                  <button class="a-btn" style="font-size:10.5px;padding:6px 9px" onclick="toast('已重试 · 仍失败')">重试</button>
+                  <button class="a-btn ghost" style="font-size:10.5px;padding:6px 9px" onclick="toast('诊断信息已复制')">复制诊断</button>
+                </div>
+
+                <div class="a-sec">最近记录</div>
+                <div class="a-tl">
+                  <div class="it ok"><b>读取成功 · 2 个数据源</b><span>14:02:11 · 200 · 1.2 KB · 6 秒</span></div>
+                  <div class="it warn"><b>1 个数据源解密失败</b><span>14:02:11 · SYNC_DECRYPT_FAILED</span></div>
+                  <div class="it ok"><b>合并 9 个渠道 · 无冲突</b><span>14:02:11 · 同一渠道取最新</span></div>
+                  <div class="it ok"><b>读取成功 · 304 Not Modified</b><span>14:01:09</span></div>
+                  <div class="it bad"><b>限流退避</b><span>13:58:40 · 403 · 退避至 14:13</span></div>
+                  <div class="it ok"><b>读取成功 · 2 个数据源</b><span>13:57:12 · 200 · 1.1 KB</span></div>
+                </div>
+
+                <p class="a-tiny" style="margin-top:12px">诊断信息不包含同步密钥、设备名、渠道余额或任何账号信息。</p>
+              </div>
+            </section>
+
+          </div>
+
+          <div class="a-nav" id="phone-nav">
+            <button data-target="dashboard" class="on" onclick="showScreen('dashboard')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>
+              面板
+            </button>
+            <button data-target="settings" onclick="showScreen('settings')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+              设置
+            </button>
+          </div>
+          <div class="a-home"></div>
+        </div>
+      </div>
+
+      <div class="proto-notes">
+        <div class="card">
+          <div class="a-tiny" style="letter-spacing:.1em;font-weight:700">当前屏幕</div>
+          <div class="nt" id="note-title">合并面板</div>
+          <p class="nb" id="note-body">组内所有电脑的快照合并成一份渠道列表。同一渠道只显示最新的一条，界面不出现设备名，也不提供设备切换。</p>
+          <hr style="margin:12px 0">
+          <div class="a-tiny" style="letter-spacing:.1em;font-weight:700">交互提示</div>
+          <p class="nh" id="note-hint">点渠道卡展开摘要；点“查看详情”进入详情；右上角刷新有 30 秒节流。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>6.1 交互规则</h3>
+  <table class="tbl">
+    <thead><tr><th style="width:190px">动作</th><th>结果</th><th>约束</th></tr></thead>
+    <tbody>
+      <tr><td>点击渠道卡</td><td>展开 2×2 摘要与“查看详情”</td><td>不强制只展开一个；允许多个，减少误触收起</td></tr>
+      <tr><td>右上角刷新</td><td>转圈 900ms → 更新“上次刷新”</td><td>30 秒内重复点击不重复请求，提示“刚刚已刷新”</td></tr>
+      <tr><td>下拉</td><td>同刷新按钮</td><td>与按钮共用同一节流</td></tr>
+      <tr><td>切换到后台</td><td>按后台策略定时拉取</td><td>WorkManager 最小 15 分钟；不注册常驻前台服务</td></tr>
+      <tr><td>扫码成功</td><td>写入 Keystore → 读取全部 → 合并 → 进入面板</td><td>任一步失败都不写入任何状态，避免半配对</td></tr>
+      <tr><td>退出同步组</td><td>删除本机密钥 → 回到空状态</td><td>不影响电脑端与 GitHub 上的密文</td></tr>
+    </tbody>
+  </table>
+
+  <h3>6.2 合并规则<span style="font-size:12px;color:var(--tx3);font-weight:400;margin-left:8px">手机只读，合并只发生在客户端</span></h3>
+  <table class="tbl">
+    <thead><tr><th style="width:210px">情况</th><th>规则</th><th>界面表现</th></tr></thead>
+    <tbody>
+      <tr><td>同一渠道出现在多个数据源</td><td>取 <code>updatedAt</code> 最新的一条；同刻取 <code>seq</code> 更大者，再同刻优先非 stale</td><td>只显示一行，不显示来自哪台电脑</td></tr>
+      <tr><td>最新一条是 stale</td><td>仍然用它，并显示 stale 标记；<b>不要退回更旧的观测</b></td><td>数字保留，标“沿用 X 时快照”</td></tr>
+      <tr><td>不同渠道</td><td>直接合并</td><td>各自一行，按现有排序规则</td></tr>
+      <tr><td>总额 / 今日消耗</td><td>从合并后的渠道行重算，<b>不累加各数据源的 totals</b></td><td>避免同一渠道被重复计算</td></tr>
+      <tr><td>签到</td><td>开发计划内：发布签到明细并跨来源去重，计数口径在 M0 确认</td><td>显示“3/4”，不显示来自谁</td></tr>
+      <tr><td>同一渠道配了不同账号</td><td>v1 只显示最新的那个，不按账号拆行</td><td>改显示名不拆行；自定义平台按同步平台标签合并</td></tr>
+      <tr><td>某个数据源解密失败</td><td>跳过该源，其余正常合并</td><td>诊断里提示，不影响其他渠道</td></tr>
+      <tr><td>旧 <code>seq</code> / 回放</td><td>忽略，不覆盖新快照</td><td>无提示，避免误报</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="pc">
+  <h2><span class="no">07</span>PC 端交互原型<span class="sub">按现有设置页：顶部标题 + 索引列表 → 子页</span></h2>
+
+  <div class="note" style="margin-bottom:12px">
+    <span class="t">按真实布局重画</span>
+    现有设置是 400×580 的窄面板：顶部标题栏 → 设置页标题（← / 设置与管理）→ 索引列表 → 点进去才是表单。没有左侧导航，也没有横向页签。同步只是索引里新增的一行。
+  </div>
+
+  <div class="stage">
+    <div class="stage-head">
+      <div><b>桌面设置面板 · 400 × 580</b> <span class="hint">（默认尺寸，可缩放到 760×940；点「同步到手机」进入子页）</span></div>
+      <div class="demo-bar">
+        <span class="lbl">提示</span>
+        <span class="tag ac">默认关闭</span>
+        <span class="tag">仅 gist 权限</span>
+      </div>
+    </div>
+
+    <div class="pcp-wrap">
+      <div class="pcp">
+        <div class="pcp-title">
+          <span class="mk"></span>
+          <span>Grandettoken</span>
+          <span class="sp"></span>
+          <span class="wc">— □ ×</span>
+        </div>
+        <div class="pcp-head">
+          <button class="pcp-back" onclick="pcpBack()" aria-label="返回">←</button>
+          <div class="pcp-title2" id="pcp-page-title">设置与管理</div>
+        </div>
+
+        <!-- 索引页 -->
+        <div class="pcp-index" id="pcp-index">
+          <button class="pcp-idx-row" onclick="toast('该页不在本次同步设计范围')">
+            <span class="ico">▤</span>
+            <span class="tx"><b>渠道管理</b><span>9 个渠道 · 1 个需处理</span></span>
+            <span class="chev">›</span>
+          </button>
+          <button class="pcp-idx-row" onclick="toast('该页不在本次同步设计范围')">
+            <span class="ico p">✦</span>
+            <span class="tx"><b>模型与客户端</b><span>4SAPI · Hapi · OpenCode Go</span></span>
+            <span class="chev">›</span>
+          </button>
+          <button class="pcp-idx-row" onclick="toast('该页不在本次同步设计范围')">
+            <span class="ico g">☑</span>
+            <span class="tx"><b>每日签到</b><span>今日 3/4 · 还差 1 个</span></span>
+            <span class="chev">›</span>
+          </button>
+          <button class="pcp-idx-row" onclick="toast('该页不在本次同步设计范围')">
+            <span class="ico g">◐</span>
+            <span class="tx"><b>外观与显示</b><span>标准字号 · 排序：紧迫度</span></span>
+            <span class="chev">›</span>
+          </button>
+          <button class="pcp-idx-row" onclick="toast('该页不在本次同步设计范围')">
+            <span class="ico y">↻</span>
+            <span class="tx"><b>刷新与启动</b><span>面板 1 分钟 · 折叠 5 分钟</span></span>
+            <span class="chev">›</span>
+          </button>
+          <button class="pcp-idx-row" onclick="pcpOpen('sync')" style="background:rgba(138,164,255,.07)">
+            <span class="ico sync">⇄</span>
+            <span class="tx"><b>同步到手机</b><span>已开启 · 组内 3 个数据源</span></span>
+            <span class="chev">›</span>
+          </button>
+          <button class="pcp-idx-row" onclick="toast('该页不在本次同步设计范围')">
+            <span class="ico k">⚿</span>
+            <span class="tx"><b>密钥箱</b><span>查看 / 搜索本机密钥</span></span>
+            <span class="chev">›</span>
+          </button>
+          <button class="pcp-idx-row" onclick="toast('该页不在本次同步设计范围')">
+            <span class="ico g">ⓘ</span>
+            <span class="tx"><b>关于与诊断</b><span>0.3.2 · 上次检查 11-01</span></span>
+            <span class="chev">›</span>
+          </button>
+          <div class="pcp-idx-note">设置只影响本机 · 密钥在 Windows 凭据管理器</div>
+        </div>
+
+        <!-- 同步子页 -->
+        <div class="pcp-page hidden" id="pcp-sync">
+          <div class="pcp-switchrow">
+            <div class="l"><b>启用同步</b><span>关闭后不再上传；GitHub 上已有的密文不会被自动删除。</span></div>
+            <div class="a-switch on" id="pcp-switch" role="switch" aria-checked="true" onclick="togglePcSync(this)"></div>
+          </div>
+
+          <div id="pcp-details">
+            <div class="pcp-sec">同步码</div>
+            <div class="pcp-card">
+              <div class="pcp-code-stack">
+                <div class="pcp-qr" id="pcp-qr"></div>
+                <div class="pcp-code" id="pcp-code">GT1.eyJ2IjoxLCJyZWxheUtpbmQiOjEsImtleUVwb2NoIjoxLCJyZWxheUlkIjoiN2YzazltcTR4MiIsImtleSI6IjhjM2Y...7ZjNkIn0</div>
+                <div class="pcp-btns">
+                  <button class="pcp-btn primary" onclick="copyText(document.getElementById('pcp-code').innerText,'同步码已复制')">复制同步码</button>
+                  <button class="pcp-btn" onclick="openModal('modal-rotate')">重新生成</button>
+                </div>
+              </div>
+              <p class="pcp-note">手机扫码后只保存密钥，不保存这串文本。重新生成会让所有旧手机立即失效。</p>
+            </div>
+
+            <div class="pcp-sec">当前状态</div>
+            <div class="pcp-card">
+              <div class="pcp-kv">
+                <div class="c"><div class="lb">上次上传</div><div class="v ok">2 分钟前</div></div>
+                <div class="c"><div class="lb">组内数据源</div><div class="v">3</div></div>
+              </div>
+              <p class="pcp-note">每 1 分钟检查一次，内容不变不写入。组内数据源数来自读取，不显示设备名。</p>
+            </div>
+
+            <div class="pcp-sec">同步组</div>
+            <div class="pcp-card">
+              <div class="pcp-kv">
+                <div class="c"><div class="lb">组内最后更新</div><div class="v">2 分钟前</div></div>
+                <div class="c"><div class="lb">本机写入</div><div class="v">2 分钟前</div></div>
+              </div>
+              <p class="pcp-note">每台电脑只写自己的 <code>gt_&lt;source&gt;.json</code>，不会互相覆盖。桌面端主面板仍显示本机取数；同步页读取组内快照，用于组状态与合并预览。</p>
+            </div>
+
+            <div class="pcp-sec">GitHub 连接</div>
+            <div class="pcp-card">
+              <div class="pcp-kv">
+                <div class="c"><div class="lb">权限</div><div class="v">仅 gist</div></div>
+                <div class="c"><div class="lb">中继</div><div class="v">Secret Gist</div></div>
+              </div>
+              <p class="pcp-note">通过 GitHub 官方浏览器页面授权，无需填写 PAT。OAuth 令牌仅存 Windows 凭据管理器，不进配置文件、日志或同步码。</p>
+              <div class="pcp-btns">
+                <button class="pcp-btn primary" onclick="openModal('modal-pc-auth')">连接 GitHub / 重新授权</button>
+                <button class="pcp-btn danger" onclick="toast('已断开；本机同步已停止')">断开连接</button>
+              </div>
+            </div>
+
+            <div class="pcp-sec">发布内容</div>
+            <div class="pcp-card">
+              <div class="pcp-checks">
+                <label class="pcp-check"><input type="checkbox" checked>DeepSeek</label>
+                <label class="pcp-check"><input type="checkbox" checked>4SAPI</label>
+                <label class="pcp-check"><input type="checkbox" checked>OpenCode Go</label>
+                <label class="pcp-check"><input type="checkbox" checked>Codex</label>
+                <label class="pcp-check"><input type="checkbox" checked>Trae</label>
+                <label class="pcp-check"><input type="checkbox" checked>Hapi</label>
+                <label class="pcp-check"><input type="checkbox" checked>Qoder</label>
+                <label class="pcp-check"><input type="checkbox" checked>WorkBuddy</label>
+                <label class="pcp-check"><input type="checkbox" checked>Qoder 国内版</label>
+              </div>
+              <p class="pcp-note">取消勾选只影响本机发布；其他电脑仍可发布它们自己的渠道。</p>
+            </div>
+
+            <div class="pcp-sec">发布频率</div>
+            <div class="pcp-card">
+              <div class="pcp-opt">
+                <button class="on" onclick="optPc(this)">1 分钟</button>
+                <button onclick="optPc(this)">5 分钟</button>
+                <button onclick="optPc(this)">15 分钟</button>
+              </div>
+              <p class="pcp-note">每次 = 1 次条件 GET + 必要时 1 次 PATCH。已登录限额 5000 次/小时。</p>
+            </div>
+
+            <div class="pcp-sec">安全与诊断</div>
+            <div class="pcp-card">
+              <ul style="margin-left:15px">
+                <li style="font-size:10px">载荷不含 API Key / Cookie / refresh token</li>
+                <li style="font-size:10px">错误文本降级为错误码</li>
+                <li style="font-size:10px">不含设备名 / 别名 / 本机路径</li>
+              </ul>
+              <div class="pcp-btns">
+                <button class="pcp-btn primary" onclick="openModal('modal-preview')">预览将上传的数据</button>
+                <button class="pcp-btn danger" onclick="openModal('modal-rotate')">轮换同步码</button>
+              </div>
+              <p class="pcp-note">上传前会跑白名单检查；任一规则不通过就不上传。</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>7.1 设置页层级</h3>
+  <table class="tbl">
+    <thead><tr><th style="width:190px">层级</th><th>现有做法</th><th>同步功能怎么接</th></tr></thead>
+    <tbody>
+      <tr><td>顶层</td><td>标题栏 → 底栏「设置与管理」</td><td>不改；同步不占用标题栏</td></tr>
+      <tr><td>设置首页</td><td>顶部 ← + 「设置与管理」+ 索引列表</td><td>在「刷新与启动」和「密钥箱」之间新增一行「同步到手机」</td></tr>
+      <tr><td>子页</td><td>同一个顶部标题，← 返回索引；内容在下方滚动</td><td>点「同步到手机」进入子页，标题变为「同步到手机」，← 返回索引</td></tr>
+      <tr><td>横向页签</td><td>旧页签在 DOM 里但 CSS 隐藏，不是可见导航</td><td>不新增页签；同步只走索引行</td></tr>
+      <tr><td>宽度</td><td>默认 400×580，可拖到 360×480 – 760×940</td><td>子页按 400px 单列设计；宽屏时保持单列，不改成左右分栏</td></tr>
+    </tbody>
+  </table>
+
+  <h3>7.2 交互规则</h3>
+  <table class="tbl">
+    <thead><tr><th style="width:190px">动作</th><th>结果</th><th>约束</th></tr></thead>
+    <tbody>
+      <tr><td>点索引「同步到手机」</td><td>隐藏索引，显示同步子页；标题改为「同步到手机」</td><td>返回时回到索引，不回到展示页</td></tr>
+      <tr><td>点顶部 ←</td><td>子页 → 索引；索引 → 关闭设置</td><td>与现有 `showTab('index')` 行为一致</td></tr>
+      <tr><td>关闭同步开关</td><td>隐藏子页里的详细设置，保留同步码与组信息</td><td>不删除 GitHub 上已有的密文</td></tr>
+      <tr><td>预览上传内容</td><td>弹出本机将写入的明文快照</td><td>不是合并视图；不含设备名/别名</td></tr>
+      <tr><td>轮换同步码</td><td>二次确认 → 生成新码</td><td>新建中继和密钥；其他电脑重新加入；旧手机可能继续显示历史缓存</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============================================================ 8 -->
+<section id="visual">
+  <h2><span class="no">08</span>视觉设计<span class="sub">沿用桌面端的深色令牌，手机端按 Material 3 的触控尺寸落地</span></h2>
+
+  <h3>8.1 颜色</h3>
+  <div class="sw-grid">
+    <div class="sw"><div class="chip" style="background:#0e1015">#0e1015</div><div class="info"><div class="nm">Canvas</div><div class="hx">--bg</div><div class="use">页面底色；手机与桌面端一致</div></div></div>
+    <div class="sw"><div class="chip" style="background:#141821">#141821</div><div class="info"><div class="nm">Surface 1</div><div class="hx">--bg2</div><div class="use">卡片、列表分组</div></div></div>
+    <div class="sw"><div class="chip" style="background:#191e27">#191e27</div><div class="info"><div class="nm">Surface 2</div><div class="hx">--bg3</div><div class="use">输入框、次级按钮</div></div></div>
+    <div class="sw"><div class="chip" style="background:#252b38">#252b38</div><div class="info"><div class="nm">Line</div><div class="hx">--line</div><div class="use">描边、分割线</div></div></div>
+    <div class="sw"><div class="chip" style="background:#f3f6fb;color:#0e1015">#f3f6fb</div><div class="info"><div class="nm">Text</div><div class="hx">--tx</div><div class="use">金额、名称、主信息</div></div></div>
+    <div class="sw"><div class="chip" style="background:#b7c0d0;color:#0e1015">#b7c0d0</div><div class="info"><div class="nm">Text 2</div><div class="hx">--tx2</div><div class="use">正文、按钮文字</div></div></div>
+    <div class="sw"><div class="chip" style="background:#8a95a8;color:#0e1015">#8a95a8</div><div class="info"><div class="nm">Text 3</div><div class="hx">--tx3</div><div class="use">标签、时间、辅助说明</div></div></div>
+    <div class="sw"><div class="chip" style="background:#4fd6a0;color:#0e1015">#4fd6a0</div><div class="info"><div class="nm">OK</div><div class="hx">--ok</div><div class="use">正常、在线、成功</div></div></div>
+    <div class="sw"><div class="chip" style="background:#f3c666;color:#3a2a06">#f3c666</div><div class="info"><div class="nm">Warn</div><div class="hx">--warn</div><div class="use">陈旧、预警、需要关注</div></div></div>
+    <div class="sw"><div class="chip" style="background:#ff7b72;color:#2a0b09">#ff7b72</div><div class="info"><div class="nm">Bad</div><div class="hx">--bad</div><div class="use">失败、解密错误、跌破底线</div></div></div>
+    <div class="sw"><div class="chip" style="background:#8aa4ff;color:#0b1020">#8aa4ff</div><div class="info"><div class="nm">Accent</div><div class="hx">--ac</div><div class="use">主按钮、选中态、链接</div></div></div>
+    <div class="sw"><div class="chip" style="background:#212836;color:#f3f6fb">#212836</div><div class="info"><div class="nm">Surface 3</div><div class="hx">--bg4</div><div class="use">悬浮层、选中卡片</div></div></div>
+  </div>
+
+  <h3>8.2 字号阶梯</h3>
+  <div class="card">
+    <div class="type-row"><div class="nm">Display</div><div class="demo" style="font-size:26px;font-weight:700;letter-spacing:-1px">¥1,284.50</div><div class="spec">26 / 28 sp · 700</div></div>
+    <div class="type-row"><div class="nm">Value</div><div class="demo" style="font-size:22px;font-weight:650;letter-spacing:-.4px">¥88.00</div><div class="spec">22 / 24 sp · 650</div></div>
+    <div class="type-row"><div class="nm">Body</div><div class="demo" style="font-size:13px">余额快照来自同步组</div><div class="spec">13 / 19 sp · 400</div></div>
+    <div class="type-row"><div class="nm">Meta</div><div class="demo" style="font-size:11.5px;color:#5a6272">2 分钟前 · 9 个渠道</div><div class="spec">11.5 / 17 sp · 400</div></div>
+    <div class="type-row"><div class="nm">Caption</div><div class="demo" style="font-size:10.5px;color:#8b93a3">端到端加密 · 手机只读</div><div class="spec">10.5 / 15 sp · 400</div></div>
+  </div>
+  <p class="a-tiny" style="color:var(--tx3);margin-top:6px">Android 端按 sp 落地并跟随系统字体缩放；11.5sp 是正文下限，低于它的文字只用于装饰。</p>
+
+  <h3>8.3 间距、圆角与触控</h3>
+  <div class="grid4">
+    <div class="card" style="padding:14px"><div class="a-tiny">基础网格</div><div style="font:700 20px/1.2 var(--mono);margin:5px 0">4 dp</div><div class="a-tiny">所有间距是 4 的倍数</div></div>
+    <div class="card" style="padding:14px"><div class="a-tiny">卡片圆角</div><div style="font:700 20px/1.2 var(--mono);margin:5px 0">11 dp</div><div class="a-tiny">与桌面端 10–12px 对齐</div></div>
+    <div class="card" style="padding:14px"><div class="a-tiny">触控目标</div><div style="font:700 20px/1.2 var(--mono);margin:5px 0">≥ 48 dp</div><div class="a-tiny">图标按钮 48×48 热区</div></div>
+    <div class="card" style="padding:14px"><div class="a-tiny">手机边距</div><div style="font:700 20px/1.2 var(--mono);margin:5px 0">12 dp</div><div class="a-tiny">列表两侧统一 12dp</div></div>
+  </div>
+
+  <h3>8.4 组件规则</h3>
+  <table class="tbl">
+    <thead><tr><th style="width:150px">组件</th><th>规则</th><th>不要这样做</th></tr></thead>
+    <tbody>
+      <tr><td><b>状态点</b></td><td>颜色 + 文字同时出现；点只做辅助</td><td>只靠红/绿区分状态</td></tr>
+      <tr><td><b>余额数字</b></td><td>等宽数字（tabular-nums），右对齐，货币符号小一号</td><td>把金额和百分比放同一层级</td></tr>
+      <tr><td><b>进度条</b></td><td>只用于有分母的渠道；配额型不画金额进度</td><td>把百分比和金额相加</td></tr>
+      <tr><td><b>陈旧状态</b></td><td>琥珀色 + “沿用 X 时快照”，数字仍然可读</td><td>把失败渲染成 0 或灰色空值</td></tr>
+      <tr><td><b>主按钮</b></td><td>一屏最多一个；用于“扫描/连接/重试”</td><td>把危险操作做成主按钮</td></tr>
+      <tr><td><b>折叠</b></td><td>渠道卡点击展开，箭头旋转 90°</td><td>用长按代替点击</td></tr>
+    </tbody>
+  </table>
+
+  <h3>8.5 动效与无障碍</h3>
+  <div class="grid2">
+    <div class="card">
+      <h4 style="margin-top:0">动效</h4>
+      <ul>
+        <li>页面切换 180ms；卡片展开 260ms；开关 160ms。</li>
+        <li>曲线 <code>cubic-bezier(.2,.8,.2,1)</code>，快起慢停，不回弹。</li>
+        <li>刷新只用旋转指示，不做全屏骨架屏，避免余额闪烁。</li>
+        <li>尊重系统“减少动态效果”：关闭激光扫描线与展开动画。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4 style="margin-top:0">无障碍</h4>
+      <ul>
+        <li>正文对比度 ≥ 4.5:1；金额大字 ≥ 3:1。</li>
+        <li>每个图标按钮有 <code>contentDescription</code>；状态点不作为唯一信息源。</li>
+        <li>支持系统字体缩放；11.5sp 以下只用于装饰。</li>
+        <li>扫码页支持手动输入，摄像头权限被拒也能完成配对。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ 9 -->
+<section id="states">
+  <h2><span class="no">09</span>状态与异常<span class="sub">余额类产品最怕“看起来正常，其实是旧数据”</span></h2>
+
+  <table class="tbl matrix">
+    <thead><tr><th>状态</th><th>触发条件</th><th>手机端表现</th><th>文案</th><th>动作</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag">加载中</span></td><td>首次进入 / 手动刷新</td><td>顶部细进度条 + 数字保持上次值</td><td>“正在读取…”</td><td>30 秒节流</td></tr>
+      <tr><td><span class="tag ok">正常</span></td><td>解密成功且未超时</td><td>绿色点 + 时间</td><td>“2 分钟前 · 9 个渠道”</td><td>—</td></tr>
+      <tr><td><span class="tag warn">陈旧</span></td><td>超过 3 倍刷新间隔</td><td>琥珀横幅 + 数字保留</td><td>“数据可能已过期 · 上次成功 14:02”</td><td>手动刷新</td></tr>
+      <tr><td><span class="tag">离线</span></td><td>组内所有数据源都超过 24 小时无新快照</td><td>组级离线横幅 + 旧快照</td><td>“同步组已离线 · 12 小时前”</td><td>手动刷新</td></tr>
+      <tr><td><span class="tag bad">解密失败</span></td><td>GCM 校验失败 / AAD 不匹配</td><td>红色横幅，仅影响该数据源</td><td>“1 个数据源无法解密”</td><td>重试 / 复制诊断</td></tr>
+      <tr><td><span class="tag bad">同步码不匹配</span></td><td>所有文件都解不开</td><td>阻断式空状态</td><td>“同步码与中继不匹配”</td><td>重新扫码</td></tr>
+      <tr><td><span class="tag warn">限流</span></td><td>HTTP 403 + rate limit</td><td>小横幅，不弹窗</td><td>“请求太频繁，稍后自动重试”</td><td>按 Retry-After / reset 退避</td></tr>
+      <tr><td><span class="tag">无网络</span></td><td>请求失败且无缓存更新</td><td>保留上次数据 + 灰色提示</td><td>“网络不可用，显示上次快照”</td><td>恢复后自动重试</td></tr>
+      <tr><td><span class="tag bad">中继被删除</span></td><td>gist 404</td><td>阻断式空状态</td><td>“电脑端的中继已被删除”</td><td>电脑重新创建</td></tr>
+      <tr><td><span class="tag">无数据</span></td><td>配对成功但还没有第一次上传</td><td>空面板 + 说明</td><td>“同步组还没有发布过数据”</td><td>回到电脑点“立即上传”</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note warn" style="margin-top:14px">
+    <span class="t">同步组合并规则</span>
+    手机把组内所有快照按 <code>channel.platformId</code> 合并，<b>同一渠道不求和</b>，取 <code>updatedAt</code> 最新的一条。如果这条是 stale，就带着 stale 标记显示，<b>不要退回另一个数据源更旧的观测</b> —— 旧值可能掩盖最近的余额下降。总额从合并后的渠道行重算，不累加各数据源的 <code>totals</code>；签到基于去重明细汇总，具体计数口径在 M0 确认。手机界面不显示设备名，也不提供按设备切换。
+  </div>
+
+  <div class="note" style="margin-top:10px">
+    <span class="t">时钟与时效</span>
+    统一使用载荷 <code>at</code>（发布时间）和渠道 <code>updatedAt</code>（最后成功观测）；另记本机 receivedAt。未来时间超过容差应标记 CLOCK_SKEW，不能简单归零后永久显示新鲜。跨来源不能靠 seq 排序；时钟异常的来源不自动抢占正常观测。具体冲突规则见评审节。
+  </div>
+</section>
+
+<!-- ============================================================ 10 -->
+<section id="contract">
+  <h2><span class="no">10</span>数据契约<span class="sub">双端共用的测试向量与字段白名单</span></h2>
+
+  <h3>10.1 Gist 里的文件布局</h3>
+  <div class="card" style="font:12px/1.8 var(--mono);color:var(--tx2)">
+    <div>gt-relay-&lt;random&gt;/</div>
+    <div>├── gt_s_7Q3K9F2M.json&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--tx3)"># 写入者 A</span></div>
+    <div>├── gt_s_P9Xm4T1A.json&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--tx3)"># 写入者 B</span></div>
+    <div>└── gt_s_L2c8V5R0.json&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--tx3)"># 写入者 C</span></div>
+  </div>
+  <p class="a-tiny" style="margin-top:7px;color:var(--tx3)">文件名只含随机写入者 ID；渠道、余额全部在密文里。手机不展示这些 ID，只用它们做合并与诊断。</p>
+
+  <h3>10.2 密文外壳</h3>
+  <div class="card" style="font:12px/1.7 var(--mono);color:var(--tx2)">
+<pre style="overflow:auto;margin:0">{
+  "v": 1,
+  "n": "q83v...9Kp",          // 12 字节 nonce，base64url
+  "c": "A1b2...Zx9"           // AES-256-GCM 密文 + tag，base64url
+}</pre>
+  </div>
+  <p class="a-tiny" style="margin-top:7px;color:var(--tx3)">AAD 固定为 <code>v1|&lt;source&gt;|&lt;keyEpoch&gt;</code>，防止密文被挪到别的写入者文件下。</p>
+
+  <h3>10.3 明文载荷（SyncSnapshot）</h3>
+  <table class="tbl">
+    <thead><tr><th>字段</th><th>类型</th><th>说明</th><th>是否必填</th></tr></thead>
+    <tbody>
+      <tr><td><code>v</code></td><td>int</td><td>载荷版本，当前 1</td><td>是</td></tr>
+      <tr><td><code>source</code></td><td>string</td><td>随机写入者 ID，与文件名一致；仅用于合并/诊断，界面不展示</td><td>是</td></tr>
+      <tr><td><code>seq</code></td><td>int</td><td>单调递增；同一来源拒绝更小的值</td><td>是</td></tr>
+      <tr><td><code>at</code></td><td>int</td><td>Unix 秒，电脑写入时刻</td><td>是</td></tr>
+      <tr><td><code>app</code></td><td>string</td><td>桌面端版本，用于排查</td><td>是</td></tr>
+      <tr><td><code>channels[]</code></td><td>array</td><td>渠道快照，字段见下</td><td>是</td></tr>
+      <tr><td><code>checkin</code></td><td>object</td><td>去重签到明细及汇总；计数口径在 M0 确认，可为 null，不以来源总数相加</td><td>否</td></tr>
+      <tr><td><code>totals</code></td><td>object</td><td><code>{cny, others[], today}</code>，只做该写入者的展示参考；合并时重算</td><td>是</td></tr>
+    </tbody>
+  </table>
+
+  <h4>channels[] 单项</h4>
+  <table class="tbl">
+    <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><code>platformId</code></td><td>string</td><td>跨来源平台合并键；内置枚举或统一同步平台标签映射，不含 URL/凭据</td></tr>
+      <tr><td><code>id</code> / <code>name</code></td><td>string</td><td>渠道标识与显示名</td></tr>
+      <tr><td><code>kind</code></td><td>enum</td><td><code>money</code> / <code>quota</code> / <code>points</code></td></tr>
+      <tr><td><code>remaining</code> / <code>total</code></td><td>number?</td><td>无分母时为 null</td></tr>
+      <tr><td><code>percent</code></td><td>number?</td><td>仅配额型；不与金额相加</td></tr>
+      <tr><td><code>windows[]</code></td><td>array</td><td>限流窗口：<code>{label, remainPercent, resetAt}</code></td></tr>
+      <tr><td><code>expiring[]</code></td><td>array</td><td>积分到期批次：<code>{amount, at}</code></td></tr>
+      <tr><td><code>day</code> / <code>week</code> / <code>month</code></td><td>number?</td><td>null 表示数据不足，不渲染成 0</td></tr>
+      <tr><td><code>estimated</code></td><td>bool</td><td>消耗是否为本地推算</td></tr>
+      <tr><td><code>stale</code></td><td>bool</td><td>本次取数失败，数值来自上次成功快照</td></tr>
+      <tr><td><code>errorCode</code></td><td>string?</td><td>错误码，不含原始文本</td></tr>
+      <tr><td><code>updatedAt</code></td><td>int</td><td>该渠道最后一次成功取数</td></tr>
+      <tr><td><code>hidden</code></td><td>bool</td><td>仅本来源隐藏；发布时移除该来源对应渠道及历史，不覆盖其他来源</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note bad" style="margin-top:14px">
+    <span class="t">明确不在契约里的字段</span>
+    <code>has_key</code>、<code>auth_source</code>、<code>auth_label</code>、<code>accounts</code>、<code>error</code>（原始文本）、设备名/别名/计算机名、任何 URL、任何本机路径、任何与密钥有关的长度或指纹。新增字段必须经过白名单评审。
+  </div>
+
+  <h3>历史与签到契约开发任务</h3>
+  <p>channels[].history[]：最近 7 天聚合记录，包含 periodStart、periodEnd、timeZone、unit、余额/消耗可空值、estimated、revisedAt；与 platformId 共同去重，具体精度、采样粒度和载荷上限在 M0 fixtures 固定。历史缺口不补 0，同窗口冲突取最新修订，同时间按 source 确定性裁决。</p>
+  <p>checkin：开发计划必须定义可去重的条目标识、业务日期与时区、状态、观测时间以及跨日重置规则。避免账号信息和凭据指纹；身份和计数口径须先确认，再固定明细结构与汇总算法。</p>
+  <h3>10.4 版本与兼容</h3>
+  <ul>
+    <li>同步码里的 <code>version</code> 与载荷 <code>v</code> 分开：前者管传输格式，后者管内容结构。</li>
+    <li>合并是客户端行为：按 <code>channel.platformId</code> 分组，取 <code>updatedAt</code> 最新；<code>source</code> 只用于区分文件与诊断，不参与展示。</li>
+    <li>未知主版本不参与合并，保留已验证缓存并提示更新；同主版本仅容忍未知可选字段，不猜测新枚举的含义。</li>
+    <li><code>contract/fixtures/</code> 放固定明文、密钥、nonce、密文；Rust 与 Kotlin 测试都读同一组向量。</li>
+    <li>字段只增不删；删除字段至少跨一个大版本，并保留解析容错。</li>
+  </ul>
+
+  <h3>10.5 仓库结构（建议）</h3>
+  <div class="card" style="font:12px/1.8 var(--mono);color:var(--tx2)">
+    <div>Grandettoken/</div>
+    <div>├── app/&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--tx3)"># 现有 Tauri 桌面端，不动结构</span></div>
+    <div>├── android/&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--tx3)"># 新的 Gradle 工程</span></div>
+    <div>├── contract/&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--tx3)"># 协议说明 + golden fixtures</span></div>
+    <div>└── docs/sync/&nbsp;&nbsp;&nbsp;<span style="color:var(--tx3)"># 安全边界、轮换、排障</span></div>
+  </div>
+</section>
+
+<!-- ============================================================ 11 -->
+<section id="acceptance">
+  <h2><span class="no">11</span>验收标准<span class="sub">能上线前必须全部满足</span></h2>
+  <ul class="checklist">
+    <li><span class="box"></span><span><b>桌面浏览器授权：</b>无需 PAT 输入；同账号授权后创建/加入，取消/失败不破坏原连接，token 不进入前端或日志。</span></li>
+    <li><span class="box"></span><span><b>手机免账号：</b>全新安装、未登录 GitHub，仅凭同步码即可看到同步组与余额。</span></li>
+    <li><span class="box"></span><span><b>零密钥泄露：</b>gist 中所有文件解密后均不包含 API Key、Cookie、邮箱、Windows 路径；自动化测试覆盖。</span></li>
+    <li><span class="box"></span><span><b>多电脑：</b>3 台电脑各自写入，互不覆盖；手机展示合并视图，同一渠道取最新，不跨数据源求和。</span></li>
+    <li><span class="box"></span><span><b>不区分设备：</b>手机界面没有设备列表、设备名或设备切换；只有一份合并面板。</span></li>
+    <li><span class="box"></span><span><b>多手机：</b>同一同步码可被多台手机读取；没有服务端注册状态。</span></li>
+    <li><span class="box"></span><span><b>失败不归零：</b>取数失败、离线、限流、解密失败都有明确状态，数字不会被渲染成 0。</span></li>
+    <li><span class="box"></span><span><b>轮换有效：</b>新组使用新密钥；旧码不能解密新数据。旧组可能仍可读到历史，不能承诺旧手机识别轮换。</span></li>
+    <li><span class="box"></span><span><b>请求预算：</b>匿名 5 分钟、登录 60 秒，后台至少 15 分钟；验证共享预算和响应头退避，不承诺连续刷新绝不限流。</span></li>
+    <li><span class="box"></span><span><b>无障碍：</b>核心流程仅用 TalkBack 可完成扫码/输入、查看合并面板、打开详情。</span></li>
+    <li><span class="box"></span><span><b>无敏感诊断：</b>导出的诊断文本只有时间、状态、错误码与文件大小。</span></li>
+    <li><span class="box"></span><span><b>桌面端无回归：</b>关闭同步时，现有取数、面板、胶囊、托盘行为不变。</span></li>
+    <li><span class="box"></span><span><b>历史同步：</b>新手机可读取电脑已有近 7 天聚合历史；跨来源去重，缺口不补 0，取消发布仅影响本来源。</span></li>
+    <li><span class="box"></span><span><b>签到汇总：</b>按 M0 确认口径验证跨来源去重、跨日重置、失败/未知状态，不相加各来源总数。</span></li>
+    <li><span class="box"></span><span><b>App 更新：</b>每天自动检查、用户点击下载、系统确认安装、稳定版可跳过；签名错误阻止安装，升级保留数据。详见第 14 节。</span></li>
+  </ul>
+</section>
+
+<!-- ============================================================ 12 -->
+<section id="milestones">
+  <h2><span class="no">12</span>里程碑<span class="sub">先跑通最窄的闭环，再补交互与状态</span></h2>
+  <table class="tbl">
+    <thead><tr><th>阶段</th><th>交付</th><th>完成判据</th><th>估算</th></tr></thead>
+    <tbody>
+      <tr><td><b>M0 协议</b></td><td><code>contract/</code>：同步码格式、密文外壳、字段白名单、历史窗口与平台标签、签到明细/计数口径设计、golden fixtures</td><td>Rust 与 Kotlin 都能用同一组向量完成加解密</td><td>待 M0 重估</td></tr>
+      <tr><td><b>M1 桌面端核心</b></td><td><code>core::sync</code>：OAuth 授权会话与安全存储、DTO、加解密、同步码、gist 传输、7 天聚合历史与签到明细发布、泄露测试</td><td>单测全绿；手工能把密文推到 gist</td><td>待 M0 重估</td></tr>
+      <tr><td><b>M2 桌面端 UI</b></td><td>设置 → 同步子页、GitHub 浏览器授权/重新授权/断开、账号展示、平台标签、仅本机取消发布、二维码、预览载荷、轮换</td><td>用户能独立完成创建与配对</td><td>待 M0 重估</td></tr>
+      <tr><td><b>M3 Android MVP</b></td><td>扫码加入同步组、匿名慢速/可选登录、合并面板、电脑同步历史曲线、签到汇总、手动刷新、Android 检查更新与下载安装</td><td>新手机 5 秒内看到合并数据</td><td>待 M0 重估</td></tr>
+      <tr><td><b>M4 状态与通知</b></td><td>组级陈旧/离线、数据源解密失败、前台轮询、后台 WorkManager、通知</td><td>断网/限流/轮换文案正确；签到去重、跨日、未知状态与历史缺口验收通过</td><td>待 M0 重估</td></tr>
+      <tr><td><b>M5 收尾</b></td><td>无障碍、动效、诊断页、发布 APK、Android 签名更新清单与覆盖升级验收、文档</td><td>验收清单全过</td><td>待 M0 重估</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============================================================ 13 -->
+<section id="final">
+  <h2><span class="no">13</span>已定决策与剩余风险<span class="sub">这版设计的核心变化，以及还没解决的取舍</span></h2>
+  <div class="grid2">
+    <div class="card">
+      <h4 style="margin-top:0">已定</h4>
+      <ul>
+        <li>数据模型：同一个同步码就是一个同步组；电脑读写，手机只读。</li>
+        <li>界面：手机不区分设备，只有一份合并面板；没有设备列表。</li>
+        <li>中继：Secret Gist，内容端到端加密。</li>
+        <li>手机：匿名慢速可用，GitHub 可选登录提速。</li>
+        <li>刷新：前台轮询；后台 15/30/60 分钟可选。</li>
+        <li>开源：同仓库 monorepo，Android 顶层工程，协议放 <code>contract/</code>。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4 style="margin-top:0">剩余风险与处理</h4>
+      <ul>
+        <li><b>同渠道不同账号：</b>合并时只保留最新的一条，可能少显示一个账号。这是已确认取舍；改显示名不改变合并身份。</li>
+        <li><b>Secret Gist 元数据：</b>API 响应可能带所有者登录名。可接受则用主账号；介意则后续增加“中继专用小号”引导。</li>
+        <li><b>未登录限额：</b>60 次/小时。匿名 304 仍纳入预算；登录后可每 60 秒读取，必须带 ETag 并处理 403/429。</li>
+        <li><b>后台限制：</b>Android 15 分钟是硬下限；不做常驻前台服务，避免耗电与通知栏污染。</li>
+        <li><b>同步码泄露：</b>当作密码处理；电脑端提供轮换与删除中继。</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="note ok" style="margin-top:14px">
+    <span class="t">下一步</span>
+    本轮仅更新设计文档，不启动开发。后续按 M0 → M1 推进：先固定平台标签、历史窗口、签到计数口径与 fixtures，再实现桌面端发布及 Android 展示。
+  </div>
+</section>
+
+
+<section id="app-update">
+  <h2><span class="no">14</span>Android 检查更新<span class="sub">客户端已实现 · 签名双版本升级待验收</span></h2>
+  <div class="note ok"><span class="t">用户已确认</span>通过本项目 GitHub Releases 分发 APK；默认每天自动检查一次，只提示；用户点击后下载并交给 Android 系统确认安装。v1 仅稳定版，可稍后处理或跳过，不强制更新。匿名用户与登录用户均可检查更新，无需先加入同步组。</div>
+  <h3>14.1 入口与检查策略</h3>
+  <ul>
+    <li>设置 → 数据与关于：显示当前 versionName / versionCode、“检查更新”、“自动检查更新”开关（默认开）、最近成功检查时间和更新状态。未配对空状态也提供“关于与更新”入口。</li>
+    <li>启动或回到前台时，若距离上次自动尝试已满 24 小时，异步检查一次；检查不阻塞扫码、面板和同步。v1 不增加专门的后台唤醒：App 长期未打开时，下次打开再检查，不承诺每天固定时刻运行。</li>
+    <li>每次自动尝试先记录时间，失败也节流，避免反复打开触发请求风暴；另存最近成功检查时间。手动检查不受 24 小时限制，但同一检查在途复用、连续点击节流，并遵守服务端退避截止时间。自动关闭后仍可手动检查。</li>
+    <li>发现新版本在设置入口显示更新标记，面板给非阻断提示，不自动弹全屏、不自动下载。自动失败保持安静；手动失败显示明确原因与重试入口，不能报“已是最新”。</li>
+    <li>更新卡包含版本、发布日期、APK 大小、更新说明、“下载更新”、“稍后”、“跳过此版本”。跳过按 versionCode 保存，仅抑制该版本自动提醒，更高版本重新提示；手动检查仍可看到被跳过的版本并主动更新。</li>
+  </ul>
+  <h3>14.2 完整交互流程</h3>
+  <ol>
+    <li><b>检查。</b>空闲 → 检查中 → 已是最新 / 有更新 / 当前系统不支持 / 检查失败。仅 versionCode 大于本机且满足系统版本、架构和稳定渠道的版本可推荐；相同版本不重复安装，不提供降级。</li>
+    <li><b>下载。</b>点击“下载更新”才联网获取 APK；移动数据下显示大小并确认“使用移动数据下载”。展示已下载字节、总大小、进度和“取消”；取消后可重试，不触发安装。下载与校验时继续显示已有面板。</li>
+    <li><b>验证。</b>下载至应用管理的临时目录，先核对受信发布清单与文件 SHA-256/大小，再验证 APK 签名、applicationId、versionCode、minSdk 和兼容架构；禁止安装任意 APK 或依赖文件扩展名判断。验证失败删除产物，显示错误码和重新下载入口。</li>
+    <li><b>安装授权。</b>校验通过后显示“安装更新”。点击后检查 canRequestPackageInstalls()；尚未允许时解释“需要允许 Grandettoken 安装此更新”，由用户选择进入系统的“允许来自此来源的应用”设置。返回后重新检查，未授权则保留“待安装”，不循环拉起权限页面。</li>
+    <li><b>系统安装。</b>通过 FileProvider content URI 和临时只读授权调用系统安装器，不暴露 file:// 路径，不静默安装。系统确认界面由用户完成；拒绝、取消、存储不足、签名不匹配、系统策略阻止时保留旧版可用，给出对应说明。不得建议卸载旧版来绕过签名错误。</li>
+    <li><b>完成确认。</b>交给安装器只代表“已交给系统”，不能提示安装成功。下次启动核对实际安装 versionCode，确认成功后清理旧 APK、更新提示和过期跳过记录；保留同步组、密钥、GitHub 登录和通知设置。安装前完成在途本地事务，数据库迁移必须支持从上一个发布版本直接升级。</li>
+  </ol>
+  <h3>14.3 Android 独立发布清单</h3>
+  <p>桌面现有 latest.json 由 Tauri 使用，Android 不复用其格式，也不使用仓库 /releases/latest 判定手机版本。建议采用独立固定发布标签 android-stable，其资源 android-latest.json 定位最新 Android 稳定版；APK 放在不可变的 android-vX.Y.Z 发布下。标签和清单需在开发时新增，当前尚不存在，不能将建议 URL 当作已可用服务。</p>
+  <div class="card"><code>https://github.com/wacilimonster-source/Grandettoken/releases/download/android-stable/android-latest.json</code></div>
+  <table class="tbl"><thead><tr><th>字段</th><th>约束</th></tr></thead><tbody>
+    <tr><td>schemaVersion / channel</td><td>清单结构版本；v1 只接受 stable，未知主版本停止解析并提示手动查看官方发布页</td></tr>
+    <tr><td>applicationId / versionName / versionCode</td><td>包名固定；versionName 供展示，versionCode 全局严格递增并用于比较，不按字符串排序</td></tr>
+    <tr><td>publishedAt / notes / releasePage</td><td>UTC 时间；更新说明按纯文本渲染并限制长度；发布页限定本项目官方 Releases</td></tr>
+    <tr><td>minSdk / artifacts[]</td><td>每个产物声明 ABI、sizeBytes、sha256、downloadUrl；首版优先 universal APK，避免选错架构；缺匹配产物显示不兼容</td></tr>
+    <tr><td>keyId / payload / signature</td><td>签名外壳：payload 为 base64url 编码的原始 UTF-8 JSON 字节，signature 为对解码后原始字节的 Ed25519 签名；校验通过后再解析，不对重新序列化 JSON 验签</td></tr>
+  </tbody></table>
+  <p>内置独立的 Android 更新清单验签公钥；APK 使用长期保管的 Android release 签名密钥，与桌面 Tauri 密钥分开。SHA-256 只能证明文件与清单一致，不能替代 APK 签名与受信清单验签。首版固定签名证书，不设计自动换签；未来轮换需单独设计兼容的签名沿革和公钥过渡。</p>
+  <h3>14.4 网络、安全与异常</h3>
+  <ul>
+    <li>清单和安装包均从官方 HTTPS 入口下载，限制清单大小、APK 总大小、超时及重定向次数。GitHub 资源会跳转至资源域名，客户端必须校验官方资源域名白名单；不把 OAuth token、同步码或 Authorization 传给发布下载链路及重定向目标。</li>
+    <li>更新功能不消耗 Gist 同步调度预算；若实现需要调用 GitHub REST API，则必须计入共享账号/IP 限额。使用 ETag 和本地缓存，304 只复用已验证清单；匿名 304 不假设免主限额。403/429 按响应头退避。</li>
+    <li>进程被结束、网络切换或超时后可重新下载；v1 不要求断点续传。持久化任务标识和下载状态，重入时核对文件完整性，不产生多个下载。临时文件失败/取消后清理，已验证待安装 APK 最长保留 7 天，重试安装前重新校验。</li>
+    <li>清单 404、缺产物、签名不符、未知版本、网络失败均视为检查/下载失败，不报告“已是最新”；保留最近可信状态。已知更新无法下载时可打开官方发布页，但不自动切换未验证镜像。</li>
+    <li>普通更新不强制；遇到同步协议主版本不兼容时保留缓存，说明无法展示的部分并给更新入口，不清空数据、不阻断其余可用功能。发行人撤回损坏版本时发布更高 versionCode 的修复包，不自动降级。</li>
+    <li>诊断仅记录检查时间、阶段、版本号与规范错误码，不含完整下载查询串、OAuth token、同步码或原始响应。</li>
+  </ul>
+  <h3>14.5 发布流程与开发任务</h3>
+  <p>沿用本项目 GitHub Releases 托管方式，另建 Android 打包/签名/清单发布流程。发布顺序：构建签名 APK → 验证证书与版本 → 上传不可变版本资源 → 匿名验证资源可下载 → 生成并签名更新清单 → 最后更新 android-stable 指针。清单切换时若资源短暂缺失，客户端保留旧可信状态并允许重试；不得覆盖已发布同 versionCode 的 APK。Android 发布不能改变桌面 latest.json，桌面发布也不能覆盖 Android 指针。</p>
+  <ul>
+    <li><b>M0：</b>固定 applicationId、versionCode 规则、清单 schema、验签向量、官方资源域名和发布指针；验证与桌面更新发现互不干扰。</li>
+    <li><b>M3：</b>关于与更新入口、自动/手动检查、更新卡、跳过版本、下载进度和取消、安装权限引导、系统安装器交接。</li>
+    <li><b>M5：</b>长期签名密钥及离线备份、发布流程、真机覆盖升级、数据库迁移、下载清理和异常验收。最终里程碑完成前必须具备可用的检查更新闭环。</li>
+  </ul>
+  <h3>14.6 验收</h3>
+  <p>覆盖匿名/登录/未配对均可检查；24 小时自动节流与关闭开关；手动检查、跳过和更高版本提醒；检查失败不误报最新；移动数据确认；取消/断网/杀进程重入；清单或 APK 被篡改、错包名/证书/版本/ABI 拒绝安装；未知来源授权被拒/返回；安装取消/空间不足；升级后数据和登录保留；桌面独立发版不误触手机更新；系统交接后不虚报安装成功。</p>
+  <p class="sec-note">依据：<a href="https://developer.android.com/studio/publish">Android 分发与未知来源安装授权</a> · <a href="https://developer.android.com/distribute/marketing-tools/alternative-distribution">APK 自行分发</a> · <a href="https://developer.android.google.cn/google/play/app-updates">Android 应用更新机制</a>。发布前结合实际目标系统与分发地区验证安装流程。</p>
+</section>
+
+<p style="text-align:center;color:var(--tx3);font-size:11.5px;margin-top:44px">
+  Grandettoken Sync · 产品设计稿 v1.4 · 2026-11-02 · 本文档不包含任何真实密钥或账号信息
+</p>
+
+</div>
+
+<!-- 桌面授权交互示意，不发起真实请求 -->
+<div class="modal" id="modal-pc-auth" onclick="if(event.target===this)closeModal('modal-pc-auth')">
+  <div class="modal-card">
+    <div class="modal-head"><b>连接 GitHub</b><span class="sp"></span><button onclick="closeModal('modal-pc-auth')" aria-label="关闭">×</button></div>
+    <div class="modal-body"><p>无需填写 PAT。在 GitHub 官方页面输入本机生成的短期授权码，允许读写 Gist，用于发布加密同步数据。</p><p><b>授权码：等待生成（原型示意）</b></p><p>正式产品将显示有效期、已连接账号和授权状态。当前原型不申请授权码、不打开真实授权会话。</p><p><a href="#desktop-auth" onclick="closeModal('modal-pc-auth')">查看完整授权流程</a></p></div>
+    <div class="modal-foot"><button class="pc-btn" onclick="closeModal('modal-pc-auth')">取消</button><button class="pc-btn primary" onclick="toast('正式产品将在此复制授权码并打开 GitHub；当前仅为设计示意')">复制授权码并打开 GitHub</button></div>
+  </div>
+</div>
+
+<!-- 预览载荷模态 -->
+<div class="modal" id="modal-preview" onclick="if(event.target===this)closeModal('modal-preview')">
+  <div class="modal-card">
+    <div class="modal-head"><b>将要上传的内容</b><span class="sp"></span><button onclick="closeModal('modal-preview')" aria-label="关闭">×</button></div>
+    <div class="modal-body">
+      <p style="font-size:12.5px;color:var(--tx2);margin-bottom:10px">这是本机将写入自己文件的明文快照（示意），不是合并视图。确认没有敏感字段后才会加密上传。</p>
+      <pre id="preview-json">{
+  "v": 1,
+  "source": "s_7Q3K9F2M",
+  "seq": 128,
+  "at": 1793500931,
+  "app": "0.3.2",
+  "totals": { "cny": 1284.5, "today": 12.4, "todayPrev": 11.5 },
+  "channels": [
+    { "id": "deepseek", "name": "DeepSeek", "kind": "money",
+      "remaining": 88.0, "day": 1.2, "week": 8.4, "month": 23.6,
+      "estimated": true, "stale": false, "updatedAt": 1793500850 },
+    { "id": "hapi", "name": "Hapi", "kind": "money",
+      "remaining": 12.6, "stale": true, "errorCode": "UPSTREAM_502",
+      "updatedAt": 1793500800 }
+  ],
+  "checkin": { "total": 4, "done": 3 }
+}</pre>
+      <div class="note ok" style="margin-top:12px">
+        <span class="t">不会出现在载荷里</span>
+        API Key · Cookie · Refresh Token · GitHub OAuth token / PAT · 同步密钥 · 邮箱/用户名 · 设备名/别名/计算机名 · 本机路径 · 原始错误文本 · 原始响应体
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="pc-btn" onclick="closeModal('modal-preview')" style="font-family:var(--doc-font)">关闭</button>
+      <button class="pc-btn primary" onclick="copyText(document.getElementById('preview-json').innerText,'预览 JSON 已复制')" style="font-family:var(--doc-font)">复制 JSON</button>
+    </div>
+  </div>
+</div>
+
+<!-- 轮换确认模态 -->
+<div class="modal" id="modal-rotate" onclick="if(event.target===this)closeModal('modal-rotate')">
+  <div class="modal-card" style="max-width:520px">
+    <div class="modal-head"><b>重新生成同步码？</b><span class="sp"></span><button onclick="closeModal('modal-rotate')" aria-label="关闭">×</button></div>
+    <div class="modal-body">
+      <p style="font-size:13px;color:var(--tx2)">这会创建新中继和新密钥，<b>所有电脑和手机</b>都需要重新加入。旧码无法读取新组的数据，但已经下载的历史数据无法收回。删除旧中继属于单独的确认操作，不能承诺清除所有副本。</p>
+      <div class="note warn" style="margin-top:12px">
+        <span class="t">适用场景</span>
+        手机丢失、同步码被截图、怀疑 gist 链接泄露。日常不要频繁轮换。
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="pc-btn" onclick="closeModal('modal-rotate')" style="font-family:var(--doc-font)">取消</button>
+      <button class="pc-btn danger" onclick="rotateNow()" style="font-family:var(--doc-font)">确认重新生成</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  var $ = function(s, r){ return (r||document).querySelector(s); };
+  var $$ = function(s, r){ return Array.prototype.slice.call((r||document).querySelectorAll(s)); };
+
+  /* ---------- Android 屏幕切换 ---------- */
+  window.showScreen = function(name){
+    $$('.a-screen').forEach(function(s){
+      s.classList.toggle('active', s.dataset.screen === name);
+    });
+    var active = $('.a-screen.active');
+    var navKey = active ? active.dataset.nav : null;
+    var nav = $('#phone-nav');
+    if(nav){
+      nav.classList.toggle('hidden', !navKey);
+      $$('#phone-nav button').forEach(function(b){
+        b.classList.toggle('on', b.dataset.target === navKey);
+      });
+    }
+    $$('#screen-index button').forEach(function(b){
+      b.classList.toggle('on', b.dataset.index === name);
+    });
+    var body = $('.a-screen.active .a-body');
+    if(body){ body.scrollTop = 0; }
+    var notes = {
+      empty: ['空状态 · 未加入同步组', '还没有加入任何同步组。首屏只给一个主动作：扫描同步码；手动输入作为次级入口。安全说明放在下方，不抢主按钮。', '加入前不发起任何请求；扫码失败不写入任何状态。'],
+      pair: ['扫码 / 输入同步码', '摄像头优先，手动输入兜底。输入框保留完整同步码，粘贴后立即做长度与 CRC 校验，不用等网络。', '扫码 → 校验 → 读取全部文件 → 合并 → 写入 Keystore；任一步失败都不产生半配对状态。'],
+      dashboard: ['合并面板', '组内所有电脑的快照合并成一份渠道列表。同一渠道只显示最新的一条，界面不出现设备名，也不提供设备切换。', '点渠道卡展开摘要；点“查看详情”进入详情；右上角刷新有 30 秒节流。'],
+      detail: ['渠道详情', '大数字 + 时间范围切换 + 近 7 天趋势。明确写出“数据来源=同步组”“是否陈旧”“是否推算”，不把缺失数据渲染成 0。', '这是只读页：手机端不提供充值、改配置或手动取数，也不显示写入者。'],
+      settings: ['同步设置', '三组：同步组、刷新、通知与数据。把“匿名 5 分钟 / 登录 60 秒 / 后台 15 分钟起”写成可选项，并说明 Android 的硬限制。', '同步码在手机上默认遮罩；不提供完整密钥的回显；退出同步组只清本机。'],
+      status: ['状态与诊断', '只展示时间、状态、错误码、文件大小与耗时。解密失败只影响那个数据源，其余渠道照常合并。', '诊断信息永不含同步密钥、设备名、余额或账号信息。']
+    };
+    var note = notes[name];
+    if(note && $('#note-title')){
+      $('#note-title').textContent = note[0];
+      $('#note-body').textContent = note[1];
+      $('#note-hint').textContent = note[2];
+    }
+  };
+
+  /* ---------- 刷新 ---------- */
+  window.refreshPhone = function(){
+    var b = $('#phone-refresh');
+    if(!b || b.classList.contains('loading')) return;
+    b.classList.add('loading');
+    setTimeout(function(){
+      b.classList.remove('loading');
+      var sub = $('#group-sub');
+      if(sub){ sub.textContent = '刚刚 · 9 个渠道'; }
+      toast('已刷新 · 同步组');
+    }, 900);
+  };
+
+  /* ---------- 渠道展开 ---------- */
+  window.toggleChannel = function(el){
+    var ch = el.closest('.a-ch');
+    if(ch){ ch.classList.toggle('open'); }
+  };
+
+  /* ---------- 演示状态 ---------- */
+  window.setDemo = function(state){
+    var b = $('#dash-banner');
+    if(!b) return;
+    var map = {
+      normal: null,
+      stale: ['warn', '数据可能已过期 · 上次成功 14:02', '组内数据源可能已休眠或网络中断；数字不会被清零。'],
+      offline: ['muted', '同步组已离线 · 12 小时前', '所有数据源都没有新快照；显示最后一次成功合并的结果。'],
+      bad: ['bad', '1 个数据源解密失败', '其他数据源正常合并；可能是同步码已轮换。']
+    };
+    var m = map[state];
+    if(!m){
+      b.className = 'a-banner hidden';
+      b.innerHTML = '';
+    } else {
+      b.className = 'a-banner ' + m[0];
+      b.innerHTML = '<b>' + m[1] + '</b><span>' + m[2] + '</span>';
+    }
+    $$('#demo-bar button').forEach(function(x){
+      x.classList.toggle('on', x.dataset.state === state);
+    });
+  };
+
+  /* ---------- 配对 ---------- */
+  window.togglePairError = function(){
+    var e = $('#pair-error');
+    if(e){ e.classList.toggle('show'); }
+  };
+
+  window.pairNow = function(){
+    var btn = $('#pair-btn');
+    var err = $('#pair-error').classList.contains('show');
+    btn.disabled = true;
+    btn.textContent = '正在校验…';
+    setTimeout(function(){
+      btn.disabled = false;
+      btn.textContent = '加入';
+      if(err){
+        $('#pair-error').classList.add('show');
+        toast('同步码无效，未写入任何状态');
+        return;
+      }
+      toast('已加入同步组');
+      showScreen('dashboard');
+    }, 900);
+  };
+
+  /* ---------- 分段 / 选项 ---------- */
+  window.seg = function(el){
+    $$('.a-seg button', el.parentNode).forEach(function(b){ b.classList.remove('on'); });
+    el.classList.add('on');
+  };
+
+  window.opt = function(el, group){
+    $$('#' + group + '-opt button').forEach(function(b){ b.classList.remove('on'); });
+    el.classList.add('on');
+    toast('刷新策略已更新（示意）');
+  };
+
+  window.flip = function(el){
+    el.classList.toggle('on');
+    el.setAttribute('aria-checked', el.classList.contains('on') ? 'true' : 'false');
+  };
+
+  /* ---------- PC 设置页：索引 → 子页 ---------- */
+  window.pcpOpen = function(name){
+    var idx = document.getElementById('pcp-index');
+    var sync = document.getElementById('pcp-sync');
+    var title = document.getElementById('pcp-page-title');
+    var isSync = name === 'sync';
+    if(idx) idx.classList.toggle('hidden', isSync);
+    if(sync) sync.classList.toggle('hidden', !isSync);
+    if(title) title.textContent = isSync ? '同步到手机' : '设置与管理';
+    if(isSync && sync) sync.scrollTop = 0;
+  };
+
+  window.pcpBack = function(){
+    var sync = document.getElementById('pcp-sync');
+    if(sync && !sync.classList.contains('hidden')){ pcpOpen('index'); return; }
+    toast('关闭设置（示意）');
+  };
+
+  window.togglePcSync = function(el){
+    el.classList.toggle('on');
+    el.setAttribute('aria-checked', el.classList.contains('on') ? 'true' : 'false');
+    var details = document.getElementById('pcp-details');
+    if(details) details.classList.toggle('hidden', !el.classList.contains('on'));
+    toast(el.classList.contains('on') ? '同步已开启' : '同步已关闭');
+  };
+
+  window.optPc = function(el){
+    var wrap = el.parentNode;
+    $$('button', wrap).forEach(function(b){ b.classList.remove('on'); });
+    el.classList.add('on');
+    toast('发布间隔已更新（示意）');
+  };
+
+  /* ---------- 模态 ---------- */
+  window.openModal = function(id){ $('#' + id).classList.add('show'); };
+  window.closeModal = function(id){ $('#' + id).classList.remove('show'); };
+
+  window.rotateNow = function(){
+    closeModal('modal-rotate');
+    toast('新同步组已创建（示意），其他电脑和手机需重新加入');
+  };
+
+  /* ---------- 复制 / toast ---------- */
+  var toastTimer = null;
+  window.toast = function(msg){
+    var t = $('#toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ t.classList.remove('show'); }, 1900);
+  };
+
+  window.copyText = function(text, msg){
+    var done = function(){ toast(msg || '已复制'); };
+    if(navigator.clipboard && window.isSecureContext){
+      navigator.clipboard.writeText(text).then(done).catch(function(){ fallback(text, done); });
+    } else {
+      fallback(text, done);
+    }
+  };
+  function fallback(text, done){
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); done(); }
+    catch(e){ toast('复制失败，请手动选择'); }
+    document.body.removeChild(ta);
+  }
+
+  /* ---------- 示意二维码 ---------- */
+  function renderQR(){
+    var el = document.getElementById('pcp-qr') || document.getElementById('qr');
+    if(!el) return;
+    var n = 25, m = 4, size = n * m;
+    var s = 20261102;
+    function rnd(){
+      s = (s * 1664525 + 1013904223) >>> 0;
+      return s / 4294967296;
+    }
+    var rects = '';
+    function finder(x, y){
+      rects += '<rect x="' + (x*m) + '" y="' + (y*m) + '" width="' + (7*m) + '" height="' + (7*m) + '" fill="#0e1015"/>';
+      rects += '<rect x="' + ((x+1)*m) + '" y="' + ((y+1)*m) + '" width="' + (5*m) + '" height="' + (5*m) + '" fill="#fff"/>';
+      rects += '<rect x="' + ((x+2)*m) + '" y="' + ((y+2)*m) + '" width="' + (3*m) + '" height="' + (3*m) + '" fill="#0e1015"/>';
+    }
+    for(var y = 0; y < n; y++){
+      for(var x = 0; x < n; x++){
+        var inFinder = (x < 8 && y < 8) || (x > n - 9 && y < 8) || (x < 8 && y > n - 9);
+        if(inFinder) continue;
+        if(rnd() > 0.52){
+          rects += '<rect x="' + (x*m) + '" y="' + (y*m) + '" width="' + m + '" height="' + m + '" fill="#0e1015"/>';
+        }
+      }
+    }
+    finder(0, 0); finder(n - 7, 0); finder(0, n - 7);
+    el.innerHTML = '<svg viewBox="0 0 ' + size + ' ' + size + '" width="126" height="126" role="img" aria-label="示意二维码"><rect width="' + size + '" height="' + size + '" fill="#fff"/>' + rects + '</svg>';
+  }
+
+  document.addEventListener('DOMContentLoaded', function(){
+    renderQR();
+    showScreen('dashboard');
+  });
+  if(document.readyState === 'interactive' || document.readyState === 'complete'){ renderQR(); }
+})();
+</script>
+</body>
+</html>

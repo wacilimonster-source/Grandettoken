@@ -16,17 +16,17 @@ pub async fn download_link(platform: String) -> Result<String, String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
         .build()
-        .map_err(|e| format!("创建下载连接失败：{e}"))?;
+        .map_err(|e| format!("创建下载连接失败: {e}"))?;
     let manifest = client
         .get(format!("{RELEASES}/{path}"))
         .send()
         .await
-        .map_err(|e| format!("获取正式版下载链接失败：{e}"))?
+        .map_err(|e| format!("获取正式版下载链接失败: {e}"))?
         .error_for_status()
-        .map_err(|e| format!("正式版下载暂不可用：{e}"))?
+        .map_err(|e| format!("正式版下载暂不可用: {e}"))?
         .json::<Value>()
         .await
-        .map_err(|e| format!("读取下载清单失败：{e}"))?;
+        .map_err(|e| format!("读取下载清单失败: {e}"))?;
     parse_link(&platform, manifest)
 }
 

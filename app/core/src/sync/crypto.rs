@@ -1,7 +1,7 @@
 //! 同步协议的加密原语。
 //!
-//! 这里不引 `hkdf` / `hmac` 新依赖：项目走离线构建，`sha2` 已在锁文件里，
-//! 用 RFC 2104 的 HMAC-SHA256 与 RFC 5869 的 HKDF-SHA256 手写实现，
+//! 这里不引 `hkdf` / `hmac` 新依赖：项目走离线构建,`sha2` 已在锁文件里,
+//! 用 RFC 2104 的 HMAC-SHA256 与 RFC 5869 的 HKDF-SHA256 手写实现,
 //! 并用 RFC 5869 Test Case 1 的官方向量锁死。AES-256-GCM 用已有的 `aes-gcm`。
 
 use aes_gcm::aead::{Aead, Payload};
@@ -18,11 +18,11 @@ pub const RELAY_ID_LEN: usize = 16;
 pub const NONCE_LEN: usize = 12;
 pub const TAG_LEN: usize = 16;
 
-/// HKDF 的固定 salt 输入。协议 v1 不允许改；改它等于换协议主版本。
+/// HKDF 的固定 salt 输入。协议 v1 不允许改;改它等于换协议主版本。
 const HKDF_SALT_INPUT: &[u8] = b"grandettoken-sync-v1/salt";
 /// HKDF info 的固定前缀。
 const HKDF_INFO_PREFIX: &str = "grandettoken-sync-v1/source-key";
-/// AAD 的固定前缀。`v1` 是密文外壳版本，不是载荷版本。
+/// AAD 的固定前缀。`v1` 是密文外壳版本,不是载荷版本。
 const AAD_PREFIX: &str = "v1";
 
 /// 密文外壳。`c` 是 ciphertext || 16 字节 GCM tag 的 base64url。
@@ -41,7 +41,7 @@ pub fn random_bytes<const N: usize>() -> Result<[u8; N], SyncError> {
     Ok(out)
 }
 
-/// 随机 128 位写入者 ID，文本形式 `s_<32 hex>`。
+/// 随机 128 位写入者 ID,文本形式 `s_<32 hex>`。
 pub fn random_source() -> Result<String, SyncError> {
     let bytes: [u8; 16] = random_bytes()?;
     Ok(format!("s_{}", hex_encode(&bytes)))
@@ -158,7 +158,7 @@ pub fn seal(
     seal_with_nonce(master, relay_id, source, key_epoch, plaintext, &nonce_bytes)
 }
 
-/// 固定 nonce 的加密入口，只给 golden fixtures / 跨语言测试用。
+/// 固定 nonce 的加密入口,只给 golden fixtures / 跨语言测试用。
 /// 生产路径必须使用 [`seal`] 的系统随机 nonce。
 pub fn seal_with_nonce(
     master: &[u8; KEY_LEN],
@@ -230,7 +230,7 @@ pub fn open(
                 aad: &aad,
             },
         )
-        .map_err(|_| SyncError::new(DECRYPT_FAILED, "密文校验失败（密钥、AAD 或内容被篡改）"))
+        .map_err(|_| SyncError::new(DECRYPT_FAILED, "密文校验失败(密钥、AAD 或内容被篡改)"))
 }
 
 pub fn valid_source(source: &str) -> bool {

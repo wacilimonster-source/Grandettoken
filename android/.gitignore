@@ -1,0 +1,12 @@
+# Android 构建产物与本机配置
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Gradle copyContractFixture 生成，源文件在 contract/fixtures
+app/src/test/resources/sync-v1.json

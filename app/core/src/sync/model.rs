@@ -1,7 +1,7 @@
-//! 同步载荷（SyncSnapshot）的数据模型、十进制口径与白名单校验。
+//! 同步载荷(SyncSnapshot)的数据模型、十进制口径与白名单校验。
 //!
 //! 这里刻意不复用 `ChannelView`：它含 `authLabel`、`error`、`extra`、`accounts`
-//! 等字段，直接序列化就是泄露。同步载荷是从零定义的 DTO，新增字段必须显式
+//! 等字段,直接序列化就是泄露。同步载荷是从零定义的 DTO,新增字段必须显式
 //! 加进本文件并通过 [`SyncSnapshot::validate`]。
 
 use serde::{Deserialize, Serialize};
@@ -31,13 +31,13 @@ pub enum ChannelKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CheckinStatus {
-    /// 今天已经完成（领过 / 平台侧已领 / 没活动也算当天完结）。
+    /// 今天已经完成(领过 / 平台侧已领 / 没活动也算当天完结)。
     Done,
-    /// 还没做，今天仍可尝试。
+    /// 还没做,今天仍可尝试。
     Pending,
-    /// 该平台不支持签到，或活动已下线。
+    /// 该平台不支持签到,或活动已下线。
     Unsupported,
-    /// 状态未知（凭据失效、接口异常），不能计入完成或待办。
+    /// 状态未知(凭据失效、接口异常),不能计入完成或待办。
     Unknown,
 }
 
@@ -47,7 +47,7 @@ pub struct SyncSnapshot {
     pub v: u8,
     pub source: String,
     pub seq: u64,
-    /// 发布时刻。心跳会变，余额时效不看它。
+    /// 发布时刻。心跳会变,余额时效不看它。
     pub at: i64,
     pub app: String,
     #[serde(default)]
@@ -61,9 +61,9 @@ pub struct SyncSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelSnapshot {
-    /// 跨来源合并键。内置平台用协议枚举；自定义平台用统一的同步平台标签。
+    /// 跨来源合并键。内置平台用协议枚举;自定义平台用统一的同步平台标签。
     pub platform_id: String,
-    /// 本机渠道 id，仅用于来源内部排查，不参与跨来源合并。
+    /// 本机渠道 id,仅用于来源内部排查,不参与跨来源合并。
     pub id: String,
     pub name: String,
     pub kind: ChannelKind,
@@ -99,13 +99,13 @@ pub struct ChannelSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowSnapshot {
-    /// 稳定窗口键；旧电脑端可能没有，手机按主窗回退。
+    /// 稳定窗口键;旧电脑端可能没有,手机按主窗回退。
     #[serde(default)]
     pub key: String,
     pub label: String,
     #[serde(default)]
     pub remain_percent: Option<String>,
-    /// 能解析成 unix 秒就填；填不了用 `reset_text`。
+    /// 能解析成 unix 秒就填;填不了用 `reset_text`。
     #[serde(default)]
     pub reset_at: Option<i64>,
     #[serde(default)]
@@ -135,7 +135,7 @@ pub struct HistoryPoint {
     pub spent: Option<String>,
     #[serde(default)]
     pub estimated: bool,
-    /// 该窗口是否有完整观测；false 表示有缺口（`spent` 可能为 null）。
+    /// 该窗口是否有完整观测;false 表示有缺口(`spent` 可能为 null)。
     /// 缺省 true 兼容旧 fixture / 旧载荷。
     #[serde(default = "default_true")]
     pub complete: bool,
@@ -149,13 +149,13 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckinSnapshot {
-    /// 业务日，UTC+8（v1 固定口径）。
+    /// 业务日,UTC+8(v1 固定口径)。
     pub date: String,
     pub time_zone: String,
     #[serde(default)]
     pub items: Vec<CheckinItem>,
     pub done: u32,
-    /// 分母 = done + pending；unsupported / unknown 不计入。
+    /// 分母 = done + pending;unsupported / unknown 不计入。
     pub total: u32,
     #[serde(default)]
     pub unsupported: u32,
@@ -166,7 +166,7 @@ pub struct CheckinSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckinItem {
-    /// 可跨来源去重的条目 ID。v1：`<platformId>:main`（当前每渠道一份凭据）。
+    /// 可跨来源去重的条目 ID。v1：`<platformId>:main`(当前每渠道一份凭据)。
     pub item_id: String,
     pub platform_id: String,
     pub status: CheckinStatus,
@@ -198,7 +198,7 @@ impl SyncSnapshot {
         if bytes.len() > MAX_PAYLOAD_BYTES {
             return Err(SyncError::new(
                 TOO_LARGE,
-                format!("同步载荷 {} 字节，超过上限 {} 字节", bytes.len(), MAX_PAYLOAD_BYTES),
+                format!("同步载荷 {} 字节,超过上限 {} 字节", bytes.len(), MAX_PAYLOAD_BYTES),
             ));
         }
         Ok(bytes)
@@ -438,7 +438,7 @@ pub fn valid_date(s: &str) -> bool {
         && b[8..].iter().all(|x| x.is_ascii_digit())
 }
 
-/// 十进制字符串：可带负号、最多 6 位小数、最多 24 字符；拒绝 NaN/Inf/指数。
+/// 十进制字符串：可带负号、最多 6 位小数、最多 24 字符;拒绝 NaN/Inf/指数。
 pub fn valid_decimal(s: &str) -> bool {
     let s = s.trim();
     if s.is_empty() || s.len() > 24 {
@@ -476,7 +476,7 @@ pub fn valid_decimal(s: &str) -> bool {
     digits > 0 && frac <= 6 && !(dot && bytes.last() == Some(&b'.'))
 }
 
-/// f64 → 规范十进制字符串；非有限值返回 None（绝不把 NaN/Inf 发出去）。
+/// f64 → 规范十进制字符串;非有限值返回 None(绝不把 NaN/Inf 发出去)。
 pub fn decimal_string(v: f64) -> Option<String> {
     if !v.is_finite() || v.abs() > 1_000_000_000_000.0 {
         return None;
@@ -494,7 +494,7 @@ pub fn decimal_string(v: f64) -> Option<String> {
     Some(s)
 }
 
-/// 解析为 1e-6 定点整数，用于精确合计。
+/// 解析为 1e-6 定点整数,用于精确合计。
 pub fn parse_decimal_micros(s: &str) -> Option<i128> {
     if !valid_decimal(s) {
         return None;
@@ -557,8 +557,8 @@ where
     }
 }
 
-/// 显示名净化：去掉控制字符、折叠空白、截断 40 字；像 URL / 邮箱 / 密钥的
-/// 自由文本直接退回内置名。白名单结构不能自动保证“零泄露”，这是最后一道闸。
+/// 显示名净化：去掉控制字符、折叠空白、截断 40 字;像 URL / 邮箱 / 密钥的
+/// 自由文本直接退回内置名。白名单结构不能自动保证“零泄露”,这是最后一道闸。
 pub fn sanitize_name(input: &str, fallback: &str) -> String {
     let cleaned: String = input
         .chars()

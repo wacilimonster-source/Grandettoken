@@ -1,0 +1,335 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_bg">
+
+    <LinearLayout
+        android:id="@+id/strip_content"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="10dp"
+        android:paddingEnd="7dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp">
+
+        <LinearLayout
+            android:id="@+id/strip_values"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <LinearLayout
+                android:id="@+id/strip_cell_0"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:paddingEnd="3dp">
+
+                <TextView
+                    android:id="@+id/strip_name_0"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:autoSizeTextType="uniform"
+                    android:autoSizeMinTextSize="9sp"
+                    android:autoSizeMaxTextSize="13sp"
+                    android:ellipsize="end"
+                    android:includeFontPadding="false"
+                    android:maxLines="1"
+                    android:textColor="#A4B2AE"
+                    android:textSize="13sp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:baselineAligned="false">
+
+                    <TextView
+                        android:id="@+id/strip_value_0"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:autoSizeTextType="uniform"
+                        android:autoSizeMinTextSize="14sp"
+                        android:autoSizeMaxTextSize="20sp"
+                        android:ellipsize="end"
+                        android:includeFontPadding="false"
+                        android:maxLines="1"
+                        android:textColor="#F0F2F4"
+                        android:textSize="20sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/strip_tag_0"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:background="@drawable/widget_tag_bg"
+                        android:includeFontPadding="false"
+                        android:paddingStart="4dp"
+                        android:paddingEnd="4dp"
+                        android:paddingTop="1dp"
+                        android:paddingBottom="1dp"
+                        android:maxLines="1"
+                        android:textColor="#AEBEFF"
+                        android:textSize="11sp"
+                        android:textStyle="bold"
+                        android:visibility="gone" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/strip_sep_1"
+                android:layout_width="1dp"
+                android:layout_height="28dp"
+                android:layout_marginStart="2dp"
+                android:layout_marginEnd="4dp"
+                android:background="#1FFFFFFF" />
+
+            <LinearLayout
+                android:id="@+id/strip_cell_1"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:paddingEnd="3dp">
+
+                <TextView
+                    android:id="@+id/strip_name_1"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:autoSizeTextType="uniform"
+                    android:autoSizeMinTextSize="9sp"
+                    android:autoSizeMaxTextSize="13sp"
+                    android:ellipsize="end"
+                    android:includeFontPadding="false"
+                    android:maxLines="1"
+                    android:textColor="#A4B2AE"
+                    android:textSize="13sp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:baselineAligned="false">
+
+                    <TextView
+                        android:id="@+id/strip_value_1"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:autoSizeTextType="uniform"
+                        android:autoSizeMinTextSize="14sp"
+                        android:autoSizeMaxTextSize="20sp"
+                        android:ellipsize="end"
+                        android:includeFontPadding="false"
+                        android:maxLines="1"
+                        android:textColor="#F0F2F4"
+                        android:textSize="20sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/strip_tag_1"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:background="@drawable/widget_tag_bg"
+                        android:includeFontPadding="false"
+                        android:paddingStart="4dp"
+                        android:paddingEnd="4dp"
+                        android:paddingTop="1dp"
+                        android:paddingBottom="1dp"
+                        android:maxLines="1"
+                        android:textColor="#AEBEFF"
+                        android:textSize="11sp"
+                        android:textStyle="bold"
+                        android:visibility="gone" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/strip_sep_2"
+                android:layout_width="1dp"
+                android:layout_height="28dp"
+                android:layout_marginStart="2dp"
+                android:layout_marginEnd="4dp"
+                android:background="#1FFFFFFF" />
+
+            <LinearLayout
+                android:id="@+id/strip_cell_2"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/strip_name_2"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:autoSizeTextType="uniform"
+                    android:autoSizeMinTextSize="9sp"
+                    android:autoSizeMaxTextSize="13sp"
+                    android:ellipsize="end"
+                    android:includeFontPadding="false"
+                    android:maxLines="1"
+                    android:textColor="#A4B2AE"
+                    android:textSize="13sp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:baselineAligned="false">
+
+                    <TextView
+                        android:id="@+id/strip_value_2"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:autoSizeTextType="uniform"
+                        android:autoSizeMinTextSize="14sp"
+                        android:autoSizeMaxTextSize="20sp"
+                        android:ellipsize="end"
+                        android:includeFontPadding="false"
+                        android:maxLines="1"
+                        android:textColor="#F0F2F4"
+                        android:textSize="20sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/strip_tag_2"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:background="@drawable/widget_tag_bg"
+                        android:includeFontPadding="false"
+                        android:paddingStart="4dp"
+                        android:paddingEnd="4dp"
+                        android:paddingTop="1dp"
+                        android:paddingBottom="1dp"
+                        android:maxLines="1"
+                        android:textColor="#AEBEFF"
+                        android:textSize="11sp"
+                        android:textStyle="bold"
+                        android:visibility="gone" />
+                </LinearLayout>
+            </LinearLayout>
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/strip_sep_3"
+            android:layout_width="1dp"
+            android:layout_height="28dp"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="4dp"
+            android:background="#1FFFFFFF" />
+
+        <LinearLayout
+            android:id="@+id/strip_side"
+            android:layout_width="42dp"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:paddingStart="2dp">
+
+            <TextView
+                android:id="@+id/strip_refresh"
+                android:layout_width="30dp"
+                android:layout_height="30dp"
+                android:background="@drawable/widget_refresh_bg"
+                android:gravity="center"
+                android:includeFontPadding="false"
+                android:text="↻"
+                android:textColor="#C9D9D3"
+                android:textSize="17sp" />
+
+            <TextView
+                android:id="@+id/strip_time"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:autoSizeTextType="uniform"
+                android:autoSizeMinTextSize="7sp"
+                android:autoSizeMaxTextSize="11sp"
+                android:ellipsize="end"
+                android:gravity="center"
+                android:includeFontPadding="false"
+                android:lineSpacingExtra="0dp"
+                android:maxLines="2"
+                android:textColor="#A4B2AE" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/strip_empty"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="12dp"
+        android:paddingEnd="10dp"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="30dp"
+            android:layout_height="30dp"
+            android:background="@drawable/widget_icon_bg"
+            android:gravity="center"
+            android:includeFontPadding="false"
+            android:text="G"
+            android:textColor="#A6EDC9"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="9dp"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/strip_empty_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:textColor="#F0F2F4"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/strip_empty_sub"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:textColor="#A8B5AE"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/strip_empty_action"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/widget_pill_bg"
+            android:includeFontPadding="false"
+            android:paddingStart="9dp"
+            android:paddingEnd="9dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:textColor="#C5F3D8"
+            android:textSize="12sp" />
+    </LinearLayout>
+</FrameLayout>

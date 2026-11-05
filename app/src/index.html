@@ -57,7 +57,7 @@
          右上角不再有「更多操作」菜单;退出只在底栏与托盘。
          2026-11-05:刷新状态(如「刚刚」)并进刷新按钮 —— 用户习惯点状态文字,
          整块合成一个可点区域,不再让"看得见却点不动"的文字挨着按钮。 -->
-    <button class="tbi refresh" id="btnR" title="立即刷新" aria-label="立即刷新">
+    <button class="tbi refresh" id="btnR" title="刷新" aria-label="刷新">
       <span class="tb-live" id="tbLive"></span>
       <span class="refresh-ic" aria-hidden="true">
         <svg class="tbi-i"><use href="#i-refresh"/></svg>
@@ -137,7 +137,7 @@
         <div class="krow"><span class="k1">字段路径</span><input class="inp" id="cPath" placeholder="如 data.quota(探活模式留空)" autocomplete="off" spellcheck="false"></div>
         <div class="krow"><span class="k1">换算倍数</span><input class="inp" id="cScale" placeholder="如 500000(积分→元);留空 = 1" autocomplete="off"></div>
         <div class="krow"><span class="k1">密钥</span><input class="inp" id="cKey" type="password" placeholder="sk-…" autocomplete="off"></div>
-        <div class="krow"><span class="k1" style="flex:1">探活模式<span class="desc">只验证"地址与密钥可达",不解析余额(余额显示「—」,不计消耗)</span></span>
+        <div class="krow"><span class="k1" style="flex:1">探活模式<span class="desc">只验证「地址与密钥可达」,不解析余额(余额显示「—」,不计消耗)</span></span>
           <button class="sw" id="cProbeOnly" role="switch" aria-checked="false" aria-label="探活模式"></button></div>
         <div class="acts">
           <button class="btn" id="cTest">测试连接</button>
@@ -304,7 +304,7 @@
         </div>
       </div>
       <h4>分享下载</h4>
-      <div class="khint" style="margin:0 0 8px">复制最新正式版的安装包直链，可直接发送给别人。</div>
+      <div class="khint" style="margin:0 0 8px">复制最新正式版的安装包直链,可直接发送给别人。</div>
       <div class="field">
         <span>Windows 安装包<span class="usub ublk">适用于 64 位 Windows</span></span>
         <button class="btn" id="btnCopyWindowsDownload">复制下载直链</button>
@@ -342,7 +342,7 @@
         </label>
       </div>
       <div class="khint" id="logOff" style="display:none;margin:8px 0 0;color:var(--bad)">
-        日志已被环境变量 TOKENSCOPE_NODIAG 关闭 —— 去掉它并重启挂件才会重新记录。</div>
+        日志已被环境变量 TOKENSCOPE_NODIAG 关闭;去掉变量并重启后恢复记录。</div>
       <h4>数据与隐私</h4>
       <details class="fold">
         <summary>密钥只进 Windows 凭据管理器;快照库在本机</summary>
@@ -354,7 +354,7 @@
       </details>
     </div>
 
-    <!-- 同步到手机：索引 → 子页。桌面通过 GitHub Device Flow 授权，不手填 PAT。 -->
+    <!-- 同步到手机：索引 → 子页。桌面通过 GitHub Device Flow 授权,不手填 PAT。 -->
     <div class="mbody panel" data-p="sync">
       <div class="khint" id="syncStatusLoading">正在读取同步设置…</div>
       <div class="sync-warning" id="syncStatusError" role="alert" hidden>
@@ -378,7 +378,7 @@
           <button class="btn" id="syncRevealBtn" aria-pressed="true">隐藏同步码</button>
           <button class="btn" id="syncOptionsBtn" aria-expanded="false">更多选项</button>
         </div>
-        <div class="khint">同步码保存在本机，切换页面或重启后保持不变。它包含解密密钥，请妥善保管。</div>
+        <div class="khint">同步码保存在本机,切换页面或重启后保持不变。它包含解密密钥,请妥善保管。</div>
         <div class="khint" id="syncRelayHint"></div>
         <div id="syncOptions" class="sync-options" hidden>
           <div class="acts">
@@ -387,12 +387,12 @@
             <button class="btn danger" id="syncRotateBtn">重新生成同步码</button>
           </div>
           <div id="syncCompare" hidden>
-            <label class="khint" for="syncCompareInput">输入旧同步码，仅在本机比较，不上传或保存。</label>
+            <label class="khint" for="syncCompareInput">输入旧同步码,仅在本机比较,不上传或保存。</label>
             <textarea class="inp sync-input" id="syncCompareInput" rows="2" autocomplete="off" spellcheck="false" placeholder="粘贴旧同步码"></textarea>
             <div class="acts"><button class="btn" id="syncCompareBtn">本地核对</button><span class="khint" id="syncCompareResult" role="status"></span></div>
           </div>
         </div>
-        <div class="khint">手机端点「扫描二维码」对准这里显示的二维码，也可以手动输入同步码。同步码和二维码包含解密密钥，请勿截图外传；点「隐藏同步码」可临时遮挡。</div>
+        <div class="khint">手机端点「扫描二维码」对准这里的二维码,或手动输入同步码。同步码和二维码包含解密密钥,请勿截图外传;点「隐藏同步码」可临时遮挡。</div>
       </div>
 
       <div id="syncGithubCard" hidden>
@@ -404,10 +404,10 @@
           <span class="spacer"></span>
           <span class="khint" id="syncGithubMeta">仅 gist 权限</span>
         </div>
-        <p class="khint" id="syncGithubHint">通过 GitHub 官方浏览器页面授权，无需填写 PAT。OAuth 令牌只存 Windows 凭据管理器，不进配置、日志或同步码。</p>
+        <p class="khint" id="syncGithubHint">通过 GitHub 官方浏览器页面授权,无需填写 PAT。OAuth 令牌只存 Windows 凭据管理器,不进配置、日志或同步码。</p>
         <div class="krow" id="syncClientIdBox">
           <span class="k1" style="flex:0 0 78px">Client ID</span>
-          <input class="inp" id="syncClientId" placeholder="Iv1.… / Ov23li…（公开值）" autocomplete="off" spellcheck="false">
+          <input class="inp" id="syncClientId" placeholder="Iv1.… / Ov23li…(公开值)" autocomplete="off" spellcheck="false">
         </div>
         <div class="acts" id="syncClientIdSaveRow">
           <button class="btn" id="syncSaveClientId">保存 Client ID</button>
@@ -423,7 +423,7 @@
 
       <div id="syncRecovery" hidden>
         <h4>找回旧同步组</h4>
-        <div class="khint">验证属于当前 GitHub 账号且可以解密的旧组。恢复后暂停自动发布，当前组不会删除。</div>
+        <div class="khint">验证属于当前 GitHub 账号且可以解密的旧组。恢复后暂停自动发布,当前组不会删除。</div>
         <div class="acts"><button class="btn" id="syncRecoveryScan">查找本机旧组</button><button class="btn" id="syncRecoveryClose">收起</button></div>
         <div id="syncRecoveryList" class="sync-recovery-list" aria-live="polite"></div>
         <label class="khint" for="syncRecoveryInput">也可输入从其他电脑保存的旧同步码：</label>
@@ -433,7 +433,7 @@
 
       <div id="syncSetup" hidden>
         <h4>创建同步组</h4>
-        <div class="khint">连接 GitHub 后，用你的账号创建一个 secret gist 作为加密中继。</div>
+        <div class="khint">连接 GitHub 后,用你的账号创建一个 secret gist 作为加密中继。</div>
         <div class="acts" style="margin-top:7px">
           <button class="btn p" id="syncCreateBtn" disabled>创建同步组</button>
           <button class="btn" id="syncRecoverOpenSetup">找回旧同步组</button>
@@ -447,7 +447,7 @@
         <div class="acts" style="margin-top:7px">
           <button class="btn" id="syncJoinBtn" disabled>加入</button>
         </div>
-        <div class="khint">加入前校验快照，并确认 Gist 属于当前 GitHub 账号。</div>
+        <div class="khint">加入前校验快照,并确认 Gist 属于当前 GitHub 账号。</div>
       </div>
 
       <div id="syncPanel" hidden>
@@ -469,7 +469,7 @@
             <input type="checkbox" id="syncEnabled"> 自动发布
           </label>
         </div>
-        <div class="khint" id="syncChannelsHint">只发布勾选的渠道；默认全选。</div>
+        <div class="khint" id="syncChannelsHint">只发布勾选的渠道;默认全选。</div>
         <div class="sync-channels" id="syncChannels"></div>
         <div class="sync-labels" id="syncLabels"></div>
 
@@ -507,7 +507,7 @@
   <!-- 轻量提示条:刷新回执 / 操作失败,替代原生 alert -->
   <div id="toast" role="status"></div>
 
-  <!-- 桌面 GitHub Device Flow：只显示短期 user_code，device_code 留在 Rust -->
+  <!-- 桌面 GitHub Device Flow：只显示短期 user_code,device_code 留在 Rust -->
   <div class="sync-auth" id="syncAuth" hidden>
     <div class="sync-auth-card">
       <div class="sync-auth-title">连接 GitHub</div>

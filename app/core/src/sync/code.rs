@@ -1,9 +1,9 @@
 //! 同步码与 Gist 文件命名。
 //!
-//! 文本格式：`GT1.<base64url(payload || crc32)>`，无填充。
+//! 文本格式：`GT1.<base64url(payload || crc32)>`,无填充。
 //! payload 固定 51 字节：
 //!   version(1) | relayKind(1) | keyEpoch(1) | relayId(16) | key(32)
-//! CRC32 覆盖 payload，大端追加 4 字节。
+//! CRC32 覆盖 payload,大端追加 4 字节。
 
 use super::crypto::{
     base64url_decode, base64url_encode, hex_decode, hex_encode, random_master_key, KEY_LEN,
@@ -79,7 +79,7 @@ impl SyncCode {
         if bytes.len() != CODED_LEN {
             return Err(SyncError::new(
                 INVALID_CODE,
-                format!("同步码长度不正确（{}）", bytes.len()),
+                format!("同步码长度不正确({})", bytes.len()),
             ));
         }
         let (payload, crc_bytes) = bytes.split_at(PAYLOAD_LEN);
@@ -166,7 +166,7 @@ pub fn is_source_file_name(name: &str) -> bool {
     source_from_file_name(name).is_some()
 }
 
-/// 生成一个新的同步码（新 Gist 用）。
+/// 生成一个新的同步码(新 Gist 用)。
 pub fn new_sync_code(relay_id: [u8; RELAY_ID_LEN]) -> Result<SyncCode, SyncError> {
     Ok(SyncCode::new(relay_id, random_master_key()?))
 }

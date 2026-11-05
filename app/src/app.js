@@ -815,7 +815,7 @@ function renderRow(c, i) {
   let subVal;
   if (noKey)
     subVal = c.authSource === "app" ? "需打开应用" : c.authSource === "web" ? "待登录" : "待配置";
-  else if (failed) subVal = c.updatedAt ? snapAge(c.updatedAt) : "失联";
+  else if (failed) subVal = c.updatedAt ? snapAge(c.updatedAt) : "未连上";
   // 陈旧(取数成功但过期):年龄比"剩多少 / 哪个窗"更重要 —— 数字再准也是旧的
   else if (isStale) subVal = c.updatedAt ? snapAge(c.updatedAt) : "上次快照";
   else if (mw) {
@@ -1571,7 +1571,7 @@ function renderDetailSheet() {
   const c = CHANNELS.find((x) => x.id === DETAIL_ID);
   if (!c) {
     closeDetail(false);
-    showToast("这个渠道已隐藏或移除,详情已关闭", true);
+    showToast("渠道已隐藏或移除,详情已关闭", true);
     return;
   }
   const body = $("detailBody");
@@ -1694,7 +1694,7 @@ async function detailAction(act) {
     renderDetailSheet();
     try {
       await refresh();
-      showToast("已刷新 · " + (CHANNELS.find((x) => x.id === id) ? "刚刚" : "渠道已移除"), false);
+      // 刷新回执不再弹 toast:caption 同步变「更新于 刚刚」+ 刷新按钮已有 ✓ 角标,同屏反馈足够
     } finally {
       DETAIL_BUSY = false;
       renderDetailSheet();
@@ -1861,13 +1861,13 @@ function renderRiskBand() {
       ? "部分渠道到期信息未知"
       : CHANNELS.length ? `${SUMMARY_EXPIRY_DAYS} 天内暂无到期` : "等待数据";
   const riskTitle = EXPIRY_FILTER
-    ? "当前只显示临期积分渠道；点击恢复全部渠道"
+    ? "当前只显示临期积分渠道;点击恢复全部渠道"
     : hasConfirmed
       ? `未来 ${SUMMARY_EXPIRY_DAYS} 天可确认的积分到期合计 · 点击筛选临期渠道${
-          summary.unknown.length ? `；另有 ${summary.unknown.length} 个渠道到期明细未知` : ""
+          summary.unknown.length ? `;另有 ${summary.unknown.length} 个渠道到期明细未知` : ""
         }`
       : summary.unknown.length
-        ? "有积分渠道未提供逐笔到期信息，无法确认是否临期"
+        ? "有积分渠道未提供逐笔到期信息,无法确认是否临期"
         : `未来 ${SUMMARY_EXPIRY_DAYS} 天没有可确认的积分到期记录`;
   const riskCount = hasConfirmed ? `${points(summary.total)} 分` : "";
   const cell1 = `<button type="button" class="cell metric risk-cell${EXPIRY_FILTER ? " on" : ""}${hasConfirmed ? " has-risk" : ""}"
@@ -2001,14 +2001,14 @@ function renderInner(opts) {
   // 与行内同一套约定:未配置=空心环,失联=斜杠灰点,预警=黄(之前 warn 用了红点,颜色梯度倒挂)
   $("fdot").className =
     "dot" + (bad ? " st" : warn ? " w" : withKey.length ? "" : " off");
-  // 三段必须**互斥**:正常 = 总数 - 失联 - 预警;每个数字前面带自己的状态点。
+  // 三段必须**互斥**:正常 = 总数 - 告急 - 预警;每个数字前面带自己的状态点。
   const normalN = withKey.length - bad - warn;
   $("fstat").innerHTML = !withKey.length
     ? `<span class="fb-dot off"></span>${hiddenN ? "渠道已全部隐藏" : "未配置渠道"}`
     : [
         normalN ? `<span class="fb-dot"></span>${normalN} 正常` : "",
         warn ? `<span class="fb-dot warn"></span>${warn} 预警` : "",
-        bad ? `<span class="fb-dot bad"></span>${bad} 失联` : "",
+        bad ? `<span class="fb-dot bad"></span>${bad} 告急` : "",
         hiddenN ? `<span class="fb-dot off"></span>${hiddenN} 隐藏` : "",
       ].filter(Boolean).join('<span class="fb-sep">·</span>');
 
@@ -2742,8 +2742,8 @@ function revealBoxShow(box, key) {
 const WHY = {
   hide: "不再请求接口,也不再读取本机登录凭据;已记录的历史快照不删,点「恢复」立即回到取数。",
   custom: "地址与密钥只发往你填的那个域名;字段路径决定从返回 JSON 的哪一层取余额,换算倍数把它折成元。探活模式只验证可达,不解析金额。",
-  wblogin: "点「登录」会开一个独立窗口加载 www.workbuddy.cn 登录页(微信扫码 / 手机号),登录成功后窗口自己关掉,挂件接着用这份浏览器会话取数 —— 不用复制任何东西,也不动桌面客户端的登录状态。会话约 7 天到期。国内版桌面端 5.6.2 起把本机令牌改为加密存储,已无法自动读取。",
-  qoderweb: "逐包到期明细(哪些积分哪天过期)只在 qoder.com 的网页会话里提供,桌面端凭据只能拿到汇总 —— 这是平台两套接口的差别(2026-10-30 排查)。点「登录网页版」会开一个独立窗口,登录成功后自动关窗并刷新明细;这套会话只读积分明细,签到与余额照旧走桌面端,互不影响。",
+  wblogin: "点「登录」开一个独立窗口走网页登录(微信扫码/手机号),成功后窗口自动关掉,挂件用这份会话取数 —— 不复制任何东西,也不动桌面客户端的登录。会话约 7 天过期;国内版 5.6.2 起令牌加密存储,已无法自动读取。",
+  qoderweb: "逐笔到期明细只有网页会话能拿到,桌面端凭据只有汇总(平台两套接口的差别)。点「登录网页版」开独立窗口,登录后自动关窗并刷新;这套会话只读明细,签到与余额照旧走桌面端。",
   appauth: "凭据来自本机已登录的客户端;失效时打开一次客户端即可。隐藏本渠道后连读取也会停止。",
   compact: "开启后可切成 380×46 的横向条;顶栏固定四枚入口不再显示「紧凑」,用 Ctrl+2 切换紧凑条,Esc 在面板与胶囊之间切换。",
   trayNum: "托盘图标画概览缩写(74 / 1.2k / 82);关闭后回到品牌样式。",
@@ -2751,7 +2751,7 @@ const WHY = {
   notify: "通知本身不支持点击回跳(插件限制),所以窗口藏着时改为闪一下任务栏。",
   sound: "WebAudio 合成,不新增资源文件;默认关。",
   pill: "选中的渠道每 8 秒轮播一次,鼠标停在胶囊上时放慢到 24 秒;渠道隐藏后自动从轮播里剔除。",
-  checkin: "使用平台内部接口读取活动状态,规则可能随时变化,与官方无关。签到走直连(不经过系统代理)—— 平台按出口 IP 限流,代理 IP 更容易被拒。关闭某渠道的监测后,不再查询也不再签到;签到状态不参与余额渲染。",
+  checkin: "走平台内部接口查活动并签到;规则一变就自动暂停,余额显示不受影响。签到走直连不用系统代理 —— 平台按出口 IP 限流,代理 IP 更容易被拒。",
   freq: "间隔只受对方限流礼貌性约束;连续失败会自动退避,面板展开与折叠可以分别设。",
   vault: "加密存放在 Windows 凭据管理器(绑当前 Windows 账户);复制走系统剪贴板;不导出、不自动填到任何地方。",
   diag: "本机检查含快照库可写、开机自启、系统代理;报告里只有域名、状态与数值,没有任何密钥。",
@@ -3907,7 +3907,7 @@ $("list").addEventListener("click", async (e) => {
       // 现在与设置页走同一个 ckRun(),首页就能一键领。
       if (CK_LOG) return;
       if (CK[id] && CK[id].canTry === false) {
-        showToast("现在还不能领:" + ckHold(CK[id]), true);
+        showToast("还没到点: " + ckHold(CK[id]), true);
         return;
       }
       await ckRun(id);
@@ -4086,7 +4086,7 @@ function renderManageIndex() {
     row("mdl", "i-spark", "模型与客户端", "4SAPI · Hapi · OpenCode Go", "mdl"),
     row("ck", "i-cal", "每日签到",
       ckOn ? `今日 ${ck.done}/${ck.total}${ck.done >= ck.total ? " · 已完成" : ""}` : "未开启签到", "ck"),
-    row("disp", "i-display", "外观与显示", `${theme}主题 · ${font}字号 · ${compact} · 排序：${sort}`, "disp"),
+    row("disp", "i-display", "外观与显示", `${theme}主题 · ${font}字号 · ${compact} · 排序: ${sort}`, "disp"),
     row("run", "i-refresh", "刷新与启动", run, "run"),
     row("vault", "i-key", "密钥箱", "查看 / 搜索本机密钥", "vault"),
     row("sync", "i-sync", "同步到手机", syncSummary(), "sync"),
@@ -4167,6 +4167,31 @@ $("mTabs").addEventListener("click", (e) => {
 
 // ───────────── 同步到手机 ─────────────
 // 状态与子页共用 SYNC_STATUS；app.js 末尾的 bindSyncUI 绑定按钮。
+// SYNC_* 错误码对用户隐藏:界面只显示中文消息,码本身保留在诊断卡与日志里(报障链路不受影响)
+function syncUserMsg(e) {
+  return String(e ?? "").replace(/^SYNC_[A-Z_]+\s*:\s*/, "");
+}
+
+// 行内确认条(替代原生 confirm):与删密钥的 .cfrm 同一组件 —— 样式受控、按钮文案可控、
+// 不阻塞渲染进程。anchor 是触发按钮;条插在它所在 .acts 行(或所在行容器)之后。
+// alt = 可选的推荐动作(如「找回旧组」),排在危险主钮之前。
+function armConfirm(anchor, html, onOk, okLabel, alt) {
+  document.querySelectorAll(".cfrm.arm").forEach((x) => x.remove());
+  const strip = document.createElement("div");
+  strip.className = "cfrm arm";
+  strip.innerHTML = html +
+    (alt ? `<button class="btn p" data-cfrm-alt>${esc(alt.label)}</button>` : "") +
+    `<button class="btn danger" data-cfrm-ok>${esc(okLabel)}</button>` +
+    `<button class="btn" data-cfrm-no>取消</button>`;
+  (anchor.closest(".acts") || anchor.parentElement).after(strip);
+  strip.addEventListener("click", (e) => {
+    if (e.target.closest("[data-cfrm-ok]")) { strip.remove(); onOk(); }
+    else if (e.target.closest("[data-cfrm-alt]")) { strip.remove(); alt.fn(); }
+    else if (e.target.closest("[data-cfrm-no]")) strip.remove();
+  });
+  strip.scrollIntoView({ block: "nearest" });
+  return strip;
+}
 function hideSyncCode() {
   SYNC_CODE_REVEALED = false;
   if ($("syncCompareInput")) $("syncCompareInput").value = "";
@@ -4201,7 +4226,7 @@ function renderSync() {
   $("syncStatusLoading").hidden = !!s || failed;
   $("syncStatusError").hidden = !failed;
   $("syncStatusErrorText").textContent = failed
-    ? "同步设置读取失败，未创建新组。请重试：" + SYNC_STATUS_ERROR : "";
+    ? "同步设置读取失败(未创建新组): " + syncUserMsg(SYNC_STATUS_ERROR) : "";
   $("syncGithubCard").hidden = !s;
   $("syncCodeCard").hidden = !(s && s.relayId);
   if (!s) {
@@ -4229,10 +4254,10 @@ function renderSync() {
       ? "未授权"
       : "缺少 client_id";
   $("syncGithubHint").textContent = hasGithub
-    ? "每台电脑独立授权同一个 GitHub 账号；OAuth 令牌只存 Windows 凭据管理器，不进配置、日志或同步码。"
+    ? "每台电脑独立授权同一个 GitHub 账号;OAuth 令牌只存 Windows 凭据管理器,不进配置、日志或同步码。"
     : githubReady
-      ? "通过 GitHub 官方浏览器页面授权，无需填写 PAT。授权前不会创建 Gist、不会上传数据。"
-      : "在 GitHub → Settings → Developer settings → OAuth Apps 创建桌面 App，勾选 Enable Device Flow，把公开的 Client ID 填到下面。只需开发者配置一次。";
+      ? "通过 GitHub 官方浏览器页面授权,无需填写 PAT。授权前不会创建 Gist、不会上传数据。"
+      : "在 GitHub → Settings → Developer settings 建 OAuth App(勾选 Device Flow),把公开 Client ID 填在下面,只需一次。";
   $("syncClientIdBox").hidden = !!githubReady;
   $("syncClientIdSaveRow").hidden = !!githubReady;
   $("syncGithubConnect").hidden = hasGithub;
@@ -4250,17 +4275,17 @@ function renderSync() {
   if (!configured) return;
 
   $("syncCodeText").textContent = !s.codeText
-    ? "无法读取同步码，请重试或找回旧同步组"
-    : SYNC_CODE_REVEALED ? s.codeText : "GT1.••••••••••••••••（已隐藏）";
+    ? "无法读取同步码,请重试或找回旧同步组"
+    : SYNC_CODE_REVEALED ? s.codeText : "GT1.••••••••••••••••(已隐藏)";
   $("syncCopyBtn").disabled = !s.codeText;
   $("syncRevealBtn").disabled = !s.codeText;
   $("syncRevealBtn").textContent = SYNC_CODE_REVEALED ? "隐藏同步码" : "显示同步码";
   $("syncRevealBtn").setAttribute("aria-pressed", String(SYNC_CODE_REVEALED));
   $("syncErr").textContent = s.keyError
-    ? "本机同步密钥读取失败：" + s.keyError + "。请重试或找回旧同步组。"
+    ? "本机同步密钥读取失败(" + s.keyError + ") · 可点「找回旧同步组」恢复"
     : !s.source
-      ? "本机发布来源无法确认，自动发布不可用；同步码仍可用于读取。请从原电脑备份恢复发布状态。"
-      : s.lastError || "";
+      ? "本机发布来源无法确认,自动发布不可用;同步码仍可用于读取,请从原电脑备份恢复发布状态。"
+      : s.lastError ? syncUserMsg(s.lastError) : "";
   $("syncDot").className =
     "dot " + (!s.enabled ? "o" : s.lastError ? "b" : s.hasGithub && s.hasKey ? "" : "w");
   $("syncState").textContent = !s.hasKey ? "同步码不可用" : !s.source ? "发布来源缺失" : !s.enabled ? "已暂停" : s.lastError ? "发布失败" : "已开启";
@@ -4268,7 +4293,7 @@ function renderSync() {
   if (s.lastUploadAt) parts.push("上次上传 " + relTime(s.lastUploadAt));
   parts.push(s.hasKey ? "主密钥在本机" : "主密钥缺失");
   parts.push(s.hasGithub ? "GitHub 已授权" : "GitHub 未连接");
-  if (s.pendingSeq) parts.push(`待重试 seq ${s.pendingSeq}`);
+  if (s.pendingSeq) parts.push(`待重试(第 ${s.pendingSeq} 批)`);
   if (s.nextAllowedAt && s.nextAllowedAt > Date.now() / 1000) {
     parts.push("限流至 " + untilTime(s.nextAllowedAt));
   }
@@ -4318,7 +4343,7 @@ function renderSyncQr(s) {
   }
   box.hidden = false;
   if (SYNC_QR_FAILED === code) {
-    box.textContent = "二维码生成失败，请手动输入同步码。";
+    box.textContent = "二维码生成失败,请手动输入同步码。";
     return;
   }
   if (SYNC_QR_CODE === code && SYNC_QR_SVG) {
@@ -4345,7 +4370,7 @@ function renderSyncQr(s) {
       if (SYNC_QR_BUSY === code) SYNC_QR_BUSY = "";
       if (!SYNC_CODE_REVEALED || !SYNC_STATUS || SYNC_STATUS.codeText !== code) return;
       box.replaceChildren();
-      box.textContent = "二维码生成失败，请手动输入同步码。";
+      box.textContent = "二维码生成失败,请手动输入同步码。";
       box.dataset.code = "";
       SYNC_QR_FAILED = code;
     });
@@ -4364,29 +4389,31 @@ function renderSyncLabels() {
     .map(
       (c) => `<label class="lbl"><span>${esc(c.name)} 的同步标签</span>
         <input class="inp" data-label="${esc(c.id)}" value="${esc(labels[c.id] || "")}"
-          placeholder="如 my-relay（同标签跨机合并）" autocomplete="off" spellcheck="false"></label>`
+          placeholder="如 my-relay(同标签跨机合并)" autocomplete="off" spellcheck="false"></label>`
     )
     .join("");
 }
 
-async function syncCreate() {
+async function syncCreate(force) {
   const btn = $("syncCreateBtn");
   btn.disabled = true;
   try {
     try {
-      await invoke("sync_create", { allowExisting: false });
+      await invoke("sync_create", { allowExisting: force === true });
     } catch (e) {
-      if (!String(e).includes("SYNC_OLD_GROUP_FOUND")) throw e;
-      if (!confirm("检测到本机保留着旧同步组。建议先找回旧组，以便继续使用以前的同步码。\n\n仍要创建新的同步组吗？")) {
-        syncOpenRecovery();
-        return;
-      }
-      await invoke("sync_create", { allowExisting: true });
+      if (force === true || !String(e).includes("SYNC_OLD_GROUP_FOUND")) throw e;
+      // 行内确认:本机留有旧组,给「找回旧组」与「仍要新建」两条路(替代原生 confirm)
+      btn.disabled = false;
+      armConfirm(btn,
+        "本机留有旧同步组 —— 建议先找回,继续用以前的同步码。仍要新建?",
+        () => syncCreate(true), "仍要新建",
+        { label: "找回旧组", fn: syncOpenRecovery });
+      return;
     }
     const loaded = await loadSyncStatus();
-    showToast(loaded ? "同步组已创建 · 同步码已就绪" : "同步组已创建，但状态读取失败，请重试", !loaded);
+    showToast(loaded ? "同步组已创建 · 同步码已就绪" : "同步组已创建 · 状态读取失败,点「查看组状态」重试", !loaded);
   } catch (e) {
-    showToast("创建同步组失败:" + e, true);
+    showToast("创建同步组失败: " + syncUserMsg(e), true);
   } finally {
     renderSync();
   }
@@ -4403,7 +4430,7 @@ async function syncJoin() {
     await loadSyncStatus();
     showToast("已加入同步组");
   } catch (e) {
-    showToast("加入失败:" + e, true);
+    showToast("加入失败: " + syncUserMsg(e), true);
   } finally {
     renderSync();
   }
@@ -4417,7 +4444,7 @@ async function syncPublish() {
     await loadSyncStatus();
     showToast("已发布");
   } catch (e) {
-    showToast("发布失败:" + e, true);
+    showToast("发布失败: " + syncUserMsg(e), true);
   } finally {
     renderSync();
   }
@@ -4431,7 +4458,7 @@ async function syncPreview() {
     showToast("这是本机将上传的明文快照");
   } catch (e) {
     out.textContent = String(e);
-    showToast("预览失败:" + e, true);
+    showToast("预览失败: " + syncUserMsg(e), true);
   }
 }
 
@@ -4444,13 +4471,20 @@ async function syncGroup() {
     else showToast("组未变化");
   } catch (e) {
     out.textContent = String(e);
-    showToast("读取组状态失败:" + e, true);
+    showToast("读取组状态失败: " + syncUserMsg(e), true);
   }
 }
 
 async function syncRotate() {
   if (!SYNC_STATUS || !SYNC_STATUS.relayId) return;
-  if (!confirm("重新生成会创建新的同步组。已配对的手机和其他电脑需要使用新码，才能接收本机的新数据。\n\n旧组不会自动删除，旧码仍可能读取旧组的数据。继续？")) return;
+  // 行内确认(替代原生 confirm):说清「换新组」影响哪些设备再动手
+  armConfirm($("syncRotateBtn"),
+    "重新生成会换新组:已配对的手机和电脑要用新码才能收到新数据。旧组不删,旧码仍能读旧数据。",
+    syncRotateGo, "重新生成");
+}
+
+async function syncRotateGo() {
+  if (!SYNC_STATUS || !SYNC_STATUS.relayId) return;
   const expectedRelayId = SYNC_STATUS.relayId;
   try {
     $("syncRotateBtn").disabled = true;
@@ -4459,9 +4493,9 @@ async function syncRotate() {
     $("syncCompareInput").value = "";
     $("syncCompareResult").textContent = "";
     await loadSyncStatus();
-    showToast("已生成新同步码" + (r.oldRelayId ? "；旧中继未删除" : ""));
+    showToast("已生成新同步码" + (r.oldRelayId ? "; 旧中继未删除" : ""));
   } catch (e) {
-    showToast("重新生成失败:" + e, true);
+    showToast("重新生成失败: " + syncUserMsg(e), true);
   } finally {
     renderSync();
   }
@@ -4483,12 +4517,12 @@ async function syncScanRecovery() {
       `<div class="sync-recovery-row"><span>中继 ${esc(String(c.gistId).slice(0, 10))}…<br><span class="khint">${c.hasLocalSource ? "已验证 · 本机发布来源可恢复" : "已验证 · 本机发布来源未确认"}</span></span>
        <button class="btn" data-recover-id="${esc(c.gistId)}" data-epoch="${Number(c.keyEpoch) || 0}">恢复</button></div>`
     );
-    if (!rows.length) rows.push('<div class="khint">没有找到可验证的旧组；如有旧同步码，可在下方输入。</div>');
-    if (result.unverified) rows.push(`<div class="khint">另有 ${Number(result.unverified)} 个本机记录未能验证，请检查网络和账号，或输入旧码。</div>`);
-    if (result.truncated) rows.push('<div class="khint">本次只检查了前 24 个记录；也可直接输入旧码。</div>');
+    if (!rows.length) rows.push('<div class="khint">没有找到可验证的旧组;如有旧同步码,可在下方输入。</div>');
+    if (result.unverified) rows.push(`<div class="khint">另有 ${Number(result.unverified)} 个本机记录未能验证,请检查网络和账号,或输入旧码。</div>`);
+    if (result.truncated) rows.push('<div class="khint">本次只检查了前 24 个记录;也可直接输入旧码。</div>');
     list.innerHTML = rows.join("");
   } catch (e) {
-    list.textContent = "查找失败：" + String(e) + "。请重试或输入旧同步码。";
+    list.textContent = "查找失败: " + syncUserMsg(e) + "。请重试或输入旧同步码。";
   } finally {
     SYNC_RECOVERY_BUSY = false;
     renderSync();
@@ -4503,9 +4537,16 @@ function syncOpenRecovery() {
   if (SYNC_STATUS && SYNC_STATUS.hasGithub) syncScanRecovery();
 }
 
-async function syncRestoreGroup(gistId, code, keyEpoch) {
+async function syncRestoreGroup(gistId, code, keyEpoch, anchor) {
   if (SYNC_RECOVERY_BUSY || !SYNC_STATUS) return;
-  if (!confirm("恢复后会切换到所选同步组，当前组不会删除。自动发布先暂停，确认发布状态后可重新开启。继续？")) return;
+  // 行内确认(替代原生 confirm)
+  armConfirm(anchor || $("syncRecoveryImport"),
+    "恢复后切换到所选旧组,当前组保留;自动发布先暂停,确认发布状态后再开。",
+    () => syncRestoreGroupGo(gistId, code, keyEpoch), "恢复旧组");
+}
+
+async function syncRestoreGroupGo(gistId, code, keyEpoch) {
+  if (SYNC_RECOVERY_BUSY || !SYNC_STATUS) return;
   const expectedCurrent = SYNC_STATUS.relayId || null;
   SYNC_RECOVERY_BUSY = true;
   renderSync();
@@ -4522,9 +4563,9 @@ async function syncRestoreGroup(gistId, code, keyEpoch) {
     await loadSyncStatus();
     showToast(result.hasLocalSource
       ? "已找回旧同步组 · 自动发布已暂停"
-      : "旧同步码已找回，但本机发布来源未确认，请先恢复原发布状态", !result.hasLocalSource);
+      : "旧同步码已找回,但本机发布来源未确认,请先恢复原发布状态", !result.hasLocalSource);
   } catch (e) {
-    showToast("找回失败：" + e, true);
+    showToast("找回失败: " + syncUserMsg(e), true);
   } finally {
     SYNC_RECOVERY_BUSY = false;
     renderSync();
@@ -4533,25 +4574,32 @@ async function syncRestoreGroup(gistId, code, keyEpoch) {
 
 async function syncForget() {
   if (!SYNC_STATUS || !SYNC_STATUS.relayId) return;
-  if (!confirm("退出同步组会删除本机主密钥和发布状态；GitHub 上的密文不会自动删除。继续？")) return;
+  // 行内确认(替代原生 confirm):退出会删本机密钥,写清后果
+  armConfirm($("syncForgetBtn"),
+    "退出会删除本机主密钥和发布状态;GitHub 上的密文不会自动删除。",
+    syncForgetGo, "退出并删除本机密钥");
+}
+
+async function syncForgetGo() {
+  if (!SYNC_STATUS || !SYNC_STATUS.relayId) return;
   const expectedRelayId = SYNC_STATUS.relayId;
   try {
     await invoke("sync_forget", { expectedRelayId });
     await loadSyncStatus();
     showToast("已退出同步组");
   } catch (e) {
-    showToast("退出失败:" + e, true);
+    showToast("退出失败: " + syncUserMsg(e), true);
   }
 }
 
 async function syncDisconnect() {
-  if (!confirm("断开 GitHub 授权后，本机将不能再发布；手机仍可用同步码匿名读取。继续？")) return;
+  if (!confirm("断开 GitHub 授权后,本机将不能再发布;手机仍可用同步码匿名读取。继续？")) return;
   try {
     await invoke("sync_disconnect_github");
     await loadSyncStatus();
     showToast("已断开 GitHub 授权");
   } catch (e) {
-    showToast("断开失败:" + e, true);
+    showToast("断开失败: " + syncUserMsg(e), true);
   }
 }
 
@@ -4568,7 +4616,7 @@ async function syncSetChannelsFromUI() {
     await invoke("sync_set_channels", { channels: ids });
     await loadSyncStatus();
   } catch (e) {
-    showToast("保存发布渠道失败:" + e, true);
+    showToast("保存发布渠道失败: " + syncUserMsg(e), true);
   }
 }
 
@@ -4577,7 +4625,7 @@ async function syncSetEnabledFromUI(on) {
     await invoke("sync_set_enabled", { enabled: on });
     await loadSyncStatus();
   } catch (e) {
-    showToast("切换失败:" + e, true);
+    showToast("切换失败: " + syncUserMsg(e), true);
     renderSync();
   }
 }
@@ -4587,7 +4635,7 @@ async function syncSetIntervalFromUI(sec) {
     await invoke("sync_set_interval", { seconds: Number(sec) });
     await loadSyncStatus();
   } catch (e) {
-    showToast("保存间隔失败:" + e, true);
+    showToast("保存间隔失败: " + syncUserMsg(e), true);
   }
 }
 
@@ -4596,7 +4644,7 @@ async function syncSetLabel(id, label) {
     await invoke("sync_set_platform_label", { channelId: id, label });
     await loadSyncStatus();
   } catch (e) {
-    showToast("保存同步标签失败:" + e, true);
+    showToast("保存同步标签失败: " + syncUserMsg(e), true);
   }
 }
 
@@ -4619,7 +4667,7 @@ async function syncGithubConnect() {
     $("syncAuth").hidden = false;
     syncAuthSchedule(SYNC_AUTH.interval);
   } catch (e) {
-    showToast("连接 GitHub 失败:" + e, true);
+    showToast("连接 GitHub 失败: " + syncUserMsg(e), true);
   } finally {
     btn.disabled = false;
   }
@@ -4635,7 +4683,7 @@ async function syncAuthPoll() {
   if (!SYNC_AUTH) return;
   if (Date.now() / 1000 >= SYNC_AUTH.expiresAt) {
     await syncAuthCancel(true);
-    showToast("GitHub 授权码已过期，请重新连接", true);
+    showToast("授权码已过期,点「连接 GitHub」重新开始", true);
     return;
   }
   try {
@@ -4661,7 +4709,7 @@ async function syncAuthPoll() {
       $("syncAuth").hidden = true;
     }
   } catch (e) {
-    $("syncAuthStatus").textContent = "轮询失败，稍后重试";
+    $("syncAuthStatus").textContent = "轮询失败,稍后重试";
     syncAuthSchedule(5);
   }
 }
@@ -4679,7 +4727,7 @@ async function syncAuthCopyOpen() {
   try { await invoke("copy_text", { text: SYNC_AUTH.userCode }); } catch { /* 手动抄写 */ }
   try {
     await invoke("open_url", { url: SYNC_AUTH.verificationUri });
-    $("syncAuthStatus").textContent = "已复制授权码。请在 GitHub 页面输入它，并确认只授予 gist 权限。";
+    $("syncAuthStatus").textContent = "已复制授权码。请在 GitHub 页面输入它,并确认只授予 gist 权限。";
   } catch (e) {
     showToast("打开浏览器失败:" + e, true);
   }
@@ -4695,13 +4743,20 @@ async function syncAuthOpenPage() {
 }
 
 async function syncGithubDisconnect() {
-  if (!confirm("断开后本机停止发布，但保留同步组和主密钥；重新授权即可恢复。继续？")) return;
+  // 行内确认(替代原生 confirm)
+  armConfirm($("syncGithubDisconnect"),
+    "断开后本机停止发布;手机仍可用同步码匿名读取。重新授权即可恢复。",
+    syncGithubDisconnectGo, "断开");
+}
+
+async function syncGithubDisconnectGo() {
+  if (!SYNC_STATUS || !SYNC_STATUS.hasGithub) return;
   try {
     await invoke("sync_disconnect_github");
     await loadSyncStatus();
     showToast("已断开 GitHub 授权");
   } catch (e) {
-    showToast("断开失败:" + e, true);
+    showToast("断开失败: " + syncUserMsg(e), true);
   }
 }
 
@@ -4711,10 +4766,9 @@ async function syncSaveClientId() {
   try {
     await invoke("sync_set_oauth_client_id", { clientId: id });
     $("syncClientId").value = "";
-    await loadSyncStatus();
-    showToast("Client ID 已保存");
+    await loadSyncStatus(); // 保存后 GitHub 卡从「OAuth App 未配置」切到「未连接」,同屏反馈足够
   } catch (e) {
-    showToast("保存 Client ID 失败:" + e, true);
+    showToast("保存 Client ID 失败: " + syncUserMsg(e), true);
   }
 }
 
@@ -4733,7 +4787,7 @@ function bindSyncUI() {
     renderSync();
     loadSyncStatus();
   });
-  $("syncCreateBtn").addEventListener("click", syncCreate);
+  $("syncCreateBtn").addEventListener("click", () => syncCreate(false));
   $("syncJoinBtn").addEventListener("click", syncJoin);
   $("syncPublishBtn").addEventListener("click", syncPublish);
   $("syncPreviewBtn").addEventListener("click", syncPreview);
@@ -4769,9 +4823,9 @@ function bindSyncUI() {
   $("syncCompareBtn").addEventListener("click", () => {
     const old = $("syncCompareInput").value.trim();
     const current = (SYNC_STATUS && SYNC_STATUS.codeText) || "";
-    $("syncCompareResult").textContent = !current ? "当前同步码无法读取，请先找回。"
+    $("syncCompareResult").textContent = !current ? "当前同步码无法读取,请先找回。"
       : !old ? "请先输入旧同步码。"
-      : old === current ? "两次同步码完全相同。" : "同步码不同，属于不同的同步凭据。";
+      : old === current ? "两次同步码完全相同。" : "同步码不同,属于不同的同步凭据。";
     $("syncCompareInput").value = "";
   });
   $("syncRecoverOpen").addEventListener("click", syncOpenRecovery);
@@ -4788,7 +4842,7 @@ function bindSyncUI() {
   });
   $("syncRecoveryList").addEventListener("click", (e) => {
     const button = e.target.closest("button[data-recover-id]");
-    if (button) syncRestoreGroup(button.dataset.recoverId, null, Number(button.dataset.epoch));
+    if (button) syncRestoreGroup(button.dataset.recoverId, null, Number(button.dataset.epoch), button);
   });
   $("syncRevealBtn").addEventListener("click", () => {
     SYNC_CODE_REVEALED = !SYNC_CODE_REVEALED;
@@ -4821,7 +4875,7 @@ function bindSyncUI() {
     renderSync();
     if (manageOpen() && document.body.classList.contains("manage-index")) renderManageIndex();
   });
-  listen("sync-error", (e) => showToast("同步失败:" + e.payload, true));
+  listen("sync-error", (e) => showToast("同步失败: " + syncUserMsg(e.payload), true));
 }
 bindSyncUI();
 
@@ -5119,7 +5173,7 @@ $("manage").addEventListener("click", async (e) => {
     if (CK_LOG) return;
     // 后端闸门(报告 P0-6):退避未到 / 今天已处理完时,点下去不该再发请求
     if (CK[id] && CK[id].canTry === false) {
-      showToast("现在还不能领:" + ckHold(CK[id]), true);
+      showToast("还没到点: " + ckHold(CK[id]), true);
       return;
     }
     await ckRun(id);
@@ -5163,7 +5217,7 @@ $("manage").addEventListener("click", async (e) => {
     }
     try {
       await invoke("copy_text", { text: v });
-      showToast("已复制:" + id);
+      showToast("已复制 " + id);
     } catch (e) {
       showToast("复制失败:" + e, true);
     }
@@ -5177,7 +5231,7 @@ $("manage").addEventListener("click", async (e) => {
       .join("\n");
     try {
       await invoke("copy_text", { text });
-      showToast("已复制地址/名称等信息(密钥在下面单独复制)");
+      showToast("已复制(不含密钥)");
     } catch (e) {
       showToast("复制失败:" + e, true);
     }
@@ -5249,7 +5303,7 @@ $("manage").addEventListener("click", async (e) => {
         model: id,
         source: MDL.sheet && MDL.sheet.source,
       });
-      showToast(msg + " · 已复制到剪贴板");
+      showToast(msg + " · 剪贴板对其他程序可见");
     } catch (err) {
       showToast("复制失败:" + err, true);
     }
@@ -5524,7 +5578,7 @@ $("manage").addEventListener("click", async (e) => {
       await refresh();
       renderChCards();
       fillKeyHints(true);
-      showToast("已改用密钥箱里的那把" + (it ? `(${it.platform} / ${it.label})` : "") + " · 手填的值已清除");
+      showToast("已改用密钥箱那把" + (it ? `(${it.platform} / ${it.label})` : "") + ",手填值已清除");
       const card = document.querySelector(`.ccard[data-id="${id}"]`);
       if (card) {
         card.classList.add("saved");
@@ -6133,7 +6187,7 @@ for (const [id, platform, label] of [
       await invoke("copy_text", { text });
       showToast(label + "下载直链已复制");
     } catch (e) {
-      showToast("复制下载直链失败：" + e, true);
+      showToast("复制下载直链失败: " + e, true);
     } finally {
       btn.disabled = false;
       btn.textContent = "复制下载直链";
@@ -6189,7 +6243,7 @@ if ($("btnLogCopy")) {
     try {
       const text = await invoke("diag_log_tail", { lines: 600 });
       await invoke("copy_text", { text });
-      showToast("最近日志已复制 · 可直接贴给我");
+      showToast("最近日志已复制 · 可直接粘贴给 AI 排查");
     } catch (e) {
       showToast("复制日志失败:" + e, true);
     } finally {
@@ -6203,16 +6257,17 @@ if ($("btnLogCopy")) {
       showToast("打开日志目录失败:" + e, true);
     }
   });
-  $("btnLogClear").addEventListener("click", async () => {
-    // 清空不可逆,但代价很小(只是排查线索);提示一句让用户知道"清掉就没了"
-    if (!confirm("清空排查日志?清掉之后,下次出问题就没有这段记录了。")) return;
-    try {
-      await invoke("diag_log_clear");
-      await refreshLogCard();
-      showToast("日志已清空");
-    } catch (e) {
-      showToast("清空失败:" + e, true);
-    }
+  $("btnLogClear").addEventListener("click", () => {
+    // 清空不可逆,但代价很小(只是排查线索);行内确认说清「清掉就没了」(替代原生 confirm)
+    armConfirm($("btnLogClear"), "清掉之后,下次出问题就没有这段记录了。", async () => {
+      try {
+        await invoke("diag_log_clear");
+        await refreshLogCard();
+        showToast("日志已清空");
+      } catch (e) {
+        showToast("清空失败:" + e, true);
+      }
+    }, "清空");
   });
 }
 
@@ -6233,7 +6288,7 @@ if ($("btnDiagExport")) {
     try {
       const text = await invoke("diag_export");
       await invoke("copy_text", { text });
-      showToast("诊断包已复制到剪贴板 · 直接贴给我就行");
+      showToast("诊断包已复制 · 可直接粘贴给 AI 排查");
     } catch (e) {
       showToast("导出诊断包失败:" + e, true);
     } finally {
@@ -6274,10 +6329,9 @@ $("btnDiag").addEventListener("click", async () => {
     const report = await invoke("run_diagnostic");
     $("diagOut").textContent = report;
     $("btnDiagCopy").style.display = "inline-block";
-    // 体检把失败链也写进了日志,顺手刷新一下大小/路径
+    // 体检把失败链也写进了日志,顺手刷新一下大小/路径。
+    // 结论(「结论:N 项需要处理 / 全部正常」)已完整展示在结果区,不再重复弹 toast
     refreshLogCard();
-    // 报告里有需要处理的渠道就顺手提示一句(不替用户判断严重性)
-    showToast(String(report).includes("✗") ? "体检完成:有项目需要处理" : "体检完成:全部正常");
   } catch (e) {
     $("diagOut").textContent = "体检失败:" + e;
     showToast("体检失败:" + e, true);
@@ -6289,7 +6343,7 @@ $("btnDiag").addEventListener("click", async () => {
 $("btnDiagCopy").addEventListener("click", async () => {
   try {
     await invoke("copy_text", { text: $("diagOut").textContent });
-    showToast("报告已复制 · 可直接贴给我");
+    showToast("报告已复制 · 可直接粘贴给 AI 排查");
   } catch (e) {
     showToast("复制失败:" + e, true);
   }
@@ -6594,7 +6648,7 @@ function vaultDel(id) {
 //   ③ 签到状态**不参与余额渲染** —— 签到失败永远不可能让余额显示成 0。
 let QODER_LOGGING = false; // 「登录网页版」正在跑(逐包到期会话,qoderweb-login 事件收尾)
 let CK = {};            // 渠道 id → checkin_state 的那一条
-let CK_LOG = false;     // 「领积分」正在跑
+let CK_LOG = false;     // 「领取」正在跑
 let CK_ACTIVITY_FILTER = "all";
 const CHECKIN_ON = new Set(["trae", "workbuddy", "qoder", "qoder-cn"]);
 const CHECKIN_QODER = new Set(["qoder", "qoder-cn"]);
@@ -6670,23 +6724,23 @@ function ckText(s) {
     const tail =
       o.startsWith("claimed") || o.startsWith("already")
         ? hasN
-          ? " · 今天已领" + amt
-          : " · 今天已签到(平台未返回数额)"
+          ? " · 已领到" + amt
+          : " · 已签到(数额未知)"
         : "";
     return { text: "活动监测未开启(关闭时不会发请求)" + tail, btn: "开启监测", act: "ckenable" };
   }
   if (s.note) return { text: s.note, btn: "去登录", act: "cklogin", warn: true };
   const activityState = s.activityState || {};
   if (activityState.status === "device_used") {
-    return { text: "本设备今日签到名额已用" };
+    return { text: "本设备名额已用" };
   }
   if (activityState.status === "claimable") {
     const scope = activityState.scope === "device" ? "本设备" : "当前账号";
-    return Object.assign({ text: "发现可领取活动 · " + scope }, run("领取积分", "p"));
+    return Object.assign({ text: "发现可领取活动 · " + scope }, run("领取", "p"));
   }
   if (o.startsWith("confirming")) {
     return Object.assign(
-      { text: s.lastMessage || "平台已收到领取请求，正在确认状态" },
+      { text: s.lastMessage || "平台已收到领取请求,正在确认状态" },
       run("重新确认", "")
     );
   }
@@ -6697,34 +6751,34 @@ function ckText(s) {
     const an = ckArrivalNote(s);
     return {
       text:
-        (hasN ? "今日已领" + amt : "今日已签到(平台未返回数额)") +
+        (hasN ? "已领到" + amt : "已签到(数额未知)") +
         streak +
         (an ? " · " + an : " · 已触发到账核对"),
     };
   }
   if (o.startsWith("already"))
     return {
-      text: (hasN ? "今日已领" + amt : "今日已签到(平台未返回数额)") +
+      text: (hasN ? "已领到" + amt : "已签到(数额未知)") +
         streak + "(平台侧显示已签到)",
     };
   if (activityState.status === "manual" && (!o || o.startsWith("inactive"))) {
     return { text: "有活动:" + (activityState.title || activityTitle || "客户端活动") + " · 需在客户端参与" };
   }
   if (activityState.status === "inactive" && !o) {
-    return { text: "本期没有可参与的签到活动" };
+    return { text: "本期没有可签的活动,等下一期" };
   }
   if (activityState.status === "claimed" && !o) {
-    return { text: "平台显示本期已领取" };
+    return { text: "平台已签" };
   }
   if (activityState.status === "unknown" && !o) {
     return { text: "活动状态暂时无法确认" };
   }
-  if (o === "retry:ready") return Object.assign({ text: "今日可领" + n }, run("领积分", "p"));
+  if (o === "retry:ready") return Object.assign({ text: "今日可领" + n }, run("领取", "p"));
   // Qoder 的可领短码形如 retry:ready:{活动id} —— 同样落进"可领"
-  if (o.startsWith("retry:ready:")) return Object.assign({ text: "今日可领" + n }, run("领积分", "p"));
+  if (o.startsWith("retry:ready:")) return Object.assign({ text: "今日可领" + n }, run("领取", "p"));
   if (o === "retry:device")
     return Object.assign(
-      { text: "太挤了,今天还会自动再试(第 " + (s.attempts || 1) + "/5 次)" },
+      { text: "平台太挤 · 今天还会自动再试(第 " + (s.attempts || 1) + "/5 次)" },
       run("重试", "")
     );
   if (o.startsWith("retry"))
@@ -6732,7 +6786,7 @@ function ckText(s) {
       { text: "上次没成功,今天还会再试(第 " + (s.attempts || 1) + "/5 次)" },
       run("重试", "")
     );
-  if (o.startsWith("auth")) return { text: "凭据失效 —— 打开一次客户端 / 在渠道卡上登录一次", btn: "去登录", act: "cklogin", warn: true };
+  if (o.startsWith("auth")) return { text: "凭据失效 · 打开一次客户端,或在渠道卡登录", btn: "去登录", act: "cklogin", warn: true };
   // `recheck` = 上次那条 `auth` 是**旧版本**判的,而凭据链路可能已经修好了。
   // 后端在节拍器重新判定之前会这么报,界面**不该给「去登录」** —— 那会把用户引去网页登录,
   // 而更常见的情况是桌面端凭据本来就好用(2026-10-20 真机就是这么被误导的)。
@@ -6754,7 +6808,7 @@ function ckText(s) {
   if (o.startsWith("no_cred"))
     return { text: s.lastMessage || "本机没读到签到凭据 · 打开一次客户端即可", warn: true };
   // 无活动与"已结束"分开说:前者是本期没有打卡活动(活动换季),不是失败也不是已签
-  if (o.startsWith("inactive")) return { text: s.lastMessage || "本期无打卡活动(等下一期)" };
+  if (o.startsWith("inactive")) return { text: s.lastMessage || "本期没有可签的活动,等下一期" };
   // manual = **有活动,但只能去客户端里领**(Qoder 的 VIEW_DETAILS 类活动)。
   // 不能说成"本期无活动" —— 用户在客户端里明明看得到那一条(2026-10-22 实证)。
   if (o.startsWith("manual"))
@@ -6764,7 +6818,7 @@ function ckText(s) {
     };
   if (o.startsWith("shape")) return { text: "签到接口有变动,已暂停自动签到 · 余额显示不受影响", warn: true };
   if (o.startsWith("failed")) return Object.assign({ text: "上次没成功:" + (s.lastMessage || o.slice(7)) }, run("重试", ""));
-  return Object.assign({ text: "今天还没签" }, run("领积分", "p"));
+  return Object.assign({ text: "今天还没签" }, run("领取", "p"));
 }
 
 /**
@@ -6775,7 +6829,7 @@ function ckText(s) {
  *
  * 2026-10-23 真机:只有一个渠道待签时,条上写「去查看」,点进去是签到设置区
  * (两个开关 + 流水),看完不知道要做什么 —— 真正的动作在渠道卡上。所以:
- *   · 只剩一个渠道时,把**渠道名和下一步**写进条上;能自己领就直接给「点此领取」;
+ *   · 只剩一个渠道时,把**渠道名和下一步**写进条上;能自己领就直接给「领取」;
  *   · 领不了(凭据失效 / 退避中 / 接口变动)就写清原因,落点改成**渠道卡的那一行**;
  *   · 多个渠道时保留汇总 + 去签到区(那里现在也画出每渠道状态与按钮)。
  */
@@ -6797,7 +6851,7 @@ function ckPendingStrip() {
     if (s.canTry !== false && !noCred) {
       // 后端把"现在到底能不能点"算好了:能点就直接把动作放在首页,少一次跳转
       return `<button type="button" class="ckstrip" data-act="ckrun" data-id="${esc(id)}"
-        title="${esc(detail)}">${esc(name)} 今天还没签 · <b>点此领取</b></button>`;
+        title="${esc(detail)}">${esc(name)} 还没签 · <b>领取</b></button>`;
     }
     // 不能自己领:别画成"可领取",说清是哪种,并把落点定到渠道卡上那一行
     return `<button type="button" class="ckstrip" data-act="ckstripopen" data-id="${esc(id)}"
@@ -6842,7 +6896,7 @@ function ckBadgeHtml(c) {
   const tip = esc(ckBadgeTip(s));
   if (s.activityState && s.activityState.status === "claimable") {
     return s.canTry === false
-      ? `<span class="ckb" title="${tip}">可领取</span>`
+      ? `<span class="ckb" title="${tip}">可领</span>`
       : `<button class="ckb hot" data-act="ckrun" data-id="${esc(c.id)}" title="${tip}">可领</button>`;
   }
   if (s.activityState && s.activityState.status === "device_used")
@@ -6852,7 +6906,7 @@ function ckBadgeHtml(c) {
   if (s.activityState && s.activityState.status === "inactive" && (!o || o.startsWith("inactive")))
     return `<span class="ckb ok" title="${tip}">本期无活动</span>`;
   if (s.activityState && s.activityState.status === "claimed" && !o)
-    return `<span class="ckb ok" title="${tip}">平台已领取</span>`;
+    return `<span class="ckb ok" title="${tip}">平台已签</span>`;
   if (s.activityState && s.activityState.status === "unknown" && !o)
     return `<span class="ckb" title="${tip}">状态未知</span>`;
   if (o.startsWith("confirming"))
@@ -6879,7 +6933,7 @@ function ckBadgeHtml(c) {
     return `<button class="ckb warn" data-act="open-manage" data-id="${esc(c.id)}" title="${tip}">需登录</button>`;
   }
   if (o.startsWith("shape")) {
-    return `<button class="ckb warn" data-act="open-manage" data-id="${esc(c.id)}" title="${tip}">异常</button>`;
+    return `<button class="ckb warn" data-act="open-manage" data-id="${esc(c.id)}" title="${tip}">已暂停</button>`;
   }
   if (o.startsWith("no_cred")) {
     return `<button class="ckb" data-act="open-manage" data-id="${esc(c.id)}" title="${tip}">未就绪</button>`;
@@ -6893,13 +6947,13 @@ function ckBadgeTip(s) {
   const o = String(s.outcome || "");
   const bits = [];
   if (o.startsWith("claimed")) {
-    bits.push("今天已领" + (s.credits ? " +" + s.credits + " 分" : ""));
+    bits.push("已领到" + (s.credits ? " +" + s.credits + " 分" : ""));
     const an = ckArrivalNote(s);
     if (an) bits.push(an);
   }
   else if (o.startsWith("already"))
     bits.push("平台显示今天已签到" + (s.credits ? "(数额 " + s.credits + " 分)" : ""));
-  else if (o.startsWith("inactive")) bits.push(s.lastMessage || "本期无打卡活动,等下一期");
+  else if (o.startsWith("inactive")) bits.push(s.lastMessage || "本期没有可签的活动,等下一期");
   else if (o.startsWith("manual"))
     bits.push("有活动:" + (s.latestActivity && s.latestActivity.title ? s.latestActivity.title : o.slice("manual:".length)) + " —— 领取入口在客户端里,挂件领不了");
   else if (o.startsWith("retry:ready"))
@@ -6914,16 +6968,7 @@ function ckBadgeTip(s) {
   if (s.latestActivity && s.latestActivity.title)
     bits.push("最近活动: " + s.latestActivity.title);
   if (s.activityState) {
-    const labels = {
-      claimable: "活动可领取",
-      manual: "活动需客户端参与",
-      confirming: "领取确认中",
-      claimed: "活动已领取",
-      device_used: "本设备今日名额已用",
-      inactive: "本期无可参与活动",
-      unknown: "活动状态暂时无法确认",
-    };
-    bits.push((labels[s.activityState.status] || labels.unknown) + " · " + (s.activityState.scope === "device" ? "设备级" : "账号级"));
+    bits.push((ACTIVITY_LABELS[s.activityState.status] || ACTIVITY_LABELS.unknown) + " · " + (s.activityState.scope === "device" ? "设备级" : "账号级"));
   }
   if (s.monthCredits) bits.push("本月共 " + s.monthCredits + " 分");
   if (s.nextTryAt) {
@@ -6940,27 +6985,29 @@ function ckBadgeTip(s) {
   return bits.join(" · ");
 }
 
+// 活动状态统一标签:渠道卡行 / 签到中心 / 徽标 tooltip 三处共用,防止叫法漂移
+const ACTIVITY_LABELS = {
+  claimable: "可领取",
+  manual: "需客户端参与",
+  confirming: "领取确认中",
+  claimed: "已领取",
+  device_used: "本设备名额已用",
+  inactive: "本期无活动",
+  unknown: "暂时无法确认",
+};
+
 function ckRowHtml(id) {
   const s = CK[id];
   if (!s) return "";
   const t = ckText(s);
   if (!t) return "";
   const activity = s.activityState;
-  const activityLabels = {
-    claimable: "可领取",
-    manual: "需客户端参与",
-    confirming: "领取确认中",
-    claimed: "本期已领取",
-    device_used: "本设备今日名额已用",
-    inactive: "本期无可参与活动",
-    unknown: "状态暂时无法确认",
-  };
   const scopeLabel = activity && activity.scope === "device" ? "设备级" : "账号级";
   const regionLabel = activity && activity.region === "CN" ? "国内版" : activity && activity.region === "Global" ? "国际版" : "";
   const activityLine = activity && s.enabled
     ? '<div class="ckactivity" title="' + esc(activity.detail || activity.title || "") + '">' +
       "活动监测 · " + esc(activity.title || "签到状态") + " · " +
-      esc(activityLabels[activity.status] || activityLabels.unknown) + " · " +
+      esc(ACTIVITY_LABELS[activity.status] || ACTIVITY_LABELS.unknown) + " · " +
       esc([regionLabel, scopeLabel].filter(Boolean).join(" / ")) +
       "</div>"
     : !activity && CHECKIN_QODER.has(id) && s.latestActivity && s.latestActivity.title
@@ -7017,16 +7064,7 @@ async function loadCheckin() {
 }
 
 function activityStatusView(status) {
-  const labels = {
-    claimable: "可领取",
-    manual: "需客户端参与",
-    confirming: "领取确认中",
-    claimed: "已领取",
-    device_used: "设备名额已用",
-    inactive: "本期无活动",
-    unknown: "暂时无法确认",
-  };
-  return { label: labels[status] || labels.unknown, kind: status || "unknown" };
+  return { label: ACTIVITY_LABELS[status] || ACTIVITY_LABELS.unknown, kind: status || "unknown" };
 }
 
 function renderActivityOverview() {
@@ -7118,7 +7156,7 @@ function renderActivityOverview() {
       '<button type="button" class="ckfilter' + (CK_ACTIVITY_FILTER === key ? " on" : "") +
       '" aria-pressed="' + (CK_ACTIVITY_FILTER === key) + '" data-act="ckfilter" data-filter="' + key + '">' + esc(label) + '</button>'
     ).join("") + '</div>' +
-    '<div class="ck-activity-list">' + (rows || '<div class="ck-overview-empty">当前筛选下没有活动</div>') + '</div>' +
+    '<div class="ck-activity-list">' + (rows || '<div class="ck-overview-empty">当前筛选下没有活动 · 点「全部」看所有</div>') + '</div>' +
     '</div>';
 }
 
@@ -7384,14 +7422,14 @@ async function ckRun(id) {
     CK[st.id] = st;
     const t = ckText(st);
     if (st.outcome && st.outcome.startsWith("claimed")) showToast("已领到" + (st.credits ? " +" + st.credits + " 分" : ""));
-    else if (st.outcome && st.outcome.startsWith("already")) showToast("今天已经签过了");
-    else showToast(t && t.text ? t.text : "签到没成功", true);
+    else if (st.outcome && st.outcome.startsWith("already")) showToast("平台已签");
+    else showToast(t && t.text ? t.text : "没签成", true);
   } catch (e) {
     showToast(String(e), true);
   }
   CK_LOG = false;
   await loadCheckin();
-  // 首页那个「点此领取」按完,条上要立刻变成 3/3 或"待处理",不能等下一轮轮询;
+  // 首页那个「领取」按完,条上要立刻变成 3/3 或"待处理",不能等下一轮轮询;
   // 签到中心开着时,流水表与日历带也要立刻带上这一次的记录
   if (manageOpen()) {
     renderChCards();
@@ -7652,7 +7690,7 @@ function renderModelsInner() {
   meta.innerHTML =
     '<div class="mrow1"><span class="dim">' +
     (isGo
-      ? "OpenCode Go 按模型选择协议端点（仅兼容的模型可自动写入）"
+      ? "OpenCode Go 按模型选择协议端点(仅兼容的模型可自动写入)"
       : '写进客户端 <b>' + esc(v.baseUrl) + "</b>") +
     "</span>" +
     '<span class="dim">' +
@@ -7964,7 +8002,7 @@ function infoSheetHtml(s) {
   const tips = {
     模型名: "OpenAI 兼容接口的 model 参数;Trae 里也是它",
     显示名: "WorkBuddy / ZCode 里的名字口径(Trae 用上面的模型名)",
-    接口协议: "OpenCode Go 模型的请求协议；不同模型可能不同",
+    接口协议: "OpenCode Go 模型的请求协议;不同模型可能不同",
     接口地址: "客户端配置中的 base_url",
     完整端点: "模型实际调用的完整 API 端点",
     上下文: "上下文窗口(token);取不到就不显示",
@@ -7989,8 +8027,8 @@ function infoSheetHtml(s) {
       " 密钥 —— 先在「渠道」页签填一次,这里才有可复制的密钥(地址与模型名照样能复制)。</div>";
   return (
     head +
-    '<div class="note">这里显示官网公布的接口协议与端点。自动写入会检查目标客户端是否支持该协议；' +
-    "不兼容时会阻止写入。需要手动配置时，可复制对应字段。</div>" +
+    '<div class="note">这里显示官网公布的接口协议与端点。自动写入会检查目标客户端是否支持该协议;' +
+    "不兼容时会阻止写入。需要手动配置时,可复制对应字段。</div>" +
     rows + keyRow +
     '<div class="acts">' +
     '<button class="btn" data-act="infocopyall">复制全部(不含密钥)</button>' +
@@ -8275,20 +8313,16 @@ function applyChannelsPush(payload) {
   await listen("checkin-activity", (ev) => {
     const d = (ev && ev.payload) || {};
     const manual = d.status === "manual" || (!d.canClaim && d.claimStatus === "CLAIMABLE");
-    const action = d.canClaim ? "发现可领取活动" : manual ? "发现需手动参与的活动" : "发现新活动";
-    const where = d.canClaim
-      ? " · 可在渠道卡手动领取"
-      : manual
-        ? " · 请在客户端活动页参与"
-        : "";
-    showToast((d.name || "渠道") + " " + action + ": " + (d.title || "新活动") + where);
+    const where = d.canClaim ? " · 渠道卡里领" : manual ? " · 需在客户端参与" : "";
+    // 活动标题在渠道卡与签到中心都看得到,toast 只报「谁 + 什么事 + 去哪办」
+    showToast((d.name || "渠道") + (d.canClaim ? " 有活动可领" : " 有新活动") + where);
   });
   // 自动签到领到了(后台静默跑,这一声就是收据);手动点的由按钮回执负责,不重响
   await listen("checkin-claimed", (ev) => {
     const d = (ev && ev.payload) || {};
     const cr = d.credits === null || d.credits === undefined ? "" : " +" + d.credits + " 分";
     beep("ding");
-    showToast((d.name || "签到") + " 今天领到了" + cr);
+    showToast((d.name || "签到") + " 已领到" + cr);
   });
 
   // 紧凑条改成可选(默认关,2026-10-23 裁决 D1):老配置若停在紧凑条,
@@ -8314,7 +8348,7 @@ function applyChannelsPush(payload) {
   listen("crit-alert", (ev) => {
     const d = (ev && ev.payload) || {};
     beep("warn");
-    showToast(d.body || d.name + " 余额很低", true);
+    showToast(d.body || d.name + " 余额告急", true);
   });
 
   // WorkBuddy 网页登录的三种结果都走这个事件:抓到令牌 / 用户自己关了窗 / 失败。

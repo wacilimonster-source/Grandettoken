@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">Grandettoken Sync</string>
+    <string name="widget_strip_label">Grandettoken 横条</string>
+    <string name="widget_card_label">Grandettoken 卡片</string>
+    <string name="widget_strip_description">4×1 横条: 快速查看渠道余额、额度或积分</string>
+    <string name="widget_card_description">4×2 卡片: 查看最多 4 个渠道和更新时间</string>
+    <string name="widget_card_title">渠道总览</string>
+</resources>

@@ -27,13 +27,13 @@ const GITHUB_TOKEN: &str = "https://github.com/login/oauth/access_token";
 const GITHUB_USER: &str = "https://api.github.com/user";
 const GITHUB_VERIFY: &str = "https://github.com/login/device";
 
-/// 手动发布与后台发布共用一把锁；避免两次 PATCH 同一文件交错。
+/// 手动发布与后台发布共用一把锁;避免两次 PATCH 同一文件交错。
 static PUBLISH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-/// 只串行同步配置；普通设置的整份保存不会写这条独立记录。
+/// 只串行同步配置;普通设置的整份保存不会写这条独立记录。
 static SYNC_PROFILE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// 后台发布已经排队/在跑时不再重复排队。
 static SYNC_SCHEDULED: AtomicBool = AtomicBool::new(false);
-/// 桌面 Device Flow 的在途会话。device_code 只留 Rust 内存，不进前端/日志。
+/// 桌面 Device Flow 的在途会话。device_code 只留 Rust 内存,不进前端/日志。
 static OAUTH: Mutex<Option<OAuthSession>> = Mutex::new(None);
 
 #[derive(Debug, Clone)]
@@ -92,7 +92,7 @@ pub struct SyncStatus {
     pub oauth_client_configured: bool,
     pub pending_seq: Option<u64>,
     pub pending_bytes: Option<usize>,
-    /// 由主密钥 + relayId + keyEpoch 现算；前端用来显示/复制。
+    /// 由主密钥 + relayId + keyEpoch 现算;前端用来显示/复制。
     pub code_text: Option<String>,
     pub key_error: Option<String>,
 }
@@ -215,7 +215,7 @@ fn master_of(cfg: &Config) -> Result<([u8; crypto::KEY_LEN], [u8; crypto::RELAY_
 fn github_token() -> Result<String, String> {
     secrets::sync_get(secrets::SYNC_OAUTH_ACCOUNT)?
         .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| "本机还没有连接 GitHub；请先在同步页授权".to_string())
+        .ok_or_else(|| "本机还没有连接 GitHub;请先在同步页授权".to_string())
 }
 
 fn github_token_opt() -> Option<String> {
@@ -225,7 +225,7 @@ fn github_token_opt() -> Option<String> {
         .filter(|s| !s.trim().is_empty())
 }
 
-/// 桌面 OAuth App 的公开 client_id：优先配置覆盖，其次编译期环境变量。
+/// 桌面 OAuth App 的公开 client_id：优先配置覆盖,其次编译期环境变量。
 fn oauth_client_id(cfg: &Config) -> Option<String> {
     cfg.sync_oauth_client_id
         .clone()
@@ -311,7 +311,7 @@ pub async fn sync_status(state: State<'_, AppState>) -> Result<SyncStatus, Strin
     status_of(state.inner())
 }
 
-/// 同步码二维码：只在用户主动「显示」时调用；SVG 只进当前 WebView。
+/// 同步码二维码：只在用户主动「显示」时调用;SVG 只进当前 WebView。
 #[tauri::command]
 pub async fn sync_qr_svg(state: State<'_, AppState>) -> Result<String, String> {
     let cfg = cfg_of(state.inner())?;
@@ -323,7 +323,7 @@ pub async fn sync_qr_svg(state: State<'_, AppState>) -> Result<String, String> {
 
 // ── 桌面 GitHub Device Flow ───────────────────────────────────────────────
 //
-// 桌面端不再手填 PAT：Rust 申请 device code，前端只看到 user_code 与验证地址；
+// 桌面端不再手填 PAT：Rust 申请 device code,前端只看到 user_code 与验证地址;
 // device_code 和最终 access token 都不进前端状态、日志或诊断。
 
 #[derive(serde::Deserialize)]
@@ -368,7 +368,7 @@ async fn github_user(token: &str) -> Result<GithubUserResponse, String> {
         .await
         .map_err(|_| "SYNC_NETWORK: 请求 GitHub 用户信息失败".to_string())?;
     if resp.status().as_u16() == 401 {
-        return Err("SYNC_AUTH: GitHub 授权已失效，请重新授权".into());
+        return Err("SYNC_AUTH: GitHub 授权已失效,请重新授权".into());
     }
     if !resp.status().is_success() {
         return Err(format!("SYNC_UPSTREAM: GitHub 用户信息返回 {}", resp.status()));
@@ -402,7 +402,7 @@ pub async fn sync_oauth_start(
 ) -> Result<OAuthStart, String> {
     let cfg = cfg_of(state.inner())?;
     let client_id = oauth_client_id(&cfg).ok_or_else(|| {
-        "SYNC_NOT_CONFIGURED: 桌面 OAuth App 未配置 client_id（见 contract/README.md）".to_string()
+        "SYNC_NOT_CONFIGURED: 桌面 OAuth App 未配置 client_id,开发者需先在 GitHub 建桌面 OAuth App".to_string()
     })?;
     let client = http_client()?;
     let resp = client
@@ -457,7 +457,7 @@ pub async fn sync_oauth_poll(app: AppHandle) -> Result<OAuthPoll, String> {
         let _ = OAUTH.lock().map(|mut g| *g = None);
         return Ok(OAuthPoll::Error {
             code: "SYNC_OAUTH_EXPIRED".into(),
-            message: "授权码已过期，请重新获取".into(),
+            message: "授权码已过期,请重新获取".into(),
         });
     }
 
@@ -521,7 +521,7 @@ pub async fn sync_oauth_poll(app: AppHandle) -> Result<OAuthPoll, String> {
                 let _ = OAUTH.lock().map(|mut g| *g = None);
                 Ok(OAuthPoll::Error {
                     code: "SYNC_OAUTH_EXPIRED".into(),
-                    message: "授权码已过期，请重新获取".into(),
+                    message: "授权码已过期,请重新获取".into(),
                 })
             }
             other => {
@@ -549,7 +549,7 @@ pub async fn sync_oauth_poll(app: AppHandle) -> Result<OAuthPoll, String> {
         }
     };
 
-    // 取消竞态：如果弹层已经取消/换了一次授权，迟到的 token 不保存。
+    // 取消竞态：如果弹层已经取消/换了一次授权,迟到的 token 不保存。
     {
         let guard = OAUTH.lock().unwrap_or_else(|p| p.into_inner());
         let still_current = guard
@@ -561,7 +561,7 @@ pub async fn sync_oauth_poll(app: AppHandle) -> Result<OAuthPoll, String> {
         }
     }
 
-    // 只接受恰好 gist 的 scope；缺 gist 或多出写权限都不完成连接。
+    // 只接受恰好 gist 的 scope;缺 gist 或多出写权限都不完成连接。
     let scopes: Vec<&str> = token
         .scope
         .as_deref()
@@ -572,7 +572,7 @@ pub async fn sync_oauth_poll(app: AppHandle) -> Result<OAuthPoll, String> {
         let _ = OAUTH.lock().map(|mut g| *g = None);
         return Ok(OAuthPoll::Error {
             code: "SYNC_SCOPE_INVALID".into(),
-            message: "GitHub 返回的授权范围不是仅 gist；请在 GitHub 撤销授权后重试".into(),
+            message: "GitHub 返回的授权范围不是仅 gist;请在 GitHub 撤销授权后重试".into(),
         });
     }
 
@@ -641,7 +641,7 @@ pub async fn sync_set_oauth_client_id(
     if value.chars().count() > 100
         || value.chars().any(|c| c.is_control() || c.is_whitespace())
     {
-        return Err("Client ID 格式不正确（不能包含空格或控制字符）".into());
+        return Err("Client ID 格式不正确(不能包含空格或控制字符)".into());
     }
     let opt = if value.is_empty() { None } else { Some(value) };
     save_sync_config(state.inner(), move |c| c.sync_oauth_client_id = opt).await?;
@@ -673,10 +673,10 @@ pub async fn sync_create(
     let _guard = PUBLISH_LOCK.lock().await;
     let cfg = cfg_of(state.inner())?;
     if cfg.sync_relay_id.is_some() {
-        return Err("已经有同步组，请查看当前同步码；需要更换时使用重新生成".into());
+        return Err("已有同步组;要换新的用「重新生成同步码」".into());
     }
     if !allow_existing && !secrets::sync_list_relay_ids()?.is_empty() {
-        return Err("SYNC_OLD_GROUP_FOUND: 本机保留着旧同步组，请先尝试找回".into());
+        return Err("SYNC_OLD_GROUP_FOUND: 本机保留着旧同步组,请先尝试找回".into());
     }
     let token = github_token()?;
     let user = github_user(&token).await?;
@@ -749,7 +749,7 @@ pub async fn sync_join(
     let _guard = PUBLISH_LOCK.lock().await;
     let cfg = cfg_of(state.inner())?;
     if cfg.sync_relay_id.is_some() {
-        return Err("已经有同步组；请使用找回旧同步组来切换".into());
+        return Err("已有同步组;要切换用「找回旧同步组」".into());
     }
     let code = SyncCode::decode(&code).map_err(err_str)?;
     let token = github_token()?;
@@ -764,7 +764,7 @@ pub async fn sync_join(
     };
     let client = GistClient::new(Some(token)).map_err(err_str)?;
 
-    // 空组不能证明密钥正确：必须先看到至少一份能解开的快照；owner 必须是当前账号。
+    // 空组不能证明密钥正确：必须先看到至少一份能解开的快照;owner 必须是当前账号。
     let fetched = sync::fetch_sources(
         &client,
         &gist_id,
@@ -782,7 +782,7 @@ pub async fn sync_join(
         FetchedSources::NotModified { .. } => (false, None),
     };
     if !has_sources {
-        return Err("同步组还没有可验证快照；请先在已建组的电脑上发布一次".into());
+        return Err("同步组还没有可验证快照;请先在已建组的电脑上发布一次".into());
     }
     if owner_id != Some(user.id) {
         return Err(
@@ -852,7 +852,7 @@ struct VerifiedRecovery {
     last_upload_at: Option<i64>,
 }
 
-/// 找回来源时必须把本机发布状态与远端密文水位对应上，不能猜另一台电脑的来源。
+/// 找回来源时必须把本机发布状态与远端密文水位对应上,不能猜另一台电脑的来源。
 async fn verify_recovery(
     state: &AppState,
     token: &str,
@@ -871,14 +871,14 @@ async fn verify_recovery(
     let sources = match fetched {
         FetchedSources::Loaded { sources, owner_id: owner, .. } => {
             if owner != Some(owner_id) {
-                return Err("旧同步组不属于当前 GitHub 账号，请连接原账号".into());
+                return Err("旧同步组不属于当前 GitHub 账号,请连接原账号".into());
             }
             sources
         }
         FetchedSources::NotModified { .. } => Vec::new(),
     };
     if sources.is_empty() {
-        return Err("无法验证旧同步码，请确认旧组仍可访问且有有效数据".into());
+        return Err("无法验证旧同步码,请确认旧组仍可访问且有有效数据".into());
     }
     let (source, last_upload_at) = {
         let store = lock_rw(&state.store);
@@ -915,7 +915,7 @@ pub async fn sync_recovery_candidates(state: State<'_, AppState>) -> Result<Reco
     let checks = stream::iter(ids.into_iter().take(LIMIT)).map(|id| {
         let token = &token;
         async move {
-            // v1 电脑创建的组 epoch 均为 0；其他代数可通过手动输入旧码恢复。
+            // v1 电脑创建的组 epoch 均为 0;其他代数可通过手动输入旧码恢复。
             let code = stored_code(&id, 0)?;
             let verified = verify_recovery(state_ref, token, owner_id, &code).await?;
             Ok::<_, String>(RecoveryCandidate {
@@ -937,7 +937,7 @@ pub async fn sync_recovery_candidates(state: State<'_, AppState>) -> Result<Reco
     Ok(RecoverySearch { candidates, unverified, truncated })
 }
 
-/// 先验证所有权与密钥，再切换；保留原组及密钥，恢复后始终暂停自动发布。
+/// 先验证所有权与密钥,再切换;保留原组及密钥,恢复后始终暂停自动发布。
 #[tauri::command]
 pub async fn sync_restore_group(
     app: AppHandle,
@@ -950,7 +950,7 @@ pub async fn sync_restore_group(
     crate::refuse_if_config_broken()?;
     let _guard = PUBLISH_LOCK.lock().await;
     if cfg_of(state.inner())?.sync_relay_id != expected_current {
-        return Err("当前同步组已变化，请重新选择要恢复的组".into());
+        return Err("当前同步组已变化,请重新选择要恢复的组".into());
     }
     let token = github_token()?;
     let user = github_user(&token).await?;
@@ -1101,7 +1101,7 @@ pub async fn sync_set_platform_label(
     } else {
         Some(
             sync::platform::normalize_label(&label)
-                .ok_or("同步平台标签不合法（小写字母/数字/点/横线，最多 40 字）")?,
+                .ok_or("同步平台标签不合法(小写字母/数字/点/横线,最多 40 字)")?,
         )
     };
     save_sync_config(state.inner(), move |c| {
@@ -1129,7 +1129,7 @@ pub async fn sync_rotate(
     let _guard = PUBLISH_LOCK.lock().await;
     let cfg = cfg_of(state.inner())?;
     if cfg.sync_relay_id.as_deref() != Some(expected_relay_id.as_str()) {
-        return Err("当前同步组已变化，请确认后重试".into());
+        return Err("当前同步组已变化,请确认后重试".into());
     }
     let token = github_token()?;
     let old_relay_id = cfg.sync_relay_id.clone();
@@ -1193,7 +1193,7 @@ pub async fn sync_forget(app: AppHandle, state: State<'_, AppState>, expected_re
     let _guard = PUBLISH_LOCK.lock().await;
     let cfg = cfg_of(state.inner())?;
     if cfg.sync_relay_id.as_deref() != Some(expected_relay_id.as_str()) {
-        return Err("当前同步组已变化，请确认后重试".into());
+        return Err("当前同步组已变化,请确认后重试".into());
     }
     save_sync_config(state.inner(), |c| {
         c.sync_enabled = false;
@@ -1232,7 +1232,7 @@ pub async fn sync_disconnect_github(
         c.sync_github_login = None;
         c.sync_github_user_id = None;
         c.sync_next_allowed_at = None;
-        c.sync_last_error = Some("GitHub 授权已断开；重新授权后才能发布（同步组与主密钥保留）".into());
+        c.sync_last_error = Some("GitHub 授权已断开;重新授权后才能发布(同步组与主密钥保留)".into());
         c.sync_last_error_at = Some(now_ts());
     })
     .await?;
@@ -1274,7 +1274,7 @@ pub async fn sync_delete_relay(
     Ok(())
 }
 
-/// 轮询循环每轮调用：到点就后台发布，不阻塞取数。
+/// 轮询循环每轮调用：到点就后台发布,不阻塞取数。
 pub fn maybe_publish(app: &AppHandle, views: &[ChannelView]) {
     if crate::refuse_if_config_broken().is_err() { return; }
     let state = app.state::<AppState>();
@@ -1285,7 +1285,7 @@ pub fn maybe_publish(app: &AppHandle, views: &[ChannelView]) {
     if github_token_opt().is_none() {
         return;
     }
-    // 401 之后不再自动重试，等用户重新授权（授权成功会清掉 last_error）。
+    // 401 之后不再自动重试,等用户重新授权(授权成功会清掉 last_error)。
     if cfg
         .sync_last_error
         .as_deref()
@@ -1318,7 +1318,7 @@ async fn publish_views(app: &AppHandle, views: &[ChannelView], automatic: bool) 
     let _guard = PUBLISH_LOCK.lock().await;
     let state = app.state::<AppState>();
     let cfg = cfg_of(state.inner())?;
-    // 排队期间用户可能暂停或恢复了另一个组，不能再自动发布。
+    // 排队期间用户可能暂停或恢复了另一个组,不能再自动发布。
     if automatic && !cfg.sync_enabled {
         return Err("自动发布已暂停".into());
     }

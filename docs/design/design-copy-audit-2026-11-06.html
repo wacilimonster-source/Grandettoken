@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Grandettoken · 全端文案体检与优化方案 · 2026-11-06</title>
+<style>
+:root{color-scheme:dark;--page:#101211;--ink:#ededdf;--muted:#93998e;--accent:#d3e6a3;--line:#2b302b;
+  --panel:#0e1015;--panel2:#141821;--panel3:#191e27;--pline:#252b38;--pline2:#343d4f;
+  --ptx:#f3f6fb;--ptx2:#b7c0d0;--ptx3:#8a95a8;--ptx4:#5e6a7e;
+  --ok:#4fd6a0;--warn:#f3c666;--bad:#ff7b72;--ac:#8aa4ff;
+  font-family:"Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI",sans-serif}
+*{box-sizing:border-box}body{margin:0;background:var(--page);color:var(--ink);font-size:14px;line-height:1.65}
+a{color:inherit;text-decoration:none;border-bottom:1px dotted var(--muted)}
+button{font:inherit;color:inherit}
+.wrap{max-width:1240px;margin:auto;padding:0 40px 90px}
+.mast{display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:34px 0 18px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.mast h1{font-size:26px;margin:0;letter-spacing:.01em}
+.mast .sub{color:var(--muted);font-size:12.5px;letter-spacing:.08em}
+h2{font-size:19px;margin:52px 0 6px;padding-top:18px;border-top:1px solid var(--line)}
+h2 .no{color:var(--accent);font-family:Consolas,monospace;font-size:14px;margin-right:10px}
+h3{font-size:15.5px;margin:30px 0 8px;color:var(--ink)}
+h3 .tag{font-size:11px;color:var(--page);background:var(--accent);border-radius:4px;padding:1px 7px;vertical-align:2px;margin-left:8px;font-weight:600}
+h3 .tag.p1{background:#e8c884}h3 .tag.p2{background:#8a95a8}
+p.lead{color:var(--muted);margin:6px 0 14px;max-width:70em}
+.note{background:#161a16;border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;padding:10px 16px;margin:14px 0;color:var(--ptx2);font-size:13px}
+.note b{color:var(--ink)}
+table{border-collapse:collapse;width:100%;margin:12px 0 6px;font-size:12.8px}
+th{color:var(--muted);text-align:left;font-weight:600;padding:7px 10px;border-bottom:1px solid var(--line2,#3a4038);font-size:11.5px;letter-spacing:.06em;white-space:nowrap}
+td{padding:7px 10px;border-bottom:1px solid #22261f;vertical-align:top}
+td code,.c{font-family:Consolas,"Microsoft YaHei UI",monospace;font-size:12px;background:#1a1e19;border:1px solid #262b24;border-radius:4px;padding:0 5px;color:#cfe0b2;word-break:break-all}
+td .loc{font-family:Consolas,monospace;font-size:11px;color:var(--muted);white-space:nowrap}
+td .why{color:var(--muted);font-size:12px;display:block;margin-top:2px}
+.pri{font-size:10.5px;font-weight:700;border-radius:4px;padding:1px 6px;white-space:nowrap}
+.p0{background:#d3e6a3;color:#1c2014}.p1{background:#e8c884;color:#241d0e}.p2{background:#3a4038;color:#c9cfc0}
+.keep{color:var(--muted)}
+/* 原型区 */
+.ba{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:14px 0}
+.ba>.col{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel)}
+.ba .cap{font-size:11.5px;letter-spacing:.1em;padding:7px 14px;color:var(--muted);border-bottom:1px solid var(--line);background:#151813}
+.ba .cap.before{color:#e2a9a2}.ba .cap.after{color:var(--accent)}
+.mock{background:var(--panel);color:var(--ptx);padding:14px;min-height:100%;font-size:13px}
+.mock .rowline{display:flex;align-items:center;gap:9px;padding:8px 10px;border:1px solid var(--pline);border-radius:9px;background:var(--panel2);margin:6px 0}
+.mock .dot{width:8px;height:8px;border-radius:50%;flex:none}
+.mock .nm{font-weight:600;font-size:13px}
+.mock .s{font-size:11.5px;color:var(--ptx3);margin-top:1px}
+.mock .val{margin-left:auto;text-align:right;font-variant-numeric:tabular-nums}
+.mock .val b{font-size:16px;font-weight:650}
+.mock .val .pct{font-size:11px;color:var(--ptx3)}
+.mock .foot{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--ptx3);margin-top:10px;padding-top:8px;border-top:1px solid var(--pline)}
+.mock .fstrip{background:#2a1d1c;border:1px solid #4a2f2c;color:#f0c5bf;border-radius:8px;padding:6px 10px;font-size:12px;margin:8px 0}
+.mock .fstrip b{color:#ffb4ab}
+.mock .toast{position:relative;display:inline-block;background:var(--panel3);border:1px solid var(--pline2);border-radius:9px;padding:8px 14px;font-size:12.5px;margin:6px 4px;box-shadow:0 6px 18px #0009}
+.mock .toast.bad{border-color:#6b3a35}
+.mock .toast.ok b{color:var(--ok)}
+.mock .khint{font-size:11.5px;color:var(--ptx3);line-height:1.6;margin:6px 0}
+.mock .whybtn{display:inline-grid;place-items:center;width:15px;height:15px;border:1px solid var(--pline2);border-radius:50%;font-size:10px;color:var(--ptx3);margin:0 4px}
+.mock .btn{border:1px solid var(--pline2);background:var(--panel3);color:var(--ptx2);border-radius:7px;padding:3px 12px;font-size:12px;cursor:default}
+.mock .btn.p{background:#2c3550;border-color:#3c4a73;color:#dfe6ff}
+.mock .btn.danger{background:#3a2220;border-color:#5c332e;color:#ffb4ab}
+.mock .cfrm{background:#241a12;border:1px solid #4a3a22;border-radius:9px;padding:8px 12px;font-size:12.5px;margin:8px 0}
+.mock .cfrm .acts{display:flex;gap:8px;margin-top:7px;justify-content:flex-end}
+.mock .notif{background:linear-gradient(180deg,#20242c,#181c23);border:1px solid var(--pline2);border-radius:10px;padding:10px 12px;max-width:340px;margin:8px 0;box-shadow:0 6px 18px #0008}
+.mock .notif .nt{font-weight:600;font-size:12.5px;display:flex;align-items:center;gap:7px}
+.mock .notif .nb{font-size:12px;color:var(--ptx2);margin-top:3px}
+.mock .ck{border:1px solid var(--pline);border-radius:9px;background:var(--panel2);padding:8px 10px;margin:6px 0;font-size:12.5px;display:flex;gap:10px;align-items:center}
+.mock .ck .badge{font-size:10.5px;border:1px solid var(--pline2);color:var(--ptx3);border-radius:5px;padding:1px 7px;white-space:nowrap}
+.mock .strike{text-decoration:line-through;text-decoration-color:#8a5a52}
+.mock .phone{width:300px;border:1px solid var(--pline2);border-radius:14px;background:#0b0d10;padding:12px;margin:4px auto;font-size:12px}
+.mock .phone .err{color:#ff9d94;font-size:11.5px;font-family:Consolas,monospace;margin:6px 2px}
+.mock .phone .err2{color:#ff9d94;font-size:12px;margin:6px 2px;line-height:1.5}
+.legend{font-size:11.5px;color:var(--muted);margin:4px 0 0}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.card{border:1px solid var(--line);border-radius:10px;padding:12px 16px;background:#141613;font-size:12.8px}
+.card h4{margin:2px 0 8px;font-size:13px;color:var(--accent)}
+ul{margin:6px 0 10px;padding-left:20px}li{margin:3px 0}
+.small{font-size:12px;color:var(--muted)}
+.toc{columns:2;gap:34px;font-size:13px;padding-left:20px}
+.toc li{margin:4px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="mast">
+  <h1>全端文案体检与优化方案</h1>
+  <div class="sub">2026-11-06 · 范围：PC 挂件（app.js / index.html / Rust）+ Android（App / 小组件）· 只出方案，未改任何代码</div>
+</div>
+
+<p class="lead">对三个端做了逐文件、逐行的用户可见文案盘点：PC 前端约 <b>470</b> 条、Rust 后端约 <b>300</b> 条、Android 约 <b>250</b> 条，合计约 <b>1,000</b> 条。结论先行：<b>单个句子的质量普遍很高</b>（说人话、给出路、不吓人），真正的问题集中在<b>跨端一致性与体系</b>上——标点双轨、错误文案三套体系、同义词泛滥、toast 过载。本方案给出一套「文案宪法」+ 逐条改法 + 原型，建议改动约 <b>190</b> 条（其中约 120 条是全局规则的机械替换），其余维持。</p>
+
+<h2 id="toc"><span class="no">§</span>目录</h2>
+<ol class="toc">
+  <li><a href="#s0">摘要：六类问题</a></li>
+  <li><a href="#s1">全局文案规范（文案宪法 v1）</a></li>
+  <li><a href="#s2">PC 端改法清单</a></li>
+  <li><a href="#s3">Rust 端改法清单</a></li>
+  <li><a href="#s4">Android 端改法清单</a></li>
+  <li><a href="#s5">交互优化（toast 减法 / 确认迁移 / 按钮收敛）</a></li>
+  <li><a href="#s6">原型（改前 / 改后）</a></li>
+  <li><a href="#s7">实施批次与验收</a></li>
+  <li><a href="#s8">需要裁决的点</a></li>
+</ol>
+
+<h2 id="s0"><span class="no">§0</span>摘要：六类问题</h2>
+<table>
+<tr><th style="width:34px">#</th><th style="width:200px">问题</th><th>典型证据</th><th style="width:70px">规模</th></tr>
+<tr><td>1</td><td><b>标点双轨</b></td><td>同步模块与 download.rs 全用全角「，：；（）」，其余 90% 用半角；同一页面 <code>创建同步组失败:</code>（半角）与 <code>找回失败：</code>（全角）并存</td><td><span class="pri p0">P0</span></td></tr>
+<tr><td>2</td><td><b>错误文案三套体系</b></td><td>取数走 errcodes 短文案（最好）、同步走 <code>SYNC_XXX: 中文</code> 前缀码、其余（签到/密钥/库层）裸字符串；reqwest/serde/rusqlite 英文原文经 <code>format!("…: {e}")</code> 直出给用户</td><td><span class="pri p1">P1</span></td></tr>
+<tr><td>3</td><td><b>同义词泛滥</b></td><td>签到「已领到 / 今日已领 / 今天领到了 / 领到 / 平台已签 / 平台显示本期已领取 / 本设备已签 / 平台已领取」8 种；空态前缀「尚未 / 还没 / 暂无 / 没有 / 未」5 种随机分布；Android「数据较旧」家族 6 种</td><td><span class="pri p1">P1</span></td></tr>
+<tr><td>4</td><td><b>toast 过载且后缀不一</b></td><td>135 处调用、单条 2600ms 覆盖；剪贴板回执 3 种后缀（<code>· 剪贴板对其他程序可见</code> / <code>· 可直接贴给我</code> / <code>· 直接贴给我就行</code>）；部分回执与界面已有反馈重复</td><td><span class="pri p1">P1</span></td></tr>
+<tr><td>5</td><td><b>跨端术语漂移</b></td><td>积分：App 内「N 分」vs 小组件「N 积分」；窗口「周 / 周额度 / 周额度（按套餐周期）」三套；应用名 <code>Grandettoken Sync</code> vs 文案里的 <code>Grandettoken</code>；自称「挂件 / 小组件 / 拉件」混用；底栏 bad 计数叫「失联」而状态词叫「告急」</td><td><span class="pri p0">P0</span></td></tr>
+<tr><td>6</td><td><b>确认交互三种形态</b></td><td>原生 <code>confirm()</code> ×7（同步页 6 + 清空日志 1）、行内 .cfrm 条 ×3、按钮二次点击 ×1；原生框样式不受控、按钮文案随系统语言</td><td><span class="pri p1">P1</span></td></tr>
+</table>
+<div class="note"><b>基线判断：</b>渠道行、详情弹层、空态、风险带这些 2026-10 之后精修过的区域文案质量已经很高（口径注、失败保留快照、推算标注都是范本级），<b>不建议为改而改</b>。本方案把火力集中在：全局规则收编（P0）、错误链路与 toast（P1）、低频长文（P2）。</div>
+
+<h2 id="s1"><span class="no">§1</span>全局文案规范（文案宪法 v1）</h2>
+<p class="lead">以下 7 条规则是后面所有逐条改法的依据；先定规则，逐条表只列「不符合规则」的项。</p>
+
+<h3>1.1 标点基线：句中半角，句末全角<span class="tag p0">P0</span></h3>
+<p>现状 90% 文案已经遵守一种隐性风格——句中停顿用半角 <code>, : ; ( )</code>（紧凑、省宽），句子收尾用全角 <code>。？</code> 或不加标点。把它定为明文规则：</p>
+<ul>
+  <li><b>句中</b>一律半角：<code>, : ; ( ) /</code>。收编现有全角点：同步模块全部（约 45 条）、<code>download.rs</code>（6 条）、确认框正文（6 条）、<code>index.html:307</code>、<code>4089</code> 排序：<code>4254</code>（已隐藏）、<code>7655/7656/7967/7992-7993</code>、<code>4387/4638/4802/6136</code> 等。</li>
+  <li><b>句尾</b>：问句用全角 <code>？</code>；陈述句尾不加标点；多句正文（confirm 正文、折叠段）可用全角 <code>。</code> 分句。<code>6208</code> 的半角 <code>?</code> 收编为 <code>？</code>。</li>
+  <li><b>引号</b>一律「」直角引号（现状已遵守）；省略号一律单字符 <code>…</code>；破折号一律双横 <code>——</code>（插值注释）；数值占位 <code>——</code>；数学负号保留 <code>−</code>（U+2212，台账专用）。</li>
+  <li>明确<b>不做</b>「全面全角化」：改动 200+ 条、与紧凑风格冲突，收益低。</li>
+</ul>
+
+<h3>1.2 术语表（唯一叫法）<span class="tag p0">P0</span></h3>
+<table>
+<tr><th style="width:130px">概念</th><th>唯一写法</th><th style="width:330px">收编对象（现状的其他叫法）</th></tr>
+<tr><td>本应用（PC）</td><td><code>挂件</code>（品牌名 Grandettoken 不变）</td><td>tauri.conf.json 长描述「小组件」→「挂件」；文档除外</td></tr>
+<tr><td>本应用（Android）</td><td><code>Grandettoken Sync</code></td><td>设置页/更新提示里的裸「Grandettoken」（MainActivity:928、:1218）</td></tr>
+<tr><td>积分（概念）</td><td><code>积分</code></td><td>—</td></tr>
+<tr><td>积分（数值后缀）</td><td><code>N 分</code></td><td>小组件「N 积分」→「N 分」（对齐 PC 主数字与 Android App 内）</td></tr>
+<tr><td>渠道类型</td><td><code>配额型 / 金额型 / 积分型</code></td><td>—（「配额」只用于类型）</td></tr>
+<tr><td>配额的量</td><td><code>额度</code>（剩余额度、周额度、额度窗口）</td><td>strings.xml「余额、配额或积分」→「余额、额度或积分」</td></tr>
+<tr><td>签到三态</td><td><code>已领到 (+N 分) / 平台已签 / 没签成</code></td><td>「今日已领 / 今天领到了 / 平台显示本期已领取 / 平台侧显示已签到 / 平台已领取」</td></tr>
+<tr><td>签到动作</td><td>按钮统一 <code>领取 / 重试 / 重新确认 / 去登录 / 开启监测</code></td><td>「领取积分 / 领积分 / 点此领取 / 立即重试」</td></tr>
+<tr><td>数据陈旧</td><td><code>较旧</code>（状态词）/「数据较旧」（句中）</td><td>Android「数据可能已过期 / 有渠道较旧 / 较旧 / 过期」家族收敛为两种</td></tr>
+<tr><td>底栏 bad 计数</td><td><code>告急</code></td><td>「失联」（app.js:2011）——bad 态含余额告急，失联只描述断网，与 TONE_WORD 冲突</td></tr>
+<tr><td>无凭据</td><td>行内短版 <code>需打开应用 / 待登录 / 待配置</code>；卡/详情长版 <code>未检测到…登录信息 / 未登录… / 未配置密钥</code></td><td>两套是「短版/长版」配对，写入规范防止再漂移；不改文案本身</td></tr>
+<tr><td>空值占位</td><td>主数值 <code>——</code>；说明性空 <code>暂无 X</code>；未配置 <code>未配置 X</code></td><td>「尚未配置 / 还没取到 / 没有 X」按语境归入三档；小组件单横 <code>—</code> 保留（限宽）</td></tr>
+<tr><td>时长</td><td>面板/弹层带空格 <code>4 天 7 小时</code>；限宽位（胶囊/托盘/紧凑条/小组件）无空格 <code>4天7小时</code></td><td>现状两套并存，规范成「限宽 &lt;160px 用 tight」，不再视为不一致</td></tr>
+</table>
+
+<h3>1.3 错误文案：三段式 + 外部原文不出用户面<span class="tag p1">P1</span></h3>
+<ul>
+  <li><b>模板</b>：<code>&lt;对象&gt;&lt;动作&gt;失败: &lt;中文短原因&gt;</code>。短原因 ≤ 20 字、说清「什么事没成」，需要时再接 <code>· &lt;一句话出路&gt;</code>。errcodes.rs 的 19 条短文案是全应用范本。</li>
+  <li><b>外部库原文（reqwest / serde / rusqlite / updater / Windows API 的英文 e）不再拼进用户可见首句</b>：替换为固定中文短语，完整 <code>{e}</code> 写入诊断日志（diaglog 已有事件管线，加一行即可）。逐条改法见 §3.2。</li>
+  <li><b>错误码对用户隐藏</b>：<code>SYNC_XXX: 中文</code> 组合到达界面时只显示中文消息；码本身保留在「设置 → 诊断」（Android 已有该展示位）、体检报告与日志里，报障链路不丢。</li>
+  <li><b>第三方平台原文</b>（平台返回的 message）保持透传但包一层：<code>平台返回: {msg}</code>，与自家文案区分。</li>
+</ul>
+
+<h3>1.4 toast 守则<span class="tag p1">P1</span></h3>
+<ul>
+  <li>成功回执 ≤ 14 字，动词开头：<code>已复制 / 已保存 / 已删除 / 已发布 / 已加入同步组</code>。</li>
+  <li>剪贴板回执只有两种：普通 = <code>已复制</code>；密钥 = <code>已复制 · 剪贴板对其他程序可见</code>（安全提醒只保留密钥这一处）。诊断/日志类 = <code>已复制 · 可直接粘贴给 AI 排查</code>（替换「贴给我」两种变体）。</li>
+  <li>失败 toast 必须含出路或可诊断信息（现状大部分已做到）；纯「已 X」的冗余回执（界面同屏已有反馈）进减法清单，见 §5.1。</li>
+  <li>机制不动：单条覆盖、2600ms、role="status"。</li>
+</ul>
+
+<h3>1.5 空态三档 + 每个空态必须给出路<span class="tag p2">P2</span></h3>
+<p>三个空态（未配置 / 全隐藏 / 筛选无结果）现状已带 CTA 按钮，是范本。规则化：凡空态必含「下一步」——按钮或一句话指路。目前仅两处缺口：签到中心全关页（7210 已有指路，合格）、活动筛选空态（7121「当前筛选下没有活动」无出路 → 加「换个筛选或点『全部』」）。</p>
+
+<h3>1.6 数字、单位与时间<span class="tag p2">P2</span></h3>
+<ul>
+  <li>金额 <code>¥12.34</code>、积分 <code>1,234 分</code>、百分比整数位优先（列表）+ 1 位小数（详情），现状已统一，不动。</li>
+  <li>相对时间 <code>刚刚 / N 分钟前 / N 小时前 / N 天前 / 从未</code> 三端已一致（Android 同款实现），写入规范。</li>
+  <li>「连续失败后」等设置项描述 <code>每 24 小时最多问一次服务器</code> 这类口语化说明保留——这是产品的语气资产。</li>
+</ul>
+
+<h2 id="s2"><span class="no">§2</span>PC 端改法清单</h2>
+<p class="lead">按区域列出需要改动的条目（行号为 2026-11-06 工作区）。「维持」项不占篇幅；标点收编若被 §1.1 规则覆盖的，只在此标出密集区不逐条列。</p>
+
+<h3>2.1 标题栏 · 底栏 · 横幅<span class="tag p0">P0</span></h3>
+<table>
+<tr><th style="width:120px">位置</th><th>原文</th><th>建议</th><th style="width:60px">优先级</th></tr>
+<tr><td class="loc">app.js:2011</td><td><code>${bad} 失联</code>（底栏 bad 计数）</td><td><code>${bad} 告急</code></td><td><span class="pri p1">P1</span><span class="why">与 TONE_WORD（正常/预警/告急）对齐；「失联」只覆盖断网，bad 还含余额告急</span></td></tr>
+<tr><td class="loc">app.js:1811</td><td><code>N 个渠道取数失败 · 可能是网络或系统代理 · 看诊断</code></td><td>维持</td><td><span class="pri p2">P2</span><span class="why">范本级：数量 + 猜因 + 出路</span></td></tr>
+<tr><td class="loc">index.html:60</td><td><code>title="立即刷新"</code></td><td><code>title="刷新"</code>（托盘菜单同步改）</td><td><span class="pri p2">P2</span><span class="why">按钮旁已有「刚刚」相对时间，「立即」冗余</span></td></tr>
+<tr><td class="loc">app.js:1574</td><td><code>这个渠道已隐藏或移除,详情已关闭</code></td><td><code>渠道已隐藏或移除,详情已关闭</code></td><td><span class="pri p2">P2</span><span class="why">去口语冗余</span></td></tr>
+<tr><td class="loc">app.js:3266-3270</td><td><code>当前${label} · 点击切换为${…}</code></td><td>维持</td><td class="keep">—</td></tr>
+</table>
+
+<h3>2.2 toast（135 处按类收编）<span class="tag p1">P1</span></h3>
+<p class="lead">全量分类结果：<b>成功回执 58</b>、<b>失败回执 52</b>、<b>复制回执 14</b>、<b>指引/一次性 11</b>。按 §1.3/1.4 规则处理，其中需要逐条改的：</p>
+<table>
+<tr><th style="width:120px">位置</th><th>原文</th><th>建议</th><th style="width:60px">优先级</th></tr>
+<tr><td class="loc">4387</td><td><code>同步组已创建，但状态读取失败，请重试</code></td><td><code>同步组已创建 · 状态读取失败,点「查看组状态」重试</code></td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">4527 / 6136</td><td><code>找回失败：</code> / <code>复制下载直链失败：</code>（全角冒号）</td><td>半角冒号（全局收编）</td><td><span class="pri p0">P0</span></td></tr>
+<tr><td class="loc">4638</td><td><code>GitHub 授权码已过期，请重新连接</code></td><td><code>授权码已过期,点「连接 GitHub」重新开始</code></td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">5166</td><td><code>已复制: ${id}</code></td><td><code>已复制 ${id}</code>（去冒号；对象 ≤ 6 字时）</td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">5180</td><td><code>已复制地址/名称等信息(密钥在下面单独复制)</code></td><td><code>已复制(不含密钥)</code></td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">5190 / 6192 / 6236</td><td>三种剪贴板后缀（见 §1.4）</td><td>按三分类统一</td><td><span class="pri p0">P0</span></td></tr>
+<tr><td class="loc">5252 / 5343 / 5369</td><td><code>${msg} · 已复制到剪贴板</code> 等</td><td>统一为 <code>已复制 · 剪贴板对其他程序可见</code>（密钥类）</td><td><span class="pri p0">P0</span></td></tr>
+<tr><td class="loc">5527</td><td><code>已改用密钥箱里的那把(${platform} / ${label}) · 手填的值已清除</code></td><td><code>已改用密钥箱那把(${platform} / ${label}),手填值已清除</code></td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">6280</td><td><code>体检完成:有项目需要处理 / 全部正常</code></td><td>删除（结果区同屏已完整展示结论行）</td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">7387</td><td><code>今天已经签过了</code></td><td><code>平台已签</code></td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">7388</td><td><code>签到没成功</code></td><td><code>没签成: ${原因}</code></td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">8278-8284</td><td><code>${name} ${action}: ${title}${where}</code>（action 三种 + where 两种，整句 30+ 字）</td><td><code>${name} 有活动可领 · 渠道卡里领</code> / <code>${name} 有新活动 · 需在客户端参与</code></td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">8291</td><td><code>${name} 今天领到了${cr}</code></td><td><code>${name} 已领到${cr}</code></td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">8317</td><td><code>${name} 余额很低</code></td><td><code>${name} 余额告急</code>（对齐状态词）</td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">8300</td><td><code>紧凑条已改为可选:设置 → 显示 → 启用紧凑条</code></td><td>维持（一次性迁移提示）</td><td class="keep">—</td></tr>
+<tr><td class="loc">4824</td><td><code>同步失败: ${e.payload}</code>（payload 是 <code>SYNC_X: 中文</code>）</td><td>剥掉 <code>SYNC_X:</code> 前缀只显示中文（§1.3）</td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">8148 / 5602 / 5662 / 4865 等</td><td><code>取数失败: ${e}</code> 等（e 含外部英文）</td><td>见 §3.2 通用收编（高频 8 条先改）</td><td><span class="pri p1">P1</span></td></tr>
+</table>
+
+<h3>2.3 签到体系（重灾区）<span class="tag p1">P1</span></h3>
+<table>
+<tr><th style="width:120px">位置</th><th>原文</th><th>建议</th><th style="width:60px">优先级</th></tr>
+<tr><td class="loc">6685</td><td>按钮 <code>领取积分</code></td><td><code>领取</code>（数额已在正文「今日可领 +N 分」）</td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">6722 / 6767</td><td>按钮 <code>领积分</code></td><td><code>领取</code></td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">6700 / 6707</td><td><code>今日已领${amt}</code> / <code>今日已签到(平台未返回数额)</code></td><td><code>已领到${amt}</code> / <code>已签到(数额未知)</code></td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">6681</td><td><code>本设备今日签到名额已用</code></td><td><code>本设备今日名额已用</code>（对齐徽标 6849）</td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">6727</td><td><code>太挤了,今天还会自动再试(第 N/5 次)</code></td><td><code>平台太挤 · 今天还会自动再试(第 N/5 次)</code></td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">6735</td><td><code>凭据失效 —— 打开一次客户端 / 在渠道卡上登录一次</code></td><td><code>凭据失效 · 打开一次客户端,或在渠道卡登录</code></td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">6714 / 6757</td><td><code>本期没有可参与的签到活动</code> / <code>本期无打卡活动(等下一期)</code></td><td>统一 <code>本期没有可签的活动,等下一期</code></td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">6845</td><td>徽标 <code>可领取</code>（禁用态）与 <code>可领</code> 并存</td><td>统一 <code>可领</code></td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">6855</td><td>徽标 <code>平台已领取</code></td><td><code>平台已签</code></td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">6882</td><td>徽标 <code>异常</code>（接口变动态）</td><td><code>已暂停</code>（该态语义是「接口变动，自动签到已暂停」）</td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">6949-6957 vs 7020-7028</td><td>活动标签两套（<code>本期无可参与活动</code> vs <code>本期无活动</code> 等）</td><td>合并为一张表（渠道卡与签到中心共用）</td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">6799</td><td><code>${name} 今天还没签 · 点此领取</code></td><td><code>${name} 还没签 · 领取</code></td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">3910/5122</td><td><code>现在还不能领:${ckHold}</code></td><td><code>还没到点: ${ckHold}</code>（ckHold 已输出「N 分钟后再试」）</td><td><span class="pri p2">P2</span></td></tr>
+</table>
+
+<h3>2.4 同步页（标点重灾区 + 确认迁移）<span class="tag p0">P0</span></h3>
+<p class="lead">全模块全角→半角（§1.1），另有 7 处原生 confirm 迁移为行内确认条（文案见 §5.2 表），以下列正文级改动：</p>
+<table>
+<tr><th style="width:120px">位置</th><th>原文</th><th>建议</th><th style="width:60px">优先级</th></tr>
+<tr><td class="loc">4204</td><td><code>同步设置读取失败，未创建新组。请重试：${code}</code></td><td><code>同步设置读取失败(未创建新组): ${中文消息}</code></td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">4231-4235</td><td>GitHub hint 三态（第三态 80+ 字逐步骤教程）</td><td>第三态精简为：<code>在 GitHub → Settings → Developer settings 建桌面 OAuth App（勾选 Device Flow），把公开 Client ID 填在下面。只需配一次。</code></td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">4259-4263</td><td><code>本机同步密钥读取失败：${keyError}。请重试或找回旧同步组。</code></td><td>半角化 + <code>· 可点「找回旧同步组」恢复</code></td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">4271</td><td><code>待重试 seq ${n}</code></td><td><code>待重试(第 ${n} 批)</code></td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">4599 区</td><td>同步标签 placeholder <code>如 my-relay（同标签跨机合并）</code></td><td><code>如 my-relay(同标签跨机合并)</code></td><td><span class="pri p0">P0</span></td></tr>
+<tr><td class="loc">sync_cmds 676/752（Rust）</td><td><code>已经有同步组，请查看当前同步码；需要更换时使用重新生成</code></td><td><code>已有同步组;要换新的用「重新生成同步码」</code></td><td><span class="pri p1">P1</span></td></tr>
+</table>
+
+<h3>2.5 设置 · WHY · 关于<span class="tag p2">P2</span></h3>
+<table>
+<tr><th style="width:120px">位置</th><th>原文</th><th>建议</th><th style="width:60px">优先级</th></tr>
+<tr><td class="loc">4089</td><td><code>排序：${sort}</code>（全角冒号）</td><td>半角（全局收编）</td><td><span class="pri p0">P0</span></td></tr>
+<tr><td class="loc">2754 WHY.checkin</td><td>约 110 字（内部接口 / 代理 / 开关三主题混一段）</td><td><code>走平台内部接口查活动并签到;规则一变就自动暂停,余额显示不受影响。签到走直连不用系统代理 —— 平台按出口 IP 限流,代理 IP 更容易被拒。</code>（58 字）</td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">2745 WHY.wblogin</td><td>约 130 字（含 5.6.2 版本史）</td><td><code>点「登录」开独立窗口走网页登录(微信扫码/手机号),成功后自动关窗,挂件用这份会话取数 —— 不复制任何东西,也不动桌面客户端登录。会话约 7 天过期。国内版 5.6.2 起令牌加密存储,已无法自动读取。</code></td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">2746 WHY.qoderweb</td><td>约 120 字（含排查日期）</td><td><code>逐笔到期明细只有网页会话能拿到,桌面端凭据只有汇总(平台两套接口的差别)。点「登录网页版」开独立窗口,登录后自动关窗并刷新;这套会话只读明细,签到与余额照旧。</code></td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">344-345</td><td><code>日志已被环境变量 TOKENSCOPE_NODIAG 关闭 —— 去掉它并重启挂件才会重新记录。</code></td><td><code>日志已被环境变量 TOKENSCOPE_NODIAG 关闭;去掉变量并重启后恢复记录。</code></td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">349-353</td><td>数据与隐私折叠段（90+ 字）</td><td>维持（安全关键 + 折叠区，长度可接受）</td><td class="keep">—</td></tr>
+<tr><td class="loc">7967 / 7992-7993</td><td>模型 tips 两条内混全角分号/逗号</td><td>半角收编</td><td><span class="pri p0">P0</span></td></tr>
+</table>
+
+<h3>2.6 渠道行 · 详情 · 空态<span class="tag p2">P2</span></h3>
+<table>
+<tr><th style="width:120px">位置</th><th>原文</th><th>建议</th><th style="width:60px">优先级</th></tr>
+<tr><td class="loc">1864 / 1866-1871</td><td>风险带 title 内全角分号/逗号</td><td>半角收编</td><td><span class="pri p0">P0</span></td></tr>
+<tr><td class="loc">7121</td><td><code>当前筛选下没有活动</code></td><td><code>当前筛选下没有活动 · 点「全部」看所有</code></td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">1253 / 1255 / 1260-1264</td><td>逐笔到期脚注四条（各 25-40 字）</td><td>维持（口径严谨是这个区域的职责）</td><td class="keep">—</td></tr>
+<tr><td class="loc">7850-7857</td><td>明文写入警示（90+ 字）</td><td>维持（安全关键，逐句都有信息量）</td><td class="keep">—</td></tr>
+<tr><td class="loc">1988-1991</td><td>未配置空态</td><td>维持（范本：图标 + 标题 + 说明 + CTA）</td><td class="keep">—</td></tr>
+</table>
+
+<h2 id="s3"><span class="no">§3</span>Rust 端改法清单</h2>
+
+<h3>3.1 系统通知 · 托盘<span class="tag p1">P1</span></h3>
+<table>
+<tr><th style="width:120px">位置</th><th>原文</th><th>建议</th><th style="width:60px">优先级</th></tr>
+<tr><td class="loc">lib.rs:1478</td><td><code>{name} {w.label}额度剩余 {pct:.0}%,已经很低了 · 打开挂件查看</code></td><td><code>{name} {label}额度剩 {pct:.0}%(¥{r:.2}) · 打开挂件查看</code>——通知里给绝对额更有行动力</td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">lib.rs:1484-1490</td><td><code>{name} 剩余 ¥{r:.2}({pct:.0}%),本轮额度 ¥{d:.0} · 打开挂件查看</code></td><td><code>{name} 剩 ¥{r:.2} / 本轮 ¥{d:.0} · 打开挂件查看</code></td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">lib.rs:1509</td><td><code>{name} 有 {within:.0} 分将在 7 天内过期(共 {r:.0} 分)· 打开挂件查看</code></td><td><code>{name} 有 {n} 分将在 7 天内过期(共 {r} 分) · 打开挂件查看</code>（补空格）</td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">lib.rs:1551</td><td><code>Grandettoken · 余额预警</code></td><td>维持</td><td class="keep">—</td></tr>
+<tr><td class="loc">lib.rs:5433-5436</td><td>托盘 <code>立即刷新 / 显示面板 / 退出</code></td><td><code>立即刷新</code> → <code>刷新</code>（与顶栏一致）</td><td><span class="pri p2">P2</span></td></tr>
+</table>
+
+<h3>3.2 外部错误原文收编（高频 8 条先改，其余 P2）<span class="tag p1">P1</span></h3>
+<table>
+<tr><th style="width:150px">位置</th><th>现状</th><th>建议（用户面）</th><th style="width:60px">优先级</th></tr>
+<tr><td class="loc">fetch.rs:913 / custom.rs:197 / checkin.rs:1292 / models.rs:675</td><td><code>请求失败: {e}</code>（reqwest 英文原文直出）</td><td><code>请求没发出去(网络或代理问题)</code>，<code>{e}</code> 写诊断日志</td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">fetch.rs:1186 / models.rs:656</td><td><code>读取响应失败: {e}</code></td><td><code>响应没读完(连接中断)</code></td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">fetch.rs:933</td><td><code>响应过大({len} 字节),已丢弃</code></td><td>维持（已是中文 + 数值）</td><td class="keep">—</td></tr>
+<tr><td class="loc">lib.rs:2283/2287（updater）</td><td><code>e.to_string()</code> 英文原文直出</td><td><code>更新没成: ${分类短语}</code>，原文进日志（更新失败是用户必经路径，值得单做映射）</td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">lib.rs:145</td><td><code>注册 {hotkey} 失败(可能已被其它程序占用): {e}</code></td><td><code>快捷键 {hotkey} 注册失败,可能被其它程序占用</code>（去尾部 {e}）</td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">store.rs / secrets.rs 各 30+ 条</td><td><code>写数据库失败: {sqlite 英文}</code></td><td>维持现状（低频故障路径，首句已中文；P2 再议统一收编）</td><td class="keep">P2 缓</td></tr>
+<tr><td class="loc">errcodes.rs:105-127</td><td>19 条短文案</td><td>维持（范本）；仅兜底 <code>出错了</code> → <code>出错了 · 详情见诊断日志</code></td><td><span class="pri p2">P2</span></td></tr>
+</table>
+
+<h3>3.3 杂项与标点<span class="tag p0">P0</span></h3>
+<table>
+<tr><th style="width:150px">位置</th><th>原文</th><th>建议</th><th style="width:60px">优先级</th></tr>
+<tr><td class="loc">download.rs 全部</td><td><code>创建下载连接失败：{e}</code> 等全角</td><td>半角收编</td><td><span class="pri p0">P0</span></td></tr>
+<tr><td class="loc">lib.rs:3957</td><td><code>今天已经处理过了({code或"已领"})</code></td><td><code>今天已处理过(${…})</code></td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">lib.rs:3966-3968</td><td><code>太挤了,约 {m} 分钟后再试</code></td><td><code>平台太挤,约 {m} 分钟后再试</code>（与前端 6727 措辞对齐）</td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">lib.rs:1124</td><td>WorkBuddy 失效指引 90+ 字长句</td><td>拆两句：先出路（<code>在渠道卡点「重新登录」</code>），后解释（7 天 TTL、备选路径入口），备选入口细节移入 WHY</td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">sync_cmds.rs:1235</td><td><code>GitHub 授权已断开；重新授权后才能发布（同步组与主密钥保留）</code></td><td>半角：<code>GitHub 授权已断开;重新授权后才能发布(同步组与主密钥保留)</code></td><td><span class="pri p0">P0</span></td></tr>
+<tr><td class="loc">lib.rs:3649/3709</td><td><code>平台已收到领取请求，正在确认状态</code></td><td><code>平台已收到领取请求,正在确认状态</code></td><td><span class="pri p0">P0</span></td></tr>
+</table>
+
+<h2 id="s4"><span class="no">§4</span>Android 端改法清单</h2>
+<table>
+<tr><th style="width:170px">位置</th><th>原文</th><th>建议</th><th style="width:60px">优先级</th></tr>
+<tr><td class="loc">WidgetFormatter.kt:184-187</td><td>小组件强制把 <code>N 分</code> 改写为 <code>N 积分</code></td><td>删除改写逻辑，显示 <code>N 分</code>（对齐 PC 主数字与 App 内；小组件更省宽）</td><td><span class="pri p0">P0</span></td></tr>
+<tr><td class="loc">SyncViewModel.kt:75/133</td><td><code>"${r.code}: ${r.message}"</code> → 用户看到 <code>SYNC_CODE_INVALID: 同步码缺少 GT1. 前缀</code></td><td>只显示 message；code 已在「设置 → 诊断」卡展示（842 行），不丢诊断能力</td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">MainActivity.kt:1121/1150</td><td><code>检查失败：$failedCode</code> / <code>下载或校验失败：$failedCode</code>（UPDATE_* 英文码直出）</td><td>建立 UPDATE_* → 中文短语映射（与 PC 更新文案同表）；<code>UPDATE_CERT_NOT_CONFIGURED</code> 已有翻译保留</td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">strings.xml:4</td><td><code>4×1 横条：快速查看渠道余额、配额或积分</code></td><td><code>…余额、额度或积分</code></td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">widget_card.xml:40</td><td><code>渠道总览</code>（唯一硬编码布局文案）</td><td>移入 strings.xml</td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">MainActivity.kt:928 / :1218</td><td><code>Grandettoken</code>（指 App 自身）</td><td><code>Grandettoken Sync</code>（与 app_name 一致）</td><td><span class="pri p1">P1</span></td></tr>
+<tr><td class="loc">MainActivity.kt:332</td><td>匿名说明 70 字长句</td><td><code>不登录 GitHub 也能用:前台 5 分钟、后台 15 分钟起。加入后可登录 GitHub 提速到 60 秒;二维码只在本机解析,不上传图像。</code></td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">MainActivity.kt:1043</td><td>清除缓存正文 62 字</td><td><code>只删除本机缓存的合并结果和序号水位,不动电脑端和 GitHub 上的密文;下次刷新会重新读取。</code></td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">MainActivity.kt:885</td><td>通知说明 60 字</td><td><code>余额偏低、数据超 2 小时未更新、连续 3 次同步失败时提醒;同一提醒 6 小时内不重复,不含余额或账号。</code></td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">NotificationHelper.kt:87/89/124</td><td><code>已连续失败 $streak 次，请检查…</code>（全角逗号）</td><td>半角收编；<code>打开 App 查看…</code> 维持</td><td><span class="pri p0">P0</span></td></tr>
+<tr><td class="loc">MainActivity.kt:518</td><td><code>数字仍保留，但请以最后一次成功取数为准。</code></td><td><code>数字仍是最后一次成功取数的结果。</code></td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">MainActivity.kt:1218</td><td><code>请允许 Grandettoken 安装此更新，再返回点击安装。</code></td><td><code>请在系统弹窗允许安装,然后返回点「安装更新」。</code></td><td><span class="pri p2">P2</span></td></tr>
+<tr><td class="loc">Decimal.kt:72-77</td><td>非 CNY 金额前缀式 <code>USD 12.00</code> vs 积分后缀式</td><td>维持（单位前缀是惯例）；写入规范说明即可</td><td class="keep">—</td></tr>
+</table>
+
+<h2 id="s5"><span class="no">§5</span>交互优化</h2>
+
+<h3>5.1 toast 减法清单<span class="tag p1">P1</span></h3>
+<p class="lead">原则：界面同屏已有同等反馈的回执不重复播 toast。逐条核查 135 处后，建议<b>删除 4 处、降级 2 处、保留其余</b>：</p>
+<table>
+<tr><th style="width:120px">位置</th><th>现状</th><th>处置</th></tr>
+<tr><td class="loc">1697</td><td><code>已刷新 · 刚刚</code>（弹层刷新成功）</td><td><b>删除</b>：弹层 caption 同步变为「更新于 刚刚」，刷新按钮已有 0.8s ✓ 角标</td></tr>
+<tr><td class="loc">6280</td><td><code>体检完成:…</code></td><td><b>删除</b>：结果区完整展示「结论:…」行</td></tr>
+<tr><td class="loc">4715</td><td><code>Client ID 已保存</code></td><td><b>删除</b>：保存后按钮态变化 + 输入框旁状态行显示</td></tr>
+<tr><td class="loc">4541</td><td><code>已退出同步组</code></td><td><b>降级保留</b>：退出后整卡切回未连接态，但这是高危操作的成功确认，保留合理（不删）</td></tr>
+<tr><td class="loc">5328 / 6567</td><td><code>已删除 / 已更新 · 已存进密钥箱</code></td><td><b>保留</b>：列表无其他反馈</td></tr>
+</table>
+
+<h3>5.2 原生 confirm(7 处) → 行内确认条<span class="tag p1">P1</span></h3>
+<p class="lead">统一迁移到已有的 <code>.cfrm</code> 行内条模式（密钥删除已在用）。收益：样式受控、按钮文案自定义、可写「危险动作」红钮。每处文案：</p>
+<table>
+<tr><th style="width:150px">触发（现 confirm）</th><th>行内条正文（改后）</th><th>按钮</th></tr>
+<tr><td class="loc">4380 撞旧组建组</td><td><code>本机留有旧同步组 —— 建议先找回,继续用以前的同步码。仍要新建?</code></td><td><code>找回旧组</code>（主）/ <code>仍要新建</code>（危险）</td></tr>
+<tr><td class="loc">4453 重新生成同步码</td><td><code>重新生成会换新组:已配对的手机和电脑要用新码才能收到新数据。旧组不删,旧码仍能读旧数据。</code></td><td><code>重新生成</code>（危险）/ <code>取消</code></td></tr>
+<tr><td class="loc">4508 恢复旧组</td><td><code>恢复后切换到所选旧组,当前组保留;自动发布先暂停,确认发布状态后再开。</code></td><td><code>恢复旧组</code>（主）/ <code>取消</code></td></tr>
+<tr><td class="loc">4536 退出同步组</td><td><code>退出会删除本机主密钥和发布状态;GitHub 上的密文不会自动删除。</code></td><td><code>退出并删除本机密钥</code>（危险）/ <code>取消</code></td></tr>
+<tr><td class="loc">4548 / 4698 断开 GitHub</td><td><code>断开后本机停止发布;手机仍可用同步码匿名读取。重新授权即可恢复。</code></td><td><code>断开</code>（危险）/ <code>取消</code></td></tr>
+<tr><td class="loc">6208 清空日志</td><td><code>清掉之后,下次出问题就没有这段记录了。</code></td><td><code>清空</code>（危险）/ <code>取消</code></td></tr>
+</table>
+
+<h3>5.3 签到按钮收敛<span class="tag p1">P1</span></h3>
+<p>ckText 返回的 <code>btn</code> 全表收敛为 6 个动词：<code>领取 / 重试 / 重新确认 / 去登录 / 开启监测 / 立即重试(保留 recheck 专用)</code> → 实际收敛为 5 个（立即重试并入重试，靠 ckHold 文案区分语境）。徽标、日历格、流水结果列同步用 §1.2 三态词。</p>
+
+<h3>5.4 WHY 说明字数上限<span class="tag p2">P2</span></h3>
+<p>规则：第一句必须是「这个开关做了什么」，全条 ≤ 60 字 / 2 行。超长三条（checkin / wblogin / qoderweb）改写见 §2.5；历史排查日期（「2026-10-30 排查」）从用户面移到代码注释。</p>
+
+<h2 id="s6"><span class="no">§6</span>原型（改前 / 改后）</h2>
+<p class="lead">以下用应用真实配色渲染关键面。改前列出问题点，改后即 §2-§5 的落地效果。</p>
+
+<h3>6.1 toast 三态规范</h3>
+<div class="ba">
+  <div class="col"><div class="cap before">改前 · 三种后缀 + 冗长 + 冒号混用</div><div class="mock">
+    <span class="toast ok">同步码已复制</span>
+    <span class="toast">已复制: gpt-5.2-turbo-high</span>
+    <span class="toast ok">最近日志已复制 · 可直接贴给我</span><br>
+    <span class="toast ok">诊断包已复制到剪贴板 · 直接贴给我就行</span>
+    <span class="toast bad">创建同步组失败：SYNC_NETWORK: 请求 GitHub 失败</span>
+    <span class="toast bad">复制下载直链失败：获取正式版下载链接失败：读取下载清单失败：…</span>
+    <div class="legend">问题：后缀 3 种；错误码直出；全角冒号；错误嵌套全链透传。</div>
+  </div></div>
+  <div class="col"><div class="cap after">改后 · 三分类模板</div><div class="mock">
+    <span class="toast ok">已复制</span>
+    <span class="toast ok">已复制 gpt-5.2-turbo-high</span>
+    <span class="toast">已复制 · 剪贴板对其他程序可见</span><br>
+    <span class="toast ok">已复制 · 可直接粘贴给 AI 排查</span>
+    <span class="toast bad">创建同步组失败: 连不上 GitHub · 检查网络后重试</span>
+    <span class="toast bad">复制下载直链失败: Release 上少一个文件,更新链路不完整</span>
+    <div class="legend">普通回执 ≤ 6 字；密钥带安全提醒；错误 = 短原因 + 出路，技术原文进日志。</div>
+  </div></div>
+</div>
+
+<h3>6.2 底栏 · 失败横幅 · 渠道行</h3>
+<div class="ba">
+  <div class="col"><div class="cap before">改前 · bad 计数叫「失联」</div><div class="mock">
+    <div class="fstrip"><b>2</b> 个渠道取数失败 · 可能是网络或系统代理 · <span style="border-bottom:1px dotted">看诊断</span></div>
+    <div class="rowline"><span class="dot" style="background:var(--bad)"></span>
+      <div><div class="nm">Hapi</div><div class="s">取数失败 · 凭据已失效 · 打开一次 Trae 即可</div></div>
+      <div class="val"><b>——</b><div class="pct">3 小时前的快照</div></div></div>
+    <div class="rowline"><span class="dot" style="background:var(--bad)"></span>
+      <div><div class="nm">OpenCode Go</div><div class="s">取数失败 · 无法连接(检查网络或代理)</div></div>
+      <div class="val"><b>——</b><div class="pct">2 小时前的快照</div></div></div>
+    <div class="foot"><span>2 正常</span><span>·</span><span>1 预警</span><span>·</span><span style="color:#ffb4ab">2 失联</span></div>
+    <div class="legend">「失联」与状态词「告急」两套口径；底部计数含义模糊。</div>
+  </div></div>
+  <div class="col"><div class="cap after">改后 · 统一「告急」</div><div class="mock">
+    <div class="fstrip"><b>2</b> 个渠道取数失败 · 可能是网络或系统代理 · <span style="border-bottom:1px dotted">看诊断</span></div>
+    <div class="rowline"><span class="dot" style="background:var(--bad)"></span>
+      <div><div class="nm">Hapi</div><div class="s">取数失败 · 凭据已失效 · 打开一次 Trae 即可</div></div>
+      <div class="val"><b>——</b><div class="pct">3 小时前的快照</div></div></div>
+    <div class="rowline"><span class="dot" style="background:var(--bad)"></span>
+      <div><div class="nm">OpenCode Go</div><div class="s">取数失败 · 无法连接(检查网络或代理)</div></div>
+      <div class="val"><b>——</b><div class="pct">2 小时前的快照</div></div></div>
+    <div class="foot"><span>2 正常</span><span>·</span><span>1 预警</span><span>·</span><span style="color:#ffb4ab">2 告急</span></div>
+    <div class="legend">行文不动（范本），仅计数词对齐 TONE_WORD。</div>
+  </div></div>
+</div>
+
+<h3>6.3 签到状态卡 · 按钮收敛</h3>
+<div class="ba">
+  <div class="col"><div class="cap before">改前 · 动词与结果词漂移</div><div class="mock">
+    <div class="ck"><div><div class="nm">Trae</div><div class="s">今日已领 +20 分 · 连续 12 天 · 已触发到账核对</div></div><span class="badge">✓ 已签</span></div>
+    <div class="ck"><div><div class="nm">Qoder 国内版</div><div class="s">发现可领取活动 · 本设备</div></div><span class="btn p">领取积分</span></div>
+    <div class="ck"><div><div class="nm">WorkBuddy</div><div class="s">太挤了,今天还会自动再试(第 2/5 次)</div></div><span class="btn">重试</span></div>
+    <div class="ck"><div><div class="nm">Qoder</div><div class="s">本期没有可参与的签到活动</div></div><span class="badge">本期无活动</span></div>
+    <div class="legend">「今日已领 / 领取积分 / 太挤了 / 本期无可参与的活动」——四种漂移。</div>
+  </div></div>
+  <div class="col"><div class="cap after">改后 · 三态词 + 五动词</div><div class="mock">
+    <div class="ck"><div><div class="nm">Trae</div><div class="s">已领到 +20 分 · 连续 12 天 · 已触发到账核对</div></div><span class="badge">✓ 已签</span></div>
+    <div class="ck"><div><div class="nm">Qoder 国内版</div><div class="s">发现可领取活动 · 本设备</div></div><span class="btn p">领取</span></div>
+    <div class="ck"><div><div class="nm">WorkBuddy</div><div class="s">平台太挤 · 今天还会自动再试(第 2/5 次)</div></div><span class="btn">重试</span></div>
+    <div class="ck"><div><div class="nm">Qoder</div><div class="s">本期没有可签的活动,等下一期</div></div><span class="badge">本期无活动</span></div>
+    <div class="legend">已领到 / 平台已签 / 没签成 三态；领取 / 重试 / 重新确认 / 去登录 / 开启监测 五动词。</div>
+  </div></div>
+</div>
+
+<h3>6.4 同步页 · 说明与危险确认</h3>
+<div class="ba">
+  <div class="col"><div class="cap before">改前 · 全角标点 + 原生 confirm</div><div class="mock">
+    <div class="khint">同步码保存在本机，切换页面或重启后保持不变。它包含解密密钥，请妥善保管。</div>
+    <div class="khint">手机端点「扫描二维码」对准这里显示的二维码，也可以手动输入同步码。同步码和二维码包含解密密钥，请勿截图外传；点「隐藏同步码」可临时遮挡。</div>
+    <div style="border:1px solid var(--pline2);border-radius:9px;padding:10px;background:var(--panel2);font-size:12.5px">
+      <b>Grandettoken</b><div style="font-size:11.5px;color:var(--ptx3);margin:2px 0 8px">（浏览器原生确认框 · 按钮文字随系统语言，样式不可控）</div>
+      <div class="khint" style="margin:0">退出同步组会删除本机主密钥和发布状态；GitHub 上的密文不会自动删除。继续？</div>
+      <div style="margin-top:8px;display:flex;gap:8px"><span class="btn">确定</span><span class="btn">Cancel</span></div>
+    </div>
+  </div></div>
+  <div class="col"><div class="cap after">改后 · 半角 + 行内确认条</div><div class="mock">
+    <div class="khint">同步码保存在本机,切换页面或重启后保持不变。它包含解密密钥,请妥善保管。</div>
+    <div class="khint">手机端点「扫描二维码」对准这里的二维码,或手动输入同步码。同步码和二维码包含解密密钥,请勿截图外传;点「隐藏同步码」可临时遮挡。</div>
+    <div class="cfrm">
+      退出会删除本机主密钥和发布状态;GitHub 上的密文不会自动删除。
+      <div class="acts"><span class="btn">取消</span><span class="btn danger">退出并删除本机密钥</span></div>
+    </div>
+    <div class="legend">同一确认组件（.cfrm）贯穿全应用；危险钮红底、文案写明后果。</div>
+  </div></div>
+</div>
+
+<h3>6.5 系统通知（PC）</h3>
+<div class="ba">
+  <div class="col"><div class="cap before">改前</div><div class="mock">
+    <div class="notif"><div class="nt">⚠ Grandettoken · 余额预警</div>
+      <div class="nb">Codex 5 小时额度剩余 12%,已经很低了 · 打开挂件查看</div></div>
+    <div class="notif"><div class="nt">⚠ Grandettoken · 余额预警</div>
+      <div class="nb">4SAPI 剩余 ¥8.40(12%),本轮额度 ¥70 · 打开挂件查看</div></div>
+    <div class="legend">有余量的通知没给绝对额；「剩余…已经很低了」两个短句信息重叠。</div>
+  </div></div>
+  <div class="col"><div class="cap after">改后</div><div class="mock">
+    <div class="notif"><div class="nt">⚠ Grandettoken · 余额预警</div>
+      <div class="nb">Codex 5 小时额度剩 12%(¥8.40) · 打开挂件查看</div></div>
+    <div class="notif"><div class="nt">⚠ Grandettoken · 余额预警</div>
+      <div class="nb">4SAPI 剩 ¥8.40 / 本轮 ¥70 · 打开挂件查看</div></div>
+    <div class="legend">一处一处数字说清：百分比 + 绝对额；CTA 统一「打开挂件查看」。</div>
+  </div></div>
+</div>
+
+<h3>6.6 Android · 错误展示与单位</h3>
+<div class="ba">
+  <div class="col"><div class="cap before">改前 · 错误码直出 + 单位分裂</div><div class="mock">
+    <div class="phone">
+      <div style="font-weight:600;margin-bottom:6px">加入同步组</div>
+      <div style="border:1px solid var(--pline2);border-radius:8px;padding:6px 10px;color:var(--ptx3)">GT1.…</div>
+      <div class="err">SYNC_CODE_INVALID: 同步码缺少 GT1. 前缀</div>
+      <div class="rowline"><div><div class="nm">Qoder</div><div class="s">积分型 · 数据较旧 · 最近到期 11/12</div></div>
+        <div class="val"><b>820<span style="font-size:11px"> 积分</span></b></div></div>
+      <div class="rowline"><div><div class="nm">DeepSeek</div><div class="s">金额型 · 12 分钟前</div></div>
+        <div class="val"><b>¥86.40</b></div></div>
+    </div>
+    <div class="legend">同一数值 App 内「820 分」、小组件「820 积分」；错误码英文前缀用户不可读。</div>
+  </div></div>
+  <div class="col"><div class="cap after">改后</div><div class="mock">
+    <div class="phone">
+      <div style="font-weight:600;margin-bottom:6px">加入同步组</div>
+      <div style="border:1px solid var(--pline2);border-radius:8px;padding:6px 10px;color:var(--ptx3)">GT1.…</div>
+      <div class="err2">同步码缺少 GT1. 前缀,粘贴完整的 GT1. 开头的码</div>
+      <div class="rowline"><div><div class="nm">Qoder</div><div class="s">积分型 · 数据较旧 · 最近到期 11/12</div></div>
+        <div class="val"><b>820<span style="font-size:11px"> 分</span></b></div></div>
+      <div class="rowline"><div><div class="nm">DeepSeek</div><div class="s">金额型 · 12 分钟前</div></div>
+        <div class="val"><b>¥86.40</b></div></div>
+    </div>
+    <div class="legend">错误 = 中文短语 + 出路；码仍在「设置 → 诊断」；「分」全端统一。</div>
+  </div></div>
+</div>
+
+<h3>6.7 WHY 说明条（字数上限）</h3>
+<div class="ba">
+  <div class="col"><div class="cap before">改前 · WHY.checkin 110 字</div><div class="mock">
+    <div class="khint">使用平台内部接口读取活动状态,规则可能随时变化,与官方无关。签到走直连(不经过系统代理)—— 平台按出口 IP 限流,代理 IP 更容易被拒。关闭某渠道的监测后,不再查询也不再签到;签到状态不参与余额渲染。<span class="whybtn">?</span></div>
+    <div class="legend">三主题混一段；含历史信息；4 行。</div>
+  </div></div>
+  <div class="col"><div class="cap after">改后 · 58 字</div><div class="mock">
+    <div class="khint">走平台内部接口查活动并签到;规则一变就自动暂停,余额显示不受影响。签到走直连不用系统代理 —— 平台按出口 IP 限流,代理 IP 更容易被拒。<span class="whybtn">?</span></div>
+    <div class="legend">第一句说行为与后果；2 行封顶；历史排查细节移到代码注释。</div>
+  </div></div>
+</div>
+
+<h2 id="s7"><span class="no">§7</span>实施批次与验收</h2>
+<table>
+<tr><th style="width:90px">批次</th><th style="width:240px">内容</th><th>验收（可 grep 断言）</th><th style="width:70px">预估</th></tr>
+<tr><td><span class="pri p0">A · P0</span></td><td>全局标点收编（PC sync 区 / confirm / download.rs / Android 通知）、术语统一（告急 / 分 / 额度 / Sync）、toast 剪贴板后缀统一、占位符规范、widget「渠道总览」入 strings.xml</td><td><code>grep -n '[，；：]' app/src/app.js app/src/index.html</code>（用户文案区归零；注释排除）；<code>失联</code> / <code>领取积分</code> / <code>N 积分</code>（widget）归零</td><td>半天</td></tr>
+<tr><td><span class="pri p1">B · P1</span></td><td>错误文案：SYNC 前缀剥离（Android VM + PC 4824）、外部错误 8 条收编、UPDATE_* 映射；toast 减法 3 处；签到动词/三态统一表落地（ckText / 徽标 / 流水 / 事件 toast）</td><td>手动过一遍签到四渠道 + 断网/错密钥/限流三条错误路径；诊断包里仍含完整 {e} 原文</td><td>1-1.5 天</td></tr>
+<tr><td><span class="pri p1">C · P1</span></td><td>7 处 confirm → .cfrm 行内条；模型/签到中心共用确认组件核对</td><td>键盘可达（Enter 确认 / Esc 取消）、焦点归还</td><td>1 天</td></tr>
+<tr><td><span class="pri p2">D · P2</span></td><td>WHY 三条精简、长文改写（GitHub hint / 匿名说明 / 对话框正文 / 通知模板）、杂项措辞</td><td>截图对比 docs/assets（涉及面板截图的资产需重截）</td><td>半天</td></tr>
+</table>
+<div class="note"><b>注意事项：</b>① 改 Rust 错误文案时同步检查 <code>app/src/test</code> 与 Android <code>GithubLoginPolicyTest / MergeTest / NotificationRulesTest</code> 是否断言了具体字符串（当前盘点未见断言文案，落地时以编译+测试为准）；② 「太挤了」「贴给我」这类语气词是产品个性，除非用户裁决更换，改动仅限格式不删个性；③ 行号随维护漂移，实施时以原文检索定位为准。</div>
+
+<h2 id="s8"><span class="no">§8</span>需要裁决的点</h2>
+<table>
+<tr><th style="width:60px">#</th><th style="width:260px">问题</th><th>选项</th></tr>
+<tr><td>1</td><td>PC 自称</td><td>A. 统一「挂件」（推荐，运行文案已是）；B. 统一「Grandettoken」更正式</td></tr>
+<tr><td>2</td><td>底栏 bad 计数</td><td>A. 改「告急」对齐状态词（推荐）；B. 保留「失联」（若 bad 语义实际只来自断网）</td></tr>
+<tr><td>3</td><td>剪贴板回执</td><td>A. 密钥带「对其他程序可见」、其余裸「已复制」（推荐）；B. 全部带安全提醒</td></tr>
+<tr><td>4</td><td>小组件积分单位</td><td>A. 改「N 分」全端统一（推荐，更省宽）；B. 保留「N 积分」更正式</td></tr>
+<tr><td>5</td><td>「可直接贴给我」</td><td>A. 改「可直接粘贴给 AI 排查」（对外更通用）；B. 保留（个人工具语境）</td></tr>
+<tr><td>6</td><td>确认交互</td><td>A. 7 处 confirm 迁行内条（推荐）；B. 仅统一文案保留原生框（改动最小）</td></tr>
+</table>
+
+<p class="small" style="margin-top:40px">附：全量盘点底稿（三端逐条、行号、逐字原文）已在本次会话完成，实施时按本文检索原文即可定位；本文未改动任何产品代码。</p>
+</div>
+</body>
+</html>

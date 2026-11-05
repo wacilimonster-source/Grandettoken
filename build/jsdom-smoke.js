@@ -121,9 +121,9 @@ const HARNESS = `
     };
     render({});
     const strip = document.querySelector("#list .ckstrip");
-    ck("单渠道待签:条上写渠道名,并直接给「点此领取」", !!strip &&
+    ck("单渠道待签:条上写渠道名,并直接给「领取」", !!strip &&
       strip.dataset.act === "ckrun" && strip.dataset.id === "wb" &&
-      /WorkBuddy/.test(strip.textContent) && /点此领取/.test(strip.textContent),
+      /WorkBuddy/.test(strip.textContent) && /领取/.test(strip.textContent),
       strip && strip.textContent);
     CK.wb = Object.assign({}, CK.wb, { canTry: false, outcome: "auth", nextTryAt: null });
     render({});
@@ -540,7 +540,7 @@ const HARNESS = `
       /今日/.test(ckc()) && /活动状态/.test(ckc()) && /近 30 天/.test(ckc()) &&
       /明细\\(近 90 天\\)/.test(ckc()) && /管理/.test(ckc()), ckc().slice(0, 160));
     ck("今日总览:✓ 1/1 + 本月已领 3,100 分", /✓ 1\\/1/.test(ckc()) && /3,100 分/.test(ckc()), ckc().slice(0, 220));
-    ck("今日行:签完的渠道给完整文案(已领 +100 分)", /今日已领 \\+100 分/.test(ckc()), ckc().slice(0, 300));
+    ck("今日行:签完的渠道给完整文案(已领 +100 分)", /已领到 \\+100 分/.test(ckc()), ckc().slice(0, 300));
     ck("日历带:领到/没签/今天待签三种格都在",
       !!document.querySelector("#ckCenter .ckc.claimed") &&
       !!document.querySelector("#ckCenter .ckc.missed") &&
@@ -652,7 +652,7 @@ const HARNESS = `
       ck("签到中心渲染出今日行与日历带",
         !!document.querySelector('#ckCenter .ckch[data-ch="wb"]') &&
         !!document.querySelector("#ckCenter .ckband") &&
-        /今日已领 \\+100 分/.test(document.getElementById("ckCenter").innerHTML),
+        /已领到 \\+100 分/.test(document.getElementById("ckCenter").innerHTML),
         document.getElementById("ckCenter").innerHTML.slice(0, 160));
     } catch (e) {
       ck("签到中心入口链路", false, e.message);

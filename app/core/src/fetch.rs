@@ -909,8 +909,10 @@ async fn fetch_once_inner(
                     crate::errcodes::CONNECT,
                 )
             } else {
+                // 原始 reqwest 错误只进日志,用户面给一句可读的(报障时日志里搜 reqwest)
+                crate::diaglog::write_keyed(def.id, "reqwest", &format!("请求失败: {e}"));
                 (
-                    format!("请求失败: {e}"),
+                    "请求没发出去(网络或代理问题)".to_string(),
                     FailKind::Transport,
                     crate::errcodes::CONNECT,
                 )
@@ -1183,7 +1185,11 @@ async fn read_body_capped(
             }
             Ok(None) => return Ok(out),
             // 连接中断属于传输类 → 值得换下一个入口(以前 None 会让整条回退链就地停下)
-            Err(e) => return Err((format!("读取响应失败: {e}"), FailKind::Transport)),
+            Err(e) => {
+                // 原始错误进日志,用户面给一句可读的
+                crate::diaglog::write_keyed("fetch", "read-body", &format!("读取响应失败: {e}"));
+                return Err(("响应没读完(连接中断)".to_string(), FailKind::Transport));
+            }
         }
     }
 }

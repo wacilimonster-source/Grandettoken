@@ -653,7 +653,11 @@ async fn read_body_capped(mut resp: reqwest::Response, max: usize) -> Result<Vec
         match resp.chunk().await {
             Ok(Some(c)) => crate::fetch::push_chunk(&mut out, &c, max)?,
             Ok(None) => return Ok(out),
-            Err(e) => return Err(format!("读取响应失败: {e}")),
+            Err(e) => {
+                // 原始错误进日志,用户面给一句可读的
+                crate::diaglog::write_keyed("models", "read-body", &format!("读取响应失败: {e}"));
+                return Err("响应没读完(连接中断)".to_string());
+            }
         }
     }
 }
@@ -672,7 +676,9 @@ async fn get_json(client: &reqwest::Client, url: &str, key: Option<&str>) -> Res
         } else if e.is_connect() {
             "无法连接(检查网络或代理)".to_string()
         } else {
-            format!("请求失败: {e}")
+            // 原始 reqwest 错误只进日志,用户面给一句可读的
+            crate::diaglog::write_keyed("models", "reqwest", &format!("请求失败: {e}"));
+            "请求没发出去(网络或代理问题)".to_string()
         }
     })?;
     let status = resp.status();
