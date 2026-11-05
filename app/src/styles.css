@@ -91,17 +91,26 @@ body.light .mark{background-image:url("brand/mark-ink.png")}
 .tbi:hover{background:#ffffff0b;color:var(--tx)}
 .tbi:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
 .tbi-i{width:calc(15px*var(--u));height:calc(15px*var(--u));display:block}
+/* 刷新按钮 = 状态文字 + 图标,整块可点(2026-11-05 用户反馈:习惯点「刚刚」)。
+   文字为空时缩回 26px 的纯图标位 —— 窄面板 xs 隐藏 .tb-live 后与原来一致。 */
+.tbi.refresh{width:auto;min-width:calc(26px*var(--u));display:inline-flex;align-items:center;
+  justify-content:center;gap:calc(5px*var(--u));padding:0 calc(5px*var(--u));
+  transition:background var(--t1) var(--ease),color var(--t1) var(--ease)}
+.refresh-ic{position:relative;width:calc(15px*var(--u));height:calc(15px*var(--u));
+  display:grid;place-items:center;flex:none}
 .tbi.loading{color:var(--ac);pointer-events:none}
-.tbi.loading::before{content:"";position:absolute;inset:calc(2px*var(--u));border-radius:50%;
+.tbi.loading .refresh-ic::before{content:"";position:absolute;inset:calc(-3px*var(--u));border-radius:50%;
   border:2px solid transparent;border-top-color:var(--ac);border-right-color:var(--ac);
   animation:spin .8s linear infinite}
 .tbi.done{color:var(--ok)}
 .tbi.done .tbi-i{display:none}
-.tbi.done::after{content:"¹3";font-size:calc(12px*var(--u));font-weight:700;line-height:1}
+.tbi.done .refresh-ic::after{content:"\2713";font-size:calc(12px*var(--u));font-weight:700;line-height:1}
 @keyframes spin{to{transform:rotate(360deg)}}
 .tb-live{font-size:max(10.5px,calc(10.5px*var(--u)));color:var(--tx4);white-space:nowrap;
-  font-variant-numeric:tabular-nums;margin-right:calc(1px*var(--u))}
+  font-variant-numeric:tabular-nums;transition:color var(--t1) var(--ease)}
 .tb-live:empty{display:none}
+.tbi.refresh:hover .tb-live{color:var(--tx2)}
+.tbi.refresh.done .tb-live{color:var(--ok)}
 /* 文字按钮没法"转",刷新反馈改成脉冲 */
 .tb.spin{animation:pulse .7s ease}
 @keyframes pulse{50%{opacity:.35}}

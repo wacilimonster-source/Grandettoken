@@ -53,11 +53,15 @@
     <div class="tt" data-tauri-drag-region>Grandettoken</div>
     <button class="uchip" id="updChip" style="display:none"></button>
     <div class="spacer" data-tauri-drag-region></div>
-    <span class="tb-live" id="tbLive"></span>
     <!-- 顶栏固定四枚入口(2026-11-03 用户裁决):刷新 / 置顶 / 隐藏 / 胶囊。
-         右上角不再有「更多操作」菜单;退出只在底栏与托盘。 -->
-    <button class="tbi" id="btnR" title="立即刷新" aria-label="立即刷新">
-      <svg class="tbi-i" aria-hidden="true"><use href="#i-refresh"/></svg>
+         右上角不再有「更多操作」菜单;退出只在底栏与托盘。
+         2026-11-05:刷新状态(如「刚刚」)并进刷新按钮 —— 用户习惯点状态文字,
+         整块合成一个可点区域,不再让"看得见却点不动"的文字挨着按钮。 -->
+    <button class="tbi refresh" id="btnR" title="立即刷新" aria-label="立即刷新">
+      <span class="tb-live" id="tbLive"></span>
+      <span class="refresh-ic" aria-hidden="true">
+        <svg class="tbi-i"><use href="#i-refresh"/></svg>
+      </span>
     </button>
     <button class="tb" id="btnP" title="窗口置顶" aria-pressed="false">置顶</button>
     <button class="tb" id="btnH" title="隐藏到托盘">隐藏</button>

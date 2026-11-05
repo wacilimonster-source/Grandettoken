@@ -3895,3 +3895,18 @@ Android 0.1.8 安装包均为 HTTP 200。
 - Android：`android-v0.1.9` 发布正式签名 APK（versionCode 10，11,035,136 字节，SHA-256 `fa4945abd77f5eef4c38cffebfa70aa696635edcb71aec1e5433b318327b17dd`，证书 `CN=Grandettoken Android Release`）；公开下载后 SHA 与本地一致。`android-stable/android-latest.json` 已重签为 0.1.9 并更新（1295 字节，digest `07754c294cc982569dd213df57b719d7bb245af11f31a54a35fb2fb9b51fa4cd`），线上清单用 `manifest-public.txt` 回验 Ed25519 签名、版本、大小、哈希和下载地址均通过。
 - 模拟器：Pixel API 14 先装官方 0.1.8（versionCode 9），再覆盖安装 0.1.9（versionCode 10），`install -r` 成功、启动无 FATAL；APK 内已确认 `ic_launcher_background/foreground/monochrome` 三层资源。
 - 创建 Android release 后已显式 `gh release edit v0.3.12 --latest`，`releases/latest` 仍为 `v0.3.12`，没有再被 `android-v0.1.9` 抢占。
+
+## 2026-11-05 · 刷新区域整块可点（v0.3.13）
+
+**背景（用户反馈）**：顶栏刷新按钮左侧的「刚刚」只是状态文字，用户习惯点它却点不动。现在把状态文字与刷新图标并进同一个 `<button id="btnR">`：点文字、点图标、键盘回车都触发刷新；悬停时整块作为一个药丸亮起；成功后整块短暂变绿显示 ✓。
+
+**实现**
+- `app/src/index.html`：`#tbLive` 移入 `#btnR`，图标包进 `.refresh-ic`；`aria-label` 保持「立即刷新」。
+- `app/src/styles.css`：`.tbi.refresh` 改 inline-flex，文字为空时靠 `min-width:26px` 缩回纯图标位；`.tb-live` 去掉自带右外边距。loading 圆环与 done ✓ 从整枚按钮收敛到 `.refresh-ic`（21px 环 / 15px 勾），补 hover 与 done 下文字颜色的过渡；xs 面板仍按原规则隐藏 `.tb-live`。
+- 顺带修掉 done 态的字面量 `¹3`：它是 CSS 转义 `\2713` 被按 JS 八进制落盘的结果，恢复为 `content:"\2713"`（✓）。
+
+**验证**
+- `node build/check-css-forms.js` PASS（903 条规则）；`jsdom-smoke` **154/154**。
+- release 二进制（深色 500px 面板）CDP 实测：点「刚刚」→ `#btnR.loading` → 完成后 `done` 勾选态（computed `::after` 为 `"✓"`）→ 800ms 后图标恢复、文字「刚刚」、toast「已更新 · 刚刚」；顶栏横向溢出 0，按钮 51×26，图标 15×15；文字完整落在按钮命中区内。深色常态/悬停截图确认药丸悬停区把文字与图标包在一起。
+- signed NSIS `Grandettoken_0.3.13_x64-setup.exe` **5,530,864 B**，SHA-256 `e27abee19d34877a68c2df3c46d28e6ca6e6bae96d397a31b15d27cecedf0067`；`.sig` 已生成，import table 无 `WebView2Loader.dll`。
+
