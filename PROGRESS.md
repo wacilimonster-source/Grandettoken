@@ -1,10 +1,10 @@
 # Grandettoken 开发进展
 
-> 最后更新:2026-10-20
-> 状态:**v0.1.48 已发版** —— 修「升级后当天仍显示凭据失效」:旧的 `auth` 结论会挡住当天,
-> 现在按「判出 auth 的版本」判断它是否陈旧,换版本就重新判一次
-> 上一版:v0.1.47(Qoder 渠道国际版 + 国内版,积分展示 + 每日 10:00 打卡;签到默认开)
-> 上上版:v0.1.46(修「WorkBuddy 取不到数」:401 被当成 Server,凭据换不下去)
+> 最后更新:2026-11-06
+> 状态:**v0.3.16 已发版** —— 全量测试收尾:修 Android 用例括号基线漂移(v0.3.14 只改实现漏了用例),
+> 测试探针假 DOM 补齐,发版流程新增「回归门禁」;产品代码零改动
+> 上一版:v0.3.15(密钥箱回归修复与 PC 主题统一)
+> 上上版:v0.3.14(全端文案统一与错误提示收编 / Android 0.1.10)
 >
 > 产品原名 TokenScope,2026-09 下旬改名 Grandettoken。凭据服务名(`TokenScope`)
 > 与 bundle identifier(`com.wacil.tokenscope`)仍沿用旧名 —— 改了会让已装用户收不到更新、
@@ -3961,3 +3961,38 @@ confirm 迁行内条。
 - `gh release edit v0.3.14 --latest` 已归位，`releases/latest` 指向 v0.3.14。
 - 附带：android/ 源码树与发版辅助脚本（`build/android-release.ps1`、
   `build/sign-android-manifest.py`）首次入库；文案体检设计文档随本提交入库。
+
+
+## 2026-11-06 · 全量测试与发版 v0.3.16(Android 用例基线修复 + 测试工具收编)
+
+**背景**:对 main@7551fe6(v0.3.15)做一次全量测试(对齐 `ci.yml` 全部门禁 + Android 单测 +
+jsdom 冒烟,报告见 `docs/report/test-run-2026-11-06.md`):547 项用例,546 过、1 失败、9 忽略。
+唯一失败是 `WidgetFormatterTest.emits_short_window_tags_from_stable_keys`:
+v0.3.14 宣布「句中半角」标点基线后只改了实现、漏了用例 —— 用例与实现同 commit 入库,
+**该用例自入库起从未通过过**;v0.3.14 门禁记录写了「Android `testDebugUnitTest` 全绿」,与实际不符。
+
+**实现**
+- 用例侧:`WidgetFormatterTest.kt:89` 期望「月额度(按套餐周期)」改回半角 —— 以 v0.3.14
+  自己定下的基线为准,不动实现。
+- 工具侧:`build/probe-frontend.js` 假 DOM 补 `Image` / `replaceChildren`。app.js 顶层
+  `new Image()`(托盘品牌图预载)让旧探针当场中断:脚本后半段没初始化,级联出
+  `LOG_INFO` TDZ 假故障,还掩盖了 `renderSyncQr` 用 `replaceChildren` 清容器的第二个缺口;
+  补齐后探针恢复可用(它的退出码判据本来就严格,THROWN/UNHANDLED/ERROR 都算失败)。
+- 流程侧:`RELEASE.md` 新增「发版前回归门禁」步骤(core 单测 / CSS 形态门 / jsdom 冒烟 /
+  动过 `android/` 必跑 Gradle 单测);`ci.yml` 用例计数注释 229 → 422(忽略 9)。
+
+**测试门禁(复测全绿)**
+- Android `testDebugUnitTest` **36/36**(修复前 35/36)、probe 退出码 0、core `cargo test`
+  **413**(9 忽略,真机用例)、两 crate `cargo check --all-targets`、`jsdom-smoke` **162/162**、
+  CSS 形态门 946 规则、`node --check` ×7、凭据扫描 CLEAN(334 文件)。
+
+**发布(2026-11-06)**
+- tag `v0.3.16`,release 提交 `06b3cd1`,前置修复提交 `346c255`(产品代码零改动)。
+  签名安装包 `Grandettoken_0.3.16_x64-setup.exe` 5,532,971 字节,SHA-256
+  `af405487064eb9b531b66d96468df9f071391ec28348cd97ad4d9b9fa864cef1`;`.sig` 424 字节;
+  `latest.json` 907 字节(更新说明经 `--notes-file` 传入)。
+  `verify-release.js` **14 项全 PASS**(更新端点 200、版本/签名/URL 一致、安装包可下载且
+  SHA 一致、三件套齐、非 draft、说明完整、latest 端点指向 0.3.16、仓库公开)。
+- 网络备注:github.com 直连超时,git 走已配好的 `http.proxy=127.0.0.1:7897`;
+  `gh` 与 `verify-release.js` 显式 `HTTPS_PROXY` + `NODE_USE_ENV_PROXY=1` 复跑通过。
+- 更新说明明确「产品代码零改动,无行为变化」;旧版用户会收到 0.3.16 更新提示。
