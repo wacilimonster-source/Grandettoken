@@ -631,7 +631,7 @@ function sortChannels(list) {
   }
   const score = (c) => {
     if (!c.hasKey) return 9999;
-    if (!c.valid) return 5000;
+    if (!c.valid && !c.stale) return 5000;
     // 积分和金额/百分比不是一回事,不能混进同一条数轴比大小:
     // 统一排在"可比渠道之后、取数失败之前"
     if (c.kind === "points") return 4000;
@@ -719,7 +719,7 @@ function grantListHtml(id) {
 function renderRow(c, i) {
   const tone = hvTone(c); // 与其余三种形态同源(设计 P3 · 状态同源)
   const noKey = !c.hasKey;
-  const failed = c.hasKey && !c.valid;
+  const failed = c.hasKey && !c.valid && !c.stale;
   const r = remainRatio(c);
   const pct = r === null ? null : Math.round(r * 100);
   const isPct = c.kind === "percent";
@@ -758,7 +758,7 @@ function renderRow(c, i) {
   // 这三种"旧快照"行,同一句话只说一次 —— 状态标签说"坏了",副标题只说原因,
   // 右侧只说"多久以前的快照"。以前这三样各写两遍,折叠行 94px、五行字。
   const hv = hvRow(c.id);
-  const isStale = hv ? hv.state === "stale" : !!c.stale;
+  const isStale = !!c.stale || !!(hv && hv.state === "stale");
   const isOld = isStale || failed;
   const hasTag = !!(hv && hv.qualifier && hv.qualifier !== "~") || !!(CFG && CFG.textTone);
 
@@ -772,12 +772,15 @@ function renderRow(c, i) {
         : c.authSource === "web"
         ? `未登录 ${esc(c.name)}`
         : "未配置密钥";
+  else if ((hv && hv.state === "auth") || (c.recovery && c.recovery.phase === "auth")) sub = esc(c.error || "登录凭据已失效");
+  else if (failed && c.recovery && c.recovery.phase === "retrying") sub = "正在获取 · 自动重试中";
   else if (failed)
     sub = hasTag
       ? c.error
         ? esc(c.error)
         : ""
       : `取数失败${c.error ? " · " + esc(c.error) : ""}`;
+  else if (c.stale) sub = esc(hv && hv.secondary ? hv.secondary : (c.recovery && c.recovery.phase === "retrying" ? "更新中 · 保留上次额度" : "暂时无法更新 · 保留上次额度"));
   else if (wins.length) {
     // Codex 的套餐档位(free/plus/pro)画在副标题里。OpenCode Go 的 extra 里也可能有
     // 一条「套餐」($10/期 · 未折进消耗),那不是 ChatGPT 订阅 —— 只认 Codex(§6.2)
@@ -840,7 +843,7 @@ function renderRow(c, i) {
     const shortValue = dispPct(Math.max(0, Math.min(100, fiveHour.remainPercent)));
     subVal = `<span class="quota-secondary"><span>5 小时${CFG.showUsed ? "已用" : "剩余"}</span><b style="color:${toneFgSoft(quotaTone(c, fiveHour))}">${shortValue.toFixed(1)}%</b></span>`;
     // 两项额度占右侧两行,旧数据的年龄移到左侧,仍然显式可见。
-    if (isOld) sub = `${c.updatedAt ? snapAge(c.updatedAt) : "上次快照"}${failed && sub ? " · " + sub : ""}`;
+    if (isOld) sub = `${c.updatedAt ? snapAge(c.updatedAt) : "上次快照"}${sub ? " · " + sub : ""}`;
   }
   // 失联 / 旧快照:数值降为 text-3 并加 ~,不让"上次成功值"看起来像当前值。
   // 紧凑条里由 CSS 的 ::before 画 ~(省一个节点),面板里用真实节点。
@@ -1380,7 +1383,7 @@ function scheduleRowReveal(id) {
 
 function renderDetail(c, inDialog = false) {
   const noKey = !c.hasKey;
-  const failed = c.hasKey && !c.valid;
+  const failed = c.hasKey && !c.valid && !c.stale;
 
   // 行详情只留一个短操作入口;具体设置集中在管理页。
   const manageLink = `<button class="btn s" data-act="open-manage" data-id="${c.id}">渠道设置</button>`;
@@ -1412,7 +1415,7 @@ function renderDetail(c, inDialog = false) {
   }
 
   const state = hvRow(c.id) || {};
-  const dim = failed || state.state === "stale" || (!state.state && !!c.stale);
+  const dim = failed || state.state === "stale" || !!c.stale;
   const more = rowMore[c.id] || {};
 
   // ① 核心(口径三选一);积分型统一走「最近一笔 + 逐笔明细」组件,
@@ -1557,7 +1560,7 @@ function detailHeroHtml(c) {
 }
 
 function detailHeaderHtml(c) {
-  const failed = c.hasKey && !c.valid;
+  const failed = c.hasKey && !c.valid && !c.stale;
   const sub = c.authLabel || KIND_CAPTION[c.kind] || "";
   return `${iconHtml(c, "ico", !c.hasKey || failed)}
     <div class="detail-title"><b id="detailName">${esc(c.name)}</b><p>${esc(sub)}</p></div>
@@ -1591,8 +1594,10 @@ function renderDetailSheet() {
   const stale = c.stale || state.state === "stale" || !c.valid;
   const caption = [
     KIND_CAPTION[c.kind] || "",
-    stale ? (c.valid ? "上次快照" : "取数失败 · 保留上次快照") : "",
+    stale ? (c.recovery && c.recovery.phase === "retrying" ? "更新中 · 保留上次快照" : c.stale ? "保留上次快照" : "暂时无法更新") : "",
     c.updatedAt ? `更新于 ${relTime(c.updatedAt)}` : "",
+    c.recovery && c.recovery.attempts ? `已尝试 ${c.recovery.attempts} 次` : "",
+    c.error && !c.valid ? c.error : "",
   ].filter(Boolean).join(" · ");
   body.innerHTML =
     detailHeroHtml(c) +
@@ -1693,7 +1698,7 @@ async function detailAction(act) {
     DETAIL_BUSY = true;
     renderDetailSheet();
     try {
-      await refresh();
+      await refresh(true);
       // 刷新回执不再弹 toast:caption 同步变「更新于 刚刚」+ 刷新按钮已有 ✓ 角标,同屏反馈足够
     } finally {
       DETAIL_BUSY = false;
@@ -1996,7 +2001,7 @@ function renderInner(opts) {
 
   // 底栏状态(隐藏渠道不计入,只报个数)
   const withKey = CHANNELS.filter((c) => c.hasKey && !c.hidden);
-  const bad = withKey.filter((c) => !c.valid).length;
+  const bad = withKey.filter((c) => !c.valid && !(c.recovery && c.recovery.phase === "retrying")).length;
   const warn = withKey.filter((c) => c.valid && (c.limited || hvTone(c) === "bad")).length;
   // 与行内同一套约定:未配置=空心环,失联=斜杠灰点,预警=黄(之前 warn 用了红点,颜色梯度倒挂)
   $("fdot").className =
@@ -2235,7 +2240,7 @@ function renderPill(sorted) {
   const autoPick = () => {
     // 自动轮播是「最紧张的一个」,口径独立于列表排序(列表顺序只按设置):
     // 绑定窗比例升序 → 无分母金额型按「余额 / 底线」贴近度 → 积分按 7 日到期占比。
-    const active = CHANNELS.filter((c) => c.hasKey && !c.hidden && c.valid);
+    const active = CHANNELS.filter((c) => c.hasKey && !c.hidden && (c.valid || c.stale || (c.recovery && c.recovery.phase === "retrying")));
     const tightness = (c) => {
       const r = remainRatio(c);
       if (r !== null) return r;
@@ -2328,7 +2333,7 @@ function peekCheckinLine() {
 }
 
 function pillPeekHtml() {
-  const amt = CHANNELS.filter((c) => c.hasKey && !c.hidden && c.valid && c.kind === "amount");
+  const amt = CHANNELS.filter((c) => c.hasKey && !c.hidden && (c.valid || c.stale) && c.kind === "amount");
   const today = amt.reduce((s, c) => s + (c.day || 0), 0);
   // 胶囊常态只有 132~280px 宽:每行一句话,长渠道名退简称 ——
   // 截断成 "OpenCod…" 比不给还难看(真机截图确认过)
@@ -2481,7 +2486,7 @@ function renderPillFace() {
   applyPillAura(AURA_OF[pd] || "fail", remainRatio(c));
   // 陈旧:胶囊上没有 .rhint 那行字,只在数值前加一个 ~ —— 四种形态里最省地方的一种写法
   const hvP = hvRow(c.id);
-  const staleTilde = hvP && hvP.state === "stale" ? '<i class="tilde">~</i>' : "";
+  const staleTilde = c.stale || (hvP && hvP.state === "stale") ? '<i class="tilde">~</i>' : "";
   // 主数字优先用后端的(它已经切到绑定窗 —— 短窗限流时大数字跟着变 0%),
   // 拿不到视图时退回本地算法,行为不回退(D03 在胶囊上的那一半)。
   $("pillV").innerHTML =
@@ -2586,7 +2591,7 @@ function trayAbbr(v) {
 
 /** 当前托盘渠道的概览数;拿不到可信数字(未配置/失败/关闭)返回 "" → 画回品牌样式。 */
 function trayNumber(c) {
-  if (!c || !c.hasKey || !c.valid) return "";
+  if (!c || !c.hasKey || (!c.valid && !c.stale)) return "";
   if (c.kind === "percent") {
     const r = remainRatio(c);
     return r === null ? "" : String(Math.round(r * 100));
@@ -3693,7 +3698,7 @@ function renderDock() {
       const c = CHANNELS.find((x) => x.id === id);
       if (!c) return "";
       const r = hvRow(id);
-      const stale = !!(r && r.state === "stale");
+      const stale = !!c.stale || !!(r && r.state === "stale");
       return `<i data-id="${esc(id)}" style="background:${TONE_HEX[hvTone(c)]}" class="${
         stale ? "stale" : ""
       }" title="${esc(c.name)}"></i>`;
@@ -4005,15 +4010,16 @@ $("btnR").addEventListener("click", async () => {
   btn.classList.add("loading");
   btn.setAttribute("aria-busy", "true");
   try {
-    await refresh();
+    await refresh(true);
     btn.classList.add("done");
     setTimeout(() => btn.classList.remove("done"), 800);
   } finally {
     btn.classList.remove("loading");
     btn.removeAttribute("aria-busy");
   }
-  const bad = CHANNELS.filter((c) => c.hasKey && !c.hidden && !c.valid).length;
-  showToast(bad ? `${bad} 个渠道取数失败` : "已更新 · 刚刚", bad > 0);
+  const bad = CHANNELS.filter((c) => c.hasKey && !c.hidden && !c.valid && !(c.recovery && c.recovery.phase === "retrying")).length;
+  const retrying = CHANNELS.some((c) => !c.hidden && c.recovery && c.recovery.phase === "retrying");
+  if (!retrying || bad) showToast(bad ? `${bad} 个渠道暂时无法更新` : "已更新 · 刚刚", bad > 0);
 });
 // 模型页:搜索框与「重新取价目表」按钮
 // 搜索去抖:一敲就重建 160 行列表太贵(每个字符一次 innerHTML + 排序)(F15);
@@ -8271,11 +8277,11 @@ async function ensureModels(source) {
 }
 
 // ───────────── 启动 ─────────────
-async function refresh() {
+async function refresh(force = false) {
   // render() 挪出 try:渲染抛错以前会被当成"取数失败"再 toast 一次,信息是错的(P2-33)
   let list;
   try {
-    list = await invoke("get_channels");
+    list = await invoke("get_channels", { force });
   } catch (e) {
     // 以前这里直接覆写 #list 就完了:紧凑条形态下条里一片空白、窗口留着旧宽度,
     // 胶囊与托盘也停在旧值(报告 P2-14)。走同一条 render 收尾,只是把错误提示出来。

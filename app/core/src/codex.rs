@@ -1,19 +1,19 @@
 //! Codex 重置卡只读元数据。参考 CodexBar 的 wham 接口契约;
 //! 不保存卡 ID、不兑换卡,也不从配额下降推断“发生过重置”。
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use serde_json::Value;
 
 pub const RESET_CREDITS_URL: &str =
     "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResetCredit {
     pub title: String,
     pub expires_at: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResetCredits {
     /// None = 连数量也未知;不能用 0 代替查询失败。

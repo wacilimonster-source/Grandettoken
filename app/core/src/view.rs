@@ -71,7 +71,7 @@ fn severity(s: ViewState) -> i64 {
         ViewState::Auth => 1,
         ViewState::Exhausted => 2,
         ViewState::Error => 3,
-        ViewState::Stale => 4,
+        ViewState::Stale => 5,
         ViewState::Fresh => 5,
         ViewState::NoKey => 6,
     }
@@ -381,13 +381,10 @@ pub fn state_of(v: &ChannelView, input: &ViewInput) -> ViewState {
     if !v.has_key {
         return ViewState::NoKey;
     }
-    // 网页登录 / 复用本机登录态的渠道:取不到数 = 登录态没了,要给人一条出路。
-    // 手填密钥的渠道(keyring)才是"取数失败" —— 这两件事在界面上是两种出路。
     if !v.valid {
-        return match v.auth_source.as_str() {
-            "web" | "app" => ViewState::Auth,
-            _ => ViewState::Error,
-        };
+        if v.recovery.as_ref().map_or(false, |r| r.phase == "auth") { return ViewState::Auth; }
+        if v.stale || v.recovery.as_ref().map_or(false, |r| r.phase == "retrying") { return ViewState::Stale; }
+        return ViewState::Error;
     }
     if is_limited(v) {
         return ViewState::Limited;
@@ -404,6 +401,7 @@ pub fn state_of(v: &ChannelView, input: &ViewInput) -> ViewState {
 fn tone_of_state(s: ViewState, v: &ChannelView, input: &ViewInput) -> Tone {
     match s {
         ViewState::NoKey | ViewState::Auth | ViewState::Error => Tone::Off,
+        ViewState::Stale if !v.valid => Tone::Off,
         ViewState::Limited | ViewState::Exhausted => Tone::Bad,
         _ => {
             // 积分型的风险是过期,不是余额低 —— 这一段沿用前端 `toneOf` 里已经验过的口径:
@@ -503,7 +501,7 @@ fn qualifier_of(state: ViewState, v: &ChannelView, input: &ViewInput) -> Option<
         ViewState::Error => Some("取数失败".into()),
         ViewState::NoKey => Some("未配置".into()),
         ViewState::Exhausted => Some("已用尽".into()),
-        ViewState::Stale => Some("~".into()),
+        ViewState::Stale => Some(if v.recovery.as_ref().map_or(false, |r| r.phase == "retrying") { "更新中" } else { "~" }.into()),
         ViewState::Fresh if below_floor(v, input.money_floor) => Some("低于底线".into()),
         ViewState::Fresh => None,
     }
@@ -536,7 +534,19 @@ fn secondary_of(v: &ChannelView, state: ViewState, input: &ViewInput) -> Option<
             Some(e) => Some(format!("取数失败 · {e}")),
             None => Some("取数失败 · 点开看原因".into()),
         },
-        ViewState::Stale => Some(format!("{} 前的快照", fmt_hours(input.now - v.updated_at))),
+        ViewState::Stale => {
+            if !v.valid && !v.stale {
+                return Some("正在获取 · 自动重试中".into());
+            }
+            let crossed = v.windows.iter().any(|w| w.resets_at.as_deref()
+                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                .map_or(false, |t| t.timestamp() > v.updated_at && t.timestamp() <= input.now));
+            let prefix = if crossed { "上一周期数据，等待更新" }
+                else if v.valid { "历史数据" }
+                else if v.recovery.as_ref().map_or(false, |r| r.phase == "retrying") { "更新中" }
+                else { "暂时无法更新" };
+            Some(format!("{prefix} · {}前的快照", fmt_hours(input.now - v.updated_at)))
+        },
         ViewState::Limited => {
             let Some(w) = binding_window(v) else { return None };
             let mut parts = vec![format!("{}窗", w.label)];
@@ -586,10 +596,10 @@ fn claim_days(v: &ChannelView) -> Option<i64> {
 
 /// 组装主数字。四种形态都画它 —— 不再各自挑窗。
 ///
-/// 未配置 / 鉴权失效 / 取数失败一律写「——」:这三种是"不知道",
-/// 跟"确定剩下 0"是两件事,不能共用一种写法(设计 P3 / 七态表)。
+/// 有成功快照时继续展示并由状态标明陈旧;没有快照才写「——」。
+/// 请求失败不能变成「余额为 0」,也不能擦掉已知的历史额度。
 fn headline_of(v: &ChannelView, state: ViewState) -> Headline {
-    if matches!(state, ViewState::NoKey | ViewState::Auth | ViewState::Error) {
+    if state == ViewState::NoKey || (!v.stale && matches!(state, ViewState::Auth | ViewState::Error)) {
         return Headline::unknown();
     }
     match v.kind {
@@ -876,6 +886,7 @@ mod tests {
             plan: None,
             estimated: false,
             stale: false,
+            recovery: None,
             updated_at: NOW,
             claim: None,
             hidden: false,
@@ -958,10 +969,12 @@ mod tests {
         v.valid = false;
         assert_eq!(state_of(&v, &input), ViewState::Error);
 
-        // 网页 / 本机登录态:取不到数 = 鉴权失效(要给用户一条出路)
+        // 网络失败不能从凭据来源推断成鉴权失效;只有明确拒绝才提示登录。
         let mut v = amount("wb", 3.0, None);
         v.valid = false;
         v.auth_source = "web".into();
+        assert_eq!(state_of(&v, &input), ViewState::Error);
+        v.recovery = Some(crate::recovery::RecoveryView { phase: "auth".into(), ..Default::default() });
         assert_eq!(state_of(&v, &input), ViewState::Auth);
         v.auth_source = "app".into();
         assert_eq!(state_of(&v, &input), ViewState::Auth);
@@ -1005,6 +1018,44 @@ mod tests {
         assert!(row.secondary.as_deref().unwrap().contains("前的快照"));
         // 陈旧不等于翻红:颜色仍由真实余量决定,只是多了一层"不确定"的写法
         assert_eq!(row.tone, Tone::Ok);
+    }
+
+    #[test]
+    fn temporary_failure_keeps_headline_without_auth_or_action_alarm() {
+        let input = base_input();
+        let mut v = amount("offline", 300.0, Some(500.0));
+        v.auth_source = "app".into();
+        v.valid = false;
+        v.stale = true;
+        v.recovery = Some(crate::recovery::RecoveryView { phase: "retrying".into(), attempts: 1, next_retry_at: input.now + 2 });
+        let row = row_of(&v, None, &input);
+        assert_eq!(row.state, ViewState::Stale);
+        assert_eq!(row.headline, Headline::money(300.0, "CNY"));
+        assert_eq!(row.qualifier.as_deref(), Some("更新中"));
+        assert_eq!(build_home(&[v.clone()], &[], &input).error_count, 0);
+        v.recovery.as_mut().unwrap().phase = "unavailable".into();
+        assert!(row_of(&v, None, &input).secondary.unwrap().contains("暂时无法更新"));
+        v.recovery.as_mut().unwrap().phase = "auth".into();
+        assert_eq!(state_of(&v, &input), ViewState::Auth);
+        assert_eq!(row_of(&v, None, &input).headline, Headline::money(300.0, "CNY"));
+    }
+
+    #[test]
+    fn pending_without_history_is_unknown_and_crossed_reset_is_explicit() {
+        let input = base_input();
+        let mut v = amount("new", 300.0, None);
+        v.valid = false;
+        v.remaining = None;
+        v.recovery = Some(crate::recovery::RecoveryView { phase: "retrying".into(), ..Default::default() });
+        let row = row_of(&v, None, &input);
+        assert_eq!(row.headline, Headline::unknown());
+        assert!(row.secondary.unwrap().contains("正在获取"));
+        v.stale = true;
+        v.updated_at = input.now - 600;
+        let mut w = win("本周", 80.0, "ok", None);
+        w.resets_at = Some(chrono::DateTime::from_timestamp(input.now - 300, 0).unwrap().to_rfc3339());
+        v.windows = vec![w];
+        assert!(row_of(&v, None, &input).secondary.unwrap().contains("上一周期数据"));
     }
 
     // ── 五桶 ────────────────────────────────────────────────────────

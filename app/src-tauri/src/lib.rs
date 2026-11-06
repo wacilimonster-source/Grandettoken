@@ -34,11 +34,12 @@ pub struct AppState {
 }
 
 #[tauri::command]
-async fn get_channels(state: State<'_, AppState>) -> Result<Vec<ChannelView>, String> {
+async fn get_channels(state: State<'_, AppState>, force: Option<bool>) -> Result<Vec<ChannelView>, String> {
     // 先克隆 Arc 再 await:不让 State 的借用跨越 await 点
     let store = state.store.clone();
     let fetcher = state.fetcher.clone();
     // fetch_shared:与轮询/托盘刷新共用闸门,手动刷新不再叠加出一份并发请求(报告 O-4)
+    if force.unwrap_or(false) { fetcher.request_refresh(); }
     Ok(fetcher.fetch_shared(&store).await)
 }
 
@@ -462,7 +463,8 @@ async fn delete_key(app: tauri::AppHandle, id: String) -> Result<String, String>
     // 自定义渠道:只有凭据管理器里那一份,没有网页会话可清
     if providers::find(&id).is_none() {
         purge_channel_credentials(&app, &id).await?;
-        app.state::<AppState>().fetcher.invalidate();
+        let state = app.state::<AppState>();
+        state.fetcher.forget_channel(&lock_rw(&state.store), &id);
         return Ok("已删除这个自定义渠道的密钥(渠道定义还在,换一把可继续用)".into());
     }
     let def = providers::find(&id).ok_or_else(|| format!("未知渠道: {id}"))?;
@@ -482,7 +484,8 @@ async fn delete_key(app: tauri::AppHandle, id: String) -> Result<String, String>
     purge_channel_credentials(&app, &id).await?;
     // 凭据刚变过:作废"5 秒内复用上次结果",否则紧接着的刷新还会把旧结果(带旧凭据
     // 取到的那份)端上来,用户看到"清掉了却还显示已登录"。
-    app.state::<AppState>().fetcher.invalidate();
+    let state = app.state::<AppState>();
+    state.fetcher.forget_channel(&lock_rw(&state.store), &id);
     Ok(if is_web {
         format!("已清除 {} 的登录会话{warn}", def.name)
     } else {
@@ -632,7 +635,7 @@ async fn clear_key_ref(app: tauri::AppHandle, id: String) -> Result<(), String> 
         .await
         .map_err(|e| format!("清除密钥引用失败: {e}"))??;
     lock_rw(&store).vault_ref_clear(&id)?;
-    app.state::<AppState>().fetcher.invalidate();
+    app.state::<AppState>().fetcher.forget_channel(&lock_rw(&store), &id);
     Ok(())
 }
 
@@ -1734,7 +1737,7 @@ async fn custom_add(
         let _ = tokio::task::spawn_blocking(move || secrets::delete(&cid2)).await;
         return Err(e);
     }
-    st.fetcher.invalidate();
+    st.fetcher.forget_channel(&lock_rw(&st.store), &id);
     Ok(id)
 }
 
@@ -1759,7 +1762,7 @@ async fn custom_remove(app: tauri::AppHandle, id: String) -> Result<String, Stri
     // ② 连删失败都被 let _ 吞了,凭据留在系统里没人知道(凭据纪律问题)。
     let cid = id.clone();
     let purge = purge_channel_credentials(&app, &cid).await;
-    st.fetcher.invalidate();
+    st.fetcher.forget_channel(&lock_rw(&st.store), &id);
     // 渠道定义已经删了,不该因为清凭据失败就把整个操作报成失败 ——
     // 但也不能静默:如实告诉用户"渠道删了,凭据没清干净"。
     let purge_note = match purge {
@@ -2043,7 +2046,21 @@ async fn poll_loop(app: tauri::AppHandle) {    let mut failures = 0u32;
 
         // 抖动,避免多渠道同秒并发撞上对方限流
         let jitter = (now_ts() % 5) as u64;
-        tokio::time::sleep(std::time::Duration::from_secs(wait + jitter)).await;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(wait + jitter);
+        while tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            if UPDATING.load(std::sync::atomic::Ordering::Relaxed) { break; }
+            let (store, fetcher) = {
+                let state = app.state::<AppState>();
+                (state.store.clone(), state.fetcher.clone())
+            };
+            if let Some(views) = fetcher.fetch_retries(&store).await {
+                emit_channels(&app, &views);
+                maybe_notify_crit(&app, &views);
+                settle_arrivals(&app).await;
+            }
+        }
+        if UPDATING.load(std::sync::atomic::Ordering::Relaxed) { continue; }
 
         // 先把 Arc 取出来,避免 State 借用跨越 await
         let (store, fetcher) = {
@@ -2125,6 +2142,7 @@ async fn refresh_now(app: &tauri::AppHandle) {
         let state = app.state::<AppState>();
         (state.store.clone(), state.fetcher.clone())
     };
+    fetcher.request_refresh();
     let views = fetcher.fetch_shared(&store).await;
     LAST_REFRESH.store(now_ts(), std::sync::atomic::Ordering::Relaxed);
     emit_channels(app, &views);
@@ -5442,6 +5460,11 @@ pub fn run() {
             app.state::<AppState>()
                 .fetcher
                 .set_web_credential_source(Box::new(move |id| web_session_of(&session_app, id)));
+
+            let progress_app = app.handle().clone();
+            app.state::<AppState>().fetcher.set_progress_sink(Arc::new(move |views| {
+                emit_channels(&progress_app, &views);
+            }));
 
             // 启动时注册已保存的全局快捷键;被占用不拦启动,但要把原因留给界面
             // (之前只 eprintln,绿色版从托盘启动时没人看得到 stderr —— 报告 P2-14)

@@ -15,6 +15,7 @@ use crate::store::{
     last_jump_rows, window_coverage_rows, HistoryRow, Store,
 };
 use crate::secrets;
+use crate::recovery::{Recovery, RecoveryView, Snapshot};
 use crate::weblogin;
 use chrono::{Datelike, Duration, Local, TimeZone, Utc, Weekday};
 use futures::StreamExt;
@@ -52,6 +53,14 @@ pub fn key_fp(token: &str) -> String {
     h.update(token.trim().as_bytes());
     let d = h.finalize();
     d.iter().take(12).map(|b| format!("{b:02x}")).collect()
+}
+
+/// Prefer an explicit stable account ID; never infer an account from a display name.
+fn credential_scope(c: &appauth::Credential) -> String {
+    match c.account_id.as_deref().filter(|id| !id.is_empty()) {
+        Some(id) => key_fp(&format!("account:{id}")),
+        None => key_fp(&format!("token:{}", c.token)),
+    }
 }
 
 /// 距到期多久算"近期"。界面上的"近 30 天将过期"用的就是它。
@@ -130,6 +139,7 @@ pub struct ChannelView {
     pub estimated: bool,
     /// 本次取数失败,以上数值来自上次成功快照
     pub stale: bool,
+    pub recovery: Option<RecoveryView>,
     pub updated_at: i64,
     /// 申请制额度状态;None = 该渠道没启用申请制(见 ClaimConfig)
     pub claim: Option<ClaimState>,
@@ -439,6 +449,7 @@ pub fn inferred_cycle_days(reset: i64) -> Option<f64> {
 pub enum FailKind {
     /// 连不上 / DNS / 超时:换域名
     Transport,
+    RateLimited(u64),
     /// 5xx、429、响应不是 JSON:换域名(可能是入口自身的问题或限流)
     Server,
     /// 401/403/407:服务器明确拒绝这份凭据 —— 换下一份凭据的信号
@@ -452,7 +463,7 @@ pub enum FailKind {
 impl FailKind {
     /// 值得换域名重试吗
     pub fn retryable(self) -> bool {
-        matches!(self, FailKind::Transport | FailKind::Server)
+        matches!(self, FailKind::Transport | FailKind::Server | FailKind::RateLimited(_))
     }
 }
 
@@ -925,6 +936,12 @@ async fn fetch_once_inner(
 
     let status = resp.status();
     info.status = Some(status.as_u16());
+    if status.as_u16() == 429 {
+        let wait = retry_after_seconds(resp.headers(), now_ts());
+        let (r, k) = err_result(def, "请求过于频繁，稍后自动重试".into(), Some(FailKind::RateLimited(wait)));
+        return (r, k, info);
+    }
+    info.status = Some(status.as_u16());
     // 上限 2 MB:入口被网关换成大 HTML 时不要整包读进内存再解析(P2-24)。
     // 先看 Content-Length,超了**在读之前**就拒;没有长度(分块传输)才按块累加,
     // 一超上限立刻停手 —— 以前 `resp.bytes()` 会先把整包缓进内存再判大小(P2)。
@@ -1148,7 +1165,17 @@ fn kind_str(k: Kind) -> &'static str {
 /// 错误页分支都必须走它,否则会出现"同一个 401 在两处被判成不同类型"的漂移
 /// —— 2026-10-20 真机日志就是这么被坑的(HTML 错误页让 401 变成了 Server,
 /// 于是只换域名、不换凭据,桌面端令牌永远轮不到)。
-fn kind_for_status(code: u16) -> FailKind {
+pub(crate) fn retry_after_seconds(headers: &reqwest::header::HeaderMap, now: i64) -> u64 {
+    headers.get("retry-after").and_then(|h| h.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok().or_else(|| chrono::DateTime::parse_from_rfc2822(v).ok().map(|d| (d.timestamp() - now).max(0) as u64)))
+        .unwrap_or(60).min(86_400)
+}
+
+fn custom_scope(ch: &custom::CustomChannel, fp: &str) -> String {
+    key_fp(&format!("{fp}:{}", serde_json::to_string(ch).unwrap_or_default()))
+}
+
+pub(crate) fn kind_for_status(code: u16) -> FailKind {
     if matches!(code, 401 | 403 | 407) {
         FailKind::Auth
     } else if code == 429 || code >= 500 {
@@ -1242,7 +1269,7 @@ async fn fetch_channel_scoped(
             None => true,
             Some(k) => !k.retryable(),
         };
-        if stop || i + 1 == order.len() {
+        if stop || matches!(kind, Some(FailKind::RateLimited(_))) || i + 1 == order.len() {
             // 失败也要把**刚试过的地址**报上去:调用方要靠它把"上次成功地址"清掉。
             // 以前只在成功时给 Some,于是失败分支永远不会清备忘 ——
             // 一个挂掉的备用镜像能把渠道永久钉在上面,每轮白等满超时(P2)。
@@ -1255,6 +1282,7 @@ async fn fetch_channel_scoped(
             Some(FailKind::Auth) => "凭据被拒",
             Some(FailKind::Transport) => "传输失败",
             Some(FailKind::Server) => "服务端错误",
+            Some(FailKind::RateLimited(_)) => "请求过于频繁",
             Some(FailKind::Client) => "请求有问题",
             Some(FailKind::Business) => "业务失败",
             None => "",
@@ -1986,6 +2014,7 @@ fn build_view(
         plan: None,
         estimated: result.kind == Kind::Amount,
         stale,
+        recovery: None,
         updated_at,
         claim,
         hidden: false,
@@ -2080,6 +2109,7 @@ fn placeholder(def: &providers::ProviderDef) -> ChannelView {
         plan: None,
         estimated: false,
         stale: false,
+        recovery: None,
         updated_at: 0,
         claim: None,
         hidden: false,
@@ -2200,7 +2230,8 @@ fn build_custom_view(
         month_prev,
         plan: None,
         estimated: has_amount,
-        stale: !r.valid,
+        stale: !r.valid && r.remaining.is_some(),
+        recovery: None,
         updated_at,
         claim: None,
         hidden: false,
@@ -2257,6 +2288,7 @@ fn custom_placeholder(
         plan: None,
         estimated: false,
         stale: false,
+        recovery: None,
         updated_at: 0,
         claim: None,
         hidden,
@@ -2277,11 +2309,27 @@ fn custom_placeholder(
 ///
 /// 返回顺序按配置里的原始下标恢复 —— 界面顺序不因并发而变;隐藏渠道连凭据都不读。
 /// 凭据走同一个凭据管理器(账户名 = 渠道 id),密钥纪律与内置渠道完全相同。
+#[cfg(test)]
 async fn fetch_custom_all<F>(
     http: &reqwest::Client,
     channels: &[custom::CustomChannel],
     hidden: &[String],
     key_for: F,
+) -> Vec<(custom::CustomChannel, Option<custom::CustomResult>, String)>
+where
+    F: Fn(&str) -> Option<String> + Clone + Send + 'static,
+{
+    fetch_custom_all_observed(http, channels, hidden, key_for, None).await
+}
+
+type CustomObserver<'a> = &'a (dyn Fn(&custom::CustomChannel, Option<&custom::CustomResult>, &str) + Send + Sync);
+
+async fn fetch_custom_all_observed<F>(
+    http: &reqwest::Client,
+    channels: &[custom::CustomChannel],
+    hidden: &[String],
+    key_for: F,
+    observer: Option<CustomObserver<'_>>,
 ) -> Vec<(custom::CustomChannel, Option<custom::CustomResult>, String)>
 where
     F: Fn(&str) -> Option<String> + Clone + Send + 'static,
@@ -2307,7 +2355,9 @@ where
                 None => (i, ch, None, String::new()),
                 Some(k) => {
                     let fp = key_fp(&k);
+                    if let Some(f) = observer { f(&ch, None, &fp); }
                     let r = custom::fetch_custom(http, &ch, &k).await;
+                    if let Some(f) = observer { f(&ch, Some(&r), &fp); }
                     (i, ch, Some(r), fp)
                 }
             }
@@ -2382,6 +2432,10 @@ pub enum QoderWebProbe {
 pub struct Fetcher {
     pub http: reqwest::Client,
     cache: Mutex<HashMap<String, (FetchResult, i64)>>,
+    scopes: Mutex<HashMap<String, String>>,
+    recovery: Mutex<HashMap<String, Recovery>>,
+    progress: Mutex<Vec<ChannelView>>,
+    progress_sink: Mutex<Option<Arc<dyn Fn(Vec<ChannelView>) + Send + Sync>>>,
     /// 每个渠道上次成功的入口地址。本轮先试它,避免每分钟都先撞挂掉的域名。
     /// 只存内存:重启后退回定义顺序,不往磁盘写状态。
     url_memo: Mutex<HashMap<String, String>>,
@@ -2424,6 +2478,81 @@ impl Default for Fetcher {
 }
 
 impl Fetcher {
+    pub fn set_progress_sink(&self, sink: Arc<dyn Fn(Vec<ChannelView>) + Send + Sync>) {
+        *self.progress_sink.lock().unwrap() = Some(sink);
+    }
+
+    fn publish(&self, v: ChannelView) {
+        let views = {
+            let mut rows = self.progress.lock().unwrap();
+            if let Some(old) = rows.iter_mut().find(|r| r.id == v.id) { *old = v; }
+            else { rows.push(v); }
+            rows.clone()
+        };
+        let sink = self.progress_sink.lock().unwrap().clone();
+        if let Some(sink) = sink { sink(views); }
+    }
+
+    fn failed(&self, id: &str, kind: Option<FailKind>) -> RecoveryView {
+        let mut states = self.recovery.lock().unwrap();
+        let mut next = Recovery::failed(states.get(id), now_ts(), kind);
+        // Stable one-second spread between channels, without random dependencies.
+        next.next += id.bytes().map(u64::from).sum::<u64>() as i64 % 2;
+        let view = next.view(now_ts());
+        states.insert(id.into(), next);
+        view
+    }
+
+    fn cached(&self, store: &Arc<Mutex<Store>>, id: &str, scope: &str) -> Option<(FetchResult, i64)> {
+        if scope.is_empty() { return self.cache.lock().unwrap().get(id).cloned(); }
+        let same = self.scopes.lock().unwrap().get(id).map_or(false, |old| old == scope);
+        if same {
+            if let Some(cached) = self.cache.lock().unwrap().get(id).cloned() { return Some(cached); }
+        }
+        if !same {
+            self.cache.lock().unwrap().remove(id);
+            self.recovery.lock().unwrap().remove(id);
+            self.scopes.lock().unwrap().insert(id.into(), scope.into());
+        }
+        Snapshot::load(&store.lock().unwrap(), id, scope).map(|s| {
+            self.cache.lock().unwrap().insert(id.into(), (s.result.clone(), s.ts));
+            (s.result, s.ts)
+        })
+    }
+
+    async fn quota_attempt(&self, def: &providers::ProviderDef, cred: &appauth::Credential, memo: Option<&str>) -> (FetchResult, Option<String>, Option<FailKind>) {
+        let attempt = self.recovery.lock().unwrap().get(def.id).map_or(0, |r| r.attempts);
+        let order = attempt_order(def.url, def.fallback_urls, memo);
+        let url = &order[attempt as usize % order.len()];
+        let (r, kind) = fetch_once_scoped(&self.http, def, url, &cred.token, cred.account_id.as_deref()).await;
+        (r, Some(url.clone()), kind)
+    }
+
+    /// Called by the shell ticker. Only failed, due channels are queried.
+    pub async fn fetch_retries(&self, store: &Arc<Mutex<Store>>) -> Option<Vec<ChannelView>> {
+        if !self.recovery.lock().unwrap().values().any(|r| r.next <= now_ts()) { return None; }
+        let _guard = self.gate.lock().await;
+        let due: HashSet<String> = self.recovery.lock().unwrap().iter()
+            .filter(|(_, r)| r.next <= now_ts()).map(|(id, _)| id.clone()).collect();
+        if due.is_empty() { return None; }
+        let views = self.fetch_selected(store, Some(&due)).await;
+        *self.last_run.lock().unwrap() = Some((now_ts(), views.clone()));
+        Some(views)
+    }
+
+    pub fn request_refresh(&self) {
+        self.invalidate();
+    }
+
+    pub fn forget_channel(&self, store: &Store, id: &str) {
+        self.cache.lock().unwrap().remove(id);
+        self.scopes.lock().unwrap().remove(id);
+        self.recovery.lock().unwrap().remove(id);
+        self.progress.lock().unwrap().retain(|v| v.id != id);
+        let _ = store.delete_setting(&format!("quota_snapshot_v1:{id}"));
+        self.invalidate();
+    }
+
     pub fn new() -> Self {
         Self {
             http: reqwest::Client::builder()
@@ -2432,6 +2561,10 @@ impl Fetcher {
                 .build()
                 .expect("HTTP 客户端初始化失败"),
             cache: Mutex::new(HashMap::new()),
+            scopes: Mutex::new(HashMap::new()),
+            recovery: Mutex::new(HashMap::new()),
+            progress: Mutex::new(Vec::new()),
+            progress_sink: Mutex::new(None),
             url_memo: Mutex::new(HashMap::new()),
             cfg_cache: Mutex::new(None),
             gate: tokio::sync::Mutex::new(()),
@@ -2461,6 +2594,7 @@ impl Fetcher {
     /// 否则那一次刷新会拿旧结果回给界面,用户看到的是"已经登录了但还没有数"。
     pub fn invalidate(&self) {
         *self.last_run.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        self.recovery.lock().unwrap().retain(|_, r| matches!(r.kind, Some(FailKind::RateLimited(_))) && r.next > now_ts());
     }
 
     /// 用一份**还没生效**的凭据试打一次:网页登录抓到会话之后,先证明这份会话真能取数,
@@ -2573,8 +2707,7 @@ impl Fetcher {
         let mut chosen: Option<(FetchResult, Option<String>, appauth::Credential)> = None;
         let mut last: Option<(FetchResult, Option<String>, appauth::Credential)> = None;
         for cred in &creds {
-            let (r, url, kind) =
-                fetch_channel_scoped(&self.http, def, &cred.token, memo.as_deref(), cred.account_id.as_deref()).await;
+            let (r, url, kind) = fetch_channel_scoped(&self.http, def, &cred.token, memo.as_deref(), cred.account_id.as_deref()).await;
             // 与轮询同一套降权记账:这次探到的 401 也帮下一轮少打一次。
             if let Ok(mut m) = self.rejected.lock() {
                 let fp = key_fp(&cred.token);
@@ -2642,6 +2775,14 @@ impl Fetcher {
     /// 并行化原因:单入口超时预算 8s、每渠道最多 4 入口 × 多凭据,串行时一个
     /// 挂掉的域名会把整轮拖到分钟级;join_all 后整轮最坏 ≈ 单渠道最坏。
     pub async fn fetch_all(&self, store: &Arc<Mutex<Store>>) -> Vec<ChannelView> {
+        self.fetch_selected(store, None).await
+    }
+
+    async fn fetch_selected(&self, store: &Arc<Mutex<Store>>, selected: Option<&HashSet<String>>) -> Vec<ChannelView> {
+        let previous = self.progress.lock().unwrap().clone();
+        let should_fetch = |id: &str| selected.map_or_else(
+            || self.recovery.lock().unwrap().get(id).map_or(true, |r| r.next <= now_ts()),
+            |ids| ids.contains(id));
         let n = providers::PROVIDERS.len();
         let mut out: Vec<Option<ChannelView>> = (0..n).map(|_| None).collect();
 
@@ -2693,6 +2834,9 @@ impl Fetcher {
                     let hidden = hidden.clone();
                     let auto_hide = auto_hide.clone();
                     let web_src = web_src.clone();
+                    let cfg = &cfg;
+                    let should_fetch = &should_fetch;
+                    let previous = &previous;
                     async move {
                     // 隐藏 = 不发请求、**也不读本机登录凭据**(裁决原文)。之前的顺序
                     // 反了:credentials() 先跑,隐藏的 App 型渠道每轮仍读本地文件 + 跑 AES
@@ -2718,6 +2862,11 @@ impl Fetcher {
                             pending: None,
                             success: None,
                         };
+                    }
+                    if !should_fetch(def.id) {
+                        if let Some(v) = previous.iter().find(|v| v.id == def.id) {
+                            return FetchedOne { i, def, fp: String::new(), view: Some(v.clone()), pending: None, success: None };
+                        }
                     }
                     // 文件 IO + AES + keyring RPC 都是阻塞调用:下沉到 spawn_blocking,
                     // 凭据服务卡住不再拖垮 tokio worker 上的整轮取数(扫描报告 O-5)。
@@ -2764,7 +2913,18 @@ impl Fetcher {
                     } else {
                         String::new()
                     };
+                    let scope = creds.first().map(|c| {
+                        credential_scope(c)
+                    }).unwrap_or_default();
+                    let cached = self.cached(store, def.id, &scope);
+                    if let Some((mut r, ts)) = cached.clone() {
+                        r.valid = false; r.limited = false;
+                        let mut v = build_view(def, r, true, ts, &store.lock().unwrap(), &cfg, creds.first(), &fp, 1);
+                        v.recovery = Some(RecoveryView { phase: "retrying".into(), ..Default::default() });
+                        self.publish(v);
+                    }
                     if creds.is_empty() {
+                        if cached.is_some() || secret_err.is_some() { self.failed(def.id, None); }
                         // 「读不到凭据」经常是瞬时的:Codex 正在写 auth.json(文件被占)、
                         // 凭据管理器 RPC 卡一下、问 webview 要 Cookie 时 3 秒超时。
                         // 这种时候不该把已有的数字抹成「——」—— 沿用上次成功快照并标注时间,
@@ -2791,16 +2951,14 @@ impl Fetcher {
                                 }
                             ),
                         );
-                        let cached = self
-                            .cache
-                            .lock()
-                            .unwrap_or_else(|p| p.into_inner())
-                            .get(def.id)
-                            .cloned();
+                        let cached = cached.clone();
                         if let Some((mut prev, prev_ts)) = cached {
                             prev.valid = false;
                             prev.limited = false;
                             prev.error = Some(reason);
+                            let mut v = build_view(def, prev.clone(), true, prev_ts, &store.lock().unwrap(), &cfg, None, &fp, 1);
+                            v.recovery = self.recovery.lock().unwrap().get(def.id).map(|r| r.view(now_ts()));
+                            self.publish(v);
                             return FetchedOne {
                                 i,
                                 def,
@@ -2846,14 +3004,15 @@ impl Fetcher {
                     let mut last_cred: Option<appauth::Credential> = None;
                     let mut result = FetchResult::default();
                     let mut used_url = None;
+                    let mut failure_kind = None;
                     // 每个候选凭据试一轮;诊断日志要知道"试了几份、最后卡在哪"。
                     let mut tried: Vec<String> = Vec::new();
                     for (ci, cred) in creds.iter().enumerate() {
                         last_cred = Some(cred.clone());
                         let desc = cred_desc(def, cred);
-                        let (r, url, kind) =
-                            fetch_channel_scoped(&self.http, def, &cred.token, memo.as_deref(), cred.account_id.as_deref()).await;
+                        let (r, url, kind) = self.quota_attempt(def, cred, memo.as_deref()).await;
                         result = r;
+                        failure_kind = kind;
                         used_url = url;
                         tried.push(format!("{desc}→{}", if result.valid { "通" } else { "不通" }));
                         // 服务器明确说这份凭据不行:记下来,下一轮把它排到末尾。
@@ -2886,6 +3045,16 @@ impl Fetcher {
                             continue;
                         }
                         break;
+                    }
+                    if result.valid {
+                        self.recovery.lock().unwrap().remove(def.id);
+                        let cred = chosen.as_ref().unwrap();
+                        if def.id == "codex" {
+                            result.reset_credits = Some(match fetch_codex_reset_credits(&self.http, &cred.token, cred.account_id.as_deref(), crate::codex::RESET_CREDITS_URL).await {
+                                Ok(cards) => cards,
+                                Err(message) => crate::codex::unavailable(result.reset_credits.take(), message),
+                            });
+                        }
                     }
                     // 渠道级一行:失败必记(节流),成功只在"从失败变成功"时有信息量,
                     // 由 diaglog 的签名去重自然处理 —— 同一成功状态不会反复落。
@@ -3022,7 +3191,13 @@ impl Fetcher {
                     // 失败也要给界面一个"凭据是从哪读的",否则 App 型渠道的说明会退化成
                     // "未检测到登录信息",与真正的失败原因(token 过期)自相矛盾
                     let shown_cred = chosen.or_else(|| last_cred.clone());
-                    if result.valid {
+                    let fetched = if result.valid {
+                        let cred = shown_cred.as_ref().unwrap();
+                        let actual_scope = credential_scope(cred);
+                        self.scopes.lock().unwrap().insert(def.id.into(), actual_scope.clone());
+                        if let Err(e) = Snapshot::new(actual_scope, ts, result.clone()).save(&store.lock().unwrap(), def.id) {
+                            eprintln!("保存额度快照失败 {}: {e}", def.id);
+                        }
                         FetchedOne {
                             i,
                             def,
@@ -3033,12 +3208,11 @@ impl Fetcher {
                         }
                     } else {
                         // 失败降级:沿用上次成功值,标注时间,绝不显示成 0
-                        let cached = self
-                            .cache
-                            .lock()
-                            .unwrap_or_else(|p| p.into_inner())
-                            .get(def.id)
-                            .cloned();
+                        let cached = match shown_cred.as_ref() {
+                            Some(cred) => self.cached(store, def.id, &credential_scope(cred)),
+                            None => cached.clone(),
+                        };
+                        self.failed(def.id, failure_kind);
                         let p = match cached {
                             Some((mut prev, prev_ts)) => {
                                 prev.error = result.error;
@@ -3048,7 +3222,7 @@ impl Fetcher {
                                 prev.limited = false;
                                 (prev, true, prev_ts, shown_cred)
                             }
-                            None => (result, false, ts, shown_cred),
+                            None => (result, false, 0, shown_cred),
                         };
                         FetchedOne {
                             i,
@@ -3058,7 +3232,13 @@ impl Fetcher {
                             pending: Some(p),
                             success: None,
                         }
+                    };
+                    if let Some((r, stale, ts, cred)) = &fetched.pending {
+                        let mut v = build_view(def, r.clone(), *stale, *ts, &store.lock().unwrap(), &cfg, cred.as_ref(), &fetched.fp, 1);
+                        v.recovery = self.recovery.lock().unwrap().get(def.id).map(|r| r.view(now_ts()));
+                        self.publish(v);
                     }
+                    fetched
                     }
                 }),
         );
@@ -3067,11 +3247,27 @@ impl Fetcher {
         // 天生独立(各自读凭据、各自请求),以前却等内置全部结束后才串行跑,
         // 每个 8 秒上限 → N 个慢渠道把整轮拖成 N×8 秒。现在两组同时驱动,
         // 最坏等待取两者较大值;自定义内部再限 4 并发,避免几十个渠道瞬间打满。
-        let custom = fetch_custom_all(
+        let custom_channels: Vec<_> = cfg.custom_channels.iter().filter(|c| should_fetch(&c.id)).cloned().collect();
+        let custom_observer = |ch: &custom::CustomChannel, r: Option<&custom::CustomResult>, fp: &str| {
+            let cached = Snapshot::load(&store.lock().unwrap(), &ch.id, &custom_scope(ch, fp));
+            let pending = custom::CustomResult { valid: false, remaining: None, failure_kind: None, error: None, url_used: None, probe_only: ch.probe_only };
+            if r.is_none() && cached.is_none() { return; }
+            let mut v = build_custom_view(ch, r.unwrap_or(&pending), &store.lock().unwrap(), fp, 1);
+            if !v.valid {
+                if let Some(c) = cached { v.remaining = c.result.remaining; v.updated_at = c.ts; v.stale = true; }
+                v.recovery = Some(match r {
+                    Some(r) => Recovery::failed(self.recovery.lock().unwrap().get(&ch.id), now_ts(), r.failure_kind).view(now_ts()),
+                    None => RecoveryView { phase: "retrying".into(), ..Default::default() },
+                });
+            }
+            self.publish(v);
+        };
+        let custom = fetch_custom_all_observed(
             &self.http,
-            &cfg.custom_channels,
+            &custom_channels,
             hidden.as_slice(),
             |id| secrets::channel_key(id).ok().flatten(),
+            Some(&custom_observer),
         );
         let (fetched, custom_results) = futures::join!(builtin, custom);
 
@@ -3210,10 +3406,11 @@ impl Fetcher {
                     continue;
                 }
                 let Some((_, res, fp)) = custom_results.iter().find(|(c, _, _)| c.id == ch.id) else {
-                    custom_views.push(custom_placeholder(ch, false, None));
+                    custom_views.push(previous.iter().find(|v| v.id == ch.id).cloned().unwrap_or_else(|| custom_placeholder(ch, false, None)));
                     continue;
                 };
                 let Some(r) = res else {
+                    self.recovery.lock().unwrap().remove(&ch.id);
                     custom_views.push(custom_placeholder(ch, false, None));
                     continue;
                 };
@@ -3255,7 +3452,20 @@ impl Fetcher {
                         }
                     }
                 };
-                custom_views.push(build_custom_view(ch, r, &s, fp, accounts));
+                let scope = custom_scope(ch, fp);
+                let cached = Snapshot::load(&s, &ch.id, &scope);
+                let mut v = build_custom_view(ch, r, &s, fp, accounts);
+                if r.valid {
+                    self.recovery.lock().unwrap().remove(&ch.id);
+                    if !r.probe_only {
+                        let result = FetchResult { valid: true, remaining: r.remaining, unit: v.unit.clone(), ..Default::default() };
+                        if let Err(e) = Snapshot::new(scope, v.updated_at, result).save(&s, &ch.id) { eprintln!("保存额度快照失败: {e}"); }
+                    }
+                } else {
+                    self.failed(&ch.id, r.failure_kind);
+                    if let Some(cached) = cached { v.remaining = cached.result.remaining; v.updated_at = cached.ts; v.stale = true; }
+                }
+                custom_views.push(v);
             }
             attach_plan_costs(&mut out, &s, &cycle_cached, fx_now.as_ref());
         }
@@ -3269,6 +3479,10 @@ impl Fetcher {
         // 内置渠道在前、自定义渠道在后(顺序由前端的排序/自定义排序再排一次)
         let mut all: Vec<ChannelView> = out.into_iter().flatten().collect();
         all.extend(custom_views);
+        for v in &mut all {
+            v.recovery = self.recovery.lock().unwrap().get(&v.id).map(|r| r.view(now_ts()));
+        }
+        *self.progress.lock().unwrap() = all.clone();
         all
     }
 }
@@ -3277,6 +3491,81 @@ impl Fetcher {
 mod tests {
     use super::*;
     use chrono::Timelike;
+
+    #[test]
+    fn restart_cache_is_scoped_and_explicit_forget_removes_history() {
+        let store = Arc::new(Mutex::new(Store::open_memory().unwrap()));
+        let fetcher = Fetcher::new();
+        Snapshot::new("a".into(), 123, FetchResult { valid: true, remaining: Some(42.0), ..Default::default() }).save(&store.lock().unwrap(), "t").unwrap();
+        assert_eq!(fetcher.cached(&store, "t", "a").unwrap().1, 123);
+        assert!(fetcher.cached(&store, "t", "b").is_none(), "换账户不得复用内存快照");
+        assert_eq!(fetcher.cached(&store, "t", "a").unwrap().0.remaining, Some(42.0));
+        fetcher.forget_channel(&store.lock().unwrap(), "t");
+        assert!(fetcher.cached(&store, "t", "a").is_none());
+        assert!(fetcher.cached(&store, "t", "").is_none());
+        fetcher.cached(&store, "new", "a");
+        fetcher.failed("new", Some(FailKind::Transport));
+        assert!(fetcher.cached(&store, "new", "a").is_none());
+        assert!(fetcher.recovery.lock().unwrap().contains_key("new"), "首次获取没有快照也必须继续重试");
+    }
+
+    #[test]
+    fn credential_rotation_uses_explicit_account_and_manual_refresh_respects_429() {
+        let mut c = appauth::Credential { token: "first".into(), source: "test".into(), account_id: Some("account-a".into()), device_id: None };
+        let scope = credential_scope(&c);
+        c.token = "second".into();
+        assert_eq!(scope, credential_scope(&c));
+        c.account_id = Some("account-b".into());
+        assert_ne!(scope, credential_scope(&c));
+        let f = Fetcher::new();
+        f.failed("network", Some(FailKind::Transport));
+        f.failed("limited", Some(FailKind::RateLimited(300)));
+        f.request_refresh();
+        assert!(!f.recovery.lock().unwrap().contains_key("network"));
+        assert!(f.recovery.lock().unwrap().contains_key("limited"));
+    }
+
+    #[test]
+    fn quota_attempt_is_single_request_and_rotates_fallback_with_shared_retry_count() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url: &'static str = Box::leak(format!("http://{}/quota", listener.local_addr().unwrap()).into_boxed_str());
+        let fallback: &'static str = Box::leak(format!("http://{}/backup", listener.local_addr().unwrap()).into_boxed_str());
+        let fallbacks: &'static [&'static str] = Box::leak(vec![fallback].into_boxed_slice());
+        let worker = std::thread::spawn(move || {
+            let mut paths = Vec::new();
+            for (status, body, headers) in [("503 Service Unavailable", "{}", ""), ("200 OK", "{\"data\":{\"total_available\":21000000}}", ""), ("429 Too Many Requests", "{}", "Retry-After: 120\r\n")] {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(std::time::Duration::from_secs(3))).unwrap();
+                let mut request = [0u8; 4096];
+                let n = stream.read(&mut request).unwrap();
+                paths.push(String::from_utf8_lossy(&request[..n]).lines().next().unwrap().to_string());
+                write!(stream, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+            paths
+        });
+        let def = providers::ProviderDef { url, fallback_urls: fallbacks, ..*providers::find("4sapi").unwrap() };
+        let f = Fetcher::new();
+        let c = appauth::Credential { token: "test-quota".into(), source: "test".into(), account_id: None, device_id: None };
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let (r, _, k) = f.quota_attempt(&def, &c, None).await;
+            assert!(!r.valid);
+            assert_eq!(k, Some(FailKind::Server));
+            f.failed(def.id, k);
+            let (r, used, k) = f.quota_attempt(&def, &c, None).await;
+            assert!(r.valid);
+            assert_eq!(r.remaining, Some(42.0));
+            assert_eq!(used.as_deref(), Some(fallback));
+            assert!(k.is_none());
+            let (_, _, k) = f.quota_attempt(&def, &c, None).await;
+            assert_eq!(k, Some(FailKind::RateLimited(120)));
+        });
+        let paths = worker.join().unwrap();
+        assert_eq!(paths.len(), 3);
+        assert!(paths[0].contains("/quota"));
+        assert!(paths[1].contains("/backup"));
+    }
 
     #[test]
     fn codex_reset_credit_read_is_scoped_and_optional_errors_stay_unknown() {

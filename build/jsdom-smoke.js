@@ -494,6 +494,41 @@ const HARNESS = `
     CFG.textTone = false;
   } catch (e) { ck("非颜色模式渲染不抛异常", false, e.message); }
 
+  // ── 短暂断联:四种形态继续显示历史额度,恢复后解除标记 ──
+  try {
+    const offline = Object.assign({}, data.CHANNELS.find((c) => c.id === "ds"), {
+      valid: false, stale: true, remaining: 321.09,
+      recovery: { phase: "retrying", attempts: 1, nextRetryAt: Math.floor(Date.now() / 1000) + 2 }
+    });
+    CHANNELS = [offline];
+    hvApply({ rows: [{ id: offline.id, state: "stale", tone: "off", tier: 2,
+      headline: { amount: 321.09, unit: "CNY" }, qualifier: "更新中", secondary: "更新中 · 5 分钟前的快照" }] });
+    document.body.className = "form-panel";
+    let row = renderRow(offline);
+    ck("断联重试:面板保留历史额度并说明更新中", /321/.test(row) && /更新中/.test(row) && !/需登录/.test(row));
+    document.body.className = "form-compact";
+    ck("断联重试:紧凑条保留历史额度", /321/.test(renderRow(offline)));
+    CFG.pillChannels = [];
+    renderPill(CHANNELS);
+    ck("断联重试:自动胶囊继续选择历史额度", /321/.test(document.getElementById("pillV").textContent));
+    ck("断联重试:托盘保留历史额度", trayNumber(offline) === "321");
+    renderDock();
+    ck("断联重试:吸附条标记旧数据", !!document.querySelector("#dockBody i.stale"));
+    offline.recovery.phase = "unavailable";
+    hvApply({ rows: [{ id: offline.id, state: "stale", tone: "off", headline: { amount: 321.09, unit: "CNY" }, qualifier: "~", secondary: "暂时无法更新 · 5 分钟前的快照" }] });
+    ck("重试耗尽:仍保留历史额度并提示", /321/.test(renderRow(offline)) && /暂时无法更新/.test(renderRow(offline)));
+    offline.valid = true; offline.stale = false; offline.recovery = null;
+    hvApply({ rows: [{ id: offline.id, state: "fresh", tone: "ok", headline: { amount: 321.09, unit: "CNY" } }] });
+    ck("恢复成功:自动移除重试提示", !/更新中|暂时无法更新/.test(renderRow(offline)));
+  } catch (e) { ck("断联历史额度回归", false, e.message); }
+  finally {
+    document.body.className = "form-panel";
+    CFG.pillChannels = [];
+    CHANNELS = data.CHANNELS;
+    hvApply(data.HOME);
+    render({});
+  }
+
   // ── 拿不到统一视图时的兜底 ──
   try {
     hvApply(null);

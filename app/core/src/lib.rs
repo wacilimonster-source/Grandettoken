@@ -23,6 +23,7 @@ pub mod peak;
 pub mod providers;
 pub mod qoder;
 pub mod qoderweb;
+pub mod recovery;
 pub mod secrets;
 pub mod store;
 pub mod sync;

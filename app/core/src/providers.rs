@@ -22,7 +22,7 @@ pub enum Kind {
 
 /// 一笔会在某时刻过期的积分。积分型渠道的核心信息就是这个列表 ——
 /// "还剩多少"只是总数,"哪一笔什么时候过期"才决定该先花哪笔。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Expiring {
     /// 到期时刻(unix 秒)
@@ -35,7 +35,7 @@ pub struct Expiring {
 
 /// 账户级有效期的三态。**不能把「未知」并进「不过期」**:Qoder 只有账户
 /// 到期时间,逐笔积分有效期是另一回事(见 design-pc-polish-v2 §9.3)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AccountExpiryState {
     /// 有可靠的到期时刻
@@ -47,7 +47,7 @@ pub enum AccountExpiryState {
 }
 
 /// 账户额度有效期。与 `Expiring` 分开:它描述的是**账户**,不是每一笔积分。
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountExpiry {
     pub state: AccountExpiryState,
@@ -56,7 +56,7 @@ pub struct AccountExpiry {
 }
 
 /// OpenCode Go 的三个限流窗口。任一触顶都会限流,所以三个都要显示。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Window {
     /// 稳定窗口键（5h/weekly/monthly/rolling 等）。标签只负责显示，
@@ -76,8 +76,9 @@ pub struct Window {
     pub main: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[serde(default)]
 pub struct FetchResult {
     pub valid: bool,
     pub kind: Kind,
@@ -93,7 +94,7 @@ pub struct FetchResult {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub expiring: Vec<Expiring>,
     /// 是否已拿到完整的逐笔到期信息。false 表示空列表不能解释为“没有积分到期”。
-    #[serde(skip)]
+    #[serde(default)]
     pub expiry_complete: bool,
     /// 账户额度有效期(Qoder)。与逐笔 `expiring` 严格分开。
     #[serde(skip_serializing_if = "Option::is_none")]

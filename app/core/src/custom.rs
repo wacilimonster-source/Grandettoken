@@ -134,6 +134,7 @@ const MAX_BODY: usize = 2_000_000;
 #[derive(Debug, Clone)]
 pub struct CustomResult {
     pub valid: bool,
+    pub failure_kind: Option<crate::fetch::FailKind>,
     /// 已按 scale 折算的显示值;探活模式或没解析到 = None
     pub remaining: Option<f64>,
     pub error: Option<String>,
@@ -161,6 +162,7 @@ pub async fn fetch_custom(
     };
     let fail = |msg: String, url: &Option<String>| CustomResult {
         valid: false,
+        failure_kind: Some(crate::fetch::FailKind::Business),
         remaining: None,
         error: Some(msg),
         url_used: url.clone(),
@@ -201,9 +203,21 @@ pub async fn fetch_custom(
         });
     let resp = match resp {
         Ok(r) => r,
-        Err(e) => return fail(e, &Some(url)),
+        Err(e) => {
+            let mut r = fail(e, &Some(url));
+            r.failure_kind = Some(crate::fetch::FailKind::Transport);
+            return r;
+        }
     };
     let status = resp.status();
+    if !status.is_success() {
+        let code = status.as_u16();
+        let mut r = fail(format!("HTTP {code}"), &Some(url));
+        r.failure_kind = Some(if code == 429 {
+            crate::fetch::FailKind::RateLimited(crate::fetch::retry_after_seconds(resp.headers(), crate::fetch::now_ts()))
+        } else { crate::fetch::kind_for_status(code) });
+        return r;
+    }
     if let Some(len) = resp.content_length() {
         if len > MAX_BODY as u64 {
             return fail(format!("响应过大({len} 字节),已丢弃"), &Some(url));
@@ -219,7 +233,11 @@ pub async fn fetch_custom(
                 }
             }
             Ok(None) => break,
-            Err(e) => return fail(format!("读取响应失败: {e}"), &Some(url)),
+            Err(_) => {
+                let mut r = fail("读取响应中断，稍后自动重试".into(), &Some(url));
+                r.failure_kind = Some(crate::fetch::FailKind::Transport);
+                return r;
+            }
         }
     }
     let body: Value = match serde_json::from_slice(&out) {
@@ -229,34 +247,22 @@ pub async fn fetch_custom(
             if probe_only && status.is_success() {
                 return CustomResult {
                     valid: true,
+                    failure_kind: None,
                     remaining: None,
                     error: None,
                     url_used: Some(url),
                     probe_only,
                 };
             }
-            return fail(format!("响应不是合法 JSON (HTTP {})", status.as_u16()), &Some(url));
+            let mut r = fail(format!("响应不是合法 JSON (HTTP {})", status.as_u16()), &Some(url));
+            r.failure_kind = Some(crate::fetch::FailKind::Server);
+            return r;
         }
     };
-    if !status.is_success() {
-        let msg = body
-            .get("error")
-            .and_then(|e| e.get("message"))
-            .and_then(|m| m.as_str())
-            .or_else(|| body.get("message").and_then(|m| m.as_str()))
-            .unwrap_or("");
-        return fail(
-            if msg.is_empty() {
-                format!("HTTP {}", status.as_u16())
-            } else {
-                format!("HTTP {} · {msg}", status.as_u16())
-            },
-            &Some(url),
-        );
-    }
     if probe_only {
         return CustomResult {
             valid: true,
+            failure_kind: None,
             remaining: None,
             error: None,
             url_used: Some(url),
@@ -266,6 +272,7 @@ pub async fn fetch_custom(
     match pick(&body, &ch.path) {
         Some(raw) => CustomResult {
             valid: true,
+            failure_kind: None,
             remaining: Some(raw / ch.normalized_scale()),
             error: None,
             url_used: Some(url),
