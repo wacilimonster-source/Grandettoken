@@ -93,7 +93,7 @@ jobs:
       #      一旦命中二进制就整步跳过,registry 有没有都不影响。
       #   ③ 加 `restore-keys` 兜底:精确 key 没中时用前缀 key,至少能救回上一次的。
       - name: Cache cargo-tauri
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/bin/cargo-tauri.exe
           key: cargo-tauri-${{ runner.os }}-v2
@@ -127,7 +127,7 @@ jobs:
       - name: Save cargo-tauri cache immediately
         if: always()
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ~/.cargo/bin/cargo-tauri.exe
           key: cargo-tauri-${{ runner.os }}-v2
