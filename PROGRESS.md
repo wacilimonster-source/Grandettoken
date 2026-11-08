@@ -4009,7 +4009,7 @@ v0.3.14 宣布「句中半角」标点基线后只改了实现、漏了用例 �
 ## 2026-11-08 · Android 0.1.11 首页签到进度上顶栏
 
 - 首页顶栏改为显示签到进度（已签 / 总数），渠道列表上方的重复汇总卡（人民币余额 / 今日消耗 / 签到）移除；渠道分组与刷新状态保持不变。
-- 门禁：Android `testDebugUnitTest` 全绿（36 项）；签名 release APK 构建后模拟器安装 0.1.10 → 0.1.11 覆盖成功、启动无 FATAL。
+- 门禁：Android `testDebugUnitTest` 全绿（36 项）；签名 release APK 构建后模拟器 `install -r` 覆盖安装成功，启动无 FATAL（全新安装落在「加入同步组」页，未配对故未进首页）。
 - 发布：tag `android-v0.1.11`（release 提交 `3fa55c6`），APK `Grandettoken-android-v0.1.11.apk` 11,035,536 字节，SHA-256 `ed09c3b5d68a2f8c53468efe8208dcb62a3a8728bb08ef12ef476adacf402c7a`，证书 `CN=Grandettoken Android Release`；匿名下载 SHA 与本地一致。
 - `android-stable/android-latest.json` 重签为 0.1.11（1,176 字节），线上清单用 `manifest-public.txt` 回验 Ed25519 签名、版本、大小、哈希、下载地址全通过。
 - 桌面 `releases/latest` 保持 `v0.3.17`（Android release 用 `--latest=false` 创建，未抢占 PC 更新端点）。
