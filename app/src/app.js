@@ -6933,8 +6933,8 @@ function renderVault() {
       <div class="vrow-t"><b>${esc(it.platform)} · ${esc(it.label)}</b><span class="vrow-hint">${unavailable ? "渠道未配置密钥" : esc(it.hint)}</span></div>
       ${it.defaultChannel ? '<div class="vrow-sub">渠道默认密钥 · 只读，请在渠道管理中修改</div>' : ""}
       ${it.note ? `<div class="vrow-sub">账号：${esc(it.note)}</div>` : ""}
-      ${it.apiEndpoint ? `<div class="vrow-sub">调用端点：${esc(it.apiEndpoint)}</div>` : ""}
-      ${it.website ? `<div class="vrow-sub">官网：${esc(it.website)}</div>` : ""}
+      ${it.apiEndpoint ? `<div class="vrow-sub vrow-address" title="${esc(it.apiEndpoint)}"><span>调用端点</span><span class="vrow-address-value">${esc(it.apiEndpoint)}</span></div>` : ""}
+      ${it.website ? `<div class="vrow-sub vrow-address" title="${esc(it.website)}"><span>官网</span><span class="vrow-address-value">${esc(it.website)}</span></div>` : ""}
       <div class="vrow-sub vrow-meta"><span>${created} 创建${updated ? " · " + updated : ""}</span>${refs.length ? `<span class="vrow-ref on">正被 ${esc(refs.map(c => channelName(c)).join("、"))} 使用</span>` : ""}</div>
       </div><div class="vrow-acts">
       <button class="btn s" data-act="vcopy" data-id="${esc(it.id)}" ${unavailable ? "disabled" : ""} title="复制密钥">复制密钥</button>

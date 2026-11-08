@@ -1812,3 +1812,12 @@ body.layout-single .row .r2{margin-top:calc(10px*var(--u));padding-top:calc(8px*
 #vaultList .vrow-sub{overflow-wrap:anywhere}
 
 .vault-meta #vaultSort{margin-left:auto;max-width:calc(110px*var(--u))}
+
+/* 密钥信息使用完整行宽，操作区独占下一行，避免端点被按钮挤窄。 */
+#vaultList .vrow{grid-template-columns:minmax(0,1fr);gap:calc(8px*var(--u));padding:calc(11px*var(--u)) calc(12px*var(--u))}
+#vaultList .vrow-main{width:100%;min-width:0}
+#vaultList .vrow-acts{justify-content:flex-start;gap:calc(5px*var(--u))}
+#vaultList .vrow-address{display:flex;align-items:baseline;gap:calc(7px*var(--u));min-width:0;overflow:hidden;white-space:nowrap;word-break:normal;overflow-wrap:normal}
+#vaultList .vrow-address>span:first-child{flex:none}
+#vaultList .vrow-address-value{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#vaultList .vrow-meta{margin-top:calc(5px*var(--u))}
