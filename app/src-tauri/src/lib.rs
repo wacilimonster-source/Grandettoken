@@ -2738,7 +2738,7 @@ async fn vault_save(
     .map_err(|e| format!("保存失败: {e}"))??;
     if let Ok(Some((source, alias))) = app.state::<gateway::Gateway>().invalidate_vault(&saved.id) {
         let id = saved.id.clone(); let handle = app.clone();
-        tauri::async_runtime::spawn(async move { let _ = gateway::gateway_publish(handle, id, source, alias).await; });
+        tauri::async_runtime::spawn(async move { let _ = gateway::gateway_publish(handle, id, source, alias, None).await; });
     }
     Ok(saved)
 }
@@ -5673,6 +5673,8 @@ pub fn run() {
             });
 
             app.manage(gateway::Gateway::new(app.state::<AppState>().store.clone()));
+            let gateway_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move { gateway::autostart(gateway_app).await; });
             // 后台一次性导入现有渠道密钥；不阻塞首屏，也不更改渠道引用。
             let import_store = app.state::<AppState>().store.clone();
             let import_cfg = config.clone();
@@ -5847,6 +5849,7 @@ pub fn run() {
             gateway::gateway_publish,
             gateway::gateway_unpublish,
             gateway::gateway_set_models,
+            gateway::gateway_set_proxy,
             inject_preview,
             inject_apply,
             inject_remove,

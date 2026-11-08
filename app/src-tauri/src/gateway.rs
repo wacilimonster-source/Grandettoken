@@ -30,7 +30,10 @@ struct Published {
     updated_at: i64,
     #[serde(default)]
     allowed_models: Option<Vec<String>>,
+    #[serde(default = "default_system_proxy")]
+    system_proxy: bool,
 }
+fn default_system_proxy() -> bool { true }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct Settings {
@@ -43,7 +46,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             port: 18771,
-            lan: false,
+            lan: true,
             auth: true,
             channels: vec![],
         }
@@ -52,12 +55,14 @@ impl Default for Settings {
 struct Inner {
     settings: Settings,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    startup_error: Option<String>,
 }
 #[derive(Clone)]
 pub struct Gateway {
     store: Arc<Mutex<Store>>,
     inner: Arc<Mutex<Inner>>,
     client: reqwest::Client,
+    direct_client: reqwest::Client,
     lifecycle: Arc<tokio::sync::Mutex<()>>,
 }
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -76,14 +81,19 @@ impl Gateway {
             inner: Arc::new(Mutex::new(Inner {
                 settings,
                 shutdown: None,
+                startup_error: None,
             })),
             client: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .connect_timeout(Duration::from_secs(15))
                 .build()
                 .expect("HTTP client"),
+            direct_client: reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).connect_timeout(Duration::from_secs(15)).build().expect("direct HTTP client"),
             lifecycle: Arc::new(tokio::sync::Mutex::new(())),
         }
+    }
+    fn client(&self, system_proxy: bool) -> &reqwest::Client {
+        if system_proxy { &self.client } else { &self.direct_client }
     }
     fn save(&self, settings: &Settings) -> Result<(), String> {
         lock(&self.store).set_setting(
@@ -184,7 +194,7 @@ fn authorized(headers: &HeaderMap, settings: &Settings) -> bool {
         == 0
 }
 fn model_id(c: &Published, id: &str) -> String {
-    format!("{}/{}/{}", c.source, c.alias, id)
+    format!("{}/{}", c.alias, id)
 }
 fn peer_allowed(peer: SocketAddr, settings: &Settings) -> bool {
     match peer.ip() {
@@ -253,22 +263,16 @@ async fn chat(
         Some(s) => s.to_string(),
         None => return error(StatusCode::BAD_REQUEST, "缺少 model"),
     };
-    let found = g.live_channels().into_iter().find_map(|c| {
-        c.models
-            .iter()
-            .find(|id| model_id(&c, id) == model)
-            .cloned()
-            .map(|id| (c, id))
+    let mut matches = g.live_channels().into_iter().filter_map(|c| {
+        c.models.iter().find(|id| model_id(&c, id) == model).cloned().map(|id| (c, id))
     });
-    let (channel, id) = match found {
+    let (channel, id) = match matches.next() {
         Some(v) => v,
-        None => {
-            return error(
-                StatusCode::NOT_FOUND,
-                "模型不存在、已下架或密钥已更新，请刷新模型列表",
-            )
-        }
+        None => return error(StatusCode::NOT_FOUND, "模型不存在、已下架或密钥已更新，请刷新模型列表"),
     };
+    if matches.next().is_some() {
+        return error(StatusCode::CONFLICT, "多个密钥的别名和模型相同，请下架并使用不同别名重新上架");
+    }
     let vid = channel.vault_id.clone();
     let key = match tokio::task::spawn_blocking(move || secrets::vault_get(&vid)).await {
         Ok(Ok(Some(k))) => k,
@@ -282,7 +286,7 @@ async fn chat(
         _ => return error(StatusCode::NOT_FOUND, "渠道不受支持"),
     };
     let req = g
-        .client
+        .client(channel.system_proxy)
         .post(format!("{base}/chat/completions"))
         .bearer_auth(key)
         .json(&data);
@@ -323,7 +327,7 @@ fn local_ips() -> Vec<Value> {
 pub async fn gateway_status(app: tauri::AppHandle) -> Result<Value, String> {
     let g = app.state::<Gateway>();
     let vault = lock(&g.store).vault_list()?;
-    let (settings, running) = {
+    let (settings, running, startup_error) = {
         let mut inner = lock(&g.inner);
         let mut next = inner.settings.clone();
         next.channels
@@ -332,12 +336,18 @@ pub async fn gateway_status(app: tauri::AppHandle) -> Result<Value, String> {
             g.save(&next)?;
             inner.settings = next;
         }
-        (inner.settings.clone(), inner.shutdown.is_some())
+        (inner.settings.clone(), inner.shutdown.is_some(), inner.startup_error.clone())
     };
-    let channels:Vec<Value>=settings.channels.iter().map(|c|{let v=vault.iter().find(|v|v.id==c.vault_id);json!({"vaultId":c.vault_id,"source":c.source,"alias":c.alias,"label":v.map(|v|v.label.clone()).unwrap_or_default(),"platform":v.map(|v|v.platform.clone()).unwrap_or_default(),"availableModels":c.models,"allowedModels":c.allowed_models,"count":c.models.len(),"models":c.models.iter().map(|m|model_id(c,m)).collect::<Vec<_>>(),"stale":v.map(|v|v.updated_at != c.updated_at).unwrap_or(true)})}).collect();
+    let channels:Vec<Value>=settings.channels.iter().map(|c|{let v=vault.iter().find(|v|v.id==c.vault_id);json!({"vaultId":c.vault_id,"source":c.source,"alias":c.alias,"label":v.map(|v|v.label.clone()).unwrap_or_default(),"platform":v.map(|v|v.platform.clone()).unwrap_or_default(),"availableModels":c.models,"allowedModels":c.allowed_models,"systemProxy":c.system_proxy,"count":c.models.len(),"models":c.models.iter().map(|m|model_id(c,m)).collect::<Vec<_>>(),"stale":v.map(|v|v.updated_at != c.updated_at).unwrap_or(true)})}).collect();
     Ok(
-        json!({"port":settings.port,"lan":settings.lan,"auth":settings.auth,"running":running,"lanIps":local_ips(),"channels":channels,"vault":vault}),
+        json!({"port":settings.port,"lan":settings.lan,"auth":settings.auth,"running":running,"startupError":startup_error,"lanIps":local_ips(),"channels":channels,"vault":vault}),
     )
+}
+pub async fn autostart(app: tauri::AppHandle) {
+    let settings = lock(&app.state::<Gateway>().inner).settings.clone();
+    if let Err(e) = gateway_start(app.clone(), settings.port, settings.lan, settings.auth).await {
+        lock(&app.state::<Gateway>().inner).startup_error = Some(e);
+    }
 }
 #[tauri::command]
 pub async fn gateway_start(
@@ -381,6 +391,7 @@ pub async fn gateway_start(
         g.save(&next)?;
         inner.settings = next;
         inner.shutdown = Some(tx);
+        inner.startup_error = None;
     }
     let router = Router::new()
         .route("/v1/models", get(list))
@@ -425,6 +436,7 @@ pub async fn gateway_publish(
     vault_id: String,
     source: String,
     alias: String,
+    system_proxy: Option<bool>,
 ) -> Result<(), String> {
     let g = app.state::<Gateway>();
     let alias = alias.trim().to_ascii_lowercase();
@@ -439,11 +451,9 @@ pub async fn gateway_publish(
     if !["hapi", "gemini", "inkstone"].contains(&source.as_str()) {
         return Err("不支持的渠道".into());
     }
-    let was_published = lock(&g.inner)
-        .settings
-        .channels
-        .iter()
-        .any(|c| c.vault_id == vault_id);
+    let previous = lock(&g.inner).settings.channels.iter().find(|c| c.vault_id == vault_id).cloned();
+    let was_published = previous.is_some();
+    let use_proxy = system_proxy.or_else(|| previous.as_ref().map(|c| c.system_proxy)).unwrap_or(false);
     let item = lock(&g.store)
         .vault_get(&vault_id)?
         .ok_or("密钥箱条目不存在")?;
@@ -454,7 +464,7 @@ pub async fn gateway_publish(
         .ok_or("密钥不存在")?;
     let (mut ids, host) = if source == "hapi" {
         models::fetch_source_ids(
-            &g.client,
+            g.client(use_proxy),
             models::find_source("hapi").ok_or("渠道不可用")?,
             Some(&key),
         )
@@ -466,9 +476,9 @@ pub async fn gateway_publish(
             "https://discovery-api.intern-ai.org.cn/v1/models"
         };
         let req = if source == "gemini" {
-            g.client.get(url).header("x-goog-api-key", &key)
+            g.client(use_proxy).get(url).header("x-goog-api-key", &key)
         } else {
-            g.client.get(url).bearer_auth(&key)
+            g.client(use_proxy).get(url).bearer_auth(&key)
         };
         let res = req
             .timeout(Duration::from_secs(25))
@@ -555,11 +565,13 @@ pub async fn gateway_publish(
     if next
         .channels
         .iter()
-        .any(|c| c.source == source && c.alias == alias && c.vault_id != vault_id)
+        .any(|c| c.alias == alias && c.vault_id != vault_id)
     {
-        return Err("同一渠道的别名已存在".into());
+        return Err("别名已被其他密钥使用".into());
     }
-    let allowed_models = next.channels.iter().find(|c| c.vault_id == vault_id).and_then(|c| c.allowed_models.clone());
+    let existing = next.channels.iter().find(|c| c.vault_id == vault_id);
+    let allowed_models = existing.and_then(|c| c.allowed_models.clone());
+    let saved_proxy = if system_proxy.is_some() { use_proxy } else { existing.map(|c| c.system_proxy).unwrap_or(use_proxy) };
     next.channels.retain(|c| c.vault_id != vault_id);
     next.channels.push(Published {
         vault_id,
@@ -568,8 +580,20 @@ pub async fn gateway_publish(
         host,
         models: ids,
         allowed_models,
+        system_proxy: saved_proxy,
         updated_at: item.updated_at,
     });
+    g.save(&next)?;
+    inner.settings = next;
+    Ok(())
+}
+#[tauri::command]
+pub async fn gateway_set_proxy(app: tauri::AppHandle, vault_id: String, system_proxy: bool) -> Result<(), String> {
+    let g = app.state::<Gateway>();
+    let mut inner = lock(&g.inner);
+    let mut next = inner.settings.clone();
+    let c = next.channels.iter_mut().find(|c| c.vault_id == vault_id).ok_or("密钥未上架")?;
+    c.system_proxy = system_proxy;
     g.save(&next)?;
     inner.settings = next;
     Ok(())
@@ -601,6 +625,15 @@ pub async fn gateway_unpublish(app: tauri::AppHandle, vault_id: String) -> Resul
 mod tests {
     use super::*;
     #[test]
+    fn legacy_groups_keep_system_proxy_and_proxy_choice_persists() {
+        let legacy = r#"{"vaultId":"v","source":"gemini","alias":"a","host":"h","models":[],"updatedAt":1}"#;
+        let mut group: Published = serde_json::from_str(legacy).unwrap();
+        assert!(group.system_proxy);
+        group.system_proxy = false;
+        let restored: Published = serde_json::from_str(&serde_json::to_string(&group).unwrap()).unwrap();
+        assert!(!restored.system_proxy);
+    }
+    #[test]
     fn identifiers_are_scoped() {
         let c = Published {
             vault_id: "v".into(),
@@ -610,16 +643,18 @@ mod tests {
             models: vec![],
             updated_at: 1,
             allowed_models: None,
+            system_proxy: false,
         };
         assert_eq!(
             model_id(&c, "gemini-2.5-flash"),
-            "gemini/main/gemini-2.5-flash"
+            "main/gemini-2.5-flash"
         );
     }
     #[test]
     fn local_no_auth_rejects_browser_origin() {
         let mut s = Settings::default();
         s.auth = false;
+        s.lan = false;
         let mut h = HeaderMap::new();
         assert!(authorized(&h, &s));
         h.insert(header::ORIGIN, "https://example.com".parse().unwrap());
@@ -630,6 +665,7 @@ mod tests {
     #[test]
     fn only_local_or_private_networks_are_allowed() {
         let mut s = Settings::default();
+        s.lan = false;
         assert!(peer_allowed("127.0.0.1:1234".parse().unwrap(), &s));
         assert!(!peer_allowed("192.168.1.10:1234".parse().unwrap(), &s));
         s.lan = true;
@@ -663,6 +699,7 @@ mod tests {
         {
             let mut inner = lock(&g.inner);
             inner.settings.auth = false;
+            inner.settings.lan = false;
             inner.settings.channels.push(Published {
                 vault_id: "sample".into(),
                 source: "gemini".into(),
@@ -671,6 +708,7 @@ mod tests {
                 models: vec!["test-model".into()],
                 updated_at: 1,
                 allowed_models: None,
+                system_proxy: false,
             });
         }
         let router = Router::new()
@@ -690,7 +728,7 @@ mod tests {
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
         let url = format!("http://{addr}/v1/models");
         let data: Value = client.get(&url).send().await.unwrap().json().await.unwrap();
-        assert_eq!(data["data"][0]["id"], "gemini/main/test-model");
+        assert_eq!(data["data"][0]["id"], "main/test-model");
         assert_eq!(
             client
                 .get(&url)

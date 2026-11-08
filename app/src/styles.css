@@ -1805,6 +1805,10 @@ body.layout-single .row .r2{margin-top:calc(10px*var(--u));padding-top:calc(8px*
 .gw-add{display:grid;grid-template-columns:1fr 1fr;gap:7px}.gw-add input,.gw-add select{min-width:0;width:100%}
 .gw-models{max-height:240px;overflow:auto;font-size:11px;color:var(--tx2);padding:8px}.gw-model{padding:4px 0;overflow-wrap:anywhere}
 #gatewayBox details{margin-top:12px}#gatewayBox summary{cursor:pointer;color:var(--tx2)}
+/* 上架条目:信息与按钮同排,「分组设置」展开后占满整行 —— 它是 flex 行的
+   第四个孩子时会被挤成右侧窄列,把条目信息顶到左下(2026-11-09 截图发现) */
+#gatewayBox .gw-channel{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center}
+#gatewayBox .gw-channel details{grid-column:1/-1;width:100%}
 
 /* 密钥箱字段名包含「调用端点」「官网地址」。 */
 #vaultForm .vf{grid-template-columns:calc(62px*var(--u)) minmax(0,1fr)}
@@ -1821,3 +1825,6 @@ body.layout-single .row .r2{margin-top:calc(10px*var(--u));padding-top:calc(8px*
 #vaultList .vrow-address>span:first-child{flex:none}
 #vaultList .vrow-address-value{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #vaultList .vrow-meta{margin-top:calc(5px*var(--u))}
+
+.gw-lan{padding:9px 0;border-bottom:1px solid var(--line)}
+.gw-lan>label{display:block;margin-bottom:6px}.gw-lan>select{width:100%;min-width:0}.gw-lan .gw-address{border:0;padding-bottom:0}.gw-lan .gw-address code{min-width:0;word-break:break-all}
