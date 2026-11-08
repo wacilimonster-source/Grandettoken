@@ -36,6 +36,9 @@ w.__TAURI__ = {
   core: {
     invoke: async (cmd, args) => {
       CALLS[cmd] = (CALLS[cmd] || 0) + 1;
+      if (w.__VAULT_COPY_INVOKE && ["vault_copy", "copy_text"].includes(cmd)) {
+        return w.__VAULT_COPY_INVOKE(cmd, args);
+      }
       if (w.__DOWNLOAD_INVOKE && ["download_link", "copy_text"].includes(cmd)) {
         return w.__DOWNLOAD_INVOKE(cmd, args);
       }
@@ -897,25 +900,40 @@ const HARNESS = `
       // 非空列表:平台分组卡 / 条目行 / 引用说明 / 顶部计数
       const nowTs = Math.floor(Date.now() / 1000);
       window.__VAULT = [
-        { id: "v1", platform: "4SAPI", label: "主号", hint: "••••abcd", note: "充值用的那个",
+        { id: "v1", platform: "4SAPI", label: "主号", hint: "••••abcd", note: "充值用的那个", defaultChannel: "4sapi", defaultAvailable: true, apiEndpoint: "https://4sapi.com/v1",
           createdAt: nowTs, updatedAt: nowTs },
         { id: "v2", platform: "4SAPI", label: "备用", hint: "••••wxyz", note: "",
-          createdAt: nowTs, updatedAt: nowTs },
+          createdAt: nowTs - 2, updatedAt: nowTs - 1 },
+        { id: "v3", platform: "Hapi", label: "工作", hint: "••••1234", note: "",
+          createdAt: nowTs - 3, updatedAt: nowTs + 1 },
       ];
       window.__VAULTREF = [["4sapi", "v1"]];
       await loadVault();
-      ck("密钥箱非空:平台卡 + 两条条目", /class="vgroup"/.test(document.getElementById("vaultList").innerHTML)
-        && document.querySelectorAll("#vaultList .vitem").length === 2,
+      ck("密钥箱非空:三条密钥", /class="vgroup"/.test(document.getElementById("vaultList").innerHTML)
+        && document.querySelectorAll("#vaultList .vitem").length === 3,
         document.querySelectorAll("#vaultList .vitem").length);
-      ck("密钥箱计数读作 2 把 · 1 个平台",
-        document.getElementById("vaultMeta").textContent === "2 把 · 1 个平台",
+      ck("密钥箱计数读作 3 把 · 2 个平台",
+        document.getElementById("vaultMeta").textContent === "3 把 · 2 个平台",
         document.getElementById("vaultMeta").textContent);
       ck("被引用的条目写明正被谁使用", /正被 4SAPI 使用/.test(document.getElementById("vaultList").innerHTML));
       ck("未引用条目不显示多余提示", !/未被任何渠道使用/.test(document.getElementById("vaultList").textContent));
+      ck("默认按更新时间全局排序", [...document.querySelectorAll("#vaultList .vrow")].map(x=>x.dataset.id).join(",") === "v3,v1,v2");
+      ck("渠道默认密钥只读", !document.querySelector('[data-act="vedit"][data-id="v1"]') && !document.querySelector('[data-act="vdel"][data-id="v1"]') && !!document.querySelector('[data-act="vedit"][data-id="v2"]'));
+      const copied = [];
+      window.__VAULT_COPY_INVOKE = async (cmd, args) => { copied.push({cmd, args}); return "已复制"; };
+      document.querySelector('[data-act="vcopy"][data-id="v1"]').click();
+      document.querySelector('[data-act="vcopy-endpoint"][data-id="v1"]').click();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      ck("密钥与端点分别复制", copied.length === 2 && copied[0].cmd === "vault_copy" && copied[0].args.id === "v1"
+        && copied[1].cmd === "copy_text" && copied[1].args.text === "https://4sapi.com/v1");
+      ck("未填写端点时禁用复制端点", document.querySelector('[data-act="vcopy-endpoint"][data-id="v2"]').disabled);
+      delete window.__VAULT_COPY_INVOKE;
+      const sort = document.getElementById("vaultSort"); sort.value = "platform"; sort.dispatchEvent(new Event("change", {bubbles:true}));
+      ck("可按平台排序", [...document.querySelectorAll("#vaultList .vrow")].map(x=>x.dataset.id).join(",") === "v2,v1,v3");
+      sort.value = "updated"; sort.dispatchEvent(new Event("change", {bubbles:true}));
       // 分组「新增」:带入平台,表单可 Esc 取消
-      document.querySelector('#vaultList .pf [data-act="vnew"]').click();
-      ck("分组新增自动带入平台", !!document.querySelector("#vaultForm .vform")
-        && document.getElementById("vPlat").value === "4SAPI");
+      document.querySelector('.vault-top [data-act="vnew"]').click();
+      ck("新增密钥打开表单", !!document.querySelector("#vaultForm .vform"));
       ck("密钥箱表单提供平台选择、分组、账号和网址", !!document.getElementById("vPlatSelect")
         && !!document.getElementById("vEndpoint") && !!document.getElementById("vWebsite")
         && /分组/.test(document.getElementById("vaultForm").textContent) && /账号/.test(document.getElementById("vaultForm").textContent));
@@ -933,7 +951,7 @@ const HARNESS = `
       ck("搜索无结果给出清除入口", /清除搜索/.test(document.getElementById("vaultList").innerHTML)
         && document.getElementById("vaultQClear").hidden === false);
       document.querySelector('[data-act="vqclear"]').click();
-      ck("清除搜索恢复列表", document.querySelectorAll("#vaultList .vitem").length === 2
+      ck("清除搜索恢复列表", document.querySelectorAll("#vaultList .vitem").length === 3
         && document.getElementById("vaultQClear").hidden === true);
 
       delete window.__VAULT;

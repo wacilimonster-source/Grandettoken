@@ -284,12 +284,13 @@
       </div>
       <div class="vault-meta">
         <span id="vaultMeta">正在读取…</span>
+        <select class="sel mini" id="vaultSort" aria-label="密钥排序"><option value="updated">最近更新</option><option value="created">最近创建</option><option value="platform">平台名称</option><option value="group">分组名称</option></select>
         <button class="why" data-why="vault" aria-expanded="false" aria-label="密钥箱的说明"></button>
       </div>
       <div id="vaultForm"></div>
       <div id="vaultList"></div>
       <div class="vault-foot">
-        <span>列表只显示平台、标签与尾号;「显示」的明文 8 秒后自动收起。</span>
+        <span>列表只显示平台、分组与尾号;「显示」的明文 8 秒后自动收起。</span>
         <span>密钥加密存放在 Windows 凭据管理器(绑定当前 Windows 账户),不上传、不导出;复制后剪贴板对其他程序可见。</span>
       </div>
     </div>

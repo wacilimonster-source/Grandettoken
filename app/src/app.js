@@ -5630,7 +5630,7 @@ $("manage").addEventListener("click", async (e) => {
     if (q) q.focus();
   } else if (a === "vedit") {
     const it = VAULT.find((x) => x.id === id);
-    if (it) {
+    if (it && !it.defaultChannel) {
       VAULT_EDIT = { id: it.id, platform: it.platform, label: it.label, key: "", note: it.note, apiEndpoint: it.apiEndpoint || "", website: it.website || "" };
       VAULT_DRAFT = null; // 同上:改另一条时以它自己的值为准
       renderVault();
@@ -5688,6 +5688,16 @@ $("manage").addEventListener("click", async (e) => {
       showToast(msg + " · 剪贴板对其他程序可见");
     } catch (e) {
       showToast("复制失败:" + e, true);
+    }
+  } else if (a === "vcopy-endpoint") {
+    const item = VAULT.find((x) => x.id === id);
+    const endpoint = item && (item.apiEndpoint || "").trim();
+    if (!endpoint) { showToast("该密钥尚未填写调用端点", true); return; }
+    try {
+      await invoke("copy_text", { text: endpoint });
+      showToast("调用端点已复制");
+    } catch (e) {
+      showToast("复制端点失败:" + e, true);
     }
   } else if (a === "vreveal") {
     if (VAULT_REVEAL[id]) {
@@ -6772,6 +6782,10 @@ document.addEventListener("keydown", (e) => {
 // 明文只在「显示」那一次回界面且 8 秒自动隐;「复制」根本不回前端。
 let VAULT = [];            // 索引列表(vault_list 的结果)
 let VAULT_Q = "";          // 搜索词
+let VAULT_SORT = "updated";
+try { const saved = localStorage.getItem("vault-sort"); if (["updated", "created", "platform", "group"].includes(saved)) VAULT_SORT = saved; } catch (_) {}
+const vaultSortEl = $("vaultSort");
+if (vaultSortEl) { vaultSortEl.value = VAULT_SORT; vaultSortEl.addEventListener("change", () => { VAULT_SORT = vaultSortEl.value; try { localStorage.setItem("vault-sort", VAULT_SORT); } catch (_) {} renderVault(); }); }
 let VAULT_EDIT = null;     // 正在编辑/新建的表单:{id?, platform, label, key, note}
 let VAULT_DRAFT = null;    // 表单里已敲未存的内容:{platform,label,key,note}(见 renderVault)
 let VAULT_REVEAL = {};     // id → 明文(8 秒后删)
@@ -6820,14 +6834,19 @@ function flashVaultRow(id) {
   return true;
 }
 
-function vaultGrouped() {
-  const out = new Map();
-  for (const it of VAULT) {
-    if (VAULT_Q && !`${it.platform} ${it.label} ${it.note} ${it.hint} ${it.apiEndpoint || ""} ${it.website || ""}`.toLowerCase().includes(VAULT_Q.toLowerCase())) continue;
-    if (!out.has(it.platform)) out.set(it.platform, []);
-    out.get(it.platform).push(it);
-  }
-  return out;
+function vaultSorted() {
+  const query = VAULT_Q.trim().toLowerCase();
+  const rows = VAULT.filter(it => !query || `${it.platform} ${it.label} ${it.note} ${it.hint} ${it.apiEndpoint || ""} ${it.website || ""}`.toLowerCase().includes(query));
+  const cmp = (a, b) => String(a || "").localeCompare(String(b || ""), "zh-CN", { sensitivity: "base" });
+  rows.sort((a, b) => {
+    let n = 0;
+    if (VAULT_SORT === "created") n = (b.createdAt || 0) - (a.createdAt || 0);
+    else if (VAULT_SORT === "platform") n = cmp(a.platform, b.platform) || cmp(a.label, b.label);
+    else if (VAULT_SORT === "group") n = cmp(a.label, b.label) || cmp(a.platform, b.platform);
+    else n = (b.updatedAt || 0) - (a.updatedAt || 0);
+    return n || (b.updatedAt || 0) - (a.updatedAt || 0) || cmp(a.id, b.id);
+  });
+  return rows;
 }
 
 function renderVault() {
@@ -6868,15 +6887,16 @@ function renderVault() {
   const qclear = $("vaultQClear");
   if (qclear) qclear.hidden = !VAULT_Q;
 
-  const groups = vaultGrouped();
-  const shown = [...groups.values()].reduce((n, arr) => n + arr.length, 0);
+  const rows = vaultSorted();
+  const shown = rows.length;
+  const platformCount = new Set(VAULT.map(it => it.platform.toLocaleLowerCase())).size;
   const meta = $("vaultMeta");
   if (meta) {
     meta.textContent = VAULT_ERR
       ? "读取失败"
       : VAULT_Q
       ? `匹配 ${shown} 把 / 共 ${VAULT.length} 把`
-      : `${VAULT.length} 把 · ${groups.size} 个平台`;
+      : `${VAULT.length} 把 · ${platformCount} 个平台`;
   }
 
   // 读失败:说清是"读不出来"并给重试,绝不画成"密钥箱是空的 + 新增一把"(F3)
@@ -6896,56 +6916,34 @@ function renderVault() {
       <div><button class="btn p" data-act="vnew">新增一把密钥</button></div></div>`;
     return;
   }
-  if (!groups.size) {
+  if (!rows.length) {
     list.innerHTML = `<div class="empty"><div class="ek"><svg aria-hidden="true"><use href="#i-search"/></svg></div>
       <b>没有匹配的条目</b>
       <span>「${esc(VAULT_Q)}」没有命中平台、分组、账号、地址或尾号。</span>
       <div><button class="btn" data-act="vqclear">清除搜索</button></div></div>`;
     return;
   }
-  list.innerHTML = [...groups.entries()]
-    .map(([plat, items]) => {
-      const rows = items
-        .map((it) => {
-          const plain = VAULT_REVEAL[it.id];
-          // 反查:这把钥匙正被哪些渠道引用(裁决 4 —— 删前要说清后果,平时要看得见)
-          const refs = refChannelsOf(it.id);
-          const created = new Date(it.createdAt * 1000).toLocaleDateString("zh-CN");
-          const updated =
-            it.updatedAt !== it.createdAt
-              ? new Date(it.updatedAt * 1000).toLocaleDateString("zh-CN") + " 改"
-              : "";
-          return `<div class="vitem">
-            <div class="vrow" data-id="${esc(it.id)}">
-              <div class="vrow-main">
-                <div class="vrow-t"><b>${esc(it.label)}</b><span class="vrow-hint">${esc(it.hint)}</span></div>
-                ${it.note ? `<div class="vrow-sub">账号：${esc(it.note)}</div>` : ""}
-                ${it.apiEndpoint ? `<div class="vrow-sub">调用端点：${esc(it.apiEndpoint)}</div>` : ""}
-                ${it.website ? `<div class="vrow-sub">官网：${esc(it.website)}</div>` : ""}
-                <div class="vrow-sub vrow-meta">
-                  <span>${created} 建${updated ? " · " + updated : ""}</span>
-                  ${refs.length ? `<span class="vrow-ref on">正被 ${esc(refs.map((c) => channelName(c)).join("、"))} 使用</span>` : ""}
-                </div>
-              </div>
-              <div class="vrow-acts">
-                <button class="btn s" data-act="vcopy" data-id="${esc(it.id)}" title="明文不回界面,直接进剪贴板">复制</button>
-                <button class="btn s" data-act="vreveal" data-id="${esc(it.id)}" title="显示明文,8 秒后自动隐">${
-                  plain ? "收起" : "显示"
-                }</button>
-                <button class="btn s" data-act="vedit" data-id="${esc(it.id)}">改</button>
-                <button class="btn s danger" data-act="vdel" data-id="${esc(it.id)}">删</button>
-              </div>
-            </div>
-            ${plain ? `<div class="reveal vrow-reveal">${esc(plain)}</div>` : ""}
-          </div>`;
-        })
-        .join("");
-      return `<div class="vgroup">
-        <div class="pf"><b>${esc(plat)}</b><span class="pcount">${items.length} 把</span>
-          <button class="btn s" data-act="vnew" data-id="${esc(plat)}" title="在 ${esc(plat)} 下新增一把">新增</button></div>
-        ${rows}</div>`;
-    })
-    .join("");
+  list.innerHTML = '<div class="vgroup">' + rows.map(it => {
+    const plain = VAULT_REVEAL[it.id];
+    const refs = refChannelsOf(it.id);
+    const created = new Date(it.createdAt * 1000).toLocaleDateString("zh-CN");
+    const updated = it.updatedAt !== it.createdAt ? new Date(it.updatedAt * 1000).toLocaleDateString("zh-CN") + " 更新" : "";
+    const unavailable = !!it.defaultChannel && it.defaultAvailable === false;
+    return `<div class="vitem"><div class="vrow" data-id="${esc(it.id)}"><div class="vrow-main">
+      <div class="vrow-t"><b>${esc(it.platform)} · ${esc(it.label)}</b><span class="vrow-hint">${unavailable ? "渠道未配置密钥" : esc(it.hint)}</span></div>
+      ${it.defaultChannel ? '<div class="vrow-sub">渠道默认密钥 · 只读，请在渠道管理中修改</div>' : ""}
+      ${it.note ? `<div class="vrow-sub">账号：${esc(it.note)}</div>` : ""}
+      ${it.apiEndpoint ? `<div class="vrow-sub">调用端点：${esc(it.apiEndpoint)}</div>` : ""}
+      ${it.website ? `<div class="vrow-sub">官网：${esc(it.website)}</div>` : ""}
+      <div class="vrow-sub vrow-meta"><span>${created} 创建${updated ? " · " + updated : ""}</span>${refs.length ? `<span class="vrow-ref on">正被 ${esc(refs.map(c => channelName(c)).join("、"))} 使用</span>` : ""}</div>
+      </div><div class="vrow-acts">
+      <button class="btn s" data-act="vcopy" data-id="${esc(it.id)}" ${unavailable ? "disabled" : ""} title="复制密钥">复制密钥</button>
+      <button class="btn s" data-act="vcopy-endpoint" data-id="${esc(it.id)}" ${it.apiEndpoint ? "" : "disabled"} title="${it.apiEndpoint ? "复制调用端点" : "尚未填写调用端点"}">复制端点</button>
+      <button class="btn s" data-act="vreveal" data-id="${esc(it.id)}" ${unavailable ? "disabled" : ""} title="显示明文，8 秒后隐藏">${plain ? "收起" : "显示"}</button>
+      ${it.defaultChannel ? "" : `<button class="btn s" data-act="vedit" data-id="${esc(it.id)}">改</button><button class="btn s danger" data-act="vdel" data-id="${esc(it.id)}">删</button>`}
+      </div></div>${plain ? `<div class="reveal vrow-reveal">${esc(plain)}</div>` : ""}</div>`;
+  }).join("") + '</div>';
+
 }
 
 /** 把表单里的内容提交(新建或改名/改备注/换密钥)。 */

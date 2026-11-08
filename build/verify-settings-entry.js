@@ -87,6 +87,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
     // ③ 焦点往返:点底栏入口 → 焦点在页头「← 返回」;关掉 → 焦点回底栏入口
     const focusRound = JSON.parse(await evalJs(`(async () => {
+      // 前置状态不假设:手动开着设置页时,再点常驻入口是"不重置"的 no-op
+      if (document.body.classList.contains('view-manage')) closeManage(false);
+      await new Promise(r => setTimeout(r, 120));
       const k = document.getElementById('lkKeys');
       k.focus();
       const before = document.activeElement.id;

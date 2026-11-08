@@ -1810,3 +1810,5 @@ body.layout-single .row .r2{margin-top:calc(10px*var(--u));padding-top:calc(8px*
 #vaultForm .vf{grid-template-columns:calc(62px*var(--u)) minmax(0,1fr)}
 #vaultForm .vf .sel{min-width:0;width:100%}
 #vaultList .vrow-sub{overflow-wrap:anywhere}
+
+.vault-meta #vaultSort{margin-left:auto;max-width:calc(110px*var(--u))}

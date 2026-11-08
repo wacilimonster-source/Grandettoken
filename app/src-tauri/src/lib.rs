@@ -2553,57 +2553,111 @@ fn vault_url(value: &str) -> Result<String, String> {
     Ok(value.to_string())
 }
 
-// 只迁入当前渠道密钥一次；只复制到密钥箱，不改变渠道原有引用。
+// 默认条目记录在数据库设置中，ID 与普通用户创建的密钥分开。
+fn vault_defaults_lock() -> &'static Mutex<()> {
+    static LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+fn vault_default_channel(store: &Store, vault_id: &str) -> Result<Option<String>, String> {
+    for id in ["4sapi", "hapi", "opencode-go"] {
+        if store.get_setting(&format!("vault_default_channel:{id}"))?.as_deref() == Some(vault_id) {
+            return Ok(Some(id.to_string()));
+        }
+    }
+    Ok(None)
+}
+fn ensure_vault_mutable(store: &Store, vault_id: &str) -> Result<(), String> {
+    if vault_default_channel(store, vault_id)?.is_some() {
+        return Err("渠道默认密钥仅供查看，请在渠道管理中修改".into());
+    }
+    Ok(())
+}
+// 复用旧版自动导入的默认条目；其他用户创建的条目不会被标记为只读。
 fn import_channel_keys(store: &Arc<Mutex<Store>>, cfg: &Config) -> Result<(), String> {
-    static IMPORT_LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
-    let _guard = lock_rw(IMPORT_LOCK.get_or_init(|| Mutex::new(())));
+    let _guard = lock_rw(vault_defaults_lock());
     for (id, platform, website) in [
         ("4sapi", "4SAPI", "https://4sapi.com"),
         ("hapi", "Hapi", "https://ai.yuchuantest.com"),
         ("opencode-go", "OpenCode Go", "https://opencode.ai"),
     ] {
-        let marker = format!("vault_channel_import_v1:{id}");
-        if lock_rw(store).get_setting(&marker)?.is_some() { continue; }
-        let (key, linked_id) = match secrets::resolve(id)? {
-            secrets::Resolved::Inline(k) if !k.trim().is_empty() => (k, None),
-            secrets::Resolved::Vault { id: vault_id, key } if !key.trim().is_empty() => (key, Some(vault_id)),
-            _ => continue,
-        };
+        let mapping = format!("vault_default_channel:{id}");
+        let mut existing_id = lock_rw(store).get_setting(&mapping)?;
         let items = lock_rw(store).vault_list()?;
-        let mut already = false;
-        for it in &items {
-            if (it.platform.eq_ignore_ascii_case(platform) || linked_id.as_deref() == Some(it.id.as_str()))
-                && secrets::vault_get(&it.id)?.as_deref() == Some(key.as_str()) { already = true; break; }
+        let legacy_marker = lock_rw(store).get_setting(&format!("vault_channel_import_v1:{id}"))?.is_some();
+        let legacy: Vec<_> = items.iter().filter(|v| legacy_marker && v.platform.eq_ignore_ascii_case(platform) && v.label == "渠道当前密钥").collect();
+        if existing_id.is_none() && legacy.len() == 1 {
+            lock_rw(store).set_setting(&mapping, &legacy[0].id)?;
+            existing_id = Some(legacy[0].id.clone());
         }
-        if !already {
-            let entry_id = tokenscope_core::vault::new_id();
-            let def = models::find_source(id).ok_or("渠道配置缺失")?;
-            let cache = { let s = lock_rw(store); models::ModelCache::load(&s) };
-            let now = now_ts();
-            let item = tokenscope_core::store::VaultItem {
-                id: entry_id.clone(), platform: platform.into(), label: "渠道当前密钥".into(),
-                hint: secrets::mask_of(&key), note: String::new(),
-                api_endpoint: source_base(cfg, cache.as_ref(), def), website: website.into(),
-                created_at: now, updated_at: now,
+        let existing = existing_id.as_ref().and_then(|vid| items.iter().find(|v| &v.id == vid)).cloned();
+        let key = match secrets::channel_key(id)? {
+            Some(key) if !key.trim().is_empty() => key,
+            _ => {
+                // 渠道密钥被移除后，不保留仍可调用的旧副本；只读记录继续显示“未配置”。
+                if let Some(mut item) = existing {
+                    if secrets::vault_get(&item.id)?.is_some() {
+                        secrets::vault_delete(&item.id)?;
+                        item.hint.clear();
+                        item.updated_at = now_ts().max(item.updated_at.saturating_add(1));
+                        lock_rw(store).vault_upsert(&item)?;
+                    }
+                }
+                continue;
+            }
+        };
+        let mut item = if let Some(v) = existing { v }
+            else if legacy.len() == 1 { legacy[0].clone() }
+            else {
+                let now = now_ts();
+                tokenscope_core::store::VaultItem {
+                    id: tokenscope_core::vault::new_id(), platform: platform.into(), label: "渠道当前密钥".into(),
+                    hint: String::new(), note: String::new(), api_endpoint: String::new(), website: website.into(),
+                    created_at: now, updated_at: now,
+                }
             };
-            secrets::vault_set(&entry_id, &key)?;
+        let is_new = !items.iter().any(|v| v.id == item.id);
+        let old_key = secrets::vault_get(&item.id)?;
+        let def = models::find_source(id).ok_or("渠道配置缺失")?;
+        let cache = { let s = lock_rw(store); models::ModelCache::load(&s) };
+        let endpoint = source_base(cfg, cache.as_ref(), def);
+        let changed = old_key.as_deref() != Some(key.as_str()) || item.api_endpoint != endpoint;
+        if changed || is_new {
+            if old_key.as_deref() != Some(key.as_str()) { secrets::vault_set(&item.id, &key)?; }
+            item.hint = secrets::mask_of(&key);
+            item.api_endpoint = endpoint;
+            if !is_new { item.updated_at = now_ts().max(item.updated_at.saturating_add(1)); }
             if let Err(e) = lock_rw(store).vault_upsert(&item) {
-                let _ = secrets::vault_delete(&entry_id); return Err(e);
+                if is_new { let _ = secrets::vault_delete(&item.id); }
+                return Err(e);
             }
         }
-        lock_rw(store).set_setting(&marker, "done")?;
+        lock_rw(store).set_setting(&mapping, &item.id)?;
     }
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VaultListItem {
+    #[serde(flatten)]
+    item: tokenscope_core::store::VaultItem,
+    default_channel: Option<String>,
+    default_available: bool,
+}
 #[tauri::command]
-async fn vault_list(state: State<'_, AppState>) -> Result<Vec<tokenscope_core::store::VaultItem>, String> {
+async fn vault_list(state: State<'_, AppState>) -> Result<Vec<VaultListItem>, String> {
     let store = state.store.clone();
     let cfg = lock_rw(&state.config).clone();
     tokio::task::spawn_blocking(move || {
         import_channel_keys(&store, &cfg)?;
-        let s = lock_rw(&store);
-        s.vault_list()
+        let items = lock_rw(&store).vault_list()?;
+        let mut out = Vec::with_capacity(items.len());
+        for item in items {
+            let default_channel = vault_default_channel(&lock_rw(&store), &item.id)?;
+            let default_available = default_channel.as_ref().map(|id| secrets::channel_key(id).ok().flatten().map(|s| !s.trim().is_empty()).unwrap_or(false)).unwrap_or(true);
+            out.push(VaultListItem { item, default_channel, default_available });
+        }
+        Ok(out)
     })
     .await
     .map_err(|e| format!("读取密钥箱失败: {e}"))?
@@ -2616,9 +2670,13 @@ async fn vault_save(
     item: VaultInput,
 ) -> Result<tokenscope_core::store::VaultItem, String> {
     let store = app.state::<AppState>().store.clone();
+    let cfg = lock_rw(&app.state::<AppState>().config).clone();
     let saved = tokio::task::spawn_blocking(move || {
         use tokenscope_core::vault;
         refuse_while_updating("保存密钥")?;
+        import_channel_keys(&store, &cfg)?;
+        let _guard = lock_rw(vault_defaults_lock());
+        if let Some(id) = item.id.as_deref() { ensure_vault_mutable(&lock_rw(&store), id)?; }
         let platform = vault::valid_platform(&item.platform)?;
         let label = vault::valid_label(&item.label)?;
         let key = item.key.trim().to_string();
@@ -2786,6 +2844,11 @@ async fn vault_delete(
     id: String,
     force: Option<bool>,
 ) -> Result<VaultDeleteResult, String> {
+    let import_store = app.state::<AppState>().store.clone();
+    let import_cfg = lock_rw(&app.state::<AppState>().config).clone();
+    tokio::task::spawn_blocking(move || import_channel_keys(&import_store, &import_cfg))
+        .await.map_err(|e| format!("检查默认密钥失败: {e}"))??;
+    ensure_vault_mutable(&lock_rw(&app.state::<AppState>().store), &id)?;
     // N07:删前拦截搬到后端,并且**扫真实指针**而不是查索引。
     // 以前拦截在浏览器里靠索引:索引读失败就静默放行、索引不准就拦了个寂寞。
     let referrers = ref_channels_by_pointer(&app, &id).await?;
@@ -2796,6 +2859,8 @@ async fn vault_delete(
     let store = state.store.clone();
     let gateway = app.state::<gateway::Gateway>().inner().clone();
     tokio::task::spawn_blocking(move || {
+        let _guard = lock_rw(vault_defaults_lock());
+        ensure_vault_mutable(&lock_rw(&store), &id)?;
         // 先删索引(用户视角"这条没了"),再删凭据;凭据删失败也不该把索引变回来
         {
             let s = lock_rw(&store);
@@ -2834,12 +2899,15 @@ async fn vault_delete(
 async fn vault_reveal(state: State<'_, AppState>, id: String) -> Result<String, String> {
     let store = state.store.clone();
     tokio::task::spawn_blocking(move || {
-        let exists = {
+        let (exists, default_channel) = {
             let s = lock_rw(&store);
-            s.vault_get(&id)?.is_some()
+            (s.vault_get(&id)?.is_some(), vault_default_channel(&s, &id)?)
         };
         if !exists {
             return Err("这条已经不在密钥箱里了".into());
+        }
+        if let Some(channel) = default_channel {
+            return secrets::channel_key(&channel)?.filter(|k| !k.trim().is_empty()).ok_or_else(|| "该渠道目前没有可用密钥".to_string());
         }
         match secrets::vault_get(&id)? {
             Some(k) => Ok(k),
@@ -5855,6 +5923,17 @@ pub fn run() {
 #[cfg(test)]
 mod vault_url_tests {
     use super::vault_url;
+    #[test]
+    fn default_records_are_protected_without_blocking_other_keys() {
+        let path = std::env::temp_dir().join(format!("vault-default-test-{}.db", tokenscope_core::vault::new_id()));
+        let store = tokenscope_core::store::Store::open(&path).unwrap();
+        store.set_setting("vault_default_channel:4sapi", "default-1").unwrap();
+        assert_eq!(super::vault_default_channel(&store, "default-1").unwrap().as_deref(), Some("4sapi"));
+        assert!(super::ensure_vault_mutable(&store, "default-1").is_err());
+        assert!(super::ensure_vault_mutable(&store, "normal-key").is_ok());
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
     #[test]
     fn accepts_plain_addresses_and_rejects_embedded_credentials() {
         assert_eq!(vault_url(" https://example.com/v1 ").unwrap(), "https://example.com/v1");
