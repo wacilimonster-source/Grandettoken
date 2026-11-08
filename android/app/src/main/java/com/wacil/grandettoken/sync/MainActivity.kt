@@ -466,18 +466,8 @@ private fun DashboardScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
-                        Text("同步组", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                        Text(
-                            when {
-                                state.loading -> "正在刷新…"
-                                state.lastRefresh > 0 -> "${relativeTime(state.lastRefresh)} · ${channels.size} 个渠道"
-                                else -> "等待同步"
-                            },
-                            fontSize = 10.sp,
-                            color = Tx3,
-                        )
-                    }
+                    val ck = merged?.checkin
+                    SummaryCell("签到", if (ck != null) "${ck.done}/${ck.total}" else "—")
                 },
                 actions = {
                     TextButton(onClick = { viewModel.refresh(true) }) {
@@ -520,7 +510,6 @@ private fun DashboardScreen(
                     )
                 }
             }
-            item { SummaryCard(merged) }
             item {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     SectionTitle("渠道 · ${channels.size}")
@@ -597,30 +586,6 @@ private fun readChannelOrder(raw: String?): List<String> = runCatching {
     val array = JSONArray(raw ?: "[]")
     (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotBlank) }.distinct()
 }.getOrDefault(emptyList())
-
-@Composable
-private fun SummaryCard(merged: MergedSnapshot?) {
-    val totals = merged?.totals
-    val ck = merged?.checkin
-    Card(
-        colors = CardDefaults.cardColors(containerColor = Surface1),
-        shape = RoundedCornerShape(12.dp),
-    ) {
-        Column(Modifier.fillMaxWidth().padding(14.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SummaryCell("人民币余额", Decimal.display(totals?.cny, "CNY"), Modifier.weight(1.4f))
-                SummaryCell("今日消耗", Decimal.display(totals?.today, "CNY"), Modifier.weight(1.1f))
-                SummaryCell("签到", if (ck != null) "${ck.done}/${ck.total}" else "—", Modifier.weight(0.7f))
-            }
-            if (!totals?.others.isNullOrEmpty()) {
-                Spacer(Modifier.height(10.dp))
-                HorizontalDivider(color = Line)
-                Spacer(Modifier.height(8.dp))
-                Text("其他币种  " + totals!!.others.joinToString("  ·  ") { Decimal.display(it.amount, it.unit) }, color = Tx2, fontSize = 11.sp)
-            }
-        }
-    }
-}
 
 @Composable
 private fun SummaryCell(label: String, value: String, modifier: Modifier = Modifier) {
