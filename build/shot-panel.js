@@ -109,9 +109,9 @@ const CH = [
   await send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });
 
   try {
+    // 2026-11-03 固定布局后没有自由 SIZE 了:窗口尺寸由 panelLayout 决定,注入只碰数据与排序
     await evalJs(`CHANNELS = ${JSON.stringify(CH)}; CFG.hiddenChannels = []; CFG.sort = 'percent';
-      CFG.fontScale = 'md'; CFG.compactMaxW = 380; compactW = 380; SIZE.panelW = 380; SIZE.panelH = 560;
-      SIZE.form = 'none'; rowOpen.clear();
+      CFG.fontScale = 'md'; rowOpen.clear();
       document.querySelectorAll('#list .row.open').forEach((r) => r.classList.remove('open'));
       applyFontScale(); render();`);
     await sleep(400);

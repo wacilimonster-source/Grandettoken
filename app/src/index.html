@@ -116,6 +116,7 @@
       <button data-p="disp">显示</button>
       <button data-p="run">刷新与启动</button>
       <button data-p="vault">密钥箱</button>
+      <button data-p="gateway">本地模型网关</button>
       <button data-p="about">关于</button>
       <button data-p="sync" hidden>同步</button>
     </div>
@@ -163,11 +164,6 @@
       <div class="mdl-q">
         <input class="inp" id="mdlQ" placeholder="搜索模型 / 厂商 / 标签…" autocomplete="off" spellcheck="false">
         <button class="btn" id="mdlR" title="重新取价目表与可用模型">&#8635;</button>
-      </div>
-      <!-- 列表规则固定:只列「这把 key 能调的 ∪ 已配置到客户端的」(不可用又不相关的永不出现),
-           所以这里只剩一个类型过滤芯片。 -->
-      <div class="chips" id="mdlF">
-        <span class="pick on" data-act="mdlfilter" data-f="chat">只看编码/对话</span>
       </div>
       <div class="mdl-meta" id="mdlMeta">正在取模型清单…</div>
       <div class="mcli" id="mdlCli"></div>
@@ -281,7 +277,7 @@
       <div class="vault-top">
         <div class="vault-search">
           <svg class="vault-search-i" aria-hidden="true"><use href="#i-search"/></svg>
-          <input class="inp" id="vaultQ" type="text" placeholder="搜索平台 / 标签 / 备注 / 尾号…" autocomplete="off" spellcheck="false" aria-label="搜索密钥">
+          <input class="inp" id="vaultQ" type="text" placeholder="搜索平台 / 分组 / 账号 / 地址…" autocomplete="off" spellcheck="false" aria-label="搜索密钥">
           <button class="vault-qclear" id="vaultQClear" data-act="vqclear" aria-label="清除搜索" title="清除搜索" hidden><svg aria-hidden="true"><use href="#i-close"/></svg></button>
         </div>
         <button class="btn p vault-add" data-act="vnew" title="新增一把密钥"><svg aria-hidden="true"><use href="#i-plus"/></svg>新增</button>
@@ -296,6 +292,10 @@
         <span>列表只显示平台、标签与尾号;「显示」的明文 8 秒后自动收起。</span>
         <span>密钥加密存放在 Windows 凭据管理器(绑定当前 Windows 账户),不上传、不导出;复制后剪贴板对其他程序可见。</span>
       </div>
+    </div>
+
+    <div class="mbody panel" data-p="gateway">
+      <div id="gatewayBox"><div class="empty">正在读取网关…</div></div>
     </div>
 
     <!-- 页签 6:关于 -->
@@ -499,16 +499,22 @@
   </div>
 
   <div class="foot">
-    <span class="dot" id="fdot"></span>
-    <span id="fstat">正在取数…</span>
+    <span class="dot" id="fdot" hidden></span>
+    <span id="fstat" hidden></span>
+    <button type="button" class="lk promo-entry" id="promoEntry">AI 优惠</button>
     <!-- 底栏三处可点元素都改成真正的 <button>:以前是 <span>,Tab 到不了、回车没反应,
          而设置入口收敛到这一处之后,它就成了键盘用户唯一的入口(2026-10-20)。 -->
     <button type="button" class="lk" id="lkUpd" style="display:none"></button>
     <div class="spacer"></div>
-    <button type="button" class="lk" id="lkLayout" title="切换单列 / 双列窗口">单列</button>
+    <button type="button" class="lk" id="lkLayout" title="切换单列 / 双列窗口">双列</button>
     <button type="button" class="lk" id="lkKeys">设置与管理</button>
     <span style="color:var(--line2)">|</span>
     <button type="button" class="lk" id="lkQuit">退出</button>
+  </div>
+
+  <div class="promo-overlay" id="promoOverlay" hidden>
+    <div class="promo-head"><button class="ib" id="promoBack" aria-label="返回">&#8592;</button><b id="promoHeading">AI 优惠</b><button class="lk" id="promoRefresh">刷新</button></div>
+    <div id="promoContent" class="promo-content"></div>
   </div>
 
   <!-- 渠道详情:单例底部弹层。标题栏与页脚之间的遮罩 + 上缘圆角 16 的弹层;

@@ -399,7 +399,7 @@ body.form-compact .row[data-dtone="st"] .val .v::before{content:"~";opacity:.8;m
 body.view-manage .manage{display:flex}
 body.view-manage .sum,
 body.view-manage .list{display:none!important}
-body.view-manage #lkKeys{display:none}
+/* 设置与管理入口**常驻**(2026-11-08 用户裁决):管理页里也固定显示,不再进页就藏 */
 .mhead{display:flex;align-items:center;gap:calc(8px*var(--u));padding:calc(7px*var(--u)) calc(10px*var(--u));flex:none;
   border-bottom:1px solid var(--line);background:var(--bg2)}
 .mhead .mt{font-size:max(11.5px,calc(11.5px*var(--u)));font-weight:600;letter-spacing:.02em}
@@ -603,6 +603,14 @@ body.manage-index .mhead .mt{letter-spacing:.01em}
 .ccbody{display:none;border-top:1px solid var(--line);padding:calc(10px*var(--u)) calc(12px*var(--u)) calc(12px*var(--u));background:var(--bg2)}
 .ccard.open .ccbody{display:block}
 .ccbtns{display:flex;gap:calc(6px*var(--u));align-items:center;margin-top:calc(8px*var(--u))}
+/* Qoder 网页登录入口:
+   ① 设置页渠道卡——常驻在折叠体 .ccbody **之外**(原来藏进折叠体,用户根本看不到);
+   ② 详情弹层——逐笔到期显示"未知"时就地给入口,不用再跳设置页。 */
+.ccquick,.qoder-login-bar{display:flex;align-items:center;gap:calc(8px*var(--u));flex-wrap:wrap;
+  font-size:max(11.5px,calc(11.5px*var(--u)));color:var(--tx3)}
+.ccquick{padding:calc(2px*var(--u)) calc(12px*var(--u)) calc(9px*var(--u));background:var(--bg2)}
+.qoder-login-bar{margin-top:calc(8px*var(--u));padding:calc(8px*var(--u)) calc(10px*var(--u));
+  border:1px dashed var(--line2);border-radius:calc(8px*var(--u));background:var(--bg2)}
 .ccbtns input[type=password]{flex:1;min-width:0;background:var(--bg);border:1px solid var(--line2);
   border-radius:calc(6px*var(--u));color:var(--tx);font-size:calc(12px*var(--u));padding:calc(5px*var(--u)) calc(8px*var(--u));font-family:inherit}
 .ccbtns input[type=password]:focus{outline:none;border-color:var(--ac)}
@@ -1584,14 +1592,22 @@ body.form-panel .row .ico{width:calc(30px*var(--u));height:calc(30px*var(--u));b
 body.form-panel .row .nm .n{font-size:calc(13.5px*var(--u))}
 body.form-panel .row .nm .s{font-size:max(12px,calc(12px*var(--u)));line-height:1.5}
 body.form-panel .row .val{text-align:right;justify-self:end}
-body.form-panel .row .val .v{font-size:calc(30px*var(--u));font-weight:550;letter-spacing:-.04em;line-height:1.15}
+/* 等宽数字 + 状态色过渡:刷新时数值原地改文本,颜色是唯一的刷新反馈,
+   不再有上下位移 / 幽灵 / 整卡扫光。color 过渡不产生布局变化。 */
+body.form-panel .row .val .v{font-size:calc(30px*var(--u));font-weight:550;letter-spacing:-.04em;line-height:1.15;
+  font-variant-numeric:tabular-nums;transition:color var(--t1) ease}
 body.form-panel .row.urg .val .v{font-size:calc(30px*var(--u))}
 body.form-panel .row .val .p{font-size:max(12px,calc(12px*var(--u)));color:var(--tx3);margin-top:calc(2px*var(--u))}
 body.form-panel .row .caret{display:none}
-body.form-panel .row .r2{display:flex;align-items:center;gap:calc(5px*var(--u));min-height:calc(22px*var(--u));
+body.form-panel .row .r2{display:flex;align-items:center;gap:calc(5px*var(--u));
+  /* 有文案与空态同一行高:以前有字时 27px、空时 22px,状态切换就会推动列表 5px */
+  min-height:calc(22px*var(--u));line-height:calc(22px*var(--u));
   margin-top:calc(12px*var(--u));padding-top:calc(9px*var(--u));border-top:1px solid var(--line);
   font-size:max(12px,calc(12px*var(--u)));color:var(--tx2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-body.form-panel .row .r2:empty{display:none}
+/* 状态轨空态由 renderRow 常驻一条不可见的 .rail-hold 占位行:
+   .r2 永远不会是 :empty,基础规则里的 .r2:empty{display:none} 也就不会
+   在失败 / 陈旧行上把整条轨收掉(以前这一收就是 ~41px 的列表上跳)。 */
+body.form-panel .row .rail-hold{visibility:hidden}
 body.form-panel .row .r2 svg{width:calc(11px*var(--u));height:calc(11px*var(--u));color:var(--tx3);flex:none}
 body.form-panel .row .r2 .end{margin-left:auto;color:var(--tx3);flex:none;padding-left:calc(6px*var(--u))}
 body.form-panel .row .bar{display:block;height:calc(3px*var(--u));margin:calc(10px*var(--u)) 0 0;
@@ -1599,12 +1615,28 @@ body.form-panel .row .bar{display:block;height:calc(3px*var(--u));margin:calc(10
 body.form-panel .row .bar>i{border-radius:inherit}
 body.form-panel .row[data-railwarn="1"] .r2,body.form-panel .row[data-railwarn="1"] .r2 svg{color:var(--warn)}
 
+/* ── 刷新稳定性:预留会空/非空切换的行高(实测空态 .s/.p 为 0 高、非空 18u)──
+   副标题(.nm .s)与数值脚注(.val .p)常驻一行,状态轨空态上面已改为占位。
+   这样「今日消耗/窗口/警告文字」出现或消失时,卡片高度不再推动列表。 */
+body.form-panel .row .nm .s,
+body.form-panel .row .val .p{min-height:1.5em}
+/* 状态轨是单行省略:完整文案挂 title / aria-label,单行高度不因文案长短而变 */
+body.form-panel .row .r2 .rt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
 /* 双列卡片:品牌一行,主数字第二行,状态轨贴底 */
 body.form-panel[data-w="lg"] .row .r1{grid-template-columns:auto minmax(0,1fr);align-items:center;row-gap:calc(13px*var(--u))}
 body.form-panel[data-w="lg"] .row .r1 .val{grid-column:1/-1;justify-self:stretch;display:flex;
   align-items:baseline;justify-content:space-between;gap:calc(10px*var(--u));text-align:left;margin:0}
 body.form-panel[data-w="lg"] .row .r1 .val .p{margin-top:0;text-align:right}
 body.form-panel[data-w="lg"] .row .r1 .nm{grid-column:2;grid-row:1}
+/* 双列数值区:数值与脚注同一行,给大金额 / 大积分 / 最大字号留空间。
+   实测真实双列窗(874px 视口,--u=1 / 1.3)时 30px / 39px 的大数字均不越界;
+   窄窗口被强制判成 lg 时按 vw 收一档,避免 .row 的 overflow:hidden 把数字裁掉。 */
+body.form-panel[data-w="lg"] .row .val .v{min-width:0;font-variant-numeric:tabular-nums;
+  font-size:min(calc(30px*var(--u)),calc(4.4vw))}
+body.form-panel[data-w="lg"] .row .val .p{flex:none;min-width:0}
+/* 单列:第三列 auto 由数值内容决定,名称列是 1fr。实测跨位数(1,000→999)
+   时 .s / .r2 的左边界不动,标题与状态区没有横向抖动,故不改列定义。 */
 
 /* ── 详情底部弹层 ── */
 .shade{position:absolute;inset:calc(55px*var(--u)) 0 calc(43px*var(--u));z-index:30;
@@ -1731,3 +1763,50 @@ body.form-panel .row .rhead:focus-visible{outline-offset:-2px;border-radius:calc
 /* 单行窗:卡片内边距略收紧,保证 4 个渠道在一屏内完整可见 */
 body.layout-single .row .rhead{padding:calc(12px*var(--u))}
 body.layout-single .row .r2{margin-top:calc(10px*var(--u));padding-top:calc(8px*var(--u))}
+
+/* 优惠阅读页 */
+.promo-overlay[hidden]{display:none}
+.promo-overlay{position:absolute;inset:calc(43px*var(--u)) 0 calc(36px*var(--u));z-index:25;display:flex;flex-direction:column;background:var(--bg);color:var(--tx)}
+.promo-head{display:flex;align-items:center;gap:12px;padding:10px 12px;border-bottom:1px solid var(--line)}
+.promo-head b{flex:1}.promo-head .lk{border:0;background:none;color:var(--ac);cursor:pointer}
+.promo-content{overflow:auto;flex:1;padding:12px;min-height:0}
+.promo-tools{display:grid;gap:8px}.promo-tools input{width:100%;box-sizing:border-box;padding:8px;background:var(--bg2);color:var(--tx);border:1px solid var(--line);border-radius:6px}
+.promo-list{margin-top:8px}.promo-item{display:flex;flex-direction:column;align-items:flex-start;gap:5px;width:100%;padding:12px 4px;border-bottom:1px solid var(--line)}
+.promo-title{border:0;padding:0;background:none;color:var(--tx);font:inherit;font-weight:700;text-align:left;cursor:pointer}.promo-title:hover,.promo-toggle:hover{color:var(--ac)}
+.promo-text{color:var(--tx2);line-height:1.55;white-space:pre-wrap;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.promo-text.expanded{display:block}
+.promo-toggle{border:0;padding:0;background:none;color:var(--ac);font:inherit;cursor:pointer}.promo-toggle[hidden]{display:none}.promo-item small,.promo-meta,.promo-empty{color:var(--tx3)}
+.promo-dot{display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;background:var(--ac);vertical-align:middle}.promo-entry.has-new{color:var(--ac)!important}.promo-entry.has-new:before{content:'●';font-size:8px;margin-right:4px}
+.promo-detail h2{font-size:18px;line-height:1.5}.promo-detail h3{font-size:14px;margin-top:24px}.promo-description{line-height:1.75;white-space:pre-wrap}.promo-detail .btn{margin-top:12px}
+
+.promo-item .promo-date{display:inline-block;margin-top:3px;padding:3px 7px;border-radius:5px;background:var(--bg3);color:var(--tx2);font-size:max(11px,calc(11px*var(--u)));font-weight:600;line-height:1.3}
+
+/* 签到中心：先处理今日事项，其余信息按需展开。 */
+#ckCenter .cktoday-section{margin-bottom:calc(14px*var(--u))}
+#ckCenter .cktoday{justify-content:space-between;padding:calc(9px*var(--u)) calc(10px*var(--u))}
+#ckCenter .ck-fold{margin:0 0 calc(7px*var(--u));border:1px solid var(--line);border-radius:calc(8px*var(--u));background:var(--bg2)}
+#ckCenter .ck-fold summary{display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer;list-style:none;padding:calc(10px*var(--u));color:var(--tx)}
+#ckCenter .ck-fold summary::-webkit-details-marker{display:none}
+#ckCenter .ck-fold summary:after{content:'›';font-size:18px;color:var(--tx3);transform:rotate(90deg)}
+#ckCenter .ck-fold[open] summary:after{transform:rotate(-90deg)}
+#ckCenter .ck-fold summary span{display:flex;flex-direction:column;gap:3px}
+#ckCenter .ck-fold summary b{font-size:max(12px,calc(12px*var(--u)))}
+#ckCenter .ck-fold summary small{color:var(--tx3);font-size:max(11px,calc(11px*var(--u)))}
+#ckCenter .ck-fold summary:focus-visible{outline:2px solid var(--ac);outline-offset:-2px;border-radius:7px}
+#ckCenter .ck-fold-body{padding:0 calc(10px*var(--u)) calc(10px*var(--u))}
+#ckCenter .ck-fold-body .cksec:last-child{margin-bottom:0}
+#ckCenter .ck-overview-filters{flex-wrap:wrap}
+#ckCenter .cklr{grid-template-columns:minmax(80px,1.4fr) minmax(50px,1fr) minmax(54px,1fr) auto;}
+#ckCenter .ckld{grid-column:1 / -1;white-space:normal;overflow-wrap:anywhere}
+
+
+.gw-state,.gw-channel,.gw-address{display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid var(--line)}
+.gw-state b,.gw-channel>div{flex:1}.gw-channel span{display:block;color:var(--tx3);font-size:11px;margin-top:3px}
+.gw-address{flex-wrap:wrap}.gw-address code{flex:1;overflow-wrap:anywhere;color:var(--tx2)}
+.gw-add{display:grid;grid-template-columns:1fr 1fr;gap:7px}.gw-add input,.gw-add select{min-width:0;width:100%}
+.gw-models{max-height:240px;overflow:auto;font-size:11px;color:var(--tx2);padding:8px}.gw-model{padding:4px 0;overflow-wrap:anywhere}
+#gatewayBox details{margin-top:12px}#gatewayBox summary{cursor:pointer;color:var(--tx2)}
+
+/* 密钥箱字段名包含「调用端点」「官网地址」。 */
+#vaultForm .vf{grid-template-columns:calc(62px*var(--u)) minmax(0,1fr)}
+#vaultForm .vf .sel{min-width:0;width:100%}
+#vaultList .vrow-sub{overflow-wrap:anywhere}

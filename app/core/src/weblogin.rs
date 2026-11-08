@@ -143,16 +143,63 @@ fn site_post_login(url: &str, hosts: &[&str], paths: &[&str]) -> bool {
 // 这套会话**只用于账务只读查询**,签到仍走桌面 Bearer,两条链路互不牵连。
 
 /// Qoder 网页站(国际版)。国内版(qoder.com.cn)是另一套账号,与桌面端的两区划分一致,
-/// P0 只接国际版 —— 用户给的用量页就是它。
+/// 站点、会话键、登录入口都必须**逐区独立**(见 [`QoderSite`])。
 pub const QODER_SITE_HOST: &str = "qoder.com";
 
 /// 登录完成后落地的路径。没登录访问 /account/usage 会被 302 到
 /// /users/sign-in?oauth_callback=…(2026-10-30 实测),所以"落在 /account/usage"
 /// 就是"服务端认了这份会话"的证据 —— 与 WorkBuddy 同一条判据思路。
+/// 国内站沿用同一路径(未真机取证;若平台给的是别的落地页,只影响"登录完成"的
+/// 置位时机,不影响取数本身 —— 取数仍以探测结果为准)。
 pub const QODER_POST_LOGIN_PATHS: [&str; 1] = ["/account/usage"];
 
 /// 网页会话验证通过时刻的 settings 键(挂件外壳在登录成功时写,unix 秒字符串)。
 pub const QODER_WEB_SESSION_AT_KEY: &str = "qoder_web_session_at";
+/// 国内版的会话时刻键 —— **不许与国际版共用**,否则一边登录会替另一边刷新"新鲜度"。
+pub const QODER_CN_WEB_SESSION_AT_KEY: &str = "qoder_cn_web_session_at";
+
+/// Qoder 一个区域的网页站配置。
+///
+/// 两区是两套账号:主机、登录入口、会话时刻键一一对应。取数侧拿它拼账务请求,
+/// 外壳拿它开登录窗、从 Cookie 罐里按域取会话。任何一项共用都会串号
+/// (最隐蔽的是会话时刻键:共用只会让"年龄提示"失准,查不出来)。
+#[derive(Debug, Clone, Copy)]
+pub struct QoderSite {
+    /// 渠道 id(`qoder` / `qoder-cn`),取数侧直接用。
+    pub id: &'static str,
+    /// 网页站主机(账务请求与 Cookie 罐都按它取)。
+    pub host: &'static str,
+    /// 登录窗入口:登录页 + oauth_callback。**不要**直接给 /account/usage,
+    /// 否则首次导航就被判成"登录完成"(真机踩过,2026-10-30)。
+    pub login_url: &'static str,
+    /// 会话验证通过时刻的 settings 键(每区独立)。
+    pub session_at_key: &'static str,
+}
+
+pub const QODER_SITE: QoderSite = QoderSite {
+    id: "qoder",
+    host: QODER_SITE_HOST,
+    login_url: "https://qoder.com/users/sign-in?oauth_callback=https%3A%2F%2Fqoder.com%2Faccount%2Fusage",
+    session_at_key: QODER_WEB_SESSION_AT_KEY,
+};
+
+/// 国内版。域名按桌面端/网关的既有划分取 `qoder.com.cn`;登录入口的形状照抄国际版
+/// (**未真机取证**,真机上若登录页路径不同,只需改这一处)。
+pub const QODER_CN_SITE: QoderSite = QoderSite {
+    id: "qoder-cn",
+    host: "qoder.com.cn",
+    login_url: "https://qoder.com.cn/users/sign-in?oauth_callback=https%3A%2F%2Fqoder.com.cn%2Faccount%2Fusage",
+    session_at_key: QODER_CN_WEB_SESSION_AT_KEY,
+};
+
+/// 按渠道 id 取区域配置。不认识的 id 返回 None(调用方按"没有网页会话"处理)。
+pub fn qoder_site(id: &str) -> Option<&'static QoderSite> {
+    match id {
+        "qoder" => Some(&QODER_SITE),
+        "qoder-cn" => Some(&QODER_CN_SITE),
+        _ => None,
+    }
+}
 
 /// 会话的年龄提示。Qoder 平台的会话 TTL 没有实测数据(等真机用出第一份再说),
 /// 先沿用 WorkBuddy 的"第 5 天起提示"窗口,措辞里不给具体天数 —— 不编没有证据的数字。
@@ -201,9 +248,18 @@ where
     }
 }
 
-/// 页面落在"Qoder 登录完成后"的路径上吗?
+/// 页面落在"Qoder 登录完成后"的路径上吗?(国际版,保持既有调用语义)
 pub fn qoder_is_post_login(url: &str) -> bool {
-    site_post_login(url, &[QODER_SITE_HOST], &QODER_POST_LOGIN_PATHS)
+    qoder_is_post_login_for("qoder", url)
+}
+
+/// 按区域判"登录完成"。主机名必须与该区站点**整串相等** —— 用国际版的主机去认
+/// 国内版的落地页一定认不出来,反过来也一样。
+pub fn qoder_is_post_login_for(id: &str, url: &str) -> bool {
+    let Some(site) = qoder_site(id) else {
+        return false;
+    };
+    site_post_login(url, &[site.host], &QODER_POST_LOGIN_PATHS)
 }
 
 #[cfg(test)]
@@ -356,6 +412,36 @@ mod tests {
         assert!(!qoder_is_post_login("https://qoder.com.attacker.example/account/usage"));
         assert!(!qoder_is_post_login("https://qoder.com@evil.example/account/usage"));
         assert!(!qoder_is_post_login("http://qoder.com/account/usage"));
+    }
+
+    /// 国内版的站点/登录判定/会话键必须与国际版**完全隔离**:
+    /// 用国际版的域名去认国内版的落地页(或反过来)一律不算登录完成。
+    #[test]
+    fn qoder_cn_site_is_isolated() {
+        assert!(qoder_is_post_login_for(
+            "qoder-cn",
+            "https://qoder.com.cn/account/usage"
+        ));
+        assert!(!qoder_is_post_login_for(
+            "qoder",
+            "https://qoder.com.cn/account/usage"
+        ));
+        assert!(!qoder_is_post_login_for(
+            "qoder-cn",
+            "https://qoder.com/account/usage"
+        ));
+        // 变形域名同样挡掉
+        assert!(!qoder_is_post_login_for(
+            "qoder-cn",
+            "https://qoder.com.cn.attacker.example/account/usage"
+        ));
+        let g = qoder_site("qoder").unwrap();
+        let cn = qoder_site("qoder-cn").unwrap();
+        assert_eq!(g.host, "qoder.com");
+        assert_eq!(cn.host, "qoder.com.cn");
+        assert_ne!(g.session_at_key, cn.session_at_key, "会话键不许共用");
+        assert_ne!(g.login_url, cn.login_url, "登录入口不许共用");
+        assert!(qoder_site("qoder-ai").is_none());
     }
 
     /// Qoder 会话年龄提示:没记录不说话、前 4 天闭嘴、第 5 天起说话;

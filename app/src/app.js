@@ -6,6 +6,13 @@ const appWindow = T.window.getCurrentWindow();
 
 const $ = (id) => document.getElementById(id);
 
+/** 时间驱动文案只在真的变了才写 DOM:轮询/分钟 ticker 每跑一次都给 span 重写
+ *  一遍 textContent,会让「相同数据刷新」凭空产生 DOM 变更(也打断节点复用)。 */
+function setTextIfChanged(el, text) {
+  const s = text === null || text === undefined ? "" : String(text);
+  if (el && el.textContent !== s) el.textContent = s;
+}
+
 let CHANNELS = [];
 let CFG = null;
 let VER = "";          // app_version 命令回来的版本号,关于页在首检之前也有的显示
@@ -238,17 +245,17 @@ function tickPeakCountdowns() {
     } catch (e) {
       return;
     }
-    el.textContent = peakCountdown(p, nowMs);
+    setTextIfChanged(el, peakCountdown(p, nowMs));
   });
   document.querySelectorAll("[data-reset-at]").forEach((el) => {
-    el.textContent = quotaResetCountdown(Number(el.dataset.resetAt));
+    setTextIfChanged(el, quotaResetCountdown(Number(el.dataset.resetAt)));
   });
   // Codex 数值标签里的极简倒计时:按同一份降级档位重算,别把 fit 收窄的那一档冲掉
   document.querySelectorAll("[data-reset-tight]").forEach((el) => {
     const ms = Number(el.dataset.resetTight);
     const mode = el.dataset.tightMode || "full";
-    el.textContent =
-      mode === "off" ? "" : "·" + (mode === "short" ? fmtResetTightShort(ms, nowMs) : fmtResetTight(ms, nowMs));
+    setTextIfChanged(el,
+      mode === "off" ? "" : "·" + (mode === "short" ? fmtResetTightShort(ms, nowMs) : fmtResetTight(ms, nowMs)));
   });
   // 到期相对时间:每分钟原地更新,跨过到期时刻立刻变成「已到期,待刷新」
   let expCrossed = false;
@@ -260,7 +267,7 @@ function tickPeakCountdowns() {
     if (before && before !== after && before !== "已到期,待刷新" && after === "已到期,待刷新") {
       expCrossed = true;
     }
-    el.textContent = after;
+    setTextIfChanged(el, after);
   });
   if (expCrossed) render({});
   updateHeaderLive();
@@ -379,8 +386,8 @@ function fitCodexResetLabels() {
     // 紧凑条里这段是 `display:none`,量出来全是 0 —— 不能据此降级:否则切回面板时
     // 倒计时会带着"已经收掉"的状态凭空消失(2026-11-03 真机截图抓到一次)。
     if (!el.getClientRects().length) {
-      el.dataset.tightMode = "full";
-      el.textContent = "·" + fmtResetTight(ms);
+      if (el.dataset.tightMode !== "full") el.dataset.tightMode = "full";
+      setTextIfChanged(el, "·" + fmtResetTight(ms, Date.now()));
       return;
     }
     const row = el.closest(".row");
@@ -388,11 +395,11 @@ function fitCodexResetLabels() {
     if (!s) return;
     const fits = () => s.scrollWidth <= s.clientWidth + 1;
     if (fits()) return;
-    el.dataset.tightMode = "short";
-    el.textContent = "·" + fmtResetTightShort(ms);
+    if (el.dataset.tightMode !== "short") el.dataset.tightMode = "short";
+    setTextIfChanged(el, "·" + fmtResetTightShort(ms, Date.now()));
     if (fits()) return;
-    el.dataset.tightMode = "off";
-    el.textContent = "";
+    if (el.dataset.tightMode !== "off") el.dataset.tightMode = "off";
+    setTextIfChanged(el, "");
   });
 }
 
@@ -617,9 +624,20 @@ function currentOrderIds() {
   ];
 }
 
+/** 上一轮真实画出来的渠道顺序 —— 排序键相同(平局)时用它兜底,避免同一份数据
+ *  每轮刷新都在等分的渠道之间来回换位。真实交叉时排序键不同,不受它影响。 */
+let LAST_RENDER_ORDER = [];
+/** 平局比较器:上一轮在前的仍在前;新出现的渠道排在平局组末尾。 */
+function stableTie(prevOrder) {
+  const rank = new Map((prevOrder || []).map((id, i) => [id, i]));
+  return (a, b) =>
+    (rank.has(a.id) ? rank.get(a.id) : Infinity) - (rank.has(b.id) ? rank.get(b.id) : Infinity);
+}
+
 /** 主排序:剩余百分比升序(默认)/ 余额 / 今日消耗 / 自定义。 */
-function sortChannels(list) {
+function sortChannels(list, prevOrder) {
   const mode = CFG.sort;
+  const tie = stableTie(prevOrder || LAST_RENDER_ORDER);
   if (mode === "custom") {
     // 自定义顺序就是用户排的顺序,不做任何干预(失败/未配置也按排的位置显示)
     const order = currentOrderIds();
@@ -627,7 +645,7 @@ function sortChannels(list) {
       const i = order.indexOf(c.id);
       return i < 0 ? 9999 : i;
     };
-    return [...list].sort((a, b) => rank(a) - rank(b));
+    return [...list].sort((a, b) => rank(a) - rank(b) || tie(a, b));
   }
   const score = (c) => {
     if (!c.hasKey) return 9999;
@@ -640,7 +658,7 @@ function sortChannels(list) {
     const r = remainRatio(c);
     return r === null ? 4000 : r * 100;
   };
-  return [...list].sort((a, b) => score(a) - score(b));
+  return [...list].sort((a, b) => score(a) - score(b) || tie(a, b));
 }
 
 // ───────────── 统一视图(core::view::HomeView)─────────────
@@ -714,6 +732,14 @@ function grantListHtml(id) {
         )}</b><i>${r.source === "api" ? "平台确认" : "推算"}</i></div>`
     )
     .join("")}</div>`;
+}
+
+/** 状态轨是单行省略:把完整文案挂到 title / aria-label 上,键盘与读屏都能读到全文,
+ *  又不会为了换行把行高改来改去。 */
+function plainText(html) {
+  const d = document.createElement("div");
+  d.innerHTML = String(html || "");
+  return (d.textContent || "").replace(/\s+/g, " ").trim();
 }
 
 function renderRow(c, i) {
@@ -1000,12 +1026,14 @@ function renderRow(c, i) {
         </div>
         <div class="caret">&#9654;</div>
       </div>
-      <div class="r2">${
+      <div class="r2"${railLeft || railRight ? ` role="note" aria-label="${esc(plainText(railLeft) + (railRight ? " · " + plainText(railRight) : ""))}"` : ""}>${
         railLeft || railRight
-          ? `<svg aria-hidden="true"><use href="${railIcon}"/></svg><span class="rt">${railLeft}</span>${
-              railRight ? `<span class="end">${railRight}</span>` : ""
+          ? `<svg aria-hidden="true"><use href="${railIcon}"/></svg><span class="rt" title="${esc(plainText(railLeft))}">${railLeft}</span>${
+              railRight ? `<span class="end" title="${esc(plainText(railRight))}">${railRight}</span>` : ""
             }`
-          : ""
+          : // 状态轨空态常驻一行不可见占位:既避开 .r2:empty{display:none},
+            // 又有和"有文案"完全相同的行高,状态切换不再推动列表
+            `<span class="rt rail-hold" aria-hidden="true">&nbsp;</span>`
       }</div>
       ${bar}
       ${claimWarn}
@@ -1162,6 +1190,25 @@ function accountExpiryHtml(c) {
     <div class="expiry-kicker"><svg aria-hidden="true"><use href="#i-clock"/></svg>账户额度到期</div>
     <div class="expiry-date">暂未提供</div>
     <div class="expiry-meta"><span>尚无法确认账户有效期</span><strong>账户级有效期</strong></div>
+  </div>`;
+}
+
+/**
+ * 详情里的「登录网页版」就地入口(2026-11-08 用户反馈"页面上找不到入口")。
+ *
+ * 只在**逐笔明细还不完整**时出现:数据已经在的时候别再劝登录。位置就在
+ * 「逐笔积分到期 · 未知」那一段下面 —— 用户是在这里发现"未知"的,入口必须也在
+ * 这里,而不是让他去设置页里翻两层折叠。
+ */
+function qoderLoginBar(c) {
+  if (c.id !== "qoder" && c.id !== "qoder-cn") return "";
+  if (c.expiryComplete === true) return "";
+  return `<div class="qoder-login-bar">
+    <span>逐笔积分到期明细需登录网页账号</span>
+    <button class="btn s" data-act="qoderweblogin" data-id="${c.id}"${
+    QODER_LOGGING ? " disabled" : ""
+  }>${QODER_LOGGING ? "登录中…" : "登录网页版"}</button>
+    <button class="why" data-why="qoderweb" aria-expanded="false" aria-label="网页会话的说明"></button>
   </div>`;
 }
 
@@ -1521,7 +1568,7 @@ function renderDetail(c, inDialog = false) {
   if (!inDialog) actions.push(manageLink);
 
   // 类名用 rb-dim 不用 dim:全局已有 .dim{color:var(--tx3)},撞名会把整张卡的数值再染一层灰
-  return `<div class="rbody-in${dim ? " rb-dim" : ""}">${core}${spend}${coreCodexResets(c)}${kvHtml}${ledger}${ckHtml}<div class="foot-det">${notesHtml}${failFull}<div class="fn-act">${actions.join(
+  return `<div class="rbody-in${dim ? " rb-dim" : ""}">${core}${qoderLoginBar(c)}${spend}${coreCodexResets(c)}${kvHtml}${ledger}${ckHtml}<div class="foot-det">${notesHtml}${failFull}<div class="fn-act">${actions.join(
     ""
   )}</div></div></div>`;
 }
@@ -1617,6 +1664,8 @@ function renderDetailSheet() {
   document.querySelectorAll("#detailBody .fn-fail").forEach((el) => {
     el.hidden = false;
   });
+  // 详情里新生的「?」也要补说明块(设置页那边是 renderChCards 自己做的)
+  hydrateWhy(body);
 }
 
 /** 详情打开时把背景区域对读屏器隐藏(视觉遮罩已盖住,这里补语义层)。 */
@@ -1730,28 +1779,49 @@ async function detailAction(act) {
     openManage();
     showTab("mdl");
     ensureModels(cid);
+    return;
+  }
+  // 详情里的就地登录入口:不跳设置页,直接开窗(与设置页卡片同一个后端命令)
+  if (a === "qoderweblogin") {
+    await qoderWebLogin(act.dataset.id || id);
   }
 }
 
 /**
- * 数值翻页(动效 A/E 共用):el 的内容必须已是新值 ——
- * 新值从下方 9px 淡入进入,旧值以幽灵层上移淡出,320ms 一次。
- * host 提供 position:relative 与字体上下文(幽灵复制 el 的 class 吃同款样式)。
+ * 数值翻页 —— 现在**只服务胶囊轮播**(动效 E)。首页数据刷新已改为直接写数值:
+ * renderInner 不再调用它,所以主数字不会有上下位移、旧数字重影或整卡扫光。
+ * el 的内容必须已是新值;host 提供 position:relative 与字体上下文。
+ * oldHtml 给幽灵层保留 <i class="dec/unit/pct/pq"> 这类数字排版结构。
  */
-function rollValue(el, oldText, host) {
+const ROLL_GEN = new WeakMap(); // el → 最近一次翻页的代次
+let ROLL_SEQ = 0;
+function rollValue(el, oldText, host, oldHtml) {
   if (!el || oldText == null || oldText === el.textContent) return;
+  const gen = ++ROLL_SEQ;
+  ROLL_GEN.set(el, gen); // 旧回调认不出新代次,不会误清新一轮的 class / ghost
+  // 同一容器里上一轮的幽灵先收掉:轮播快速切换不许叠出两层旧数字
+  if (host) {
+    Array.from(host.children).forEach((g) => {
+      if (g.classList && g.classList.contains("roll-ghost")) g.remove();
+    });
+  }
   el.classList.remove("roll-in");
-  void el.offsetWidth; // 同名 class 重挂必须先回流才能重播动画
+  void el.offsetWidth; // 胶囊轮播重播同名动画仍需一次回流;首页路径已不走这里
   el.classList.add("roll-in");
-  setTimeout(() => el.classList.remove("roll-in"), 360);
+  setTimeout(() => { if (ROLL_GEN.get(el) === gen) el.classList.remove("roll-in"); }, 360);
   if (!oldText || !host) return;
   const g = document.createElement("span");
-  g.className = el.className + " roll-ghost";
-  g.textContent = oldText;
+  // ghost 只吃稳定的排版 class:带上临时的 roll-in 会让旧值也跟着上下位移,
+  // 看起来就是"两层数字一起动"的重影。
+  g.className =
+    el.className.split(/\s+/).filter((c) => c && c !== "roll-in" && c !== "roll-ghost").join(" ") +
+    " roll-ghost";
+  if (oldHtml) g.innerHTML = oldHtml;
+  else g.textContent = oldText;
   g.style.left = el.offsetLeft + "px";
   g.style.top = el.offsetTop + "px";
   host.appendChild(g);
-  setTimeout(() => g.remove(), 380);
+  setTimeout(() => { if (ROLL_GEN.get(el) === gen) g.remove(); }, 380);
 }
 
 /** 动效 I:面板入场(行自上而下 30ms 节奏淡入)。只在「进入面板形态/从托盘唤出/启动首帧」放。 */
@@ -1815,6 +1885,113 @@ function failBannerHtml() {
   if (n < 3) return "";
   return `<div class="fstrip"><b>${n}</b> 个渠道取数失败 · 可能是网络或系统代理 ·
     <span class="lk" data-act="open-diag">看诊断</span></div>`;
+}
+
+/* ═════════════ 按 key 复用的最小 DOM 更新 ═════════════
+ * 首页以前每轮 `innerHTML = ...` 整块重建:节点身份、键盘焦点、进度条宽度过渡
+ * 全部丢失,旧值幽灵与扫光也只能在"新节点"上重播。这里改为按稳定 key 复用:
+ *   · 展示计算仍只走 renderRow()/各自的 html 函数(不维护第二套文案逻辑);
+ *   · 签名就是这一行最终要输出的 HTML 字符串 —— 覆盖所有真正影响显示的输入
+ *     (状态、徽标、配额、警告、时间驱动文案),又不会被"时间戳变了但文案没变"
+ *     骗去做整行重建;
+ *   · 签名不同才做一次逐节点 diff,只写变化的文本/属性/class/样式。
+ */
+const QKEY = new WeakMap();   // 元素 → 稳定 key
+const QSIG = new WeakMap();   // 元素 → 上次输出的 HTML
+
+function qParse(html) {
+  const t = document.createElement("template");
+  t.innerHTML = String(html).trim();
+  return t.content.firstElementChild;
+}
+
+/** 子元素匹配键:取第一个 class 作为结构角色,状态类(dot b / ckb ok)不改变键,
+ *  所以状态切换是"改 class"而不是"换节点"。 */
+function qChildKey(n) {
+  if (!n) return "#none";
+  if (n.nodeType === 3 || n.nodeType === 8) return "#text";
+  if (n.nodeType !== 1) return "#" + n.nodeType;
+  const first = (n.getAttribute("class") || "").trim().split(/\s+/)[0] || "";
+  const id = n.getAttribute("data-act") || n.getAttribute("data-body") ||
+    n.getAttribute("data-id") || n.getAttribute("data-sec") || "";
+  return n.tagName.toLowerCase() + "|" + first + "|" + id;
+}
+
+function qPatchAttrs(dst, src) {
+  for (const a of Array.from(dst.attributes)) {
+    if (!src.hasAttribute(a.name)) dst.removeAttribute(a.name);
+  }
+  for (const a of Array.from(src.attributes)) {
+    if (dst.getAttribute(a.name) !== a.value) dst.setAttribute(a.name, a.value);
+  }
+}
+
+function qPatchChildren(dst, src) {
+  let di = 0;
+  for (const s of Array.from(src.childNodes)) {
+    const key = qChildKey(s);
+    let d = dst.childNodes[di] || null;
+    if (!d || qChildKey(d) !== key) {
+      let found = null;
+      for (let j = di + 1; j < dst.childNodes.length; j++) {
+        if (qChildKey(dst.childNodes[j]) === key) { found = dst.childNodes[j]; break; }
+      }
+      if (found) { dst.insertBefore(found, d); d = found; }
+      else { d = s.cloneNode(true); dst.insertBefore(d, dst.childNodes[di] || null); }
+    }
+    // .rbody 的内容由详情/展开逻辑拥有,不参与刷新 diff
+    if (!(d.nodeType === 1 && d.classList && d.classList.contains("rbody"))) {
+      if (s.nodeType === 3 || s.nodeType === 8) {
+        if (d.nodeValue !== s.nodeValue) d.nodeValue = s.nodeValue;
+      } else if (s.nodeType === 1 && d.nodeType === 1) {
+        qPatchAttrs(d, s);
+        qPatchChildren(d, s);
+      }
+    }
+    di++;
+  }
+  while (dst.childNodes[di]) dst.removeChild(dst.childNodes[di]);
+}
+
+/** box 的直接子元素按 key 复用;顺序相同不移动节点,顺序变化才移动既有节点。 */
+function qReconcile(box, items) {
+  if (!box) return;
+  const old = new Map();
+  for (const el of Array.from(box.children)) {
+    const k = QKEY.get(el);
+    if (k) old.set(k, el);
+    else el.remove(); // 形态脚本临时刻的节点 / 旧骨架
+  }
+  const wanted = new Set(items.map((it) => it.key));
+  for (const [k, el] of old) if (!wanted.has(k)) el.remove();
+  let i = 0;
+  for (const it of items) {
+    let el = old.get(it.key);
+    if (!el) {
+      el = qParse(it.html);
+      if (!el) continue; // 空模板不该出现;真出现了也不能把 key 挂到 null 上
+      QKEY.set(el, it.key);
+      QSIG.set(el, it.html);
+    } else if (QSIG.get(el) !== it.html) {
+      const src = qParse(it.html);
+      if (src && el.tagName !== src.tagName) {
+        // 摘要格会在 button / div 之间切换(有可点入口 vs 纯展示):
+        // 标签变了只能换节点,qPatchAttrs 改不了 tagName。
+        QKEY.set(src, it.key);
+        QSIG.set(src, it.html);
+        box.replaceChild(src, el);
+        el = src;
+      } else if (src) {
+        qPatchAttrs(el, src);
+        qPatchChildren(el, src);
+        QSIG.set(el, it.html);
+      }
+    }
+    const cur = box.children[i];
+    if (cur !== el) box.insertBefore(el, cur || null);
+    i++;
+  }
+  while (box.children[i]) box.removeChild(box.children[i]);
 }
 
 /** 顶部临期摘要:30 天内确认到期积分 / 最先到期渠道 / 签到进度。 */
@@ -1923,20 +2100,27 @@ function renderRiskBand() {
       <div class="metric-number vv" style="color:var(--tx3)">——</div><div class="metric-sub">未启用</div></div>`;
   }
 
-  box.innerHTML = cell1 + cell2 + cell3;
+  // 三格摘要也按 key 复用:轮询时不再整块重建(焦点/按钮身份/高度都更稳)。
+  qReconcile(box, [
+    { key: "risk", html: cell1 },
+    { key: "first", html: cell2 },
+    { key: "checkin", html: cell3 },
+  ]);
 }
+
+/** 状态红晕的代次:快速连续刷新时,旧定时器不许清掉新一轮刚挂上的动画。 */
+let STATUS_FLASH_GEN = 0;
+const DOT_FLASH_GEN = new WeakMap();
 
 /** 过滤条:默认收起,放大镜展开;渠道多起来(>=12)时仍自动放出输入框。 */
 function renderInner(opts) {
-  // updated=true 只由「数据刷新」调用方传(settings 变更等重渲染不放动效)
+  // updated=true 只由「数据刷新」调用方传。首页数据刷新已改为直接写数值,
+  // 不再做主数字翻页位移 / 幽灵 / 整卡扫光(见 rollValue 与 CSS 动效层说明)。
   const updated = !!(opts && opts.updated);
-  // 动效 A/B:重建 DOM 前先把每行大数字的旧文本存下来,替换后对比才知道谁变了
-  const prevV = {};
-  // M7:顺便记下每行上一轮的状态点,等下识别"刚刚跌破红线"的行
+  // M7:只记上一轮的状态点,用来识别"刚刚跌破红线"的行 —— 那是唯一保留的
+  // 刷新反馈(一枚小红晕),不碰数值、不碰整卡。
   const prevDt = {};
   document.querySelectorAll("#list .row").forEach((r) => {
-    const v = r.querySelector(".val .v");
-    if (v) prevV[r.dataset.id] = v.textContent;
     if (r.dataset.dtone !== undefined) prevDt[r.dataset.id] = r.dataset.dtone;
   });
   // 标题栏挤了 6 个按钮,计数用短写法,完整说法放 tooltip
@@ -1946,19 +2130,24 @@ function renderInner(opts) {
   const expiryOnly = EXPIRY_FILTER && currentForm() === "panel";
   // 排序只听设置里的「渠道排序」(2026-11-03 用户裁决):
   // 限流 / 失效不再被强制排到前排,排序口径只有一个来源。
+  const tie = stableTie(LAST_RENDER_ORDER);
   const sorted = expiryOnly
     ? CHANNELS.filter(hasConfirmedExpiry)
-        .sort((a, b) => (nearestExpiryAt(a) || Infinity) - (nearestExpiryAt(b) || Infinity))
-    : sortChannels(CHANNELS);
+        .sort((a, b) =>
+          (nearestExpiryAt(a) || Infinity) - (nearestExpiryAt(b) || Infinity) || tie(a, b))
+    : sortChannels(CHANNELS, LAST_RENDER_ORDER);
+  LAST_RENDER_ORDER = sorted.map((c) => c.id);
 
   if (!CHANNELS.length) {
     // 冷启动画骨架(D14):一行"加载中…"区分不了"正在加载 / 卡住了 / 没配好",
     // 骨架至少说清"这里有 N 个渠道的位置,正在一个个点亮"。
-    $("list").innerHTML =
-      `<div class="sk-wrap">${Array.from({ length: 6 }, () =>
+    qReconcile($("list"), [
+      { key: "sk-wrap", html: `<div class="sk-wrap">${Array.from({ length: 6 }, () =>
         `<div class="sk-row"><i class="sk-ico"></i><i class="sk-nm"></i><i class="sk-v"></i></div>`
-      ).join("")}</div>
-       <div class="sk-foot">正在取数 · 首次启动需要几秒</div>`;
+      ).join("")}</div>` },
+      { key: "sk-foot", html: `<div class="sk-foot">正在取数 · 首次启动需要几秒</div>` },
+    ]);
+    LAST_RENDER_ORDER = [];
     // 底栏也要跟着回到"还没数"的状态:以前这里直接 return,底栏留着**上一轮**
     // 的「8 正常 · 3 预警」—— 刚启动就写着 8 个渠道,而列表里一个都还没有。
     $("fdot").className = "dot off";
@@ -1972,9 +2161,17 @@ function renderInner(opts) {
   const shown = sorted.filter((c) => c.hasKey && !c.hidden);
   const configured = shown.length > 0;
 
-  $("list").innerHTML = configured
-    ? failBannerHtml() + ckPendingStrip() + shown.map((c, i) => renderRow(c, i)).join("")
-    : expiryOnly
+  // 列表按稳定 key 复用:.row / .rhead / .val .v / 进度条都保留同一个节点,
+  // 只有输出 HTML 真的变了的行才做一次最小 diff。失败横幅与签到提示条同样按 key 更新。
+  const items = [];
+  const banner = failBannerHtml();
+  const ckStrip = ckPendingStrip();
+  if (banner) items.push({ key: "fstrip", html: banner });
+  if (ckStrip) items.push({ key: "ckstrip", html: ckStrip });
+  if (configured) {
+    shown.forEach((c, i) => items.push({ key: "row:" + c.id, html: renderRow(c, i) }));
+  } else {
+    const emptyHtml = expiryOnly
       ? `<div class="empty">
           <div class="ek">⌕</div>
           <b>没有匹配的临期渠道</b>
@@ -1995,6 +2192,9 @@ function renderInner(opts) {
          支持 9 个内置渠道 + 自定义(自己的取数地址与字段路径)<br>密钥与登录令牌只写入 Windows 凭据管理器,界面保存后不回显
          <div><button class="btn p" data-act="open-manage">去配置密钥</button></div>
        </div>`;
+    items.push({ key: "empty", html: emptyHtml });
+  }
+  qReconcile($("list"), items);
 
   // 列表已经落到 DOM 里,现在才有真实宽度可量:把 Codex 的倒计时按当前面板宽度收一档
   if (configured) fitCodexResetLabels();
@@ -2017,32 +2217,27 @@ function renderInner(opts) {
         hiddenN ? `<span class="fb-dot off"></span>${hiddenN} 隐藏` : "",
       ].filter(Boolean).join('<span class="fb-sep">·</span>');
 
-  // 动效 A/B:数据刷新后,值真的变了的行 → 大数字翻页进入 + 一道微光;
-  // 值没变的行一动不动 —— 这是「刷新完成」的视觉回执,不是装饰
+  // 首页刷新回执只剩「状态颜色变化 + 刚跌破红线的一次性红晕」:
+  //   · 主数字由 qReconcile 原地改文本,不再翻页位移、不生成 ghost;
+  //   · 整卡 sweep 不再触发(.sweep 节点只是保留下来的空壳,不挂 .go);
+  //   · 没有错峰定时器,也没有为重启同名动画而强制读布局。
+  // 颜色本身写在 .val .v 的 inline style 里,随 diff 原地过渡(CSS transition)。
   if (updated && currentForm() === "panel") {
-    let n = 0;
+    const gen = ++STATUS_FLASH_GEN;
     document.querySelectorAll("#list .row").forEach((r) => {
       const id = r.dataset.id;
-      const v = r.querySelector(".val .v");
-      if (v && id in prevV && prevV[id] !== v.textContent) {
-        rollValue(v, prevV[id], v.closest(".val"));
-        const sw = r.querySelector(".sweep");
-        if (sw) {
-          const d = n++ * 60;
-          setTimeout(() => {
-            sw.classList.remove("go");
-            void sw.offsetWidth; // 重启动画要先强制一次回流
-            sw.classList.add("go");
-          }, d);
-        }
-      }
-      // M7:这一轮刚从非红跌进红线的行,状态点播一次 1.2s 红晕(只播一次,
-      // 持续低位不重复 —— 告警要闭环,但不打扰;阈值上调"回红"同理)
+      // M7:只播一次,连续快速刷新时旧回调认不出最新 gen 就不会误清新的红晕
       if (prevDt[id] !== undefined && prevDt[id] !== "b" && r.dataset.dtone === "b") {
         const d = r.querySelector(".n .dot");
         if (d) {
+          DOT_FLASH_GEN.set(d, gen);
           d.classList.add("breath1");
-          setTimeout(() => d.classList.remove("breath1"), 1300);
+          setTimeout(() => {
+            if (DOT_FLASH_GEN.get(d) === gen) {
+              d.classList.remove("breath1");
+              DOT_FLASH_GEN.delete(d);
+            }
+          }, 1300);
         }
       }
     });
@@ -2105,10 +2300,13 @@ function compactCheckinChip(list) {
 function fitCompact() {
   const list = $("list");
   const rows = [...list.querySelectorAll(".row")];
-  // 先整体还原:切回面板时必须把紧凑条里藏掉的行和降级类放出来
+  // 先整体还原:切回面板时必须把紧凑条里藏掉的行和降级类放出来。
+  // 面板形态下这些都是空操作 —— 只在真的带着降级态时才写,免得每轮刷新都
+  // 给每张卡片的 class/style 各来一次无意义的 DOM 写入(节点复用的前提)。
   rows.forEach((r) => {
-    r.style.display = "";
-    r.classList.remove("lv1", "lv2");
+    if (r.style.display) r.style.display = "";
+    if (r.classList.contains("lv1")) r.classList.remove("lv1");
+    if (r.classList.contains("lv2")) r.classList.remove("lv2");
   });
   list.querySelectorAll(".more,.cempty,.ckchip").forEach((el) => el.remove());
   if (!document.body.classList.contains("form-compact")) return;
@@ -2269,13 +2467,13 @@ function renderPill(sorted) {
   renderPillFace();
 }
 
-let LAST_PILL = { id: null, text: "" };
+let LAST_PILL = { id: null, text: "", html: "" };
 /** 胶囊翻页(动效 E):轮播换渠道/换数值时 200ms 纵向翻页 + 图标淡入;只在胶囊形态放 */
-function pillAnim(newId, lastText, lastId) {
+function pillAnim(newId, lastText, lastId, lastHtml) {
   const pv = $("pillV");
   const text = pv.textContent;
   if (currentForm() === "pill") {
-    if (lastText && text !== lastText) rollValue(pv, lastText, $("pill"));
+    if (lastText && text !== lastText) rollValue(pv, lastText, $("pill"), lastHtml);
     if (lastId !== newId) {
       const p = $("pillIco").querySelector(".pico");
       if (p) {
@@ -2285,7 +2483,7 @@ function pillAnim(newId, lastText, lastId) {
       }
     }
   }
-  LAST_PILL = { id: newId, text };
+  LAST_PILL = { id: newId, text, html: pv.innerHTML };
 }
 
 // ─────────── 胶囊单击速览(方案 C:抬升卡片)───────────
@@ -2457,8 +2655,9 @@ function renderPillFace() {
   const dot = $("pillDot");
   const icoBox = $("pillIco");
   const c = PILL.list[PILL.idx];
-  // 此刻 #pillV 里还是上一次的文本 —— 先存旧值才能做翻页对比
+  // 此刻 #pillV 里还是上一次的文本 —— 先存旧值(含排版结构)才能做翻页对比
   const lastText = $("pillV").textContent;
+  const lastHtml = $("pillV").innerHTML;
   const lastId = LAST_PILL.id;
 
   if (!c) {
@@ -2473,7 +2672,7 @@ function renderPillFace() {
     // "取数失…";托盘也停在上一轮的数字上,该退回品牌图标时退不回去(报告 P1-4)
     fitPill();
     drawTrayIcon();
-    pillAnim(null, lastText, lastId);
+    pillAnim(null, lastText, lastId, lastHtml);
     return;
   }
 
@@ -2532,7 +2731,7 @@ function renderPillFace() {
 
   fitPill();
   drawTrayIcon();
-  pillAnim(c.id, lastText, lastId);
+  pillAnim(c.id, lastText, lastId, lastHtml);
 }
 
 /**
@@ -2782,7 +2981,14 @@ function hydrateWhy(root) {
     // 按钮在横向按钮行(.ccbtns)里时插到整行之后 —— 塞进 flex 行会白占一段宽度。
     const next = btn.nextElementSibling;
     const p = btn.parentElement;
-    if (p && p.classList.contains("ccbtns")) p.after(box);
+    // 蜷在按钮行里的说明块必须落在整行之后,否则会成为 flex 行的窄列(登录入口两处都这样)
+    if (
+      p &&
+      (p.classList.contains("ccbtns") ||
+        p.classList.contains("ccquick") ||
+        p.classList.contains("qoder-login-bar"))
+    )
+      p.after(box);
     else if (next && next.classList.contains("desc")) p.appendChild(box);
     else btn.after(box);
   });
@@ -2797,6 +3003,26 @@ function toggleWhy(btn) {
 }
 
 function renderChCards() {
+  const chBox = $("chList");
+  // 设置页真正的滚动容器是 #chList 所在的 .mbody(不是 #chList 自己)。
+  // 重绘会整块换掉 #chList 的子节点:滚动值、阅读锚点、输入焦点都要先记下来。
+  const scroller = chBox ? chBox.closest(".mbody") : null;
+  const keepTop = scroller ? scroller.scrollTop : 0;
+  let anchor = null;
+  if (scroller && chBox) {
+    const sr = scroller.getBoundingClientRect();
+    for (const card of chBox.querySelectorAll(".ccard[data-id]")) {
+      const r = card.getBoundingClientRect();
+      if (r.bottom > sr.top + 4) { anchor = { id: card.dataset.id, delta: r.top - sr.top }; break; }
+    }
+  }
+  const ae = document.activeElement;
+  const focusIn = !!(ae && chBox && chBox.contains(ae));
+  const focusId = focusIn && ae.id ? ae.id : null;
+  const focusAct = focusIn ? ae.getAttribute("data-act") : null;
+  const focusDataId = focusIn ? ae.getAttribute("data-id") || "" : "";
+  const focusSel = focusIn && ae.selectionStart !== undefined && ae.selectionStart !== null
+    ? { start: ae.selectionStart, end: ae.selectionEnd } : null;
   // 重绘前把已显示的密钥收回:明文不许留在 DOM 里过夜(盒子自己的计时器一起清)
   document.querySelectorAll(".reveal-box").forEach((b) => revealBoxHide(b));
   // 点别的卡上的「恢复」眼睛也会整块重建 #chList,新建输入框的 value 是空的 ——
@@ -2857,15 +3083,7 @@ function renderChCards() {
             // 国际版这条链路**会续期**(refreshToken 换 accessToken,成果存在我们自己的库里、
             // 不写回客户端文件),照抄别的 app 型渠道写"不刷新"就是错的(设计稿 §6 记过这一条)
             c.id === "workbuddy-ai" ? "只读复用本机登录,自动续期" : "只读复用本机登录,不写回、不刷新"
-          }<button class="why" data-why="appauth" aria-expanded="false" aria-label="凭据来源的说明"></button></div>` +
-          (c.id === "qoder"
-            ? // 逐包到期明细在 qoder.com 的网页会话后面(桌面 Bearer 只有汇总,
-              // 排查见 docs/product/product-qoder-credit-expiry-2026-10-30.md);
-              // 这套会话只做账务只读,签到与余额的桌面链路一概不碰
-              `<div class="mini">积分包到期明细走网页会话
-                <button class="btn s" data-act="qoderweblogin" data-id="${c.id}"${QODER_LOGGING ? " disabled" : ""}>${QODER_LOGGING ? "登录中…" : "登录网页版"}</button>
-                <button class="why" data-why="qoderweb" aria-expanded="false" aria-label="网页会话的说明"></button></div>`
-            : "")
+          }<button class="why" data-why="appauth" aria-expanded="false" aria-label="凭据来源的说明"></button></div>`
         : `<div class="ksrc" data-src="${c.id}">${srcRowHtml(c.id)}</div>
           <div class="ccbtns">
             <input type="password" id="key-${c.id}" autocomplete="off" spellcheck="false"
@@ -2924,6 +3142,18 @@ function renderChCards() {
             }">${c.hidden ? (c.autoHidden ? "显示" : "恢复") : "👁"}</button>
           <span class="ccaret">&#9654;</span>
         </div>
+        ${
+          // 逐包到期明细的登录入口**必须放在折叠体外面**(2026-11-08 用户反馈):
+          // 原来它生在 .ccbody 里,而 .ccbody 默认 display:none、要点卡片头才展开,
+          // 等于把一个"去找它"的入口藏进了第二层折叠。现在常驻卡片头下方。
+          // 国际版/国内版共用同一入口,Cookie 与会话键在 Rust 侧按渠道隔离;
+          // 这套会话只做账务只读,签到与余额的桌面链路一概不碰。
+          c.id === "qoder" || c.id === "qoder-cn"
+            ? `<div class="ccquick"><span>积分包到期明细走网页会话</span>
+                <button class="btn s" data-act="qoderweblogin" data-id="${c.id}"${QODER_LOGGING ? " disabled" : ""}>${QODER_LOGGING ? "登录中…" : "登录网页版"}</button>
+                <button class="why" data-why="qoderweb" aria-expanded="false" aria-label="网页会话的说明"></button></div>`
+            : ""
+        }
         <div class="ccbody">
           ${keyBlock}
           ${
@@ -2964,6 +3194,35 @@ function renderChCards() {
   hydrateWhy($("chList"));
   // 重绘把 .kh / .ksrc 清空了:有缓存就同步贴回去(不产生 RPC)
   paintCachedKeyMeta();
+  // 滚动位置 + 可见渠道锚点:卡片展开/收起导致高度变化时,仍停在用户正在读的那张卡
+  if (scroller) {
+    scroller.scrollTop = keepTop;
+    if (anchor) {
+      const sr2 = scroller.getBoundingClientRect();
+      for (const card of chBox.querySelectorAll(".ccard[data-id]")) {
+        if (card.dataset.id !== anchor.id) continue;
+        scroller.scrollTop += card.getBoundingClientRect().top - sr2.top - anchor.delta;
+        break;
+      }
+    }
+  }
+  // 焦点还给同一个控件(输入值由 keyDraft 回填),光标位置一并带上。
+  // 没有 id 的按钮用 data-act + data-id 找回来 —— 键盘用户按完按钮后轮询重绘不该丢焦点。
+  if (focusIn) {
+    let el = focusId ? document.getElementById(focusId) : null;
+    if ((!el || !chBox.contains(el)) && focusAct) {
+      el = Array.from(chBox.querySelectorAll("[data-act]")).find(
+        (x) => x.getAttribute("data-act") === focusAct &&
+          (x.getAttribute("data-id") || "") === focusDataId
+      ) || null;
+    }
+    if (el && chBox.contains(el)) {
+      el.focus({ preventScroll: true });
+      if (focusSel && el.setSelectionRange) {
+        try { el.setSelectionRange(focusSel.start, focusSel.end); } catch (_) {}
+      }
+    }
+  }
 }
 
 /** 轮询刷新时更新渠道卡;正在输入就不重建,免得把输入内容冲掉。 */function refreshChCards() {
@@ -3265,14 +3524,18 @@ function updateSizeClass() {
   updateLayoutUI();
 }
 
-/** 底栏与设置里的「单列 / 双列」状态同源。 */
+/** 底栏与设置里的「单列 / 双列」状态同源。
+ *  底栏那枚是**动作标签**(2026-11-08 用户裁定):显示"点下去会切到哪一档",
+ *  单列时显示「双列」、双列时显示「单列」;当前布局由布局本身与 title 说明。
+ *  设置页里的两个按钮维持"当前选中"语义(aria-pressed),不是动作。 */
 function updateLayoutUI() {
   const layout = panelLayout();
-  const label = layout === "double" ? "双列" : "单列";
+  const cur = layout === "double" ? "双列" : "单列";
+  const next = layout === "double" ? "单列" : "双列";
   const btn = $("lkLayout");
   if (btn) {
-    btn.textContent = label;
-    btn.title = `当前${label} · 点击切换为${layout === "double" ? "单列" : "双列"}`;
+    btn.textContent = next;
+    btn.title = `当前${cur} · 点击切换为${next}`;
   }
   const grp = $("cfgLayout");
   if (grp) {
@@ -3730,9 +3993,8 @@ function openManage() {
   loadCheckin();         // 签到状态(渠道卡与设置页都用)
   showTab("index");      // 默认落在索引页,31 号起不再把 7 个页签挤进 380px
   loadSyncStatus();      // 索引里的「同步到手机」需要状态摘要
-  // 键盘用户是从底栏那枚按钮进来的,而它进管理页后就被 CSS 隐藏了 ——
-  // 焦点会掉到 body,Tab 一下回到标题栏。把焦点交给页头的「← 返回」,
-  // 入口与出口方向一致(鼠标点进来时 :focus-visible 不出环,看不出差别)。
+  // 焦点交给页头的「← 返回」,入口与出口方向一致(鼠标点进来时 :focus-visible 不出环,
+  // 看不出差别)。入口本身常驻在底栏(2026-11-08),这里只是把焦点送进新页面。
   const back = $("btnBack");
   if (back) back.focus();
 }
@@ -4053,7 +4315,7 @@ $("btnBack").addEventListener("click", () => {
 const TAB_TITLES = {
   index: "设置与管理", ch: "渠道管理", ck: "每日签到", mdl: "模型与客户端",
   disp: "外观与显示", run: "刷新与启动", vault: "密钥箱", about: "关于与诊断",
-  sync: "同步到手机",
+  sync: "同步到手机", gateway: "本地模型网关",
 };
 const FONT_NAME = { md: "标准", lg: "大", xl: "特大" };
 const SORT_NAME = {
@@ -4095,6 +4357,7 @@ function renderManageIndex() {
     row("disp", "i-display", "外观与显示", `${theme}主题 · ${font}字号 · ${compact} · 排序: ${sort}`, "disp"),
     row("run", "i-refresh", "刷新与启动", run, "run"),
     row("vault", "i-key", "密钥箱", "查看、新增与管理本机密钥", "vault"),
+    row("gateway", "i-layers", "本地模型网关", "汇总模型 · 本机或局域网调用"),
     row("sync", "i-sync", "同步到手机", syncSummary(), "sync"),
     row("about", "i-info", "关于与诊断", about),
   ].join("");
@@ -4163,6 +4426,7 @@ function showTab(name) {
     loadVault();
   }
   if (name === "sync") loadSyncStatus();
+  if (name === "gateway") loadGateway();
 }
 $("mIndexList").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-p]");
@@ -4935,7 +5199,12 @@ $("lkLayout").addEventListener("click", (e) => {
   e.stopPropagation();
   togglePanelLayout();
 });
-$("lkKeys").addEventListener("click", openManage);
+$("lkKeys").addEventListener("click", () => {
+  // 入口常驻(2026-11-08):管理页里也固定显示。已在管理页时再点**不重置**,
+  // 不把用户正在读的子页抖回索引页
+  if (manageOpen()) return;
+  openManage();
+});
 // 紧凑条上的两个方向:展开一级 / 再收一级
 $("btnExpand").addEventListener("click", () => applyForm("panel"));
 $("btnToPill").addEventListener("click", () => applyForm("pill"));
@@ -5127,6 +5396,8 @@ $("manage").addEventListener("input", (e) => {
       label: val("vLabel"),
       key: val("vKey"),
       note: val("vNote"),
+      apiEndpoint: val("vEndpoint"),
+      website: val("vWebsite"),
     };
   }
 });
@@ -5211,18 +5482,6 @@ $("manage").addEventListener("click", async (e) => {
     } else {
       showToast("打开一次 Trae 即可(它自己会续期)");
     }
-    return;
-  }
-  if (a === "mdlfilter") {
-    const f = act.dataset.f;
-    MDL.f[f] = !MDL.f[f];
-    act.classList.toggle("on", MDL.f[f]);
-    // 「只看编码/对话」= !modelShowAll,顺手持久化,下次打开还是这个口径
-    if (f === "chat") {
-      CFG.modelShowAll = !MDL.f.chat;
-      saveCfg();
-    }
-    renderModels();
     return;
   }
   if (a === "mdlcli") {
@@ -5359,7 +5618,7 @@ $("manage").addEventListener("click", async (e) => {
     card.classList.toggle("open");
     card.classList.contains("open") ? cardOpen.add(id) : cardOpen.delete(id);
   } else if (a === "vnew") {
-    VAULT_EDIT = { platform: act.dataset.id || "", label: "", key: "", note: "" };
+    VAULT_EDIT = { platform: act.dataset.id || "", label: "", key: "", note: "", apiEndpoint: "", website: "" };
     VAULT_DRAFT = null; // 换目标就丢草稿,不然会拿上一张表单里敲的内容回填(F4)
     renderVault();
     focusVaultForm();
@@ -5372,7 +5631,7 @@ $("manage").addEventListener("click", async (e) => {
   } else if (a === "vedit") {
     const it = VAULT.find((x) => x.id === id);
     if (it) {
-      VAULT_EDIT = { id: it.id, platform: it.platform, label: it.label, key: "", note: it.note };
+      VAULT_EDIT = { id: it.id, platform: it.platform, label: it.label, key: "", note: it.note, apiEndpoint: it.apiEndpoint || "", website: it.website || "" };
       VAULT_DRAFT = null; // 同上:改另一条时以它自己的值为准
       renderVault();
       focusVaultForm();
@@ -5556,16 +5815,7 @@ $("manage").addEventListener("click", async (e) => {
     refreshChCards();
     await saveConfigAndRefresh(); // 隐藏即停止取数:重取一轮,汇总/胶囊/底栏同步
   } else if (a === "qoderweblogin") {
-    // 打开 Qoder 网页登录窗(逐包到期明细用)。结果走 qoderweb-login 事件,
-    // 与 WorkBuddy 同构:登录窗自动关,前端只管状态与提示。
-    try {
-      await invoke("qoderweb_login");
-      QODER_LOGGING = true;
-      renderChCards();
-      showToast("登录窗口已打开 · 完成登录后会自动关窗");
-    } catch (err) {
-      showToast("打不开登录窗口:" + err, true);
-    }
+    await qoderWebLogin(id);
   } else if (a === "wblogin") {
     // 打开 WorkBuddy 网页登录窗。令牌由 Rust 侧从窗口导航里接住,前端只负责状态与提示,
     // 结果走 workbuddy-login 事件(成功/取消/失败都从那里回)。
@@ -6530,8 +6780,9 @@ let vaultRevealTimer = null;
 // 后者才是"去新增一把"。把故障画成空态会让用户以为密钥全丢了(F3,
 // 与渠道卡 1417-1419 的「凭据库读取失败」同一条纪律)。
 let VAULT_ERR = "";
+let VAULT_SAVING = false;
 
-const VAULT_PLATFORM_HINT = ["4SAPI", "Hapi", "OpenCode Go", "DeepSeek", "OpenAI", "Anthropic", "Gemini", "Moonshot", "智谱", "阿里云百炼", "腾讯", "火山引擎"];
+const VAULT_PLATFORM_HINT = ["4SAPI", "Hapi", "OpenCode Go", "DeepSeek", "OpenAI", "Anthropic", "Gemini", "Moonshot", "智谱", "阿里云百炼", "腾讯", "火山引擎", "书生端砚"];
 
 async function loadVault() {
   try {
@@ -6572,7 +6823,7 @@ function flashVaultRow(id) {
 function vaultGrouped() {
   const out = new Map();
   for (const it of VAULT) {
-    if (VAULT_Q && !`${it.platform} ${it.label} ${it.note} ${it.hint}`.toLowerCase().includes(VAULT_Q.toLowerCase())) continue;
+    if (VAULT_Q && !`${it.platform} ${it.label} ${it.note} ${it.hint} ${it.apiEndpoint || ""} ${it.website || ""}`.toLowerCase().includes(VAULT_Q.toLowerCase())) continue;
     if (!out.has(it.platform)) out.set(it.platform, []);
     out.get(it.platform).push(it);
   }
@@ -6594,13 +6845,16 @@ function renderVault() {
         <div class="vform-head"><b>${e.id ? "编辑密钥" : "新增密钥"}</b><span>${
         e.id ? "密钥留空 = 不改这把" : "保存后列表只留尾 4 位"
       }</span></div>
-        <div class="vf"><span>平台</span><input class="inp" id="vPlat" list="vPlatList" value="${esc(d ? d.platform : e.platform)}" placeholder="如 4SAPI">
-          <datalist id="vPlatList">${VAULT_PLATFORM_HINT.map((p) => `<option value="${esc(p)}">`).join("")}</datalist></div>
-        <div class="vf"><span>标签</span><input class="inp" id="vLabel" value="${esc(d ? d.label : e.label)}" placeholder="如 主号 / 备用"></div>
+        <div class="vf"><span>选择平台</span><select class="sel" id="vPlatSelect"><option value="">选择平台或自行输入</option>${[...new Set([...VAULT.map(x => x.platform), ...VAULT_PLATFORM_HINT])].map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join("")}</select></div>
+        <div class="vf"><span>平台名称</span><input class="inp" id="vPlat" list="vPlatList" value="${esc(d ? d.platform : e.platform)}" placeholder="选择或输入新平台">
+          <datalist id="vPlatList">${[...new Set([...VAULT.map(x => x.platform), ...VAULT_PLATFORM_HINT])].map((p) => `<option value="${esc(p)}">`).join("")}</datalist></div>
+        <div class="vf"><span>分组</span><input class="inp" id="vLabel" value="${esc(d ? d.label : e.label)}" placeholder="如 主账号 / 工作"></div>
         <div class="vf"><span>密钥</span><input class="inp" id="vKey" type="password" autocomplete="off" value="${esc(
           d ? d.key : ""
         )}" placeholder="${e.id ? "留空 = 不改这把" : "粘贴密钥"}"></div>
-        <div class="vf"><span>备注</span><input class="inp" id="vNote" value="${esc(d ? d.note : e.note)}" placeholder="选填,如 充值用的那个"></div>
+        <div class="vf"><span>账号</span><input class="inp" id="vNote" value="${esc(d ? d.note : e.note)}" placeholder="选填，如邮箱或账号名"></div>
+        <div class="vf"><span>调用端点</span><input class="inp" id="vEndpoint" type="url" value="${esc(d ? d.apiEndpoint : e.apiEndpoint || "")}" placeholder="选填，如 https://example.com/v1"></div>
+        <div class="vf"><span>官网地址</span><input class="inp" id="vWebsite" type="url" value="${esc(d ? d.website : e.website || "")}" placeholder="选填，如 https://example.com"></div>
         <div class="vform-acts">
           <button class="btn p" data-act="vsave">保存</button>
           <button class="btn" data-act="vcancel">取消</button>
@@ -6609,6 +6863,8 @@ function renderVault() {
       </div>`
     : "";
 
+  const platformSelect = $("vPlatSelect");
+  if (platformSelect) platformSelect.onchange = () => { if (!platformSelect.value) return; const input = $("vPlat"); input.value = platformSelect.value; input.dispatchEvent(new Event("input", { bubbles: true })); };
   const qclear = $("vaultQClear");
   if (qclear) qclear.hidden = !VAULT_Q;
 
@@ -6643,7 +6899,7 @@ function renderVault() {
   if (!groups.size) {
     list.innerHTML = `<div class="empty"><div class="ek"><svg aria-hidden="true"><use href="#i-search"/></svg></div>
       <b>没有匹配的条目</b>
-      <span>「${esc(VAULT_Q)}」没有命中平台、标签、备注或尾号。</span>
+      <span>「${esc(VAULT_Q)}」没有命中平台、分组、账号、地址或尾号。</span>
       <div><button class="btn" data-act="vqclear">清除搜索</button></div></div>`;
     return;
   }
@@ -6663,14 +6919,12 @@ function renderVault() {
             <div class="vrow" data-id="${esc(it.id)}">
               <div class="vrow-main">
                 <div class="vrow-t"><b>${esc(it.label)}</b><span class="vrow-hint">${esc(it.hint)}</span></div>
-                ${it.note ? `<div class="vrow-sub">${esc(it.note)}</div>` : ""}
+                ${it.note ? `<div class="vrow-sub">账号：${esc(it.note)}</div>` : ""}
+                ${it.apiEndpoint ? `<div class="vrow-sub">调用端点：${esc(it.apiEndpoint)}</div>` : ""}
+                ${it.website ? `<div class="vrow-sub">官网：${esc(it.website)}</div>` : ""}
                 <div class="vrow-sub vrow-meta">
                   <span>${created} 建${updated ? " · " + updated : ""}</span>
-                  <span class="vrow-ref${refs.length ? " on" : ""}">${
-                    refs.length
-                      ? "正被 " + esc(refs.map((c) => channelName(c)).join("、")) + " 使用"
-                      : "未被任何渠道使用"
-                  }</span>
+                  ${refs.length ? `<span class="vrow-ref on">正被 ${esc(refs.map((c) => channelName(c)).join("、"))} 使用</span>` : ""}
                 </div>
               </div>
               <div class="vrow-acts">
@@ -6697,14 +6951,19 @@ function renderVault() {
 /** 把表单里的内容提交(新建或改名/改备注/换密钥)。 */
 async function vaultSave() {
   const e = VAULT_EDIT;
-  if (!e) return;
+  if (!e || VAULT_SAVING) return;
   const payload = {
     id: e.id || null,
     platform: ($("vPlat").value || "").trim(),
     label: ($("vLabel").value || "").trim(),
     key: ($("vKey").value || "").trim(),
     note: ($("vNote").value || "").trim(),
+    apiEndpoint: ($("vEndpoint").value || "").trim(),
+    website: ($("vWebsite").value || "").trim(),
   };
+  VAULT_SAVING = true;
+  const saveButton = document.querySelector('#vaultForm [data-act="vsave"]');
+  if (saveButton) saveButton.disabled = true;
   try {
     const saved = await invoke("vault_save", { item: payload });
     VAULT_EDIT = null;
@@ -6726,6 +6985,10 @@ async function vaultSave() {
     if (manageOpen()) await fillKeySources(true);
   } catch (err) {
     showToast(String(err), true);
+  } finally {
+    VAULT_SAVING = false;
+    const button = document.querySelector('#vaultForm [data-act="vsave"]');
+    if (button) button.disabled = false;
   }
 }
 
@@ -6750,6 +7013,23 @@ function vaultDel(id) {
 //   ② **不把"点了按钮"说成"领到了"**:数额只显示平台自己给的字段,拿不到就不写数字;
 //   ③ 签到状态**不参与余额渲染** —— 签到失败永远不可能让余额显示成 0。
 let QODER_LOGGING = false; // 「登录网页版」正在跑(逐包到期会话,qoderweb-login 事件收尾)
+
+/**
+ * 打开 Qoder 网页登录窗(逐包到期明细用)。设置页卡片与详情弹层共用这一个入口。
+ * 结果走 qoderweb-login 事件:登录窗自动关,前端只管按钮与提示。
+ * **必须带 id**:国际版与国内版是两套账号,后端据此选站点/Cookie 域/会话键。
+ */
+async function qoderWebLogin(id) {
+  try {
+    await invoke("qoderweb_login", { id });
+    QODER_LOGGING = true;
+    renderChCards();
+    if (DETAIL_ID) renderDetailSheet();
+    showToast("登录窗口已打开 · 完成登录后会自动关窗");
+  } catch (err) {
+    showToast("打不开登录窗口:" + err, true);
+  }
+}
 let CK = {};            // 渠道 id → checkin_state 的那一条
 let CK_LOG = false;     // 「领取」正在跑
 let CK_ACTIVITY_FILTER = "all";
@@ -7267,6 +7547,7 @@ function renderActivityOverview() {
 // 设计见 docs/product/product-checkin-center-2026-10-29.md。五段:今日总览 + 逐渠道行 /
 // 活动状态 / 近 30 天日历带 / 明细流水(90 天)/ 管理开关。首页签到格与多渠道待签
 // 提示条都落到这里(格子 = 看,提示条 = 办,职责分开)。
+const CK_CENTER_OPEN = new Set(); // 刷新状态时保留用户展开的分区
 let CKH = null;          // checkin_history 的返回(日历带 + 明细表)
 let CKH_SEQ = 0;         // 与 loadCheckin 同一个道理:晚到的旧快照不许盖新的
 let CKH_FILTER = "all";  // 明细表的渠道筛选
@@ -7351,7 +7632,20 @@ function renderCheckinCenter() {
     return;
   }
   box.innerHTML =
-    '<div id="ckTodayBox"></div><div id="ckActsBox"></div><div id="ckHistBox"></div><div id="ckManageBox"></div>';
+    '<div id="ckTodayBox"></div>' +
+    [['activity', '活动详情', '查看活动与领取状态', 'ckActsBox'],
+     ['history', '签到记录', '近 30 天概览与 90 天明细', 'ckHistBox'],
+     ['settings', '签到设置', '管理监测与自动领取', 'ckManageBox']]
+      .map(([key, title, hint, id]) => '<details class="ck-fold" data-ck-section="' + key + '"' +
+        (CK_CENTER_OPEN.has(key) ? ' open' : '') + '><summary><span><b>' + title +
+        '</b><small>' + hint + '</small></span></summary><div class="ck-fold-body" id="' + id + '"></div></details>')
+      .join('');
+  box.querySelectorAll('[data-ck-section]').forEach((section) => {
+    section.addEventListener('toggle', () => {
+      if (section.open) CK_CENTER_OPEN.add(section.dataset.ckSection);
+      else CK_CENTER_OPEN.delete(section.dataset.ckSection);
+    });
+  });
   renderCkToday();
   renderCkActs();
   renderCkHist();
@@ -7371,18 +7665,12 @@ function renderCkToday() {
   const all = done >= ids.length;
   const month = ids.reduce((n, id) => n + ((CK[id] && CK[id].monthCredits) || 0), 0);
   const tone = all ? " ok" : ids.some((id) => CK[id] && CK[id].needsUser) ? " warn" : "";
-  const segs = ids
-    .map((id) =>
-      '<button type="button" class="cksi' + (CK[id] && CK[id].doneToday ? " on" : "") +
-      '" data-act="ckjump" data-id="' + esc(id) + '" aria-label="' + esc((CK[id] && CK[id].name) || id) + '" title="' +
-      esc((CK[id] && CK[id].name) || id) + '"></button>')
-    .join("");
   // 没签的排前面 —— 从别处跳进来的人,要看的正是没签的那几行
   const order = ids.slice().sort((a, b) => (CK[a].doneToday ? 1 : 0) - (CK[b].doneToday ? 1 : 0));
   box.innerHTML =
-    '<div class="cksec"><h4>今日</h4>' +
-    '<div class="cktoday' + tone + '"><b>' + (all ? "✓ " : "") + done + "/" + ids.length +
-    '</b><span>本月已领 ' + points(month) + ' 分</span><span class="ckseg">' + segs + "</span></div>" +
+    '<div class="cksec cktoday-section"><h4>今日签到</h4>' +
+    '<div class="cktoday' + tone + '"><b>' + (all ? "✓ " : "今日进度 ") + done + "/" + ids.length +
+    '</b><span>本月已领 ' + points(month) + ' 分</span></div>' +
     order
       .map(
         (id) =>
@@ -7569,7 +7857,6 @@ const MDL = {
   stateError: "",            // inject_state 失败原因(与"没装客户端"分开显示)
   log: [],                   // 写入台账(不含密钥)
   q: "",                     // 搜索词
-  f: { chat: true },         // 芯片只剩「只看编码/对话」;「只列能用上的」是固定规则
   sheet: null,               // 当前弹层内容(预告 / 结果 / 客户端详情)
   loading: false,
 };
@@ -7643,7 +7930,6 @@ function mdlVisibleRows() {
   for (const r of v.rows || []) {
     const useful = knowUsable ? r.usable === true || done.has(r.id) : done.has(r.id);
     if (!useful) continue;
-    if (MDL.f.chat && !r.chat) continue;
     if (q) {
       const hay = (
         r.id + " " + (r.vendor || "") + " " + (r.tags || []).join(" ") + " " + (r.description || "")
@@ -7763,8 +8049,7 @@ function renderModelsInner() {
   const chips = MDL.sources
     .map((s) => {
       const v = MDL.views[s.id];
-      const n = v ? v.total : null;
-      const sub = v ? (n ? n + " 个" : "—") : "—";
+      const sub = !v ? "—" : v.usableAt ? v.usableCount + " 个可用" : "可用数未知";
       return (
         '<div class="srcbar-i' + (s.id === MDL.src ? " on" : "") + '" data-act="mdlsrc" data-id="' +
         esc(s.id) + '" title="' + esc(s.name) + '">' + esc(s.name) + "<i>" + esc(sub) + "</i></div>"
@@ -7799,7 +8084,7 @@ function renderModelsInner() {
     (v.hasPrice ? "单价按站点自动分组折算" : isGo ? "订阅制:不按 token 计价" : "该来源不提供单价") +
     "</span></div>" +
     '<div class="mrow1"><span class="dim">显示 ' + rows.length +
-    (v.usableCount ? " · 可用 " + v.usableCount : "") +
+    (v.usableAt ? " · 可用 " + v.usableCount : " · 可用数未知") +
     " · 已配置 " + done.size + "</span>" +
     '<span class="dim">' +
     (v.fetchedAt ? "清单 " + relTime(v.fetchedAt) + " · " : "") +
@@ -7820,7 +8105,6 @@ function renderModelsInner() {
           (v.hasKey || v.listPublic ? "(刷新试试)" : ":先在「渠道」页签填密钥") +
           " —— 按规则这里只显示已配置的那几条"
         : "没有符合条件的模型" +
-          (MDL.f.chat ? "(「只看编码/对话」排掉了图像/视频/音频/向量模型)" : "") +
           " —— 只列这个来源能用的、以及已经配到客户端的") +
       "</div>";
 }
@@ -8266,9 +8550,6 @@ async function pickSource(id) {
 }
 /** 打开模型页签;带来源时直接切过去(渠道行的「去挑模型」用的就是这个)。 */
 async function ensureModels(source) {
-  MDL.f.chat = !CFG.modelShowAll;
-  const chip = document.querySelector('#mdlF .pick[data-f="chat"]');
-  if (chip) chip.classList.toggle("on", MDL.f.chat);
   if (!MDL.clients.length) await loadInjects();
   const want = source || MDL.src || "4sapi";
   if (!MDL.src) MDL.src = want;
@@ -8458,13 +8739,16 @@ function applyChannelsPush(payload) {
   listen("qoderweb-login", (ev) => {
     QODER_LOGGING = false;
     const p = ev.payload || {};
+    const name = p.id === "qoder-cn" ? "Qoder 国内版" : "Qoder";
     // ok + detail = 会话确实被平台接受了,但逐包结构还没认出来:不许说成"失败",
     // 也不许说成"明细已刷新" —— 两句都是假话(2026-11-03 真机,见 core::qoderweb)。
     if (p.ok && p.detail) showToast(p.detail);
-    else if (p.ok) showToast("已登录 Qoder 网页 · 积分明细已刷新");
+    else if (p.ok) showToast(`已登录 ${name} 网页 · 积分明细已刷新`);
     else if (p.cancelled) showToast("已取消登录");
     else showToast(p.reason || "登录没成功,请再试一次", true);
     renderChCards();
+    // 详情开着时把按钮状态一起换掉:成功且拿到明细后 qoderLoginBar 会自己消失
+    if (DETAIL_ID) renderDetailSheet();
   });
   listen("workbuddy-login", (ev) => {
     WB_LOGGING = false;
@@ -8492,3 +8776,122 @@ function applyChannelsPush(payload) {
   setTimeout(() => checkUpdate(false), 30_000);
   setInterval(() => checkUpdate(false), 10 * 60 * 1000);
 })();
+
+/* AI 优惠：RSS 摘要与本机已读状态。 */
+(() => {
+  const key = "promo-feed-v1";
+  let state = { items: [], seen: [], updated: 0, initialized: false };
+  try { state = { ...state, ...JSON.parse(localStorage.getItem(key) || "{}") }; } catch (_) {}
+  let busy = false, failed = false, filter = "all", query = "", scroll = 0;
+  const expanded = new Set();
+  const save = () => { try { localStorage.setItem(key, JSON.stringify(state)); } catch (_) {} };
+  const unread = item => !state.seen.includes(item.id);
+  const date = value => { const d = new Date(value); return Number.isNaN(d.getTime()) ? "" : d.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }); };
+  function entry() {
+    const count = state.items.filter(unread).length;
+    $("promoEntry").textContent = "AI 优惠" + (count ? " · " + (count > 99 ? "99+" : count) + " 条新" : failed ? " · 更新失败" : "");
+    $("promoEntry").classList.toggle("has-new", count > 0);
+    $("promoEntry").title = "查看 AI 工具优惠" + (state.updated ? " · 上次更新 " + date(state.updated) : "");
+  }
+  function render() {
+    entry();
+    if ($("promoOverlay").hidden) return;
+    const content = $("promoContent");
+    $("promoHeading").textContent = "AI 优惠";
+    $("promoRefresh").disabled = busy;
+    $("promoRefresh").textContent = busy ? "更新中…" : "刷新";
+    const list = state.items.filter(x => (filter === "all" || unread(x)) && (x.title + " " + x.description).toLowerCase().includes(query.toLowerCase()));
+    content.innerHTML = `<div class="promo-tools"><input id="promoSearch" type="search" placeholder="搜索优惠或工具名称" value="${esc(query)}" aria-label="搜索优惠"><div><button class="btn ${filter === "all" ? "p" : ""}" data-filter="all">全部</button> <button class="btn ${filter === "unread" ? "p" : ""}" data-filter="unread">未读</button></div></div>${failed ? `<p class="promo-meta">更新失败${state.updated ? " · 上次更新 " + esc(date(state.updated)) : "，请检查网络后重试"}</p>` : ""}<div class="promo-list">${list.map(x => `<article class="promo-item" data-id="${esc(x.id)}"><button class="promo-title" data-open="${esc(x.id)}">${unread(x) ? '<span class="promo-dot"></span>' : ""}${esc(x.title)} ↗</button><p class="promo-text${expanded.has(x.id) ? " expanded" : ""}">${esc(x.description)}</p><button class="promo-toggle" data-toggle="${esc(x.id)}" aria-expanded="${expanded.has(x.id)}" hidden>${expanded.has(x.id) ? "收起" : "展开"}</button><small class="promo-date">发布于 ${esc(date(x.date)) || "时间未知"}</small></article>`).join("") || `<p class="promo-empty">${busy && !state.items.length ? "正在加载优惠…" : filter === "unread" && !query ? "暂无未读优惠" : "没有匹配的优惠"}</p>`}</div>`;
+    content.querySelectorAll(".promo-item").forEach(row => {
+      const text = row.querySelector(".promo-text"), toggle = row.querySelector(".promo-toggle");
+      const isExpanded = text.classList.contains("expanded");
+      if (isExpanded) text.classList.remove("expanded");
+      toggle.hidden = text.scrollHeight <= text.clientHeight + 1;
+      if (isExpanded) text.classList.add("expanded");
+    });
+    $("promoSearch").oninput = e => { query = e.target.value; const start = e.target.selectionStart; render(); $("promoSearch").focus(); $("promoSearch").setSelectionRange(start, start); };
+    content.querySelectorAll("[data-filter]").forEach(b => b.onclick = () => { filter = b.dataset.filter; scroll = 0; render(); });
+    content.querySelectorAll("[data-open]").forEach(b => b.onclick = async () => {
+      const item = state.items.find(x => x.id === b.dataset.open);
+      if (!item) return;
+      try {
+        await invoke("open_promo_url", { url: item.link });
+        scroll = content.scrollTop;
+        if (unread(item)) state.seen.push(item.id);
+        save(); render();
+      } catch (_) { showToast("无法打开详情，请重试", true); }
+    });
+    content.querySelectorAll("[data-toggle]").forEach(b => b.onclick = () => {
+      scroll = content.scrollTop;
+      if (expanded.has(b.dataset.toggle)) expanded.delete(b.dataset.toggle); else expanded.add(b.dataset.toggle);
+      render();
+    });
+    content.scrollTop = scroll;
+  }
+  async function refresh() {
+    if (busy) return;
+    busy = true; render();
+    try {
+      const xml = new DOMParser().parseFromString(await invoke("fetch_promo_feed"), "application/xml");
+      if (xml.querySelector("parsererror") || !xml.querySelector("channel")) throw Error("invalid feed");
+      const field = (node, name) => node.querySelector(name)?.textContent?.trim() || "";
+      const items = Array.from(xml.querySelectorAll("channel > item")).map(n => ({ title: field(n, "title"), description: field(n, "description"), link: field(n, "link"), id: field(n, "guid") || field(n, "link"), date: field(n, "pubDate") })).filter(x => x.id && x.title && x.link);
+      if (!items.length) throw Error("empty feed");
+      if (!state.initialized) state.seen = items.map(x => x.id);
+      state.items = items.sort((a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0));
+      state.seen = state.seen.filter(id => items.some(x => x.id === id));
+      state.initialized = true; state.updated = Date.now(); failed = false; save();
+    } catch (_) { failed = true; }
+    busy = false; render();
+  }
+  $("promoEntry").onclick = () => { $("promoOverlay").hidden = false; render(); if (!state.updated || Date.now() - state.updated > 1800000) refresh(); };
+  $("promoBack").onclick = () => { $("promoOverlay").hidden = true; $("promoEntry").focus(); };
+  $("promoRefresh").onclick = refresh;
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("promoOverlay").hidden) $("promoBack").click(); });
+  entry();
+  if (!state.updated || Date.now() - state.updated > 1800000) setTimeout(refresh, 1000);
+  setInterval(refresh, 1800000);
+})();
+
+
+// 本地模型网关：不把上游密钥传到页面。
+let GW = null;
+let GW_BUSY = false;
+async function loadGateway() {
+  try { GW = await invoke("gateway_status"); renderGateway(); }
+  catch (e) { $("gatewayBox").innerHTML = '<div class="empty">读取网关失败：' + esc(String(e)) + '</div>'; }
+}
+function renderGateway() {
+  const box = $("gatewayBox"); if (!box || !GW) return;
+  const items = GW.channels || [], vault = GW.vault || [];
+  const rows = items.map(c => `<div class="gw-channel"><div><b>${esc(c.label || c.alias)}</b><span>${esc(c.source)} / ${esc(c.alias)} · ${c.stale ? "密钥已变更，请刷新" : c.count + " 个模型"}</span></div><button class="btn" data-gw="refresh" data-id="${esc(c.vaultId)}">刷新</button><button class="btn" data-gw="remove" data-id="${esc(c.vaultId)}">下架</button></div>`).join("");
+  const options = vault.filter(v => !items.some(c => c.vaultId === v.id)).map(v => `<option value="${esc(v.id)}">${esc(v.platform)} · ${esc(v.label)} ${esc(v.hint)}</option>`).join("");
+  const modelRows = items.filter(c => !c.stale).flatMap(c => c.models).map(id => `<div class="gw-model">${esc(id)}</div>`).join("");
+  box.innerHTML = `<div class="gw-state"><b>${GW.running ? "● 运行中" : "○ 已停止"}</b><button class="btn p" data-gw="${GW.running ? "stop" : "start"}" ${GW_BUSY ? "disabled" : ""}>${GW.running ? "停止网关" : "启动网关"}</button></div>
+    <div class="field"><span>监听端口<span class="desc">修改设置后启动生效</span></span><input class="sel" id="gwPort" type="number" min="1" max="65535" value="${GW.port}" ${GW.running ? "disabled" : ""}></div>
+    <div class="field"><span>允许局域网访问<span class="desc">开启后必须使用网关密钥</span></span><input id="gwLan" type="checkbox" ${GW.lan ? "checked" : ""} ${GW.running ? "disabled" : ""}></div>
+    <div class="field"><span>需要网关密钥<span class="desc">局域网访问必须开启</span></span><input id="gwAuth" type="checkbox" ${GW.auth ? "checked" : ""} ${GW.running || GW.lan ? "disabled" : ""}></div>
+    <div class="gw-address"><span>本机地址</span><code>http://127.0.0.1:${GW.port}/v1</code><button class="btn" data-gw="copy-local">复制</button></div>
+    ${GW.lan ? `<div class="gw-address"><span>局域网地址</span>${(GW.lanIps || []).length ? `<select class="sel" id="gwLanIp">${GW.lanIps.map(i => `<option value="${esc(i.address)}">${esc(i.name)} · http://${esc(i.address)}:${GW.port}/v1</option>`).join("")}</select><button class="btn" data-gw="copy-lan">复制</button>` : "未检测到地址"}</div><p class="khint">仅在可信局域网使用；其他设备无法连接时请检查 Windows 防火墙。HTTP 传输未加密。</p>` : ""}
+    <div class="acts"><button class="btn" data-gw="copy-secret">复制网关密钥</button><button class="btn" data-gw="rotate-secret">重新生成密钥</button></div>
+    <h4>已上架密钥</h4>${rows || '<p class="khint">还没有上架密钥</p>'}
+    <h4>添加密钥</h4><div class="gw-add"><select class="sel" id="gwVault"><option value="">选择密钥箱条目</option>${options}</select><select class="sel" id="gwSource"><option value="hapi">Hapi</option><option value="gemini">Gemini</option><option value="inkstone">书生端砚</option></select><input class="inp" id="gwAlias" placeholder="英文别名，如 main" maxlength="32"><button class="btn p" data-gw="publish" ${GW_BUSY ? "disabled" : ""}>上架</button></div>
+    <p class="khint">上架会读取该密钥的模型清单；下架不会删除密钥。Gemini 列表依服务商返回，模型实际权限以调用结果为准。</p>
+    <details class="ck-fold"><summary>模型列表 · ${items.filter(c=>!c.stale).reduce((n,c)=>n+c.count,0)} 个</summary><div class="gw-models">${modelRows || '暂无模型'}</div></details>`;
+  const lan = $("gwLan"), auth = $("gwAuth"); lan.onchange = () => { if (lan.checked) auth.checked = true; auth.disabled = lan.checked || GW.running; };
+  $("gwVault").onchange = e => { const item = vault.find(v => v.id === e.target.value); if (!item) return; const p = item.platform.toLowerCase(); if (p.includes("gemini")) $("gwSource").value = "gemini"; else if (p.includes("书生") || p.includes("端砚")) $("gwSource").value = "inkstone"; else if (p.includes("hapi")) $("gwSource").value = "hapi"; };
+}
+$("gatewayBox").addEventListener("click", async e => {
+  const b = e.target.closest("[data-gw]"); if (!b || GW_BUSY) return; const action = b.dataset.gw;
+  try {
+    if (action === "copy-local" || action === "copy-lan") { const ip = action === "copy-local" ? "127.0.0.1" : $("gwLanIp").value; await invoke("copy_text", {text:`http://${ip}:${GW.port}/v1`}); showToast("地址已复制"); return; }
+    if (action === "copy-secret" || action === "rotate-secret") { if (action === "rotate-secret" && !confirm("重新生成后旧网关密钥立即失效，继续吗？")) return; const text = await invoke("gateway_secret", {rotate:action === "rotate-secret"}); await invoke("copy_text", {text}); showToast("网关密钥已复制"); return; }
+    GW_BUSY = true; b.disabled = true;
+    if (action === "start") { const port=Number($("gwPort").value); if (!Number.isInteger(port) || port < 1 || port > 65535) throw Error("请输入 1 到 65535 的端口"); await invoke("gateway_start", {port, lan:$("gwLan").checked, auth:$("gwAuth").checked}); }
+    if (action === "stop") await invoke("gateway_stop");
+    if (action === "remove") await invoke("gateway_unpublish", {vaultId:b.dataset.id});
+    if (action === "publish" || action === "refresh") { const c = action === "refresh" ? GW.channels.find(x=>x.vaultId===b.dataset.id) : null; const vaultId=c ? c.vaultId : $("gwVault").value, source=c ? c.source : $("gwSource").value, alias=c ? c.alias : $("gwAlias").value; if (!vaultId || !alias.trim()) throw Error("请选择密钥并填写英文别名"); await invoke("gateway_publish", {vaultId,source,alias}); }
+    GW_BUSY = false; await loadGateway();
+  } catch (err) { showToast(String(err), true); b.disabled = false; }
+  finally { GW_BUSY = false; }
+});

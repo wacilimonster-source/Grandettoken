@@ -1,5 +1,7 @@
 // 验证「Qoder 逐包到期」:CDP 连真机。断言:
-// ① 渠道卡有「登录网页版」且只有 qoder 有;② 点它开 qoder-login 窗;
+// ① 渠道卡有「登录网页版」——2026-11-08 起国际版与国内版都有,别的渠道没有;
+//    且入口常驻折叠体**外**的 .ccquick(原来藏进 .ccbody,用户找不到);
+// ② 点它开 qoder-login 窗;
 // ③ 无会话时明细卡的「逐笔到期明细」引导行如实出现;④ 有会话时 expiring 真数据(若用户已登录)。
 const PORT = Number(process.argv[2] || process.env.CDP_PORT || 9222);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -33,11 +35,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     await sleep(300);
     const card = JSON.parse(await evalJs(`JSON.stringify({
       q: !!document.querySelector('#chList .ccard[data-id="qoder"]'),
+      qcn: !!document.querySelector('#chList .ccard[data-id="qoder-cn"]'),
       btn: !!document.querySelector('#chList .ccard[data-id="qoder"] [data-act="qoderweblogin"]'),
-      other: !!document.querySelector('#chList .ccard:not([data-id="qoder"]) [data-act="qoderweblogin"]'),
+      btnCn: !!document.querySelector('#chList .ccard[data-id="qoder-cn"] [data-act="qoderweblogin"]'),
+      // 入口必须常驻在 .ccbody 之外(折叠体默认 display:none,藏进去等于没有)
+      outside: !!document.querySelector('#chList .ccard[data-id="qoder"] .ccquick [data-act="qoderweblogin"]'),
+      other: !!document.querySelector('#chList .ccard:not([data-id="qoder"]):not([data-id="qoder-cn"]) [data-act="qoderweblogin"]'),
       why: !!document.querySelector('#chList [data-why="qoderweb"][data-for]'),
     })`));
     check('qoder 渠道卡在场且有「登录网页版」', card.q && card.btn);
+    check('qoder-cn 渠道卡也有「登录网页版」', card.qcn && card.btnCn);
+    check('入口在折叠体外的 .ccquick 常驻条里', card.outside);
     check('别的渠道没有该入口', !card.other);
     check('「?」说明已水合', card.why);
 
@@ -50,17 +58,22 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     })`));
     check('点登录后进入登录中状态', win.logging === true, JSON.stringify(win));
 
-    // 无会话 / 会话无效时的降级文案(取数一轮后看 extra)
+    // 无会话 / 会话无效时的降级文案(取数一轮后看 extra)。
+    // 引导行只在**桌面凭据有效**的 Qoder 区上写(fetch.rs:valid 才进逐包链),
+    // 本机哪个区有效就断言哪个区 —— 两个区都是合法现场(2026-11-08 起国内版同链)。
     const extra = JSON.parse(await evalJs(`(async () => {
       const vs = await invoke("get_channels");
-      const q = vs.find((c) => c.id === "qoder") || {};
-      return JSON.stringify({ extra: q.extra || [], expiryComplete: q.expiryComplete, expiring: (q.expiring || []).length });
+      const qs = vs.filter((c) => c.id === "qoder" || c.id === "qoder-cn");
+      const q = qs.find((c) => c.valid) || qs[0] || {};
+      return JSON.stringify({ which: q.id, valid: q.valid,
+        extra: q.extra || [], expiryComplete: q.expiryComplete, expiring: (q.expiring || []).length });
     })()`, true));
     const line = (extra.extra.find((x) => x[0] === "逐笔到期明细") || [])[1] || "(无该行)";
-    // 「结构还没识别」= 会话有效但平台换了返回结构(2026-11-03 真机),也是如实的一种
-    check(`「逐笔到期明细」行如实(当前:${line})`,
-      /需网页登录|未登录|接口未提供|按平台返回|结构还没识别/.test(line), line);
-    console.log(`  info  expiring=${extra.expiring} 条 · expiryComplete=${extra.expiryComplete}`);
+    const honest = /需网页登录|未登录|接口未提供|按平台返回|结构还没识别/.test(line);
+    // 桌面凭据都无效的区不进逐包链,行缺席也是如实 —— 只在有效区上要求行存在
+    const check1 = extra.valid ? honest || extra.expiryComplete === true : line === "(无该行)" || honest;
+    check(`「逐笔到期明细」行如实(${extra.which} · 当前:${line})`, check1, line);
+    console.log(`  info  区=${extra.which} valid=${extra.valid} expiring=${extra.expiring} 条 · expiryComplete=${extra.expiryComplete}`);
   } catch (e) {
     console.log('  FAIL  脚本异常 · ' + e.message);
     fails++;

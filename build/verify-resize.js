@@ -43,17 +43,19 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const gone = JSON.parse(await evalJs(`JSON.stringify({frame:!document.getElementById('rzFrame'),grip:!document.getElementById('rzGrip')})`));
     check('拖动缩放入口已移除(rzFrame/rzGrip)', gone.frame && gone.grip, JSON.stringify(gone));
 
-    // 2. 两档固定尺寸
-    for (const [layout, wantW, wantH, wantWcls] of [['single', 500, 840, 'sm'], ['double', 880, 840, 'lg']]) {
+    // 2. 两档固定尺寸(期望值按当前字号档位计算:md=1.0 / lg=1.15 / xl=1.3)
+    for (const [layout, wantWcls] of [['single', 'sm'], ['double', 'lg']]) {
       await evalJs(`(()=>{CFG.panelLayout='${layout}';updateLayoutUI();applyForm('panel',false,true);})()`);
       await sleep(900);
+      const [wantW, wantH] = JSON.parse(await evalJs(`JSON.stringify(formSize('panel'))`));
       const s = JSON.parse(await evalJs(`(()=>{const btn=document.querySelector('.tbar').getBoundingClientRect();
         const foot=document.querySelector('.foot').getBoundingClientRect();
         return JSON.stringify({w:innerWidth,h:innerHeight,dw:document.body.dataset.w,
           hScroll:document.documentElement.scrollWidth>innerWidth,
           inWin:btn.right<=innerWidth+1&&foot.bottom<=innerHeight+1,
           label:document.getElementById('lkLayout').textContent})})()`));
-      check(`${layout}:窗口 ${wantW}×${wantH}`, s.w === wantW && s.h === wantH, JSON.stringify(s));
+      // ±1px:Windows 下 setSize 走物理像素,DPR 非整数(1.25)时逻辑值会差 1
+      check(`${layout}:窗口 ${wantW}×${wantH}`, Math.abs(s.w - wantW) <= 1 && Math.abs(s.h - wantH) <= 1, JSON.stringify(s));
       check(`${layout}:有效宽度断点 ${wantWcls}`, s.dw === wantWcls, s.dw);
       check(`${layout}:无横向越界`, !s.hScroll);
       check(`${layout}:标题栏 / 页脚在窗内`, s.inWin);
@@ -65,8 +67,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     await evalJs(`applyForm('compact',false)`); await sleep(700);
     await evalJs(`applyForm('pill',false)`); await sleep(700);
     await evalJs(`applyForm('panel',false)`); await sleep(900);
-    const back = JSON.parse(await evalJs(`JSON.stringify({w:innerWidth,h:innerHeight,form:document.body.className.includes('form-panel')})`));
-    check('形态往返后面板回到固定尺寸 500×840', back.form && back.w === 500 && back.h === 840, JSON.stringify(back));
+    const back = JSON.parse(await evalJs(`JSON.stringify({w:innerWidth,h:innerHeight,form:document.body.className.includes('form-panel'),want:formSize('panel')})`));
+    check('形态往返后面板回到固定尺寸', back.form && Math.abs(back.w - back.want[0]) <= 1 && Math.abs(back.h - back.want[1]) <= 1, JSON.stringify(back));
 
     // 4. xl 字号:高度被显示器钳制
     await evalJs(`(()=>{const o=CFG.fontScale;CFG.fontScale='xl';applyForm('panel',false,true);CFG.fontScale=o;})()`);

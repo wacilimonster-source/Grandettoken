@@ -835,7 +835,7 @@ const HARNESS = `
     const idxOn = document.body.classList.contains("manage-index");
     const idxRows = document.querySelectorAll("#mIndexList .midx-row").length;
     const idxTitle = document.querySelector(".mhead .mt").textContent;
-    ck("设置默认落在索引页(含同步，共 8 个分区)", idxOn && idxRows === 8 && !!document.querySelector('#mIndexList [data-p="sync"]') && idxTitle === "设置与管理", idxOn + "/" + idxRows + "/" + idxTitle);
+    ck("设置默认落在索引页(含网关，共 9 个分区)", idxOn && idxRows === 9 && !!document.querySelector('#mIndexList [data-p="gateway"]') && !!document.querySelector('#mIndexList [data-p="sync"]') && idxTitle === "设置与管理", idxOn + "/" + idxRows + "/" + idxTitle);
     const savedSyncStatus = SYNC_STATUS;
     const testSync = { relayId: "test", hasGithub: true, hasKey: true, enabled: true, oauthClientConfigured: true, codeText: "GT1.test-secret", channels: [] };
     SYNC_STATUS = testSync;
@@ -911,10 +911,17 @@ const HARNESS = `
         document.getElementById("vaultMeta").textContent === "2 把 · 1 个平台",
         document.getElementById("vaultMeta").textContent);
       ck("被引用的条目写明正被谁使用", /正被 4SAPI 使用/.test(document.getElementById("vaultList").innerHTML));
+      ck("未引用条目不显示多余提示", !/未被任何渠道使用/.test(document.getElementById("vaultList").textContent));
       // 分组「新增」:带入平台,表单可 Esc 取消
       document.querySelector('#vaultList .pf [data-act="vnew"]').click();
       ck("分组新增自动带入平台", !!document.querySelector("#vaultForm .vform")
         && document.getElementById("vPlat").value === "4SAPI");
+      ck("密钥箱表单提供平台选择、分组、账号和网址", !!document.getElementById("vPlatSelect")
+        && !!document.getElementById("vEndpoint") && !!document.getElementById("vWebsite")
+        && /分组/.test(document.getElementById("vaultForm").textContent) && /账号/.test(document.getElementById("vaultForm").textContent));
+      const select = document.getElementById("vPlatSelect"); select.value = "Hapi";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      ck("选择平台后填入平台名称", document.getElementById("vPlat").value === "Hapi");
       document.querySelector("#vaultForm .vform").dispatchEvent(
         new KeyboardEvent("keydown", { key: "Escape", bubbles: true })
       );
@@ -1196,11 +1203,16 @@ w.__DATA = DATA;
     const before = w.__TEST.cfg().panelLayout;
     w.__TEST.patchCfg({ panelLayout: "double" });
     w.__TEST.updateLayout();
+    const labelDouble = w.__TEST.layoutLabel();
+    w.__TEST.patchCfg({ panelLayout: "single" });
+    w.__TEST.updateLayout();
+    const labelSingle = w.__TEST.layoutLabel();
     R.push({
-      name: "双列布局按钮状态同步",
-      ok: w.__TEST.layoutLabel() === "双列" &&
-        w.document.querySelector('#cfgLayout [data-layout="double"]').getAttribute("aria-pressed") === "true",
-      extra: w.__TEST.layoutLabel(),
+      name: "底栏布局按钮显示切换目标(单列时显双列,双列时显单列)",
+      ok: labelDouble === "单列" && labelSingle === "双列" &&
+        w.document.querySelector('#cfgLayout [data-layout="double"]').getAttribute("aria-pressed") === "false" &&
+        w.document.querySelector('#cfgLayout [data-layout="single"]').getAttribute("aria-pressed") === "true",
+      extra: `double=${labelDouble} single=${labelSingle}`,
     });
     w.__TEST.patchCfg({ panelLayout: before || "single" });
     w.__TEST.updateLayout();

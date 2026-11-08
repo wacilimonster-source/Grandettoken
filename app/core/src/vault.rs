@@ -1,4 +1,4 @@
-//! 本地密钥箱的纯逻辑:平台/标签校验、同平台内标签去重、搜索、排序。
+//! 本地密钥箱的纯逻辑:平台与分组校验、搜索、排序。
 //!
 //! 分工:密文在 `secrets::vault_*`(Windows 凭据管理器),索引在 `store`(`vault_items`,不含密钥),
 //! 这里只做判断与排序,便于挂单测。**这个模块永远不该出现"加密/解密"** —— 我们不自己造加密。
@@ -26,22 +26,12 @@ pub fn valid_platform(s: &str) -> Result<String, String> {
 pub fn valid_label(s: &str) -> Result<String, String> {
     let s = clean(s);
     if s.is_empty() {
-        return Err("标签不能为空(比如「主号」「备用」)".into());
+        return Err("分组不能为空(比如「主号」「备用」)".into());
     }
     if s.chars().count() > MAX_LEN {
-        return Err(format!("标签太长(最多 {MAX_LEN} 字)"));
+        return Err(format!("分组太长(最多 {MAX_LEN} 字)"));
     }
     Ok(s)
-}
-
-/// 同一平台下标签是否已存在(编辑时用 `except_id` 排除自己)。
-/// 平台名与标签都不区分大小写地比 —— 免得"4SAPI/主号"和"4sapi/主号"看起来是两条。
-pub fn label_taken(items: &[VaultItem], platform: &str, label: &str, except_id: Option<&str>) -> bool {
-    items.iter().any(|it| {
-        Some(it.id.as_str()) != except_id
-            && it.platform.eq_ignore_ascii_case(platform)
-            && it.label.eq_ignore_ascii_case(label)
-    })
 }
 
 /// 搜索匹配:平台 / 标签 / 备注 三项任意命中(不区分大小写)。空查询 = 全中。
@@ -91,6 +81,8 @@ mod tests {
             label: label.into(),
             hint: "••••abcd".into(),
             note: note.into(),
+            api_endpoint: String::new(),
+            website: String::new(),
             created_at: 0,
             updated_at: 0,
         }
@@ -103,25 +95,6 @@ mod tests {
         assert!(valid_platform(&"x".repeat(41)).is_err());
         assert_eq!(valid_label("主号").unwrap(), "主号");
         assert!(valid_label("").is_err());
-    }
-
-    /// 同平台内标签不许重名(不区分大小写);编辑自己时不算冲突。
-    #[test]
-    fn duplicate_label_within_platform() {
-        let items = vec![
-            item("1", "4SAPI", "主号", ""),
-            item("2", "Hapi", "主号", ""),
-        ];
-        assert!(label_taken(&items, "4sapi", "主号", None), "不区分大小写");
-        assert!(!label_taken(&items, "4SAPI", "备用", None));
-        assert!(
-            !label_taken(&items, "4SAPI", "主号", Some("1")),
-            "改自己不该判成冲突"
-        );
-        assert!(
-            !label_taken(&items, "Hapi", "主号", None) == false,
-            "不同平台允许同名标签"
-        );
     }
 
     #[test]

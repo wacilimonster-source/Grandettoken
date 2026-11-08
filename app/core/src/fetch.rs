@@ -2447,9 +2447,13 @@ pub struct Fetcher {
     /// Qoder 逐包到期(2026-10-30):上次成功抓到的列表 + 时刻。抓取失败时沿用,
     /// 绝不把"这轮没抓到"渲染成"没有临期"(与余额失联同一原则)。
     /// 只存内存:重启后退回"等下一轮成功"。
-    qoder_packs: Mutex<Option<(i64, Vec<Expiring>)>>,
-    /// Qoder 逐包端点谁赢了(候选链下标)。
-    qoder_memo: qoderweb::PacksMemo,
+    ///
+    /// **按渠道 id 分开存**(2026-11-08):国际版 `qoder` 与国内版 `qoder-cn` 是两套
+    /// 账号,列表混存会把 A 的包当成 B 的临期展示 —— 比"没数据"更糟。
+    qoder_packs: Mutex<HashMap<String, (i64, Vec<Expiring>)>>,
+    /// Qoder 逐包端点谁赢了(候选链下标)。同样按渠道 id 分开:两区的候选链并不相同
+    /// (国内版多一条 openapi 汇总端点),共用下标会指错端点。
+    qoder_memos: Mutex<HashMap<String, Arc<qoderweb::PacksMemo>>>,
     /// 网页登录型渠道的会话来源。外壳在启动时装一个"去 webview 的 Cookie 罐里现取"
     /// 的回调:会话留在 WebView2 的 profile 里(平台自己管过期与轮换),挂件不存副本 ——
     /// 一个是凭据管理器放不下(实测 blob 上限约 1280 字符,而两个会话 Cookie 近 6 KB),
@@ -2569,8 +2573,8 @@ impl Fetcher {
             cfg_cache: Mutex::new(None),
             gate: tokio::sync::Mutex::new(()),
             last_run: Mutex::new(None),
-            qoder_packs: Mutex::new(None),
-            qoder_memo: qoderweb::PacksMemo::default(),
+            qoder_packs: Mutex::new(HashMap::new()),
+            qoder_memos: Mutex::new(HashMap::new()),
             web_cred_src: Mutex::new(None),
             adopted: Mutex::new(HashSet::new()),
             accounts_cache: Mutex::new(HashMap::new()),
@@ -2605,6 +2609,16 @@ impl Fetcher {
         result.valid
     }
 
+    /// 取某区自己的端点 memo。返回 Arc 后立刻释放锁 —— `MutexGuard` 不能带过 await。
+    fn qoder_memo_for(&self, id: &str) -> Arc<qoderweb::PacksMemo> {
+        self.qoder_memos
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .entry(id.to_string())
+            .or_default()
+            .clone()
+    }
+
     /// Qoder 网页会话验证:候选端点里有一条给出"包形状"的响应(哪怕为空)就算有效。
     /// 不验证就报成功的话,一份被平台拒掉的会话会变成"状态显示已登录、却一直取不到数"
     /// —— 与 WorkBuddy 的 probe 同一条纪律。会话有效但没有包 ≠ 失败。
@@ -2612,8 +2626,12 @@ impl Fetcher {
     /// 三档必须分开(2026-11-03):**会话被拒**要让用户去重登;**结构没认出来**是挂件
     /// 这一侧的事,重登一百次也没用;其余才是网络问题。以前只回 bool,后两种被并成
     /// "登录失败 · 被平台拒绝",实测把用户引向了无用的重登。
-    pub async fn probe_qoder_web(&self, session: &str) -> QoderWebProbe {
-        match qoderweb::fetch_packs(&self.http, session, &self.qoder_memo).await {
+    pub async fn probe_qoder_web(&self, id: &str, session: &str) -> QoderWebProbe {
+        let Some(site) = crate::weblogin::qoder_site(id) else {
+            return QoderWebProbe::Failed("未知的 Qoder 区域".into());
+        };
+        let memo = self.qoder_memo_for(id);
+        match qoderweb::fetch_packs(&self.http, session, &memo, site).await {
             Ok(_) => QoderWebProbe::Packed,
             Err(qoderweb::PacksErr::Unauthorized) => QoderWebProbe::Rejected,
             Err(qoderweb::PacksErr::Unrecognized(detail)) => QoderWebProbe::Unrecognized(detail),
@@ -3081,16 +3099,22 @@ impl Fetcher {
                     // 链路一概不碰(设计红线)。三条退路全是"如实":没会话 → 引导登录;
                     // 这轮失败 → 沿用上次成功列表 + 标时间;从未成功 → 维持"接口未提供",
                     // 绝不编一个到期日,也不把"没抓到"渲染成"没有临期"。
-                    if def.id == "qoder" && result.valid {
+                    // 国际版与国内版都走这条链;会话来源按**渠道 id**取,两套 Cookie 罐
+                    // 由外壳分别按域抓取 —— 这里绝不共用一份会话。
+                    if matches!(def.id, "qoder" | "qoder-cn") && result.valid {
+                        let qoder_id = def.id;
                         // 会话来源是阻塞派发(要同步问 webview 的 Cookie 罐),不能占着 async worker
                         let session = tokio::task::spawn_blocking(move || {
-                            qoder_web_src.as_deref().and_then(|f| f("qoder"))
+                            qoder_web_src.as_deref().and_then(|f| f(qoder_id))
                         })
                         .await
                         .ok()
                         .flatten();
+                        let site = crate::weblogin::qoder_site(def.id)
+                            .expect("上面已限定 qoder | qoder-cn,站点配置必然存在");
+                        let memo = self.qoder_memo_for(def.id);
                         match session {
-                            Some(sess) => match qoderweb::fetch_packs(&self.http, &sess, &self.qoder_memo).await {
+                            Some(sess) => match qoderweb::fetch_packs(&self.http, &sess, &memo, site).await {
                                 Ok((packs, _)) => {
                                     let n = packs.len();
                                     result.expiring = packs.iter().map(|p| p.as_expiring()).collect();
@@ -3100,17 +3124,18 @@ impl Fetcher {
                                         "逐笔到期明细",
                                         if n > 0 { "按平台返回" } else { "按平台返回 · 当前没有待到期的积分包" },
                                     );
-                                    *self
-                                        .qoder_packs
+                                    self.qoder_packs
                                         .lock()
-                                        .unwrap_or_else(|p| p.into_inner()) = Some((now_ts(), result.expiring.clone()));
+                                        .unwrap_or_else(|p| p.into_inner())
+                                        .insert(def.id.to_string(), (now_ts(), result.expiring.clone()));
                                 }
                                 Err(e) => {
                                     let cached = self
                                         .qoder_packs
                                         .lock()
                                         .unwrap_or_else(|p| p.into_inner())
-                                        .clone();
+                                        .get(def.id)
+                                        .cloned();
                                     match cached {
                                         Some((ts, packs)) => {
                                             result.expiring = packs;
@@ -3151,9 +3176,10 @@ impl Fetcher {
                                             }
                                         }
                                     }
-                                    // 只记形状不记值:响应里可能有余额与会话
+                                    // 只记形状不记值:响应里可能有余额与会话;诊断按渠道分开
+                                    // 落,排查时不会把国内版的失败读成国际版的。
                                     crate::diaglog::write_keyed(
-                                        "qoder",
+                                        def.id,
                                         "webpacks",
                                         &match &e {
                                             qoderweb::PacksErr::Unauthorized => {

@@ -14,6 +14,7 @@ use tokenscope_core::{appauth, checkin, inject, models, providers, secrets, stor
 
 mod sync_cmds;
 mod download;
+mod gateway;
 pub use sync_cmds::{
     sync_create, sync_delete_relay, sync_disconnect_github, sync_forget, sync_github_status,
     sync_join, sync_oauth_cancel, sync_oauth_poll, sync_oauth_start, sync_preview,
@@ -881,28 +882,70 @@ async fn wb_finish_login(app: &tauri::AppHandle) {
 // 同一条裁决);判定规则(登录完成路径/Cookie 拼装)都在 core::weblogin,那边有单测。
 
 const QODER_LOGIN_LABEL: &str = "qoder-login";
-/// 入口走登录页 + 回调(与 WorkBuddy 同构),**不要**直接给 /account/usage:
-/// 那样的话首次导航就是"登录完成路径",随后才被 302 到登录页 —— landed 会在
-/// 用户还没登录时就被置真,观察者的"被拒绝"提示立刻误发(真机踩过,2026-10-30)。
-/// 从登录页进:登录完平台自己跳回 /account/usage,那一跳才置 landed。
-const QODER_LOGIN_URL: &str = "https://qoder.com/users/sign-in?oauth_callback=https%3A%2F%2Fqoder.com%2Faccount%2Fusage";
+const QODER_CN_LOGIN_LABEL: &str = "qoder-cn-login";
 
+/// 登录入口来自 core 的区域配置(`QODER_SITE.login_url` / `QODER_CN_SITE.login_url`),
+/// 形状是"登录页 + 回调",**不要**直接给 /account/usage:那样首次导航就是"登录完成
+/// 路径",随后才被 302 到登录页 —— landed 会在用户还没登录时就被置真,观察者的
+/// "被拒绝"提示立刻误发(真机踩过,2026-10-30)。从登录页进:登录完平台自己跳回
+/// /account/usage,那一跳才置 landed。
+///
+/// 两区各自一套标位:国际版登录窗还开着时再开国内版,不能让两个观察者互相把对方
+/// 置成"已收工/已落地"。
 static QODER_LOGIN_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static QODER_LOGIN_CLOSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 static QODER_LANDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static QODER_CN_LOGIN_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static QODER_CN_LOGIN_CLOSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+static QODER_CN_LANDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Qoder 的网页会话:从主窗口的 Cookie 罐里把 qoder.com 域的全部 Cookie 拼成
+/// 渠道 id → (完成标位, 关窗标位, 落地标位)。只认两个 Qoder 区。
+fn qoder_login_flags(
+    id: &str,
+) -> (
+    &'static std::sync::atomic::AtomicBool,
+    &'static std::sync::atomic::AtomicBool,
+    &'static std::sync::atomic::AtomicBool,
+) {
+    if id == "qoder-cn" {
+        (&QODER_CN_LOGIN_DONE, &QODER_CN_LOGIN_CLOSED, &QODER_CN_LANDED)
+    } else {
+        (&QODER_LOGIN_DONE, &QODER_LOGIN_CLOSED, &QODER_LANDED)
+    }
+}
+
+fn qoder_login_label(id: &str) -> &'static str {
+    if id == "qoder-cn" {
+        QODER_CN_LOGIN_LABEL
+    } else {
+        QODER_LOGIN_LABEL
+    }
+}
+
+/// 窗口 label → 渠道 id(关窗事件只能拿到 label)。
+fn qoder_label_id(label: &str) -> Option<&'static str> {
+    match label {
+        QODER_LOGIN_LABEL => Some("qoder"),
+        QODER_CN_LOGIN_LABEL => Some("qoder-cn"),
+        _ => None,
+    }
+}
+
+/// Qoder 的网页会话:从主窗口的 Cookie 罐里把**该区站点域**的全部 Cookie 拼成
 /// `cookie:` 凭据。名单是平台私有的,不按名字挑(core::weblogin::qoder_cookie_credential);
 /// 拿到的东西能不能真取到数,由观察者的探测负责 —— 没登录的访客也可能有几枚营销 Cookie。
-fn qoder_web_session_of(app: &tauri::AppHandle) -> Option<String> {
+///
+/// 国际版取 qoder.com,国内版取 qoder.com.cn:两套账号的 Cookie 罐必须按域分开,
+/// 否则会把国际版会话发给国内账务接口(必然 401,还会误导用户)。
+fn qoder_web_session_of(app: &tauri::AppHandle, id: &str) -> Option<String> {
+    let site = tokenscope_core::weblogin::qoder_site(id)?;
+    let host = site.host;
     let handle = app.clone();
     on_main_with_timeout(
         app,
         move || {
             let w = handle.get_webview_window("main")?;
-            let url = format!("https://{}/", tokenscope_core::weblogin::QODER_SITE_HOST)
-                .parse::<tauri::Url>()
-                .ok()?;
+            let url = format!("https://{host}/").parse::<tauri::Url>().ok()?;
             let Ok(jar) = w.cookies_for_url(url) else {
                 return None;
             };
@@ -920,7 +963,7 @@ fn qoder_web_session_of(app: &tauri::AppHandle) -> Option<String> {
 fn web_session_of(app: &tauri::AppHandle, id: &str) -> Option<String> {
     match id {
         WB_CHANNEL_ID => wb_session_of(app, id),
-        "qoder" => qoder_web_session_of(app),
+        "qoder" | "qoder-cn" => qoder_web_session_of(app, id),
         _ => None,
     }
 }
@@ -931,26 +974,28 @@ fn web_session_of(app: &tauri::AppHandle, id: &str) -> Option<String> {
 /// `note` 是"登录成功但有保留"的说明(目前只有一种:会话被平台接受、逐包接口的
 /// 响应结构挂件还没认出来)。**这种情况仍按登录成功收尾** —— 会话本身是真的有效,
 /// 把窗口留在那儿让用户对着它等,只会让人以为登录没成。
-async fn qoderweb_finish_login(app: &tauri::AppHandle, note: Option<String>) {
-    QODER_LOGIN_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
+async fn qoderweb_finish_login(app: &tauri::AppHandle, id: &str, note: Option<String>) {
+    let site = tokenscope_core::weblogin::qoder_site(id)
+        .expect("调用方已限定 qoder | qoder-cn,站点配置必然存在");
+    let (done, _, _) = qoder_login_flags(id);
+    done.store(true, std::sync::atomic::Ordering::Relaxed);
     // "这份网页会话从现在起是新鲜的":取数侧按这个年龄出提示(qoder_web_session_hint)。
+    // 写**本区自己的键** —— 共用会让一边登录替另一边刷新年龄(串号的隐性形态)。
     {
         let st = app.state::<AppState>();
         let store = lock_rw(&st.store);
-        let _ = store.set_setting(
-            tokenscope_core::weblogin::QODER_WEB_SESSION_AT_KEY,
-            &now_ts().to_string(),
-        );
+        let _ = store.set_setting(site.session_at_key, &now_ts().to_string());
     }
+    let label = qoder_login_label(id);
     let handle = app.clone();
     on_main(app, move || {
-        if let Some(w) = handle.get_webview_window(QODER_LOGIN_LABEL) {
+        if let Some(w) = handle.get_webview_window(label) {
             let _ = w.close();
         }
     });
     let _ = app.emit(
         "qoderweb-login",
-        serde_json::json!({"ok": true, "detail": note}),
+        serde_json::json!({"ok": true, "detail": note, "id": id}),
     );
     app.state::<AppState>().fetcher.invalidate();
     refresh_now(app).await;
@@ -958,53 +1003,68 @@ async fn qoderweb_finish_login(app: &tauri::AppHandle, note: Option<String>) {
 
 /// 打开 Qoder 网页登录窗(逐包到期用)。已开着就拉到前台。**必须 async**,理由同
 /// workbuddy_login:同步命令在 WebMessageReceived 回调里再建 webview 会冻死(2026-10-08 实测)。
+/// `id` 省略时按国际版(兼容旧调用)。
 #[tauri::command]
-async fn qoderweb_login(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(w) = app.get_webview_window(QODER_LOGIN_LABEL) {
+async fn qoderweb_login(app: tauri::AppHandle, id: Option<String>) -> Result<(), String> {
+    let id = id.as_deref().unwrap_or("qoder");
+    let site = tokenscope_core::weblogin::qoder_site(id)
+        .ok_or_else(|| format!("未知的 Qoder 区域: {id}"))?;
+    let id = site.id; // &'static str,观察者/导航闭包都要 'static
+    let label = qoder_login_label(id);
+    if let Some(w) = app.get_webview_window(label) {
         let _ = w.show();
         let _ = w.set_focus();
         return Ok(());
     }
-    QODER_LOGIN_DONE.store(false, std::sync::atomic::Ordering::Relaxed);
-    QODER_LANDED.store(false, std::sync::atomic::Ordering::Relaxed);
-    QODER_LOGIN_CLOSED.store(false, std::sync::atomic::Ordering::Relaxed);
-    let url: tauri::Url = QODER_LOGIN_URL
+    let (done, closed, landed) = qoder_login_flags(id);
+    done.store(false, std::sync::atomic::Ordering::Relaxed);
+    landed.store(false, std::sync::atomic::Ordering::Relaxed);
+    closed.store(false, std::sync::atomic::Ordering::Relaxed);
+    let url: tauri::Url = site
+        .login_url
         .parse()
         .map_err(|e| format!("登录地址有问题: {e}"))?;
-    tauri::WebviewWindowBuilder::new(&app, QODER_LOGIN_LABEL, tauri::WebviewUrl::External(url))
-        .title("登录 Qoder 网页账号（积分明细用）")
+    let title = if id == "qoder-cn" {
+        "登录 Qoder 国内版网页账号（积分明细用）"
+    } else {
+        "登录 Qoder 网页账号（积分明细用）"
+    };
+    tauri::WebviewWindowBuilder::new(&app, label, tauri::WebviewUrl::External(url))
+        .title(title)
         .inner_size(560.0, 780.0)
         .min_inner_size(420.0, 560.0)
         .resizable(true)
         .always_on_top(true)
-        .on_navigation(|nav| {
-            if tokenscope_core::weblogin::qoder_is_post_login(nav.as_str()) {
-                QODER_LANDED.store(true, std::sync::atomic::Ordering::Relaxed);
+        .on_navigation(move |nav| {
+            if tokenscope_core::weblogin::qoder_is_post_login_for(id, nav.as_str()) {
+                landed.store(true, std::sync::atomic::Ordering::Relaxed);
             }
             true
         })
         .build()
         .map_err(|e| format!("登录窗口打不开: {e}"))?;
-    spawn_qoder_login_watcher(app.clone());
+    spawn_qoder_login_watcher(app.clone(), id);
     Ok(())
 }
 
 /// 与 spawn_login_watcher 同一条纪律:判"能不能收工"靠**探测**(真打一次账务接口),
 /// 不靠"cookie 罐里有没有东西";两条状态由主线程侧钩子置位,绝不碰登录窗的 API。
-fn spawn_qoder_login_watcher(app: tauri::AppHandle) {
+fn spawn_qoder_login_watcher(app: tauri::AppHandle, id: &'static str) {
+    let (_, closed, landed) = qoder_login_flags(id);
     tauri::async_runtime::spawn(async move {
         let mut tried = String::new();
         let mut probes = 0u32;
         let mut ticks = 0u32;
         loop {
-            if QODER_LOGIN_CLOSED.load(std::sync::atomic::Ordering::Relaxed) {
+            if closed.load(std::sync::atomic::Ordering::Relaxed) {
                 return;
             }
             let probe_app = app.clone();
-            let session = tokio::task::spawn_blocking(move || qoder_web_session_of(&probe_app))
-                .await
-                .ok()
-                .flatten();
+            let session =
+                tokio::task::spawn_blocking(move || qoder_web_session_of(&probe_app, id))
+                    .await
+                    .ok()
+                    .flatten();
             if let Some(session) = session {
                 let fresh = session != tried;
                 if fresh {
@@ -1015,9 +1075,9 @@ fn spawn_qoder_login_watcher(app: tauri::AppHandle) {
                 if fresh || (probes < 10 && ticks % 5 == 0) {
                     probes += 1;
                     let fetcher = app.state::<AppState>().fetcher.clone();
-                    match fetcher.probe_qoder_web(&session).await {
+                    match fetcher.probe_qoder_web(id, &session).await {
                         tokenscope_core::fetch::QoderWebProbe::Packed => {
-                            qoderweb_finish_login(&app, None).await;
+                            qoderweb_finish_login(&app, id, None).await;
                             return;
                         }
                         // 会话有效、只是结构没认出来:登录是成功的,别让用户去重登。
@@ -1026,6 +1086,7 @@ fn spawn_qoder_login_watcher(app: tauri::AppHandle) {
                         tokenscope_core::fetch::QoderWebProbe::Unrecognized(_) => {
                             qoderweb_finish_login(
                                 &app,
+                                id,
                                 Some(
                                     "已登录 Qoder 网页 · 但积分明细接口的返回结构还没识别(已记入诊断)。余额与签到不受影响"
                                         .to_string(),
@@ -1038,15 +1099,16 @@ fn spawn_qoder_login_watcher(app: tauri::AppHandle) {
                         // 还停在登录页说明人家正要登录,别抢着报错。
                         tokenscope_core::fetch::QoderWebProbe::Rejected => {
                             tokenscope_core::diaglog::write_keyed(
-                                "qoder",
+                                id,
                                 "webauth",
                                 "登录轮询:网页会话被平台拒绝(401/403)",
                             );
-                            if QODER_LANDED.load(std::sync::atomic::Ordering::Relaxed) && fresh {
+                            if landed.load(std::sync::atomic::Ordering::Relaxed) && fresh {
                                 let _ = app.emit(
                                     "qoderweb-login",
                                     serde_json::json!({
                                         "ok": false,
+                                        "id": id,
                                         "reason": "登录页到了,但用这份会话查积分明细被平台拒绝。会自动再试几次;一直失败的话在渠道卡上点「登录网页版」重来。"
                                     }),
                                 );
@@ -1054,15 +1116,16 @@ fn spawn_qoder_login_watcher(app: tauri::AppHandle) {
                         }
                         tokenscope_core::fetch::QoderWebProbe::Failed(detail) => {
                             tokenscope_core::diaglog::write_keyed(
-                                "qoder",
+                                id,
                                 "webauth",
                                 &format!("登录轮询:验证请求失败 · {detail}"),
                             );
-                            if QODER_LANDED.load(std::sync::atomic::Ordering::Relaxed) && fresh {
+                            if landed.load(std::sync::atomic::Ordering::Relaxed) && fresh {
                                 let _ = app.emit(
                                     "qoderweb-login",
                                     serde_json::json!({
                                         "ok": false,
+                                        "id": id,
                                         "reason": "登录页到了,但查积分明细的请求没打通(网络或接口地址变了)。会自动再试几次。"
                                     }),
                                 );
@@ -2469,13 +2532,76 @@ struct VaultInput {
     #[serde(default)]
     note: String,
     #[serde(default)]
+    api_endpoint: String,
+    #[serde(default)]
+    website: String,
+    #[serde(default)]
     key: String,
+}
+
+fn vault_url(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() { return Ok(String::new()); }
+    let parsed = reqwest::Url::parse(value).map_err(|_| "请输入完整的网址（包含 http:// 或 https://）")?;
+    let has_secret_param = parsed.query_pairs().any(|(name, _)| {
+        let n = name.to_ascii_lowercase().replace('-', "_");
+        n == "key" || n.contains("api_key") || n.contains("token") || n.contains("secret") || n.contains("password") || n.contains("authorization")
+    });
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() || !parsed.username().is_empty() || parsed.password().is_some() || has_secret_param {
+        return Err("网址需为不含密钥或凭据的 HTTP(S) 地址".into());
+    }
+    Ok(value.to_string())
+}
+
+// 只迁入当前渠道密钥一次；只复制到密钥箱，不改变渠道原有引用。
+fn import_channel_keys(store: &Arc<Mutex<Store>>, cfg: &Config) -> Result<(), String> {
+    static IMPORT_LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+    let _guard = lock_rw(IMPORT_LOCK.get_or_init(|| Mutex::new(())));
+    for (id, platform, website) in [
+        ("4sapi", "4SAPI", "https://4sapi.com"),
+        ("hapi", "Hapi", "https://ai.yuchuantest.com"),
+        ("opencode-go", "OpenCode Go", "https://opencode.ai"),
+    ] {
+        let marker = format!("vault_channel_import_v1:{id}");
+        if lock_rw(store).get_setting(&marker)?.is_some() { continue; }
+        let (key, linked_id) = match secrets::resolve(id)? {
+            secrets::Resolved::Inline(k) if !k.trim().is_empty() => (k, None),
+            secrets::Resolved::Vault { id: vault_id, key } if !key.trim().is_empty() => (key, Some(vault_id)),
+            _ => continue,
+        };
+        let items = lock_rw(store).vault_list()?;
+        let mut already = false;
+        for it in &items {
+            if (it.platform.eq_ignore_ascii_case(platform) || linked_id.as_deref() == Some(it.id.as_str()))
+                && secrets::vault_get(&it.id)?.as_deref() == Some(key.as_str()) { already = true; break; }
+        }
+        if !already {
+            let entry_id = tokenscope_core::vault::new_id();
+            let def = models::find_source(id).ok_or("渠道配置缺失")?;
+            let cache = { let s = lock_rw(store); models::ModelCache::load(&s) };
+            let now = now_ts();
+            let item = tokenscope_core::store::VaultItem {
+                id: entry_id.clone(), platform: platform.into(), label: "渠道当前密钥".into(),
+                hint: secrets::mask_of(&key), note: String::new(),
+                api_endpoint: source_base(cfg, cache.as_ref(), def), website: website.into(),
+                created_at: now, updated_at: now,
+            };
+            secrets::vault_set(&entry_id, &key)?;
+            if let Err(e) = lock_rw(store).vault_upsert(&item) {
+                let _ = secrets::vault_delete(&entry_id); return Err(e);
+            }
+        }
+        lock_rw(store).set_setting(&marker, "done")?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
 async fn vault_list(state: State<'_, AppState>) -> Result<Vec<tokenscope_core::store::VaultItem>, String> {
     let store = state.store.clone();
+    let cfg = lock_rw(&state.config).clone();
     tokio::task::spawn_blocking(move || {
+        import_channel_keys(&store, &cfg)?;
         let s = lock_rw(&store);
         s.vault_list()
     })
@@ -2486,11 +2612,11 @@ async fn vault_list(state: State<'_, AppState>) -> Result<Vec<tokenscope_core::s
 /// 新建或编辑一条。**先写凭据、再写索引**:索引写失败就把刚写的凭据删掉,不留半条。
 #[tauri::command]
 async fn vault_save(
-    state: State<'_, AppState>,
+    app: tauri::AppHandle,
     item: VaultInput,
 ) -> Result<tokenscope_core::store::VaultItem, String> {
-    let store = state.store.clone();
-    tokio::task::spawn_blocking(move || {
+    let store = app.state::<AppState>().store.clone();
+    let saved = tokio::task::spawn_blocking(move || {
         use tokenscope_core::vault;
         refuse_while_updating("保存密钥")?;
         let platform = vault::valid_platform(&item.platform)?;
@@ -2501,21 +2627,12 @@ async fn vault_save(
         // 库锁只圈住"读"这一段。下面要调 Windows 凭据管理器(外部 RPC,域账户/组策略
         // 出问题时可以卡到秒级),以前是持着 store 锁跨 RPC:那段时间里 channel_changes
         // 等主线程命令在同一把锁上排队,整个面板冻住(报告 P1-7)。
-        let (all, existing) = {
-            let s = lock_rw(&store);
-            (
-                s.vault_list()?,
-                match item.id.as_deref() {
-                    Some(id) => s.vault_get(id)?,
-                    None => None,
-                },
-            )
-        };
+        let existing = { let s = lock_rw(&store); match item.id.as_deref() { Some(id) => s.vault_get(id)?, None => None } };
+        // 校验必须发生在写入凭据之前，避免地址无效时密钥已被改掉。
+        let api_endpoint = vault_url(&item.api_endpoint)?;
+        let website = vault_url(&item.website)?;
         if item.id.is_some() && existing.is_none() {
             return Err("这条已经不在密钥箱里了(可能刚被删过)".into());
-        }
-        if vault::label_taken(&all, &platform, &label, item.id.as_deref()) {
-            return Err(format!("「{platform}」下已经有一个叫「{label}」的了"));
         }
 
         let id = existing
@@ -2541,8 +2658,10 @@ async fn vault_save(
             label,
             hint,
             note: item.note.trim().to_string(),
+            api_endpoint,
+            website,
             created_at: existing.as_ref().map(|e| e.created_at).unwrap_or(now),
-            updated_at: now,
+            updated_at: existing.as_ref().map(|e| now.max(e.updated_at.saturating_add(1))).unwrap_or(now),
         };
         let up = {
             let s = lock_rw(&store);
@@ -2558,7 +2677,12 @@ async fn vault_save(
         Ok(out)
     })
     .await
-    .map_err(|e| format!("保存失败: {e}"))?
+    .map_err(|e| format!("保存失败: {e}"))??;
+    if let Ok(Some((source, alias))) = app.state::<gateway::Gateway>().invalidate_vault(&saved.id) {
+        let id = saved.id.clone(); let handle = app.clone();
+        tauri::async_runtime::spawn(async move { let _ = gateway::gateway_publish(handle, id, source, alias).await; });
+    }
+    Ok(saved)
 }
 
 /// 删密钥箱条目的结果。
@@ -2670,12 +2794,14 @@ async fn vault_delete(
     }
     let state = app.state::<AppState>();
     let store = state.store.clone();
+    let gateway = app.state::<gateway::Gateway>().inner().clone();
     tokio::task::spawn_blocking(move || {
         // 先删索引(用户视角"这条没了"),再删凭据;凭据删失败也不该把索引变回来
         {
             let s = lock_rw(&store);
             s.vault_delete(&id)?;
         }
+        let _ = gateway.remove_vault(&id);
         // 索引已经删了,凭据删不掉的话那把密钥的密文会**永远**留在凭据管理器里:
         // 界面再也列不出、也删不掉(vault_reveal 先校验索引)。以前只 eprintln 就当成功
         // (报告 P2-14)。重试一次,仍失败就把话说明白,让用户知道要去手动清。
@@ -5147,6 +5273,31 @@ async fn open_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
     .map_err(|e| format!("打开失败: {e}"))?
 }
 
+/// 固定来源的优惠订阅，避免前端跨域请求。
+#[tauri::command]
+async fn fetch_promo_feed() -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build().map_err(|e| e.to_string())?;
+    let response = client.get("https://www.aipromonow.com/rss.xml")
+        .send().await.map_err(|e| e.to_string())?
+        .error_for_status().map_err(|e| e.to_string())?;
+    if response.content_length().unwrap_or(0) > 2_000_000 { return Err("订阅内容过大".into()); }
+    let text = response.text().await.map_err(|e| e.to_string())?;
+    if text.len() > 2_000_000 { return Err("订阅内容过大".into()); }
+    Ok(text)
+}
+
+#[tauri::command]
+async fn open_promo_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(&url).map_err(|_| "地址无效")?;
+    if parsed.scheme() != "https" || parsed.host_str() != Some("www.aipromonow.com") || !parsed.path().starts_with("/promos/") {
+        return Err("不允许打开这个地址".into());
+    }
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().open_url(url, None::<&str>).map_err(|e| format!("打开失败: {e}"))
+}
+
 /// 排查日志的落点与大小(设置页要显示"日志在哪儿、多大")。
 /// 只报路径,不读内容 —— 打开/复制是另外两条命令,便于前端按需触发。
 #[derive(Debug, Clone, serde::Serialize)]
@@ -5453,6 +5604,16 @@ pub fn run() {
                 startup_error: Mutex::new(None),
             });
 
+            app.manage(gateway::Gateway::new(app.state::<AppState>().store.clone()));
+            // 后台一次性导入现有渠道密钥；不阻塞首屏，也不更改渠道引用。
+            let import_store = app.state::<AppState>().store.clone();
+            let import_cfg = config.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = tokio::task::spawn_blocking(move || import_channel_keys(&import_store, &import_cfg)).await.unwrap_or_else(|e| Err(e.to_string())) {
+                    eprintln!("导入渠道密钥失败: {e}");
+                }
+            });
+
             // 网页登录型渠道的会话来源:每轮取数时现从 webview 的 Cookie 罐里读。
             // 回调会在取数路径的 spawn_blocking 里被调用(见 set_web_credential_source
             // 的注释),里面那次 webview 派发是阻塞的 —— 只能在非主线程上调,符合。
@@ -5574,16 +5735,17 @@ pub fn run() {
                         serde_json::json!({ "ok": false, "cancelled": true }),
                     );
                 }
-                // Qoder 网页登录窗同一条规矩(两个窗共用这套判定,拆成两个分支而不是
-                // 两个闭包 —— on_window_event 只能挂一次)
-                if window.label() == QODER_LOGIN_LABEL {
-                    QODER_LOGIN_CLOSED.store(true, std::sync::atomic::Ordering::Relaxed);
-                    if QODER_LOGIN_DONE.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                // Qoder 网页登录窗同一条规矩(国际版/国内版共用这套判定,按 label 反推
+                // 渠道,拆成两个分支而不是两个闭包 —— on_window_event 只能挂一次)
+                if let Some(id) = qoder_label_id(window.label()) {
+                    let (done, closed, _) = qoder_login_flags(id);
+                    closed.store(true, std::sync::atomic::Ordering::Relaxed);
+                    if done.swap(false, std::sync::atomic::Ordering::Relaxed) {
                         return;
                     }
                     let _ = window.emit(
                         "qoderweb-login",
-                        serde_json::json!({ "ok": false, "cancelled": true }),
+                        serde_json::json!({ "ok": false, "cancelled": true, "id": id }),
                     );
                 }
             }
@@ -5610,6 +5772,12 @@ pub fn run() {
             app_version,
             take_startup_error,
             get_model_catalog,
+            gateway::gateway_status,
+            gateway::gateway_start,
+            gateway::gateway_stop,
+            gateway::gateway_secret,
+            gateway::gateway_publish,
+            gateway::gateway_unpublish,
             inject_preview,
             inject_apply,
             inject_remove,
@@ -5621,6 +5789,8 @@ pub fn run() {
             download::download_link,
             open_path,
             open_url,
+            fetch_promo_feed,
+            open_promo_url,
             diag_log_info,
             diag_log_tail,
             open_log_dir,
@@ -5680,4 +5850,18 @@ pub fn run() {
             eprintln!("{msg}");
             std::process::exit(1);
         });
+}
+
+#[cfg(test)]
+mod vault_url_tests {
+    use super::vault_url;
+    #[test]
+    fn accepts_plain_addresses_and_rejects_embedded_credentials() {
+        assert_eq!(vault_url(" https://example.com/v1 ").unwrap(), "https://example.com/v1");
+        assert_eq!(vault_url("").unwrap(), "");
+        assert_eq!(vault_url("https://example.com/v1?api-version=1").unwrap(), "https://example.com/v1?api-version=1");
+        assert!(vault_url("https://user:password@example.com/v1").is_err());
+        assert!(vault_url("https://example.com/v1?key=secret").is_err());
+        assert!(vault_url("javascript:alert(1)").is_err());
+    }
 }

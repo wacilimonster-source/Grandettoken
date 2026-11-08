@@ -133,7 +133,7 @@ impl Store {
         // 3 = snapshots 加 key_fp(密钥指纹分段,换 key 后两本账不互相推算消耗)
         // 4 = credit_grants(积分到账事件,WorkBuddy AI 的每日活跃 +30 等)
         // 5 = snapshots 的覆盖索引 idx_snap_fp_cover(P1b:批量历史读取不回表)
-        const WANT: i64 = 5;
+        const WANT: i64 = 6;
         let cur: i64 = self
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -158,6 +158,8 @@ impl Store {
                 [
                     ("hint", "TEXT NOT NULL DEFAULT ''"),
                     ("note", "TEXT NOT NULL DEFAULT ''"),
+                    ("api_endpoint", "TEXT NOT NULL DEFAULT ''"),
+                    ("website", "TEXT NOT NULL DEFAULT ''"),
                 ]
                 .as_slice(),
             ),
@@ -188,34 +190,10 @@ impl Store {
                 )
                 .map_err(|e| format!("建立快照指纹索引失败: {e}"))?;
         }
-        // vault_items 里两条同 (platform,label) 的行是允许的 —— 唯一性只由应用层
-        // "先查后插"把关,而查与插之间会放开锁:双击「保存」能插进两条一模一样的
-        // 索引行。落成库级约束:先在**一个事务**里按大小写不敏感去重(留最早那一行
-        // —— earliest 是用户最初那条,后插的副本跟着它;顺序按 created_at,同刻按 rowid),
-        // 再建唯一索引。两段都幂等,user_version 到 2 之后不再跑。
+        // 分组可以包含多个账号：保留所有旧数据，移除旧的「平台+标签」唯一约束。
         if self.table_exists("vault_items")? {
-            let tx = self
-                .conn
-                .unchecked_transaction()
-                .map_err(|e| format!("开启密钥箱迁移事务失败: {e}"))?;
-            tx.execute_batch(
-                r#"
-                DELETE FROM vault_items WHERE rowid NOT IN (
-                    SELECT rowid FROM vault_items v WHERE NOT EXISTS (
-                        SELECT 1 FROM vault_items o
-                        WHERE o.platform = v.platform COLLATE NOCASE
-                          AND o.label = v.label COLLATE NOCASE
-                          AND (o.created_at < v.created_at
-                               OR (o.created_at = v.created_at AND o.rowid < v.rowid))
-                    )
-                );
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_vault_uniq
-                    ON vault_items (platform COLLATE NOCASE, label COLLATE NOCASE);
-                "#,
-            )
-            .map_err(|e| format!("整理密钥箱索引失败: {e}"))?;
-            tx.commit()
-                .map_err(|e| format!("提交密钥箱迁移失败: {e}"))?;
+            self.conn.execute_batch("DROP INDEX IF EXISTS idx_vault_uniq;")
+                .map_err(|e| format!("更新密钥箱分组失败: {e}"))?;
         }
         // 积分到账事件。**纯新增表**,不动任何老表 —— 老库升级上来只会多这一张空表。
         // UNIQUE(channel, ts):同一秒的重放(重启补跑、时钟回拨)不产生第二条。
@@ -367,6 +345,8 @@ impl Store {
                 label      TEXT    NOT NULL,
                 hint       TEXT    NOT NULL DEFAULT '',
                 note       TEXT    NOT NULL DEFAULT '',
+                api_endpoint TEXT  NOT NULL DEFAULT '',
+                website    TEXT    NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             );
@@ -1579,6 +1559,10 @@ pub struct VaultItem {
     /// 尾 4 位掩码(存下来,列表不需要解密)
     pub hint: String,
     pub note: String,
+    #[serde(default)]
+    pub api_endpoint: String,
+    #[serde(default)]
+    pub website: String,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -1588,7 +1572,7 @@ impl Store {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, platform, label, hint, note, created_at, updated_at
+                "SELECT id, platform, label, hint, note, created_at, updated_at, api_endpoint, website
                  FROM vault_items ORDER BY platform COLLATE NOCASE, created_at DESC",
             )
             .map_err(|e| e.to_string())?;
@@ -1602,6 +1586,8 @@ impl Store {
                     note: r.get(4)?,
                     created_at: r.get(5)?,
                     updated_at: r.get(6)?,
+                    api_endpoint: r.get(7)?,
+                    website: r.get(8)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -1612,11 +1598,12 @@ impl Store {
     pub fn vault_upsert(&self, it: &VaultItem) -> Result<(), String> {
         self.conn
             .execute(
-                "INSERT INTO vault_items (id, platform, label, hint, note, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                "INSERT INTO vault_items (id, platform, label, hint, note, created_at, updated_at, api_endpoint, website)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                  ON CONFLICT(id) DO UPDATE SET
                    platform = excluded.platform, label = excluded.label,
-                   hint = excluded.hint, note = excluded.note, updated_at = excluded.updated_at",
+                   hint = excluded.hint, note = excluded.note, updated_at = excluded.updated_at,
+                   api_endpoint = excluded.api_endpoint, website = excluded.website",
                 params![
                     it.id,
                     it.platform,
@@ -1624,7 +1611,9 @@ impl Store {
                     it.hint,
                     it.note,
                     it.created_at,
-                    it.updated_at
+                    it.updated_at,
+                    it.api_endpoint,
+                    it.website
                 ],
             )
             .map_err(|e| format!("写密钥箱索引失败: {e}"))?;
@@ -1734,7 +1723,7 @@ impl Store {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, platform, label, hint, note, created_at, updated_at
+                "SELECT id, platform, label, hint, note, created_at, updated_at, api_endpoint, website
                  FROM vault_items WHERE id = ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -1748,6 +1737,8 @@ impl Store {
                     note: r.get(4)?,
                     created_at: r.get(5)?,
                     updated_at: r.get(6)?,
+                    api_endpoint: r.get(7)?,
+                    website: r.get(8)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -2139,54 +2130,44 @@ mod tests {
         assert_eq!(s.consumption_since("p", 2000, 3000).unwrap(), Some(6.67));
     }
 
-    /// F10:老库里已经有重复的 (platform,label)(大小写不同也算同一对)时,
-    /// 迁移要去重到最早那一行,并落下大小写不敏感的唯一索引。
     #[test]
-    fn migration_dedupes_existing_vault_duplicates() {
-        let s = mem_with_vault(&[
-            ("a", "4SAPI", "主key", 100),
-            ("b", "4sapi", "主KEY", 200), // 双击「保存」留下的副本
-            ("c", "Hapi", "别的", 150),
-        ]);
+    fn migration_preserves_multiple_accounts_in_the_same_group() {
+        let s = mem_with_vault(&[("a", "4SAPI", "工作", 100), ("b", "4sapi", "工作", 200)]);
+        s.conn.execute_batch("PRAGMA user_version = 5;").unwrap();
         s.migrate().unwrap();
         let list = s.vault_list().unwrap();
-        assert_eq!(list.len(), 2, "同 (platform,label) 只留一条: {list:?}");
-        let kept = list
-            .iter()
-            .find(|i| i.platform.eq_ignore_ascii_case("4sapi"))
-            .expect("4SAPI 那条还在");
-        assert_eq!(kept.id, "a", "留最早那一行(用户最初建的)");
-        s.migrate().unwrap(); // 幂等:再跑一次不动数据也不报错
-        // 把版本号退回去重跑一遍:去重 + CREATE INDEX IF NOT EXISTS 都能重入
-        s.conn.execute_batch("PRAGMA user_version = 0;").unwrap();
+        assert_eq!(list.len(), 2);
+        assert!(list.iter().all(|v| v.api_endpoint.is_empty() && v.website.is_empty()));
         s.migrate().unwrap();
         assert_eq!(s.vault_list().unwrap().len(), 2);
     }
 
-    /// F10:唯一索引在库这一层拒绝重复插入(应用层的"先查后插"隔着一次放开锁,
-    /// 双击保存时挡不住第二个)。
     #[test]
-    fn vault_unique_index_rejects_a_duplicate_insert() {
+    fn migration_removes_legacy_unique_index_without_losing_data() {
+        let s = mem_with_vault(&[("a", "Hapi", "工作", 100)]);
+        s.conn.execute_batch("CREATE UNIQUE INDEX idx_vault_uniq ON vault_items (platform COLLATE NOCASE, label COLLATE NOCASE); PRAGMA user_version = 5;").unwrap();
+        s.migrate().unwrap();
+        let mut second = s.vault_get("a").unwrap().unwrap();
+        second.id = "b".into(); second.note = "另一个账号".into();
+        s.vault_upsert(&second).unwrap();
+        assert_eq!(s.vault_list().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn vault_group_allows_multiple_accounts_and_preserves_addresses() {
         let s = Store::open_memory().unwrap();
-        let mk = |id: &str, platform: &str, label: &str, ts: i64| VaultItem {
-            id: id.into(),
-            platform: platform.into(),
-            label: label.into(),
-            hint: String::new(),
-            note: String::new(),
-            created_at: ts,
-            updated_at: ts,
+        let mk = |id: &str, account: &str| VaultItem {
+            id: id.into(), platform: "4SAPI".into(), label: "工作".into(),
+            hint: String::new(), note: account.into(),
+            api_endpoint: "https://example.com/v1".into(), website: "https://example.com".into(),
+            created_at: 1, updated_at: 1,
         };
-        s.vault_upsert(&mk("a", "4SAPI", "主key", 100)).unwrap();
-        let e = s
-            .vault_upsert(&mk("b", "4sapi", "主KEY", 200))
-            .unwrap_err();
-        assert!(e.contains("UNIQUE"), "库级约束要真的拦住: {e}");
-        assert_eq!(s.vault_list().unwrap().len(), 1);
-        // 不同标签/不同平台照旧能插
-        s.vault_upsert(&mk("c", "4sapi", "备用", 300)).unwrap();
-        s.vault_upsert(&mk("d", "Hapi", "主KEY", 300)).unwrap();
-        assert_eq!(s.vault_list().unwrap().len(), 3);
+        s.vault_upsert(&mk("a", "alice")).unwrap();
+        s.vault_upsert(&mk("b", "bob")).unwrap();
+        let list = s.vault_list().unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(s.vault_get("a").unwrap().unwrap().api_endpoint, "https://example.com/v1");
+        assert_eq!(s.vault_get("b").unwrap().unwrap().website, "https://example.com");
     }
 
     /// 无窗口前基线(装软件当周/当月):从窗口内首快照起算下限,而不是整格「——」。
@@ -2846,7 +2827,7 @@ mod tests {
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 5, "迁移版本号要推进,否则每次启动都重跑补列");
+        assert_eq!(v, 6, "迁移版本号要推进,否则每次启动都重跑补列");
     }
 
     /// 手动性能基准(不进常规测试):

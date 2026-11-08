@@ -29,6 +29,29 @@ const CANDIDATE_PATHS: [&str; 3] = [
     "/api/v1/me/userplan",
 ];
 
+/// 国内版的候选端点。前三条是**同一组 web 账务路径、换到国内站**;
+/// 最后一条是桌面网关 `openapi.qoder.com.cn` 的汇总接口 —— 它**只回汇总**、
+/// 认不出逐包,保留它是为了区分"网关接受了会话"与"会话被拒":
+/// 结构问题不该把用户引去重复登录(与 Unrecognized 的分档同一目的)。
+///
+/// ⚠ 国内站的真实账务路径**还没有真机样本**(2026-11-08)。这里按国际版同构假设,
+/// 若真机返回 404/结构不同,只会走到"未知"的降级文案,不会伪造到期日。
+const CN_CANDIDATE_ENDPOINTS: [(&str, &str); 4] = [
+    ("qoder.com.cn", CANDIDATE_PATHS[0]),
+    ("qoder.com.cn", CANDIDATE_PATHS[1]),
+    ("qoder.com.cn", CANDIDATE_PATHS[2]),
+    ("openapi.qoder.com.cn", "/api/v2/quota/usage"),
+];
+
+/// 某个区域的候选端点表(主机 + 路径)。国际版保持原样(只有 web 站点三条)。
+fn endpoints_for(site: &weblogin::QoderSite) -> Vec<(&'static str, &'static str)> {
+    if site.id == "qoder-cn" {
+        CN_CANDIDATE_ENDPOINTS.to_vec()
+    } else {
+        CANDIDATE_PATHS.iter().map(|p| (site.host, *p)).collect()
+    }
+}
+
 /// 单个积分包(已经过净化:只留界面要的三样)。
 #[derive(Debug, Clone, PartialEq)]
 pub struct CreditPack {
@@ -90,23 +113,25 @@ pub enum PacksErr {
 
 /// 按候选顺序抓一次逐包列表。全都不像包形状 → Err(带结构说明,只记形状不记值)。
 ///
-/// `memo` 命中时先试赢过的那条,失败再回落全链 —— 每轮取数最多 3 个请求,
-/// 命中后 1 个。
+/// `memo` 命中时先试赢过的那条,失败再回落全链 —— 国际版每轮最多 3 个请求,
+/// 国内版 4 个(多一条 openapi 汇总端点),命中后都只 1 个。
 pub async fn fetch_packs(
     client: &reqwest::Client,
     session: &str,
     memo: &PacksMemo,
+    site: &weblogin::QoderSite,
 ) -> Result<(Vec<CreditPack>, usize), PacksErr> {
     let cookie = cookie_of(session)
         .ok_or(PacksErr::Other("会话凭据不是 cookie 形态".into()))?
         .to_string();
-    let mut order: Vec<usize> = Vec::with_capacity(CANDIDATE_PATHS.len());
+    let endpoints = endpoints_for(site);
+    let mut order: Vec<usize> = Vec::with_capacity(endpoints.len());
     if let Some(w) = memo.winner() {
-        if w < CANDIDATE_PATHS.len() {
+        if w < endpoints.len() {
             order.push(w);
         }
     }
-    for i in 0..CANDIDATE_PATHS.len() {
+    for i in 0..endpoints.len() {
         if !order.contains(&i) {
             order.push(i);
         }
@@ -117,13 +142,16 @@ pub async fn fetch_packs(
     // 这是"会话有效、只是结构没认出来"与"会话被拒"的唯一分界。
     let mut session_ok = false;
     for i in order {
-        let url = format!("https://{}{}", weblogin::QODER_SITE_HOST, CANDIDATE_PATHS[i]);
+        let (host, path) = endpoints[i];
+        // 报错里带主机:`qoder.com` 与 `qoder.com.cn` 的失败要能一眼分开
+        let label = format!("{host}{path}");
+        let url = format!("https://{host}{path}");
         let resp = client
             .get(&url)
             .header("Cookie", &cookie)
             .header("Accept", "application/json")
             // 同源页面本身;有的网关按 Referer/UA 挑路由,与浏览器同源请求保持一致
-            .header("Referer", "https://qoder.com/account/usage")
+            .header("Referer", format!("https://{}/account/usage", site.host))
             .header(
                 "User-Agent",
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
@@ -134,7 +162,7 @@ pub async fn fetch_packs(
         let resp = match resp {
             Ok(r) => r,
             Err(e) => {
-                shapes.push(format!("{}: 请求失败 {e}", CANDIDATE_PATHS[i]));
+                shapes.push(format!("{label}: 请求失败 {e}"));
                 continue;
             }
         };
@@ -147,13 +175,13 @@ pub async fn fetch_packs(
             if code == 401 || code == 403 {
                 unauth_hits += 1;
             }
-            shapes.push(format!("{}: HTTP {st}", CANDIDATE_PATHS[i]));
+            shapes.push(format!("{label}: HTTP {st}"));
             continue;
         }
         let body = match resp.json::<serde_json::Value>().await {
             Ok(v) => v,
             Err(e) => {
-                shapes.push(format!("{}: 非 JSON({e})", CANDIDATE_PATHS[i]));
+                shapes.push(format!("{label}: 非 JSON({e})"));
                 continue;
             }
         };
@@ -163,7 +191,7 @@ pub async fn fetch_packs(
         }) == Some(true)
         {
             unauth_hits += 1;
-            shapes.push(format!("{}: 业务层拒绝会话", CANDIDATE_PATHS[i]));
+            shapes.push(format!("{label}: 业务层拒绝会话"));
             continue;
         }
         // 走到这里 = 平台认了这份会话;后面的判断只关"结构",与登录无关。
@@ -175,8 +203,7 @@ pub async fn fetch_packs(
             }
             None => {
                 shapes.push(format!(
-                    "{}: 响应里没有逐包数据 {}",
-                    CANDIDATE_PATHS[i],
+                    "{label}: 响应里没有逐包数据 {}",
                     shape_sketch(&body)
                 ));
             }

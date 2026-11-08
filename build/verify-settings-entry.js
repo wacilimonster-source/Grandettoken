@@ -52,8 +52,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         return b && { id, hidden: b.hidden, text: b.textContent.trim() };
       }),
       chip: !!document.getElementById('updChip'),
-      reset: (() => { const b = document.getElementById('lkReset');
+      // 2026-11-03 固定布局后,lkReset 已按设计移除,底栏常驻的是「单列/双列」布局切换
+      layout: (() => { const b = document.getElementById('lkLayout');
         return b && { hidden: b.hidden, display: getComputedStyle(b).display, text: b.textContent.trim() }; })(),
+      resetGone: !document.getElementById('lkReset'),
     })`));
     check('标题栏无 #btnS', top.btnS === false);
     check('顶栏固定刷新/置顶/隐藏/胶囊四枚',
@@ -62,9 +64,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     check('顶栏不再有 ⋯ 菜单与「紧凑」按钮',
       !top.btnMenu && !top.hmenu && !top.btnC,
       JSON.stringify({ menu: top.btnMenu, hmenu: top.hmenu, compact: top.btnC }));
-    check('底栏「恢复默认大小」常驻',
-      !!top.reset && !top.reset.hidden && top.reset.display !== 'none' && /默认大小/.test(top.reset.text),
-      JSON.stringify(top.reset));
+    check('底栏「单列/双列」布局切换常驻(旧 lkReset 已移除)',
+      !!top.layout && !top.layout.hidden && top.layout.display !== 'none' && /单列|双列/.test(top.layout.text) &&
+      top.resetGone,
+      JSON.stringify(top.layout));
 
     // ② 底栏三枚是 <button> 且键盘可达(tabIndex 0、非 disabled)
     const foot = JSON.parse(await evalJs(`JSON.stringify({
@@ -91,6 +94,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       await new Promise(r => setTimeout(r, 260));
       const inManage = document.body.classList.contains('view-manage');
       const inFocus = document.activeElement.id;
+      // 入口常驻(2026-11-08):管理页里也固定显示,不再进页就藏
       const keysHidden = getComputedStyle(k).display === 'none';
       document.getElementById('btnBack').click();
       await new Promise(r => setTimeout(r, 260));
@@ -99,7 +103,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       return JSON.stringify({ before, inManage, inFocus, keysHidden, outManage, outFocus });
     })()`, true));
     check('点底栏入口进管理页', focusRound.inManage === true);
-    check('进管理页后入口按设计隐藏', focusRound.keysHidden === true);
+    check('入口常驻:管理页内也固定显示', focusRound.keysHidden === false);
     check('焦点交给页头返回', focusRound.inFocus === 'btnBack', focusRound.inFocus);
     check('返回后焦点还给底栏入口', focusRound.outManage === true && focusRound.outFocus === 'lkKeys', focusRound.outFocus);
 
@@ -149,21 +153,30 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const slack = geom.map((g) => g.footSlack);
     console.log('  底栏弹性空隙(px):', geom.map((g) => `${g.u}${g.withUpd ? '+upd' : ''}=${g.footSlack}`).join(' '));
 
-    // ⑤ 管理页里底栏入口确实隐藏(不出现"进去以后还能点同一个入口"的二义)
-    const hidden = await evalJs(`(async () => {
+    // ⑤ 管理页里入口常驻:再点不重置(不把用户正在读的子页抖回索引页)
+    const reentry = await evalJs(`(async () => {
       openManage();
       await new Promise(r => setTimeout(r, 200));
       const d = getComputedStyle(document.getElementById('lkKeys')).display;
+      // 摆到子页(渠道),点常驻入口后必须仍停在原地
+      showTab('ch');
+      await new Promise(r => setTimeout(r, 100));
+      document.getElementById('lkKeys').click();
+      await new Promise(r => setTimeout(r, 100));
+      const stayed = document.querySelector('#mTabs [data-p="ch"]').classList.contains('on')
+        && !document.body.classList.contains('manage-index');
       closeManage();
       await new Promise(r => setTimeout(r, 200));
-      return d;
+      return JSON.stringify({ d, stayed });
     })()`, true);
-    check('管理页内 #lkKeys 隐藏', hidden === 'none', hidden);
+    const re = JSON.parse(reentry);
+    check('管理页内入口常驻显示', re.d !== 'none', re.d);
+    check('页内再点入口不重置子页', re.stayed === true, JSON.stringify(re));
 
-    // ⑥ 设置页内部结构未被波及
+    // ⑥ 设置页内部结构未被波及(2026-11-08 起多一个「本地模型网关」分区)
     const tabs = JSON.parse(await evalJs(`JSON.stringify([...document.querySelectorAll('#mTabs button')].map(b => b.dataset.p))`));
-    check('设置页 8 个页签原样(含签到/同步)',
-      tabs.length === 8 && tabs.join('/') === 'ch/ck/mdl/disp/run/vault/about/sync', tabs.join('/'));
+    check('设置页 9 个页签原样(含网关/签到/同步)',
+      tabs.length === 9 && tabs.join('/') === 'ch/ck/mdl/disp/run/vault/gateway/about/sync', tabs.join('/'));
 
     console.log(fails ? `\n${fails} FAILED` : '\nALL PASS');
   } catch (e) {
