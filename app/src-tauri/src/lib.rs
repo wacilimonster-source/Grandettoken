@@ -5846,6 +5846,7 @@ pub fn run() {
             gateway::gateway_secret,
             gateway::gateway_publish,
             gateway::gateway_unpublish,
+            gateway::gateway_set_models,
             inject_preview,
             inject_apply,
             inject_remove,

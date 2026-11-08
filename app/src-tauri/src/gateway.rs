@@ -28,6 +28,8 @@ struct Published {
     host: String,
     models: Vec<String>,
     updated_at: i64,
+    #[serde(default)]
+    allowed_models: Option<Vec<String>>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -127,6 +129,7 @@ impl Gateway {
                     .iter()
                     .any(|v| v.id == c.vault_id && v.updated_at == c.updated_at)
             })
+            .map(|mut c| { if let Some(ref allowed) = c.allowed_models { c.models.retain(|m| allowed.contains(m)); } c })
             .collect()
     }
 }
@@ -331,7 +334,7 @@ pub async fn gateway_status(app: tauri::AppHandle) -> Result<Value, String> {
         }
         (inner.settings.clone(), inner.shutdown.is_some())
     };
-    let channels:Vec<Value>=settings.channels.iter().map(|c|{let v=vault.iter().find(|v|v.id==c.vault_id);json!({"vaultId":c.vault_id,"source":c.source,"alias":c.alias,"label":v.map(|v|v.label.clone()).unwrap_or_default(),"count":c.models.len(),"models":c.models.iter().map(|m|model_id(c,m)).collect::<Vec<_>>(),"stale":v.map(|v|v.updated_at != c.updated_at).unwrap_or(true)})}).collect();
+    let channels:Vec<Value>=settings.channels.iter().map(|c|{let v=vault.iter().find(|v|v.id==c.vault_id);json!({"vaultId":c.vault_id,"source":c.source,"alias":c.alias,"label":v.map(|v|v.label.clone()).unwrap_or_default(),"platform":v.map(|v|v.platform.clone()).unwrap_or_default(),"availableModels":c.models,"allowedModels":c.allowed_models,"count":c.models.len(),"models":c.models.iter().map(|m|model_id(c,m)).collect::<Vec<_>>(),"stale":v.map(|v|v.updated_at != c.updated_at).unwrap_or(true)})}).collect();
     Ok(
         json!({"port":settings.port,"lan":settings.lan,"auth":settings.auth,"running":running,"lanIps":local_ips(),"channels":channels,"vault":vault}),
     )
@@ -556,6 +559,7 @@ pub async fn gateway_publish(
     {
         return Err("同一渠道的别名已存在".into());
     }
+    let allowed_models = next.channels.iter().find(|c| c.vault_id == vault_id).and_then(|c| c.allowed_models.clone());
     next.channels.retain(|c| c.vault_id != vault_id);
     next.channels.push(Published {
         vault_id,
@@ -563,8 +567,21 @@ pub async fn gateway_publish(
         alias,
         host,
         models: ids,
+        allowed_models,
         updated_at: item.updated_at,
     });
+    g.save(&next)?;
+    inner.settings = next;
+    Ok(())
+}
+#[tauri::command]
+pub async fn gateway_set_models(app: tauri::AppHandle, vault_id: String, models: Vec<String>) -> Result<(), String> {
+    let g = app.state::<Gateway>();
+    let mut inner = lock(&g.inner);
+    let mut next = inner.settings.clone();
+    let c = next.channels.iter_mut().find(|c| c.vault_id == vault_id).ok_or("密钥未上架")?;
+    if models.iter().any(|m| !c.models.contains(m)) { return Err("模型不在当前列表中，请刷新后重试".into()); }
+    c.allowed_models = Some(models);
     g.save(&next)?;
     inner.settings = next;
     Ok(())
@@ -592,6 +609,7 @@ mod tests {
             host: String::new(),
             models: vec![],
             updated_at: 1,
+            allowed_models: None,
         };
         assert_eq!(
             model_id(&c, "gemini-2.5-flash"),
@@ -652,6 +670,7 @@ mod tests {
                 host: String::new(),
                 models: vec!["test-model".into()],
                 updated_at: 1,
+                allowed_models: None,
             });
         }
         let router = Router::new()
