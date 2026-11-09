@@ -4148,3 +4148,10 @@ Qoder 登录页仍可能用平台自身登录态自动恢复上一账号 —— 
 **门禁**:core `cargo test --locked` **421 passed / 8 ignored**、src-tauri
 `cargo check --all-targets --locked`、`node --check` ×6、CSS 形态门 1079 条 PASS、
 jsdom 冒烟 **177/177**、凭据扫描 CLEAN。
+
+**发布(2026-11-09)**:tag `v0.3.29`,release 提交 `ce81dd3`。安装包
+`Grandettoken_0.3.29_x64-setup.exe` 5,729,224 字节,SHA-256
+`9ceed7d646ff2fa1cfe16906816486357a39af5797480d48423428b3700d8c1d`;`.sig` 424 字节;
+`latest.json` 2,131 字节。`verify-release.js` **14 项全 PASS**(更新端点 200 /
+版本 0.3.29 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft /
+说明完整 / latest 指向 0.3.29 / 仓库公开)。
