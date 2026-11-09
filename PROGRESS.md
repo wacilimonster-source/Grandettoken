@@ -4155,3 +4155,25 @@ jsdom 冒烟 **177/177**、凭据扫描 CLEAN。
 `latest.json` 2,131 字节。`verify-release.js` **14 项全 PASS**(更新端点 200 /
 版本 0.3.29 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft /
 说明完整 / latest 指向 0.3.29 / 仓库公开)。
+
+## 2026-11-09 · Android 0.1.12 小部件自动刷新修复
+
+- 全量排查 App 端 31 个源文件(约 6000 行),确认 8 个 bug 并全部修复,清单见
+  `docs/bug-report-app-2026-11-09.md`:①小部件不自动刷新(`updatePeriodMillis` 0→30 分钟兜底重绘
+  + 缓存超 15 分钟自动补拉 + 刷新任务 KEEP→REPLACE 不再吞请求);②离线点刷新假"刷新中"
+  (WidgetRefreshWorker 去掉联网约束,立即执行并如实显示"离线");③回前台不立即刷新
+  (ON_START 补一次非 force 刷新);④退出同步组不清 GitHub 登录(logout 一并清 token/登录名,
+  弹窗文案同步);⑤首次配置小部件停在"等待首次同步"(保存后触发补拉);⑥更新自动检查失败
+  等 24 小时(改成功 24h/失败 1h 退避);⑦通知 ID 取模碰撞(去掉 %100_000);⑧每次刷新
+  新建 OkHttpClient(共享单例,复用连接池)。
+- 门禁:Android `testDebugUnitTest` 全绿;签名 release APK 构建后模拟器全新安装成功,
+  启动无 FATAL,落在「加入同步组」页(截图 `build/qa/android-v0.1.12/smoke-pair-screen.png`);
+  APK 签名证书 SHA-256 与 `certificate-sha256.txt` 一致(`c56dbf42…`)。
+- 发布:tag `android-v0.1.12`(release 提交见 git log),APK
+  `Grandettoken-android-v0.1.12.apk` 11,035,540 字节,SHA-256
+  `d69becaedd014fb7ea5cff6694bddc50747c5b9bf5a7c8b9c1f3bd8ce6b9b2ee`,证书
+  `CN=Grandettoken Android Release`;匿名下载 SHA 与本地一致。
+- `android-stable/android-latest.json` 重签为 0.1.12(1,310 字节),线上清单用
+  `manifest-public.txt` 回验 Ed25519 签名、版本、大小、哈希、下载地址全通过。
+- 桌面 `releases/latest` 保持 `v0.3.29`(Android release 创建后显式
+  `gh release edit v0.3.29 --latest`,未抢占 PC 更新端点)。
