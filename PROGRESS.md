@@ -4064,3 +4064,13 @@ v0.3.14 宣布「句中半角」标点基线后只改了实现、漏了用例 �
 - 托盘更新改为串行发送并合并中间帧，避免 DPI 变化时旧尺寸图标后到覆盖新图标；发送失败仍清去重键以便重试。
 - 门禁：core 419 + 6 夹具、src-tauri 13、jsdom 177/177、CSS 形态门 1080 条、新增 `build/verify-tray.js`（真实 Chromium 画布）110/110；`android/` 无改动未跑 Gradle。
 - 发布：tag `v0.3.25`，release 提交 `5290e91`。安装包 `Grandettoken_0.3.25_x64-setup.exe` 5,721,742 字节，SHA-256 `841aba3946ddc2c179037070d8e6e777fec3755c052aeefd371b5ef8f3031a45`；`.sig` 424 字节；`latest.json` 1,584 字节。`verify-release.js` 14 项全 PASS（更新端点 200 / 版本 0.3.25 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft / 说明完整 / latest 指向 0.3.25 / 仓库公开）。
+
+## 2026-11-09 · v0.3.26 托盘数字改用系统窄体字形
+
+- 托盘数字从手工点阵字形改为系统窄体字体（`Bahnschrift SemiCondensed`，缺失时退回 `Segoe UI`）：16px 下三位数依然清晰，字形比点阵自然。
+- 字号按 `actualBoundingBox*` 量出的实际墨迹边界选择（从 `1.75×size` 起按 0.25px 递减到 4px），不再按字符个数估算；小数、负号、`k` / `w` 单位走同一套排版，避免单位被挤小或裁切。
+- 极长缩写仍放不下时按墨迹边界等比缩小，左右突出部分与上下都留在图标内；正常路径按墨迹居中并取半像素定位。
+- 上一版的 DPI 自适应绘制、串行合并托盘帧、30 秒尺寸校验保持不变；本轮 Rust 侧无改动。
+- 门禁：core 419 + 6 夹具、jsdom 177/177、CSS 形态门 1080 条、`build/verify-tray.js` 125/125（新增 `-1.2k` / `100w` / `123456789w` 三个超长与负数用例）；`android/` 无改动未跑 Gradle。
+- 发布：tag `v0.3.26`，release 提交 `7667368`。安装包 `Grandettoken_0.3.26_x64-setup.exe` 5,720,656 字节，SHA-256 `cbb3ed4c052ab7a387607ecfe8ccf8027b564d875129f5963e08e39446cf82f2`；`.sig` 424 字节；`latest.json` 1,368 字节。`verify-release.js` 14 项全 PASS。
+- 备注：本机直连 GitHub 超时（需要 `127.0.0.1:7897` 代理），Node 24 的 `fetch` 默认不读 `HTTP(S)_PROXY`，核验时要带 `NODE_USE_ENV_PROXY=1`，否则报 `fetch failed`。
