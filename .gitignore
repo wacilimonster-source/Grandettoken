@@ -22,6 +22,11 @@ node_modules/
 *.sqlite
 *.sqlite3
 
+*.db.bak
+# QA 留档的 Cookie 罐备份(含会话),不区分清洁前后
+build/qa/**/Cookies.*
+build/qa/**/Cookies.clean
+
 # ── 密钥 / 凭据(理论上不会落到文件,防御性忽略)──
 *.pem
 *.key

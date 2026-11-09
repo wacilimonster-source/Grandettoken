@@ -73,7 +73,11 @@ impl ProxyClientCache {
 fn build_client(system_proxy: bool) -> Result<reqwest::Client, String> {
     let builder = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(15));
+        .connect_timeout(Duration::from_secs(15))
+        // 读空闲超时(报告 B7):上游握手完成后若不吐响应头、或 SSE 流中途断流,
+        // 没有这一项连接会**永久悬挂**,网关任务堆积只能重启恢复。60s 对流式足够宽
+        // —— 正常打字也会持续吐 chunk,真静默 60 秒就是挂了。
+        .read_timeout(Duration::from_secs(60));
     let builder = if system_proxy {
         builder
     } else {

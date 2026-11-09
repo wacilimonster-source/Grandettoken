@@ -986,6 +986,9 @@ pub async fn sync_publish_now(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<PublishOutcome, String> {
+    // 与自动发布(maybe_publish)同一条闸(报告 L14):配置损坏时手动发布会把默认
+    // 配置的数据发出去,而 last_upload_at 又必然记不上 —— 下次还发,白烧 gist 写入。
+    crate::refuse_if_config_broken()?;
     let views = fetch_views(state.inner()).await;
     publish_views(&app, &views, false).await
 }
@@ -994,7 +997,9 @@ pub async fn sync_publish_now(
 pub async fn sync_read_group(state: State<'_, AppState>) -> Result<ReadOutcome, String> {
     let cfg = cfg_of(state.inner())?;
     let (master, relay_id, gist_id) = master_of(&cfg)?;
-    let client = GistClient::new(github_token_opt()).map_err(err_str)?;
+    // 与同文件其它命令同口径(报告 L14):没连 GitHub 就明说,别拿匿名请求去换一个
+    // 误导性的 404「Gist 不存在」。
+    let client = GistClient::new(Some(github_token()?)).map_err(err_str)?;
     let fetched = sync::fetch_sources(
         &client,
         &gist_id,
@@ -1226,7 +1231,9 @@ pub async fn sync_disconnect_github(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let _guard = PUBLISH_LOCK.lock().await;
-    secrets::sync_delete(secrets::SYNC_OAUTH_ACCOUNT)?;
+    // 先存「已断开」再删凭据(报告 L14):顺序反过来的话,保存一旦失败,配置里还
+    // 指着一把已经删掉的 token,后续发布会一直 401。反过来失败也只是留下一个
+    // 孤儿凭据(下次断开重删即可),状态是自洽的。
     save_sync_config(state.inner(), |c| {
         c.sync_enabled = false;
         c.sync_github_login = None;
@@ -1236,6 +1243,7 @@ pub async fn sync_disconnect_github(
         c.sync_last_error_at = Some(now_ts());
     })
     .await?;
+    secrets::sync_delete(secrets::SYNC_OAUTH_ACCOUNT)?;
     emit_status(&app);
     Ok(())
 }

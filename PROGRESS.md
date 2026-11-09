@@ -4121,6 +4121,59 @@ jsdom 冒烟 **177/177**(本机临时装 jsdom 27.4.0 跑)、凭据扫描 CLEAN(
 版本 0.3.28 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft /
 说明完整 / latest 指向 0.3.28 / 仓库公开)。真机「切换账号」回归待装 0.3.28 后补。
 
+## 2026-11-10 · v0.3.30 托盘不再闪 + 全量代码排查修复 23 项缺陷
+
+本版两部分:**请求数据时托盘/胶囊不再闪**(fetch.rs:取数发起不再发布
+「失联 + 更新中」过场视图,内置与自定义渠道同口径,2026-11-09 用户反馈)
+与**一次全量代码排查的 23 项修复**。排查方法:四路并行通读 PC 端全部代码
+(app.js 9051 行 + Rust 后端 8514 行 + HTML/CSS/配置),高危/中危逐条回读
+源码二次核实;报告在 `docs/report/bug-report-pc-audit-2026-11-10.md`。
+
+**23 项修复清单**(编号沿用报告):
+
+- **B1(高)** `set_config` 整份覆盖漏保护 `custom_channels` —— 改任意设置会把
+  刚加的自定义渠道删掉/把删掉的复活、密钥成孤儿。后端一行收口:该字段只由
+  custom_add/custom_remove 改。
+- **B2(中)** `settle_arrivals` 持 config 锁嵌套拿 store 锁,与 check_update 的
+  锁序相反 → AB-BA 死锁可整体冻死挂件。改为「config 锁内抄清单,放锁后读 store」。
+- **B3(中)** `key_reveal`/`key_copy`/`key_hint` 只认静态渠道表,自定义渠道的
+  「复制/显示密钥」必报「未知渠道」(key_copy 还带 `expect` panic 风险)。
+  改用 `key_allowed` 同款放行 + `channel_display_name` 助手。
+- **B4(中)** 6 处绕过 `CFG_WRITE` 串行闸的配置写(record_checkin_skip /
+  wb_finish_login 整份克隆回写内存最重)—— 用户在落库窗口改的设置会被倒回。
+  全部收进 `save_config_off_main`,只合并各自字段;损坏闸(P1-16)一并补齐。
+- **B5(中)** 底栏计数错位:warn 过滤写成 `hvTone==="bad"`,黄色预警被算成
+  「正常」、红线被标黄「预警」。改为与行内 dotCls 同源口径。
+- **B6(中)** Qoder/qoder-cn 签到「去登录」统一落到 Trae 文案。按渠道分指路。
+- **B7(中)** 网关 `/chat/completions` 无读超时,上游挂起连接永久悬挂。
+  proxy 客户端加 60s `read_timeout`(流式友好)。
+- **L1-L8(前端)** 详情重取失败保留缓存;模型可用数 0 不再误报 total;
+  配额窗口数字套 `dispPct`;临期窗口按自然日对齐(柱/合计/「最先到期」三处);
+  签到徽标 tooltip 用北京小时;Esc 一次只动一层(主链让 promo 弹层);
+  checkin_state/历史读失败保留旧值 + 重试入口(`ckhretry` 动作);
+  channels-updated / crit-alert / 登录事件提前到首轮 refresh 之前挂。
+- **L9-L16(Rust/配置)** 凭据读失败不再吞成「还没填密钥」(probe_channel /
+  run_diagnostic / source_key 三处,`source_key` 改 `Result`);节拍器套用手动入口
+  同款 gate_like 过滤;activity_ready 三处按 period 门控(新助手
+  `activity_ready_today`);custom_add 编号分配原子化(占位先落盘,密钥失败回滚);
+  体检读 live 配置、损坏时降级不外呼;sync_publish_now 补损坏闸 /
+  sync_disconnect 先存后删 / sync_read_group 改 `github_token()?`;
+  网关透传上游错误体(截 400 字)+ Retry-After + 无鉴权本机模式校验 Host
+  (DNS rebinding 免疫,测试同步更新);`Gateway::new` 改 `Result`,失败记
+  startup_error 不再 panic。
+
+**门禁**:core `cargo test --locked` **421 passed / 8 ignored**、src-tauri
+`cargo test` **14 passed**(含更新后的网关授权用例)、`cargo check`、
+`node --check app.js`、CSS 形态门 1079 条 PASS、jsdom 冒烟 **177/177**。
+编译期抓到并修掉三处:`record_checkin_skip` 转 async 后 store guard 需块级
+作用域才能过 Send 检查;run_diagnostic 的 match 臂要 `Ok(...)` 包装;
+块尾表达式的 guard 临时值生命周期(E0597)。
+
+**发布(2026-11-10)**:tag `v0.3.30`,release 提交见 `git log`。安装包
+`Grandettoken_0.3.30_x64-setup.exe` 5,735,664 字节,SHA-256
+`7bd0ddc591030def656e6a4b9d677eed694812176a46c9f972a3c5086f0adfca`;`.sig` 424 字节;
+`latest.json` 见 release 资产。`verify-release.js` 见下。
+
 ## 2026-11-09 · v0.3.29 Qoder「切换账号」真正清掉旧网页会话
 
 v0.3.28 真机复现:点「切换账号」日志说"已清该区域 Cookie",但 Cookies 库里

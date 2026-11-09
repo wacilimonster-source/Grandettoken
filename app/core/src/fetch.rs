@@ -3004,13 +3004,13 @@ impl Fetcher {
                     let scope = creds.first().map(|c| {
                         credential_scope(c)
                     }).unwrap_or_default();
+                    // 取数开始不再发「更新中」过场(2026-11-09 用户反馈:请求数据时
+                    // 托盘绿底变灰、数字变白,胶囊光环闪失败态,取完又回绿)。
+                    // 以前这里把缓存快照临时置为 invalid + retrying 推给界面 —— 把
+                    // "正在请求"当成了状态变化。现在请求期间四种形态都保持上一次
+                    // 成功后的画面,数字与颜色只在这一轮真正取到数后更新;真正的
+                    // 失败仍走下面 no-cred / pending 的发布口径,不受影响。
                     let cached = self.cached(store, def.id, &scope);
-                    if let Some((mut r, ts)) = cached.clone() {
-                        r.valid = false; r.limited = false;
-                        let mut v = build_view(def, r, true, ts, &store.lock().unwrap(), &cfg, creds.first(), &fp, 1);
-                        v.recovery = Some(RecoveryView { phase: "retrying".into(), ..Default::default() });
-                        self.publish(v);
-                    }
                     if creds.is_empty() {
                         if cached.is_some() || secret_err.is_some() { self.failed(def.id, None); }
                         // 「读不到凭据」经常是瞬时的:Codex 正在写 auth.json(文件被占)、
@@ -3391,16 +3391,16 @@ impl Fetcher {
         // 最坏等待取两者较大值;自定义内部再限 4 并发,避免几十个渠道瞬间打满。
         let custom_channels: Vec<_> = cfg.custom_channels.iter().filter(|c| should_fetch(&c.id)).cloned().collect();
         let custom_observer = |ch: &custom::CustomChannel, r: Option<&custom::CustomResult>, fp: &str| {
+            // 与内置渠道同一条口径:observer 收到 None = 请求刚发起,不发「更新中」
+            // 过场 —— 请求期间保持上一次成功后的画面,结果回来才更新(2026-11-09 用户反馈)。
+            // fetch_custom 总会返回一个结果(成功或失败),所以每个请求必有后续的
+            // Some 发布,这里提前返回不会让渠道停在旧状态上。
+            let Some(r) = r else { return };
             let cached = Snapshot::load(&store.lock().unwrap(), &ch.id, &custom_scope(ch, fp));
-            let pending = custom::CustomResult { valid: false, remaining: None, failure_kind: None, error: None, url_used: None, probe_only: ch.probe_only };
-            if r.is_none() && cached.is_none() { return; }
-            let mut v = build_custom_view(ch, r.unwrap_or(&pending), &store.lock().unwrap(), fp, 1);
+            let mut v = build_custom_view(ch, r, &store.lock().unwrap(), fp, 1);
             if !v.valid {
                 if let Some(c) = cached { v.remaining = c.result.remaining; v.updated_at = c.ts; v.stale = true; }
-                v.recovery = Some(match r {
-                    Some(r) => Recovery::failed(self.recovery.lock().unwrap().get(&ch.id), now_ts(), r.failure_kind).view(now_ts()),
-                    None => RecoveryView { phase: "retrying".into(), ..Default::default() },
-                });
+                v.recovery = Some(Recovery::failed(self.recovery.lock().unwrap().get(&ch.id), now_ts(), r.failure_kind).view(now_ts()));
             }
             self.publish(v);
         };

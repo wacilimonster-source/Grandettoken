@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "channel": "stable",
+  "applicationId": "com.wacil.grandettoken.sync",
+  "versionName": "0.1.11",
+  "versionCode": 12,
+  "publishedAt": "2026-11-08T14:56:14Z",
+  "notes": "Android 0.1.11：首页顶栏显示签到进度（已签/总数），移除渠道列表上方的重复汇总卡。",
+  "releasePage": "https://github.com/wacilimonster-source/Grandettoken/releases/tag/android-v0.1.11",
+  "minSdk": 26,
+  "artifacts": [
+    {
+      "abi": "universal",
+      "sizeBytes": 11035536,
+      "sha256": "ed09c3b5d68a2f8c53468efe8208dcb62a3a8728bb08ef12ef476adacf402c7a",
+      "downloadUrl": "https://github.com/wacilimonster-source/Grandettoken/releases/download/android-v0.1.11/Grandettoken-android-v0.1.11.apk"
+    }
+  ]
+}

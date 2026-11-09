@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "channel": "stable",
+  "applicationId": "com.wacil.grandettoken.sync",
+  "versionName": "0.1.12",
+  "versionCode": 13,
+  "publishedAt": "2026-11-09T15:37:20Z",
+  "notes": "Android 0.1.12:小部件自动刷新修复——桌面每 30 分钟自动重绘并补拉,离线刷新立即提示,回前台立即刷新;退出同步组同时退出 GitHub 登录;更新检查失败 1 小时重试。",
+  "releasePage": "https://github.com/wacilimonster-source/Grandettoken/releases/tag/android-v0.1.12",
+  "minSdk": 26,
+  "artifacts": [
+    {
+      "abi": "universal",
+      "sizeBytes": 11035540,
+      "sha256": "d69becaedd014fb7ea5cff6694bddc50747c5b9bf5a7c8b9c1f3bd8ce6b9b2ee",
+      "downloadUrl": "https://github.com/wacilimonster-source/Grandettoken/releases/download/android-v0.1.12/Grandettoken-android-v0.1.12.apk"
+    }
+  ]
+}

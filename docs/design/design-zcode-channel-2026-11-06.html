@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>产品设计 · ZCode 渠道(每日赠送额度领取)· 2026-11-06</title>
+<style>
+  :root{
+    --bg:#0f1115; --fg:#e6e8ee; --mut:#9aa3b2; --line:#262b36; --card:#151922;
+    --ac:#2f7cf6; --qg:#00b3a4; --qc:#e8622c; --ok:#2fbf71; --warn:#f5a623; --bad:#e5484d;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f6f7f9; --fg:#1b1f27; --mut:#5b6472; --line:#dfe3ea; --card:#fff; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:15px/1.72 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1080px;margin:0 auto;padding:28px 22px 90px}
+  h1{font-size:26px;margin:0 0 4px}
+  h2{font-size:19px;margin:38px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+  h3{font-size:16px;margin:22px 0 6px}
+  h4{font-size:14px;margin:16px 0 4px;color:var(--mut);font-weight:600}
+  p{margin:8px 0}
+  code{background:rgba(127,127,127,.16);padding:1px 5px;border-radius:4px;font-size:13px;
+    font-family:"Cascadia Mono",Consolas,monospace;word-break:break-all}
+  pre{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px;
+    overflow-x:auto;font-size:12.5px;line-height:1.6;font-family:"Cascadia Mono",Consolas,monospace}
+  .sub{color:var(--mut);font-size:13px}
+  .hand{border:1px solid var(--ac);border-left-width:4px;background:var(--card);
+    border-radius:8px;padding:14px 16px;margin:18px 0}
+  .hand b{color:var(--ac)}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:rgba(127,127,127,.08);font-weight:600;white-space:nowrap}
+  td.nowrap{white-space:nowrap}
+  .tag{display:inline-block;padding:0 7px;border-radius:10px;font-size:12px;border:1px solid var(--line)}
+  .t-fact{color:var(--ok);border-color:var(--ok)}
+  .t-half{color:var(--warn);border-color:var(--warn)}
+  .t-risk{color:var(--bad);border-color:var(--bad)}
+  .t-tbd{color:var(--mut)}
+  .note{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:10px 0}
+  .note.warn{border-left:3px solid var(--warn)}
+  .note.bad{border-left:3px solid var(--bad)}
+  .note.ok{border-left:3px solid var(--ok)}
+  ul,ol{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+  .card{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--card);
+    max-width:430px;position:relative;overflow:hidden}
+  .card .bar{position:absolute;left:0;top:0;bottom:0;width:3px}
+  .card .r1{display:flex;align-items:center;gap:8px;padding-left:6px}
+  .card .nm{font-weight:600}
+  .card .big{font-size:26px;font-weight:700;padding-left:6px;margin:4px 0 2px;letter-spacing:.5px}
+  .card .ln{font-size:12.5px;color:var(--mut);padding-left:6px}
+  .badge{margin-left:auto;font-size:12px;padding:2px 8px;border-radius:11px;border:1px solid;white-space:nowrap}
+  .ckrow{display:flex;align-items:center;gap:8px;margin-top:8px;padding:7px 8px 7px 6px;
+    border-top:1px dashed var(--line);font-size:13px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media (max-width:860px){.grid2{grid-template-columns:1fr}}
+  .kbd{font-size:11px;color:var(--mut)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>ZCode 渠道:每日赠送额度领取(用户口径「积分」)</h1>
+<p class="sub">产品设计 · 2026-11-06 · 证据来源:magpie #1001 实测记录、CreditDaddy 源码(社区实现)、本机 <code>~/.zcode/v2/credentials.json</code> 结构实测</p>
+
+<div class="hand">
+<b>一句话:</b>把 ZCode(Z.ai 官方 CLI/桌面端账号)接成第 11 个内置渠道,自动领取官方客户端里的<b>每日赠送额度</b>(Trust Build 等活动,用户口径叫「积分」)。
+展示口径按用户要求收得很紧:<b>只有「本应用当天领取成功」才显示渠道卡和积分,其余一切情况(无活动 / 已被官方客户端领走 / 验证码拦截 / 失败)整卡隐藏</b>。
+本地切换 ZCode 账号后,老账号的领取展示立即让位,新账号重新走自己的领取与展示。
+</div>
+
+<div class="note warn">
+<b>先泼一盆冷水(期望管理):</b>上游对领取接口<b>部署了阿里云验证码</b>(部分账号/时段强制)。
+magpie 官方在 <a href="https://github.com/yetone/magpie/issues/1001">#1001</a> 明确裁决:<b>不做自动过验证码</b>,只做只读提示。
+本设计跟随这条裁决:v1 <b>只做「不带验证码直领」</b>——服务端未风控时直接成功;返回 3007 时<b>放弃并隐藏</b>,绝不尝试绕过。
+所以这个功能<b>不保证每天都领到</b>,领不到的日子渠道卡就是不在——这恰好与用户「没领到就不展示」的要求天然一致。
+</div>
+
+<h2>0. 先说结论(八条)</h2>
+<table>
+<tr><th>#</th><th>结论</th><th>证据等级</th></tr>
+<tr><td>1</td><td>ZCode 的「积分」= 官方客户端的<b>每日赠送额度</b>(活动套餐),接口是 <code>GET …/zcode-plan/billing/preview</code> → <code>POST …/zcode-plan/billing/claim</code>,与 Trae/Qoder 的签到同族,融入现有 <code>checkin.rs</code> 框架</td><td><span class="tag t-half">社区实测</span></td></tr>
+<tr><td>2</td><td>赠送是<b>token 额度</b>不是货币积分:样例 plan <code>zcode-v3-start-plan-trust-1006</code>,grant_units=1 亿 token,模型 GLM-5.3-Flash,one_time、有效期约 24h</td><td><span class="tag t-half">社区实测</span></td></tr>
+<tr><td>3</td><td>展示口径:<b>卡片仅在本应用当天 claim 成功(code=0 或 1003 且有本应用记录)时出现</b>,大数字 = 今日领取数额(亿 token 格式);preview 为空 / 1003 无本应用记录 / 1005 / 3007 / 失败 / 无凭据 → 整卡隐藏</td><td><span class="tag t-tbd">产品决策</span></td></tr>
+<tr><td>4</td><td>仅 <b>z.ai 国际版</b>有此接口;bigmodel 国内版无 preview/claim(CreditDaddy 源码佐证)。本机当前 <code>oauth:active_provider</code> 即 z.ai,对得上</td><td><span class="tag t-fact">本机实测</span>+<span class="tag t-half">社区代码</span></td></tr>
+<tr><td>5</td><td>凭据读本机 <code>~/.zcode/v2/credentials.json</code> 的 <code>zcodejwttoken</code>(Bearer),与模型注入读 <code>config.json</code> 同目录不同文件;账号指纹取 <code>oauth:zai:user_info</code> 的用户 id,取不到退化为 token 整串哈希</td><td><span class="tag t-fact">本机实测</span></td></tr>
+<tr><td>6</td><td><b>账号切换</b>:展示与账本全部按「日期+账号指纹」分账(沿用 <code>key_fp</code> 机制)。切换后老账号今日领取立即隐藏,新账号当天重查 preview、按自己的领取结果决定展示</td><td><span class="tag t-tbd">产品决策</span></td></tr>
+<tr><td>7</td><td>渠道 id 用 <code>zcode</code>。与模型注入的 <code>Client::Zcode</code>(inject.rs)<b>只是同名、不同子系统</b>:一个写 <code>~/.zcode/v2/config.json</code>,一个读 <code>credentials.json</code>,配置键域不重叠,文档注明即可</td><td><span class="tag t-fact">代码确认</span></td></tr>
+<tr><td>8</td><td>v1 不做:验证码自动化(永久)、bigmodel 国内版领取、z.ai 开放平台积分签到(<code>/v2/billing/meter/daily-checkin</code>,那是另一套体系,不属于 zcode 渠道)</td><td><span class="tag t-tbd">范围裁决</span></td></tr>
+</table>
+
+<h2>1. GitHub 调研:谁做过、他们的结论是什么</h2>
+
+<table>
+<tr><th>项目</th><th>做了什么</th><th>对本设计的价值</th></tr>
+<tr>
+<td><a href="https://github.com/techysy/CreditDaddy">techysy/CreditDaddy</a></td>
+<td>AI 编程工具多账号管理 + 签到领取,ZCode 部分实现了 <code>billing/preview → claim</code> 全自动轮询(桌面版用隐藏窗口跑阿里云验证码 SDK 静默验证)</td>
+<td><b>接口细节的主要来源</b>(域名、请求头、错误码、返回结构、版本校验坑)。其验证码自动化部分<b>不采纳</b>(见 §7)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/yetone/magpie/issues/1001">yetone/magpie #1001</a></td>
+<td>ZCode 用户请求「每日赠送额度自动领取」,维护者逐方案裁决</td>
+<td><b>官方态度的风向标</b>:方案 A(程序过验证码)被明确拒绝,理由是「用程序去过 ZCode 的人机验证,本质上就是绕过它」;方案 B(只读 preview + 提示去客户端领)已落地</td>
+</tr>
+<tr>
+<td><a href="https://github.com/OLmatter/glm-coding-helper">OLmatter/glm-coding-helper</a></td>
+<td>GLM Coding Plan 抢购助手(油猴脚本 + OCR 验证码)</td>
+<td>场景不同(抢购套餐),不相关</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tmyiezsr/GLM-Coding">tmyiezsr/GLM-Coding</a></td>
+<td>优惠码与套餐活动信息汇总</td>
+<td>仅活动情报参考</td>
+</tr>
+</table>
+
+<div class="note">
+<b>为什么我们比 magpie 多做一步(自动 claim),又不越界:</b>
+magpie 只做只读 preview,是因为它面向所有用户、必须对风控零风险。
+葛朗台的定位是「能领的自动领」,所以直领要试——但<b>验证码是硬边界</b>:3007 即止,引导去官方客户端,和 magpie 的方案 B 行为等价。
+服务端未启用验证码时,不带验证码的 claim 本来就是官方允许的请求(magpie 实测 preview 无需验证码、claim 对未风控账号可过;CreditDaddy 的策略注释原文:「先直接 claim(不带验证码:服务端未风控时可直接成功)」)。
+</div>
+
+<h2>2. 上游接口与凭据取证</h2>
+
+<h3>2.1 接口清单(z.ai 国际版)</h3>
+<table>
+<tr><th>用途</th><th>方法 + URL</th><th>说明</th></tr>
+<tr><td>查可领活动</td><td><code>GET https://zcode.z.ai/api/v1/zcode-plan/billing/preview?app_version={ver}&amp;platform=win32-x64</code></td><td>返回 <code>data.plans[]</code>,已领过的账号返回空数组;<code>data.server_time</code> 秒级时间戳</td></tr>
+<tr><td>领取</td><td><code>POST https://zcode.z.ai/api/v1/zcode-plan/billing/claim</code></td><td>body <code>{"plan_id":"…"}</code>;成功 <code>code=0</code> 且 <code>data.plan</code> 含 name/starts_at/ends_at</td></tr>
+<tr><td>余额(回查用)</td><td><code>GET https://zcode.z.ai/api/v1/zcode-plan/billing/balance</code></td><td><code>data.balances[]</code> 含 total/used/remaining_units、show_name、expire_at;<code>data.plans[]</code> 按含 <code>status==='active'</code> 过滤。仅作回查证据,<b>不渲染</b></td></tr>
+<tr><td>验证码配置</td><td><code>GET https://zcode.z.ai/api/v1/client/configs</code></td><td>含 captcha enabled/region/sceneId。v1 只用来记日志,不做后续动作</td></tr>
+</table>
+
+<h3>2.2 请求头</h3>
+<pre>Authorization: Bearer &lt;zcodejwttoken&gt;
+User-Agent: ZCode/&lt;app_version&gt;
+X-ZCode-App-Version: &lt;app_version&gt;      ← billing 接口对客户端版本有校验,过低直接 3001
+X-Platform: win32-x64
+X-Release-Channel: stable
+X-Client-Language: zh-CN
+X-Device-Mid: &lt;稳定 UUID&gt;               ← 首次生成后存 settings 表,之后不换
+x-request-id: &lt;每请求随机 UUID&gt;</pre>
+
+<h3>2.3 preview 返回结构(关键字段)</h3>
+<pre>data.plans[]:
+  plan_id: "zcode-v3-start-plan-trust-1006"
+  name:    "ZCode Trust Build"
+  priority
+  entitlements[]:            ← 过滤 meter==='model_usage' &amp;&amp; unit_type==='token'
+    show_name:  "GLM-5.3-Flash"
+    grant_units: 100000000  ← 1 亿 token
+    period:     "one_time"  ← daily / weekly / monthly / one_time</pre>
+
+<h3>2.4 业务错误码(一律按 code 判定,HTTP 200 不代表成功)</h3>
+<table>
+<tr><th>code</th><th>含义</th><th>本应用处置</th><th>展示</th></tr>
+<tr><td>0</td><td>领取成功</td><td>记领取证据(响应含 plan 明细),balance 回查做到账核对</td><td class="nowrap"><b>显示 ✓</b></td></tr>
+<tr><td>1003</td><td>该套餐已领取过</td><td>本应用今天已有成功记录 → 按已领口径;无记录(官方客户端领的)→ 不是我们领的</td><td class="nowrap">有记录→✓ / 无→隐藏</td></tr>
+<tr><td>1001</td><td>套餐不存在</td><td>静默(活动下架)</td><td>隐藏</td></tr>
+<tr><td>1002</td><td>活动已结束/暂不可领</td><td>静默</td><td>隐藏</td></tr>
+<tr><td>1004</td><td>不符合领取条件</td><td>记日志</td><td>隐藏</td></tr>
+<tr><td>1005</td><td>今日名额已用完</td><td>按响应 <code>data.plan.ends_at</code> snooze,当天不再试</td><td>隐藏</td></tr>
+<tr><td>3001</td><td>参数错误(常见于 app_version 过低)</td><td>版本取证项(见 §7);重试一次后放弃</td><td>隐藏</td></tr>
+<tr><td>3007</td><td>验证码校验失败</td><td><b>硬边界:放弃,不绕过</b></td><td>隐藏(+可选提示,见 §8-A)</td></tr>
+<tr><td>401</td><td>未登录/凭据失效</td><td>Outcome::AuthNeeded,凭据指纹标失效</td><td>隐藏</td></tr>
+</table>
+
+<div class="note ok">
+<b>preview 为空 ≠ 无事可做</b>(CreditDaddy 实测坑):服务端偶尔把活动从 preview 列表藏起来(2026-10-30 WEEKEND BUILD 实测 preview 空、按已知 planId 直领可成功)。
+所以 empty-preview 时还差一步:对<b>昨天领过的 planId 形态</b>做一次试探性 claim,1001/1002 静默当没有,0 即成功。
+v1 简化:只在「昨天成功领过某 planId」时做这一次试探,不维护硬编码活动清单。
+</div>
+
+<h3>2.5 本机凭据取证(2026-11-06 实测,值已脱敏)</h3>
+<pre>~/.zcode/v2/credentials.json 顶层键:
+  zcodejwttoken                     &lt;string:387&gt;   ← 领取用 JWT(Bearer)
+  oauth:zai:access_token            &lt;string:1919&gt;
+  oauth:zai:user_info               &lt;string:330&gt;   ← 账号指纹来源(用户 id)
+  oauth:active_provider             &lt;string:51&gt;    ← 当前激活的提供方
+  account-provider:coding-plan:…api-key           ← bigmodel 侧密钥(本设计不用)
+  project-key-location:v1:…(4 条)                 ← 项目密钥定位(本设计不用)</pre>
+<p>本机 <code>oauth:active_provider</code> 指向 z.ai → 功能可用。若某天切到 bigmodel 激活,<b>无 preview/claim 接口</b>,渠道自然全程隐藏(CreditDaddy 源码:preview/claim 仅存在于 zcode.z.ai 域名)。</p>
+<div class="note warn">
+CreditDaddy 提到部分安装的凭据值是 <code>enc:v1:</code> 信封(AES-256-GCM 派生密钥)。本机当前为明文 JSON 值,但实现必须<b>两者都兼容</b>:值以 <code>enc:v1:</code> 开头走解密,否则直接用。
+</div>
+
+<h2>3. 展示设计:「领取到才存在」的渠道</h2>
+
+<h3>3.1 展示谓词(全部满足才渲染渠道卡)</h3>
+<pre>show = 签到开关开(settings.zcode.checkinEnabled)
+     &amp;&amp; 凭据可读且 active_provider=zai
+     &amp;&amp; 今天(自然日)本应用【按当前账号指纹】领取成功</pre>
+<p>四条任一不满足 → <b>整卡一个像素都不画</b>(复用现有徽标三条硬规矩里的第 1、2 条精神:没开启不画、状态没读到不画)。这与 WorkBuddy 的 <code>auto_hide_when_no_credential</code> 是两种隐藏:zcode 的隐藏是<b>展示规则</b>,不写用户的 hidden 设置,两者互不污染。</p>
+
+<h3>3.2 卡片 mock</h3>
+<div class="grid2">
+<div>
+<h4>领取成功日(唯一可见形态)</h4>
+<div class="card">
+  <div class="bar" style="background:var(--ac)"></div>
+  <div class="r1"><span class="nm">ZCode</span>
+    <span class="badge" style="color:var(--ok);border-color:var(--ok)">✓ 已签</span></div>
+  <div class="big">+1亿 <span style="font-size:13px;color:var(--mut)">token</span></div>
+  <div class="ln">今日领取 · GLM-5.3-Flash · 有效期至 11-07 09:00</div>
+  <div class="ckrow">已领到 +100000000 token · 余额已确认到账(增量吻合)</div>
+</div>
+<p class="sub">大数字 = 今日领取的赠送额度(亿格式化),<b>不是余额</b>。数额来自领取前 preview 的 entitlements;
+响应里 effective_at 晚于领取时刻时,次行标注「HH:mm 生效」,<b>不因此隐藏</b>——领取动作已成功,积分已是账户的。</p>
+</div>
+<div>
+<h4>其余一切日子</h4>
+<div class="card" style="border-style:dashed;opacity:.55">
+  <div class="r1"><span class="nm" style="color:var(--mut)">ZCode</span></div>
+  <div class="big" style="color:var(--mut);font-size:15px">(整卡不渲染)</div>
+  <div class="ln">无活动 / 已被官方客户端领走 / 验证码拦截 / 失败 / 无凭据 / 开关关</div>
+</div>
+<p class="sub">注意「已被官方客户端领走」也不展示:1003 且本应用无成功记录 = <b>不是我们领的</b>。
+这与全应用既有口径同源(「✓+100 会让人以为是我们领的」)——葛朗台只炫耀自己捡到的钱。</p>
+</div>
+</div>
+
+<h3>3.3 与既有 UI 部件的关系</h3>
+<table>
+<tr><th>部件</th><th>zcode 的行为</th></tr>
+<tr><td>卡片徽标(ckBadge)</td><td>领取成功日画 <code>✓ 已签</code>,数额进 tooltip(全应用统一规矩,不画 +N)</td></tr>
+<tr><td>展开详情行(ckText)</td><td>「已领到 +1 亿 token · 模型 GLM-5.3-Flash · 余额已确认到账(增量 +1 亿…)」;balance 回查失败时降级为「已领取(响应含活动明细)」</td></tr>
+<tr><td>首页待签条(ckPendingStrip)</td><td><b>自然跟随 CheckinState</b>:有活动可领(retry:ready)→ 出现并带领取按钮;领完/无活动 → 消失。空 preview 记为 no-activity,不算「待签」</td></tr>
+<tr><td>签到中心页</td><td><b>照常记录全部事实</b>(含「无活动」日、3007 日)——签到中心是账本,不是橱窗;隐藏规则只作用于首页渠道卡</td></tr>
+<tr><td>积分到账行(grantLine)</td><td>不适用(zcode 无「活跃赠送」语义,领取结果直接由签到行承载)</td></tr>
+</table>
+
+<h2>4. 领取流程(融入 checkin.rs 框架)</h2>
+
+<h3>4.1 CheckinDef 声明</h3>
+<pre>id: "zcode"
+auth:          ZcodeLocal(新分支,见 §5)
+status_url:    GET  https://zcode.z.ai/api/v1/zcode-plan/billing/preview?app_version={ver}&amp;platform={plat}
+claim_url:     POST https://zcode.z.ai/api/v1/zcode-plan/billing/claim      body {"plan_id":"{id}"}
+day_roll_hour: 0(自然日;活动每日由服务端投放,preview 是唯一事实来源,无需本地跨日特殊化)</pre>
+
+<h3>4.2 每日一次的编排(挂在现有自动签到节拍器上,无额外轮询)</h3>
+<ol>
+<li><b>闸门</b>:开关关 / 无凭据 / active_provider 非 zai → 直接静默返回(渠道今日隐藏)。</li>
+<li><b>preview</b>:可领 plans 为空 → 记 no-activity,结束(隐藏)。昨天有成功 planId 且今天 preview 空 → 按 §2.4 注做一次试探。</li>
+<li><b>claim</b>:逐 plan 领取。code=0 → 进入回查;1003 → 查本应用今日记录;其余码按 §2.4 表处置。</li>
+<li><b>回查</b>:balance 的 active plans 出现刚领的 plan_id(或 balances 增量吻合)→ 到账确认。<b>注意</b>:effective_at 可能是当日 23:00,balance 暂无该笔<b>不算失败</b>——claim 响应里的 plan 明细(name/starts_at/ends_at)本身就是领取证据,回查只是加分证据。</li>
+<li><b>落库</b>:checkin_log 记「日期 + 账号指纹 + plan_id + 数额 + 证据」;快照按 key_fp 分账。</li>
+</ol>
+
+<h3>4.3 红线沿用(checkin.rs 头部三条,逐条对表)</h3>
+<ul>
+<li>HTTP 200 不代表成功 → 全按业务 code 判定(§2.4 表)。</li>
+<li>不把「点了按钮」说成「领到了」→ 证据 = claim 响应 plan 明细 + balance 回查,双证据落库。</li>
+<li>签到状态不参与余额渲染 → zcode 卡片大数字是「今日领取」语义,由签到到账数据驱动,不由 balance.remaining 驱动。</li>
+</ul>
+
+<h2>5. 账号切换设计</h2>
+
+<p>ZCode 的账号切换发生在官方客户端里(我们只读凭据文件),对葛朗台来说,<b>切换 = credentials.json 内容变化</b>。设计四件事:</p>
+
+<table>
+<tr><th>#</th><th>机制</th><th>说明</th></tr>
+<tr><td>1</td><td><b>指纹</b></td>
+<td><code>oauth:zai:user_info</code> 解出用户 id 作指纹;解不出退化为 <code>zcodejwttoken</code> 整串哈希。每次领取流程开始时重读文件、重算指纹(文件变化即感知,不依赖事件通知)</td></tr>
+<tr><td>2</td><td><b>展示让位</b></td>
+<td>首页卡片展示绑「今日+当前指纹」。切换瞬间,老账号今天领的积分<b>立即隐藏</b>(§3.1 谓词按当前指纹求值)——绝不出现「张三领的显示给李四看」</td></tr>
+<tr><td>3</td><td><b>状态隔离</b></td>
+<td>CheckinState 的 doneToday/credits/streak 按「日期+指纹」计算:换号后新账号当天视为未领取,重走 preview→claim。历史 checkin_log/snapshots 按指纹分账,互不推算(沿用 key_fp 分段既有机制)</td></tr>
+<tr><td>4</td><td><b>多账号不会同时领</b></td>
+<td>我们只读「当前激活」的那份凭据,不做多账号轮询(与 CreditDaddy 的多账号托管不同,葛朗台不存任何 ZCode 密钥副本)。用户在官方客户端切谁,我们就服务谁</td></tr>
+</table>
+
+<div class="note">
+<b>与既有 App 型凭据的对比:</b>Trae/Qoder 的凭据多份候选是「401 时逐份试」;zcode 只有一份活凭据(credentials.json 当前值),没有逐份试的问题,反而简单。Encountering 401(凭据失效,如官方端登出)→ AuthNeeded → 当日隐藏,等用户在官方端重新登录后自然恢复。
+</div>
+
+<h2>6. 改动面清单</h2>
+<table>
+<tr><th>文件</th><th>改动</th></tr>
+<tr><td><code>app/core/src/providers.rs</code></td>
+<td>① <code>ProviderDef</code> 加 <code>zcode</code> 一条(auth=<code>App(Zcode)</code>,取数 = GET billing/balance,<code>extract_zcode</code> 解析 balances/active plans 供回查与凭据有效性判定,<b>不产出渲染数值</b>;无凭据自动隐藏)。② <code>auto_hide_when_no_credential = true</code>。③ 按家规补 <code>#[test]</code>(preview/claim/balance 正常与错误分支样本)</td></tr>
+<tr><td><code>app/core/src/checkin.rs</code></td>
+<td><code>CHECKINS</code> 加 zcode 条目(§4.1);<code>call_with_body</code>/头组装支持 zcode 头组(§2.2);错误码 → Outcome 映射(§2.4)</td></tr>
+<tr><td><code>app/src-tauri/src/lib.rs</code></td>
+<td><code>checkin_credentials</code> 加 ZcodeLocal 分支:读 <code>~/.zcode/v2/credentials.json</code>(兼容 enc:v1 解密)、active_provider=zai 校验、指纹计算;领取成功数额回填 CheckinState.credits</td></tr>
+<tr><td><code>app/core/src/config.rs</code></td>
+<td><b>预计零改动</b>:默认 CheckinCfg 表从 CHECKINS 现取生成(既有机制注释:「以后加渠道不会漏配」)</td></tr>
+<tr><td><code>app/src/app.js</code></td>
+<td>① <code>CHECKIN_ON</code>/<code>CK_ROLL</code> 补 zcode。② 渠道卡渲染加 zcode 特判:仅按 §3.1 谓词渲染,大数字 = 今日领取(亿格式化),次行模型+有效期。③ LOGOS 图标映射</td></tr>
+<tr><td><code>app/src/logos/</code></td>
+<td>zcode 图标一枚(缺省走 color+「ZC」字母兜底,不阻塞)</td></tr>
+<tr><td><code>build/jsdom-smoke.js</code></td>
+<td>合成 zcode 数据 + 4 条断言:领取成功日显示 / 无活动日隐藏 / 3007 隐藏 / 切换指纹后老账号领取隐藏</td></tr>
+</table>
+
+<h2>7. 风险与红线</h2>
+<table>
+<tr><th>风险</th><th>处置</th></tr>
+<tr><td><b>验证码风控</b></td><td><b>硬边界:不绕过</b>(magpie 官方裁决原文:「用程序去过 ZCode 的人机验证,本质上就是绕过它」)。3007 → 放弃 + 隐藏 + 记日志。CreditDaddy 用隐藏窗口跑阿里云 SDK 的做法<b>不采纳</b>:官方裁决点名、账号风控风险由用户承担、SDK 逆向维护成本高</td></tr>
+<tr><td><b>版本校验(3001)</b></td><td>billing 接口校验客户端版本。app_version 从 Windows 注册表 Uninstall 项读 ZCode DisplayVersion(CreditDaddy 同款做法),取不到回退保守值 3.14.3+。实现期先真机取证一次</td></tr>
+<tr><td><b>频控</b></td><td>挂现有签到节拍器,每日 preview+claim+balance 各 ≤2 次;1005 按 ends_at snooze;绝不加独立高频轮询</td></tr>
+<tr><td><b>凭据安全</b></td><td>token 与指纹不落日志、不落 JSON/SQLite 明文(secrets.rs 首行规矩);credentials.json 只读,绝不写回</td></tr>
+<tr><td><b>命名冲突</b></td><td>渠道 id <code>zcode</code> 与 inject 的 <code>Client::Zcode</code> 同名不同域(§0-7);若实现中发现前端字典键冲突,渠道 id 退让为 <code>zcode-plan</code></td></tr>
+<tr><td><b>claim 即证据的口径变化</b></td><td>既有红线是「回查是唯一的成功证据」;zcode 因 effective_at 延迟到账,回查可能暂时空手。本文已在 §4.2 明确:claim 响应含完整 plan 明细时本身即领取证据,回查为到账加分证据——需在代码注释与 test 用例里固化,防止后人误改</td></tr>
+</table>
+
+<h2>8. 开放问题(待拍板,均已给推荐项)</h2>
+<table>
+<tr><th>#</th><th>问题</th><th>推荐</th></tr>
+<tr><td>A</td><td>3007(验证码拦截)或官方客户端已领走时,严格静默还是给一条轻提示?</td>
+<td>卡片严格隐藏(符合「没领到不展示」);另加<b>默认关闭</b>的设置项「领取受阻提醒」,开启后当日首次受阻发一条系统通知,引导去 ZCode 客户端手动领</td></tr>
+<tr><td>B</td><td>展示单位口径:「+1亿 token」(原始事实)还是折算成抽象「积分」?</td>
+<td>用 token 原始口径 + 模型名。折算积分需要凭空的汇率,和全应用「不编数字」的口径冲突</td></tr>
+<tr><td>C</td><td>多活动日(如 TRUST + WEEKEND 同日)怎么显示?</td>
+<td>大数字取合计 token 数,详情行逐 plan 列明细</td></tr>
+<tr><td>D</td><td>非 token 单位的 entitlement(未来可能出现)怎么处理?</td><td>跳过并记日志,不猜单位</td></tr>
+</table>
+
+<h2>9. 实施前置:真机只读取证清单(动代码前先做)</h2>
+<ol>
+<li>本机用 <code>zcodejwttoken</code> 调一次 <b>preview</b>(只读):确认 200/结构/app_version 校验现状,留响应样本进单测 fixtures。</li>
+<li>调一次 <b>configs</b>(只读):确认本账号 captcha.enabled 当前值。</li>
+<li>调一次 <b>balance</b>(只读):确认字段与 CreditDaddy 描述一致。</li>
+<li>注册表读 ZCode DisplayVersion,核对与 <code>X-ZCode-App-Version</code> 应取的值。</li>
+<li><b>不做</b> claim 试探性请求——claim 留到实现完成后走真实验证(领到即是验收)。</li>
+</ol>
+<p class="sub">取证产物按家规补进本文件的证据等级标注,把 <span class="tag t-half">社区实测</span> 升级为 <span class="tag t-fact">实测</span> 后再动代码。</p>
+
+</div>
+</body>
+</html>

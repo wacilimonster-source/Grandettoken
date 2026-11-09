@@ -69,23 +69,26 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 impl Gateway {
-    pub fn new(store: Arc<Mutex<Store>>) -> Self {
+    pub fn new(store: Arc<Mutex<Store>>) -> Result<Self, String> {
         let settings = lock(&store)
             .get_setting(CONFIG_KEY)
             .ok()
             .flatten()
             .and_then(|v| serde_json::from_str(&v).ok())
             .unwrap_or_default();
-        Self {
+        // TLS 后端初始化失败这类罕见故障不再 expect 硬退(报告 L16):失败交还调用方,
+        // 走 startup_error 通道,余额监控与签到照常,只是本地网关这一项起不来。
+        let clients = ProxyClients::new()?;
+        Ok(Self {
             store,
             inner: Arc::new(Mutex::new(Inner {
                 settings,
                 shutdown: None,
                 startup_error: None,
             })),
-            clients: Arc::new(ProxyClients::new().expect("HTTP clients")),
+            clients: Arc::new(clients),
             lifecycle: Arc::new(tokio::sync::Mutex::new(())),
-        }
+        })
     }
     fn save(&self, settings: &Settings) -> Result<(), String> {
         lock(&self.store).set_setting(
@@ -165,7 +168,19 @@ fn authorized(headers: &HeaderMap, settings: &Settings) -> bool {
         return false;
     }
     if !settings.auth && !settings.lan {
-        return true;
+        // 无鉴权本机模式:只认 127.0.0.1 / localhost / ::1 的 Host(报告 L15)。
+        // 浏览器同源 GET 不带 Origin,DNS rebinding 后攻击页对攻击域名的请求
+        // Host 是攻击者的域名 —— 校验 Host 直接免疫 rebinding 读走 /v1/models。
+        let Some(h) = headers.get(header::HOST).and_then(|v| v.to_str().ok()) else {
+            return false;
+        };
+        // IPv6 字面量带方括号,端口在 ] 之后;其余情况端口在最后一个冒号之后
+        let host = if let Some(rest) = h.strip_prefix('[') {
+            rest.split(']').next().unwrap_or("")
+        } else {
+            h.rsplit_once(':').map(|(a, _)| a).unwrap_or(h)
+        };
+        return matches!(host, "127.0.0.1" | "localhost" | "::1");
     }
     let provided = headers
         .get(header::AUTHORIZATION)
@@ -291,7 +306,23 @@ async fn chat(
     };
     let status = upstream.status();
     if !status.is_success() {
-        return error(status, "上游服务拒绝请求，请检查密钥、模型权限或额度");
+        // 上游 4xx/5xx 的详情原样透传(截断),别替换成一句固定文案(报告 L15):
+        // 「密钥失效」与「额度耗尽」的处置完全不同,拿不到 body 就得去抓包才能排查。
+        let retry_after = upstream.headers().get(header::RETRY_AFTER).cloned();
+        let body = upstream.text().await.unwrap_or_default();
+        let short: String = body.chars().take(400).collect();
+        let mut resp = error(
+            status,
+            &format!(
+                "上游返回 {} · {}",
+                status.as_u16(),
+                if short.is_empty() { "上游服务拒绝请求，请检查密钥、模型权限或额度" } else { &short }
+            ),
+        );
+        if let Some(ra) = retry_after {
+            resp.headers_mut().insert(header::RETRY_AFTER, ra);
+        }
+        return resp;
     }
     let content_type = upstream.headers().get(header::CONTENT_TYPE).cloned();
     let mut response = Response::new(Body::from_stream(upstream.bytes_stream()));
@@ -655,6 +686,14 @@ mod tests {
         s.auth = false;
         s.lan = false;
         let mut h = HeaderMap::new();
+        // 无鉴权本机模式现在还要求 Host 是本机(L15,DNS rebinding 免疫):
+        // 没 Host 不放行;本机 Host 放行;攻击者域名不放行;Origin 一律不放行。
+        assert!(!authorized(&h, &s));
+        h.insert(header::HOST, "127.0.0.1:18771".parse().unwrap());
+        assert!(authorized(&h, &s));
+        *h.get_mut(header::HOST).unwrap() = "attacker.example:18771".parse().unwrap();
+        assert!(!authorized(&h, &s));
+        *h.get_mut(header::HOST).unwrap() = "localhost:18771".parse().unwrap();
         assert!(authorized(&h, &s));
         h.insert(header::ORIGIN, "https://example.com".parse().unwrap());
         assert!(!authorized(&h, &s));
@@ -702,7 +741,7 @@ mod tests {
             updated_at: 1,
         };
         lock(&store).vault_upsert(&item).unwrap();
-        let g = Gateway::new(store.clone());
+        let g = Gateway::new(store.clone()).unwrap();
         {
             let mut inner = lock(&g.inner);
             inner.settings.auth = false;

@@ -460,10 +460,14 @@ function fmtDay(ts) {
   return `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-/** 未来 days 天内会过期的积分合计。 */
+/** 未来 days 个**自然日**内会过期的积分合计。窗口从今天 00:00 起算
+ *  (报告 L4):以前从"当前时刻 + N×24h"起算,晚间横跨 8 个自然日,
+ *  柱状图按自然日切桶就会漏掉第 8 天的到期,图与合计对不上。 */
 function expiringWithin(c, days) {
   const now = Date.now() / 1000;
-  const limit = now + days * 86400;
+  const base = new Date();
+  base.setHours(0, 0, 0, 0);
+  const limit = base.getTime() / 1000 + days * 86400;
   return (c.expiring || [])
     .filter((e) => e.at >= now && e.at <= limit)
     .reduce((a, e) => a + e.amount, 0);
@@ -472,7 +476,9 @@ function expiringWithin(c, days) {
 /** 积分到期摘要中的有效记录。未知的逐笔到期信息不伪装成“没有临期”。 */
 function expiringEntriesWithin(c, days) {
   const now = Date.now() / 1000;
-  const limit = now + days * 86400;
+  const base = new Date();
+  base.setHours(0, 0, 0, 0);
+  const limit = base.getTime() / 1000 + days * 86400;
   return (c && c.expiring ? c.expiring : []).filter(
     (e) =>
       e &&
@@ -1099,7 +1105,7 @@ function coreWindows(c) {
     return `<div class="core-w${codex ? " codex-w" : ""}">
       <span class="wl">${esc(w.label)}</span>
       <i class="wb"><i style="width:${wr}%;background:${TONE_HEX[wt]}"></i></i>
-      <b class="wv" style="color:${lim ? "var(--bad)" : toneFg(wt)}">${wr.toFixed(1)}%</b>
+      <b class="wv" style="color:${lim ? "var(--bad)" : toneFg(wt)}">${dispPct(wr).toFixed(1)}%</b>
       <span class="wt${whenOk ? " ok" : ""}">${when}</span>
     </div>`;
   });
@@ -1559,9 +1565,12 @@ function renderDetail(c, inDialog = false) {
   const actions = [];
   if (MODEL_SOURCES.has(c.id) && !noKey) {
     const v = MDL.views[c.id];
-    const n = v ? v.usableCount || v.total : 0;
+    // 0 也是真实计数(key 没权限时 usableCount 就是 0):`||` 会把 0 当"未知"
+    // 落到 total,误报成"230 个可用" —— 与模型页签自己的口径(usableAt 才显示)
+    // 直接矛盾(报告 L2)。
+    const n = v && v.usableAt ? v.usableCount : 0;
     actions.push(`<button class="btn s" data-act="open-models" data-id="${c.id}" title="浏览并配置 ${esc(c.name)} 的模型">模型配置${
-      n ? ` · ${n} 个可用` : ""
+      v && v.usableAt ? ` · ${n} 个可用` : ""
     }</button>`);
   }
   // 弹层底部已有「刷新 / 设置与管理」动作条,详情正文不再重复同一入口
@@ -2064,8 +2073,14 @@ function renderRiskBand() {
   let cell2 = "";
   const first = summary.first;
   if (first) {
-    const days = daysUntil(first.entry.at);
-    const when = days === 0 ? "今天" : `剩 ${days} 天`;
+    // 自然日差,与 expiryRelative 同一口径(报告 L4):ceil 的"剩 N 天"会把
+    // 今天 23:00 到期的积分写成"剩 1 天",同一界面另一处却是"今天到期"。
+    const d0 = new Date();
+    d0.setHours(0, 0, 0, 0);
+    const d1 = new Date(first.entry.at * 1000);
+    d1.setHours(0, 0, 0, 0);
+    const days = Math.round((d1 - d0) / 86400000);
+    const when = days <= 0 ? "今天" : days === 1 ? "明天" : `剩 ${days} 天`;
     const dueColor = days <= 7 ? "var(--warn)" : "var(--tx)";
     const title = `打开 ${first.channel.name} 的到期明细 · ${fmtDay(first.entry.at)} · ${points(first.entry.amount)} 分`;
     cell2 = `<button type="button" class="cell metric" data-act="jump" data-id="${esc(first.channel.id)}" title="${esc(title)}">
@@ -2199,11 +2214,17 @@ function renderInner(opts) {
   // 列表已经落到 DOM 里,现在才有真实宽度可量:把 Codex 的倒计时按当前面板宽度收一档
   if (configured) fitCodexResetLabels();
 
-  // 底栏状态(隐藏渠道不计入,只报个数)
+  // 底栏状态(隐藏渠道不计入,只报个数)。口径与行内 dotCls 同源(报告 B5):
+  // 红线/限流=告急(红),阈值预警=预警(黄),失联沿用"告急"段(与旧行为一致)。
+  // 以前 warn 过滤写成 hvTone==="bad":黄色预警渠道不落在任何段里被算成"正常",
+  // 跌破红线的反而标成黄"预警" —— 颜色梯度倒挂,只看底栏会漏掉预警。
   const withKey = CHANNELS.filter((c) => c.hasKey && !c.hidden);
-  const bad = withKey.filter((c) => !c.valid && !(c.recovery && c.recovery.phase === "retrying")).length;
-  const warn = withKey.filter((c) => c.valid && (c.limited || hvTone(c) === "bad")).length;
-  // 与行内同一套约定:未配置=空心环,失联=斜杠灰点,预警=黄(之前 warn 用了红点,颜色梯度倒挂)
+  const bad = withKey.filter(
+    (c) =>
+      (!c.valid && !(c.recovery && c.recovery.phase === "retrying")) ||
+      (c.valid && (c.limited || hvTone(c) === "bad"))
+  ).length;
+  const warn = withKey.filter((c) => c.valid && !c.limited && hvTone(c) === "warn").length;
   $("fdot").className =
     "dot" + (bad ? " st" : warn ? " w" : withKey.length ? "" : " off");
   // 三段必须**互斥**:正常 = 总数 - 告急 - 预警;每个数字前面带自己的状态点。
@@ -4348,14 +4369,21 @@ $("list").addEventListener("click", async (e) => {
   // 金额型的「最近变动」仍按需取:先画占位,取到后只刷新当前弹层。
   if (c.kind === "amount") {
     // 已有缓存就先画缓存,后台重取;从没取到过才写「读取中…」
-    if (!(changesCache[id] && changesCache[id].length)) changesState[id] = "loading";
+    const hadCache = !!(changesCache[id] && changesCache[id].length);
+    if (!hadCache) changesState[id] = "loading";
     renderDetailSheet();
     try {
       changesCache[id] = await invoke("channel_changes", { id, days: 7 });
       changesState[id] = "done";
     } catch {
-      changesCache[id] = [];
-      changesState[id] = "error";
+      // 重取失败不清掉已有缓存(报告 L1):失败路径推翻"先画缓存"的设计意图,
+      // 正展示着的真实台账会被换成错误态,下次打开也拿不到旧数据了。
+      if (!hadCache) {
+        changesCache[id] = [];
+        changesState[id] = "error";
+      } else {
+        showToast("最近变动刷新失败,先展示上次记录");
+      }
     }
     // 期间可能已切换/关闭弹层:只刷新仍是同一个 ID 的那一个
     if (DETAIL_ID === id) renderDetailSheet();
@@ -5594,10 +5622,18 @@ $("manage").addEventListener("click", async (e) => {
     await ckRun(id);
     return;
   }
+  if (a === "ckhretry") {
+    // 签到历史读失败后的「重试」(报告 L7)
+    loadCheckinHistory();
+    return;
+  }
   if (a === "cklogin") {
-    // 凭据失效的两条指路:Trae 去开客户端;WorkBuddy 回渠道卡登录
+    // 凭据失效的指路,各渠道各回各家(报告 B6):Qoder 的签到凭据来自 Qoder 桌面端,
+    // 以前统一落到 Trae 文案 —— 打开 Trae 对 Qoder 毫无作用,4 个可签到渠道里 2 个被误导。
     if (id === "workbuddy") {
       await invoke("workbuddy_login").catch((e) => showToast("打不开登录窗口:" + e, true));
+    } else if (CHECKIN_QODER.has(id)) {
+      showToast("打开一次 Qoder 桌面端即可(它自己会续期)");
     } else {
       showToast("打开一次 Trae 即可(它自己会续期)");
     }
@@ -6817,6 +6853,9 @@ listen("update-progress", (ev) => onUpdProgress(ev.payload));
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
+  // AI 优惠弹层由自己的监听管(报告 L6):它开着时主链不动 —— 否则一次 Esc 会
+  // 同时关弹层 + 把面板收成胶囊/退出设置页,一次按键两个动作。
+  if ($("promoOverlay") && !$("promoOverlay").hidden) return;
   // 详情弹层盖在最上层:Esc 只关它,同一次按键不能再把窗口收成胶囊。
   if (DETAIL_ID) {
     e.preventDefault();
@@ -7487,8 +7526,11 @@ function ckBadgeTip(s) {
   } else if (!s.doneToday) {
     // 还没到本渠道的跨日时刻:必须说清是几点,不能说"明天"
     // (Qoder 的"今天"从 10:00 起算 —— 说"明天"会让人以为今天没戏了)
+    // CK_ROLL 是**北京时间**(UTC+8),本地 getHours() 在别的时区会差出时区差
+    // —— 与后端判定的 canTry/doneToday 口径对不上(报告 L5)。
     const roll = CK_ROLL[s.id] || 0;
-    if (roll > 0 && new Date().getHours() < roll) bits.push(roll + ":00 后可签");
+    const bjHour = new Date(Date.now() + (new Date().getTimezoneOffset() + 480) * 60000).getHours();
+    if (roll > 0 && bjHour < roll) bits.push(roll + ":00 后可签");
   }
   return bits.join(" · ");
 }
@@ -7559,8 +7601,12 @@ async function loadCheckin() {
     list = await invoke("checkin_state");
   } catch (e) {}
   if (seq !== CK_SEQ) return; // 更晚的一次已经发出,这份结果作废
-  CK = {};
-  if (list) for (const x of list) CK[x.id] = x;
+  // 读失败 ≠ 签到状态是空的(报告 L7,loadVault F3 同一条纪律):保留上次读到的那份,
+  // 宁可旧一点也不把徽标 / 待签提示条整体抹掉,装作"没有待签"。
+  if (list) {
+    CK = {};
+    for (const x of list) CK[x.id] = x;
+  }
   ckTabUpdate();
   // 渠道卡与签到中心都跟着更新(哪个在场更新哪个)
   if (document.body.classList.contains("view-manage")) {
@@ -7675,6 +7721,7 @@ function renderActivityOverview() {
 const CK_CENTER_OPEN = new Set(); // 刷新状态时保留用户展开的分区
 let CKH = null;          // checkin_history 的返回(日历带 + 明细表)
 let CKH_SEQ = 0;         // 与 loadCheckin 同一个道理:晚到的旧快照不许盖新的
+let CKH_ERR = false;     // 读失败 ≠ "正在读取"(报告 L7):失败要明说并给重试
 let CKH_FILTER = "all";  // 明细表的渠道筛选
 const CKH_DAYS = 90;     // 明细表窗口(后端 clamp 到 7~365)
 const CKH_BAND = 30;     // 日历带窗口(天)
@@ -7717,7 +7764,12 @@ async function loadCheckinHistory() {
   let h = null;
   try {
     h = await invoke("checkin_history", { days: CKH_DAYS });
-  } catch (e) {}
+    CKH_ERR = false;
+  } catch (e) {
+    // 读失败如实说 + 给重试(报告 L7,F3 纪律):以前吞掉后 CKH 停在 null,
+    // 渲染成一句永远不结束的"正在读取签到记录…"
+    CKH_ERR = true;
+  }
   if (seq !== CKH_SEQ) return;
   CKH = h;
   renderCkHist();
@@ -7829,7 +7881,10 @@ function renderCkHist() {
   const box = $("ckHistBox");
   if (!box) return;
   if (!CKH) {
-    box.innerHTML = '<div class="cksec"><h4>近 30 天</h4><div class="ckempty">正在读取签到记录…</div></div>';
+    // 读失败要明说并给重试入口(报告 L7,F3 纪律),不画成一句永远不结束的"正在读取"
+    box.innerHTML = CKH_ERR
+      ? '<div class="cksec"><h4>近 30 天</h4><div class="ckempty">签到记录读不出来,可能是数据库忙了。<button class="btn s" data-act="ckhretry">重试</button></div></div>'
+      : '<div class="cksec"><h4>近 30 天</h4><div class="ckempty">正在读取签到记录…</div></div>';
     return;
   }
   const active = new Set(ckActiveIds());
@@ -8846,14 +8901,16 @@ function applyChannelsPush(payload) {
   // 紧凑条 / 胶囊。CFG.form 仍会记录用户的选择,只是不再用于启动恢复。
   await applyForm("panel", false, true);
   updateSizeClass();
-  await refresh();
-  playEntrance(); // 启动首帧也来一次入场(上面 applyForm 没换形态,不会自动放)
 
-  listen("channels-updated", (ev) => applyChannelsPush(ev.payload));
+  // ── 数据/结果事件:必须在首轮 refresh **之前**挂上(报告 L8,与上方 checkin-*
+  // 同一条纪律)── 后端 setup 里就跑首轮取数与红线判定,慢网络下能持续数秒;以前
+  // 这批监听挂在 refresh 之后,首检那一刻发出的 channels-updated / crit-alert 没人接,
+  // 预警音与应用内提示会丢。全部 await,确保注册完成才放行首轮取数。
+  await listen("channels-updated", (ev) => applyChannelsPush(ev.payload));
 
   // 跌破红线(Rust 判定、一天一次):播一声预警音(开了才有)+ 应用内提示。
   // 判定不放前端 —— 界面与通知必须用同一个口径,否则会出现"红了但没响"。
-  listen("crit-alert", (ev) => {
+  await listen("crit-alert", (ev) => {
     const d = (ev && ev.payload) || {};
     beep("warn");
     showToast(d.body || d.name + " 余额告急", true);
@@ -8861,7 +8918,7 @@ function applyChannelsPush(payload) {
 
   // WorkBuddy 网页登录的三种结果都走这个事件:抓到令牌 / 用户自己关了窗 / 失败。
   // 成功时 Rust 已经立刻刷过一轮(channels-updated 会带出新数值),这里只管按钮与提示。
-  listen("qoderweb-login", (ev) => {
+  await listen("qoderweb-login", (ev) => {
     QODER_LOGGING = false;
     const p = ev.payload || {};
     const name = p.id === "qoder-cn" ? "Qoder 国内版" : "Qoder";
@@ -8875,7 +8932,7 @@ function applyChannelsPush(payload) {
     // 详情开着时把按钮状态一起换掉:成功且拿到明细后 qoderLoginBar 会自己消失
     if (DETAIL_ID) renderDetailSheet();
   });
-  listen("workbuddy-login", (ev) => {
+  await listen("workbuddy-login", (ev) => {
     WB_LOGGING = false;
     const p = ev.payload || {};
     if (p.ok) showToast("已登录 WorkBuddy · 读数已刷新");
@@ -8889,11 +8946,15 @@ function applyChannelsPush(payload) {
   // 从托盘/热键唤回窗口:Rust 侧在「隐藏 → 显示」那一刻发 window-shown,这里重放入场。
   // 不能监听 focus / visibilitychange —— 它们分不清"从托盘唤回"和普通 alt-tab,
   // 每次切走再切回都会重播一遍(报告 B8)。
-  listen("window-shown", () => {
+  await listen("window-shown", () => {
     // 隐藏期间分钟定时器仍会跑,但窗口可能错过最后一次重绘;唤回时先补一次文案
     tickPeakCountdowns();
     if (currentForm() === "panel") playEntrance();
   });
+
+  // 监听都挂好了才做首轮取数(与上方 L8 注释同一理由);首帧入场随后放
+  await refresh();
+  playEntrance(); // 启动首帧也来一次入场(上面 applyForm 没换形态,不会自动放)
 
   // 启动 30 秒后先自动检查一次;之后每 10 分钟再问一次 —— 是否真发请求由
   // Rust 侧 24 小时节流把关(最多每天一次)。之前只有启动那一次,

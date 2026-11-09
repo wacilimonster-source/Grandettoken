@@ -58,11 +58,7 @@ fn home_view_of(cfg: &Config, views: &[ChannelView], now: i64) -> view::HomeView
         .iter()
         .map(|d| {
             let c = cfg.checkin.get(d.id).cloned().unwrap_or_default();
-            let activity_ready = c
-                .activity_state
-                .as_ref()
-                .map(|a| a.status == "claimable")
-                .unwrap_or(false);
+            let activity_ready = activity_ready_today(&c, &cycle_day_of(d.id, now));
             view::CheckinInput {
                 id: d.id.to_string(),
                 enabled: c.enabled,
@@ -344,6 +340,11 @@ async fn set_config(app: tauri::AppHandle, state: State<'_, AppState>, config: C
             }
         }
         incoming.checkin = ck;
+
+        // 自定义渠道只能由 custom_add / custom_remove 改:前端手里永远是开机那一刻的
+        // 快照(custom_add 之后不重取 get_config),整份覆盖会把刚加的渠道删掉、
+        // 把刚删的复活(密钥成孤儿)。与上面「跳过版本被覆盖」是同一个坑(报告 B1)。
+        incoming.custom_channels = cur.custom_channels.clone();
     }
 
     // 先应用快捷键:注册失败(如被占用)就让整次保存失败,前端好回滚旧值
@@ -368,11 +369,19 @@ async fn set_config(app: tauri::AppHandle, state: State<'_, AppState>, config: C
 /// 是最难排查的一类问题)。不回显完整密钥。复用本机应用登录态的渠道没有密钥可回显;
 /// 网页登录型(WorkBuddy)存的就是令牌本身,同样值得回显尾 4 位。
 #[tauri::command]
-async fn key_hint(id: String) -> Result<Option<String>, String> {
-    if !matches!(
+async fn key_hint(app: tauri::AppHandle, id: String) -> Result<Option<String>, String> {
+    let builtin_ok = matches!(
         providers::find(&id).map(|d| d.auth),
         Some(providers::AuthKind::Keyring | providers::AuthKind::WebSession)
-    ) {
+    );
+    // 自定义渠道的密钥也在凭据管理器里(账户名 = id),尾号照样值得回显 ——
+    // 以前这里对 custom-N 返回 Ok(None),卡片上的尾号永远空着(报告 B3)。
+    let custom_ok = !builtin_ok && {
+        let state = app.state::<AppState>();
+        is_custom_id(&id)
+            && lock_rw(&state.config).custom_channels.iter().any(|x| x.id == id)
+    };
+    if !builtin_ok && !custom_ok {
         return Ok(None);
     }
     // 这是个 RPC,而且每轮渲染会对每个已配密钥的渠道各发一次 —— 以前是同步命令,
@@ -833,33 +842,35 @@ async fn wb_finish_login(app: &tauri::AppHandle) {
     // 只清 auth 之后的场次,claimed/already/inactive 不动(那些是真签完了)。
     {
         let st = app.state::<AppState>();
-        let mut cfg = lock_rw(&st.config).clone();
-        let mut changed = false;
-        let store2 = app.state::<AppState>().store.clone();
-        if let Some(entry) = cfg.checkin.get_mut(WB_CHANNEL_ID) {
-            // `auth` = 平台拒绝了那份凭据;`no_cred` = 本机压根没读到凭据。
-            // **两者都该被复登成功放行** —— 复登之后凭据就有了,当天的分不必等到次日。
-            if entry
-                .last_code
-                .as_deref()
-                .is_some_and(|c| c.starts_with("auth") || c.starts_with("no_cred"))
+        let needs_reset = lock_rw(&st.config)
+            .checkin
+            .get(WB_CHANNEL_ID)
+            .and_then(|entry| entry.last_code.as_deref())
+            .is_some_and(|c| c.starts_with("auth") || c.starts_with("no_cred"));
+        if needs_reset {
+            let today = cycle_day_of(WB_CHANNEL_ID, now_ts());
+            // 过串行闸只合并本渠道 entry(报告 B4):以前整份克隆-落库-再把陈旧克隆
+            // 写回内存,落库窗口里用户改的其它设置会被倒回去。
+            if let Err(e) = save_config_off_main(&st, |live| {
+                if let Some(entry) = live.checkin.get_mut(WB_CHANNEL_ID) {
+                    // `auth` = 平台拒绝了那份凭据;`no_cred` = 本机压根没读到凭据。
+                    // **两者都该被复登成功放行** —— 复登之后凭据就有了,当天的分不必等到次日。
+                    if entry
+                        .last_code
+                        .as_deref()
+                        .is_some_and(|c| c.starts_with("auth") || c.starts_with("no_cred"))
+                    {
+                        entry.last_day = Some(today);
+                        entry.last_code = None;
+                        entry.attempts = 0;
+                        entry.next_try_at = None;
+                    }
+                }
+            })
+            .await
             {
-                let today = cycle_day_of(WB_CHANNEL_ID, now_ts());
-                entry.last_day = Some(today);
-                entry.last_code = None;
-                entry.attempts = 0;
-                entry.next_try_at = None;
-                changed = true;
-            }
-        }
-        if changed {
-            // save(写盘)与回写内存态照 run_checkin 的次序:先落库,再放出 guard。
-            let save_store = lock_rw(&store2);
-            if let Err(e) = cfg.save(&save_store) {
                 eprintln!("复登后重置签到状态失败: {e}");
             }
-            drop(save_store);
-            *lock_rw(&st.config) = cfg;
         }
     }
     let handle = app.clone();
@@ -1703,7 +1714,10 @@ fn window_cmd(app: tauri::AppHandle, action: String) -> Result<(), String> {
 }
 
 /// 全局锁序约定:**先 store 后 config**。所有同时拿两把锁的命令都必须按这个
-/// 顺序,否则与 check_update / skip_update_version(store→config)交错时会 AB-BA 死锁。
+/// 顺序,否则与按此序加锁的命令交错时会 AB-BA 死锁。
+/// (check_update 与 settle_arrivals 曾经违反:前者已改走 save_config_off_main 串行闸、
+/// 后者已把「config 内抄清单 / 放锁后读 store」拆开 —— 2026-11-10 报告 B2/B4。
+/// 新代码请优先走串行闸,实在要同时拿两把锁,顺序不得颠倒。)
 /// 锁一律走 `lock_rw` 毒化恢复:一次 panic 不该把后续所有命令永久卡死。
 pub(crate) fn lock_rw<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
@@ -2029,33 +2043,43 @@ async fn custom_add(
     if key.trim().is_empty() {
         return Err("密钥不能为空".into());
     }
-    let (id, _) = {
-        let st = app.state::<AppState>();
-        let c = lock_rw(&st.config);
-        (next_custom_id(&c), ())
-    };
     let mut saved = ch.clone();
-    saved.id = id.clone();
     // 小写化颜色/单位在这里做一次,免得每种渲染各写一遍
     saved.unit = ch.normalized_unit();
+    // id 分配与占位落盘在同一个临界区里完成(报告 L12):以前 id 在锁内分配、定义却
+    // 等密钥写完才 push,两次并发 custom_add 会分到同一个号,产生重复 id 的渠道定义。
+    // 占位先落盘(此刻还没有密钥,渠道只是"未配置"态),密钥写失败就地把占位撤掉。
+    let st = app.state::<AppState>();
+    let mut assigned = String::new();
+    if let Err(e) = save_config_off_main(&st, |c| {
+        let id = next_custom_id(c);
+        saved.id = id.clone();
+        c.custom_channels.push(saved);
+        assigned = id;
+    })
+    .await
+    {
+        return Err(e);
+    }
+    let id = assigned;
     let cid = id.clone();
     let k = key.clone();
     // N29(2026-10-21):写值前先清引用指针。next_custom_id 用的是"最小空号",
     // 删掉 custom-1 再新建就会复用它 —— 而上一个渠道若留下孤儿指针(N02 之前删的),
     // 新渠道会**继承别人的引用**,卡片上显示"引用密钥箱",用的却是别人的密钥。
     // 清了指针,id 复用就是安全的(也就不必为它引入单调计数器)。
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
+    if let Err(e) = tokio::task::spawn_blocking(move || -> Result<(), String> {
         secrets::link_clear(&cid)?;
         secrets::set(&cid, &k)
     })
     .await
-    .map_err(|e| format!("写密钥任务失败: {e}"))??;
-    let st = app.state::<AppState>();
-    let push = saved.clone();
-    if let Err(e) = save_config_off_main(&st, move |c| c.custom_channels.push(push)).await {
-        // 配置没落成:把刚写的密钥删掉,不留孤儿凭据
+    .map_err(|e| format!("写密钥任务失败: {e}"))?
+    {
+        // 密钥没写成:撤掉占位定义 + 删掉半把钥匙,不留无钥渠道也不留孤儿凭据
         let cid2 = id.clone();
         let _ = tokio::task::spawn_blocking(move || secrets::delete(&cid2)).await;
+        let id2 = id.clone();
+        let _ = save_config_off_main(&st, move |c| c.custom_channels.retain(|x| x.id != id2)).await;
         return Err(e);
     }
     st.fetcher.forget_channel(&lock_rw(&st.store), &id);
@@ -2115,11 +2139,34 @@ async fn probe_channel(
                 .ok_or_else(|| format!("没有这个自定义渠道:{id}"))?
         };
         let cid = id.clone();
-        let key = tokio::task::spawn_blocking(move || secrets::channel_key(&cid).ok().flatten())
+        let key = tokio::task::spawn_blocking(move || secrets::channel_key(&cid))
             .await
-            .unwrap_or(None);
+            .map_err(|e| format!("读取凭据失败: {e}"))?;
         let started = std::time::Instant::now();
-        let Some(k) = key else {
+        // 「没填密钥」(Ok(None))与「凭据库读不出来」(Err)是两件事,不能吞成一个:
+        // 后者说"还没填"会把用户支去重填一遍根本治不了病(报告 L9,P2-15 同款)。
+        let k = match key {
+            Ok(k) => k,
+            Err(e) => {
+                return Ok(tokenscope_core::fetch::ProbeReport {
+                    id: ch.id.clone(),
+                    name: ch.name.clone(),
+                    ok: false,
+                    auth_label: "凭据库读取失败".into(),
+                    url_used: None,
+                    elapsed_ms: 0,
+                    remaining: None,
+                    used: None,
+                    total: None,
+                    unit: ch.normalized_unit(),
+                    error: Some(format!("凭据管理器读取失败: {e}")),
+                    snapshot_last_at: None,
+                    snapshot_count_7d: 0,
+                    accounts: 1,
+                });
+            }
+        };
+        let Some(k) = k else {
             return Ok(tokenscope_core::fetch::ProbeReport {
                 id: ch.id.clone(),
                 name: ch.name.clone(),
@@ -2174,9 +2221,13 @@ async fn run_diagnostic(app: tauri::AppHandle) -> Result<String, String> {
         let state = app.state::<AppState>();
         (state.fetcher.clone(), state.store.clone())
     };
+    // 隐藏清单读内存里的 live 配置(报告 L13):以前重新从库里 try_load,配置损坏
+    // 回落默认值后 hidden_channels 为空,体检会对「隐藏 = 不发请求」红线的渠道真打。
+    let config_broken = refuse_if_config_broken().is_err();
     let cfg = {
-        let s = lock_rw(&store);
-        Config::try_load(&s).unwrap_or_default()
+        let state = app.state::<AppState>();
+        let c = lock_rw(&state.config).clone();
+        c
     };
     let mut lines: Vec<String> = vec![format!(
         "Grandettoken 体检 · {}",
@@ -2184,8 +2235,16 @@ async fn run_diagnostic(app: tauri::AppHandle) -> Result<String, String> {
     )];
     let total = providers::PROVIDERS.len();
     let mut need = 0usize;
+    if config_broken {
+        lines.push(
+            "配置损坏:渠道体检降级 —— 只查本机,不外呼(隐藏清单不可信,守不住「隐藏渠道不发请求」红线)".into(),
+        );
+    }
     for (i, def) in providers::PROVIDERS.iter().enumerate() {
         let idx = format!("[{}/{}]", i + 1, total);
+        if config_broken {
+            continue;
+        }
         if cfg.hidden_channels.iter().any(|h| h == def.id) {
             lines.push(format!(
                 "{} {} 已隐藏(不发请求,跳过)",
@@ -2226,16 +2285,29 @@ async fn run_diagnostic(app: tauri::AppHandle) -> Result<String, String> {
         let custom = { lock_rw(&app.state::<AppState>().config).custom_channels.clone() };
         for (i, ch) in custom.iter().enumerate() {
             let idx = format!("[自{}/{}]", i + 1, custom.len());
+            if config_broken {
+                continue;
+            }
             if cfg.hidden_channels.iter().any(|h| h == &ch.id) {
                 lines.push(format!("{} {} 已隐藏(不发请求,跳过)", idx, pad_display(&ch.name, 12)));
                 continue;
             }
             let cid = ch.id.clone();
-            let key = tokio::task::spawn_blocking(move || secrets::channel_key(&cid).ok().flatten())
+            let key = tokio::task::spawn_blocking(move || secrets::channel_key(&cid))
                 .await
-                .unwrap_or(None);
+                .map_err(|e| format!("读取凭据失败: {e}"))?;
             match key {
-                None => {
+                // 「没填」与「凭据库读不出来」分开说(报告 L9):吞成一个会让人去
+                // 重填密钥,可病根本不在密钥上。
+                Err(e) => {
+                    need += 1;
+                    lines.push(format!(
+                        "{} {} ✗ 凭据库读取失败:{e}",
+                        idx,
+                        pad_display(&ch.name, 12)
+                    ));
+                }
+                Ok(None) => {
                     need += 1;
                     lines.push(format!(
                         "{} {} ✗ 还没填密钥 —— 在渠道卡里填一次",
@@ -2243,7 +2315,7 @@ async fn run_diagnostic(app: tauri::AppHandle) -> Result<String, String> {
                         pad_display(&ch.name, 12)
                     ));
                 }
-                Some(k) => {
+                Ok(Some(k)) => {
                     let http = app.state::<AppState>().fetcher.http.clone();
                     let r = tokenscope_core::custom::fetch_custom(&http, ch, &k).await;
                     if r.valid {
@@ -2545,17 +2617,17 @@ async fn check_update(
     // 只要真的要发请求就先把时间戳写掉 —— 失败也算检查过,
     // 否则一次网络故障会变成每次启动都重试的请求风暴。
     {
-        // 锁必须用 lock_rw():store 被污染时 .lock() 会永久返回 Err,这段被整段跳过,
-        // 24 小时节流等于失效(前端每 10 分钟真去打一次 GitHub)。
-        let s = lock_rw(&state.store);
-        // 锁序样板:这里 store→config,set_pin 等命令必须同序(见 lock_rw 注释)
-        let mut cfg = lock_rw(&state.config);
-        cfg.last_check_at = Some(now_ts());
-        // 配置损坏时**不能**整份写回:内存里那份是 Config::default(),一写就把用户
-        // 还能手工救回的原始 JSON 永久覆盖掉 —— 正好是 refuse_if_config_broken 要防的事,
-        // 而这里是全文件唯一一个没问它的整份写入者(报告 P1-16 的反例)。
+        // 时间戳先记内存(失败也算检查过 —— 否则一次网络故障会变成每次启动都重试的
+        // 请求风暴);落盘走串行闸,与其它配置写者排队(报告 B4)。配置损坏时**不能**
+        // 整份写盘:内存里那份是 Config::default(),一写就把用户还能手工救回的原始
+        // JSON 永久覆盖掉(报告 P1-16)。
+        let now = now_ts();
         if refuse_if_config_broken().is_ok() {
-            let _ = cfg.save(&s);
+            if let Err(e) = save_config_off_main(&state, |c| c.last_check_at = Some(now)).await {
+                eprintln!("更新检查时间落库失败: {e}");
+            }
+        } else {
+            lock_rw(&state.config).last_check_at = Some(now);
         }
     }
 
@@ -3362,6 +3434,18 @@ pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// 否则会出现"界面说不能试、节拍器却在试"这种自相矛盾。
 fn checkin_blocks_today(c: &checkin::CheckinCfg, today: &str) -> bool {
     c.blocks_today(today, APP_VERSION)
+}
+
+/// 「今天有可领取的活动」。与 checkin_state 的展示口径同源:活动态按 period
+/// (观测时的周期日)门控 —— 昨天监测到的 claimable 在今天不算事实(报告 L11):
+/// 不门控的话,昨天遗留的状态能绕过 done 门多跑一次签到,回查把当天已领的条目
+/// 改写成 already,界面上的 last_credits 就丢了。最新一轮监测永远带着今天的 period。
+fn activity_ready_today(c: &checkin::CheckinCfg, today: &str) -> bool {
+    c.activity_state
+        .as_ref()
+        .filter(|a| a.period == today)
+        .map(|a| a.status == "claimable")
+        .unwrap_or(false)
 }
 
 fn checkin_state_of(id: &str, cfg: &Config, store: &Store, note: Option<String>) -> CheckinState {
@@ -4233,18 +4317,15 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
                 eprintln!("{e}");
             }
         }
-        // 再**只**把 checkin[id] 合并进当前配置。读的是 live 配置而不是开头那份快照,
-        // 所以用户在签到期间改的其它设置原样保留 —— 这条是 N04 的核心。
-        let merged = {
-            let mut live = lock_rw(&state.config);
+        // 再**只**把 checkin[id] 合并进当前配置,过串行闸落盘(报告 B4)。
+        // 合并的是 live 配置而不是开头那份快照,所以用户在签到期间改的其它设置
+        // 原样保留 —— 这条是 N04 的核心;串行闸保证与其它配置写者不乱序(P3-35)。
+        if let Err(e) = save_config_off_main(&state, |live| {
             live.checkin.insert(id.to_string(), entry.clone());
-            live.clone()
-        };
+        })
+        .await
         {
-            let store = lock_rw(&state.store);
-            if let Err(e) = merged.save(&store) {
-                eprintln!("签到配置落库失败: {e}");
-            }
+            eprintln!("签到配置落库失败: {e}");
         }
     }
     let _ = manual;
@@ -4272,66 +4353,71 @@ async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<c
 async fn settle_arrivals(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
     let now = now_ts();
-    // ① 读:谁有待落定的核对单,各自的最新快照是什么
-    let mut updates: Vec<(String, checkin::ArrivalInfo)> = Vec::new();
-    {
+    // ① 读:谁有待落定的核对单。config 锁内只把「谁在等 + 等什么」抄下来,
+    // **不嵌套 store 锁** —— 全局锁序是「先 store 后 config」(lock_rw 注释),
+    // 持 config 再拿 store 会与 check_update 构成 AB-BA 死锁(报告 B2)。
+    let pending: Vec<(String, checkin::ArrivalInfo, String)> = {
         let cfg = lock_rw(&state.config);
-        for def in checkin::CHECKINS {
-            let Some(c) = cfg.checkin.get(def.id) else { continue };
-            if !c.enabled {
-                continue; // 与 run_checkin 的闸门同口径:关了就不动
-            }
-            if cfg.hidden_channels.iter().any(|h| h == def.id) {
-                continue;
-            }
-            let Some(a) = c.arrival.as_ref() else { continue };
-            if a.status != "pending" {
-                continue;
-            }
-            let today = cycle_day_of(def.id, now);
-            let snap = lock_rw(&state.store)
-                .latest_snapshot(def.id)
-                .ok()
-                .flatten();
-            let Some((_, bal)) = snap else { continue };
-            let mut a2 = a.clone();
-            a2.observe(bal, now, &today);
-            if a2 != *a {
-                updates.push((def.id.to_string(), a2));
-            }
+        checkin::CHECKINS
+            .iter()
+            .filter_map(|def| {
+                let c = cfg.checkin.get(def.id)?;
+                if !c.enabled {
+                    return None; // 与 run_checkin 的闸门同口径:关了就不动
+                }
+                if cfg.hidden_channels.iter().any(|h| h == def.id) {
+                    return None;
+                }
+                let a = c.arrival.as_ref()?;
+                if a.status != "pending" {
+                    return None;
+                }
+                Some((def.id.to_string(), a.clone(), cycle_day_of(def.id, now)))
+            })
+            .collect()
+    };
+    let mut updates: Vec<(String, checkin::ArrivalInfo)> = Vec::new();
+    for (id, a, today) in pending {
+        let snap = lock_rw(&state.store).latest_snapshot(&id).ok().flatten();
+        let Some((_, bal)) = snap else { continue };
+        let mut a2 = a.clone();
+        a2.observe(bal, now, &today);
+        if a2 != a {
+            updates.push((id, a2));
         }
     }
     if updates.is_empty() {
         return;
     }
-    // ② 写:只合并改动的那几项,再整份落盘(与 run_checkin 的收尾同一套路)
-    let merged = {
-        let mut live = lock_rw(&state.config);
-        for (id, a) in &updates {
-            if let Some(e) = live.checkin.get_mut(id) {
-                e.arrival = Some(a.clone());
+    // ② 写:只合并改动的那几项,过串行闸落盘(报告 B4)。诊断日志挪到闸外写,
+    // 不占住配置临界区;配置损坏时不动配置(P1-16),核对结论留给下一轮。
+    if refuse_if_config_broken().is_ok() {
+        if let Err(e) = save_config_off_main(&state, |live| {
+            for (id, a) in &updates {
+                if let Some(e) = live.checkin.get_mut(id) {
+                    e.arrival = Some(a.clone());
+                }
             }
-            tokenscope_core::diaglog::write_keyed(
-                "checkin",
-                id,
-                &format!(
-                    "到账核对:{} · 基线 {}@{} · {}",
-                    a.status,
-                    a.baseline,
-                    a.baseline_at,
-                    a.delta
-                        .map(|d| format!("增量 +{d}"))
-                        .unwrap_or_else(|| "未见增量".into())
-                ),
-            );
-        }
-        live.clone()
-    };
-    {
-        let store = lock_rw(&state.store);
-        if let Err(e) = merged.save(&store) {
+        })
+        .await
+        {
             eprintln!("到账核对落库失败: {e}");
         }
+    }
+    for (id, a) in &updates {
+        tokenscope_core::diaglog::write_keyed(
+            "checkin",
+            id,
+            &format!(
+                "到账核对:{} · 基线 {}@{} · {}",
+                a.status,
+                a.baseline,
+                a.baseline_at,
+                a.delta
+                    .map(|d| format!("增量 +{d}"))
+                    .unwrap_or_else(|| "未见增量".into())
+            ),
+        );
     }
     // ③ 告诉前端:核对单落定了,渠道卡与设置页的文案要当场刷新
     for (id, _) in &updates {
@@ -4351,29 +4437,47 @@ async fn settle_arrivals(app: &tauri::AppHandle) {
 ///
 /// 这条**不算当天完结**(`done_for_day` 不认 `no_cred`),所以白天补装/登录后
 /// 节拍器还会再试 —— 与 `retry` 同口径。
-fn record_checkin_skip(app: &tauri::AppHandle, id: &str, day: &str, now: i64, why: &str) {
+async fn record_checkin_skip(app: &tauri::AppHandle, id: &str, day: &str, now: i64, why: &str) {
     let state = app.state::<AppState>();
-    let mut cfg = lock_rw(&state.config).clone();
-    let entry = cfg.checkin.entry(id.to_string()).or_default();
-    let same_day = entry.last_day.as_deref() == Some(day);
-    entry.attempts = if same_day { entry.attempts + 1 } else { 1 };
-    entry.last_day = Some(day.to_string());
-    entry.last_code = Some(format!("no_cred:{why}"));
-    entry.last_try_at = Some(now);
-    entry.last_message = Some(why.to_string());
-    // 排一次退避:凭据问题不会在 2 分钟内自愈,别每 5 分钟硬撞一次
-    entry.next_try_at = Some(now + checkin::next_delay(entry.attempts));
-
-    let store = lock_rw(&state.store);
-    if let Err(e) = store.record_checkin(id, now, day, &format!("no_cred:{why}"), None, entry.attempts, why)
+    // 退避计数从 live 配置起算;以前是整份克隆后自算、落库后再把陈旧克隆**整份写回内存**
+    // —— 用户在落库窗口里改的任何设置都会被倒回旧值(报告 B4,P3-35 的残余形态)。
+    let attempts = {
+        let c = lock_rw(&state.config);
+        let prev = c
+            .checkin
+            .get(id)
+            .map(|x| if x.last_day.as_deref() == Some(day) { x.attempts } else { 0 })
+            .unwrap_or(0);
+        prev + 1
+    };
     {
-        eprintln!("{e}");
+        // 块级作用域:guard 在 await 前彻底出借结束(显式 drop 在生成器分析里仍可能
+        // 被视作"跨 await 存活",块边界不会)
+        let store = lock_rw(&state.store);
+        if let Err(e) =
+            store.record_checkin(id, now, day, &format!("no_cred:{why}"), None, attempts, why)
+        {
+            eprintln!("{e}");
+        }
     }
-    if let Err(e) = cfg.save(&store) {
-        eprintln!("签到配置落库失败: {e}");
+    // 配置走串行闸,只合并本渠道的 entry;配置损坏时不动配置(P1-16),流水已留下
+    if refuse_if_config_broken().is_ok() {
+        if let Err(e) = save_config_off_main(&state, |c| {
+            let entry = c.checkin.entry(id.to_string()).or_default();
+            let same_day = entry.last_day.as_deref() == Some(day);
+            entry.attempts = if same_day { entry.attempts + 1 } else { 1 };
+            entry.last_day = Some(day.to_string());
+            entry.last_code = Some(format!("no_cred:{why}"));
+            entry.last_try_at = Some(now);
+            entry.last_message = Some(why.to_string());
+            // 排一次退避:凭据问题不会在 2 分钟内自愈,别每 5 分钟硬撞一次
+            entry.next_try_at = Some(now + checkin::next_delay(entry.attempts));
+        })
+        .await
+        {
+            eprintln!("签到配置落库失败: {e}");
+        }
     }
-    drop(store);
-    *lock_rw(&state.config) = cfg;
     let _ = app.emit("checkin-updated", serde_json::json!({ "id": id }));
 }
 
@@ -4443,11 +4547,7 @@ async fn checkin_now(app: tauri::AppHandle, id: String) -> Result<CheckinState, 
         // 周期日(不是自然日):Qoder 的"今天"从 10:00 起算
         let today = cycle_day_of(&id, now_ts());
         if let Some(c) = cfg.checkin.get(&id) {
-            let activity_ready = c
-                .activity_state
-                .as_ref()
-                .map(|a| a.status == "claimable")
-                .unwrap_or(false);
+            let activity_ready = activity_ready_today(c, &today);
             if checkin_blocks_today(c, &today) && !activity_ready {
                 return Err(format!(
                     "今天已处理过({})",
@@ -4477,7 +4577,7 @@ async fn checkin_now(app: tauri::AppHandle, id: String) -> Result<CheckinState, 
                 .any(|k| e.contains(k));
             if !gate_like {
                 let now = now_ts();
-                record_checkin_skip(&app, &id, &cycle_day_of(&id, now), now, &e);
+                record_checkin_skip(&app, &id, &cycle_day_of(&id, now), now, &e).await;
             }
             return Err(e);
         }
@@ -4673,11 +4773,7 @@ async fn checkin_tick_once(app: &tauri::AppHandle) {
         // **逐渠道算周期日**:Qoder 的"今天"从 10:00 起算,不是自然日。
         // 用自然日会让 09:59 与 10:01 混成一天,当天那一期永远领不到。
         let today = checkin::cycle_day(now, def.day_roll_hour);
-        let activity_ready = c
-            .activity_state
-            .as_ref()
-            .map(|a| a.status == "claimable")
-            .unwrap_or(false);
+        let activity_ready = activity_ready_today(c, &today);
         if checkin_blocks_today(c, &today) && !activity_ready {
             continue;
         }
@@ -4689,12 +4785,20 @@ async fn checkin_tick_once(app: &tauri::AppHandle) {
             continue;
         }
         if let Err(e) = run_checkin(app, def.id, false).await {
-            // 拿不到凭据:记一句就走,别每 5 分钟刷屏。
-            // **但也要落一条流水** —— 以前这里只 eprintln,绿色版从托盘启动时
-            // 那行没人看得到,于是"没试"与"试了失败"在数据里无法区分
-            // (2026-10-20 排查:workbuddy 10-16/10-17 两天在 checkin_log 里是空白)。
             eprintln!("签到 {} 跳过: {e}", def.name);
-            record_checkin_skip(app, def.id, &today, now, &e);
+            // 与手动入口(checkin_now)同一条过滤:互斥忙 / 开关类「本来就不该跑」的
+            // 拒绝不记流水也不推进退避 —— 否则手动签到进行中时节拍器会拿到
+            // 「正在签到」,把 attempts 双计、流水里留一行假"没签成"(报告 L10)。
+            let gate_like = ["已隐藏", "开关没开", "正在签到", "未知签到渠道"]
+                .iter()
+                .any(|k| e.contains(k));
+            if !gate_like {
+                // 拿不到凭据:记一句就走,别每 5 分钟刷屏。
+                // **但也要落一条流水** —— 以前这里只 eprintln,绿色版从托盘启动时
+                // 那行没人看得到,于是"没试"与"试了失败"在数据里无法区分
+                // (2026-10-20 排查:workbuddy 10-16/10-17 两天在 checkin_log 里是空白)。
+                record_checkin_skip(app, def.id, &today, now, &e).await;
+            }
         }
         // 两渠道之间串行 + 间隔(设计稿第 8 节)
         tokio::time::sleep(std::time::Duration::from_millis(800)).await;
@@ -4792,11 +4896,10 @@ fn source_base(cfg: &Config, cache: Option<&models::ModelCache>, def: &models::S
 }
 
 /// 该来源的密钥。Go 的列表公开,但写进客户端必须带密钥。
-fn source_key(id: &str) -> Option<String> {
-    secrets::channel_key(id)
-        .ok()
-        .flatten()
-        .filter(|k| !k.trim().is_empty())
+/// Err = 凭据管理器真失败,必须如实往上传,别吞成「没配密钥」
+/// —— 那会把用户支去重填密钥,可病根本不在密钥上(报告 L9,P2-15 同款)。
+fn source_key(id: &str) -> Result<Option<String>, String> {
+    secrets::channel_key(id).map(|k| k.filter(|k| !k.trim().is_empty()))
 }
 
 
@@ -4842,13 +4945,14 @@ fn model_spec_with(
     }
     let def = models::find_source(source).ok_or_else(|| format!("未知模型来源: {source}"))?;
     let key = match source_key(def.id) {
-        Some(k) => k,
-        None => {
+        Ok(Some(k)) => k,
+        Ok(None) => {
             return Err(format!(
                 "还没配置 {} 密钥:先在「渠道」页签里填一次",
                 def.name
             ))
         }
+        Err(e) => return Err(format!("{} 的凭据库读取失败:{e}", def.name)),
     };
     let cache = {
         let s = lock_rw(store);
@@ -4911,7 +5015,8 @@ async fn get_model_catalog(
         let sid = def.id;
         let key = tokio::task::spawn_blocking(move || source_key(sid))
             .await
-            .map_err(|e| format!("读取密钥失败: {e}"))?;
+            .map_err(|e| format!("读取密钥失败: {e}"))?
+            .map_err(|e| format!("凭据库读取失败: {e}"))?;
         let need = force
             || cache
                 .as_ref()
@@ -5261,19 +5366,13 @@ async fn inject_state(state: State<'_, AppState>) -> Result<InjectOverview, Stri
         // 用户去重装客户端甚至重装挂件,而真实原因(探测任务坏了)一点出口都没有(P2-35)
         format!("检测客户端状态失败:{e} —— 这是挂件的探测环节出问题,不代表你没装客户端")
     })?;
-    if dirty {
-        // 学到的口径写回配置。两把锁分开拿、各拿各的(不嵌套,避免与 set_config 互等)。
-        let updated = {
-            let mut c = lock_rw(&state.config);
-            c.selection_prefix = learned;
-            c.clone()
-        };
-        let store2 = state.store.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            let s = lock_rw(&store2);
-            updated.save(&s)
-        })
-        .await;
+    if dirty && refuse_if_config_broken().is_ok() {
+        // 学到的口径写回配置,过串行闸(报告 B4)。以前内存改完、克隆整份交给阻塞任务
+        // 落盘,与 CFG_WRITE 闸内的写者可乱序 —— 旧 JSON 后落盘会把刚学到的口径拖回去。
+        // 配置损坏时不动配置(P1-16):口径丢了没关系,下次检测会重新学回来。
+        if let Err(e) = save_config_off_main(&state, |c| c.selection_prefix = learned).await {
+            eprintln!("客户端口径落库失败: {e}");
+        }
     }
     Ok(InjectOverview { clients, log })
 }
@@ -5429,7 +5528,7 @@ async fn model_info(
             Some(_) => source_base(&cfg, cache.as_ref(), def),
             None => String::new(),
         };
-        let key = source_key(def.id);
+        let key = source_key(def.id).map_err(|e| format!("凭据库读取失败: {e}"))?;
         Ok(ModelInfoView {
             id: model.clone(),
             display_name: inject::display_name_of(def.id, &model),
@@ -5470,12 +5569,33 @@ async fn copy_text(text: String) -> Result<(), String> {
 
 /// 渠道密钥的明文(用户点「显示」时一次性返回)。**这是产品里唯一把密钥回前端的路径**,
 /// 所以只有用户显式点击才会走到这里;界面侧 8 秒自动收回,不留驻。密钥型渠道以外没有可取的。
-#[tauri::command]
-async fn key_reveal(id: String) -> Result<String, String> {
-    let def = providers::find(&id).ok_or_else(|| format!("未知渠道: {id}"))?;
-    if !matches!(def.auth, providers::AuthKind::Keyring) {
-        return Err(format!("{} 没有可复制的密钥(用的是本机登录态或网页会话)", def.name));
+/// 渠道的显示名:内置渠道查静态表,自定义渠道查配置(报告 B3)。
+/// 错误信息与「已复制」回执都要用它 —— key_reveal 放行自定义渠道后,
+/// 不能再用 `providers::find(&id).expect("上面校验过")`(对 custom-N 会 panic)。
+fn channel_display_name(state: &AppState, id: &str) -> String {
+    if let Some(def) = providers::find(id) {
+        return def.name.to_string();
     }
+    lock_rw(&state.config)
+        .custom_channels
+        .iter()
+        .find(|x| x.id == id)
+        .map(|x| x.name.clone())
+        .unwrap_or_else(|| id.to_string())
+}
+
+#[tauri::command]
+async fn key_reveal(app: tauri::AppHandle, id: String) -> Result<String, String> {
+    let state = app.state::<AppState>();
+    // 放行口径与 set_key / delete_key 相同(报告 B3):自定义渠道的密钥账户名也是
+    // 渠道 id,以前只认静态表,卡片上的「复制 / 显示」对自定义渠道必报"未知渠道"。
+    key_allowed(&state, &id)?;
+    if let Some(def) = providers::find(&id) {
+        if !matches!(def.auth, providers::AuthKind::Keyring) {
+            return Err(format!("{} 没有可复制的密钥(用的是本机登录态或网页会话)", def.name));
+        }
+    }
+    let name = channel_display_name(&state, &id);
     // 凭据管理器读是 RPC:与 key_hint/set_key 同一条纪律,不下沉就会占住一个 tokio worker
     let rid = id.clone();
     match tokio::task::spawn_blocking(move || secrets::channel_key(&rid))
@@ -5483,17 +5603,18 @@ async fn key_reveal(id: String) -> Result<String, String> {
         .map_err(|e| format!("读取凭据失败: {e}"))?
     {
         Ok(Some(k)) if !k.trim().is_empty() => Ok(k),
-        Ok(_) => Err(format!("{} 还没有保存密钥", def.name)),
+        Ok(_) => Err(format!("{name} 还没有保存密钥")),
         Err(e) => Err(e),
     }
 }
 
 /// 复制渠道密钥:明文**不回前端**,后端读出来直接进剪贴板(与「复制三件套」同一条路)。
 #[tauri::command]
-async fn key_copy(id: String) -> Result<String, String> {
-    let key = key_reveal(id.clone()).await?;
-    let def = providers::find(&id).expect("上面校验过");
-    tokio::task::spawn_blocking(move || copy_to_clipboard(&key).map(|_| format!("已复制 {} 的密钥", def.name)))
+async fn key_copy(app: tauri::AppHandle, id: String) -> Result<String, String> {
+    let state = app.state::<AppState>();
+    let name = channel_display_name(&state, &id);
+    let key = key_reveal(app, id).await?;
+    tokio::task::spawn_blocking(move || copy_to_clipboard(&key).map(|_| format!("已复制 {name} 的密钥")))
         .await
         .map_err(|e| format!("复制失败: {e}"))?
 }
@@ -5930,9 +6051,20 @@ pub fn run() {
                 startup_error: Mutex::new(None),
             });
 
-            app.manage(gateway::Gateway::new(app.state::<AppState>().store.clone()));
-            let gateway_app = app.handle().clone();
-            tauri::async_runtime::spawn(async move { gateway::autostart(gateway_app).await; });
+            match gateway::Gateway::new(app.state::<AppState>().store.clone()) {
+                Ok(gw) => {
+                    app.manage(gw);
+                    let gateway_app = app.handle().clone();
+                    tauri::async_runtime::spawn(async move { gateway::autostart(gateway_app).await; });
+                }
+                // TLS 后端初始化失败这类罕见故障:不再 panic 硬退(报告 L16)——
+                // 记进启动错误,余额监控与签到照常跑,只是本地网关这一项不可用。
+                Err(e) => {
+                    let msg = format!("本地网关初始化失败:{e}(余额监控不受影响,仅本地 API 网关不可用)");
+                    eprintln!("{msg}");
+                    startup_error = note(startup_error, msg);
+                }
+            }
             // 后台一次性导入现有渠道密钥；不阻塞首屏，也不更改渠道引用。
             let import_store = app.state::<AppState>().store.clone();
             let import_cfg = config.clone();
