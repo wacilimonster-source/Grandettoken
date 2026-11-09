@@ -4074,3 +4074,13 @@ v0.3.14 宣布「句中半角」标点基线后只改了实现、漏了用例 �
 - 门禁：core 419 + 6 夹具、jsdom 177/177、CSS 形态门 1080 条、`build/verify-tray.js` 125/125（新增 `-1.2k` / `100w` / `123456789w` 三个超长与负数用例）；`android/` 无改动未跑 Gradle。
 - 发布：tag `v0.3.26`，release 提交 `7667368`。安装包 `Grandettoken_0.3.26_x64-setup.exe` 5,720,656 字节，SHA-256 `cbb3ed4c052ab7a387607ecfe8ccf8027b564d875129f5963e08e39446cf82f2`；`.sig` 424 字节；`latest.json` 1,368 字节。`verify-release.js` 14 项全 PASS。
 - 备注：本机直连 GitHub 超时（需要 `127.0.0.1:7897` 代理），Node 24 的 `fetch` 默认不读 `HTTP(S)_PROXY`，核验时要带 `NODE_USE_ENV_PROXY=1`，否则报 `fetch failed`。
+
+## 2026-11-09 · v0.3.27 托盘图标刷新不再闪烁
+
+- **根因是"无变化也换图"**：图标去重键里带着胶囊的小数文本与完整 tooltip，取数刷新（活动 60s / 空闲 300s）只要小数变一位就把**逐像素相同**的图重新送进 `Shell_NotifyIcon`，Explorer 重绘/淡入一次就是肉眼看到的"闪一下"。
+- 去重键改为只含真正画进画面的内容：`尺寸 + 状态色 + 数字`（品牌模式为 `尺寸 + 状态色 + brand`）；tooltip 拆成独立命令 `set_tray_tooltip`（只发 `NIF_TIP`），文字每轮变化不再连带替换图标。
+- Rust 侧记录上一帧图标指纹（尺寸 + 像素哈希）与 tooltip，内容相同直接跳过；真需要换图时前端仍串行合并帧，并加 1.5 秒最小写入间隔，连续变化只留最后一帧。新增 `tray_icon_digest` 单测。
+- 品牌图加载完成前不发首帧，消除开机时「灰块 → 真图」的额外一次替换；图片缺失则按灰底占位兜底。
+- 托盘跟随胶囊轮播、按托盘物理尺寸绘制、数字缩写规则均保持不变。
+- 门禁：core 419 + 6 夹具、src-tauri 14、jsdom 177/177、CSS 形态门 1080 条、`build/verify-tray.js` 128/128（新增「小数变化只更新 tooltip、不重发图标」与 tooltip 独立通道两条回归）；`android/` 无改动未跑 Gradle。
+- 发布：tag `v0.3.27`，release 提交 `570bb63`。安装包 `Grandettoken_0.3.27_x64-setup.exe` 5,721,690 字节，SHA-256 `f2e48707079461b07f375848ce895de95536872b4f12ac7b556ce62473b895c0`；`.sig` 424 字节；`latest.json` 1,445 字节。`verify-release.js` 14 项全 PASS（更新端点 200 / 版本 0.3.27 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft / 说明完整 / latest 指向 0.3.27 / 仓库公开）。
