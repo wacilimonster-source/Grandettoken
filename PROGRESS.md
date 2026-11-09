@@ -4085,7 +4085,7 @@ v0.3.14 宣布「句中半角」标点基线后只改了实现、漏了用例 �
 - 门禁：core 419 + 6 夹具、src-tauri 14、jsdom 177/177、CSS 形态门 1080 条、`build/verify-tray.js` 128/128（新增「小数变化只更新 tooltip、不重发图标」与 tooltip 独立通道两条回归）；`android/` 无改动未跑 Gradle。
 - 发布：tag `v0.3.27`，release 提交 `570bb63`。安装包 `Grandettoken_0.3.27_x64-setup.exe` 5,721,690 字节，SHA-256 `f2e48707079461b07f375848ce895de95536872b4f12ac7b556ce62473b895c0`；`.sig` 424 字节；`latest.json` 1,445 字节。`verify-release.js` 14 项全 PASS（更新端点 200 / 版本 0.3.27 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft / 说明完整 / latest 指向 0.3.27 / 仓库公开）。
 
-## 2026-11-09 · Qoder 换账号后逐笔到期仍来自旧账号(未发布)
+## 2026-11-09 · v0.3.28 Qoder 换账号后逐笔到期仍来自旧账号
 
 **现象**:国际版换成新账号后余额正确(100 分),但「逐笔到期明细」仍是旧账号的
 18 个每日 100 分赠送包(合计 1736 分)。真机快照同一条里余额 100、`expiring[]`
@@ -4110,6 +4110,13 @@ Qoder 是 App 型凭据,没有 WebSession 的「清除登录」按钮,界面上�
   清逐包缓存,再开登录窗;凭据换过时普通「登录网页版」也走同一条清理;
 - 「登录网页版」成功收尾时同样清逐包缓存,避免旧列表在随后一轮失败时复活。
 
-**门禁**:core `cargo test` **421 passed / 8 ignored**、src-tauri `cargo check`、
-`node --check app/src/app.js`、CSS 形态门 1079 条 PASS。jsdom 冒烟未跑(本机没有
-jsdom 依赖);真机换号复现与「切换账号」回归待装包后补。
+**门禁**:core `cargo test --locked` **421 passed / 8 ignored**、src-tauri
+`cargo check --all-targets --locked`、`node --check` ×6、CSS 形态门 1079 条 PASS、
+jsdom 冒烟 **177/177**(本机临时装 jsdom 27.4.0 跑)、凭据扫描 CLEAN(354 文件)。
+
+**发布(2026-11-09)**:tag `v0.3.28`,release 提交 `4b9dcff`。安装包
+`Grandettoken_0.3.28_x64-setup.exe` 5,727,032 字节,SHA-256
+`093b1167e7c229232722b8146dd4e2bfbb8d3fd00d8596bc5760e0506529ee6d`;`.sig` 424 字节;
+`latest.json` 1,718 字节。`verify-release.js` **14 项全 PASS**(更新端点 200 /
+版本 0.3.28 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft /
+说明完整 / latest 指向 0.3.28 / 仓库公开)。真机「切换账号」回归待装 0.3.28 后补。
