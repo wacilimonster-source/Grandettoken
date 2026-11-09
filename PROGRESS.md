@@ -4047,3 +4047,11 @@ v0.3.14 宣布「句中半角」标点基线后只改了实现、漏了用例 �
 - 修复「分组设置」展开后被挤成右侧窄列（`gw-channel` 改 grid，details 占满整行）。
 - 门禁：core 418 + 6 夹具、src-tauri 12、jsdom 177/177、CSS 形态门 1022 条、刷新稳定性对比、真机回归（自动启动/鉴权/模型 id/代理与全选控件/排版）全过。
 - 发布：tag `v0.3.22`，release 提交 `84c0076`。安装包 5,712,613 字节，SHA-256 `34ce5498cdc0527c15ee6cb2b1e579888ccf281e34be6bc9ec2fe02d394272f4`；`.sig` 424 字节；`latest.json` 1,923 字节。`verify-release.js` 14 项全 PASS。
+
+## 2026-11-09 · v0.3.24 网关代理跟随与界面统一
+
+- 网关上游请求改为按系统代理快照取客户端：每次调用前比对 `HTTP(S)_PROXY` / `NO_PROXY` 等环境变量与 `Internet Settings` 注册表（ProxyEnable / ProxyServer / ProxyOverride），变化后重建连接池；关闭「使用系统代理」的分组走 `no_proxy` 客户端完全直连。未配置系统代理时直连，暂不支持 PAC（页面已注明）。
+- 局域网地址列表只公布私有网段 IPv4（10/8、172.16/12、192.168/16），不再列出 Tailscale/CGNAT（100.64/10）与其他不可直连网卡；新增 `advertised_lan_ip` 用例覆盖。
+- 网关页排版统一到设置页的字号与行距：状态与启动/停止按钮并入顶部，连接地址、访问设置、上架分组、模型目录按 `--u` 缩放；窄窗口按钮不再被挤压，展开箭头改为统一字符。
+- 门禁：core 419（含 proxy 1）+ 6 夹具、src-tauri 13、jsdom 177/177、网关面板定点用例 26/26、CSS 形态门 1080 条；`android/` 无改动未跑 Gradle。
+- 发布：tag `v0.3.24`，release 提交 `9880de9`。安装包 `Grandettoken_0.3.24_x64-setup.exe` 5,716,223 字节，SHA-256 `adec073db64141b7c9ec07ccaeb81032cd50bfe71652468fedfe2849491f603a`；`.sig` 424 字节；`latest.json` 850 字节。`verify-release.js` 14 项全 PASS（更新端点 200 / 版本 0.3.24 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft / 说明完整 / latest 指向 0.3.24 / 仓库公开）。
