@@ -188,11 +188,21 @@ private fun SyncApp(
             when (event) {
                 Lifecycle.Event.ON_START -> {
                     viewModel.startPolling()
+                    // 回前台立刻刷一次,不要等轮询首轮(60s/300s)才更新;
+                    // 非 force,刚刷过时只是一次 304。
+                    viewModel.refresh()
                     updateScope.launch {
                         if (!updatePrefs.getBoolean("autoCheck", true)) return@launch
                         val now = System.currentTimeMillis()
                         val lastAttempt = updatePrefs.getLong("lastAutoAttempt", 0L)
-                        if (now - lastAttempt < 24L * 60L * 60L * 1000L) return@launch
+                        // 成功检查后 24 小时不再查;上次失败(尝试晚于成功)按 1 小时退避重试,
+                        // 不要一次断网就把自动检查挡住一整天。
+                        val gap = if (updatePrefs.getLong("lastSuccessfulCheck", 0L) >= lastAttempt) {
+                            24L * 60L * 60L * 1000L
+                        } else {
+                            60L * 60L * 1000L
+                        }
+                        if (now - lastAttempt < gap) return@launch
                         updatePrefs.edit().putLong("lastAutoAttempt", now).apply()
                         val result = runCatching {
                             withContext(Dispatchers.IO) { AndroidUpdateRepository.check(context) }
@@ -1022,7 +1032,7 @@ private fun SettingsScreen(
         AlertDialog(
             onDismissRequest = { confirmLogout = false },
             title = { Text("退出同步组？") },
-            text = { Text("会删除本机主密钥、缓存和后台任务;GitHub 上的密文不会自动删除。需要重新扫码才能再次查看;重新扫另一个同步码即可更换同步组。") },
+            text = { Text("会删除本机主密钥、缓存、后台任务和 GitHub 登录;GitHub 上的密文不会自动删除。需要重新扫码才能再次查看;重新扫另一个同步码即可更换同步组。") },
             confirmButton = {
                 TextButton(onClick = {
                     confirmLogout = false

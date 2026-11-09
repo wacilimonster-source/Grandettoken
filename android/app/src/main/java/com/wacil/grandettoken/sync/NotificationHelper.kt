@@ -153,8 +153,9 @@ object NotificationHelper {
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .build()
+        // 不取模:模数会制造不同 key 的 ID 碰撞,后发通知覆盖先发。
         NotificationManagerCompat.from(context)
-            .notify((key.hashCode() and 0x7FFFFFFF) % 100_000, notification)
+            .notify(key.hashCode() and 0x7FFFFFFF, notification)
     }
 
     private fun prefs(context: Context) =

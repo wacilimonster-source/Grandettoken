@@ -1,10 +1,8 @@
 package com.wacil.grandettoken.sync.widget
 
 import android.content.Context
-import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
-import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -29,16 +27,13 @@ class WidgetRefreshWorker(
         private const val UNIQUE_NAME = "grandettoken-widget-refresh"
 
         fun enqueue(context: Context) {
+            // 不加联网约束:离线时任务也要立即执行,把"离线"结果画到小部件上,
+            // 而不是挂在队列里让"刷新中"状态悄悄过期。
             val request = OneTimeWorkRequestBuilder<WidgetRefreshWorker>()
-                .setConstraints(
-                    Constraints.Builder()
-                        .setRequiredNetworkType(NetworkType.CONNECTED)
-                        .build()
-                )
                 .build()
             WorkManager.getInstance(context).enqueueUniqueWork(
                 UNIQUE_NAME,
-                ExistingWorkPolicy.KEEP,
+                ExistingWorkPolicy.REPLACE,
                 request,
             )
         }

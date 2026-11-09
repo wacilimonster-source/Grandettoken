@@ -252,6 +252,10 @@ class GroupRepository(context: Context) {
 
     fun logout() {
         store.clearGroup()
+        // 退出即彻底清理本机凭据,换同步组后从匿名模式干净起步,
+        // 不残留旧 token 让新组静默变成"已登录"。
+        store.clearToken()
+        store.clearGithubLogin()
         SyncScheduler.cancel(appContext)
     }
 

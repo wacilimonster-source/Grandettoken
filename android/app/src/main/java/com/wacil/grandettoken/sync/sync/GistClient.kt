@@ -19,11 +19,7 @@ sealed class FetchResult {
  * 所有响应都做截断/大小检查，错误只保留状态码与错误码。
  */
 class GistClient(private val token: String? = null) {
-    private val http = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .writeTimeout(20, TimeUnit.SECONDS)
-        .build()
+    private val http = SHARED_HTTP
 
     fun get(gistId: String, etag: String?): FetchResult {
         if (!SyncCode.validGistId(gistId)) {
@@ -124,12 +120,18 @@ class GistClient(private val token: String? = null) {
         }
     }
 
+    /** 共享客户端,保留 close() 让调用方语义不变;不再销毁线程池与连接池。 */
     fun close() {
-        http.dispatcher.executorService.shutdown()
-        http.connectionPool.evictAll()
     }
 
     companion object {
+        /** 前台轮询、后台 SyncWorker 和小部件刷新共用,复用线程池与连接。 */
+        private val SHARED_HTTP: OkHttpClient = OkHttpClient.Builder()
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .writeTimeout(20, TimeUnit.SECONDS)
+            .build()
+
         const val MAX_SOURCES = 32
         const val MAX_SOURCE_FILE_BYTES = 256L * 1024L
         const val MAX_TOTAL_BYTES = 4L * 1024L * 1024L

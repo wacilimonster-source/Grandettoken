@@ -78,6 +78,9 @@ class WidgetConfigActivity : ComponentActivity() {
                     onSave = { selection ->
                         WidgetStore.save(this, appWidgetId, kind, selection)
                         WidgetUpdater.update(this, appWidgetId, kind)
+                        // 缓存为空/过旧时立即补拉一次(内部有 5 分钟节流),
+                        // 不要让首次配置停在"等待首次同步"直到下个轮询周期。
+                        WidgetSyncBridge.onWidgetShown(this)
                         setResult(
                             RESULT_OK,
                             Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId),
