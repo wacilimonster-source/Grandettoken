@@ -26,14 +26,19 @@ const preview = path.resolve(process.argv[2] || path.join(os.tmpdir(), "grandett
       const CFG = { trayShowNumber: true };
       const channel = { name: "测试渠道", hasKey: true, valid: true, kind: "amount", remaining: 74 };
       const PILL = { list: [channel], sorted: [channel], idx: 0 };
-      const control = { size: 16, text: "¥74.00", frames: [], block: false, release: null, fail: false };
+      const control = { size: 16, text: "¥74.00", frames: [], tips: [], block: false, release: null, fail: false };
       const $ = () => ({ textContent: control.text });
       const toneOf = c => c.tone || "ok";
       const remainRatio = c => c.ratio ?? null;
       const setInterval = () => 0;
-      class Image { constructor() { this.complete = false; this.naturalWidth = 0; } }
+      // 异步触发 onload 即可:测试只验证"加载完成后才发首帧",不需要真图像。
+      class Image {
+        constructor() { this.complete = false; this.naturalWidth = 0; }
+        set src(v) { setTimeout(() => this.onload && this.onload(), 0); }
+      }
       const invoke = (command, args) => {
         if (command === "tray_icon_size") return Promise.resolve(control.size);
+        if (command === "set_tray_tooltip") { control.tips.push(args.tooltip); return Promise.resolve(); }
         if (command !== "set_tray_icon") throw new Error("意外的命令: " + command);
         control.frames.push(args);
         if (control.fail) { control.fail = false; return Promise.reject(new Error("模拟失败")); }
@@ -41,7 +46,10 @@ const preview = path.resolve(process.argv[2] || path.join(os.tmpdir(), "grandett
         return Promise.resolve();
       };
       ${implementation}
-      window.trayTest = { trayAbbr, trayNumber, drawTrayNumber, drawTrayIcon, refreshTraySize, CFG, channel, control };
+      window.trayTest = {
+        trayAbbr, trayNumber, drawTrayNumber, drawTrayIcon, refreshTraySize, CFG, channel, control,
+        setTrayMinGap: (ms) => { trayMinGapMs = ms; },
+      };
     })();` });
 
     const result = await page.evaluate(async () => {
@@ -49,6 +57,8 @@ const preview = path.resolve(process.argv[2] || path.join(os.tmpdir(), "grandett
       const checks = [];
       const check = (name, ok) => checks.push({ name, ok: !!ok });
       const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+      // 测试里不真等 1.5 秒节流;节流逻辑本身只影响"帧排队",不影响内容正确性。
+      h.setTrayMinGap(0);
       for (const [value, expected] of [
         [0, "0"], [0.03, "0.0"], [0.4, "0.4"], [5, "5"], [-0.4, "-0.4"],
         [74.2, "74"], [999, "999"], [1000, "1k"], [1200, "1.2k"],
@@ -89,10 +99,15 @@ const preview = path.resolve(process.argv[2] || path.join(os.tmpdir(), "grandett
       await tick();
       h.drawTrayIcon(); await tick();
       let last = h.control.frames.at(-1);
-      check("100% 按 16×16 发送并保留完整 tooltip", last.size === 16 && atob(last.rgbaB64).length === 16 * 16 * 4 && last.tooltip === "测试渠道 ¥74.00");
+      check("100% 按 16×16 发送", last.size === 16 && atob(last.rgbaB64).length === 16 * 16 * 4);
+      check("tooltip 走独立通道且内容完整", h.control.tips.at(-1) === "测试渠道 ¥74.00");
       const count = h.control.frames.length;
       h.drawTrayIcon(); await tick();
       check("相同画面不重复发送", h.control.frames.length === count);
+      // 核心回归:胶囊小数变了,但托盘数字取整后没变 —— 只更新 tooltip,不重发图标。
+      h.control.text = "¥74.01"; h.drawTrayIcon(); await tick(); await tick();
+      check("小数变化只更新 tooltip,不重发图标", h.control.frames.length === count && h.control.tips.at(-1) === "测试渠道 ¥74.01");
+      h.control.text = "¥74.00"; h.drawTrayIcon(); await tick();
       h.control.size = 20; await h.refreshTraySize(); await tick();
       last = h.control.frames.at(-1);
       check("缩放变化重画 20×20", last.size === 20 && atob(last.rgbaB64).length === 20 * 20 * 4);
@@ -107,7 +122,8 @@ const preview = path.resolve(process.argv[2] || path.join(os.tmpdir(), "grandett
       const pending = h.control.frames.length;
       h.control.block = false; h.control.release(); await tick();
       last = h.control.frames.at(-1);
-      check("并发变化合并为最新帧", h.control.frames.length === pending + 1 && last.size === 24 && last.tooltip === "测试渠道 76");
+      check("并发变化合并为最新帧", h.control.frames.length === pending + 1 && last.size === 24);
+      check("合并后 tooltip 也是最新文字", h.control.tips.at(-1) === "测试渠道 76");
       h.control.fail = true; h.control.text = "77"; h.channel.remaining = 77; h.drawTrayIcon(); await tick();
       const afterFail = h.control.frames.length;
       h.drawTrayIcon(); await tick();

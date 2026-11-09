@@ -2857,6 +2857,11 @@ let trayKey = "";
 let traySize = 16;
 let traySizeBusy = false;
 let trayFrame = null, traySending = false;
+let trayLastSentAt = 0;
+let trayMinGapMs = 1500; // 真需要换图时的最小写入间隔,连续变化只留最后一帧
+let trayTip = "";
+let trayTipChain = Promise.resolve();
+let trayBrandReady = false;
 
 async function refreshTraySize() {
   if (traySizeBusy) return;
@@ -2876,12 +2881,16 @@ async function refreshTraySize() {
 }
 
 // 串行发送并合并待更新帧,避免 DPI 变化时旧尺寸的图标后到并覆盖新图标。
+// 真需要换图时也留最小间隔:连续变化只留最后一帧,不会把每帧都送进
+// Shell_NotifyIcon 排队闪一串。首次发送(时间戳为 0)不受影响。
 function sendTrayFrame(frame) {
   trayFrame = frame;
   if (traySending) return;
   traySending = true;
   (async () => {
     while (trayFrame) {
+      const wait = trayLastSentAt + trayMinGapMs - Date.now();
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
       const current = trayFrame;
       trayFrame = null;
       try {
@@ -2889,14 +2898,37 @@ function sendTrayFrame(frame) {
       } catch (e) {
         if (trayKey === current.key) trayKey = "";
         console.error("更新托盘图标失败", e);
+      } finally {
+        trayLastSentAt = Date.now();
       }
     }
     traySending = false;
   })();
 }
 
+/** tooltip 单独走 NIF_TIP:文字每轮都可能变,但不该连带重画图标。
+    串行发送,避免慢的那次后到把新文字盖回旧文字。 */
+function sendTrayTip(text) {
+  if (text === trayTip) return;
+  trayTip = text;
+  trayTipChain = trayTipChain
+    .then(() => invoke("set_tray_tooltip", { tooltip: text }))
+    .catch((e) => {
+      if (trayTip === text) trayTip = "";
+      console.error("更新托盘提示失败", e);
+    });
+}
+
 const trayBrand = new Image();
+// 品牌图没加载完不发帧:否则会先画一块灰底、加载完再换真图,开机多闪一次。
 trayBrand.onload = () => {
+  trayBrandReady = true;
+  trayKey = "";
+  drawTrayIcon();
+};
+// 图片缺失也不能永远停在启动时的默认图标上:退回灰底占位。
+trayBrand.onerror = () => {
+  trayBrandReady = true;
   trayKey = "";
   drawTrayIcon();
 };
@@ -2913,7 +2945,13 @@ function drawTrayIcon() {
       ? "渠道全部取数失败"
       : "尚未配置密钥";
   const num = CFG && CFG.trayShowNumber !== false ? trayNumber(c) : "";
-  const key = traySize + "|" + tone + "|" + text + "|" + num;
+  // tooltip 与图标走两条通道:胶囊的小数每轮都在变,但它不该参与图标去重 ——
+  // 以前 text 进 key,取数刷新会把逐像素相同的图重发一遍,Explorer 重绘即"闪一下"。
+  sendTrayTip(text);
+  // 品牌图就绪前保持启动时的默认图标,避免"灰块 → 真图"多换一次。
+  if (!num && !trayBrandReady) return;
+  // 键只含真正画进画面的内容:尺寸 + 状态色 + 数字(或品牌模式)。
+  const key = traySize + "|" + tone + "|" + (num || "brand");
   if (key === trayKey) return; // 内容没变就不重画、不跨进程传数据
   trayKey = key;
 
@@ -2966,7 +3004,7 @@ function drawTrayIcon() {
     bin += String.fromCharCode.apply(null, px.subarray(i, i + 0x8000));
   }
   const rgbaB64 = btoa(bin);
-  sendTrayFrame({ key, args: { rgbaB64, size: S, tooltip: text } });
+  sendTrayFrame({ key, args: { rgbaB64, size: S } });
 }
 
 /** 设置页「渠道」页签:一卡一渠道 —— 显隐、排序、密钥、额度申请全在卡里。
