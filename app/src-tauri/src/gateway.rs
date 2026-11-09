@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 use tauri::Manager;
-use tokenscope_core::{models, secrets, store::Store};
+use tokenscope_core::{models, proxy::ProxyClients, secrets, store::Store};
 
 const CONFIG_KEY: &str = "local_gateway_v1";
 const SECRET_KEY: &str = "local-gateway-access";
@@ -61,13 +61,13 @@ struct Inner {
 pub struct Gateway {
     store: Arc<Mutex<Store>>,
     inner: Arc<Mutex<Inner>>,
-    client: reqwest::Client,
-    direct_client: reqwest::Client,
+    clients: Arc<ProxyClients>,
     lifecycle: Arc<tokio::sync::Mutex<()>>,
 }
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
+
 impl Gateway {
     pub fn new(store: Arc<Mutex<Store>>) -> Self {
         let settings = lock(&store)
@@ -83,17 +83,9 @@ impl Gateway {
                 shutdown: None,
                 startup_error: None,
             })),
-            client: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .connect_timeout(Duration::from_secs(15))
-                .build()
-                .expect("HTTP client"),
-            direct_client: reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).connect_timeout(Duration::from_secs(15)).build().expect("direct HTTP client"),
+            clients: Arc::new(ProxyClients::new().expect("HTTP clients")),
             lifecycle: Arc::new(tokio::sync::Mutex::new(())),
         }
-    }
-    fn client(&self, system_proxy: bool) -> &reqwest::Client {
-        if system_proxy { &self.client } else { &self.direct_client }
     }
     fn save(&self, settings: &Settings) -> Result<(), String> {
         lock(&self.store).set_setting(
@@ -285,8 +277,11 @@ async fn chat(
         "hapi" => "https://ai.yuchuantest.com/v1".to_string(),
         _ => return error(StatusCode::NOT_FOUND, "渠道不受支持"),
     };
-    let req = g
-        .client(channel.system_proxy)
+    let client = match g.clients.client(channel.system_proxy) {
+        Ok(client) => client,
+        Err(_) => return error(StatusCode::BAD_GATEWAY, "无法初始化上游代理连接"),
+    };
+    let req = client
         .post(format!("{base}/chat/completions"))
         .bearer_auth(key)
         .json(&data);
@@ -306,6 +301,9 @@ async fn chat(
     }
     response
 }
+fn advertised_lan_ip(ip: Ipv4Addr) -> bool {
+    ip.is_private()
+}
 fn local_ips() -> Vec<Value> {
     let mut ips: Vec<Value> = if_addrs::get_if_addrs()
         .unwrap_or_default()
@@ -313,7 +311,7 @@ fn local_ips() -> Vec<Value> {
         .filter_map(|iface| {
             let ip = iface.ip();
             match ip {
-                IpAddr::V4(v) if !v.is_loopback() && !v.is_unspecified() && !v.is_link_local() => {
+                IpAddr::V4(v) if advertised_lan_ip(v) => {
                     Some(json!({"address":v.to_string(),"name":iface.name}))
                 }
                 _ => None,
@@ -462,9 +460,10 @@ pub async fn gateway_publish(
         .await
         .map_err(|e| e.to_string())??
         .ok_or("密钥不存在")?;
+    let client = g.clients.client(use_proxy)?;
     let (mut ids, host) = if source == "hapi" {
         models::fetch_source_ids(
-            g.client(use_proxy),
+            &client,
             models::find_source("hapi").ok_or("渠道不可用")?,
             Some(&key),
         )
@@ -476,9 +475,9 @@ pub async fn gateway_publish(
             "https://discovery-api.intern-ai.org.cn/v1/models"
         };
         let req = if source == "gemini" {
-            g.client(use_proxy).get(url).header("x-goog-api-key", &key)
+            client.get(url).header("x-goog-api-key", &key)
         } else {
-            g.client(use_proxy).get(url).bearer_auth(&key)
+            client.get(url).bearer_auth(&key)
         };
         let res = req
             .timeout(Duration::from_secs(25))
@@ -671,6 +670,14 @@ mod tests {
         s.lan = true;
         assert!(peer_allowed("192.168.1.10:1234".parse().unwrap(), &s));
         assert!(!peer_allowed("8.8.8.8:1234".parse().unwrap(), &s));
+    }
+    #[test]
+    fn advertised_lan_addresses_are_accepted_private_ipv4() {
+        assert!(advertised_lan_ip("192.168.1.10".parse().unwrap()));
+        assert!(advertised_lan_ip("10.0.0.2".parse().unwrap()));
+        assert!(!advertised_lan_ip("100.69.220.4".parse().unwrap()));
+        assert!(!advertised_lan_ip("8.8.8.8".parse().unwrap()));
+        assert!(!advertised_lan_ip("127.0.0.1".parse().unwrap()));
     }
     #[test]
     fn generated_keys_are_distinct() {

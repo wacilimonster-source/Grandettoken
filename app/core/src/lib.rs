@@ -21,6 +21,7 @@ pub mod inject;
 pub mod models;
 pub mod peak;
 pub mod providers;
+pub mod proxy;
 pub mod qoder;
 pub mod qoderweb;
 pub mod recovery;
