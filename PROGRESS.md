@@ -4169,10 +4169,17 @@ jsdom 冒烟 **177/177**(本机临时装 jsdom 27.4.0 跑)、凭据扫描 CLEAN(
 作用域才能过 Send 检查;run_diagnostic 的 match 臂要 `Ok(...)` 包装;
 块尾表达式的 guard 临时值生命周期(E0597)。
 
-**发布(2026-11-10)**:tag `v0.3.30`,release 提交见 `git log`。安装包
+**发布(2026-11-10)**:tag `v0.3.30`,release 提交 `879e29e`。安装包
 `Grandettoken_0.3.30_x64-setup.exe` 5,735,664 字节,SHA-256
 `7bd0ddc591030def656e6a4b9d677eed694812176a46c9f972a3c5086f0adfca`;`.sig` 424 字节;
-`latest.json` 见 release 资产。`verify-release.js` 见下。
+`latest.json` 958 字节。`verify-release.js` **14 项全 PASS**(更新端点 200 /
+版本 0.3.30 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft /
+说明完整 / latest 指向 0.3.30 / 仓库公开)。
+
+**安全插记**:本次 release 提交按 `git add -A` 惯例收编了长期未跟踪的 build/qa
+留档,其中 `build/qa/qoder-fix-20261109/` 是 Cookie 罐与快照库的**真机备份
+(44 条会话 Cookie / 28.5 万行快照)** —— 已在推送前 amend 移出,文件仍留在本地;
+`.gitignore` 补 `*.db.bak` 与 `build/qa/**/Cookies.*`,防止下次再被收编。
 
 ## 2026-11-09 · v0.3.29 Qoder「切换账号」真正清掉旧网页会话
 
