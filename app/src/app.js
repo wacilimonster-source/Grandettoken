@@ -2778,14 +2778,20 @@ function fitPill() {
   }
 }
 
-/** 托盘缩写:10 以内留一位小数,两位优先(<1000 直接取整),千「k」万「w」各留一位小数。 */
+/** 托盘缩写:低余额保留一位小数;去掉无意义的 .0,较大的万位数取整。完整数值仍在 tooltip。 */
 function trayAbbr(v) {
   const a = Math.abs(v);
+  const compact = (n) => {
+    const s = n.toFixed(1);
+    // 非零数被舍入到 0.0 时仍保留小数,避免把接近零误写成精确的零。
+    return s.endsWith(".0") && (n === 0 || Math.abs(n) >= 0.05) ? s.slice(0, -2) : s;
+  };
   // 小于 10 时取整会把"只剩 5.28"报成 5,把"只剩 0.4"报成 0 —— 越紧张越需要精度
-  if (a < 10) return v.toFixed(1);
+  if (a < 10) return compact(v);
   if (a < 1000) return String(Math.round(v));
-  if (a < 10000) return (v / 1000).toFixed(1) + "k";
-  return (v / 10000).toFixed(1) + "w";
+  if (a < 10000) return compact(v / 1000) + "k";
+  if (a < 100000) return compact(v / 10000) + "w";
+  return String(Math.round(v / 10000)) + "w";
 }
 
 /** 当前托盘渠道的概览数;拿不到可信数字(未配置/失败/关闭)返回 "" → 画回品牌样式。 */
@@ -2793,25 +2799,161 @@ function trayNumber(c) {
   if (!c || !c.hasKey || (!c.valid && !c.stale)) return "";
   if (c.kind === "percent") {
     const r = remainRatio(c);
-    return r === null ? "" : String(Math.round(r * 100));
+    return Number.isFinite(r) ? String(Math.round(r * 100)) : "";
   }
-  if (c.remaining === null || c.remaining === undefined) return "";
+  if (!Number.isFinite(c.remaining)) return "";
   return trayAbbr(c.remaining);
+}
+
+// 16px 托盘容不下普通字体的抗锯齿和描边。数字用整数像素的小字形,3 位数也能
+// 占满高度;空间足够时换成更圆润的 5 列字形。小数点、负号和单位各自留出间隔。
+const TRAY_GLYPHS = {
+  "0": ["111", "101", "101", "101", "101", "101", "111"],
+  "1": ["010", "110", "010", "010", "010", "010", "111"],
+  "2": ["111", "001", "001", "111", "100", "100", "111"],
+  "3": ["110", "001", "001", "011", "001", "001", "110"],
+  "4": ["101", "101", "101", "111", "001", "001", "001"],
+  "5": ["111", "100", "100", "111", "001", "001", "110"],
+  "6": ["011", "100", "100", "111", "101", "101", "111"],
+  "7": ["111", "001", "001", "010", "010", "010", "010"],
+  "8": ["111", "101", "101", "111", "101", "101", "111"],
+  "9": ["111", "101", "101", "111", "001", "001", "110"],
+  ".": ["0", "0", "0", "0", "0", "0", "1"],
+  "-": ["000", "000", "000", "111", "000", "000", "000"],
+  k: ["100", "100", "101", "110", "101", "101", "101"],
+  w: ["000", "000", "101", "101", "101", "111", "010"],
+};
+const TRAY_WIDE_GLYPHS = {
+  "0": ["01110", "10001", "10001", "10001", "10001", "10001", "01110"],
+  "1": ["00100", "01100", "00100", "00100", "00100", "00100", "01110"],
+  "2": ["01110", "10001", "00001", "00010", "00100", "01000", "11111"],
+  "3": ["11110", "00001", "00001", "01110", "00001", "00001", "11110"],
+  "4": ["00010", "00110", "01010", "10010", "11111", "00010", "00010"],
+  "5": ["11111", "10000", "10000", "11110", "00001", "00001", "11110"],
+  "6": ["01110", "10000", "10000", "11110", "10001", "10001", "01110"],
+  "7": ["11111", "00001", "00010", "00100", "01000", "01000", "01000"],
+  "8": ["01110", "10001", "10001", "01110", "10001", "10001", "01110"],
+  "9": ["01110", "10001", "10001", "01111", "00001", "00001", "01110"],
+  k: ["10000", "10000", "10010", "10100", "11000", "10100", "10010"],
+  w: ["00000", "00000", "10001", "10001", "10101", "10101", "01010"],
+};
+
+function drawTrayNumber(g, size, num, tone) {
+  const chars = Array.from(num);
+  const pad = Math.max(1, Math.round(size * 0.1));
+  const height = size - pad * 2;
+  const gap = Math.max(1, Math.round(size / 24));
+  const widths = chars.map((ch) => ch === "." ? 1 : 3);
+  const available = size - 2;
+  const minWidth = widths.reduce((a, b) => a + b, 0) + gap * (chars.length - 1);
+  // off 是深色底,其余状态色是浅底;不加描边,让每个像素都用来画笔画。
+  g.fillStyle = tone === "off" ? "#fff" : "#141921";
+  if (minWidth > available || chars.some((ch) => !TRAY_GLYPHS[ch])) {
+    // 极大的数字可能超过 4 位,退回限宽字体,仍能看到完整缩写。
+    g.font = `700 ${Math.floor(size * 0.8)}px "Segoe UI",sans-serif`;
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    g.fillText(num, size / 2, size / 2, available);
+    return;
+  }
+  let spare = available - minWidth;
+  const maxWidth = Math.max(3, Math.floor(height * 5 / 7));
+  // 小写 w 至少 5 列时才容易与 y 区分;有余量先给单位补齐。
+  chars.forEach((ch, i) => {
+    while (ch === "w" && widths[i] < Math.min(5, maxWidth) && spare > 0) {
+      widths[i]++; spare--;
+    }
+  });
+  // 先给非 1 数字多分一列,再给单位、1 和符号;每轮只加一列,保持相邻数字均衡。
+  const order = chars.map((ch, i) => i).sort((a, b) => {
+    const rank = (ch) => /[02-9]/.test(ch) ? 0 : ch === "k" || ch === "w" ? 1 : ch === "1" ? 2 : 3;
+    return rank(chars[a]) - rank(chars[b]);
+  });
+  while (spare > 0) {
+    let changed = false;
+    for (const i of order) {
+      const cap = chars[i] === "." ? Math.max(1, Math.floor(height / 7))
+        : chars[i] === "-" ? Math.max(3, Math.floor(maxWidth * 0.6)) : maxWidth;
+      if (widths[i] < cap && spare > 0) { widths[i]++; spare--; changed = true; }
+    }
+    if (!changed) break;
+  }
+  const total = widths.reduce((a, b) => a + b, 0) + gap * (chars.length - 1);
+  let x = Math.floor((size - total) / 2);
+  chars.forEach((ch, i) => {
+    const rows = widths[i] >= 5 && TRAY_WIDE_GLYPHS[ch] ? TRAY_WIDE_GLYPHS[ch] : TRAY_GLYPHS[ch];
+    const cols = rows[0].length;
+    rows.forEach((row, y) => {
+      for (let col = 0; col < cols; col++) {
+        if (row[col] !== "1") continue;
+        const x1 = x + Math.floor(col * widths[i] / cols);
+        const x2 = x + Math.floor((col + 1) * widths[i] / cols);
+        const y1 = pad + Math.floor(y * height / 7);
+        const y2 = pad + Math.floor((y + 1) * height / 7);
+        g.fillRect(x1, y1, x2 - x1, y2 - y1);
+      }
+    });
+    x += widths[i] + gap;
+  });
 }
 
 /**
  * 托盘图标。两种画法(设置→显示→托盘数字切换):
- *  - 数字式:状态色整底 + 白色粗体概览数(描深边保证任意底色可读)——扫一眼托盘要的就是这个;
+ *  - 数字式:状态色整底 + 高对比数字,按托盘实际物理像素绘制;
  *  - 品牌式:应用图标 + 右下状态角点(无可信数字时的回退,也是开关关闭的样式)。
- * 32×32 画布,系统按 DPI 缩到 16~24px;tooltip 永远带完整信息。
+ * tooltip 永远带完整信息。
  */
 let trayKey = "";
+let traySize = 16;
+let traySizeBusy = false;
+let trayFrame = null, traySending = false;
+
+async function refreshTraySize() {
+  if (traySizeBusy) return;
+  traySizeBusy = true;
+  try {
+    const size = await invoke("tray_icon_size");
+    if (Number.isInteger(size) && size >= 8 && size <= 64 && size !== traySize) {
+      traySize = size;
+      trayKey = "";
+      drawTrayIcon();
+    }
+  } catch (e) {
+    console.warn("获取托盘图标尺寸失败", e);
+  } finally {
+    traySizeBusy = false;
+  }
+}
+
+// 串行发送并合并待更新帧,避免 DPI 变化时旧尺寸的图标后到并覆盖新图标。
+function sendTrayFrame(frame) {
+  trayFrame = frame;
+  if (traySending) return;
+  traySending = true;
+  (async () => {
+    while (trayFrame) {
+      const current = trayFrame;
+      trayFrame = null;
+      try {
+        await invoke("set_tray_icon", current.args);
+      } catch (e) {
+        if (trayKey === current.key) trayKey = "";
+        console.error("更新托盘图标失败", e);
+      }
+    }
+    traySending = false;
+  })();
+}
+
 const trayBrand = new Image();
 trayBrand.onload = () => {
   trayKey = "";
   drawTrayIcon();
 };
 trayBrand.src = "brand/logo-tray.png";
+refreshTraySize();
+// 任务栏可以在主窗口隐藏时移动到另一台显示器,不能只监听窗口的 DPI 变化。
+setInterval(refreshTraySize, 30_000);
 function drawTrayIcon() {
   const c = PILL.list[PILL.idx] || null;
   const tone = c ? toneOf(c) : "off";
@@ -2821,11 +2963,11 @@ function drawTrayIcon() {
       ? "渠道全部取数失败"
       : "尚未配置密钥";
   const num = CFG && CFG.trayShowNumber !== false ? trayNumber(c) : "";
-  const key = tone + "|" + text + "|" + num;
+  const key = traySize + "|" + tone + "|" + text + "|" + num;
   if (key === trayKey) return; // 内容没变就不重画、不跨进程传数据
   trayKey = key;
 
-  const S = 32;
+  const S = traySize;
   const cv = document.createElement("canvas");
   cv.width = S;
   cv.height = S;
@@ -2844,15 +2986,7 @@ function drawTrayIcon() {
     roundRect();
     g.fillStyle = TONE_HEX[tone === "off" ? "off" : tone];
     g.fill();
-    const fs = num.length >= 4 ? S * 0.34 : num.length === 3 ? S * 0.42 : S * 0.56;
-    g.font = `700 ${fs}px "Segoe UI",sans-serif`;
-    g.textAlign = "center";
-    g.textBaseline = "middle";
-    g.lineWidth = S * 0.07;
-    g.strokeStyle = "rgba(18,20,26,.8)";
-    g.strokeText(num, S / 2, S * 0.54);
-    g.fillStyle = "#fff";
-    g.fillText(num, S / 2, S * 0.54);
+    drawTrayNumber(g, S, num, tone);
   } else {
     if (trayBrand.complete && trayBrand.naturalWidth) {
       g.drawImage(trayBrand, 0, 0, S, S);
@@ -2873,7 +3007,7 @@ function drawTrayIcon() {
     g.fill();
   }
 
-  // 像素走 base64:4096 字节的 RGBA 若按数组过 IPC 会变成两万多字符的 JSON,
+  // 像素走 base64:RGBA 若按数组过 IPC 会膨胀成很长的 JSON,
   // 胶囊每几秒轮播一次就重发一遍(报告 O-9)。分块转 binary string 是为了
   // 避开 fromCharCode 一次传几千年参数的栈溢出上限。
   const px = g.getImageData(0, 0, S, S).data;
@@ -2882,12 +3016,7 @@ function drawTrayIcon() {
     bin += String.fromCharCode.apply(null, px.subarray(i, i + 0x8000));
   }
   const rgbaB64 = btoa(bin);
-  invoke("set_tray_icon", { rgbaB64, size: S, tooltip: text }).catch((e) => {
-    // 失败要清掉去重键:否则 trayKey 已记成这一帧,后面永远不再重试,
-    // 托盘就停在旧数字上(报告 O-9)
-    console.error("更新托盘图标失败", e);
-    trayKey = "";
-  });
+  sendTrayFrame({ key, args: { rgbaB64, size: S, tooltip: text } });
 }
 
 /** 设置页「渠道」页签:一卡一渠道 —— 显隐、排序、密钥、额度申请全在卡里。
@@ -2950,7 +3079,7 @@ const WHY = {
   qoderweb: "逐笔到期明细只有网页会话能拿到,桌面端凭据只有汇总(平台两套接口的差别)。点「登录网页版」开独立窗口,登录后自动关窗并刷新;这套会话只读明细,签到与余额照旧走桌面端。",
   appauth: "凭据来自本机已登录的客户端;失效时打开一次客户端即可。隐藏本渠道后连读取也会停止。",
   compact: "开启后可切成 380×46 的横向条;顶栏固定四枚入口不再显示「紧凑」,用 Ctrl+2 切换紧凑条,Esc 在面板与胶囊之间切换。",
-  trayNum: "托盘图标画概览缩写(74 / 1.2k / 82);关闭后回到品牌样式。",
+  trayNum: "托盘显示缩写(74 / 1.2k / 82),悬停可看完整数值;关闭后回到品牌样式。",
   pulse: "只有红色状态点会 2 秒一次红晕。低位持续期间不重复播报,免得常驻桌面一直闪。",
   notify: "通知本身不支持点击回跳(插件限制),所以窗口藏着时改为闪一下任务栏。",
   sound: "WebAudio 合成,不新增资源文件;默认关。",
@@ -3581,6 +3710,7 @@ async function savePosSoon() {
 // DPI / 显示器缩放变化后按固定尺寸重新落一次;不再有用户拖拽 resize。
 if (typeof appWindow.onScaleChanged === "function") {
   appWindow.onScaleChanged(async () => {
+    refreshTraySize();
     if (SIZE_APPLYING) return;
     await applyForm(currentForm(), false, true);
   });

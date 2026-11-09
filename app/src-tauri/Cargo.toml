@@ -1,6 +1,6 @@
 [package]
 name = "tokenscope"
-version = "0.3.24"
+version = "0.3.25"
 description = "多平台 Token 余额监控"
 authors = ["wacil"]
 edition = "2021"
@@ -49,6 +49,8 @@ tauri-plugin-single-instance = "2"
 # 开机自启写 HKCU Run 键,免管理员权限,无外部 DLL 依赖(单 exe 约束)
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
+# 按任务栏所在显示器的 DPI 获取小图标物理尺寸,避免托盘数字被系统二次缩放。
+windows-sys = { version = "0.61", features = ["Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging"] }
 
 [profile.release]
 opt-level = "s"

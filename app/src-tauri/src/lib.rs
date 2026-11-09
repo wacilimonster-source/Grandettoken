@@ -1394,12 +1394,57 @@ async fn set_autostart(enabled: bool) -> Result<(), String> {
         .map_err(|e| format!("设置开机自启失败: {e}"))?
 }
 
-/// 托盘角标。前端用 canvas 画好 32×32 的 RGBA(图标同款造型 + 状态色角标),
-/// 这里换成托盘图标并把文字放进 tooltip —— 托盘图标只有 16px,数字放 tooltip,
-/// 和胶囊共用同一套渠道与轮播逻辑。
+/// 查托盘所在显示器的实际小图标尺寸,而不是用主窗口所在显示器的 DPI。
+/// 托盘隐藏在溢出区、Explorer 尚未就绪时,退回主显示器的缩放比例。
+/// 这是异步命令:tray.rect() 要在主线程执行,不能在主线程等待自己。
+#[tauri::command]
+async fn tray_icon_size(app: tauri::AppHandle) -> u32 {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::{
+            HiDpi::GetSystemMetricsForDpi,
+            WindowsAndMessaging::{SM_CXSMICON, SM_CYSMICON},
+        };
+
+        let monitor = app
+            .tray_by_id("main")
+            .and_then(|tray| tray.rect().ok().flatten())
+            .and_then(|rect| {
+                // Windows 返回的是物理坐标,取中心点可避免图标恰好位于屏幕边缘。
+                let pos = rect.position.to_physical::<i32>(1.0);
+                let size = rect.size.to_physical::<u32>(1.0);
+                app.monitor_from_point(
+                    f64::from(pos.x) + f64::from(size.width) / 2.0,
+                    f64::from(pos.y) + f64::from(size.height) / 2.0,
+                )
+                .ok()
+                .flatten()
+            })
+            .or_else(|| app.primary_monitor().ok().flatten());
+        let scale = monitor.map(|m| m.scale_factor()).unwrap_or(1.0);
+        let dpi = (96.0 * scale).round().clamp(48.0, 384.0) as u32;
+        // 系统托盘用小图标尺寸;若查询失败,按 16 个逻辑像素退回。
+        let size = unsafe {
+            GetSystemMetricsForDpi(SM_CXSMICON, dpi)
+                .min(GetSystemMetricsForDpi(SM_CYSMICON, dpi))
+        };
+        if (8..=64).contains(&size) {
+            size as u32
+        } else {
+            (16.0 * scale).round().clamp(8.0, 64.0) as u32
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        32
+    }
+}
+
+/// 前端按托盘尺寸画好 RGBA,这里更新图标及含完整信息的 tooltip。
+/// 图标和胶囊共用同一套渠道与轮播逻辑。
 ///
-/// 像素走 base64 而不是 `Vec<u8>`:Tauri 把命令参数序列化成 JSON,4096 字节的
-/// RGBA 会变成两万多个字符的数组,每几秒轮播一次白耗流量(报告 O-9)。
+/// 像素走 base64 而不是 `Vec<u8>`:避免 RGBA 字节数组在 JSON 里膨胀(报告 O-9)。
 /// 尺寸不符直接报错:图标画错时宁可保留上一帧,也不要把花屏贴到托盘上。
 #[tauri::command]
 fn set_tray_icon(
@@ -5832,6 +5877,7 @@ pub fn run() {
             set_autostart,
             set_pin,
             set_tray_icon,
+            tray_icon_size,
             key_hint,
             window_cmd,
             check_update,
