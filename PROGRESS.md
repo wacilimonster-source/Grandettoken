@@ -4158,9 +4158,17 @@ eatgemini(`G:\game\nw\eatgemini`)不 400 靠两道防线,照搬:
 1079 条 PASS、jsdom 冒烟 **177/177**。android/ 未动,Gradle 门按 RELEASE.md
 规则跳过。
 
-**发布(2026-11-10)**:tag `v0.3.31`,release 提交见 `git log`。安装包
-`Grandettoken_0.3.31_x64-setup.exe` 与 `.sig`、`latest.json` 见 release 资产,
-`verify-release.js` 结果见下。
+**发布(2026-11-10)**:tag `v0.3.31`,release 提交 `4f7d0d4`。安装包
+`Grandettoken_0.3.31_x64-setup.exe` 5,737,511 字节,SHA-256
+`7a6ead39acdd41308d4ed32a6d0b481985ff2ee73805c22a87f94b30b3493f92`;`.sig` 424 字节;
+`latest.json` 1,108 字节。`verify-release.js` **14 项全 PASS**(更新端点 200 /
+版本 0.3.31 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft /
+说明完整 / latest 指向 0.3.31 / 仓库公开)。
+
+**流程插记**:`gh release create` 在远端**自动建 tag**时取的是当时的默认分支
+尖端 —— 本次 main 还没推,远端 tag 先指向了上一版的 docs 提交 `f7b7c41`,
+发现后已 force 改指 `4f7d0d4`(release 资产本身不受影响,但源码归档会拿错
+快照)。RELEASE.md 已补规则:先推 main 再建 release。
 
 ## 2026-11-10 · v0.3.30 托盘不再闪 + 全量代码排查修复 23 项缺陷
 

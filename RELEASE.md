@@ -97,6 +97,13 @@ node build/make-latest-json.js "更新说明写在这里"
 
 ### 4. 上传到 GitHub Release
 
+> ⚠ **先推 main 再建 release(2026-11-10 v0.3.31 踩过)。** `gh release create`
+> 发现远端没有这个 tag 时会**自动建一个**,取的是**当时的默认分支尖端** ——
+> main 还没推的话,tag 就指到上一版的提交,源码归档(zip/tar.gz)拿错快照。
+> 顺序:commit + tag → `git push`(main 和 tag 一起)→ 再 `gh release create`。
+> 已经踩了就 `git push origin refs/tags/vX.Y.Z:refs/tags/vX.Y.Z --force` 改指
+> 正确提交(资产不受影响)。
+
 ```bash
 gh auth login            # 只第一次需要
 
