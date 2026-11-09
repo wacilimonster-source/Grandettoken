@@ -2805,96 +2805,46 @@ function trayNumber(c) {
   return trayAbbr(c.remaining);
 }
 
-// 16px 托盘容不下普通字体的抗锯齿和描边。数字用整数像素的小字形,3 位数也能
-// 占满高度;空间足够时换成更圆润的 5 列字形。小数点、负号和单位各自留出间隔。
-const TRAY_GLYPHS = {
-  "0": ["111", "101", "101", "101", "101", "101", "111"],
-  "1": ["010", "110", "010", "010", "010", "010", "111"],
-  "2": ["111", "001", "001", "111", "100", "100", "111"],
-  "3": ["110", "001", "001", "011", "001", "001", "110"],
-  "4": ["101", "101", "101", "111", "001", "001", "001"],
-  "5": ["111", "100", "100", "111", "001", "001", "110"],
-  "6": ["011", "100", "100", "111", "101", "101", "111"],
-  "7": ["111", "001", "001", "010", "010", "010", "010"],
-  "8": ["111", "101", "101", "111", "101", "101", "111"],
-  "9": ["111", "101", "101", "111", "001", "001", "110"],
-  ".": ["0", "0", "0", "0", "0", "0", "1"],
-  "-": ["000", "000", "000", "111", "000", "000", "000"],
-  k: ["100", "100", "101", "110", "101", "101", "101"],
-  w: ["000", "000", "101", "101", "101", "111", "010"],
-};
-const TRAY_WIDE_GLYPHS = {
-  "0": ["01110", "10001", "10001", "10001", "10001", "10001", "01110"],
-  "1": ["00100", "01100", "00100", "00100", "00100", "00100", "01110"],
-  "2": ["01110", "10001", "00001", "00010", "00100", "01000", "11111"],
-  "3": ["11110", "00001", "00001", "01110", "00001", "00001", "11110"],
-  "4": ["00010", "00110", "01010", "10010", "11111", "00010", "00010"],
-  "5": ["11111", "10000", "10000", "11110", "00001", "00001", "11110"],
-  "6": ["01110", "10000", "10000", "11110", "10001", "10001", "01110"],
-  "7": ["11111", "00001", "00010", "00100", "01000", "01000", "01000"],
-  "8": ["01110", "10001", "10001", "01110", "10001", "10001", "01110"],
-  "9": ["01110", "10001", "10001", "01111", "00001", "00001", "01110"],
-  k: ["10000", "10000", "10010", "10100", "11000", "10100", "10010"],
-  w: ["00000", "00000", "10001", "10001", "10101", "10101", "01010"],
-};
-
+// 窄体系统字体让多位数字在 16px 下仍有足够高度,同时保留自然的字形。
+// 按实际墨迹边界量字号和居中,避免按字符个数估算导致小数或单位被挤小、裁切。
 function drawTrayNumber(g, size, num, tone) {
-  const chars = Array.from(num);
-  const pad = Math.max(1, Math.round(size * 0.1));
-  const height = size - pad * 2;
-  const gap = Math.max(1, Math.round(size / 24));
-  const widths = chars.map((ch) => ch === "." ? 1 : 3);
-  const available = size - 2;
-  const minWidth = widths.reduce((a, b) => a + b, 0) + gap * (chars.length - 1);
-  // off 是深色底,其余状态色是浅底;不加描边,让每个像素都用来画笔画。
+  const padX = Math.max(1, Math.round(size * 0.06));
+  const padY = Math.max(1, Math.round(size * 0.1));
+  const availableWidth = size - padX * 2;
+  const availableHeight = size - padY * 2;
   g.fillStyle = tone === "off" ? "#fff" : "#141921";
-  if (minWidth > available || chars.some((ch) => !TRAY_GLYPHS[ch])) {
-    // 极大的数字可能超过 4 位,退回限宽字体,仍能看到完整缩写。
-    g.font = `700 ${Math.floor(size * 0.8)}px "Segoe UI",sans-serif`;
-    g.textAlign = "center";
-    g.textBaseline = "middle";
-    g.fillText(num, size / 2, size / 2, available);
+  g.textAlign = "left";
+  g.textBaseline = "alphabetic";
+  let bounds, fits = false;
+  for (let fontSize = size * 1.75; fontSize >= 4; fontSize -= 0.25) {
+    g.font = `700 ${fontSize}px "Bahnschrift SemiCondensed", "Segoe UI", sans-serif`;
+    const m = g.measureText(num);
+    // 老版 WebView 或测试桩可能没有实际墨迹边界,退回字体近似尺寸。
+    const left = Number.isFinite(m.actualBoundingBoxLeft) ? m.actualBoundingBoxLeft : 0;
+    const right = Number.isFinite(m.actualBoundingBoxRight) ? m.actualBoundingBoxRight : m.width;
+    const ascent = Number.isFinite(m.actualBoundingBoxAscent) ? m.actualBoundingBoxAscent : fontSize * 0.8;
+    const descent = Number.isFinite(m.actualBoundingBoxDescent) ? m.actualBoundingBoxDescent : fontSize * 0.2;
+    bounds = { left, right, ascent, descent };
+    if (left + right <= availableWidth && ascent + descent <= availableHeight) {
+      fits = true;
+      break;
+    }
+  }
+  if (!fits) {
+    // 极长缩写按墨迹边界等比缩小,避免字体的左右突出部分被裁掉。
+    const width = bounds.left + bounds.right, height = bounds.ascent + bounds.descent;
+    const scale = Math.min(1, (availableWidth - 1) / width, (availableHeight - 1) / height);
+    g.save();
+    g.translate(size / 2, size / 2);
+    g.scale(scale, scale);
+    g.fillText(num, (bounds.left - bounds.right) / 2, (bounds.ascent - bounds.descent) / 2);
+    g.restore();
     return;
   }
-  let spare = available - minWidth;
-  const maxWidth = Math.max(3, Math.floor(height * 5 / 7));
-  // 小写 w 至少 5 列时才容易与 y 区分;有余量先给单位补齐。
-  chars.forEach((ch, i) => {
-    while (ch === "w" && widths[i] < Math.min(5, maxWidth) && spare > 0) {
-      widths[i]++; spare--;
-    }
-  });
-  // 先给非 1 数字多分一列,再给单位、1 和符号;每轮只加一列,保持相邻数字均衡。
-  const order = chars.map((ch, i) => i).sort((a, b) => {
-    const rank = (ch) => /[02-9]/.test(ch) ? 0 : ch === "k" || ch === "w" ? 1 : ch === "1" ? 2 : 3;
-    return rank(chars[a]) - rank(chars[b]);
-  });
-  while (spare > 0) {
-    let changed = false;
-    for (const i of order) {
-      const cap = chars[i] === "." ? Math.max(1, Math.floor(height / 7))
-        : chars[i] === "-" ? Math.max(3, Math.floor(maxWidth * 0.6)) : maxWidth;
-      if (widths[i] < cap && spare > 0) { widths[i]++; spare--; changed = true; }
-    }
-    if (!changed) break;
-  }
-  const total = widths.reduce((a, b) => a + b, 0) + gap * (chars.length - 1);
-  let x = Math.floor((size - total) / 2);
-  chars.forEach((ch, i) => {
-    const rows = widths[i] >= 5 && TRAY_WIDE_GLYPHS[ch] ? TRAY_WIDE_GLYPHS[ch] : TRAY_GLYPHS[ch];
-    const cols = rows[0].length;
-    rows.forEach((row, y) => {
-      for (let col = 0; col < cols; col++) {
-        if (row[col] !== "1") continue;
-        const x1 = x + Math.floor(col * widths[i] / cols);
-        const x2 = x + Math.floor((col + 1) * widths[i] / cols);
-        const y1 = pad + Math.floor(y * height / 7);
-        const y2 = pad + Math.floor((y + 1) * height / 7);
-        g.fillRect(x1, y1, x2 - x1, y2 - y1);
-      }
-    });
-    x += widths[i] + gap;
-  });
+  const x = (size - bounds.left - bounds.right) / 2 + bounds.left;
+  const y = (size - bounds.ascent - bounds.descent) / 2 + bounds.ascent;
+  // 半像素定位兼顾居中与清晰,不使用额外描边或非等比压缩。
+  g.fillText(num, Math.round(x * 2) / 2, Math.round(y * 2) / 2);
 }
 
 /**

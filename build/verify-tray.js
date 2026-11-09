@@ -63,7 +63,7 @@ const preview = path.resolve(process.argv[2] || path.join(os.tmpdir(), "grandett
 
       for (const size of [16, 20, 24, 32, 40]) {
         const digitImages = new Set();
-        for (const value of ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "74", "100", "0.4", "1.2k", "10w", "-0.4"]) {
+        for (const value of ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "74", "100", "0.4", "1.2k", "10w", "-0.4", "-1.2k", "100w", "123456789w"]) {
           const canvas = document.createElement("canvas");
           canvas.width = canvas.height = size;
           const g = canvas.getContext("2d");
