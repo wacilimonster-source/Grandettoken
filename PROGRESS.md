@@ -4120,3 +4120,31 @@ jsdom 冒烟 **177/177**(本机临时装 jsdom 27.4.0 跑)、凭据扫描 CLEAN(
 `latest.json` 1,718 字节。`verify-release.js` **14 项全 PASS**(更新端点 200 /
 版本 0.3.28 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft /
 说明完整 / latest 指向 0.3.28 / 仓库公开)。真机「切换账号」回归待装 0.3.28 后补。
+
+## 2026-11-09 · v0.3.29 Qoder「切换账号」真正清掉旧网页会话
+
+v0.3.28 真机复现:点「切换账号」日志说"已清该区域 Cookie",但 Cookies 库里
+`qoder_session_cookie` 的创建时间仍是 11-03 —— **一个都没删掉**。根因是
+`w.cookies()`(无 URI 枚举)在这台机器的 WebView2 上没枚举到 qoder 的会话,
+`matched=0` 又被当成"本来就没有会话"静默放过;登录窗随即被旧会话判成
+"登录成功"并自动关窗,用户根本没机会换号。
+
+**修法**
+
+- `qoder_clear_session` 改用 `cookies_for_url`(WorkBuddy 已跑通的同一条路),
+  按 `/`、`/account/usage`、`/users/sign-in` 三个入口枚举,按 (name, domain, path) 去重;
+- 国际版额外清 Google SSO(`.google.com` / `accounts.google.com`,按 Google 自己的域再枚举一遍);
+- 换号时向 Qoder 页面注入一次性初始化脚本:清 localStorage / sessionStorage
+  (`window.name` 做一次性标记,OAuth 回调不再清,免得把新 token 也清掉);
+- 校验收紧:罐里有条目却一个都没匹配到目标域 → 直接报错,不再静默;
+  诊断日志记录实际清掉的 Cookie 数(真机 31 个 / 24 个,不再谎报"已清")。
+
+**真机验证**:0.3.28 清完 Cookie 后 2 秒内旧会话重建、登录窗自动关;0.3.29
+日志出现"已清网页登录 Cookie(N 个)"且计数与库中条目吻合。**已知限制**:
+Qoder 登录页仍可能用平台自身登录态自动恢复上一账号 —— 此时需在登录窗页面里
+手动退出再登录;未完成重新登录前,取数侧判旧会话陈旧,逐笔到期明细如实显示
+「未知」,不拿旧账号记录充数(用户裁决:不需要当前账号明细,数据不错配即可)。
+
+**门禁**:core `cargo test --locked` **421 passed / 8 ignored**、src-tauri
+`cargo check --all-targets --locked`、`node --check` ×6、CSS 形态门 1079 条 PASS、
+jsdom 冒烟 **177/177**、凭据扫描 CLEAN。

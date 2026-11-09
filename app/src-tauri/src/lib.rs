@@ -958,17 +958,42 @@ fn qoder_web_session_of(app: &tauri::AppHandle, id: &str) -> Option<String> {
     .flatten()
 }
 
-/// 清掉某个 Qoder 区域的网页会话。**只清该区域站点的 Cookie**,WorkBuddy/别的域
-/// 一个都不碰 —— 与整份 profile 清空的粗暴做法分开。
+/// 清掉某个 Qoder 区域的网页会话。**只清该区域站点 + 该区域登录页会用来免选账号的
+/// SSO Cookie**,WorkBuddy/别的域一个都不碰 —— 与整份 profile 清空的粗暴做法分开。
 ///
 /// 名单是平台私有的,所以按域清(`qoder.com` 及其子域);这是"换账号 / 换令牌后
 /// 旧会话还挂在浏览器里"的唯一可靠退出方式(2026-11-09 真机)。
-/// 返回 (匹配到的 Cookie 数, 删除失败数);找不到会话不算失败(目标状态本来就成立)。
+///
+/// **不能用 `w.cookies()`**:2026-11-09 真机,它在这台机器的 WebView2 上没枚举到
+/// qoder 的会话(qoder_session_cookie 创建时间仍是 11-03,点完「切换账号」原封不动),
+/// 而 `cookies_for_url` 是 WorkBuddy 已经跑通的同一条路(带 URI 的枚举)。
+/// 按 `/`、`/account/usage`、`/users/sign-in` 三个入口各查一遍:会话 Cookie 的
+/// path 一般是 `/`,后两个兜底覆盖 path 更窄的版本;按 (name, domain, path) 去重。
+///
+/// **国际版还要清 Google SSO**(`.google.com` / `accounts.google.com`):2026-11-09
+/// 真机,只清 qoder.com 后登录页拿现成的 Google 会话直接免选账号、2 秒内又建了一份
+/// 旧账号会话并自动关窗 —— 用户根本没机会换号。清掉 Google 的 Cookie 只是迫使
+/// 登录页重新选账号;这只动挂件自己的 WebView2 profile,不影响系统浏览器。
+/// 国内版登录不走 Google,不扩这一刀。
+///
+/// 返回 (匹配到的总数, 删除失败数);**一个都没匹配到但有 Cookie 就报错** ——
+/// 以前 matched=0 被当成"本来就没有会话"静默放过,才会出现"日志说已清、实际没清"。
 fn qoder_clear_session(app: &tauri::AppHandle, id: &str) -> Result<(usize, usize), String> {
     let site = tokenscope_core::weblogin::qoder_site(id)
         .ok_or_else(|| format!("未知的 Qoder 区域: {id}"))?;
     let host = site.host.to_ascii_lowercase();
     let suffix = format!(".{host}");
+    // 国际版 Qoder 的网页登录拿 Google 会话免选账号;国内版不走这条路。
+    let sso: Vec<&'static str> = if id == "qoder" { vec!["google.com"] } else { Vec::new() };
+    let mut urls: Vec<String> = ["/", "/account/usage", "/users/sign-in"]
+        .iter()
+        .map(|p| format!("https://{host}{p}"))
+        .collect();
+    // Google 的 Cookie 不在 qoder.com 的罐里,要按 Google 自己的域再枚举一遍。
+    if id == "qoder" {
+        urls.push("https://google.com/".into());
+        urls.push("https://accounts.google.com/".into());
+    }
     let handle = app.clone();
     let job = on_main_with_timeout(
         app,
@@ -976,18 +1001,55 @@ fn qoder_clear_session(app: &tauri::AppHandle, id: &str) -> Result<(usize, usize
             let Some(w) = handle.get_webview_window("main") else {
                 return Ok((0, 0));
             };
-            let jar = w.cookies().map_err(|e| format!("读不到 Cookie 罐: {e}"))?;
+            let mut total = 0usize;
             let mut matched = 0usize;
             let mut failed = 0usize;
-            for c in jar {
-                let domain = c.domain().unwrap_or("").trim_start_matches('.').to_ascii_lowercase();
-                if domain != host && !domain.ends_with(&suffix) {
+            let mut read_ok = 0usize;
+            let mut seen: Vec<(String, String, String)> = Vec::new();
+            for url in urls {
+                let Ok(u) = url.parse::<tauri::Url>() else {
                     continue;
+                };
+                let Ok(jar) = w.cookies_for_url(u) else {
+                    continue;
+                };
+                read_ok += 1;
+                for c in jar {
+                    let key = (
+                        c.name().to_string(),
+                        c.domain().unwrap_or("").to_string(),
+                        c.path().unwrap_or("").to_string(),
+                    );
+                    if seen.contains(&key) {
+                        continue;
+                    }
+                    seen.push(key);
+                    total += 1;
+                    let domain = c
+                        .domain()
+                        .unwrap_or("")
+                        .trim_start_matches('.')
+                        .to_ascii_lowercase();
+                    let in_region = domain == host || domain.ends_with(&suffix);
+                    let in_sso = sso.iter().any(|h| {
+                        domain == *h || domain.ends_with(&format!(".{h}"))
+                    });
+                    if !in_region && !in_sso {
+                        continue;
+                    }
+                    matched += 1;
+                    if w.delete_cookie(c).is_err() {
+                        failed += 1;
+                    }
                 }
-                matched += 1;
-                if w.delete_cookie(c).is_err() {
-                    failed += 1;
-                }
+            }
+            if read_ok == 0 {
+                return Err("读不到 Cookie 罐".to_string());
+            }
+            if total > 0 && matched == 0 {
+                return Err(format!(
+                    "Cookie 罐里有 {total} 个条目,但没有一个匹配 {host} —— 会话没清掉"
+                ));
             }
             Ok((matched, failed))
         },
@@ -1089,7 +1151,7 @@ async fn qoderweb_login(
         )
     };
     if switch || stale {
-        qoder_clear_session(&app, id)?;
+        let (cleared, _) = qoder_clear_session(&app, id)?;
         {
             let st = app.state::<AppState>();
             let store = lock_rw(&st.store);
@@ -1099,11 +1161,14 @@ async fn qoderweb_login(
         tokenscope_core::diaglog::write_keyed(
             id,
             "webauth",
-            if switch {
-                "用户切换网页账号 → 已清该区域 Cookie"
-            } else {
-                "余额凭据已更换 → 已清旧网页会话"
-            },
+            &format!(
+                "{} → 已清网页登录 Cookie({cleared} 个)",
+                if switch {
+                    "用户切换网页账号"
+                } else {
+                    "余额凭据已更换"
+                }
+            ),
         );
     }
     let (done, closed, landed) = qoder_login_flags(id);
@@ -1119,12 +1184,19 @@ async fn qoderweb_login(
     } else {
         "登录 Qoder 网页账号（积分明细用）"
     };
-    tauri::WebviewWindowBuilder::new(&app, label, tauri::WebviewUrl::External(url))
-        .title(title)
-        .inner_size(560.0, 780.0)
-        .min_inner_size(420.0, 560.0)
-        .resizable(true)
-        .always_on_top(true)
+    let mut builder =
+        tauri::WebviewWindowBuilder::new(&app, label, tauri::WebviewUrl::External(url))
+            .title(title)
+            .inner_size(560.0, 780.0)
+            .min_inner_size(420.0, 560.0)
+            .resizable(true)
+            .always_on_top(true);
+    // 换号时还要清掉 Qoder 自己存在 localStorage 里的 token:2026-11-09 真机,
+    // 只清 Cookie 不够 —— SPA 用旧 token 在 2 秒内重新建出会话并自动关窗。
+    if switch || stale {
+        builder = builder.initialization_script(QODER_SWITCH_CLEAR_SCRIPT);
+    }
+    builder
         .on_navigation(move |nav| {
             if tokenscope_core::weblogin::qoder_is_post_login_for(id, nav.as_str()) {
                 landed.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -1136,6 +1208,28 @@ async fn qoderweb_login(
     spawn_qoder_login_watcher(app.clone(), id);
     Ok(())
 }
+
+/// 换号时在 Qoder 页面里执行的一次性清理(初始化脚本,先于页面 JS)。
+///
+/// Qoder 的网页登录把 token 存在 localStorage:只清 Cookie,SPA 会在 2 秒内
+/// 用旧 token 重新建出会话,登录窗被观察者判成功并自动关掉 —— 用户根本没机会
+/// 换号(2026-11-09 真机)。`window.name` 做一次性标记:OAuth 回调/二次导航
+/// 不再清,否则会把刚登录的新 token 也清掉。只在 qoder.com / qoder.com.cn 的
+/// 文档上清,about:blank 与 Google 页面跳过。
+const QODER_SWITCH_CLEAR_SCRIPT: &str = r#"
+(function () {
+  try {
+    var h = (location.hostname || '').toLowerCase();
+    var isQoder = h === 'qoder.com' || /\.qoder\.com$/.test(h) ||
+                  h === 'qoder.com.cn' || /\.qoder\.com\.cn$/.test(h);
+    if (isQoder && window.name !== 'gt-qoder-switch') {
+      try { localStorage.clear(); } catch (e) {}
+      try { sessionStorage.clear(); } catch (e) {}
+      window.name = 'gt-qoder-switch';
+    }
+  } catch (e) {}
+})();
+"#;
 
 /// 与 spawn_login_watcher 同一条纪律:判"能不能收工"靠**探测**(真打一次账务接口),
 /// 不靠"cookie 罐里有没有东西";两条状态由主线程侧钩子置位,绝不碰登录窗的 API。
