@@ -5347,9 +5347,12 @@ $("lkLayout").addEventListener("click", (e) => {
   togglePanelLayout();
 });
 $("lkKeys").addEventListener("click", () => {
-  // 入口常驻(2026-11-08):管理页里也固定显示。已在管理页时再点**不重置**,
-  // 不把用户正在读的子页抖回索引页
-  if (manageOpen()) return;
+  // 入口常驻(2026-11-08):管理页里也固定显示,行为改成开关式 ——
+  // 未在管理页时进入;已在管理页时再点一次则退出回首页,不必挪到页头找「← 返回」
+  if (manageOpen()) {
+    closeManage();
+    return;
+  }
   openManage();
 });
 // 紧凑条上的两个方向:展开一级 / 再收一级

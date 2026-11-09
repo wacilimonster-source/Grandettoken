@@ -285,7 +285,8 @@ async fn chat(
         Ok(Ok(Some(k))) => k,
         _ => return error(StatusCode::SERVICE_UNAVAILABLE, "上游密钥不可用"),
     };
-    data["model"] = Value::String(id);
+    data["model"] = Value::String(id.clone());
+    let is_gemini = channel.source == "gemini";
     let base = match channel.source.as_str() {
         "gemini" => "https://generativelanguage.googleapis.com/v1beta/openai".to_string(),
         "inkstone" => "https://discovery-api.intern-ai.org.cn/v1".to_string(),
@@ -296,34 +297,55 @@ async fn chat(
         Ok(client) => client,
         Err(_) => return error(StatusCode::BAD_GATEWAY, "无法初始化上游代理连接"),
     };
-    let req = client
-        .post(format!("{base}/chat/completions"))
-        .bearer_auth(key)
-        .json(&data);
-    let upstream = match req.send().await {
-        Ok(r) => r,
-        Err(_) => return error(StatusCode::BAD_GATEWAY, "无法连接上游服务"),
+    if is_gemini {
+        sanitize_gemini_body(&mut data, &id);
+    }
+    // 修复重试上限 1 次,与 eatgemini 的 maxParamRepairsPerRequest 对齐;
+    // 修复必须发生在任何字节转发给客户端之前(400 在响应头阶段就能拿到),所以安全。
+    let mut repairs = 0u8;
+    let upstream = loop {
+        let req = client
+            .post(format!("{base}/chat/completions"))
+            .bearer_auth(key.clone())
+            .json(&data);
+        let upstream = match req.send().await {
+            Ok(r) => r,
+            Err(_) => return error(StatusCode::BAD_GATEWAY, "无法连接上游服务"),
+        };
+        let status = upstream.status();
+        if !status.is_success() {
+            // 上游 4xx/5xx 的详情原样透传(截断),别替换成一句固定文案(报告 L15):
+            // 「密钥失效」与「额度耗尽」的处置完全不同,拿不到 body 就得去抓包才能排查。
+            let retry_after = upstream.headers().get(header::RETRY_AFTER).cloned();
+            let body = upstream.text().await.unwrap_or_default();
+            if is_gemini && status.as_u16() == 400 && repairs < 1 {
+                if let Some(params) = gemini_repairable_params(&body) {
+                    if let Some(obj) = data.as_object_mut() {
+                        for p in &params {
+                            obj.remove(p);
+                        }
+                    }
+                    repairs += 1;
+                    continue;
+                }
+            }
+            let short: String = body.chars().take(400).collect();
+            let mut resp = error(
+                status,
+                &format!(
+                    "上游返回 {} · {}",
+                    status.as_u16(),
+                    if short.is_empty() { "上游服务拒绝请求，请检查密钥、模型权限或额度" } else { &short }
+                ),
+            );
+            if let Some(ra) = retry_after {
+                resp.headers_mut().insert(header::RETRY_AFTER, ra);
+            }
+            return resp;
+        }
+        break upstream;
     };
     let status = upstream.status();
-    if !status.is_success() {
-        // 上游 4xx/5xx 的详情原样透传(截断),别替换成一句固定文案(报告 L15):
-        // 「密钥失效」与「额度耗尽」的处置完全不同,拿不到 body 就得去抓包才能排查。
-        let retry_after = upstream.headers().get(header::RETRY_AFTER).cloned();
-        let body = upstream.text().await.unwrap_or_default();
-        let short: String = body.chars().take(400).collect();
-        let mut resp = error(
-            status,
-            &format!(
-                "上游返回 {} · {}",
-                status.as_u16(),
-                if short.is_empty() { "上游服务拒绝请求，请检查密钥、模型权限或额度" } else { &short }
-            ),
-        );
-        if let Some(ra) = retry_after {
-            resp.headers_mut().insert(header::RETRY_AFTER, ra);
-        }
-        return resp;
-    }
     let content_type = upstream.headers().get(header::CONTENT_TYPE).cloned();
     let mut response = Response::new(Body::from_stream(upstream.bytes_stream()));
     *response.status_mut() = status;
@@ -334,6 +356,114 @@ async fn chat(
 }
 fn advertised_lan_ip(ip: Ipv4Addr) -> bool {
     ip.is_private()
+}
+// ───────────── Gemini 兼容层参数治理(与 eatgemini 同款)─────────────
+// eatgemini 对「Gemini 渠道 400」的两道防线,这里照搬:
+// 1) 发送前清理(sanitize_gemini_body):兼容层只认 OpenAI 标准字段的子集,
+//    客户端(SillyTavern 等)自带的 seed/logit_bias/logprobs、Gemini 3 系
+//    不吃的采样参数与惩罚项,透传过去就是 400 —— 干脆不发。
+// 2) 400 修复重试(gemini_repairable_params):错误体点名可修参数或报
+//    "penalty" 时剥掉重试一次;不可修的 400 原样透传,不吞错误。
+/// 输出 token 上限。eatgemini 对 Gemini 各系统一按 65536 封顶,超限直接 400。
+const GEMINI_OUTPUT_LIMIT: u64 = 65536;
+/// 400 时可以剥掉重试的参数(eatgemini classify.dart 的 _repairableParams)。
+const GEMINI_REPAIRABLE: [&str; 10] = [
+    "temperature",
+    "top_p",
+    "top_k",
+    "max_tokens",
+    "max_completion_tokens",
+    "stop",
+    "reasoning_effort",
+    "seed",
+    "frequency_penalty",
+    "presence_penalty",
+];
+/// 发送前清理请求体(eatgemini router_engine._buildBody 的剥离清单)。
+fn sanitize_gemini_body(data: &mut Value, model: &str) {
+    let Some(obj) = data.as_object_mut() else { return };
+    // 兼容层未收录/明确不支持的字段:一律不透传(未知字段不发、seed 永远不发)
+    for k in [
+        "seed",
+        "logit_bias",
+        "logprobs",
+        "top_logprobs",
+        "n",
+        "user",
+        "metadata",
+        "parallel_tool_calls",
+    ] {
+        obj.remove(k);
+    }
+    // stream_options 只在流式请求里有意义(OpenAI 语义:非流式带上会被拒)
+    if obj.get("stream") != Some(&Value::Bool(true)) {
+        obj.remove("stream_options");
+    }
+    // max_completion_tokens → max_tokens:兼容层统一吃后者(eatgemini 只发 max_tokens)
+    if let Some(v) = obj.remove("max_completion_tokens") {
+        obj.entry("max_tokens".to_string()).or_insert(v);
+    }
+    // 输出上限压到封顶值(eatgemini clamp:max_tokens),避免「must be at most」400
+    if obj.get("max_tokens").and_then(Value::as_u64).unwrap_or(0) > GEMINI_OUTPUT_LIMIT {
+        obj.insert("max_tokens".to_string(), Value::from(GEMINI_OUTPUT_LIMIT));
+    }
+    // reasoning_effort 只在 2.5/3 系有效,档位按模型家族放行
+    // (eatgemini:3 系 flash = low/medium/high,flash-lite = low/high,其余剥离)
+    if model.starts_with("gemini-2.5") || model.starts_with("gemini-3") {
+        let efforts: &[&str] = if model.starts_with("gemini-3") && model.contains("flash-lite") {
+            &["low", "high"]
+        } else {
+            &["low", "medium", "high"]
+        };
+        let bad = obj
+            .get("reasoning_effort")
+            .and_then(Value::as_str)
+            .map(|v| !efforts.contains(&v))
+            .unwrap_or(false);
+        if bad {
+            obj.remove("reasoning_effort");
+        }
+    } else {
+        obj.remove("reasoning_effort");
+    }
+    // Gemini 3 系不吃采样参数与惩罚项(实测 "Penalty is not enabled for this model"
+    // 等 400;eatgemini 对 3.x 的 stripParams = temperature/top_p/top_k)
+    if model.starts_with("gemini-3") {
+        for k in [
+            "temperature",
+            "top_p",
+            "top_k",
+            "frequency_penalty",
+            "presence_penalty",
+        ] {
+            obj.remove(k);
+        }
+    }
+}
+/// 从 Gemini 兼容层的 400 错误体里找出可修复参数( eatgemini classify.dart 同款):
+/// 兼容层报 OpenAI 风格错误时带 param 字段;惩罚项的报错不带 param
+/// ("Penalty is not enabled for this model"),用 message 关键词一次剥两个。
+/// 找不到可修的东西返回 None,调用方原样透传给客户端。
+fn gemini_repairable_params(err_body: &str) -> Option<Vec<String>> {
+    let v: Value = serde_json::from_str(err_body).ok()?;
+    let err = v.get("error")?;
+    if let Some(p) = err.get("param").and_then(Value::as_str) {
+        if GEMINI_REPAIRABLE.contains(&p) {
+            return Some(vec![p.to_string()]);
+        }
+    }
+    let msg = err
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if msg.contains("penalty") {
+        return Some(vec![
+            "frequency_penalty".to_string(),
+            "presence_penalty".to_string(),
+        ]);
+    }
+    None
 }
 fn local_ips() -> Vec<Value> {
     let mut ips: Vec<Value> = if_addrs::get_if_addrs()
@@ -724,6 +854,104 @@ mod tests {
         let b = token().unwrap();
         assert!(a.starts_with("gw_"));
         assert_ne!(a, b);
+    }
+    #[test]
+    fn gemini_sanitize_strips_unsupported_fields() {
+        // SillyTavern 典型载荷:兼容层不收的字段透传即 400,清完必须全没了
+        let mut body: Value = serde_json::from_str(
+            r#"{"model":"gemini-2.5-flash","messages":[],"stream":true,
+                "seed":1,"logit_bias":{"x":1},"logprobs":true,"top_logprobs":3,
+                "n":1,"user":"u","metadata":{},"stream_options":{"include_usage":true}}"#,
+        )
+        .unwrap();
+        sanitize_gemini_body(&mut body, "gemini-2.5-flash");
+        let obj = body.as_object().unwrap();
+        for k in ["seed", "logit_bias", "logprobs", "top_logprobs", "n", "user", "metadata"] {
+            assert!(!obj.contains_key(k), "{k} 应被剥离");
+        }
+        assert!(obj.contains_key("stream_options")); // 流式请求保留
+        assert_eq!(obj["model"], "gemini-2.5-flash"); // 非目标字段不动
+    }
+    #[test]
+    fn gemini_sanitize_drops_stream_options_when_not_streaming() {
+        let mut body: Value = serde_json::from_str(
+            r#"{"stream":false,"stream_options":{"include_usage":true}}"#,
+        )
+        .unwrap();
+        sanitize_gemini_body(&mut body, "gemini-2.5-flash");
+        assert!(body.as_object().unwrap().get("stream_options").is_none());
+    }
+    #[test]
+    fn gemini_sanitize_maps_completion_tokens_and_clamps() {
+        let mut body: Value =
+            serde_json::from_str(r#"{"max_completion_tokens":900000}"#).unwrap();
+        sanitize_gemini_body(&mut body, "gemini-2.5-flash");
+        let obj = body.as_object().unwrap();
+        assert_eq!(obj["max_tokens"], 65536);
+        assert!(!obj.contains_key("max_completion_tokens"));
+        // 不超限的值不动
+        let mut body: Value = serde_json::from_str(r#"{"max_tokens":1024}"#).unwrap();
+        sanitize_gemini_body(&mut body, "gemini-2.5-flash");
+        assert_eq!(body["max_tokens"], 1024);
+    }
+    #[test]
+    fn gemini_sanitize_strips_sampling_for_gemini3_only() {
+        // 3 系:采样参数 + 惩罚项 + 采样外的 reasoning 档位全剥
+        let mut body: Value = serde_json::from_str(
+            r#"{"temperature":0.7,"top_p":0.9,"top_k":40,
+                "frequency_penalty":0.5,"presence_penalty":0.5,"reasoning_effort":"minimal"}"#,
+        )
+        .unwrap();
+        sanitize_gemini_body(&mut body, "gemini-3-flash-preview");
+        let obj = body.as_object().unwrap();
+        for k in ["temperature", "top_p", "top_k", "frequency_penalty", "presence_penalty"] {
+            assert!(!obj.contains_key(k), "3 系 {k} 应被剥离");
+        }
+        assert!(!obj.contains_key("reasoning_effort")); // minimal 不在 3 系放行列表
+        // 放行的档位保留
+        let mut body: Value = serde_json::from_str(r#"{"reasoning_effort":"low"}"#).unwrap();
+        sanitize_gemini_body(&mut body, "gemini-3-flash-preview");
+        assert_eq!(body["reasoning_effort"], "low");
+        // flash-lite 只放 low/high
+        let mut body: Value = serde_json::from_str(r#"{"reasoning_effort":"medium"}"#).unwrap();
+        sanitize_gemini_body(&mut body, "gemini-3.5-flash-lite");
+        assert!(!body.as_object().unwrap().contains_key("reasoning_effort"));
+        // 非 3 系保留采样参数;非 2.5/3 系整个剥离 reasoning_effort
+        let mut body: Value = serde_json::from_str(
+            r#"{"temperature":0.7,"top_p":0.9,"frequency_penalty":0.5,"reasoning_effort":"low"}"#,
+        )
+        .unwrap();
+        sanitize_gemini_body(&mut body, "gemini-2.5-flash");
+        let obj = body.as_object().unwrap();
+        assert!(obj.contains_key("temperature") && obj.contains_key("frequency_penalty"));
+        assert_eq!(obj["reasoning_effort"], "low");
+        let mut body: Value = serde_json::from_str(r#"{"temperature":0.7,"reasoning_effort":"low"}"#).unwrap();
+        sanitize_gemini_body(&mut body, "gemini-2.0-flash");
+        let obj = body.as_object().unwrap();
+        assert!(obj.contains_key("temperature"));
+        assert!(!obj.contains_key("reasoning_effort"));
+    }
+    #[test]
+    fn gemini_repair_reads_param_and_penalty_message() {
+        // OpenAI 风格错误带 param:按名修复
+        let p = gemini_repairable_params(
+            r#"{"error":{"message":"Invalid value","type":"invalid_request_error","param":"temperature"}}"#,
+        );
+        assert_eq!(p.unwrap(), vec!["temperature"]);
+        // 惩罚项报错不带 param(实测文案),按 message 一次剥两个
+        let p = gemini_repairable_params(
+            r#"{"error":{"code":400,"message":"Penalty is not enabled for this model","status":"INVALID_ARGUMENT"}}"#,
+        );
+        assert_eq!(
+            p.unwrap(),
+            vec!["frequency_penalty", "presence_penalty"]
+        );
+        // 不可修的 400 返回 None(原样透传)
+        assert!(gemini_repairable_params(r#"{"error":{"message":"API key not valid"}}"#).is_none());
+        assert!(gemini_repairable_params("not json").is_none());
+        // param 字段不在可修名单里也不修
+        let p = gemini_repairable_params(r#"{"error":{"message":"bad","param":"messages"}}"#);
+        assert!(p.is_none());
     }
     #[tokio::test]
     async fn http_list_respects_deletion_and_rejects_browser_origin() {

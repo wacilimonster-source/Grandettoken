@@ -4121,6 +4121,47 @@ jsdom 冒烟 **177/177**(本机临时装 jsdom 27.4.0 跑)、凭据扫描 CLEAN(
 版本 0.3.28 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft /
 说明完整 / latest 指向 0.3.28 / 仓库公开)。真机「切换账号」回归待装 0.3.28 后补。
 
+## 2026-11-10 · v0.3.31 设置与管理开关式入口 + Gemini 渠道 400 修复(学 eatgemini)
+
+本版两项:**底栏「设置与管理」开关式入口**(app.js)与**本地网关 Gemini 渠道
+400 的根治**(gateway.rs,方法学自同作者的 eatgemini 项目 —— 同样打
+Google OpenAI 兼容层,它不发 400 的原因就是参数治理)。
+
+**1. 设置与管理:开关式入口**。入口常驻(v0.3.24 起)之后,在管理页里再点它
+原来是无操作(怕把用户正在读的子页抖回索引页);改成开关:已在管理页时
+再点一次 = 退出回首页,不必挪到页头找「← 返回」。走 `closeManage()`
+(与页头返回同一出口,清编辑态/隐藏同步码)。
+
+**2. Gemini 渠道 400:根因是透传,修法学 eatgemini**。网关原实现把客户端
+请求体**原样透传**给 `generativelanguage.googleapis.com/v1beta/openai`
+只换 `model` 字段;SillyTavern 这类客户端默认带 `seed`/惩罚项/采样参数,
+撞上 Gemini 3 系就是 400("Penalty is not enabled for this model" 等)。
+eatgemini(`G:\game\nw\eatgemini`)不 400 靠两道防线,照搬:
+
+- **发送前清理** `sanitize_gemini_body()`:`seed`/`logit_bias`/`logprobs`/
+  `top_logprobs`/`n`/`user`/`metadata`/`parallel_tool_calls` 一律不发
+  (eatgemini:未知字段不发、seed 永远不发);非流式丢 `stream_options`;
+  `max_completion_tokens` 归一为 `max_tokens` 并按 65536 封顶
+  (eatgemini clamp:max_tokens);`reasoning_effort` 仅 2.5/3 系放行,
+  flash-lite 只收 low/high(eatgemini reasoningEfforts 表);
+  **gemini-3 系额外剥离 temperature/top_p/top_k + 两个惩罚项**
+  (eatgemini 对 3.x 的 stripParams)。非 3 系的采样参数照常保留。
+- **400 修复重试** `gemini_repairable_params()`:错误体 `param` 字段点名
+  可修参数(eatgemini _repairableParams 十个)或 message 含 "penalty"
+  (实测该报错不带 param)就剥掉重试一次,上限与 eatgemini
+  maxParamRepairsPerRequest=1 对齐;修复发生在任何字节转发给客户端之前
+  (400 在响应头阶段就能拿到),安全。不可修的 400 依旧原样透传详情
+  (v0.3.30 的 L15 行为,不吞错误)。
+
+**门禁**:core `cargo test --locked` **421 passed / 8 ignored**、src-tauri
+`cargo test` **19 passed**(新增 5 个:清理器 4 + 修复分类 1)、CSS 形态门
+1079 条 PASS、jsdom 冒烟 **177/177**。android/ 未动,Gradle 门按 RELEASE.md
+规则跳过。
+
+**发布(2026-11-10)**:tag `v0.3.31`,release 提交见 `git log`。安装包
+`Grandettoken_0.3.31_x64-setup.exe` 与 `.sig`、`latest.json` 见 release 资产,
+`verify-release.js` 结果见下。
+
 ## 2026-11-10 · v0.3.30 托盘不再闪 + 全量代码排查修复 23 项缺陷
 
 本版两部分:**请求数据时托盘/胶囊不再闪**(fetch.rs:取数发起不再发布
