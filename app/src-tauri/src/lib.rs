@@ -958,6 +958,49 @@ fn qoder_web_session_of(app: &tauri::AppHandle, id: &str) -> Option<String> {
     .flatten()
 }
 
+/// 清掉某个 Qoder 区域的网页会话。**只清该区域站点的 Cookie**,WorkBuddy/别的域
+/// 一个都不碰 —— 与整份 profile 清空的粗暴做法分开。
+///
+/// 名单是平台私有的,所以按域清(`qoder.com` 及其子域);这是"换账号 / 换令牌后
+/// 旧会话还挂在浏览器里"的唯一可靠退出方式(2026-11-09 真机)。
+/// 返回 (匹配到的 Cookie 数, 删除失败数);找不到会话不算失败(目标状态本来就成立)。
+fn qoder_clear_session(app: &tauri::AppHandle, id: &str) -> Result<(usize, usize), String> {
+    let site = tokenscope_core::weblogin::qoder_site(id)
+        .ok_or_else(|| format!("未知的 Qoder 区域: {id}"))?;
+    let host = site.host.to_ascii_lowercase();
+    let suffix = format!(".{host}");
+    let handle = app.clone();
+    let job = on_main_with_timeout(
+        app,
+        move || -> Result<(usize, usize), String> {
+            let Some(w) = handle.get_webview_window("main") else {
+                return Ok((0, 0));
+            };
+            let jar = w.cookies().map_err(|e| format!("读不到 Cookie 罐: {e}"))?;
+            let mut matched = 0usize;
+            let mut failed = 0usize;
+            for c in jar {
+                let domain = c.domain().unwrap_or("").trim_start_matches('.').to_ascii_lowercase();
+                if domain != host && !domain.ends_with(&suffix) {
+                    continue;
+                }
+                matched += 1;
+                if w.delete_cookie(c).is_err() {
+                    failed += 1;
+                }
+            }
+            Ok((matched, failed))
+        },
+        std::time::Duration::from_secs(3),
+    );
+    match job {
+        None => Err("主线程 3 秒内没回信(窗口正忙或正在销毁)".to_string()),
+        Some(Err(e)) => Err(e),
+        Some(Ok((_, failed))) if failed > 0 => Err(format!("有 {failed} 个 Cookie 没删掉")),
+        Some(Ok(counts)) => Ok(counts),
+    }
+}
+
 /// 取数管线的会话分发。**故意不并进 wb_session_of**:签到凭据兜底(checkin_credentials
 /// 的 WebSession 分支)引用的是那个函数 —— Qoder 的网页会话绝不能漏进签到链路(设计红线)。
 fn web_session_of(app: &tauri::AppHandle, id: &str) -> Option<String> {
@@ -997,15 +1040,28 @@ async fn qoderweb_finish_login(app: &tauri::AppHandle, id: &str, note: Option<St
         "qoderweb-login",
         serde_json::json!({"ok": true, "detail": note, "id": id}),
     );
-    app.state::<AppState>().fetcher.invalidate();
+    // 刚登录的是当前账号:旧逐包列表不能再作为"取数失败时沿用的上次成功"。
+    // 余额快照不受影响(那是桌面凭据的账,与网页会话无关)。forget_qoder_web
+    // 内部已经作废 5 秒复用窗口,这里不必再 invalidate 一次。
+    app.state::<AppState>().fetcher.forget_qoder_web(id);
     refresh_now(app).await;
 }
 
 /// 打开 Qoder 网页登录窗(逐包到期用)。已开着就拉到前台。**必须 async**,理由同
 /// workbuddy_login:同步命令在 WebMessageReceived 回调里再建 webview 会冻死(2026-10-08 实测)。
 /// `id` 省略时按国际版(兼容旧调用)。
+///
+/// `switch = true` 是用户明确要**换账号**:先退出该区域当前的网页登录再开窗。
+/// 不先退出的话,旧会话仍然有效,页面一落到 /account/usage 就会被观察者判成
+/// "登录成功"并自动关窗 —— 用户根本没机会在窗口里换号(2026-11-09 真机)。
+/// 余额凭据换过(`qoder_account_changed_at` 晚于网页会话时刻)时,普通登录
+/// 也走同一条清理,否则旧账号的逐包明细会继续挂在新账号名下。
 #[tauri::command]
-async fn qoderweb_login(app: tauri::AppHandle, id: Option<String>) -> Result<(), String> {
+async fn qoderweb_login(
+    app: tauri::AppHandle,
+    id: Option<String>,
+    switch: Option<bool>,
+) -> Result<(), String> {
     let id = id.as_deref().unwrap_or("qoder");
     let site = tokenscope_core::weblogin::qoder_site(id)
         .ok_or_else(|| format!("未知的 Qoder 区域: {id}"))?;
@@ -1015,6 +1071,40 @@ async fn qoderweb_login(app: tauri::AppHandle, id: Option<String>) -> Result<(),
         let _ = w.show();
         let _ = w.set_focus();
         return Ok(());
+    }
+    let switch = switch.unwrap_or(false);
+    let stale = {
+        let st = app.state::<AppState>();
+        let store = lock_rw(&st.store);
+        let read_ts = |key: &str| {
+            store
+                .get_setting(key)
+                .ok()
+                .flatten()
+                .and_then(|s| s.trim().parse::<i64>().ok())
+        };
+        tokenscope_core::weblogin::qoder_web_session_stale(
+            read_ts(&format!("{}:{id}", tokenscope_core::fetch::QODER_CHANGED_KEY)),
+            read_ts(site.session_at_key),
+        )
+    };
+    if switch || stale {
+        qoder_clear_session(&app, id)?;
+        {
+            let st = app.state::<AppState>();
+            let store = lock_rw(&st.store);
+            let _ = store.delete_setting(site.session_at_key);
+        }
+        app.state::<AppState>().fetcher.forget_qoder_web(id);
+        tokenscope_core::diaglog::write_keyed(
+            id,
+            "webauth",
+            if switch {
+                "用户切换网页账号 → 已清该区域 Cookie"
+            } else {
+                "余额凭据已更换 → 已清旧网页会话"
+            },
+        );
     }
     let (done, closed, landed) = qoder_login_flags(id);
     done.store(false, std::sync::atomic::Ordering::Relaxed);

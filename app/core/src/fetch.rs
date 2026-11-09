@@ -63,6 +63,51 @@ fn credential_scope(c: &appauth::Credential) -> String {
     }
 }
 
+/// 余额凭据的 scope 落在 settings 里的键(按渠道)。值只是指纹,不是密钥。
+pub const QODER_SCOPE_KEY: &str = "qoder_cred_scope_v1";
+/// 本渠道最近一次换余额凭据的时刻(unix 秒)。它与网页会话登录时刻一比,
+/// 就知道浏览器里那份 Cookie 是不是上一本账留下的。外壳的登录命令也读它,
+/// 所以是 `pub`(键名必须与取数侧一致,错一个字符就判不出换号)。
+pub const QODER_CHANGED_KEY: &str = "qoder_account_changed_at";
+
+/// 记下本轮余额凭据的 scope,返回"是否换了凭据(账号 / 令牌)"。
+///
+/// 上一本账优先读专门的设置键;升级上来的用户还没有那个键,就回退读上一次成功
+/// 快照里的 `scope` —— 这样"换令牌之后第一次取数"就能发现,不必等旧网页列表
+/// 再错一轮。第一次运行(两者都没有)按"没换过"处理,绝不误杀。
+fn note_qoder_scope(store: &Store, id: &str, scope: &str) -> bool {
+    if scope.is_empty() {
+        return false;
+    }
+    let key = format!("{QODER_SCOPE_KEY}:{id}");
+    let prev = store
+        .get_setting(&key)
+        .ok()
+        .flatten()
+        .or_else(|| Snapshot::stored_scope(store, id));
+    let changed = prev.as_deref().map(|p| p != scope).unwrap_or(false);
+    if changed {
+        let _ = store.set_setting(&format!("{QODER_CHANGED_KEY}:{id}"), &now_ts().to_string());
+    }
+    let _ = store.set_setting(&key, scope);
+    changed
+}
+
+/// 网页会话是否属于上一本账(判定本身在 `core::weblogin`,这里只负责读两个时刻)。
+fn qoder_web_session_stale(store: &Store, id: &str, session_at_key: &str) -> bool {
+    let read_ts = |key: &str| {
+        store
+            .get_setting(key)
+            .ok()
+            .flatten()
+            .and_then(|s| s.trim().parse::<i64>().ok())
+    };
+    weblogin::qoder_web_session_stale(
+        read_ts(&format!("{QODER_CHANGED_KEY}:{id}")),
+        read_ts(session_at_key),
+    )
+}
+
 /// 距到期多久算"近期"。界面上的"近 30 天将过期"用的就是它。
 pub const EXPIRING_SOON_DAYS: i64 = 30;
 
@@ -2428,6 +2473,16 @@ pub enum QoderWebProbe {
     Failed(String),
 }
 
+/// Qoder 逐包列表缓存。`scope` 必须和**抓取时**余额凭据的指纹一起存:
+/// 换账号/换令牌后,旧列表要连同 scope 一起作废 —— 只按渠道 id 存的话,
+/// 旧账号的"已到期"会顶替新账号的明细(2026-11-09 真机)。
+#[derive(Clone)]
+struct QoderPackCache {
+    scope: String,
+    ts: i64,
+    packs: Vec<Expiring>,
+}
+
 /// 取数器。持有 HTTP 客户端和上次成功结果的缓存,失败时用于降级显示。
 pub struct Fetcher {
     pub http: reqwest::Client,
@@ -2444,13 +2499,15 @@ pub struct Fetcher {
     /// fetch_shared 的门 + 近期结果:手动刷新撞上轮询不再双份请求账务接口(O-4)
     gate: tokio::sync::Mutex<()>,
     last_run: Mutex<Option<(i64, Vec<ChannelView>)>>,
-    /// Qoder 逐包到期(2026-10-30):上次成功抓到的列表 + 时刻。抓取失败时沿用,
-    /// 绝不把"这轮没抓到"渲染成"没有临期"(与余额失联同一原则)。
+    /// Qoder 逐包到期(2026-10-30):上次成功抓到的列表 + 时刻 + 凭据 scope。
+    /// 抓取失败时沿用,绝不把"这轮没抓到"渲染成"没有临期"(与余额失联同一原则)。
     /// 只存内存:重启后退回"等下一轮成功"。
     ///
     /// **按渠道 id 分开存**(2026-11-08):国际版 `qoder` 与国内版 `qoder-cn` 是两套
     /// 账号,列表混存会把 A 的包当成 B 的临期展示 —— 比"没数据"更糟。
-    qoder_packs: Mutex<HashMap<String, (i64, Vec<Expiring>)>>,
+    /// **列表还要和 scope 绑定**(2026-11-09):同一渠道换账号/换令牌时,缓存必须
+    /// 一起作废;只按 id 存会让旧账号的列表在新账号上继续充当"上次成功"。
+    qoder_packs: Mutex<HashMap<String, QoderPackCache>>,
     /// Qoder 逐包端点谁赢了(候选链下标)。同样按渠道 id 分开:两区的候选链并不相同
     /// (国内版多一条 openapi 汇总端点),共用下标会指错端点。
     qoder_memos: Mutex<HashMap<String, Arc<qoderweb::PacksMemo>>>,
@@ -2553,7 +2610,20 @@ impl Fetcher {
         self.scopes.lock().unwrap().remove(id);
         self.recovery.lock().unwrap().remove(id);
         self.progress.lock().unwrap().retain(|v| v.id != id);
+        self.qoder_packs.lock().unwrap().remove(id);
+        self.qoder_memos.lock().unwrap().remove(id);
         let _ = store.delete_setting(&format!("quota_snapshot_v1:{id}"));
+        let _ = store.delete_setting(&format!("{QODER_SCOPE_KEY}:{id}"));
+        let _ = store.delete_setting(&format!("{QODER_CHANGED_KEY}:{id}"));
+        self.invalidate();
+    }
+
+    /// 网页会话被用户主动换掉(退出网页登录 / 切换账号)时清掉逐包缓存。
+    ///
+    /// 只清内存,不动余额快照与会话时刻:会话时刻由外壳在登录收尾时写,
+    /// 这里要是顺手删了,"换号后是否陈旧"的判据就断了。
+    pub fn forget_qoder_web(&self, id: &str) {
+        self.qoder_packs.lock().unwrap().remove(id);
         self.invalidate();
     }
 
@@ -3102,102 +3172,148 @@ impl Fetcher {
                     // 国际版与国内版都走这条链;会话来源按**渠道 id**取,两套 Cookie 罐
                     // 由外壳分别按域抓取 —— 这里绝不共用一份会话。
                     if matches!(def.id, "qoder" | "qoder-cn") && result.valid {
-                        let qoder_id = def.id;
-                        // 会话来源是阻塞派发(要同步问 webview 的 Cookie 罐),不能占着 async worker
-                        let session = tokio::task::spawn_blocking(move || {
-                            qoder_web_src.as_deref().and_then(|f| f(qoder_id))
-                        })
-                        .await
-                        .ok()
-                        .flatten();
                         let site = crate::weblogin::qoder_site(def.id)
                             .expect("上面已限定 qoder | qoder-cn,站点配置必然存在");
-                        let memo = self.qoder_memo_for(def.id);
-                        match session {
-                            Some(sess) => match qoderweb::fetch_packs(&self.http, &sess, &memo, site).await {
-                                Ok((packs, _)) => {
-                                    let n = packs.len();
-                                    result.expiring = packs.iter().map(|p| p.as_expiring()).collect();
-                                    result.expiry_complete = true;
+                        // 余额凭据换了(换账号 / 换令牌),浏览器里的网页会话不会跟着换:
+                        // 2026-11-09 真机就是"余额已经是新账号的 100,逐包明细还是旧账号的
+                        // 18 个每日 100 分包"。先判断这本账换没换,再决定要不要用网页会话。
+                        let qoder_scope = chosen
+                            .as_ref()
+                            .map(credential_scope)
+                            .unwrap_or_default();
+                        let (scope_changed, session_stale) = {
+                            let st = store.lock().unwrap_or_else(|p| p.into_inner());
+                            let changed = note_qoder_scope(&st, def.id, &qoder_scope);
+                            let stale =
+                                qoder_web_session_stale(&st, def.id, site.session_at_key);
+                            (changed, stale)
+                        };
+                        if scope_changed {
+                            self.qoder_packs
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner())
+                                .remove(def.id);
+                            crate::diaglog::write_keyed(
+                                def.id,
+                                "webpacks",
+                                "余额凭据已更换 → 旧网页到期明细作废,需用当前账号重新登录网页版",
+                            );
+                        }
+                        if session_stale {
+                            // **不拿旧会话的数据来充数**:宁可如实说"需要重新登录",
+                            // 也不把上一本账的已到期记录挂到新账号名下。
+                            result.expiry_complete = false;
+                            extra_set(
+                                &mut result.extra,
+                                "逐笔到期明细",
+                                "余额凭据已更换 · 网页到期明细需用当前账号重新登录",
+                            );
+                        } else {
+                            let qoder_id = def.id;
+                            // 会话来源是阻塞派发(要同步问 webview 的 Cookie 罐),不能占着 async worker
+                            let session = tokio::task::spawn_blocking(move || {
+                                qoder_web_src.as_deref().and_then(|f| f(qoder_id))
+                            })
+                            .await
+                            .ok()
+                            .flatten();
+                            let memo = self.qoder_memo_for(def.id);
+                            match session {
+                                Some(sess) => match qoderweb::fetch_packs(&self.http, &sess, &memo, site).await {
+                                    Ok((packs, _)) => {
+                                        let n = packs.len();
+                                        result.expiring = packs.iter().map(|p| p.as_expiring()).collect();
+                                        result.expiry_complete = true;
+                                        extra_set(
+                                            &mut result.extra,
+                                            "逐笔到期明细",
+                                            if n > 0 { "按平台返回" } else { "按平台返回 · 当前没有待到期的积分包" },
+                                        );
+                                        self.qoder_packs
+                                            .lock()
+                                            .unwrap_or_else(|p| p.into_inner())
+                                            .insert(
+                                                def.id.to_string(),
+                                                QoderPackCache {
+                                                    scope: qoder_scope.clone(),
+                                                    ts: now_ts(),
+                                                    packs: result.expiring.clone(),
+                                                },
+                                            );
+                                    }
+                                    Err(e) => {
+                                        // 只用**同一本账**的缓存:旧账号的列表不能因为
+                                        // 这一轮网络失败就重新冒出来。
+                                        let cached = self
+                                            .qoder_packs
+                                            .lock()
+                                            .unwrap_or_else(|p| p.into_inner())
+                                            .get(def.id)
+                                            .cloned()
+                                            .filter(|c| c.scope == qoder_scope);
+                                        match cached {
+                                            Some(c) => {
+                                                result.expiring = c.packs;
+                                                result.expiry_complete = true;
+                                                let when = chrono::DateTime::from_timestamp(c.ts, 0)
+                                                    .map(|d| {
+                                                        d.with_timezone(&chrono::Local)
+                                                            .format("%m-%d %H:%M")
+                                                            .to_string()
+                                                    })
+                                                    .unwrap_or_default();
+                                                extra_set(
+                                                    &mut result.extra,
+                                                    "逐笔到期明细",
+                                                    &format!("按平台返回 · 沿用 {when} 抓到的列表"),
+                                                );
+                                            }
+                                            None => {
+                                                // 指引按失败原因分叉:被平台拒 = 该去登录;
+                                                // 结构没认出来 = 挂件的事,别让用户白重登;
+                                                // 别的错 = 取数问题,别把用户引去登录窗
+                                                match &e {
+                                                    qoderweb::PacksErr::Unauthorized => extra_set(
+                                                        &mut result.extra,
+                                                        "逐笔到期明细",
+                                                        "网页会话未登录 · 渠道卡点「登录网页版」",
+                                                    ),
+                                                    qoderweb::PacksErr::Unrecognized(_) => extra_set(
+                                                        &mut result.extra,
+                                                        "逐笔到期明细",
+                                                        "登录是好的,但积分明细接口的返回结构还没识别 · 已记入诊断",
+                                                    ),
+                                                    qoderweb::PacksErr::Other(_) => extra_set(
+                                                        &mut result.extra,
+                                                        "逐笔到期明细",
+                                                        "积分包明细这轮没取到 · 稍后自动重试",
+                                                    ),
+                                                }
+                                            }
+                                        }
+                                        // 只记形状不记值:响应里可能有余额与会话;诊断按渠道分开
+                                        // 落,排查时不会把国内版的失败读成国际版的。
+                                        crate::diaglog::write_keyed(
+                                            def.id,
+                                            "webpacks",
+                                            &match &e {
+                                                qoderweb::PacksErr::Unauthorized => {
+                                                    "所有候选都被平台拒绝(未登录或会话过期)".to_string()
+                                                }
+                                                // 这一条是"平台换结构"的现场:结构草图在里面
+                                                qoderweb::PacksErr::Unrecognized(m) => m.clone(),
+                                                qoderweb::PacksErr::Other(m) => m.clone(),
+                                            },
+                                        );
+                                    }
+                                },
+                                None => {
                                     extra_set(
                                         &mut result.extra,
                                         "逐笔到期明细",
-                                        if n > 0 { "按平台返回" } else { "按平台返回 · 当前没有待到期的积分包" },
-                                    );
-                                    self.qoder_packs
-                                        .lock()
-                                        .unwrap_or_else(|p| p.into_inner())
-                                        .insert(def.id.to_string(), (now_ts(), result.expiring.clone()));
-                                }
-                                Err(e) => {
-                                    let cached = self
-                                        .qoder_packs
-                                        .lock()
-                                        .unwrap_or_else(|p| p.into_inner())
-                                        .get(def.id)
-                                        .cloned();
-                                    match cached {
-                                        Some((ts, packs)) => {
-                                            result.expiring = packs;
-                                            result.expiry_complete = true;
-                                            let when = chrono::DateTime::from_timestamp(ts, 0)
-                                                .map(|d| {
-                                                    d.with_timezone(&chrono::Local)
-                                                        .format("%m-%d %H:%M")
-                                                        .to_string()
-                                                })
-                                                .unwrap_or_default();
-                                            extra_set(
-                                                &mut result.extra,
-                                                "逐笔到期明细",
-                                                &format!("按平台返回 · 沿用 {when} 抓到的列表"),
-                                            );
-                                        }
-                                        None => {
-                                            // 指引按失败原因分叉:被平台拒 = 该去登录;
-                                            // 结构没认出来 = 挂件的事,别让用户白重登;
-                                            // 别的错 = 取数问题,别把用户引去登录窗
-                                            match &e {
-                                                qoderweb::PacksErr::Unauthorized => extra_set(
-                                                    &mut result.extra,
-                                                    "逐笔到期明细",
-                                                    "网页会话未登录 · 渠道卡点「登录网页版」",
-                                                ),
-                                                qoderweb::PacksErr::Unrecognized(_) => extra_set(
-                                                    &mut result.extra,
-                                                    "逐笔到期明细",
-                                                    "登录是好的,但积分明细接口的返回结构还没识别 · 已记入诊断",
-                                                ),
-                                                qoderweb::PacksErr::Other(_) => extra_set(
-                                                    &mut result.extra,
-                                                    "逐笔到期明细",
-                                                    "积分包明细这轮没取到 · 稍后自动重试",
-                                                ),
-                                            }
-                                        }
-                                    }
-                                    // 只记形状不记值:响应里可能有余额与会话;诊断按渠道分开
-                                    // 落,排查时不会把国内版的失败读成国际版的。
-                                    crate::diaglog::write_keyed(
-                                        def.id,
-                                        "webpacks",
-                                        &match &e {
-                                            qoderweb::PacksErr::Unauthorized => {
-                                                "所有候选都被平台拒绝(未登录或会话过期)".to_string()
-                                            }
-                                            // 这一条是"平台换结构"的现场:结构草图在里面
-                                            qoderweb::PacksErr::Unrecognized(m) => m.clone(),
-                                            qoderweb::PacksErr::Other(m) => m.clone(),
-                                        },
+                                        "积分包明细需网页登录 · 渠道卡点「登录网页版」",
                                     );
                                 }
-                            },
-                            None => {
-                                extra_set(
-                                    &mut result.extra,
-                                    "逐笔到期明细",
-                                    "积分包明细需网页登录 · 渠道卡点「登录网页版」",
-                                );
                             }
                         }
                     }
@@ -3533,6 +3649,36 @@ mod tests {
         fetcher.failed("new", Some(FailKind::Transport));
         assert!(fetcher.cached(&store, "new", "a").is_none());
         assert!(fetcher.recovery.lock().unwrap().contains_key("new"), "首次获取没有快照也必须继续重试");
+    }
+
+    /// 换账号/换令牌后,旧网页会话必须被判定为陈旧;没换过时不能误杀。
+    #[test]
+    fn qoder_credential_change_makes_the_old_web_session_stale() {
+        let store = Store::open_memory().unwrap();
+        // 第一次(没有历史):不算换号
+        assert!(!note_qoder_scope(&store, "qoder", "scope-a"));
+        assert!(!note_qoder_scope(&store, "qoder", "scope-a"), "同一本账不重复记更换");
+        // 换令牌 → 记下更换时刻;此时如果网页会话还是旧的,必须判陈旧
+        assert!(note_qoder_scope(&store, "qoder", "scope-b"));
+        store.set_setting("qoder_web_session_at", "100").unwrap();
+        assert!(qoder_web_session_stale(&store, "qoder", "qoder_web_session_at"));
+        // 用新账号重新登录网页(会话时刻晚于更换时刻)→ 不再陈旧
+        store.set_setting("qoder_web_session_at", "9999999999").unwrap();
+        assert!(!qoder_web_session_stale(&store, "qoder", "qoder_web_session_at"));
+        // 换过凭据但一次网页都没登录过 → 没有可用会话,同样要提示重新登录
+        store.delete_setting("qoder_web_session_at").unwrap();
+        assert!(qoder_web_session_stale(&store, "qoder", "qoder_web_session_at"));
+
+        // 升级上来的用户还没有专门的 scope 键:从上次成功快照里的 scope 认上一本账
+        let upgraded = Store::open_memory().unwrap();
+        Snapshot::new(
+            "old-account".into(),
+            1,
+            FetchResult { valid: true, remaining: Some(1.0), ..Default::default() },
+        )
+        .save(&upgraded, "qoder")
+        .unwrap();
+        assert!(note_qoder_scope(&upgraded, "qoder", "new-account"));
     }
 
     #[test]

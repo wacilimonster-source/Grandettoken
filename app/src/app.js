@@ -3064,7 +3064,7 @@ const WHY = {
   hide: "不再请求接口,也不再读取本机登录凭据;已记录的历史快照不删,点「恢复」立即回到取数。",
   custom: "地址与密钥只发往你填的那个域名;字段路径决定从返回 JSON 的哪一层取余额,换算倍数把它折成元。探活模式只验证可达,不解析金额。",
   wblogin: "点「登录」开一个独立窗口走网页登录(微信扫码/手机号),成功后窗口自动关掉,挂件用这份会话取数 —— 不复制任何东西,也不动桌面客户端的登录。会话约 7 天过期;国内版 5.6.2 起令牌加密存储,已无法自动读取。",
-  qoderweb: "逐笔到期明细只有网页会话能拿到,桌面端凭据只有汇总(平台两套接口的差别)。点「登录网页版」开独立窗口,登录后自动关窗并刷新;这套会话只读明细,签到与余额照旧走桌面端。",
+  qoderweb: "逐笔到期明细只有网页会话能拿到,桌面端凭据只有汇总(平台两套接口的差别)。点「登录网页版」开独立窗口,登录后自动关窗并刷新;这套会话只读明细,签到与余额照旧走桌面端。换过账号或令牌时点「切换账号」——旧网页会话属于上一本账,不先退出就会把旧账号的已到期记录挂到新账号下。",
   appauth: "凭据来自本机已登录的客户端;失效时打开一次客户端即可。隐藏本渠道后连读取也会停止。",
   compact: "开启后可切成 380×46 的横向条;顶栏固定四枚入口不再显示「紧凑」,用 Ctrl+2 切换紧凑条,Esc 在面板与胶囊之间切换。",
   trayNum: "托盘显示缩写(74 / 1.2k / 82),悬停可看完整数值;关闭后回到品牌样式。",
@@ -3268,6 +3268,7 @@ function renderChCards() {
           c.id === "qoder" || c.id === "qoder-cn"
             ? `<div class="ccquick"><span>积分包到期明细走网页会话</span>
                 <button class="btn s" data-act="qoderweblogin" data-id="${c.id}"${QODER_LOGGING ? " disabled" : ""}>${QODER_LOGGING ? "登录中…" : "登录网页版"}</button>
+                <button class="btn s" data-act="qoderwebswitch" data-id="${c.id}"${QODER_LOGGING ? " disabled" : ""} title="先退出当前网页登录,再用另一个账号登录(换号后用这个)">切换账号</button>
                 <button class="why" data-why="qoderweb" aria-expanded="false" aria-label="网页会话的说明"></button></div>`
             : ""
         }
@@ -5943,7 +5944,11 @@ $("manage").addEventListener("click", async (e) => {
     refreshChCards();
     await saveConfigAndRefresh(); // 隐藏即停止取数:重取一轮,汇总/胶囊/底栏同步
   } else if (a === "qoderweblogin") {
-    await qoderWebLogin(id);
+    await qoderWebLogin(id, false);
+  } else if (a === "qoderwebswitch") {
+    // 换号:先退出该区域当前的网页登录,再开窗。否则旧会话仍然有效,
+    // 登录窗会被判成"已登录"并自动关掉,用户根本没机会换账号。
+    await qoderWebLogin(id, true);
   } else if (a === "wblogin") {
     // 打开 WorkBuddy 网页登录窗。令牌由 Rust 侧从窗口导航里接住,前端只负责状态与提示,
     // 结果走 workbuddy-login 事件(成功/取消/失败都从那里回)。
@@ -7135,13 +7140,17 @@ let QODER_LOGGING = false; // 「登录网页版」正在跑(逐包到期会话,
  * 结果走 qoderweb-login 事件:登录窗自动关,前端只管按钮与提示。
  * **必须带 id**:国际版与国内版是两套账号,后端据此选站点/Cookie 域/会话键。
  */
-async function qoderWebLogin(id) {
+async function qoderWebLogin(id, switchAccount = false) {
   try {
-    await invoke("qoderweb_login", { id });
+    await invoke("qoderweb_login", { id, switch: !!switchAccount });
     QODER_LOGGING = true;
     renderChCards();
     if (DETAIL_ID) renderDetailSheet();
-    showToast("登录窗口已打开 · 完成登录后会自动关窗");
+    showToast(
+      switchAccount
+        ? "已退出旧网页登录 · 请用要使用的账号登录,完成后自动关窗"
+        : "登录窗口已打开 · 完成登录后会自动关窗"
+    );
   } catch (err) {
     showToast("打不开登录窗口:" + err, true);
   }
@@ -8898,10 +8907,14 @@ function applyChannelsPush(payload) {
   const key = "promo-feed-v1";
   let state = { items: [], seen: [], updated: 0, initialized: false };
   try { state = { ...state, ...JSON.parse(localStorage.getItem(key) || "{}") }; } catch (_) {}
-  let busy = false, failed = false, filter = "all", query = "", scroll = 0;
+  let busy = false, failed = false, query = "", scroll = 0;
   const expanded = new Set();
   const save = () => { try { localStorage.setItem(key, JSON.stringify(state)); } catch (_) {} };
   const unread = item => !state.seen.includes(item.id);
+  // 看过列表就算读过:打开列表时把当前条目全部记入 seen,底栏的「N 条新」随之清零。
+  const markAllSeen = () => {
+    if (state.items.some(unread)) { state.seen = state.items.map(x => x.id); save(); }
+  };
   const date = value => { const d = new Date(value); return Number.isNaN(d.getTime()) ? "" : d.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }); };
   function entry() {
     const count = state.items.filter(unread).length;
@@ -8910,14 +8923,15 @@ function applyChannelsPush(payload) {
     $("promoEntry").title = "查看 AI 工具优惠" + (state.updated ? " · 上次更新 " + date(state.updated) : "");
   }
   function render() {
+    if (!$("promoOverlay").hidden) markAllSeen();
     entry();
     if ($("promoOverlay").hidden) return;
     const content = $("promoContent");
     $("promoHeading").textContent = "AI 优惠";
     $("promoRefresh").disabled = busy;
     $("promoRefresh").textContent = busy ? "更新中…" : "刷新";
-    const list = state.items.filter(x => (filter === "all" || unread(x)) && (x.title + " " + x.description).toLowerCase().includes(query.toLowerCase()));
-    content.innerHTML = `<div class="promo-tools"><input id="promoSearch" type="search" placeholder="搜索优惠或工具名称" value="${esc(query)}" aria-label="搜索优惠"><div><button class="btn ${filter === "all" ? "p" : ""}" data-filter="all">全部</button> <button class="btn ${filter === "unread" ? "p" : ""}" data-filter="unread">未读</button></div></div>${failed ? `<p class="promo-meta">更新失败${state.updated ? " · 上次更新 " + esc(date(state.updated)) : "，请检查网络后重试"}</p>` : ""}<div class="promo-list">${list.map(x => `<article class="promo-item" data-id="${esc(x.id)}"><button class="promo-title" data-open="${esc(x.id)}">${unread(x) ? '<span class="promo-dot"></span>' : ""}${esc(x.title)} ↗</button><p class="promo-text${expanded.has(x.id) ? " expanded" : ""}">${esc(x.description)}</p><button class="promo-toggle" data-toggle="${esc(x.id)}" aria-expanded="${expanded.has(x.id)}" hidden>${expanded.has(x.id) ? "收起" : "展开"}</button><small class="promo-date">发布于 ${esc(date(x.date)) || "时间未知"}</small></article>`).join("") || `<p class="promo-empty">${busy && !state.items.length ? "正在加载优惠…" : filter === "unread" && !query ? "暂无未读优惠" : "没有匹配的优惠"}</p>`}</div>`;
+    const list = state.items.filter(x => (x.title + " " + x.description).toLowerCase().includes(query.toLowerCase()));
+    content.innerHTML = `<div class="promo-tools"><input id="promoSearch" type="search" placeholder="搜索优惠或工具名称" value="${esc(query)}" aria-label="搜索优惠"></div>${failed ? `<p class="promo-meta">更新失败${state.updated ? " · 上次更新 " + esc(date(state.updated)) : "，请检查网络后重试"}</p>` : ""}<div class="promo-list">${list.map(x => `<article class="promo-item" data-id="${esc(x.id)}"><button class="promo-title" data-open="${esc(x.id)}">${esc(x.title)} ↗</button><p class="promo-text${expanded.has(x.id) ? " expanded" : ""}">${esc(x.description)}</p><button class="promo-toggle" data-toggle="${esc(x.id)}" aria-expanded="${expanded.has(x.id)}" hidden>${expanded.has(x.id) ? "收起" : "展开"}</button><small class="promo-date">发布于 ${esc(date(x.date)) || "时间未知"}</small></article>`).join("") || `<p class="promo-empty">${busy && !state.items.length ? "正在加载优惠…" : "没有匹配的优惠"}</p>`}</div>`;
     content.querySelectorAll(".promo-item").forEach(row => {
       const text = row.querySelector(".promo-text"), toggle = row.querySelector(".promo-toggle");
       const isExpanded = text.classList.contains("expanded");
@@ -8926,15 +8940,13 @@ function applyChannelsPush(payload) {
       if (isExpanded) text.classList.add("expanded");
     });
     $("promoSearch").oninput = e => { query = e.target.value; const start = e.target.selectionStart; render(); $("promoSearch").focus(); $("promoSearch").setSelectionRange(start, start); };
-    content.querySelectorAll("[data-filter]").forEach(b => b.onclick = () => { filter = b.dataset.filter; scroll = 0; render(); });
     content.querySelectorAll("[data-open]").forEach(b => b.onclick = async () => {
       const item = state.items.find(x => x.id === b.dataset.open);
       if (!item) return;
       try {
         await invoke("open_promo_url", { url: item.link });
         scroll = content.scrollTop;
-        if (unread(item)) state.seen.push(item.id);
-        save(); render();
+        render();
       } catch (_) { showToast("无法打开详情，请重试", true); }
     });
     content.querySelectorAll("[data-toggle]").forEach(b => b.onclick = () => {

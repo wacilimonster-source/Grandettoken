@@ -1775,7 +1775,7 @@ body.layout-single .row .r2{margin-top:calc(10px*var(--u));padding-top:calc(8px*
 .promo-title{border:0;padding:0;background:none;color:var(--tx);font:inherit;font-weight:700;text-align:left;cursor:pointer}.promo-title:hover,.promo-toggle:hover{color:var(--ac)}
 .promo-text{color:var(--tx2);line-height:1.55;white-space:pre-wrap;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.promo-text.expanded{display:block}
 .promo-toggle{border:0;padding:0;background:none;color:var(--ac);font:inherit;cursor:pointer}.promo-toggle[hidden]{display:none}.promo-item small,.promo-meta,.promo-empty{color:var(--tx3)}
-.promo-dot{display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;background:var(--ac);vertical-align:middle}.promo-entry.has-new{color:var(--ac)!important}.promo-entry.has-new:before{content:'●';font-size:8px;margin-right:4px}
+.promo-entry.has-new{color:var(--ac)!important}.promo-entry.has-new:before{content:'●';font-size:8px;margin-right:4px}
 .promo-detail h2{font-size:18px;line-height:1.5}.promo-detail h3{font-size:14px;margin-top:24px}.promo-description{line-height:1.75;white-space:pre-wrap}.promo-detail .btn{margin-top:12px}
 
 .promo-item .promo-date{display:inline-block;margin-top:3px;padding:3px 7px;border-radius:5px;background:var(--bg3);color:var(--tx2);font-size:max(11px,calc(11px*var(--u)));font-weight:600;line-height:1.3}

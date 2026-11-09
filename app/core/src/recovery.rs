@@ -90,6 +90,21 @@ impl Snapshot {
         let snapshot: Self = serde_json::from_str(&raw).ok()?;
         (snapshot.scope == scope && snapshot.result.valid && snapshot.ts > 0).then_some(snapshot)
     }
+
+    /// 上一次成功快照属于哪本账(凭据 scope)。**不要求**与当前 scope 相同 ——
+    /// 换账号/换令牌的那一刻,正是要拿它来判断"上一本账是谁"。
+    /// 快照坏了 / 没有快照 → None(按"没有历史"处理,不能据此误判换号)。
+    pub fn stored_scope(store: &Store, id: &str) -> Option<String> {
+        let raw = store
+            .get_setting(&format!("quota_snapshot_v1:{id}"))
+            .ok()??;
+        let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        v.get("scope")
+            .and_then(|s| s.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    }
     pub fn save(&self, store: &Store, id: &str) -> Result<(), String> {
         if !self.result.valid || self.scope.is_empty() || self.ts <= 0 {
             return Err("只保存有凭据范围的成功额度快照".into());
@@ -139,6 +154,11 @@ mod tests {
             .unwrap();
         assert!(Snapshot::load(&store, "test", "account-b").is_none());
         assert!(Snapshot::load(&store, "test", "").is_none());
+        // 换账号判定要能读到"上一本账"的 scope(即使它和当前 scope 不同)
+        assert_eq!(Snapshot::stored_scope(&store, "test").as_deref(), Some("account-a"));
+        assert_eq!(Snapshot::stored_scope(&store, "missing"), None);
+        store.set_setting("quota_snapshot_v1:broken", "{").unwrap();
+        assert_eq!(Snapshot::stored_scope(&store, "broken"), None);
         let loaded = Snapshot::load(&store, "test", "account-a").unwrap();
         assert_eq!(loaded.result.remaining, Some(42.0));
         assert_eq!(loaded.ts, 100);

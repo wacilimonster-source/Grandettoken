@@ -201,6 +201,23 @@ pub fn qoder_site(id: &str) -> Option<&'static QoderSite> {
     }
 }
 
+/// 网页会话是否**早于**当前余额凭据的更换时刻(换了账号/换了令牌)。
+///
+/// 2026-11-09 真机:Qoder 换成新账号的令牌后,余额立刻变成新账号的 100,
+/// 而逐包明细仍来自旧账号的网页会话(18 个每日 100 分的包,合计 1736)——
+/// 两个数据源各自独立,换令牌不会动浏览器 Cookie。判据只有时间:
+/// **网页会话登录时刻 < 凭据更换时刻** 就是"这份会话属于上一本账"。
+///
+/// 没有更换记录(None)= 从没换过凭据,按不陈旧处理(升级后的第一轮不能误杀);
+/// 有更换记录但没有网页会话 = 没有任何可用的旧会话,也按陈旧处理(提示去登录).
+pub fn qoder_web_session_stale(changed_at: Option<i64>, session_at: Option<i64>) -> bool {
+    match (changed_at, session_at) {
+        (Some(changed), Some(session)) => session < changed,
+        (Some(_), None) => true,
+        _ => false,
+    }
+}
+
 /// 会话的年龄提示。Qoder 平台的会话 TTL 没有实测数据(等真机用出第一份再说),
 /// 先沿用 WorkBuddy 的"第 5 天起提示"窗口,措辞里不给具体天数 —— 不编没有证据的数字。
 pub fn qoder_web_session_hint(at: Option<i64>, now: i64) -> Option<String> {
@@ -442,6 +459,22 @@ mod tests {
         assert_ne!(g.session_at_key, cn.session_at_key, "会话键不许共用");
         assert_ne!(g.login_url, cn.login_url, "登录入口不许共用");
         assert!(qoder_site("qoder-ai").is_none());
+    }
+
+    /// 换账号/换令牌后,旧网页会话必须判为陈旧;没有更换记录时不误杀。
+    #[test]
+    fn qoder_web_session_staleness_follows_credential_change() {
+        // 没换过凭据 → 不陈旧(升级后的第一轮不能误杀)
+        assert!(!qoder_web_session_stale(None, None));
+        assert!(!qoder_web_session_stale(None, Some(100)));
+        // 会话早于凭据更换 → 旧账号的会话
+        assert!(qoder_web_session_stale(Some(200), Some(100)));
+        // 会话晚于凭据更换 → 用户已经用新账号登录过网页
+        assert!(!qoder_web_session_stale(Some(100), Some(200)));
+        // 同一秒:按"已换过网页登录"处理(登录收尾写会话时刻在凭据之后)
+        assert!(!qoder_web_session_stale(Some(100), Some(100)));
+        // 换过凭据、但一次网页都没登录过 → 没有可用会话,提示去登录
+        assert!(qoder_web_session_stale(Some(100), None));
     }
 
     /// Qoder 会话年龄提示:没记录不说话、前 4 天闭嘴、第 5 天起说话;

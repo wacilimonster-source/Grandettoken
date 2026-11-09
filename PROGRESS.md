@@ -4084,3 +4084,32 @@ v0.3.14 宣布「句中半角」标点基线后只改了实现、漏了用例 �
 - 托盘跟随胶囊轮播、按托盘物理尺寸绘制、数字缩写规则均保持不变。
 - 门禁：core 419 + 6 夹具、src-tauri 14、jsdom 177/177、CSS 形态门 1080 条、`build/verify-tray.js` 128/128（新增「小数变化只更新 tooltip、不重发图标」与 tooltip 独立通道两条回归）；`android/` 无改动未跑 Gradle。
 - 发布：tag `v0.3.27`，release 提交 `570bb63`。安装包 `Grandettoken_0.3.27_x64-setup.exe` 5,721,690 字节，SHA-256 `f2e48707079461b07f375848ce895de95536872b4f12ac7b556ce62473b895c0`；`.sig` 424 字节；`latest.json` 1,445 字节。`verify-release.js` 14 项全 PASS（更新端点 200 / 版本 0.3.27 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft / 说明完整 / latest 指向 0.3.27 / 仓库公开）。
+
+## 2026-11-09 · Qoder 换账号后逐笔到期仍来自旧账号(未发布)
+
+**现象**:国际版换成新账号后余额正确(100 分),但「逐笔到期明细」仍是旧账号的
+18 个每日 100 分赠送包(合计 1736 分)。真机快照同一条里余额 100、`expiring[]`
+合计 1736;`qoder_web_session_at` 写于 01:47,余额在 20:42 已切到新账号 ——
+余额走令牌、明细走网页会话,换令牌不会动浏览器 Cookie。
+
+**两个次生问题**:① 登录窗共用 WebView2 profile,旧会话有效时点「登录网页版」
+会立刻落到 `/account/usage` 并被观察者判成功、自动关窗,用户没机会切号;
+② `qoder_packs` 只按渠道 id 缓存,换号后网页抓取失败会沿用旧账号列表。
+Qoder 是 App 型凭据,没有 WebSession 的「清除登录」按钮,界面上原本没有退出
+网页会话的入口。
+
+**修法**
+
+- 凭据 scope 落库(`qoder_cred_scope_v1:<id>`);成功取数时发现换号/换令牌,
+  记 `qoder_account_changed_at:<id>` 并清空逐包缓存;
+- `core::weblogin::qoder_web_session_stale`:网页会话时刻早于凭据更换时刻即判陈旧,
+  这一轮不读网页会话、不展示旧明细,文案改为「余额凭据已更换 · 需用当前账号
+  重新登录」;缓存降级只肯用同一 scope 的列表;
+- 渠道卡新增「切换账号」:`qoderweb_login(switch=true)` 先按域清掉
+  `qoder.com` / `qoder.com.cn` 的 Cookie(WorkBuddy 等别的域不碰)、删会话时刻、
+  清逐包缓存,再开登录窗;凭据换过时普通「登录网页版」也走同一条清理;
+- 「登录网页版」成功收尾时同样清逐包缓存,避免旧列表在随后一轮失败时复活。
+
+**门禁**:core `cargo test` **421 passed / 8 ignored**、src-tauri `cargo check`、
+`node --check app/src/app.js`、CSS 形态门 1079 条 PASS。jsdom 冒烟未跑(本机没有
+jsdom 依赖);真机换号复现与「切换账号」回归待装包后补。
