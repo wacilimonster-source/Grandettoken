@@ -918,10 +918,14 @@ const HARNESS = `
     ck("返回键回到索引页", document.body.classList.contains("manage-index")
       && document.querySelector(".mhead .mt").textContent === "设置与管理",
       document.querySelector(".mhead .mt").textContent);
-    const topIds = ["btnR", "btnP", "btnH", "btnPill"];
+    const topIds = ["btnR", "btnP", "btnPill", "btnH"];
     const topBtns = topIds.map((id) => document.getElementById(id));
-    ck("顶栏固定四枚:刷新/置顶/隐藏/胶囊",
-      topBtns.every(Boolean) && topBtns.every((el) => el.hidden === false),
+    // 顺序本身是用户裁决(2026-11-03 定四枚,2026-11-11 胶囊与隐藏对调),
+    // 用 compareDocumentPosition 断言 DOM 先后,防止以后被无意挪动。
+    const topOrderOk = topBtns.every((el, i) =>
+      i === 0 || !!(el.compareDocumentPosition(topBtns[i - 1]) & Node.DOCUMENT_POSITION_PRECEDING));
+    ck("顶栏固定四枚:刷新/置顶/胶囊/隐藏",
+      topBtns.every(Boolean) && topBtns.every((el) => el.hidden === false) && topOrderOk,
       topIds.map((id, i) => id + "=" + (topBtns[i] ? !topBtns[i].hidden : "missing")).join(" "));
     ck("顶栏不再有「更多操作」菜单",
       !document.getElementById("btnMenu") && !document.getElementById("hmenu"));

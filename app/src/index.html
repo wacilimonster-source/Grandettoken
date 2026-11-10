@@ -58,7 +58,9 @@
     <!-- 顶栏固定四枚入口(2026-11-03 用户裁决):刷新 / 置顶 / 隐藏 / 胶囊。
          右上角不再有「更多操作」菜单;退出只在底栏与托盘。
          2026-11-05:刷新状态(如「刚刚」)并进刷新按钮 —— 用户习惯点状态文字,
-         整块合成一个可点区域,不再让"看得见却点不动"的文字挨着按钮。 -->
+         整块合成一个可点区域,不再让"看得见却点不动"的文字挨着按钮。
+         2026-11-11:胶囊与隐藏对调(用户裁决)—— 顺序改为 刷新 / 置顶 / 胶囊 / 隐藏,
+         冒烟测试同步断言该顺序。 -->
     <button class="tbi refresh" id="btnR" title="刷新" aria-label="刷新">
       <span class="tb-live" id="tbLive"></span>
       <span class="refresh-ic" aria-hidden="true">
@@ -66,8 +68,8 @@
       </span>
     </button>
     <button class="tb" id="btnP" title="窗口置顶" aria-pressed="false">置顶</button>
-    <button class="tb" id="btnH" title="隐藏到托盘">隐藏</button>
     <button class="tb" id="btnPill" title="收成胶囊">胶囊</button>
+    <button class="tb" id="btnH" title="隐藏到托盘">隐藏</button>
   </div>
 
   <div class="sum" id="sum"></div>
