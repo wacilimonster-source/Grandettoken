@@ -49,11 +49,21 @@ pub struct GistClient {
 
 impl GistClient {
     pub fn new(token: Option<String>) -> Result<Self, SyncError> {
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(20))
-            .user_agent("Grandettoken-Sync/1")
-            .build()
-            .map_err(|e| SyncError::new(NETWORK, format!("HTTP 客户端初始化失败: {e}")))?;
+        // 一次同步会连开好几个 `GistClient`(读来源 / PATCH / 建中继),原来每个都新建
+        // 一套连接池与 TLS 上下文。参数、UA、超时与错误码逐字不变,只是进程内复用一份。
+        static HTTP: std::sync::OnceLock<Result<reqwest::Client, String>> =
+            std::sync::OnceLock::new();
+        let http = HTTP
+            .get_or_init(|| {
+                reqwest::Client::builder()
+                    .timeout(Duration::from_secs(20))
+                    .user_agent("Grandettoken-Sync/1")
+                    .build()
+                    .map_err(|e| format!("HTTP 客户端初始化失败: {e}"))
+            })
+            .as_ref()
+            .map_err(|e| SyncError::new(NETWORK, e.clone()))?
+            .clone();
         Ok(Self {
             http,
             token: token.filter(|t| !t.trim().is_empty()),

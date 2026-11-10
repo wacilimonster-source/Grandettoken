@@ -120,7 +120,18 @@ try {
     'test'      { Push-Location $coreDir; try { & cargo test } finally { Pop-Location } }
     'check'     { & cargo check --all-targets }
     'dev'       { & cargo run }
-    'build'     { & cargo build --release }
+    'build'     {
+      # Same PS 5.1 native-stderr trap the bundle branch handles: cargo writes its
+      # progress to stderr, and a caller that captures the streams (agent session,
+      # CI, `... | Out-String`) aborts the script on that line BEFORE $LASTEXITCODE
+      # is read. Keep $LASTEXITCODE as the single source of truth (report P0-3).
+      $prevEap = $ErrorActionPreference
+      $ErrorActionPreference = 'Continue'
+      & cargo build --release
+      $buildExit = $LASTEXITCODE
+      $ErrorActionPreference = $prevEap
+      if ($buildExit -ne 0) { throw "cargo build --release failed with exit code $buildExit" }
+    }
     'bundle'    {
       # Missing updater signing env vars = tauri-cli waits for a password in a
       # non-interactive session and hangs forever (CPU 0), or produces a setup.exe

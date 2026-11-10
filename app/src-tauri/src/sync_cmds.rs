@@ -350,12 +350,23 @@ struct GithubUserResponse {
     login: String,
 }
 
-fn http_client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .user_agent("Grandettoken-Desktop/1")
-        .build()
-        .map_err(|e| format!("SYNC_NETWORK: HTTP 客户端初始化失败: {e}"))
+/// 同步用的 HTTP 客户端:**进程内复用一份**。
+///
+/// 一次同步要串好几个 GitHub 请求(用户信息 / gist 读写 / 设备流),原来每个请求
+/// 都新建一套连接池与 TLS 上下文,连接也无法复用。参数、超时、UA 与错误码逐字不变。
+fn http_client() -> Result<&'static reqwest::Client, String> {
+    static CLIENT: std::sync::OnceLock<Result<reqwest::Client, String>> =
+        std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(20))
+                .user_agent("Grandettoken-Desktop/1")
+                .build()
+                .map_err(|e| format!("SYNC_NETWORK: HTTP 客户端初始化失败: {e}"))
+        })
+        .as_ref()
+        .map_err(|e| e.clone())
 }
 
 async fn github_user(token: &str) -> Result<GithubUserResponse, String> {

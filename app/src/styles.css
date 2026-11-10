@@ -1143,7 +1143,7 @@ body.form-pill.st-fail .pill-body .hair i{background:var(--tx3)}
 
 /* 弹层:面板内覆盖(复用更新提示那套机制),按钮固定底部、内容自己滚 */
 .modl-ov{position:absolute;inset:0;z-index:40;display:flex;align-items:flex-end;
-  background:#0b0d12cc;backdrop-filter:blur(1.5px)}
+  background:#0b0d12cc}
 .modl-in{width:100%;max-height:86%;overflow-y:auto;background:#151d2b;border-top:1px solid #3d5a8a;
   border-radius:calc(12px*var(--u)) calc(12px*var(--u)) 0 0;padding:calc(11px*var(--u)) calc(12px*var(--u)) calc(12px*var(--u));
   box-shadow:0 -12px 34px -14px #000c}
@@ -1643,7 +1643,7 @@ body.form-panel[data-w="lg"] .row .val .p{flex:none;min-width:0}
 
 /* ── 详情底部弹层 ── */
 .shade{position:absolute;inset:calc(55px*var(--u)) 0 calc(43px*var(--u));z-index:30;
-  background:#00000066;display:flex;align-items:flex-end;backdrop-filter:blur(3px);
+  background:#00000066;display:flex;align-items:flex-end;
   animation:fadeIn var(--t2) var(--ease)}
 .shade[hidden]{display:none!important}
 .detail{width:100%;max-height:100%;background:var(--bg);border-top:1px solid var(--line);

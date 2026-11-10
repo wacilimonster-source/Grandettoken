@@ -1168,14 +1168,23 @@ use crate::fetch::BROWSER_UA;
 ///
 /// 理由(设计稿裁决 4A):Trae 侧 9074("当前参与用户太多")的成因之一是按出口 IP 排队限流,
 /// 而系统代理/机场 IP 正是那类高发出口。余额取数跟随代理没问题,签到这条特意绕开。
-/// 单次 20 秒、不用连接池 —— 一天就几次请求,不值得为它维护池子。
+///
+/// 连接池:**进程内复用一份**。这里原写「一天就几次请求,不用连接池」,但同一个客户端
+/// 现在也被 5 分钟一次的签到节拍器与活动监测调用(`lib.rs` 的 `monitor_*` / `run_checkin`),
+/// 一天是几百次 —— 每次重建 TLS 上下文与连接池纯属浪费。`no_proxy` 的**语义不变**,
+/// 只是把「每次新建」改成「首次构造、之后复用」。
 pub fn direct_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .no_proxy()
-        .timeout(std::time::Duration::from_secs(20))
-        .user_agent(BROWSER_UA)
-        .build()
-        .expect("签到 HTTP 客户端初始化失败")
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .no_proxy()
+                .timeout(std::time::Duration::from_secs(20))
+                .user_agent(BROWSER_UA)
+                .build()
+                .expect("签到 HTTP 客户端初始化失败")
+        })
+        .clone()
 }
 
 /// 一次请求要带的那份凭据。**只在内存里过一趟**:不落盘、不进日志。

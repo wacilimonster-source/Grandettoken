@@ -2610,6 +2610,19 @@ impl Fetcher {
         (r, Some(url.clone()), kind)
     }
 
+    /// 下一次失败重试的到期时刻(墙钟秒)。没有待重试渠道时返回 `None`。
+    ///
+    /// 给外壳的轮询用。它原本在 60/300/900 秒的等待窗口里**每秒醒一次**,只为了看
+    /// 有没有渠道到期该重试 —— 一轮白醒 60~900 次(约 86,400 次/天),每次都要锁一遍
+    /// state、克隆 Arc、遍历这张表。有了这个值,它可以一次睡到下一个到期点。
+    ///
+    /// 只读、不改任何状态:触发条件仍是 `r.next <= now_ts()`,精度仍按秒
+    /// (调用方最小睡 1 秒),所以重试时机与原来等价。
+    pub fn next_retry_at(&self) -> Option<i64> {
+        let states = self.recovery.lock().unwrap_or_else(|p| p.into_inner());
+        states.values().map(|r| r.next).min()
+    }
+
     /// Called by the shell ticker. Only failed, due channels are queried.
     pub async fn fetch_retries(&self, store: &Arc<Mutex<Store>>) -> Option<Vec<ChannelView>> {
         if !self.recovery.lock().unwrap().values().any(|r| r.next <= now_ts()) { return None; }
@@ -3654,6 +3667,25 @@ impl Fetcher {
 mod tests {
     use super::*;
     use chrono::Timelike;
+
+    /// 外壳的轮询现在按「下一次重试到期」精确睡眠,这个值就是唯一的重试时机来源。
+    /// 它必须取**最早到期**的渠道:返回晚了,5/15 秒的短重试就退化成"下一轮主取数才试"。
+    #[test]
+    fn next_retry_at_is_the_earliest_due_channel() {
+        let f = Fetcher::new();
+        assert_eq!(f.next_retry_at(), None, "没有失败渠道时必须允许一次睡到本轮结束");
+        {
+            let mut states = f.recovery.lock().unwrap();
+            states.insert("mid".into(), Recovery { attempts: 1, started: 0, next: 300, kind: None });
+            states.insert("slow".into(), Recovery { attempts: 2, started: 0, next: 900, kind: None });
+        }
+        assert_eq!(f.next_retry_at(), Some(300));
+        f.recovery.lock().unwrap().insert(
+            "due".into(),
+            Recovery { attempts: 1, started: 0, next: 60, kind: None },
+        );
+        assert_eq!(f.next_retry_at(), Some(60), "必须取最小到期时刻");
+    }
 
     #[test]
     fn restart_cache_is_scoped_and_explicit_forget_removes_history() {

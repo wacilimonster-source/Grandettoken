@@ -6,6 +6,22 @@ use std::time::Duration;
 
 const RELEASES: &str = "https://github.com/wacilimonster-source/Grandettoken/releases";
 
+/// 清单解析用的 HTTP 客户端:**进程内复用一份**。参数与错误文案逐字不变,
+/// 只是不再每次点「下载」都重建连接池与 TLS 上下文。
+fn release_client() -> Result<&'static reqwest::Client, String> {
+    static CLIENT: std::sync::OnceLock<Result<reqwest::Client, String>> =
+        std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(20))
+                .build()
+                .map_err(|e| format!("创建下载连接失败: {e}"))
+        })
+        .as_ref()
+        .map_err(|e| e.clone())
+}
+
 #[tauri::command]
 pub async fn download_link(platform: String) -> Result<String, String> {
     let path = match platform.as_str() {
@@ -13,10 +29,7 @@ pub async fn download_link(platform: String) -> Result<String, String> {
         "android" => "download/android-stable/android-latest.json",
         _ => return Err("不支持的下载平台".into()),
     };
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .build()
-        .map_err(|e| format!("创建下载连接失败: {e}"))?;
+    let client = release_client()?;
     let manifest = client
         .get(format!("{RELEASES}/{path}"))
         .send()

@@ -187,6 +187,12 @@ pub(crate) async fn save_config_off_main(
 /// 所以:更新前先等在途的写入;更新期间停轮询、停签到节拍、拒绝新的写入与密钥箱保存。
 static UPDATING: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+/// 「开始更新」的立即唤醒信号。
+///
+/// 轮询改成按「下一次失败重试到期」精确睡长觉之后,不能再靠每秒轮询来发现
+/// `UPDATING` 翻转(那正是本次要消掉的 86,400 次/天空转)。开始更新时必须主动叫醒它,
+/// 否则 60~900 秒的睡眠会让「更新期间停取数」这件事晚生效 —— 那是行为变化,不是优化。
+static UPDATING_NOTIFY: tokio::sync::Notify = tokio::sync::Notify::const_new();
 static INJECTING: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -2494,13 +2500,35 @@ async fn poll_loop(app: tauri::AppHandle) {    let mut failures = 0u32;
         // 抖动,避免多渠道同秒并发撞上对方限流
         let jitter = (now_ts() % 5) as u64;
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(wait + jitter);
-        while tokio::time::Instant::now() < deadline {
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        // 睡到「本轮结束」与「下一次失败重试到期」里更早的那个。
+        //
+        // 原来是一秒一醒地自旋等 deadline:60/300/900 秒的间隔就白醒 60/300/900 次
+        // (约 86,400 次/天),每次都要锁 state、克隆 Arc、遍历 recovery 表。
+        // 这里只改**唤醒次数**,不改任何触发条件:该不该重试仍由 fetch_retries 里的
+        // `r.next <= now_ts()` 判定;已经到期时最小睡 1 秒,与原来 1 秒的检查粒度一致。
+        loop {
+            if tokio::time::Instant::now() >= deadline { break; }
             if UPDATING.load(std::sync::atomic::Ordering::Relaxed) { break; }
             let (store, fetcher) = {
                 let state = app.state::<AppState>();
                 (state.store.clone(), state.fetcher.clone())
             };
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            // .max(1):next 在过去时也至少睡 1 秒,避免"到期 → 重算 → 又到期"的空转
+            let until_retry = fetcher
+                .next_retry_at()
+                .map(|at| std::time::Duration::from_secs((at - now_ts()).max(1) as u64));
+            let sleep_for = match until_retry {
+                Some(d) if d < remaining => d,
+                _ => remaining,
+            };
+            if sleep_for.is_zero() { break; }
+            tokio::select! {
+                _ = tokio::time::sleep(sleep_for) => {}
+                // 开始更新:立刻停下,不等这一觉睡醒
+                _ = UPDATING_NOTIFY.notified() => {}
+            }
+            if UPDATING.load(std::sync::atomic::Ordering::Relaxed) { break; }
             if let Some(views) = fetcher.fetch_retries(&store).await {
                 emit_channels(&app, &views);
                 maybe_notify_crit(&app, &views);
@@ -2770,6 +2798,8 @@ async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
     }
     let _upd_guard = FlagGuard(&UPDATING);
     UPDATING.store(true, std::sync::atomic::Ordering::Relaxed);
+    // 轮询现在按「下次重试到期」睡长觉(最长 900 秒),必须主动叫醒它才能立刻停取数
+    UPDATING_NOTIFY.notify_waiters();
     let updater = app.updater_builder().build().map_err(updater_err)?;
     let update = updater
         .check()
@@ -5797,12 +5827,29 @@ async fn open_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
     .map_err(|e| format!("打开失败: {e}"))?
 }
 
+/// 优惠订阅的 HTTP 客户端:进程内复用一份(前端每 30 分钟问一次)。
+/// builder 参数逐字不变,只是不再每次新建连接池与 TLS 上下文。
+/// 缓存 `Result` 而不是 `Client`:构造失败时保持原来的错误返回,不用 expect 把
+/// 一次网络初始化失败升级成 panic。
+static PROMO_HTTP: std::sync::OnceLock<Result<reqwest::Client, String>> =
+    std::sync::OnceLock::new();
+
+fn promo_client() -> Result<&'static reqwest::Client, String> {
+    PROMO_HTTP
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(15))
+                .build()
+                .map_err(|e| e.to_string())
+        })
+        .as_ref()
+        .map_err(|e| e.clone())
+}
+
 /// 固定来源的优惠订阅，避免前端跨域请求。
 #[tauri::command]
 async fn fetch_promo_feed() -> Result<String, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build().map_err(|e| e.to_string())?;
+    let client = promo_client()?;
     let response = client.get("https://www.aipromonow.com/rss.xml")
         .send().await.map_err(|e| e.to_string())?
         .error_for_status().map_err(|e| e.to_string())?;

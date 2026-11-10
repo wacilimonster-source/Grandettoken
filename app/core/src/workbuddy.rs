@@ -665,7 +665,6 @@ pub fn find_app_exe() -> Option<PathBuf> {
 /// **必须带超时**:桌面端是 Electron,个别环境下会卡在启动阶段 —— 挂件是常驻轮询程序,
 /// 不能因为一个子进程把整条取数链挂住(与 `tasklist` 那条 5 秒超时同一个理由)。
 fn fetch_key_payload(exe: &Path) -> Result<String, DesktopErr> {
-    use std::io::Read;
     use std::process::{Command, Stdio};
     const SCRIPT: &str = "try{process.stdout.write(process._linkedBinding('electron_browser_workbuddy_storage').loggerGet())}catch(e){process.exitCode=3;process.stderr.write(String(e&&e.message||e))}";
     #[cfg(windows)]
@@ -684,61 +683,98 @@ fn fetch_key_payload(exe: &Path) -> Result<String, DesktopErr> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = cmd
+    let child = cmd
         .spawn()
         .map_err(|e| DesktopErr::KeyUnavailable(format!("起不来: {e}")))?;
-    // 输出要**趁子进程还活着的时候并发读走**。以前的写法是"轮询等它退出、退出后再读管道":
-    // 一旦 loggerGet() 输出超过管道缓冲,子进程就永远卡在写上,我们则永远卡在等它退出,
-    // 15 秒到点后误报成"桌面端没有应答"(本次改造没踩到,是因为当时那段 JSON 恰好没满)。
-    let so = child.stdout.take();
-    let se = child.stderr.take();
-    let (out, err, timeout_reason) = std::thread::scope(|s| {
-        let h_out = s.spawn(move || {
+    run_child_with_timeout(child, KEY_TIMEOUT)
+}
+
+/// 等子进程退出并读走它的 stdout，**总耗时不超过 `timeout`**。
+///
+/// 2026-11-10 真机:这段逻辑原来实测要 **104~133 秒**才返回,而 `KEY_TIMEOUT` 是 15 秒。
+/// 两个独立的坑,缺一不可:
+///
+/// 1. **只杀 launcher 杀不掉整棵树**。Electron 会派生子进程,launcher 被 `kill()` 之后
+///    那些派生进程仍然握着 stdout/stderr 的**写端**,管道等不到 EOF。所以超时必须杀进程树。
+/// 2. **读端不能用 `thread::scope` + `join()`**。作用域结束会强制等所有线程收尾,
+///    等于把 15 秒超时又变回"等进程自己死"。改成 detached 线程 + channel:
+///    超时直接返回,读线程随管道关闭自行结束。
+fn run_child_with_timeout(
+    mut child: std::process::Child,
+    timeout: Duration,
+) -> Result<String, DesktopErr> {
+    use std::io::Read;
+    use std::sync::mpsc;
+
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel::<(bool, String)>();
+    let mut readers = 0usize;
+    // 两个管道类型不同(ChildStdout / ChildStderr),分开写而不硬凑一个数组
+    if let Some(mut r) = child.stdout.take() {
+        readers += 1;
+        let tx = tx.clone();
+        // 读线程故意不 join:它可能在等一个迟迟不来的 EOF,不能让它挡着返回值
+        std::thread::spawn(move || {
             let mut buf = String::new();
-            if let Some(mut r) = so {
-                let _ = r.read_to_string(&mut buf);
-            }
-            buf
+            let _ = r.read_to_string(&mut buf);
+            let _ = tx.send((true, buf));
         });
-        let h_err = s.spawn(move || {
+    }
+    if let Some(mut r) = child.stderr.take() {
+        readers += 1;
+        let tx = tx.clone();
+        std::thread::spawn(move || {
             let mut buf = String::new();
-            if let Some(mut r) = se {
-                let _ = r.read_to_string(&mut buf);
-            }
-            buf
+            let _ = r.read_to_string(&mut buf);
+            let _ = tx.send((false, buf));
         });
-        // std 没有 wait_timeout,自己转;超时就杀掉,不留孤儿进程
-        let deadline = Instant::now() + KEY_TIMEOUT;
-        let mut why: Option<String> = None;
-        loop {
-            match child.try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) => {
-                    if Instant::now() >= deadline {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        why = Some(format!("桌面端 {} 秒内没有应答", KEY_TIMEOUT.as_secs()));
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(80));
-                }
-                Err(e) => {
+    }
+    drop(tx);
+
+    let deadline = Instant::now() + timeout;
+    let mut why: Option<String> = None;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    kill_process_tree(pid);
                     let _ = child.kill();
-                    why = Some(format!("等待桌面端失败: {e}"));
+                    let _ = child.wait();
+                    why = Some(format!("桌面端 {} 秒内没有应答", timeout.as_secs()));
                     break;
                 }
+                std::thread::sleep(Duration::from_millis(80));
+            }
+            Err(e) => {
+                kill_process_tree(pid);
+                let _ = child.kill();
+                why = Some(format!("等待桌面端失败: {e}"));
+                break;
             }
         }
-        // 子进程已退出或被杀 → 写端关闭,两个读线程读到 EOF 自然收尾
-        (
-            h_out.join().unwrap_or_default(),
-            h_err.join().unwrap_or_default(),
-            why,
-        )
-    });
-    if let Some(w) = timeout_reason {
+    }
+    if let Some(w) = why {
         return Err(DesktopErr::KeyUnavailable(w));
     }
+
+    // 进程已退出 → 写端关闭 → 两个读线程立刻送出结果。
+    // 仍然带剩余预算:极端情况下(写端被别的进程继承)也不会把超时拖长。
+    let mut out = String::new();
+    let mut err = String::new();
+    let mut got = 0usize;
+    while got < readers {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        match rx.recv_timeout(left) {
+            Ok((true, s)) => { out = s; got += 1; }
+            Ok((false, s)) => { err = s; got += 1; }
+            Err(_) => break,
+        }
+    }
+
     let stdout = out.trim().to_string();
     if stdout.is_empty() {
         let err = err.trim().to_string();
@@ -750,6 +786,24 @@ fn fetch_key_payload(exe: &Path) -> Result<String, DesktopErr> {
     }
     Ok(stdout)
 }
+
+/// 杀掉整个进程树。`Child::kill()` 只作用于 launcher,Electron 派生出来的进程
+/// 会继续持有管道写端(见 `run_child_with_timeout` 的第 1 条)。
+#[cfg(windows)]
+fn kill_process_tree(pid: u32) {
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let _ = Command::new("taskkill")
+        .args(["/T", "/F", "/PID", &pid.to_string()])
+        .creation_flags(0x0800_0000) // 别给挂件弹控制台窗口
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+#[cfg(not(windows))]
+fn kill_process_tree(_pid: u32) {}
 
 /// 从 payload 里派生 32 字节 key。
 /// **关键细节**:上游是对 `atRestSecretKey` 这个 base64 **字符串**做 sha256(不是解码后的字节)。
@@ -1709,6 +1763,42 @@ const DESKTOP_UA_FOR_REFRESH: &str = "CLI/2.63.2 CodeBuddy/2.63.2";
 mod tests {
     use super::*;
     use base64::Engine as _;
+
+    /// 正常路径:子进程立刻退出,输出要能原样读回来 —— 改成 channel 收数据后不能丢。
+    #[cfg(windows)]
+    #[test]
+    fn child_output_is_read_back() {
+        use std::process::{Command, Stdio};
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/C", "echo hello"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let child = cmd.spawn().unwrap();
+        let out = run_child_with_timeout(child, Duration::from_secs(10)).unwrap();
+        assert_eq!(out, "hello");
+    }
+
+    /// 超时必须**真的返回**。2026-11-10 真机:原来 `thread::scope` 的 `join()` 会一直等
+    /// 管道 EOF,15 秒的 `KEY_TIMEOUT` 实际要 104~133 秒才回到调用方。
+    /// 这里用一个会挂 19 秒的子进程,断言 800ms 的超时能在 10 秒内返回。
+    #[cfg(windows)]
+    #[test]
+    fn child_timeout_returns_within_budget() {
+        use std::process::{Command, Stdio};
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/C", "ping -n 20 127.0.0.1"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let child = cmd.spawn().unwrap();
+        let started = Instant::now();
+        let r = run_child_with_timeout(child, Duration::from_millis(800));
+        assert!(r.is_err(), "子进程没退出时必须报超时");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "超时后必须尽快返回,实际等了 {:?}",
+            started.elapsed()
+        );
+    }
 
     /// keyId 口径:sha256 前 8 字节的十六进制 —— 真机信封里的 `9127dea1b44020a7` 就是这么来的。
     #[test]

@@ -4345,3 +4345,29 @@ jsdom 冒烟 **177/177**、凭据扫描 CLEAN。
 版本 0.3.33 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft /
 说明完整 117 个汉字 / latest 指向 0.3.33 / 仓库公开)。打包日志
 `build/bundle-log-v0.3.33.txt`,导入表检查确认无 WebView2Loader.dll 混入。
+
+## 2026-11-10/11 · 资源占用优化 Wave 1 + 收尾评估(v0.3.34)
+
+第二轮性能方案(`docs/research/performance-optimization-2026-11-10.md`)的落地批次。
+Wave 2 按用户决策全部跳过;其余各项「收益高风险小」逐项取证,详见该文档 §10:
+
+- **W1-1 精确唤醒**:poll_loop 的 1 秒自旋改为「睡到 `min(deadline, 下一次重试到期)`」,
+  `Fetcher::next_retry_at()` 只读取最早到期渠道(+单测);`UPDATING` 另有 `Notify`
+  立即唤醒。是否重试仍由 `fetch_retries` 内 `r.next <= now` 判定,只改唤醒次数不改时机。
+- **`fetch_key_payload` 超时修复**(§9.6 运行时观察发现的缺陷,同日修复):读线程改
+  detached + 剩余预算 `recv_timeout`,到期先 `taskkill /T` 清整棵进程树;返回语义逐字
+  未变。修复前单次 104-133 秒、残留 2×105MB 子进程;修复后 2-3 秒、零残留(+2 单测)。
+- **W1-2 HTTP 客户端单例**:`checkin::direct_client`(`.no_proxy()` 保留)、
+  `fetch_promo_feed`、`sync_cmds::http_client`、`download`、`GistClient` 改进程内
+  `OnceLock` 复用,builder 参数逐字不变。
+- **W1-4** 删 `.modl-ov` / `.shade` 两处透明窗口里空转的 `backdrop-filter`。
+- **W1-3(代理快照 TTL)复核后放弃**;Wave 3 评估:启动 prune 实测 **60-70ms**
+  (覆盖索引 `idx_snap_lookup`,§2.6「全表扫描」前提被推翻)不下沉;`ProxyClients`
+  惰性会改错误浮现时点,不做;仅裁 `image-png`(全项目无 PNG 解码调用点,
+  Cargo.lock -4 包)。开发机 debug 构建缓存 60 GB 已清(用户确认)。
+- **门禁**:core `cargo test --locked` **425 passed / 8 ignored**、src-tauri
+  `cargo check --all-targets --locked` 0 警告、`bench_history_batch`(release) ok、
+  `node --check`、CSS 形态门 **1081 条**、jsdom 冒烟 **182/182**、refresh-stability
+  20 场景对基线无新增回归、verify-tray **128/128**。
+- **真机证据**(diag.log):qoder 失败 5.1 秒重试成功;4sapi 23:57:44→48 五秒档重试;
+  超时修复后无新的 >100 秒密钥耗时记录。
