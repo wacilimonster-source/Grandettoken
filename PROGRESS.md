@@ -4306,3 +4306,11 @@ jsdom 冒烟 **177/177**、凭据扫描 CLEAN。
   `cargo test --locked` **19 passed**、`cargo check --all-targets --locked`、
   `node --check app.js`、CSS 形态门 1079 条 PASS、jsdom 冒烟 **177/177**、
   Android `testDebugUnitTest` **BUILD SUCCESSFUL**。
+
+**发布(2026-11-10)**:tag `v0.3.32`,release 提交 `6433f2d`。安装包
+`Grandettoken_0.3.32_x64-setup.exe` 5,739,396 字节,SHA-256
+`25f4dec9a73611dd7b6e5ef572fb3c09f41c931c91a9d6386118b04e72e12ca7`;`.sig` 424 字节;
+`latest.json` 1,281 字节。`verify-release.js` **14 项全 PASS**(更新端点 200 /
+版本 0.3.32 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft /
+说明完整 / latest 指向 0.3.32 / 仓库公开)。Android 端通知去重随源码提交,
+本轮未打 Android 包(等下一次 Android 发版一起带出)。
