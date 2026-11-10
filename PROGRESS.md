@@ -4314,3 +4314,26 @@ jsdom 冒烟 **177/177**、凭据扫描 CLEAN。
 版本 0.3.32 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft /
 说明完整 / latest 指向 0.3.32 / 仓库公开)。Android 端通知去重随源码提交,
 本轮未打 Android 包(等下一次 Android 发版一起带出)。
+
+## 2026-11-10 · Qoder 三处文案修正(v0.3.33)
+
+用户三张真机截图反馈的同一条链路问题,一次收口:
+
+- **副标题渠道名重复**:`appauth::qoder_candidates` 的 `source` 自带区域名,
+  `fetch::auth_label` 又拼了一次 `app.label()` →「Qoder · Qoder · sebird」。
+  展示层剥掉重复前缀(只认「整段相等」或「label + 分隔符」,避免 `Qoder` 误吞
+  `Qoder 国内版 · …`);`source` 原值留给诊断日志。新增 core 回归测试。
+- **逐笔明细来源代号看不懂**:`qoderweb::pack_of` 透传 `name`/`source`,而产品文档
+  §2.2 本就要求「label = source 的人话」。在 `app.js::packLabelZh` 做展示层映射
+  (官方枚举 / `act-` 活动编号 / 英文短语 / 词素兜底),未知代号保留原文、中文幂等、
+  原始代号进 tooltip;历史快照无需等重新登录就能读懂。`qoderweb.rs` 加注释写明
+  「翻译在展示层」,避免以后双重翻译。
+- **网页会话入口不分状态**:设置页 `ccquick` 常驻写死「登录网页版」。按
+  `expiryComplete`(与详情栏 `qoderLoginBar` 同一判据)改两态:已登录显示绿色状态 +
+  「重新登录」,未登录写「需登录」+「登录网页版」;`WHY.qoderweb` 与操作 toast 同步。
+  不另存「登录过」的内存标记 —— 会话失效后界面还挂「已登录」是假话。
+- **门禁**:core `cargo test --locked` **422 passed / 8 ignored**、src-tauri
+  `cargo check --all-targets --locked`、`node --check` ×2、CSS 形态门 **1081 条**、
+  jsdom 冒烟 **182/182**、凭据扫描 CLEAN。src-tauri 的 `cargo test` 测试二进制在本机
+  仍报 `STATUS_ENTRYPOINT_NOT_FOUND`(本文 1461 行记过的 WebView2 链栈老问题),
+  非 RELEASE.md §0 门禁项;release 产物由 `build.ps1` 重新链接,不受影响。

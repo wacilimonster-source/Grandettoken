@@ -1613,11 +1613,32 @@ fn auth_label(def: &providers::ProviderDef, cred: Option<&appauth::Credential>) 
         },
         AuthKind::App(app) => match cred {
             Some(c) => {
-                let src = c.source.trim_end_matches(".info");
-                if src.is_empty() {
-                    format!("本机 {}", app.label())
+                let label = app.label();
+                let raw = c.source.trim_end_matches(".info").trim();
+                if raw.is_empty() {
+                    format!("本机 {label}")
                 } else {
-                    format!("{} · {}", app.label(), src)
+                    // Qoder 的 source 自带区域名 + 账号名(见 appauth::qoder_candidates:
+                    // "Qoder · sebird" / "Qoder 国内版 · 里怪兽"),而这里已经先拼了 label,
+                    // 直接接上会显示成「Qoder · Qoder · sebird」(2026-11-10 真机截图)。
+                    // 展示层剥掉这段重复前缀即可;source 原值留在诊断日志里不动。
+                    // 只认「整段相等」或「label + 分隔符」,否则 "Qoder" 会误吞
+                    // 以它开头的 "Qoder 国内版 · …"(国际版标签是国内版标签的前缀)。
+                    let sep = format!("{label} · ");
+                    let src = if raw == label {
+                        ""
+                    } else if let Some(rest) = raw.strip_prefix(&sep) {
+                        rest.trim()
+                    } else {
+                        raw
+                    };
+                    // Trae("TRAE SOLO CN")/Codex("CLI 登录态")的 source 是安装目录或凭据形态,
+                    // 与 label 不是同一信息,保持「Trae · TRAE SOLO CN」这类两段式。
+                    if src.is_empty() {
+                        label.to_string()
+                    } else {
+                        format!("{label} · {src}")
+                    }
                 }
             }
             None => format!("未检测到 {} 登录信息", app.label()),
@@ -4296,6 +4317,39 @@ mod tests {
         assert_eq!(placeholder(ds).auth_source, "keyring");
         assert_eq!(auth_label(ds, None), "Windows 凭据管理器");
         assert_eq!(expired_credential_msg(ds), None);
+    }
+
+    /// Qoder 两版的 `source` 自带区域名,展示层不能把 app.label() 拼两遍。
+    /// 2026-11-10 真机截图:「已读取本机登录 · Qoder · Qoder · sebird」。
+    #[test]
+    fn qoder_auth_label_does_not_repeat_channel_name() {
+        let cred = |source: &str| appauth::Credential {
+            token: "dummy".into(),
+            source: source.into(),
+            account_id: None,
+            device_id: None,
+        };
+        let qoder = providers::find("qoder").expect("qoder 渠道存在");
+        let cn = providers::find("qoder-cn").expect("qoder-cn 渠道存在");
+        assert_eq!(auth_label(qoder, Some(&cred("Qoder · sebird"))), "Qoder · sebird");
+        assert_eq!(
+            auth_label(cn, Some(&cred("Qoder 国内版 · 里怪兽"))),
+            "Qoder 国内版 · 里怪兽"
+        );
+        // 账号名读不到时 source 只有区域名,同样不许拼成「Qoder · Qoder」
+        assert_eq!(auth_label(qoder, Some(&cred("Qoder"))), "Qoder");
+        assert_eq!(auth_label(cn, Some(&cred("Qoder 国内版"))), "Qoder 国内版");
+        // 国际版标签是国内版标签的前缀:不能把后者误当成「重复前缀」剥掉
+        assert_eq!(
+            auth_label(qoder, Some(&cred("Qoder 国内版 · 里怪兽"))),
+            "Qoder · Qoder 国内版 · 里怪兽"
+        );
+        // 其它 app 型渠道的两段式(安装目录 / 凭据形态)保持原样
+        let trae = providers::find("trae").expect("trae 渠道存在");
+        assert_eq!(auth_label(trae, Some(&cred("TRAE SOLO CN"))), "Trae · TRAE SOLO CN");
+        let codex = providers::find("codex").expect("codex 渠道存在");
+        assert_eq!(auth_label(codex, Some(&cred("CLI 登录态"))), "Codex · CLI 登录态");
+        assert_eq!(auth_label(codex, Some(&cred(""))), "本机 Codex");
     }
 
     #[test]

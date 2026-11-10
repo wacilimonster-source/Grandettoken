@@ -470,6 +470,9 @@ fn pack_of(item: &serde_json::Value) -> Option<CreditPack> {
     if remaining <= 0.0 {
         return None;
     }
+    // 原始代号刻意**不在这里翻成中文**:诊断日志与同步数据要靠它跟官网对账。
+    // 界面文案统一由 app.js::packLabelZh 负责(历史快照里的旧英文代号也能立刻译出),
+    // 所以产品文档 §2.2 说的「label = source 的人话」落在展示层,不落在取数层。
     let label = str_of(item, &["name", "source", "title", "product_name"])
         .map(|s| s.to_string())
         .unwrap_or_else(|| "积分包".into());

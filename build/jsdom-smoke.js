@@ -755,10 +755,50 @@ const HARNESS = `
       dq.slice(0, 300));
     ck("有真实包时不再写「接口未提供」", !/接口未提供/.test(dq), (dq.match(/接口未提供/g) || []).join(","));
 
+    // 来源代号翻译(2026-11-10 真机截图):活动编号、带前缀的 source 枚举、
+    // 认不出的代号、本来就是中文的 label —— 四种都要读得懂。
+    const qdZh = Object.assign({}, qd, {
+      expiring: [
+        { at: nowS + 86400 * 3, amount: 2000, label: "act-20261110-699" },
+        { at: nowS + 86400 * 29, amount: 98, label: "RESOURCE_PACKAGE_SOURCE_BONUS" },
+        { at: nowS + 86400 * 30, amount: 100, label: "MYSTERY_CODE" },
+      ],
+      expiryComplete: true,
+    });
+    const dZh = renderDetail(qdZh);
+    ck("逐包来源代号译成中文:活动编号 / BONUS / 未识别代号保留原文",
+      /活动积分包 · 2026-11-10/.test(dZh) && /赠送积分包/.test(dZh) &&
+      /积分包 · MYSTERY_CODE/.test(dZh) && !/<p>RESOURCE_PACKAGE_SOURCE_BONUS<[/]p>/.test(dZh),
+      dZh.slice(0, 400));
+    ck("原始代号留在悬停提示里,便于去官网对账",
+      /平台原始代号:RESOURCE_PACKAGE_SOURCE_BONUS/.test(dZh) &&
+      /平台原始代号:act-20261110-699/.test(dZh),
+      (dZh.match(/title="[^"]*"/g) || []).slice(0, 3).join(" | "));
+    ck("译过的明细补一句说明", /来源代号已译为中文/.test(dZh));
+    const dCn = renderDetail(Object.assign({}, qd, {
+      expiring: [{ at: nowS + 86400, amount: 10, label: "签到积分" }], expiryComplete: true,
+    }));
+    ck("本来就是中文的来源标签不被改写,也不加多余说明",
+      /<p>签到积分<[/]p>/.test(dCn) && !/来源代号已译为中文/.test(dCn),
+      dCn.slice(0, 300));
+
     window.__TEST.openManage();
     const qcard = document.querySelector('#chList .ccard[data-id="qoder"]');
-    ck("Qoder 渠道卡有「登录网页版」", !!qcard && /登录网页版/.test(qcard.innerHTML),
-      qcard && qcard.innerHTML.slice(0, 220));
+    const qquick = qcard && qcard.querySelector(".ccquick");
+    ck("已登录:Qoder 渠道卡显示「已登录」与「重新登录」,不再劝登录",
+      !!qquick && /已登录网页账号 · 逐笔明细可用/.test(qquick.textContent) &&
+      /重新登录/.test(qquick.textContent) && !/登录网页版/.test(qquick.textContent),
+      qquick && qquick.innerHTML.slice(0, 320));
+    // 未登录态:逐笔明细不完整时仍要给「登录网页版」入口
+    window.__TEST.setChannels([...data.CHANNELS,
+      Object.assign({}, qd, { expiryComplete: false, expiring: [] })]);
+    window.__TEST.openManage();
+    const qcardOff = document.querySelector('#chList .ccard[data-id="qoder"]');
+    const qquickOff = qcardOff && qcardOff.querySelector(".ccquick");
+    ck("未登录:Qoder 渠道卡仍写「需登录」并给「登录网页版」",
+      !!qquickOff && /逐笔积分到期明细需登录网页账号/.test(qquickOff.textContent) &&
+      /登录网页版/.test(qquickOff.textContent) && !/重新登录/.test(qquickOff.textContent),
+      qquickOff && qquickOff.innerHTML.slice(0, 320));
     const ocard = document.querySelector('#chList .ccard[data-id="ds"]');
     ck("别的渠道不塞登录入口", !!ocard && !/登录网页版/.test(ocard.innerHTML));
 

@@ -609,6 +609,9 @@ body.manage-index .mhead .mt{letter-spacing:.01em}
 .ccquick,.qoder-login-bar{display:flex;align-items:center;gap:calc(8px*var(--u));flex-wrap:wrap;
   font-size:max(11.5px,calc(11.5px*var(--u)));color:var(--tx3)}
 .ccquick{padding:calc(2px*var(--u)) calc(12px*var(--u)) calc(9px*var(--u));background:var(--bg2)}
+/* 网页会话已登录:状态文字用绿色 + 实心点,与"还需登录"的灰字区分开 */
+.ccquick-ok{color:var(--ok)}
+.ccquick-ok::before{content:"\25CF";font-size:.8em;margin-right:calc(5px*var(--u))}
 .qoder-login-bar{margin-top:calc(8px*var(--u));padding:calc(8px*var(--u)) calc(10px*var(--u));
   border:1px dashed var(--line2);border-radius:calc(8px*var(--u));background:var(--bg2)}
 .ccbtns input[type=password]{flex:1;min-width:0;background:var(--bg);border:1px solid var(--line2);

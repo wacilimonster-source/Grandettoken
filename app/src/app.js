@@ -1218,6 +1218,69 @@ function qoderLoginBar(c) {
   </div>`;
 }
 
+/* ───────── 逐笔到期:平台来源代号 → 中文 ─────────
+ * Qoder 网页接口给的是原始代号(RESOURCE_PACKAGE_SOURCE_BONUS),活动发的包给的是
+ * campaignKey(act-20261110-699),老快照里还可能是 "Purchased Credits" 这种英文包名。
+ * 这里统一译出中文,**不动 expiring[] 数据本身**:core / 同步 / 诊断日志仍留原文,
+ * 鼠标悬停每行也能看到原始代号,去官网对账不会丢线索。
+ * 放在展示层而不是 core 的另一个原因:**数据库里的旧快照是英文**,改取数层要等
+ * 下一次网页会话刷新才生效,改渲染则装上就能读懂。
+ * 纪律:只译有依据的枚举与词素;认不出的代号保留在「积分包 · 原文」里,不编业务含义。
+ */
+// 产品文档 §1 从官方 web bundle 实拆到的 source 枚举(PURCHASED / BONUS / REFUND…)。
+// 真机返回值会带 RESOURCE_PACKAGE_SOURCE_ 前缀,查表前先剥掉。
+const PACK_SOURCE_ZH = {
+  BONUS: "赠送积分包",
+  PURCHASED: "购买积分包",
+  REFUND: "退款积分包",
+  TRIAL: "试用积分包",
+};
+// 词素兜底:平台以后加新代号时,认得的词照直译,不认得的整条退回原文。
+const PACK_WORD_ZH = {
+  BONUS: "赠送", PURCHASED: "购买", PURCHASE: "购买", REFUND: "退款", TRIAL: "试用",
+  GIFT: "赠送", REWARD: "奖励", COMPENSATION: "补偿", SUBSCRIPTION: "订阅",
+  ADDON: "加量", ADD: "加量", CHECKIN: "签到", SIGNIN: "签到", DAILY: "每日",
+  FREE: "免费", CAMPAIGN: "活动", ACTIVITY: "活动", INVITE: "邀请", REFERRAL: "邀请",
+  MONTHLY: "月度", YEARLY: "年度", ANNUAL: "年度", PRO: "Pro",
+};
+// 只承载结构、不承载来源语义的词,拼中文时略过。
+const PACK_STRUCT_WORDS = new Set([
+  "RESOURCE", "PACKAGE", "SOURCE", "TYPE", "CODE", "QUOTA", "CREDIT", "CREDITS",
+  "POINT", "POINTS", "VALUE", "AMOUNT", "ID", "KEY",
+]);
+// 组织版 / 老快照里的英文包名(测试样本见 core::qoderweb)。
+const PACK_PHRASE_ZH = {
+  "purchased credits": "购买积分包",
+  "bonus credits": "赠送积分包",
+  bonus: "赠送积分包",
+  "trial credits": "试用积分包",
+  "free credits": "免费积分包",
+  "add-on credits": "加量包",
+  "gift credits": "活动赠送积分包",
+};
+
+/** 把一条来源代号译成中文。已是中文(如 WorkBuddy 的「每日积分」)原样返回 —— 幂等。 */
+function packLabelZh(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "积分包";
+  if (/[\u3400-\u9fff]/.test(s)) return s;
+  const phrase = PACK_PHRASE_ZH[s.toLowerCase()];
+  if (phrase) return phrase;
+  const upper = s.toUpperCase();
+  // campaignKey 自带活动日期,只解释格式,不猜是哪一期活动、也不把它当到期日。
+  const act = /^ACT-(\d{4})(\d{2})(\d{2})-\d+$/.exec(upper);
+  if (act) return `活动积分包 · ${act[1]}-${act[2]}-${act[3]}`;
+  const key = upper.replace(/^RESOURCE_PACKAGE_SOURCE_/, "");
+  if (PACK_SOURCE_ZH[key]) return PACK_SOURCE_ZH[key];
+  if (/^[A-Z0-9_\- ]+$/.test(upper)) {
+    const words = upper.split(/[^A-Z0-9]+/).filter(Boolean);
+    const semantic = words.filter((w) => !PACK_STRUCT_WORDS.has(w));
+    const zh = semantic.map((w) => PACK_WORD_ZH[w]);
+    if (semantic.length && zh.every(Boolean)) return [...new Set(zh)].join("") + "积分包";
+  }
+  return `积分包 · ${s}`;
+}
+
 /** 积分到期:WorkBuddy / Trae / WorkBuddy AI / Qoder 共用的唯一组件。
  *  `expiring` 与 `expiryComplete` 是唯一数据源;不从渠道名或文案猜日期。 */
 function pointsExpiryHtml(c, showAll) {
@@ -1284,13 +1347,19 @@ function pointsExpiryHtml(c, showAll) {
 
   const head = showAll ? [...upcoming, ...past] : upcoming.length ? upcoming.slice(0, 3) : past.slice(0, 3);
   const total = upcoming.length + past.length;
+  let translated = 0;
   const rows = head
     .map((e) => {
       const isPast = e.at <= nowS;
       const p = expiryParts(e.at);
       const urgent = !isPast && e.at * 1000 - Date.now() <= 7 * 86400e3;
-      return `<div class="expiry-entry core-exp${isPast ? " past" : urgent ? " urgent" : ""}" title="${points(e.amount)} 分 · ${esc(e.label || "积分")}">
-        <div><b>${p.date} ${p.time}</b><p>${esc(e.label || "积分")}</p></div>
+      // 平台原始代号只进 tooltip:显示用中文,但对账时仍能查到原文。
+      const rawLabel = String(e.label || "").trim() || "积分";
+      const label = packLabelZh(rawLabel);
+      if (label !== rawLabel) translated++;
+      const tip = `${points(e.amount)} 分 · ${label}${label !== rawLabel ? ` · 平台原始代号:${rawLabel}` : ""}`;
+      return `<div class="expiry-entry core-exp${isPast ? " past" : urgent ? " urgent" : ""}" title="${esc(tip)}">
+        <div><b>${p.date} ${p.time}</b><p>${esc(label)}</p></div>
         <div class="expiry-amount"><strong>${points(e.amount)} <small>分</small></strong>
           <p>${isPast ? "已到期,待刷新" : expiryRelativeSpan(e.at)}</p></div>
       </div>`;
@@ -1318,6 +1387,7 @@ function pointsExpiryHtml(c, showAll) {
     notes.push(`已知到期记录合计 ${points(sumExp)} 分,多于当前余额 ${points(remain)} 分;总额仍以后端余额为准。`);
   }
   notes.push("每笔显示尚未使用的积分;不同来源的积分分别到期。");
+  if (translated) notes.push("来源代号已译为中文;悬停每行可查看平台原始代号。");
   html += `<p class="expiry-footnote">${notes.map(esc).join("<br>")}</p>`;
   if (isQoder) {
     html += `<p class="expiry-footnote">账户有效期与逐笔积分到期不同,不能据此判断所有积分在同一时间到期。</p>`;
@@ -3085,7 +3155,7 @@ const WHY = {
   hide: "不再请求接口,也不再读取本机登录凭据;已记录的历史快照不删,点「恢复」立即回到取数。",
   custom: "地址与密钥只发往你填的那个域名;字段路径决定从返回 JSON 的哪一层取余额,换算倍数把它折成元。探活模式只验证可达,不解析金额。",
   wblogin: "点「登录」开一个独立窗口走网页登录(微信扫码/手机号),成功后窗口自动关掉,挂件用这份会话取数 —— 不复制任何东西,也不动桌面客户端的登录。会话约 7 天过期;国内版 5.6.2 起令牌加密存储,已无法自动读取。",
-  qoderweb: "逐笔到期明细只有网页会话能拿到,桌面端凭据只有汇总(平台两套接口的差别)。点「登录网页版」开独立窗口,登录后自动关窗并刷新;这套会话只读明细,签到与余额照旧走桌面端。换过账号或令牌时点「切换账号」——旧网页会话属于上一本账,不先退出就会把旧账号的已到期记录挂到新账号下。",
+  qoderweb: "逐笔到期明细只有网页会话能拿到,桌面端凭据只有汇总(平台两套接口的差别)。显示「已登录」= 本轮已用网页会话取到逐笔明细;平台会话会过期,失效后状态会自己退回「需登录」,届时点「重新登录」重开窗口刷新即可,历史快照不丢。未登录时点「登录网页版」开独立窗口,完成后自动关窗并刷新;这套会话只读明细,签到与余额照旧走桌面端。换过账号或令牌时点「切换账号」——旧网页会话属于上一本账,不先退出就会把旧账号的已到期记录挂到新账号下。",
   appauth: "凭据来自本机已登录的客户端;失效时打开一次客户端即可。隐藏本渠道后连读取也会停止。",
   compact: "开启后可切成 380×46 的横向条;顶栏固定四枚入口不再显示「紧凑」,用 Ctrl+2 切换紧凑条,Esc 在面板与胶囊之间切换。",
   trayNum: "托盘显示缩写(74 / 1.2k / 82),悬停可看完整数值;关闭后回到品牌样式。",
@@ -3139,6 +3209,31 @@ function toggleWhy(btn) {
   // 说明块不一定紧跟在按钮后面(见上),按 data-for 找
   const box = document.querySelector(`.whybox[data-for="${btn.dataset.for}"]`);
   if (box) box.classList.toggle("on", !on);
+}
+
+/**
+ * 设置页 Qoder 网页会话入口(常驻在折叠体外面,别再藏进 .ccbody)。
+ *
+ * 已登录的判据与详情栏 qoderLoginBar **完全一致**:expiryComplete === true 表示
+ * 本轮已用网页会话取到逐笔明细(Rust fetch.rs 只在 fetch_packs 成功、或沿用
+ * 同一本账缓存时置 true;会话失效 / 换过账号会置 false)。不另存一份"登录过"的
+ * 内存标记 —— 那样会话早失效了界面还挂着「已登录」,等于骗人。
+ * 两态只换状态文案与按钮叫法,操作仍是同一个 qoderweb_login:平台会话会过期,
+ * 已登录态也保留「重新登录」(重开窗口会重新确认会话并刷一轮明细)与「切换账号」。
+ */
+function qoderQuickHtml(c) {
+  if (c.id !== "qoder" && c.id !== "qoder-cn") return "";
+  const logged = c.expiryComplete === true;
+  const dis = QODER_LOGGING ? " disabled" : "";
+  const loginBtn = QODER_LOGGING ? "登录中…" : logged ? "重新登录" : "登录网页版";
+  return `<div class="ccquick"><span${logged ? ' class="ccquick-ok"' : ""}>${
+    logged ? "已登录网页账号 · 逐笔明细可用" : "逐笔积分到期明细需登录网页账号"
+  }</span>
+      <button class="btn s" data-act="qoderweblogin" data-id="${c.id}"${dis} title="${
+    logged ? "平台会话会过期;重新确认并刷新逐笔明细" : "打开独立窗口登录网页账号"
+  }">${loginBtn}</button>
+      <button class="btn s" data-act="qoderwebswitch" data-id="${c.id}"${dis} title="先退出当前网页登录,再用另一个账号登录(换号后用这个)">切换账号</button>
+      <button class="why" data-why="qoderweb" aria-expanded="false" aria-label="网页会话的说明"></button></div>`;
 }
 
 function renderChCards() {
@@ -3282,17 +3377,10 @@ function renderChCards() {
           <span class="ccaret">&#9654;</span>
         </div>
         ${
-          // 逐包到期明细的登录入口**必须放在折叠体外面**(2026-11-08 用户反馈):
-          // 原来它生在 .ccbody 里,而 .ccbody 默认 display:none、要点卡片头才展开,
-          // 等于把一个"去找它"的入口藏进了第二层折叠。现在常驻卡片头下方。
-          // 国际版/国内版共用同一入口,Cookie 与会话键在 Rust 侧按渠道隔离;
-          // 这套会话只做账务只读,签到与余额的桌面链路一概不碰。
-          c.id === "qoder" || c.id === "qoder-cn"
-            ? `<div class="ccquick"><span>积分包到期明细走网页会话</span>
-                <button class="btn s" data-act="qoderweblogin" data-id="${c.id}"${QODER_LOGGING ? " disabled" : ""}>${QODER_LOGGING ? "登录中…" : "登录网页版"}</button>
-                <button class="btn s" data-act="qoderwebswitch" data-id="${c.id}"${QODER_LOGGING ? " disabled" : ""} title="先退出当前网页登录,再用另一个账号登录(换号后用这个)">切换账号</button>
-                <button class="why" data-why="qoderweb" aria-expanded="false" aria-label="网页会话的说明"></button></div>`
-            : ""
+          // 逐包到期明细的入口**必须放在折叠体外面**(2026-11-08 用户反馈):
+          // .ccbody 默认 display:none,藏进去等于让用户翻两层折叠。
+          // 国际版/国内版共用同一个入口,Cookie 与会话键在 Rust 侧按渠道隔离。
+          qoderQuickHtml(c)
         }
         <div class="ccbody">
           ${keyBlock}
@@ -7192,10 +7280,14 @@ async function qoderWebLogin(id, switchAccount = false) {
     QODER_LOGGING = true;
     renderChCards();
     if (DETAIL_ID) renderDetailSheet();
+    // 已登录态点的是「重新登录」:提示别再说成"完成登录",它只是重新确认会话并刷新。
+    const logged = (CHANNELS.find((x) => x.id === id) || {}).expiryComplete === true;
     showToast(
       switchAccount
         ? "已退出旧网页登录 · 请用要使用的账号登录,完成后自动关窗"
-        : "登录窗口已打开 · 完成登录后会自动关窗"
+        : logged
+          ? "已打开网页会话窗口 · 确认后自动关窗并刷新明细"
+          : "登录窗口已打开 · 完成登录后会自动关窗"
     );
   } catch (err) {
     showToast("打不开登录窗口:" + err, true);
