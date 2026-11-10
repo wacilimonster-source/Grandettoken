@@ -496,6 +496,12 @@ pub struct CheckinCfg {
     pub activity_state: Option<ActivityState>,
     /// 最近已提示的“活动键 + 状态”，防止每小时重复提醒。
     pub last_activity_notice_key: Option<String>,
+    /// 最近已提示过的「结果码 + 周期日」。签到告警(`auth` / `shape`)按它去重:
+    /// 同一天同一个问题只弹一次,状态变了或到了新的一天才允许再提醒。
+    ///
+    /// 与 `last_activity_notice_key` 分开:那条管“有活动可领”,这条管“需要用户动手”,
+    /// 共用一个键会让两类提示互相吞掉。
+    pub last_alert_key: Option<String>,
     /// 最近看到的 Qoder 活动快照(最多保留 100 条,用于识别新活动和状态变化)。
     pub activity_history: Vec<QoderActivity>,
     /// 最近一次活动列表中的优先活动,供渠道详情和首页徽标展示。
@@ -528,6 +534,7 @@ impl Default for CheckinCfg {
             last_activity_check_at: None,
             activity_state: None,
             last_activity_notice_key: None,
+            last_alert_key: None,
             activity_history: Vec::new(),
             latest_activity: None,
             arrival: None,

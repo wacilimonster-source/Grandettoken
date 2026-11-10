@@ -67,5 +67,9 @@ class NotificationRulesTest {
     fun failure_needs_three_consecutive_attempts() {
         assertFalse(NotificationRules.failureReached(2))
         assertTrue(NotificationRules.failureReached(3))
+        // 通知只在“刚达到阈值”那一次发:4、5 次不再重复
+        assertFalse(NotificationRules.failureJustReached(2))
+        assertTrue(NotificationRules.failureJustReached(3))
+        assertFalse(NotificationRules.failureJustReached(4))
     }
 }

@@ -24,6 +24,9 @@ internal object NotificationRules {
 
     fun failureReached(streak: Int): Boolean = streak >= FAILURE_STREAK
 
+    /** 连续失败“刚达到阈值”的那一次 —— 通知只在这一跳发,之后不再重复。 */
+    fun failureJustReached(streak: Int): Boolean = streak == FAILURE_STREAK
+
     private fun isLowBalance(ch: ChannelSnapshot): Boolean {
         val value = when (ch.kind) {
             ChannelKind.Money -> if (ch.unit == "CNY") Decimal.parseMicros(ch.remaining) else null

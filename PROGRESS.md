@@ -4286,3 +4286,23 @@ jsdom 冒烟 **177/177**、凭据扫描 CLEAN。
   `manifest-public.txt` 回验 Ed25519 签名、版本、大小、哈希、下载地址全通过。
 - 桌面 `releases/latest` 保持 `v0.3.29`(Android release 创建后显式
   `gh release edit v0.3.29 --latest`,未抢占 PC 更新端点)。
+
+## 2026-11-10 · 告警去重:同一渠道同一事件只弹一次
+
+用户反馈 codex 渠道限额后一下午弹了好几次。排查本机日志:codex 在 **02:22**
+就已跌破红线,桌面端「跌破那一刻 + 同渠道一天一次」的判定本身没有重复发;
+真正的问题是**去重状态只放内存**(重启/数据抖动会再弹),以及签到「需要处理」
+提示完全没有去重、设置页也没有开关。
+
+- **桌面红线通知**:去重表落 settings(`crit_notified_v1`),同一天同一渠道
+  跨重启只发一次;每次真正发出时写一条 diag 日志(`notify` 作用域),
+  下次再有人问"到底是谁弹的"可以直接查。
+- **签到「需要处理」提示**:按「结果码 + 周期日」去重(`CheckinCfg.last_alert_key`),
+  同一天同一个问题只提示一次;设置 → 显示 → 提醒与声音新增开关
+  (配置字段 `checkin_notify` 早就存在,这次补上 UI 入口)。
+- **Android**:余额提醒从「每 6 小时重复」改为「跌破时一次,回到线上后再次跌破
+  才允许下一次」;连续失败提醒只在刚达到 3 次时发,不再每 6 小时重弹。
+- **门禁**:core `cargo test --locked` **421 passed / 8 ignored**、src-tauri
+  `cargo test --locked` **19 passed**、`cargo check --all-targets --locked`、
+  `node --check app.js`、CSS 形态门 1079 条 PASS、jsdom 冒烟 **177/177**、
+  Android `testDebugUnitTest` **BUILD SUCCESSFUL**。

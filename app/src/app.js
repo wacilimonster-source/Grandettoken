@@ -3091,6 +3091,7 @@ const WHY = {
   trayNum: "托盘显示缩写(74 / 1.2k / 82),悬停可看完整数值;关闭后回到品牌样式。",
   pulse: "只有红色状态点会 2 秒一次红晕。低位持续期间不重复播报,免得常驻桌面一直闪。",
   notify: "通知本身不支持点击回跳(插件限制),所以窗口藏着时改为闪一下任务栏。",
+  checkinAlert: "签到成功时静默;只有凭据失效或接口结构变了才提示,且同一天同一个问题只提示一次。",
   sound: "WebAudio 合成,不新增资源文件;默认关。",
   pill: "选中的渠道每 8 秒轮播一次,鼠标停在胶囊上时放慢到 24 秒;渠道隐藏后自动从轮播里剔除。",
   checkin: "走平台内部接口查活动并签到;规则一变就自动暂停,余额显示不受影响。签到走直连不用系统代理 —— 平台按出口 IP 限流,代理 IP 更容易被拒。",
@@ -6214,6 +6215,8 @@ bindSwitch("cfgPulse", "alertPulse", (on) => document.body.classList.toggle("pul
 bindSwitch("cfgPeek", "peekOnClick");
 // 跌破红线的系统通知(裁决 3A):判定全在 Rust 侧(与 UI 同一口径),这里只是开关
 bindSwitch("cfgNotify", "notifyOnCrit");
+// 签到"需要处理"的提醒:同一天同一个问题只提示一次;关掉后不再弹
+bindSwitch("cfgCheckinNotify", "checkinNotify");
 // 提示音两声(裁决 8A):开的时候试听一声,让用户知道会是什么声音
 bindSwitch("cfgSound", "soundOn", (on) => {
   if (on) beep("ding");
@@ -6415,6 +6418,7 @@ function syncStaticControls() {
   setSwitch("cfgPulse", CFG.alertPulse);
   setSwitch("cfgPeek", CFG.peekOnClick !== false);
   setSwitch("cfgNotify", CFG.notifyOnCrit !== false);
+  setSwitch("cfgCheckinNotify", CFG.checkinNotify !== false);
   setSwitch("cfgSound", !!CFG.soundOn);
   setSwitch("cfgDock", CFG.dockEnabled);
   setSwitch("cfgCompact", !!CFG.compactEnabled);
