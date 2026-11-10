@@ -4337,3 +4337,11 @@ jsdom 冒烟 **177/177**、凭据扫描 CLEAN。
   jsdom 冒烟 **182/182**、凭据扫描 CLEAN。src-tauri 的 `cargo test` 测试二进制在本机
   仍报 `STATUS_ENTRYPOINT_NOT_FOUND`(本文 1461 行记过的 WebView2 链栈老问题),
   非 RELEASE.md §0 门禁项;release 产物由 `build.ps1` 重新链接,不受影响。
+
+**发布(2026-11-10)**:tag `v0.3.33`,release 提交 `69866e2`。安装包
+`Grandettoken_0.3.33_x64-setup.exe` 5,740,907 字节,SHA-256
+`e0e4f5c929911668422cf3acd3f25f8e9519c3e00820ae9663653a7e48e42ab6`;`.sig` 424 字节;
+`latest.json` 1,172 字节。`verify-release.js` **14 项全 PASS**(更新端点 200 /
+版本 0.3.33 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft /
+说明完整 117 个汉字 / latest 指向 0.3.33 / 仓库公开)。打包日志
+`build/bundle-log-v0.3.33.txt`,导入表检查确认无 WebView2Loader.dll 混入。
