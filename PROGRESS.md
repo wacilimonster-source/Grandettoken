@@ -4391,3 +4391,12 @@ image-png 裁剪兑现)。`verify-release.js` **14 项全 PASS**(更新端点 20
   现加 `compareDocumentPosition` **顺序断言**,防止以后被无意挪动。
 - **门禁**:`node --check`、CSS 形态门 **1081 条**、jsdom 冒烟 **182/182**(含新顺序断言)。
   纯 DOM 顺序调整,`btnH` / `btnPill` 的 JS 处理都按 id 绑定,不受顺序影响。
+
+**发布(2026-11-11)**:tag `v0.3.35`,release 提交 `df4f59c`。安装包
+`Grandettoken_0.3.35_x64-setup.exe` 5,699,979 字节,SHA-256
+`0b91d8c062b487b489fd3d85d520afdcade3d2ecbf7da6d758a27c28058c5dd6`;`.sig` 424 字节;
+`latest.json` 858 字节。`verify-release.js` **14 项全 PASS**(首跑与重试 1 直连
+github.com:443 超时,第 2 次通过 —— 本机网络偶发抖动,`gh api` 同时核验 latest
+指向 0.3.35、三件套齐,非产物问题)。打包日志 `build/bundle-log-v0.3.35.txt`,
+导入表检查确认无 WebView2Loader.dll 混入;主程序维持 10,302,464 字节。
+本条提交信息曾因 shell 编码乱码,已用 `-F` 文件方式 amend(fff1d67 → df4f59c)。
