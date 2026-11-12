@@ -4510,5 +4510,61 @@ CI 内 `verify-release.js` **14 项全 PASS**(含「签名与本地 .sig 逐字�
   假失败(实测 `local=0`)。已改成同口径 SKIP;这类"脚本自己制造的假失败"会教人
   忽略门禁,见 `AGENTS.md` §6.4。
 
+## 2026-11-13 新渠道 MiniMax:积分 + 逐笔到期 + 签到
+
+**新渠道 `minimax`(积分型)**:读本机 MiniMax Code 桌面端凭据
+(`~/.minimax/auth/prod/<cn|io|com>/mcode-public/auth.json`,明文 JSON,无需解密),
+积分汇总 + **逐笔到期账本**(`credit/details`,签到积分 30 天到期)+ 每日签到
+(7 天一轮,第 4、7 天 1000 分)。API 口径经三个独立参考项目交叉验证
+(CreditDaddy 拆包 / QinglongMy 逆向 / dsh-connect-minimaxcode),账户端点签名
+按官方 app.asar 算法实现,Golden 向量钉死在 `core/src/minimax.rs`。
+
+- **真机实证(本机 cn 登录态)**:签名被生产 API 接受(积分 HTTP 200,remaining=400,
+  免费 400/购买 0);签到查询用 **IANA 时区名**(`timezone_id`,带 offset 会被拒)
+  口径正确(今日已签 status=3 → `Already(400)`);账本 1 笔 400 分 30 天后到期,
+  与官方客户端一致。令牌实测寿命 ~10.9 小时(参考项目说的 1 小时偏保守)。
+- **凭据托管(用户裁决,默认开可关)**:refresh token 一次性轮换。**临近过期(≤2 分钟)
+  才刷新**,刷新后**原子回写**客户端 auth.json(保留 generation/loginEpoch)——
+  文件是唯一事实源,不与客户端抢链。设置 → 刷新与启动可关;`MINIMAX_NOWRITEBACK=1`
+  硬关;**只读模式必须连刷新一起停**(刷新消费轮换却不回写会把客户端的链作废)。
+  这是 `appauth.rs`「只读不刷新」总原则的**有依据的例外**,理由写在该模块头注。
+- **区域**:凭据目录 cn/io/com 哪个有登录态走哪套域名(含 CreditDaddy 的 `en` 目录名兼容)。
+  取数跨区 401 靠 fallback 链自愈(last_good 钉住对的那个);签到域名跟凭据键走
+  (`mm:<region>:<token>` 前缀,`desktop:` 前缀同一先例)。
+- **架构**:全部逻辑在新模块 `core/src/minimax.rs`(凭据/签名/续期/extract/parse,
+  30 项单测);`fetch.rs` 的 minimax 分支每次尝试现算签名(静态表表达不了),
+  逐笔账本照 codex 明细的"主响应成功后追加、失败不拖垮余额"模式;签到的 URL 与
+  签名头在 `call_with_body` 现算。IPC 无新命令,前端零改动(kind=points 自动渲染)。
+- **门禁**:check-file-size 给 checkin.rs 上调 2200 → 2260(**唯一一次**,接线代码拆不出去,
+  理由在注释);全量门禁绿:IPC 契约 / silent 失败 / 文件规模 / CSS 形态 / app.js 语法 /
+  jsdom 182 / core 454 / src-tauri check --all-targets --locked / secrets 扫描 CLEAN,
+  串行单独跑。
+- **调研回收**:参考源码与真机探针都在 `build/tmp/`,本轮已删;顺手补上
+  `.gitignore` 的 `build/tmp/`(本次实测发现它未被 gitignore,一次性产物差点入库)。
+
+## 2026-11-13 新渠道豆包工作:体验额度 + 签到
+
+**新渠道 `doubao`(积分型)**:doubao.com **网页会话**渠道,任务面板接口一次给全 ——
+`data.progress.total_amount` 是体验额度余量,`data.tasks[]` 里的 `daily_signin` 是签到状态;
+领取 +200/天,服务端幂等(`idempotent:true` 归 already)。API 口径来自 CreditDaddy
+`doubaoClient.js`(issue #32,CDP 实测两个场景)。
+
+- **鉴权是纯 Cookie,但客户端环境要像样**:活动接口按客户端环境放行(裸 UA 吃「请求非法」),
+  所以 URL 必带桌面版平台参数(version_code/aid/...),UA 用 `DoubaoDesktop/2.32.6`,
+  web_id/tea_uuid 按 Cookie 里的 sessionid 确定性派生(每号一台稳定「设备」)。
+  **匿名真机探针实证**:形状被接受,返 `code 710012001「登录已过期」`(与参考实现一致);
+  完整登录态链路需用户在挂件内登录一次豆包(登录窗自动捕获,未在本次开发中真机验证)。
+- **凭据 = 网页会话**(WorkBuddy 同一套模型):挂件内登录窗捕获 → 会话留在 WebView2
+  profile、不落盘,取数时现读;手动粘贴 Cookie 走凭据管理器兜底。登录流拆成独立
+  模块 `src-tauri/src/doubao_web.rs`(lib.rs 在棘轮上,AGENTS 2.3 的正路)——
+  观察器只靠探测收工(豆包 SPA 没有"登录完成落地页")。
+- **单位是「额度」不是「分」**:前端积分型的大数字按 `unit` 渲染(`credits` 保持"分",
+  其它照渠道自己的叫法),豆包显示 `额度`。
+- **门禁**:check-file-size 当天第二次上调(checkin.rs → 2290、fetch.rs → 5280、
+  providers.rs → 2095,理由同一条:渠道接线点拆不出去,逻辑都在 doubao.rs);
+  IPC 契约新增 `doubao_login` 命令(前端已接);jsdom 182 / core 467 单测 /
+  src-tauri check --all-targets --locked / secrets 扫描全绿。
+- **调研回收**:参考源码与匿名探针都在 `build/tmp/`,本轮已删。
+
 
 

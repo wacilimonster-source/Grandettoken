@@ -74,6 +74,45 @@ pub fn cookie_header(credential: &str) -> Option<&str> {    let rest = credentia
     Some(rest)
 }
 
+/// 豆包(doubao.com)的会话主域名。登录窗、Cookie 罐、取数请求都对它。
+pub const DOUBAO_HOST: &str = "www.doubao.com";
+
+/// 判"这条 Cookie 里有豆包会话"的最小条件:sessionid / sessionid_ss 至少有一个
+/// (字节系的会话主键;实测两个都常在,但个别端只发一个 —— 缺主键就当未登录)。
+pub const DOUBAO_SESSION_COOKIES: [&str; 2] = ["sessionid", "sessionid_ss"];
+
+/// 从 webview 的 Cookie 罐里拼豆包会话凭据。
+///
+/// 与 WorkBuddy 的 [`cookie_credential`](只认白名单两个名字、缺一不可)不同:
+/// 豆包的认证分散在 sessionid / sessionid_ss / sid_tt 等多个 Cookie 里,还带
+/// msToken 等动态伙伴字段 —— **按浏览器原样全量携带最忠实**(接口在浏览器里
+/// 就是这么打的,拆着挑反而容易漏掉服务端要的伙伴字段)。带
+/// [`COOKIE_PREFIX`](网页会话罐的传输格式)。
+pub fn doubao_cookie_credential<I, S>(jar: I) -> Option<String>
+where
+    I: IntoIterator<Item = (S, S)>,
+    S: AsRef<str>,
+{
+    let mut out = String::new();
+    let mut has_session = false;
+    for (name, value) in jar {
+        let (name, value) = (name.as_ref(), value.as_ref());
+        if value.is_empty() || value.chars().any(|c| c.is_control() || c == ' ') {
+            continue;
+        }
+        if DOUBAO_SESSION_COOKIES.contains(&name) {
+            has_session = true;
+        }
+        if !out.is_empty() {
+            out.push_str("; ");
+        }
+        out.push_str(name);
+        out.push('=');
+        out.push_str(value);
+    }
+    has_session.then(|| format!("{COOKIE_PREFIX}{out}"))
+}
+
 /// 这个名字是不是会话 Cookie(清登录时按它挑要删的那几个)。
 pub fn is_session_cookie(name: &str) -> bool {
     SESSION_COOKIES.contains(&name)

@@ -898,10 +898,40 @@ async fn fetch_once_inner(
     account_id: Option<&str>,
 ) -> (FetchResult, Option<FailKind>, WireInfo) {
     let mut info = WireInfo::default();
+    // MiniMax:账户端点要官方客户端签名(x-signature/yy),查询串参与签名且绑定
+    // URL 与时间戳 —— 每次尝试都要现算,静态 extra_headers 表达不了(见 core::minimax)。
+    // 凭据键形如 mm:<region>:<token>,Authorization 必须用解出来的裸令牌,不能带前缀。
+    let mm = if def.id == "minimax" {
+        match crate::minimax::sign_for_fetch(url, def.method, key, account_id) {
+            Some(s) => Some(s),
+            None => {
+                let (r, k) = err_result(
+                    def,
+                    "MiniMax 凭据格式异常(缺 mm: 区域前缀)".into(),
+                    Some(FailKind::Business),
+                );
+                return (r, k, info);
+            }
+        }
+    } else {
+        None
+    };
+    // 豆包:活动接口按客户端环境放行,查询串要带桌面版平台参数与派生设备号
+    // (core::doubao;UA/Referer/Origin 由 def.extra_headers 静态携带)
+    let db_url = if def.id == "doubao" {
+        Some(crate::doubao::decorate_url(url, key))
+    } else {
+        None
+    };
+    let url_signed: &str = mm
+        .as_ref()
+        .map(|s| s.url.as_str())
+        .or(db_url.as_deref())
+        .unwrap_or(url);
     let mut req = match def.method {
-        Method::Get => client.get(url),
+        Method::Get => client.get(url_signed),
         Method::PostJson(body) => client
-            .post(url)
+            .post(url_signed)
             .header("Content-Type", "application/json")
             .body(body()),
     }
@@ -919,7 +949,24 @@ async fn fetch_once_inner(
     // 用浏览器 UA 200、用客户端 UA 401(2026-10-08 实测,两种各打一次)。
     // 客户端默认那个 `TokenScope/0.1` 恰好是被拒的一类,所以这台机器上要靠逐请求覆盖。
     let desktop_token = key.trim().strip_prefix(DESKTOP_TOKEN_PREFIX);
-    if let Some(token) = desktop_token {
+    if mm.is_some() {
+        let token = crate::minimax::parse_key(key).map(|(_, t)| t.trim()).unwrap_or("");
+        req = req.header("Authorization", format!("Bearer {}", token));
+    } else if def.id == "doubao" {
+        // 豆包只有 Cookie 一条路:粘贴值允许不带 cookie: 前缀(手动自救路径)。
+        // 形状不对就如实报错,绝不拿去当 Bearer 撞 —— 那只会换来一句看不懂的 401。
+        match crate::doubao::cookie_header_of(key) {
+            Some(c) => req = req.header("Cookie", c),
+            None => {
+                let (r, k) = err_result(
+                    def,
+                    "豆包凭据不是合法的 Cookie 字符串 · 点「登录豆包账号」重新捕获".into(),
+                    Some(FailKind::Auth),
+                );
+                return (r, k, info);
+            }
+        }
+    } else if let Some(token) = desktop_token {
         // 桌面端令牌走 Bearer,且**不能**带 Cookie;UA 用桌面端自己的形态
         req = req
             .header("Authorization", format!("Bearer {}", token.trim()))
@@ -945,6 +992,12 @@ async fn fetch_once_inner(
             _ => v.to_string(),
         };
         req = req.header(*k, val);
+    }
+    // MiniMax 的三个签名头最后追加(查询串已在上面的签名 URL 里,与头同源)
+    if let Some(s) = &mm {
+        for (k, v) in &s.headers {
+            req = req.header(*k, v);
+        }
     }
     if def.id == "codex" {
         if let Some(id) = account_id {
@@ -1315,6 +1368,11 @@ async fn fetch_channel_scoped(
                 Ok(cards) => cards,
                 Err(message) => crate::codex::unavailable(result.reset_credits.take(), message),
             });
+        }
+        if def.id == "minimax" && result.valid {
+            // 逐笔积分账本:独立端点、尽力而为 —— 账本失败不拖垮余额
+            // (口径同上面的 codex 明细:expiry_complete=false 表示"空 ≠ 没有到期")
+            crate::minimax::merge_expiry(client, key, url, account_id, &mut result).await;
         }
         // 成功,或者失败类型不值得换域名(密钥错/业务失败)—— 就此打住
         let stop = match kind {

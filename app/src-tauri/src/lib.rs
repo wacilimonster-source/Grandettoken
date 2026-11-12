@@ -15,6 +15,7 @@ use tokenscope_core::{appauth, checkin, inject, models, providers, secrets, stor
 mod sync_cmds;
 mod download;
 mod gateway;
+mod doubao_web;
 pub use sync_cmds::{
     sync_create, sync_disconnect_github, sync_forget,
     sync_join, sync_oauth_cancel, sync_oauth_poll, sync_oauth_start, sync_preview,
@@ -347,6 +348,8 @@ async fn set_config(app: tauri::AppHandle, state: State<'_, AppState>, config: C
         return Err(e);
     }
     let next = incoming;
+    // MiniMax 托管开关立即生效(set_config 不走 sanitize,不能等下次配置加载)
+    tokenscope_core::minimax::set_writeback_enabled(next.minimax_writeback);
     if let Err(e) = save_config_off_main(&state, move |c| *c = next).await {
         // 落库失败:快捷键严格回到保存前。以前只在"原来有键"时回滚,
         // 第一次设键又落库失败时,那个组合键已被挂件抢走却显示为空(报告 P3-34)。
@@ -481,7 +484,16 @@ async fn delete_key(app: tauri::AppHandle, id: String) -> Result<String, String>
     let is_web = matches!(def.auth, providers::AuthKind::WebSession);
     let mut warn = String::new();
     if is_web {
-        if let Err(e) = wb_clear_session(&app) {
+        // 各渠道的会话住在各自域的 Cookie 罐里:WorkBuddy 清工作台两域,豆包清
+        // doubao.com —— 用错清单会把别人的会话误伤或漏清
+        let cleared = if def.id == WB_CHANNEL_ID {
+            wb_clear_session(&app)
+        } else if def.id == "doubao" {
+            doubao_web::clear_session(&app)
+        } else {
+            Ok(())
+        };
+        if let Err(e) = cleared {
             warn = format!(";浏览器登录会话可能没清干净({e}),请在客户端里退出登录一次");
         }
     }
@@ -1066,6 +1078,8 @@ fn web_session_of(app: &tauri::AppHandle, id: &str) -> Option<String> {
     match id {
         WB_CHANNEL_ID => wb_session_of(app, id),
         "qoder" | "qoder-cn" => qoder_web_session_of(app, id),
+        // 豆包:登录窗捕获的会话现读(全量 Cookie 组装,规则在 core::weblogin)
+        "doubao" => doubao_web::session_of(app),
         _ => None,
     }
 }
@@ -1392,6 +1406,12 @@ fn spawn_login_watcher(app: tauri::AppHandle) {
 /// (2026-10-08 实测:窗口壳出来了、页面停在 about:blank、之后连别的 IPC 一起冻死)。
 /// async 命令跑在 async runtime 的线程上,窗口创建被当成一条消息投进事件循环,
 /// 与启动时建主窗口走的是同一种上下文 —— 那条路是通的。
+/// 打开豆包登录窗(壳命令,流程在 doubao_web::login)。async 的理由同 workbuddy_login。
+#[tauri::command]
+async fn doubao_login(app: tauri::AppHandle) -> Result<(), String> {
+    doubao_web::login(app).await
+}
+
 #[tauri::command]
 async fn workbuddy_login(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(w) = app.get_webview_window(WB_LOGIN_LABEL) {
@@ -3442,6 +3462,44 @@ fn checkin_credentials(app: &tauri::AppHandle, def: &checkin::CheckinDef) -> Res
                 }
             }
             Ok(vec![checkin::Cred::Qoder(c.token)])
+        }
+        checkin::CheckinAuth::MiniMaxApp => {
+            // 与取数同一条凭据链(core::minimax::blocking_credential):读 ~/.minimax,
+            // 临近过期自动续期(托管模式,可经 MINIMAX_NOWRITEBACK=1 关成只读)。
+            // 凭据来源必须与取数一致 —— 两边都走这一个入口。
+            match tokenscope_core::minimax::blocking_credential() {
+                Some(c) => Ok(vec![checkin::Cred::MiniMax {
+                    key: tokenscope_core::minimax::encode_key(&c),
+                    uid: c.uid,
+                }]),
+                None => Err("没检测到 MiniMax Code 登录 · 打开一次 MiniMax Code 即可".into()),
+            }
+        }
+        checkin::CheckinAuth::DoubaoWeb => {
+            // 与取数同一条链(凭据来源必须一致):手动粘贴的 Cookie(凭据管理器)
+            // 优先,登录窗捕获的网页会话现读兜底 —— 与取数 WebSession 同一顺序。
+            let mut out: Vec<checkin::Cred> = Vec::new();
+            match secrets::resolve(def.id) {
+                Ok(secrets::Resolved::Inline(k)) | Ok(secrets::Resolved::Vault { key: k, .. }) => {
+                    if tokenscope_core::doubao::cookie_header_of(&k).is_some() {
+                        out.push(checkin::Cred::Doubao { cookie: k });
+                    }
+                }
+                Ok(secrets::Resolved::Dangling(vid)) => {
+                    return Err(format!(
+                        "引用的密钥箱条目已被删除(条目 id={vid})—— 去「密钥箱」检查,或重新粘贴 Cookie"
+                    ));
+                }
+                Ok(secrets::Resolved::None) => {}
+                Err(e) => return Err(e),
+            }
+            if let Some(session) = doubao_web::session_of(app) {
+                out.push(checkin::Cred::Doubao { cookie: session });
+            }
+            if out.is_empty() {
+                return Err("未检测到豆包登录 · 在渠道卡点「登录豆包账号」".into());
+            }
+            Ok(out)
         }
     }
 }
@@ -6287,6 +6345,10 @@ pub fn run() {
                         serde_json::json!({ "ok": false, "cancelled": true, "id": id }),
                     );
                 }
+                // 豆包登录窗:同一条规矩,逻辑在模块里(标位与事件都在那侧)
+                if window.label() == doubao_web::LOGIN_LABEL {
+                    doubao_web::on_login_window_destroyed(window);
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -6297,6 +6359,7 @@ pub fn run() {
             set_key,
             delete_key,
             workbuddy_login,
+            doubao_login,
             channel_changes,
             set_autostart,
             set_pin,

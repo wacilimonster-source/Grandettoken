@@ -270,6 +270,10 @@
       <div class="field"><span>余额底线(元)<button class="why" data-why="floor" aria-expanded="false" aria-label="余额底线的说明"></button><span class="desc">低于它算「需要处理」</span></span>
         <input class="sel" id="cfgMoneyFloor" type="number" min="1" step="1" placeholder="10"></div>
 
+      <h4>MiniMax 凭据</h4>
+      <div class="field"><span>令牌过期自动续期<span class="desc">刷新后回写 MiniMax Code 客户端的凭据文件;关掉即只读,过期后要打开客户端续期</span></span>
+        <button class="sw" id="cfgMinimaxWriteback" role="switch" aria-checked="true" aria-label="MiniMax 令牌自动续期"></button></div>
+
       <h4>快捷键</h4>
       <div class="field"><span>显示 / 隐藏面板<button class="why" data-why="hotkey" aria-expanded="false" aria-label="快捷键的说明"></button><span class="desc">点框内直接按组合键</span></span>
         <input class="sel hk-rec" id="cfgHotkey" readonly placeholder="未设置"></div>

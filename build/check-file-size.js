@@ -22,15 +22,22 @@ const SOFT_LIMIT = 1500;
 
 // 上限 = 当前行数 + 约 1% 的应急余量(允许小修补,不允许塞新功能)。
 // 清理后请把上限一起调下来 —— 这是唯一能防止"删完再长回去"的机制。
+//
+// 2026-11-13 上调(当天两轮,理由同一条:新增渠道的**接线点拆不出去**,
+// 逻辑本体都在新模块里 —— minimax.rs / doubao.rs):
+//   - checkin.rs 2200 → 2260:第 5 个签到渠道 MiniMax(表项 / Cred / apply_cred / 分发);
+//   - checkin.rs 2260 → 2290、fetch.rs 5250 → 5280、providers.rs 2060 → 2095:
+//     第 6 个渠道豆包(WebSession 表项 + 逐动作 body + Cookie 分支),
+//     渠道表与统一取数/签到管线是这些文件的本职,不许再从这里长功能以外的行。
 const BUDGETS = {
   "app/src/app.js": 9260,
   "app/core/src/inject.rs": 7320,
   "app/src-tauri/src/lib.rs": 6500,
-  "app/core/src/fetch.rs": 5250,
+  "app/core/src/fetch.rs": 5280,
   "app/core/src/store.rs": 3000,
   "app/core/src/workbuddy.rs": 2420,
-  "app/core/src/checkin.rs": 2200,
-  "app/core/src/providers.rs": 2060,
+  "app/core/src/checkin.rs": 2290,
+  "app/core/src/providers.rs": 2095,
   "app/core/src/diaglog.rs": 1740,
   "app/src/index.html": 700,
   "app/src/styles.css": 1860,

@@ -1,4 +1,4 @@
-//! 本机已登录应用凭据的只读复用(Trae / Codex / Qoder)。
+//! 本机已登录应用凭据的只读复用(Trae / Codex / Qoder / MiniMax)。
 //!
 //! 这几个平台的积分没有开放 API Key,只能拿客户端自己的登录态去查。所以这里
 //! 直接读客户端已经写在磁盘上的凭据文件 —— **只读,不写回,不刷新**。
@@ -7,6 +7,14 @@
 //! 我们刷完客户端手里那份就成了废票,用户下次打开 IDE 会被登出。为了一个挂件
 //! 把用户踢下线是不能接受的。token 过期就如实报"打开一次 Trae / Codex / Qoder 即可",
 //! 由用户在客户端里正常续期,我们只是搭个便车。
+//!
+//! **MiniMax 是这条原则的例外**(见 `crate::minimax`):它的 accessToken 只有约
+//! 1 小时寿命,"永不刷新"等于渠道每小时死一次;而 MiniMax Code 客户端的凭据
+//! 就躺在 `~/.minimax` 的明文文件里、客户端自己续期时会重读该文件,两个独立
+//! 参考实现(CreditDaddy / dsh-connect)在生产环境实证"临近过期才刷新 + 原子
+//! 回写同一份文件(保留 generation)"不会与客户端互相作废。该能力带用户开关
+//! (`MINIMAX_NOWRITEBACK=1` = 只读),README 有披露 —— 与 Trae 的"不刷新"
+//! 各自成立,不构成矛盾。
 //!
 //! WorkBuddy 曾经也走这条路,但桌面端 5.6.2(2026-10-01 实测)起把
 //! `auth.accessToken` 改成了 `{"$wbEncrypted":1,"envelope":…}` 的 AES-GCM 信封,
@@ -29,6 +37,9 @@ pub enum App {
     Qoder,
     /// Qoder 国内版(`%APPDATA%\com.qodercn.app.stable`)—— 与上一条是**两套账号**
     QoderCn,
+    /// MiniMax Code 桌面端(`~/.minimax` 的明文 OAuth 文件,见 [`crate::minimax`];
+    /// 凭据在 cn/io/com 哪个目录,请求就走哪套域名)
+    MiniMax,
 }
 
 impl App {
@@ -39,6 +50,7 @@ impl App {
             App::Codex => "Codex",
             App::Qoder => "Qoder",
             App::QoderCn => "Qoder 国内版",
+            App::MiniMax => "MiniMax Code",
         }
     }
 
@@ -80,6 +92,9 @@ pub fn candidates(app: App) -> Vec<Credential> {
         App::Trae => trae_candidates(),
         App::Codex => codex_candidates(),
         App::Qoder | App::QoderCn => qoder_candidates(app),
+        // MiniMax:读 ~/.minimax + 临近过期续期,全部逻辑在 core::minimax,
+        // 这里只负责把它接到统一的候选降级链上
+        App::MiniMax => crate::minimax::app_credentials(),
     }
 }
 

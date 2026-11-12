@@ -40,6 +40,8 @@ const rowOpen = new Set();
 // WorkBuddy 网页登录窗口已打开、正在等令牌:按钮期间置真,防止连点开出第二个窗口
 // (Rust 侧也会把已开的那个拉到前台,但界面要给出"进行中"的样子)
 let WB_LOGGING = false;
+// 豆包网页登录窗口:同一位纪律(各渠道各自一个标位,互不干扰)
+let DB_LOGGING = false;
 
 // 字号档位:--u 倍率写到 :root,styles.css 全部尺寸都是 calc(Npx*var(--u));
 // 窗口尺寸走同一个倍率(见 formSize),否则大字会被固定高度的窗口裁切
@@ -579,6 +581,8 @@ const LOGOS = {
   "qoder-cn": "logos/qoder.png",
   // WorkBuddy AI(国际版)同理:同一个产品、另一套账号,共用 WorkBuddy 的标。
   "workbuddy-ai": "logos/workbuddy.png",
+  minimax: "logos/minimax.png",
+  doubao: "logos/doubao.png",
 };
 
 /**
@@ -758,9 +762,11 @@ function renderRow(c, i) {
     const v = dispPct(Math.max(0, Math.min(100, mw ? mw.remainPercent : c.remaining)));
     main = v.toFixed(1) + '<i class="pct">%</i>';
   } else if (isPts) {
-    // 积分不带货币符号;整数部分千分位,小数部分照旧
+    // 积分不带货币符号;整数部分千分位,小数部分照旧。
+    // 单位按渠道的 unit 走:credits = 积分/分(历史口径),豆包这类其它单位照它自己的叫法显示
     const [ip, dp] = points(c.remaining).split(".");
-    main = ip + (dp ? '<i class="dec">.' + dp + "</i>" : "") + '<i class="unit">分</i>';
+    const ptsUnit = c.unit && c.unit !== "credits" ? c.unit : "分";
+    main = ip + (dp ? '<i class="dec">.' + dp + "</i>" : "") + '<i class="unit">' + esc(ptsUnit) + "</i>";
   } else {
     // 金额型:统一走 money(千分位 + 币种,非 CNY 渠道照它自己的币种标,不换算);
     // 小数部分单独包一层 <i class="dec"> 缩一号
@@ -3110,6 +3116,7 @@ const WHY = {
   hide: "不再请求接口,也不再读取本机登录凭据;已记录的历史快照不删,点「恢复」立即回到取数。",
   custom: "地址与密钥只发往你填的那个域名;字段路径决定从返回 JSON 的哪一层取余额,换算倍数把它折成元。探活模式只验证可达,不解析金额。",
   wblogin: "点「登录」开一个独立窗口走网页登录(微信扫码/手机号),成功后窗口自动关掉,挂件用这份会话取数 —— 不复制任何东西,也不动桌面客户端的登录。会话约 7 天过期;国内版 5.6.2 起令牌加密存储,已无法自动读取。",
+  dblogin: "点「登录」开一个独立窗口走豆包网页登录,成功后窗口自动关掉,挂件用这份会话查体验额度与签到 —— 会话留在挂件自己的浏览器 profile 里,不复制、不落盘。仅个人账号可参与激励任务(飞书企业号不支持);粘贴 Cookie 是登录窗口不通时的自救路径。",
   qoderweb: "逐笔到期明细只有网页会话能拿到,桌面端凭据只有汇总(平台两套接口的差别)。显示「已登录」= 本轮已用网页会话取到逐笔明细;平台会话会过期,失效后状态会自己退回「需登录」,届时点「重新登录」重开窗口刷新即可,历史快照不丢。未登录时点「登录网页版」开独立窗口,完成后自动关窗并刷新;这套会话只读明细,签到与余额照旧走桌面端。换过账号或令牌时点「切换账号」——旧网页会话属于上一本账,不先退出就会把旧账号的已到期记录挂到新账号下。",
   appauth: "凭据来自本机已登录的客户端;失效时打开一次客户端即可。隐藏本渠道后连读取也会停止。",
   compact: "开启后可切成 380×46 的横向条;顶栏固定四枚入口不再显示「紧凑」,用 Ctrl+2 切换紧凑条,Esc 在面板与胶囊之间切换。",
@@ -3255,10 +3262,17 @@ function renderChCards() {
 
       const keyBlock = isWeb
         ? `<div class="ccbtns">
-            <button class="btn p" data-act="wblogin" data-id="${c.id}"${WB_LOGGING ? " disabled" : ""}>${
-          c.hasKey ? "重新登录 WorkBuddy 账号" : "登录 WorkBuddy 账号"
-        }</button>
-            <button class="why" data-why="wblogin" aria-expanded="false" aria-label="登录方式的说明"></button>
+            ${
+          c.id === "doubao"
+            ? `<button class="btn p" data-act="dblogin" data-id="${c.id}"${DB_LOGGING ? " disabled" : ""}>${
+                c.hasKey ? "重新登录豆包账号" : "登录豆包账号"
+              }</button>
+            <button class="why" data-why="dblogin" aria-expanded="false" aria-label="登录方式的说明"></button>`
+            : `<button class="btn p" data-act="wblogin" data-id="${c.id}"${WB_LOGGING ? " disabled" : ""}>${
+                c.hasKey ? "重新登录 WorkBuddy 账号" : "登录 WorkBuddy 账号"
+              }</button>
+            <button class="why" data-why="wblogin" aria-expanded="false" aria-label="登录方式的说明"></button>`
+        }
           </div>
           <div class="ccbtns">
             <input type="password" id="key-${c.id}" autocomplete="off" spellcheck="false"
@@ -5676,6 +5690,8 @@ $("manage").addEventListener("click", async (e) => {
     // 以前统一落到 Trae 文案 —— 打开 Trae 对 Qoder 毫无作用,4 个可签到渠道里 2 个被误导。
     if (id === "workbuddy") {
       await invoke("workbuddy_login").catch((e) => showToast("打不开登录窗口:" + e, true));
+    } else if (id === "doubao") {
+      await invoke("doubao_login").catch((e) => showToast("打不开登录窗口:" + e, true));
     } else if (CHECKIN_QODER.has(id)) {
       showToast("打开一次 Qoder 桌面端即可(它自己会续期)");
     } else {
@@ -6040,6 +6056,16 @@ $("manage").addEventListener("click", async (e) => {
     } catch (err) {
       showToast("打不开登录窗口:" + err, true);
     }
+  } else if (a === "dblogin") {
+    // 豆包登录窗:同一条纪律,结果走 doubao-login 事件
+    try {
+      await invoke("doubao_login");
+      DB_LOGGING = true;
+      renderChCards();
+      showToast("登录窗口已打开 · 完成登录后会自动关窗");
+    } catch (err) {
+      showToast("打不开登录窗口:" + err, true);
+    }
   } else if (a === "savekey") {
     const input = $("key-" + id);
     const val = input ? input.value.trim() : "";
@@ -6257,6 +6283,9 @@ bindSwitch("cfgPeek", "peekOnClick");
 bindSwitch("cfgNotify", "notifyOnCrit");
 // 签到"需要处理"的提醒:同一天同一个问题只提示一次;关掉后不再弹
 bindSwitch("cfgCheckinNotify", "checkinNotify");
+// MiniMax 托管(AGENTS 2.4 披露项):临近过期自动续期并原子回写客户端凭据文件;
+// 关掉 = 只读模式 —— 不刷新也不回写,渠道在令牌过期后要靠打开官方客户端续期
+bindSwitch("cfgMinimaxWriteback", "minimaxWriteback");
 // 提示音两声(裁决 8A):开的时候试听一声,让用户知道会是什么声音
 bindSwitch("cfgSound", "soundOn", (on) => {
   if (on) beep("ding");
@@ -6459,6 +6488,7 @@ function syncStaticControls() {
   setSwitch("cfgPeek", CFG.peekOnClick !== false);
   setSwitch("cfgNotify", CFG.notifyOnCrit !== false);
   setSwitch("cfgCheckinNotify", CFG.checkinNotify !== false);
+  setSwitch("cfgMinimaxWriteback", CFG.minimaxWriteback !== false);
   setSwitch("cfgSound", !!CFG.soundOn);
   setSwitch("cfgDock", CFG.dockEnabled);
   setSwitch("cfgCompact", !!CFG.compactEnabled);
@@ -9000,6 +9030,16 @@ function applyChannelsPush(payload) {
     WB_LOGGING = false;
     const p = ev.payload || {};
     if (p.ok) showToast("已登录 WorkBuddy · 读数已刷新");
+    else if (p.cancelled) showToast("已取消登录");
+    else showToast(p.reason || "登录没成功,请再试一次", true);
+    invalidateKeyMeta();
+    renderChCards();
+    fillKeyHints(true);
+  });
+  await listen("doubao-login", (ev) => {
+    DB_LOGGING = false;
+    const p = ev.payload || {};
+    if (p.ok) showToast("已登录豆包 · 读数已刷新");
     else if (p.cancelled) showToast("已取消登录");
     else showToast(p.reason || "登录没成功,请再试一次", true);
     invalidateKeyMeta();

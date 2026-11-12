@@ -1364,6 +1364,57 @@ pub const PROVIDERS: &[ProviderDef] = &[
         peak_pricing: false,
         extract: extract_qoder,
     },
+    // MiniMax(积分型):账户端点要官方客户端签名,URL 查询串与 x-signature/yy
+    // 在 fetch_once_inner 的 minimax 分支现算(见 core::minimax);逐笔到期来自
+    // 另一个账本端点,由 fetch_channel_scoped 在主响应成功后追加(口径同 codex 明细)。
+    ProviderDef {
+        id: "minimax",
+        name: "MiniMax",
+        short: "MM",
+        color: "#f95348",
+        url: "https://agent.minimax.cn/matrix/api/v1/commerce/get_membership_info",
+        // 域名跟凭据区域走:先打 cn,401 后逐个回退(io / com)。签名只绑 path+query,
+        // 换 host 不用重算;第一轮成功后 last_good 备忘会钉住对的那个。
+        fallback_urls: &[
+            "https://agent.minimax.io/matrix/api/v1/commerce/get_membership_info",
+            "https://agent.minimaxi.com/matrix/api/v1/commerce/get_membership_info",
+        ],
+        extra_headers: &[
+            // 官方客户端自己的 UA(签名请求口径,CreditDaddy 实证)
+            ("User-Agent", "MiniMaxCode"),
+        ],
+        auth: AuthKind::App(App::MiniMax),
+        auth_prefix: "Bearer ",
+        method: Method::PostJson(|| "{}".to_string()),
+        unstable: false,
+        default_kind: Kind::Points,
+        peak_pricing: false,
+        extract: crate::minimax::extract_membership,
+    },
+    // 豆包工作(积分型):doubao.com 网页会话,体验额度读数在任务面板接口里,
+    // 每日签到 +200。接口按客户端环境放行 —— 查询串(平台参数 + 派生设备号)在
+    // fetch_once_inner 的 doubao 分支现拼,UA/Referer/Origin 静态携带(core::doubao)。
+    // 单位是「额度」不是「分」,前端按 unit 渲染。
+    ProviderDef {
+        id: "doubao",
+        name: "豆包工作",
+        short: "豆包",
+        color: "#cae4ff",
+        url: "https://www.doubao.com/alice/ug/campaign/v3/detail/",
+        fallback_urls: &[],
+        extra_headers: &[
+            ("Referer", "https://www.doubao.com/pc/agent-explore"),
+            ("Origin", "https://www.doubao.com"),
+            ("User-Agent", crate::doubao::APP_UA),
+        ],
+        auth: AuthKind::WebSession,
+        auth_prefix: "",
+        method: Method::PostJson(|| crate::doubao::DETAIL_BODY.to_string()),
+        unstable: true,
+        default_kind: Kind::Points,
+        peak_pricing: false,
+        extract: crate::doubao::extract_doubao,
+    },
 ];
 
 pub fn find(id: &str) -> Option<&'static ProviderDef> {

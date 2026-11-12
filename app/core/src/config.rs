@@ -180,6 +180,12 @@ pub struct Config {
     /// 排查"余额数字不对"这类必须看成功响应的问题时才打开。
     /// 打开后日志量大得多(挂件最坏情况一天上万次请求),所以默认关。
     pub diag_verbose: bool,
+    /// MiniMax 令牌托管(2026-11-13 用户裁决):临近过期自动续期,并把轮换后的
+    /// 新令牌对原子回写进 MiniMax Code 客户端的 auth.json(保留 generation)。
+    /// **默认开** —— 关掉即只读模式:不刷新也不回写,令牌过期后渠道显示
+    /// "需重新登录",要靠打开官方客户端续期。只读模式必须连刷新一起停
+    /// (刷新消费了轮换却不回写,会把客户端的链作废),见 `crate::minimax`。
+    pub minimax_writeback: bool,
     /// 同步到手机：总开关。默认关；开启后按 `syncPublishIntervalSec` 发布。
     pub sync_enabled: bool,
     /// 中继类型。v1 只有 "gist"。
@@ -283,6 +289,7 @@ impl Default for Config {
             custom_channels: Vec::new(),
             peek_on_click: true,
             diag_verbose: false,
+            minimax_writeback: true,
             sync_enabled: false,
             sync_relay_kind: "gist".into(),
             sync_relay_id: None,
@@ -326,6 +333,9 @@ impl Config {
     /// 永远一个样、NaN 的额度会让百分比分母塌掉(报告 P3-15)。
     /// 只夹取值,不改用户的意图(开了的开关不会因此被关掉)。
     pub fn sanitize(&mut self) {
+        // MiniMax 托管开关随配置加载同步给凭据层(try_load 必经之路;旧配置缺字段
+        // 时 serde default 补 true,与出厂口径一致)
+        crate::minimax::set_writeback_enabled(self.minimax_writeback);
         self.active_interval_sec = self.active_interval_sec.clamp(15, 3600);
         self.idle_interval_sec = self.idle_interval_sec.clamp(30, 7200);
         self.backoff_interval_sec = self.backoff_interval_sec.clamp(60, 7200);

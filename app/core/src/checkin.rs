@@ -21,6 +21,12 @@ pub enum CheckinAuth {
     /// Qoder:本机桌面端的 `auth.v1.dat`(Electron safeStorage 信封)。
     /// 与 Trae 同为"读本机登录态",但解密链完全不同,所以单独一档。
     QoderApp,
+    /// MiniMax Code:本机 `~/.minimax` 的明文 OAuth 凭据(与取数同一条读取链,
+    /// 见 `crate::minimax`;签名头在请求时现算,不能进静态 headers)。
+    MiniMaxApp,
+    /// 豆包:doubao.com 网页会话 Cookie(登录窗捕获现读为主,手动粘贴兜底;
+    /// 没有桌面端凭据链)。URL 查询串要带客户端指纹参数(core::doubao)。
+    DoubaoWeb,
 }
 
 /// 签到请求的 HTTP 方法。
@@ -160,6 +166,47 @@ pub const CHECKINS: &[CheckinDef] = &[
             ("User-Agent", "Qoder"),
         ],
         day_roll_hour: 10,
+    },
+    CheckinDef {
+        id: "minimax",
+        name: "MiniMax",
+        auth: CheckinAuth::MiniMaxApp,
+        // 状态 GET / 领取 POST(官方卡片的这一对;动词错了是裸 404,不是签名错)
+        status_url: "https://agent.minimax.cn/minimax-cloud/api/v1/signin/status",
+        claim_url: "https://agent.minimax.cn/minimax-cloud/api/v1/signin/claim",
+        // 域名跟凭据区域走(signed_checkin 换 host),不设跨区回退:
+        // 错区的令牌打哪个区都 401,而 401 是"就地返回 AuthNeeded"的语义
+        fallback_status: &[],
+        fallback_claim: &[],
+        status_method: CheckinMethod::Get,
+        claim_method: CheckinMethod::Post,
+        body: "{}",
+        headers: &[("User-Agent", "MiniMaxCode")],
+        // 服务端按请求里的 timezone_id(系统 IANA 名)决定"今天是哪天";对
+        // 国内用户(UTC+8)与 beijing_day 一致,幂等键沿用自然日
+        day_roll_hour: 0,
+    },
+    CheckinDef {
+        id: "doubao",
+        name: "豆包工作",
+        auth: CheckinAuth::DoubaoWeb,
+        // 状态与领取都是 POST(官方任务面板的这一对);body 逐动作不同
+        // (detail 要 campaign_group_code,claim 要 scene),在 call_with_body
+        // 的 doubao 分支里取 core::doubao 的两个常量 —— 静态 body 字段表达不了
+        status_url: "https://www.doubao.com/alice/ug/campaign/v3/detail/",
+        claim_url: "https://www.doubao.com/alice/ug/campaign/landing/checkin",
+        fallback_status: &[],
+        fallback_claim: &[],
+        status_method: CheckinMethod::Post,
+        claim_method: CheckinMethod::Post,
+        body: "{}",
+        headers: &[
+            ("User-Agent", crate::doubao::APP_UA),
+            ("Referer", crate::doubao::REFERER),
+            ("Origin", crate::doubao::ORIGIN),
+        ],
+        // 自然日跨日(国内服务,与服务端"今天"一致)
+        day_roll_hour: 0,
     },
 ];
 
@@ -1205,6 +1252,12 @@ pub enum Cred {
         token: String,
         identity: crate::qoder::QoderMachineIdentity,
     },
+    /// MiniMax:本机客户端凭据(键形如 `mm:<region>:<token>`,区域决定域名;
+    /// 签名 URL 与三个签名头在 call_with_body 的 minimax 分支现算,见 `crate::minimax`)。
+    MiniMax { key: String, uid: Option<String> },
+    /// 豆包:doubao.com 网页会话 Cookie(登录窗捕获现读为主,手动粘贴兜底)。
+    /// Cookie 从原始字符串解出(`doubao::cookie_header_of` 允许带/不带 cookie: 前缀)。
+    Doubao { cookie: String },
 }
 
 fn apply_cred(req: reqwest::RequestBuilder, cred: &Cred) -> reqwest::RequestBuilder {
@@ -1237,6 +1290,19 @@ fn apply_cred(req: reqwest::RequestBuilder, cred: &Cred) -> reqwest::RequestBuil
                 req = req.header("Cosy-MachineId", machine_id);
             }
             req
+        }
+        Cred::MiniMax { key, .. } => {
+            // 令牌从键里解出;签名头与实际域名在 call_with_body 里处理
+            let token = crate::minimax::parse_key(key)
+                .map(|(_, t)| t.trim())
+                .unwrap_or(key.trim());
+            req.header("Authorization", format!("Bearer {}", token))
+        }
+        Cred::Doubao { cookie } => {
+            // 只有 Cookie 一条路;UA/Referer/Origin 由 def.headers 静态携带
+            let value = crate::doubao::cookie_header_of(cookie)
+                .unwrap_or_else(|| cookie.trim());
+            req.header("Cookie", value)
         }
     }
     .header("Content-Type", "application/json")
@@ -1285,6 +1351,22 @@ pub async fn call_with_body(
     for url in subst.iter().filter(|u| !u.is_empty()) {
         // 方法逐渠道声明(见 CheckinMethod):Qoder 的查状态是 GET,POST 会 404
         let method = if claim { def.claim_method } else { def.status_method };
+        // MiniMax:账户端点要官方客户端签名,查询串带 IANA 时区名,域名跟凭据
+        // 区域走 —— 全部在发请求前现算,静态表表达不了(见 core::minimax 头注)
+        let mm = match cred {
+            Cred::MiniMax { key, uid } => {
+                crate::minimax::signed_checkin(url, method == CheckinMethod::Post, key, uid.as_deref())
+            }
+            _ => None,
+        };
+        // 豆包:活动接口按客户端环境放行,查询串要带平台参数与派生设备号(core::doubao)
+        let db_url = match cred {
+            Cred::Doubao { cookie } => Some(crate::doubao::decorate_url(url, cookie)),
+            _ if def.id == "doubao" => Some(crate::doubao::decorate_url(url, "")),
+            _ => None,
+        };
+        let url: &str = mm.as_ref().map(|s| s.url.as_str()).unwrap_or(url);
+        let url: &str = db_url.as_deref().unwrap_or(url);
         let mut req = match method {
             CheckinMethod::Get => client.get(url),
             CheckinMethod::Post => client.post(url),
@@ -1293,9 +1375,24 @@ pub async fn call_with_body(
         for (k, v) in def.headers {
             req = req.header(*k, *v);
         }
+        if let Some(s) = &mm {
+            for (k, v) in &s.headers {
+                req = req.header(*k, v);
+            }
+        }
         // GET **不发 body**(带了反而可能被网关当成非法请求)
         if method == CheckinMethod::Post {
-            req = req.body(def.body.to_string());
+            // 豆包的两个动作 body 不同(detail 要 campaign_group_code,claim 要 scene)
+            let body_str = if def.id == "doubao" {
+                if claim {
+                    crate::doubao::CLAIM_BODY
+                } else {
+                    crate::doubao::DETAIL_BODY
+                }
+            } else {
+                def.body
+            };
+            req = req.body(body_str.to_string());
         }
         let resp = match req.send().await {
             Ok(r) => r,
@@ -1396,6 +1493,8 @@ pub async fn call_with_body(
         };
         let out = match def.id {
             "trae" => parse_trae(&body, claim),
+            "minimax" => crate::minimax::parse_minimax(&body, claim),
+            "doubao" => crate::doubao::parse_doubao(&body, claim),
             "qoder" | "qoder-cn" => parse_qoder(&body, claim),
             _ => parse_workbuddy_for_region(
                 &body,

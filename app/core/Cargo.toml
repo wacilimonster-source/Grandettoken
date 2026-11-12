@@ -26,6 +26,11 @@ base64 = "0.22"
 aes-gcm = "0.10"
 # 同步协议的随机 nonce / 128 位 source。0.2 已在锁文件里,离线可用。
 getrandom = "0.2"
+# MiniMax 账户端点的官方客户端签名(x-signature / yy 都是 MD5 家族;
+# RustCrypto 纯 Rust,与上面 sha2/aes 同源,不引入 C 依赖)。
+md-5 = "0.10"
+# MiniMax 签到要发 IANA 时区名(服务端拒收纯 offset);已在锁文件里(传递依赖),提为直接。
+iana-time-zone = "0.1"
 # 同步码二维码：只渲染 SVG，不引入 image 依赖（PC 本地展示，不走网络）。
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 

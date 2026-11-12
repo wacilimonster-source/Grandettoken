@@ -22,6 +22,8 @@
 | Codex | `GET https://chatgpt.com/backend-api/wham/usage` + `rate-limit-reset-credits` | 配额型 | 读本机 Codex 登录态;按服务端时长显示窗口、准确重置时间、重置卡数量与到期日 |
 | Qoder | `GET https://openapi.qoder.sh/api/v2/quota/usage` | 积分型 | 国际版;读桌面端 `auth.v1.dat`(Electron safeStorage) |
 | Qoder 国内版 | `GET https://openapi.qoder.com.cn/api/v2/quota/usage` | 积分型 | 国内版;**与上一行是两套账号**,不互通 |
+| MiniMax | `POST https://agent.minimax.cn/matrix/api/v1/commerce/get_membership_info` + `GET …/credit/details` | 积分型 | 读 MiniMax Code 桌面端凭据(`~/.minimax` 明文 OAuth,区域 cn/io/com 跟凭据目录走);**账户端点要官方客户端签名**(x-signature/yy,见 `core/src/minimax.rs`);逐笔账本 + 每日签到 |
+| 豆包工作 | `POST https://www.doubao.com/alice/ug/campaign/v3/detail/` | 积分型 | doubao.com **网页会话**(挂件内登录窗捕获,不落盘;手动粘贴 Cookie 兜底);体验额度 + 每日签到(+200/天,服务端幂等);活动接口按客户端环境放行,URL 要带桌面版平台参数与派生设备号(`core/src/doubao.rs`);仅个人账号 |
 
 > Qoder 两版是**两个独立渠道**,不是"一个渠道两个域名":账号体系不互通
 > (官方明确不支持跨区迁移),余额无法合并。判定**不要**看 `product.json` 的下载域名 ——
@@ -267,19 +269,26 @@ ZCode 是两份 JSON(`schemaVersion` 不是 1 就放弃),Trae 是 SQLite 的 `It
 **规矩**:认不出来的结构就放弃(不写、不改、不猜);密钥只从凭据管理器现读现写,
 不落盘、不进日志、不进备份。
 
-## 每日签到(Trae / WorkBuddy / Qoder)
+## 每日签到(Trae / WorkBuddy / Qoder / MiniMax / 豆包)
 
-四个渠道的活动状态每小时检查一次，监测与自动领取分开控制。沿用每渠道原有的监测开关；
+六个渠道的活动状态每小时检查一次，监测与自动领取分开控制。沿用每渠道原有的监测开关；
 关闭监测后不再发状态查询或领取请求。监测开启、自动领取关闭时仍会读状态，并在可领取时提供手动入口。
 
-- **纯逻辑**在 `core/src/checkin.rs`:签到周期日、抖动的触发时刻、退避序列、幂等(先查后领、领后回查)、
-  以及把平台的响应解读成状态机的 `parse_trae` / `parse_workbuddy` / `parse_qoder`。
+- **纯逻辑**在 `core/src/checkin.rs`(Trae / WorkBuddy / Qoder)与 `core/src/minimax.rs`(MiniMax):
+  签到周期日、抖动的触发时刻、退避序列、幂等(先查后领、领后回查)、
+  以及把平台的响应解读成状态机的 `parse_trae` / `parse_workbuddy` / `parse_qoder` / `parse_minimax`
+  (MiniMax / 豆包的解析在各自模块:core/src/minimax.rs、core/src/doubao.rs)。
 - **跨日时刻逐渠道配**(`CheckinDef::day_roll_hour`):Trae / WorkBuddy 是自然日 00:00(抖动落在 00:23–00:43),
   **Qoder 是 10:00**(抖动 10:00–10:20)—— 官方活动描述原文「每日 10:00（UTC+8）刷新」,实测
   `startAt`/`endAt` 正好是 10:00:00 → 次日 09:59:00。幂等键用 `cycle_day()` 算的**周期日**,
   不是自然日:否则 09:59 与 10:01 会混成一天,当天那一期永远领不到。
 - **HTTP 方法逐渠道声明**(`CheckinDef::status_method` / `claim_method`):Trae / WorkBuddy 全是 POST;
-  **Qoder 查状态是 GET**(POST 会 404)。
+  **Qoder 查状态是 GET**(POST 会 404);MiniMax 与官方卡片一致(状态 GET / 领取 POST)。
+- **MiniMax 的「今天」由请求里的 `timezone_id`(系统 IANA 名)决定**:带 `timezone_offset`
+  会被拒(`invalid timezone_id`,dsh-connect 实证),所以它的查询串与账务端点不同构(无 offset)。
+  7 天一轮(第 4、7 天 1000 分),签到积分 30 天到期;账户端点一律要官方客户端签名
+  (算法与 Golden 向量见 `core/src/minimax.rs`)。**真机实证(2026-11-13)**:签名被生产 API
+  接受,签到状态返回与官方客户端一致。
 - **判因只看 `code` / HTTP / 字段结构 / 请求域名,不看 message 文案**:Trae `9095` 表示本设备今日名额已用；
   WorkBuddy `10001` 按实际请求域名解释(国区已签、国际版活动未开启)，未知区域不猜状态。
 - **Qoder 的 `actionType` 真机拼写是 `CLAIM_BENEFIT`(带 E)**:写成少一个 E 的 `CLAIM_BEFIT`
@@ -292,7 +301,11 @@ ZCode 是两份 JSON(`schemaVersion` 不是 1 就放弃),Trae 是 SQLite 的 `It
 - **凭据**:
   - Trae:本机登录态(令牌 + `iCubeAuthInfo://icube-dc:` 键名里的设备号);
   - WorkBuddy:**桌面端凭据优先,网页会话兜底**(与取数同口径 —— 见下方"凭据来源必须与取数一致");
-  - Qoder:本机桌面端 `auth.v1.dat`(Electron safeStorage:DPAPI 解密钥 + AES-256-GCM,见 `core/src/qoder.rs`)。
+  - Qoder:本机桌面端 `auth.v1.dat`(Electron safeStorage:DPAPI 解密钥 + AES-256-GCM,见 `core/src/qoder.rs`);
+  - MiniMax:本机 `~/.minimax` 明文 OAuth 文件(**与取数同一条链** `minimax::blocking_credential`,
+    含临近过期托管续期,可在设置关成只读,见根 README 披露节);
+  - 豆包:doubao.com **网页会话**(挂件内登录窗捕获,留在 WebView2 profile、不落盘;
+    手动粘贴的 Cookie 走凭据管理器兜底。与取数同一条链:`login_credentials` 先凭据管理器后现读)。
   都不落盘、不进日志。
 - **流水**在 SQLite 的 `checkin_log`:渠道 / 周期日 / 结果码 / 数额 / 次数 / 说明。
   **拿不到凭据也会留一条**(结果码 `no_cred:…`)—— 否则"今天一次都没试"在流水里是空白,
