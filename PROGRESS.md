@@ -4566,5 +4566,24 @@ CI 内 `verify-release.js` **14 项全 PASS**(含「签名与本地 .sig 逐字�
   src-tauri check --all-targets --locked / secrets 扫描全绿。
 - **调研回收**:参考源码与匿名探针都在 `build/tmp/`,本轮已删。
 
+**发布(2026-11-13 凌晨)**:tag `v0.3.39`,release 提交 `a5ed4b5`,修复提交 `48c2d2c`。
+**首轮 CI 失败过一次**(run 43284249021,15m11s),根因与修复见下:
+- **上游工具链漂移**:v0.3.38 发版时 runner 是 rustc 1.99.1,过了一晚 rustup `stable`
+  升到 **1.100.0**,cargo 改了构建目录布局(`build/<pkg>-<hash>/` →
+  `build/<pkg>/<hash>/`)。锁定的 `tauri-build 2.6.3` 用 `.parent()` 三次推算
+  target 目录,新布局下算成 `release/build`,再拼 `build` 去 `read_dir` 报
+  `os error 3` —— bundle 死在构建脚本里,与业务代码无关。
+- **修复**:锁文件升级 `tauri-build 2.7.2`(其 `target_dir_from_out_dir` 已兼容
+  两种布局;`tauri` 运行时仍 2.11.5),并把 `build.rs` 的 `strip_crate_dll` 改成
+  「找名为 build 的祖先再往下扫两代」(否则新布局下删不到 WebView2Loader.dll,
+  静态链接会静默回退)。**本地装了 1.100.0 工具链实际复现验证**,没有拿 CI 当唯一测试场。
+- 二轮 CI(run 43288954487)**全绿**:门禁 → core 测试 → bundle+签名 → latest.json
+  → 建 release → 三件套核验 → verify-release 全部 PASS。安装包
+  `Grandettoken_0.3.39_x64-setup.exe` **5,822,617 字节**,SHA-256
+  `0ef191d2bf9a4ad507cff49c1d2601d6babf4c4ade39716c129f2e746a04876d`。
+- 本地复核 **RESULT: PASS**(12 PASS / 2 SKIP,SKIP 两项按 §6.4 同口径是"本地没有该版本产物")。
+- 教训:发版鏈里 rustup `stable` 是**流动目标**,上游工具链/构建工具的回归会直接
+  卡发版;"门禁全绿"证明不了 bundle 能过,Release 链路本身就是最后一道门。
+
 
 
