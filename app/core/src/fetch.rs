@@ -87,9 +87,16 @@ fn note_qoder_scope(store: &Store, id: &str, scope: &str) -> bool {
         .or_else(|| Snapshot::stored_scope(store, id));
     let changed = prev.as_deref().map(|p| p != scope).unwrap_or(false);
     if changed {
-        let _ = store.set_setting(&format!("{QODER_CHANGED_KEY}:{id}"), &now_ts().to_string());
+        // 写失败不能吞:换号时刻是"网页会话是否属于上一本账"的唯一判据,
+        // 没落盘就等于判据回到旧值,下一轮还会按旧账处理。GUI 里没人看 stderr,
+        // 所以进诊断日志,出问题时能用 diag.log 复现判定链。
+        if let Err(e) = store.set_setting(&format!("{QODER_CHANGED_KEY}:{id}"), &now_ts().to_string()) {
+            crate::diaglog::write_keyed(id, "qoder-scope", &format!("换号时刻写入失败: {e}"));
+        }
     }
-    let _ = store.set_setting(&key, scope);
+    if let Err(e) = store.set_setting(&key, scope) {
+        crate::diaglog::write_keyed(id, "qoder-scope", &format!("凭据指纹写入失败: {e}"));
+    }
     changed
 }
 

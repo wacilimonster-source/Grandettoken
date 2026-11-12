@@ -416,7 +416,7 @@ pub fn unwrap_os_crypt_key(encrypted_key_b64: &str) -> Result<Vec<u8>, QoderErr>
         Some(rest) => rest,
         None => &raw[..], // 有的版本不带前缀,照解
     };
-    let key = dpapi_unprotect(blob)?;
+    let key = crate::backup_crypto::unprotect_raw(blob).map_err(QoderErr::KeyUnavailable)?;
     if key.len() != 32 {
         return Err(QoderErr::KeyUnavailable(format!(
             "解出来的密钥是 {} 字节,期望 32",
@@ -432,51 +432,8 @@ pub fn unwrap_os_crypt_key(_b64: &str) -> Result<Vec<u8>, QoderErr> {
     Err(QoderErr::KeyUnavailable("DPAPI 只在 Windows 上存在".into()))
 }
 
-/// 调一次 `CryptUnprotectData`。**这是全项目唯一直接调 Win32 的地方**,
-/// 所以单独圈出来:失败一律归成 `KeyUnavailable`(绝大多数成因是"换了账户")。
-#[cfg(windows)]
-fn dpapi_unprotect(data: &[u8]) -> Result<Vec<u8>, QoderErr> {
-    // LocalFree 在 Foundation(不是 System::Memory)—— 0.61 起挪了位置。
-    use windows_sys::Win32::Foundation::LocalFree;
-    use windows_sys::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
-
-    if data.is_empty() {
-        return Err(QoderErr::KeyUnavailable("密文是空的".into()));
-    }
-    let mut input = CRYPT_INTEGER_BLOB {
-        cbData: data.len() as u32,
-        pbData: data.as_ptr() as *mut u8,
-    };
-    let mut output = CRYPT_INTEGER_BLOB {
-        cbData: 0,
-        pbData: std::ptr::null_mut(),
-    };
-    // SAFETY:两个 blob 都是本栈上的有效结构;input 指向的切片在调用期间存活;
-    // 成功时 output.pbData 由系统分配,下面立刻拷走并用 LocalFree 归还。
-    let ok = unsafe {
-        CryptUnprotectData(
-            &mut input,
-            std::ptr::null_mut(), // 不关心描述串(它会额外分配,还得再释放)
-            std::ptr::null(),     // 无额外熵
-            std::ptr::null(),
-            std::ptr::null(),
-            0,
-            &mut output,
-        )
-    };
-    if ok == 0 {
-        // 不把 GetLastError 的原文拼进来:它对用户没有意义,而且这里最可能是
-        // "密文是别的账户/机器加密的",文案里已经说清方向了。
-        return Err(QoderErr::KeyUnavailable("DPAPI 拒绝解密(密文不属于当前账户)".into()));
-    }
-    // SAFETY:成功时 pbData 指向 cbData 字节的有效内存(系统分配)。
-    let out = unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
-    // SAFETY:归还系统分配的内存;失败只是漏一点内存,不影响正确性。
-    unsafe {
-        LocalFree(output.pbData as *mut core::ffi::c_void);
-    }
-    Ok(out)
-}
+/// DPAPI 解密已统一到 `crate::backup_crypto::unprotect_raw` —— 全项目只留一处
+/// 直接调 Win32 加解密的实现(备份加密与 Electron safeStorage 共用,各自传不同的熵)。
 
 /// 解一个 `v10` 信封(AES-256-GCM,无 AAD —— 与 WorkBuddy 的带 AAD 信封不同)。
 ///

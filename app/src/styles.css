@@ -120,6 +120,13 @@ body.light .mark{background-image:url("brand/mark-ink.png")}
 
 /* ── 顶部摘要:临期积分 / 最先到期 / 签到 ── */
 /* 总余额不占摘要位;第一格强调已确认的临期总量,中间格给最早到期来源,签到压成窄列。 */
+/* ⚠️ 这一段是旧版三格摘要的残留:下方「P1/P2 · 折叠形态」段有**同名选择器**,
+   同特异性下后者胜出。2026-11-12 已删除"全部属性都被覆盖"的 8 条
+   (`.risk-cell` / `.risk-cell.on` / `.hero-unit` / `.due-name` / `.sb-row` /
+    `.sb-tx` / `.expbars` / `.expbars i`)—— 删前逐条比对过属性集,零视觉变化。
+   剩下的规则各有**下方未声明**的属性(`.vv` 的 overflow、`.hero-v` 的
+   font-variant-numeric、`.due-date` 的 margin-top、hover / focus-visible 态),
+   不能整段删;要删必须先核对这两段的属性并集。 */
 .sum{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(0,1fr) 66px;
   align-items:stretch;border-bottom:1px solid var(--line);background:var(--bg2);flex:none;
   min-height:calc(78px*var(--u))}
@@ -132,9 +139,7 @@ body.light .mark{background-image:url("brand/mark-ink.png")}
 .sum button.cell{margin:0;border-top:0;border-bottom:0;border-left:0;appearance:none;background:transparent;
   color:inherit;text-align:left;font:inherit;cursor:pointer}
 .sum button.cell:disabled{cursor:default;opacity:1}
-.sum .risk-cell{background:linear-gradient(115deg,#26221d,#1a1d25)}
 .sum .risk-cell:not(:disabled):hover{background:linear-gradient(115deg,#342a1e,#20232d)}
-.sum .risk-cell.on{box-shadow:inset 0 0 0 1px #a77c3e;background:linear-gradient(115deg,#352a1e,#21232a)}
 .sum .risk-cell:focus-visible{outline:2px solid #8db3ff;outline-offset:-2px}
 .sum .risk-cell .hero-v{color:var(--tx)}
 .sum .risk-cell:disabled .hero-v{color:var(--tx3)}
@@ -144,15 +149,8 @@ body.light .mark{background-image:url("brand/mark-ink.png")}
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.12}
 .sum .hero-v{font-size:calc(24px*var(--u));font-weight:650;letter-spacing:-.025em;line-height:1.05;
   font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--tx)}
-.sum .hero-unit{font-size:calc(12px*var(--u));font-weight:600;color:var(--tx3);margin-left:calc(2px*var(--u))}
-.sum .due-name{font-size:max(11.5px,calc(11.5px*var(--u)));font-weight:600;color:var(--tx2);
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.25}
 .sum .due-date{font-size:calc(17px*var(--u));font-weight:650;letter-spacing:-.01em;line-height:1.1;
   font-variant-numeric:tabular-nums;margin-top:calc(1px*var(--u))}
-.sum .sb-row{display:flex;align-items:flex-end;gap:calc(6px*var(--u))}
-.sum .sb-tx{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sum .expbars{display:flex;align-items:flex-end;gap:1px;height:calc(16px*var(--u));flex:none;padding-bottom:1px}
-.sum .expbars i{display:block;width:4px;border-radius:1px 1px 0 0;background:var(--warn)}
 .sum .expbars.is-empty{width:calc(34px*var(--u));height:calc(8px*var(--u));border-bottom:1px dashed var(--line2);opacity:.6}
 .sum .vv b{white-space:nowrap}
 

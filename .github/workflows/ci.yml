@@ -75,7 +75,9 @@ jobs:
           echo "RUSTFLAGS=-C linker=$mingw\gcc.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           gcc -v
 
-      - name: cargo test (core, 422 tests, 9 ignored)
+      # 用例数量不要写死在注释里:每加一条测试这行就过时一次,
+      # 而「文档与实测不一致」比没有这行注释更误导人。以 cargo 输出为准。
+      - name: cargo test (core)
         shell: pwsh
         working-directory: app/core
         # 8 条 #[ignore] 是真机用例 / 基准(要读本机凭据、要打真接口、要写真实文件),
@@ -121,6 +123,26 @@ jobs:
           node --check build/shot-panel.js
           node --check build/make-latest-json.js
           node --check build/check-css-forms.js
+          node --check build/check-ipc-contract.js
+          node --check build/check-silent-failures.js
+          node --check build/check-file-size.js
+
+      # 前端 invoke() 的桩在 jsdom 冒烟里对未知命令一律返回 null —— 命令名拼错、
+      # 定义漏注册都能「全绿」。这道门从源码实时比对「调用 / 定义 / 注册」三方,
+      # 零外部依赖;下面另装 jsdom 跑渲染冒烟。两道门覆盖的是不同层面,都要留。
+      - name: IPC contract gate
+        shell: pwsh
+        run: node build/check-ipc-contract.js
+
+      # 以前 jsdom 冒烟只在某台装了 jsdom 的机器上手工跑,文档却写「182/182 通过」——
+      # 换个 clone 目录连脚本都起不来(它曾写死 G:/game/...)。这里把开发期依赖装上再跑,
+      # 让前端渲染路径真正进 CI。node_modules 已 gitignore,不会被提交。
+      - name: install jsdom (dev-only, not a product dependency)
+        shell: pwsh
+        run: npm install jsdom --no-save --no-audit --no-fund
+      - name: front-end smoke (jsdom)
+        shell: pwsh
+        run: node build/jsdom-smoke.js
 
       # 形态门守卫:吸附条 / 胶囊 / 紧凑条控件这些"整块容器"的 display 必须挂在
       # body.<状态> 下。v0.1.56 的吸附条漏了这道门(.dock-body{display:flex!important}),
@@ -128,7 +150,28 @@ jobs:
       # 纯 CSS 的错,jsdom 不参与布局,所以单独一道闸。
       - name: CSS form gate guard
         shell: pwsh
-        run: node build/check-css-forms.js
+        run: |
+          node build/check-css-forms.js --self-test
+          node build/check-css-forms.js
+
+      # 空 catch 门禁。2026-11-12 全量治理时 app.js 里还有 14 处空 catch,其中 5 处
+      # 是 IPC **写操作** —— 保存失败时界面回到"看起来没事"的状态,重启才发现设置没生效。
+      # 纪律写进 AGENTS.md 三次都没拦住(靠人记),所以改成机器判定:空 catch 必须带
+      # `silent: <理由>`,写不出理由说明它不该被吞。--self-test 先证明门禁自己会变红。
+      - name: silent-failure gate (empty catch must be claimed)
+        shell: pwsh
+        run: |
+          node build/check-silent-failures.js --self-test
+          node build/check-silent-failures.js
+
+      # 文件规模棘轮:app.js 9176 行、inject.rs 7248 行这类文件已经是"改一处不知道
+      # 影响哪里"的状态,而每轮自动化改动都会顺手再塞几十行。上限只许下调 ——
+      # 清理后不调低,等于把清理出来的空间又送回去。
+      - name: file-size guard (do not pile into oversized files)
+        shell: pwsh
+        run: |
+          node build/check-file-size.js --self-test
+          node build/check-file-size.js
 
       # 推送前扫凭据。以前只在本地手动跑 —— 而"只在本地跑"等于"忘了就不跑",
       # 这一步恰恰是最不该忘的。它扫的是 git ls-files,所以 untracked 的文件不会

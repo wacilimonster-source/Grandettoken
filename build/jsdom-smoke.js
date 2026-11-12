@@ -21,7 +21,9 @@ try {
     process.exit(2);
 }
 
-const SRC = "G:/game/nw/Grandettoken/app/src";
+// 必须从脚本位置推导仓库根:以前写死 "G:/game/nw/Grandettoken/app/src",
+// 换一台机器 / 换个 clone 目录就静默读不到文件,而门禁脚本可能仍然报绿。
+const SRC = path.resolve(__dirname, "..", "app", "src");
 const html = fs.readFileSync(path.join(SRC, "index.html"), "utf8");
 const js = fs.readFileSync(path.join(SRC, "app.js"), "utf8");
 

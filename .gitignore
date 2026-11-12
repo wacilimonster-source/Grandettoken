@@ -46,6 +46,14 @@ Thumbs.db
 desktop.ini
 .DS_Store
 
+# ── 自动化验证产物:本地留档,不进版本库 ──
+# 这些是脚本生成的机器产物(每份 1–11 MB),历史上被误提交进来,
+# 会永久撑大 .git 并淹没 diff。只保留体积小的汇总与证据截图。
+build/qa/**/*.apk
+build/qa/refresh-*.json
+build/qa/perf-*.json
+.trae-html-share-packages/
+
 # ── AI 代理的工作目录(memory / plans / rollout 之类,不是项目文件)──
 .workbuddy/
 .workbuddy-ai/

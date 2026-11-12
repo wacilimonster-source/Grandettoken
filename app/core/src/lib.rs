@@ -8,6 +8,7 @@
 #![recursion_limit = "256"]
 
 pub mod appauth;
+pub mod backup_crypto;
 pub mod checkin;
 pub mod codex;
 pub mod config;

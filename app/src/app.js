@@ -3915,6 +3915,8 @@ const DOCK = {
   collapseTimer: null, hoverTimer: null, settleTimer: null,
   selfMove: false, selfMoveTimer: null,
 };
+// 窗口位置落盘失败只提示一次:拖拽会反复触发,逐次弹 toast 反而盖住真正的问题。
+let POS_SAVE_WARNED = false;
 
 const currentForm = () => (document.body.className.match(/form-(\w+)/) || [])[1] || "panel";
 
@@ -4039,11 +4041,18 @@ async function dockExitNow(keepPos) {
     await readSizeFromWindow();
     updateSizeClass();
   } catch (e) {
-    console.error("解除吸附失败", e);
+    // GUI 里 console 没人看得见(AGENTS.md 2.1.6)。解吸附失败会让窗口停在
+    // 半吸附状态(尺寸解锁了、形态没换回来),用户以为操作成功,必须说出来。
+    showToast("解除吸附失败:" + e, true);
   } finally {
     SIZE_APPLYING = false;
   }
-  await invoke("set_pin", { enabled: !!(CFG && CFG.alwaysOnTop) }).catch(() => {});
+  try {
+    await invoke("set_pin", { enabled: !!(CFG && CFG.alwaysOnTop) });
+  } catch (e) {
+    // 置顶是窗口层状态:写失败时按钮仍显示"已置顶",实际没置顶,重启才对上。
+    showToast("恢复置顶失败:" + e, true);
+  }
   render();
 }
 // 解除吸附也走几何队列(见 enqueueGeom)
@@ -4071,9 +4080,20 @@ function scheduleSettleCheck() {
     // 停稳 250ms 才写,一次拖拽只落一次盘,不会拖动途中反复写库。
     if (!DOCK.on) {
       if (CFG.winX !== pos.x || CFG.winY !== pos.y) {
+        const prevX = CFG.winX, prevY = CFG.winY;
         CFG.winX = pos.x;
         CFG.winY = pos.y;
-        invoke("save_window_pos", { x: pos.x, y: pos.y }).catch(() => {});
+        // 落盘失败必须回滚内存里的坐标:否则"这一秒记住了、磁盘上没有",
+        // 下次启动跳回旧位置,用户只会觉得"软件记不住窗口位置",查无可查。
+        // 一次会话只提示一次,免得每拖一次弹一次。
+        invoke("save_window_pos", { x: pos.x, y: pos.y }).catch((e) => {
+          CFG.winX = prevX;
+          CFG.winY = prevY;
+          if (!POS_SAVE_WARNED) {
+            POS_SAVE_WARNED = true;
+            showToast("保存窗口位置失败:" + e, true);
+          }
+        });
       }
       // 开关关着就不吸附:挂件随手一拖就变竖条太意外,所以默认关闭
       if (!(CFG && CFG.dockEnabled)) return;
@@ -5429,7 +5449,9 @@ async function previewTick() {
     const nearR = pos.x + size.width >= info.right - near;
     const nearL = pos.x <= info.left + near;
     setDockPreview(nearR ? "right" : nearL ? "left" : null);
-  } catch {}
+  } catch {
+    // silent: 纯视觉预览线,取不到显示器/窗口几何就不亮,无需打断拖拽去提示。
+  }
 }
 // I6:吸附展开态的显式收回按钮(移出鼠标 / Esc 之外的第三条出路)
 $("dockClose").addEventListener("click", () => {
@@ -6858,13 +6880,20 @@ async function startInstall() {
 }
 
 $("btnUpdGo").addEventListener("click", startInstall);
-$("btnUpdSkip").addEventListener("click", () => {
+$("btnUpdSkip").addEventListener("click", async () => {
   if (!UPD.info) return;
   // 下载/安装中不跳过:状态清了后台却还在装,下一个进度事件又把角标"复活",
   // 跳过与安装互相打架(报告 B5;与覆盖层按钮 busy 置灰的行为对齐)
   if (updBusy()) return;
   const v = UPD.info.version;
-  invoke("skip_update_version", { version: v }).catch(() => {});
+  // 先等后端落盘再清界面。以前是"发出去就清":写失败时界面说"已跳过",
+  // 重启后又弹同一个版本,而且没有任何提示 —— 用户只会认为"跳过按钮没用"。
+  try {
+    await invoke("skip_update_version", { version: v });
+  } catch (e) {
+    showToast("跳过该版本失败:" + e, true);
+    return;
+  }
   // 版本信息只有 UPD.info 一处,清它 + 清 phase,角标/卡片/覆盖层一起消失
   UPD.info = null;
   UPDC.phase = null;
@@ -6970,9 +6999,9 @@ document.addEventListener("keydown", (e) => {
 let VAULT = [];            // 索引列表(vault_list 的结果)
 let VAULT_Q = "";          // 搜索词
 let VAULT_SORT = "updated";
-try { const saved = localStorage.getItem("vault-sort"); if (["updated", "created", "platform", "group"].includes(saved)) VAULT_SORT = saved; } catch (_) {}
+try { const saved = localStorage.getItem("vault-sort"); if (["updated", "created", "platform", "group"].includes(saved)) VAULT_SORT = saved; } catch (_) { /* silent: 排序偏好读不出就用默认顺序 */ }
 const vaultSortEl = $("vaultSort");
-if (vaultSortEl) { vaultSortEl.value = VAULT_SORT; vaultSortEl.addEventListener("change", () => { VAULT_SORT = vaultSortEl.value; try { localStorage.setItem("vault-sort", VAULT_SORT); } catch (_) {} renderVault(); }); }
+if (vaultSortEl) { vaultSortEl.value = VAULT_SORT; vaultSortEl.addEventListener("change", () => { VAULT_SORT = vaultSortEl.value; try { localStorage.setItem("vault-sort", VAULT_SORT); } catch (_) { /* silent: 排序偏好存不下只影响下次默认值 */ } renderVault(); }); }
 let VAULT_EDIT = null;     // 正在编辑/新建的表单:{id?, platform, label, key, note}
 let VAULT_DRAFT = null;    // 表单里已敲未存的内容:{platform,label,key,note}(见 renderVault)
 let VAULT_REVEAL = {};     // id → 明文(8 秒后删)
@@ -7613,7 +7642,7 @@ async function loadHomeView() {
   try {
     hvApply(await invoke("home_view"));
   } catch (e) {
-    // 视图拿不到不该让首页变空白:渲染器各自退回 toneOf / sortChannels
+    // silent: 视图拿不到不该让首页变空白,四个渲染器各自退回 toneOf / sortChannels。
   }
 }
 
@@ -7628,10 +7657,11 @@ async function loadCheckin() {
   let list = null;
   try {
     list = await invoke("checkin_state");
-  } catch (e) {}
+  } catch {
+    // silent: 读失败 ≠ 签到状态是空的(报告 L7,loadVault F3 同一条纪律):保留上次读到的那份,
+    // 宁可旧一点也不把徽标 / 待签提示条整体抹掉,装作"没有待签"。
+  }
   if (seq !== CK_SEQ) return; // 更晚的一次已经发出,这份结果作废
-  // 读失败 ≠ 签到状态是空的(报告 L7,loadVault F3 同一条纪律):保留上次读到的那份,
-  // 宁可旧一点也不把徽标 / 待签提示条整体抹掉,装作"没有待签"。
   if (list) {
     CK = {};
     for (const x of list) CK[x.id] = x;
@@ -8484,9 +8514,12 @@ function renderModelSheet() {
         ' 密钥<b>明文</b>写进上面那个客户端自己的配置文件' +
         (s.client === "dsh" ? "(DSH 这边是 <code>.credentials.yaml</code> 的 <code>refs:</code>,它自己也是这么存的)" : "") +
         "。挂件自己不存副本:密钥不进数据库、不进日志、不进写入台账。" +
-        "<b>但回滚要靠备份</b> —— 备份是照原样拷那个客户端那几个文件,而里面的密钥本来就是明文," +
-        "所以 <code>backup-inject/&lt;时间戳&gt;/</code> 下会留下含明文密钥的历史快照" +
-        "(每个客户端最多 5 份;换密钥后旧快照不自动失效)。想清掉就去模型页的「打开配置目录」。"+
+        "<b>但回滚要靠备份</b> —— 备份会拷那个客户端那几个文件,里面的密钥本来是明文," +
+        "所以每份快照都用 <b>Windows DPAPI 加密</b>后才写进 <code>backup-inject/&lt;时间戳&gt;/</code>" +
+        "(解密钥由当前 Windows 账户托管,不落盘;升级前的旧明文快照会在下次写入时自动加密)。" +
+        "<b>代价</b>:换了 Windows 账户或重装系统后,旧快照将无法解密。" +
+        "(每个客户端最多 5 份)。快照是密文,手动拷回去无效,请用「一键回滚」;" +
+        "想清掉就去模型页的「打开配置目录」。"+
         "</div>"
       : "") +
     (!writesSel && !blocked && !removals.length && s.client !== "dsh"
@@ -8837,6 +8870,7 @@ function applyChannelsPush(payload) {
       const el = $("uver");
       if (el && !el.textContent) el.textContent = " " + v;
     })
+    // silent: 版本号拿不到只是关于页少个后缀,首检成功后 renderAbout 会补。
     .catch(() => {});
   // 启动期的非致命错误(配置坏了回落默认、快捷键被占用):后端只往 stderr 写过,
   // 而绿色版从托盘启动时没人看得到控制台 —— 取回来显示在关于页的状态行上
@@ -8844,12 +8878,13 @@ function applyChannelsPush(payload) {
     .then((msg) => {
       if (msg) setMsg(msg, true);
     })
+    // silent: 启动期错误本身是非致命的;取不到就没有可显示的内容,不额外提示"提示读取失败"。
     .catch(() => {});
   // 置顶以真实窗口状态为准(Rust 启动时按配置应用),避免按钮与实际不一致
   try {
     const real = await appWindow.isAlwaysOnTop();
     if (real !== CFG.alwaysOnTop) CFG.alwaysOnTop = real;
-  } catch {}
+  } catch { /* silent: 读不到真实置顶态就沿用配置值,只影响按钮初始高亮 */ }
   applyPinUI();
   // ── 签到事件:必须在首轮 refresh **之前**挂上 ──
   // 后台签到节拍器在 Rust setup 里立刻跑一轮(`spawn_checkin_ticker`),常常正好赶上
@@ -8996,10 +9031,10 @@ function applyChannelsPush(payload) {
 (() => {
   const key = "promo-feed-v1";
   let state = { items: [], seen: [], updated: 0, initialized: false };
-  try { state = { ...state, ...JSON.parse(localStorage.getItem(key) || "{}") }; } catch (_) {}
+  try { state = { ...state, ...JSON.parse(localStorage.getItem(key) || "{}") }; } catch (_) { /* silent: 本地已读状态损坏就当作全新会话 */ }
   let busy = false, failed = false, query = "", scroll = 0;
   const expanded = new Set();
-  const save = () => { try { localStorage.setItem(key, JSON.stringify(state)); } catch (_) {} };
+  const save = () => { try { localStorage.setItem(key, JSON.stringify(state)); } catch (_) { /* silent: 已读标记存不下只影响下次的"新条目"计数 */ } };
   const unread = item => !state.seen.includes(item.id);
   // 看过列表就算读过:打开列表时把当前条目全部记入 seen,底栏的「N 条新」随之清零。
   const markAllSeen = () => {

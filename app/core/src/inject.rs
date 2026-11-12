@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! ① 目标进程不在运行   —— 它们是内存态落盘:边跑边写会在退出时被覆盖(SQLite 还可能写坏)
-//! ② 先备份             —— <配置目录>/backup-inject/<时间戳>/,含 SQLite 的 -wal/-shm,保留最近 5 份
+//! ② 先备份(DPAPI 加密) —— <配置目录>/backup-inject/<时间戳>/,含 SQLite 的 -wal/-shm,保留最近 5 份
 //! ③ 只增改自己写的那条 —— 不碰账号、登录态、内置模型、别人的 provider
 //! ④ 写完读回校验       —— 不过就自动回滚到备份,并如实报错
 //! ```
@@ -12,11 +12,11 @@
 //! 密钥处理:挂件自己**不存**任何密钥副本 —— 只从 Windows 凭据管理器现读现写,
 //! 不进数据库、不进日志、不进台账。
 //!
-//! 但"不进备份"这句以前写得太满,得说清楚(报告 P2-17 之外的 P2-7):回滚要靠备份,
-//! 备份就是照原样拷目标客户端那几个文件,而**那些文件里的密钥本来就是明文**。
-//! 所以每次写入会在 `<配置目录>/backup-inject/<时间戳>/` 留下含明文密钥的历史快照
-//! (每个客户端最多 KEEP_BACKUPS 份,换密钥后旧快照不会自动失效,卸载也不清这些目录)。
-//! 界面与预告里都必须把这句话如实说出来,不能讲"不进备份"。
+//! "不进备份"这句以前写得太满(报告 P2-17 之外的 P2-7):回滚必须留快照,而这些客户端
+//! 配置文件里的密钥本来就是明文。**2026-11-12 起每份快照都用 Windows DPAPI 加密后
+//! 落盘**(见 [`crate::backup_crypto`]),密钥由当前账户托管、不落盘;升级前的旧明文快照
+//! 会在下一次写入时原地加密。快照仍是最多 KEEP_BACKUPS 份,换账户 / 重装后无法解密 ——
+//! 界面与写入预告都必须如实说明,既不能讲"不进备份",也不能讲"绝对安全"。
 //!
 //! 目标文件里密钥是**明文**(这些客户端本来就这么存),所以每次写入都要用户逐客户端
 //! 显式确认,界面上写明落到哪个文件的哪个字段。这是本功能最大的信任成本,不藏。
@@ -912,7 +912,7 @@ fn os(e: &std::io::Error) -> String {
     format!("{e} {}", os_hint(e)).trim().to_string()
 }
 
-/// 备份要改的文件到 `<root>/backup-inject/<stamp>/`。返回备份目录。
+/// 备份要改的文件到 `<root>/backup-inject/<stamp>/`,**每份都是加密容器**。返回备份目录。
 fn backup(root: &Path, files: &[PathBuf], stamp: &str) -> Result<PathBuf, String> {
     let dir = fresh_backup_dir(root, stamp)?;
     for f in files {
@@ -923,8 +923,13 @@ fn backup(root: &Path, files: &[PathBuf], stamp: &str) -> Result<PathBuf, String
             .file_name()
             .and_then(|s| s.to_str())
             .ok_or_else(|| format!("文件名非法: {}", pretty(f)))?;
-        std::fs::copy(f, dir.join(name)).map_err(|e| format!("备份 {name} 失败: {e}"))?;
+        let plain = std::fs::read(f).map_err(|e| format!("读 {name} 失败: {e}"))?;
+        // **fail closed**:加密不成功就让这次写入中止 —— 宁可不写,也不留一份明文快照。
+        crate::backup_crypto::write_sealed(&dir.join(name), &plain)
+            .map_err(|e| format!("加密备份 {name} 失败: {e}"))?;
     }
+    // 升级前落盘的明文快照顺手加密掉,别让它们继续留在磁盘上(详见函数注释)。
+    encrypt_legacy_backups(root);
     prune_backups(root);
     Ok(dir)
 }
@@ -976,7 +981,9 @@ fn backup_layered(
         let copy = rel.replace('/', "__");
         let existed = f.exists();
         if existed {
-            std::fs::copy(f, dir.join(&copy)).map_err(|e| format!("备份 {rel} 失败: {e}"))?;
+            let plain = std::fs::read(f).map_err(|e| format!("读 {rel} 失败: {e}"))?;
+            crate::backup_crypto::write_sealed(&dir.join(&copy), &plain)
+                .map_err(|e| format!("加密备份 {rel} 失败: {e}"))?;
         }
         entries.push(BackupEntry {
             copy,
@@ -985,7 +992,10 @@ fn backup_layered(
         });
     }
     let json = serde_json::to_string_pretty(&entries).map_err(|e| e.to_string())?;
-    std::fs::write(dir.join(BACKUP_LAYOUT), json).map_err(|e| format!("写备份清单失败: {e}"))?;
+    // 清单里虽不含密钥(只有落点与 existed),也按同一容器写:格式统一,回滚走同一条 read_plain。
+    crate::backup_crypto::write_sealed(&dir.join(BACKUP_LAYOUT), json.as_bytes())
+        .map_err(|e| format!("写加密备份清单失败: {e}"))?;
+    encrypt_legacy_backups(root);
     prune_backups(root);
     Ok(dir)
 }
@@ -994,7 +1004,7 @@ fn backup_layered(
 /// 追加的 `-N`(N = 2..=99)。**其它名字一律不认** ——
 /// ① 清理只动我们自己建的目录,用户在 `backup-inject/` 里自建的东西不碰;
 /// ② 回滚只认这个形态,拒绝"把随便一个目录里的文件盖到它上一级"。
-/// 以前只认 15 位,于是带序号的备份**永远不会被清理**:含明文密钥的快照无上限地堆着,
+/// 以前只认 15 位,于是带序号的备份**永远不会被清理**:历史快照无上限地堆着,
 /// 与"每个客户端最多 5 份"的承诺相矛盾(P2)。
 fn is_stamp_name(name: &str) -> bool {
     let b = name.as_bytes();
@@ -1019,6 +1029,46 @@ fn is_stamp_name(name: &str) -> bool {
         && n.len() <= 2
         && n.bytes().all(|c| c.is_ascii_digit())
         && n.parse::<u32>().map(|v| (2..=99).contains(&v)).unwrap_or(false)
+}
+
+/// 把升级前落盘的**明文**快照原地加密。
+///
+/// 2026-11-12 用户裁决「含明文密钥的备份需要加密」:只给新备份加密不够,老快照还躺在
+/// 同一个 `backup-inject/` 里。每次新建备份时都跑一遍 —— 已是容器的跳过,其余逐文件
+/// 加密后原子替换(读明文 / 回滚都走 `backup_crypto::read_plain`,按文件头自动兼容)。
+///
+/// 某个目录里有文件加密不了(换了 Windows 账户 / 权限异常)时**整体删掉该目录**并打印
+/// 原因:明文快照不能继续留着;此时刚建好的那份加密备份仍是可回滚的最新点,不会让用户
+/// 落到「没有回滚点」的处境。只动 `is_stamp_name` 的目录,用户自建的一律不碰。
+fn encrypt_legacy_backups(root: &Path) {
+    let base = root.join("backup-inject");
+    let Ok(rd) = std::fs::read_dir(&base) else { return };
+    for d in rd.filter_map(|e| e.ok()) {
+        let dir = d.path();
+        let name = dir
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if !dir.is_dir() || !is_stamp_name(&name) {
+            continue;
+        }
+        let Ok(files) = std::fs::read_dir(&dir) else { continue };
+        let mut failed: Option<String> = None;
+        for f in files.filter_map(|e| e.ok()) {
+            let p = f.path();
+            if !p.is_file() || p.to_string_lossy().ends_with(".enc-tmp") {
+                continue;
+            }
+            if let Err(e) = crate::backup_crypto::encrypt_in_place(&p) {
+                failed = Some(format!("{}: {e}", pretty(&p)));
+                break;
+            }
+        }
+        if let Some(reason) = failed {
+            eprintln!("旧明文备份加密失败,已移除该快照({}): {reason}", pretty(&dir));
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
 }
 
 /// 只留最近 KEEP_BACKUPS 份,免得天天写把用户目录撑大。
@@ -1094,7 +1144,16 @@ pub fn restore(backup_dir: &Path) -> Result<String, String> {
         // 逐个文件:先写同目录 temp 再 rename。直接 fs::copy 到已存在目标会**先截断**
         // 再逐块拷,目标被占用时就把客户端自己的配置留成了半截文件(报告 P2-6)。
         let tmp = root.join(format!("{name_str}.restore-tmp"));
-        match std::fs::copy(e.path(), &tmp).and_then(|_| std::fs::rename(&tmp, &target)) {
+        // 备份文件是加密容器(或升级前的明文),统一读成明文后再原子放回。
+        // 解密失败(换了 Windows 账户 / 文件损坏)必须进 bad 列表,不能悄悄跳过。
+        let outcome: Result<(), String> = crate::backup_crypto::read_plain(&e.path())
+            .and_then(|plain| {
+                std::fs::write(&tmp, plain).map_err(|e| format!("写临时文件失败: {e}"))
+            })
+            .and_then(|_| {
+                std::fs::rename(&tmp, &target).map_err(|e| format!("替换文件失败: {e}"))
+            });
+        match outcome {
             Ok(_) => {
                 n += 1;
                 // SQLite 主库恢复完,旁边若留着**没进这份备份**的 -wal/-shm,SQLite
@@ -1138,10 +1197,11 @@ fn stamp_now() -> String {
 /// 清单里的 `rel` 只允许是 `root` 以内的相对路径(手改过的清单不能把文件写到别处 ——
 /// 这条与"备份目录必须叫 backup-inject"是同一道防线)。
 fn restore_layered(backup_dir: &Path, root: &Path) -> Result<String, String> {
-    let raw = std::fs::read_to_string(backup_dir.join(BACKUP_LAYOUT))
+    // 新清单是加密容器,老清单是明文 JSON —— read_plain 按文件头兼容两者。
+    let raw = crate::backup_crypto::read_plain(&backup_dir.join(BACKUP_LAYOUT))
         .map_err(|e| format!("读备份清单失败: {e}"))?;
     let entries: Vec<BackupEntry> =
-        serde_json::from_str(&raw).map_err(|e| format!("备份清单解析失败: {e}"))?;
+        serde_json::from_slice(&raw).map_err(|e| format!("备份清单解析失败: {e}"))?;
     let mut n = 0usize;
     let mut bad: Vec<String> = Vec::new();
     for e in entries {
@@ -1201,7 +1261,14 @@ fn restore_layered(backup_dir: &Path, root: &Path) -> Result<String, String> {
             .map(|x| x.to_string_lossy().to_string())
             .unwrap_or_default();
         let tmp = target.with_file_name(format!("{name}.restore-tmp"));
-        match std::fs::copy(&src, &tmp).and_then(|_| std::fs::rename(&tmp, &target)) {
+        let outcome: Result<(), String> = crate::backup_crypto::read_plain(&src)
+            .and_then(|plain| {
+                std::fs::write(&tmp, plain).map_err(|e| format!("写临时文件失败: {e}"))
+            })
+            .and_then(|_| {
+                std::fs::rename(&tmp, &target).map_err(|e| format!("替换文件失败: {e}"))
+            });
+        match outcome {
             Ok(_) => n += 1,
             Err(err) => {
                 let _ = std::fs::remove_file(&tmp);
@@ -5160,6 +5227,44 @@ mod tests {
         assert_eq!(std::fs::read(&f).unwrap(), before, "回滚要逐字节一致");
     }
 
+    /// 2026-11-12 加密:新快照是密文、升级前的明文快照被原地加密,且旧快照仍能回滚。
+    #[test]
+    fn backup_seals_snapshots_and_migrates_legacy_plaintext() {
+        let root = tmpdir("backup-sealed");
+        let f = root.join("models.json");
+        let plain = br#"{"apiKey":"sk-LEGACY-SECRET","models":[]}"#.to_vec();
+        std::fs::write(&f, &plain).unwrap();
+
+        // 手工造一份「升级前」的明文快照:目录名是合法 stamp,文件内容没有 MAGIC。
+        let legacy = root.join("backup-inject").join("20260101-000000");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("models.json"), &plain).unwrap();
+        assert!(!crate::backup_crypto::is_sealed(
+            &std::fs::read(legacy.join("models.json")).unwrap()
+        ));
+
+        // 再建一份新备份,触发存量迁移。
+        let fresh = backup(&root, &[f.clone()], "20260101-000001").unwrap();
+        for dir in [&legacy, &fresh] {
+            let raw = std::fs::read(dir.join("models.json")).unwrap();
+            assert!(
+                crate::backup_crypto::is_sealed(&raw),
+                "快照必须是加密容器: {}",
+                pretty(dir)
+            );
+            assert!(
+                !raw.windows(plain.len()).any(|w| w == plain.as_slice()),
+                "磁盘上不能残留明文密钥: {}",
+                pretty(dir)
+            );
+        }
+
+        // 老快照仍要能回滚(按文件头兼容),且逐字节一致。
+        std::fs::write(&f, b"[]").unwrap();
+        restore(&legacy).unwrap();
+        assert_eq!(std::fs::read(&f).unwrap(), plain, "旧明文快照迁移后仍能回滚");
+    }
+
     /// 读回校验不过要自动回滚(模拟:写完立刻把文件改坏,校验就该发现)。
     #[test]
     fn failed_verification_rolls_back() {
@@ -5624,7 +5729,7 @@ mod tests {
     }
 
     /// F12:`-N`(同秒撞车时 backup 自己造的序号)也算备份名,必须一起清理 ——
-    /// 以前只认 15 位,带序号的快照**永远不会被删**,含明文密钥的备份无上限地堆积。
+    /// 以前只认 15 位,带序号的快照**永远不会被删**,历史备份无上限地堆积。
     #[test]
     fn prune_keeps_five_and_removes_numbered_backups() {
         let root = tmpdir("prune-n");
@@ -6119,13 +6224,25 @@ mod tests {
             dir.join("state.vscdb").is_file(),
             "备份目录里必须有**写入前**的库"
         );
-        // 备份那份不该含有我们这次写的条目(证明备份发生在写之前)
-        let bconn = rusqlite::Connection::open(dir.join("state.vscdb")).unwrap();
-        let braw: String = bconn
-            .query_row("SELECT value FROM ItemTable WHERE key LIKE '%model_list_map'", [], |r| {
-                r.get(0)
-            })
-            .unwrap();
+        // 备份那份不该含有我们这次写的条目(证明备份发生在写之前)。
+        // 2026-11-12 起快照是 DPAPI 容器,不能再直接拿 SQLite 打开:
+        // 先断言「确实是密文」,再解密到临时库检查内容 —— 这条断言同时守住加密不回退。
+        let snap = dir.join("state.vscdb");
+        assert!(
+            crate::backup_crypto::is_sealed(&std::fs::read(&snap).unwrap()),
+            "备份快照必须是加密的,不能留一份明文 SQLite"
+        );
+        let probe = dir.join("state.verify.vscdb");
+        std::fs::write(&probe, crate::backup_crypto::read_plain(&snap).unwrap()).unwrap();
+        let braw: String = {
+            let bconn = rusqlite::Connection::open(&probe).unwrap();
+            bconn
+                .query_row("SELECT value FROM ItemTable WHERE key LIKE '%model_list_map'", [], |r| {
+                    r.get(0)
+                })
+                .unwrap()
+        };
+        let _ = std::fs::remove_file(&probe);
         assert!(
             !braw.contains(sp.id.as_str()),
             "备份内容必须是写入前的原样,不能是已改坏的库"

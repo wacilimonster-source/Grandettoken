@@ -1,5 +1,9 @@
 ﻿const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const PORT = Number(process.env.CDP_PORT || 9222);
+const OUT = path.join(os.tmpdir(), 'gt-measure');
+fs.mkdirSync(OUT, { recursive: true });
 (async () => {
   const targets = await (await fetch(`http://127.0.0.1:${PORT}/json`)).json();
   const t = targets.filter(x => x.type === 'page').find(x => /tauri|grandettoken/i.test(`${x.title} ${x.url}`));
@@ -19,7 +23,7 @@ const PORT = Number(process.env.CDP_PORT || 9222);
   for (const [name, r] of Object.entries({ tbar: rects.tbar, foot: rects.foot })) {
     const shot = await send('Page.captureScreenshot', { format: 'png',
       clip: { x: r.x, y: r.y, width: r.width, height: r.height, scale: 2 } });
-    fs.writeFileSync(`C:/Users/wacil/AppData/Local/Temp/gt-measure/live-${name}.png`, Buffer.from(shot.data, 'base64'));
+    fs.writeFileSync(path.join(OUT, `live-${name}.png`), Buffer.from(shot.data, 'base64'));
     console.log(name, JSON.stringify(r));
   }
   await send('Emulation.setDefaultBackgroundColorOverride', {});

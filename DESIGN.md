@@ -541,7 +541,7 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 | 39 | 置顶按钮与设置项双向同步 | ✅ | `applyPinUI` |
 | 40 | `Esc` 分级回退 | ✅ | `keydown` |
 | 41 | 「模型」页签(搜索 / 过滤芯片 / 分组切换 / 单价 / 五客户端按钮) | ✅ | `renderModels` |
-| 42 | 写入预告 —— 确认前看到文件、动作、明文密钥、备份位置与阻塞原因 | ✅ | `renderModelSheet` |
+| 42 | 写入预告 —— 确认前看到文件、动作、明文密钥、快照加密方式与阻塞原因 | ✅ | `renderModelSheet` |
 | 43 | 写入结果与一键回滚 / 打开备份目录 | ✅ | `injectGo` / `mdlrollback` |
 | 44 | 客户端状态条(装没装 / 在不在跑 / 写了几条 / 选中的是哪个) | ✅ | `mdlClientChip` |
 | 45 | 4SAPI 行展开里的「可用模型 → 去挑模型」入口 | ✅ | `renderDetail` |

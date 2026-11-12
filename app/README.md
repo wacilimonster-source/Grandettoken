@@ -103,6 +103,20 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 工具链装在用户目录,不需要管理员权限。Windows 上走系统 SChannel 做 TLS,
 避免 rustls 的 ring/aws-lc 汇编依赖在 GNU 工具链下需要 nasm 的问题。
 
+## 提交前门禁
+
+完整清单与"为什么需要它"见仓库根 `AGENTS.md` 第 4 节。零依赖、可独立跑的四道静态门:
+
+```bash
+node build/check-ipc-contract.js        # 前端 invoke ↔ Rust 定义 ↔ 注册 三方比对
+node build/check-silent-failures.js     # 空 catch 必须认领:silent: <理由>
+node build/check-file-size.js           # 文件规模棘轮,上限只许下调
+node build/check-css-forms.js           # 整块容器的 display 必须挂在 body 状态门之下
+```
+
+后三道与 IPC 门都带自检:它先证明自己**会变红**,再去判定代码。
+这不是形式主义 —— 2026-11-12 出现过两次"门禁报错但代码是对的",照报错改会制造真 bug。
+
 ## 结构
 
 ```
