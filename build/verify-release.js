@@ -50,9 +50,16 @@ const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
   if (!plat) { bad('platforms.windows-x86_64 present'); return report(); }
   const sigPath = path.join(nsis, `${EXE}.sig`);
   const localSig = fs.existsSync(sigPath) ? fs.readFileSync(sigPath, 'utf8').trim() : '';
-  const sameSig = plat.signature.trim() === localSig;
-  if (sameSig) ok('signature identical to local .sig', `(${localSig.length} chars)`);
-  else bad('signature identical to local .sig', `live=${plat.signature.length} local=${localSig.length}`);
+  // 本地没有对应版本的 .sig 时只能 SKIP —— 这与下面安装包的 sha256 对比必须
+  // 用同一口径。CI 发版后本地通常没有产物(构建在 runner 上),若这里判 FAIL,
+  // 「二次确认」会稳定报一个假失败,反而教人忽略这道门(2026-11-12 v0.3.38 实测)。
+  if (!localSig) {
+    lines.push(`SKIP  local .sig not present (${EXE}.sig); live signature ${plat.signature.trim().length} chars`);
+  } else if (plat.signature.trim() === localSig) {
+    ok('signature identical to local .sig', `(${localSig.length} chars)`);
+  } else {
+    bad('signature identical to local .sig', `live=${plat.signature.length} local=${localSig.length}`);
+  }
 
   // 4. 清单里的 url 指向本 tag 的资源,且真的下得到
   const wantUrl = `https://github.com/${OWNER}/${REPO}/releases/download/${TAG}/${EXE}`;

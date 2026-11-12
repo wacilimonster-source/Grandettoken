@@ -120,6 +120,11 @@ cd ../.. && powershell -File build/scan-secrets.ps1   # 凭据扫描,非零退�
 本机 GNU 工具链前置:`PATH` 含 `C:/Users/wacil/mingw64/bin`(gcc)与 `~/.cargo/bin`,
 工具链 `stable-x86_64-pc-windows-gnu`。**门禁缺依赖就如实写「未跑」,不要用别处的历史结果冒充本次验证。**
 
+**发版走 CI,不要本地打包**(2026-11-12 起):同步三处版本号 → 推 main → 推 `v*` tag,
+`release.yml` 自动跑「门禁 → 构建 → 签名 → 建 release → `verify-release.js` 核验」。
+本地 `build/release-local.sh` 只在 Actions 不可用时用。完整步骤见 `RELEASE.md`。
+tag 之前**必须**先推 main —— tag 指向的 commit 不在 main 上,GitHub 生成的源码归档会与代码不一致。
+
 **门禁要串行跑,并单独复跑确认**:2026-11-12 把 core 编译、src-tauri 链接、jsdom 冒烟
 并行跑时,`proxy` 一个用例与 jsdom 两项因资源竞争假红,单独复跑立刻全绿。
 假红不能当回归,真红也不能当噪音 —— 结论必须是「单独跑一次仍成立」。
@@ -169,6 +174,11 @@ cd ../.. && powershell -File build/scan-secrets.ps1   # 凭据扫描,非零退�
 类早已不存在。脚本躺在 `build/` 里,文档还宣称它通过过。
 **改了渲染 / CSS / 命令之后,先确认 `build/verify-*.js` 引用的选择器和命令还在。**
 破损的脚本宁可删掉,也不要留着冒充门禁。
+
+同类但更隐蔽的一种:**脚本对"前置条件不满足"的处理前后不一致**。
+`verify-release.js` 在本地没有安装包时 SKIP(合理),没有 `.sig` 时却判 FAIL ——
+而 CI 发版后本地恰好两者都没有,于是"二次确认"稳定报一个假失败(2026-11-12 v0.3.38 实测)。
+假失败比不设门禁更糟:它会训练人忽略这道门。**同一个脚本里,同一类前置缺失必须用同一种口径。**
 
 ### 6.5 「门禁报错就照着改代码」
 

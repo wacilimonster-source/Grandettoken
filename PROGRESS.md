@@ -4493,6 +4493,22 @@ CI 一次 22 分钟里 12 分钟在 `cargo install tauri-cli`;代价是**发版�
 - **`RELEASE.md` 全篇重写**:CI 为主、本地为应急;保留仍然有效的坑
   (三件套补传、PowerShell 里空密码等于删变量、Node 24 的 fetch 不读代理)。
 
-**发布(2026-11-12)**:tag `v0.3.38`,release 提交 `PENDING`。
+**发布(2026-11-12)**:tag `v0.3.38`,release 提交 `1b62a48`。**首次由 CI 完整发版**,
+run [43163421308](https://github.com/wacilimonster-source/Grandettoken/actions/runs/43163421308)
+22 步全绿,**26 分 36 秒**(冷缓存;其中 `cargo install tauri-cli` 约 13 分钟、
+Rust release 编译约 8 分钟)。安装包 `Grandettoken_0.3.38_x64-setup.exe` **5,741,252 字节**,
+SHA-256 `5d03a89b25340e8bb2686ffeb759f9eeebbfc87a8f6634f9e279d37d0068fa8e`;
+`.sig` **444 字节**、`latest.json` 1,684 字节(说明 587 字符 / 163 汉字)。
+CI 内 `verify-release.js` **14 项全 PASS**(含「签名与本地 .sig 逐字一致」与
+「sha256 matches local installer」—— 这两项只有在 runner 上才有本地产物可比);
+本地复核 12 PASS / 2 SKIP / 0 FAIL(SKIP 的两项是本地没有该版本产物,按设计跳过)。
+
+- **安装包比本地打包大 44 KB**(5,741,252 vs 5,696,919):CI 的 `cargo install tauri-cli`
+  装的是当时最新的 2.x,NSIS 打包器版本与本地不同。属预期差异,不影响签名与更新链路。
+- **发版后新发现并已修**:`verify-release.js` 对"本地缺产物"的处理口径不一致 ——
+  安装包缺失走 `SKIP`,签名缺失却判 `FAIL`,于是 CI 发版后的本地复核会稳定报一个
+  假失败(实测 `local=0`)。已改成同口径 SKIP;这类"脚本自己制造的假失败"会教人
+  忽略门禁,见 `AGENTS.md` §6.4。
+
 
 
