@@ -1,9 +1,10 @@
 # Grandettoken 开发进展
 
 > 最后更新:2026-11-12
-> 状态:**v0.3.36 已发版** —— 死代码清理与依赖精简(见文末 2026-11-12 条目)
+> 状态:**v0.3.37 已发版** —— 静默失败归零 / 门禁自检 / 摘要 CSS 去重(见文末 2026-11-12 条目)
 > 同日另做了一轮**代码治理**:自动化产物移出版本库、IPC 契约门禁补强、经验沉淀,
-> 见 `docs/report/code-governance-2026-11-12.md` 与根目录 `AGENTS.md`。
+> 见 `docs/report/code-governance-2026-11-12.md`、`docs/report/code-quality-2026-11-12-b.md`
+> 与根目录 `AGENTS.md`。
 >
 > ⚠️ 本文件按版本倒序追加,头部状态只是「写它那一刻」的快照,最容易过时 ——
 > **当前版本与改动一律以文末最新条目和 `git log` 为准**,不要拿头部当事实源。
@@ -4458,4 +4459,15 @@ token 走 `GH_TOKEN`;三件套核验齐全(`gh release view --json assets` 3 个
 - **门禁**:core `cargo test --locked` **431 passed / 0 failed / 8 ignored**、
   core 与 src-tauri `cargo check --all-targets --locked` 零警告、IPC 112/90/90 零缺口、
   静默失败 71 处 catch 全认领、规模 10 项全达标、CSS 形态门 1044 条、jsdom **182/182**。
+
+**发布(2026-11-12)**:tag `v0.3.37`,release 提交 `8c1639e`。安装包
+`Grandettoken_0.3.37_x64-setup.exe` 5,696,919 字节,SHA-256
+`e48ba395145d103be7e4a8e2e8fff4a34224a43b83e04f216cb89036c7713218`;`.sig` 424 字节;
+`latest.json` 1,415 字节(说明 176 个汉字)。主程序 10,266,112 → **10,271,744 字节**
+(+0.05%,DPAPI 加密与失败路径提示的净增量)。`verify-release.js` **14 项全 PASS**
+(更新端点 200 / 版本 0.3.37 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 /
+非 draft / 说明完整 / latest 指向 0.3.37 / 仓库公开)。打包 5 分 54 秒(编译 5 分 27 秒),
+日志确认 `import table clean (no WebView2Loader.dll)`;`gh` 未登录,按 RELEASE.md 用
+`git credential fill` 取 token 走 `GH_TOKEN`;三件套核验齐全
+(`gh release view --json assets` 3 个)。
 
