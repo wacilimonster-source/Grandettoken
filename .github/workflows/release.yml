@@ -1,17 +1,23 @@
 # 发版自动化:打 v* tag → 构建 + 签名 + 发 Release + 生成 latest.json。
 #
-# 对应 RELEASE.md 的手工 5 步。把每一步都单独拆开是有意的:哪一段红了,
-# 本地就能照 RELEASE.md 原样复现哪一段,不用猜是哪半步坏的。
+# 对应 RELEASE.md 的 5 步。把每一步都单独拆开是有意的:哪一段红了,
+# 看日志就知道坏在哪半步,不用猜。
 #
-# ⚠ **2026-10-20 起,发版改回本地打包,本文件不再是主链路。**
-#   原因见 RELEASE.md 顶部:CI 一次 22 分钟,其中 12 分钟花在 `cargo install tauri-cli`
-#   (tauri-cli 没有官方预编译二进制,实测 cargo-binstall / install-action / npm 都不行)。
-#   本机已有编好的 cargo-tauri.exe + target/ 增量缓存,本地 bundle 只要 **3 分 11 秒**。
+# ── 2026-11-12 起,**CI 发版是主链路**(推 tag 即发),本地打包降级为应急 ──
 #
-#   所以:去掉 `push: tags` 触发器,**只留 workflow_dispatch 作应急**。
-#   正常发版走 `bash build/release-local.sh` + `gh release create`(见 RELEASE.md)。
+# 历史:v0.1.x 时代 CI 发一次要 22 分钟,其中 12 分钟花在 `cargo install tauri-cli`
+# (tauri-cli 没有预编译二进制,cargo-binstall / install-action / npm 都试过),
+# 所以 2026-10-20 改成本地打包(3 分 11 秒)。那次改动的代价是**发版不可复现** ——
+# 产物取决于本机当时装了哪个 cargo-tauri、哪份 target 缓存,别人无法重放。
 #
-# 需要 3 个 secret(仅应急链路需要,见 RELEASE.md「一次性准备」):
+# 现在回到 CI 的三个理由:
+#   1. tauri-cli 的编译产物已经能缓存(`~/.cargo/bin/cargo-tauri.exe`,key 与项目
+#      依赖锁解耦),命中后这一步是 0 秒;首次冷启动约 11 分钟,可接受。
+#   2. Rust 依赖有 Swatinem/rust-cache,增量命中后 Build 约 2 分钟。
+#   3. 发版是最后一道闸:产物必须由「公开、可重放、带完整门禁」的流水线生成,
+#      而不是某台机器上恰好能过的构建。
+#
+# 需要 2 个 secret(已配置,见 RELEASE.md「一次性准备」):
 #   TAURI_SIGNING_PRIVATE_KEY        签名私钥**文件内容**(不是路径)—— CI 上没有那把文件
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  空串(密钥未加密)
 # 私钥只从 secret 读,不落盘、不回显。GITHUB_TOKEN 由 Actions 内置提供。
@@ -20,12 +26,21 @@
 name: release
 
 on:
-  # 只留手工触发。推 tag **不再**自动发版(2026-10-20 改)。
+  # 主入口:推版本 tag 即发版。
+  push:
+    tags: ['v*']
+  # 应急入口:某个 tag 已经在,但构建失败 / 需要重发时,不必删 tag 重推。
   workflow_dispatch:
     inputs:
       tag:
-        description: '要发布的 tag(已存在),如 v0.1.47'
+        description: '要发布的 tag(已存在),如 v0.3.38'
         required: true
+
+# 同一个 tag 同时只跑一个发版;但**不取消**已在跑的那次 ——
+# 发版是有副作用的(cancel 可能停在"release 已建、资产没传完"的中间态)。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: write   # 创建 release、上传资源
@@ -37,12 +52,18 @@ env:
 jobs:
   build-and-release:
     runs-on: windows-latest
+    # 冷缓存全流程实测上限约 25 分钟;给到 60 是防"签名等密码"那类挂死
+    # (RELEASE.md 记过:签名步骤在非交互环境等输入会 CPU 0% 永久挂住)。
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
           # 手工触发时按输入的 tag 检出,而不是默认分支 —— 否则构建出来的是
           # 分支头代码,版本号与 tag 不符。
           ref: ${{ github.event.inputs.tag || github.ref }}
+          # tag 推送时默认只取那一个 ref。make-latest-json.js 与 gh 补传都要
+          # 看到 tag 对象,显式取全更稳(只多几百 KB)。
+          fetch-tags: true
 
       - name: Resolve tag and version
         id: meta
@@ -58,6 +79,30 @@ jobs:
           echo "tag=$tag"    | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           echo "version=$ver"| Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "tag=$tag version=$ver"
+
+      # 发版前的最后一道闸。这些在 ci.yml 里也跑,但 tag 可能打在没跑过 CI 的
+      # 提交上(例如在本地临时 commit 上直接打 tag),而**发出去的包收不回来**。
+      # 四道静态门是零依赖的,几秒;前端冒烟要装 jsdom,约 40 秒 —— 一起付。
+      - name: Pre-release gates
+        shell: pwsh
+        run: |
+          # 原生命令的非零退出码不会自动中断 pwsh 脚本,必须逐个检查
+          function Invoke-Gate([string]$name, [scriptblock]$cmd) {
+            & $cmd
+            if ($LASTEXITCODE -ne 0) { throw "pre-release gate failed: $name (exit $LASTEXITCODE)" }
+            Write-Host "  ok $name"
+          }
+          Invoke-Gate 'ipc-contract'      { node build/check-ipc-contract.js }
+          Invoke-Gate 'silent-self'       { node build/check-silent-failures.js --self-test }
+          Invoke-Gate 'silent-failures'   { node build/check-silent-failures.js }
+          Invoke-Gate 'size-self'         { node build/check-file-size.js --self-test }
+          Invoke-Gate 'file-size'         { node build/check-file-size.js }
+          Invoke-Gate 'css-self'          { node build/check-css-forms.js --self-test }
+          Invoke-Gate 'css-forms'         { node build/check-css-forms.js }
+          Invoke-Gate 'syntax'            { node --check app/src/app.js }
+          npm install jsdom --no-save --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw "npm install jsdom failed" }
+          Invoke-Gate 'jsdom-smoke'       { node build/jsdom-smoke.js }
 
       - name: Install GNU toolchain + target
         shell: pwsh

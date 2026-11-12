@@ -1,8 +1,8 @@
 # Grandettoken 开发进展
 
 > 最后更新:2026-11-12
-> 状态:**v0.3.37 已发版** —— 静默失败归零 / 门禁自检 / 摘要 CSS 去重(见文末 2026-11-12 条目)
-> 同日另做了一轮**代码治理**:自动化产物移出版本库、IPC 契约门禁补强、经验沉淀,
+> 状态:**v0.3.38 已发版** —— 发版链路改回 GitHub Actions(见文末 2026-11-12 条目)
+> 同日做了两轮**代码治理**:产物出库 / 门禁补强 / 静默失败归零 / 经验沉淀,
 > 见 `docs/report/code-governance-2026-11-12.md`、`docs/report/code-quality-2026-11-12-b.md`
 > 与根目录 `AGENTS.md`。
 >
@@ -4470,4 +4470,29 @@ token 走 `GH_TOKEN`;三件套核验齐全(`gh release view --json assets` 3 个
 日志确认 `import table clean (no WebView2Loader.dll)`;`gh` 未登录,按 RELEASE.md 用
 `git credential fill` 取 token 走 `GH_TOKEN`;三件套核验齐全
 (`gh release view --json assets` 3 个)。
+
+## 2026-11-12 · 发版链路改回 GitHub Actions(v0.3.38)
+
+用户要求「改为 github ci 发版」并真实发一次。2026-10-20 之所以改本地打包,是因为
+CI 一次 22 分钟里 12 分钟在 `cargo install tauri-cli`;代价是**发版不可复现**
+(产物取决于本机装的哪个 cargo-tauri、哪份 target 缓存)。
+
+- **`release.yml` 恢复 `push: tags: ['v*']` 主入口**,`workflow_dispatch` 保留为
+  应急重发;`fetch-tags: true`,因为 `make-latest-json.js` 与 `gh release upload`
+  都要看到 tag 对象。
+- **tauri-cli 缓存改成与项目依赖锁解耦的固定 key**(只缓存 `~/.cargo/bin/cargo-tauri.exe`),
+  并在安装后**立刻单独 save**(`if: always()`),不依赖 job 收尾 —— 以前 job 后段
+  一失败,Post 步骤被 skip,缓存永远存不下来,于是每次都重编 11 分钟。
+- **新增 `Pre-release gates`**:发版前跑 IPC 契约 / 静默失败 / 文件规模 / CSS 形态
+  四道零依赖门 + jsdom 冒烟。理由:tag 可能打在没跑过 ci.yml 的提交上,
+  而**发出去的包收不回来**。原生命令的非零退出码不会自动中断 pwsh,逐个用
+  `Invoke-Gate` 检查。
+- job 加 `timeout-minutes: 60`(防签名步骤在非交互环境等密码而 CPU 0% 挂死)
+  与 `concurrency`(`cancel-in-progress: false` —— 发版有副作用,取消可能停在
+  「release 已建、资产没传完」的中间态)。
+- **`RELEASE.md` 全篇重写**:CI 为主、本地为应急;保留仍然有效的坑
+  (三件套补传、PowerShell 里空密码等于删变量、Node 24 的 fetch 不读代理)。
+
+**发布(2026-11-12)**:tag `v0.3.38`,release 提交 `PENDING`。
+
 
