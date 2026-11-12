@@ -54,10 +54,6 @@ impl SyncError {
         self.reset_at = reset_at;
         self
     }
-
-    pub fn code_only(code: &'static str) -> Self {
-        Self::new(code, code)
-    }
 }
 
 impl fmt::Display for SyncError {

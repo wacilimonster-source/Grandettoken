@@ -521,13 +521,6 @@ pub fn session_id() -> String {
     g.clone().unwrap_or(gen)
 }
 
-/// 显式设定会话 id(测试用)。
-pub fn set_session(id: &str) {
-    if let Ok(mut g) = SESSION.lock() {
-        *g = Some(id.to_string());
-    }
-}
-
 // ───────────────────────── 脱敏 ─────────────────────────
 
 /// 令牌的**可区分摘要**:长度 + sha256 前 8 位。

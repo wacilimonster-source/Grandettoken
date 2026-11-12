@@ -20,7 +20,6 @@
     <symbol id="i-sync" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h14M14 3l4 4-4 4"/><path d="M20 17H6M10 13l-4 4 4 4"/></symbol>
     <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
     <symbol id="i-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></symbol>
-    <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
     <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.8" cy="10.8" r="6.3"/><path d="m15.4 15.4 4.4 4.4"/></symbol>
   </svg>
@@ -29,7 +28,7 @@
   <div class="dock-body" id="dockBody" data-tauri-drag-region="deep" title="移入展开"></div>
 
   <!-- 拖拽靠近屏幕边缘时的吸附预览线(在窗口贴边侧的 2px 高亮) -->
-  <div class="prevline" id="prevLine"></div>
+  <div class="prevline"></div>
 
   <!-- 单击速览气泡(裁决 7A):窗口临时向上长高一条,气泡画在那块新空间里,4 秒自收。
        必须挂在 body 下、不能放进 .pill-body —— 后者是 position:relative 且 overflow:hidden,
@@ -130,7 +129,7 @@
 
       <h4>自定义渠道</h4>
       <div class="khint">填完先点「测试」,通过才能保存 —— 坏配置进不来。<button class="why" data-why="custom" aria-expanded="false" aria-label="自定义渠道的说明"></button></div>
-      <div class="cform" id="cForm">
+      <div class="cform">
         <div class="krow"><span class="k1">名称</span><input class="inp" id="cName" placeholder="如 我的中转站" autocomplete="off" spellcheck="false"></div>
         <div class="krow"><span class="k1">简称 / 颜色</span>
           <input class="inp" id="cShort" placeholder="2 字" style="max-width:70px" autocomplete="off">
@@ -490,7 +489,7 @@
             <input type="checkbox" id="syncEnabled"> 自动发布
           </label>
         </div>
-        <div class="khint" id="syncChannelsHint">只发布勾选的渠道;默认全选。</div>
+        <div class="khint">只发布勾选的渠道;默认全选。</div>
         <div class="sync-channels" id="syncChannels"></div>
         <div class="sync-labels" id="syncLabels"></div>
 

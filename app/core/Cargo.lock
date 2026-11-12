@@ -1474,7 +1474,6 @@ dependencies = [
  "base64",
  "chrono",
  "futures",
- "generic-array",
  "getrandom 0.2.17",
  "keyring",
  "qrcode",

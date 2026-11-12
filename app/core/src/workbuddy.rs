@@ -415,13 +415,6 @@ pub fn parse_auth_file(text: &str, source: &str, key: Option<&[u8]>) -> Result<D
 /// 缓存:key 与其取回时间。
 static KEY_CACHE: Mutex<Option<(Vec<u8>, Instant)>> = Mutex::new(None);
 
-/// 清缓存(测试与"换了账号"时用)。
-pub fn clear_key_cache() {
-    if let Ok(mut g) = KEY_CACHE.lock() {
-        *g = None;
-    }
-}
-
 /// 列出本机存在的盘符(`A`..`Z`)。
 ///
 /// 为什么不用 `GetLogicalDrives`:core 刻意不依赖 Win32 绑定(见 `lib.rs` 顶部),
@@ -1566,14 +1559,6 @@ impl FetchAuth {
             FetchAuth::Cookie(c) => format!("Cookie: {c}"),
         }
     }
-}
-
-/// 一次取数尝试的结果(便于上层把"哪条路失败了"如实报出来)。
-#[derive(Debug, Clone)]
-pub struct Attempt {
-    pub base: String,
-    pub status: u16,
-    pub body: String,
 }
 
 /// 按凭据的 domain 选基址:**国内版打 codebuddy.cn,国际版打 workbuddy.ai**。

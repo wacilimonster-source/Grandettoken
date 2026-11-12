@@ -95,10 +95,6 @@ impl ApiProtocol {
         }
     }
 
-    pub fn is_openai_chat(self) -> bool {
-        matches!(self, Self::OpenAiChatCompletions)
-    }
-
     pub fn dsh_api(self) -> Option<&'static str> {
         match self {
             Self::OpenAiChatCompletions => Some("openai-completions"),

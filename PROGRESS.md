@@ -4400,3 +4400,19 @@ github.com:443 超时,第 2 次通过 —— 本机网络偶发抖动,`gh api` �
 指向 0.3.35、三件套齐,非产物问题)。打包日志 `build/bundle-log-v0.3.35.txt`,
 导入表检查确认无 WebView2Loader.dll 混入;主程序维持 10,302,464 字节。
 本条提交信息曾因 shell 编码乱码,已用 `-F` 文件方式 amend(fff1d67 → df4f59c)。
+
+## 2026-11-12 · 死代码清理与依赖精简(v0.3.36)
+
+- 依据 `docs/report/redundancy-audit-2026-11-11.md`（二次复核版）执行：A 类 21 组全部清理；
+  B 类按裁决处理 —— B2 删 `clear_key_cache`、B3/#9 整条废弃 resize 遗留配置、
+  A2#12 删 `vault_ref_channels` 命令、B6 删 `.tb.loading`（联动 `@keyframes pulse`）、
+  B5 暂缓；B1 的 `SYNC_NOT_CONFIGURED` 码值改引 `sync::error::NOT_CONFIGURED` 常量，
+  B4 移除 `generic-array` 直接依赖。另清理报告漏列的零读写字段 `resize_hint_seen`。
+  净变更 **+41 / −384 行（18 文件）**。
+- `DESKTOP_READER` 注入链随注入函数一并删除（注入函数删掉后该锁恒为 None，属排查口径定义②
+  的恒假死分支）；`vault_ref_channels` 的 5 处测试断言改用现役 `vault_ref_pairs()`，覆盖不变。
+- **门禁**：core `cargo test --locked` **425 passed / 8 ignored**；core 与 src-tauri
+  `cargo check --all-targets --locked` 零警告；src-tauri `cargo test` **19 passed**；
+  `node --check`、CSS 形态门（1052 条）、jsdom 冒烟 **182/182**、`verify-codex-layout`
+  **48/48**（修复其既有损坏：`.quota-number` 旧类已不存在）、`verify-refresh-stability` EXIT=0。
+  IPC 三角复验：90 个被调命令全部已注册，被删 4 命令零残留。

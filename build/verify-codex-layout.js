@@ -27,11 +27,12 @@ const icon = "data:image/svg+xml;base64," + fs.readFileSync(path.join(root, "app
       await page.evaluate((s) => document.documentElement.style.setProperty("--u", String(s)), scale);
       const check = await page.evaluate(({ dual, form }) => {
         const row = document.querySelector(".row"), rr = row.getBoundingClientRect();
-        const parts = [...row.querySelectorAll(".quota-label,.quota-number,.quota-secondary")];
+        const parts = [...row.querySelectorAll(".val .v,.quota-secondary")];
         const overflow = parts.filter((el) => { const r = el.getBoundingClientRect(); return r.left < rr.left - 1 || r.right > rr.right + 1 || r.bottom > innerHeight + 1; });
         const secondary = row.querySelector(".quota-secondary");
         const visible = !dual || (secondary && secondary.getBoundingClientRect().height > 0 && getComputedStyle(secondary.parentElement).display !== "none");
-        const mainSize = parseFloat(getComputedStyle(row.querySelector(".quota-number")).fontSize);
+        // 主数字旧类 .quota-number 已随渲染改版消失,现行主百分比在 .val .v 里
+        const mainSize = parseFloat(getComputedStyle(row.querySelector(".val .v")).fontSize);
         const secondarySize = secondary ? parseFloat(getComputedStyle(secondary.querySelector("b")).fontSize) : 0;
         return { ok: overflow.length === 0 && visible && (form !== "panel" || !dual || mainSize >= secondarySize * 1.4),
           overflow: overflow.map((e) => e.textContent), visible, mainSize, secondarySize, rowHeight: rr.height };

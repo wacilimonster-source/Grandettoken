@@ -6,8 +6,7 @@
 //! CRC32 覆盖 payload,大端追加 4 字节。
 
 use super::crypto::{
-    base64url_decode, base64url_encode, hex_decode, hex_encode, random_master_key, KEY_LEN,
-    RELAY_ID_LEN,
+    base64url_decode, base64url_encode, hex_decode, hex_encode, KEY_LEN, RELAY_ID_LEN,
 };
 use super::error::{SyncError, GIST_ID_INVALID, INVALID_CODE, SOURCE_INVALID};
 
@@ -164,11 +163,6 @@ pub fn source_from_file_name(name: &str) -> Option<String> {
 
 pub fn is_source_file_name(name: &str) -> bool {
     source_from_file_name(name).is_some()
-}
-
-/// 生成一个新的同步码(新 Gist 用)。
-pub fn new_sync_code(relay_id: [u8; RELAY_ID_LEN]) -> Result<SyncCode, SyncError> {
-    Ok(SyncCode::new(relay_id, random_master_key()?))
 }
 
 #[cfg(test)]

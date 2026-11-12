@@ -1083,18 +1083,6 @@ impl Store {
         self.series_scoped(provider_id, None, from_ts, to_ts, buckets)
     }
 
-    /// 同 [`Self::series`],但只看同一把密钥的账。
-    pub fn series_fp(
-        &self,
-        provider_id: &str,
-        key_fp: &str,
-        from_ts: i64,
-        to_ts: i64,
-        buckets: usize,
-    ) -> Result<Vec<f64>, String> {
-        self.series_scoped(provider_id, Some(key_fp), from_ts, to_ts, buckets)
-    }
-
     fn series_scoped(
         &self,
         provider_id: &str,
@@ -1695,18 +1683,6 @@ impl Store {
         Ok(())
     }
 
-    /// 反查:有哪些渠道正引用这个箱子条目。删前拦截与列表标注都靠它。
-    pub fn vault_ref_channels(&self, vault_id: &str) -> Result<Vec<String>, String> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT channel_id FROM vault_refs WHERE vault_id = ?1 ORDER BY channel_id")
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map(params![vault_id], |r| r.get::<_, String>(0))
-            .map_err(|e| e.to_string())?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
-    }
-
     /// 全部引用关系,一次读出来给界面批量渲染(避免逐条箱子条目各查一次)。
     pub fn vault_ref_pairs(&self) -> Result<Vec<(String, String)>, String> {
         let mut stmt = self
@@ -2062,8 +2038,9 @@ mod tests {
             ("hapi".to_string(), "uuid-b".to_string()),
         ])
         .unwrap();
-        assert_eq!(s.vault_ref_channels("uuid-a").unwrap(), vec!["4sapi".to_string()]);
-        assert_eq!(s.vault_ref_channels("uuid-b").unwrap(), vec!["hapi".to_string()]);
+        let pairs = s.vault_ref_pairs().unwrap();
+        assert!(pairs.contains(&("4sapi".to_string(), "uuid-a".to_string())));
+        assert!(pairs.contains(&("hapi".to_string(), "uuid-b".to_string())));
 
         // 第二次对账:4sapi 改引用 uuid-c,hapi 取消引用 —— 旧行必须消失
         s.vault_ref_rebuild(&[
@@ -2071,11 +2048,13 @@ mod tests {
             ("hapi".to_string(), "uuid-b".to_string()),
         ])
         .unwrap();
+        let pairs = s.vault_ref_pairs().unwrap();
         assert!(
-            s.vault_ref_channels("uuid-a").unwrap().is_empty(),
+            !pairs.iter().any(|(_, v)| v == "uuid-a"),
             "旧的 uuid-a 行必须被清掉,否则列表会说谎"
         );
-        assert_eq!(s.vault_ref_channels("uuid-c").unwrap(), vec!["4sapi".to_string()]);
+        assert!(pairs.contains(&("4sapi".to_string(), "uuid-c".to_string())));
+        assert!(pairs.contains(&("hapi".to_string(), "uuid-b".to_string())));
 
         // 第三次对账:什么都不剩(全部取消引用)
         s.vault_ref_rebuild(&[]).unwrap();
@@ -2087,7 +2066,13 @@ mod tests {
             ("hapi".to_string(), "uuid-shared".to_string()),
         ])
         .unwrap();
-        let mut got = s.vault_ref_channels("uuid-shared").unwrap();
+        let mut got: Vec<String> = s
+            .vault_ref_pairs()
+            .unwrap()
+            .iter()
+            .filter(|(_, v)| v == "uuid-shared")
+            .map(|(c, _)| c.clone())
+            .collect();
         got.sort();
         assert_eq!(got, vec!["4sapi".to_string(), "hapi".to_string()]);
     }

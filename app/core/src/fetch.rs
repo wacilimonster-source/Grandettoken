@@ -1383,37 +1383,20 @@ async fn fetch_codex_reset_credits(
     crate::codex::inventory(&body, now_ts()).map_err(str::to_string)
 }
 
-/// 桌面端凭据读取器。**生产环境默认启用**;`cfg!(test)` 下默认**关闭** ——
-/// 单测绝不能真去起 WorkBuddy 进程(那会让测试依赖本机装了什么,还会把并发测试拖慢,
-/// 2026-10-19 就因此让两条无关用例挂掉)。要测这条路径的用例用 `set_desktop_reader` 显式打开。
-type DesktopReader = dyn Fn() -> Vec<String> + Send + Sync;
-
-static DESKTOP_READER: std::sync::RwLock<Option<&'static DesktopReader>> = std::sync::RwLock::new(None);
-
-/// 测试里"永远读不到"的替身。只在测试构建里存在 —— 放外面会报"static is never used"
-/// (v0.1.41 的发版记录说"0 警告",那是 `cargo test` 口径;`cargo check --all-targets`
-/// 当时其实带着这一条)。
-#[cfg(test)]
-static NO_DESKTOP_READER: fn() -> Vec<String> = Vec::new;
-
-/// 读**全部**桌面端候选(国内版优先,其次国际版,再其次历史备份)。
+/// 读桌面端凭据候选。`region`:`Some(true)` 只国际版 / `Some(false)` 只国内版 /
+/// `None` 全部(国内版优先,其次国际版,再其次历史备份 —— 签到侧逐份试的旧口径)。
 ///
 /// 为什么给全部:同一台机器可能同时登着国内版与国际版(两套凭据各自有效),
 /// 而历史备份里的 token 可能已被上游作废(未过期但 401)—— 上层按 401 换下一份,
 /// 比直接让用户重新登录更省事。
-/// 只读某一个区的桌面端候选。`region`:`Some(true)` 国际版 / `Some(false)` 国内版 /
-/// `None` 全部(签到侧逐份试的旧口径)。
 ///
 /// 分区不是优化:国际版 token 打国区域名一定 401(反之亦然),两个渠道混用同一份
 /// 列表会让每轮先失败一次,真正的凭据失效被 `cred-switch` 噪音埋掉。
 fn read_desktop_tokens_region(region: Option<bool>) -> Vec<String> {
-    if let Ok(g) = DESKTOP_READER.read() {
-        if let Some(f) = *g {
-            return f();
-        }
-    }
     if cfg!(test) {
-        // 单测默认不碰本机凭据(见上面那段注释)
+        // 单测绝不能真去碰本机凭据:会让测试依赖本机装了什么,还会把并发测试拖慢
+        // (2026-10-19 就因此让两条无关用例挂掉)。v0.3.36 起测试隔离只靠这个早退,
+        // 不再保留可注入的 DESKTOP_READER 钩子(旧注入链无人使用,已删)。
         return Vec::new();
     }
     let now_ms = chrono::Local::now().timestamp_millis();
@@ -1462,25 +1445,6 @@ pub fn auto_hide_candidates(cfg: &Config) -> Vec<String> {
         .filter(|id| !cfg.user_touched_channels.iter().any(|t| t == id))
         .map(str::to_string)
         .collect()
-}
-
-/// 测试专用:替换/关闭桌面端读取器。返回前一个(便于恢复)。
-/// 目前没有用例需要打开它(桌面端链路由 `workbuddy` 模块的单测 + 一条默认 ignore 的
-/// 真机测试覆盖),但保留入口:以后要测"凭据候选顺序"时不必再改生产代码。
-#[cfg(test)]
-#[allow(dead_code)]
-pub(crate) fn set_desktop_reader(r: Option<&'static DesktopReader>) -> Option<&'static DesktopReader> {
-    let mut g = DESKTOP_READER.write().ok()?;
-    let prev = *g;
-    *g = r;
-    prev
-}
-
-/// 测试专用:恢复"读不到"的默认姿态。
-#[cfg(test)]
-#[allow(dead_code)]
-pub(crate) fn disable_desktop_reader() {
-    let _ = set_desktop_reader(Some(&NO_DESKTOP_READER));
 }
 
 /// 取一个渠道的凭据候选(按可信度排序)。空的第一个返回值 = 没有可用凭据;
@@ -3990,12 +3954,6 @@ mod tests {
         let text = crate::diaglog::read_log();
         assert!(!text.contains(secret), "查询参数里的密钥不该落盘:{text}");
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// 单测里把"读桌面端凭据"关掉:它要起 WorkBuddy 进程、还依赖本机装没装,
-    /// 两条都不该出现在单元测试里。测这条路径的用例自己 set_desktop_reader。
-    fn _init_desktop_off() {
-        disable_desktop_reader();
     }
 
     fn test_rate() -> FxRate {

@@ -95,20 +95,6 @@ const points = (v) =>
     ? "——"
     : v.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
 
-/** 距今天还有几天(向上取整:不足一天也算 1 天,不说"0 天后过期")。 */
-function daysUntil(ts) {
-  if (!ts) return null;
-  return Math.ceil((ts * 1000 - Date.now()) / 86400000);
-}
-
-/** 到期紧迫度:7 天内红、30 天内黄,其余不强调。 */
-function expClass(days, warnDays = 30, critDays = 7) {
-  if (days === null) return "";
-  if (days <= critDays) return "b";
-  if (days <= warnDays) return "w";
-  return "";
-}
-
 /** 到期相对时间。今天/明天按**本地自然日**判断,不用"不足 24 小时"顶替今天;
  *  跨过到期时刻一律写「已到期,待刷新」,不出现负数倒计时。 */
 function expiryRelative(ts) {
@@ -1482,28 +1468,6 @@ function revealFailFull(rowEl) {
   if (sub && full && sub.scrollWidth > sub.clientWidth + 1) full.hidden = false;
 }
 
-/**
- * 展开后的滚动定位:动画走完(320ms)再量,否则量到的是展开前的高度。
- * 卡片比列表还高时让行头贴住列表顶部,否则让卡片下沿进入可视区。
- */
-const rowRevealTimers = {};
-function scheduleRowReveal(id) {
-  clearTimeout(rowRevealTimers[id]);
-  rowRevealTimers[id] = setTimeout(() => {
-    const row = document.querySelector(`.row[data-id="${id}"]`);
-    const list = $("list");
-    if (!row || !list || !row.classList.contains("open")) return;
-    const lr = list.getBoundingClientRect();
-    const rr = row.getBoundingClientRect();
-    const top = rr.top - lr.top + list.scrollTop;
-    if (rr.height > lr.height || top < list.scrollTop) {
-      list.scrollTop = Math.max(0, top);
-    } else if (top + rr.height > list.scrollTop + lr.height) {
-      list.scrollTop = top + rr.height - lr.height;
-    }
-  }, 340);
-}
-
 function renderDetail(c, inDialog = false) {
   const noKey = !c.hasKey;
   const failed = c.hasKey && !c.valid && !c.stale;
@@ -1950,12 +1914,6 @@ function hvText(h) {
   if (h.amount !== null && h.amount !== undefined) return money(h.amount, h.unit || "CNY");
   if (h.points !== null && h.points !== undefined) return `${points(h.points)} 分`;
   return "——";
-}
-
-/** 非人民币并列时的写法:只标币种,不折算(Q1 的裁断:静默换算等于改了用户的钱数)。 */
-function otherMoneyTxt(o) {
-  const sym = o.unit === "USD" ? "$" : o.unit === "CNY" ? "¥" : o.unit + " ";
-  return sym + (Math.abs(o.amount) < 100 ? o.amount.toFixed(1) : o.amount.toFixed(0));
 }
 
 /** 一轮里 ≥3 个渠道取不到数:多半是网络或系统代理,不是渠道坏了 —— 明说(D14)。 */
@@ -2519,9 +2477,6 @@ function setCompactW(w) {
 // 胶囊显示哪些渠道:设置里选中的按顺序轮播;一个都没选就自动取最紧张的那个
 // (总额不能告诉你哪个 Key 要挂了,所以自动模式只挑最紧的)
 const PILL = { list: [], sorted: [], idx: 0, auto: true, degraded: false };
-// 8 秒一换(原 5 秒偏赶);悬停不暂停但节奏 ×3 —— 指示点让"会变"可见,
-// 所以不需要暂停(暂停曾被误认为轮播坏了),只需要"别在用户盯着看时刚好切走"
-const PILL_ROTATE_MS = 8000;
 
 function renderPill(sorted) {
   PILL.sorted = sorted;
@@ -3692,7 +3647,6 @@ const COMPACT_MIN_W = 220;
 const COMPACT_MAX_W = 580;
 const COMPACT_H = 46;
 let SIZE_APPLYING = false;   // 程序化 setSize 期间忽略缩放回调
-let RESIZING = false;        // 保留给吸附松手判定;固定尺寸下恒为 false
 let pillW = 200; // 胶囊实测内容宽(已是当前档位的最终逻辑像素),fitPill 维护
 
 function panelLayout() {
@@ -3706,8 +3660,8 @@ function panelContentSize(layout = panelLayout()) {
 }
 function compactMaxPx() {
   const u = fsU();
-  const raw = Number(CFG && CFG.compactMaxW) || Math.round(380 * u);
-  return clampNum(Math.round(raw), Math.round(COMPACT_MIN_W * u), Math.round(COMPACT_MAX_W * u));
+  // 原可由配置 compactMaxW 调节;唯一写入口 save_window_size 已随固定尺寸改版废弃(v0.3.36)。
+  return clampNum(Math.round(380 * u), Math.round(COMPACT_MIN_W * u), Math.round(COMPACT_MAX_W * u));
 }
 
 /** 当前字号档位下某形态的**窗口**尺寸(内容 + 两侧透明边距)。 */
@@ -3791,19 +3745,6 @@ async function setPanelLayout(layout) {
 }
 function togglePanelLayout() {
   return setPanelLayout(panelLayout() === "double" ? "single" : "double");
-}
-
-async function savePosSoon() {
-  if (DOCK.on) return;
-  try {
-    const pos = await appWindow.outerPosition();
-    const x = pos.x, y = pos.y;
-    if (CFG.winX !== x || CFG.winY !== y) {
-      CFG.winX = x;
-      CFG.winY = y;
-      invoke("save_window_pos", { x, y }).catch(() => {});
-    }
-  } catch {}
 }
 
 // DPI / 显示器缩放变化后按固定尺寸重新落一次;不再有用户拖拽 resize。
@@ -4112,7 +4053,7 @@ function dockExit(keepPos) {
 
 /** 松手判定:停止移动 250ms 后看窗口是不是贴着屏幕左/右边缘。 */
 function scheduleSettleCheck() {
-  if (RESIZING || DOCK.selfMove) return;
+  if (DOCK.selfMove) return;
   clearTimeout(DOCK.settleTimer);
   DOCK.settleTimer = setTimeout(async () => {
     if (DOCK.selfMove) return;
@@ -5101,17 +5042,6 @@ async function syncForgetGo() {
   }
 }
 
-async function syncDisconnect() {
-  if (!confirm("断开 GitHub 授权后,本机将不能再发布;手机仍可用同步码匿名读取。继续？")) return;
-  try {
-    await invoke("sync_disconnect_github");
-    await loadSyncStatus();
-    showToast("已断开 GitHub 授权");
-  } catch (e) {
-    showToast("断开失败: " + syncUserMsg(e), true);
-  }
-}
-
 async function syncSetChannelsFromUI() {
   const ids = [...document.querySelectorAll("#syncChannels input[data-ch]")]
     .filter((x) => x.checked)
@@ -5488,7 +5418,7 @@ async function previewTick() {
   const now = Date.now();
   if (now - previewAt < 180) return;
   previewAt = now;
-  if (!CFG || !CFG.dockEnabled || DOCK.on || DOCK.selfMove || RESIZING) return setDockPreview(null);
+  if (!CFG || !CFG.dockEnabled || DOCK.on || DOCK.selfMove) return setDockPreview(null);
   try {
     const info = await monitorInfo();
     if (!info) return;

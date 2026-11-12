@@ -13,7 +13,7 @@ use crate::secrets;
 use crate::store::Store;
 
 use super::model::{
-    decimal_string, format_micros, parse_decimal_micros, safe_unit, sanitize_name, sum_decimal_strings,
+    decimal_string, format_micros, parse_decimal_micros, safe_unit, sanitize_name,
     ChannelKind, ChannelSnapshot, CheckinItem, CheckinSnapshot, CheckinStatus, ExpiringSnapshot,
     HistoryPoint, OtherMoney, SyncSnapshot, TotalsSnapshot, MAX_HISTORY, MAX_WINDOWS,
 };
@@ -412,14 +412,6 @@ pub(crate) fn build_totals(channels: &[ChannelSnapshot]) -> TotalsSnapshot {
             .collect(),
         today: cny_today.map(format_micros),
     }
-}
-
-/// 给手机端做合计重算用：同一组十进制字符串求和的公开入口。
-pub fn sum_amounts<'a, I>(values: I) -> Option<String>
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    sum_decimal_strings(values)
 }
 
 #[cfg(test)]

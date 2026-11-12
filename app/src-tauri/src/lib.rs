@@ -16,7 +16,7 @@ mod sync_cmds;
 mod download;
 mod gateway;
 pub use sync_cmds::{
-    sync_create, sync_delete_relay, sync_disconnect_github, sync_forget, sync_github_status,
+    sync_create, sync_disconnect_github, sync_forget,
     sync_join, sync_oauth_cancel, sync_oauth_poll, sync_oauth_start, sync_preview,
     sync_publish_now, sync_qr_svg, sync_read_group, sync_recovery_candidates, sync_restore_group,
     sync_rotate, sync_set_channels, sync_set_enabled,
@@ -295,18 +295,6 @@ async fn set_config(app: tauri::AppHandle, state: State<'_, AppState>, config: C
         }
         if incoming.win_y.is_none() {
             incoming.win_y = cur.win_y;
-        }
-        if incoming.win_w.is_none() {
-            incoming.win_w = cur.win_w;
-        }
-        if incoming.win_h.is_none() {
-            incoming.win_h = cur.win_h;
-        }
-        if incoming.compact_max_w.is_none() {
-            incoming.compact_max_w = cur.compact_max_w;
-        }
-        if !incoming.resize_hint_seen {
-            incoming.resize_hint_seen = cur.resize_hint_seen;
         }
         // 选中项口径是后端从客户端文件里读出来的(前端手里永远是旧的):
         // 整份覆盖会把刚学会的抹掉,所以后端已知的键以库里为准。
@@ -653,14 +641,6 @@ async fn clear_key_ref(app: tauri::AppHandle, id: String) -> Result<(), String> 
     lock_rw(&store).vault_ref_clear(&id)?;
     app.state::<AppState>().fetcher.forget_channel(&lock_rw(&store), &id);
     Ok(())
-}
-
-/// 有哪些渠道正引用这个箱子条目。密钥箱列表与删除前拦截都要它。
-/// 反查"这把被哪些渠道用着"。**扫真实指针,不查索引**(N30:以前注册了却没人调,
-/// 而且它读的是索引 —— 注释说"删除前拦截要它",实现却在浏览器里自己过滤)。
-#[tauri::command]
-async fn vault_ref_channels(app: tauri::AppHandle, vault_id: String) -> Result<Vec<String>, String> {
-    ref_channels_by_pointer(&app, &vault_id).await
 }
 
 /// 全部引用关系(渠道 → 箱子条目)。密钥箱列表一次读出来批量渲染。
@@ -2863,30 +2843,6 @@ async fn save_window_pos(state: State<'_, AppState>, x: i32, y: i32) -> Result<(
     .await
 }
 
-/// 保存面板/紧凑条尺寸。只更新传入的字段,不整份覆盖配置。
-/// 前端在 resize 结束 250ms 防抖后调用一次,不做高频写盘。
-#[tauri::command]
-async fn save_window_size(
-    state: State<'_, AppState>,
-    w: Option<u32>,
-    h: Option<u32>,
-    compact_max_w: Option<u32>,
-) -> Result<(), String> {
-    refuse_if_config_broken()?;
-    save_config_off_main(&state, move |c| {
-        if let Some(w) = w {
-            c.win_w = Some(w.clamp(200, 2000));
-        }
-        if let Some(h) = h {
-            c.win_h = Some(h.clamp(200, 2000));
-        }
-        if let Some(cw) = compact_max_w {
-            c.compact_max_w = Some(cw.clamp(150, 1200));
-        }
-    })
-    .await
-}
-
 /// 把请求的窗口坐标夹进"至少有一条边露在外面"的范围。
 /// 多屏环境下用户拔掉副屏后,记下的坐标会落在屏幕外,窗口看起来像消失了。
 /// 至少要露出 KEEP_X × KEEP_Y 的可视区,保证还能拖回来。
@@ -3173,8 +3129,7 @@ struct VaultDeleteResult {
 
 /// 按**真实指针**反查:有哪些渠道正引用这个箱子条目。
 ///
-/// 与 `store.vault_ref_channels`(查索引)的根本区别:这里问的是凭据管理器 ——
-/// **书架说了算**。索引读坏了、过期了、被删了,都不影响这个判断。
+/// 这里问的是凭据管理器 —— **书架说了算**。索引读坏了、过期了、被删了,都不影响这个判断。
 ///
 /// 渠道清单来自配置(内置渠道 + 自定义渠道)。已删除渠道留下的孤儿指针**扫不到**
 /// (keyring 不提供枚举),这一点在设计稿 §6 里写明了。
@@ -6354,7 +6309,6 @@ pub fn run() {
             install_update,
             skip_update_version,
             save_window_pos,
-            save_window_size,
             app_version,
             take_startup_error,
             get_model_catalog,
@@ -6401,7 +6355,6 @@ pub fn run() {
             key_source,
             set_key_ref,
             clear_key_ref,
-            vault_ref_channels,
             vault_ref_map,
             probe_channel,
             run_diagnostic,
@@ -6423,8 +6376,6 @@ pub fn run() {
             sync_rotate,
             sync_forget,
             sync_disconnect_github,
-            sync_delete_relay,
-            sync_github_status,
             sync_oauth_start,
             sync_oauth_poll,
             sync_oauth_cancel,

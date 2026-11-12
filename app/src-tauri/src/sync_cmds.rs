@@ -63,15 +63,6 @@ pub enum OAuthPoll {
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GithubStatus {
-    pub configured: bool,
-    pub connected: bool,
-    pub login: Option<String>,
-    pub user_id: Option<i64>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SyncStatus {
     pub enabled: bool,
     pub relay_id: Option<String>,
@@ -395,19 +386,6 @@ async fn github_user(token: &str) -> Result<GithubUserResponse, String> {
 }
 
 #[tauri::command]
-pub async fn sync_github_status(
-    state: State<'_, AppState>,
-) -> Result<GithubStatus, String> {
-    let cfg = cfg_of(state.inner())?;
-    Ok(GithubStatus {
-        configured: oauth_client_id(&cfg).is_some(),
-        connected: github_token_opt().is_some(),
-        login: cfg.sync_github_login,
-        user_id: cfg.sync_github_user_id,
-    })
-}
-
-#[tauri::command]
 pub async fn sync_oauth_start(
     state: State<'_, AppState>,
 ) -> Result<OAuthStart, String> {
@@ -475,7 +453,7 @@ pub async fn sync_oauth_poll(app: AppHandle) -> Result<OAuthPoll, String> {
     let cfg = cfg_of(app.state::<AppState>().inner())?;
     let Some(client_id) = oauth_client_id(&cfg) else {
         return Ok(OAuthPoll::Error {
-            code: "SYNC_NOT_CONFIGURED".into(),
+            code: sync::error::NOT_CONFIGURED.into(),
             message: "桌面 OAuth App 未配置 client_id".into(),
         });
     };
@@ -1255,40 +1233,6 @@ pub async fn sync_disconnect_github(
     })
     .await?;
     secrets::sync_delete(secrets::SYNC_OAUTH_ACCOUNT)?;
-    emit_status(&app);
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn sync_delete_relay(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    gist_id: String,
-) -> Result<(), String> {
-    let _guard = PUBLISH_LOCK.lock().await;
-    let token = github_token()?;
-    let client = GistClient::new(Some(token)).map_err(err_str)?;
-    client.delete_gist(&gist_id).await.map_err(err_str)?;
-    let cfg = cfg_of(state.inner())?;
-    if cfg.sync_relay_id.as_deref() == Some(gist_id.as_str()) {
-        if let Some(source) = cfg.sync_source.as_deref() {
-            let store = state.store.clone();
-            let s = lock_rw(&store);
-            let _ = publish::clear_state(&s, source);
-        }
-        let _ = secrets::sync_delete(&secrets::sync_key_account(&gist_id));
-        save_sync_config(state.inner(), |c| {
-            c.sync_enabled = false;
-            c.sync_relay_id = None;
-            c.sync_source = None;
-            c.sync_key_epoch = 0;
-            c.sync_last_upload_at = None;
-            c.sync_next_allowed_at = None;
-        })
-        .await?;
-    } else {
-        let _ = secrets::sync_delete(&secrets::sync_key_account(&gist_id));
-    }
     emit_status(&app);
     Ok(())
 }
