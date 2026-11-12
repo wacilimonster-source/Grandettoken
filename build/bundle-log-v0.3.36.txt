@@ -1,0 +1,38 @@
+=== env 检查 ===
+  私钥路径: 已设
+  密码: 空串(正确)
+  toolchain: host: x86_64-pc-windows-gnu
+  cargo-tauri: tauri-cli 2.11.4
+
+=== bundle ===
+strip G:\game\nw\Grandettoken\app\src-tauri\target\debug\build\webview2-com-sys-0ffd3f22bbbe6f2b\out\x64\WebView2Loader.dll (static link, single exe)
+strip G:\game\nw\Grandettoken\app\src-tauri\target\debug\build\webview2-com-sys-0ffd3f22bbbe6f2b\out\x64\WebView2Loader.dll.lib (static link, single exe)
+strip G:\game\nw\Grandettoken\app\src-tauri\target\debug\build\webview2-com-sys-e4ab5af58b84d3bc\out\x64\WebView2Loader.dll (static link, single exe)
+strip G:\game\nw\Grandettoken\app\src-tauri\target\debug\build\webview2-com-sys-e4ab5af58b84d3bc\out\x64\WebView2Loader.dll.lib (static link, single exe)
+stash Grandettoken.exe -> G:\game\nw\Grandettoken\app\src-tauri\target\release-pre-bundle-62252 (forces a real relink)
+        Info Looking up installed tauri packages to check mismatched versions...
+   Compiling tokenscope v0.3.36 (G:\game\nw\Grandettoken\app\src-tauri)
+   Compiling tokenscope-core v0.1.0 (G:\game\nw\Grandettoken\app\core)
+warning: linker stderr: corrupt .drectve at end of def file
+         Warning: corrupt .drectve at end of def file
+         Warning: corrupt .drectve at end of def file
+         Warning: corrupt .drectve at end of def file
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `tokenscope` (bin "tokenscope") generated 1 warning
+    Finished `release` profile [optimized] target(s) in 3m 13s
+       Built application at: G:\game\nw\Grandettoken\app\src-tauri\target\release\Grandettoken.exe
+        Info Patching G:\game\nw\Grandettoken\app\src-tauri\target\release\Grandettoken.exe with bundle type information: nsis
+        Info Target: x64
+     Running makensis to produce G:\game\nw\Grandettoken\app\src-tauri\target\release\bundle\nsis\Grandettoken_0.3.36_x64-setup.exe
+    Finished 1 bundle at:
+        G:\game\nw\Grandettoken\app\src-tauri\target\release\bundle\nsis\Grandettoken_0.3.36_x64-setup.exe
+
+    Finished 1 updater signature at:
+        G:\game\nw\Grandettoken\app\src-tauri\target\release\bundle\nsis\Grandettoken_0.3.36_x64-setup.exe.sig
+
+ok    Grandettoken.exe rebuilt (SHA-256 changed)
+ok    import table clean (no WebView2Loader.dll) - Grandettoken.exe
+
+=== exit=0 ===

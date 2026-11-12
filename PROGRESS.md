@@ -4416,3 +4416,13 @@ github.com:443 超时,第 2 次通过 —— 本机网络偶发抖动,`gh api` �
   `node --check`、CSS 形态门（1052 条）、jsdom 冒烟 **182/182**、`verify-codex-layout`
   **48/48**（修复其既有损坏：`.quota-number` 旧类已不存在）、`verify-refresh-stability` EXIT=0。
   IPC 三角复验：90 个被调命令全部已注册，被删 4 命令零残留。
+
+**发布(2026-11-12)**:tag `v0.3.36`,release 提交 `da582aa`。安装包
+`Grandettoken_0.3.36_x64-setup.exe` 5,693,162 字节,SHA-256
+`5d89b9b15679a0f38d6313c74f470bafe741aae911d5f67f5e2a8ca55a1651c7`;`.sig` 424 字节;
+`latest.json` 1,404 字节。`verify-release.js` **14 项全 PASS**(首跑 Node fetch 直连超时 ——
+本机设了 `HTTPS_PROXY=127.0.0.1:7897`,而 Node 24 的 fetch 默认不读代理环境变量;
+加 `--use-env-proxy` 后一次通过)。打包 3 分 13 秒,日志 `build/bundle-log-v0.3.36.txt`,
+导入表检查确认无 WebView2Loader.dll 混入;主程序 10,302,464 → **10,266,112 字节**
+(−0.35%,死代码清理兑现)。gh 未登录,按 RELEASE.md 用 `git credential fill` 取
+token 走 `GH_TOKEN`;三件套核验齐全(`gh release view --json assets` 3 个)。
