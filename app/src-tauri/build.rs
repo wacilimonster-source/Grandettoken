@@ -15,27 +15,47 @@ use std::path::PathBuf;
 /// 删掉 crate 复制出来的那份真 DLL。
 /// 它和我们的归档都能满足 `-lWebView2Loader.dll`,谁先被搜到取决于 -L 顺序;
 /// 删掉它,搜索路径上就只剩静态归档可命中。
-/// OUT_DIR = <target>/<profile>/build/<pkg>-<hash>/out,往上第三层就是 build 目录。
+///
+/// 目录布局**两种都要认**:`build/<pkg>-<hash>/out`(cargo ≤1.99)与
+/// `build/<pkg>/<hash>/out`(cargo 1.100 起改了布局)。用固定层数推算会在新布局下
+/// 算错目录、静默什么都不删 —— tauri-build 2.6.3 正是这么坏的(2.7.2 才修),
+/// 所以这里先找名为 `build` 的祖先,再往下扫两代,不猜层数。
 fn strip_crate_dll() {
     let Ok(out) = std::env::var("OUT_DIR") else { return };
-    let Some(build_dir) = PathBuf::from(out).ancestors().nth(2).map(PathBuf::from) else {
+    let Some(build_root) = PathBuf::from(out)
+        .ancestors()
+        .find(|p| p.file_name() == Some(std::ffi::OsStr::new("build")))
+        .map(PathBuf::from)
+    else {
         return;
     };
-    let Ok(entries) = std::fs::read_dir(&build_dir) else { return };
+    let Ok(entries) = std::fs::read_dir(&build_root) else { return };
     for e in entries.flatten() {
-        if !e.file_name().to_string_lossy().starts_with("webview2-com-sys-") {
+        // 旧布局目录名带 `-<hash>`,新布局是裸包名 —— 前缀匹配两种都覆盖
+        if !e.file_name().to_string_lossy().starts_with("webview2-com-sys") {
             continue;
         }
         // 要删两个:`WebView2Loader.dll` 本身,以及 `WebView2Loader.dll.lib`。
         // ld 解析 `-lWebView2Loader.dll` 时候选后缀包含 `.lib`,留着那个导入库
         // 它就会命中导入库、照样生成 DLL 依赖(实测踩过)。
+        let mut candidates: Vec<PathBuf> = Vec::new();
         for name in ["WebView2Loader.dll", "WebView2Loader.dll.lib"] {
-            let f = e.path().join("out").join("x64").join(name);
-            if f.exists() {
-                match std::fs::remove_file(&f) {
-                    Ok(()) => println!("cargo:warning=已删除 {} (改静态链接,单 exe 交付)", f.display()),
-                    Err(err) => println!("cargo:warning=删除 {} 失败: {}", f.display(), err),
+            // 旧布局:pkg-hash/out/x64/*
+            candidates.push(e.path().join("out").join("x64").join(name));
+            // 新布局:pkg/<hash>/out/x64/*(hash 目录名不可预知,枚举)
+            if let Ok(hs) = std::fs::read_dir(e.path()) {
+                for h in hs.flatten() {
+                    candidates.push(h.path().join("out").join("x64").join(name));
                 }
+            }
+        }
+        for f in candidates {
+            if !f.exists() {
+                continue;
+            }
+            match std::fs::remove_file(&f) {
+                Ok(()) => println!("cargo:warning=已删除 {} (改静态链接,单 exe 交付)", f.display()),
+                Err(err) => println!("cargo:warning=删除 {} 失败: {}", f.display(), err),
             }
         }
     }
