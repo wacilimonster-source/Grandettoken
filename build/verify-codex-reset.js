@@ -63,6 +63,8 @@ w.CHANNELS = [{
   valid: true,
 }];
 w.DETAIL_ID = "codex";
+// 建议会按十二小时有效期检查需求，固定夹具必须使用同一时钟。
+w.Date.now = () => w.CHANNELS[0].updatedAt * 1000;
 
 function adviceFor(kind) {
   const now = kind === "urgent";
