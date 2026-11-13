@@ -991,6 +991,7 @@ async fn fetch_once_inner(
         // 跨域名回退时 Origin/Referer 必须跟着走,别把主域的头发给备用域(P2-3)
         let val = match k.as_ref() {
             "Origin" | "Referer" => same_origin_header(url, k).unwrap_or_else(|| v.to_string()),
+            "User-Agent" if def.id == "doubao" => crate::doubao::app_ua().to_string(), // 豆包 UA 版本运行时探测替换(钉死已腐烂,见 checkin.rs / core::doubao_client)
             _ => v.to_string(),
         };
         req = req.header(*k, val);

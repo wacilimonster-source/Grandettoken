@@ -3473,32 +3473,6 @@ fn checkin_credentials(app: &tauri::AppHandle, def: &checkin::CheckinDef) -> Res
                 None => Err("没检测到 MiniMax Code 登录 · 打开一次 MiniMax Code 即可".into()),
             }
         }
-        checkin::CheckinAuth::DoubaoWeb => {
-            // 与取数同一条链(凭据来源必须一致):手动粘贴的 Cookie(凭据管理器)
-            // 优先,登录窗捕获的网页会话现读兜底 —— 与取数 WebSession 同一顺序。
-            let mut out: Vec<checkin::Cred> = Vec::new();
-            match secrets::resolve(def.id) {
-                Ok(secrets::Resolved::Inline(k)) | Ok(secrets::Resolved::Vault { key: k, .. }) => {
-                    if tokenscope_core::doubao::cookie_header_of(&k).is_some() {
-                        out.push(checkin::Cred::Doubao { cookie: k });
-                    }
-                }
-                Ok(secrets::Resolved::Dangling(vid)) => {
-                    return Err(format!(
-                        "引用的密钥箱条目已被删除(条目 id={vid})—— 去「密钥箱」检查,或重新粘贴 Cookie"
-                    ));
-                }
-                Ok(secrets::Resolved::None) => {}
-                Err(e) => return Err(e),
-            }
-            if let Some(session) = doubao_web::session_of(app) {
-                out.push(checkin::Cred::Doubao { cookie: session });
-            }
-            if out.is_empty() {
-                return Err("未检测到豆包登录 · 在渠道卡点「登录豆包账号」".into());
-            }
-            Ok(out)
-        }
     }
 }
 

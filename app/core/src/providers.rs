@@ -1393,7 +1393,8 @@ pub const PROVIDERS: &[ProviderDef] = &[
     },
     // 豆包工作(积分型):doubao.com 网页会话,体验额度读数在任务面板接口里,
     // 每日签到 +200。接口按客户端环境放行 —— 查询串(平台参数 + 派生设备号)在
-    // fetch_once_inner 的 doubao 分支现拼,UA/Referer/Origin 静态携带(core::doubao)。
+    // fetch_once_inner 的 doubao 分支现拼,Referer/Origin 静态携带;UA 发送前被
+    // 运行时探测值替换(core::doubao_client,钉死版本已腐烂)。
     // 单位是「额度」不是「分」,前端按 unit 渲染。
     ProviderDef {
         id: "doubao",

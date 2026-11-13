@@ -4764,3 +4764,22 @@ src-tauri `cargo check --all-targets --locked` exit 0;
   本机 `node --use-env-proxy build/verify-release.js` 二次核验 PASS，固定更新端点返回 0.3.43，
   安装包公开下载成功。本机缺少对应 CI 原始产物的两项逐字对比按规则 SKIP，已核对 CI 日志通过。
 - 真实 Google 登录后的在线取数按用户要求留待后续验收，发布说明及 README 均已注明。
+
+## 2026-11-14 v0.3.44 移除豆包工作自动签到,渠道保留额度取数
+
+- 服务端自 2026-10-24 起对豆包活动接口收紧:挂件 claim 五次全部 710010702「系统错误」
+  (claim 后回查仍是未签,按「回查是唯一成功证据」降级为可重试),官方客户端手动领取
+  同样失败(「签到失败,请稍后重试」);detail 取数始终正常。完整复盘与证据链见
+  docs/report/doubao-checkin-710010702-2026-11-14.md。
+- 移除 CHECKINS 的豆包项、CheckinAuth::DoubaoWeb / Cred::Doubao 凭据链、parse_doubao
+  及其状态机测试与 claim 专用常量;保留渠道卡、登录窗、Cookie 自救、额度取数、
+  登出清会话与「今日签到」展示摘要。
+- 新增 core/src/doubao_client.rs:运行时从本机豆包客户端(PE 版本资源 + User Data/Last
+  Version)派生 version_code 与 UA,抓包钉值只作兜底;实测新指纹下取数正常,部署当日
+  detail 未被破坏。
+- 评估过 bluechonk/doubao-auto-checkin 的 CDP 驱动真实客户端方案(对风控收紧免疫):
+  属 AGENTS 2.4 高权限能力,且官方客户端被拒期间同样无效,本版未采用,留作后续选项。
+- 门禁串行全绿:core 508 passed / 8 ignored、src-tauri 全目标编译(--locked)、IPC 契约、
+  静默失败、CSS 形态、JS 语法、jsdom 182/182;文件规模预算随清理下调
+  (checkin.rs 2290→2242、lib.rs 6500→6484)。
+

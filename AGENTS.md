@@ -219,6 +219,13 @@ tag 之前**必须**先推 main —— tag 指向的 commit 不在 main 上,GitH
 
 v0.3.42 发布核验补充：`verify-release.js` 的 `notes intact` 检查读取线上 `latest.json.notes`，单独编辑 GitHub Release 正文不会改变检查结果。修正发布说明时需同步核对更新清单，并记录原始失败与修正后的实测结果，不能把原 run 写成全绿。
 
+2026-11-14 豆包签到移除:平台 2026-10-24 起对活动接口收紧,挂件 claim 五次全部
+710010702「系统错误」,连官方客户端手动领取都报错 —— 直连伪接口是在跟风控打追赶战,
+依赖它的功能要有「平台一收紧就下线」的预案,而不是无限堆修补。跟客户端版本联动的参数
+抓包钉死一个月就腐烂(core/src/doubao_client.rs 的运行时探测是这次的落地,带 Golden
+双向验证)。门禁测不出服务端变脸:mock 全绿不妨碍平台开始拒人。渠道保留取数,完整复盘见
+docs/report/doubao-checkin-710010702-2026-11-14.md。
+
 ### 7.1 静默失败:空 catch 必须认领
 
 `build/check-silent-failures.js` 扫前端所有 `catch {}` / `.catch(() => {})`,
