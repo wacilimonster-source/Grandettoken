@@ -25,11 +25,29 @@ try {
 // 换一台机器 / 换个 clone 目录就静默读不到文件,而门禁脚本可能仍然报绿。
 const SRC = path.resolve(__dirname, "..", "app", "src");
 const html = fs.readFileSync(path.join(SRC, "index.html"), "utf8");
-const js = fs.readFileSync(path.join(SRC, "app.js"), "utf8");
+let js = fs.readFileSync(path.join(SRC, "app.js"), "utf8");
+if (process.env.CHECKIN_SENTINEL === "1") {
+  const marker = "CHECKIN_ON.add(x.id);";
+  if (js.split(marker).length !== 2) throw new Error("签到哨兵未命中唯一能力同步入口");
+  js = js.replace(marker, "");
+} else {
+  const { spawnSync } = require("node:child_process");
+  const probe = spawnSync(process.execPath, [__filename], {
+    env: { ...process.env, CHECKIN_SENTINEL: "1" }, encoding: "utf8", timeout: 20000,
+  });
+  if (probe.status !== 1 || !/FAIL 首页与签到中心使用全部后端签到渠道/.test(probe.stdout)) {
+    throw new Error("签到哨兵自检失败：移除能力名单同步后必须被统计回归断言拦截");
+  }
+}
 const vaultJs = fs.readFileSync(path.join(SRC, "vault-view.js"), "utf8");
+const checkinSource = fs.readFileSync(path.join(SRC, "../core/src/checkin.rs"), "utf8");
+const checkinDefs = checkinSource.slice(checkinSource.indexOf("pub const CHECKINS:"), checkinSource.indexOf("pub fn find("));
+const checkinIds = [...checkinDefs.matchAll(/\bid:\s*"([^"]+)"/g)].map((match) => match[1]);
+if (!checkinIds.length) throw new Error("未提取到后端签到渠道");
 
 const dom = new JSDOM(html, { runScripts: "outside-only", pretendToBeVisual: true, url: "http://localhost/" });
 const w = dom.window;
+w.__CHECKIN_IDS = checkinIds;
 
 const CALLS = Object.create(null);
 w.__CALLS = CALLS;
@@ -108,6 +126,7 @@ const HARNESS = `
   const L = () => document.getElementById("list").innerHTML;
   const S = () => document.getElementById("sum").innerHTML;
   const data = window.__DATA;
+  window.__CHECKIN_IDS.forEach(id => CHECKIN_ON.add(id));
 
   try {
     CHANNELS = data.CHANNELS;
@@ -1093,6 +1112,29 @@ const HARNESS = `
 
       delete window.__VAULT;
       delete window.__VAULTREF;
+      const oldChannels = CHANNELS, oldCk = CK, oldProgress = HV.checkin;
+      const allIds = window.__CHECKIN_IDS;
+      CHANNELS = allIds.map(id => Object.assign({}, data.CHANNELS[0], { id, name: id, hidden: false }));
+      window.__CK_ST = allIds.map((id, index) => ({ id, name: id, enabled: true, auto: true,
+        doneToday: index < allIds.length - 2, canTry: true, outcome: index < allIds.length - 2 ? "already" : "retry:ready" }));
+      document.body.classList.add("view-manage");
+      CHECKIN_ON.clear();
+      await loadCheckin();
+      HV.checkin = { total: allIds.length, done: allIds.length - 2, pending: allIds.slice(-2) };
+      renderRiskBand(); renderCheckinCenter();
+      const expectedProgress = (allIds.length - 2) + "/" + allIds.length;
+      ck("首页与签到中心使用全部后端签到渠道", document.querySelector("#sum .check-cell").textContent.includes(expectedProgress)
+        && document.querySelector("#ckTodayBox .cktoday b")?.textContent.includes(expectedProgress)
+        && document.querySelectorAll("#ckTodayBox .ckch").length === allIds.length);
+      ck("每个后端签到渠道都有管理入口", allIds.every(id => !!document.querySelector('#ckManageBox [data-act="ckenable"][data-id="' + id + '"]')));
+      ck("首次状态加载后渠道卡补齐签到控制", allIds.every(id => !!document.querySelector('#chList .ckwrap[data-id="' + id + '"]')));
+      window.__CK_ST.push({ id: "future-checkin", name: "未来签到渠道", enabled: false, auto: false });
+      await loadCheckin();
+      ck("新增和关闭的能力仍进入设置名单", CHECKIN_ON.has("future-checkin")
+        && !!document.querySelector('#ckManageBox [data-act="ckenable"][data-id="future-checkin"]') && ckActiveIds().length === allIds.length);
+      CHANNELS = oldChannels; CK = oldCk; HV.checkin = oldProgress;
+      CHECKIN_ON.clear(); allIds.forEach(id => CHECKIN_ON.add(id));
+      delete window.__CK_ST;
       showTab("index");
     });
     closeManage();

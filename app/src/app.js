@@ -7201,7 +7201,7 @@ async function qoderWebLogin(id, switchAccount = false) {
 let CK = {};            // 渠道 id → checkin_state 的那一条
 let CK_LOG = false;     // 「领取」正在跑
 let CK_ACTIVITY_FILTER = "all";
-const CHECKIN_ON = new Set(["trae", "workbuddy", "qoder", "qoder-cn"]);
+const CHECKIN_ON = new Set(); // 能力名单来自 checkin_state，包含关闭监测的渠道。
 const CHECKIN_QODER = new Set(["qoder", "qoder-cn"]);
 
 /** 退避没到 / 今天已处理完:按钮留着但点不动,并写明还要等多久(报告 P0-6)。 */
@@ -7608,13 +7608,18 @@ async function loadCheckin() {
     // 宁可旧一点也不把徽标 / 待签提示条整体抹掉,装作"没有待签"。
   }
   if (seq !== CK_SEQ) return; // 更晚的一次已经发出,这份结果作废
+  let capabilitiesChanged = false;
   if (list) {
+    const ids = list.map((x) => x.id);
+    capabilitiesChanged = ids.length !== CHECKIN_ON.size || ids.some((id) => !CHECKIN_ON.has(id));
+    CHECKIN_ON.clear();
     CK = {};
-    for (const x of list) CK[x.id] = x;
+    for (const x of list) { CK[x.id] = x; CHECKIN_ON.add(x.id); }
   }
   ckTabUpdate();
   // 渠道卡与签到中心都跟着更新(哪个在场更新哪个)
   if (document.body.classList.contains("view-manage")) {
+    if (capabilitiesChanged) renderChCards();
     renderCheckinCenter();
     document.querySelectorAll("#chList .ckwrap").forEach((el) => {
       el.innerHTML = ckRowHtml(el.dataset.id);
