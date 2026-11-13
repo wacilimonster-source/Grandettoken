@@ -149,8 +149,10 @@ jobs:
           aapt=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n1)
           test -x "$apksigner"
           test -x "$aapt"
-          cert=$("$apksigner" verify --print-certs "$apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr -d ':' | tr '[:upper:]' '[:lower:]' | head -n1)
-          expected=$(printf '%s' "$EXPECTED_CERT" | tr -d ':' | tr '[:upper:]' '[:lower:]')
+          echo "apksigner certificate output:"
+          "$apksigner" verify --print-certs "$apk" 2>&1 || true
+          cert=$("$apksigner" verify --print-certs "$apk" 2>&1 | grep -i 'SHA-256 digest' | head -n1 | tr '[:upper:]' '[:lower:]' | sed 's/^.*sha-256 digest: *//' | tr -d ':\r' | tr -d ' ')
+          expected=$(printf '%s' "$EXPECTED_CERT" | tr -d '[:space:]:' | tr '[:upper:]' '[:lower:]')
           if [ -z "$cert" ] || [ "$cert" != "$expected" ]; then
             echo "::error::certificate SHA-256 mismatch: got '$cert' expected '$expected'"
             exit 1
