@@ -9,7 +9,7 @@ import com.wacil.grandettoken.sync.sync.MergedSnapshot
 internal object NotificationRules {
     const val LOW_MONEY_MICROS = 10_000_000L
     const val LOW_PERCENT_MICROS = 20_000_000L
-    const val STALE_SECONDS = 2 * 3600L
+    const val STALE_SECONDS = ChannelFreshness.STALE_SECONDS
     const val FAILURE_STREAK = 3
 
     fun lowBalance(merged: MergedSnapshot?): List<ChannelSnapshot> =
@@ -17,9 +17,10 @@ internal object NotificationRules {
 
     fun stale(merged: MergedSnapshot?, now: Long): List<ChannelSnapshot> =
         merged?.channels.orEmpty().filter { ch ->
-            ch.stale ||
-                ch.errorCode != null ||
-                (ch.updatedAt > 0 && now - ch.updatedAt >= STALE_SECONDS)
+            when (ChannelFreshness.state(ch, now)) {
+                ChannelFreshness.State.Stale, ChannelFreshness.State.Failed -> true
+                else -> false
+            }
         }
 
     fun failureReached(streak: Int): Boolean = streak >= FAILURE_STREAK

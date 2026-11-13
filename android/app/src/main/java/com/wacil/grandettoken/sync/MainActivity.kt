@@ -1318,16 +1318,5 @@ internal fun kindLabel(kind: ChannelKind): String = when (kind) {
     ChannelKind.Points -> "积分型"
 }
 
-internal fun relativeTime(ts: Long): String {
-    if (ts <= 0) return "—"
-    val delta = (System.currentTimeMillis() / 1000 - ts).coerceAtLeast(0)
-    return when {
-        delta < 60 -> "刚刚"
-        delta < 3600 -> "${delta / 60} 分钟前"
-        delta < 86_400 -> "${delta / 3600} 小时前"
-        else -> "${delta / 86_400} 天前"
-    }
-}
-
 internal fun formatDate(ts: Long): String =
     if (ts <= 0) "—" else SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(ts * 1000))

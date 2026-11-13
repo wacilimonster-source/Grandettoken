@@ -73,8 +73,10 @@ internal fun ChannelCard(
     onDetail: () -> Unit,
     onMove: (Int) -> Unit,
 ) {
+    val now = System.currentTimeMillis() / 1000
+    val freshness = ChannelFreshness.state(ch, now)
     val tone = when {
-        ch.stale || ch.errorCode != null -> Warn
+        freshness != ChannelFreshness.State.Fresh -> Warn
         ch.kind == ChannelKind.Quota && (Decimal.parseMicros(ch.percent) ?: 100_000_000L) <= 20_000_000L -> Warn
         else -> Ok
     }
@@ -99,16 +101,16 @@ internal fun ChannelCard(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(Modifier.size(6.dp).background(tone, RoundedCornerShape(99.dp)))
                             Spacer(Modifier.width(5.dp))
+                            val segments = buildList {
+                                add(kindLabel(ch.kind))
+                                ChannelFreshness.timeLabel(ch, now)?.let { add(it) }
+                                if (ch.kind == ChannelKind.Points) {
+                                    nearestExpiry(ch)?.let { add("最近到期 ${shortDate(it.at)}") }
+                                }
+                                if (ch.estimated) add("推算")
+                            }
                             Text(
-                                buildString {
-                                    append(kindLabel(ch.kind))
-                                    append(" · ")
-                                    append(if (ch.errorCode != null) "取数失败" else if (ch.stale) "数据较旧" else relativeTime(ch.updatedAt))
-                                    if (ch.kind == ChannelKind.Points) {
-                                        nearestExpiry(ch)?.let { append(" · 最近到期 ${shortDate(it.at)}") }
-                                    }
-                                    if (ch.estimated) append(" · 推算")
-                                },
+                                segments.joinToString(" · "),
                                 color = Tx3, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f),
                             )
@@ -203,6 +205,8 @@ internal fun ChannelDetailScreen(
     onBack: () -> Unit,
 ) {
     var period by rememberSaveable(ch.platformId) { mutableIntStateOf(0) }
+    val now = System.currentTimeMillis() / 1000
+    val freshness = ChannelFreshness.state(ch, now)
     val periods = listOf("今日" to ch.day, "本周" to ch.week, "本月" to ch.month)
     Scaffold(
         modifier = modifier,
@@ -220,8 +224,25 @@ internal fun ChannelDetailScreen(
             contentPadding = PaddingValues(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            if (ch.stale || ch.errorCode != null) {
-                item { Banner("数据较旧", "保留最后一次成功的快照,以更新时间为准。", Warn) }
+            if (freshness != ChannelFreshness.State.Fresh) {
+                item {
+                    val title = when (freshness) {
+                        ChannelFreshness.State.Failed -> "取数失败"
+                        ChannelFreshness.State.Never -> "从未成功更新"
+                        else -> "数据较旧"
+                    }
+                    val body = when (freshness) {
+                        ChannelFreshness.State.Failed ->
+                            ChannelFreshness.ageLabel(ch, now, 60)?.let { "数字仍是 ${it}成功取到的结果。" }
+                                ?: "数字仍是上一次成功取到的结果。"
+                        ChannelFreshness.State.Stale ->
+                            ChannelFreshness.ageLabel(ch, now, ChannelFreshness.STALE_SECONDS)
+                                ?.let { "保留 ${it}的快照,以更新时间为准。" }
+                                ?: "保留最后一次成功的快照,以更新时间为准。"
+                        else -> "还没有成功取到过数据。"
+                    }
+                    Banner(title, body, Warn)
+                }
             }
             item {
                 Card(colors = CardDefaults.cardColors(containerColor = Surface1), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
@@ -229,8 +250,10 @@ internal fun ChannelDetailScreen(
                         Text(when (ch.kind) { ChannelKind.Money -> "当前余额"; ChannelKind.Quota -> "剩余额度"; ChannelKind.Points -> "当前积分" }, color = Tx3, fontSize = 12.sp)
                         Spacer(Modifier.height(5.dp))
                         Text(channelValue(ch), color = Tx, fontSize = 30.sp, fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.height(5.dp))
-                        Text("更新于 ${relativeTime(ch.updatedAt)}${if (ch.estimated) " · 含推算数据" else ""}", color = Tx3, fontSize = 11.sp)
+                        if (ch.estimated) {
+                            Spacer(Modifier.height(5.dp))
+                            Text("含推算数据", color = Tx3, fontSize = 11.sp)
+                        }
                         channelFraction(ch)?.let { Spacer(Modifier.height(12.dp)); ChannelProgress(it, Accent) }
                     }
                 }
@@ -284,7 +307,7 @@ internal fun ChannelDetailScreen(
                     Spacer(Modifier.height(8.dp))
                     DetailRow("后台刷新", "$backgroundMinutes 分钟")
                     Spacer(Modifier.height(8.dp))
-                    DetailRow("数据状态", if (ch.stale || ch.errorCode != null) "可能已过期" else "正常")
+                    DetailRow("数据状态", if (freshness != ChannelFreshness.State.Fresh) "可能已过期" else "正常")
                     Spacer(Modifier.height(8.dp))
                     DetailRow("是否推算", if (ch.estimated) "是" else "否")
                     if (ch.errorCode != null) { Spacer(Modifier.height(8.dp)); DetailRow("错误码", ch.errorCode) }

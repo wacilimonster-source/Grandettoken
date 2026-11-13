@@ -1,5 +1,6 @@
 package com.wacil.grandettoken.sync.widget
 
+import com.wacil.grandettoken.sync.ChannelFreshness
 import com.wacil.grandettoken.sync.sync.ChannelKind
 import com.wacil.grandettoken.sync.sync.ChannelSnapshot
 import com.wacil.grandettoken.sync.sync.Decimal
@@ -11,8 +12,6 @@ import java.util.Locale
 
 /** 小部件文案与可信度判断；不补齐缺失值，不把旧值写成“刚刚”。 */
 internal object WidgetFormatter {
-    private const val STALE_SECONDS = 2 * 3600L
-
     /**
      * windowKey = null 时是旧选择/旧电脑端：优先主窗，再退回第一个窗口，
      * 保持“OpenCode 月、Codex 周”的新默认；没有 main 的旧载荷仍按旧行为显示。
@@ -30,11 +29,11 @@ internal object WidgetFormatter {
 
     fun note(channel: ChannelSnapshot?, now: Long): String? {
         if (channel == null) return "不可用"
-        if (channel.errorCode != null) return "失败"
-        if (channel.stale || channel.updatedAt <= 0 || now - channel.updatedAt >= STALE_SECONDS) {
-            return "较旧"
+        return when (ChannelFreshness.state(channel, now)) {
+            ChannelFreshness.State.Fresh -> null
+            ChannelFreshness.State.Failed -> "失败"
+            ChannelFreshness.State.Stale, ChannelFreshness.State.Never -> "较旧"
         }
-        return null
     }
 
     fun isIncomplete(values: List<String?>): Boolean = values.any { it == "—" }

@@ -8,26 +8,20 @@ protected material.
 
 import argparse
 import base64
-import ctypes
 import json
-from ctypes import wintypes
 from pathlib import Path
-
-from cryptography.hazmat.primitives.serialization import (
-    Encoding,
-    PublicFormat,
-    load_pem_private_key,
-)
-
-
-class DATA_BLOB(ctypes.Structure):
-    _fields_ = [
-        ("cbData", wintypes.DWORD),
-        ("pbData", ctypes.POINTER(ctypes.c_byte)),
-    ]
 
 
 def unprotect_dpapi(blob: bytes) -> bytes:
+    import ctypes
+    from ctypes import wintypes
+
+    class DATA_BLOB(ctypes.Structure):
+        _fields_ = [
+            ("cbData", wintypes.DWORD),
+            ("pbData", ctypes.POINTER(ctypes.c_byte)),
+        ]
+
     crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     crypt32.CryptUnprotectData.argtypes = [
@@ -72,14 +66,27 @@ def main() -> None:
         default=str(Path.home() / ".android" / "Grandettoken" / "manifest-private.dpapi"),
     )
     parser.add_argument(
+        "--private-key-pem",
+        help="PEM private key file (CI); skips DPAPI and takes priority over --private-key",
+    )
+    parser.add_argument(
         "--public-key",
         default=str(Path.home() / ".android" / "Grandettoken" / "manifest-public.txt"),
     )
     parser.add_argument("--key-id", default="grandettoken-android-updates-v1")
     args = parser.parse_args()
 
-    encrypted = bytes.fromhex(Path(args.private_key).read_text(encoding="ascii").strip())
-    pem_text = unprotect_dpapi(encrypted).decode("utf-16le").strip()
+    from cryptography.hazmat.primitives.serialization import (
+        Encoding,
+        PublicFormat,
+        load_pem_private_key,
+    )
+
+    if args.private_key_pem:
+        pem_text = Path(args.private_key_pem).read_text(encoding="ascii").strip()
+    else:
+        encrypted = bytes.fromhex(Path(args.private_key).read_text(encoding="ascii").strip())
+        pem_text = unprotect_dpapi(encrypted).decode("utf-16le").strip()
     private_key = load_pem_private_key(pem_text.encode("ascii"), password=None)
     actual_public = private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
     expected_public = base64.b64decode(Path(args.public_key).read_text(encoding="ascii").strip())

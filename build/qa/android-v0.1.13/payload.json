@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "channel": "stable",
+  "applicationId": "com.wacil.grandettoken.sync",
+  "versionName": "0.1.13",
+  "versionCode": 113,
+  "publishedAt": "2026-11-13T05:52:04Z",
+  "notes": "Android 0.1.13\n\n- 渠道卡正常状态不再显示「刚刚」：只在数据较旧、取数失败或从未更新时出现时间。\n- 超过 2 小时显示「数据较旧 · N 前」；失败状态显示「取数失败 · 上次 N 前」，失败不足 1 分钟不写年龄。\n- 详情页首卡移除常驻的「更新于 …」，异常年龄放进顶部横幅；「数据说明」保留绝对时间。\n- 2 小时陈旧阈值统一到 ChannelFreshness，通知与桌面小组件行为不变。\n- 新增 ChannelFreshness 单测，覆盖 2 小时边界、失败 1 分钟门槛与「正常卡不含刚刚」。",
+  "releasePage": "https://github.com/wacilimonster-source/Grandettoken/releases/tag/android-v0.1.13",
+  "minSdk": 26,
+  "artifacts": [
+    {
+      "abi": "universal",
+      "sizeBytes": 11035540,
+      "sha256": "fa85e6c868037fa4153d1f1ea2225bfd467671f91c0cd6010e6e8c20714e561a",
+      "downloadUrl": "https://github.com/wacilimonster-source/Grandettoken/releases/download/android-v0.1.13/Grandettoken-android-v0.1.13.apk"
+    }
+  ]
+}

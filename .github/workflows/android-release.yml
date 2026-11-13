@@ -1,0 +1,319 @@
+# Android 发版自动化:打 android-v* tag → 单测 + 签名 APK + 签更新清单 + 发 Release。
+#
+# 与桌面 release.yml 共用同一个仓库和 GitHub Releases,但入口/资产/更新指针完全独立:
+#   - tag:            android-vX.Y.Z
+#   - APK:            Grandettoken-android-vX.Y.Z.apk
+#   - 更新清单:       release "android-stable" 的 android-latest.json
+#   - 不抢桌面 latest: 显式 --latest=false
+#
+# 需要的 secrets(只存值,不打印):
+#   ANDROID_KEYSTORE_BASE64       release.p12 的 base64
+#   ANDROID_STORE_PASSWORD        keystore 口令(与 key 口令相同)
+#   ANDROID_KEY_ALIAS             grandettoken
+#   ANDROID_UPDATE_PUBLIC_KEY     更新清单 Ed25519 公钥(base64 raw)
+#   ANDROID_CERT_SHA256           APK 签名证书 SHA-256(小写 hex)
+#   ANDROID_MANIFEST_PRIVATE_KEY  更新清单 Ed25519 私钥(PEM 文本)
+#
+# versionCode 由 tag 推导: major*10000 + minor*100 + patch。
+# 0.1.12(13) → 0.1.13(113),保持单调递增,不再手工维护另一份数字。
+name: android-release
+
+on:
+  push:
+    tags: ['android-v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '已存在的 Android tag,如 android-v0.1.13'
+        required: true
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve tag and version
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          if [[ ! "$tag" =~ ^android-v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error::tag must look like android-v1.2.3: $tag"
+            exit 1
+          fi
+          version="${tag#android-v}"
+          version_code=$((10#${BASH_REMATCH[1]} * 10000 + 10#${BASH_REMATCH[2]} * 100 + 10#${BASH_REMATCH[3]}))
+          if (( version_code <= 0 )); then
+            echo "::error::invalid versionCode $version_code"
+            exit 1
+          fi
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "version_code=$version_code"
+          } >> "$GITHUB_OUTPUT"
+          echo "tag=$tag version=$version versionCode=$version_code"
+
+      - name: Check release secrets
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_UPDATE_PUBLIC_KEY: ${{ secrets.ANDROID_UPDATE_PUBLIC_KEY }}
+          ANDROID_CERT_SHA256: ${{ secrets.ANDROID_CERT_SHA256 }}
+          ANDROID_MANIFEST_PRIVATE_KEY: ${{ secrets.ANDROID_MANIFEST_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_STORE_PASSWORD ANDROID_KEY_ALIAS \
+                      ANDROID_UPDATE_PUBLIC_KEY ANDROID_CERT_SHA256 ANDROID_MANIFEST_PRIVATE_KEY; do
+            if [ -z "${!name:-}" ]; then missing+=("$name"); fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::missing Android release secrets: ${missing[*]}"
+            exit 1
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-35 build-tools;35.0.0'
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: android-gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle*', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            android-gradle-${{ runner.os }}-
+
+      - name: Decode release keystore
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.p12"
+          test -s "$RUNNER_TEMP/release.p12"
+
+      - name: Build signed APK + unit tests
+        shell: bash
+        working-directory: android
+        env:
+          GRANDETTOKEN_ANDROID_KEYSTORE: ${{ runner.temp }}/release.p12
+          GRANDETTOKEN_ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          GRANDETTOKEN_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          GRANDETTOKEN_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          GRANDETTOKEN_ANDROID_UPDATE_PUBLIC_KEY: ${{ secrets.ANDROID_UPDATE_PUBLIC_KEY }}
+          GRANDETTOKEN_ANDROID_CERT_SHA256: ${{ secrets.ANDROID_CERT_SHA256 }}
+          GRANDETTOKEN_ANDROID_VERSION_NAME: ${{ steps.meta.outputs.version }}
+          GRANDETTOKEN_ANDROID_VERSION_CODE: ${{ steps.meta.outputs.version_code }}
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew :app:testDebugUnitTest :app:assembleRelease --console=plain --no-daemon
+
+      - name: Verify signed APK and stage asset
+        id: apk
+        shell: bash
+        env:
+          VERSION_NAME: ${{ steps.meta.outputs.version }}
+          VERSION_CODE: ${{ steps.meta.outputs.version_code }}
+          EXPECTED_CERT: ${{ secrets.ANDROID_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          apk="android/app/build/outputs/apk/release/app-release.apk"
+          test -f "$apk"
+          apksigner=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n1)
+          aapt=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n1)
+          test -x "$apksigner"
+          test -x "$aapt"
+          cert=$("$apksigner" verify --print-certs "$apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr -d ':' | tr '[:upper:]' '[:lower:]' | head -n1)
+          expected=$(printf '%s' "$EXPECTED_CERT" | tr -d ':' | tr '[:upper:]' '[:lower:]')
+          if [ -z "$cert" ] || [ "$cert" != "$expected" ]; then
+            echo "::error::certificate SHA-256 mismatch: got '$cert' expected '$expected'"
+            exit 1
+          fi
+          badging=$("$aapt" dump badging "$apk")
+          grep -Fq "package: name='com.wacil.grandettoken.sync'" <<<"$badging"
+          grep -Fq "versionCode='${VERSION_CODE}'" <<<"$badging"
+          grep -Fq "versionName='${VERSION_NAME}'" <<<"$badging"
+          stage="$RUNNER_TEMP/Grandettoken-android-v${VERSION_NAME}.apk"
+          cp "$apk" "$stage"
+          sha256=$(sha256sum "$stage" | awk '{print $1}')
+          size=$(stat -c '%s' "$stage")
+          {
+            echo "path=$stage"
+            echo "sha256=$sha256"
+            echo "size=$size"
+          } >> "$GITHUB_OUTPUT"
+          echo "APK: $stage"
+          echo "cert: $cert"
+          echo "sha256: $sha256 size: $size"
+
+      - name: Generate unsigned update payload
+        shell: bash
+        env:
+          VERSION_NAME: ${{ steps.meta.outputs.version }}
+          VERSION_CODE: ${{ steps.meta.outputs.version_code }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          APK_PATH: ${{ steps.apk.outputs.path }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/commit-notes.md"
+          git log -1 --pretty=%B "$TAG" > "$notes"
+          if [ "$(wc -c < "$notes")" -lt 20 ]; then
+            echo "Android $VERSION_NAME" > "$notes"
+          fi
+          node build/make-android-manifest.mjs \
+            --version-name "$VERSION_NAME" \
+            --version-code "$VERSION_CODE" \
+            --apk "$APK_PATH" \
+            --tag "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --notes-file "$notes" \
+            --out "$RUNNER_TEMP/payload.json"
+
+      - name: Prepare manifest signing environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/android-venv"
+          "$RUNNER_TEMP/android-venv/bin/pip" install --disable-pip-version-check --quiet cryptography
+          echo "ANDROID_PYTHON=$RUNNER_TEMP/android-venv/bin/python" >> "$GITHUB_ENV"
+
+      - name: Sign update manifest
+        shell: bash
+        env:
+          ANDROID_MANIFEST_PRIVATE_KEY: ${{ secrets.ANDROID_MANIFEST_PRIVATE_KEY }}
+          ANDROID_UPDATE_PUBLIC_KEY: ${{ secrets.ANDROID_UPDATE_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s\n' "$ANDROID_MANIFEST_PRIVATE_KEY" > "$RUNNER_TEMP/manifest-private.pem"
+          printf '%s\n' "$ANDROID_UPDATE_PUBLIC_KEY" > "$RUNNER_TEMP/manifest-public.txt"
+          "$ANDROID_PYTHON" build/sign-android-manifest.py \
+            --payload "$RUNNER_TEMP/payload.json" \
+            --out "$RUNNER_TEMP/android-latest.json" \
+            --private-key-pem "$RUNNER_TEMP/manifest-private.pem" \
+            --public-key "$RUNNER_TEMP/manifest-public.txt"
+
+      - name: Verify manifest against staged APK
+        shell: bash
+        env:
+          VERSION_NAME: ${{ steps.meta.outputs.version }}
+          VERSION_CODE: ${{ steps.meta.outputs.version_code }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          APK_PATH: ${{ steps.apk.outputs.path }}
+          ANDROID_UPDATE_PUBLIC_KEY: ${{ secrets.ANDROID_UPDATE_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$ANDROID_UPDATE_PUBLIC_KEY" > "$RUNNER_TEMP/manifest-public.txt"
+          "$ANDROID_PYTHON" build/verify-android-release.py \
+            --manifest "$RUNNER_TEMP/android-latest.json" \
+            --public-key "$RUNNER_TEMP/manifest-public.txt" \
+            --apk "$APK_PATH" \
+            --expected-version-name "$VERSION_NAME" \
+            --expected-version-code "$VERSION_CODE" \
+            --expected-download-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/Grandettoken-android-v$VERSION_NAME.apk"
+
+      - name: Publish signed stable manifest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! gh release view android-stable >/dev/null 2>&1; then
+            gh release create android-stable \
+              --title "Android stable update manifest" \
+              --notes "Signed Android update pointer. Do not delete; installed apps read this asset." \
+              --latest=false
+          fi
+          gh release upload android-stable "$RUNNER_TEMP/android-latest.json" --clobber
+          gh release view android-stable --json assets --jq '.assets[] | "\(.name) \(.size)"'
+
+      - name: Create Android release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION_NAME: ${{ steps.meta.outputs.version }}
+          APK_PATH: ${{ steps.apk.outputs.path }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/release-notes.md"
+          {
+            echo "## Android $VERSION_NAME"
+            echo
+            cat "$RUNNER_TEMP/commit-notes.md"
+          } > "$notes"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK_PATH" --clobber
+            gh release edit "$TAG" --title "Android $VERSION_NAME" --notes-file "$notes" --latest=false
+          else
+            gh release create "$TAG" "$APK_PATH" \
+              --title "Android $VERSION_NAME" \
+              --notes-file "$notes" \
+              --latest=false
+          fi
+
+      - name: Verify published APK and stable manifest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION_NAME: ${{ steps.meta.outputs.version }}
+          VERSION_CODE: ${{ steps.meta.outputs.version_code }}
+          ANDROID_UPDATE_PUBLIC_KEY: ${{ secrets.ANDROID_UPDATE_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/published"
+          mkdir -p "$out"
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download"
+          curl -fsSL --retry 3 --retry-delay 2 -o "$out/android-latest.json" "$base/android-stable/android-latest.json"
+          curl -fsSL --retry 3 --retry-delay 2 -o "$out/apk" "$base/$TAG/Grandettoken-android-v$VERSION_NAME.apk"
+          printf '%s\n' "$ANDROID_UPDATE_PUBLIC_KEY" > "$RUNNER_TEMP/manifest-public.txt"
+          "$ANDROID_PYTHON" build/verify-android-release.py \
+            --manifest "$out/android-latest.json" \
+            --public-key "$RUNNER_TEMP/manifest-public.txt" \
+            --apk "$out/apk" \
+            --expected-version-name "$VERSION_NAME" \
+            --expected-version-code "$VERSION_CODE" \
+            --expected-download-url "$base/$TAG/Grandettoken-android-v$VERSION_NAME.apk"
+          gh release view "$TAG" --json assets --jq '.assets[] | "\(.name) \(.size)"'
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          if [[ "$latest" == android-* ]]; then
+            echo "::error::Android release took over desktop latest: $latest"
+            exit 1
+          fi
+          echo "desktop latest remains: $latest"
+
+      - name: Post-release summary
+        shell: bash
+        run: |
+          echo "=== ${{ steps.meta.outputs.tag }} ==="
+          echo "APK:    ${{ steps.apk.outputs.path }}"
+          echo "size:   ${{ steps.apk.outputs.size }} bytes"
+          echo "sha256: ${{ steps.apk.outputs.sha256 }}"
+          echo "manifest: https://github.com/${{ github.repository }}/releases/download/android-stable/android-latest.json"

@@ -1,6 +1,6 @@
 # 发布流程
 
-> 交付形态:**只有 NSIS 安装包**(绿色单 exe 已下线,见 PROGRESS「追加调整 12」)。
+> 桌面交付形态:**只有 NSIS 安装包**(绿色单 exe 已下线,见 PROGRESS「追加调整 12」)。
 > 装到 `%LOCALAPPDATA%\Grandettoken`(实测确认,不是 Programs 子目录),**不需要管理员权限**。
 > 更新走 GitHub Releases。
 >
@@ -127,7 +127,90 @@ CI 里也会跑同一个脚本,所以本地这步是**二次确认**,不是唯�
 > Node 24 的 `fetch` 默认不读 `HTTPS_PROXY`;本机设了代理时必须加 `--use-env-proxy`,
 > 否则会看到 `fetch failed`(2026-11-12 v0.3.36 踩过)。
 
-## 应急:本地打包
+## Android 发版（CI，独立 tag）
+
+Android 与桌面共用同一套 GitHub Actions，但入口、资产和更新指针完全独立。
+**2026-11-13 起，Android 也走 CI 发版**，本地打包只作应急。
+
+### 1. 打 tag
+
+版本号只从 tag 推导，不再手工改 `build.gradle.kts`：
+
+```bash
+git tag android-vX.Y.Z
+git push origin refs/tags/android-vX.Y.Z
+```
+
+workflow `android-release.yml` 会自动：
+
+```
+checkout(tag) → 单测 + assembleRelease（keystore 来自 secrets）
+  → 校验证书 SHA-256 / versionName / versionCode
+  → 生成 payload → Ed25519 签清单 → 本地回验
+  → 更新 android-stable/android-latest.json
+  → 建 Android release（--latest=false）→ 匿名下载回验 → 确认桌面 latest 未被抢占
+```
+
+`versionCode = major*10000 + minor*100 + patch`（`0.1.13` → `113`）。
+必须单调递增；不要复用已发布过的 `versionCode`。
+
+### 2. CI secrets（一次性配置）
+
+以下名称必须存在于仓库 Actions secrets，值只存不打印：
+
+| secret | 内容 |
+|---|---|
+| `ANDROID_KEYSTORE_BASE64` | `release.p12` 的 base64 |
+| `ANDROID_STORE_PASSWORD` | keystore 口令（与 key 口令相同） |
+| `ANDROID_KEY_ALIAS` | `grandettoken` |
+| `ANDROID_UPDATE_PUBLIC_KEY` | 更新清单 Ed25519 公钥（base64 raw） |
+| `ANDROID_CERT_SHA256` | APK 签名证书 SHA-256（小写 hex） |
+| `ANDROID_MANIFEST_PRIVATE_KEY` | 更新清单 Ed25519 私钥（PEM 文本） |
+
+`ANDROID_MANIFEST_PRIVATE_KEY` 与已装用户收到的更新签名是同一把 key。
+**不要轮换**，否则老版本会因 `UPDATE_KEY_UNKNOWN` 拒绝更新；轮换只能配合一次强制重装。
+
+### 3. 产物与指针
+
+- Android release tag：`android-vX.Y.Z`
+- APK 资产名：`Grandettoken-android-vX.Y.Z.apk`
+- 更新清单：release `android-stable` 的 `android-latest.json`
+- 固定更新地址：
+  `https://github.com/wacilimonster-source/Grandettoken/releases/download/android-stable/android-latest.json`
+- Android release 必须 `--latest=false`，桌面 `releases/latest` 不能被抢走。
+- `android-stable` release **不要删除**；已装 App 只认这个资产。
+
+### 4. 核验
+
+CI 会用 `build/verify-android-release.py` 对**已上传**的清单和 APK 做匿名回验：
+签名、schema、applicationId、versionName/versionCode、minSdk、大小、SHA-256、
+下载地址逐项比对，并断言 `releases/latest` 仍指向桌面版本。
+
+本地复核同一脚本：
+
+```bash
+python build/verify-android-release.py \
+  --manifest build/qa/android-vX.Y.Z/android-latest.json \
+  --public-key ~/.android/Grandettoken/manifest-public.txt \
+  --apk build/qa/android-vX.Y.Z/Grandettoken-android-vX.Y.Z.apk \
+  --expected-version-name X.Y.Z \
+  --expected-version-code <code> \
+  --expected-download-url https://github.com/wacilimonster-source/Grandettoken/releases/download/android-vX.Y.Z/Grandettoken-android-vX.Y.Z.apk
+```
+
+### 5. 应急：本地打包（CI 不可用时）
+
+```powershell
+.\build\android-release.ps1 -VersionName 0.1.13 -VersionCode 113
+```
+
+脚本只产签名 APK，不发布、不签清单。清单仍需
+`build/make-android-manifest.mjs` 生成 payload、`build/sign-android-manifest.py`
+签名（本地默认走 DPAPI；CI 用 `--private-key-pem`），再手工上传
+`android-vX.Y.Z` 和 `android-stable` 两个 release。上传后必须用上面的
+`verify-android-release.py` 复核。
+
+## 应急：本地打包
 
 CI 不可用(Actions 故障 / 需要发一个尚未合并的提交 / 需要立即回滚发版)时才用:
 
