@@ -16,6 +16,7 @@ pub mod config;
 pub mod custom;
 pub mod diaglog;
 pub mod doubao;
+pub mod doubao_client;
 pub mod errcodes;
 pub mod fetch;
 pub mod fx;

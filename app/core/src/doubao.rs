@@ -1,33 +1,35 @@
-//! 豆包(doubao.com)网页会话渠道:体验额度读数 + 每日签到。
+//! 豆包(doubao.com)网页会话渠道:体验额度读数。
 //!
 //! 口径来自 CreditDaddy 的 doubaoClient.js(issue #32,2026-10-19/20 用调试端口
-//! CDP 实测,已签 + 未签两个场景):
+//! CDP 实测):
 //!
 //! ```text
 //! POST https://www.doubao.com/alice/ug/campaign/v3/detail/      任务面板(一次给全)
 //!   body {"campaign_group_code":"pc_incentive_task_mvp_v3"}
 //!   → data.progress.total_amount = 体验额度余量
-//!   → data.tasks[] 里 task_kind === "daily_signin" 那项 = 签到状态
-//! POST https://www.doubao.com/alice/ug/campaign/landing/checkin  领取(+200/天)
-//!   body {"scene":"pc_incentive_task_mvp_v3"}
-//!   → code 0 + data.idempotent:true = 重复领取(服务端幂等,不重复发放)
+//!   → data.tasks[] 里 task_kind === "daily_signin" 那项 = 签到状态(只在展示里带一句)
 //! ```
 //!
 //! 鉴权:**纯 doubao.com 网页会话 Cookie**,没有 a_bogus / msToken 请求签名,
 //! device_id 空可过 —— 但**客户端环境要像样**(issue #32 实测:裸 UA 打活动接口
 //! 吃「请求非法」)。指纹 = 豆包桌面版 webview 的请求形状:
-//! UA 用 `DoubaoDesktop/2.32.6 Chrome/147`,URL 必带 version_code / aid 等平台参数,
+//! UA 是 `DoubaoDesktop/{version} Chrome/{kernel}`,URL 必带 version_code / aid 等
+//! 平台参数;**version / version_code / kernel 运行时从本机真实客户端探测**
+//! ([`crate::doubao_client`])—— 2026-10-24 起服务端对活动接口按客户端形状收紧,
+//! 钉死的版本参数一腐烂就会被拒(2026-11-14 实测,复盘见
+//! docs/report/doubao-checkin-710010702-2026-11-14.md)。
 //! web_id / tea_uuid 按 Cookie 里的 sessionid 确定性派生(每号一台稳定「设备」;
 //! CreditDaddy 按 uid 派生 —— cookie 里的 sessionid 是同一账号的稳定标识,等价且
 //! 不需要额外接口)。Golden 向量钉住派生与查询串(见测试)。
 //!
-//! 参与门槛:仅个人账号(飞书企业号被排除,detail 里没有签到任务,如实报 Inactive)。
-//! 活动页 UI 有「仅支持豆包电脑版」前端墙,但接口不吃这套 —— cookie 直打即通。
+//! **自动签到已移除**(2026-11-14,随 v0.3.47):签到写路径被服务端整体拒绝
+//! (业务码 710010702,连官方客户端都领不动),直连路线短期无解,渠道只留取数。
+//! 判断矩阵的 Retry/AuthNeeded 分级、「回查是唯一成功证据」等纪律来自签到实战,
+//! 删除前留此存照(完整记录在同目录 report 里)。
 //!
 //! 凭据:网页会话住在 WebView2 的 profile 里(与 WorkBuddy 同一条裁决,不落盘),
 //! 登录窗捕获后取数时现读;手动粘贴的 Cookie 走凭据管理器兜底。都不进日志。
 
-use crate::checkin::Outcome;
 use crate::providers::{FetchResult, Kind};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -35,30 +37,25 @@ use sha2::{Digest, Sha256};
 /// 网页会话的主域名(登录窗、Cookie 罐都对着它)。
 pub const HOST: &str = "www.doubao.com";
 pub const DETAIL_PATH: &str = "/alice/ug/campaign/v3/detail/";
-pub const CHECKIN_PATH: &str = "/alice/ug/campaign/landing/checkin";
-/// 任务面板所属活动组(pc 端激励任务 v3;签到是其中的 daily_signin 任务)。
+/// 任务面板所属活动组(pc 端激励任务 v3)。
 pub const CAMPAIGN_GROUP: &str = "pc_incentive_task_mvp_v3";
-/// detail 的请求体(取数与签到状态共用)。
+/// detail 的请求体。
 pub const DETAIL_BODY: &str = "{\"campaign_group_code\":\"pc_incentive_task_mvp_v3\"}";
-/// claim 的请求体。
-pub const CLAIM_BODY: &str = "{\"scene\":\"pc_incentive_task_mvp_v3\"}";
 
-/// 豆包桌面版 webview 的 UA(CDP 抓包原样)。活动接口按它放行客户端。
-pub const APP_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) DoubaoDesktop/2.32.6 Chrome/147.0.7727.149 Safari/537.36";
+/// 桌面版 webview 的 UA 家族(**兜底占位值**:2026-10-19 CDP 抓包原样)。
+/// 静态表(providers)引用它当占位;实际发送前取数路径会用 [`app_ua`] 运行时替换
+/// —— 真实版本来自本机客户端探测([`crate::doubao_client`]),这个钉值只在
+/// 不装客户端的机器上发出去,可能被服务端拒绝(见模块头注)。
+pub const APP_UA: &str = crate::doubao_client::FALLBACK_UA;
 pub const REFERER: &str = "https://www.doubao.com/pc/agent-explore";
 pub const ORIGIN: &str = "https://www.doubao.com";
 
 /// 会话失效的业务码(实测:匿名 / 过期 cookie 返 710012001「登录已过期」)。
 const LOGIN_INVALID: f64 = 710012001.0;
 
-/// detail 的完整地址(签到/取数共用;取数侧由 providers 表给,签到侧由 call_with_body 拼)。
+/// detail 的完整地址。
 pub fn detail_url() -> String {
     format!("https://{HOST}{DETAIL_PATH}")
-}
-
-/// claim 的完整地址。
-pub fn checkin_url() -> String {
-    format!("https://{HOST}{CHECKIN_PATH}")
 }
 
 /// 从凭据键里解出 Cookie 串。允许带 `cookie:` 前缀(网页会话罐的传输格式)也允许裸
@@ -113,20 +110,26 @@ fn device_ids(seed: &str) -> (String, String) {
 }
 
 /// 组装带客户端指纹的接口 URL:固定平台参数 + 派生设备号 + 空设备/区域。
+/// 版本段(version_code / pc_version)来自本机客户端探测 —— 钉死会腐烂,见模块头注。
 /// 参数顺序与参考实现逐字节一致(URLSearchParams 插入序),Golden 钉死。
 pub fn decorate_url(url: &str, cookie: &str) -> String {
+    decorate_url_with(crate::doubao_client::detect(), url, cookie)
+}
+
+/// 同 [`decorate_url`],指纹可注入(单测用,Golden 不依赖装机状态)。
+pub fn decorate_url_with(fp: &crate::doubao_client::ClientFingerprint, url: &str, cookie: &str) -> String {
     let base = url.split('?').next().unwrap_or(url);
     let seed = seed_of(cookie);
     let (web_id, tea_uuid) = device_ids(&seed);
     let pairs: [(&str, &str); 18] = [
-        ("version_code", "20800"),
+        ("version_code", &fp.version_code),
         ("language", "zh"),
         ("device_platform", "web"),
         ("doubao_device_platform", "web"),
         ("aid", "497858"),
         ("real_aid", "497858"),
         ("pkg_type", "release_version"),
-        ("pc_version", "2.32.6"),
+        ("pc_version", &fp.version),
         ("doubao_pc_version", "5.72.66"),
         ("samantha_web", "1"),
         ("web_platform", "desktop"),
@@ -146,6 +149,13 @@ pub fn decorate_url(url: &str, cookie: &str) -> String {
             .collect::<Vec<_>>()
             .join("&")
     )
+}
+
+/// 当前应发送的 UA(运行时探测,进程内缓存;静态表的占位值在两条请求路径
+/// 上都会被它替换 —— 调用方是 checkin::call_with_body 与 fetch::fetch_once_inner)。
+pub fn app_ua() -> &'static str {
+    let fp: &'static crate::doubao_client::ClientFingerprint = crate::doubao_client::detect();
+    &fp.ua
 }
 
 // ---------------------------------------------------------------- 取数解析
@@ -246,9 +256,10 @@ pub fn extract_doubao(body: &Value) -> FetchResult {
     r
 }
 
-// ---------------------------------------------------------------- 签到解析
+// ---------------------------------------------------------------- 签到任务(只进展示)
 
 /// detail 响应里的签到任务(tasks[].task_kind === "daily_signin")。
+/// 自动签到已移除,这个摘要只随取数进「今日签到」展示,让用户知道去客户端领。
 fn checkin_task<'a>(body: &'a Value) -> Option<&'a Value> {
     body.get("data")
         .and_then(|d| d.get("tasks"))
@@ -257,50 +268,11 @@ fn checkin_task<'a>(body: &'a Value) -> Option<&'a Value> {
         .find(|t| t.get("task_kind").and_then(Value::as_str) == Some("daily_signin"))
 }
 
-/// 签到状态机(detail = 查状态,checkin = 领取)。
-/// 判因只看 code / 字段结构,不看 message 文案(全仓红线)。
-pub fn parse_doubao(body: &Value, claiming: bool) -> Outcome {
-    match biz_code(body) {
-        Some(c) if c == LOGIN_INVALID => return Outcome::AuthNeeded,
-        Some(c) if c != 0.0 => return Outcome::Retry(format!("biz:{c}")),
-        None => return Outcome::BadShape("响应缺 code 字段".into()),
-        _ => {}
-    }
-    if claiming {
-        let Some(data) = body.get("data").filter(|d| d.is_object()) else {
-            return Outcome::BadShape("claim 响应缺 data".into());
-        };
-        // 服务端幂等:重复领取 code 0 + idempotent:true —— 归 already,不算错误
-        if data.get("idempotent").and_then(Value::as_bool) == Some(true) {
-            return Outcome::Already(data.get("reward_amount").and_then(fnum));
-        }
-        return match data.get("reward_amount").and_then(fnum) {
-            Some(amount) if amount > 0.0 => Outcome::Claimed(Some(amount)),
-            Some(_) => Outcome::BadShape("claim 成功但 reward_amount 为 0".into()),
-            None => Outcome::BadShape("claim 响应缺 reward_amount".into()),
-        };
-    }
-    // status 分支:detail 里挖签到任务
-    let Some(task) = checkin_task(body) else {
-        // 活动下线 / 飞书企业号被排除:detail 里没有签到任务 —— 不是失败,是没得签
-        return Outcome::Inactive("当前账号无签到任务(活动未开放或飞书企业账号不支持)".into());
-    };
-    let c = task.get("daily_checkin");
-    let checked = c.and_then(|x| x.get("checked_in_today")).and_then(Value::as_bool);
-    match checked {
-        Some(true) => Outcome::Already(c.and_then(|x| x.get("reward")).and_then(|rw| rw.get("reward_amount")).and_then(fnum)),
-        Some(false) => Outcome::Retry("ready".into()),
-        // 任务在,却没有 checked_in_today 字段 —— 口径未知,不猜
-        _ => Outcome::BadShape("签到任务缺 checked_in_today".into()),
-    }
-}
-
 // ---------------------------------------------------------------- 测试
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::checkin::Outcome;
 
     /// Golden:与 CreditDaddy doubaoClient.js 的派生逐字节一致(node sha256 算出)。
     #[test]
@@ -322,9 +294,20 @@ mod tests {
         assert_ne!(a.1, b.1);
     }
 
+    /// 2026-10-19 CDP 抓包时的指纹 —— Golden 用它注入,与装机状态无关。
+    fn captured_fp() -> crate::doubao_client::ClientFingerprint {
+        crate::doubao_client::ClientFingerprint {
+            version: "2.32.6".into(),
+            version_code: "20800".into(),
+            chrome: "147.0.7727.149".into(),
+            ua: crate::doubao_client::FALLBACK_UA.into(),
+            source: "test".into(),
+        }
+    }
+
     #[test]
     fn decorate_url_matches_reference_query() {
-        let url = decorate_url(detail_url().as_str(), "");
+        let url = decorate_url_with(&captured_fp(), detail_url().as_str(), "");
         let (base, q) = url.split_once('?').unwrap();
         assert_eq!(base, "https://www.doubao.com/alice/ug/campaign/v3/detail/");
         assert_eq!(
@@ -333,9 +316,26 @@ mod tests {
         );
     }
 
+    /// 版本段跟指纹走:探测到新客户端,查询串里的 version_code / pc_version 同步换,
+    /// 其余参数逐字节不动(2026-11-14:20800 已被服务端拒绝,见 docs/report)。
+    #[test]
+    fn decorate_url_follows_detected_fingerprint() {
+        let fresh = crate::doubao_client::ClientFingerprint {
+            version: "2.36.15".into(),
+            version_code: "23615".into(),
+            chrome: "158.0.1.2".into(),
+            ua: String::new(),
+            source: "test".into(),
+        };
+        let url = decorate_url_with(&fresh, detail_url().as_str(), "");
+        assert!(url.contains("version_code=23615&"));
+        assert!(url.contains("pc_version=2.36.15&"));
+        assert!(url.contains("doubao_pc_version=5.72.66&"), "派生来源未知的参数维持钉值");
+    }
+
     #[test]
     fn decorate_url_strips_existing_query() {
-        let u = decorate_url("https://www.doubao.com/x?old=1", "");
+        let u = decorate_url_with(&captured_fp(), "https://www.doubao.com/x?old=1", "");
         assert!(u.contains("/x?version_code=20800"));
         assert!(!u.contains("old=1"));
     }
@@ -448,51 +448,5 @@ mod tests {
         assert!(!r.valid);
         let r = extract_doubao(&serde_json::json!({"code": 0, "data": {}}));
         assert!(!r.valid, "缺额度字段要如实报错,不能渲染成 0");
-    }
-
-    fn detail_body(checked: bool) -> Value {
-        serde_json::json!({
-            "code": 0,
-            "data": {"tasks": [
-                {"task_kind": "other", "daily_checkin": {"checked_in_today": true}},
-                {"task_kind": "daily_signin", "daily_checkin": {
-                    "checked_in_today": checked,
-                    "continuous_days": 3,
-                    "reward": {"reward_amount": 200.0}
-                }}
-            ]}
-        })
-    }
-
-    #[test]
-    fn signin_status_states() {
-        assert_eq!(parse_doubao(&detail_body(false), false), Outcome::Retry("ready".into()));
-        assert_eq!(parse_doubao(&detail_body(true), false), Outcome::Already(Some(200.0)));
-    }
-
-    #[test]
-    fn signin_no_task_is_inactive() {
-        let body = serde_json::json!({"code": 0, "data": {"tasks": [{"task_kind": "other"}]}});
-        assert!(matches!(parse_doubao(&body, false), Outcome::Inactive(_)));
-        let body = serde_json::json!({"code": 0, "data": {}});
-        assert!(matches!(parse_doubao(&body, false), Outcome::Inactive(_)));
-    }
-
-    #[test]
-    fn signin_claim_results() {
-        let ok = serde_json::json!({"code": 0, "data": {"reward_amount": 200.0, "continuous_days": 4}});
-        assert_eq!(parse_doubao(&ok, true), Outcome::Claimed(Some(200.0)));
-        let idem = serde_json::json!({"code": 0, "data": {"idempotent": true, "reward_amount": 200.0}});
-        assert_eq!(parse_doubao(&idem, true), Outcome::Already(Some(200.0)));
-        let no_amount = serde_json::json!({"code": 0, "data": {}});
-        assert!(matches!(parse_doubao(&no_amount, true), Outcome::BadShape(_)));
-    }
-
-    #[test]
-    fn signin_auth_and_biz_codes() {
-        assert_eq!(parse_doubao(&serde_json::json!({"code": 710012001}), false), Outcome::AuthNeeded);
-        assert_eq!(parse_doubao(&serde_json::json!({"code": 710012001}), true), Outcome::AuthNeeded);
-        assert_eq!(parse_doubao(&serde_json::json!({"code": 42}), true), Outcome::Retry("biz:42".into()));
-        assert!(matches!(parse_doubao(&serde_json::json!({}), false), Outcome::BadShape(_)));
     }
 }

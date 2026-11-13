@@ -32,11 +32,11 @@ const SOFT_LIMIT = 1500;
 const BUDGETS = {
   "app/src/app.js": 9220,
   "app/core/src/inject.rs": 7320,
-  "app/src-tauri/src/lib.rs": 6500,
+  "app/src-tauri/src/lib.rs": 6484,
   "app/core/src/fetch.rs": 5280,
   "app/core/src/store.rs": 3000,
   "app/core/src/workbuddy.rs": 2420,
-  "app/core/src/checkin.rs": 2290,
+  "app/core/src/checkin.rs": 2242,
   "app/core/src/providers.rs": 2095,
   "app/core/src/diaglog.rs": 1740,
   "app/src/index.html": 700,
