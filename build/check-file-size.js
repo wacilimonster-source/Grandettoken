@@ -30,7 +30,7 @@ const SOFT_LIMIT = 1500;
 //     第 6 个渠道豆包(WebSession 表项 + 逐动作 body + Cookie 分支),
 //     渠道表与统一取数/签到管线是这些文件的本职,不许再从这里长功能以外的行。
 const BUDGETS = {
-  "app/src/app.js": 9260,
+  "app/src/app.js": 9220,
   "app/core/src/inject.rs": 7320,
   "app/src-tauri/src/lib.rs": 6500,
   "app/core/src/fetch.rs": 5280,
@@ -40,7 +40,7 @@ const BUDGETS = {
   "app/core/src/providers.rs": 2095,
   "app/core/src/diaglog.rs": 1740,
   "app/src/index.html": 700,
-  "app/src/styles.css": 1860,
+  "app/src/styles.css": 1830,
 };
 
 // 不参与判定的路径:构建产物、依赖、测试夹具
@@ -68,10 +68,11 @@ function walk(dir, out) {
 
 function selfTest() {
   const tmp = path.join(ROOT, "build", "__size_probe__.js");
+  const limit = BUDGETS["app/src/app.js"];
   const cases = [
-    { name: "超预算文件被判红", lines: 9261, budget: 9260, wantBad: true },
-    { name: "正好等于上限不判红", lines: 9260, budget: 9260, wantBad: false },
-    { name: "低于上限不判红", lines: 100, budget: 9260, wantBad: false },
+    { name: "超预算文件被判红", lines: limit + 1, budget: limit, wantBad: true },
+    { name: "正好等于上限不判红", lines: limit, budget: limit, wantBad: false },
+    { name: "低于上限不判红", lines: 100, budget: limit, wantBad: false },
   ];
   let fail = 0;
   for (const c of cases) {

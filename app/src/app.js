@@ -4218,11 +4218,14 @@ function openManage() {
 }
 function closeManage(restoreFocus = true) {
   hideSyncCode();
+  window.VaultUI.reset();
   // 关掉设置页时把过期的弹层与编辑态一起作废:否则重开设置页会直接停在
   // 几分钟前那个「写入 · 确认」弹层上,而且还能点(报告 P2-31)
   MDL.sheet = null;
   renderModelSheet();
   VAULT_EDIT = null;
+  VAULT_DRAFT = null;
+  renderVault();
   // 焦点还在管理页里(含页头返回按钮)时,关掉之后把焦点还给底栏入口;
   // 若焦点在别处(比如点了标题栏「紧凑」触发切形态),不去抢它。
   const ae = document.activeElement;
@@ -4612,6 +4615,7 @@ function untilTime(ts) {
 }
 
 function showTab(name) {
+  window.VaultUI.reset();
   if (name !== "sync") hideSyncCode();
   // 用户确认：进入同步页直接显示同步码和二维码；「隐藏同步码」只作为临时遮挡。
   else {
@@ -4646,8 +4650,6 @@ function showTab(name) {
   // 密钥箱:每次切进来都重新读索引(列表不需要解密,读起来很便宜);
   // 重新渲染也会把已显示的明文收回
   if (name === "vault") {
-    VAULT_REVEAL = {};
-    clearTimeout(vaultRevealTimer);
     loadVault();
   }
   if (name === "sync") loadSyncStatus();
@@ -5601,6 +5603,7 @@ $("manage").addEventListener("change", async (e) => {
 // 渠道卡上的操作:折叠/显隐/密钥保存删除/额度申请/排序/胶囊选择,全走 data-act
 $("manage").addEventListener("input", (e) => {
   if (e.target && e.target.id === "vaultQ") {
+    window.VaultUI.hideReveal();
     VAULT_Q = e.target.value || "";
     renderVault();
   } else if (e.target && e.target.closest && e.target.closest("#vaultForm .vform")) {
@@ -5631,7 +5634,7 @@ $("manage").addEventListener("keydown", (e) => {
     VAULT_EDIT = null;
     VAULT_DRAFT = null;
     renderVault();
-  } else if (e.key === "Enter" && !e.target.closest("button")) {
+  } else if (e.key === "Enter" && !e.target.closest("button, summary")) {
     e.preventDefault();
     vaultSave();
   }
@@ -5846,7 +5849,10 @@ $("manage").addEventListener("click", async (e) => {
     const card = act.closest(".ccard");
     card.classList.toggle("open");
     card.classList.contains("open") ? cardOpen.add(id) : cardOpen.delete(id);
+  } else if (a === "vfold") {
+    window.VaultUI.toggle(id, renderVault);
   } else if (a === "vnew") {
+    window.VaultUI.beginForm();
     VAULT_EDIT = { platform: act.dataset.id || "", label: "", key: "", note: "", apiEndpoint: "", website: "" };
     VAULT_DRAFT = null; // 换目标就丢草稿,不然会拿上一张表单里敲的内容回填(F4)
     renderVault();
@@ -5860,6 +5866,7 @@ $("manage").addEventListener("click", async (e) => {
   } else if (a === "vedit") {
     const it = VAULT.find((x) => x.id === id);
     if (it && !it.defaultChannel) {
+      window.VaultUI.beginForm();
       VAULT_EDIT = { id: it.id, platform: it.platform, label: it.label, key: "", note: it.note, apiEndpoint: it.apiEndpoint || "", website: it.website || "" };
       VAULT_DRAFT = null; // 同上:改另一条时以它自己的值为准
       renderVault();
@@ -5898,7 +5905,7 @@ $("manage").addEventListener("click", async (e) => {
         }
         return;
       }
-      delete VAULT_REVEAL[id];
+      window.VaultUI.reset();
       showToast("已删除");
     } catch (e) {
       showToast("删除失败:" + e, true);
@@ -5929,24 +5936,7 @@ $("manage").addEventListener("click", async (e) => {
       showToast("复制端点失败:" + e, true);
     }
   } else if (a === "vreveal") {
-    if (VAULT_REVEAL[id]) {
-      delete VAULT_REVEAL[id];
-      clearTimeout(vaultRevealTimer);
-      renderVault();
-    } else {
-      try {
-        VAULT_REVEAL[id] = await invoke("vault_reveal", { id });
-        renderVault();
-        clearTimeout(vaultRevealTimer);
-        // 8 秒后自动收回:明文不许留在界面上(切页签/搜索也会重绘收回)
-        vaultRevealTimer = setTimeout(() => {
-          VAULT_REVEAL = {};
-          renderVault();
-        }, 8000);
-      } catch (e) {
-        showToast("取密钥失败:" + e, true);
-      }
-    }
+    await window.VaultUI.reveal(id, invoke, renderVault, showToast);
   } else if (a === "keycopy") {
     try {
       const msg = await invoke("key_copy", { id });
@@ -7048,8 +7038,6 @@ const vaultSortEl = $("vaultSort");
 if (vaultSortEl) { vaultSortEl.value = VAULT_SORT; vaultSortEl.addEventListener("change", () => { VAULT_SORT = vaultSortEl.value; try { localStorage.setItem("vault-sort", VAULT_SORT); } catch (_) { /* silent: 排序偏好存不下只影响下次默认值 */ } renderVault(); }); }
 let VAULT_EDIT = null;     // 正在编辑/新建的表单:{id?, platform, label, key, note}
 let VAULT_DRAFT = null;    // 表单里已敲未存的内容:{platform,label,key,note}(见 renderVault)
-let VAULT_REVEAL = {};     // id → 明文(8 秒后删)
-let vaultRevealTimer = null;
 // vault_list 的失败原因:读失败 ≠ 箱子是空的 —— 前者说"读不出来 + 重试",
 // 后者才是"去新增一把"。把故障画成空态会让用户以为密钥全丢了(F3,
 // 与渠道卡 1417-1419 的「凭据库读取失败」同一条纪律)。
@@ -7110,100 +7098,11 @@ function vaultSorted() {
 }
 
 function renderVault() {
-  const list = $("vaultList");
-  const form = $("vaultForm");
-  if (!list || !form) return;
-
-  // 表单(新建/编辑)。草稿优先:它比 VAULT_EDIT 新 —— 用户刚敲进去、还没点保存的
-  // 平台/标签/密钥/备注,不能因为「显示明文」或改搜索词触发一次重绘就被吞掉
-  // (与 #chList 的 keyDraft 同一套做法,F4)。草稿只在 vnew/vedit/vcancel/保存成功时清。
-  const e = VAULT_EDIT;
-  const d = VAULT_DRAFT;
-  form.innerHTML = e
-    ? `<div class="vform">
-        <div class="vform-head"><b>${e.id ? "编辑密钥" : "新增密钥"}</b><span>${
-        e.id ? "密钥留空 = 不改这把" : "保存后列表只留尾 4 位"
-      }</span></div>
-        <div class="vf"><span>选择平台</span><select class="sel" id="vPlatSelect"><option value="">选择平台或自行输入</option>${[...new Set([...VAULT.map(x => x.platform), ...VAULT_PLATFORM_HINT])].map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join("")}</select></div>
-        <div class="vf"><span>平台名称</span><input class="inp" id="vPlat" list="vPlatList" value="${esc(d ? d.platform : e.platform)}" placeholder="选择或输入新平台">
-          <datalist id="vPlatList">${[...new Set([...VAULT.map(x => x.platform), ...VAULT_PLATFORM_HINT])].map((p) => `<option value="${esc(p)}">`).join("")}</datalist></div>
-        <div class="vf"><span>分组</span><input class="inp" id="vLabel" value="${esc(d ? d.label : e.label)}" placeholder="如 主账号 / 工作"></div>
-        <div class="vf"><span>密钥</span><input class="inp" id="vKey" type="password" autocomplete="off" value="${esc(
-          d ? d.key : ""
-        )}" placeholder="${e.id ? "留空 = 不改这把" : "粘贴密钥"}"></div>
-        <div class="vf"><span>账号</span><input class="inp" id="vNote" value="${esc(d ? d.note : e.note)}" placeholder="选填，如邮箱或账号名"></div>
-        <div class="vf"><span>调用端点</span><input class="inp" id="vEndpoint" type="url" value="${esc(d ? d.apiEndpoint : e.apiEndpoint || "")}" placeholder="选填，如 https://example.com/v1"></div>
-        <div class="vf"><span>官网地址</span><input class="inp" id="vWebsite" type="url" value="${esc(d ? d.website : e.website || "")}" placeholder="选填，如 https://example.com"></div>
-        <div class="vform-acts">
-          <button class="btn p" data-act="vsave">保存</button>
-          <button class="btn" data-act="vcancel">取消</button>
-          <span class="vform-note">密钥写进 Windows 凭据管理器;按 Esc 取消,回车保存。</span>
-        </div>
-      </div>`
-    : "";
-
-  const platformSelect = $("vPlatSelect");
-  if (platformSelect) platformSelect.onchange = () => { if (!platformSelect.value) return; const input = $("vPlat"); input.value = platformSelect.value; input.dispatchEvent(new Event("input", { bubbles: true })); };
-  const qclear = $("vaultQClear");
-  if (qclear) qclear.hidden = !VAULT_Q;
-
-  const rows = vaultSorted();
-  const shown = rows.length;
-  const platformCount = new Set(VAULT.map(it => it.platform.toLocaleLowerCase())).size;
-  const meta = $("vaultMeta");
-  if (meta) {
-    meta.textContent = VAULT_ERR
-      ? "读取失败"
-      : VAULT_Q
-      ? `匹配 ${shown} 把 / 共 ${VAULT.length} 把`
-      : `${VAULT.length} 把 · ${platformCount} 个平台`;
-  }
-
-  // 读失败:说清是"读不出来"并给重试,绝不画成"密钥箱是空的 + 新增一把"(F3)
-  if (VAULT_ERR) {
-    list.innerHTML = `<div class="empty"><div class="ek"><svg aria-hidden="true"><use href="#i-key"/></svg></div>
-      <b class="badc">读不出密钥箱</b>
-      <span>${esc(VAULT_ERR)}</span>
-      <div><button class="btn p" data-act="vreload">重试</button></div>
-      <div class="note">列表(以及里面的密钥)并没有丢,只是这一次没读出来</div></div>`;
-    return;
-  }
-
-  if (!VAULT.length) {
-    list.innerHTML = `<div class="empty"><div class="ek"><svg aria-hidden="true"><use href="#i-key"/></svg></div>
-      <b>密钥箱还是空的</b>
-      <span>把常用平台的密钥存进来,换机或重填时不用再翻聊天记录。</span>
-      <div><button class="btn p" data-act="vnew">新增一把密钥</button></div></div>`;
-    return;
-  }
-  if (!rows.length) {
-    list.innerHTML = `<div class="empty"><div class="ek"><svg aria-hidden="true"><use href="#i-search"/></svg></div>
-      <b>没有匹配的条目</b>
-      <span>「${esc(VAULT_Q)}」没有命中平台、分组、账号、地址或尾号。</span>
-      <div><button class="btn" data-act="vqclear">清除搜索</button></div></div>`;
-    return;
-  }
-  list.innerHTML = '<div class="vgroup">' + rows.map(it => {
-    const plain = VAULT_REVEAL[it.id];
-    const refs = refChannelsOf(it.id);
-    const created = new Date(it.createdAt * 1000).toLocaleDateString("zh-CN");
-    const updated = it.updatedAt !== it.createdAt ? new Date(it.updatedAt * 1000).toLocaleDateString("zh-CN") + " 更新" : "";
-    const unavailable = !!it.defaultChannel && it.defaultAvailable === false;
-    return `<div class="vitem"><div class="vrow" data-id="${esc(it.id)}"><div class="vrow-main">
-      <div class="vrow-t"><b>${esc(it.platform)} · ${esc(it.label)}</b><span class="vrow-hint">${unavailable ? "渠道未配置密钥" : esc(it.hint)}</span></div>
-      ${it.defaultChannel ? '<div class="vrow-sub">渠道默认密钥 · 只读，请在渠道管理中修改</div>' : ""}
-      ${it.note ? `<div class="vrow-sub">账号：${esc(it.note)}</div>` : ""}
-      ${it.apiEndpoint ? `<div class="vrow-sub vrow-address" title="${esc(it.apiEndpoint)}"><span>调用端点</span><span class="vrow-address-value">${esc(it.apiEndpoint)}</span></div>` : ""}
-      ${it.website ? `<div class="vrow-sub vrow-address" title="${esc(it.website)}"><span>官网</span><span class="vrow-address-value">${esc(it.website)}</span></div>` : ""}
-      <div class="vrow-sub vrow-meta"><span>${created} 创建${updated ? " · " + updated : ""}</span>${refs.length ? `<span class="vrow-ref on">正被 ${esc(refs.map(c => channelName(c)).join("、"))} 使用</span>` : ""}</div>
-      </div><div class="vrow-acts">
-      <button class="btn s" data-act="vcopy" data-id="${esc(it.id)}" ${unavailable ? "disabled" : ""} title="复制密钥">复制密钥</button>
-      <button class="btn s" data-act="vcopy-endpoint" data-id="${esc(it.id)}" ${it.apiEndpoint ? "" : "disabled"} title="${it.apiEndpoint ? "复制调用端点" : "尚未填写调用端点"}">复制端点</button>
-      <button class="btn s" data-act="vreveal" data-id="${esc(it.id)}" ${unavailable ? "disabled" : ""} title="显示明文，8 秒后隐藏">${plain ? "收起" : "显示"}</button>
-      ${it.defaultChannel ? "" : `<button class="btn s" data-act="vedit" data-id="${esc(it.id)}">改</button><button class="btn s danger" data-act="vdel" data-id="${esc(it.id)}">删</button>`}
-      </div></div>${plain ? `<div class="reveal vrow-reveal">${esc(plain)}</div>` : ""}</div>`;
-  }).join("") + '</div>';
-
+  window.VaultUI.render({
+    items: VAULT, rows: vaultSorted(), query: VAULT_Q, error: VAULT_ERR,
+    edit: VAULT_EDIT, draft: VAULT_DRAFT, saving: VAULT_SAVING, platformHints: VAULT_PLATFORM_HINT,
+    refsOf: refChannelsOf, channelName, esc,
+  });
 }
 
 /** 把表单里的内容提交(新建或改名/改备注/换密钥)。 */
@@ -7224,13 +7123,16 @@ async function vaultSave() {
   if (saveButton) saveButton.disabled = true;
   try {
     const saved = await invoke("vault_save", { item: payload });
-    VAULT_EDIT = null;
-    VAULT_DRAFT = null; // 存进去了就不再是草稿,免得下次开表单又被回填(F4)
+    const sameForm = VAULT_EDIT === e;
+    if (sameForm) {
+      VAULT_EDIT = null;
+      VAULT_DRAFT = null;
+    }
     // 条目名/尾号变了 → 引用它的渠道卡"密钥来源"要重读
     invalidateKeyMeta(null, "source");
     showToast(e.id ? "已更新" : "已存进密钥箱");
     await loadVault();
-    if (saved && saved.id) {
+    if (saved && saved.id && (sameForm || !VAULT_EDIT)) {
       // 搜索词可能把刚存的那条挡住:清掉筛选再亮一次,否则"已存进密钥箱"之后
       // 眼前什么都没变,用户会以为没存上。
       if (!flashVaultRow(saved.id) && VAULT_Q) {

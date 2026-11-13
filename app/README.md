@@ -153,6 +153,7 @@ app/
     index.html
     styles.css
     app.js
+    vault-view.js / vault-view.css  密钥箱紧凑列表、详情与明文显示状态
     logos/                渠道官方图标(来源与版权见该目录 README)
   src-tauri/
     src/
