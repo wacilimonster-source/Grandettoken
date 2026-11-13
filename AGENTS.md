@@ -212,6 +212,8 @@ tag 之前**必须**先推 main —— tag 指向的 commit 不在 main 上,GitH
 
 2026-11-13 重置顾问评审补充：时间敏感的建议缓存必须包含时钟失效，不能只看快照更新时间；已过期项目不能降级成“到期日未知”继续参与供给模拟。账号隔离除了存储键，还必须检查前端缓存与迟到写请求的账号指纹。证据见 `docs/report/codex-reset-review-2026-11-13.md`。
 
+v0.3.42 发布核验补充：`verify-release.js` 的 `notes intact` 检查读取线上 `latest.json.notes`，单独编辑 GitHub Release 正文不会改变检查结果。修正发布说明时需同步核对更新清单，并记录原始失败与修正后的实测结果，不能把原 run 写成全绿。
+
 ### 7.1 静默失败:空 catch 必须认领
 
 `build/check-silent-failures.js` 扫前端所有 `catch {}` / `.catch(() => {})`,

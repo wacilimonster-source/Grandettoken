@@ -1,7 +1,7 @@
 # Grandettoken 开发进展
 
 > 最后更新:2026-11-13
-> 状态:**桌面 v0.3.42 发布验证中，Android 0.1.13 已发布**，结果见文末最新条目。
+> 状态:**桌面 v0.3.42、Android 0.1.13 已发布**，结果见文末最新条目。
 > 同日做了两轮**代码治理**:产物出库 / 门禁补强 / 静默失败归零 / 经验沉淀,
 > 见 `docs/report/code-governance-2026-11-12.md`、`docs/report/code-quality-2026-11-12-b.md`
 > 与根目录 `AGENTS.md`。
@@ -4726,3 +4726,12 @@ src-tauri `cargo check --all-targets --locked` exit 0;
 - 本地 IPC / 静默失败 / 规模 / JS 语法 / CSS / 原有 jsdom / 顾问 jsdom / core 全量 / Tauri 全目标编译 / secrets 均串行通过并独立复跑。顾问冒烟含未知命令注入变红、写失败回滚与读失败降级。
 - 已检查模拟数据页面的生产样式渲染。真实兑换未执行，安装包内 WebView2 人工交互待验收。
 - 三处桌面版本同步为 0.3.42，按 main 后 tag 顺序触发 CI，发布结果随后补记。
+
+**发布结果**
+
+- tag `v0.3.42` 指向 `0456a75ec461a025f266a771bd6966e4398d3f90`，main CI `43414345345` success。
+- release run `43414351951` 完成构建、签名、上传，最后核验因 `latest.json.notes` 恰好含 20 个汉字、未达到脚本 `>20` 条件而 failure。该 run 保留原始失败记录。
+- 已补齐 Release 正文与线上 `latest.json.notes`。单改 Release 正文无法修复本门禁，它读取的是更新清单里的 notes。
+- 补正后本机 `node --use-env-proxy build/verify-release.js` 返回 PASS。缺少本地 CI 产物的两项逐字对比按既有规则 SKIP；CI 的原始日志已确认安装包 SHA 和签名逐字对比通过。
+- 线上安装包 `Grandettoken_0.3.42_x64-setup.exe` 为 5,856,249 字节，SHA-256 `72fbefba56ae073b434d75ba8c2b4d94f847dcf5032710447ef55ce69743c4e0`。签名资产 444 字节，更新清单补正文案后为 1,472 字节。
+- Release 已公开发布，固定更新端点返回 0.3.42，安装包可以公开下载。安装包内 WebView2 人工交互仍待验收。
