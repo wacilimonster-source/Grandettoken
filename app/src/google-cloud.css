@@ -1,0 +1,4 @@
+.gc-credit { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.gc-credit label { display: block; color: var(--tx2); margin: 8px 0; }
+.gc-credit input { display: block; max-width: 100%; margin-top: 6px; }
+.gc-credit p { overflow-wrap: anywhere; }

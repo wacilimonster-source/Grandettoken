@@ -18,11 +18,9 @@ const fs = require("fs");
 const path = require("path");
 
 const root = path.resolve(__dirname, "..");
-const frontPaths = [
-  path.join(root, "app/src/app.js"),
-  // 重置顾问拆成了独立模块，命令调用必须一起纳入三方比对。
-  path.join(root, "app/src/codex-reset.js"),
-];
+// 从源码目录取所有前端模块，拆文件后新增命令仍必须受同一道契约检查。
+const frontDir = path.join(root, "app/src");
+const frontPaths = fs.readdirSync(frontDir).filter(n => n.endsWith(".js")).map(n => path.join(frontDir, n));
 const front = frontPaths.map((p) => fs.readFileSync(p, "utf8")).join("\n");
 const rustDir = path.join(root, "app/src-tauri/src");
 

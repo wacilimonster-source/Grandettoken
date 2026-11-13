@@ -946,7 +946,12 @@ function renderRow(c, i) {
   let railLeft = sub || "";
   let railRight = subVal || "";
   let railWarn = false;
-  if (noKey || failed || isStale) {
+  if (c.id === "google-cloud" && c.hasKey && window.GoogleCloudUI) {
+    const rail = window.GoogleCloudUI.rail(c);
+    railLeft = rail.left;
+    railRight = rail.right;
+    railWarn = rail.warn;
+  } else if (noKey || failed || isStale) {
     // 原因与快照年龄已经分别写在 .s / .p 里,状态轨不再重复(HUD 同一句话只说一次)
     railLeft = "";
     railRight = "";
@@ -1477,6 +1482,7 @@ function revealFailFull(rowEl) {
 }
 
 function renderDetail(c, inDialog = false) {
+  if (c.id === "google-cloud" && window.GoogleCloudUI) return window.GoogleCloudUI.detail(c);
   const noKey = !c.hasKey;
   const failed = c.hasKey && !c.valid && !c.stale;
 
@@ -1639,6 +1645,7 @@ const KIND_CAPTION = {
 
 /** 弹层顶部的大数字:与卡片主数字同一口径,只放大。 */
 function detailHeroHtml(c) {
+  if (c.id === "google-cloud") return `<div class="detail-hero">${esc(money(c.remaining, c.unit))}</div>`;
   if (!c.hasKey) return `<div class="detail-hero" style="color:var(--tx3)">——</div>`;
   if (c.remaining === null || c.remaining === undefined) {
     return `<div class="detail-hero" style="color:var(--tx3)">——</div>`;
@@ -1691,7 +1698,7 @@ function renderDetailSheet() {
   const state = hvRow(c.id) || {};
   const stale = c.stale || state.state === "stale" || !c.valid;
   const caption = [
-    KIND_CAPTION[c.kind] || "",
+    c.id === "google-cloud" ? "Google Cloud 剩余赠金" : KIND_CAPTION[c.kind] || "",
     stale ? (c.recovery && c.recovery.phase === "retrying" ? "更新中 · 保留上次快照" : c.stale ? "保留上次快照" : "暂时无法更新") : "",
     c.updatedAt ? `更新于 ${relTime(c.updatedAt)}` : "",
     c.recovery && c.recovery.attempts ? `已尝试 ${c.recovery.attempts} 次` : "",
@@ -3265,7 +3272,9 @@ function renderChCards() {
           : `已配置<span class="kh" data-hint="${c.id}"></span>`;
       else st = (isApp ? "已读取本机登录" : isWeb ? "已登录" : "已配置") + " · 取数失败" + (isWeb ? "(令牌可能已过期)" : "");
 
-      const keyBlock = isWeb
+      const keyBlock = c.id === "google-cloud" && window.GoogleCloudUI
+        ? window.GoogleCloudUI.controls(c) + window.GoogleCloudUI.records(c)
+        : isWeb
         ? `<div class="ccbtns">
             ${
           c.id === "doubao"
@@ -3302,7 +3311,7 @@ function renderChCards() {
           </div>`;
 
       const claimBlock =
-        c.kind === "amount"
+        c.kind === "amount" && c.id !== "google-cloud"
           ? `<div class="claim-in">
               <div class="field"><span>额度申请制<span class="desc">余额补到固定上限;申请时间自动检测</span></span>
                 <button class="sw${on ? " on" : ""}" role="switch" aria-checked="${on}" aria-label="额度申请制" data-act="claimtoggle" data-id="${c.id}"></button></div>
@@ -3369,7 +3378,7 @@ function renderChCards() {
       ${claimBlock}
       ${grantBlock}
       ${
-        c.hasKey && !c.hidden
+        c.hasKey && !c.hidden && c.id !== "google-cloud"
           ? `<div class="krow"><span class="k1" style="flex:1">连接自检<span class="desc">真打一次接口,不落快照</span></span>
                <button class="btn s" data-act="probe" data-id="${c.id}">测试连接</button></div>
              <div class="prb" data-prb="${c.id}"></div>`
@@ -3507,7 +3516,7 @@ function invalidateKeyMeta(id = null, kind = "both") {
 
 async function doRefreshKeyMeta(force) {
   const wantedHints = CHANNELS.filter(
-    (c) => c.hasKey && (force || !metaFresh((KEY_META[c.id] || {}).hintAt))
+    (c) => c.hasKey && c.id !== "google-cloud" && (force || !metaFresh((KEY_META[c.id] || {}).hintAt))
   );
   const wantedSources = CHANNELS.filter(
     (c) => c.authSource === "keyring" && (force || !metaFresh((KEY_META[c.id] || {}).sourceAt))

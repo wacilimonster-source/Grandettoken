@@ -11,6 +11,11 @@
 
 ## 当前渠道
 
+Google Cloud 赠金渠道另由 `core/src/google_cloud.rs`、`src-tauri/src/google_cloud_web.rs`、
+`src-tauri/src/google_cloud_capture.js` 与 `src/google-cloud.js` 接入。用户主动连接后读取独立网页窗口的
+赠金表，按结算账号与赠金 ID 保存余额、手填到期时间。测试入口为 `node build/verify-google-cloud.js`，
+需通过 `npm install jsdom --no-save` 安装开发依赖；真实 Google 登录与页面读取需另做在线验证。
+
 | 渠道 | 接口 | 类型 | 说明 |
 |---|---|---|---|
 | 4SAPI | `GET https://4sapi.com/api/usage/token` | 金额型 | 积分制,500000 积分 = ¥1 |

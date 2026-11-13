@@ -138,9 +138,11 @@ pub const GRANT_KEEP_SEC: i64 = 30 * 86_400;
 pub(crate) const DESKTOP_UA: &str = "CLI/2.63.2 CodeBuddy/2.63.2";
 
 /// 传给界面的一行。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub google_cloud: Option<crate::google_cloud::CreditView>,
     pub id: String,
     pub name: String,
     pub short: String,
@@ -2070,6 +2072,7 @@ fn build_view(
 
     ChannelView {
         id: def.id.into(),
+        google_cloud: None,
         name: def.name.into(),
         short: def.short.into(),
         color: def.color.into(),
@@ -2164,6 +2167,7 @@ fn gap_of_day(d: &crate::store::DayCoverage, now: i64) -> bool {
 /// 没有可用凭据的渠道占位。这不是故障,只是没启用。
 fn placeholder(def: &providers::ProviderDef) -> ChannelView {
     ChannelView {
+        google_cloud: None,
         id: def.id.into(),
         name: def.name.into(),
         short: def.short.into(),
@@ -2288,6 +2292,7 @@ fn build_custom_view(
     };
     ChannelView {
         id: ch.id.clone(),
+        google_cloud: None,
         name,
         short,
         color,
@@ -2351,6 +2356,7 @@ fn custom_placeholder(
 ) -> ChannelView {
     let (name, short, color) = custom_identity(ch);
     ChannelView {
+        google_cloud: None,
         id: ch.id.clone(),
         name,
         short,
@@ -3700,6 +3706,7 @@ impl Fetcher {
         // 内置渠道在前、自定义渠道在后(顺序由前端的排序/自定义排序再排一次)
         let mut all: Vec<ChannelView> = out.into_iter().flatten().collect();
         all.extend(custom_views);
+        all.push(crate::google_cloud::channel(&store.lock().unwrap(), &cfg, now_ts()));
         for v in &mut all {
             v.recovery = self.recovery.lock().unwrap().get(&v.id).map(|r| r.view(now_ts()));
         }

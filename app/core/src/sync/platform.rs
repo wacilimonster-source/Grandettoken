@@ -12,7 +12,7 @@ use super::model::valid_platform_id;
 
 /// 内置 provider id 的集合。
 pub fn is_builtin(channel_id: &str) -> bool {
-    providers::PROVIDERS.iter().any(|p| p.id == channel_id)
+    channel_id == crate::google_cloud::ID || providers::PROVIDERS.iter().any(|p| p.id == channel_id)
 }
 
 /// 把本机渠道映射成跨来源合并键。
@@ -96,6 +96,7 @@ mod tests {
         let cfg = Config::default();
         assert_eq!(platform_id_for("deepseek", &cfg), "deepseek");
         assert_eq!(platform_id_for("workbuddy-ai", &cfg), "workbuddy-ai");
+        assert_eq!(platform_id_for("google-cloud", &cfg), "google-cloud");
     }
 
     #[test]

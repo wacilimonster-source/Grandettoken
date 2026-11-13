@@ -854,6 +854,7 @@ mod tests {
     /// 一个"全空"的 ChannelView。字段多,测试只改自己关心的那几个。
     fn dummy() -> ChannelView {
         ChannelView {
+            google_cloud: None,
             id: String::new(),
             name: String::new(),
             short: String::new(),

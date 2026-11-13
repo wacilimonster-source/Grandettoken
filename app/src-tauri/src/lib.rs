@@ -17,6 +17,7 @@ mod download;
 mod gateway;
 mod doubao_web;
 mod codex_reset_cmd;
+mod google_cloud_web;
 pub use sync_cmds::{
     sync_create, sync_disconnect_github, sync_forget,
     sync_join, sync_oauth_cancel, sync_oauth_poll, sync_oauth_start, sync_preview,
@@ -38,7 +39,6 @@ pub struct AppState {
 
 #[tauri::command]
 async fn get_channels(state: State<'_, AppState>, force: Option<bool>) -> Result<Vec<ChannelView>, String> {
-    // 先克隆 Arc 再 await:不让 State 的借用跨越 await 点
     let store = state.store.clone();
     let fetcher = state.fetcher.clone();
     // fetch_shared:与轮询/托盘刷新共用闸门,手动刷新不再叠加出一份并发请求(报告 O-4)
@@ -91,9 +91,6 @@ async fn home_view(state: State<'_, AppState>) -> Result<view::HomeView, String>
 
 /// 一轮取数的推送载荷:**数据 + 由这份数据算出的统一视图**。
 ///
-/// 以前只推 `views` 数组。前端拿到数组只能更新面板(它自己会算行数字),
-/// 而胶囊 / 行色调 / 分组 / 风险带读的是 `home_view` 的结论 —— 那一份只在启动时
-/// 取过一次,于是这些地方全停在启动那一刻(2026-10-26 真机:4S 余额在动,胶囊不动)。
 /// 视图跟着数据一起推,前端就不必再为"补一份视图"多调一次 IPC(那还可能多打一轮账务接口)。
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -6213,14 +6210,14 @@ pub fn run() {
             });
 
             // 网页登录型渠道的会话来源:每轮取数时现从 webview 的 Cookie 罐里读。
-            // 回调会在取数路径的 spawn_blocking 里被调用(见 set_web_credential_source
-            // 的注释),里面那次 webview 派发是阻塞的 —— 只能在非主线程上调,符合。
+            // 回调在取数路径的 spawn_blocking 里调用，避免主线程阻塞读 WebView。
             let session_app = app.handle().clone();
             app.state::<AppState>()
                 .fetcher
                 .set_web_credential_source(Box::new(move |id| web_session_of(&session_app, id)));
 
             let progress_app = app.handle().clone();
+            google_cloud_web::start(app.handle().clone());
             app.state::<AppState>().fetcher.set_progress_sink(Arc::new(move |views| {
                 emit_channels(&progress_app, &views);
             }));
@@ -6448,6 +6445,10 @@ pub fn run() {
             codex_reset_cmd::codex_reset_advice,
             codex_reset_cmd::codex_reset_profile_get,
             codex_reset_cmd::codex_reset_profile_set,
+            google_cloud_web::google_cloud_login,
+            google_cloud_web::google_cloud_refresh,
+            google_cloud_web::google_cloud_expiry_set,
+            google_cloud_web::google_cloud_disconnect,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

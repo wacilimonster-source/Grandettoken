@@ -20,6 +20,7 @@ pub mod errcodes;
 pub mod fetch;
 pub mod fx;
 pub mod grants;
+pub mod google_cloud;
 pub mod inject;
 pub mod minimax;
 pub mod models;

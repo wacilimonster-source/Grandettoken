@@ -119,6 +119,8 @@ jobs:
         run: |
           node --check app/src/app.js
           node --check app/src/codex-reset.js
+          node --check app/src/google-cloud.js
+          node --check app/src-tauri/src/google_cloud_capture.js
           node --check build/verify-form.js
           node --check build/verify-ui-0923.js
           node --check build/shot-panel.js
@@ -150,6 +152,10 @@ jobs:
       - name: Codex reset advisor smoke (jsdom)
         shell: pwsh
         run: node build/verify-codex-reset.js
+
+      - name: Google Cloud credits smoke (jsdom)
+        shell: pwsh
+        run: node build/verify-google-cloud.js
 
       # 形态门守卫:吸附条 / 胶囊 / 紧凑条控件这些"整块容器"的 display 必须挂在
       # body.<状态> 下。v0.1.56 的吸附条漏了这道门(.dock-body{display:flex!important}),
