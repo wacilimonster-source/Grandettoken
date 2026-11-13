@@ -390,7 +390,6 @@ jobs:
           $still = @($want | Where-Object { $have -notcontains $_ })
           if ($still.Count -gt 0) { throw "assets still missing after retries: $($still -join ', ')" }
           Write-Host "all three assets present after retries"
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # 上传**之后**才核验。第一版把核验放在了上传之前 —— 那时 release 还不存在,
       # 拉 latest.json 只会拿到 GitHub 的 404 错误页,Invoke-RestMethod 直接抛,

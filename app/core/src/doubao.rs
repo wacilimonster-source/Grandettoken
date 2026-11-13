@@ -164,6 +164,54 @@ fn biz_code(body: &Value) -> Option<f64> {
     body.get("code").and_then(fnum)
 }
 
+/// 额度数值的显示:整数不留 ".0"(活动额度都是整数,200.0 要显示成 200)。
+fn fmt_quota(v: f64) -> String {
+    if v.fract().abs() < 1e-9 {
+        format!("{}", v as i64)
+    } else {
+        format!("{v:.2}")
+    }
+}
+
+/// detail 里顺带把签到摘要塞进展开区。**不额外发请求** —— 这份响应用户已经付过一次
+/// 网络往返,签到状态、连续天数、今日奖励都在里面;再单独打一次接口只会多一条风控面。
+fn push_signin_extra(r: &mut FetchResult, body: &Value) {
+    let Some(tasks) = body.get("data").and_then(|d| d.get("tasks")).and_then(Value::as_array) else {
+        return;
+    };
+    let Some(task) = checkin_task(body) else { return; };
+    let Some(c) = task.get("daily_checkin") else { return; };
+
+    let checked = c.get("checked_in_today").and_then(Value::as_bool);
+    let days = c.get("continuous_days").and_then(fnum);
+    let reward = c
+        .get("reward")
+        .and_then(|rw| rw.get("reward_amount"))
+        .and_then(fnum);
+    match checked {
+        Some(true) => {
+            let mut s = String::from("已签");
+            if let Some(d) = days {
+                s.push_str(&format!(" · 连续 {} 天", fmt_quota(d)));
+            }
+            r.extra.push(("今日签到".into(), s));
+            if let Some(a) = reward {
+                r.extra.push(("今日奖励".into(), format!("+{} 额度", fmt_quota(a))));
+            }
+        }
+        Some(false) => {
+            let mut s = String::from("未签");
+            if let Some(a) = reward {
+                s.push_str(&format!(" · 可领 +{} 额度", fmt_quota(a)));
+            }
+            r.extra.push(("今日签到".into(), s));
+        }
+        // 字段缺失 = 口径未知,不猜也不编
+        None => {}
+    }
+    r.extra.push(("任务".into(), format!("{} 项", tasks.len())));
+}
+
 /// 体验额度读数(detail 的 `data.progress.total_amount`)。
 pub fn extract_doubao(body: &Value) -> FetchResult {
     let mut r = FetchResult {
@@ -194,6 +242,7 @@ pub fn extract_doubao(body: &Value) -> FetchResult {
     };
     r.valid = true;
     r.remaining = Some(total);
+    push_signin_extra(&mut r, body);
     r
 }
 
@@ -320,6 +369,70 @@ mod tests {
         assert_eq!(r.remaining, Some(3267.0));
         assert_eq!(r.unit, "额度");
         assert!(!r.expiry_complete, "豆包没有逐笔到期数据,不能谎称完整");
+    }
+
+    #[test]
+    fn extract_adds_signin_summary_from_same_response() {
+        let body = serde_json::json!({
+            "code": 0,
+            "data": {
+                "progress": {"total_amount": 950.0},
+                "tasks": [
+                    {"task_kind": "chat_activity", "title": "网页任务"},
+                    {"task_kind": "daily_signin", "daily_checkin": {
+                        "checked_in_today": true,
+                        "continuous_days": 1,
+                        "reward": {"reward_amount": 200.0}
+                    }}
+                ]
+            }
+        });
+        let r = extract_doubao(&body);
+        assert!(r.valid);
+        assert_eq!(r.remaining, Some(950.0));
+        assert!(r
+            .extra
+            .iter()
+            .any(|(k, v)| k == "今日签到" && v == "已签 · 连续 1 天"));
+        assert!(r
+            .extra
+            .iter()
+            .any(|(k, v)| k == "今日奖励" && v == "+200 额度"));
+        assert!(r.extra.iter().any(|(k, v)| k == "任务" && v == "2 项"));
+    }
+
+    #[test]
+    fn extract_unchecked_signin_shows_claimable_without_guessing() {
+        let body = serde_json::json!({
+            "code": 0,
+            "data": {
+                "progress": {"total_amount": 0.0},
+                "tasks": [
+                    {"task_kind": "daily_signin", "daily_checkin": {
+                        "checked_in_today": false,
+                        "reward": {"reward_amount": 200.0}
+                    }},
+                    {"task_kind": "chat_activity"}
+                ]
+            }
+        });
+        let r = extract_doubao(&body);
+        assert!(r.valid);
+        assert!(r
+            .extra
+            .iter()
+            .any(|(k, v)| k == "今日签到" && v == "未签 · 可领 +200 额度"));
+    }
+
+    #[test]
+    fn extract_without_signin_task_keeps_extra_empty() {
+        let body = serde_json::json!({
+            "code": 0,
+            "data": {"progress": {"total_amount": 100.0}, "tasks": [{"task_kind": "chat_activity"}]}
+        });
+        let r = extract_doubao(&body);
+        assert!(r.valid);
+        assert!(r.extra.is_empty(), "没有签到任务就不要编签到摘要");
     }
 
     #[test]

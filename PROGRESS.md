@@ -4614,3 +4614,47 @@ CI 内 `verify-release.js` **14 项全 PASS**(含「签名与本地 .sig 逐字�
 **复盘教训(写给下一个 agent)**:「用 fetch_channel 探针验证过了」证明不了主轮询能用 ——
 主轮询走 `Fetcher::quota_attempt`(单次请求),与 `fetch_channel_scoped`(测试连接/自由函数)
 是**两条路径**。验证取数侧新功能必须至少打到 `fetch_all`,或同时覆盖两条路径。
+
+
+## 2026-11-13 豆包工作(DoubaoWork)会话实测:详情/签到可用,quota summary 已 404
+
+**背景**:用户在本机挂件的 WebView2 里登录 doubao.com 后,要求确认豆包工作能否不打开网页做
+自动签到/看额度,并排查 v0.3.40「检查更新」搜不到。
+
+**实测(真实 WebView2 会话,只读)**:
+- 从挂件 profile 的 Cookies 库取出 `.doubao.com` 全量会话后,`detail` 返 `code=0`;
+  `data.progress.total_amount` 当次 950;`data.tasks` 11 项;`daily_signin` =
+  `checked_in_today:true`、`continuous_days:1`、`reward_amount:200`。
+- **现有常量仍有效**:`version_code=20800` + `DoubaoDesktop/2.32.6` + `aid=497858` 就能过,
+  不需要按客户端 2.36.15 改成 23615 / `SamanthaDoubao`。预认证阶段不校验版本,匿名探针仍返 710012001。
+- `GET /alice/commerce/sale/subscription/quota/summary/` 用三组安全参数(含本会话派生设备号)
+  均 **404 空响应**;dsh-connect-doubao 的 5 小时/周额度口径当前不可用,**没有接**。
+- 桌面客户端 Cookie 直读仍不可行:DoubaoWork 的 `Default\Network\Cookies` 被独占锁,
+  当前非管理员、VSS Stopped;GitHub 上最认真的 dsh 0.5.0 也已删掉这条路径。
+  **安全边界**:一次 WebView2 登录 + 纯 HTTP 接口;不杀客户端、不开 CDP、不用第三方 device_id。
+
+**改动(未提交、未发版)**:
+- `app/core/src/doubao.rs`:在同一份 detail 响应上补 `extra`
+  「今日签到(已签 · 连续 N 天 / 未签 · 可领 +N 额度)」「今日奖励 +N 额度」「任务 N 项」;
+  不新增请求、不新增凭据路径。新增 3 条单测。
+- `.github/workflows/release.yml`:删掉补传步骤 `run:` 末尾误混入的
+  `GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}`(成功路径 `exit 0` 掩盖了它,补传重试时才可能炸)。
+
+**客户端已验证**:`checkin_log` 2026-11-13 12:34:17 `doubao already 200`,说明登录后签到状态识别正常;
+`checkin.doubao.enabled/auto` 均为 true。
+
+**写路径实测**:已签状态下 `POST /alice/ug/campaign/landing/checkin` 返 `code 0`、
+`idempotent:true`、`reward_amount:200`、`continuous_days:1` —— 服务端幂等,没有重复发放。
+
+**发版排查(v0.3.40)**:
+- run `43365001018` **completed/success**(04:36:51Z),20 步全绿;release published 04:36:23Z。
+- 直接资产 `releases/download/v0.3.40/latest.json` 是 **0.3.40**(pub_date 04:36:16.745Z);
+  `releases/latest/download/latest.json` 在 04:37 仍缓存 0.3.39,**现已切到 0.3.40**。
+- 客户端 `settings.config`: `lastCheckAt=12:32:45`、`skippedVersion=null`;
+  它比 release 早 4 分钟检查,之后 24h 节流不再自动查 —— **不是 CI 发版失败**。
+  手动点「检查更新」(force)绕过 24h,现在应能拿到 0.3.40。
+
+**门禁**:core `cargo test --locked` 470 passed / 0 failed / 8 ignored;
+src-tauri `cargo check --all-targets --locked` exit 0;
+`check-ipc-contract` / `check-silent-failures` / `check-file-size` / `node --check` /
+`check-css-forms` / `jsdom-smoke` 182/182 / `scan-secrets.ps1` CLEAN。
