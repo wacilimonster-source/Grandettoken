@@ -4605,3 +4605,12 @@ CI 内 `verify-release.js` **14 项全 PASS**(含「签名与本地 .sig 逐字�
 - **不发版就看不见**:用户装的是 v0.3.39,所以修复随 v0.3.40 发。
 - 豆包渠道在端到端探针里如预期报「没检测到登录凭据」——用户尚未在挂件内登录,
   登录窗捕获后同一路径即可出数。
+
+**发布(2026-11-13)**:tag `v0.3.40`,release 提交 `893c259`。CI run 43365001018 **全绿**,
+安装包 `Grandettoken_0.3.40_x64-setup.exe` **5,820,688 字节**,SHA-256
+`6ab02bbd147b51a87a976da14aa4a26b4dec818b74bf69beb338d39a61510b1b`;
+本地复核 **RESULT: PASS**(12 PASS / 2 SKIP,SKIP 两项按 §6.4 同口径)。
+
+**复盘教训(写给下一个 agent)**:「用 fetch_channel 探针验证过了」证明不了主轮询能用 ——
+主轮询走 `Fetcher::quota_attempt`(单次请求),与 `fetch_channel_scoped`(测试连接/自由函数)
+是**两条路径**。验证取数侧新功能必须至少打到 `fetch_all`,或同时覆盖两条路径。
