@@ -4658,3 +4658,42 @@ CI 内 `verify-release.js` **14 项全 PASS**(含「签名与本地 .sig 逐字�
 src-tauri `cargo check --all-targets --locked` exit 0;
 `check-ipc-contract` / `check-silent-failures` / `check-file-size` / `node --check` /
 `check-css-forms` / `jsdom-smoke` 182/182 / `scan-secrets.ps1` CLEAN。
+
+
+## 2026-11-13 App 渠道卡新鲜度文案收敛(Android)
+
+**背景**:每张正常渠道卡的副标题都拼 `relativeTime(updatedAt)`,所以全部显示「配额型 · 刚刚」;
+详情首卡又写「更新于 刚刚」,与「数据说明」里的绝对时间重复。用户要求只在「很久没更新 /
+更新失败」时展示。
+
+**改动**
+- 新增 `android/.../sync/ChannelFreshness.kt`:四态 `Fresh / Stale / Failed / Never` +
+  `timeLabel()`;2 小时阈值与通知、小组件共用。正常返回 null,失败不足 1 分钟不写年龄,
+  结构上不可能再出现「刚刚」;`now` 作为入参,边界可单测。
+- `ChannelPresentation.kt`:卡片副标题改为片段列表,正常卡只剩类型;`stale` 标记或 ≥2 小时
+  显示「数据较旧(· N 前)」;失败显示「取数失败(· 上次 N 前)」;`updatedAt <= 0` 显示
+  「从未更新」。详情首卡移除常驻「更新于 …」,异常年龄进横幅,「数据说明」保留绝对时间;
+  状态点按同一状态变黄。
+- `NotificationRules` / `WidgetFormatter` 改用同一状态与阈值;通知与小部件文案不变。
+
+**验证**:`cd android; .\gradlew.bat testDebugUnitTest assembleDebug` → 全部通过
+(0 failed / 0 errors;数量以命令输出为准),debug APK 构建成功。未做真机截图。
+
+**边界**:顶部「N 个渠道数据较旧」横幅与「需要关注」分组仍只按载荷的 `stale/error` 标记统计;
+仅年龄超标的卡不会自动进组、也不抬高横幅计数。PC 详情弹层 `app.js:1694` 的同款
+「更新于 刚刚」未改。
+
+
+## 2026-11-13 v0.3.41 发布记录
+
+- tag `v0.3.41` -> commit `8240112`；release run `43368803326`（#18）**completed/success**，
+  release published `2026-11-13T05:20:25Z`；main 的 ci run `43368778871`（#111）success。
+- 资产：`Grandettoken_0.3.41_x64-setup.exe` 5,822,539 B；`.exe.sig` 444 B；`latest.json` 885 B。
+- 直链 `releases/download/v0.3.41/latest.json` 为 `version=0.3.41`，
+  `platforms.windows-x86_64.url` 指向本版 exe；`releases/latest/download/latest.json`
+  也已返回 0.3.41（客户端更新端点可直接拉到）。
+- 本地门禁：core 470 passed / 0 failed / 8 ignored；src-tauri `cargo check --all-targets --locked`
+  exit 0；jsdom 182/182；IPC / 静默失败 / 文件规模 / CSS / `node --check` / scan-secrets 全绿。
+  首次全量 core 跑出 `proxy` 一条假红，单独复跑 + 全量复跑均通过（AGENTS 已记录的竞争假红）。
+- 本次发版含：豆包详情展开区「今日签到 / 今日奖励 / 任务」+ `release.yml` 补传步骤
+  误混入 `GITHUB_TOKEN` 行的修复。
