@@ -98,7 +98,7 @@ jobs:
         with:
           packages: 'platforms;android-35 build-tools;35.0.0'
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.gradle/caches
