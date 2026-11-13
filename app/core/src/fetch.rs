@@ -3206,6 +3206,22 @@ impl Fetcher {
                                 Err(message) => crate::codex::unavailable(result.reset_credits.take(), message),
                             });
                         }
+                        // MiniMax 逐笔到期账本:与余额同轮但独立请求,尽力而为。
+                        // **这是主轮询用的那一份**;`fetch_channel_scoped` 里还有一份
+                        // 同样的调用(「测试连接」与自由函数 fetch_channel 走那条)。
+                        // 两处都要有 —— 主循环走 quota_attempt(单次请求),不经
+                        // fetch_channel_scoped;只改一处会让两条路径行为分叉
+                        // (codex 明细就是两处各一份的既有形状)。
+                        if def.id == "minimax" {
+                            crate::minimax::merge_expiry(
+                                &self.http,
+                                &cred.token,
+                                used_url.as_deref().unwrap_or(def.url),
+                                cred.account_id.as_deref(),
+                                &mut result,
+                            )
+                            .await;
+                        }
                     }
                     // 渠道级一行:失败必记(节流),成功只在"从失败变成功"时有信息量,
                     // 由 diaglog 的签名去重自然处理 —— 同一成功状态不会反复落。

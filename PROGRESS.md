@@ -4587,3 +4587,21 @@ CI 内 `verify-release.js` **14 项全 PASS**(含「签名与本地 .sig 逐字�
 
 
 
+
+## 2026-11-13 v0.3.40:MiniMax 到期明细不出数(主轮询与测试连接双路径分叉)
+
+**现象**:v0.3.39 装机后 MiniMax 卡片余额正常(400 分),但详情页逐笔到期区显示
+「暂未提供」,diag 日志里 0 条 ledger 记录,last-good 快照 `expiryComplete:false`。
+**根因**:主轮询走 `Fetcher::quota_attempt` → **单次** `fetch_once_scoped`(只查余额),
+**从不经过 `fetch_channel_scoped`** —— 而 minimax 的账本合并只加在了后者里。
+「测试连接」与自由函数 `fetch_channel` 走后者,所以开发期探针能拿到 1 笔、真机主轮询
+拿不到:两条路径行为分叉。codex 的 reset-credits 明细早就踩过同一类问题(主循环里是
+第二份内联实现),当时没有把它抽成共享调用 —— 这次照同样的形状补在
+`fetch.rs` 主循环 `result.valid` 块里,并在两处都写了「两边都要有」的注释。
+
+- **验证要打到真实路径上**:端到端探针改成 `Fetcher::new() + 临时 Store + fetch_all`
+  (应用轮询的同一入口),修复后返回 `expiryComplete=true, expiring.len=1,
+  400 分 @ 2026-12-13` —— 只用 `fetch_channel` 验证过的旧探针证明不了主轮询能用。
+- **不发版就看不见**:用户装的是 v0.3.39,所以修复随 v0.3.40 发。
+- 豆包渠道在端到端探针里如预期报「没检测到登录凭据」——用户尚未在挂件内登录,
+  登录窗捕获后同一路径即可出数。
