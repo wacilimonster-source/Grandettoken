@@ -22,6 +22,7 @@ Google Cloud 赠金渠道另由 `core/src/google_cloud.rs`、`src-tauri/src/goog
 | OpenCode Go | `GET https://opencode.ai/zen/go/v1/usage` | 配额型 | **未公开接口**,只返回百分比 |
 | DeepSeek | `GET https://api.deepseek.com/user/balance` | 金额型 | 充值型,无月限额 |
 | Hapi | `GET https://ai.yuchuantest.com/v1/usage` | 金额型 | 积分制,20 积分 = ¥1 |
+| Gemini · Google Cloud | Google Cloud 控制台赠金表格 | 金额型 | 独立网页登录，余额按结算账号读取，逐笔到期时间手填；在线取数待验收 |
 | Trae | `POST https://api.trae.cn/.../user_current_entitlement_list` | 积分型 | 读本机登录态;两端点互为备份 |
 | WorkBuddy | `POST https://www.codebuddy.cn/v2/billing/meter/get-user-resource` | 积分型 | 读桌面端凭据,accessToken 到期自动 refresh |
 | Codex | `GET https://chatgpt.com/backend-api/wham/usage` + `rate-limit-reset-credits` | 配额型 | 读本机 Codex 登录态;按服务端时长显示窗口、准确重置时间、重置卡数量与到期日 |

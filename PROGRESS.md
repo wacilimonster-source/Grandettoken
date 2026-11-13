@@ -1,7 +1,7 @@
 # Grandettoken 开发进展
 
 > 最后更新:2026-11-13
-> 状态:**桌面 v0.3.43 已完成本地代码验证，待 CI 发布；Android 0.1.13 已发布**，结果见文末最新条目。
+> 状态:**桌面 v0.3.43、Android 0.1.13 已发布**，结果见文末最新条目。
 > 同日做了两轮**代码治理**:产物出库 / 门禁补强 / 静默失败归零 / 经验沉淀,
 > 见 `docs/report/code-governance-2026-11-12.md`、`docs/report/code-quality-2026-11-12-b.md`
 > 与根目录 `AGENTS.md`。
@@ -4752,3 +4752,15 @@ src-tauri `cargo check --all-targets --locked` exit 0;
   保存失败、保存后控件解锁及换号迟到保存；core 覆盖落盘失败原子性、过期记录、账号隔离与旧快照。
 - 已检查桌面渠道设置入口和独立 Google 登录窗口。用户明确要求本次先按代码验证发版，
   真实登录后的余额读取与线上刷新留待后续验收。三处版本号同步为 0.3.43，发布结果随后补记。
+
+**发布结果**
+
+- tag `v0.3.43` 指向 `407e05ad91b4cbffcdd991c0006fe43eed888147`，先推 main 后推 tag。
+  main CI `43438897777` 与 release run `43438936048` 均 completed/success。
+- Release 于 `2026-11-13T14:17:39Z` 公开发布。安装包 `Grandettoken_0.3.43_x64-setup.exe`
+  为 5,885,805 字节，SHA-256 `e5997f3e3cc57ce5294ee04a6b8e62b9565d0f47653ebd9632969dcc603fd7b2`。
+  签名资产 444 字节，更新清单 1,392 字节。
+- CI 端 `verify-release.js` 完整 PASS，含签名逐字及安装包 SHA 比对。
+  本机 `node --use-env-proxy build/verify-release.js` 二次核验 PASS，固定更新端点返回 0.3.43，
+  安装包公开下载成功。本机缺少对应 CI 原始产物的两项逐字对比按规则 SKIP，已核对 CI 日志通过。
+- 真实 Google 登录后的在线取数按用户要求留待后续验收，发布说明及 README 均已注明。
