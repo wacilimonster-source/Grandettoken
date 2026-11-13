@@ -4697,3 +4697,23 @@ src-tauri `cargo check --all-targets --locked` exit 0;
   首次全量 core 跑出 `proxy` 一条假红，单独复跑 + 全量复跑均通过（AGENTS 已记录的竞争假红）。
 - 本次发版含：豆包详情展开区「今日签到 / 今日奖励 / 任务」+ `release.yml` 补传步骤
   误混入 `GITHUB_TOKEN` 行的修复。
+
+## 2026-11-13 Android 0.1.13 CI 发版记录
+
+- tag `android-v0.1.13` -> commit `e71c95f`；run `43376024512` **completed/success**（4m8s，
+  06:03:18Z 启动），release published `2026-11-13T06:07:19Z`。
+- 首次 tag 指向 `3736d82`，run `43375250522` 在「Verify signed APK」证书摘要解析处失败：
+  `apksigner` 的证书输出走 stderr，旧命令只读 stdout 得到空串。修复为 `2>&1` +
+  大小写不敏感解析并重打 tag；失败 run 未产生 release、未改 `android-stable`。
+- 资产：`Grandettoken-android-v0.1.13.apk` 11,035,540 B；
+  SHA-256 `57c8f42895b8b4456f5b7ce3546b990597c6b1b9a2f5855b9014df870decba96`；
+  签名证书 SHA-256 `c56dbf4238aaf7403351c568e9149e7ccb3ff74f049d5e3e3682dee500df8e84`
+  （与本地 release key 一致）；versionName `0.1.13` / versionCode `113`。
+- `android-stable` 的 `android-latest.json` 已更新（1,771 B，06:07:16Z），payload
+  versionName `0.1.13` / versionCode `113`，downloadUrl 指向本版；
+  `releases/latest` 仍为桌面 `v0.3.41`，未被 Android release 抢占。
+- 本地独立复核：下载线上清单与 APK，`build/verify-android-release.py` **全部 PASS**
+  （signature/schema/channel/appId/version/minSdk/size/sha256/downloadUrl）；
+  `apksigner` 证书与 `aapt` versionCode/versionName 均与清单一致。
+- 6 个 Android CI secrets 已配置且值未打印；本次 CI 成功证明 keystore、更新签名私钥、
+  证书哈希的 secret 形态可用。
