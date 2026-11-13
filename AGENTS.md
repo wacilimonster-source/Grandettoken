@@ -112,6 +112,7 @@ node build/check-file-size.js             # 文件规模棘轮,上限只许下�
 node --check app/src/app.js
 node build/check-css-forms.js             # CSS 形态门
 node build/jsdom-smoke.js                 # 需 jsdom: npm install jsdom --no-save
+node build/verify-codex-reset.js          # Codex 重置顾问独立模块冒烟（同样需 jsdom）
 cd app/core && cargo test --locked        # 用例数看输出,别写死
 cd ../src-tauri && cargo check --all-targets --locked
 cd ../.. && powershell -File build/scan-secrets.ps1   # 凭据扫描,非零退出必须停
@@ -208,6 +209,8 @@ tag 之前**必须**先推 main —— tag 指向的 commit 不在 main 上,GitH
   因资源竞争假红;单独复跑全绿。**门禁要串行,结论要单独复跑一次。**
 
 ## 7. 两条棘轮(2026-11-12 新增,不要绕过)
+
+2026-11-13 重置顾问评审补充：时间敏感的建议缓存必须包含时钟失效，不能只看快照更新时间；已过期项目不能降级成“到期日未知”继续参与供给模拟。账号隔离除了存储键，还必须检查前端缓存与迟到写请求的账号指纹。证据见 `docs/report/codex-reset-review-2026-11-13.md`。
 
 ### 7.1 静默失败:空 catch 必须认领
 

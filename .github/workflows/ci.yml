@@ -118,6 +118,7 @@ jobs:
         shell: pwsh
         run: |
           node --check app/src/app.js
+          node --check app/src/codex-reset.js
           node --check build/verify-form.js
           node --check build/verify-ui-0923.js
           node --check build/shot-panel.js
@@ -143,6 +144,12 @@ jobs:
       - name: front-end smoke (jsdom)
         shell: pwsh
         run: node build/jsdom-smoke.js
+
+      # Codex 重置顾问是独立模块,jsdom-smoke 只加载 index.html + app.js,
+      # 这条专门覆盖重置卡区入口、页签切换、滑块透传与「不自动兑换」。
+      - name: Codex reset advisor smoke (jsdom)
+        shell: pwsh
+        run: node build/verify-codex-reset.js
 
       # 形态门守卫:吸附条 / 胶囊 / 紧凑条控件这些"整块容器"的 display 必须挂在
       # body.<状态> 下。v0.1.56 的吸附条漏了这道门(.dock-body{display:flex!important}),

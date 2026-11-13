@@ -1116,6 +1116,8 @@ function coreWindows(c) {
 
 function coreCodexResets(c) {
   if (c.id !== "codex") return "";
+  // 重置顾问拆在 codex-reset.js 里；加载失败时保留旧的只读卡列表，别让整段消失。
+  if (window.CodexResetUI) return window.CodexResetUI.render(c);
   const r = c.resetCredits;
   const n = r && r.availableCount;
   const count = n == null ? "未获取" : `${esc(n)} 张可用`;
@@ -1695,13 +1697,15 @@ function renderDetailSheet() {
     c.recovery && c.recovery.attempts ? `已尝试 ${c.recovery.attempts} 次` : "",
     c.error && !c.valid ? c.error : "",
   ].filter(Boolean).join(" · ");
-  body.innerHTML =
-    detailHeroHtml(c) +
-    `<div class="detail-caption">${esc(caption)}</div>` +
-    renderDetail(c, true) +
-    `<div class="detail-actions"><button type="button" class="btn" data-act="detail-refresh"${
-      DETAIL_BUSY ? " disabled" : ""
-    }>${DETAIL_BUSY ? "刷新中…" : c.valid ? "刷新数据" : "重试连接"}</button>
+  const resetOpen = c.id === "codex" && window.CodexResetUI && window.CodexResetUI.isOpen();
+  body.innerHTML = resetOpen
+    ? window.CodexResetUI.renderDetail(c)
+    : detailHeroHtml(c) +
+      `<div class="detail-caption">${esc(caption)}</div>` +
+      renderDetail(c, true) +
+      `<div class="detail-actions"><button type="button" class="btn" data-act="detail-refresh"${
+        DETAIL_BUSY ? " disabled" : ""
+      }>${DETAIL_BUSY ? "刷新中…" : c.valid ? "刷新数据" : "重试连接"}</button>
       <button type="button" class="btn p" data-act="detail-manage">设置与管理</button></div>`;
   body.scrollTop = keepTop;
   if (focusSel) {
@@ -1751,6 +1755,7 @@ function openDetail(id, trigger) {
 }
 
 function closeDetail(restoreFocus = true) {
+  if (window.CodexResetUI) window.CodexResetUI.onDetailClosed();
   const id = DETAIL_ID;
   DETAIL_ID = null;
   const shade = $("detailShade");

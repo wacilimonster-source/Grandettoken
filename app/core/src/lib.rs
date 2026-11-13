@@ -11,6 +11,7 @@ pub mod appauth;
 pub mod backup_crypto;
 pub mod checkin;
 pub mod codex;
+pub mod codex_reset;
 pub mod config;
 pub mod custom;
 pub mod diaglog;

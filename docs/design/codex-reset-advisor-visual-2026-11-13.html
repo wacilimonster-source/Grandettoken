@@ -1,0 +1,1563 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Codex 重置顾问 · 设计图解</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230e6b4f'/%3E%3Cpath d='M16 5 27 16 16 27 5 16Z' fill='%23f1f0eb'/%3E%3C/svg%3E">
+<style>
+:root {
+  --paper: #f1f0eb;
+  --paper-2: #e7e5dd;
+  --paper-3: #fbfaf6;
+  --ink: #15181a;
+  --ink-2: #3f464b;
+  --muted: #737b80;
+  --line: #cfccc2;
+  --line-strong: #a8a49a;
+  --green: #0e6b4f;
+  --green-soft: #e3efe9;
+  --amber: #a85b12;
+  --amber-soft: #f5e9d8;
+  --red: #b42318;
+  --red-soft: #f6e2df;
+  --slate: #475569;
+  --slate-soft: #e7eaee;
+  --blue: #1d4ed8;
+  --mono: "Cascadia Code", "Consolas", "SFMono-Regular", monospace;
+  --sans: "Microsoft YaHei", "Segoe UI", "Noto Sans SC", sans-serif;
+  --display: "Bahnschrift", "Segoe UI Semibold", "Microsoft YaHei", sans-serif;
+  --max: 1280px;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+::selection { background: var(--green-soft); }
+a { color: inherit; text-decoration: none; }
+button { font: inherit; color: inherit; }
+button, a { -webkit-tap-highlight-color: transparent; }
+:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+
+.page { max-width: var(--max); margin: 0 auto; padding: 0 28px 72px; }
+
+/* ---------- top bar ---------- */
+.topbar {
+  display: flex; justify-content: space-between; align-items: center; gap: 24px;
+  padding: 18px 0; border-bottom: 1px solid var(--line);
+  font-family: var(--mono); font-size: 11px; color: var(--muted);
+}
+.brand { display: flex; align-items: center; gap: 10px; color: var(--ink); }
+.brand-mark {
+  width: 18px; height: 18px; border: 1px solid var(--ink);
+  display: grid; place-items: center; flex: 0 0 auto;
+}
+.brand-mark::before { content: ""; width: 6px; height: 6px; background: var(--green); transform: rotate(45deg); }
+.topnav { display: flex; gap: 18px; flex-wrap: wrap; }
+.topnav a { border-bottom: 1px solid transparent; }
+.topnav a:hover { color: var(--ink); border-bottom-color: var(--ink); }
+
+/* ---------- hero ---------- */
+.hero {
+  display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr);
+  gap: 48px; padding: 56px 0 40px; border-bottom: 1px solid var(--line); align-items: start;
+}
+.hero > * { min-width: 0; }
+.kicker {
+  margin: 0 0 18px; font-family: var(--mono); font-size: 11px;
+  color: var(--green); letter-spacing: .04em;
+}
+h1 {
+  margin: 0; font-family: var(--display); font-weight: 600;
+  font-size: clamp(32px, 5.6vw, 58px); line-height: 1.05; letter-spacing: -.025em;
+}
+h1 .mark {
+  display: inline; background: var(--green-soft); color: var(--green);
+  box-decoration-break: clone; -webkit-box-decoration-break: clone;
+  padding: 0 .08em .04em;
+}
+.dek { margin: 22px 0 0; max-width: 62ch; font-size: 17px; line-height: 1.7; color: var(--ink-2); }
+.hero-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 26px; }
+.btn {
+  border: 1px solid var(--ink); background: transparent; padding: 10px 16px;
+  min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  cursor: pointer; font-size: 14px; border-radius: 2px; transition: background .15s, color .15s, border-color .15s;
+}
+.btn:hover { background: var(--ink); color: var(--paper); }
+.btn.primary { background: var(--green); border-color: var(--green); color: #fff; }
+.btn.primary:hover { background: #0b5a42; border-color: #0b5a42; }
+.walk-status { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.verdict-board { border: 1px solid var(--ink); background: var(--paper-2); padding: 22px; position: relative; }
+.verdict-board::before {
+  content: "VERDICT"; position: absolute; top: 10px; right: 12px;
+  font-family: var(--mono); font-size: 10px; color: var(--muted);
+}
+.verdict-stamp {
+  display: inline-block; border: 2px solid var(--green); color: var(--green);
+  font-family: var(--display); font-size: clamp(44px, 5vw, 64px); line-height: 1;
+  padding: 6px 16px 8px; transform: rotate(-1.5deg); letter-spacing: .04em;
+}
+.verdict-sub { margin: 14px 0 20px; font-size: 15px; color: var(--ink-2); }
+.metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 0; margin: 0; border-top: 1px solid var(--line); }
+.metric { padding: 14px 0 12px; border-bottom: 1px solid var(--line); min-width: 0; }
+.metric:nth-child(2n) { padding-left: 16px; border-left: 1px solid var(--line); }
+.metric-value { display: block; font-family: var(--mono); font-size: 26px; line-height: 1.1; letter-spacing: -.04em; }
+.metric-label { display: block; margin-top: 6px; font-size: 12px; color: var(--muted); line-height: 1.45; }
+.board-note { margin: 16px 0 0; font-size: 12px; color: var(--muted); line-height: 1.6; }
+
+/* ---------- ledger strip ---------- */
+.ledger-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; border-bottom: 1px solid var(--line); }
+.ledger-cell { padding: 18px 0; border-right: 1px solid var(--line); min-width: 0; }
+.ledger-cell:not(:first-child) { padding-left: 18px; }
+.ledger-cell:last-child { border-right: 0; }
+.ledger-value { font-family: var(--mono); font-size: 24px; letter-spacing: -.04em; }
+.ledger-label { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.ledger-value.good { color: var(--green); }
+.ledger-value.warn { color: var(--amber); }
+.ledger-value.bad { color: var(--red); }
+
+/* ---------- shared sections ---------- */
+.section { padding: 64px 0; border-bottom: 1px solid var(--line); }
+.section-head {
+  display: grid; grid-template-columns: 1.2fr .8fr; gap: 32px; align-items: end; margin-bottom: 32px;
+}
+.section-title {
+  margin: 0; font-family: var(--display); font-size: clamp(28px, 3.4vw, 40px);
+  line-height: 1.08; font-weight: 600; letter-spacing: -.02em;
+}
+.section-sub { margin: 0; font-family: var(--mono); font-size: 11px; color: var(--muted); line-height: 1.7; }
+.section-sub strong { color: var(--ink-2); font-weight: 600; }
+
+/* ---------- thesis ---------- */
+.thesis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; padding: 36px 0 0; }
+.thesis-item { border-top: 2px solid var(--ink); padding-top: 14px; min-width: 0; }
+.thesis-label { font-family: var(--mono); font-size: 11px; color: var(--green); }
+.thesis-item h3 { font-size: 18px; margin: 8px 0; font-family: var(--display); line-height: 1.25; }
+.thesis-item p { margin: 0; font-size: 14px; color: var(--ink-2); line-height: 1.7; }
+
+/* ---------- flow ---------- */
+.flow-layout {
+  display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, .65fr);
+  gap: 36px; align-items: start;
+}
+.flow { position: relative; min-width: 0; }
+.flow-rail { position: absolute; left: 17px; top: 12px; bottom: 12px; width: 1px; background: var(--line-strong); }
+.gate {
+  position: relative; display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 14px;
+  width: 100%; text-align: left; background: transparent; border: 0; padding: 0 0 18px; cursor: pointer;
+}
+.gate-marker {
+  position: relative; z-index: 1; width: 34px; height: 34px; display: grid; place-items: center;
+  background: var(--paper); border: 1px solid var(--line-strong);
+  font-family: var(--mono); font-size: 12px; font-weight: 600; flex: 0 0 auto;
+}
+.gate-marker::after {
+  content: ""; position: absolute; inset: 5px; border: 1px solid var(--line); transform: rotate(45deg);
+}
+.gate-marker span { position: relative; z-index: 2; }
+.gate-body {
+  display: block; border: 1px solid var(--line); background: rgba(255,255,255,.38);
+  padding: 14px 16px; transition: border-color .15s, background .15s; min-width: 0;
+}
+.gate:hover .gate-body { border-color: var(--ink); background: var(--paper-3); }
+.gate.is-active .gate-body { border-color: var(--green); background: var(--green-soft); }
+.gate.is-active .gate-marker { border-color: var(--green); color: var(--green); }
+.gate.is-active .gate-marker::after { border-color: var(--green); }
+.output-gate .gate-body { border-color: var(--line-strong); background: var(--paper-3); }
+.output-gate .gate-marker::after { border-color: var(--green); }
+.gate-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.gate-title { font-family: var(--display); font-size: 17px; font-weight: 600; line-height: 1.3; }
+.gate-code { font-family: var(--mono); font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+.gate-desc { display: block; margin-top: 6px; font-size: 13.5px; color: var(--ink-2); line-height: 1.6; }
+.branches { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+.branch {
+  display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line);
+  padding: 3px 7px; font-size: 11.5px; color: var(--ink-2); background: var(--paper);
+}
+.branch.yes { border-color: var(--line-strong); background: var(--paper-3); }
+.branch.no { color: var(--muted); }
+.chip {
+  display: inline-flex; align-items: center; justify-content: center; min-height: 20px;
+  padding: 1px 7px; font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+  letter-spacing: .02em; border: 1px solid transparent; white-space: nowrap;
+}
+.chip.now { color: var(--red); background: var(--red-soft); border-color: #e7c4bf; }
+.chip.wait { color: var(--green); background: var(--green-soft); border-color: #c3dbcf; }
+.chip.hold { color: var(--amber); background: var(--amber-soft); border-color: #e6d0b3; }
+.chip.unknown { color: var(--slate); background: var(--slate-soft); border-color: #cbd2da; }
+.chip.neutral { color: var(--ink-2); background: var(--paper-2); border-color: var(--line); }
+
+.subflow {
+  margin: 10px 0 0 46px; border-left: 1px dashed var(--line-strong);
+  padding: 8px 0 0 14px; display: grid; gap: 6px;
+}
+.subflow-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px;
+  font-size: 12px; color: var(--ink-2); align-items: center;
+}
+.need-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.need-card { border: 1px solid var(--line); background: var(--paper-2); padding: 9px 10px; min-width: 0; }
+.need-card strong { display: block; font-size: 12.5px; }
+.need-card > span:not(.chip) { display: block; margin-top: 4px; font-size: 11.5px; color: var(--muted); line-height: 1.45; }
+.need-card .chip { margin-top: 6px; }
+.flow-detail {
+  position: sticky; top: 24px; border: 1px solid var(--ink);
+  background: var(--paper-3); padding: 20px; min-width: 0;
+}
+.detail-top { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.detail-code { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+.detail-title { margin: 14px 0 8px; font-family: var(--display); font-size: 23px; line-height: 1.15; }
+.detail-why { margin: 0; font-size: 14px; color: var(--ink-2); line-height: 1.65; }
+.detail-block { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 10px; }
+.detail-label { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: .04em; }
+.detail-text { margin: 5px 0 0; font-size: 13px; line-height: 1.6; }
+.walk-log {
+  margin-top: 14px; border: 1px dashed var(--line-strong); padding: 10px 12px;
+  font-family: var(--mono); font-size: 11px; color: var(--ink-2); line-height: 1.7;
+  background: var(--paper-3);
+}
+.param-strip {
+  display: flex; flex-wrap: wrap; gap: 8px 18px; border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line); padding: 10px 0; margin-top: 18px;
+  font-family: var(--mono); font-size: 11px; color: var(--muted);
+}
+.param-strip span { white-space: nowrap; }
+.param-strip code { color: var(--ink-2); }
+
+/* ---------- matrix ---------- */
+.matrix-controls {
+  display: flex; justify-content: space-between; align-items: center; gap: 16px;
+  flex-wrap: wrap; margin-bottom: 14px;
+}
+.segmented { display: inline-flex; border: 1px solid var(--ink); }
+.segmented button { border: 0; background: transparent; padding: 8px 14px; cursor: pointer; font-size: 13px; min-height: 40px; }
+.segmented button + button { border-left: 1px solid var(--ink); }
+.segmented button.active { background: var(--ink); color: var(--paper); }
+.matrix-note { font-size: 12px; color: var(--muted); margin: 0; }
+.matrix-wrap { overflow-x: auto; border: 1px solid var(--line); }
+table.decision-matrix { width: 100%; min-width: 780px; border-collapse: collapse; table-layout: fixed; }
+.decision-matrix th, .decision-matrix td { border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); text-align: left; vertical-align: top; }
+.decision-matrix th {
+  font-family: var(--mono); font-size: 10.5px; color: var(--muted);
+  font-weight: 400; padding: 10px; background: var(--paper-2);
+}
+.decision-matrix th:last-child, .decision-matrix td:last-child { border-right: 0; }
+.decision-matrix tr:last-child td { border-bottom: 0; }
+.decision-matrix td { padding: 0; }
+.row-head { font-family: var(--display); font-size: 14px; padding: 12px 10px !important; background: var(--paper-3); }
+.matrix-cell {
+  display: block; width: 100%; min-height: 76px; border: 0; background: transparent;
+  text-align: left; padding: 10px; cursor: pointer;
+}
+.matrix-cell:hover { background: var(--green-soft); }
+.matrix-cell .chip { margin-bottom: 6px; }
+.matrix-cell .note { display: block; font-size: 11px; color: var(--muted); line-height: 1.45; }
+.row-head .note { display: block; font-size: 10.5px; color: var(--muted); font-weight: 400; margin-top: 3px; line-height: 1.4; }
+.matrix-cell.is-selected { outline: 2px solid var(--green); outline-offset: -2px; }
+.edge.span-2 { grid-column: 1 / -1; }
+#matrixDetail {
+  margin-top: 12px; border-left: 2px solid var(--green); padding: 8px 0 8px 12px;
+  font-size: 13px; color: var(--ink-2); min-height: 44px;
+}
+
+/* ---------- timeline ---------- */
+.timeline-desktop { overflow-x: auto; border: 1px solid var(--line); background: var(--paper-3); }
+.timeline-desktop svg { display: block; width: 100%; min-width: 960px; height: auto; }
+.timeline-mobile { display: none; }
+.timeline-legend { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 12px; font-size: 12px; color: var(--muted); }
+.legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.legend-dot { width: 10px; height: 10px; display: inline-block; flex: 0 0 auto; }
+.timeline-table { margin-top: 14px; border-top: 1px solid var(--line); }
+.timeline-table table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.timeline-table th, .timeline-table td { text-align: left; font-size: 12px; padding: 8px 6px; border-bottom: 1px solid var(--line); }
+.timeline-table th { font-family: var(--mono); font-size: 10px; color: var(--muted); font-weight: 400; }
+.timeline-table td:first-child { font-family: var(--mono); }
+
+/* ---------- horizon ---------- */
+.horizon-controls { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 14px; }
+.horizon-controls label { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.horizon-controls input[type=range] { flex: 1; min-width: 220px; accent-color: var(--green); height: 36px; }
+.horizon-callout {
+  border: 1px solid var(--line); background: var(--paper-2); padding: 12px 14px;
+  font-size: 13px; line-height: 1.6; margin-bottom: 14px;
+}
+.horizon-wrap { overflow-x: auto; border: 1px solid var(--line); }
+table.horizon { width: 100%; min-width: 820px; border-collapse: collapse; table-layout: fixed; }
+.horizon th, .horizon td { border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); padding: 9px 10px; font-size: 12px; vertical-align: middle; }
+.horizon th { font-family: var(--mono); font-size: 10px; font-weight: 400; color: var(--muted); background: var(--paper-2); text-align: left; }
+.horizon tr:last-child td { border-bottom: 0; }
+.horizon td:last-child, .horizon th:last-child { border-right: 0; }
+.horizon .row-you { background: var(--amber-soft); }
+.horizon .burn { font-family: var(--mono); font-size: 13px; }
+.bar { height: 6px; background: #e4e1d8; position: relative; min-width: 70px; }
+.bar span { display: block; height: 100%; background: var(--red); }
+.bar span.good { background: var(--green); }
+.bar span.warn { background: var(--amber); }
+.card-dots { display: inline-flex; gap: 3px; }
+.card-dot { width: 8px; height: 11px; border: 1px solid var(--line-strong); background: transparent; }
+.card-dot.on { background: var(--ink); border-color: var(--ink); }
+
+/* ---------- mechanism ---------- */
+.mech-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }
+.mech { border-top: 2px solid var(--ink); padding-top: 12px; min-width: 0; }
+.mech-num { font-family: var(--mono); font-size: 10px; color: var(--green); }
+.mech h3 { margin: 6px 0 8px; font-family: var(--display); font-size: 17px; line-height: 1.25; }
+.mech p { margin: 0; font-size: 13px; color: var(--ink-2); line-height: 1.65; }
+
+/* ---------- edges ---------- */
+.filter-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+.filter-btn {
+  border: 1px solid var(--line-strong); background: transparent; padding: 7px 12px;
+  min-height: 40px; font-size: 12.5px; cursor: pointer; border-radius: 2px;
+}
+.filter-btn.active { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.edge-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.edge { border: 1px solid var(--line); background: var(--paper-3); padding: 12px 14px; min-width: 0; }
+.edge[hidden] { display: none; }
+.edge-top { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+.edge-cond { font-size: 13px; font-weight: 600; line-height: 1.4; }
+.edge p { margin: 8px 0 8px; font-size: 12.5px; color: var(--ink-2); line-height: 1.6; }
+.edge code { font-family: var(--mono); font-size: 10.5px; color: var(--muted); overflow-wrap: anywhere; }
+
+/* ---------- architecture ---------- */
+.arch { display: flex; align-items: stretch; gap: 0; border: 1px solid var(--line); background: var(--paper-3); overflow-x: auto; }
+.arch-box { flex: 1; min-width: 180px; padding: 14px; border-right: 1px solid var(--line); }
+.arch-box:last-child { border-right: 0; }
+.arch-box h4 { margin: 0 0 6px; font-family: var(--mono); font-size: 11px; color: var(--green); }
+.arch-box p { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--ink-2); }
+.arch-arrow { display: grid; place-items: center; min-width: 28px; color: var(--muted); font-family: var(--mono); }
+.profile-box { margin-top: 12px; border: 1px dashed var(--line-strong); padding: 12px 14px; font-family: var(--mono); font-size: 11px; color: var(--ink-2); overflow-wrap: anywhere; }
+
+/* ---------- footer ---------- */
+footer { padding: 24px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.7; }
+footer code { font-family: var(--mono); }
+
+/* ---------- responsive ---------- */
+@media (max-width: 980px) {
+  .hero { grid-template-columns: 1fr; gap: 28px; }
+  .section-head { grid-template-columns: 1fr; gap: 8px; }
+  .flow-layout { grid-template-columns: 1fr; }
+  .flow-detail { position: static; }
+  .thesis { grid-template-columns: 1fr; }
+  .ledger-strip { grid-template-columns: 1fr 1fr; }
+  .ledger-cell { border-right: 0; border-bottom: 1px solid var(--line); padding-left: 0 !important; }
+  .ledger-cell:nth-child(odd) { border-right: 1px solid var(--line); }
+  .mech-grid { grid-template-columns: 1fr 1fr; }
+  .edge-grid { grid-template-columns: 1fr; }
+  .arch { flex-direction: column; }
+  .arch-box { border-right: 0; border-bottom: 1px solid var(--line); min-width: 0; }
+  .arch-arrow { min-height: 24px; transform: rotate(90deg); }
+}
+@media (max-width: 900px) {
+  .timeline-desktop { display: none; }
+  .timeline-mobile { display: grid; gap: 0; border: 1px solid var(--line); background: var(--paper-3); padding: 14px; }
+  .tl-row { display: grid; grid-template-columns: 92px 20px minmax(0, 1fr); gap: 10px; min-height: 58px; }
+  .tl-date { font-family: var(--mono); font-size: 11px; padding-top: 2px; text-align: right; color: var(--muted); }
+  .tl-axis { position: relative; display: flex; justify-content: center; }
+  .tl-axis::before { content: ""; position: absolute; top: 0; bottom: 0; width: 1px; background: var(--line-strong); }
+  .tl-dot { position: relative; z-index: 1; width: 10px; height: 10px; margin-top: 4px; background: var(--paper); border: 1px solid var(--ink); flex: 0 0 auto; }
+  .tl-dot.green { border-color: var(--green); background: var(--green-soft); }
+  .tl-dot.red { border-color: var(--red); background: var(--red-soft); }
+  .tl-dot.amber { border-color: var(--amber); background: var(--amber-soft); }
+  .tl-content { padding-bottom: 16px; min-width: 0; }
+  .tl-content strong { display: block; font-size: 13.5px; }
+  .tl-content span { font-size: 11.5px; color: var(--muted); }
+}
+@media (max-width: 560px) {
+  .page { padding: 0 16px 48px; }
+  .topbar { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .topnav { gap: 12px; }
+  .hero { padding-top: 36px; }
+  .metrics { grid-template-columns: 1fr; }
+  .metric:nth-child(2n) { padding-left: 0; border-left: 0; }
+  .ledger-strip { grid-template-columns: 1fr; }
+  .ledger-cell:nth-child(odd) { border-right: 0; }
+  .need-grid { grid-template-columns: 1fr; }
+  .gate { grid-template-columns: 28px minmax(0, 1fr); gap: 10px; }
+  .gate-marker { width: 26px; height: 26px; font-size: 10px; }
+  .flow-rail { left: 13px; }
+  .subflow { margin-left: 36px; }
+  .gate-head { display: block; }
+  .gate-code { display: block; margin-top: 3px; white-space: normal; }
+  .section { padding: 44px 0; }
+  .verdict-board { padding: 16px; }
+  .verdict-stamp { font-size: 46px; }
+  .mech-grid { grid-template-columns: 1fr; }
+  .tl-row { grid-template-columns: 82px 18px minmax(0, 1fr); gap: 8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+}
+@media print {
+  body { background: #fff; }
+  .topnav, .hero-actions, .filter-row, .matrix-controls, .horizon-controls, .timeline-mobile { display: none; }
+  .page { max-width: none; padding: 0; }
+  .section { break-inside: avoid; }
+  .flow-detail { position: static; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>GRANDETTOKEN / CODEX RESET ADVISOR</span>
+    </div>
+    <nav class="topnav" aria-label="页面章节">
+      <a href="#flow">判断树</a>
+      <a href="#matrix">判定矩阵</a>
+      <a href="#timeline">到期时间轴</a>
+      <a href="#horizon">用量模拟</a>
+      <a href="#edges">边界情况</a>
+      <a href="#architecture">落点</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero" aria-labelledby="hero-title">
+      <div>
+        <p class="kicker">DESIGN NOTE · 2026-11-13 · v2 优化轮</p>
+        <h1 id="hero-title">今晚别用卡。<br><span class="mark">等 5 小时，免费满额。</span></h1>
+        <p class="dek">你手里有 3 张 <strong>Full reset (Weekly + 5 hr)</strong>。它们都在 12 月才到期，但订阅 11-29 就结束——真正的截止不是卡到期日，是订阅到期日。</p>
+        <div class="hero-actions">
+          <button class="btn primary" id="walkBtn" type="button">走一遍我的数据</button>
+          <a class="btn" href="#flow">跳到判定树</a>
+        </div>
+        <p class="walk-status" id="walkStatus">按你的实时数据走一遍判定路径</p>
+      </div>
+      <aside class="verdict-board" aria-label="当前结论">
+        <div class="verdict-stamp">WAIT</div>
+        <div class="verdict-sub">建议：等自然重置，不消耗卡</div>
+        <div class="metrics">
+          <div class="metric">
+            <span class="metric-value">0%</span>
+            <span class="metric-label">周额度剩余 · 已限流</span>
+          </div>
+          <div class="metric">
+            <span class="metric-value">5.3h</span>
+            <span class="metric-label">距自然重置 · 17:56</span>
+          </div>
+          <div class="metric">
+            <span class="metric-value">3 张</span>
+            <span class="metric-label">重置卡 · 全部 12 月到期</span>
+          </div>
+          <div class="metric">
+            <span class="metric-value">16.5d</span>
+            <span class="metric-label">距订阅到期 · 11-29 23:59</span>
+          </div>
+        </div>
+        <p class="board-note">按接口快照 17:56:52（5.3h）；5h 窗 100% 剩余（17:53:53），周窗 0%。你提问时按 6h 估算是 3.7%，结论不变。三张卡最早一张 12-01 03:10 才到期，晚于订阅 11-29——不续订，它们等不到被用。</p>
+      </aside>
+    </section>
+
+    <section class="ledger-strip" aria-label="关键数字">
+      <div class="ledger-cell">
+        <div class="ledger-value warn">3.3%</div>
+        <div class="ledger-label">现在用卡能换回 · 个周窗</div>
+      </div>
+      <div class="ledger-cell">
+        <div class="ledger-value bad">96.7%</div>
+        <div class="ledger-label">这张卡被烧掉的价值</div>
+      </div>
+      <div class="ledger-cell">
+        <div class="ledger-value good">0 张</div>
+        <div class="ledger-label">省卡策略到 11-29 · 缺口 10.9%</div>
+      </div>
+      <div class="ledger-cell">
+        <div class="ledger-value">1 张</div>
+        <div class="ledger-label">想全程不断 · 每张只换回 7–11%</div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="thesis-title">
+      <div class="section-head">
+        <h2 class="section-title" id="thesis-title">先记住三件事，再看判定树</h2>
+        <p class="section-sub">WHY THE ALGORITHM LOOKS LIKE THIS<br>卡的面值不是 100%，是“你本来会被卡住的那段时间”。</p>
+      </div>
+      <div class="thesis">
+        <article class="thesis-item">
+          <div class="thesis-label">MECHANISM / 01</div>
+          <h3>卡不是加 100%，是把未来重置提前</h3>
+          <p>储存重置会刷新 5 小时与每周周期，并改写每周重置日。距自然重置越近，它买到的空窗越短；周窗满额时，面值为 0。</p>
+        </article>
+        <article class="thesis-item">
+          <div class="thesis-label">SAFETY / 02</div>
+          <h3>满额是最高优先级</h3>
+          <p>官方只恢复低于 100% 的项。周窗满时点重置，可能只刷新 5h 窗，甚至两项都满时白耗一张——所以满额保护排在需求判断前面。</p>
+        </article>
+        <article class="thesis-item">
+          <div class="thesis-label">YOUR CASE / 03</div>
+          <h3>你的截止是订阅，不是卡到期日</h3>
+          <p>三张卡 12-01、12-02、12-13 到期，全部晚于 11-29。不续订的话，11-29 之后它们随订阅一起失效；卡到期日只影响“续订后还能用到哪天”。</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ===== 判断树 ===== -->
+    <section class="section" id="flow" aria-labelledby="flow-title">
+      <div class="section-head">
+        <h2 class="section-title" id="flow-title">判断树：先排掉不能算的，再算该不该用</h2>
+        <p class="section-sub">DECISION LADDER / v2<br>点击任意一道门，右侧会解释它的条件、你的数据和边界；也可以点上面的“走一遍我的数据”。</p>
+      </div>
+
+      <div class="flow-layout">
+        <div class="flow">
+          <div class="flow-rail" aria-hidden="true"></div>
+
+          <button class="gate" data-gate="sub" type="button">
+            <span class="gate-marker"><span>0</span></span>
+            <span class="gate-body">
+              <span class="gate-head"><span class="gate-title">订阅已到期？</span><span class="gate-code">subEndAt ≤ now</span></span>
+              <span class="gate-desc">先看订阅，不看额度：订阅没了，卡还在也没用。</span>
+              <span class="branches"><span class="branch yes">是 → <span class="chip hold">HOLD</span> sub_expired</span><span class="branch no">否 ↓ 下一道</span></span>
+            </span>
+          </button>
+
+          <button class="gate" data-gate="weekly" type="button">
+            <span class="gate-marker"><span>1</span></span>
+            <span class="gate-body">
+              <span class="gate-head"><span class="gate-title">有周额度窗口吗？</span><span class="gate-code">weekly 存在</span></span>
+              <span class="gate-desc">只认 <code>key="weekly"</code> 的窗口；Go 是月窗，不硬套 7 天模型。</span>
+              <span class="branches"><span class="branch yes">有 → 下一道</span><span class="branch no">没有 → <span class="chip unknown">UNKNOWN</span> no_weekly</span></span>
+            </span>
+          </button>
+
+          <button class="gate" data-gate="full" type="button">
+            <span class="gate-marker"><span>2</span></span>
+            <span class="gate-body">
+              <span class="gate-head"><span class="gate-title">周窗满了吗？</span><span class="gate-code">remain ≥ 99%</span></span>
+              <span class="gate-desc">官方只恢复 &lt;100% 的项；周窗满时点重置，可能只刷新 5h 窗，甚至两项都满时白耗。</span>
+              <span class="branches">
+                <span class="branch yes">5h ≥99 → <span class="chip hold">HOLD</span> full_window_both</span>
+                <span class="branch yes">5h &lt;99 → <span class="chip hold">HOLD</span> full_window_five_hour</span>
+                <span class="branch no">未满 ↓ 下一道</span>
+              </span>
+            </span>
+          </button>
+
+          <button class="gate" data-gate="data" type="button">
+            <span class="gate-marker"><span>3</span></span>
+            <span class="gate-body">
+              <span class="gate-head"><span class="gate-title">数据自洽吗？</span><span class="gate-code">|remain + used − 100| ≤ 1</span></span>
+              <span class="gate-desc">已用和剩余加起来不等于 100%，说明数据正在刷新或字段错位；不拿矛盾的数硬算。</span>
+              <span class="branches"><span class="branch yes">自洽 → 下一道</span><span class="branch no">不自洽 → <span class="chip unknown">UNKNOWN</span> data_inconsistent</span></span>
+            </span>
+          </button>
+
+          <button class="gate" data-gate="reset" type="button">
+            <span class="gate-marker"><span>4</span></span>
+            <span class="gate-body">
+              <span class="gate-head"><span class="gate-title">重置时间可用吗？</span><span class="gate-code">0 &lt; gap ≤ 168h</span></span>
+              <span class="gate-desc">缺失、已过重置点、超过 7 天都不算；不要按 7 天自己推一个日期。</span>
+              <span class="branches"><span class="branch yes">可用 → 下一道</span><span class="branch no">缺失/过点 → <span class="chip unknown">UNKNOWN</span> reset_unknown / stale_past_reset</span></span>
+            </span>
+          </button>
+
+          <button class="gate" data-gate="redeem" type="button">
+            <span class="gate-marker"><span>5</span></span>
+            <span class="gate-body">
+              <span class="gate-head"><span class="gate-title">刚用过卡吗？</span><span class="gate-code">lastRedeemedAt &gt; dataUpdatedAt</span></span>
+              <span class="gate-desc">用卡会改写每周重置日；数据比用卡时刻还旧，就不能拿重置前的额度算。</span>
+              <span class="branches"><span class="branch yes">刚用过 → <span class="chip unknown">UNKNOWN</span> just_redeemed</span><span class="branch no">没用过 ↓ 下一道</span></span>
+            </span>
+          </button>
+
+          <button class="gate" data-gate="canwait" type="button">
+            <span class="gate-marker"><span>6</span></span>
+            <span class="gate-body">
+              <span class="gate-head"><span class="gate-title">等得到下次重置吗？</span><span class="gate-code">resetsAt ≤ subEndAt</span></span>
+              <span class="gate-desc">自然重置在订阅到期之后，等于等不到；这个分支里 <strong>WAIT 是禁词</strong>。</span>
+              <span class="branches"><span class="branch yes">等得到 → 下一道</span><span class="branch no">等不到 → 见下方分支</span></span>
+              <span class="subflow">
+                <span class="subflow-row"><span>urgent/soon · amount &gt; remain</span><span><span class="chip now">NOW</span> deadline_before_sub_end</span></span>
+                <span class="subflow-row"><span>urgent/soon · amount ≤ remain</span><span><span class="chip hold">HOLD</span> remaining_covers</span></span>
+                <span class="subflow-row"><span>patient</span><span><span class="chip hold">HOLD</span> no_reset_before_sub_end</span></span>
+                <span class="subflow-row"><span>idle</span><span><span class="chip hold">HOLD</span> no_need</span></span>
+              </span>
+            </span>
+          </button>
+
+          <button class="gate" data-gate="expiry" type="button">
+            <span class="gate-marker"><span>7</span></span>
+            <span class="gate-body">
+              <span class="gate-head"><span class="gate-title">卡会在重置前过期吗？</span><span class="gate-code">earliest_expiry &lt; resetsAt</span></span>
+              <span class="gate-desc">等到重置等于把卡等没。只有用户真的需要时才提前用；能等的人只加警告。</span>
+              <span class="branches"><span class="branch yes">急且不够 → <span class="chip now">NOW</span> card_expires_before_reset</span><span class="branch no">否则 → WAIT/HOLD + warning</span></span>
+            </span>
+          </button>
+
+          <button class="gate" data-gate="need" type="button">
+            <span class="gate-marker"><span>8</span></span>
+            <span class="gate-body">
+              <span class="gate-head"><span class="gate-title">你的需求是什么？</span><span class="gate-code">need.kind</span></span>
+              <span class="gate-desc">四个按钮不是四种语气，是四种时间约束。默认 <strong>patient</strong>，不假设你有紧急任务。</span>
+              <span class="need-grid">
+                <span class="need-card"><strong>urgent / 现在</strong><span>amount &gt; remain → NOW；否则 HOLD</span><span class="chip now">NOW</span></span>
+                <span class="need-card"><strong>soon / 24h 内</strong><span>能等且 gap≤24h → WAIT；否则不够才 NOW</span><span class="chip wait">WAIT</span></span>
+                <span class="need-card"><strong>patient / 能等</strong><span>gap≤24h → WAIT(gap_too_short)；否则 WAIT(wait_for_reset)</span><span class="chip wait">WAIT</span></span>
+                <span class="need-card"><strong>idle / 不用</strong><span>gap≤24h → WAIT；否则 HOLD(no_need)</span><span class="chip hold">HOLD</span></span>
+              </span>
+            </span>
+          </button>
+
+          <button class="gate" data-gate="cards" type="button">
+            <span class="gate-marker"><span>9</span></span>
+            <span class="gate-body">
+              <span class="gate-head"><span class="gate-title">卡够吗？</span><span class="gate-code">cards = availableCount ?? derived</span></span>
+              <span class="gate-desc">只覆盖 NOW：WAIT/HOLD 不因为没卡改判；数量未知时先看明细能不能推导。</span>
+              <span class="branches"><span class="branch yes">0 张 → <span class="chip hold">HOLD</span> no_cards</span><span class="branch yes">未知 → <span class="chip unknown">UNKNOWN</span> cards_unknown</span><span class="branch no">&gt;0 → NOW 保留</span></span>
+            </span>
+          </button>
+
+          <button class="gate output-gate" data-gate="out" type="button">
+            <span class="gate-marker"><span>→</span></span>
+            <span class="gate-body">
+              <span class="gate-head"><span class="gate-title">输出：四值 verdict</span><span class="gate-code">now / wait / hold / unknown</span></span>
+              <span class="gate-desc">前端只渲染，不自己推导。数字、原因码、计划行、警告一起返回。</span>
+              <span class="branches">
+                <span class="branch yes"><span class="chip now">NOW</span> 用一张</span>
+                <span class="branch yes"><span class="chip wait">WAIT</span> 等免费重置</span>
+                <span class="branch yes"><span class="chip hold">HOLD</span> 先留着</span>
+                <span class="branch yes"><span class="chip unknown">UNKNOWN</span> 不硬算</span>
+              </span>
+            </span>
+          </button>
+        </div>
+
+        <aside class="flow-detail" id="flowDetail" aria-live="polite">
+          <div class="detail-top">
+            <span class="detail-code" id="detailCode">GATE 0 / HARD</span>
+            <span class="chip neutral" id="detailVerdict">NEXT</span>
+          </div>
+          <h3 class="detail-title" id="detailTitle">订阅已到期？</h3>
+          <p class="detail-why" id="detailWhy">先看订阅，不看额度：订阅没了，卡还在也没用。</p>
+          <div class="detail-block">
+            <div class="detail-label">你的数据</div>
+            <p class="detail-text" id="detailSample">订阅 11-29 23:59 到期；今天 11-13，否。</p>
+          </div>
+          <div class="detail-block">
+            <div class="detail-label">判定</div>
+            <p class="detail-text" id="detailResult">否 → 进入下一道：有没有周窗。</p>
+          </div>
+          <div class="detail-block">
+            <div class="detail-label">边界</div>
+            <p class="detail-text" id="detailEdge">订阅优先于“无周窗”和“满额”；三张卡都在订阅后到期。</p>
+          </div>
+        </aside>
+      </div>
+
+      <div class="walk-log" id="walkLog">路径：点“走一遍我的数据”，从 0 走到输出。</div>
+      <div class="param-strip" aria-label="关键阈值">
+        <span><code>FULL_WINDOW</code> 99%</span>
+        <span><code>WAIT_GAP_H</code> 24h</span>
+        <span><code>MIN_GAIN</code> 25%</span>
+        <span><code>SUNK_MIN_GAIN</code> 5%</span>
+        <span><code>SUB_WARN_DAYS</code> 3d</span>
+        <span><code>NEED_TTL_H</code> 12h</span>
+        <span><code>STALE_MIN</code> 15min</span>
+      </div>
+    </section>
+
+    <!-- ===== 判定矩阵 ===== -->
+    <section class="section" id="matrix" aria-labelledby="matrix-title">
+      <div class="section-head">
+        <h2 class="section-title" id="matrix-title">判定矩阵：需求 × 时间 × 额度</h2>
+        <p class="section-sub">NEED × TIME × AMOUNT<br>表是基础分支；满额、数据门、卡过期、卡数会覆盖它。点任意格子看叠加规则。</p>
+      </div>
+
+      <div class="matrix-controls">
+        <div class="segmented" role="group" aria-label="额度是否足够">
+          <button type="button" class="active" data-amount="enough" aria-pressed="true">额度够</button>
+          <button type="button" data-amount="short" aria-pressed="false">额度不够</button>
+        </div>
+        <p class="matrix-note">“额度”只看这次任务大概要用多少，不是周窗剩余。</p>
+      </div>
+
+      <div class="matrix-wrap">
+        <table class="decision-matrix" aria-label="需求与时间组合的判定矩阵">
+          <colgroup>
+            <col style="width:16%">
+            <col style="width:21%">
+            <col style="width:21%">
+            <col style="width:21%">
+            <col style="width:21%">
+          </colgroup>
+          <thead>
+            <tr>
+              <th>需求</th>
+              <th>能等 · gap ≤ 24h</th>
+              <th>能等 · gap &gt; 24h</th>
+              <th>重置在订阅后</th>
+              <th>卡在重置前过期<br>（看需求）</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="row-head">urgent<br><span class="note">现在就要用</span></td>
+              <td><button class="matrix-cell" type="button" data-row="urgent" data-col="gap24"><span class="chip hold">HOLD</span><span class="note">额度够 → HOLD；不够 → NOW</span></button></td>
+              <td><button class="matrix-cell" type="button" data-row="urgent" data-col="gapLong"><span class="chip hold">HOLD</span><span class="note">额度够 → HOLD；不够 → NOW</span></button></td>
+              <td><button class="matrix-cell" type="button" data-row="urgent" data-col="noWait"><span class="chip hold">HOLD</span><span class="note">额度够 → HOLD；不够 → NOW</span></button></td>
+              <td><button class="matrix-cell" type="button" data-row="urgent" data-col="expiry"><span class="chip hold">HOLD</span><span class="note">额度够 → HOLD；不够 → NOW</span></button></td>
+            </tr>
+            <tr>
+              <td class="row-head">soon<br><span class="note">24 小时内要用</span></td>
+              <td><button class="matrix-cell" type="button" data-row="soon" data-col="gap24"><span class="chip wait">WAIT</span><span class="note">能等 → WAIT；不够也等</span></button></td>
+              <td><button class="matrix-cell" type="button" data-row="soon" data-col="gapLong"><span class="chip hold">HOLD</span><span class="note">额度够 → HOLD；不够 → NOW</span></button></td>
+              <td><button class="matrix-cell" type="button" data-row="soon" data-col="noWait"><span class="chip hold">HOLD</span><span class="note">额度够 → HOLD；不够 → NOW</span></button></td>
+              <td><button class="matrix-cell" type="button" data-row="soon" data-col="expiry"><span class="chip wait">WAIT</span><span class="note">额度够 → WAIT/HOLD 看 gap；不够 → NOW</span></button></td>
+            </tr>
+            <tr>
+              <td class="row-head">patient<br><span class="note">能等到下次重置</span></td>
+              <td><button class="matrix-cell" type="button" data-row="patient" data-col="gap24"><span class="chip wait">WAIT</span><span class="note">gap≤24h → WAIT(gap_too_short)</span></button></td>
+              <td><button class="matrix-cell" type="button" data-row="patient" data-col="gapLong"><span class="chip wait">WAIT</span><span class="note">gap&gt;24h → WAIT(wait_for_reset)</span></button></td>
+              <td><button class="matrix-cell" type="button" data-row="patient" data-col="noWait"><span class="chip hold">HOLD</span><span class="note">等不到 → HOLD(no_reset_before_sub_end)</span></button></td>
+              <td><button class="matrix-cell" type="button" data-row="patient" data-col="expiry"><span class="chip wait">WAIT</span><span class="note">继续等；加 warning(card_expiry_loss)</span></button></td>
+            </tr>
+            <tr>
+              <td class="row-head">idle<br><span class="note">暂时不用</span></td>
+              <td><button class="matrix-cell" type="button" data-row="idle" data-col="gap24"><span class="chip wait">WAIT</span><span class="note">gap≤24h → WAIT(gap_too_short)</span></button></td>
+              <td><button class="matrix-cell" type="button" data-row="idle" data-col="gapLong"><span class="chip hold">HOLD</span><span class="note">gap&gt;24h → HOLD(no_need)</span></button></td>
+              <td><button class="matrix-cell" type="button" data-row="idle" data-col="noWait"><span class="chip hold">HOLD</span><span class="note">等不到 → HOLD(no_need)</span></button></td>
+              <td><button class="matrix-cell" type="button" data-row="idle" data-col="expiry"><span class="chip hold">HOLD</span><span class="note">不需要就别用；加 warning</span></button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="matrixDetail">点任意格子，看叠加卡数与卡过期后的最终结论。</div>
+    </section>
+
+    <!-- ===== 到期时间轴 ===== -->
+    <section class="section" id="timeline" aria-labelledby="timeline-title">
+      <div class="section-head">
+        <h2 class="section-title" id="timeline-title">到期时间轴：卡还在，订阅没了</h2>
+        <p class="section-sub">SUBSCRIPTION vs CARD EXPIRY<br>三张卡的到期日都在订阅结束之后。真正的使用截止是 11-29 23:59，不是 12 月的某一天。</p>
+      </div>
+
+      <div class="timeline-desktop">
+        <svg viewBox="0 0 1200 260" role="img" aria-label="2026-11-13 到 2026-12-13 的订阅、自然重置与卡到期时间轴">
+          <defs>
+            <pattern id="hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+              <line x1="0" y1="0" x2="0" y2="8" stroke="#b42318" stroke-width="1" opacity=".18"/>
+            </pattern>
+          </defs>
+
+          <rect x="70" y="96" width="581" height="48" fill="#e3efe9" opacity=".65"/>
+          <rect x="651" y="96" width="469" height="48" fill="url(#hatch)"/>
+          <text x="300" y="106" text-anchor="middle" fill="#0e6b4f" font-family="Microsoft YaHei, sans-serif" font-size="11">订阅有效期</text>
+
+          <line x1="70" y1="120" x2="1120" y2="120" stroke="#a8a49a" stroke-width="1"/>
+          <line x1="651" y1="120" x2="1120" y2="120" stroke="#b42318" stroke-width="1" stroke-dasharray="4 4"/>
+
+          <!-- now -->
+          <circle cx="88" cy="120" r="4" fill="#15181a"/>
+          <text x="70" y="196" fill="#15181a" font-family="Microsoft YaHei, sans-serif" font-size="12">现在 11-13 12:41</text>
+
+          <!-- natural resets -->
+          <path d="M96 114 L102 120 L96 126 L90 120Z" fill="#0e6b4f"/>
+          <line x1="96" y1="108" x2="96" y2="84" stroke="#0e6b4f" stroke-width="1" opacity=".6"/>
+          <text x="96" y="76" text-anchor="middle" fill="#0e6b4f" font-family="Microsoft YaHei, sans-serif" font-size="11">11-13 17:56</text>
+
+          <path d="M335 114 L341 120 L335 126 L329 120Z" fill="#0e6b4f"/>
+          <line x1="335" y1="108" x2="335" y2="84" stroke="#0e6b4f" stroke-width="1" opacity=".6"/>
+          <text x="335" y="76" text-anchor="middle" fill="#0e6b4f" font-family="Microsoft YaHei, sans-serif" font-size="11">11-20 17:56</text>
+
+          <path d="M574 114 L580 120 L574 126 L568 120Z" fill="#0e6b4f"/>
+          <line x1="574" y1="108" x2="574" y2="84" stroke="#0e6b4f" stroke-width="1" opacity=".6"/>
+          <text x="574" y="76" text-anchor="middle" fill="#0e6b4f" font-family="Microsoft YaHei, sans-serif" font-size="11">11-27 17:56</text>
+
+          <!-- subscription end -->
+          <line x1="651" y1="84" x2="651" y2="160" stroke="#b42318" stroke-width="2"/>
+          <text x="651" y="174" text-anchor="middle" fill="#b42318" font-family="Microsoft YaHei, sans-serif" font-size="12">订阅到期 11-29 23:59</text>
+
+          <!-- cards -->
+          <line x1="684" y1="88" x2="733" y2="88" stroke="#a85b12" stroke-width="1" opacity=".7"/>
+          <rect x="684" y="112" width="12" height="12" fill="#a85b12"/>
+          <rect x="721" y="112" width="12" height="12" fill="#a85b12"/>
+          <text x="708" y="78" text-anchor="middle" fill="#a85b12" font-family="Microsoft YaHei, sans-serif" font-size="11">卡 1 / 2 · 12-01、12-02</text>
+
+          <rect x="1097" y="112" width="12" height="12" fill="#a85b12"/>
+          <line x1="1103" y1="108" x2="1103" y2="84" stroke="#a85b12" stroke-width="1" opacity=".6"/>
+          <text x="1120" y="76" text-anchor="end" fill="#a85b12" font-family="Microsoft YaHei, sans-serif" font-size="11">卡 3 · 12-13</text>
+
+          <text x="860" y="206" text-anchor="middle" fill="#b42318" font-family="Microsoft YaHei, sans-serif" font-size="13">订阅结束后：卡还在，但用不了</text>
+          <text x="860" y="226" text-anchor="middle" fill="#737b80" font-family="Microsoft YaHei, sans-serif" font-size="10.5">最早一张也晚约 27 小时</text>
+        </svg>
+      </div>
+
+      <div class="timeline-mobile">
+        <div class="tl-row">
+          <div class="tl-date">11-13 12:41</div>
+          <div class="tl-axis"><span class="tl-dot"></span></div>
+          <div class="tl-content"><strong>现在</strong><span>周额度 0%，距自然重置 5.3h</span></div>
+        </div>
+        <div class="tl-row">
+          <div class="tl-date">11-13 17:56</div>
+          <div class="tl-axis"><span class="tl-dot green"></span></div>
+          <div class="tl-content"><strong>自然重置 #1</strong><span>周窗回到 100%；这次免费</span></div>
+        </div>
+        <div class="tl-row">
+          <div class="tl-date">11-20 17:56</div>
+          <div class="tl-axis"><span class="tl-dot green"></span></div>
+          <div class="tl-content"><strong>自然重置 #2</strong><span>又一周</span></div>
+        </div>
+        <div class="tl-row">
+          <div class="tl-date">11-27 17:56</div>
+          <div class="tl-axis"><span class="tl-dot green"></span></div>
+          <div class="tl-content"><strong>自然重置 #3</strong><span>距订阅只剩约 2.2 天</span></div>
+        </div>
+        <div class="tl-row">
+          <div class="tl-date">11-29 23:59</div>
+          <div class="tl-axis"><span class="tl-dot red"></span></div>
+          <div class="tl-content"><strong>订阅到期</strong><span>不续订；三张卡从此刻起不可用</span></div>
+        </div>
+        <div class="tl-row">
+          <div class="tl-date">12-01 03:10</div>
+          <div class="tl-axis"><span class="tl-dot amber"></span></div>
+          <div class="tl-content"><strong>卡 1 到期</strong><span>在订阅结束后约 27 小时</span></div>
+        </div>
+        <div class="tl-row">
+          <div class="tl-date">12-02 04:55</div>
+          <div class="tl-axis"><span class="tl-dot amber"></span></div>
+          <div class="tl-content"><strong>卡 2 到期</strong><span>同样晚于订阅</span></div>
+        </div>
+        <div class="tl-row">
+          <div class="tl-date">12-13 05:40</div>
+          <div class="tl-axis"><span class="tl-dot amber"></span></div>
+          <div class="tl-content"><strong>卡 3 到期</strong><span>最晚的一张，但仍晚于订阅</span></div>
+        </div>
+      </div>
+
+      <div class="timeline-legend">
+        <span class="legend-item"><span class="legend-dot" style="background:#15181a"></span>现在</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#0e6b4f"></span>自然重置</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#b42318"></span>订阅到期</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#a85b12"></span>卡到期</span>
+      </div>
+
+      <div class="timeline-table">
+        <table>
+          <colgroup><col style="width:10%"><col style="width:42%"><col style="width:48%"></colgroup>
+          <thead><tr><th>卡</th><th>到期（CST）</th><th>与订阅的关系</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>2026-12-01 03:10:30</td><td>订阅结束后约 27 小时</td></tr>
+            <tr><td>2</td><td>2026-12-02 04:55:09</td><td>订阅结束后约 2 天</td></tr>
+            <tr><td>3</td><td>2026-12-13 05:40:52</td><td>订阅结束后约 13 天</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ===== 用量模拟 ===== -->
+    <section class="section" id="horizon" aria-labelledby="horizon-title">
+      <div class="section-head">
+        <h2 class="section-title" id="horizon-title">如果速度变了，3 张够不够？</h2>
+        <p class="section-sub">7-DAY STEP SIMULATION / 16.5 DAYS LEFT<br>卡会改写下一次自然重置，不能简单相加。拖动速度，看“省卡”与“补满”的差别。</p>
+      </div>
+
+      <div class="horizon-controls">
+        <label for="burnSlider">你的实际速度</label>
+        <input id="burnSlider" type="range" min="0" max="6" step="1" value="1" aria-label="拖动查看不同消耗速度">
+        <strong id="burnLabel" style="font-family:var(--mono);font-size:13px;">14.8%/天</strong>
+      </div>
+      <div class="horizon-callout" id="horizonCallout">按 14.8%/天：省卡 0 张，到 11-29 差 <strong>10.9%</strong> 个周窗；补满要 1 张，但每张只换回 7–11%，补不补都行。</div>
+
+      <div class="horizon-wrap">
+        <table class="horizon" aria-label="不同消耗速度下的省卡与补满结果">
+          <colgroup>
+            <col style="width:12%"><col style="width:23%"><col style="width:14%"><col style="width:23%"><col style="width:14%"><col style="width:14%">
+          </colgroup>
+          <thead>
+            <tr><th>速度</th><th>不用卡到到期差</th><th>省卡策略用几张</th><th>用后还差</th><th>补满所需</th><th>结论</th></tr>
+          </thead>
+          <tbody>
+            <tr data-burn-row="10" data-callout="按 10%/天：自然重置就够，省卡 0 张；缺口约 2.5%。">
+              <td class="burn">10%/天</td>
+              <td>2.5%<div class="bar"><span class="good" style="width:1%"></span></div></td>
+              <td><span class="card-dots"><span class="card-dot"></span><span class="card-dot"></span><span class="card-dot"></span></span> 0</td>
+              <td>2.5%<div class="bar"><span class="good" style="width:1%"></span></div></td>
+              <td>0 张</td>
+              <td>自然够</td>
+            </tr>
+            <tr data-burn-row="14.8" class="row-you" data-callout="按 14.8%/天：省卡 0 张，到 11-29 差 10.9%；补满要 1 张，每张只换回 7–11%，补不补都行。">
+              <td class="burn">14.8%/天</td>
+              <td>10.9%<div class="bar"><span class="warn" style="width:4.4%"></span></div></td>
+              <td><span class="card-dots"><span class="card-dot"></span><span class="card-dot"></span><span class="card-dot"></span></span> 0</td>
+              <td>10.9%<div class="bar"><span class="warn" style="width:4.4%"></span></div></td>
+              <td>1 张</td>
+              <td>0–1 张，补不补都行</td>
+            </tr>
+            <tr data-burn-row="16" data-callout="按 16%/天：省卡 0 张，差 28%；补满要 3 张，但每张只换回约 12%，能补但很亏。">
+              <td class="burn">16%/天</td>
+              <td>28.0%<div class="bar"><span class="warn" style="width:11.2%"></span></div></td>
+              <td><span class="card-dots"><span class="card-dot"></span><span class="card-dot"></span><span class="card-dot"></span></span> 0</td>
+              <td>28.0%<div class="bar"><span class="warn" style="width:11.2%"></span></div></td>
+              <td>3 张</td>
+              <td>能补但很亏</td>
+            </tr>
+            <tr data-burn-row="18" data-callout="按 18%/天：省卡 2 张，仍差 4.5%；第 3 张可补满。">
+              <td class="burn">18%/天</td>
+              <td>56.5%<div class="bar"><span style="width:22.6%"></span></div></td>
+              <td><span class="card-dots"><span class="card-dot on"></span><span class="card-dot on"></span><span class="card-dot"></span></span> 2</td>
+              <td>4.5%<div class="bar"><span class="good" style="width:1.8%"></span></div></td>
+              <td>3 张</td>
+              <td>2 张，仍差 4.5%</td>
+            </tr>
+            <tr data-burn-row="20" data-callout="按 20%/天：省卡 3 张，仍差 5.0%；现有 3 张也不够补满。">
+              <td class="burn">20%/天</td>
+              <td>85.0%<div class="bar"><span style="width:34%"></span></div></td>
+              <td><span class="card-dots"><span class="card-dot on"></span><span class="card-dot on"></span><span class="card-dot on"></span></span> 3</td>
+              <td>5.0%<div class="bar"><span class="good" style="width:2%"></span></div></td>
+              <td>不够</td>
+              <td>3 张仍差 5%</td>
+            </tr>
+            <tr data-burn-row="25" data-callout="按 25%/天：省卡 3 张，仍差 11.8%；3 张仍略差。">
+              <td class="burn">25%/天</td>
+              <td>156.3%<div class="bar"><span style="width:62.5%"></span></div></td>
+              <td><span class="card-dots"><span class="card-dot on"></span><span class="card-dot on"></span><span class="card-dot on"></span></span> 3</td>
+              <td>11.8%<div class="bar"><span class="warn" style="width:4.7%"></span></div></td>
+              <td>不够</td>
+              <td>3 张仍略差</td>
+            </tr>
+            <tr data-burn-row="30" data-callout="按 30%/天：省卡 3 张，仍差 94.1%；3 张远远不够。">
+              <td class="burn">30%/天</td>
+              <td>227.5%<div class="bar"><span style="width:91%"></span></div></td>
+              <td><span class="card-dots"><span class="card-dot on"></span><span class="card-dot on"></span><span class="card-dot on"></span></span> 3</td>
+              <td>94.1%<div class="bar"><span style="width:37.6%"></span></div></td>
+              <td>不够</td>
+              <td>3 张远远不够</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="matrix-note" style="margin-top:10px;">条形按 250% 满宽；“省卡”是贪心策略实际用掉的张数；“补满所需”是从 0 到 3 张逐个模拟，第一个让缺口归零的最小卡数。</p>
+    </section>
+
+    <!-- ===== 官方机制 ===== -->
+    <section class="section" id="mechanism" aria-labelledby="mechanism-title">
+      <div class="section-head">
+        <h2 class="section-title" id="mechanism-title">四条官方口径，决定算法形状</h2>
+        <p class="section-sub">OPENAI HELP CENTER / 11369540 · 20001498 · 20001507<br>不是产品猜测；每一条都直接改判定顺序。</p>
+      </div>
+      <div class="mech-grid">
+        <article class="mech">
+          <div class="mech-num">MECHANISM</div>
+          <h3>刷新 5h + 周窗，并改写周重置日</h3>
+          <p>Plus / Business 的储存重置会同时刷新 5 小时与每周周期，并更改每周重置日期；Pro 只重置周窗，Go 是月窗。所以卡不是“加 100%”，是把未来重置提前。</p>
+        </article>
+        <article class="mech">
+          <div class="mech-num">CONDITION</div>
+          <h3>只恢复低于 100% 的项</h3>
+          <p>已经是 100% 的那一项不会重新计时。周窗满时点重置，可能只刷新 5h 窗；两项都满时，官方没有承诺一定生效，只能说“可能白耗”。</p>
+        </article>
+        <article class="mech">
+          <div class="mech-num">COUNTING</div>
+          <h3>至少恢复一项，才算用掉</h3>
+          <p>判断“用没用掉”不能只看周窗数字；“刚用过卡”要用 <code>lastRedeemedAt</code> 与数据时刻比，重置前的额度不可信。</p>
+        </article>
+        <article class="mech">
+          <div class="mech-num">PAID RESET</div>
+          <h3>下次周重置 = 首次请求 +7 天</h3>
+          <p>付费重置的锚点不是简单的 <code>now + 7d</code>；工具以服务端下次刷新的 <code>resetsAt</code> 为准，不在本地把日期锁死。</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ===== 边界情况 ===== -->
+    <section class="section" id="edges" aria-labelledby="edges-title">
+      <div class="section-head">
+        <h2 class="section-title" id="edges-title">边界情况：先承认“算不出来”，再谈建议</h2>
+        <p class="section-sub">EDGE MATRIX / 30 CASES<br>每一条都对应一个 reasonCode 或 warning；不拿未知写 0，不拿旧数据装新。</p>
+      </div>
+
+      <div class="filter-row" role="group" aria-label="按类别筛选边界情况">
+        <button class="filter-btn active" type="button" data-filter="all" aria-pressed="true">全部</button>
+        <button class="filter-btn" type="button" data-filter="data" aria-pressed="false">数据门</button>
+        <button class="filter-btn" type="button" data-filter="full" aria-pressed="false">满额</button>
+        <button class="filter-btn" type="button" data-filter="wait" aria-pressed="false">等不到</button>
+        <button class="filter-btn" type="button" data-filter="expiry" aria-pressed="false">卡过期</button>
+        <button class="filter-btn" type="button" data-filter="cards" aria-pressed="false">卡数</button>
+        <button class="filter-btn" type="button" data-filter="sub" aria-pressed="false">订阅</button>
+        <button class="filter-btn" type="button" data-filter="quality" aria-pressed="false">质量</button>
+      </div>
+
+      <div class="edge-grid" id="edgeGrid">
+        <article class="edge" data-cat="sub">
+          <div class="edge-top"><span class="edge-cond">订阅已到期</span><span class="chip hold">HOLD</span></div>
+          <p>订阅没了，卡还在也没用；这条优先于“无周窗”和“满额”。</p>
+          <code>sub_expired</code>
+        </article>
+        <article class="edge" data-cat="data">
+          <div class="edge-top"><span class="edge-cond">没有周额度窗口</span><span class="chip unknown">UNKNOWN</span></div>
+          <p>Go 是月窗；整块隐藏，不拿主窗（可能是月窗）冒充周窗。</p>
+          <code>no_weekly</code>
+        </article>
+        <article class="edge" data-cat="full">
+          <div class="edge-top"><span class="edge-cond">周窗满 + 5h 也满</span><span class="chip hold">HOLD</span></div>
+          <p>两项都满；官方没承诺一定生效，可能白耗一张。文案只写“可能”，不写“点了没用”。</p>
+          <code>full_window_both</code>
+        </article>
+        <article class="edge" data-cat="full">
+          <div class="edge-top"><span class="edge-cond">周窗满 + 5h 未满</span><span class="chip hold">HOLD</span></div>
+          <p>点了只会刷新 5h 窗；如果你正被 5h 限流且马上要干活，那是 5h 的取舍，本顾问不替它做决定。</p>
+          <code>full_window_five_hour</code>
+        </article>
+        <article class="edge" data-cat="full">
+          <div class="edge-top"><span class="edge-cond">周窗满 + 5h 窗未知</span><span class="chip hold">HOLD</span></div>
+          <p>不知道 5h 是否满，就不猜“只会刷 5h”还是“会白耗”；统一 HOLD(full_window)，文案写“可能”。</p>
+          <code>full_window</code>
+        </article>
+        <article class="edge" data-cat="data">
+          <div class="edge-top"><span class="edge-cond">已用 + 剩余 ≠ 100%</span><span class="chip unknown">UNKNOWN</span></div>
+          <p>数据正在刷新或字段错位；不拿两个矛盾的数硬算 gain。</p>
+          <code>data_inconsistent</code>
+        </article>
+        <article class="edge" data-cat="data">
+          <div class="edge-top"><span class="edge-cond">重置时间缺失</span><span class="chip unknown">UNKNOWN</span></div>
+          <p>不按 7 天自己推；只保留“满额时别点”这一句。</p>
+          <code>reset_unknown</code>
+        </article>
+        <article class="edge" data-cat="data">
+          <div class="edge-top"><span class="edge-cond">已跨过重置点</span><span class="chip unknown">UNKNOWN</span></div>
+          <p>数据停在重置前，刷新后再判断；不拿旧百分比说“还有 5 小时”。</p>
+          <code>stale_past_reset</code>
+        </article>
+        <article class="edge" data-cat="data">
+          <div class="edge-top"><span class="edge-cond">刚用过一张卡</span><span class="chip unknown">UNKNOWN</span></div>
+          <p>周重置日已改写；<code>lastRedeemedAt &gt; dataUpdatedAt</code> 时不拿重置前的额度算。</p>
+          <code>just_redeemed</code>
+        </article>
+        <article class="edge" data-cat="data">
+          <div class="edge-top"><span class="edge-cond">数据更新时刻缺失</span><span class="chip unknown">UNKNOWN</span></div>
+          <p>无法判断“刚用过卡”和“数据已过期”；加 warning(data_time_unknown)，不拿无时间戳的额度算。</p>
+          <code>data_time_unknown</code>
+        </article>
+        <article class="edge" data-cat="wait">
+          <div class="edge-top"><span class="edge-cond">重置在订阅后 · 能等</span><span class="chip hold">HOLD</span></div>
+          <p>等不到的东西不能建议等；没有免费重置，只能留着或按需求用。</p>
+          <code>no_reset_before_sub_end</code>
+        </article>
+        <article class="edge" data-cat="wait">
+          <div class="edge-top"><span class="edge-cond">重置在订阅后 · 现在就要</span><span class="chip now">NOW</span></div>
+          <p>额度不够且自然重置等不到；有卡就用，没卡就降级 HOLD(no_cards)。</p>
+          <code>deadline_before_sub_end</code>
+        </article>
+        <article class="edge" data-cat="expiry">
+          <div class="edge-top"><span class="edge-cond">卡在重置前过期 · 24h 内要用</span><span class="chip now">NOW</span></div>
+          <p>等到重置等于把卡等没；只有额度不够时才提前用，额度够就仍按 gap 判。</p>
+          <code>card_expires_before_reset</code>
+        </article>
+        <article class="edge" data-cat="expiry">
+          <div class="edge-top"><span class="edge-cond">卡在重置前过期 · 能等</span><span class="chip wait">WAIT</span></div>
+          <p>继续等免费重置；加 warning(card_expiry_loss)，不硬劝用卡。</p>
+          <code>wait_for_reset + warning</code>
+        </article>
+        <article class="edge" data-cat="expiry">
+          <div class="edge-top"><span class="edge-cond">所有卡都在重置前过期</span><span class="chip wait">WAIT</span></div>
+          <p>文案必须写明“等到重置，所有卡都过期了”；但用户不需要时，仍不劝用。</p>
+          <code>card_expiry_loss</code>
+        </article>
+        <article class="edge" data-cat="expiry">
+          <div class="edge-top"><span class="edge-cond">卡会在重置前过期，但空窗只值 3%</span><span class="chip neutral">SUNK</span></div>
+          <p>沉没卡不是“必须用”：只有确实有闲置空窗、且用卡收益低于 5% 时才标沉没；不要为了不浪费而烧卡。</p>
+          <code>SUNK_MIN_GAIN = 5%</code>
+        </article>
+        <article class="edge" data-cat="cards">
+          <div class="edge-top"><span class="edge-cond">卡数 0</span><span class="chip hold">HOLD</span></div>
+          <p>只在 NOW 时降级；WAIT/HOLD 不因为没卡改判。没有卡就等或降速。</p>
+          <code>no_cards</code>
+        </article>
+        <article class="edge" data-cat="cards">
+          <div class="edge-top"><span class="edge-cond">卡数 null，但有明细</span><span class="chip wait">WAIT</span></div>
+          <p>由明细推导数量（available 且未过期），不偷懒判 unknown；加 warning(cards_derived)。</p>
+          <code>cards_derived</code>
+        </article>
+        <article class="edge" data-cat="cards">
+          <div class="edge-top"><span class="edge-cond">卡数 null，且无明细</span><span class="chip unknown">UNKNOWN</span></div>
+          <p>需要 NOW 时降级；不把未知写成 0 张，也不拿空数组伪装成 0。</p>
+          <code>cards_unknown</code>
+        </article>
+        <article class="edge" data-cat="cards">
+          <div class="edge-top"><span class="edge-cond">数量与明细不一致</span><span class="chip neutral">COUNT</span></div>
+          <p>数量权威，明细只用到到期日；不用明细长度覆盖 count，加 warning(count_mismatch)。</p>
+          <code>count_mismatch</code>
+        </article>
+        <article class="edge" data-cat="cards">
+          <div class="edge-top"><span class="edge-cond">有卡但没有到期日</span><span class="chip neutral">EXPIRY?</span></div>
+          <p>不假设“永久有效”，也不说“即将到期”；单独计数并提示。</p>
+          <code>card_expiry_unknown</code>
+        </article>
+        <article class="edge" data-cat="sub">
+          <div class="edge-top"><span class="edge-cond">订阅到期日未填</span><span class="chip neutral">NO PLAN</span></div>
+          <p>即时建议仍可算；计划区不可用，显示“填订阅到期日”，不默认“还有很久”。</p>
+          <code>plan_unavailable</code>
+        </article>
+        <article class="edge" data-cat="sub">
+          <div class="edge-top"><span class="edge-cond">订阅 1 天内到期</span><span class="chip neutral">WARN</span></div>
+          <p>等到重置也用不了几天；加 warning(sub_ends_soon)。</p>
+          <code>sub_ends_soon</code>
+        </article>
+        <article class="edge" data-cat="sub">
+          <div class="edge-top"><span class="edge-cond">订阅 &lt;3 天</span><span class="chip neutral">WARN</span></div>
+          <p>一张卡最多用出 X/7；别按整周估，加 warning(sub_short)。</p>
+          <code>sub_short</code>
+        </article>
+        <article class="edge" data-cat="quality">
+          <div class="edge-top"><span class="edge-cond">本周期样本太少</span><span class="chip neutral">GAIN?</span></div>
+          <p>elapsed &lt; 0.5 天或 used &lt; 5% 时，gain 写 “—”，不写 0；加 warning(burn_unknown)。</p>
+          <code>burn_unknown</code>
+        </article>
+        <article class="edge" data-cat="quality">
+          <div class="edge-top"><span class="edge-cond">现在就要用，但只换回 3%</span><span class="chip now">NOW</span></div>
+          <p>尊重用户的时间约束，但把代价说清；加 warning(low_value_now)，不把低价值说成高价值。</p>
+          <code>low_value_now</code>
+        </article>
+        <article class="edge" data-cat="quality">
+          <div class="edge-top"><span class="edge-cond">scope 不一致</span><span class="chip neutral">WARN</span></div>
+          <p>订阅日期可能不是这个账号的；加 warning(scope_mismatch)，不静默用错 scope。</p>
+          <code>scope_mismatch</code>
+        </article>
+        <article class="edge" data-cat="quality">
+          <div class="edge-top"><span class="edge-cond">need 读不到 / 已过期</span><span class="chip neutral">DEFAULT</span></div>
+          <p>默认 patient + plan_unavailable，不阻塞建议、不空白；写失败仍要 toast + 回滚。</p>
+          <code>need_defaulted</code>
+        </article>
+        <article class="edge" data-cat="quality">
+          <div class="edge-top"><span class="edge-cond">amount 没填</span><span class="chip neutral">ASSUME</span></div>
+          <p>按 50% 估并显式标注“按默认 50% 算”；不让用户以为这是实测值。</p>
+          <code>amount_defaulted</code>
+        </article>
+        <article class="edge" data-cat="quality">
+          <div class="edge-top"><span class="edge-cond">连点按钮，旧响应后到</span><span class="chip neutral">SEQ</span></div>
+          <p>adviseSeq 只接受最后一次请求；慢的旧响应不得覆盖新结论。</p>
+          <code>stale_response</code>
+        </article>
+      </div>
+    </section>
+
+    <!-- ===== 架构 ===== -->
+    <section class="section" id="architecture" aria-labelledby="architecture-title">
+      <div class="section-head">
+        <h2 class="section-title" id="architecture-title">落点：纯函数算，命令层只做胶水</h2>
+        <p class="section-sub">DATA FLOW / 3 TAURI COMMANDS<br>顾问不读快照里的卡数据，也不发起新的账务请求；与详情卡同一份实时 ChannelView。</p>
+      </div>
+
+      <div class="arch" aria-label="重置顾问数据流">
+        <div class="arch-box"><h4>CHANNELVIEW</h4><p>weekly + 5h + resetCredits<br>+ updatedAt（实时）</p></div>
+        <div class="arch-arrow" aria-hidden="true">→</div>
+        <div class="arch-box"><h4>codex_reset_cmd</h4><p>校验范围；读 profile；<br>不读快照卡数据</p></div>
+        <div class="arch-arrow" aria-hidden="true">→</div>
+        <div class="arch-box"><h4>codex_reset::advise</h4><p>纯函数；无 IO、无随机；<br>verdict + reason + metrics</p></div>
+        <div class="arch-arrow" aria-hidden="true">→</div>
+        <div class="arch-box"><h4>ADVICE</h4><p>verdict / reasonCode /<br>planLines / warnings</p></div>
+        <div class="arch-arrow" aria-hidden="true">→</div>
+        <div class="arch-box"><h4>codex-reset.js</h4><p>渲染区块、四个按钮、<br>adviseSeq 防乱序</p></div>
+      </div>
+
+      <div class="profile-box">profile key: codex_reset_profile_v1:&lt;scope&gt; · { subEndAt, need, amountPercent, needAt, updatedAt } · 写失败 → 回滚 + showToast</div>
+      <p class="matrix-note" style="margin-top:12px;">文件：<code>app/core/src/codex_reset.rs</code> · <code>app/src-tauri/src/codex_reset_cmd.rs</code> · <code>app/src/codex-reset.js</code> · <code>app/src/codex-reset.css</code>；3 个命令：advice / profile_get / profile_set；不上调 app.js 与 lib.rs 的行数预算。</p>
+    </section>
+
+
+  </main>
+
+  <footer>
+    <div>数据口径：本机只读快照 `quota_snapshot_v1:codex` + 重置卡接口 `rate-limit-reset-credits`；未兑换、未发起新的账务请求。设计正文：<code>docs/design/design-codex-reset-advisor-2026-11-13.md</code>。</div>
+    <div>本页是设计图解，不代替 Codex 官方“设置 → 用量”的最终口径；用卡后的每周锚点以服务端 <code>resetsAt</code> 为准。</div>
+  </footer>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ---------- 判断树详情 ---------- */
+  var GATES = {
+    sub: {
+      code: 'GATE 0 / HARD', verdict: 'NEXT', cls: 'neutral',
+      title: '订阅已到期？',
+      why: '先看订阅，不看额度：订阅没了，卡还在也没用。',
+      sample: '你的订阅 11-29 23:59 到期；今天 11-13，否。',
+      result: '否 → 进入下一道：有没有周窗。',
+      edge: '订阅优先于“无周窗”和“满额”；三张卡都在订阅后到期。'
+    },
+    weekly: {
+      code: 'GATE 1 / WINDOW', verdict: 'NEXT', cls: 'neutral',
+      title: '有周额度窗口吗？',
+      why: '只认 key=weekly 的窗口；Go 是月窗，不硬套 7 天模型。',
+      sample: '套餐 plus；weekly 窗口存在，key=weekly。',
+      result: '有 → 下一道。',
+      edge: '没有 weekly → UNKNOWN(no_weekly)；不拿月窗或主窗冒充周窗。'
+    },
+    full: {
+      code: 'GATE 2 / FULL', verdict: 'NEXT', cls: 'neutral',
+      title: '周窗满了吗？',
+      why: '官方只恢复低于 100% 的项；周窗满时点重置，可能只刷新 5h 窗。',
+      sample: '周窗 0% 剩余（100% 已用），未满；5h 窗 100% 剩余。',
+      result: '否 → 下一道。',
+      edge: '周窗满 + 5h 满 → HOLD(full_window_both)；周窗满 + 5h 未满 → HOLD(full_window_five_hour)。'
+    },
+    data: {
+      code: 'GATE 3 / DATA', verdict: 'NEXT', cls: 'neutral',
+      title: '数据自洽吗？',
+      why: '已用和剩余加起来不等于 100%，说明数据正在刷新或字段错位。',
+      sample: '0% + 100% = 100%，自洽。',
+      result: '自洽 → 下一道。',
+      edge: '|remain + used − 100| > 1 → UNKNOWN(data_inconsistent)。'
+    },
+    reset: {
+      code: 'GATE 4 / RESET', verdict: 'NEXT', cls: 'neutral',
+      title: '重置时间可用吗？',
+      why: '缺失、已过重置点、超过 7 天都不算；不要按 7 天自己推一个日期。',
+      sample: 'resetsAt = 2026-11-13T09:56:52Z → 17:56:52 CST，距现在 5.3h。',
+      result: '在 0–168h 内 → 下一道。',
+      edge: '缺失 → reset_unknown；已过点 → stale_past_reset；>168h → reset_unknown。'
+    },
+    redeem: {
+      code: 'GATE 5 / REDEEM', verdict: 'NEXT', cls: 'neutral',
+      title: '刚用过卡吗？',
+      why: '用卡会改写每周重置日；数据比用卡时刻还旧，就不能拿重置前的额度算。',
+      sample: 'lastRedeemedAt = null；没有刚用卡记录。',
+      result: '否 → 下一道。',
+      edge: 'lastRedeemedAt > dataUpdatedAt → UNKNOWN(just_redeemed)，周重置日已改写。'
+    },
+    canwait: {
+      code: 'GATE 6 / CAN WAIT', verdict: 'NEXT', cls: 'neutral',
+      title: '等得到下次重置吗？',
+      why: '自然重置在订阅到期之后，等于等不到；这个分支里 WAIT 是禁词。',
+      sample: '17:56:52 早于 11-29 23:59，等得到。',
+      result: '是 → 下一道。',
+      edge: '等不到时：urgent/soon 不够 → NOW(deadline_before_sub_end)；patient → HOLD(no_reset_before_sub_end)。'
+    },
+    expiry: {
+      code: 'GATE 7 / CARD EXPIRY', verdict: 'NEXT', cls: 'neutral',
+      title: '卡会在重置前过期吗？',
+      why: '等到重置等于把卡等没；只有用户真的需要时才提前用。',
+      sample: '最早卡 12-01 03:10，晚于 17:56，不会在重置前过期。',
+      result: '否 → 下一道。',
+      edge: '急且不够 → NOW(card_expires_before_reset)；能等 → WAIT + warning(card_expiry_loss)。'
+    },
+    need: {
+      code: 'GATE 8 / NEED', verdict: 'WAIT', cls: 'wait',
+      title: '你的需求是什么？',
+      why: '四个按钮不是四种语气，是四种时间约束。默认 patient，不假设你有紧急任务。',
+      sample: '默认 patient；gap 5.3h ≤ 24h。',
+      result: 'WAIT(gap_too_short) → 等 17:56。',
+      edge: 'patient + gap≤24h 一定 WAIT(gap_too_short)；gap>24h 才 WAIT(wait_for_reset)。'
+    },
+    cards: {
+      code: 'GATE 9 / CARDS', verdict: 'WAIT', cls: 'wait',
+      title: '卡够吗？',
+      why: '只覆盖 NOW：WAIT/HOLD 不因为没卡改判；数量未知时先看明细能不能推导。',
+      sample: 'availableCount=3；明细 3 张，全部 available，未过期。',
+      result: '3 张 > 0；当前是 WAIT，不需要降级。',
+      edge: 'cards=0 只把 NOW 降为 HOLD(no_cards)；cards=null 只把 NOW 降为 UNKNOWN(cards_unknown)。'
+    },
+    out: {
+      code: 'OUTPUT / VERDICT', verdict: 'WAIT', cls: 'wait',
+      title: '输出：WAIT(gap_too_short)',
+      why: '这是“等免费重置”的结论，不是“卡没用”。',
+      sample: '3 张卡全部保留；17:56 免费满额；11-29 前还有 16.5 天。',
+      result: '今晚不用卡；到 11-29 会用掉 0 张，缺口约 10.9%。',
+      edge: '若改成 urgent 且额度不够，NOW 会接管；若卡数 0，NOW 降为 HOLD。'
+    }
+  };
+
+  var detailCode = document.getElementById('detailCode');
+  var detailVerdict = document.getElementById('detailVerdict');
+  var detailTitle = document.getElementById('detailTitle');
+  var detailWhy = document.getElementById('detailWhy');
+  var detailSample = document.getElementById('detailSample');
+  var detailResult = document.getElementById('detailResult');
+  var detailEdge = document.getElementById('detailEdge');
+  var gateButtons = Array.prototype.slice.call(document.querySelectorAll('[data-gate]'));
+
+  function setActiveGate(id) {
+    gateButtons.forEach(function (gate) {
+      if (gate.getAttribute('data-gate') === id) {
+        gate.classList.add('is-active');
+      } else {
+        gate.classList.remove('is-active');
+      }
+    });
+  }
+
+  function showGate(id) {
+    var gate = GATES[id];
+    if (!gate) return;
+    detailCode.textContent = gate.code;
+    detailVerdict.textContent = gate.verdict;
+    detailVerdict.className = 'chip ' + gate.cls;
+    detailTitle.textContent = gate.title;
+    detailWhy.textContent = gate.why;
+    detailSample.textContent = gate.sample;
+    detailResult.textContent = gate.result;
+    detailEdge.textContent = gate.edge;
+  }
+
+  gateButtons.forEach(function (gate) {
+    gate.addEventListener('click', function () {
+      stopWalk();
+      var id = gate.getAttribute('data-gate');
+      setActiveGate(id);
+      showGate(id);
+      walkStatus.textContent = '手动查看：' + (GATES[id] ? GATES[id].title : id);
+      walkLog.textContent = '手动查看第 ' + (GATES[id] ? GATES[id].code : id) + ' 道门；最终结论仍需结合完整路径。';
+    });
+  });
+
+  /* ---------- 走一遍我的数据 ---------- */
+  var WALK_PATH = [
+    ['sub', '0 否'],
+    ['weekly', '1 有'],
+    ['full', '2 未满'],
+    ['data', '3 自洽'],
+    ['reset', '4 可用'],
+    ['redeem', '5 未用'],
+    ['canwait', '6 等得到'],
+    ['expiry', '7 不过期'],
+    ['need', '8 patient / gap≤24h'],
+    ['cards', '9 3 张'],
+    ['out', 'WAIT(gap_too_short)']
+  ];
+  var walkBtn = document.getElementById('walkBtn');
+  var walkStatus = document.getElementById('walkStatus');
+  var walkLog = document.getElementById('walkLog');
+  var walkTimers = [];
+  var reduced = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)').matches : false;
+
+  function stopWalk() {
+    walkTimers.forEach(function (timer) { window.clearTimeout(timer); });
+    walkTimers = [];
+  }
+
+  function walk() {
+    stopWalk();
+    var flow = document.getElementById('flow');
+    if (flow) {
+      flow.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'start' });
+    }
+    var index = 0;
+    function step() {
+      if (index >= WALK_PATH.length) {
+        walkStatus.textContent = '走完：WAIT · gap_too_short';
+        return;
+      }
+      var item = WALK_PATH[index];
+      setActiveGate(item[0]);
+      showGate(item[0]);
+      var path = WALK_PATH.slice(0, index + 1).map(function (entry) { return entry[1]; }).join(' → ');
+      walkLog.textContent = '路径：' + path;
+      walkStatus.textContent = '经过：' + item[1];
+      index += 1;
+      if (index < WALK_PATH.length) {
+        if (reduced) {
+          step();
+        } else {
+          walkTimers.push(window.setTimeout(step, 360));
+        }
+      } else {
+        walkStatus.textContent = '走完：WAIT · gap_too_short';
+      }
+    }
+    if (reduced) {
+      step();
+    } else {
+      walkTimers.push(window.setTimeout(step, 260));
+    }
+  }
+
+  walkBtn.addEventListener('click', function () {
+    stopWalk();
+    walkLog.textContent = '路径：准备中';
+    walkStatus.textContent = '准备走一遍…';
+    walk();
+  });
+
+  /* ---------- 判定矩阵 ---------- */
+  var MATRIX = {
+    enough: {
+      urgent: {
+        gap24: ['HOLD', 'hold', '额度够 → HOLD；不够 → NOW'],
+        gapLong: ['HOLD', 'hold', '额度够 → HOLD；不够 → NOW'],
+        noWait: ['HOLD', 'hold', '额度够 → HOLD；不够 → NOW'],
+        expiry: ['HOLD', 'hold', '额度够 → HOLD；不够 → NOW']
+      },
+      soon: {
+        gap24: ['WAIT', 'wait', '能等 → WAIT；不够也等'],
+        gapLong: ['HOLD', 'hold', '额度够 → HOLD；不够 → NOW'],
+        noWait: ['HOLD', 'hold', '额度够 → HOLD；不够 → NOW'],
+        expiry: ['WAIT', 'wait', '额度够 → WAIT/HOLD 看 gap']
+      },
+      patient: {
+        gap24: ['WAIT', 'wait', 'gap≤24h → WAIT(gap_too_short)'],
+        gapLong: ['WAIT', 'wait', 'gap>24h → WAIT(wait_for_reset)'],
+        noWait: ['HOLD', 'hold', '等不到 → HOLD(no_reset_before_sub_end)'],
+        expiry: ['WAIT', 'wait', '继续等；加 warning(card_expiry_loss)']
+      },
+      idle: {
+        gap24: ['WAIT', 'wait', 'gap≤24h → WAIT(gap_too_short)'],
+        gapLong: ['HOLD', 'hold', 'gap>24h → HOLD(no_need)'],
+        noWait: ['HOLD', 'hold', '等不到 → HOLD(no_need)'],
+        expiry: ['HOLD', 'hold', '不需要就别用；加 warning']
+      }
+    },
+    short: {
+      urgent: {
+        gap24: ['NOW', 'now', '额度不够 → NOW；卡过期/等不到同向'],
+        gapLong: ['NOW', 'now', '额度不够 → NOW；卡过期/等不到同向'],
+        noWait: ['NOW', 'now', '额度不够 → NOW；卡过期/等不到同向'],
+        expiry: ['NOW', 'now', '额度不够 → NOW；卡过期/等不到同向']
+      },
+      soon: {
+        gap24: ['WAIT', 'wait', 'gap≤24h → WAIT(gap_too_short)'],
+        gapLong: ['NOW', 'now', '额度不够且 gap>24h → NOW'],
+        noWait: ['NOW', 'now', '等不到重置 → NOW(deadline_before_sub_end)'],
+        expiry: ['NOW', 'now', '卡先过期 → NOW(card_expires_before_reset)']
+      },
+      patient: {
+        gap24: ['WAIT', 'wait', 'gap≤24h → WAIT(gap_too_short)'],
+        gapLong: ['WAIT', 'wait', 'gap>24h → WAIT(wait_for_reset)'],
+        noWait: ['HOLD', 'hold', '等不到 → HOLD(no_reset_before_sub_end)'],
+        expiry: ['WAIT', 'wait', '继续等；加 warning(card_expiry_loss)']
+      },
+      idle: {
+        gap24: ['WAIT', 'wait', 'gap≤24h → WAIT(gap_too_short)'],
+        gapLong: ['HOLD', 'hold', 'gap>24h → HOLD(no_need)'],
+        noWait: ['HOLD', 'hold', '等不到 → HOLD(no_need)'],
+        expiry: ['HOLD', 'hold', '不需要就别用；加 warning']
+      }
+    }
+  };
+  var CELL_LABELS = {
+    urgent: 'urgent · 现在',
+    soon: 'soon · 24h 内',
+    patient: 'patient · 能等',
+    idle: 'idle · 不用'
+  };
+  var COL_LABELS = {
+    gap24: '能等 · gap≤24h',
+    gapLong: '能等 · gap>24h',
+    noWait: '重置在订阅后',
+    expiry: '卡在重置前过期'
+  };
+  var matrixAmount = 'enough';
+  var matrixCells = Array.prototype.slice.call(document.querySelectorAll('.matrix-cell'));
+  var matrixDetail = document.getElementById('matrixDetail');
+
+  function renderMatrix() {
+    matrixCells.forEach(function (cell) {
+      var row = cell.getAttribute('data-row');
+      var col = cell.getAttribute('data-col');
+      var data = MATRIX[matrixAmount][row][col];
+      cell.innerHTML = '<span class="chip ' + data[1] + '">' + data[0] + '</span><span class="note">' + data[2] + '</span>';
+      cell.classList.remove('is-selected');
+    });
+    matrixDetail.textContent = '当前展示：' + (matrixAmount === 'enough' ? '额度够' : '额度不够') + '。点任意格子看叠加规则。';
+  }
+
+  function showMatrixDetail(row, col) {
+    var data = MATRIX[matrixAmount][row][col];
+    var extra = '';
+    if (data[0] === 'NOW') {
+      if (col === 'expiry') {
+        extra = ' 卡在重置前过期，NOW 不会被“等”覆盖；但 cards=0 会降为 HOLD(no_cards)。';
+      } else if (col === 'noWait') {
+        extra = ' 自然重置在订阅后，NOW 不会被“等”覆盖；这是 deadline_before_sub_end 的典型场景。';
+      } else {
+        extra = ' 如果周窗满，满额保护会先把它改成 HOLD；如果卡数 0，NOW 降为 HOLD(no_cards)。';
+      }
+    } else if (data[0] === 'WAIT') {
+      extra = ' 如果周窗满，仍先走满额保护；如果等不到下次重置，WAIT 会被 HOLD 替换。';
+    } else {
+      extra = ' 如果周窗满，满额保护会覆盖它；卡数只影响 NOW，不影响 HOLD。';
+    }
+    matrixDetail.innerHTML = '<strong>' + CELL_LABELS[row] + ' × ' + COL_LABELS[col] + ' → ' + data[0] + '</strong><br>' + data[2] + extra;
+  }
+
+  matrixCells.forEach(function (cell) {
+    cell.addEventListener('click', function () {
+      matrixCells.forEach(function (other) { other.classList.remove('is-selected'); });
+      cell.classList.add('is-selected');
+      showMatrixDetail(cell.getAttribute('data-row'), cell.getAttribute('data-col'));
+    });
+  });
+
+  Array.prototype.slice.call(document.querySelectorAll('[data-amount]')).forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      matrixAmount = btn.getAttribute('data-amount');
+      Array.prototype.slice.call(document.querySelectorAll('[data-amount]')).forEach(function (other) {
+        var active = other === btn;
+        other.classList.toggle('active', active);
+        other.setAttribute('aria-pressed', active ? 'true' : 'false');
+      });
+      renderMatrix();
+    });
+  });
+
+  /* ---------- 边界筛选 ---------- */
+  var filterButtons = Array.prototype.slice.call(document.querySelectorAll('.filter-btn'));
+  var edges = Array.prototype.slice.call(document.querySelectorAll('.edge'));
+  var edgeGrid = document.getElementById('edgeGrid');
+
+  function applyFilter(category) {
+    var visible = [];
+    edges.forEach(function (edge) {
+      var show = category === 'all' || edge.getAttribute('data-cat') === category;
+      edge.hidden = !show;
+      edge.classList.remove('span-2');
+      if (show) visible.push(edge);
+    });
+    if (visible.length % 2 === 1) {
+      visible[visible.length - 1].classList.add('span-2');
+    }
+    filterButtons.forEach(function (btn) {
+      var active = btn.getAttribute('data-filter') === category;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+  }
+
+  filterButtons.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      applyFilter(btn.getAttribute('data-filter'));
+    });
+  });
+
+  /* ---------- 速度滑块 ---------- */
+  var burnRows = Array.prototype.slice.call(document.querySelectorAll('[data-burn-row]'));
+  var burnSlider = document.getElementById('burnSlider');
+  var burnLabel = document.getElementById('burnLabel');
+  var horizonCallout = document.getElementById('horizonCallout');
+
+  function setBurn(index) {
+    var row = burnRows[index];
+    if (!row) return;
+    burnRows.forEach(function (item) { item.classList.remove('row-you'); });
+    row.classList.add('row-you');
+    burnLabel.textContent = row.getAttribute('data-burn-row') + '%/天';
+    horizonCallout.textContent = row.getAttribute('data-callout');
+  }
+
+  burnSlider.addEventListener('input', function () {
+    setBurn(Number(burnSlider.value));
+  });
+
+  /* ---------- init ---------- */
+  showGate('sub');
+  renderMatrix();
+  applyFilter('all');
+  setBurn(1);
+})();
+</script>
+</body>
+</html>

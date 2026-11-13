@@ -1,7 +1,7 @@
 # Grandettoken 开发进展
 
-> 最后更新:2026-11-12
-> 状态:**v0.3.38 已发版** —— 发版链路改回 GitHub Actions(见文末 2026-11-12 条目)
+> 最后更新:2026-11-13
+> 状态:**桌面 v0.3.42 发布验证中，Android 0.1.13 已发布**，结果见文末最新条目。
 > 同日做了两轮**代码治理**:产物出库 / 门禁补强 / 静默失败归零 / 经验沉淀,
 > 见 `docs/report/code-governance-2026-11-12.md`、`docs/report/code-quality-2026-11-12-b.md`
 > 与根目录 `AGENTS.md`。
@@ -4717,3 +4717,12 @@ src-tauri `cargo check --all-targets --locked` exit 0;
   `apksigner` 证书与 `aapt` versionCode/versionName 均与清单一致。
 - 6 个 Android CI secrets 已配置且值未打印；本次 CI 成功证明 keystore、更新签名私钥、
   证书哈希的 secret 形态可用。
+
+## 2026-11-13 v0.3.42 Codex 重置顾问评审与发版
+
+- 已检查本轮代码、两份原型与详细设计，评审及修正清单见 `docs/report/codex-reset-review-2026-11-13.md`。
+- 详情内展开建议、计划与依据。核心算法、命令层、前端与样式拆为独立模块，原文件仅接线，规模预算保持原值。
+- 修正过期卡供给、时间缓存、换号设置与迟到写入、写失败回滚、订阅截止和异常数据门。严格不断档的当前算例需要三张卡，初稿的一张口径已在评审中纠正。
+- 本地 IPC / 静默失败 / 规模 / JS 语法 / CSS / 原有 jsdom / 顾问 jsdom / core 全量 / Tauri 全目标编译 / secrets 均串行通过并独立复跑。顾问冒烟含未知命令注入变红、写失败回滚与读失败降级。
+- 已检查模拟数据页面的生产样式渲染。真实兑换未执行，安装包内 WebView2 人工交互待验收。
+- 三处桌面版本同步为 0.3.42，按 main 后 tag 顺序触发 CI，发布结果随后补记。

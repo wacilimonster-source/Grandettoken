@@ -16,6 +16,7 @@ mod sync_cmds;
 mod download;
 mod gateway;
 mod doubao_web;
+mod codex_reset_cmd;
 pub use sync_cmds::{
     sync_create, sync_disconnect_github, sync_forget,
     sync_join, sync_oauth_cancel, sync_oauth_poll, sync_oauth_start, sync_preview,
@@ -6444,6 +6445,9 @@ pub fn run() {
             sync_oauth_cancel,
             sync_set_oauth_client_id,
             sync_qr_svg,
+            codex_reset_cmd::codex_reset_advice,
+            codex_reset_cmd::codex_reset_profile_get,
+            codex_reset_cmd::codex_reset_profile_set,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

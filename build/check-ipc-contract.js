@@ -18,9 +18,13 @@ const fs = require("fs");
 const path = require("path");
 
 const root = path.resolve(__dirname, "..");
-const frontPath = path.join(root, "app/src/app.js");
+const frontPaths = [
+  path.join(root, "app/src/app.js"),
+  // 重置顾问拆成了独立模块，命令调用必须一起纳入三方比对。
+  path.join(root, "app/src/codex-reset.js"),
+];
+const front = frontPaths.map((p) => fs.readFileSync(p, "utf8")).join("\n");
 const rustDir = path.join(root, "app/src-tauri/src");
-const front = fs.readFileSync(frontPath, "utf8");
 
 // ── 1. 前端调用点 ──
 const invokeAll = [...front.matchAll(/\binvoke\s*\(/g)];

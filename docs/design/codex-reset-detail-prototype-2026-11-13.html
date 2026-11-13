@@ -1,0 +1,1138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#15181b">
+<title>Codex 重置顾问 · PC 交互原型</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2315181b'/%3E%3Cpath d='M9 16h14M16 9v14' stroke='%23d3e6a3' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+/* ===== tokens：对齐 app/src/styles.css 的 PC 视觉精修 V2（石墨 + 暖雾白） ===== */
+:root{
+  --bg:#15181b; --bg2:#1d2125; --bg3:#262b30;
+  --line:#30363b; --line2:#3a4147;
+  --tx:#f0f2ed; --tx2:#afb8bb; --tx3:#849095; --tx4:#6b767b;
+  --ok:#8bc9a2; --warn:#edc185; --bad:#ef9d94; --ac:#d3e6a3;
+  --ok-bg:rgba(139,201,162,.09);
+  --warn-bg:rgba(237,193,133,.09);
+  --bad-bg:rgba(239,157,148,.09);
+  --ac-bg:rgba(211,230,163,.08);
+  --btn-text:#25301c;
+  --r:12px; --t1:120ms; --t2:200ms; --t3:280ms;
+  --ease:cubic-bezier(.2,.8,.2,1);
+  --canvas:#080a0c;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{min-height:100%}
+body{
+  background:var(--canvas); color:var(--tx);
+  font:13px/1.5 "Segoe UI","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+button,input{font-family:inherit}
+button{cursor:pointer}
+button:disabled{cursor:not-allowed;opacity:.42}
+a{color:inherit}
+::selection{background:var(--ac);color:var(--btn-text)}
+.sprite{position:absolute;width:0;height:0;overflow:hidden}
+.icon{width:14px;height:14px;display:block;flex:none}
+.icon.sm{width:11px;height:11px}
+.icon.lg{width:16px;height:16px}
+
+/* ===== page shell ===== */
+.shell{padding:26px 28px 30px}
+.page-head{
+  max-width:1240px;margin:0 auto 22px;
+  display:flex;align-items:flex-end;justify-content:space-between;gap:28px;
+}
+.ph-copy{min-width:0}
+.eyebrow{font-size:9.5px;letter-spacing:.14em;color:var(--tx4);font-weight:600}
+.page-head h1{
+  margin-top:8px;font-size:clamp(24px,2.45vw,31px);line-height:1.2;
+  letter-spacing:-.025em;font-weight:650;max-width:720px;
+}
+.page-head p{margin-top:8px;font-size:12px;line-height:1.65;color:var(--tx3);max-width:650px}
+.ph-tools{display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex:none}
+.mode{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--bg2)}
+.mode-btn{
+  border:0;background:transparent;color:var(--tx3);padding:6px 10px;
+  font-size:10.5px;line-height:1.2;letter-spacing:.02em;transition:background var(--t1),color var(--t1);
+}
+.mode-btn:hover{color:var(--tx)}
+.mode-btn.on{background:var(--ac-bg);color:var(--ac);font-weight:600}
+.demo-pill{font-size:9.5px;color:var(--tx4);border:1px solid var(--line);border-radius:999px;padding:2px 8px}
+
+.stage{
+  max-width:1240px;margin:0 auto;
+  display:grid;grid-template-columns:auto 280px;gap:40px;
+  align-items:start;justify-content:center;
+}
+
+/* ===== app window ===== */
+.app{
+  position:relative;width:420px;height:760px;flex:none;
+  display:flex;flex-direction:column;
+  background:var(--bg);border:1px solid var(--line);border-radius:var(--r);
+  overflow:hidden;
+  box-shadow:0 24px 64px -24px rgba(0,0,0,.82),0 2px 8px -2px rgba(0,0,0,.6);
+  transition:width var(--t3) var(--ease);
+}
+.app.wide{width:900px}
+.titlebar{
+  flex:none;height:38px;display:flex;align-items:center;gap:7px;
+  padding:0 9px 0 11px;
+  background:linear-gradient(180deg,#20252a,#191d21);
+  border-bottom:1px solid var(--line);
+}
+.mark{
+  width:20px;height:20px;display:grid;place-items:center;flex:none;
+  color:var(--ac);font-size:13px;font-weight:800;line-height:1;
+  border:1px solid color-mix(in srgb,var(--ac) 35%,transparent);border-radius:6px;
+}
+.tt{font-size:12.5px;font-weight:600;letter-spacing:.02em;white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.tt small{font-size:9.5px;font-weight:400;color:var(--tx4);margin-left:5px}
+.spacer{flex:1}
+.tbi{
+  height:24px;min-width:24px;border:0;background:transparent;color:var(--tx3);
+  border-radius:6px;display:inline-flex;align-items:center;justify-content:center;gap:4px;
+  padding:0 5px;font-size:10.5px;line-height:1;transition:background var(--t1),color var(--t1);
+}
+.tbi:hover,.tb:hover{background:#ffffff0a;color:var(--tx)}
+.tbi:focus-visible,.tb:focus-visible,.icon-btn:focus-visible,.mode-btn:focus-visible,
+.btn:focus-visible,.need:focus-visible,.link:focus-visible,.preview:focus-visible,
+.reset-section:focus-visible,.tab:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
+.tbi.loading{color:var(--ac);pointer-events:none}
+.tbi.loading .icon{animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.tb{
+  height:24px;border:0;background:transparent;color:var(--tx3);border-radius:6px;
+  padding:0 5px;font-size:10.5px;line-height:1;white-space:nowrap;transition:background var(--t1),color var(--t1);
+}
+.tb.on{background:var(--ac);color:var(--btn-text);font-weight:600}
+.tb-live{font-size:9.5px;color:var(--tx4);font-variant-numeric:tabular-nums}
+
+.app-body{flex:1;min-height:0;position:relative;display:flex}
+.main{
+  flex:1;min-width:0;overflow-y:auto;overflow-x:hidden;
+  transition:margin-right var(--t3) var(--ease);
+  scrollbar-width:thin;scrollbar-color:var(--line2) transparent;
+}
+.main::-webkit-scrollbar,.detail-body::-webkit-scrollbar{width:8px}
+.main::-webkit-scrollbar-thumb,.detail-body::-webkit-scrollbar-thumb{background:var(--line2);border-radius:9px;border:2px solid var(--bg)}
+.main::-webkit-scrollbar-track,.detail-body::-webkit-scrollbar-track{background:transparent}
+
+/* ===== channel ===== */
+.channel{min-width:0}
+.ch-head{
+  display:flex;align-items:center;gap:9px;padding:11px 12px;
+  border-bottom:1px solid var(--line);background:var(--bg2);
+}
+.ch-ico{
+  width:28px;height:28px;border-radius:8px;display:grid;place-items:center;flex:none;
+  background:var(--ac-bg);color:var(--ac);font-size:10px;font-weight:700;letter-spacing:.02em;
+}
+.ch-name{flex:1;min-width:0}
+.ch-title{display:flex;align-items:center;gap:5px;font-size:13px;font-weight:600;line-height:1.25;white-space:nowrap}
+.badge{
+  font-size:9px;font-weight:500;color:var(--tx3);border:1px solid var(--line2);
+  border-radius:3px;padding:0 4px;line-height:1.5;
+}
+.ch-sub{font-size:10.5px;color:var(--tx3);line-height:1.45;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ch-val{text-align:right;flex:none;font-variant-numeric:tabular-nums}
+.ch-val b{display:block;font-size:21px;line-height:1.05;font-weight:650;letter-spacing:-.02em}
+.ch-val span{display:block;font-size:9.5px;color:var(--tx3);margin-top:1px}
+.caret{width:12px;height:12px;flex:none;color:var(--tx4);transform:rotate(90deg)}
+.bad{color:var(--bad)} .okc{color:var(--ok)} .warnc{color:var(--warn)}
+
+.ch-body{padding:0 12px 13px}
+.sec-h{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding-top:12px;margin-bottom:2px}
+.sec-h>span:first-child{font-size:10px;font-weight:600;color:var(--tx3);letter-spacing:.06em}
+.sec-meta,.sec-h>span:last-child{font-size:9.5px;color:var(--tx4)}
+
+.quota{padding-bottom:1px}
+.qrow{
+  display:grid;grid-template-columns:42px minmax(0,1fr) 44px 74px;
+  align-items:center;gap:7px;padding:6px 0;
+}
+.q-label{font-size:10.5px;color:var(--tx3);white-space:nowrap}
+.q-bar{height:5px;border-radius:3px;background:var(--bg3);overflow:hidden}
+.q-bar i{display:block;height:100%;border-radius:3px}
+.q-val{font-size:12.5px;font-weight:600;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.q-time{font-size:9.5px;color:var(--tx3);text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.q-note{font-size:10px;line-height:1.5;color:var(--tx3);padding:3px 0 0 49px;opacity:.92}
+
+.preview{
+  margin-top:11px;padding:9px 11px 8px;
+  border:1px solid color-mix(in srgb,var(--ok) 34%,var(--line));
+  border-radius:9px;background:var(--ok-bg);
+  cursor:pointer;transition:background var(--t1),border-color var(--t1);
+}
+.preview:hover{background:rgba(139,201,162,.12);border-color:color-mix(in srgb,var(--ok) 55%,var(--line))}
+.preview-top{display:flex;align-items:center;gap:7px}
+.preview-label{font-size:9.5px;font-weight:600;letter-spacing:.06em;color:var(--tx3)}
+.verdict-pill{
+  display:inline-flex;align-items:center;border:1px solid;border-radius:3px;
+  padding:0 5px;font-size:9px;font-weight:700;line-height:1.6;letter-spacing:.07em;
+}
+.verdict-pill.wait{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 38%,transparent);background:var(--ok-bg)}
+.verdict-pill.now{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 38%,transparent);background:var(--bad-bg)}
+.verdict-pill.hold{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 38%,transparent);background:var(--warn-bg)}
+.verdict-pill.unknown{color:var(--tx3);border-color:var(--line2);background:transparent}
+.preview-more{margin-left:auto;display:inline-flex;align-items:center;gap:2px;font-size:9.5px;color:var(--tx3);white-space:nowrap}
+.preview:hover .preview-more{color:var(--ac)}
+.preview-title{font-size:14px;font-weight:600;letter-spacing:-.01em;line-height:1.3;margin-top:5px}
+.preview-desc{font-size:10.5px;line-height:1.5;color:var(--tx2);margin-top:3px}
+.preview-foot{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  margin-top:6px;padding-top:6px;border-top:1px dashed rgba(139,201,162,.18);
+  font-size:9.5px;color:var(--tx3);
+}
+.preview-hint{color:var(--tx4);white-space:nowrap}
+
+.reset-section{
+  margin-top:9px;padding:8px 9px 7px;
+  border:1px solid transparent;border-radius:9px;cursor:pointer;
+  transition:background var(--t1),border-color var(--t1);
+}
+.reset-section:hover{background:#ffffff05;border-color:var(--line)}
+.reset-section:hover .reset-more,.reset-section:focus-visible .reset-more{color:var(--ac);opacity:1}
+.reset-h{padding-top:0;margin-bottom:1px}
+.reset-count{display:inline-flex;align-items:center;gap:4px;font-size:9.5px;color:var(--tx2);font-weight:400;white-space:nowrap}
+.reset-more{font-size:9px;color:var(--tx4);opacity:.8;transition:color var(--t1),opacity var(--t1)}
+.reset-chev{width:10px;height:10px;color:var(--tx4)}
+.rcard{
+  display:flex;align-items:baseline;justify-content:space-between;gap:8px;
+  padding:5px 0;border-top:1px solid #ffffff07;
+  font-size:10px;line-height:1.45;
+}
+.rcard:first-of-type{border-top:0}
+.rc-title{color:var(--tx2);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rc-date{color:var(--tx3);white-space:nowrap;font-variant-numeric:tabular-nums}
+.reset-note{
+  margin-top:5px;padding-top:5px;border-top:1px dashed #ffffff0c;
+  font-size:9.5px;line-height:1.5;color:var(--warn);
+}
+.query-note{font-size:9px;color:var(--tx4);text-align:right;padding:7px 0 0}
+
+/* ===== detail ===== */
+.detail{
+  position:absolute;inset:0;z-index:20;
+  display:flex;flex-direction:column;background:var(--bg);
+  opacity:0;visibility:hidden;pointer-events:none;
+  transform:translateY(8px);
+  transition:opacity var(--t2) var(--ease),transform var(--t3) var(--ease),visibility var(--t2);
+}
+.detail.open{opacity:1;visibility:visible;pointer-events:auto;transform:none}
+.app.wide .detail{left:auto;right:0;width:480px;border-left:1px solid var(--line2);transform:translateX(18px)}
+.app.wide .detail.open{transform:none}
+.app.wide.detail-open .main{margin-right:480px}
+.scrim{
+  position:absolute;inset:0;z-index:15;display:none;
+  background:rgba(4,6,7,.34);cursor:pointer;
+}
+.app.wide.detail-open .scrim{display:block;right:480px}
+
+.detail-head{
+  flex:none;height:48px;display:flex;align-items:center;gap:8px;
+  padding:0 10px;border-bottom:1px solid var(--line);background:var(--bg2);
+}
+.icon-btn{
+  width:28px;height:28px;border:0;background:transparent;color:var(--tx3);
+  border-radius:6px;display:grid;place-items:center;flex:none;
+  transition:background var(--t1),color var(--t1);
+}
+.icon-btn:hover{background:#ffffff0a;color:var(--tx)}
+.detail-title{min-width:0;flex:1}
+.detail-title b{display:block;font-size:11.5px;font-weight:600;line-height:1.25}
+.detail-title span{display:block;font-size:9.5px;color:var(--tx3);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.detail-tabs{
+  flex:none;display:grid;grid-template-columns:repeat(3,1fr);gap:3px;
+  padding:7px 10px;border-bottom:1px solid var(--line);background:var(--bg2);
+}
+.tab{
+  border:1px solid transparent;background:transparent;color:var(--tx3);
+  border-radius:6px;padding:4px 0;font-size:10.5px;line-height:1.4;transition:background var(--t1),color var(--t1),border-color var(--t1);
+}
+.tab:hover{color:var(--tx)}
+.tab.on{background:var(--ac-bg);border-color:color-mix(in srgb,var(--ac) 42%,transparent);color:var(--ac);font-weight:600}
+.detail-body{
+  flex:1;min-height:0;overflow-y:auto;padding:12px 13px 18px;
+  scrollbar-width:thin;scrollbar-color:var(--line2) transparent;
+}
+.tab-panel[hidden]{display:none}
+
+.verdict-band{
+  border-top:2px solid var(--ok);background:var(--ok-bg);
+  border-radius:0 0 8px 8px;padding:9px 11px 10px;
+  transition:background var(--t2),border-color var(--t2);
+}
+.verdict-band.now{border-top-color:var(--bad);background:var(--bad-bg)}
+.verdict-band.hold{border-top-color:var(--warn);background:var(--warn-bg)}
+.verdict-band.unknown{border-top-color:var(--tx3);background:#ffffff05}
+.vb-top{display:flex;align-items:center;gap:7px;min-width:0}
+.vb-label{font-size:9.5px;color:var(--tx3);white-space:nowrap}
+.vb-word{font-size:11px;font-weight:750;letter-spacing:.1em;color:var(--ok);white-space:nowrap}
+.verdict-band.now .vb-word{color:var(--bad)}
+.verdict-band.hold .vb-word{color:var(--warn)}
+.verdict-band.unknown .vb-word{color:var(--tx3)}
+.vb-reason{margin-left:auto;font-size:9px;color:var(--tx4);white-space:nowrap;font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis}
+.verdict-band h2{font-size:17px;line-height:1.3;letter-spacing:-.015em;margin-top:5px;font-weight:650}
+.verdict-band p{font-size:10.5px;line-height:1.55;color:var(--tx2);margin-top:3px}
+.vb-meta{
+  display:flex;flex-wrap:wrap;gap:4px 9px;margin-top:7px;padding-top:6px;
+  border-top:1px solid #ffffff0b;font-size:9px;color:var(--tx3);font-variant-numeric:tabular-nums;
+}
+.metrics{
+  display:grid;grid-template-columns:1fr 1fr;gap:1px;margin-top:9px;
+  background:var(--line);border:1px solid var(--line);border-radius:8px;overflow:hidden;
+}
+.metric{background:var(--bg2);padding:7px 9px 8px;min-width:0}
+.metric>span{display:block;font-size:9.5px;color:var(--tx3);line-height:1.35}
+.metric b{display:block;font-size:17px;line-height:1.15;font-weight:650;letter-spacing:-.02em;margin-top:2px;font-variant-numeric:tabular-nums}
+.metric em{display:block;font-style:normal;font-size:9px;color:var(--tx4);line-height:1.4;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+.block{margin-top:12px}
+.block-h{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:6px}
+.block h3,.block-h h3{font-size:10.5px;font-weight:600;color:var(--tx2);letter-spacing:.01em}
+.tiny{font-size:9px;color:var(--tx4);line-height:1.45}
+.need-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+.need{
+  min-height:46px;text-align:left;border:1px solid var(--line);
+  background:var(--bg2);color:var(--tx2);border-radius:7px;
+  padding:6px 8px;transition:background var(--t1),border-color var(--t1);
+}
+.need:hover{background:#ffffff06;border-color:var(--line2)}
+.need b{display:block;font-size:10.5px;font-weight:600;color:var(--tx);line-height:1.3}
+.need span{display:block;font-size:9px;line-height:1.45;color:var(--tx3);margin-top:2px}
+.need.on{border-color:color-mix(in srgb,var(--ac) 60%,transparent);background:var(--ac-bg)}
+.need.on b{color:var(--ac)}
+.need.on span{color:var(--tx2)}
+.tiny.note{display:block;margin-top:5px}
+.reason-list{margin:0;padding:0 0 0 13px;color:var(--tx2);font-size:10.5px;line-height:1.55}
+.reason-list li{margin:0 0 2px;padding-left:1px}
+.reason-list li::marker{color:var(--ac)}
+.link-row{display:flex;flex-wrap:wrap;gap:12px;margin-top:6px}
+.link{border:0;background:transparent;padding:0;font-size:9.5px;color:var(--tx3);border-bottom:1px solid transparent;line-height:1.5}
+.link:hover{color:var(--ac);border-bottom-color:color-mix(in srgb,var(--ac) 45%,transparent)}
+.detail-footnote{font-size:9px;line-height:1.5;color:var(--tx4);margin-top:10px;padding-top:8px;border-top:1px solid #ffffff0b}
+
+/* plan */
+.range{display:block;width:100%;height:20px;margin:6px 0 0;accent-color:var(--ac);cursor:pointer;background:transparent}
+.range-scale{display:flex;justify-content:space-between;font-size:9px;color:var(--tx4);margin-top:-1px}
+.plan-kpis{
+  display:grid;grid-template-columns:repeat(3,1fr);gap:1px;margin-top:8px;
+  background:var(--line);border:1px solid var(--line);border-radius:8px;overflow:hidden;
+}
+.plan-kpis>div{background:var(--bg2);padding:7px 8px;min-width:0}
+.plan-kpis b{display:block;font-size:15px;font-weight:650;line-height:1.15;letter-spacing:-.02em;color:var(--tx);font-variant-numeric:tabular-nums;white-space:nowrap}
+.plan-kpis span{display:block;font-size:9px;color:var(--tx3);line-height:1.35;margin-top:2px}
+.block-note{font-size:9.5px;line-height:1.55;color:var(--tx3);margin-top:6px}
+.block-note.warn{color:var(--warn)}
+.tl{position:relative;padding:2px 0 0}
+.tl::before{content:"";position:absolute;left:91px;top:9px;bottom:9px;width:1px;background:var(--line2)}
+.tl-row{display:grid;grid-template-columns:74px 14px minmax(0,1fr);column-gap:10px;align-items:start;padding:4px 0;position:relative}
+.tl-time{font-size:9px;line-height:1.5;color:var(--tx3);text-align:right;padding-top:1px;font-variant-numeric:tabular-nums}
+.tl-dot{width:8px;height:8px;border-radius:50%;background:var(--line2);margin:4px auto 0;position:relative;z-index:1;box-shadow:0 0 0 3px var(--bg)}
+.tl-dot.now{background:var(--ok)}
+.tl-dot.end{background:var(--bad)}
+.tl-dot.after{background:var(--tx4)}
+.tl-row b{display:block;font-size:10.5px;font-weight:600;line-height:1.35;color:var(--tx2)}
+.tl-row p{font-size:9px;line-height:1.5;color:var(--tx3);margin-top:1px}
+.card-list{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--bg2)}
+.card-item{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:6px 8px;border-top:1px solid var(--line)}
+.card-item:first-child{border-top:0}
+.ci-main{min-width:0}
+.ci-main b{display:block;font-size:10px;font-weight:500;line-height:1.35;color:var(--tx2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ci-main span{display:block;font-size:9px;line-height:1.4;color:var(--tx3);margin-top:1px;font-variant-numeric:tabular-nums}
+.ci-tag{font-size:8.5px;line-height:1.5;color:var(--warn);border:1px solid color-mix(in srgb,var(--warn) 26%,transparent);background:var(--warn-bg);border-radius:3px;padding:0 4px;white-space:nowrap}
+
+/* evidence */
+.path{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--bg2)}
+.pstep{display:grid;grid-template-columns:18px minmax(0,1fr) auto;gap:7px;align-items:center;padding:5px 7px;border-top:1px solid var(--line)}
+.pstep:first-child{border-top:0}
+.pstep.final{background:#ffffff05}
+.p-num{font-size:8.5px;color:var(--tx4);text-align:center;font-variant-numeric:tabular-nums}
+.p-text{min-width:0}
+.p-text b{display:block;font-size:10px;font-weight:500;line-height:1.35;color:var(--tx2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.p-text span{display:block;font-size:9px;line-height:1.4;color:var(--tx3);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.p-flag{font-size:8.5px;line-height:1.5;border-radius:3px;border:1px solid;padding:0 4px;white-space:nowrap}
+.p-flag.pass{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 28%,transparent);background:var(--ok-bg)}
+.p-flag.wait{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 28%,transparent);background:var(--ok-bg)}
+.p-flag.now{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 28%,transparent);background:var(--bad-bg)}
+.p-flag.hold{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 26%,transparent);background:var(--warn-bg)}
+.p-flag.unknown{color:var(--tx3);border-color:var(--line2);background:transparent}
+.edge-grid{display:grid;grid-template-columns:1fr;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.edge-grid>div{background:var(--bg2);padding:6px 8px}
+.edge-grid b{display:block;font-size:9.5px;font-weight:600;line-height:1.4;color:var(--tx2)}
+.edge-grid p{font-size:9px;line-height:1.5;color:var(--tx3);margin-top:1px}
+
+/* actions */
+.detail-actions{
+  flex:none;display:grid;grid-template-columns:1fr auto;gap:6px;
+  padding:8px 10px 9px;border-top:1px solid var(--line);background:var(--bg);
+}
+.btn{
+  min-height:34px;border:1px solid var(--line2);background:var(--bg3);color:var(--tx2);
+  border-radius:7px;padding:6px 10px;display:inline-flex;align-items:center;justify-content:center;
+  font-size:10.5px;line-height:1.3;white-space:nowrap;transition:background var(--t1),color var(--t1),border-color var(--t1);
+}
+.btn:hover{background:#2d3339;color:var(--tx)}
+.btn.primary{background:var(--ac);border-color:var(--ac);color:var(--btn-text);font-weight:600}
+.btn.primary:hover{background:color-mix(in srgb,var(--ac) 86%,var(--tx));border-color:transparent;color:var(--btn-text)}
+.btn.danger{background:var(--bad);border-color:var(--bad);color:#2a1210;font-weight:600}
+.btn.danger:hover{background:color-mix(in srgb,var(--bad) 86%,var(--tx));border-color:transparent;color:#2a1210}
+.btn.ghost{background:transparent;border-color:var(--line2);color:var(--tx2)}
+.btn.ghost:hover{background:#ffffff08;color:var(--tx)}
+.action-note{grid-column:1/-1;font-size:9px;line-height:1.4;color:var(--tx4)}
+
+/* confirm + toast */
+.confirm-layer{
+  position:absolute;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;
+  padding:18px;background:rgba(4,6,7,.74);
+  opacity:0;visibility:hidden;pointer-events:none;transition:opacity var(--t2),visibility var(--t2);
+}
+.confirm-layer.show{opacity:1;visibility:visible;pointer-events:auto}
+.confirm{width:100%;max-width:330px;background:var(--bg2);border:1px solid var(--line2);border-radius:10px;padding:13px 14px;box-shadow:0 18px 42px -16px #000}
+.confirm h3{font-size:12.5px;line-height:1.35;color:var(--tx);font-weight:650}
+.confirm p{font-size:10px;line-height:1.6;color:var(--tx2);margin-top:5px}
+.check{display:flex;align-items:flex-start;gap:7px;margin-top:9px;font-size:9.5px;line-height:1.5;color:var(--tx2);cursor:pointer}
+.check input{accent-color:var(--ac);margin-top:2px;flex:none}
+.confirm-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:11px}
+.confirm-actions .btn{min-width:84px}
+.toast{
+  position:absolute;left:50%;bottom:15px;z-index:60;
+  max-width:calc(100% - 24px);padding:6px 9px;border:1px solid var(--line2);border-radius:6px;
+  background:#0b0e10;color:var(--tx2);font-size:9.5px;line-height:1.45;
+  box-shadow:0 8px 24px -10px #000;
+  opacity:0;visibility:hidden;pointer-events:none;
+  transform:translate(-50%,7px);transition:opacity var(--t2),transform var(--t2),visibility var(--t2);
+}
+.toast.show{opacity:1;visibility:visible;transform:translate(-50%,0)}
+
+/* ===== notes rail ===== */
+.notes{max-width:280px;padding-top:2px}
+.notes-kicker{font-size:9px;letter-spacing:.14em;color:var(--tx4);font-weight:600}
+.notes h2{font-size:16px;line-height:1.35;letter-spacing:-.02em;margin-top:8px;font-weight:650;max-width:260px}
+.notes-intro{font-size:10.5px;line-height:1.65;color:var(--tx3);margin-top:7px}
+.note-item{padding:9px 0;border-top:1px solid #ffffff0c}
+.note-item b{display:block;font-size:10.5px;font-weight:600;color:var(--tx2)}
+.note-item p{font-size:9.5px;line-height:1.6;color:var(--tx3);margin-top:2px}
+.note-data{margin-top:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg2);padding:9px}
+.note-data b{display:block;font-size:9.5px;color:var(--tx3);font-weight:600;margin-bottom:5px}
+.note-data .chips{display:flex;flex-wrap:wrap;gap:4px}
+.chip{font-size:8.5px;line-height:1.6;color:var(--tx3);border:1px solid var(--line);border-radius:3px;padding:0 4px;font-variant-numeric:tabular-nums}
+.note-data p{font-size:9px;line-height:1.55;color:var(--tx4);margin-top:6px}
+.page-foot{max-width:1240px;margin:18px auto 0;display:flex;justify-content:space-between;gap:12px;font-size:9px;line-height:1.5;color:var(--tx4);border-top:1px solid #ffffff08;padding-top:9px}
+
+/* ===== responsive ===== */
+@media (max-width:1260px){
+  .stage{grid-template-columns:1fr;justify-items:center}
+  .notes{max-width:900px;margin-top:4px;width:100%}
+  .notes h2{max-width:none}
+  .page-head{align-items:flex-start}
+  .ph-tools{flex-direction:row;align-items:center}
+}
+@media (max-width:1020px){
+  .app.wide{width:min(900px,calc(100vw - 36px))}
+  .app.wide.detail-open .main{margin-right:480px}
+  .page-head h1{max-width:600px}
+}
+@media (max-width:720px){
+  .shell{padding:16px 12px 20px}
+  .page-head{margin-bottom:14px}
+  .page-head h1{font-size:23px}
+  .page-head p{font-size:11px}
+  .ph-tools{width:100%;justify-content:space-between}
+  .app,.app.wide{width:calc(100vw - 24px);height:calc(100vh - 156px);min-height:620px;max-height:760px}
+  .app.wide .detail,.detail{width:100%;left:0;right:0;border-left:0}
+  .app.wide.detail-open .main{margin-right:0;display:none}
+  .app.wide.detail-open .scrim{display:none}
+  .mode{display:none}
+  .page-foot{margin-top:12px;flex-direction:column;gap:4px}
+  .tl::before{left:82px}
+  .tl-row{grid-template-columns:65px 14px minmax(0,1fr)}
+}
+@media (prefers-reduced-motion:reduce){
+  .app,.main,.detail,.toast,.confirm-layer,.preview,.reset-section,.need,.tab,.btn{transition:none!important;animation:none!important}
+}
+</style>
+</head>
+<body>
+
+<svg class="sprite" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" aria-hidden="true">
+  <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.35 5.65"/><path d="M20 4.5V11h-6.5"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 5 7 7-7 7"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+  <symbol id="i-card" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><path d="M3.5 10h17M8 14.5h3"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4 4 10-10"/></symbol>
+</svg>
+
+<div class="shell">
+  <header class="page-head">
+    <div class="ph-copy">
+      <div class="eyebrow">GRANDETTOKEN / CODEX / PROTOTYPE</div>
+      <h1>重置卡区域，点开之后给一个可解释的建议</h1>
+      <p>沿用 v2 判定口径：先排掉不能算的，再算该不该用。窄窗全屏下钻，宽窗右侧抽屉；先给结论，再给依据和 16 天计划。</p>
+    </div>
+    <div class="ph-tools">
+      <div class="mode" role="group" aria-label="预览窗口宽度">
+        <button class="mode-btn on" type="button" data-mode="narrow" aria-pressed="true">窄窗 420</button>
+        <button class="mode-btn" type="button" data-mode="wide" aria-pressed="false">宽窗 900</button>
+      </div>
+      <div class="demo-pill">演示数据 · 不执行真实兑换</div>
+    </div>
+  </header>
+
+  <div class="stage">
+    <div class="app" id="app" data-mode="narrow">
+      <div class="titlebar">
+        <div class="mark" aria-hidden="true">G</div>
+        <div class="tt">Grandettoken <small>v0.3.39</small></div>
+        <div class="spacer"></div>
+        <button class="tbi" id="btnRefresh" type="button" title="刷新" aria-label="刷新">
+          <span class="tb-live" id="tbLive">12:41</span>
+          <svg class="icon"><use href="#i-refresh" xlink:href="#i-refresh"/></svg>
+        </button>
+        <button class="tb" id="btnPin" type="button" title="窗口置顶" aria-pressed="false">置顶</button>
+        <button class="tb" id="btnPill" type="button" title="收成胶囊">胶囊</button>
+        <button class="tb" id="btnHide" type="button" title="隐藏到托盘">隐藏</button>
+      </div>
+
+      <div class="app-body" id="appBody">
+        <main class="main" id="main">
+          <div class="channel">
+            <div class="ch-head">
+              <div class="ch-ico">CX</div>
+              <div class="ch-name">
+                <div class="ch-title">Codex <span class="badge">Plus</span></div>
+                <div class="ch-sub">已限流 · 订阅 11-29 到期</div>
+              </div>
+              <div class="ch-val"><b class="bad">0.0%</b><span>本周剩余</span></div>
+              <svg class="caret" aria-hidden="true"><use href="#i-chev" xlink:href="#i-chev"/></svg>
+            </div>
+
+            <div class="ch-body">
+              <section class="quota">
+                <div class="sec-h"><span>配额窗口</span><span class="sec-meta">CST</span></div>
+                <div class="qrow">
+                  <span class="q-label">本周</span>
+                  <div class="q-bar"><i class="bad" style="width:100%;background:var(--bad)"></i></div>
+                  <b class="q-val bad">0.0%</b>
+                  <span class="q-time">17:56 重置</span>
+                </div>
+                <div class="qrow">
+                  <span class="q-label">5 小时</span>
+                  <div class="q-bar"><i style="width:100%;background:var(--ok)"></i></div>
+                  <b class="q-val">100%</b>
+                  <span class="q-time">17:53 重置</span>
+                </div>
+                <div class="q-note">周窗到期即清零，不滚存；5 小时窗按滚动恢复。</div>
+              </section>
+
+              <div class="preview" id="preview" role="button" tabindex="0" aria-label="打开重置顾问详情">
+                <div class="preview-top">
+                  <span class="preview-label">重置顾问</span>
+                  <span class="verdict-pill wait" id="previewPill">WAIT</span>
+                  <span class="preview-more">查看详情 <svg class="icon sm"><use href="#i-chev" xlink:href="#i-chev"/></svg></span>
+                </div>
+                <div class="preview-title" id="previewTitle">今晚先别用卡</div>
+                <div class="preview-desc" id="previewDesc">等约 5.3 小时，17:56 免费满额；现在用卡只能换回约 3.3%。</div>
+                <div class="preview-foot"><span id="previewFoot">3 张卡全部保留</span><span class="preview-hint">点整块查看详情</span></div>
+              </div>
+
+              <section class="reset-section" id="resetSection" role="button" tabindex="0" aria-label="查看重置卡与重置建议">
+                <div class="sec-h reset-h">
+                  <span>重置卡</span>
+                  <span class="reset-count">3 张可用 <span class="reset-more">查看建议</span><svg class="reset-chev"><use href="#i-chev" xlink:href="#i-chev"/></svg></span>
+                </div>
+                <div class="rcard"><span class="rc-title">Full reset (Weekly + 5 hr)</span><span class="rc-date">12-01 03:10 到期</span></div>
+                <div class="rcard"><span class="rc-title">Full reset (Weekly + 5 hr)</span><span class="rc-date">12-02 04:55 到期</span></div>
+                <div class="rcard"><span class="rc-title">Full reset (Weekly + 5 hr)</span><span class="rc-date">12-13 05:40 到期</span></div>
+                <div class="reset-note">三张都晚于订阅 11-29；订阅到期后一起失效。</div>
+              </section>
+              <div class="query-note">重置卡查询于 12:41 · 接口快照 17:56:52</div>
+            </div>
+          </div>
+        </main>
+
+        <div class="scrim" id="scrim" aria-hidden="true"></div>
+
+        <section class="detail" id="detail" aria-hidden="true" aria-label="重置顾问详情">
+          <div class="detail-head">
+            <button class="icon-btn" id="detailBack" type="button" aria-label="返回 Codex">
+              <svg class="icon lg"><use href="#i-back" xlink:href="#i-back"/></svg>
+            </button>
+            <div class="detail-title"><b>重置顾问</b><span>Codex · Plus · 订阅 11-29</span></div>
+            <button class="icon-btn" id="detailClose" type="button" aria-label="关闭详情">
+              <svg class="icon"><use href="#i-close" xlink:href="#i-close"/></svg>
+            </button>
+          </div>
+
+          <div class="detail-tabs" role="tablist" aria-label="重置顾问分页">
+            <button class="tab on" id="tabBtnAdvice" type="button" role="tab" aria-selected="true" aria-controls="panelAdvice" data-tab="advice">建议</button>
+            <button class="tab" id="tabBtnPlan" type="button" role="tab" aria-selected="false" aria-controls="panelPlan" data-tab="plan" tabindex="-1">计划</button>
+            <button class="tab" id="tabBtnEvidence" type="button" role="tab" aria-selected="false" aria-controls="panelEvidence" data-tab="evidence" tabindex="-1">依据</button>
+          </div>
+
+          <div class="detail-body" id="detailBody">
+            <div class="tab-panel" id="panelAdvice" role="tabpanel" aria-labelledby="tabBtnAdvice">
+              <div class="verdict-band wait" id="verdictBand" aria-live="polite">
+                <div class="vb-top"><span class="vb-label">当前建议</span><b class="vb-word" id="verdictWord">WAIT</b><span class="vb-reason" id="verdictReason">gap_too_short</span></div>
+                <h2 id="verdictTitle">今晚先别用卡</h2>
+                <p id="verdictDesc">等约 5.3 小时，17:56 免费满额；现在用卡只能换回约 3.3% 个周窗，96.7% 的价值会被烧掉。</p>
+                <div class="vb-meta"><span>周窗 0.0%</span><span>距重置 5h 16m</span><span>3 张可用</span></div>
+              </div>
+
+              <div class="metrics">
+                <div class="metric"><span>本周剩余</span><b class="bad">0.0%</b><em>100% 已用 · 已限流</em></div>
+                <div class="metric"><span>距自然重置</span><b>5h 16m</b><em>11-13 17:56:52</em></div>
+                <div class="metric"><span>重置卡</span><b>3 张</b><em>全部可用</em></div>
+                <div class="metric"><span>订阅剩余</span><b>16.5 天</b><em>11-29 23:59 到期</em></div>
+              </div>
+
+              <div class="block">
+                <div class="block-h"><h3>你这次要用吗？</h3><span class="tiny">选择只影响建议</span></div>
+                <div class="need-grid" role="group" aria-label="选择本次需求">
+                  <button class="need on" type="button" data-need="patient" aria-pressed="true"><b>能等</b><span>等 17:56 免费满额</span></button>
+                  <button class="need" type="button" data-need="soon" aria-pressed="false"><b>24h 内</b><span>需要，但可等几小时</span></button>
+                  <button class="need" type="button" data-need="urgent" aria-pressed="false"><b>现在就要</b><span>截止在 17:56 之前</span></button>
+                  <button class="need" type="button" data-need="idle" aria-pressed="false"><b>暂时不用</b><span>本周没有硬任务</span></button>
+                </div>
+                <span class="tiny note">按一次典型任务估 100%；不会自动用卡。</span>
+              </div>
+
+              <div class="block">
+                <div class="block-h"><h3>为什么是这个结论</h3><span class="tiny">v2 判定</span></div>
+                <ul class="reason-list" id="reasonList">
+                  <li>距自然重置只有约 5.3 小时，卡买到的空窗太短。</li>
+                  <li>现在用卡约换回 3.3% 个周窗，96.7% 的价值被烧掉。</li>
+                  <li>三张卡都晚于订阅到期，11-29 后一起失效。</li>
+                </ul>
+                <div class="link-row">
+                  <button class="link" type="button" data-goto="evidence">查看判定依据</button>
+                  <button class="link" type="button" data-goto="plan">看 16 天计划</button>
+                </div>
+              </div>
+
+              <div class="detail-footnote">数据 12:41 · 接口快照 17:56:52 · 只看周额度，5h 窗只用于文案。</div>
+            </div>
+
+            <div class="tab-panel" id="panelPlan" role="tabpanel" aria-labelledby="tabBtnPlan" hidden>
+              <div class="block">
+                <div class="block-h"><h3>按你的真实速度</h3><span class="tiny" id="speedLabel">14.8%/天</span></div>
+                <input class="range" id="speedRange" type="range" min="0" max="6" step="1" value="1" aria-label="日均消耗速度">
+                <div class="range-scale"><span>10%/天</span><span>30%/天</span></div>
+                <div class="plan-kpis">
+                  <div><b id="kpiShort">10.9%</b><span>到 11-29 缺口</span></div>
+                  <div><b id="kpiCards">0 张</b><span>建议省下的卡</span></div>
+                  <div><b id="kpiCover">1 张</b><span>想全程不断</span></div>
+                </div>
+                <p class="block-note" id="planNote">按 14.8%/天：省卡 0 张；到订阅到期差 10.9%；想全程不断要 1 张，每张只换回 7–11%。</p>
+              </div>
+
+              <div class="block">
+                <h3>16 天时间轴</h3>
+                <div class="tl" style="margin-top:6px">
+                  <div class="tl-row"><span class="tl-time">11-13 17:56</span><span class="tl-dot now"></span><div><b>免费满额</b><p>约 5h 16m 后，周窗 + 5h 都恢复。</p></div></div>
+                  <div class="tl-row"><span class="tl-time">11-20 / 11-27</span><span class="tl-dot"></span><div><b>自然重置 2 次</b><p>不用卡也能各满一次。</p></div></div>
+                  <div class="tl-row"><span class="tl-time">11-29 23:59</span><span class="tl-dot end"></span><div><b>订阅到期</b><p>三张卡一起失效；真正截止是这里。</p></div></div>
+                  <div class="tl-row"><span class="tl-time">12-01 03:10</span><span class="tl-dot after"></span><div><b>卡 1 到期</b><p>比订阅晚约 27h；续订后才用得上。</p></div></div>
+                  <div class="tl-row"><span class="tl-time">12-13 05:40</span><span class="tl-dot after"></span><div><b>卡 3 到期</b><p>最晚一张，仍在订阅之后。</p></div></div>
+                </div>
+              </div>
+
+              <div class="block">
+                <h3>三张重置卡</h3>
+                <div class="card-list" style="margin-top:6px">
+                  <div class="card-item"><div class="ci-main"><b>Full reset (Weekly + 5 hr)</b><span>12-01 03:10 到期</span></div><span class="ci-tag">订阅后 27h</span></div>
+                  <div class="card-item"><div class="ci-main"><b>Full reset (Weekly + 5 hr)</b><span>12-02 04:55 到期</span></div><span class="ci-tag">订阅后 2d</span></div>
+                  <div class="card-item"><div class="ci-main"><b>Full reset (Weekly + 5 hr)</b><span>12-13 05:40 到期</span></div><span class="ci-tag">订阅后 13d</span></div>
+                </div>
+                <p class="block-note warn">订阅 11-29 23:59 早于三张卡到期；到期后卡随订阅失效，卡到期日只影响续订后能用多久。</p>
+              </div>
+            </div>
+
+            <div class="tab-panel" id="panelEvidence" role="tabpanel" aria-labelledby="tabBtnEvidence" hidden>
+              <div class="block">
+                <div class="block-h"><h3>本次判定路径</h3><span class="tiny">0 → 9</span></div>
+                <div class="path">
+                  <div class="pstep pass"><span class="p-num">0</span><div class="p-text"><b>订阅未到期</b><span>11-29 23:59 · 还剩 16.5 天</span></div><span class="p-flag pass">通过</span></div>
+                  <div class="pstep pass"><span class="p-num">1</span><div class="p-text"><b>周窗存在</b><span>Codex 周额度窗口可用</span></div><span class="p-flag pass">通过</span></div>
+                  <div class="pstep pass"><span class="p-num">2</span><div class="p-text"><b>周窗未满</b><span>0.0% · 未触发 99% 满额保护</span></div><span class="p-flag pass">通过</span></div>
+                  <div class="pstep pass"><span class="p-num">3</span><div class="p-text"><b>数据自洽</b><span>0% + 100% = 100%</span></div><span class="p-flag pass">通过</span></div>
+                  <div class="pstep pass"><span class="p-num">4</span><div class="p-text"><b>重置时间可信</b><span>17:56:52 · 约 5h 16m 后</span></div><span class="p-flag pass">通过</span></div>
+                  <div class="pstep pass"><span class="p-num">5</span><div class="p-text"><b>未刚用卡</b><span>lastRedeemedAt 为空</span></div><span class="p-flag pass">通过</span></div>
+                  <div class="pstep pass"><span class="p-num">6</span><div class="p-text"><b>等得到</b><span>17:56 早于订阅 11-29</span></div><span class="p-flag pass">通过</span></div>
+                  <div class="pstep pass"><span class="p-num">7</span><div class="p-text"><b>卡不在重置前过期</b><span>最早卡 12-01，晚于 17:56</span></div><span class="p-flag pass">通过</span></div>
+                  <div class="pstep pass" data-step="8"><span class="p-num">8</span><div class="p-text"><b>需求</b><span data-step-text>能等</span></div><span class="p-flag wait" data-step-flag>WAIT</span></div>
+                  <div class="pstep final wait" data-step="9"><span class="p-num">9</span><div class="p-text"><b>输出</b><span data-step-text>WAIT(gap_too_short)</span></div><span class="p-flag wait" data-step-flag>WAIT</span></div>
+                </div>
+                <p class="tiny" style="margin-top:5px">只显示命中路径；满额、无周窗、数据异常等覆盖分支未触发。</p>
+              </div>
+
+              <div class="block">
+                <h3>最容易改判的三件事</h3>
+                <div class="edge-grid" style="margin-top:6px">
+                  <div><b>周窗 ≥ 99%</b><p>满额保护：直接 HOLD，不消耗卡。</p></div>
+                  <div><b>重置在订阅后</b><p>等不到：HOLD(no_reset_before_sub_end)。</p></div>
+                  <div><b>可用卡 = 0</b><p>只把 NOW 降为 HOLD；WAIT 不因没卡改判。</p></div>
+                </div>
+              </div>
+
+              <div class="detail-footnote">完整判定树 0–9、40 条表驱动用例、24 行异常口径在 v2 设计文档；此页不重复全表。</div>
+            </div>
+          </div>
+
+          <div class="detail-actions">
+            <button class="btn primary" id="primaryAction" type="button">按建议等</button>
+            <button class="btn ghost" id="secondaryAction" type="button">查看依据</button>
+            <div class="action-note" id="actionNote">本次建议不消耗卡</div>
+          </div>
+        </section>
+      </div>
+
+      <div class="confirm-layer" id="confirmLayer" aria-hidden="true">
+        <div class="confirm" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+          <h3 id="confirmTitle">确认使用 1 张重置卡？</h3>
+          <p>会刷新 5 小时与每周窗口，并改写每周重置日。当前周窗 0.0%，用后从 100% 重新计时；但 17:56 本来就会免费满额。</p>
+          <label class="check"><input type="checkbox" id="confirmCheck"> 我知道这会消耗 1 张卡；本原型不执行真实兑换。</label>
+          <div class="confirm-actions">
+            <button class="btn ghost" id="confirmCancel" type="button">取消</button>
+            <button class="btn danger" id="confirmOk" type="button" disabled>确认（仅演示）</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    </div>
+
+    <aside class="notes">
+      <div class="notes-kicker">PC INTERACTION</div>
+      <h2>点击重置卡，先给结论，再给依据。</h2>
+      <p class="notes-intro">不新开窗口，也不做浮层弹窗。详情在同一个应用窗口内完成，返回后仍停在 Codex 详情。</p>
+      <div class="note-item"><b>入口</b><p>重置卡区整块可点，上方“重置顾问”摘要共用同一下钻入口；不是只有 11px 的“详情”文字可点。</p></div>
+      <div class="note-item"><b>窄窗</b><p>420px 下详情全屏覆盖内容区，保留标题栏、返回和 Esc；适合现在这种悬浮面板。</p></div>
+      <div class="note-item"><b>宽窗</b><p>900px 下详情变成右侧 480px 抽屉，左侧 Codex 仍可见；这是同一份详情，不是第二套界面。</p></div>
+      <div class="note-item"><b>动作</b><p>WAIT 不出现“用卡”；NOW 才出现，并且必须二次确认。顾问永远不自动兑换。</p></div>
+      <div class="note-data">
+        <b>本次演示数据</b>
+        <div class="chips"><span class="chip">周窗 0%</span><span class="chip">5h 100%</span><span class="chip">3 张卡</span><span class="chip">订阅 11-29</span></div>
+        <p>数据 12:41；不调用真实兑换接口。完整判定口径见 v2 设计文档。</p>
+      </div>
+    </aside>
+  </div>
+
+  <footer class="page-foot">
+    <span>Codex 重置顾问 · PC 交互原型 · 2026-11-13</span>
+    <span>单文件 HTML · 演示数据 · 原型不执行真实用卡</span>
+  </footer>
+</div>
+
+<script>
+(function(){
+  'use strict';
+  const $ = (sel, root) => (root || document).querySelector(sel);
+  const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
+
+  const app = $('#app');
+  const main = $('#main');
+  const preview = $('#preview');
+  const resetSection = $('#resetSection');
+  const detail = $('#detail');
+  const detailBack = $('#detailBack');
+  const detailClose = $('#detailClose');
+  const detailBody = $('#detailBody');
+  const scrim = $('#scrim');
+  const panelAdvice = $('#panelAdvice');
+  const panelPlan = $('#panelPlan');
+  const panelEvidence = $('#panelEvidence');
+  const tabButtons = $$('.tab', detail);
+  const needButtons = $$('.need', detail);
+  const verdictBand = $('#verdictBand');
+  const verdictWord = $('#verdictWord');
+  const verdictReason = $('#verdictReason');
+  const verdictTitle = $('#verdictTitle');
+  const verdictDesc = $('#verdictDesc');
+  const previewPill = $('#previewPill');
+  const previewTitle = $('#previewTitle');
+  const previewDesc = $('#previewDesc');
+  const previewFoot = $('#previewFoot');
+  const reasonList = $('#reasonList');
+  const primaryAction = $('#primaryAction');
+  const secondaryAction = $('#secondaryAction');
+  const actionNote = $('#actionNote');
+  const speedRange = $('#speedRange');
+  const speedLabel = $('#speedLabel');
+  const kpiShort = $('#kpiShort');
+  const kpiCards = $('#kpiCards');
+  const kpiCover = $('#kpiCover');
+  const planNote = $('#planNote');
+  const step8 = $('[data-step="8"]', detail);
+  const step9 = $('[data-step="9"]', detail);
+  const confirmLayer = $('#confirmLayer');
+  const confirmCheck = $('#confirmCheck');
+  const confirmOk = $('#confirmOk');
+  const confirmCancel = $('#confirmCancel');
+  const toast = $('#toast');
+  const tbLive = $('#tbLive');
+  const btnRefresh = $('#btnRefresh');
+  const btnPin = $('#btnPin');
+  const btnPill = $('#btnPill');
+  const btnHide = $('#btnHide');
+  const modeButtons = $$('.mode-btn');
+
+  const state = {need:'patient', speed:1, tab:'advice', open:false, mode:'narrow', trigger:null, confirm:false};
+
+  const NEED_LABEL = {
+    patient: {label:'能等', path:'能等'},
+    soon: {label:'24h 内', path:'24 小时内要用'},
+    urgent: {label:'现在就要', path:'现在就要'},
+    idle: {label:'暂时不用', path:'暂时不用'}
+  };
+
+  const SPEEDS = [
+    {speed:10, planned:0, short:2.5, cover:0,
+      note:'按 10%/天：省卡 0 张；到订阅到期只差 2.5%；0 张也够。'},
+    {speed:14.8, planned:0, short:10.9, cover:1,
+      note:'按 14.8%/天：省卡 0 张；到订阅到期差 10.9%；想全程不断要 1 张，每张只换回 7–11%。'},
+    {speed:16, planned:0, short:28.0, cover:3,
+      note:'按 16%/天：省卡 0 张；到订阅到期差 28.0%；想全程不断要 3 张。'},
+    {speed:18, planned:2, short:4.5, cover:3,
+      note:'按 18%/天：至少用 2 张；用完后还差 4.5%；想全程不断要 3 张。'},
+    {speed:20, planned:3, short:5.0, cover:null,
+      note:'按 20%/天：3 张全用仍差 5.0%；3 张也不够补满。'},
+    {speed:25, planned:3, short:11.8, cover:null,
+      note:'按 25%/天：3 张全用仍差 11.8%；3 张也不够补满。'},
+    {speed:30, planned:3, short:94.1, cover:null,
+      note:'按 30%/天：3 张全用仍差 94.1%；3 张也不够补满。'}
+  ];
+
+  function verdictFor(need){
+    if (need === 'urgent'){
+      return {
+        cls:'now', word:'NOW', reason:'deadline_before_reset · low_value_now',
+        title:'你选了现在就要用',
+        desc:'用一张卡能买到约 5.3 小时，但只换回约 3.3% 个周窗；96.7% 的价值会被烧掉。',
+        previewTitle:'现在就要用',
+        previewDesc:'用卡买约 5.3 小时，只换回约 3.3%；会消耗 1 张。',
+        previewFoot:'会消耗 1 张',
+        primary:'用一张重置卡', secondary:'改回能等', note:'会消耗 1 张；当前只演示确认流程',
+        reasons:[
+          '你选了现在就要用；时间优先于卡的价值。',
+          '用卡后周窗从 100% 重新计时，但 17:56 本来就会免费满额。',
+          '会消耗 1 张；三张卡都在订阅后到期，早用只买到约 5.3 小时。'
+        ],
+        pathLabel:'现在就要', pathFlag:'NOW',
+        final:'NOW(deadline_before_reset) · low_value_now', finalFlag:'NOW'
+      };
+    }
+    if (need === 'soon'){
+      return {
+        cls:'wait', word:'WAIT', reason:'gap_too_short',
+        title:'24 小时内要用，但可以先等 5 小时',
+        desc:'17:56 的自然重置在你需要用之前；现在用卡只能换回约 3.3%，等免费满额更合算。',
+        previewTitle:'可以先等 5 小时',
+        previewDesc:'17:56 就在你需要之前；现在用卡只换回约 3.3%。',
+        previewFoot:'3 张卡全部保留',
+        primary:'按建议等', secondary:'查看依据', note:'本次建议不消耗卡',
+        reasons:[
+          '你是 24 小时内要用，但 17:56 在你需要之前。',
+          '现在用卡只能换回约 3.3% 个周窗，等免费满额更合算。',
+          '三张卡都晚于订阅到期；先留着，别在订阅结束前烧掉。'
+        ],
+        pathLabel:'24 小时内要用', pathFlag:'WAIT',
+        final:'WAIT(gap_too_short)', finalFlag:'WAIT'
+      };
+    }
+    if (need === 'idle'){
+      return {
+        cls:'wait', word:'WAIT', reason:'gap_too_short',
+        title:'暂时不用，更不需要现在用卡',
+        desc:'17:56 会免费满额；三张卡全部保留，等真的有任务再算。',
+        previewTitle:'暂时不用',
+        previewDesc:'17:56 会免费满额；三张卡全部保留。',
+        previewFoot:'3 张卡全部保留',
+        primary:'先留着', secondary:'查看依据', note:'本次建议不消耗卡',
+        reasons:[
+          '你本周暂时没有硬任务。',
+          '17:56 会免费满额；现在用卡没有需要被满足。',
+          '三张卡都晚于订阅到期；保留到有任务时再评估。'
+        ],
+        pathLabel:'暂时不用', pathFlag:'WAIT',
+        final:'WAIT(gap_too_short)', finalFlag:'WAIT'
+      };
+    }
+    return {
+      cls:'wait', word:'WAIT', reason:'gap_too_short',
+      title:'今晚先别用卡',
+      desc:'等约 5.3 小时，17:56 免费满额；现在用卡只能换回约 3.3% 个周窗，96.7% 的价值会被烧掉。',
+      previewTitle:'今晚先别用卡',
+      previewDesc:'等约 5.3 小时，17:56 免费满额；现在用卡只能换回约 3.3%。',
+      previewFoot:'3 张卡全部保留',
+      primary:'按建议等', secondary:'查看依据', note:'本次建议不消耗卡',
+      reasons:[
+        '距自然重置只有约 5.3 小时，卡买到的空窗太短。',
+        '现在用卡约换回 3.3% 个周窗，96.7% 的价值被烧掉。',
+        '三张卡都晚于订阅到期，11-29 后一起失效。'
+      ],
+      pathLabel:'能等', pathFlag:'WAIT',
+      final:'WAIT(gap_too_short)', finalFlag:'WAIT'
+    };
+  }
+
+  function render(need){
+    const v = verdictFor(need);
+
+    verdictBand.className = 'verdict-band ' + v.cls;
+    verdictWord.textContent = v.word;
+    verdictReason.textContent = v.reason;
+    verdictTitle.textContent = v.title;
+    verdictDesc.textContent = v.desc;
+
+    previewPill.className = 'verdict-pill ' + v.cls;
+    previewPill.textContent = v.word;
+    previewTitle.textContent = v.previewTitle;
+    previewDesc.textContent = v.previewDesc;
+    previewFoot.textContent = v.previewFoot;
+
+    reasonList.innerHTML = v.reasons.map(function(s){ return '<li>' + s + '</li>'; }).join('');
+
+    primaryAction.className = 'btn primary' + (v.cls === 'now' ? ' danger' : '');
+    primaryAction.textContent = v.primary;
+    secondaryAction.textContent = v.secondary;
+    actionNote.textContent = v.note;
+
+    const step8Text = $('[data-step-text]', step8);
+    const step8Flag = $('[data-step-flag]', step8);
+    const step9Text = $('[data-step-text]', step9);
+    const step9Flag = $('[data-step-flag]', step9);
+    if (step8Text) step8Text.textContent = v.pathLabel;
+    if (step8Flag){ step8Flag.textContent = v.pathFlag; step8Flag.className = 'p-flag ' + v.cls; }
+    if (step9Text) step9Text.textContent = v.final;
+    if (step9Flag){ step9Flag.textContent = v.finalFlag; step9Flag.className = 'p-flag ' + v.cls; }
+    if (step9) step9.className = 'pstep final ' + v.cls;
+  }
+
+  function setNeed(need){
+    state.need = need;
+    needButtons.forEach(function(btn){
+      const on = btn.dataset.need === need;
+      btn.classList.toggle('on', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    render(need);
+  }
+
+  function setTab(tab){
+    state.tab = tab;
+    tabButtons.forEach(function(btn){
+      const on = btn.dataset.tab === tab;
+      btn.classList.toggle('on', on);
+      btn.setAttribute('aria-selected', on ? 'true' : 'false');
+      btn.tabIndex = on ? 0 : -1;
+    });
+    panelAdvice.hidden = tab !== 'advice';
+    panelPlan.hidden = tab !== 'plan';
+    panelEvidence.hidden = tab !== 'evidence';
+    detailBody.scrollTop = 0;
+  }
+
+  function openDetail(trigger){
+    if (state.open) return;
+    state.open = true;
+    state.trigger = trigger || null;
+    app.classList.add('detail-open');
+    detail.classList.add('open');
+    detail.setAttribute('aria-hidden', 'false');
+    main.setAttribute('inert', '');
+    main.setAttribute('aria-hidden', 'true');
+    scrim.setAttribute('aria-hidden', 'false');
+    setTimeout(function(){ detailBack.focus(); }, 30);
+  }
+
+  function closeDetail(){
+    if (!state.open) return;
+    state.open = false;
+    app.classList.remove('detail-open');
+    detail.classList.remove('open');
+    detail.setAttribute('aria-hidden', 'true');
+    main.removeAttribute('inert');
+    main.removeAttribute('aria-hidden');
+    scrim.setAttribute('aria-hidden', 'true');
+    if (state.trigger) state.trigger.focus();
+    state.trigger = null;
+  }
+
+  function openConfirm(){
+    state.confirm = true;
+    confirmLayer.classList.add('show');
+    confirmLayer.setAttribute('aria-hidden', 'false');
+    confirmCheck.checked = false;
+    confirmOk.disabled = true;
+    setTimeout(function(){ confirmCheck.focus(); }, 30);
+  }
+
+  function closeConfirm(){
+    if (!state.confirm) return;
+    state.confirm = false;
+    confirmLayer.classList.remove('show');
+    confirmLayer.setAttribute('aria-hidden', 'true');
+    primaryAction.focus();
+  }
+
+  let toastTimer = null;
+  function showToast(msg){
+    toast.textContent = msg;
+    toast.classList.add('show');
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ toast.classList.remove('show'); }, 2600);
+  }
+
+  function renderPlan(){
+    const row = SPEEDS[state.speed];
+    if (!row) return;
+    speedLabel.textContent = row.speed + '%/天';
+    kpiShort.textContent = row.short.toFixed(1) + '%';
+    kpiCards.textContent = row.planned + ' 张';
+    kpiCover.textContent = row.cover === null ? '3 张也不够' : (row.cover === 0 ? '0 张（够）' : row.cover + ' 张');
+    planNote.textContent = row.note;
+    speedRange.value = String(state.speed);
+    speedRange.setAttribute('aria-valuetext', row.speed + '%/天');
+  }
+
+  function setMode(mode){
+    state.mode = mode;
+    app.classList.toggle('wide', mode === 'wide');
+    app.dataset.mode = mode;
+    modeButtons.forEach(function(btn){
+      const on = btn.dataset.mode === mode;
+      btn.classList.toggle('on', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    if (mode === 'wide'){
+      showToast('宽窗：打开详情时会变成右侧 480px 抽屉。');
+    } else {
+      showToast('窄窗：详情改为全屏下钻。');
+    }
+  }
+
+  [preview, resetSection].forEach(function(el){
+    el.addEventListener('click', function(){ openDetail(el); });
+    el.addEventListener('keydown', function(e){
+      if (e.key === 'Enter' || e.key === ' '){
+        e.preventDefault();
+        openDetail(el);
+      }
+    });
+  });
+
+  detailBack.addEventListener('click', closeDetail);
+  detailClose.addEventListener('click', closeDetail);
+  scrim.addEventListener('click', closeDetail);
+
+  tabButtons.forEach(function(btn){
+    btn.addEventListener('click', function(){ setTab(btn.dataset.tab); });
+  });
+
+  $('.detail-tabs', detail).addEventListener('keydown', function(e){
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    const current = tabButtons.indexOf(document.activeElement);
+    if (current < 0) return;
+    const next = (current + (e.key === 'ArrowRight' ? 1 : -1) + tabButtons.length) % tabButtons.length;
+    setTab(tabButtons[next].dataset.tab);
+    tabButtons[next].focus();
+    e.preventDefault();
+  });
+
+  needButtons.forEach(function(btn){
+    btn.addEventListener('click', function(){ setNeed(btn.dataset.need); });
+  });
+
+  $$('[data-goto]', detail).forEach(function(btn){
+    btn.addEventListener('click', function(){ setTab(btn.dataset.goto); });
+  });
+
+  primaryAction.addEventListener('click', function(){
+    const v = verdictFor(state.need);
+    if (v.cls === 'now'){
+      openConfirm();
+      return;
+    }
+    closeDetail();
+    showToast(v.cls === 'wait' ? '已记下：等 17:56 的自然重置（原型）' : '已保留现有卡（原型）');
+  });
+
+  secondaryAction.addEventListener('click', function(){
+    if (verdictFor(state.need).cls === 'now'){
+      setNeed('patient');
+      showToast('已改回能等；建议变为 WAIT');
+      return;
+    }
+    setTab('evidence');
+  });
+
+  speedRange.addEventListener('input', function(){
+    state.speed = Number(speedRange.value);
+    renderPlan();
+  });
+
+  confirmCheck.addEventListener('change', function(){
+    confirmOk.disabled = !confirmCheck.checked;
+  });
+
+  confirmOk.addEventListener('click', function(){
+    if (!confirmCheck.checked) return;
+    closeConfirm();
+    showToast('原型：未执行真实兑换；真实产品需确认后调用兑换接口。');
+  });
+
+  confirmCancel.addEventListener('click', closeConfirm);
+  confirmLayer.addEventListener('click', function(e){
+    if (e.target === confirmLayer) closeConfirm();
+  });
+
+  document.addEventListener('keydown', function(e){
+    if (e.key !== 'Escape') return;
+    if (state.confirm){
+      closeConfirm();
+    } else if (state.open){
+      closeDetail();
+    }
+  });
+
+  modeButtons.forEach(function(btn){
+    btn.addEventListener('click', function(){ setMode(btn.dataset.mode); });
+  });
+
+  btnRefresh.addEventListener('click', function(){
+    if (btnRefresh.classList.contains('loading')) return;
+    btnRefresh.classList.add('loading');
+    tbLive.textContent = '刷新中';
+    setTimeout(function(){
+      btnRefresh.classList.remove('loading');
+      tbLive.textContent = '刚刚';
+      showToast('已刷新（原型）：重置卡仍为 3 张');
+    }, 700);
+  });
+
+  let pinned = false;
+  btnPin.addEventListener('click', function(){
+    pinned = !pinned;
+    btnPin.textContent = pinned ? '已置顶' : '置顶';
+    btnPin.classList.toggle('on', pinned);
+    btnPin.setAttribute('aria-pressed', pinned ? 'true' : 'false');
+    showToast(pinned ? '窗口置顶已打开（原型）' : '窗口置顶已关闭（原型）');
+  });
+  btnPill.addEventListener('click', function(){ showToast('原型：窗口胶囊操作不在此页演示。'); });
+  btnHide.addEventListener('click', function(){ showToast('原型：窗口隐藏操作不在此页演示。'); });
+
+  setNeed('patient');
+  setTab('advice');
+  renderPlan();
+})();
+</script>
+</body>
+</html>

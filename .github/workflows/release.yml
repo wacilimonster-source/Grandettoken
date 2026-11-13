@@ -100,9 +100,11 @@ jobs:
           Invoke-Gate 'css-self'          { node build/check-css-forms.js --self-test }
           Invoke-Gate 'css-forms'         { node build/check-css-forms.js }
           Invoke-Gate 'syntax'            { node --check app/src/app.js }
+          Invoke-Gate 'syntax-reset'      { node --check app/src/codex-reset.js }
           npm install jsdom --no-save --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { throw "npm install jsdom failed" }
           Invoke-Gate 'jsdom-smoke'       { node build/jsdom-smoke.js }
+          Invoke-Gate 'codex-reset'       { node build/verify-codex-reset.js }
 
       - name: Install GNU toolchain + target
         shell: pwsh
