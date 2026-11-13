@@ -30,7 +30,10 @@ const w = dom.window;
 const doc = w.document;
 const calls = [];
 let profileNeed = "patient";
-let profileSubEnd = 1795967940;
+// 夹具时间一律相对本机时钟:需求新鲜度(12h)/过期标记/重置点都按真实 now 推,
+// 钉死绝对时间戳会在跨天/12h 后把 NOW 误降级成 WAIT(2026-11-14 实测)
+const FIXTURE_NOW = Math.floor(Date.now() / 1000);
+let profileSubEnd = FIXTURE_NOW + 16 * 86400;
 let toasts = [];
 let failSave = false;
 let failRead = false;
@@ -52,13 +55,13 @@ w.CHANNELS = [{
     credits: [
       { title: "Full reset (Weekly + 5 hr)", expiresAt: 1796133030 },
       { title: "Full reset (Weekly + 5 hr)", expiresAt: 1796244909 },
-      { title: "Full reset (Weekly + 5 hr)", expiresAt: 1797195652 },
+      { title: "Full reset (Weekly + 5 hr)", expiresAt: FIXTURE_NOW + 25 * 86400 },
     ],
     lastRedeemedAt: null,
-    updatedAt: 1794545634,
+    updatedAt: FIXTURE_NOW - 60,
     error: null,
   },
-  updatedAt: 1794545634,
+  updatedAt: FIXTURE_NOW - 60,
   stale: false,
   valid: true,
 }];
@@ -74,14 +77,14 @@ function adviceFor(kind) {
     metrics: {
       weeklyRemainPercent: 0,
       weeklyUsedPercent: 100,
-      nextResetAt: 1794563812,
+      nextResetAt: FIXTURE_NOW + 18936,
       gapHours: 5.26,
       cardsAvailable: 3,
       cardsUnknown: false,
       cardsSource: "live",
       canWait: true,
       fiveHourRemainPercent: 100,
-      earliestCardExpiry: 1796133030,
+      earliestCardExpiry: FIXTURE_NOW + 13 * 86400,
       cardsExpiringBeforeReset: 0,
       allCardsExpireBeforeReset: false,
       burnPercentPerDay: 14.8,
@@ -89,7 +92,7 @@ function adviceFor(kind) {
       cardGainPercent: 3.3,
       subEndAt: profileSubEnd,
       daysToSubEnd: 16.47,
-      dataUpdatedAt: 1794545634,
+      dataUpdatedAt: FIXTURE_NOW - 60,
       planAvailable: true,
       plannedCards: 0,
       coverCards: 3,
@@ -101,7 +104,7 @@ function adviceFor(kind) {
       "想全程不断：补满要 3 张，但每张只换回 4%–4%，补不补都行",
     ],
     warnings: now ? ["low_value_now"] : [],
-    computedAt: 1794545634,
+    computedAt: FIXTURE_NOW - 60,
   };
 }
 
@@ -111,7 +114,7 @@ w.__TAURI__ = {
       calls.push({ cmd, args });
       if (cmd === "codex_reset_profile_get") {
         if (failRead) throw new Error("read fixture");
-        return { subEndAt: profileSubEnd, need: { kind: profileNeed, amountPercent: null, at: 1794545634 }, updatedAt: 1794545634 };
+        return { subEndAt: profileSubEnd, need: { kind: profileNeed, amountPercent: null, at: FIXTURE_NOW - 60 }, updatedAt: FIXTURE_NOW - 60 };
       }
       if (cmd === "codex_reset_profile_set") {
         if (failSave) throw new Error("write fixture");
@@ -119,7 +122,7 @@ w.__TAURI__ = {
         if (p.need && p.need.kind) profileNeed = p.need.kind;
         if (p.subEndAt) profileSubEnd = p.subEndAt;
         if (p.clearSubEnd) profileSubEnd = null;
-        return { subEndAt: profileSubEnd, need: { kind: profileNeed, amountPercent: null, at: 1794545634 }, updatedAt: 1794545634 };
+        return { subEndAt: profileSubEnd, need: { kind: profileNeed, amountPercent: null, at: FIXTURE_NOW - 60 }, updatedAt: FIXTURE_NOW - 60 };
       }
       if (cmd === "codex_reset_advice") {
         const kind = (args && args.input && args.input.need && args.input.need.kind) || "patient";
@@ -168,6 +171,8 @@ const assert = (ok, msg) => {
 
   q('[data-codex-need="urgent"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
   await wait(40);
+  // probe removed
+  // console.log("BADGE_AFTER_URGENT:", JSON.stringify(q(".cr-verdict-badge").textContent), "note:", JSON.stringify(q(".cr-action-note") && q(".cr-action-note").textContent));
   assert(q(".cr-verdict-badge").textContent === "NOW", "选「现在就要」翻成 NOW");
   assert(q(".cr-action-note").textContent.includes("手动兑换"), "NOW 只提示去 Codex 手动兑换");
   assert(qa("[data-codex-use]").length === 0, "没有任何自动兑换或「用一张」按钮");
