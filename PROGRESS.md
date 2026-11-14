@@ -5121,3 +5121,16 @@ src-tauri `cargo check --all-targets --locked` exit 0;
   (--locked)、凭据扫描 CLEAN。版本号三处同步 0.3.52 并 `cargo fetch --locked` 复跑通过。
 - 待验收:安装包内真实账号的 Antigravity 取数与三档宽度/倍率下的原生 WebView2 观感;
   日期控件回填的人工复核(v0.3.49 遗留)持续开放。
+
+## 2026-11-15 v0.3.52 发布结果
+
+- tag `v0.3.52` 指向 `4af2ba6`(Antigravity 展示层级发版 commit)。release run
+  `43631893224` 全部成功;main CI 对 4af2ba6 成功。
+- Release 于北京时间 2026-11-15 03:40:17 公开发布,三件套齐全(安装包 5,947,554 字节,
+  SHA-256 本地匿名下载回验
+  `0afde86a2e621fedd1044deec7877e0e2e4025a00fd8af71b80d05ba8462a182`;签名 444 字节;
+  更新清单 1,784 字节),非 draft。
+- 本机 `node --use-env-proxy build/verify-release.js` 二次核验 PASS(14 项),固定更新
+  端点返回 0.3.52;签名/安装包逐字比对按既有口径 SKIP,由 CI 端完成。
+- 待验收:安装包内真实账号的 Antigravity 取数与三档宽度/倍率下的原生 WebView2 观感;
+  顾问时长「N 天 M 小时」的实际显示;日期控件回填的人工复核(v0.3.49 遗留)持续开放。
