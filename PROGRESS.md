@@ -1,7 +1,7 @@
 # Grandettoken 开发进展
 
 > 最后更新:2026-11-15
-> 状态:**桌面 v0.3.54 准备发布、Android 0.1.14 已发布**，缩略卡片数值右对齐已完成门禁测试，见文末最新条目。
+> 状态:**桌面 v0.3.54、Android 0.1.14 已发布**，结果见文末最新条目。
 > 同日做了两轮**代码治理**:产物出库 / 门禁补强 / 静默失败归零 / 经验沉淀,
 > 见 `docs/report/code-governance-2026-11-12.md`、`docs/report/code-quality-2026-11-12-b.md`
 > 与根目录 `AGENTS.md`。
@@ -5192,4 +5192,11 @@ src-tauri `cargo check --all-targets --locked` exit 0;
 - 集中发布工作区「缩略卡片数值右对齐」改动:缩略卡顶部名称靠左、状态点靠右；中部口径标签在左、主数字在右；底部到期金额与日期、重置卡与短窗额度两端分列；普通卡片边框减弱；Google Cloud 缩略日期复用赠金筛选提示；倒计时区分「后重置」与「后恢复」并在越过重置点保持「待刷新」。
 - 发版前门禁串行复跑(本会话):静态四门及自检(IPC 122 处 invoke / 98 命令、静默失败 6 脚本 74 处 catch、文件规模、CSS 6 样式文件 1303 条规则)、七个前端 JS 与 `verify-thumbnail-layout.py` 语法、jsdom 227/227(含缩略模式 15 项回归)、密钥箱 / Codex 重置顾问 / Google Cloud 冒烟、假 DOM 前端探针、Playwright 浏览器排版校验(三档倍率、深浅主题、16 渠道、760/680px 高度钳制、坏样本拦截及截图核验)、`app/core` `cargo test --locked -- --test-threads=1`（设置 `NO_PROXY=127.0.0.1,localhost,::1`，542 passed / 8 ignored + `sync_fixtures` 6 passed + doc-test 1 ignored）、`app/core` 与 `app/src-tauri` `cargo check --all-targets --locked`、凭据扫描 CLEAN(459 文件)。
 - 版本号三处同步 `0.3.54` 并通过 `cargo fetch --locked`。
+- 待验收:安装版原生 WebView2 真实账号、字号倍率、scaleFactor 与屏幕工作区联合验收，以及既有遗留人工复核项。
+
+## 2026-11-15 v0.3.54 发布结果
+
+- tag `v0.3.54` 指向 `13dbd5f`(缩略卡片数值右对齐发版 commit)。release run `43641765149` 全部成功；main CI run `43641760129` 全部成功。
+- Release 于北京时间 2026-11-15 05:34:13 公开发布，三件套齐全(安装包 5,950,802 字节，SHA-256 本地匿名下载回验 `e8a22114848a577492509aae3b8f82cec26b79f977b57a005986685a9624b1d8`；签名 444 字节；更新清单 1,549 字节)，非 draft。
+- 本机 `node --use-env-proxy build/verify-release.js` 二次核验 PASS(14 项检查：12 PASS，2 项本地文件缺失按既有口径 SKIP)，固定更新端点返回 `0.3.54`。
 - 待验收:安装版原生 WebView2 真实账号、字号倍率、scaleFactor 与屏幕工作区联合验收，以及既有遗留人工复核项。
