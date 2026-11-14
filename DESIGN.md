@@ -491,6 +491,12 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 
 ### 8.1 逻辑层 `app/core`
 
+2026-11-15 Antigravity 展示调整。首页主数字明确标注 Gemini 本周剩余，状态轨固定呈现
+Gemini 5 小时余量及重置倒计时。详情中其他模型组受限时标明具体窗口，以 Gemini 周窗口
+大数字和短窗口组成主要内容，其他模型组默认折叠，展开后显示各窗口与完整模型说明。
+适用模型说明可独立展开，刷新保留展开状态与键盘焦点。已用模式同步切换标签与数字，
+缺失短窗口明确提示未提供，重置时间已过仍显示原快照并提示待刷新。
+
 | # | 功能 | 状态 | 落点 |
 |---|---|---|---|
 | 1 | 四渠道响应解析与单位换算 | ✅ | `providers.rs` |
@@ -605,6 +611,10 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 ---
 
 ## 9. 设计稿差异台账
+
+2026-11-15 Antigravity 按用户偏好采用 Gemini 本周、Gemini 5 小时、其他模型组的展示顺序。
+原配额设计稿 §4.2 中按最紧窗口组织首页副行的方案已更新，详情取消独立重复的 Hero 数字。
+实现位于 `antigravity.js` 与 `antigravity.css`。
 
 原型稿 `docs/prototype/token-dashboard-prototype.html` 是视觉基准,但实现过程中有多处**有意偏离**。记录在此,避免后续把"有意为之"当成 bug 修掉:
 

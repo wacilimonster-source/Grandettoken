@@ -117,6 +117,11 @@
 
 ## 4. 全形态交互与信息展示设计
 
+2026-11-15 用户验收后调整桌面首页与详情的信息层级。当前实现优先呈现 Gemini 本周剩余，
+其次显示 Gemini 5 小时余量与重置倒计时，其他模型组在详情默认折叠，组内标明各窗口受限状态。
+详情主数字归入 Gemini 周窗区，模型说明在所属组内展开。下方 §4.2 与 §4.3 为初版设计，
+上述桌面展示更新以 `DESIGN.md` 第 8.1、9 节为准。
+
 ### 4.1 真实官方图标（已定位核验 ✅）
 - 官网透明 PNG 源：`https://antigravity.google/assets/image/antigravity-logo.png`（实测 `276×276` 32bpp RGBA 透明底彩色 “A” 标，角像素 `A=0`）。
 - 缩至标准 `256×256` RGBA 入库（遵循 [app/src/logos/README.md](../../app/src/logos/README.md) 本地内嵌 CSP 要求，且避免 `/favicon.svg` 内嵌 10 组 `<feGaussianBlur>` 在 Android 端不兼容）：

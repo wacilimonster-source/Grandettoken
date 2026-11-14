@@ -756,6 +756,7 @@ function renderRow(c, i) {
   const mw = wins.length ? mainWindow(c) : null;
   const quotaMain = (c.id === "codex" || c.id === "antigravity") && !!mw;
   const codex = c.id === "codex" && !!mw;
+  const ag = c.id === "antigravity" && window.AntigravityUI;
   const fiveHour = codex ? wins.find((w) => w.label === "5 小时") : null;
   const codexDual = codex && mw.label === "本周" && !!fiveHour && !noKey && c.remaining != null;
 
@@ -874,6 +875,7 @@ function renderRow(c, i) {
     // 两项额度占右侧两行,旧数据的年龄移到左侧,仍然显式可见。
     if (isOld) sub = `${c.updatedAt ? snapAge(c.updatedAt) : "上次快照"}${sub ? " · " + sub : ""}`;
   }
+  if (ag && mw && !noKey && !isOld) subVal = esc(mw.label) + (CFG.showUsed ? "已用" : "剩余");
   // 失联 / 旧快照:数值降为 text-3 并加 ~,不让"上次成功值"看起来像当前值。
   // 紧凑条里由 CSS 的 ::before 画 ~(省一个节点),面板里用真实节点。
   const compactNow = document.body.className.includes("form-compact");
@@ -939,9 +941,10 @@ function renderRow(c, i) {
   // 状态标签:颜色之外的第二个通道(P4)。默认只给"需要动作"的挂一枚;
   // 开了「非颜色模式」后每一行都写文字态 —— 灰度截图下也读得出来(D12)。
   const TONE_WORD = { ok: "正常", warn: "预警", bad: "告急", off: "无数据" };
+  const qualifier = ag && !isOld && !noKey ? "" : hv && hv.qualifier;
   const qtag =
-    hv && hv.qualifier && hv.qualifier !== "~"
-      ? `<span class="qtag">${esc(hv.qualifier)}</span>`
+    qualifier && qualifier !== "~"
+      ? `<span class="qtag">${esc(qualifier)}</span>`
       : CFG && CFG.textTone
         ? `<span class="qtag">${TONE_WORD[tone] || ""}</span>`
         : "";
@@ -960,6 +963,10 @@ function renderRow(c, i) {
     // 原因与快照年龄已经分别写在 .s / .p 里,状态轨不再重复(HUD 同一句话只说一次)
     railLeft = "";
     railRight = "";
+  } else if (ag && mw) {
+    const rail = ag.rail(c);
+    railLeft = rail.left;
+    railRight = rail.right;
   } else if (isPts) {
     const upcoming = (c.expiring || [])
       .filter((e) => e && Number(e.amount) > 0 && e.at * 1000 > Date.now())
@@ -1073,6 +1080,7 @@ function coreAmount(c) {
 
 /** ① 核心 · 配额:一窗一行。重置 < 24 小时写相对时间,更久写「N 天 · MM-DD HH:MM」。 */
 function coreWindows(c) {
+  if (c.id === "antigravity" && window.AntigravityUI) return window.AntigravityUI.windows(c);
   const codex = c.id === "codex";
   const exactReset = codex || c.id === "antigravity";
   const rows = (c.windows || []).map((w) => {
@@ -1560,6 +1568,7 @@ function renderDetail(c, inDialog = false) {
   //   逐笔到期明细  —— 「接口未提供」,核心段的兜底文案已经说了
   const hasExpList = c.kind === "points" && (c.expiring || []).length > 0;
   const dupExtra = (k) =>
+    (c.id === "antigravity" && (c.windows || []).length && window.AntigravityUI && window.AntigravityUI.ownsExtra(k)) ||
     (k === "套餐" && c.id === "codex") ||
     ((k === "额度包" || k === "积分包") && hasExpList) ||
     (k === "逐笔到期明细" && c.kind === "points" && !hasExpList) ||
@@ -1651,6 +1660,7 @@ const KIND_CAPTION = {
 
 /** 弹层顶部的大数字:与卡片主数字同一口径,只放大。 */
 function detailHeroHtml(c) {
+  if (c.id === "antigravity" && c.hasKey && (c.windows || []).length && window.AntigravityUI) return "";
   if (c.id === "google-cloud") return `<div class="detail-hero">${esc(money(c.remaining, c.unit))}</div>`;
   if (!c.hasKey) return `<div class="detail-hero" style="color:var(--tx3)">——</div>`;
   if (c.remaining === null || c.remaining === undefined) {

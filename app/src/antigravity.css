@@ -1,0 +1,31 @@
+/* Gemini 周额度承担主数字，短窗口与其他模型组按层级排列。 */
+.ag-quota{font-size:max(12px,calc(12px*var(--u)))}
+.ag-gemini h3{font-size:calc(15px*var(--u));font-weight:600;margin:0 0 calc(12px*var(--u));color:var(--tx)}
+.ag-window{padding:calc(12px*var(--u)) 0;min-width:0}
+.ag-window+.ag-window{border-top:1px solid var(--line)}
+.ag-window-head{display:flex;align-items:baseline;justify-content:space-between;gap:calc(12px*var(--u));color:var(--tx2)}
+.ag-window-head>span{min-width:0;overflow-wrap:anywhere}
+.ag-window-head b{flex:none;font-size:calc(19px*var(--u));font-weight:600;font-variant-numeric:tabular-nums;line-height:1.2}
+.ag-primary{padding-top:0;padding-bottom:calc(20px*var(--u))}
+.ag-primary .ag-window-head b{font-size:calc(38px*var(--u));letter-spacing:-.035em;margin-left:auto}
+.ag-primary .ag-window-head{flex-wrap:wrap}
+.ag-primary .ag-window-head>span{white-space:nowrap}
+.ag-bar{height:calc(5px*var(--u));border-radius:8px;background:var(--bg3);overflow:hidden;margin:calc(9px*var(--u)) 0}
+.ag-bar i{display:block;height:100%;border-radius:inherit}
+.ag-reset{color:var(--tx3);line-height:1.7;font-size:max(11px,calc(11px*var(--u)));font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.ag-exhausted{color:var(--bad)}
+.ag-group{border-top:1px solid var(--line);padding:calc(12px*var(--u)) 0}
+.ag-gemini{padding-bottom:calc(16px*var(--u))}
+.ag-group-toggle.sec-more{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:calc(5px*var(--u)) calc(12px*var(--u));width:100%;text-align:left;margin:0;padding:calc(3px*var(--u)) 0}
+.ag-group-name{font-weight:500;color:var(--tx2);overflow-wrap:anywhere;min-width:0}
+.ag-summary{color:var(--tx3);font-size:max(11px,calc(11px*var(--u)));font-variant-numeric:tabular-nums;overflow-wrap:anywhere;min-width:0}
+.ag-description{color:var(--tx3);line-height:1.7;overflow-wrap:anywhere;white-space:normal;margin:calc(8px*var(--u)) 0 0}
+body.form-panel .row[data-id="antigravity"] .r2{flex-wrap:wrap;white-space:normal}
+body.form-panel .row[data-id="antigravity"] .r2 .rt{flex:1 1 calc(170px*var(--u));white-space:normal;overflow:visible}
+body.form-panel .row[data-id="antigravity"] .r2 .end{max-width:100%;white-space:normal;overflow-wrap:anywhere}
+.row[data-id="antigravity"]{container-type:inline-size}
+.row[data-id="antigravity"] .val .p{white-space:nowrap}
+@container (max-width:300px){
+  body.form-panel .row[data-id="antigravity"] .r1{grid-template-columns:auto minmax(0,1fr)}
+  body.form-panel .row[data-id="antigravity"] .val{grid-column:1/-1}
+}

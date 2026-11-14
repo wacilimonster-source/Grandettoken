@@ -38,9 +38,20 @@ if (process.env.CHECKIN_SENTINEL === "1") {
   if (probe.status !== 1 || !/FAIL 首页与签到中心使用全部后端签到渠道/.test(probe.stdout)) {
     throw new Error("签到哨兵自检失败：移除能力名单同步后必须被统计回归断言拦截");
   }
+  const agProbe = spawnSync(process.execPath, [__filename], {
+    env: { ...process.env, CHECKIN_SENTINEL: "1", AG_LAYOUT_SENTINEL: "1" }, encoding: "utf8", timeout: 20000,
+  });
+  if (agProbe.status !== 1 || !/FAIL Antigravity Gemini 周窗优先且其他组默认折叠/.test(agProbe.stdout)) {
+    throw new Error("Antigravity 哨兵自检失败：移除周窗主数字样式必须被断言拦截");
+  }
 }
 const vaultJs = fs.readFileSync(path.join(SRC, "vault-view.js"), "utf8");
-const antigravityJs = fs.readFileSync(path.join(SRC, "antigravity.js"), "utf8");
+let antigravityJs = fs.readFileSync(path.join(SRC, "antigravity.js"), "utf8");
+if (process.env.AG_LAYOUT_SENTINEL === "1") {
+  const marker = 'windowHtml(c, w, w.key === "gemini-weekly")';
+  if (!antigravityJs.includes(marker)) throw new Error("Antigravity 哨兵未命中周窗选择");
+  antigravityJs = antigravityJs.replace(marker, 'windowHtml(c, w, false)');
+}
 const checkinSource = fs.readFileSync(path.join(SRC, "../core/src/checkin.rs"), "utf8");
 const checkinDefs = checkinSource.slice(checkinSource.indexOf("pub const CHECKINS:"), checkinSource.indexOf("pub fn find("));
 const checkinIds = [...checkinDefs.matchAll(/\bid:\s*"([^"]+)"/g)].map((match) => match[1]);
@@ -1227,14 +1238,78 @@ w.__DATA = DATA;
     const agMarkup = w.renderRow(agChannel, 0);
     const agControls = w.AntigravityUI.controls(agChannel);
     const coreWins = w.coreWindows(agChannel);
-    const agMainOk = agMarkup.includes("80.4") && !agMarkup.includes("AI Credits") &&
-      agControls.includes('data-ag-path') && (coreWins.match(/class="core-w/g) || []).length === 5 &&
+    const agDom = w.document.createElement("div");
+    agDom.innerHTML = coreWins;
+    const agMainOk = agMarkup.includes("80.4") && agMarkup.includes("Gemini 本周剩余") &&
+      agMarkup.includes("Gemini 5 小时剩余 32.1%") && !agMarkup.includes("AI Credits") &&
+      agControls.includes('data-ag-path') && agDom.querySelectorAll(".ag-gemini .ag-window").length === 2 &&
+      agDom.querySelector(".ag-primary")?.dataset.agWindow === "gemini-weekly" &&
+      agDom.querySelectorAll('.ag-group-toggle[aria-expanded="false"]').length === 2 &&
+      !agDom.querySelector('[data-ag-window="3p-5h"]') &&
+      w.detailHeroHtml(agChannel) === "" &&
       !coreWins.includes("周窗到期即清零");
+    R.push({ name: "Antigravity Gemini 周窗优先且其他组默认折叠", ok: agMainOk });
     let cfgSaved = [];
     w.__SET_CONFIG_INVOKE = async ({ config }) => { cfgSaved.push(config.antigravityCliPath); };
     const savedChannels = [...DATA.CHANNELS];
     DATA.CHANNELS = [...savedChannels, agChannel];
     w.__TEST.setChannels(DATA.CHANNELS);
+    w.openDetail("antigravity");
+    const groupButton = w.document.querySelector('#detailBody [data-sec="ag-Claude%2FGPT"]');
+    groupButton.click();
+    const opened = w.document.querySelector('#detailBody [data-sec="ag-Claude%2FGPT"]');
+    const openedOk = opened?.getAttribute("aria-expanded") === "true" &&
+      w.document.querySelector('#detailBody [data-ag-window="3p-5h"]')?.textContent.includes("已耗尽") &&
+      w.document.activeElement === opened;
+    w.renderDetailSheet();
+    const retained = w.document.querySelector('#detailBody [data-sec="ag-Claude%2FGPT"]');
+    R.push({ name: "Antigravity 详情展开、重画及键盘焦点保留", ok: openedOk &&
+      retained?.getAttribute("aria-expanded") === "true" && w.document.activeElement === retained });
+    retained.click();
+    R.push({ name: "Antigravity 详情可重新收起", ok:
+      !w.document.querySelector('#detailBody [data-ag-window="3p-5h"]') });
+    w.closeDetail(false);
+    const onlyWeekly = { ...agChannel, windows: [agChannel.windows[0]] };
+    const missingShort = w.renderRow(onlyWeekly, 0);
+    R.push({ name: "Antigravity 缺少短窗如实说明", ok:
+      missingShort.includes("5 小时窗口未提供") && !missingShort.includes("5 小时剩余 0.0%") });
+    const shortOnly = { ...agChannel, windows: [agChannel.windows[1]] };
+    R.push({ name: "Antigravity 无周窗时短窗标签准确", ok:
+      w.renderRow(shortOnly, 0).includes("Gemini 5 小时剩余") && !w.coreWindows(shortOnly).includes("ag-primary") });
+    const unknown = { key: "new-weekly", label: "新模型 本周", remainPercent: 12, status: "ok", resetsAt: null };
+    const dynamic = { ...agChannel, windows: [...agChannel.windows, unknown],
+      extra: [...agChannel.extra, ["模型 · 新模型", "<script>长说明</script>"]] };
+    R.push({ name: "Antigravity 新模型组动态保留且文案转义", ok:
+      w.coreWindows(dynamic).includes("新模型") && !w.coreWindows(dynamic).includes("<script>") });
+    w.__TEST.setChannels([...savedChannels, dynamic]);
+    w.openDetail("antigravity");
+    w.document.querySelector(`#detailBody [data-sec="ag-${encodeURIComponent("新模型")}"]`).click();
+    R.push({ name: "Antigravity 动态组展开后显示未知时间和完整转义说明", ok:
+      w.document.querySelector('#detailBody [data-ag-window="new-weekly"]')?.textContent.includes("重置时间未知") &&
+      w.document.querySelector('#detailBody .ag-description')?.textContent === "<script>长说明</script>" &&
+      !w.document.querySelector('#detailBody script') });
+    w.closeDetail(false);
+    w.__TEST.setChannels(DATA.CHANNELS);
+    const exhausted = { ...agChannel, windows: agChannel.windows.map((x) => x.key === "gemini-5h"
+      ? { ...x, remainPercent: 0, status: "rate-limited", resetsAt: new Date((NOW - 60) * 1000).toISOString() } : x) };
+    R.push({ name: "Antigravity 短窗耗尽和越过重置点等待刷新", ok:
+      w.renderRow(exhausted, 0).includes("Gemini 5 小时剩余 0.0% · 已耗尽") &&
+      w.coreWindows(exhausted).includes("已到重置时间,待刷新") });
+    R.push({ name: "Antigravity 陈旧与失败状态保留快照提示", ok:
+      w.renderRow({ ...agChannel, stale: true, updatedAt: NOW - 600 }, 0).includes("快照") &&
+      !w.renderRow({ ...agChannel, valid: false, error: "测试取数失败" }, 0).includes("Gemini 5 小时剩余 32.1%") });
+    w.__TEST.patchCfg({ showUsed: true });
+    R.push({ name: "Antigravity 已用模式的标签和百分比一致", ok:
+      w.renderRow(agChannel, 0).includes("Gemini 本周已用") &&
+      w.renderRow(agChannel, 0).includes("Gemini 5 小时已用 67.9%") });
+    w.__TEST.patchCfg({ showUsed: false });
+    if (process.env.AG_LAYOUT_FIXTURES) {
+      const preview = { ...agChannel, windows: agChannel.windows.map((x) => x.key === "gemini-5h"
+        ? { ...x, remainPercent: 0, status: "rate-limited" } : x) };
+      fs.writeFileSync(process.env.AG_LAYOUT_FIXTURES, JSON.stringify({
+        row: w.renderRow(preview, 0), detail: w.coreWindows(preview),
+      }));
+    }
     w.__TEST.patchCfg({ antigravityCliPath: null });
     w.renderChCards();
     const agInp = w.document.querySelector('[data-ag-path]');
