@@ -214,6 +214,8 @@ pub struct Config {
     /// 已连接 GitHub 账号的 login / id（非密钥，仅用于本机状态展示）。
     pub sync_github_login: Option<String>,
     pub sync_github_user_id: Option<i64>,
+    /// Antigravity `agy` CLI 可选自定义路径（留空则自动探测 `%LOCALAPPDATA%\agy\bin\agy.exe` / `PATH`）。
+    pub antigravity_cli_path: Option<String>,
 }
 
 /// 签到渠道的出厂配置:**全部默认开**(2026-10-20 用户裁决)。
@@ -305,6 +307,7 @@ impl Default for Config {
             sync_oauth_client_id: None,
             sync_github_login: None,
             sync_github_user_id: None,
+            antigravity_cli_path: None,
         }
     }
 }
@@ -396,6 +399,7 @@ impl Config {
         }
         self.sync_oauth_client_id = clean_short(self.sync_oauth_client_id.take(), 64);
         self.sync_github_login = clean_short(self.sync_github_login.take(), 40);
+        self.antigravity_cli_path = clean_short(self.antigravity_cli_path.take(), 260);
         if self.sync_github_user_id.map_or(false, |id| id <= 0) {
             self.sync_github_user_id = None;
         }
@@ -652,5 +656,24 @@ mod tests {
         );
         let back: Config = serde_json::from_str(&json).unwrap();
         assert!(back.compact_enabled);
+    }
+
+    #[test]
+    fn antigravity_cli_path_defaults_none_trims_and_roundtrips() {
+        let legacy: Config = serde_json::from_str(r#"{"form":"panel"}"#).unwrap();
+        assert!(legacy.antigravity_cli_path.is_none());
+
+        let mut cfg = Config::default();
+        cfg.antigravity_cli_path = Some("   ".into());
+        cfg.sanitize();
+        assert!(cfg.antigravity_cli_path.is_none());
+
+        cfg.antigravity_cli_path = Some(r" C:\tools\agy.exe ".into());
+        cfg.sanitize();
+        assert_eq!(cfg.antigravity_cli_path.as_deref(), Some(r"C:\tools\agy.exe"));
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains("\"antigravityCliPath\""));
+        let back: Config = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.antigravity_cli_path.as_deref(), Some(r"C:\tools\agy.exe"));
     }
 }

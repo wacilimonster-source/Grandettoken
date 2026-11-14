@@ -40,6 +40,8 @@ pub enum App {
     /// MiniMax Code 桌面端(`~/.minimax` 的明文 OAuth 文件,见 [`crate::minimax`];
     /// 凭据在 cn/io/com 哪个目录,请求就走哪套域名)
     MiniMax,
+    /// Antigravity 官方 `agy` CLI（仅调公开 CLI `/usage --output-format json`，不碰客户端凭据）
+    Antigravity,
 }
 
 impl App {
@@ -51,6 +53,7 @@ impl App {
             App::Qoder => "Qoder",
             App::QoderCn => "Qoder 国内版",
             App::MiniMax => "MiniMax Code",
+            App::Antigravity => "Antigravity CLI",
         }
     }
 
@@ -95,6 +98,7 @@ pub fn candidates(app: App) -> Vec<Credential> {
         // MiniMax:读 ~/.minimax + 临近过期续期,全部逻辑在 core::minimax,
         // 这里只负责把它接到统一的候选降级链上
         App::MiniMax => crate::minimax::app_credentials(),
+        App::Antigravity => crate::antigravity::app_credentials().0,
     }
 }
 

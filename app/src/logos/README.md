@@ -13,6 +13,7 @@
 | `qoder.png` | Qoder / Qoder 国内版 | qoder.com 站点声明的 apple-touch-icon(`img.alicdn.com` 的 412×412 PNG),缩到 256×256 RGBA | 2026-10-20 |
 | `minimax.png` | MiniMax | www.minimax.cn 站点声明的 favicon(`favicon.ico`,32×32 帧);`agent.minimax.cn` 的 `apple-touch_v2.png` 是 agent 产品的吉祥物,不是品牌标,不采用 | 2026-11-13 |
 | `doubao.png` | 豆包工作 | www.doubao.com 页面声明的 192×192 官方新标(`lf-flow-web-cdn.doubao.com/.../new-doubao/192x192.png`) | 2026-11-13 |
+| `antigravity.png` | Antigravity | https://antigravity.google/assets/image/antigravity-logo.png (276×276 官方透明底 PNG,缩到 256×256 RGBA) | 2026-11-15 |
 
 说明:
 

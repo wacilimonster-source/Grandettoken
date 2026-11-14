@@ -891,6 +891,19 @@ struct WireInfo {
     code: Option<&'static str>,
 }
 
+fn antigravity_attempt(o: crate::antigravity::AgyOutcome, mut info: WireInfo) -> (FetchResult, Option<FailKind>, WireInfo) {
+    info.bytes = o.bytes;
+    info.shape = o.shape;
+    info.code = o.err_code;
+    let kind = o.fail_kind.map(|k| match k {
+        "auth" => FailKind::Auth,
+        "transport" => FailKind::Transport,
+        "server" => FailKind::Server,
+        _ => FailKind::Business,
+    });
+    (o.result, kind, info)
+}
+
 /// 真正发请求的那一段(与 [`fetch_once`] 分开,是为了"每个请求只记一行 L2")。
 async fn fetch_once_inner(
     client: &reqwest::Client,
@@ -900,6 +913,9 @@ async fn fetch_once_inner(
     account_id: Option<&str>,
 ) -> (FetchResult, Option<FailKind>, WireInfo) {
     let mut info = WireInfo::default();
+    if def.id == "antigravity" {
+        return antigravity_attempt(crate::antigravity::fetch_usage(key).await, info);
+    }
     // MiniMax:账户端点要官方客户端签名(x-signature/yy),查询串参与签名且绑定
     // URL 与时间戳 —— 每次尝试都要现算,静态 extra_headers 表达不了(见 core::minimax)。
     // 凭据键形如 mm:<region>:<token>,Authorization 必须用解出来的裸令牌,不能带前缀。
@@ -1590,6 +1606,7 @@ fn credentials(
             }
             (out, err)
         }
+        AuthKind::App(appauth::App::Antigravity) => crate::antigravity::app_credentials(),
         // 本机应用的登录态:可能有几份(多个安装 / 旧备份),按可信度依次试
         AuthKind::App(app) => (appauth::candidates(app), None),
     }
@@ -2685,6 +2702,7 @@ impl Fetcher {
         let _ = store.delete_setting(&format!("quota_snapshot_v1:{id}"));
         let _ = store.delete_setting(&format!("{QODER_SCOPE_KEY}:{id}"));
         let _ = store.delete_setting(&format!("{QODER_CHANGED_KEY}:{id}"));
+        if id == "antigravity" { crate::antigravity::clear_cooldown(); }
         self.invalidate();
     }
 
@@ -2739,6 +2757,7 @@ impl Fetcher {
     pub fn invalidate(&self) {
         *self.last_run.lock().unwrap_or_else(|p| p.into_inner()) = None;
         self.recovery.lock().unwrap().retain(|_, r| matches!(r.kind, Some(FailKind::RateLimited(_))) && r.next > now_ts());
+        crate::antigravity::clear_cooldown();
     }
 
     /// 用一份**还没生效**的凭据试打一次:网页登录抓到会话之后,先证明这份会话真能取数,
@@ -2790,11 +2809,13 @@ impl Fetcher {
         store: &Arc<Mutex<Store>>,
     ) -> ProbeReport {
         let started = std::time::Instant::now();
-        let web_src = self
-            .web_cred_src
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone();
+        if def.id == "antigravity" {
+            if let Ok(c) = Config::try_load(&store.lock().unwrap_or_else(|p| p.into_inner())) {
+                crate::antigravity::set_cli_path(c.antigravity_cli_path);
+            }
+            crate::antigravity::clear_cooldown();
+        }
+        let web_src = self.web_cred_src.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let (creds, secret_err) =
             tokio::task::spawn_blocking(move || credentials(def, web_src.as_deref()))
                 .await
@@ -2945,44 +2966,21 @@ impl Fetcher {
         let mut out: Vec<Option<ChannelView>> = (0..n).map(|_| None).collect();
 
         // ── await 段:纯网络,不碰数据库 ──
-        // 每轮开头读一次配置(隐藏清单与申请制规则都从它来;之前每轮 load 两遍,
-        // 报告 O-12)。解析失败绝不回落 default —— 那会把隐藏渠道静默"解除隐藏"
-        // 恢复取数(扫描报告 P2-11):沿用上次成功的配置,首轮无缓存才用默认并记日志。
+        // 每轮开头读一次配置;解析失败沿用上次成功的配置(报告 P2-11),避免隐藏渠道恢复取数。
         let cfg: Arc<Config> = Arc::new({
             let s = store.lock().unwrap_or_else(|p| p.into_inner());
             let mut cache = self.cfg_cache.lock().unwrap_or_else(|p| p.into_inner());
             match Config::try_load(&s) {
-                Ok(c) => {
-                    *cache = Some(c.clone());
-                    c
-                }
-                Err(e) => {
-                    eprintln!("{e},本轮沿用上次的配置");
-                    cache.clone().unwrap_or_default()
-                }
+                Ok(c) => { *cache = Some(c.clone()); c }
+                Err(e) => { eprintln!("{e},本轮沿用上次的配置"); cache.clone().unwrap_or_default() }
             }
         });
-        // 隐藏 = 不发请求、不读本机登录凭据;仍返回占位视图,管理页要靠它列「已隐藏」卡片。
-        // Arc:并发时每渠道克隆一次指针,而不是把 Vec 移进每个 future。
+        crate::antigravity::set_cli_path(cfg.antigravity_cli_path.clone());
         let hidden: Arc<Vec<String>> = Arc::new(cfg.hidden_channels.clone());
-        // 自动隐藏候选(用户没动过眼睛 + "没装就等于不存在"的渠道)。
-        // 与 hidden 分开:那不是用户的决定,只是"还没装,先别占一行"。
         let auto_hide: Arc<Vec<String>> = Arc::new(auto_hide_candidates(&cfg));
-        // 订阅套餐要用的两份缓存:美元牌价(每月一次)与周期记忆(跨期才更新)。
-        // 单独一次短锁读出来 —— 下面的 refresh 会 await,不能带着 MutexGuard 跨过去。
-        let (fx_cached, cycle_cached): (Option<FxRate>, Vec<Option<CycleMemo>>) = {
-            let s = store.lock().unwrap_or_else(|p| p.into_inner());
-            (fx::load(&s), load_cycles(&s))
-        };
-        // 当月已有牌价时这个 await 是纯内存返回,不打网络;只有跨月后的第一轮才会
-        // 真去试两个公开接口(每个 6 秒上限)。
+        let (fx_cached, cycle_cached) = { let s = store.lock().unwrap_or_else(|p| p.into_inner()); (fx::load(&s), load_cycles(&s)) };
         let fx_now = fx::refresh(&self.http, fx_cached.clone(), now_ts()).await;
-        // 网页登录型的会话来源(外壳注入)。每轮取一次,每渠道克隆一个指针。
-        let web_src: Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>> =
-            self.web_cred_src
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .clone();
+        let web_src: Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>> = self.web_cred_src.lock().unwrap_or_else(|p| p.into_inner()).clone();
 
         let builtin = futures::future::join_all(
             providers::PROVIDERS

@@ -132,6 +132,19 @@
     return `${r.availableCount} 张可用`;
   }
 
+  function earliestExpiryText(c) {
+    const list = (c && c.resetCredits && c.resetCredits.credits) || [];
+    const nowMs = Date.now();
+    let earliest = null;
+    for (const card of list) {
+      const at = card && card.expiresAt;
+      if (at && at * 1000 > nowMs && (earliest == null || at < earliest)) {
+        earliest = at;
+      }
+    }
+    return earliest ? `最早 ${fmtDay(earliest)} 到期` : "";
+  }
+
   function cardsRows(c, limit) {
     const r = c && c.resetCredits;
     const list = (r && r.credits) || [];
@@ -139,15 +152,24 @@
       return `<div class="cr-empty">${r && r.error ? esc(r.error) : "接口未返回逐张到期明细"}</div>`;
     }
     const shown = limit ? list.slice(0, limit) : list;
+    const nowMs = Date.now();
+    const firstValidIdx = shown.findIndex((card) => card && card.expiresAt && card.expiresAt * 1000 > nowMs);
     return shown.map((card, i) => {
       const at = card.expiresAt;
-      const expired = at && at * 1000 <= Date.now();
-      const afterSub = at && state.subEndAt && at > state.subEndAt;
+      const expired = !!(at && at * 1000 <= nowMs);
+      const afterSub = !!(at && state.subEndAt && at > state.subEndAt);
       const label = at == null ? "到期日未知" : `${fmtTime(at)} 到期`;
+      const badges = [
+        expired ? '<span class="cr-card-tag expired">已过期</span>' : "",
+        afterSub ? '<span class="cr-card-tag sub-later">比订阅晚</span>' : "",
+        i === firstValidIdx && at ? '<span class="cr-card-tag">最早到期</span>' : "",
+      ].filter(Boolean).join("");
       return `<div class="cr-card-row">
-        <span class="cr-card-title">${esc(card.title || "额度重置卡")}</span>
-        <span class="cr-card-date">${esc(label)}${expired ? " · 已过期" : ""}${afterSub ? " · 比订阅晚" : ""}</span>
-        ${i === 0 && at ? '<span class="cr-card-tag">最早到期</span>' : ""}
+        <div class="cr-card-main">
+          <span class="cr-card-title">${esc(card.title || "额度重置卡")}</span>
+          <span class="cr-card-date">${esc(label)}</span>
+        </div>
+        ${badges ? `<div class="cr-card-badges">${badges}</div>` : ""}
       </div>`;
     }).join("") + (limit && list.length > limit
       ? `<div class="cr-empty">还有 ${list.length - limit} 张，详情里看全部</div>`
@@ -156,7 +178,7 @@
 
   function compactInner(c) {
     const a = state.advice;
-    const v = verdict(a);
+    const vclass = a && VERDICT[a.verdict] ? a.verdict : "unknown";
     const headline = state.loading && !a
       ? "正在计算…"
       : state.error && !a
@@ -165,25 +187,36 @@
     const meta = a
       ? `周额度 ${pct(a.metrics.weeklyRemainPercent)} · 下次重置 ${fmtTime(a.metrics.nextResetAt)} · ${cardCountText(c)}`
       : `周额度读取中 · ${cardCountText(c)}`;
-    const notes = [];
-    if (c.resetCredits && c.resetCredits.error) notes.push(c.resetCredits.error);
-    if (c.resetCredits && c.resetCredits.lastRedeemedAt) {
-      notes.push(`最近用卡重置 ${fmtTime(c.resetCredits.lastRedeemedAt)}`);
-    }
-    const updated = c.resetCredits && c.resetCredits.updatedAt
-      ? `<div class="cr-note">查询于 ${esc(fmtTime(c.resetCredits.updatedAt))}${c.stale || !c.valid ? " · 上次快照" : ""}</div>`
+    const earliest = earliestExpiryText(c);
+    const updatedText = c.resetCredits && c.resetCredits.updatedAt
+      ? `查询于 ${fmtTime(c.resetCredits.updatedAt)}${c.stale || !c.valid ? " · 上次快照" : ""}`
+      : "";
+    const errNote = c.resetCredits && c.resetCredits.error
+      ? `<div class="cr-note bad">${esc(c.resetCredits.error)}</div>`
+      : "";
+    const redeemedNote = c.resetCredits && c.resetCredits.lastRedeemedAt
+      ? `<div class="cr-note">最近用卡重置 ${esc(fmtTime(c.resetCredits.lastRedeemedAt))}</div>`
       : "";
     return `
-      <div class="cr-entry">
-        <div class="cr-entry-top"><span class="cr-kicker">重置顾问</span>${chip(a)}</div>
+      <div class="cr-entry tone-${vclass}">
+        <div class="cr-entry-top">
+          <span class="cr-kicker">重置顾问</span>
+          ${chip(a)}
+          <span class="cr-entry-cta">查看重置建议 <span aria-hidden="true">›</span></span>
+        </div>
         <div class="cr-entry-title">${esc(headline)}</div>
         <div class="cr-entry-meta">${esc(meta)}</div>
-        <div class="cr-entry-cta">查看重置建议 <span aria-hidden="true">›</span></div>
+      </div>
+      <div class="cr-cards-sec-head">
+        <span>重置卡明细 · <b>${esc(cardCountText(c))}</b></span>
+        <span>${esc(earliest)}</span>
       </div>
       <div class="cr-compact-cards">${cardsRows(c, 3)}</div>
-      ${notes.map((s) => `<div class="cr-note">${esc(s)}</div>`).join("")}
-      ${updated}
-      <div class="cr-note">只看周额度 · 不自动兑换</div>`;
+      ${errNote}${redeemedNote}
+      <div class="cr-compact-foot">
+        <span>${esc(updatedText)}</span>
+        <span>只看周额度 · 不自动兑换</span>
+      </div>`;
   }
 
   function needButtons() {
@@ -197,12 +230,14 @@
   function amountRow() {
     if (state.need !== "urgent" && state.need !== "soon") return "";
     return `<div class="cr-amts">
-      <div class="cr-label">这次大概用多少周额度？</div>
+      <div class="cr-label-row">
+        <span class="cr-label">这次大概用多少周额度？</span>
+        <span class="cr-label-sub">${state.amount == null ? "默认按整窗 100% 保守估" : `已选 ${state.amount}%`}</span>
+      </div>
       <div class="cr-amt-row">${AMOUNTS.map(([v, label]) => `
         <button type="button" class="cr-amt${state.amount === v ? " on" : ""}"
           data-codex-amt="${v}" aria-pressed="${state.amount === v}"${state.saving ? " disabled" : ""}>${label}</button>`).join("")}
       </div>
-      <div class="cr-hint">不选按整窗 100% 保守估；标了小用量，剩余够时就不会建议用卡。</div>
     </div>`;
   }
 
@@ -214,13 +249,15 @@
   function metricGrid(a) {
     if (!a) return "";
     const m = a.metrics || {};
+    const remainCls = m.weeklyRemainPercent != null && Number(m.weeklyRemainPercent) <= 0 ? ' class="tone-bad"' : "";
+    const gainCls = m.cardGainPercent != null && Number(m.cardGainPercent) > 20 ? ' class="tone-ok"' : "";
     return `<div class="cr-metrics">
-      <div><span>周额度剩余</span><b>${pct(m.weeklyRemainPercent)}</b></div>
+      <div><span>周额度剩余</span><b${remainCls}>${pct(m.weeklyRemainPercent)}</b></div>
       <div><span>下次自然重置</span><b>${esc(fmtTime(m.nextResetAt))}</b><small>${m.gapHours == null ? "" : esc(fmtGap(m.gapHours))}</small></div>
       <div><span>五小时额度剩余</span><b>${pct(m.fiveHourRemainPercent)}</b><small>恢复 ${esc(fmtTime(m.fiveHourResetAt))}</small></div>
-      <div><span>现在用卡净收益</span><b>${m.cardGainPercent == null ? "—" : `${Number(m.cardGainPercent).toFixed(1)}%`}</b><small>同一计划范围内对比等待，按周额度估算</small></div>
+      <div><span>现在用卡净收益</span><b${gainCls}>${m.cardGainPercent == null ? "—" : `${Number(m.cardGainPercent).toFixed(1)}%`}</b><small>同范围对比等待，按周额度估算</small></div>
       <div><span>可用重置卡</span><b>${m.cardsAvailable == null ? "未知" : `${m.cardsAvailable} 张`}</b><small>${m.cardsUnknown ? "不能劝用" : "来自当前详情"}</small></div>
-      <div><span>订阅到期</span><b>${esc(fmtTime(m.subEndAt))}</b><small>${m.daysToSubEnd == null ? "未填" : `还剩 ${m.daysToSubEnd.toFixed(1)} 天`}</small></div>
+      <div><span>订阅到期</span><b>${esc(fmtTime(m.subEndAt))}</b><small>${m.daysToSubEnd == null ? "未填 · 按卡规划" : `还剩 ${m.daysToSubEnd.toFixed(1)} 天`}</small></div>
       <div><span>本周期平均速度</span><b>${m.burnPercentPerDay == null ? "—" : `${Number(m.burnPercentPerDay).toFixed(1)}%/天`}</b><small>${m.burnEstimated ? "按本周期估算" : "样本不足"}</small></div>
     </div>`;
   }
@@ -228,7 +265,7 @@
   function warningsHtml(a) {
     const list = (a && a.warnings) || [];
     if (!list.length) return `<div class="cr-ok">没有额外口径提示</div>`;
-    return `<ul class="cr-warns">${list.map((w) => `<li>${esc(WARN[w] || w)}</li>`).join("")}</ul>`;
+    return `<ul class="cr-warns active-warn">${list.map((w) => `<li>${esc(WARN[w] || w)}</li>`).join("")}</ul>`;
   }
 
   function actionNote(a) {
@@ -261,26 +298,30 @@
       return `<div class="cr-panel">${error || `<div class="cr-loading">正在计算建议…</div>`}</div>`;
     }
     return `<div class="cr-panel">
-      <div class="cr-block">
-        <div class="cr-label">你这次要用吗？</div>
-        <div class="cr-needs">${needButtons()}</div>
-        <div class="cr-hint">默认按「能等」计算；选择用量后，会结合自然重置时间与卡的有效期给出建议。</div>
-        ${amountRow()}
-      </div>
-      <div class="cr-block">
-        <label class="cr-label" for="codexResetSubEnd">订阅到期日（可选）</label>
-        <div class="cr-date-row">
-          <input type="date" id="codexResetSubEnd" value="${dateValue(state.subEndAt)}"
-            aria-label="订阅到期日"${state.saving || state.loading ? " disabled" : ""}>
-          <button type="button" class="btn s" data-codex-clear-date
-            aria-label="清空订阅到期日"${!state.subEndAt || state.saving || state.loading ? " disabled" : ""}>清空</button>
-          <span>可留空，按重置卡有效期规划；填写后按当日 23:59 截止，日期只存本地</span>
+      <div class="cr-config-card">
+        <div class="cr-label-row">
+          <span class="cr-label">你这次要用吗？</span>
+          <span class="cr-label-sub">默认按「能等」· 12h 后自动复位</span>
         </div>
-        ${state.profileError ? `<div class="cr-note bad">${esc(state.profileError)}</div>` : ""}
+        <div class="cr-needs">${needButtons()}</div>
+        ${amountRow()}
+        <div class="cr-date-block">
+          <div class="cr-label-row">
+            <label class="cr-label" for="codexResetSubEnd">订阅到期日（可选）</label>
+            <span class="cr-label-sub">${state.subEndAt ? "当日 23:59 截止 · 仅存本地" : "未填 · 按最晚有效卡规划"}</span>
+          </div>
+          <div class="cr-date-row">
+            <input type="date" id="codexResetSubEnd" value="${dateValue(state.subEndAt)}"
+              aria-label="订阅到期日"${state.saving || state.loading ? " disabled" : ""}>
+            <button type="button" class="btn s" data-codex-clear-date
+              aria-label="清空订阅到期日"${!state.subEndAt || state.saving || state.loading ? " disabled" : ""}>清空</button>
+          </div>
+          ${state.profileError ? `<div class="cr-note bad">${esc(state.profileError)}</div>` : ""}
+        </div>
       </div>
+      ${actionNote(a)}
       ${metricGrid(a)}
       ${warningsHtml(a)}
-      ${actionNote(a)}
       ${error}
     </div>`;
   }
@@ -297,41 +338,72 @@
     const rp = reset ? clamp((reset - start) / span * 100, 0, 100) : null;
     const dot = (left, cls) =>
       `<span class="cr-tl-dot ${cls}" style="left:${left}%"><i></i></span>`;
-    return `<div class="cr-timeline" aria-label="从现在到${endLabel}的时间轴">
-      <div class="cr-tl-line"></div>
-      ${dot(0, "now")}
-      ${rp == null ? "" : dot(rp, "reset")}
-      ${dot(100, "end")}
-    </div>
-    <div class="cr-tl-legend">
-      <span><b>今天</b>${esc(fmtDay(now))}</span>
-      <span><b>下次自然重置</b>${esc(fmtDay(reset))}</span>
-      <span><b>${endLabel}</b>${esc(fmtDay(sub))}</span>
+    return `<div class="cr-tl-card">
+      <div class="cr-timeline" aria-label="从现在到${endLabel}的时间轴">
+        <div class="cr-tl-line"></div>
+        ${rp == null ? "" : `<div class="cr-tl-span" style="width:${rp}%"></div>`}
+        ${dot(0, "now")}
+        ${rp == null ? "" : dot(rp, "reset")}
+        ${dot(100, "end")}
+      </div>
+      <div class="cr-tl-legend">
+        <span><b><i class="cr-tl-lg-dot now"></i>今天</b><em>${esc(fmtDay(now))}</em></span>
+        <span><b><i class="cr-tl-lg-dot reset"></i>下次自然重置</b><em>${esc(fmtDay(reset))}</em></span>
+        <span><b><i class="cr-tl-lg-dot end"></i>${endLabel}</b><em>${esc(fmtDay(sub))}</em></span>
+      </div>
     </div>`;
+  }
+
+  function nearestSpeedIndex(a) {
+    if (state.speed != null) {
+      const i = SPEEDS.indexOf(state.speed);
+      return i >= 0 ? i : 1;
+    }
+    const actual = a && a.metrics ? a.metrics.burnPercentPerDay : null;
+    if (actual == null || !Number.isFinite(Number(actual))) return 1;
+    const v = Number(actual);
+    return SPEEDS.reduce((best, s, i) =>
+      Math.abs(s - v) < Math.abs(SPEEDS[best] - v) ? i : best, 0);
   }
 
   function planPanel(c) {
     const a = state.advice;
     if (!a) return `<div class="cr-panel"><div class="cr-loading">正在计算计划…</div></div>`;
+    const m = a.metrics || {};
+    const kpisHtml = m.planAvailable
+      ? `<div class="cr-plan-kpis">
+          <div><span>省卡策略</span><b>${m.plannedCards == null ? "—" : `${m.plannedCards} 张`}</b></div>
+          <div><span>严格不断档</span><b>${m.coverCards == null ? "现有卡不够" : `${m.coverCards} 张`}</b></div>
+          <div><span>到期仍差</span><b>${m.shortfallPercent == null ? "—" : `${Number(m.shortfallPercent).toFixed(1)}%`}</b></div>
+        </div>`
+      : "";
     const lines = (a.planLines || []).map((s) => `<li>${esc(s)}</li>`).join("");
-    const idx = state.speed == null ? 1 : Math.max(0, SPEEDS.indexOf(state.speed));
+    const idx = nearestSpeedIndex(a);
     const current = state.speed == null
-      ? (a.metrics.burnPercentPerDay == null ? "本周期平均" : `本周期平均 ${Number(a.metrics.burnPercentPerDay).toFixed(1)}%/天`)
-      : `${state.speed}%/天`;
+      ? (m.burnPercentPerDay == null ? "本周期平均" : `本周期平均 ${Number(m.burnPercentPerDay).toFixed(1)}%/天`)
+      : `手动试算 ${state.speed}%/天`;
     return `<div class="cr-panel">
+      ${kpisHtml}
       <ol class="cr-plan">${lines}</ol>
       ${timelineHtml(a)}
-      <div class="cr-block">
-        <div class="cr-label-row"><span class="cr-label">按不同速度试算</span><b>${esc(current)}</b></div>
+      <div class="cr-speed-card">
+        <div class="cr-label-row">
+          <span class="cr-label">按不同消耗速度试算</span>
+          <span class="cr-speed-val">
+            ${esc(current)}
+            ${state.speed != null ? '<button type="button" class="cr-speed-reset" data-speed-reset>恢复实测</button>' : ""}
+          </span>
+        </div>
         <input type="range" id="codexResetSpeed" min="0" max="6" step="1" value="${idx}"
           aria-label="按不同消耗速度试算">
-        <div class="cr-speed-marks">${SPEEDS.map((s) => `<span>${s}</span>`).join("")}</div>
+        <div class="cr-speed-marks">${SPEEDS.map((s, i) => `<span${i === idx ? ' class="on"' : ""}>${s}%</span>`).join("")}</div>
         <div class="cr-hint">速度只改计划试算，不改上面的 NOW/WAIT 结论。「补满」按严格不断档算，不等于建议用卡；省卡看计划第二行。</div>
       </div>
-      <div class="cr-block">
-        <div class="cr-label">重置卡（按到期日）</div>
-        <div class="cr-card-list">${cardsRows(c, 0)}</div>
+      <div class="cr-cards-sec-head" style="margin-top:4px">
+        <span>重置卡（按到期日排序）</span>
+        <span>${esc(cardCountText(c))}</span>
       </div>
+      <div class="cr-card-list">${cardsRows(c, 0)}</div>
     </div>`;
   }
 
@@ -339,6 +411,9 @@
     if (!a) return "";
     const m = a.metrics || {};
     const cards = m.cardsAvailable == null ? "未知" : `${m.cardsAvailable} 张`;
+    const blocked = a.reasonCode === "no_weekly" || a.reasonCode === "data_inconsistent"
+      || a.reasonCode === "full_window" || a.reasonCode === "full_window_both"
+      || a.reasonCode === "full_window_five_hour" || a.reasonCode === "sub_expired";
     const canWait = m.canWait === false ? "订阅结束前等不到" : m.canWait === true ? "能等到"
       : m.planEndSource === "cards" ? "订阅未填，按卡有效期规划" : "未填订阅到期日";
     const need = NEEDS.find(([k]) => k === state.need);
@@ -347,27 +422,30 @@
         ? ` · ${state.amount == null ? "按整窗估" : `${state.amount}%`}` : "")
       : "能等";
     const steps = [
-      ["0", "硬门", a.reasonCode === "no_weekly" || a.reasonCode === "data_inconsistent" || a.reasonCode === "full_window" || a.reasonCode === "full_window_both" || a.reasonCode === "full_window_five_hour" || a.reasonCode === "sub_expired" ? "卡住/不判断" : "通过"],
-      ["1", "等得到吗", canWait],
-      ["2", "需求", needVal],
-      ["3", "卡数", cards],
-      ["4", "质量", (a.warnings || []).length ? `${a.warnings.length} 条提示` : "无"],
+      ["0", "硬门", blocked ? "卡住/不判断" : "通过", blocked ? "" : "pass"],
+      ["1", "等得到吗", canWait, m.canWait === true || m.planEndSource === "cards" ? "pass" : ""],
+      ["2", "需求", needVal, "focus"],
+      ["3", "卡数", cards, m.cardsAvailable > 0 ? "pass" : ""],
+      ["4", "质量", (a.warnings || []).length ? `${a.warnings.length} 条提示` : "无", (a.warnings || []).length ? "" : "pass"],
     ];
-    return `<ol class="cr-path">${steps.map(([n, k, v]) => `
-      <li><span class="cr-path-n">${n}</span><b>${esc(k)}</b><em>${esc(v)}</em></li>`).join("")}</ol>`;
+    return `<ol class="cr-path">${steps.map(([n, k, v, cls]) => `
+      <li${cls ? ` class="${cls}"` : ""}><span class="cr-path-n">${n}</span><b>${esc(k)}</b><em>${esc(v)}</em></li>`).join("")}</ol>`;
   }
 
   function evidencePanel() {
     const a = state.advice;
     if (!a) return `<div class="cr-panel"><div class="cr-loading">正在读取依据…</div></div>`;
     const m = a.metrics || {};
+    const dynWarns = (a.warnings || []).length
+      ? `<div class="cr-block"><div class="cr-label">当前状态提示</div>${warningsHtml(a)}</div>`
+      : `<div class="cr-ok">没有额外口径提示</div>`;
     return `<div class="cr-panel">
       <div class="cr-block">
-        <div class="cr-label-row"><span class="cr-label">这次结论的路径</span><code>${esc(a.reasonCode)}</code></div>
+        <div class="cr-label-row"><span class="cr-label">这次结论的判定路径</span><code>${esc(a.reasonCode)}</code></div>
         ${pathRows(a)}
       </div>
       <div class="cr-block">
-        <div class="cr-label">关键数字</div>
+        <div class="cr-label">关键数字核对</div>
         <div class="cr-evidence-grid">
           <div><span>这次标的用量</span><b>${esc(needAmountText())}</b></div>
           <div><span>周额度已用</span><b>${pct(m.weeklyUsedPercent)}</b></div>
@@ -382,14 +460,14 @@
         </div>
       </div>
       <div class="cr-block">
-        <div class="cr-label">口径</div>
+        <div class="cr-label">静态规则口径</div>
         <ul class="cr-warns">
-          <li>只看周额度；5 小时窗只影响文案，不参与结论。</li>
-          <li>用卡会改写下一次周窗锚点，计划不是「自然重置 + 卡数」的简单加法。</li>
-          <li>卡到期日未知时不假设永久有效；现有卡也不够时，不推荐买卡。</li>
+          <li>只看周额度主判断；5 小时窗耗尽时单独检查套餐重置涵盖范围。</li>
+          <li>用卡会改写下一次周窗锚点，计划按事件模拟，非简单加法。</li>
+          <li>手动兑换要求至少一项涵盖额度剩余不足 80%，不推荐买卡。</li>
         </ul>
       </div>
-      ${warningsHtml(a)}
+      ${dynWarns}
     </div>`;
   }
 
@@ -398,16 +476,23 @@
     const v = verdict(a);
     const vclass = a && VERDICT[a.verdict] ? a.verdict : "unknown";
     const tab = state.tab;
+    const verdictMeta = a
+      ? `周窗 ${pct(a.metrics.weeklyRemainPercent)} · ${cardCountText(c)}`
+      : cardCountText(c);
     const tabBtn = (key, label) =>
       `<button type="button" class="cr-tab${tab === key ? " on" : ""}" data-codex-tab="${key}"
         role="tab" aria-selected="${tab === key}">${label}</button>`;
     return `
       <div class="cr-page-head">
-        <button type="button" class="btn s cr-back" data-codex-reset-back>返回 Codex</button>
-        <div class="cr-page-title"><span>重置顾问</span><small>只看周额度 · 不自动兑换</small></div>
+        <button type="button" class="cr-back" data-codex-reset-back><span aria-hidden="true">‹</span> 返回配额详情</button>
+        <div class="cr-page-title"><span>重置顾问</span><small>· 只看周额度 · 不代点</small></div>
       </div>
       <div class="cr-verdict-card cr-verdict-${vclass}">
-        <div class="cr-verdict-badge">${v.en}</div>
+        <div class="cr-verdict-top">
+          <span class="cr-verdict-badge">${v.en}</span>
+          <span class="cr-verdict-zh">${v.zh}</span>
+          <span class="cr-verdict-pill-meta">${esc(verdictMeta)}</span>
+        </div>
         <div class="cr-verdict-copy">
           <b>${esc(a ? a.headline : state.loading ? "正在计算…" : state.error ? "建议暂时不可用" : "正在读取周额度…")}</b>
           <p>${esc(a ? a.detail : state.error || "先刷新 Codex 周额度。")}</p>
@@ -617,7 +702,10 @@
       state.profileLoaded = true;
       await loadAdvice(c, true);
       requestAnimationFrame(() => {
-        const el = document.querySelector(`[data-codex-need="${kind}"]`);
+        const sel = amountPercent != null
+          ? `[data-codex-amt="${amountPercent}"]`
+          : `[data-codex-need="${kind}"]`;
+        const el = document.querySelector(sel);
         if (el) el.focus({ preventScroll: true });
       });
     } catch (e) {
@@ -676,7 +764,7 @@
 
   function clickHandler(ev) {
     const t = ev.target && ev.target.closest
-      ? ev.target.closest("[data-codex-reset-open],[data-codex-reset-back],[data-codex-tab],[data-codex-need],[data-codex-amt],[data-codex-clear-date],[data-codex-retry]")
+      ? ev.target.closest("[data-codex-reset-open],[data-codex-reset-back],[data-codex-tab],[data-codex-need],[data-codex-amt],[data-codex-clear-date],[data-codex-retry],[data-speed-reset]")
       : null;
     if (!t) return;
     if (t.hasAttribute("data-codex-clear-date")) {
@@ -706,6 +794,15 @@
     if (t.hasAttribute("data-codex-amt")) {
       const amt = Number(t.getAttribute("data-codex-amt"));
       if (Number.isFinite(amt) && amt > 0 && amt !== state.amount) saveNeed(state.need, amt);
+      return;
+    }
+    if (t.hasAttribute("data-speed-reset")) {
+      state.speed = null;
+      const c = currentChannel();
+      if (c) loadAdvice(c, true).then(() => {
+        const slider = document.getElementById("codexResetSpeed");
+        if (slider) slider.focus({ preventScroll: true });
+      });
       return;
     }
     if (t.hasAttribute("data-codex-retry")) {

@@ -1575,7 +1575,7 @@ body.form-panel[data-w="lg"] .row .val .p{flex:none;min-width:0}
    时 .s / .r2 的左边界不动,标题与状态区没有横向抖动,故不改列定义。 */
 
 /* ── 详情底部弹层 ── */
-.shade{position:absolute;inset:calc(55px*var(--u)) 0 calc(43px*var(--u));z-index:30;
+.shade{position:absolute;inset:calc(44px*var(--u) + 1px) 0 calc(14px*var(--u) + max(18px,18px*var(--u)) + 1px);z-index:30;
   background:#00000066;display:flex;align-items:flex-end;
   animation:fadeIn var(--t2) var(--ease)}
 .shade[hidden]{display:none!important}

@@ -118,7 +118,7 @@ fn round2(n: f64) -> f64 {
     (n * 100.0).round() / 100.0
 }
 
-fn round1(n: f64) -> f64 {
+pub(crate) fn round1(n: f64) -> f64 {
     (n * 10.0).round() / 10.0
 }
 
@@ -1415,6 +1415,13 @@ pub const PROVIDERS: &[ProviderDef] = &[
         default_kind: Kind::Points,
         peak_pricing: false,
         extract: crate::doubao::extract_doubao,
+    },
+    ProviderDef {
+        id: "antigravity", name: "Antigravity", short: "AG", color: "#3286fc",
+        url: "local://agy-cli", fallback_urls: &[], extra_headers: &[],
+        auth: AuthKind::App(App::Antigravity), auth_prefix: "", method: Method::Get,
+        unstable: false, default_kind: Kind::Percent, peak_pricing: false,
+        extract: crate::antigravity::extract_antigravity,
     },
 ];
 

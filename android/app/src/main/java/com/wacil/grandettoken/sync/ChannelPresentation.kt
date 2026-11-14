@@ -179,6 +179,7 @@ private fun ChannelLogo(ch: ChannelSnapshot) {
         "opencode-go" -> R.drawable.channel_opencode
         "workbuddy", "workbuddy-ai" -> R.drawable.channel_workbuddy
         "qoder", "qoder-cn" -> R.drawable.channel_qoder
+        "antigravity" -> R.drawable.channel_antigravity
         else -> null
     }
     Box(Modifier.size(34.dp).background(Surface3, RoundedCornerShape(9.dp)), contentAlignment = Alignment.Center) {

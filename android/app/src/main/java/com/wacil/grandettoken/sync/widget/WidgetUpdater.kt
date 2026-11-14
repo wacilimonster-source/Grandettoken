@@ -289,9 +289,9 @@ object WidgetUpdater {
             id,
             when {
                 unavailable -> MUTED
-                text == "周" -> AMBER
-                text == "5h" -> BLUE
-                text == "月" -> MINT
+                text.endsWith("周") -> AMBER
+                text.endsWith("5h") -> BLUE
+                text.endsWith("月") -> MINT
                 else -> MUTED
             },
         )

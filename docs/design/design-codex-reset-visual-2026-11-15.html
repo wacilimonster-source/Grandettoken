@@ -1,0 +1,2326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Codex 重置顾问 · 视觉优化设计原型 (2026-11-15)</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════════
+   1. 评审工作台外壳样式（与画布内 App 样式完全隔离）
+   ═══════════════════════════════════════════════════════════════════════ */
+:root {
+  color-scheme: dark;
+  --wb-bg: #0d0f11;
+  --wb-surface: #14171a;
+  --wb-raised: #1b2024;
+  --wb-line: #282e33;
+  --wb-line2: #363e45;
+  --wb-tx: #eef1ec;
+  --wb-tx2: #aeb7ba;
+  --wb-tx3: #7e898e;
+  --wb-ac: #d3e6a3;
+  --wb-ac-bg: rgba(211, 230, 163, 0.12);
+  --wb-ok: #8bc9a2;
+  --wb-warn: #edc185;
+  --wb-bad: #ef9d94;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: radial-gradient(1100px 520px at 50% -10%, #1c221b 0%, rgba(28,34,27,0) 65%), var(--wb-bg);
+  color: var(--wb-tx);
+  font: 13.5px/1.6 "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  padding: 24px 24px 72px;
+}
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; border: 0; background: transparent; }
+button:disabled { cursor: not-allowed; opacity: 0.42; }
+
+.wb-wrap { max-width: 1340px; margin: 0 auto; }
+
+/* 顶部标题区 */
+.wb-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--wb-line);
+  flex-wrap: wrap;
+}
+.wb-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--wb-ac);
+  text-transform: uppercase;
+}
+.wb-header h1 {
+  font-size: clamp(22px, 2.5vw, 30px);
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
+  margin-top: 6px;
+}
+.wb-header p {
+  color: var(--wb-tx2);
+  font-size: 13px;
+  max-width: 72ch;
+  margin-top: 6px;
+}
+.wb-badges { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 10px; }
+.wb-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--wb-line2);
+  background: var(--wb-surface);
+  font-size: 11.5px;
+  color: var(--wb-tx2);
+}
+.wb-badge i { width: 6px; height: 6px; border-radius: 50%; background: var(--wb-ac); }
+
+/* 控制工具栏 */
+.wb-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  align-items: center;
+  justify-content: space-between;
+  margin: 16px 0 22px;
+  padding: 12px 16px;
+  border: 1px solid var(--wb-line);
+  border-radius: 12px;
+  background: var(--wb-surface);
+}
+.wb-tgroup { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wb-tlabel { font-size: 11.5px; color: var(--wb-tx3); font-weight: 600; white-space: nowrap; }
+.wb-seg {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 8px;
+  background: var(--wb-bg);
+  border: 1px solid var(--wb-line);
+  gap: 2px;
+}
+.wb-seg button {
+  padding: 4px 10px;
+  border-radius: 5px;
+  font-size: 12px;
+  color: var(--wb-tx2);
+  white-space: nowrap;
+  transition: background 120ms, color 120ms;
+}
+.wb-seg button:hover { color: var(--wb-tx); background: rgba(255,255,255,0.04); }
+.wb-seg button.on {
+  background: var(--wb-ac);
+  color: #222c18;
+  font-weight: 600;
+}
+
+/* 舞台布局 */
+.wb-stage {
+  display: grid;
+  grid-template-columns: auto minmax(300px, 1fr);
+  gap: 28px;
+  align-items: start;
+}
+.wb-stage.compare-mode {
+  grid-template-columns: 1fr;
+}
+.wb-canvases {
+  display: flex;
+  gap: 24px;
+  justify-content: center;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.wb-canvas-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.wb-col-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+.wb-col-tag.after {
+  background: var(--wb-ac-bg);
+  color: var(--wb-ac);
+  border: 1px solid rgba(211, 230, 163, 0.35);
+}
+.wb-col-tag.before {
+  background: rgba(239, 157, 148, 0.1);
+  color: var(--wb-bad);
+  border: 1px solid rgba(239, 157, 148, 0.3);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   2. 真实应用模拟器壳（严格对齐 app/src/styles.css V2 令牌与尺寸）
+   ═══════════════════════════════════════════════════════════════════════ */
+.app-sim {
+  --u: 1;
+  --bg: #15181b;
+  --bg2: #1d2125;
+  --bg3: #262b30;
+  --line: #30363b;
+  --line2: #3a4147;
+  --tx: #f0f2ed;
+  --tx2: #afb8bb;
+  --tx3: #849095;
+  --tx4: #6b767b;
+  --ok: #8bc9a2;
+  --warn: #edc185;
+  --bad: #ef9d94;
+  --ac: #d3e6a3;
+  --ok-bg: #8bc9a214;
+  --warn-bg: #edc18512;
+  --bad-bg: #ef9d9414;
+  --ac-bg: #d3e6a313;
+  --btn-text: #25301c;
+  --t1: 120ms;
+  --t2: 200ms;
+  --ease: cubic-bezier(.2, .8, .2, 1);
+
+  width: calc(400px * var(--u));
+  height: calc(740px * var(--u));
+  background: var(--bg);
+  color: var(--tx);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 20px 55px -20px rgba(0,0,0,0.85), 0 2px 8px -2px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.04) inset;
+  font: calc(13.5px * var(--u))/1.5 "Segoe UI", "Microsoft YaHei", sans-serif;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  user-select: none;
+  transition: width 200ms var(--ease);
+}
+.app-sim.light {
+  color-scheme: light;
+  --bg: #f6f7f3;
+  --bg2: #ffffff;
+  --bg3: #eef1e9;
+  --line: #dce0d6;
+  --line2: #cbd1c4;
+  --tx: #272e28;
+  --tx2: #606d62;
+  --tx3: #6b756a;
+  --tx4: #8b938a;
+  --ok: #427650;
+  --warn: #946120;
+  --bad: #b7483c;
+  --ac: #4c632f;
+  --ok-bg: #e7f0e9;
+  --warn-bg: #fdf3e3;
+  --bad-bg: #fdeeea;
+  --ac-bg: #e9efdf;
+  --btn-text: #ffffff;
+  box-shadow: 0 20px 50px -22px rgba(32,48,32,0.28), 0 2px 8px -2px rgba(32,48,32,0.12);
+}
+
+/* 顶部标题栏 (.tbar) */
+.sim-tbar {
+  display: flex;
+  align-items: center;
+  gap: calc(7px * var(--u));
+  padding: calc(9px * var(--u)) calc(8px * var(--u)) calc(9px * var(--u)) calc(12px * var(--u));
+  background: linear-gradient(180deg, #1a1f28, #141821);
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+.app-sim.light .sim-tbar {
+  background: linear-gradient(180deg, #fbfcf8, #f1f3ec);
+}
+.sim-mark {
+  width: calc(20px * var(--u));
+  height: calc(20px * var(--u));
+  border-radius: 6px;
+  border: 1.5px solid var(--ac);
+  color: var(--ac);
+  display: grid;
+  place-items: center;
+  font-size: calc(11px * var(--u));
+  font-weight: 800;
+  flex: none;
+}
+.sim-tt { font-size: calc(13px * var(--u)); font-weight: 600; margin-right: auto; }
+.sim-tb {
+  font-size: max(12px, calc(11.5px * var(--u)));
+  color: var(--tx2);
+  padding: calc(3px * var(--u)) calc(5px * var(--u));
+  border-radius: calc(5px * var(--u));
+}
+.sim-tb.live { color: var(--tx4); font-size: max(10.5px, calc(10.5px * var(--u))); font-variant-numeric: tabular-nums; }
+
+/* 背景首页摘要与卡片（半透明遮罩后可见） */
+.sim-home-bg {
+  flex: 1;
+  padding: calc(14px * var(--u)) calc(20px * var(--u));
+  display: flex;
+  flex-direction: column;
+  gap: calc(10px * var(--u));
+  overflow: hidden;
+}
+.sim-sum-mock {
+  display: grid;
+  grid-template-columns: 1.18fr 1fr 0.82fr;
+  gap: calc(9px * var(--u));
+}
+.sim-sum-cell {
+  padding: calc(10px * var(--u)) calc(12px * var(--u));
+  border: 1px solid var(--line);
+  border-radius: calc(11px * var(--u));
+  background: var(--bg2);
+}
+.sim-sum-cell span { display: block; font-size: max(11px, calc(11px * var(--u))); color: var(--tx3); }
+.sim-sum-cell b { display: block; font-size: calc(22px * var(--u)); font-weight: 550; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.sim-bg-row {
+  margin-top: auto;
+  padding: calc(12px * var(--u)) calc(14px * var(--u));
+  border: 1px solid var(--line);
+  border-radius: calc(10px * var(--u));
+  background: var(--bg2);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* 底部栏 (.foot) */
+.sim-foot {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--u));
+  padding: calc(7px * var(--u)) calc(12px * var(--u));
+  background: var(--bg2);
+  border-top: 1px solid var(--line);
+  font-size: max(12px, calc(12px * var(--u)));
+  color: var(--tx3);
+  flex: none;
+}
+.sim-foot .sp { flex: 1; }
+
+/* 详情底部弹层 (.shade + .detail)
+   注意：优化项 #8 修复了 .shade 的 bottom 间隙（从 43px 改为贴合 .foot 上沿） */
+.sim-shade {
+  position: absolute;
+  inset: calc(45px * var(--u)) 0 calc(33px * var(--u));
+  z-index: 30;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: flex-end;
+}
+.app-sim.legacy-mode .sim-shade {
+  /* 还原现状 bug：bottom 43px 导致底部漏出 10px 背景列表 */
+  inset: calc(55px * var(--u)) 0 calc(43px * var(--u));
+}
+.sim-detail {
+  width: 100%;
+  height: calc(100% - 36px * var(--u));
+  background: var(--bg);
+  border-top: 1px solid var(--line);
+  border-radius: calc(16px * var(--u)) calc(16px * var(--u)) 0 0;
+  box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.sim-detail-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: calc(10px * var(--u));
+  padding: calc(14px * var(--u)) calc(20px * var(--u)) calc(11px * var(--u));
+  border-bottom: 1px solid var(--line);
+}
+.sim-codex-ico {
+  width: calc(30px * var(--u));
+  height: calc(30px * var(--u));
+  border-radius: calc(8px * var(--u));
+  background: var(--bg3);
+  border: 1px solid var(--line2);
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: var(--tx);
+}
+.sim-detail-title { min-width: 0; flex: 1; }
+.sim-detail-title b {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: calc(15px * var(--u));
+  font-weight: 600;
+}
+.sim-plan-pill {
+  font-size: max(10.5px, calc(10px * var(--u)));
+  font-weight: 550;
+  color: var(--ac);
+  background: var(--ac-bg);
+  border: 1px solid color-mix(in srgb, var(--ac) 35%, transparent);
+  padding: 0 6px;
+  border-radius: 999px;
+  line-height: 1.5;
+}
+.sim-detail-title p {
+  font-size: max(12px, calc(12px * var(--u)));
+  color: var(--tx3);
+  margin-top: calc(1px * var(--u));
+}
+.sim-detail-close {
+  width: calc(28px * var(--u));
+  height: calc(28px * var(--u));
+  border-radius: calc(7px * var(--u));
+  display: grid;
+  place-items: center;
+  color: var(--tx2);
+}
+.sim-detail-close:hover { background: var(--bg3); color: var(--tx); }
+
+.sim-detail-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: calc(16px * var(--u)) calc(20px * var(--u)) calc(20px * var(--u));
+  scrollbar-width: thin;
+  scrollbar-color: var(--line2) transparent;
+}
+.sim-detail-body::-webkit-scrollbar { width: 6px; }
+.sim-detail-body::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 6px; }
+
+/* Codex 详情基础元素（配额窗口） */
+.sim-hero {
+  font-size: calc(40px * var(--u));
+  font-weight: 550;
+  letter-spacing: -0.05em;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  display: flex;
+  align-items: baseline;
+  gap: calc(5px * var(--u));
+}
+.sim-hero .unit { font-size: calc(13px * var(--u)); font-weight: 400; color: var(--tx2); letter-spacing: 0; }
+.sim-caption {
+  font-size: max(12px, calc(12px * var(--u)));
+  color: var(--tx3);
+  margin: calc(3px * var(--u)) 0 calc(14px * var(--u));
+}
+.sim-sec-h {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: max(11px, calc(10.5px * var(--u)));
+  color: var(--tx3);
+  letter-spacing: 0.05em;
+  margin-bottom: calc(4px * var(--u));
+}
+.sim-w-row {
+  display: grid;
+  grid-template-columns: calc(48px * var(--u)) 1fr calc(46px * var(--u));
+  gap: calc(3px * var(--u)) calc(8px * var(--u));
+  align-items: center;
+  padding: calc(5px * var(--u)) 0;
+  font-size: max(12px, calc(12px * var(--u)));
+}
+.sim-w-bar { height: calc(4px * var(--u)); border-radius: 3px; background: var(--bg3); overflow: hidden; }
+.sim-w-bar i { display: block; height: 100%; border-radius: 3px; }
+.sim-w-val { text-align: right; font-weight: 550; font-variant-numeric: tabular-nums; }
+.sim-w-time { grid-column: 1 / -1; font-size: max(11px, calc(11px * var(--u))); color: var(--tx2); font-variant-numeric: tabular-nums; }
+.sim-core-note { font-size: max(11.5px, calc(11px * var(--u))); color: var(--tx3); margin: calc(3px * var(--u)) 0 calc(12px * var(--u)); opacity: 0.85; }
+.sim-detail-actions {
+  display: flex;
+  gap: calc(8px * var(--u));
+  margin-top: calc(16px * var(--u));
+}
+.sim-btn {
+  border: 1px solid var(--line2);
+  background: var(--bg3);
+  color: var(--tx2);
+  font-size: max(11.5px, calc(12px * var(--u)));
+  padding: calc(5px * var(--u)) calc(10px * var(--u));
+  border-radius: calc(6px * var(--u));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+.sim-btn:hover:not(:disabled) { border-color: var(--tx3); color: var(--tx); }
+.sim-btn.p { background: var(--ac); border-color: var(--ac); color: var(--btn-text); font-weight: 600; }
+.sim-detail-actions .sim-btn { flex: 1; padding: calc(7px * var(--u)) calc(10px * var(--u)); }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   3A. 优化后样式（V2 精修版 codex-reset.css 提案）
+   保留全部验证门禁选择器：
+   [data-codex-reset-root], .cr-chip, .cr-page, .cr-verdict-badge,
+   [data-codex-reset-back], [data-codex-tab], .cr-metrics, [data-codex-need],
+   .cr-amts, .cr-amt, #codexResetSubEnd, [data-codex-clear-date], .cr-action-note,
+   .cr-plan, .cr-timeline, .cr-tl-legend, #codexResetSpeed, .cr-card-list, .cr-path
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* --- 优化 #1：内嵌入口卡 + 重置卡分组表（对齐 V2 .expiry-summary / .expiry-table） --- */
+.v2-mode .codex-resets[data-codex-reset-open] {
+  display: block;
+  margin-top: calc(10px * var(--u));
+  cursor: pointer;
+}
+.v2-mode .cr-entry {
+  padding: calc(13px * var(--u)) calc(14px * var(--u));
+  border: 1px solid var(--line);
+  border-radius: calc(10px * var(--u));
+  background: var(--bg2);
+  transition: background var(--t1), border-color var(--t1), box-shadow var(--t1);
+}
+.v2-mode .cr-entry.tone-wait {
+  background: var(--ok-bg);
+  border-color: color-mix(in srgb, var(--ok) 32%, var(--line));
+}
+.v2-mode .cr-entry.tone-now {
+  background: var(--bad-bg);
+  border-color: color-mix(in srgb, var(--bad) 36%, var(--line));
+}
+.v2-mode .cr-entry.tone-hold {
+  background: var(--warn-bg);
+  border-color: color-mix(in srgb, var(--warn) 34%, var(--line));
+}
+.v2-mode .codex-resets[data-codex-reset-open]:hover .cr-entry {
+  border-color: var(--ac);
+  box-shadow: 0 4px 16px -8px rgba(0, 0, 0, 0.5);
+}
+.v2-mode .cr-entry-top {
+  display: flex;
+  align-items: center;
+  gap: calc(7px * var(--u));
+  margin-bottom: calc(7px * var(--u));
+}
+.v2-mode .cr-kicker {
+  font-size: max(11.5px, calc(11px * var(--u)));
+  font-weight: 600;
+  color: var(--tx2);
+  letter-spacing: 0.02em;
+}
+.v2-mode .cr-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: calc(20px * var(--u));
+  padding: 0 calc(7px * var(--u));
+  border-radius: 999px;
+  font-size: max(11px, calc(10.5px * var(--u)));
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  border: 1px solid transparent;
+}
+.v2-mode .cr-chip-wait { color: var(--ok); background: var(--ok-bg); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
+.v2-mode .cr-chip-now  { color: var(--bad); background: var(--bad-bg); border-color: color-mix(in srgb, var(--bad) 40%, var(--line)); }
+.v2-mode .cr-chip-hold { color: var(--warn); background: var(--warn-bg); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
+.v2-mode .cr-chip-unknown { color: var(--tx2); background: var(--bg3); border-color: var(--line2); }
+
+.v2-mode .cr-entry-cta {
+  margin-left: auto;
+  font-size: max(11.5px, calc(11px * var(--u)));
+  font-weight: 550;
+  color: var(--tx2);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  transition: color var(--t1), transform var(--t1);
+}
+.v2-mode .codex-resets[data-codex-reset-open]:hover .cr-entry-cta {
+  color: var(--ac);
+  transform: translateX(2px);
+}
+.v2-mode .cr-entry-title {
+  font-size: max(15px, calc(14.5px * var(--u)));
+  font-weight: 600;
+  line-height: 1.38;
+  color: var(--tx);
+  letter-spacing: -0.01em;
+}
+.v2-mode .cr-entry-meta {
+  margin-top: calc(4px * var(--u));
+  font-size: max(11.5px, calc(11.5px * var(--u)));
+  color: var(--tx2);
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 内嵌重置卡表格区 */
+.v2-mode .cr-cards-sec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: calc(12px * var(--u)) 0 calc(6px * var(--u));
+  font-size: max(11.5px, calc(11px * var(--u)));
+  color: var(--tx3);
+}
+.v2-mode .cr-cards-sec-head b { color: var(--tx2); font-weight: 550; }
+.v2-mode .cr-compact-cards {
+  border: 1px solid var(--line);
+  border-radius: calc(9px * var(--u));
+  background: var(--bg2);
+  overflow: hidden;
+}
+.v2-mode .cr-card-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(8px * var(--u));
+  padding: calc(8px * var(--u)) calc(12px * var(--u));
+  border-top: 1px solid var(--line);
+  font-size: max(11.5px, calc(11.5px * var(--u)));
+}
+.v2-mode .cr-card-row:first-child { border-top: 0; }
+.v2-mode .cr-card-main { min-width: 0; flex: 1; }
+.v2-mode .cr-card-title {
+  display: block;
+  color: var(--tx);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.v2-mode .cr-card-date {
+  display: block;
+  color: var(--tx3);
+  font-size: max(11px, calc(11px * var(--u)));
+  font-variant-numeric: tabular-nums;
+  margin-top: 1px;
+}
+.v2-mode .cr-card-badges { display: flex; gap: 5px; flex: none; align-items: center; }
+.v2-mode .cr-card-tag {
+  font-size: max(10.5px, calc(10px * var(--u)));
+  color: var(--ac);
+  background: var(--ac-bg);
+  border: 1px solid color-mix(in srgb, var(--ac) 35%, transparent);
+  border-radius: 999px;
+  padding: 1px 7px;
+  white-space: nowrap;
+}
+.v2-mode .cr-card-tag.sub-later {
+  color: var(--tx3);
+  background: var(--bg3);
+  border-color: var(--line2);
+}
+.v2-mode .cr-compact-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: calc(6px * var(--u));
+  font-size: max(11px, calc(10.5px * var(--u)));
+  color: var(--tx4);
+}
+
+/* --- 优化 #2：子视图轻量面包屑顶栏（消除与 #detailHead 的双标题冲突） --- */
+.v2-mode .cr-page {
+  max-width: 760px;
+  margin: 0 auto;
+  padding-bottom: calc(8px * var(--u));
+}
+.v2-mode .cr-page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: calc(10px * var(--u));
+}
+.v2-mode .cr-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: calc(4px * var(--u)) calc(9px * var(--u));
+  border-radius: calc(6px * var(--u));
+  border: 1px solid var(--line);
+  background: var(--bg2);
+  color: var(--tx2);
+  font-size: max(11.5px, calc(11.5px * var(--u)));
+  font-weight: 500;
+  transition: background var(--t1), color var(--t1), border-color var(--t1);
+}
+.v2-mode .cr-back:hover { background: var(--bg3); color: var(--tx); border-color: var(--line2); }
+.v2-mode .cr-page-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: max(11.5px, calc(11px * var(--u)));
+  color: var(--tx3);
+}
+.v2-mode .cr-page-title span { color: var(--tx2); font-weight: 600; }
+.v2-mode .cr-page-title small { font-size: inherit; color: var(--tx4); }
+
+/* --- 优化 #3：结论横幅（顶栏状态徽标 + 全宽标题与正文，消除左列空白） --- */
+.v2-mode .cr-verdict-card {
+  position: relative;
+  padding: calc(12px * var(--u)) calc(14px * var(--u));
+  border: 1px solid var(--line);
+  border-top-width: 2px;
+  border-radius: calc(10px * var(--u));
+  background: var(--bg2);
+  margin-bottom: calc(10px * var(--u));
+}
+.v2-mode .cr-verdict-wait {
+  border-color: color-mix(in srgb, var(--ok) 32%, var(--line));
+  border-top-color: var(--ok);
+  background: var(--ok-bg);
+}
+.v2-mode .cr-verdict-now {
+  border-color: color-mix(in srgb, var(--bad) 35%, var(--line));
+  border-top-color: var(--bad);
+  background: var(--bad-bg);
+}
+.v2-mode .cr-verdict-hold {
+  border-color: color-mix(in srgb, var(--warn) 35%, var(--line));
+  border-top-color: var(--warn);
+  background: var(--warn-bg);
+}
+.v2-mode .cr-verdict-top {
+  display: flex;
+  align-items: center;
+  gap: calc(7px * var(--u));
+  margin-bottom: calc(6px * var(--u));
+}
+.v2-mode .cr-verdict-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 5px;
+  font-size: max(11px, calc(10.5px * var(--u)));
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  border: 1px solid var(--line2);
+  background: var(--bg3);
+}
+.v2-mode .cr-verdict-wait .cr-verdict-badge { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); background: color-mix(in srgb, var(--ok) 14%, var(--bg2)); }
+.v2-mode .cr-verdict-now  .cr-verdict-badge { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); background: color-mix(in srgb, var(--bad) 14%, var(--bg2)); }
+.v2-mode .cr-verdict-hold .cr-verdict-badge { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); background: color-mix(in srgb, var(--warn) 14%, var(--bg2)); }
+.v2-mode .cr-verdict-zh {
+  font-size: max(11.5px, calc(11.5px * var(--u)));
+  font-weight: 600;
+  color: var(--tx2);
+}
+.v2-mode .cr-verdict-pill-meta {
+  margin-left: auto;
+  font-size: max(11px, calc(10.5px * var(--u)));
+  color: var(--tx3);
+  font-variant-numeric: tabular-nums;
+}
+.v2-mode .cr-verdict-copy b {
+  display: block;
+  font-size: max(15.5px, calc(15px * var(--u)));
+  font-weight: 600;
+  line-height: 1.38;
+  color: var(--tx);
+  letter-spacing: -0.01em;
+  margin-bottom: 3px;
+}
+.v2-mode .cr-verdict-copy p {
+  font-size: max(12px, calc(11.5px * var(--u)));
+  line-height: 1.55;
+  color: var(--tx2);
+}
+
+/* --- 优化 #4：三页签导航对齐 V2 分段控件 (.seg / .detail-tabs) --- */
+.v2-mode .cr-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: calc(3px * var(--u));
+  padding: calc(3px * var(--u));
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-radius: calc(8px * var(--u));
+  margin-bottom: calc(10px * var(--u));
+}
+.v2-mode .cr-tab {
+  min-height: calc(28px * var(--u));
+  border-radius: calc(5px * var(--u));
+  border: 1px solid transparent;
+  font-size: max(12px, calc(11.5px * var(--u)));
+  color: var(--tx3);
+  transition: background var(--t1), color var(--t1), border-color var(--t1);
+}
+.v2-mode .cr-tab:hover { color: var(--tx); background: var(--bg3); }
+.v2-mode .cr-tab.on {
+  background: var(--ac-bg);
+  border-color: color-mix(in srgb, var(--ac) 42%, transparent);
+  color: var(--ac);
+  font-weight: 600;
+}
+
+/* --- 优化 #5：建议页签紧凑参数卡 + 6+1 满宽对称指标网格（消除 7 格黑洞） --- */
+.v2-mode .cr-config-card {
+  padding: calc(11px * var(--u)) calc(12px * var(--u));
+  border: 1px solid var(--line);
+  border-radius: calc(9px * var(--u));
+  background: var(--bg2);
+  margin-bottom: calc(10px * var(--u));
+}
+.v2-mode .cr-label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: calc(6px * var(--u));
+}
+.v2-mode .cr-label {
+  font-size: max(12px, calc(11.5px * var(--u)));
+  font-weight: 600;
+  color: var(--tx);
+}
+.v2-mode .cr-label-sub {
+  font-size: max(11px, calc(10.5px * var(--u)));
+  color: var(--tx3);
+}
+.v2-mode .cr-needs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: calc(6px * var(--u));
+}
+.v2-mode .cr-need {
+  padding: calc(6px * var(--u)) calc(9px * var(--u));
+  border: 1px solid var(--line);
+  border-radius: calc(7px * var(--u));
+  background: var(--bg);
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  transition: background var(--t1), border-color var(--t1);
+}
+.v2-mode .cr-need:hover { background: var(--bg3); border-color: var(--line2); }
+.v2-mode .cr-need b { font-size: max(12px, calc(12px * var(--u))); font-weight: 600; color: var(--tx); }
+.v2-mode .cr-need span { font-size: max(11px, calc(10.5px * var(--u))); color: var(--tx3); }
+.v2-mode .cr-need.on {
+  border-color: var(--ac);
+  background: var(--ac-bg);
+}
+.v2-mode .cr-need.on b { color: var(--ac); }
+.v2-mode .cr-need.on span { color: var(--tx2); }
+
+/* 用量档位内联展开条 */
+.v2-mode .cr-amts {
+  margin-top: calc(9px * var(--u));
+  padding-top: calc(9px * var(--u));
+  border-top: 1px dashed var(--line);
+}
+.v2-mode .cr-amt-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: calc(6px * var(--u));
+  margin-top: calc(5px * var(--u));
+}
+.v2-mode .cr-amt {
+  min-height: calc(30px * var(--u));
+  padding: calc(4px * var(--u)) calc(8px * var(--u));
+  border: 1px solid var(--line);
+  border-radius: calc(6px * var(--u));
+  background: var(--bg);
+  color: var(--tx2);
+  font-size: max(11.5px, calc(11.5px * var(--u)));
+  text-align: center;
+  transition: background var(--t1), border-color var(--t1), color var(--t1);
+}
+.v2-mode .cr-amt:hover { background: var(--bg3); border-color: var(--line2); }
+.v2-mode .cr-amt.on {
+  border-color: var(--ac);
+  background: var(--ac-bg);
+  color: var(--ac);
+  font-weight: 600;
+}
+
+/* 订阅到期日紧凑行 */
+.v2-mode .cr-date-block {
+  margin-top: calc(9px * var(--u));
+  padding-top: calc(9px * var(--u));
+  border-top: 1px solid var(--line);
+}
+.v2-mode .cr-date-row {
+  display: flex;
+  align-items: center;
+  gap: calc(7px * var(--u));
+}
+.v2-mode .cr-date-row input[type="date"] {
+  flex: 1;
+  min-height: calc(32px * var(--u));
+  padding: calc(3px * var(--u)) calc(8px * var(--u));
+  border: 1px solid var(--line2);
+  border-radius: calc(6px * var(--u));
+  background: var(--bg);
+  color: var(--tx);
+  font-size: max(12px, calc(12px * var(--u)));
+  font-variant-numeric: tabular-nums;
+}
+.v2-mode .cr-hint {
+  font-size: max(11px, calc(10.5px * var(--u)));
+  color: var(--tx3);
+  line-height: 1.45;
+  margin-top: calc(4px * var(--u));
+}
+
+/* 6+1 对称指标网格（第 7 项跨双列，彻底消灭右下角黑洞） */
+.v2-mode .cr-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: calc(9px * var(--u));
+  overflow: hidden;
+  margin-bottom: calc(10px * var(--u));
+}
+.v2-mode .cr-metrics > div {
+  min-width: 0;
+  padding: calc(8px * var(--u)) calc(10px * var(--u));
+  background: var(--bg2);
+}
+.v2-mode .cr-metrics > div:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.v2-mode .cr-metrics > div:last-child:nth-child(odd) b {
+  margin-top: 0;
+  margin-left: auto;
+}
+.v2-mode .cr-metrics > div:last-child:nth-child(odd) small {
+  margin-top: 0;
+}
+.v2-mode .cr-metrics span {
+  display: block;
+  font-size: max(11px, calc(10.5px * var(--u)));
+  color: var(--tx3);
+}
+.v2-mode .cr-metrics b {
+  display: block;
+  margin-top: 2px;
+  font-size: max(15px, calc(14.5px * var(--u)));
+  font-weight: 600;
+  color: var(--tx);
+  font-variant-numeric: tabular-nums;
+}
+.v2-mode .cr-metrics b.tone-bad { color: var(--bad); }
+.v2-mode .cr-metrics b.tone-ok  { color: var(--ok); }
+.v2-mode .cr-metrics small {
+  display: block;
+  margin-top: 1px;
+  font-size: max(10.5px, calc(10px * var(--u)));
+  color: var(--tx4);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 行动指引与口径提示 */
+.v2-mode .cr-action-note {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: calc(9px * var(--u)) calc(11px * var(--u));
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: calc(8px * var(--u));
+  font-size: max(11.5px, calc(11.5px * var(--u)));
+  line-height: 1.5;
+  color: var(--tx2);
+  background: var(--bg2);
+  margin-bottom: calc(8px * var(--u));
+}
+.v2-mode .cr-action-note b { color: var(--tx); font-weight: 600; }
+.v2-mode .cr-action-note.now  { border-color: color-mix(in srgb, var(--bad) 35%, var(--line)); border-left-color: var(--bad); background: var(--bad-bg); }
+.v2-mode .cr-action-note.wait { border-color: color-mix(in srgb, var(--ok) 35%, var(--line));  border-left-color: var(--ok);  background: var(--ok-bg); }
+.v2-mode .cr-action-note.hold { border-color: color-mix(in srgb, var(--warn) 35%, var(--line)); border-left-color: var(--warn); background: var(--warn-bg); }
+
+.v2-mode .cr-warns, .v2-mode .cr-ok {
+  margin: 0 0 calc(8px * var(--u));
+  padding: calc(8px * var(--u)) calc(10px * var(--u));
+  border: 1px solid var(--line);
+  border-radius: calc(8px * var(--u));
+  background: var(--bg2);
+  font-size: max(11.5px, calc(11px * var(--u)));
+  color: var(--tx2);
+  line-height: 1.55;
+  list-style: none;
+}
+.v2-mode .cr-warns.active-warn {
+  border-color: color-mix(in srgb, var(--warn) 32%, var(--line));
+  background: var(--warn-bg);
+}
+.v2-mode .cr-warns li { padding-left: 12px; position: relative; margin-bottom: 3px; }
+.v2-mode .cr-warns li:last-child { margin-bottom: 0; }
+.v2-mode .cr-warns li::before { content: "•"; position: absolute; left: 1px; color: var(--warn); }
+
+/* --- 优化 #6：计划页签（三格 KPI 摘要 + 同色锚点时间轴 + 滑块智能吸附） --- */
+.v2-mode .cr-plan-kpis {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: calc(9px * var(--u)) calc(9px * var(--u)) 0 0;
+  overflow: hidden;
+}
+.v2-mode .cr-plan-kpis > div {
+  background: var(--bg2);
+  padding: calc(8px * var(--u)) calc(10px * var(--u));
+}
+.v2-mode .cr-plan-kpis span {
+  display: block;
+  font-size: max(10.5px, calc(10px * var(--u)));
+  color: var(--tx3);
+}
+.v2-mode .cr-plan-kpis b {
+  display: block;
+  font-size: max(15px, calc(14.5px * var(--u)));
+  font-weight: 650;
+  color: var(--tx);
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.v2-mode .cr-plan {
+  margin: 0 0 calc(10px * var(--u));
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 1px;
+  border: 1px solid var(--line);
+  border-top: 0;
+  border-radius: 0 0 calc(9px * var(--u)) calc(9px * var(--u));
+  overflow: hidden;
+  background: var(--line);
+}
+.v2-mode .cr-plan li {
+  padding: calc(7px * var(--u)) calc(10px * var(--u));
+  background: var(--bg2);
+  font-size: max(11.5px, calc(11.5px * var(--u)));
+  color: var(--tx2);
+  line-height: 1.5;
+}
+
+/* 升级时间轴：带进度段 + 同色图例圆点，解决圆点与文字错位 */
+.v2-mode .cr-tl-card {
+  padding: calc(10px * var(--u)) calc(12px * var(--u));
+  border: 1px solid var(--line);
+  border-radius: calc(9px * var(--u));
+  background: var(--bg2);
+  margin-bottom: calc(10px * var(--u));
+}
+.v2-mode .cr-timeline {
+  position: relative;
+  height: 22px;
+  margin: calc(4px * var(--u)) calc(4px * var(--u)) calc(8px * var(--u));
+}
+.v2-mode .cr-tl-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 9px;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--bg3);
+}
+.v2-mode .cr-tl-span {
+  position: absolute;
+  left: 0;
+  top: 9px;
+  height: 3px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--ac), var(--ok));
+}
+.v2-mode .cr-tl-dot {
+  position: absolute;
+  top: 5px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.v2-mode .cr-tl-dot i {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid var(--bg2);
+  box-shadow: 0 0 0 1px var(--line2);
+}
+.v2-mode .cr-tl-dot.now i   { background: var(--ac); }
+.v2-mode .cr-tl-dot.reset i { background: var(--ok); }
+.v2-mode .cr-tl-dot.end i   { background: var(--warn); }
+
+.v2-mode .cr-tl-legend {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  padding-top: calc(6px * var(--u));
+  border-top: 1px dashed var(--line);
+}
+.v2-mode .cr-tl-legend span {
+  font-size: max(11px, calc(10.5px * var(--u)));
+  color: var(--tx3);
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+.v2-mode .cr-tl-legend span:nth-child(2) { text-align: center; }
+.v2-mode .cr-tl-legend span:last-child { text-align: right; }
+.v2-mode .cr-tl-legend b {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--tx2);
+  font-weight: 550;
+}
+.v2-mode .cr-tl-legend em {
+  display: block;
+  font-style: normal;
+  color: var(--tx);
+  font-weight: 600;
+  margin-top: 1px;
+}
+.v2-mode .cr-tl-lg-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.v2-mode .cr-tl-lg-dot.now   { background: var(--ac); }
+.v2-mode .cr-tl-lg-dot.reset { background: var(--ok); }
+.v2-mode .cr-tl-lg-dot.end   { background: var(--warn); }
+
+/* 速度滑块卡片 */
+.v2-mode .cr-speed-card {
+  padding: calc(10px * var(--u)) calc(12px * var(--u));
+  border: 1px solid var(--line);
+  border-radius: calc(9px * var(--u));
+  background: var(--bg2);
+  margin-bottom: calc(10px * var(--u));
+}
+.v2-mode .cr-speed-val {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: max(11.5px, calc(11px * var(--u)));
+  color: var(--ac);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.v2-mode .cr-speed-reset {
+  font-size: max(10.5px, calc(10px * var(--u)));
+  color: var(--tx3);
+  border: 1px solid var(--line2);
+  border-radius: 4px;
+  padding: 1px 6px;
+  background: var(--bg3);
+}
+.v2-mode .cr-speed-reset:hover { color: var(--tx); border-color: var(--ac); }
+.v2-mode input[type="range"]#codexResetSpeed {
+  width: 100%;
+  accent-color: var(--ac);
+  min-height: 24px;
+  margin: 4px 0 2px;
+}
+.v2-mode .cr-speed-marks {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  text-align: center;
+  font-size: max(10.5px, calc(10px * var(--u)));
+  color: var(--tx4);
+  font-variant-numeric: tabular-nums;
+}
+.v2-mode .cr-speed-marks span:first-child { text-align: left; }
+.v2-mode .cr-speed-marks span:last-child { text-align: right; }
+.v2-mode .cr-speed-marks span.on { color: var(--ac); font-weight: 600; }
+
+.v2-mode .cr-card-list {
+  border: 1px solid var(--line);
+  border-radius: calc(9px * var(--u));
+  background: var(--bg2);
+  overflow: hidden;
+}
+
+/* --- 优化 #7：依据页签（卡片化步进器 .cr-path + 分组数字网格） --- */
+.v2-mode .cr-path {
+  margin: 0 0 calc(10px * var(--u));
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: calc(9px * var(--u));
+  background: var(--bg2);
+  overflow: hidden;
+}
+.v2-mode .cr-path li {
+  display: grid;
+  grid-template-columns: calc(22px * var(--u)) minmax(72px, auto) minmax(0, 1fr);
+  gap: calc(8px * var(--u));
+  align-items: center;
+  padding: calc(7px * var(--u)) calc(10px * var(--u));
+  border-top: 1px solid var(--line);
+  font-size: max(11.5px, calc(11.5px * var(--u)));
+}
+.v2-mode .cr-path li:first-child { border-top: 0; }
+.v2-mode .cr-path-n {
+  width: calc(18px * var(--u));
+  height: calc(18px * var(--u));
+  border-radius: 5px;
+  background: var(--bg3);
+  border: 1px solid var(--line2);
+  color: var(--tx3);
+  font-size: max(10.5px, calc(10px * var(--u)));
+  font-weight: 600;
+  display: grid;
+  place-items: center;
+  font-variant-numeric: tabular-nums;
+}
+.v2-mode .cr-path b { color: var(--tx); font-weight: 550; }
+.v2-mode .cr-path em {
+  font-style: normal;
+  justify-self: end;
+  text-align: right;
+  font-size: max(11px, calc(10.5px * var(--u)));
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--bg3);
+  border: 1px solid var(--line2);
+  color: var(--tx2);
+}
+.v2-mode .cr-path li.pass .cr-path-n { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); background: var(--ok-bg); }
+.v2-mode .cr-path li.pass em { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, var(--line)); background: var(--ok-bg); }
+.v2-mode .cr-path li.focus .cr-path-n { color: var(--ac); border-color: var(--ac); background: var(--ac-bg); }
+.v2-mode .cr-path li.focus em { color: var(--ac); border-color: color-mix(in srgb, var(--ac) 40%, var(--line)); background: var(--ac-bg); font-weight: 600; }
+
+.v2-mode .cr-evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: calc(9px * var(--u));
+  overflow: hidden;
+  margin-bottom: calc(10px * var(--u));
+}
+.v2-mode .cr-evidence-grid > div {
+  padding: calc(7px * var(--u)) calc(10px * var(--u));
+  background: var(--bg2);
+  min-width: 0;
+}
+.v2-mode .cr-evidence-grid span { display: block; font-size: max(10.5px, calc(10px * var(--u))); color: var(--tx3); }
+.v2-mode .cr-evidence-grid b {
+  display: block;
+  margin-top: 2px;
+  font-size: max(12.5px, calc(12px * var(--u)));
+  color: var(--tx);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.v2-mode .cr-footer {
+  margin-top: calc(8px * var(--u));
+  padding-top: calc(8px * var(--u));
+  border-top: 1px solid var(--line);
+  font-size: max(11px, calc(10.5px * var(--u)));
+  color: var(--tx4);
+  line-height: 1.5;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   3B. 现状还原样式（v0.3.50 Legacy 对照，用于 Before/After 直观对比）
+   ═══════════════════════════════════════════════════════════════════════ */
+.legacy-mode .codex-resets[data-codex-reset-open] {
+  display: block;
+  margin-top: calc(8px * var(--u));
+  cursor: pointer;
+  border-radius: calc(10px * var(--u));
+}
+.legacy-mode .codex-resets[data-codex-reset-open]:hover {
+  background: var(--bg3);
+  box-shadow: inset 0 0 0 1px var(--line2);
+}
+.legacy-mode .cr-entry { padding: calc(2px * var(--u)) 0 calc(8px * var(--u)); }
+.legacy-mode .cr-entry-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: calc(6px * var(--u)); }
+.legacy-mode .cr-kicker { font-size: max(11px, calc(10.5px * var(--u))); color: var(--tx3); }
+.legacy-mode .cr-chip {
+  display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px;
+  border-radius: 999px; font-size: max(11px, calc(10.5px * var(--u))); font-weight: 650;
+  border: 1px solid transparent;
+}
+.legacy-mode .cr-chip-wait { color: var(--ok); background: var(--ok-bg); border-color: color-mix(in srgb, var(--ok) 35%, var(--line)); }
+.legacy-mode .cr-chip-now  { color: var(--bad); background: var(--bad-bg); border-color: color-mix(in srgb, var(--bad) 35%, var(--line)); }
+.legacy-mode .cr-chip-hold { color: var(--warn); background: var(--warn-bg); border-color: color-mix(in srgb, var(--warn) 35%, var(--line)); }
+.legacy-mode .cr-entry-title { font-size: max(14px, calc(13px * var(--u))); font-weight: 560; color: var(--tx); margin-bottom: 4px; }
+.legacy-mode .cr-entry-meta { font-size: max(11.5px, calc(11px * var(--u))); color: var(--tx3); }
+.legacy-mode .cr-entry-cta { margin-top: 6px; font-size: max(11.5px, calc(11px * var(--u))); color: var(--ac); font-weight: 550; }
+.legacy-mode .cr-card-row {
+  display: flex; align-items: baseline; gap: 8px; min-height: 28px;
+  padding: 3px 0; border-top: 1px solid var(--line); font-size: max(11.5px, calc(11px * var(--u))); color: var(--tx3);
+}
+.legacy-mode .cr-card-title { flex: 1 1 42%; color: var(--tx2); }
+.legacy-mode .cr-card-date { flex: 1 1 48%; text-align: right; font-variant-numeric: tabular-nums; }
+.legacy-mode .cr-card-tag { color: var(--ac); font-size: 10.5px; border: 1px solid var(--line2); border-radius: 999px; padding: 1px 6px; }
+.legacy-mode .cr-note { font-size: 11px; color: var(--tx3); padding: 3px 0; }
+.legacy-mode .cr-page-head {
+  display: flex; align-items: center; gap: 10px; padding: 2px 0 9px; border-bottom: 1px solid var(--line);
+}
+.legacy-mode .cr-page-title { display: flex; flex-direction: column; gap: 2px; }
+.legacy-mode .cr-page-title span { font-size: 15px; font-weight: 600; color: var(--tx); }
+.legacy-mode .cr-page-title small { font-size: 11px; color: var(--tx3); }
+.legacy-mode .cr-verdict-card {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: start;
+  margin: 10px 0; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg2);
+}
+.legacy-mode .cr-verdict-wait { border-color: color-mix(in srgb, var(--ok) 36%, var(--line)); background: var(--ok-bg); }
+.legacy-mode .cr-verdict-now  { border-color: color-mix(in srgb, var(--bad) 36%, var(--line)); background: var(--bad-bg); }
+.legacy-mode .cr-verdict-hold { border-color: color-mix(in srgb, var(--warn) 36%, var(--line)); background: var(--warn-bg); }
+.legacy-mode .cr-verdict-badge {
+  min-width: 68px; padding: 6px 8px; border-radius: 7px; font-size: 11px; font-weight: 700;
+  text-align: center; border: 1px solid var(--line2); background: var(--bg3);
+}
+.legacy-mode .cr-verdict-wait .cr-verdict-badge { color: var(--ok); }
+.legacy-mode .cr-verdict-now  .cr-verdict-badge { color: var(--bad); }
+.legacy-mode .cr-verdict-hold .cr-verdict-badge { color: var(--warn); }
+.legacy-mode .cr-verdict-copy b { display: block; font-size: 15px; margin-bottom: 3px; }
+.legacy-mode .cr-verdict-copy p { font-size: 12px; color: var(--tx2); line-height: 1.6; }
+.legacy-mode .cr-tabs { display: flex; gap: 2px; margin-top: 8px; border-bottom: 1px solid var(--line); }
+.legacy-mode .cr-tab { padding: 8px 12px 9px; font-size: 12px; color: var(--tx3); border-bottom: 2px solid transparent; }
+.legacy-mode .cr-tab.on { color: var(--tx); border-bottom-color: var(--ac); font-weight: 600; }
+.legacy-mode .cr-panel { padding-top: 10px; }
+.legacy-mode .cr-block { margin-bottom: 13px; }
+.legacy-mode .cr-label { display: block; font-size: 12px; color: var(--tx2); font-weight: 560; margin-bottom: 6px; }
+.legacy-mode .cr-label-row { display: flex; justify-content: space-between; margin-bottom: 6px; }
+.legacy-mode .cr-label-row b { font-size: 11.5px; color: var(--ac); }
+.legacy-mode .cr-hint { font-size: 11px; color: var(--tx3); line-height: 1.55; margin-top: 4px; }
+.legacy-mode .cr-needs { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px; }
+.legacy-mode .cr-need {
+  min-height: 48px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg2); text-align: left; display: flex; flex-direction: column; gap: 2px;
+}
+.legacy-mode .cr-need.on { border-color: var(--ac); background: color-mix(in srgb, var(--ac) 12%, var(--bg2)); }
+.legacy-mode .cr-need.on b { color: var(--ac); }
+.legacy-mode .cr-need span { font-size: 11px; color: var(--tx3); }
+.legacy-mode .cr-amts { margin-top: 10px; }
+.legacy-mode .cr-amt-row { display: flex; gap: 7px; margin-top: 7px; }
+.legacy-mode .cr-amt { min-height: 32px; padding: 5px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg2); color: var(--tx2); font-size: 12px; }
+.legacy-mode .cr-amt.on { border-color: var(--ac); color: var(--ac); background: color-mix(in srgb, var(--ac) 12%, var(--bg2)); }
+.legacy-mode .cr-date-row { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.legacy-mode .cr-date-row input[type="date"] { min-height: 38px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg2); color: var(--tx); }
+.legacy-mode .cr-date-row > span { font-size: 11px; color: var(--tx3); }
+.legacy-mode .cr-metrics {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--line);
+  border: 1px solid var(--line); border-radius: 9px; overflow: hidden; margin-bottom: 12px;
+}
+.legacy-mode .cr-metrics > div { padding: 9px 10px; background: var(--bg2); }
+.legacy-mode .cr-metrics span { display: block; font-size: 11px; color: var(--tx3); }
+.legacy-mode .cr-metrics b { display: block; margin-top: 2px; font-size: 15px; font-variant-numeric: tabular-nums; }
+.legacy-mode .cr-metrics small { display: block; margin-top: 2px; font-size: 10.5px; color: var(--tx4); }
+.legacy-mode .cr-warns { margin: 0 0 12px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg2); font-size: 11.5px; color: var(--tx2); list-style: none; }
+.legacy-mode .cr-action-note { display: flex; flex-direction: column; gap: 3px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; background: var(--bg2); }
+.legacy-mode .cr-plan { margin: 0 0 10px; padding: 0; list-style: none; display: grid; gap: 1px; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; background: var(--line); }
+.legacy-mode .cr-plan li { padding: 8px 10px; background: var(--bg2); font-size: 12px; color: var(--tx2); }
+.legacy-mode .cr-timeline { position: relative; height: 30px; margin: 14px 0 4px; }
+.legacy-mode .cr-tl-line { position: absolute; left: 0; right: 0; top: 11px; height: 2px; background: var(--line2); }
+.legacy-mode .cr-tl-dot { position: absolute; top: 5px; transform: translateX(-50%); }
+.legacy-mode .cr-tl-dot i { display: block; width: 9px; height: 9px; border-radius: 50%; background: var(--tx3); border: 2px solid var(--bg2); }
+.legacy-mode .cr-tl-dot.now i { background: var(--ac); }
+.legacy-mode .cr-tl-dot.end i { background: var(--warn); }
+.legacy-mode .cr-tl-legend { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 12px; }
+.legacy-mode .cr-tl-legend span { font-size: 10.5px; color: var(--tx3); }
+.legacy-mode .cr-tl-legend span:nth-child(2) { text-align: center; }
+.legacy-mode .cr-tl-legend span:last-child { text-align: right; }
+.legacy-mode .cr-tl-legend b { display: block; color: var(--tx2); }
+.legacy-mode .cr-speed-marks { display: flex; justify-content: space-between; font-size: 10px; color: var(--tx4); }
+.legacy-mode .cr-path { margin: 0; padding: 0; list-style: none; border-left: 1px solid var(--line); }
+.legacy-mode .cr-path li { display: grid; grid-template-columns: 24px 76px 1fr; gap: 6px; padding: 5px 0 5px 9px; position: relative; font-size: 11.5px; }
+.legacy-mode .cr-path li::before { content: ""; position: absolute; left: -4px; top: 12px; width: 7px; height: 7px; border-radius: 50%; background: var(--line2); }
+.legacy-mode .cr-path-n { color: var(--tx4); }
+.legacy-mode .cr-path b { color: var(--tx2); }
+.legacy-mode .cr-path em { color: var(--tx3); font-style: normal; }
+.legacy-mode .cr-evidence-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+.legacy-mode .cr-evidence-grid > div { padding: 8px 9px; background: var(--bg2); }
+.legacy-mode .cr-evidence-grid span { display: block; font-size: 10.5px; color: var(--tx3); }
+.legacy-mode .cr-evidence-grid b { display: block; margin-top: 2px; font-size: 12.5px; color: var(--tx); }
+.legacy-mode .cr-footer { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 10.5px; color: var(--tx4); }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   4. 右侧诊断与设计规范对照栏
+   ═══════════════════════════════════════════════════════════════════════ */
+.wb-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.wb-card {
+  border: 1px solid var(--wb-line);
+  border-radius: 12px;
+  background: var(--wb-surface);
+  padding: 16px 18px;
+}
+.wb-card h2 {
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--wb-tx);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.wb-card h2 .tag {
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--wb-ac-bg);
+  color: var(--wb-ac);
+  font-weight: 600;
+}
+.wb-diff-list {
+  display: grid;
+  gap: 10px;
+}
+.wb-diff-item {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--wb-line);
+  background: var(--wb-bg);
+}
+.wb-diff-item .head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.wb-diff-item b { font-size: 13px; color: var(--wb-tx); }
+.wb-diff-item .loc { font-family: Consolas, monospace; font-size: 11px; color: var(--wb-tx3); }
+.wb-diff-item p { font-size: 12px; color: var(--wb-tx2); line-height: 1.55; }
+.wb-diff-item p em { font-style: normal; color: var(--wb-ac); }
+
+.wb-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 6px;
+}
+.wb-table th, .wb-table td {
+  text-align: left;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--wb-line);
+  vertical-align: top;
+}
+.wb-table th { color: var(--wb-tx3); font-size: 11px; font-weight: 600; }
+.wb-table code {
+  font-family: Consolas, monospace;
+  font-size: 11px;
+  background: var(--wb-bg);
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: var(--wb-ac);
+}
+
+@media (max-width: 960px) {
+  .wb-stage { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<div class="wb-wrap">
+  <header class="wb-header">
+    <div>
+      <div class="wb-eyebrow">GRANDETTOKEN · CODEX RESET ADVISOR · VISUAL REFINEMENT</div>
+      <h1>Codex 渠道重置建议 · 视觉优化设计原型</h1>
+      <p>基于 v0.3.50 实机验收截图与 PC 精修 V2 规范，解决「内嵌入口无边界、双标题栏打架、左徽章留白、表单长说明把核心指标顶出首屏、7 格奇数黑洞、时间轴点字错位、滑块指示脱节」等 8 项视觉问题，100% 兼容现有前端冒烟断言。</p>
+      <div class="wb-badges">
+        <span class="wb-badge"><i></i>对齐 PC Polish V2 令牌</span>
+        <span class="wb-badge"><i></i>遵循 2026-11-14 独立推荐规则</span>
+        <span class="wb-badge"><i></i>保留 verify-codex-reset.js 全部选择器</span>
+        <span class="wb-badge"><i></i>零外部依赖</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- 顶部交互控制栏 -->
+  <section class="wb-toolbar" aria-label="原型预览控制">
+    <div class="wb-tgroup">
+      <span class="wb-tlabel">对比模式</span>
+      <div class="wb-seg" id="ctrlCompare">
+        <button type="button" class="on" data-val="v2">优化后 (V2 精修)</button>
+        <button type="button" data-val="both">同屏对比 (Before / After)</button>
+        <button type="button" data-val="legacy">当前实现 (v0.3.50)</button>
+      </div>
+    </div>
+
+    <div class="wb-tgroup">
+      <span class="wb-tlabel">视图层级</span>
+      <div class="wb-seg" id="ctrlView">
+        <button type="button" data-val="compact">详情内嵌入口</button>
+        <button type="button" class="on" data-val="advice">顾问 · 建议</button>
+        <button type="button" data-val="plan">顾问 · 计划</button>
+        <button type="button" data-val="evidence">顾问 · 依据</button>
+      </div>
+    </div>
+
+    <div class="wb-tgroup">
+      <span class="wb-tlabel">实机场景</span>
+      <div class="wb-seg" id="ctrlScene">
+        <button type="button" class="on" data-val="s1">场景 A：68% 剩余 · 6天4小时重置</button>
+        <button type="button" data-val="s2">场景 B：0% 限流 · 5.3小时重置</button>
+        <button type="button" data-val="s3">场景 C：空订阅日期 · 按卡规划</button>
+      </div>
+    </div>
+
+    <div class="wb-tgroup">
+      <span class="wb-tlabel">主题与字号</span>
+      <div class="wb-seg" id="ctrlTheme">
+        <button type="button" class="on" data-val="dark">深石墨</button>
+        <button type="button" data-val="light">暖雾白</button>
+      </div>
+      <div class="wb-seg" id="ctrlScale">
+        <button type="button" class="on" data-val="1">标准 1.0x</button>
+        <button type="button" data-val="1.15">大 1.15x</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 主舞台 -->
+  <div class="wb-stage" id="wbStage">
+    <div class="wb-canvases" id="wbCanvases"></div>
+
+    <!-- 右侧诊断与规范拆解 -->
+    <aside class="wb-notes">
+      <div class="wb-card">
+        <h2>8 项视觉精修逐点对照 <span class="tag">点击左侧画布可直接交互</span></h2>
+        <div class="wb-diff-list">
+          <div class="wb-diff-item">
+            <div class="head"><b>1. 详情内嵌入口卡片化</b><span class="loc">.cr-entry + .cr-compact-cards</span></div>
+            <p>现状常态无背景无内边距，悬停才突兀亮起贴边色块。优化后对齐 V2 <code>.expiry-summary</code>（带状态微着色描边，右上角内联 <em>查看建议 ›</em>），重置卡独立成带圆角边框的 <code>.expiry-table</code> 风格列表，「比订阅晚」改为胶囊小标签。</p>
+          </div>
+          <div class="wb-diff-item">
+            <div class="head"><b>2. 消除双标题栏打架</b><span class="loc">.cr-page-head</span></div>
+            <p>外层 <code>#detailHead</code> 已固定显示 Codex 图标与关闭按钮，现状内部又画一道粗底线 + 双行大标题。优化后收敛为 32px 单行面包屑导航条（左 <em>‹ 返回 Codex</em> 胶囊按钮 + 右静态口径说明），首屏省出 22px。</p>
+          </div>
+          <div class="wb-diff-item">
+            <div class="head"><b>3. 结论横幅全宽化</b><span class="loc">.cr-verdict-card</span></div>
+            <p>现状左列放 68px 宽方块徽标导致左下角留空、右列文字折行挤促。优化后改为 <em>顶部 2px 状态色冠 + 顶行徽标/中文结论/核心倒计时 + 全宽主标题与正文</em>，字宽提升 22%。</p>
+          </div>
+          <div class="wb-diff-item">
+            <div class="head"><b>4. 三页签对齐 V2 分段控件</b><span class="loc">.cr-tabs / .cr-tab</span></div>
+            <p>现状为旧式左对齐底划线页签；优化后对齐 V2 标准三等分槽位容器（<code>--bg2</code> 槽底 + <code>--ac-bg</code> 鼠尾草绿选中态）。</p>
+          </div>
+          <div class="wb-diff-item">
+            <div class="head"><b>5. 参数收口 + 消灭 7 格奇数黑洞</b><span class="loc">.cr-config-card / .cr-metrics</span></div>
+            <p>将需求、用量档位与订阅到期日收纳进紧凑参数卡，说明提炼至标题行右侧；7 项指标采用 <em>2×3 对称网格 + 第 7 项跨双列横排</em>（<code>grid-column: 1 / -1</code>），彻底消灭右下角空白黑洞，行动指引在首屏直接可见。</p>
+          </div>
+          <div class="wb-diff-item">
+            <div class="head"><b>6. 计划 KPI 三格带 + 时间轴同色锚点 + 滑块吸附</b><span class="loc">.cr-plan-kpis / .cr-timeline</span></div>
+            <p>提炼「省卡策略 / 严格不断档 / 到期缺口」三格大数字；时间轴增加已过进度段与同色图例圆点（解决圆点在 21% 而文字居中在 50% 的错位）；未手动调速时滑块自动吸附至实测日均速度附近并提供「恢复实测」入口。</p>
+          </div>
+          <div class="wb-diff-item">
+            <div class="head"><b>7. 依据页 0→4 卡片步进器</b><span class="loc">.cr-path / .cr-evidence-grid</span></div>
+            <p>将原本昏暗的左竖线列表升级为序号方块 + 语义胶囊徽标步进表，当前命中的需求步高亮显示；区分动态触发的告警提示与静态规则说明。</p>
+          </div>
+          <div class="wb-diff-item">
+            <div class="head"><b>8. 修复详情遮罩底部 10px 漏底瑕疵</b><span class="loc">styles.css .shade</span></div>
+            <p>实机验收截图底部均漏出半行背景卡片（<code>.shade</code> 写死 <code>bottom: 43px</code>，而 <code>.foot</code> 实高 <code>33px</code>）。修正为 <code>inset: calc(45px*var(--u)) 0 calc(33px*var(--u))</code> 严丝合缝贴齐底栏。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="wb-card">
+        <h2>门禁契约与代码改动映射 <span class="tag">零破坏性升级</span></h2>
+        <table class="wb-table">
+          <thead>
+            <tr><th>检查项 / 选择器</th><th>verify-codex-reset.js 断言要求</th><th>优化原型兼容性</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>[data-codex-reset-root]</code></td><td>重置卡区整块可点入口</td><td>✓ 完整保留</td></tr>
+            <tr><td><code>.cr-chip</code> / <code>.cr-verdict-badge</code></td><td>文本严格等于 <code>WAIT</code> / <code>NOW</code> / <code>HOLD</code></td><td>✓ 中文移至相邻兄弟节点</td></tr>
+            <tr><td><code>.cr-metrics</code></td><td>含 <code>fmtGap</code>（<code>约 5.3 小时</code> / <code>约 6 天 2 小时</code>）</td><td>✓ 6+1 布局完整包含</td></tr>
+            <tr><td><code>.cr-amts</code> / <code>[data-codex-amt]</code></td><td>urgent/soon 展开 3 档用量并写 profile</td><td>✓ 完整保留</td></tr>
+            <tr><td><code>#codexResetSubEnd</code> / <code>[data-codex-clear-date]</code></td><td>编辑焦点保护、清空回写与回滚</td><td>✓ 原生控件与属性不变</td></tr>
+            <tr><td><code>.cr-plan li</code> / <code>.cr-timeline</code></td><td>≥3 行自然语言计划 + 时间轴图例</td><td>✓ KPI 置于上方，列表不变</td></tr>
+            <tr><td><code>.cr-path li</code></td><td>严格 5 步（0 硬门 → 4 质量）</td><td>✓ 保持 5 个 <code>&lt;li&gt;</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script>
+(function () {
+  const SPEEDS = [10, 14.8, 16, 18, 20, 25, 30];
+  const VERDICT = {
+    wait: { en: "WAIT", zh: "等自然重置" },
+    now: { en: "NOW", zh: "现在要用" },
+    hold: { en: "HOLD", zh: "先留着" },
+    unknown: { en: "UNKNOWN", zh: "不确定" },
+  };
+  const NEEDS = [
+    ["urgent", "现在就要", "这次必须马上用"],
+    ["soon", "今天要用", "能等，但今天要"],
+    ["patient", "能等", "等自然重置再说"],
+    ["idle", "暂时不用", "只是看看，不急"],
+  ];
+  const AMOUNTS = [
+    [25, "少量 25%"],
+    [50, "一半 50%"],
+    [100, "整窗 100%"],
+  ];
+  const WARN = {
+    low_value_now: "同一计划范围内的净增供给较少，可能为负；本次明确的使用期限仍优先。",
+    subscription_unknown: "订阅到期日未填，暂按订阅持续有效规划至最后一张有效卡到期；续订情况变化后请更新日期。",
+    five_hour_demand_unknown: "本次用量按周额度填写，五小时实际需求需在 Codex 核对；其百分比与周额度分别计算。",
+    weekly_plan_only: "计划仅试算周额度供给，五小时窗口可能另有限流。",
+  };
+
+  // 三组实机数据场景
+  const SCENES = {
+    s1: {
+      name: "场景 A",
+      weeklyRemain: 68.0,
+      weeklyUsed: 32.0,
+      fiveRemain: 49.0,
+      gapHours: 147.5,
+      nextResetStr: "11/20 18:04",
+      nextResetFull: "2026-11-20 18:04:31 · 6 天 4 小时后重置",
+      fiveResetStr: "11/14 17:50",
+      fiveResetFull: "2026-11-14 17:50:45 · 3.3 小时后重置",
+      subEndStr: "2026-11-29",
+      subEndDisplay: "11/29 23:59",
+      daysToSub: 15.4,
+      burnRate: 37.5,
+      tlProgress: 22,
+      tlToday: "11/14",
+      tlReset: "11/20",
+      tlEnd: "11/29",
+    },
+    s2: {
+      name: "场景 B",
+      weeklyRemain: 0.0,
+      weeklyUsed: 100.0,
+      fiveRemain: 100.0,
+      gapHours: 5.26,
+      nextResetStr: "11/13 17:56",
+      nextResetFull: "2026-11-13 17:56:52 · 约 5.3 小时后重置",
+      fiveResetStr: "11/13 17:53",
+      fiveResetFull: "2026-11-13 17:53:53 · 约 5.2 小时后重置",
+      subEndStr: "2026-11-29",
+      subEndDisplay: "11/29 23:59",
+      daysToSub: 16.5,
+      burnRate: 14.8,
+      tlProgress: 4,
+      tlToday: "11/13",
+      tlReset: "11/13",
+      tlEnd: "11/29",
+    },
+    s3: {
+      name: "场景 C",
+      weeklyRemain: 68.0,
+      weeklyUsed: 32.0,
+      fiveRemain: 49.0,
+      gapHours: 147.5,
+      nextResetStr: "11/20 18:04",
+      nextResetFull: "2026-11-20 18:04:31 · 6 天 4 小时后重置",
+      fiveResetStr: "11/14 17:50",
+      fiveResetFull: "2026-11-14 17:50:45 · 3.3 小时后重置",
+      subEndStr: "",
+      subEndDisplay: "—",
+      daysToSub: null,
+      burnRate: 37.5,
+      tlProgress: 21,
+      tlToday: "11/14",
+      tlReset: "11/20",
+      tlEnd: "12/13",
+    },
+  };
+
+  const state = {
+    compare: "v2",      // "v2" | "both" | "legacy"
+    view: "advice",     // "compact" | "advice" | "plan" | "evidence"
+    scene: "s1",
+    theme: "dark",
+    scale: "1",
+    need: "patient",
+    amount: null,       // null | 25 | 50 | 100
+    subEndStr: "2026-11-29",
+    speed: null,
+  };
+
+  function fmtGap(h) {
+    if (h == null || !Number.isFinite(Number(h))) return "—";
+    const v = Number(h);
+    if (v < 1) return `约 ${Math.max(1, Math.round(v * 60))} 分钟`;
+    if (v < 24) return `约 ${v.toFixed(1)} 小时`;
+    const rawDays = Math.floor(v / 24);
+    const rem = Math.round(v - rawDays * 24);
+    if (rem >= 24) return `约 ${rawDays + 1} 天`;
+    if (rem === 0) return `约 ${rawDays} 天`;
+    return `约 ${rawDays} 天 ${rem} 小时`;
+  }
+
+  function computeAdvice() {
+    const sc = SCENES[state.scene];
+    const hasSub = !!state.subEndStr;
+    const amt = (state.need === "urgent" || state.need === "soon") ? (state.amount || 100) : 0;
+    const covers = amt <= sc.weeklyRemain;
+    const gapText = fmtGap(sc.gapHours);
+    const speed = state.speed || sc.burnRate;
+
+    let verdict = "wait";
+    let reasonCode = "wait_for_reset";
+    let headline = `等 ${gapText} 的自然重置`;
+    let detail = "当前选择能等，可以在自然恢复后使用并保留重置卡。";
+    const warnings = [];
+
+    if (state.need === "urgent") {
+      if (covers) {
+        verdict = "hold";
+        reasonCode = "remaining_covers";
+        headline = "周额度够这次用量，先留着卡";
+        detail = `这次预计使用 ${amt}% 周额度，当前周窗剩余 ${sc.weeklyRemain.toFixed(1)}% 足够；五小时额度还需按实际工作量核对。`;
+        warnings.push("five_hour_demand_unknown");
+      } else {
+        verdict = "now";
+        reasonCode = "deadline_before_reset";
+        headline = "自然重置赶不上这次，用卡";
+        detail = `下次自然重置在 ${gapText} 后；按这次 ${amt}% 的用量，当前剩余 ${sc.weeklyRemain.toFixed(1)}% 不够，要用只能先兑换一张卡补满。用卡会改写每周重置日。`;
+        if (sc.gapHours < 24) warnings.push("low_value_now");
+      }
+    } else if (state.need === "soon") {
+      if (covers) {
+        verdict = "hold";
+        reasonCode = "remaining_covers";
+        headline = "周额度够这次用量，先留着卡";
+        detail = `这次预计使用 ${amt}% 周额度，当前周窗剩余 ${sc.weeklyRemain.toFixed(1)}% 足够；五小时额度还需按实际工作量核对。`;
+        warnings.push("five_hour_demand_unknown");
+      } else if (sc.gapHours <= 10) {
+        verdict = "wait";
+        reasonCode = "gap_too_short";
+        headline = `先等 ${gapText} 的自然重置`;
+        detail = "今天内就会自然恢复满额，现在用卡只能换回約 3.3% 个周窗，等免费恢复更合算。";
+      } else {
+        verdict = "now";
+        reasonCode = "deadline_before_reset";
+        headline = "自然重置赶不上今天，用卡";
+        detail = `下次自然重置在 ${gapText} 后；按今天 ${amt}% 的用量，当前剩余 ${sc.weeklyRemain.toFixed(1)}% 不够，需手动兑换一张重置卡。`;
+      }
+    } else if (state.need === "idle") {
+      verdict = sc.gapHours <= 24 ? "wait" : "hold";
+      reasonCode = sc.gapHours <= 24 ? "gap_too_short" : "no_need";
+      headline = sc.gapHours <= 24 ? `先等 ${gapText} 的自然重置` : "暂时不用，先留着重置卡";
+      detail = "当前没有明确使用期限，保留重置卡到真正被限流且急用时再评估。";
+    } else {
+      verdict = "wait";
+      reasonCode = sc.gapHours <= 24 ? "gap_too_short" : "wait_for_reset";
+      headline = `等 ${gapText} 的自然重置`;
+      detail = sc.gapHours <= 24
+        ? "自然重置很快就到，现在用卡只能换回约 3.3% 个周窗。"
+        : "当前选择能等，可以在自然恢复后使用并保留重置卡。";
+    }
+
+    if (!hasSub) warnings.push("subscription_unknown");
+    warnings.push("weekly_plan_only");
+
+    // 计划指标试算
+    const horizonDays = hasSub ? (sc.daysToSub || 15.4) : 29.0;
+    const resetsCount = hasSub ? 3 : 4;
+    const endLabel = hasSub ? `到 11-29 还剩 ${Math.round(horizonDays)} 天` : "计划至最后一张有效卡到期 12-13 · 还剩 29 天";
+    const totalNeed = speed * horizonDays;
+    const naturalSupply = sc.weeklyRemain + resetsCount * 100;
+    const rawGap = Math.max(0, totalNeed - naturalSupply);
+    const plannedCards = speed <= 16 ? 0 : speed <= 18 ? 2 : 3;
+    const afterShortfall = Math.max(0, rawGap - plannedCards * 85);
+    const coverCards = rawGap === 0 ? 0 : rawGap <= 90 ? 1 : rawGap <= 240 ? 3 : null;
+    const gainPct = sc.weeklyRemain === 0 ? 3.3 : 0.0;
+
+    const planLines = [
+      hasSub ? `自然重置 ${resetsCount} 次 · ${endLabel}` : `计划至最后一张有效卡到期 12-13 · 自然重置 ${resetsCount} 次 · 还剩 29 天`,
+      `按 ${speed.toFixed(1)}%/天：省卡 ${plannedCards} 张；${afterShortfall > 0 ? `用后仍有一段 ${afterShortfall.toFixed(1)}% 缺口` : "自然恢复即可覆盖"}`,
+      coverCards == null
+        ? `仅按周额度试算连续供给：现有 3 张也不够补满，仍差 ${afterShortfall.toFixed(1)}%`
+        : `仅按周额度试算连续供给：严格不断档需 ${coverCards} 张`,
+    ];
+
+    return {
+      sc,
+      hasSub,
+      verdict,
+      reasonCode,
+      headline,
+      detail,
+      gapText,
+      speed,
+      gainPct,
+      plannedCards,
+      coverCards,
+      shortfallPercent: afterShortfall,
+      planLines,
+      warnings,
+      planEndLabel: hasSub ? "订阅到期" : "最后一张卡到期",
+      planEndTime: hasSub ? "11/29 23:59" : "12/13 05:40",
+    };
+  }
+
+  function renderCardRows(mode, hasSub) {
+    const cards = [
+      { title: "Full reset (Weekly + 5 hr)", date: "12/01 03:10 到期", first: true },
+      { title: "Full reset (Weekly + 5 hr)", date: "12/02 04:55 到期", first: false },
+      { title: "Full reset (Weekly + 5 hr)", date: "12/13 05:40 到期", first: false },
+    ];
+    if (mode === "legacy") {
+      return cards.map((c) => `
+        <div class="cr-card-row">
+          <span class="cr-card-title">${c.title}</span>
+          <span class="cr-card-date">${c.date}${hasSub ? " · 比订阅晚" : ""}</span>
+          ${c.first ? '<span class="cr-card-tag">最早到期</span>' : ""}
+        </div>`).join("");
+    }
+    return cards.map((c) => `
+      <div class="cr-card-row">
+        <div class="cr-card-main">
+          <span class="cr-card-title">${c.title}</span>
+          <span class="cr-card-date">${c.date}</span>
+        </div>
+        <div class="cr-card-badges">
+          ${hasSub ? '<span class="cr-card-tag sub-later">比订阅晚</span>' : ""}
+          ${c.first ? '<span class="cr-card-tag">最早到期</span>' : ""}
+        </div>
+      </div>`).join("");
+  }
+
+  function renderCompactView(mode, adv) {
+    const sc = adv.sc;
+    const v = VERDICT[adv.verdict];
+    const meta = `周额度 ${sc.weeklyRemain.toFixed(1)}% · 下次重置 ${sc.nextResetStr} · 3 张可用`;
+
+    const resetSection = mode === "legacy" ? `
+      <div class="sec codex-resets" data-codex-reset-root data-codex-reset-open role="button" tabindex="0">
+        <div class="cr-entry">
+          <div class="cr-entry-top"><span class="cr-kicker">重置顾问</span><span class="cr-chip cr-chip-${adv.verdict}">${v.en}</span></div>
+          <div class="cr-entry-title">${adv.headline}</div>
+          <div class="cr-entry-meta">${meta}</div>
+          <div class="cr-entry-cta">查看重置建议 ›</div>
+        </div>
+        <div class="cr-compact-cards">${renderCardRows("legacy", adv.hasSub)}</div>
+        <div class="cr-note">查询于 11/14 14:30</div>
+        <div class="cr-note">只看周额度 · 不自动兑换</div>
+      </div>
+    ` : `
+      <div class="sec codex-resets" data-codex-reset-root data-codex-reset-open role="button" tabindex="0">
+        <div class="cr-entry tone-${adv.verdict}">
+          <div class="cr-entry-top">
+            <span class="cr-kicker">重置顾问</span>
+            <span class="cr-chip cr-chip-${adv.verdict}">${v.en}</span>
+            <span class="cr-entry-cta">查看重置建议 <span aria-hidden="true">›</span></span>
+          </div>
+          <div class="cr-entry-title">${adv.headline}</div>
+          <div class="cr-entry-meta">${meta}</div>
+        </div>
+        <div class="cr-cards-sec-head">
+          <span>重置卡明细 · <b>3 张可用</b></span>
+          <span>最早 12/01 到期</span>
+        </div>
+        <div class="cr-compact-cards">${renderCardRows("v2", adv.hasSub)}</div>
+        <div class="cr-compact-foot">
+          <span>查询于 11/14 14:30</span>
+          <span>只看周额度 · 不自动兑换</span>
+        </div>
+      </div>
+    `;
+
+    return `
+      <div class="sim-hero" style="color:${sc.weeklyRemain === 0 ? "var(--bad)" : "var(--tx)"}">${sc.weeklyRemain.toFixed(1)}<span class="unit">%</span></div>
+      <div class="sim-caption">配额 · 按窗口恢复 · 更新于 刚刚</div>
+      <div class="sim-sec-h"><span>配额窗口</span><span>本地时间 UTC+08:00</span></div>
+      <div class="sim-w-row">
+        <span>本周</span>
+        <div class="sim-w-bar"><i style="width:${sc.weeklyRemain}%;background:${sc.weeklyRemain === 0 ? "var(--bad)" : "var(--ok)"}"></i></div>
+        <span class="sim-w-val">${sc.weeklyRemain.toFixed(1)}%</span>
+        <div class="sim-w-time">下次重置 ${sc.nextResetFull}</div>
+      </div>
+      <div class="sim-w-row">
+        <span>5 小时</span>
+        <div class="sim-w-bar"><i style="width:${sc.fiveRemain}%;background:var(--ok)"></i></div>
+        <span class="sim-w-val">${sc.fiveRemain.toFixed(1)}%</span>
+        <div class="sim-w-time">下次重置 ${sc.fiveResetFull}</div>
+      </div>
+      <div class="sim-core-note">周窗到期即清零，不滚存；5 小时窗按滚动恢复</div>
+      ${resetSection}
+      <div class="sim-detail-actions">
+        <button type="button" class="sim-btn">刷新数据</button>
+        <button type="button" class="sim-btn p">设置与管理</button>
+      </div>
+    `;
+  }
+
+  function renderSubView(mode, adv) {
+    const sc = adv.sc;
+    const v = VERDICT[adv.verdict];
+    const tab = state.view;
+    const showAmts = state.need === "urgent" || state.need === "soon";
+
+    const headHtml = mode === "legacy" ? `
+      <div class="cr-page-head">
+        <button type="button" class="sim-btn cr-back" data-codex-reset-back>返回 Codex</button>
+        <div class="cr-page-title"><span>重置顾问</span><small>只看周额度 · 不自动兑换</small></div>
+      </div>
+    ` : `
+      <div class="cr-page-head">
+        <button type="button" class="cr-back" data-codex-reset-back><span aria-hidden="true">‹</span> 返回配额详情</button>
+        <div class="cr-page-title"><span>重置顾问</span><small>· 只看周额度 · 不代点</small></div>
+      </div>
+    `;
+
+    const verdictHtml = mode === "legacy" ? `
+      <div class="cr-verdict-card cr-verdict-${adv.verdict}">
+        <div class="cr-verdict-badge">${v.en}</div>
+        <div class="cr-verdict-copy">
+          <b>${adv.headline}</b>
+          <p>${adv.detail}</p>
+        </div>
+      </div>
+    ` : `
+      <div class="cr-verdict-card cr-verdict-${adv.verdict}">
+        <div class="cr-verdict-top">
+          <span class="cr-verdict-badge">${v.en}</span>
+          <span class="cr-verdict-zh">${v.zh}</span>
+          <span class="cr-verdict-pill-meta">周窗 ${sc.weeklyRemain.toFixed(1)}% · 3 张卡</span>
+        </div>
+        <div class="cr-verdict-copy">
+          <b>${adv.headline}</b>
+          <p>${adv.detail}</p>
+        </div>
+      </div>
+    `;
+
+    const tabsHtml = `
+      <div class="cr-tabs" role="tablist">
+        <button type="button" class="cr-tab${tab === "advice" ? " on" : ""}" data-codex-tab="advice">建议</button>
+        <button type="button" class="cr-tab${tab === "plan" ? " on" : ""}" data-codex-tab="plan">计划</button>
+        <button type="button" class="cr-tab${tab === "evidence" ? " on" : ""}" data-codex-tab="evidence">依据</button>
+      </div>
+    `;
+
+    let bodyHtml = "";
+    if (tab === "advice") {
+      const needsBtns = NEEDS.map(([k, label, desc]) => `
+        <button type="button" class="cr-need${state.need === k ? " on" : ""}" data-codex-need="${k}">
+          <b>${label}</b><span>${desc}</span>
+        </button>`).join("");
+
+      const amtHtml = showAmts ? `
+        <div class="cr-amts">
+          <div class="cr-label-row">
+            <span class="cr-label">这次大概用多少周额度？</span>
+            <span class="cr-label-sub">${state.amount == null ? "默认按整窗 100% 估" : `已选 ${state.amount}%`}</span>
+          </div>
+          <div class="cr-amt-row">
+            ${AMOUNTS.map(([val, lbl]) => `
+              <button type="button" class="cr-amt${state.amount === val ? " on" : ""}" data-codex-amt="${val}">${lbl}</button>
+            `).join("")}
+          </div>
+          ${mode === "legacy" ? '<div class="cr-hint">不选按整窗 100% 保守估；标了小用量，剩余够时就不会建议用卡。</div>' : ""}
+        </div>` : "";
+
+      const metricsHtml = `
+        <div class="cr-metrics">
+          <div><span>周额度剩余</span><b class="${sc.weeklyRemain === 0 ? "tone-bad" : ""}">${sc.weeklyRemain.toFixed(1)}%</b></div>
+          <div><span>下次自然重置</span><b>${sc.nextResetStr}</b><small>${adv.gapText}</small></div>
+          <div><span>五小时额度剩余</span><b>${sc.fiveRemain.toFixed(1)}%</b><small>恢复 ${sc.fiveResetStr}</small></div>
+          <div><span>现在用卡净收益</span><b class="${adv.gainPct > 20 ? "tone-ok" : ""}">${adv.gainPct.toFixed(1)}%</b><small>同范围对比等待</small></div>
+          <div><span>可用重置卡</span><b>3 张</b><small>来自当前详情</small></div>
+          <div><span>订阅到期</span><b>${adv.hasSub ? sc.subEndDisplay : "—"}</b><small>${adv.hasSub ? `还剩 ${sc.daysToSub.toFixed(1)} 天` : "未填 · 按卡规划"}</small></div>
+          <div><span>本周期平均速度</span><b>${sc.burnRate.toFixed(1)}%/天</b><small>按本周期已用估算</small></div>
+        </div>
+      `;
+
+      const actionHtml = adv.verdict === "now" ? `
+        <div class="cr-action-note now">
+          <b>如果决定用：去 Codex 用量页面核对涵盖范围后手动兑换。</b>
+          <span>本工具只给建议，不代点、不自动兑换。</span>
+        </div>` : adv.verdict === "wait" ? `
+        <div class="cr-action-note wait">
+          <b>按建议等：查看受限窗口的自然恢复时间。</b>
+          <span>周额度与五小时窗口可能分别恢复。</span>
+        </div>` : `
+        <div class="cr-action-note hold">
+          <b>先留着卡，不用为了「快过期」强行兑换。</b>
+          <span>需要时再去 Codex 手动操作。</span>
+        </div>`;
+
+      const warnsHtml = adv.warnings.length
+        ? `<ul class="cr-warns active-warn">${adv.warnings.map((w) => `<li>${WARN[w] || w}</li>`).join("")}</ul>`
+        : "";
+
+      if (mode === "legacy") {
+        bodyHtml = `
+          <div class="cr-panel">
+            <div class="cr-block">
+              <div class="cr-label">你这次要用吗？</div>
+              <div class="cr-needs">${needsBtns}</div>
+              <div class="cr-hint">默认按「能等」计算；选择用量后，会结合自然重置时间与卡的有效期给出建议。</div>
+              ${amtHtml}
+            </div>
+            <div class="cr-block">
+              <label class="cr-label" for="codexResetSubEnd">订阅到期日（可选）</label>
+              <div class="cr-date-row">
+                <input type="date" id="codexResetSubEnd" value="${state.subEndStr}">
+                <button type="button" class="sim-btn" data-codex-clear-date ${!adv.hasSub ? "disabled" : ""}>清空</button>
+                <span>可留空，按重置卡有效期规划；填写后按当日 23:59 截止，日期只存本地</span>
+              </div>
+            </div>
+            ${metricsHtml}
+            ${warnsHtml}
+            ${actionHtml}
+          </div>
+        `;
+      } else {
+        bodyHtml = `
+          <div class="cr-panel">
+            <div class="cr-config-card">
+              <div class="cr-label-row">
+                <span class="cr-label">你这次要用吗？</span>
+                <span class="cr-label-sub">默认按「能等」· 12h 后自动复位</span>
+              </div>
+              <div class="cr-needs">${needsBtns}</div>
+              ${amtHtml}
+              <div class="cr-date-block">
+                <div class="cr-label-row">
+                  <label class="cr-label" for="codexResetSubEnd">订阅到期日（可选）</label>
+                  <span class="cr-label-sub">${adv.hasSub ? "当日 23:59 截止" : "未填 · 按最晚有效卡规划"}</span>
+                </div>
+                <div class="cr-date-row">
+                  <input type="date" id="codexResetSubEnd" value="${state.subEndStr}">
+                  <button type="button" class="sim-btn" data-codex-clear-date ${!adv.hasSub ? "disabled" : ""}>清空</button>
+                </div>
+              </div>
+            </div>
+            ${actionHtml}
+            ${metricsHtml}
+            ${warnsHtml}
+          </div>
+        `;
+      }
+    } else if (tab === "plan") {
+      // 滑块位置：未手动指定时，V2 模式自动吸附到最接近实测速度的档位，Legacy 模式硬编码为 1 (14.8)
+      let sliderIdx = 1;
+      if (state.speed != null) {
+        sliderIdx = Math.max(0, SPEEDS.indexOf(state.speed));
+      } else if (mode === "v2") {
+        sliderIdx = SPEEDS.reduce((best, s, idx) =>
+          Math.abs(s - sc.burnRate) < Math.abs(SPEEDS[best] - sc.burnRate) ? idx : best, 0);
+      }
+      const speedLabel = state.speed == null
+        ? `本周期平均 ${sc.burnRate.toFixed(1)}%/天`
+        : `手动试算 ${state.speed}%/天`;
+
+      if (mode === "legacy") {
+        bodyHtml = `
+          <div class="cr-panel">
+            <ol class="cr-plan">${adv.planLines.map((l) => `<li>${l}</li>`).join("")}</ol>
+            <div class="cr-timeline">
+              <div class="cr-tl-line"></div>
+              <span class="cr-tl-dot now" style="left:0%"><i></i></span>
+              <span class="cr-tl-dot reset" style="left:${sc.tlProgress}%"><i></i></span>
+              <span class="cr-tl-dot end" style="left:100%"><i></i></span>
+            </div>
+            <div class="cr-tl-legend">
+              <span><b>今天</b>${sc.tlToday}</span>
+              <span><b>下次自然重置</b>${sc.tlReset}</span>
+              <span><b>${adv.planEndLabel}</b>${sc.tlEnd}</span>
+            </div>
+            <div class="cr-block">
+              <div class="cr-label-row"><span class="cr-label">按不同速度试算</span><b>${speedLabel}</b></div>
+              <input type="range" id="codexResetSpeed" min="0" max="6" step="1" value="${sliderIdx}">
+              <div class="cr-speed-marks">${SPEEDS.map((s) => `<span>${s}</span>`).join("")}</div>
+              <div class="cr-hint">速度只改计划试算，不改上面的 NOW/WAIT 结论。「补满」按严格不断档算，不等于建议用卡；省卡看计划第二行。</div>
+            </div>
+            <div class="cr-block">
+              <div class="cr-label">重置卡（按到期日）</div>
+              <div class="cr-card-list">${renderCardRows("legacy", adv.hasSub)}</div>
+            </div>
+          </div>
+        `;
+      } else {
+        bodyHtml = `
+          <div class="cr-panel">
+            <div class="cr-plan-kpis">
+              <div><span>省卡策略</span><b>${adv.plannedCards} 张</b></div>
+              <div><span>严格不断档</span><b>${adv.coverCards == null ? "3 张不够" : `${adv.coverCards} 张`}</b></div>
+              <div><span>到期仍差</span><b>${adv.shortfallPercent.toFixed(1)}%</b></div>
+            </div>
+            <ol class="cr-plan">${adv.planLines.map((l) => `<li>${l}</li>`).join("")}</ol>
+
+            <div class="cr-tl-card">
+              <div class="cr-timeline" aria-label="从现在到${adv.planEndLabel}的时间轴">
+                <div class="cr-tl-line"></div>
+                <div class="cr-tl-span" style="width:${sc.tlProgress}%"></div>
+                <span class="cr-tl-dot now" style="left:0%"><i></i></span>
+                <span class="cr-tl-dot reset" style="left:${sc.tlProgress}%"><i></i></span>
+                <span class="cr-tl-dot end" style="left:100%"><i></i></span>
+              </div>
+              <div class="cr-tl-legend">
+                <span><b><i class="cr-tl-lg-dot now"></i>今天</b><em>${sc.tlToday}</em></span>
+                <span><b><i class="cr-tl-lg-dot reset"></i>下次自然重置</b><em>${sc.tlReset}</em></span>
+                <span><b><i class="cr-tl-lg-dot end"></i>${adv.planEndLabel}</b><em>${sc.tlEnd}</em></span>
+              </div>
+            </div>
+
+            <div class="cr-speed-card">
+              <div class="cr-label-row">
+                <span class="cr-label">按不同消耗速度试算</span>
+                <span class="cr-speed-val">
+                  ${speedLabel}
+                  ${state.speed != null ? '<button type="button" class="cr-speed-reset" data-speed-reset>恢复实测</button>' : ""}
+                </span>
+              </div>
+              <input type="range" id="codexResetSpeed" min="0" max="6" step="1" value="${sliderIdx}">
+              <div class="cr-speed-marks">
+                ${SPEEDS.map((s, i) => `<span class="${i === sliderIdx ? "on" : ""}">${s}%</span>`).join("")}
+              </div>
+              <div class="cr-hint">速度只改上方计划试算，不改变即时 WAIT/NOW 结论。</div>
+            </div>
+
+            <div class="cr-cards-sec-head" style="margin-top:4px">
+              <span>重置卡（按到期日排序）</span>
+              <span>共 3 张</span>
+            </div>
+            <div class="cr-card-list">${renderCardRows("v2", adv.hasSub)}</div>
+          </div>
+        `;
+      }
+    } else {
+      const needObj = NEEDS.find(([k]) => k === state.need);
+      const needVal = needObj[1] + (showAmts ? ` · ${state.amount == null ? "按整窗估" : `${state.amount}%`}` : "");
+      const canWait = adv.hasSub ? "能等到" : "订阅未填，按卡有效期规划";
+      const steps = [
+        ["0", "硬门", "通过", "pass"],
+        ["1", "等得到吗", canWait, "pass"],
+        ["2", "需求", needVal, "focus"],
+        ["3", "卡数", "3 张", "pass"],
+        ["4", "质量", `${adv.warnings.length} 条提示`, ""],
+      ];
+      bodyHtml = `
+        <div class="cr-panel">
+          <div class="cr-block">
+            <div class="cr-label-row"><span class="cr-label">这次结论的判定路径</span><code>${adv.reasonCode}</code></div>
+            <ol class="cr-path">
+              ${steps.map(([n, k, val, cls]) => `
+                <li class="${cls}"><span class="cr-path-n">${n}</span><b>${k}</b><em>${val}</em></li>
+              `).join("")}
+            </ol>
+          </div>
+          <div class="cr-block">
+            <div class="cr-label" style="margin-bottom:6px">关键数字核对</div>
+            <div class="cr-evidence-grid">
+              <div><span>这次标的用量</span><b>${showAmts ? (state.amount == null ? "100%（默认）" : `${state.amount}%`) : "—"}</b></div>
+              <div><span>周额度已用</span><b>${sc.weeklyUsed.toFixed(1)}%</b></div>
+              <div><span>周额度剩余</span><b>${sc.weeklyRemain.toFixed(1)}%</b></div>
+              <div><span>下次重置</span><b>${sc.nextResetStr}</b></div>
+              <div><span>可用卡</span><b>3 张</b></div>
+              <div><span>省卡策略用几张</span><b>${adv.plannedCards} 张</b></div>
+              <div><span>补满要几张（不断档）</span><b>${adv.coverCards == null ? "现有卡不够" : `${adv.coverCards} 张`}</b></div>
+              <div><span>到计划截止仍差</span><b>${adv.shortfallPercent.toFixed(1)}%</b></div>
+              <div><span>计划截止${!adv.hasSub ? "（卡到期）" : ""}</span><b>${adv.planEndTime}</b></div>
+              <div><span>最早卡到期</span><b>12/01 03:10</b></div>
+            </div>
+          </div>
+          <div class="cr-block">
+            <div class="cr-label" style="margin-bottom:6px">静态规则口径</div>
+            <ul class="cr-warns">
+              <li>只看周额度主判断；5 小时窗耗尽时单独检查套餐重置涵盖范围。</li>
+              <li>用卡会改写下一次周窗锚点，计划按事件模拟，非简单加法。</li>
+              <li>手动兑换要求至少一项涵盖额度剩余不足 80%。</li>
+            </ul>
+          </div>
+        </div>
+      `;
+    }
+
+    return `
+      <div class="cr-page" data-codex-reset-page>
+        ${headHtml}
+        ${verdictHtml}
+        ${tabsHtml}
+        ${bodyHtml}
+        <div class="cr-footer">
+          本工具只给建议。兑换前请在 Codex 用量页面核对卡涵盖的额度和有效期。
+        </div>
+      </div>
+    `;
+  }
+
+  function renderSimulator(mode, labelText, labelClass) {
+    const adv = computeAdvice();
+    const content = state.view === "compact"
+      ? renderCompactView(mode, adv)
+      : renderSubView(mode, adv);
+
+    return `
+      <div class="wb-canvas-col">
+        ${labelText ? `<span class="wb-col-tag ${labelClass}">${labelText}</span>` : ""}
+        <div class="app-sim ${mode}-mode ${state.theme === "light" ? "light" : ""}" style="--u:${state.scale}" data-sim-mode="${mode}">
+          <div class="sim-tbar">
+            <div class="sim-mark">G</div>
+            <div class="sim-tt">Grandettoken</div>
+            <span class="sim-tb live">刚刚 ↻</span>
+            <span class="sim-tb">置顶</span>
+            <span class="sim-tb">胶囊</span>
+            <span class="sim-tb">隐藏</span>
+          </div>
+
+          <div class="sim-home-bg" aria-hidden="true">
+            <div class="sim-sum-mock">
+              <div class="sim-sum-cell"><span>已确认临期</span><b>650.82</b></div>
+              <div class="sim-sum-cell"><span>最早可确认</span><b>11-16</b></div>
+              <div class="sim-sum-cell"><span>每日签到</span><b style="color:var(--ok)">✓5/5</b></div>
+            </div>
+            <div class="sim-bg-row">
+              <b>WorkBuddy AI ●</b>
+              <b>598.04 分</b>
+            </div>
+          </div>
+
+          <div class="sim-shade">
+            <div class="sim-detail">
+              <div class="sim-detail-head">
+                <div class="sim-codex-ico">CX</div>
+                <div class="sim-detail-title">
+                  <b>Codex <span class="sim-plan-pill">Plus</span></b>
+                  <p>Codex · CLI 登录态</p>
+                </div>
+                <button type="button" class="sim-detail-close" title="关闭详情">✕</button>
+              </div>
+              <div class="sim-detail-body">
+                ${content}
+              </div>
+            </div>
+          </div>
+
+          <div class="sim-foot">
+            <span>AI 优惠</span>
+            <span class="sp"></span>
+            <span>双列</span>
+            <span>设置与管理</span>
+            <span>退出</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function paint() {
+    const stage = document.getElementById("wbStage");
+    const host = document.getElementById("wbCanvases");
+    stage.classList.toggle("compare-mode", state.compare === "both");
+
+    if (state.compare === "both") {
+      host.innerHTML =
+        renderSimulator("v2", "优化后设计 (V2 精修规范对齐)", "after") +
+        renderSimulator("legacy", "当前实现 (v0.3.50 实机现状)", "before");
+    } else if (state.compare === "legacy") {
+      host.innerHTML = renderSimulator("legacy", "当前实现 (v0.3.50 实机现状)", "before");
+    } else {
+      host.innerHTML = renderSimulator("v2", "优化后设计 (V2 精修规范对齐)", "after");
+    }
+
+    const syncSeg = (id, val) => {
+      document.querySelectorAll(`#${id} button`).forEach((b) => {
+        b.classList.toggle("on", b.dataset.val === String(val));
+      });
+    };
+    syncSeg("ctrlCompare", state.compare);
+    syncSeg("ctrlView", state.view);
+    syncSeg("ctrlScene", state.scene);
+    syncSeg("ctrlTheme", state.theme);
+    syncSeg("ctrlScale", state.scale);
+  }
+
+  document.addEventListener("click", (ev) => {
+    const segBtn = ev.target.closest(".wb-seg button");
+    if (segBtn) {
+      const parentId = segBtn.parentElement.id;
+      const val = segBtn.dataset.val;
+      if (parentId === "ctrlCompare") state.compare = val;
+      if (parentId === "ctrlView") state.view = val;
+      if (parentId === "ctrlScene") {
+        state.scene = val;
+        state.subEndStr = SCENES[val].subEndStr;
+        state.speed = null;
+      }
+      if (parentId === "ctrlTheme") state.theme = val;
+      if (parentId === "ctrlScale") state.scale = val;
+      paint();
+      return;
+    }
+
+    const openEl = ev.target.closest("[data-codex-reset-open]");
+    if (openEl) {
+      state.view = "advice";
+      paint();
+      return;
+    }
+
+    const backEl = ev.target.closest("[data-codex-reset-back]");
+    if (backEl) {
+      state.view = "compact";
+      paint();
+      return;
+    }
+
+    const tabEl = ev.target.closest("[data-codex-tab]");
+    if (tabEl) {
+      state.view = tabEl.dataset.codexTab;
+      paint();
+      return;
+    }
+
+    const needEl = ev.target.closest("[data-codex-need]");
+    if (needEl) {
+      state.need = needEl.dataset.codexNeed;
+      if (state.need !== "urgent" && state.need !== "soon") state.amount = null;
+      paint();
+      return;
+    }
+
+    const amtEl = ev.target.closest("[data-codex-amt]");
+    if (amtEl) {
+      const v = Number(amtEl.dataset.codexAmt);
+      state.amount = state.amount === v ? null : v;
+      paint();
+      return;
+    }
+
+    const clearDateEl = ev.target.closest("[data-codex-clear-date]");
+    if (clearDateEl && !clearDateEl.disabled) {
+      state.subEndStr = "";
+      paint();
+      return;
+    }
+
+    const resetSpeedEl = ev.target.closest("[data-speed-reset]");
+    if (resetSpeedEl) {
+      state.speed = null;
+      paint();
+    }
+  });
+
+  document.addEventListener("change", (ev) => {
+    if (ev.target.id === "codexResetSpeed") {
+      const idx = Number(ev.target.value);
+      state.speed = SPEEDS[idx] || null;
+      paint();
+    } else if (ev.target.id === "codexResetSubEnd") {
+      state.subEndStr = ev.target.value || "";
+      paint();
+    }
+  });
+
+  paint();
+})();
+</script>
+</body>
+</html>

@@ -30,6 +30,7 @@ Google Cloud 赠金渠道另由 `core/src/google_cloud.rs`、`src-tauri/src/goog
 | Qoder 国内版 | `GET https://openapi.qoder.com.cn/api/v2/quota/usage` | 积分型 | 国内版;**与上一行是两套账号**,不互通 |
 | MiniMax | `POST https://agent.minimax.cn/matrix/api/v1/commerce/get_membership_info` + `GET …/credit/details` | 积分型 | 读 MiniMax Code 桌面端凭据(`~/.minimax` 明文 OAuth,区域 cn/io/com 跟凭据目录走);**账户端点要官方客户端签名**(x-signature/yy,见 `core/src/minimax.rs`);逐笔账本 + 每日签到 |
 | 豆包工作 | `POST https://www.doubao.com/alice/ug/campaign/v3/detail/` | 积分型 | doubao.com **网页会话**(挂件内登录窗捕获,不落盘;手动粘贴 Cookie 兜底);体验额度读数(自动签到已于 v0.3.47 移除,见 `docs/report/doubao-checkin-710010702-2026-11-14.md`);活动接口按客户端环境放行,URL 要带桌面版平台参数与派生设备号(`core/src/doubao.rs`) |
+| Antigravity | 本机 `agy -p /usage --output-format json` (`core/src/antigravity.rs`) | 配额型 | 仅调用官方 `agy` CLI 公开输出（支持自定义路径 `antigravityCliPath`、单飞锁 + ≥120s 冷却 + 35s 超时强杀）；主窗锁定 `gemini-weekly` (`w.main`), Android 同步端支持多窗口选卡 (`WidgetConfigActivity.kt`) |
 
 > Qoder 两版是**两个独立渠道**,不是"一个渠道两个域名":账号体系不互通
 > (官方明确不支持跨区迁移),余额无法合并。判定**不要**看 `product.json` 的下载域名 ——

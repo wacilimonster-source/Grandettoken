@@ -121,6 +121,7 @@ jobs:
           node --check app/src/vault-view.js
           node --check app/src/codex-reset.js
           node --check app/src/google-cloud.js
+          node --check app/src/antigravity.js
           node --check app/src-tauri/src/google_cloud_capture.js
           node --check build/verify-form.js
           node --check build/verify-ui-0923.js

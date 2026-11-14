@@ -150,6 +150,9 @@ function mainWindow(c) {
     const weekly = wins.find((w) => w.label === "本周");
     if (weekly) return weekly;
   }
+  if (c.id === "antigravity") {
+    return wins.find((w) => w.main) || wins.find((w) => w.key === "gemini-weekly") || wins.find((w) => w.key === "gemini-5h") || wins[0];
+  }
   return wins.find((w) => w.main) || wins.find((w) => w.label === "周期") || wins[0];
 }
 
@@ -583,6 +586,7 @@ const LOGOS = {
   "workbuddy-ai": "logos/workbuddy.png",
   minimax: "logos/minimax.png",
   doubao: "logos/doubao.png",
+  antigravity: "logos/antigravity.png",
 };
 
 /**
@@ -750,6 +754,7 @@ function renderRow(c, i) {
   // 下面三行各带一条迷你条把 5 小时 / 本周 / 周期都摊开,右侧附重置倒计时
   const wins = isPct && c.windows && c.windows.length ? c.windows : [];
   const mw = wins.length ? mainWindow(c) : null;
+  const quotaMain = (c.id === "codex" || c.id === "antigravity") && !!mw;
   const codex = c.id === "codex" && !!mw;
   const fiveHour = codex ? wins.find((w) => w.label === "5 小时") : null;
   const codexDual = codex && mw.label === "本周" && !!fiveHour && !noKey && c.remaining != null;
@@ -875,7 +880,7 @@ function renderRow(c, i) {
   // Codex 的窗口名与重置时间由状态轨承担(「本周窗 · N 天后重置」);
   // 主数字只留百分比,避免「本周剩余」与「本周窗」在同一张卡上重复。
   const mainValue = isOld && !compactNow ? `<i class="tilde">~</i>${main}` : main;
-  const mainTone = isOld ? "off" : codex ? quotaTone(c, mw) : tone;
+  const mainTone = isOld ? "off" : quotaMain ? quotaTone(c, mw) : tone;
 
   // 金额型第二行两边都空时给今日消耗兜底:否则整行会比别的行矮一截(Hapi 39px vs 51px)
   if (!noKey && !failed && c.kind === "amount" && !sub && !subVal && c.day !== null) {
@@ -1069,6 +1074,7 @@ function coreAmount(c) {
 /** ① 核心 · 配额:一窗一行。重置 < 24 小时写相对时间,更久写「N 天 · MM-DD HH:MM」。 */
 function coreWindows(c) {
   const codex = c.id === "codex";
+  const exactReset = codex || c.id === "antigravity";
   const rows = (c.windows || []).map((w) => {
     const wr = Math.max(0, Math.min(100, w.remainPercent));
     const lim = w.status === "rate-limited";
@@ -1095,11 +1101,11 @@ function coreWindows(c) {
         whenOk = true;
       }
     }
-    if (codex) {
+    if (exactReset) {
       when = ms === null ? "重置时间未知" : `下次重置 ${exactLocalTime(ms / 1000)} · <span data-reset-at="${ms}">${esc(quotaResetCountdown(ms))}</span>`;
       whenOk = false;
     }
-    return `<div class="core-w${codex ? " codex-w" : ""}">
+    return `<div class="core-w${exactReset ? " codex-w" : ""}">
       <span class="wl">${esc(w.label)}</span>
       <i class="wb"><i style="width:${wr}%;background:${TONE_HEX[wt]}"></i></i>
       <b class="wv" style="color:${lim ? "var(--bad)" : toneFg(wt)}">${dispPct(wr).toFixed(1)}%</b>
@@ -1113,7 +1119,7 @@ function coreWindows(c) {
         : Math.max(0, Math.min(100, Number(c.remaining))).toFixed(1) + "%";
     return `<div class="sec"><div class="core-use"><div>当前剩余<b>${v}</b></div></div></div>`;
   }
-  return `<div class="sec">${codex ? `<div class="sec-h"><span>配额窗口</span><span>${esc(localZoneLabel())}</span></div>` : ""}${rows.join("")}${
+  return `<div class="sec">${exactReset ? `<div class="sec-h"><span>配额窗口</span><span>${esc(localZoneLabel())}</span></div>` : ""}${rows.join("")}${
     // 口径说明只放一次:周窗到点清零,5 小时窗到点恢复 —— 两件事措辞不能混
     codex ? `<div class="core-note">周窗到期即清零,不滚存;5 小时窗按滚动恢复</div>` : ""
   }</div>`;
@@ -3132,6 +3138,7 @@ const WHY = {
   dblogin: "点「登录」开一个独立窗口走豆包网页登录,成功后窗口自动关掉,挂件用这份会话查体验额度 —— 会话留在挂件自己的浏览器 profile 里,不复制、不落盘;粘贴 Cookie 是登录窗口不通时的自救路径。",
   qoderweb: "逐笔到期明细只有网页会话能拿到,桌面端凭据只有汇总(平台两套接口的差别)。显示「已登录」= 本轮已用网页会话取到逐笔明细;平台会话会过期,失效后状态会自己退回「需登录」,届时点「重新登录」重开窗口刷新即可,历史快照不丢。未登录时点「登录网页版」开独立窗口,完成后自动关窗并刷新;这套会话只读明细,签到与余额照旧走桌面端。换过账号或令牌时点「切换账号」——旧网页会话属于上一本账,不先退出就会把旧账号的已到期记录挂到新账号下。",
   appauth: "凭据来自本机已登录的客户端;失效时打开一次客户端即可。隐藏本渠道后连读取也会停止。",
+  agy: "仅通过官方 agy CLI 的公开 /usage JSON 接口读取配额，不读取桌面端内部凭据库，也不持久化任何密钥。",
   compact: "开启后可切成 380×46 的横向条;顶栏固定四枚入口不再显示「紧凑」,用 Ctrl+2 切换紧凑条,Esc 在面板与胶囊之间切换。",
   trayNum: "托盘显示缩写(74 / 1.2k / 82),悬停可看完整数值;关闭后回到品牌样式。",
   pulse: "只有红色状态点会 2 秒一次红晕。低位持续期间不重复播报,免得常驻桌面一直闪。",
@@ -3296,6 +3303,8 @@ function renderChCards() {
             <button class="btn" data-act="savekey" data-id="${c.id}">保存</button>
             ${c.hasKey ? `<button class="btn danger" data-act="delkey" data-id="${c.id}">清除登录</button>` : ""}
           </div>`
+        : c.id === "antigravity" && window.AntigravityUI
+        ? window.AntigravityUI.controls(c)
         : isApp
         ? `<div class="mini">${
             // 国际版这条链路**会续期**(refreshToken 换 accessToken,成果存在我们自己的库里、

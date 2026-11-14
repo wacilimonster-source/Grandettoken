@@ -40,6 +40,7 @@ if (process.env.CHECKIN_SENTINEL === "1") {
   }
 }
 const vaultJs = fs.readFileSync(path.join(SRC, "vault-view.js"), "utf8");
+const antigravityJs = fs.readFileSync(path.join(SRC, "antigravity.js"), "utf8");
 const checkinSource = fs.readFileSync(path.join(SRC, "../core/src/checkin.rs"), "utf8");
 const checkinDefs = checkinSource.slice(checkinSource.indexOf("pub const CHECKINS:"), checkinSource.indexOf("pub fn find("));
 const checkinIds = [...checkinDefs.matchAll(/\bid:\s*"([^"]+)"/g)].map((match) => match[1]);
@@ -66,6 +67,9 @@ w.__TAURI__ = {
       if (w.__VAULT_LIST_INVOKE && cmd === "vault_list") return w.__VAULT_LIST_INVOKE(cmd, args);
       if (w.__DOWNLOAD_INVOKE && ["download_link", "copy_text"].includes(cmd)) {
         return w.__DOWNLOAD_INVOKE(cmd, args);
+      }
+      if (w.__SET_CONFIG_INVOKE && cmd === "set_config") {
+        return w.__SET_CONFIG_INVOKE(args);
       }
       if (cmd === "get_config") return JSON.parse(JSON.stringify(DATA.CFG));
       if (cmd === "get_channels") return JSON.parse(JSON.stringify(DATA.CHANNELS));
@@ -1162,6 +1166,7 @@ w.__DATA = DATA;
     const initMarker = "(async function init() {";
     if (js.split(initMarker).length !== 2) throw new Error("初始化入口必须唯一");
     w.eval(vaultJs + "\n;\n" + js.replace(initMarker, "window.__INIT = " + initMarker)
+      + "\n;\n" + antigravityJs
       + "\n;window.__RUN_HARNESS = async () => { await window.__INIT;\n" + HARNESS + "\n};");
     await w.__RUN_HARNESS();
   } catch (e) {
@@ -1202,6 +1207,65 @@ w.__DATA = DATA;
     }
   }
   delete w.__DOWNLOAD_INVOKE;
+
+  // ── Antigravity 配额渲染 + 自定义路径保存与失败回滚 ──────────────────────
+  try {
+    const agChannel = {
+      id: "antigravity", name: "Antigravity", short: "AG", color: "#3286fc",
+      kind: "percent", hasKey: true, valid: true, stale: false, limited: true,
+      remaining: 80.4, used: 19.6, total: 100, unit: "%",
+      authSource: "app", authLabel: "Antigravity CLI · agy CLI 1.5.9",
+      updatedAt: NOW, extra: [["模型 · Gemini", "Gemini 4 Hydrogen, Gemini 3.8 Flash"]],
+      windows: [
+        { key: "gemini-weekly", label: "Gemini 本周", percent: 19.6, remainPercent: 80.4, status: "ok", resetsAt: new Date((NOW + 500000) * 1000).toISOString(), main: true },
+        { key: "gemini-5h", label: "Gemini 5 小时", percent: 67.9, remainPercent: 32.1, status: "ok", resetsAt: new Date((NOW + 3600) * 1000).toISOString(), main: false },
+        { key: "3p-weekly", label: "Claude/GPT 本周", percent: 53.0, remainPercent: 47.0, status: "ok", resetsAt: new Date((NOW + 500000) * 1000).toISOString(), main: false },
+        { key: "3p-5h", label: "Claude/GPT 5 小时", percent: 100.0, remainPercent: 0.0, status: "rate-limited", resetsAt: new Date((NOW + 3600) * 1000).toISOString(), main: false },
+        { key: "gemini-argon-wtu-weekly", label: "Gemini 4 Argon 本周", percent: 69.3, remainPercent: 30.7, status: "ok", resetsAt: new Date((NOW + 500000) * 1000).toISOString(), main: false },
+      ],
+    };
+    const agMarkup = w.renderRow(agChannel, 0);
+    const agControls = w.AntigravityUI.controls(agChannel);
+    const coreWins = w.coreWindows(agChannel);
+    const agMainOk = agMarkup.includes("80.4") && !agMarkup.includes("AI Credits") &&
+      agControls.includes('data-ag-path') && (coreWins.match(/class="core-w/g) || []).length === 5 &&
+      !coreWins.includes("周窗到期即清零");
+    let cfgSaved = [];
+    w.__SET_CONFIG_INVOKE = async ({ config }) => { cfgSaved.push(config.antigravityCliPath); };
+    const savedChannels = [...DATA.CHANNELS];
+    DATA.CHANNELS = [...savedChannels, agChannel];
+    w.__TEST.setChannels(DATA.CHANNELS);
+    w.__TEST.patchCfg({ antigravityCliPath: null });
+    w.renderChCards();
+    const agInp = w.document.querySelector('[data-ag-path]');
+    agInp.value = "C:\\tools\\agy.exe";
+    agInp.dispatchEvent(new w.Event("input", { bubbles: true }));
+    w.document.querySelector('[data-ag-action="save"]').click();
+    await new Promise((r) => setTimeout(r, 30));
+    const saveOk = cfgSaved[0] === "C:\\tools\\agy.exe" && w.__TEST.cfg().antigravityCliPath === "C:\\tools\\agy.exe";
+
+    w.__SET_CONFIG_INVOKE = async () => { throw new Error("写入盘失败"); };
+    const agInp2 = w.document.querySelector('[data-ag-path]');
+    agInp2.value = "D:\\bad\\agy.exe";
+    agInp2.dispatchEvent(new w.Event("input", { bubbles: true }));
+    w.document.querySelector('[data-ag-action="save"]').click();
+    await new Promise((r) => setTimeout(r, 30));
+    const rollbackOk = w.__TEST.cfg().antigravityCliPath === "C:\\tools\\agy.exe" &&
+      w.document.querySelector('[data-ag-path]').value === "C:\\tools\\agy.exe" &&
+      w.document.getElementById("toast").textContent.includes("保存Antigravity CLI 路径失败");
+    DATA.CHANNELS = savedChannels;
+    w.__TEST.setChannels(savedChannels);
+    w.__TEST.patchCfg({ antigravityCliPath: undefined });
+    w.renderChCards();
+    delete w.__SET_CONFIG_INVOKE;
+    R.push({
+      name: "Antigravity 渲染主池/5窗详情且不显示 AI Credits，自定义路径保存与失败回滚正常",
+      ok: agMainOk && saveOk && rollbackOk,
+      extra: JSON.stringify({ agMainOk, saveOk, rollbackOk, cfgSaved, gotPath: w.__TEST.cfg().antigravityCliPath }),
+    });
+  } catch (e) {
+    R.push({ name: "Antigravity 渲染与配置回滚", ok: false, extra: e.message });
+  }
   const css = fs.readFileSync(path.join(SRC, "styles.css"), "utf8");
   R.push({
     name: "顶栏固定四枚,不再有「紧凑」按钮与弹出菜单",

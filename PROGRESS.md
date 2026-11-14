@@ -5054,3 +5054,22 @@ src-tauri `cargo check --all-targets --locked` exit 0;
   返回 0.3.50;签名/安装包逐字比对按既有口径 SKIP,由 CI 端完成。
 - 待验收:安装包内顾问 headline 与指标行的「N 天 M 小时」实际显示;日期控件回填的
   人工复核(v0.3.49 遗留,见验收报告问题 #2)。
+
+## 2026-11-15 v0.3.51 + android-v0.1.14：Antigravity 配额监控与 Codex 重置顾问视觉改版
+
+- **桌面端新增 Antigravity (`antigravity`) 内置配额渠道**（设计稿 `docs/product/product-antigravity-quota-2026-11-15.md`）：
+  - 安全采集链（`app/core/src/antigravity.rs`）：仅调用用户本机官方 `agy` CLI（`agy -p /usage --output-format json --print-timeout 25s`），
+    零桌面端内部数据库/端口探测、零凭据/OAuth 密钥提取；子进程隔离环境（`CREATE_NO_WINDOW`、自动清理临时目录、`AGY_CLI_DISABLE_AUTO_UPDATE=true`、
+    `BROWSER=NUL`、`1 MiB` 输出上限、`35s` 硬超时强杀）、`mtime` 缓存版本探测、`120s` 自动冷却（手刷/清除/改路径时清空）。
+  - 口径与展示：P0 不读取/不展示 AI Credits，主额度固定钉住 `gemini-weekly`（缺省依次回落 `gemini-5h` / 首个有效窗口），
+    `view.rs` 同时保留 `binding_window` 的限流/告警与二次行；独立模块 `app/src/antigravity.js` 提供可选自定义 `agy` 路径与失败回滚保护，
+    搭配 256×256 官方透明图标（`app/src/logos/antigravity.png`），同步在 `README.md` / `app/README.md` 披露子进程边界。
+- **Android 端同步支持 Antigravity（`android-v0.1.14`）**：
+  - 新增透明图标 `channel_antigravity.png`、`ChannelPresentation.kt` 映射、`WidgetFormatter.kt` 多配额窗简标（`G周`/`G5h`/`AI周`/`AI5h`/`Ag周`）、
+    `WidgetUpdater.kt` 着色规则与 `WidgetConfigActivity.kt` 多窗选择器，附 `WidgetFormatterTest.kt` 单测。
+- **Codex 重置顾问视觉优化**（另一会话协作改动）：
+  - 更新 `app/src/codex-reset.css`、`app/src/codex-reset.js`、`app/src/styles.css` 与设计原型 `docs/design/design-codex-reset-visual-2026-11-15.html`：
+    重构内嵌入口卡色调（`tone-wait`/`tone-now`/`tone-hold`）、重置卡明细徽章与页脚布局、详情头部返回与状态胶囊、指标区与配置块层级、
+    判定路径高亮及用量重置快捷键焦点定位，并微调详情弹层 `.shade` 高度锚点。
+- **版本号与工作流**：桌面端同步 `0.3.50` → `0.3.51`（`Cargo.toml` / `Cargo.lock` / `tauri.conf.json`）；
+  `ci.yml` 与 `release.yml` 补充 `app/src/antigravity.js` 语法检查。

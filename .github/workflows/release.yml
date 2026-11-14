@@ -103,6 +103,7 @@ jobs:
           Invoke-Gate 'syntax-vault'      { node --check app/src/vault-view.js }
           Invoke-Gate 'syntax-reset'      { node --check app/src/codex-reset.js }
           Invoke-Gate 'syntax-google'     { node --check app/src/google-cloud.js }
+          Invoke-Gate 'syntax-antigravity'{ node --check app/src/antigravity.js }
           Invoke-Gate 'syntax-google-capture' { node --check app/src-tauri/src/google_cloud_capture.js }
           npm install jsdom --no-save --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { throw "npm install jsdom failed" }

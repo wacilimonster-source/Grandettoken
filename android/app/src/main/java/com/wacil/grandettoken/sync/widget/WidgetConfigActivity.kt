@@ -293,7 +293,7 @@ private fun WidgetConfigScreen(
                 groups.entries.forEach { (platformId, group) ->
                     val title = group.first().entry.name
                     val type = when {
-                        platformId == "codex" -> "配额型 · 可多选窗口"
+                        platformId == "codex" || platformId == "antigravity" -> "配额型 · 可多选窗口"
                         platformId == "opencode-go" -> "配额型 · 月额度"
                         group.first().channel?.kind == ChannelKind.Quota -> "配额型"
                         group.first().channel?.kind == ChannelKind.Points -> "积分型"
@@ -395,12 +395,14 @@ private fun buildOptions(
     val result = mutableListOf<WidgetOption>()
     cache?.channels.orEmpty().forEach { channel ->
         when {
-            channel.kind == ChannelKind.Quota && channel.platformId == "codex" &&
+            channel.kind == ChannelKind.Quota &&
+                (channel.platformId == "codex" || channel.platformId == "antigravity") &&
                 channel.windows.any { it.key.isNotBlank() } -> {
                 val sorted = channel.windows
                     .filter { it.key.isNotBlank() }
                     .sortedWith(compareBy(::windowOrder).thenBy { it.key })
-                val weeklyKey = sorted.firstOrNull { it.key == "weekly" }?.key
+                val weeklyKey = sorted.firstOrNull { it.main }?.key
+                    ?: sorted.firstOrNull { it.key == "weekly" || it.key == "gemini-weekly" }?.key
                     ?: sorted.first().key
                 sorted.forEach { window ->
                     val entry = WidgetEntry(
@@ -476,9 +478,12 @@ private fun optionLabel(option: WidgetOption): String = when {
 }
 
 private fun windowOrder(window: WindowSnapshot): Int = when (window.key) {
-    "weekly" -> 0
-    "5h" -> 1
-    "monthly" -> 2
-    "daily" -> 3
+    "weekly", "gemini-weekly" -> 0
+    "5h", "gemini-5h" -> 1
+    "3p-weekly" -> 2
+    "3p-5h" -> 3
+    "gemini-argon-wtu-weekly" -> 4
+    "monthly" -> 5
+    "daily" -> 6
     else -> 9
 }

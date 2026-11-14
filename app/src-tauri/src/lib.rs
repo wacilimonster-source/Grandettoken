@@ -348,6 +348,7 @@ async fn set_config(app: tauri::AppHandle, state: State<'_, AppState>, config: C
     let next = incoming;
     // MiniMax 托管开关立即生效(set_config 不走 sanitize,不能等下次配置加载)
     tokenscope_core::minimax::set_writeback_enabled(next.minimax_writeback);
+    tokenscope_core::antigravity::set_cli_path(next.antigravity_cli_path.clone());
     if let Err(e) = save_config_off_main(&state, move |c| *c = next).await {
         // 落库失败:快捷键严格回到保存前。以前只在"原来有键"时回滚,
         // 第一次设键又落库失败时,那个组合键已被挂件抢走却显示为空(报告 P3-34)。

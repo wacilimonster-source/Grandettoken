@@ -7,6 +7,7 @@
 // serde_json 的 json_internal! 每个键都要展开一层。抬高上限,不改宏写法。
 #![recursion_limit = "256"]
 
+pub mod antigravity;
 pub mod appauth;
 pub mod backup_crypto;
 pub mod checkin;

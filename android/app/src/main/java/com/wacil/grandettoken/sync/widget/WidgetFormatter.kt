@@ -110,20 +110,11 @@ internal object WidgetFormatter {
 
     /** 小部件上的短标签：只表达窗口，不重复“剩/额度”。 */
     fun tag(channel: ChannelSnapshot?, windowKey: String?): String? {
-        if (channel == null) return when (windowKey) {
-            "weekly" -> "周"
-            "5h" -> "5h"
-            "monthly" -> "月"
-            "daily" -> "日"
-            else -> null
-        }
+        if (channel == null) return tagForKey(windowKey)
         val window = windowFor(channel, windowKey)
         val key = windowKey?.takeIf { it.isNotBlank() } ?: window?.key.orEmpty()
+        tagForKey(key)?.let { return it }
         return when {
-            key == "monthly" -> "月"
-            key == "weekly" -> "周"
-            key == "5h" || key == "rolling" -> "5h"
-            key == "daily" -> "日"
             window?.label == "本周" || window?.label == "周" -> "周"
             window?.label == "5 小时" -> "5h"
             window?.label == "周期" || window?.label == "本月" ||
@@ -131,6 +122,24 @@ internal object WidgetFormatter {
             window?.label == "当日" -> "日"
             else -> null
         }
+    }
+
+    private fun tagForKey(key: String?): String? = when {
+        key.isNullOrBlank() -> null
+        key == "monthly" -> "月"
+        key == "weekly" -> "周"
+        key == "5h" || key == "rolling" -> "5h"
+        key == "daily" -> "日"
+        key == "gemini-weekly" -> "G周"
+        key == "gemini-5h" -> "G5h"
+        key == "3p-weekly" -> "AI周"
+        key == "3p-5h" -> "AI5h"
+        key.contains("argon") && key.endsWith("-weekly") -> "Ag周"
+        key.endsWith("-weekly") -> "周"
+        key.endsWith("-5h") -> "5h"
+        key.endsWith("-daily") -> "日"
+        key.endsWith("-monthly") -> "月"
+        else -> null
     }
 
     fun windowFor(channel: ChannelSnapshot, windowKey: String?): WindowSnapshot? {

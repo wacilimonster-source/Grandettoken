@@ -87,6 +87,26 @@ class WidgetFormatterTest {
         assertEquals("月", WidgetFormatter.tag(openCode, "monthly"))
         assertEquals("月", WidgetFormatter.tag(openCode, null))
         assertEquals("月额度(按套餐周期)", WidgetFormatter.configLabel(openCode, "monthly"))
+        val ag = channel(
+            "antigravity",
+            ChannelKind.Quota,
+            "%",
+            percent = "80.4",
+            windows = listOf(
+                WindowSnapshot("Gemini 本周", "80.4", key = "gemini-weekly", main = true),
+                WindowSnapshot("Gemini 5 小时", "32.1", key = "gemini-5h"),
+                WindowSnapshot("Claude/GPT 5 小时", "0", key = "3p-5h"),
+                WindowSnapshot("Gemini 4 Argon 本周", "30.7", key = "gemini-argon-wtu-weekly"),
+            ),
+        )
+        assertEquals("80.4%", WidgetFormatter.value(ag))
+        assertEquals("0%", WidgetFormatter.value(ag, "3p-5h"))
+        assertEquals("G周", WidgetFormatter.tag(ag, "gemini-weekly"))
+        assertEquals("G周", WidgetFormatter.tag(ag, null))
+        assertEquals("G5h", WidgetFormatter.tag(ag, "gemini-5h"))
+        assertEquals("AI5h", WidgetFormatter.tag(ag, "3p-5h"))
+        assertEquals("Ag周", WidgetFormatter.tag(ag, "gemini-argon-wtu-weekly"))
+        assertEquals("Claude/GPT 5 小时", WidgetFormatter.configLabel(ag, "3p-5h"))
     }
 
     @Test

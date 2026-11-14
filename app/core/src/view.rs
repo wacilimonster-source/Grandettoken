@@ -333,7 +333,7 @@ fn is_limited(v: &ChannelView) -> bool {
 
 /// 通知沿用各渠道既有口径。Codex 周窗是展示重点,通知仍看实际最紧的窗。
 pub fn notification_window(v: &ChannelView) -> Option<&Window> {
-    if v.id == "codex" {
+    if matches!(v.id.as_str(), "codex" | "antigravity") {
         binding_window(v)
     } else {
         v.windows.iter().find(|w| w.main).or_else(|| v.windows.first())
@@ -603,7 +603,7 @@ fn headline_of(v: &ChannelView, state: ViewState) -> Headline {
         return Headline::unknown();
     }
     match v.kind {
-        Kind::Percent => match if v.id == "codex" {
+        Kind::Percent => match if matches!(v.id.as_str(), "codex" | "antigravity") {
             v.windows.iter().find(|w| w.main).or_else(|| binding_window(v))
         } else {
             binding_window(v)
@@ -1191,11 +1191,28 @@ mod tests {
         v.windows[0].remain_percent = 0.0;
         v.windows[0].status = "rate-limited".into();
         assert_eq!(notification_window(&v).unwrap().label, "本周");
-        // 非 Codex 仍按原有主窗判定,不因这次展示调整改变通知口径。
+        // 非 Codex/Antigravity 仍按原有主窗判定,不因这次展示调整改变通知口径。
         v.id = "opencode-go".into();
         v.windows[0].remain_percent = 87.0;
         v.windows[0].status = "ok".into();
         assert_eq!(notification_window(&v).unwrap().label, "本周");
+    }
+
+    #[test]
+    fn antigravity_gemini_weekly_headline_preserves_third_party_limit() {
+        let input = base_input();
+        let mut gem = win("Gemini 本周", 80.4, "ok", Some(7 * 86_400));
+        gem.main = true;
+        let v = percent_ch("antigravity", vec![
+            gem,
+            win("Claude/GPT 5 小时", 0.0, "rate-limited", Some(3600)),
+        ]);
+        let row = row_of(&v, None, &input);
+        assert_eq!(row.headline, Headline::percent(80.4));
+        assert_eq!(row.binding_window.as_deref(), Some("Claude/GPT 5 小时"));
+        assert_eq!(row.state, ViewState::Limited);
+        assert_eq!(row.tone, Tone::Bad);
+        assert_eq!(notification_window(&v).unwrap().label, "Claude/GPT 5 小时");
     }
 
     // ── 颜色与"确定是 0" ───────────────────────────────────────────
