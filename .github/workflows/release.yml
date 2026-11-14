@@ -56,7 +56,7 @@ jobs:
     # (RELEASE.md 记过:签名步骤在非交互环境等输入会 CPU 0% 永久挂住)。
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # 手工触发时按输入的 tag 检出,而不是默认分支 —— 否则构建出来的是
           # 分支头代码,版本号与 tag 不符。
