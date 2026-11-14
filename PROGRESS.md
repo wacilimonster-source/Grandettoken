@@ -4941,3 +4941,17 @@ src-tauri `cargo check --all-targets --locked` exit 0;
   密钥箱冒烟、Google Cloud 冒烟、凭据扫描 CLEAN、`git diff --check` 通过。
   版本号三处同步 0.3.48 并 `cargo fetch --locked` 复跑通过。
 - 真实账号的兑换操作与安装包 WebView2 交互仍未执行,发布后按验收边界补测。
+
+## 2026-11-14 v0.3.48 发布结果
+
+- tag `v0.3.48` 指向 `6beb779`(发版 commit,位于 merge 5618a56 之上),先推 main 后推 tag。
+  release run `43563297821` 全部成功(约 17 分钟);main CI `43563286654` 对 6beb779 成功。
+- Release 于北京时间 2026-11-14 14:05:29 公开发布。安装包 `Grandettoken_0.3.48_x64-setup.exe`
+  为 5,892,250 字节,SHA-256(本地匿名下载回验)
+  `ed4e3586392dbdeb56318c9c34629f51d4167c246427dda772a1504399adf4b2`;签名 444 字节,
+  更新清单 2,371 字节,三件套齐全,非 draft。
+- CI 端核验通过;本机 `node --use-env-proxy build/verify-release.js` 二次核验 PASS(14 项),
+  固定更新端点返回 0.3.48,安装包公开下载成功。本地无 CI 原始产物的签名及安装包逐字
+  比对按既有口径 SKIP,由 CI 端完成原始产物比对。
+- 本版含两条并行工作线的合并(远端 v0.3.44–47 与本地重置顾问复核),合并与冲突裁决
+  见上一条目;真实账号的兑换操作与安装包 WebView2 交互仍待验收。
