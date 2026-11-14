@@ -232,6 +232,24 @@
 .cr-need.on b { color: var(--ac); }
 .cr-need:focus-visible { outline: 2px solid var(--ac); outline-offset: 2px; }
 
+.cr-amts { margin-top: 10px; }
+.cr-amt-row { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 7px; }
+.cr-amt {
+  min-height: 32px;
+  padding: 5px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg2);
+  color: var(--tx2);
+  font: inherit;
+  font-size: max(12px, calc(11.5px * var(--u)));
+  cursor: pointer;
+  transition: background var(--t1), border-color var(--t1);
+}
+.cr-amt:hover { background: var(--bg3); border-color: var(--line2); }
+.cr-amt.on { border-color: var(--ac); color: var(--ac); background: color-mix(in srgb, var(--ac) 12%, var(--bg2)); font-weight: 560; }
+.cr-amt:focus-visible { outline: 2px solid var(--ac); outline-offset: 2px; }
+
 .cr-date-row { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
 .cr-date-row input[type="date"] {
   min-height: 38px;

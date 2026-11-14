@@ -8,32 +8,10 @@
     hold: { en: "HOLD", zh: "先留着" },
     unknown: { en: "UNKNOWN", zh: "不确定" },
   };
-  const REASON = {
-    gap_too_short: "空窗很短，等自然重置",
-    wait_for_reset: "能等到自然重置",
-    deadline_before_reset: "自然重置前就要用",
-    deadline_before_sub_end: "订阅结束前就要用",
-    card_expires_before_reset: "卡等不到自然重置",
-    remaining_covers: "剩余额度够这次需求",
-    full_window: "周额度还满",
-    full_window_both: "周额度还满",
-    full_window_five_hour: "周额度还满",
-    no_need: "这次没有明确需求",
-    no_cards: "没有可用卡",
-    cards_unknown: "卡数未知",
-    sub_expired: "订阅已到期",
-    no_weekly: "没有周窗",
-    data_inconsistent: "周额度数据对不上",
-    reset_unknown: "重置时间不可用",
-    stale_past_reset: "已过重置点",
-    just_redeemed: "刚用过卡",
-    no_reset_before_sub_end: "订阅前等不到重置",
-    plan_unavailable: "计划暂不可用",
-  };
   const WARN = {
     verify_eligibility: "请在 Codex 核对兑换资格。官方要求重置涵盖的至少一项额度剩余不足 80%。",
     burn_unknown: "本周期样本太短，消耗速度只是估算",
-    low_value_now: "现在用卡换回的额度很低",
+    low_value_now: "同一计划范围内的净增供给较少，可能为负；本次明确的使用期限仍优先。",
     cards_derived: "卡数是从明细推导的",
     count_mismatch: "接口数量与明细条数不一致，以数量为准",
     card_expiry_unknown: "有卡的到期日未知，计划没有假设它永久有效",
@@ -41,7 +19,11 @@
     data_time_unknown: "数据更新时间未知",
     sub_ends_soon: "订阅不到 1 天到期",
     sub_short: "订阅不到 3 天到期",
-    plan_unavailable: "订阅到期日未填或样本不足，计划暂不可用",
+    plan_unavailable: "缺少有效卡到期时间、订阅截止或足够用量样本，计划暂不可用",
+    subscription_unknown: "订阅到期日未填，暂按订阅持续有效规划至最后一张有效卡到期；续订情况变化后请更新日期。",
+    reset_imminent: "自然恢复已不足一小时；本次按必须立即使用给出建议，若能等可保留卡。",
+    five_hour_demand_unknown: "本次用量按周额度填写，五小时实际需求需在 Codex 核对；其百分比与周额度分别计算。",
+    weekly_plan_only: "计划仅试算周额度供给，五小时窗口可能另有限流。",
     scope_mismatch: "账号范围不一致，设置没有串用",
     amount_defaulted: "没有写用量，按 100% 算",
     need_defaulted: "需求已过期或无效，按「能等」算",
@@ -51,6 +33,12 @@
     ["soon", "今天要用", "能等，但今天要"],
     ["patient", "能等", "等自然重置再说"],
     ["idle", "暂时不用", "只是看看，不急"],
+  ];
+  // 设计 §5.3 的用量档位：标了小用量，剩余够时就不会被劝去烧卡。
+  const AMOUNTS = [
+    [25, "少量 25%"],
+    [50, "一半 50%"],
+    [100, "整窗 100%"],
   ];
 
   const state = {
@@ -66,6 +54,7 @@
     subEndAt: null,
     need: "patient",
     needAt: null,
+    amount: null,
     speed: null,
     scope: null,
     saving: false,
@@ -198,13 +187,31 @@
       </button>`).join("");
   }
 
+  function amountRow() {
+    if (state.need !== "urgent" && state.need !== "soon") return "";
+    return `<div class="cr-amts">
+      <div class="cr-label">这次大概用多少周额度？</div>
+      <div class="cr-amt-row">${AMOUNTS.map(([v, label]) => `
+        <button type="button" class="cr-amt${state.amount === v ? " on" : ""}"
+          data-codex-amt="${v}" aria-pressed="${state.amount === v}"${state.saving ? " disabled" : ""}>${label}</button>`).join("")}
+      </div>
+      <div class="cr-hint">不选按整窗 100% 保守估；标了小用量，剩余够时就不会建议用卡。</div>
+    </div>`;
+  }
+
+  function needAmountText() {
+    if (state.need !== "urgent" && state.need !== "soon") return "—";
+    return state.amount == null ? "100%（默认）" : `${state.amount}%`;
+  }
+
   function metricGrid(a) {
     if (!a) return "";
     const m = a.metrics || {};
     return `<div class="cr-metrics">
       <div><span>周额度剩余</span><b>${pct(m.weeklyRemainPercent)}</b></div>
       <div><span>下次自然重置</span><b>${esc(fmtTime(m.nextResetAt))}</b><small>${m.gapHours == null ? "" : esc(fmtGap(m.gapHours))}</small></div>
-      <div><span>现在用卡换回</span><b>${m.cardGainPercent == null ? "—" : `${Number(m.cardGainPercent).toFixed(1)}%`}</b><small>按本周期平均速度估算</small></div>
+      <div><span>五小时额度剩余</span><b>${pct(m.fiveHourRemainPercent)}</b><small>恢复 ${esc(fmtTime(m.fiveHourResetAt))}</small></div>
+      <div><span>现在用卡净收益</span><b>${m.cardGainPercent == null ? "—" : `${Number(m.cardGainPercent).toFixed(1)}%`}</b><small>同一计划范围内对比等待，按周额度估算</small></div>
       <div><span>可用重置卡</span><b>${m.cardsAvailable == null ? "未知" : `${m.cardsAvailable} 张`}</b><small>${m.cardsUnknown ? "不能劝用" : "来自当前详情"}</small></div>
       <div><span>订阅到期</span><b>${esc(fmtTime(m.subEndAt))}</b><small>${m.daysToSubEnd == null ? "未填" : `还剩 ${m.daysToSubEnd.toFixed(1)} 天`}</small></div>
       <div><span>本周期平均速度</span><b>${m.burnPercentPerDay == null ? "—" : `${Number(m.burnPercentPerDay).toFixed(1)}%/天`}</b><small>${m.burnEstimated ? "按本周期估算" : "样本不足"}</small></div>
@@ -221,14 +228,14 @@
     if (!a) return "";
     if (a.verdict === "now") {
       return `<div class="cr-action-note now">
-        <b>如果决定用：去 Codex「个人资料 → 用量摘要」手动兑换。</b>
+        <b>如果决定用：去 Codex 用量页面核对涵盖范围后手动兑换。</b>
         <span>本工具只给建议，不代点、不自动兑换。</span>
       </div>`;
     }
     if (a.verdict === "wait") {
       return `<div class="cr-action-note wait">
-        <b>按建议等：下次自然重置会自动恢复周额度。</b>
-        <span>现在不用去 Codex 点重置。</span>
+        <b>按建议等：查看受限窗口的自然恢复时间。</b>
+        <span>周额度与五小时窗口可能分别恢复。</span>
       </div>`;
     }
     return `<div class="cr-action-note hold">
@@ -250,14 +257,17 @@
       <div class="cr-block">
         <div class="cr-label">你这次要用吗？</div>
         <div class="cr-needs">${needButtons()}</div>
-        <div class="cr-hint">「能等」是默认；选「现在就要」才会把结论翻成 NOW。</div>
+        <div class="cr-hint">默认按「能等」计算；选择用量后，会结合自然重置时间与卡的有效期给出建议。</div>
+        ${amountRow()}
       </div>
       <div class="cr-block">
-        <label class="cr-label" for="codexResetSubEnd">订阅到期日</label>
+        <label class="cr-label" for="codexResetSubEnd">订阅到期日（可选）</label>
         <div class="cr-date-row">
           <input type="date" id="codexResetSubEnd" value="${dateValue(state.subEndAt)}"
-            aria-label="订阅到期日"${state.saving ? " disabled" : ""}>
-          <span>按当日 23:59 计；只存本地，不发网络请求</span>
+            aria-label="订阅到期日"${state.saving || state.loading ? " disabled" : ""}>
+          <button type="button" class="btn s" data-codex-clear-date
+            aria-label="清空订阅到期日"${!state.subEndAt || state.saving || state.loading ? " disabled" : ""}>清空</button>
+          <span>可留空，按重置卡有效期规划；填写后按当日 23:59 截止，日期只存本地</span>
         </div>
         ${state.profileError ? `<div class="cr-note bad">${esc(state.profileError)}</div>` : ""}
       </div>
@@ -270,8 +280,9 @@
 
   function timelineHtml(a) {
     if (!a) return "";
-    const sub = a.metrics.subEndAt || state.subEndAt;
+    const sub = a.metrics.planEndAt || a.metrics.subEndAt || state.subEndAt;
     if (!sub) return "";
+    const endLabel = a.metrics.planEndSource === "cards" ? "最后一张卡到期" : "订阅到期";
     const now = nowSec();
     const reset = a.metrics.nextResetAt;
     const start = Math.min(now, sub - 1);
@@ -279,7 +290,7 @@
     const rp = reset ? clamp((reset - start) / span * 100, 0, 100) : null;
     const dot = (left, cls) =>
       `<span class="cr-tl-dot ${cls}" style="left:${left}%"><i></i></span>`;
-    return `<div class="cr-timeline" aria-label="从现在到订阅到期的时间轴">
+    return `<div class="cr-timeline" aria-label="从现在到${endLabel}的时间轴">
       <div class="cr-tl-line"></div>
       ${dot(0, "now")}
       ${rp == null ? "" : dot(rp, "reset")}
@@ -288,7 +299,7 @@
     <div class="cr-tl-legend">
       <span><b>今天</b>${esc(fmtDay(now))}</span>
       <span><b>下次自然重置</b>${esc(fmtDay(reset))}</span>
-      <span><b>订阅到期</b>${esc(fmtDay(sub))}</span>
+      <span><b>${endLabel}</b>${esc(fmtDay(sub))}</span>
     </div>`;
   }
 
@@ -321,12 +332,17 @@
     if (!a) return "";
     const m = a.metrics || {};
     const cards = m.cardsAvailable == null ? "未知" : `${m.cardsAvailable} 张`;
-    const canWait = m.canWait === false ? "订阅结束前等不到" : m.canWait === true ? "能等到" : "未填订阅到期日";
+    const canWait = m.canWait === false ? "订阅结束前等不到" : m.canWait === true ? "能等到"
+      : m.planEndSource === "cards" ? "订阅未填，按卡有效期规划" : "未填订阅到期日";
     const need = NEEDS.find(([k]) => k === state.need);
+    const needVal = need
+      ? need[1] + ((state.need === "urgent" || state.need === "soon")
+        ? ` · ${state.amount == null ? "按整窗估" : `${state.amount}%`}` : "")
+      : "能等";
     const steps = [
       ["0", "硬门", a.reasonCode === "no_weekly" || a.reasonCode === "data_inconsistent" || a.reasonCode === "full_window" || a.reasonCode === "full_window_both" || a.reasonCode === "full_window_five_hour" || a.reasonCode === "sub_expired" ? "卡住/不判断" : "通过"],
       ["1", "等得到吗", canWait],
-      ["2", "需求", need ? need[1] : "能等"],
+      ["2", "需求", needVal],
       ["3", "卡数", cards],
       ["4", "质量", (a.warnings || []).length ? `${a.warnings.length} 条提示` : "无"],
     ];
@@ -346,13 +362,15 @@
       <div class="cr-block">
         <div class="cr-label">关键数字</div>
         <div class="cr-evidence-grid">
+          <div><span>这次标的用量</span><b>${esc(needAmountText())}</b></div>
           <div><span>周额度已用</span><b>${pct(m.weeklyUsedPercent)}</b></div>
           <div><span>周额度剩余</span><b>${pct(m.weeklyRemainPercent)}</b></div>
           <div><span>下次重置</span><b>${esc(fmtTime(m.nextResetAt))}</b></div>
           <div><span>可用卡</span><b>${m.cardsAvailable == null ? "未知" : `${m.cardsAvailable} 张`}</b></div>
           <div><span>省卡策略用几张</span><b>${m.plannedCards == null ? "—" : `${m.plannedCards} 张`}</b></div>
           <div><span>补满要几张（严格不断档）</span><b>${m.coverCards == null ? "现有卡不够" : `${m.coverCards} 张`}</b></div>
-          <div><span>到订阅到期仍差</span><b>${m.shortfallPercent == null ? "—" : `${Number(m.shortfallPercent).toFixed(1)}%`}</b></div>
+          <div><span>到计划截止仍差</span><b>${m.shortfallPercent == null ? "—" : `${Number(m.shortfallPercent).toFixed(1)}%`}</b></div>
+          <div><span>计划截止${m.planEndSource === "cards" ? "（卡到期）" : ""}</span><b>${esc(fmtTime(m.planEndAt))}</b></div>
           <div><span>最早卡到期</span><b>${esc(fmtTime(m.earliestCardExpiry))}</b></div>
         </div>
       </div>
@@ -384,7 +402,7 @@
       <div class="cr-verdict-card cr-verdict-${vclass}">
         <div class="cr-verdict-badge">${v.en}</div>
         <div class="cr-verdict-copy">
-          <b>${esc(a ? a.headline : state.loading ? "正在计算…" : "暂时无法判断")}</b>
+          <b>${esc(a ? a.headline : state.loading ? "正在计算…" : state.error ? "建议暂时不可用" : "正在读取周额度…")}</b>
           <p>${esc(a ? a.detail : state.error || "先刷新 Codex 周额度。")}</p>
         </div>
       </div>
@@ -395,7 +413,7 @@
         ${tab === "advice" ? advicePanel(c) : tab === "plan" ? planPanel(c) : evidencePanel()}
       </div>
       <div class="cr-footer">
-        本工具只给建议，不自动兑换、不新增网络请求。兑换入口在 Codex「个人资料 → 用量摘要」。
+        本工具只给建议。兑换前请在 Codex 用量页面核对卡涵盖的额度和有效期。
       </div>`;
   }
 
@@ -415,6 +433,7 @@
     const five = (c.windows || []).find((w) => w.key === "5h") || null;
     return {
       scope: state.scope,
+      planType: ((c.extra || []).find(([key]) => key === "套餐") || [])[1] || null,
       dataStale: !!c.stale || c.valid === false,
       weekly,
       fiveHour: five,
@@ -423,7 +442,7 @@
       subEndAt: state.subEndAt || null,
       need: {
         kind: state.need,
-        amountPercent: null,
+        amountPercent: state.amount,
         at: state.needAt || null,
       },
       planBurnPercentPerDay: state.speed,
@@ -434,11 +453,12 @@
     return [
       c.id || "",
       Math.floor(nowSec() / 60),
-      JSON.stringify([c.windows, c.resetCredits, c.stale, c.valid]),
+      JSON.stringify([c.windows, c.resetCredits, c.stale, c.valid, c.extra]),
       ts(c.updatedAt),
       c.resetCredits && ts(c.resetCredits.updatedAt),
       c.resetCredits ? (c.resetCredits.availableCount == null ? "u" : String(c.resetCredits.availableCount)) : "u",
       state.need,
+      state.amount == null ? "d" : String(state.amount),
       state.subEndAt || "0",
       state.speed == null ? "actual" : String(state.speed),
     ].join("|");
@@ -450,11 +470,16 @@
     state.subEndAt = profile.subEndAt || null;
     const need = profile.need || {};
     state.needAt = need.at || null;
-    if (need.kind && need.at && nowSec() - need.at <= 12 * 3600) {
+    const amt = Number(need.amountPercent);
+    state.amount = Number.isFinite(amt) && amt > 0 ? Math.min(100, amt) : null;
+    const sameDay = need.kind !== "soon" || new Date(need.at * 1000).toDateString()
+      === new Date(nowSec() * 1000).toDateString();
+    if (need.kind && need.at && nowSec() - need.at <= 12 * 3600 && sameDay) {
       state.need = need.kind;
     } else {
       state.need = "patient";
       state.needAt = null;
+      state.amount = null;
     }
   }
 
@@ -555,21 +580,26 @@
     paintPageAndFocus("[data-codex-reset-root]");
   }
 
-  async function saveNeed(kind) {
+  async function saveNeed(kind, amountPercent) {
     if (state.saving || state.loading) return;
     const c = currentChannel();
     if (!c) return;
     const prev = state.need;
     const prevAt = state.needAt;
+    const prevAmount = state.amount;
     state.saving = true;
     ++state.seq;
     state.need = kind;
     state.needAt = nowSec();
+    // patient/idle 不带用量；urgent/soon 保留旧用量或用本次点选的档位。
+    state.amount = kind === "urgent" || kind === "soon"
+      ? (amountPercent == null ? state.amount : amountPercent)
+      : null;
     paint();
     try {
       await invoke("codex_reset_profile_set", {
         id: "codex",
-        profile: { scope: state.scope, need: { kind, amountPercent: null, at: state.needAt } },
+        profile: { scope: state.scope, need: { kind, amountPercent: state.amount, at: state.needAt } },
       });
       state.profileError = "";
       state.profileLoaded = true;
@@ -581,6 +611,7 @@
     } catch (e) {
       state.need = prev;
       state.needAt = prevAt;
+      state.amount = prevAmount;
       if (typeof showToast === "function") showToast("保存需求失败:" + e, true);
       paint();
     } finally {
@@ -633,9 +664,13 @@
 
   function clickHandler(ev) {
     const t = ev.target && ev.target.closest
-      ? ev.target.closest("[data-codex-reset-open],[data-codex-reset-back],[data-codex-tab],[data-codex-need],[data-codex-retry]")
+      ? ev.target.closest("[data-codex-reset-open],[data-codex-reset-back],[data-codex-tab],[data-codex-need],[data-codex-amt],[data-codex-clear-date],[data-codex-retry]")
       : null;
     if (!t) return;
+    if (t.hasAttribute("data-codex-clear-date")) {
+      if (!t.disabled) saveDate("");
+      return;
+    }
     if (t.hasAttribute("data-codex-reset-open")) {
       ev.preventDefault();
       open();
@@ -654,6 +689,11 @@
     if (t.hasAttribute("data-codex-need")) {
       const kind = t.getAttribute("data-codex-need");
       if (kind && kind !== state.need) saveNeed(kind);
+      return;
+    }
+    if (t.hasAttribute("data-codex-amt")) {
+      const amt = Number(t.getAttribute("data-codex-amt"));
+      if (Number.isFinite(amt) && amt > 0 && amt !== state.amount) saveNeed(state.need, amt);
       return;
     }
     if (t.hasAttribute("data-codex-retry")) {

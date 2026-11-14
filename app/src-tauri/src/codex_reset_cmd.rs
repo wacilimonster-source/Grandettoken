@@ -4,7 +4,9 @@
 //! 交给 `codex_reset::advise`。不读配额快照里的卡数据、不发网络请求、不兑换卡。
 
 use tauri::State;
-use tokenscope_core::codex_reset::{advise, Advice, AdviceInput, Profile, ProfilePatch};
+use tokenscope_core::codex_reset::{
+    advise, local_today_end, Advice, AdviceInput, Profile, ProfilePatch,
+};
 use tokenscope_core::fetch::now_ts;
 use tokenscope_core::recovery::Snapshot;
 use tokenscope_core::store::Store;
@@ -108,5 +110,10 @@ pub fn codex_reset_advice(
         return Err("Codex 账号已变化，请刷新后重新计算".into());
     }
     // 写操作和读判定分开：命令层不碰卡，也不改 profile；纯函数只读输入。
+    // 「今天要用」的当天边界由本机时区补齐；纯函数不读时钟以外的环境。
+    let mut input = input;
+    if input.today_end_at.is_none() {
+        input.today_end_at = local_today_end(now);
+    }
     Ok(advise(&input, now))
 }

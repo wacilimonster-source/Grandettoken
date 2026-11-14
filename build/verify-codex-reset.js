@@ -30,9 +30,13 @@ const w = dom.window;
 const doc = w.document;
 const calls = [];
 let profileNeed = "patient";
+let profileAmount = null;
 // 夹具时间一律相对本机时钟:需求新鲜度(12h)/过期标记/重置点都按真实 now 推,
 // 钉死绝对时间戳会在跨天/12h 后把 NOW 误降级成 WAIT(2026-11-14 实测)
 const FIXTURE_NOW = Math.floor(Date.now() / 1000);
+let profileNeedAt = FIXTURE_NOW;
+let uiNow = FIXTURE_NOW;
+w.Date.now = () => uiNow * 1000;
 let profileSubEnd = FIXTURE_NOW + 16 * 86400;
 let toasts = [];
 let failSave = false;
@@ -44,6 +48,7 @@ w.showToast = (msg, bad) => toasts.push({ msg, bad });
 w.CHANNELS = [{
   id: "codex",
   kind: "codex",
+  extra: [["套餐", "plus"]],
   windows: [
     { key: "weekly", label: "周额度", percent: 100, remainPercent: 0, status: "rate-limited",
       resetsAt: "2026-11-13T09:56:52Z", main: true },
@@ -69,6 +74,11 @@ w.DETAIL_ID = "codex";
 
 function adviceFor(kind) {
   const now = kind === "urgent";
+  const inventory = w.CHANNELS[0].resetCredits;
+  const validExpiries = inventory.credits.map((c) => c.expiresAt).filter((t) => t > uiNow)
+    .sort((a, b) => a - b).slice(0, inventory.availableCount);
+  const cardEnd = inventory.error ? null : validExpiries.pop() || null;
+  const planEnd = profileSubEnd || cardEnd;
   return {
     verdict: now ? "now" : "wait",
     reasonCode: now ? "deadline_before_reset" : "gap_too_short",
@@ -82,7 +92,7 @@ function adviceFor(kind) {
       cardsAvailable: 3,
       cardsUnknown: false,
       cardsSource: "live",
-      canWait: true,
+      canWait: profileSubEnd == null ? null : true,
       fiveHourRemainPercent: 100,
       earliestCardExpiry: FIXTURE_NOW + 13 * 86400,
       cardsExpiringBeforeReset: 0,
@@ -91,19 +101,21 @@ function adviceFor(kind) {
       burnEstimated: true,
       cardGainPercent: 3.3,
       subEndAt: profileSubEnd,
-      daysToSubEnd: 16.47,
+      daysToSubEnd: profileSubEnd == null ? null : 16.47,
+      planEndAt: planEnd,
+      planEndSource: profileSubEnd ? "subscription" : cardEnd ? "cards" : null,
       dataUpdatedAt: FIXTURE_NOW - 60,
-      planAvailable: true,
+      planAvailable: planEnd != null,
       plannedCards: 0,
       coverCards: 3,
-      shortfallPercent: 10.9,
+      shortfallPercent: planEnd == null ? null : 10.9,
     },
-    planLines: [
-      "自然重置 3 次 · 到 11-30 还剩 16 天",
+    planLines: planEnd == null ? ["缺少有效重置卡到期时间"] : [
+      profileSubEnd ? "自然重置 3 次 · 到 11-30 还剩 16 天" : "计划至最后一张有效卡到期",
       "按 14.8%/天：省卡 0 张；到到期差 10.9% 个周窗",
       "想全程不断：补满要 3 张，但每张只换回 4%–4%，补不补都行",
     ],
-    warnings: now ? ["low_value_now"] : [],
+    warnings: [...(now ? ["low_value_now"] : []), ...(!profileSubEnd && cardEnd ? ["subscription_unknown"] : [])],
     computedAt: FIXTURE_NOW - 60,
   };
 }
@@ -114,15 +126,19 @@ w.__TAURI__ = {
       calls.push({ cmd, args });
       if (cmd === "codex_reset_profile_get") {
         if (failRead) throw new Error("read fixture");
-        return { subEndAt: profileSubEnd, need: { kind: profileNeed, amountPercent: null, at: FIXTURE_NOW - 60 }, updatedAt: FIXTURE_NOW - 60 };
+        return { subEndAt: profileSubEnd, need: { kind: profileNeed, amountPercent: profileAmount, at: profileNeedAt }, updatedAt: FIXTURE_NOW - 60 };
       }
       if (cmd === "codex_reset_profile_set") {
         if (failSave) throw new Error("write fixture");
         const p = (args && args.profile) || {};
-        if (p.need && p.need.kind) profileNeed = p.need.kind;
+        if (p.need && p.need.kind) {
+          profileNeed = p.need.kind;
+          profileNeedAt = p.need.at;
+          profileAmount = p.need.amountPercent == null ? null : p.need.amountPercent;
+        }
         if (p.subEndAt) profileSubEnd = p.subEndAt;
         if (p.clearSubEnd) profileSubEnd = null;
-        return { subEndAt: profileSubEnd, need: { kind: profileNeed, amountPercent: null, at: FIXTURE_NOW - 60 }, updatedAt: FIXTURE_NOW - 60 };
+        return { subEndAt: profileSubEnd, need: { kind: profileNeed, amountPercent: profileAmount, at: profileNeedAt }, updatedAt: FIXTURE_NOW - 60 };
       }
       if (cmd === "codex_reset_advice") {
         const kind = (args && args.input && args.input.need && args.input.need.kind) || "patient";
@@ -161,6 +177,8 @@ const assert = (ok, msg) => {
   assert(q(".cr-chip").textContent === "WAIT", "初始结论 WAIT");
   assert(calls.some((c) => c.cmd === "codex_reset_profile_get"), "进入时读一次本地 profile");
   assert(calls.some((c) => c.cmd === "codex_reset_advice"), "进入时调用一次纯函数建议");
+  assert(calls.filter((c) => c.cmd === "codex_reset_advice").pop().args.input.planType === "plus",
+    "当前套餐传入判定以核对重置涵盖范围");
 
   q("[data-codex-reset-root]").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
   await wait(30);
@@ -171,11 +189,31 @@ const assert = (ok, msg) => {
 
   q('[data-codex-need="urgent"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
   await wait(40);
-  // probe removed
-  // console.log("BADGE_AFTER_URGENT:", JSON.stringify(q(".cr-verdict-badge").textContent), "note:", JSON.stringify(q(".cr-action-note") && q(".cr-action-note").textContent));
   assert(q(".cr-verdict-badge").textContent === "NOW", "选「现在就要」翻成 NOW");
   assert(q(".cr-action-note").textContent.includes("手动兑换"), "NOW 只提示去 Codex 手动兑换");
   assert(qa("[data-codex-use]").length === 0, "没有任何自动兑换或「用一张」按钮");
+  assert(!!q(".cr-amts"), "选 urgent 后展开用量档位行");
+  assert(qa("[data-codex-amt]").length === 3, "三个用量档位都在");
+  q('[data-codex-amt="50"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await wait(40);
+  assert(calls.some((c) => c.cmd === "codex_reset_profile_set" && c.args.profile.need
+    && c.args.profile.need.amountPercent === 50), "用量档位写进 profile");
+  const amtCall = calls.filter((c) => c.cmd === "codex_reset_advice").pop();
+  assert(amtCall && amtCall.args.input.need.amountPercent === 50, "用量随建议请求传给纯函数");
+  assert(!!q('.cr-amt.on[data-codex-amt="50"]'), "选中的用量档位高亮");
+
+  q('[data-codex-need="soon"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await wait(40);
+  const soonCall = calls.filter((c) => c.cmd === "codex_reset_advice").pop();
+  assert(soonCall.args.input.need.kind === "soon" && soonCall.args.input.need.amountPercent === 50,
+    "今天要用携带所选用量请求建议");
+  failSave = true;
+  q('[data-codex-amt="25"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await wait(40);
+  assert(!!q('.cr-amt.on[data-codex-amt="50"]'), "用量保存失败回滚原档位");
+  assert(toasts.some((t) => t.bad && t.msg.includes("保存需求失败")), "用量保存失败有用户可见反馈");
+  failSave = false;
+  toasts = [];
 
   q('[data-codex-tab="plan"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
   await wait(20);
@@ -209,6 +247,7 @@ const assert = (ok, msg) => {
   await wait(40);
   assert(calls.some((c) => c.cmd === "codex_reset_profile_set" && c.args.profile.subEndAt), "日期变更写 profile");
   assert(toasts.length === 0, "保存成功不弹错误 toast");
+  assert(!!q("[data-codex-clear-date]"), "已填写日期提供明确清空入口");
 
   const savedDate = q("#codexResetSubEnd").value;
   failSave = true;
@@ -217,14 +256,76 @@ const assert = (ok, msg) => {
   await wait(40);
   assert(q("#codexResetSubEnd").value === savedDate, "写失败恢复已保存日期");
   assert(toasts.some((t) => t.bad && t.msg.includes("保存订阅到期日失败")), "写失败有用户可见反馈");
+
+  q("[data-codex-clear-date]").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await wait(40);
+  assert(q("#codexResetSubEnd").value === savedDate && profileSubEnd != null,
+    "清空保存失败恢复日期并保留已保存值");
   failSave = false;
+  q("[data-codex-clear-date]").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await wait(40);
+  assert(calls.some((c) => c.cmd === "codex_reset_profile_set" && c.args.profile.clearSubEnd === true),
+    "清空通过明确标志写入 profile");
+  assert(q("#codexResetSubEnd").value === "" && profileSubEnd === null, "清空成功保存空日期");
+  assert(q("[data-codex-clear-date]").disabled, "空日期禁用重复清空");
+  const clearedAdvice = calls.filter((c) => c.cmd === "codex_reset_advice").pop();
+  assert(clearedAdvice.args.input.subEndAt === null && clearedAdvice.args.input.need.kind === "soon",
+    "清空后沿用需求并以空日期重算即时建议");
+  assert(q(".cr-verdict-badge").textContent === "WAIT", "空日期仍展示即时建议");
+  q('[data-codex-tab="plan"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert(q(".cr-plan").textContent.includes("最后一张有效卡到期") && !!q(".cr-timeline"),
+    "空日期按卡到期时间展示计划及时间轴");
+  assert(q(".cr-tl-legend").textContent.includes("最后一张卡到期"), "时间轴标明卡有效期截止");
+
+  const readsBeforeReopen = calls.filter((c) => c.cmd === "codex_reset_profile_get").length;
+  w.CodexResetUI.onDetailClosed();
+  w.CHANNELS[0].updatedAt += 1;
+  host.innerHTML = w.CodexResetUI.render(w.CHANNELS[0]);
+  await wait(40);
+  q("[data-codex-reset-root]").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await wait(20);
+  assert(calls.filter((c) => c.cmd === "codex_reset_profile_get").length > readsBeforeReopen
+    && q("#codexResetSubEnd").value === "", "重新读取设置后日期仍为空");
+  q("#codexResetSubEnd").value = savedDate;
+  q("#codexResetSubEnd").dispatchEvent(new w.Event("change", { bubbles: true }));
+  await wait(40);
+  assert(q("#codexResetSubEnd").value === savedDate && profileSubEnd != null, "空日期可重新填写并保存");
+  q('[data-codex-tab="plan"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert(!!q(".cr-timeline"), "重新填写后恢复到期时间轴");
+  q('[data-codex-tab="advice"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  q("#codexResetSubEnd").value = "";
+  q("#codexResetSubEnd").dispatchEvent(new w.Event("change", { bubbles: true }));
+  await wait(40);
+  assert(profileSubEnd === null && q("#codexResetSubEnd").value === "", "日期控件直接清空也能保存");
+  const savedCredits = w.CHANNELS[0].resetCredits.credits;
+  w.CHANNELS[0].resetCredits.credits = [{ title: "Expiring", expiresAt: uiNow + 30 }];
+  tick();
+  await wait(40);
+  q('[data-codex-tab="plan"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  assert(!!q(".cr-timeline"), "有效卡在空日期下提供计划截止");
+  uiNow += 120;
+  tick();
+  await wait(40);
+  assert(!q(".cr-timeline") && q(".cr-plan").textContent.includes("缺少有效"),
+    "跨过卡到期时刻自动撤下失效计划");
+  w.CHANNELS[0].resetCredits.credits = [{ title: "Unknown", expiresAt: null }];
+  tick();
+  await wait(40);
+  assert(!q(".cr-timeline"), "未知卡到期时间不编造计划截止");
+  w.CHANNELS[0].resetCredits.credits = savedCredits;
+  w.CHANNELS[0].resetCredits.error = "fixture refresh failure";
+  tick();
+  await wait(40);
+  assert(!q(".cr-timeline"), "卡读取失败不沿用旧有效期计划");
+  w.CHANNELS[0].resetCredits.error = null;
   failRead = true;
   const retry = doc.querySelector('[data-codex-tab="plan"]');
   retry.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
   q("#codexResetSpeed").dispatchEvent(new w.Event("change", { bubbles: true }));
   await wait(40);
   const fallback = calls.filter((c) => c.cmd === "codex_reset_advice").pop();
-  assert(fallback.args.input.subEndAt === null && fallback.args.input.need.kind === "patient", "读取失败清掉旧设置并降级为能等");
+  assert(fallback.args.input.subEndAt === null && fallback.args.input.need.kind === "patient"
+    && fallback.args.input.need.amountPercent === null, "读取失败清掉旧设置并降级为能等");
   assert(typeof tick === "function", "注册每分钟重新计算的时钟");
 
   assert(!calls.some((c) => /redeem|reset_credit/i.test(c.cmd)), "全程没有兑换或读卡命令");

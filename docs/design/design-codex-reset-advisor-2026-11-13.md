@@ -1,6 +1,11 @@
 # Codex 重置顾问 · 详细设计方案
 
 > 2026-11-13 · 状态：**已评审并修正**，算例与边界裁决见 `docs/report/codex-reset-review-2026-11-13.md`。
+> 2026-11-13 二轮（实机反馈）：`deadline_before_reset` 文案缺失导致前端显示「暂时无法判断」已修复
+> （reason code 改为穷举 enum，编译期强制文案表完整）；新增重置临近等待规则与「今天」本地日界；
+> §5.3 的用量档位落地。实现以本文件 §4.4 v3 为准。
+> 2026-11-14 更新：订阅日期为空时按最后一张有效卡的到期时间规划，计划与订阅日期分别保存于输出指标；逐卡检查有效期，并提示订阅持续有效的假设。
+> 2026-11-14 独立规则复核后的当前即时判定以 `docs/report/codex-reset-policy-review-2026-11-14.md` 为准。下文 v3 的一小时强制等待、99% 满额保护和五小时仅提示规则保留为历史设计记录。
 > 关联代码：`app/core/src/codex.rs`（重置卡只读元数据）、`app/core/src/providers.rs::extract_codex`（周窗模型）、`app/src/app.js::coreCodexResets`（重置卡区块）、`docs/product/product-codex-weekly-reset-2026-11-03.md`（周窗倒计时）
 > 关联外部口径：OpenAI Help Center（见 §12）
 
@@ -136,14 +141,15 @@ burn ≈ 100 / 6.75 = 14.8% / 天
 | `resetCredits.lastRedeemedAt` | 同上 | 刚用过卡 → 旧额度数据不可信 |
 | `resetCredits.updatedAt` | 同上 | 与 `lastRedeemedAt` 比，判断数据是否在重置后 |
 | `view.updatedAt` | `ChannelView` | 兜底的数据时刻；`lastRedeemedAt > 它` = 数据在重置前 |
-| `subEndAt` | **新增，手动设置** | `wham/usage` 不含订阅到期日；按凭据 scope 存 |
-| `need` | **新增，交互输入** | 4 档：现在 / 24 小时内 / 能等下次重置 / 不用；可选用量 |
+| `subEndAt` | **可选，手动设置或清空** | 按凭据 scope 存；为空时按卡有效期计算计划，填写后计算到订阅结束的计划 |
+| `need` | **新增，交互输入** | 4 档：现在 / 今天内 / 能等下次重置 / 不用；可选用量 |
+| `today_end_at` | **v3 新增，命令层补齐** | 本地「今天」的 23:59:59；命令层按机器时区计算，缺省退回 24h 口径 |
 | `scope` | 可选；否则快照 scope | 多账号隔离；不一致时 warning(scope_mismatch) |
 | `now` | 后端 | Unix 秒 |
 
 > 订阅到期日为什么必须手动：`wham/usage` 只给 `plan_type` 和窗口，不给「订阅还剩几天」。这不是可以猜的字段——猜错会让整个 horizon 计划失真，所以宁可让用户填一次。
 
-**有效截止 = `min(subEndAt, 最近一张卡的 expiresAt)`。** 本机 2026-11-13 实测：3 张卡的到期分别是 **12-01 03:10、12-02 04:55、12-13 05:40（CST）**，全部晚于订阅到期 11-29。所以本例的有效截止就是 **11-29**；卡到期日只影响「如果续订，这张卡还能用到哪天」，不改变「不续订、11-29 之后都用不了」的结论。
+**计划截止优先使用手填订阅日期，未填时使用最后一张有效卡的到期时间。** 卡按自身有效期逐张检查，计划截止与订阅日期分别输出为 `planEndAt` 和 `subEndAt`，`planEndSource` 为 `subscription` 或 `cards`。缺少有效卡日期时需刷新卡明细或填写订阅日期。空日期下提示订阅持续有效的计算假设。
 
 ### 4.2 派生量
 
@@ -181,7 +187,9 @@ all_expire_before_reset = cards > 0
 | 常量 | 值 | 为什么是这个数 |
 |---|---|---|
 | `FULL_WINDOW` | 99% | 官方：100% 不重新计时；留 1% 容差给上游四舍五入 |
-| `WAIT_GAP_H` | 24h | 24 小时内用卡，最多换 `24h × burn`；按典型 14.8%/天只有 14.8%，低于「值一张卡」的直觉 |
+| `RESET_IMMINENT_H` | 1h | 重置在眼前（v3 新增）：此刻用卡只提前几分钟，还把周窗锚点推走一周，卡几乎全烧 |
+| `WAIT_GAP_H` | 24h | 24 小时内用卡，最多换 `24h × burn`；按典型 14.8%/天只有 14.8%，低于「值一张卡」的直觉。「今天要用」的日界缺失时退回此口径 |
+| `ELIGIBILITY_H` | 80% | 官方资格口径「至少一项剩余不足 80%」（v3 新增）：周窗与 5h 窗都 ≥80% 时兑换大概率被拒，只发警告不改 verdict |
 | `MIN_GAIN` | 25% | 一张卡的机会成本约一个周窗；换回不到 1/4 个窗，不如等。用于即时文案的价值标注与 §6 模拟的用卡门槛，不单独决定 `verdict` |
 | `SUNK_MIN_GAIN` | 5% | 卡会在下次重置前过期、且当前确实有闲置空窗；不降门槛就会把卡等没。只用于模拟，不改即时 verdict |
 | `SUB_WARN_DAYS` | 3d | 距到期 <3 天，卡最多用出 3/7≈43%，必须提示「用不完整」 |
@@ -190,9 +198,14 @@ all_expire_before_reset = cards > 0
 
 阈值不写死在 UI 文案里；文案由 `reasonCode` 映射，改阈值只改常量与测试。
 
-### 4.4 判定顺序（v2，2026-11-13 优化轮）
+### 4.4 历史判定顺序（v3，2026-11-13 实机反馈轮）
 
 先算 §4.2 的派生量，再按下面的门走。**顺序本身就是安全策略**：越靠前的门越不能算错；能靠“满额保护”直接驳回的，不要先算需求。
+
+v3 相对 v2 的三处修正（都来自实机反馈）：
+1. `deadline_before_reset` 一直存在于判定矩阵，但 `reason_copy` 文案表漏了这个分支，前端于是永远显示兜底文案「暂时无法判断」。现在 reason code 是穷举 enum（`codex_reset::Reason`），文案表漏分支直接编译失败。
+2. 「今天要用」按钮的实现文案是「能等，但今天要」，按本地当天 23:59:59 为界（`AdviceInput.today_end_at`，命令层用机器时区补齐），不再按 24 小时近似——晚上 22 点 + 明早 6 点重置，按 24h 算会误判成「等一下就有」。
+3. 新增 `RESET_IMMINENT_H`：距自然重置不足 1 小时且额度不够时，等免费满额，不为几分钟烧卡。
 
 ```
 0. 硬门（先排除“算了也没用”）
@@ -223,25 +236,30 @@ all_expire_before_reset = cards > 0
        all_expire_before_reset == true
                     → 文案必须写明“等到重置，所有卡都过期了”
 
-2. 需求判定
+2. 需求判定（v3）
+   - urgent/soon 且 amount > remain 且 gap_h <= 1h，soon 还需重置落在当天
+                    → WAIT(reset_imminent)   // 重置就在眼前，等免费满额
+   - urgent/soon 且 amount > remain 且卡在重置前过期
+                    → NOW(card_expires_before_reset)  // 等到重置，卡先没了
    - urgent:
        amount > remain  → NOW(deadline_before_reset)
        amount <= remain → HOLD(remaining_covers)
-   - soon:
-       can_wait && gap_h <= 24 → WAIT(gap_too_short)
-       amount > remain          → NOW(deadline_before_reset)
-       amount <= remain         → HOLD(remaining_covers)
+   - soon（今天要用，以本地当天 23:59:59 为界；today_end_at 缺失退回 24h）:
+       amount <= remain            → HOLD(remaining_covers)
+       reset <= 当天结束            → WAIT(gap_too_short)   // 今天内就会免费满额
+       else                        → NOW(deadline_before_reset)
    - patient:
-       can_wait && gap_h <= 24 → WAIT(gap_too_short)
-       can_wait && gap_h > 24  → WAIT(wait_for_reset)
-       !can_wait               → HOLD(no_reset_before_sub_end)
+       gap_h <= 24 → WAIT(gap_too_short)
+       gap_h > 24  → WAIT(wait_for_reset)
+       !can_wait   → HOLD(no_reset_before_sub_end)
    - idle:
-       can_wait && gap_h <= 24 → WAIT(gap_too_short)
-       else                    → HOLD(no_need)
+       gap_h <= 24 → WAIT(gap_too_short)
+       else        → HOLD(no_need)
 
 3. 卡数校验（只覆盖 NOW；WAIT/HOLD 不因卡数改变结论）
    - cards == 0    → HOLD(no_cards)
    - cards == null → UNKNOWN(cards_unknown)
+   - 卡刷新失败且保留旧库存 → 可用数按未知处理，NOW 降级为 UNKNOWN(cards_unknown)
    - cards > 0     → NOW 保留
 
 4. 质量标注（不改 verdict，只进 warnings / 文案）
@@ -253,7 +271,8 @@ all_expire_before_reset = cards > 0
    - dataUpdatedAt 缺失         → warning(data_time_unknown) // 刚用卡可能识别不到
    - 订阅剩余 < 24h             → warning(sub_ends_soon)
    - 订阅剩余 < 3d              → warning(sub_short)       // 卡最多用出 3/7
-   - 订阅到期日未填             → warning(plan_unavailable)
+   - 订阅到期日未填且有有效卡日期 → warning(subscription_unknown)，按卡截止规划
+   - 缺少计划截止或消耗样本不足   → warning(plan_unavailable)
 ```
 
 判定表（基础分支；卡过期/满额/数据门是覆盖规则，优先级见上面的顺序）：
@@ -354,13 +373,14 @@ Codex 详情卡（`detailBody`）里，**「重置卡」区块之上**新增一�
 
 | reasonCode | 标题 | 正文（必须带数字） |
 |---|---|---|
-| `deadline_before_reset` | 现在重置 | 「你选的是现在就要用；自然重置在 17:56（约 5 小时后）。用这张卡能拿到满额，但会改写每周重置日；如果不急，等免费满额更划算。」 |
+| `deadline_before_reset` | 自然重置赶不上这次，用卡 | 「下次自然重置在 X 后；按这次 Y% 的用量，当前剩余 Z% 不够，要用只能先兑换一张卡补满。用卡会改写每周重置日。」（v3：文案随用量/剩余动态生成） |
+| `reset_imminent` | 重置就在 X，先等这一次 | 「不到 X 自然重置就免费满额；现在用卡等于把马上到手的重置烧掉，只提前这几分钟。实在等不了再去 Codex 手动兑换。」（v3 新增） |
 | `gap_too_short` | 等自然重置 | 「只差约 5 小时；现在用卡约换回 3.3% 个周窗，等免费满额更划算。」 |
 | `wait_for_reset` | 等自然重置 | 「你选的是能等；X 天后自然满额，这张卡留到下次卡住。」 |
 | `full_window` | 现在别用 | 「周额度还是满的。官方只恢复低于 100% 的窗口；现在点可能只刷新 5 小时窗，却消耗一张卡。」 |
 | `full_window_five_hour` | 现在别用 | 「周窗是满的，点了只会刷新 5h 窗。如果你正被 5h 限流且马上要干活，这是 5h 窗的取舍，不在本顾问的周窗判断里；否则别点。」 |
 | `full_window_both` | 现在别用 | 「周窗和 5h 窗都满；官方只恢复低于 100% 的项，点了可能不生效，别赌。」 |
-| `remaining_covers` | 不用卡 | 「还剩 62%，按 14.8%/天能撑到自然重置；这张卡留到下次卡住。」 |
+| `remaining_covers` | 不用卡 | 「这次要用掉的 Y% 不超过当前周窗剩余 Z%；不用重置也能完成。」（v3：带用量数字） |
 | `no_need` | 先留着 | 「没有明确需求就别用；真要开工时约能换回 X% 个周窗。」 |
 | `no_reset_before_sub_end` | 等不到重置 | 「下一次自然重置在 11-29 之后；等到那时订阅已经结束。要用就现在用，不用就留着作废。」 |
 | `deadline_before_sub_end` | 现在重置 | 「你选的是现在就要用，而自然重置在订阅之后；剩余额度撑不到，只能用卡。」 |
@@ -384,10 +404,12 @@ Codex 详情卡（`detailBody`）里，**「重置卡」区块之上**新增一�
 | `count_mismatch` | `availableCount` 与未过期明细数量不一致 | 「接口数量与明细不一致；按数量算，明细只用到到期日。」 |
 | `card_expiry_unknown` | 有卡但 `expiresAt` 为 null | 「有卡没有到期日；不假设它临期，也不假设它永久有效。」 |
 | `data_time_unknown` | `dataUpdatedAt` 缺失 | 「数据时刻缺失；刚用过卡可能识别不到，刷新后再看。」 |
-| `card_expiry_loss` | 卡在自然重置前过期，但 need 是 patient/idle | 「等到重置，这张卡会先过期；你不需要它就没关系。」 |
+| `card_expiry_loss` | 卡在自然重置前过期，且结论不是 NOW（v3：等/留的任何结论都提示，含 urgent 的 reset_imminent） | 「等到重置，这张卡会先过期；你不需要它就没关系。」 |
+| `eligibility_unlikely` | NOW 且周窗与 5h 窗剩余都 ≥80%（v3 新增；替代通用核对提示） | 「周窗与 5 小时窗剩余都 ≥80%，这次兑换大概率不符合官方资格（至少一项需不足 80%）；先直接用剩余额度，被拒就等下一轮重置。」 |
 | `sub_ends_soon` | `0 < days_left < 1` | 「订阅 1 天内到期；等到重置也用不了几天。」 |
 | `sub_short` | `1 <= days_left < 3` | 「订阅只剩 X 天；一张卡最多用出 X/7，别按整周估。」 |
-| `plan_unavailable` | `subEndAt` 未填或 `burn` 不可信 | 「计划区算不了；先填订阅到期日，或等本周期样本够了再看。」 |
+| `plan_unavailable` | 缺少有效卡日期和订阅截止，或消耗样本不足 | 提示刷新卡明细、填写订阅日期或积累用量样本 |
+| `subscription_unknown` | 未填订阅日期，使用卡截止规划 | 提示暂按订阅持续有效规划至最后一张有效卡到期 |
 | `scope_mismatch` | 传入 `scope` 与快照 scope 不一致 | 「账号 scope 不一致，订阅日期可能不是这个账号的；请复核。」 |
 | `amount_defaulted` | `urgent/soon` 未填用量 | 「按 100% 保守估；填了实际用量会更准。」 |
 | `need_defaulted` | `need.kind` 非法 | 「需求选项无法识别，先按能等到下次重置估算。」 |
@@ -400,7 +422,7 @@ Codex 详情卡（`detailBody`）里，**「重置卡」区块之上**新增一�
 - `lastRedeemedAt` 变化：立即把建议置为 `just_redeemed`，等下一轮刷新，不拿重置前的额度算。
 - `dataUpdatedAt`：前端必须把 `ChannelView.updatedAt`（或 `resetCredits.updatedAt`）一起传给命令；没有它，`lastRedeemedAt > dataUpdatedAt` 判不出来。缺失时加 warning，不默认等于 `now`。
 - **请求乱序**：用户连点四个按钮时，晚到的旧响应不得覆盖新结论。`codex-reset.js` 维护 `adviseSeq`，只接受最后一次请求的响应；jsdom 冒烟要测「先发的慢响应后到」。
-- **profile 读失败**：不阻塞建议；按默认 `patient` + `plan_unavailable` 降级，写回时再提示。
+- **profile 读失败**：按默认 `patient`、空订阅日期计算，有有效卡日期时使用卡截止计划，同时显示设置读取失败。
 - `amountPercent` 跟 `need` 一起存；`urgent/soon` 未填时按 100 估，并加 `amount_defaulted` warning。
 
 
@@ -412,7 +434,9 @@ Codex 详情卡（`detailBody`）里，**「重置卡」区块之上**新增一�
 
 ---
 
-## 6. 到订阅到期的用卡计划（Horizon）
+## 6. 到计划截止的用卡计划（Horizon）
+
+`planEndAt` 优先取手填订阅日期，留空时取已确认可用卡中最晚的有效到期时间。未知有效期的卡只用于库存展示，计划供给只使用有效期已知的卡。过期、零卡及读取失败的旧库存不能构造卡截止计划。自然重置计数只统计严格早于计划截止的恢复事件。
 
 ### 6.1 为什么不是简单加法
 
@@ -428,17 +452,17 @@ cards         = availableCount
 unknown_expiry = max(0, cards - known_cards)
 consumed = 0; idle = 0; used = 0; iter = 0
 
-while t < subEnd && iter < 1000:
+while t < planEndAt && iter < 1000:
     iter++
     t_exhaust = burn > 0 ? t + quota / burn * 24h : INF
-    t_event   = min(next, subEnd)
+    t_event   = min(next, planEndAt)
 
     if t_exhaust <= t_event:
         consumed += quota; t = t_exhaust; quota = 0
-        if t >= subEnd: break
+        if t >= planEndAt: break
         gap  = next - t
         gain = min(100, burn * gap / 24h)
-        usable = card_expiries 中 expiresAt > t 的卡 + unknown_expiry
+        usable = card_expiries 中 expiresAt > t 且有效期已知的卡
         // 最早可用的卡会在下次重置前过期 → 这张是“沉没卡”，门槛降到 5%
         earliest = min(usable 的 expiresAt > t)
         sunk = earliest != null && earliest < next
@@ -451,7 +475,7 @@ while t < subEnd && iter < 1000:
     else:
         consumed += min(quota, burn * (t_event - t)/24h)
         quota -= burn * (t_event - t)/24h; t = t_event
-        if t >= subEnd: break
+        if t >= planEndAt: break
         quota = 100; next += 7d
 ```
 
@@ -634,12 +658,12 @@ fn codex_reset_profile_set(
 | 快照 `resetCredits` 为 `null`，详情卡有卡 | 以详情卡实时数据为准 | 正常出建议 | 不因快照缺失判 `unknown`，也不拿 0 张代替 |
 | 某张卡无到期日 | 不排序假设，warning(`card_expiry_unknown`) | 「接口未提供到期日」 | 不说「即将到期」，也不假设永久有效 |
 | `lastRedeemedAt > dataUpdatedAt` | `unknown/just_redeemed` | 「刚用过卡，等刷新」 | 不拿重置前的额度算 gain |
-| 订阅到期日未填 | 只算即时 verdict；计划区不可用 | 「填订阅到期日」入口 + warning | 不默认「还有很久」 |
+| 订阅到期日未填 | 按最后一张有效卡到期规划，并计算即时建议 | 显示卡截止时间轴和订阅持续有效假设 | 缺少有效卡日期时提示刷新或填写订阅日期 |
 | 订阅 1 天内到期 | 按 `can_wait` 判；warning(`sub_ends_soon`) | 「等到重置也用不了几天」 | 不把 1 天当成 1 周 |
 | 本周期刚开始（elapsed < 0.5 天） | `burnEstimated=false`，`gain=null` | 「速度还看不出来，先按即时建议」 | 不拿 1 小时的斜率外推 16 天，不把 gain 写成 0 |
 | `NOW` 但 `gain < 25%` | `now` + warning(`low_value_now`) | 「你选了现在用，但只换回 X%」 | 不因为用户急就把低价值说成高价值 |
 | 传入 scope 与快照 scope 不一致 | 正常算 + warning(`scope_mismatch`) | 「订阅日期可能不是这个账号的」 | 不静默用错 scope |
-| profile 读失败 | 默认 `patient` + warning(`plan_unavailable`) | 「先按默认估算」 | 不阻塞建议，不静默 |
+| profile 读失败 | 默认 `patient`，有有效卡日期时按卡截止规划 | 显示设置读取失败提示 | 清除旧账号设置后重算 |
 
 ---
 
@@ -689,6 +713,12 @@ fn codex_reset_profile_set(
 | 38 | 订阅已过期 + r=100 | `hold` | `sub_expired`（订阅优先于满额） |
 | 39 | 0 / 6h / urgent(0) | `now` | `deadline_before_reset`（用量按 100 估） |
 | 40 | 0 / 6h / urgent(150) | `now` | `deadline_before_reset`（用量夹到 100） |
+| 41 | 0 / 0.5h / urgent(100) | `wait` | `reset_imminent`（v3：重置就在眼前） |
+| 42 | 0 / 0.5h / urgent / 最早卡 15min 后到期 | `wait` + warning | `reset_imminent` + `card_expiry_loss`（v3：等到重置卡作废，但烧卡更亏） |
+| 43 | 0 / 30h / soon / today_end = now+1h | `now` | `deadline_before_reset`（v3：重置落在明天，今天要用） |
+| 44 | 60 / 30h / soon(50) / today_end = now+1h | `hold` | `remaining_covers`（v3：剩余够这次 50%） |
+| 45 | 0 / 6h / soon / today_end = now+10h | `wait` | `gap_too_short`（v3：重置落在今天内） |
+| 46 | 85 / 5h=90 / urgent(100) | `now` + warning | `deadline_before_reset` + `eligibility_unlikely`（v3：两项都 ≥80%） |
 
 ### 9.2 双向验证
 
@@ -744,13 +774,13 @@ fn codex_reset_profile_set(
 
 1. **重置后的每周锚点**：官方说「更改每周重置日期」，但没有给出「兑换时刻 vs 首次请求」的精确公式（付费重置是首次请求 +7 天）。本方案不写死，等用户在真机用一张后核对 `resetsAt`；若发现锚点偏移，只改 `cycleDays` 与测试，不改界面。
 2. **平均速度是下限**：`used=100` 只能说明「到某个时刻为止用完了」，不能说明什么时候用完。P1 可加入本地快照历史（若已有按小时的窗口记录）做近 3 天斜率；没有历史就用本周期平均，并明确标注。
-3. **订阅到期日手动输入**：多账号时按 scope 隔离；如果用户不填，计划区不可用，但即时建议仍可算。是否需要在设置页放一个全局默认？建议先不做，避免「一个日期管所有账号」。
+3. **订阅到期日手动输入**：按 scope 隔离，允许清空。留空时用当前账号有效卡日期规划，日期和库存变化后重算。
 4. **卡的数量与明细不一致**：`availableCount` 是权威计数，明细可能被上游截断。计划只用 count，到期日只用明细；两者冲突时文案说明，不用明细长度覆盖 count。
 5. **5 小时窗**：本方案只看周窗；Plus 用卡会同时刷新 5 小时窗，可能让「今天还能不能用」变好，但这不影响「周窗该不该用卡」的结论。文案里只作为附注，不进公式。
 6. **「订阅到期日」的精度**：11-29 是日期不是时刻，00:00 与 23:59 会让「0 张 vs 1 张」翻转。界面必须允许选到日，并在文案里写「按当日 23:59 计」，同时把结论写成区间而不是单点。
 7. **快照与实时卡明细不一致**：本机实测 `quota_snapshot_v1:codex` 的 `resetCredits` 为 `null`，同一时刻实时接口有 3 张完整明细。顾问已改为用实时 `ChannelView` 规避，但**重启后、刷新前**详情卡回退到快照仍会显示「重置卡信息未获取」。这像是保存路径的问题（`Snapshot::new` 本身保留字段），建议单独立项查 `quota_attempt` 的保存时序；本方案不假装它不存在。
-8. **`can_wait` 依赖手动日期**：`subEndAt` 错一天，`can_wait` 就可能翻转，`patient` 的 `WAIT` 会变成 `HOLD`。界面必须显示日期、允许改，并在未填时加 `plan_unavailable`，不能默认「还有很久」。
-9. **卡到期与续订的耦合**：本工具按「不续订」算，有效截止取 `min(subEnd, 最早卡到期)`。如果用户后来续订，`subEndAt` 要同步改，否则卡到期日会被误当成订阅截止；profile 里要记录 `updatedAt`，续订后提示复核。
+8. **`can_wait` 依赖手动日期**：未填时保持未知，卡截止计划通过独立字段显示。手填日期后才比较自然重置与订阅截止。
+9. **卡到期与续订的耦合**：有订阅日期时以其为截止，无日期时假设订阅持续有效并提示。续订状态变化后用户可更新日期，卡到期时间随上游刷新。
 10. **并发/乱序**：四个按钮连点会并发发命令；没有 `adviseSeq` 时，慢的旧响应会覆盖新结论。这是仓库已经踩过的坑（`loadCheckin` 的并发乱序），必须在 P2 前修好，不能只靠“用户不会连点”。
 11. **`dataUpdatedAt` 缺失**：没有它就无法判断 `lastRedeemedAt` 是否在数据刷新之后；不能默认等于 `now`，否则刚用卡会被误判为“数据已更新”。缺失时加 warning，并退回 `just_redeemed` 的保守判断。
 12. **两项都满时官方行为不确定**：官方只说“至少恢复一项才算用掉”“100% 的项不重新计时”，没有说两项都 100% 时点重置是拒绝还是白耗。文案只能写“可能不生效/白耗”，不能承诺“点了没用”或“点了会扣”。
@@ -771,17 +801,18 @@ fn codex_reset_profile_set(
 
 ## 13. 验收清单
 
-- [ ] 用户场景（r=0 / gap=6h / patient / 3 张 / 11-29 到期）给出「等自然重置」，不出现「立即重置」。
-- [ ] 同场景点「现在就要用」→ 变「现在重置」，且正文明确写出「否则 6 小时后免费满额」的代价。
-- [ ] r=100 → 「现在别用」，并解释「只恢复低于 100% 的窗口」。
-- [ ] 周窗满 + 5h 满 / 周窗满 + 5h 空：两种文案都对，都不出现「现在重置」。
-- [ ] `can_wait=false` + `patient` → 「等不到重置」，不出现 `wait`；同场景 `urgent` 且额度不够 → `now`。
-- [ ] 卡在自然重置前过期 + `soon` 且额度不够 → `now/card_expires_before_reset`；同场景 `patient` → `wait` + warning。
-- [ ] 没有周窗 / 重置时间缺失 / 快照跨重置点 / 刚用过卡 / 数据不自洽：五种「无法判断」各一句，不瞎猜。
-- [ ] 卡数 null 但有明细 → 推导出数量并给 warning；卡数 null 且无明细 → `unknown`；count 与明细不一致 → count 权威 + warning。
-- [ ] 计划区能算出「省卡 0 张 / 缺口 11% / 补满 1 张」；20%/天变「3 张且仍差 5% / 现有卡也不够」；卡在重置前到期时不被算进供给。
-- [ ] 连点两个不同需求，旧响应后到不覆盖新结论；12h TTL 到点回 `patient`。
-- [ ] 不新增网络请求；不自动兑换；不新增通知。
-- [ ] `check-ipc-contract`、`check-file-size`、`check-silent-failures` 全绿；文件预算未上调。
-- [ ] `profile_set` 失败有 toast + 回滚，不静默；`profile_get` 失败有默认值，不空白。
-- [ ] 40 条纯函数表驱动全绿，且双向验证的“绝不返回”样本真的会红。
+- [x] 用户场景（r=0 / gap=6h / patient / 3 张 / 11-29 到期）给出「等自然重置」，不出现「立即重置」。
+- [x] 同场景点「现在就要用」→ 变「现在重置」，且正文明确写出「否则 6 小时后免费满额」的代价。（v3：文案曾缺失导致「暂时无法判断」，已修复并用穷举 enum 编译期防复发）
+- [x] r=100 → 「现在别用」，并解释「只恢复低于 100% 的窗口」。
+- [x] 周窗满 + 5h 满 / 周窗满 + 5h 空：两种文案都对，都不出现「现在重置」。
+- [x] `can_wait=false` + `patient` → 「等不到重置」，不出现 `wait`；同场景 `urgent` 且额度不够 → `now`。
+- [x] 卡在自然重置前过期 + `soon` 且额度不够 → `now/card_expires_before_reset`；同场景 `patient` → `wait` + warning。
+- [x] 没有周窗 / 重置时间缺失 / 快照跨重置点 / 刚用过卡 / 数据不自洽：五种「无法判断」各一句，不瞎猜。
+- [x] 卡数 null 但有明细 → 推导出数量并给 warning；卡数 null 且无明细 → `unknown`；count 与明细不一致 → count 权威 + warning。
+- [x] 计划区能算出「省卡 0 张 / 缺口 11% / 补满 1 张」；20%/天变「3 张且仍差 5% / 现有卡也不够」；卡在重置前到期时不被算进供给。
+- [x] 连点两个不同需求，旧响应后到不覆盖新结论；12h TTL 到点回 `patient`。
+- [x] 不新增网络请求；不自动兑换；不新增通知。
+- [x] `check-ipc-contract`、`check-file-size`、`check-silent-failures` 全绿；文件预算未上调。
+- [x] `profile_set` 失败有 toast + 回滚，不静默；`profile_get` 失败有默认值，不空白。
+- [x] 表驱动用例全绿（§9.1 v3 共 46 行，其中 v3 新增行为由 9 条专项/矩阵单测覆盖），且双向验证的“绝不返回”样本真的会红。
+- [x] v3 补充：重置 1 小时内 urgent → `wait/reset_imminent`；「今天要用」跨日边界不再误判；用量档位写 profile 并参与判定；全矩阵任何路径都不出现「暂时无法判断」兜底。
