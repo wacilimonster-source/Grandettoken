@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="codex-reset.css">
 <link rel="stylesheet" href="google-cloud.css">
 <link rel="stylesheet" href="antigravity.css">
+<link rel="stylesheet" href="panel-layout.css">
 </head>
 <body class="form-panel">
 
@@ -76,6 +77,7 @@
   </div>
 
   <div class="sum" id="sum"></div>
+  <div class="thumbnail-heading"><span id="thumbnailCount"></span><span id="thumbnailMetric">余额 / 剩余额度</span></div>
   <div class="list" id="list" role="region" aria-label="渠道列表">
     <div class="empty">加载中…</div>
   </div>
@@ -195,6 +197,7 @@
         <div class="seg" id="cfgLayout" role="group" aria-label="窗口布局">
           <button type="button" data-layout="single" aria-pressed="true">单列</button>
           <button type="button" data-layout="double" aria-pressed="false">双列</button>
+          <button type="button" data-layout="thumbnail" aria-pressed="false">缩略</button>
         </div></div>
       <div class="field"><span>启用紧凑条<button class="why" data-why="compact" aria-expanded="false" aria-label="紧凑条的说明"></button><span class="desc">关闭后顶栏仍可用「胶囊」收起</span></span>
         <button class="sw" id="cfgCompact" role="switch" aria-checked="false" aria-label="启用紧凑条"></button></div>
@@ -514,14 +517,17 @@
     <span class="dot" id="fdot" hidden></span>
     <span id="fstat" hidden></span>
     <button type="button" class="lk promo-entry" id="promoEntry">AI 优惠</button>
-    <!-- 底栏三处可点元素都改成真正的 <button>:以前是 <span>,Tab 到不了、回车没反应,
-         而设置入口收敛到这一处之后,它就成了键盘用户唯一的入口(2026-10-20)。 -->
     <button type="button" class="lk" id="lkUpd" style="display:none"></button>
     <div class="spacer"></div>
-    <button type="button" class="lk" id="lkLayout" title="切换单列 / 双列窗口">双列</button>
-    <button type="button" class="lk" id="lkKeys">设置与管理</button>
-    <span style="color:var(--line2)">|</span>
-    <button type="button" class="lk" id="lkQuit">退出</button>
+    <div class="layout-picker" id="lkLayout" role="group" aria-label="窗口布局">
+      <button type="button" data-layout="single" aria-pressed="true">单列</button>
+      <button type="button" data-layout="double" aria-pressed="false">双列</button>
+      <button type="button" data-layout="thumbnail" aria-pressed="false">缩略</button>
+    </div>
+    <button type="button" class="lk" id="lkKeys" aria-label="设置与管理">设置</button>
+    <details class="foot-more" id="footerMore"><summary aria-label="更多操作">•••</summary>
+      <div class="foot-more-menu"><button type="button" class="lk" id="lkQuit">退出</button></div>
+    </details>
   </div>
 
   <div class="promo-overlay" id="promoOverlay" hidden>
@@ -557,6 +563,7 @@
   </div>
 
   <script src="vault-view.js"></script>
+  <script src="panel-layout.js"></script>
   <script src="app.js"></script>
   <script src="codex-reset.js"></script>
   <script src="google-cloud.js"></script>

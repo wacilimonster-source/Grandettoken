@@ -228,6 +228,7 @@ function peakCountdown(p, nowMs) {
  * 3600 次回调、每次都扫全文档。定时器误差可能落在边界前几毫秒,统一 +20ms 起跳。
  */
 function tickPeakCountdowns() {
+  if (window.PanelLayoutUI) window.PanelLayoutUI.tick();
   const nowMs = Date.now();
   document.querySelectorAll("[data-peakcd]").forEach((el) => {
     let p = null;
@@ -1024,6 +1025,7 @@ function renderRow(c, i) {
     railRight = pct !== null ? `剩 ${pct}%` : hv && hv.qualifier ? esc(hv.qualifier) : "";
   }
   const railIcon = isPts || mw ? "#i-clock" : failed || isStale ? "#i-info" : "#i-info";
+  const thumbnail = window.PanelLayoutUI && panelLayout() === "thumbnail" && currentForm() === "panel" ? window.PanelLayoutUI.summary(c, { noKey, failed, isOld, mw, sub, subVal, railLeft, railRight, winWarn, claimWarn }) : {};
 
   // data-state:后端判的七态,给 CSS 用 —— 紧凑条与胶囊里没有 .rhint 那行字,
   // 只有靠它才能把"这是旧快照"画出来(设计 P0 验收①)
@@ -1032,11 +1034,11 @@ function renderRow(c, i) {
       <div class="r1">
         ${iconHtml(c, "ico", noKey || failed)}
         <div class="nm">
-          <div class="n"><span class="nn">${esc(c.name)}</span><span class="nsh">${esc(c.short)}</span>${dot}${wmark}${ckb}${qtag}</div>
+          <div class="n"><span class="nn">${esc(c.name)}</span><span class="nsh">${esc(c.short)}</span>${thumbnail.name || ""}${dot}${wmark}${ckb}${qtag}</div>
           <div class="s">${sub}</div>
         </div>
         <div class="val">
-          <div class="v" style="color:${toneFg(mainTone)}">${mainValue}</div>
+          <div class="v" style="color:${toneFg(mainTone)}">${thumbnail.label || ""}${mainValue}</div>
           <div class="p">${subVal}</div>
         </div>
         <div class="caret">&#9654;</div>
@@ -1053,6 +1055,7 @@ function renderRow(c, i) {
       ${bar}
       ${claimWarn}
       ${winWarn}
+      ${thumbnail.html || ""}
       <span class="sweep"></span>
     </div>
     <div class="rbody" data-body="${c.id}" hidden></div>
@@ -2273,6 +2276,7 @@ function renderInner(opts) {
     items.push({ key: "empty", html: emptyHtml });
   }
   qReconcile($("list"), items);
+  if (window.PanelLayoutUI) window.PanelLayoutUI.schedule();
 
   // 列表已经落到 DOM 里,现在才有真实宽度可量:把 Codex 的倒计时按当前面板宽度收一档
   if (configured) fitCodexResetLabels();
@@ -3698,7 +3702,7 @@ let SIZE_APPLYING = false;   // 程序化 setSize 期间忽略缩放回调
 let pillW = 200; // 胶囊实测内容宽(已是当前档位的最终逻辑像素),fitPill 维护
 
 function panelLayout() {
-  return CFG && CFG.panelLayout === "double" ? "double" : "single";
+  return window.PanelLayoutUI.normalize(CFG && CFG.panelLayout);
 }
 /** 当前字号档位下的面板内容尺寸(逻辑 px)。 */
 function panelContentSize(layout = panelLayout()) {
@@ -3754,45 +3758,14 @@ function updateSizeClass() {
   updateLayoutUI();
 }
 
-/** 底栏与设置里的「单列 / 双列」状态同源。
- *  底栏那枚是**动作标签**(2026-11-08 用户裁定):显示"点下去会切到哪一档",
- *  单列时显示「双列」、双列时显示「单列」;当前布局由布局本身与 title 说明。
- *  设置页里的两个按钮维持"当前选中"语义(aria-pressed),不是动作。 */
+/** 底栏与设置使用同一组布局状态。 */
 function updateLayoutUI() {
-  const layout = panelLayout();
-  const cur = layout === "double" ? "双列" : "单列";
-  const next = layout === "double" ? "单列" : "双列";
-  const btn = $("lkLayout");
-  if (btn) {
-    btn.textContent = next;
-    btn.title = `当前${cur} · 点击切换为${next}`;
-  }
-  const grp = $("cfgLayout");
-  if (grp) {
-    grp.querySelectorAll("button[data-layout]").forEach((b) => {
-      b.setAttribute("aria-pressed", String(b.dataset.layout === layout));
-    });
-  }
-  document.body.classList.toggle("layout-single", layout === "single");
-  document.body.classList.toggle("layout-double", layout === "double");
+  window.PanelLayoutUI.update(panelLayout());
 }
 
 /** 切到指定的固定布局。先落盘再改窗口,失败时 saveCfg 会回滚并重画按钮。 */
 async function setPanelLayout(layout) {
-  const next = layout === "double" ? "double" : "single";
-  if (panelLayout() === next) {
-    updateLayoutUI();
-    return;
-  }
-  CFG.panelLayout = next;
-  updateLayoutUI();
-  const saved = await saveCfg("窗口布局");
-  if (!saved) updateLayoutUI();
-  if (currentForm() === "panel") await applyForm("panel", false, true);
-  render({});
-}
-function togglePanelLayout() {
-  return setPanelLayout(panelLayout() === "double" ? "single" : "double");
+  return window.PanelLayoutUI.select(layout);
 }
 
 // DPI / 显示器缩放变化后按固定尺寸重新落一次;不再有用户拖拽 resize。
@@ -5430,11 +5403,6 @@ $("btnH").addEventListener("click", () =>
 $("lkQuit").addEventListener("click", () =>
   invoke("window_cmd", { action: "quit" }).catch((e) => showToast("退出失败:" + e, true))
 );
-$("lkLayout").addEventListener("click", (e) => {
-  e.preventDefault();
-  e.stopPropagation();
-  togglePanelLayout();
-});
 $("lkKeys").addEventListener("click", () => {
   // 入口常驻(2026-11-08):管理页里也固定显示,行为改成开关式 ——
   // 未在管理页时进入;已在管理页时再点一次则退出回首页,不必挪到页头找「← 返回」

@@ -46,6 +46,7 @@ if (process.env.CHECKIN_SENTINEL === "1") {
   }
 }
 const vaultJs = fs.readFileSync(path.join(SRC, "vault-view.js"), "utf8");
+const layoutJs = fs.readFileSync(path.join(SRC, "panel-layout.js"), "utf8");
 let antigravityJs = fs.readFileSync(path.join(SRC, "antigravity.js"), "utf8");
 if (process.env.AG_LAYOUT_SENTINEL === "1") {
   const marker = 'windowHtml(c, w, w.key === "gemini-weekly")';
@@ -768,7 +769,8 @@ const HARNESS = `
     refreshChCards: () => refreshChCards(),
     fillKeyHints: (force) => fillKeyHints(force),
     invalidateKeyMeta: (id, kind) => invalidateKeyMeta(id, kind),
-    layoutLabel: () => ($("lkLayout") ? $("lkLayout").textContent : ""),
+    layoutLabel: () => document.querySelector('#lkLayout [aria-pressed="true"]')?.textContent,
+    setLayout: (layout) => setPanelLayout(layout),
     panelContentSize: (layout) => panelContentSize(layout),
     fontUnit: () => fsU(),
     updateLayout: () => updateLayoutUI(),
@@ -1176,7 +1178,7 @@ w.__DATA = DATA;
   try {
     const initMarker = "(async function init() {";
     if (js.split(initMarker).length !== 2) throw new Error("初始化入口必须唯一");
-    w.eval(vaultJs + "\n;\n" + js.replace(initMarker, "window.__INIT = " + initMarker)
+    w.eval(vaultJs + "\n;\n" + layoutJs + "\n;\n" + js.replace(initMarker, "window.__INIT = " + initMarker)
       + "\n;\n" + antigravityJs
       + "\n;window.__RUN_HARNESS = async () => { await window.__INIT;\n" + HARNESS + "\n};");
     await w.__RUN_HARNESS();
@@ -1567,8 +1569,9 @@ w.__DATA = DATA;
     w.__TEST.updateLayout();
     const labelSingle = w.__TEST.layoutLabel();
     R.push({
-      name: "底栏布局按钮显示切换目标(单列时显双列,双列时显单列)",
-      ok: labelDouble === "单列" && labelSingle === "双列" &&
+      name: "底栏布局三段选择与设置同步选中当前布局",
+      ok: labelDouble === "双列" && labelSingle === "单列" &&
+        w.document.querySelectorAll('#lkLayout [data-layout]').length === 3 &&
         w.document.querySelector('#cfgLayout [data-layout="double"]').getAttribute("aria-pressed") === "false" &&
         w.document.querySelector('#cfgLayout [data-layout="single"]').getAttribute("aria-pressed") === "true",
       extra: `double=${labelDouble} single=${labelSingle}`,
@@ -1617,6 +1620,8 @@ w.__DATA = DATA;
     }
     fs.writeFileSync(process.env.CODEX_LAYOUT_FIXTURES, JSON.stringify(fixtures));
   }
+
+  await require("./thumbnail-regression.js")({ w, R, data: DATA, src: SRC });
 
   let ok = 0, bad = 0;
   for (const r of R) {

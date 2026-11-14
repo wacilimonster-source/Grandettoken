@@ -3,7 +3,7 @@
 // 用法: launch-debug.ps1(或带 CDP 启动)后 node build/verify-resize.js [port]
 // 覆盖:
 //   · 拖动缩放入口已移除(rzFrame / rzGrip 不存在)
-//   · 单列 / 双列两档固定尺寸与 data-w 断点、关键区域不越界
+//   · 单列 / 双列 / 缩略固定尺寸与 data-w 断点、关键区域不越界
 //   · 形态往返(紧凑条 / 胶囊 → 面板)后固定尺寸保持
 //   · xl 字号:窗口高度被显示器钳制,不超出屏幕
 // 说明:布局切换用内存预览(CFG.panelLayout + applyForm),不写用户配置;
@@ -44,7 +44,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     check('拖动缩放入口已移除(rzFrame/rzGrip)', gone.frame && gone.grip, JSON.stringify(gone));
 
     // 2. 两档固定尺寸(期望值按当前字号档位计算:md=1.0 / lg=1.15 / xl=1.3)
-    for (const [layout, wantWcls] of [['single', 'sm'], ['double', 'lg']]) {
+    for (const [layout, wantWcls] of [['single', 'sm'], ['double', 'lg'], ['thumbnail', 'sm']]) {
       await evalJs(`(()=>{CFG.panelLayout='${layout}';updateLayoutUI();applyForm('panel',false,true);})()`);
       await sleep(900);
       const [wantW, wantH] = JSON.parse(await evalJs(`JSON.stringify(formSize('panel'))`));

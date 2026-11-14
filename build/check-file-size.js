@@ -30,7 +30,7 @@ const SOFT_LIMIT = 1500;
 //     第 6 个渠道豆包(WebSession 表项 + 逐动作 body + Cookie 分支),
 //     渠道表与统一取数/签到管线是这些文件的本职,不许再从这里长功能以外的行。
 const BUDGETS = {
-  "app/src/app.js": 9220,
+  "app/src/app.js": 9183,
   "app/core/src/inject.rs": 7320,
   "app/src-tauri/src/lib.rs": 6484,
   "app/core/src/fetch.rs": 5280,

@@ -95,8 +95,8 @@ pub struct Config {
     /// 主题:dark(深石墨) | light(暖雾白)。老配置缺字段兜成 dark;
     /// 非法值在 sanitize 里回退,不让一个手改的字符串把界面染成空白。
     pub theme: String,
-    /// 面板布局:single(单行窗,一列) | double(双行窗,两列)。
-    /// 两种都是固定尺寸,不再支持用户拖动缩放。
+    /// 面板布局:single(单列) | double(宽窗双列) | thumbnail(窄窗双列缩略)。
+    /// 固定尺寸随字号倍率缩放。
     pub panel_layout: String,
     /// 胶囊形态固定显示哪些渠道(按顺序轮播);空 = 自动显示最紧张的一个
     pub pill_channels: Vec<String>,
@@ -356,7 +356,7 @@ impl Config {
         if self.theme != "light" {
             self.theme = "dark".into();
         }
-        if self.panel_layout != "double" {
+        if !matches!(self.panel_layout.as_str(), "double" | "thumbnail") {
             self.panel_layout = "single".into();
         }
         if self.form != "compact" && self.form != "pill" {
@@ -480,6 +480,10 @@ mod tests {
         layout.panel_layout = "double".into();
         layout.sanitize();
         assert_eq!(layout.panel_layout, "double");
+        layout.panel_layout = "thumbnail".into();
+        layout.sanitize();
+        let back: Config = serde_json::from_str(&serde_json::to_string(&layout).unwrap()).unwrap();
+        assert_eq!(back.panel_layout, "thumbnail");
         layout.panel_layout = "triple".into();
         layout.sanitize();
         assert_eq!(layout.panel_layout, "single");

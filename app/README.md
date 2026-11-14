@@ -9,6 +9,11 @@
 安装 / 使用 / 下载入口看[根 README](../README.md),产品设计看 [DESIGN.md](../DESIGN.md),
 进展与踩坑看 [PROGRESS.md](../PROGRESS.md),本文只讲代码内部的事。
 
+面板底部提供单列、双列、缩略三种布局。缩略复用单列窗口尺寸，以两列小卡展示渠道，
+配置值为 `panelLayout: thumbnail`。布局选择、状态摘要和可用高度适配位于
+`src/panel-layout.js`，样式位于 `src/panel-layout.css`，详情和余额继续使用现有渲染。
+详细规格与浏览器验证步骤见 [缩略详细设计](../docs/design/design-thumbnail-mode-2026-11-15.md)。
+
 ## 当前渠道
 
 Google Cloud 赠金渠道另由 `core/src/google_cloud.rs`、`src-tauri/src/google_cloud_web.rs`、

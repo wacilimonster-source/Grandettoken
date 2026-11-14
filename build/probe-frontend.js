@@ -163,6 +163,7 @@ const invoke = async (cmd, args) => {
 };
 
 const windowMock = {
+  addEventListener() {},
   __TAURI__: {
     core: { invoke },
     event: { listen: async () => {}, emit: async () => {} },
@@ -354,6 +355,7 @@ function probeLogCardCheck() {
 process.on('unhandledRejection', (e) => logs.push(['UNHANDLED', String(e && e.stack || e)]));
 try {
   vm.runInContext(vaultSrc, ctx, { filename: 'vault-view.js' });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../app/src/panel-layout.js'), 'utf8'), ctx, { filename: 'panel-layout.js' });
   vm.runInContext(src, ctx, { filename: 'app.js' });
 } catch (e) {
   logs.push(['THROWN', String(e && e.stack || e)]);
