@@ -28,19 +28,25 @@ body.form-panel.layout-thumbnail .row .rhead{height:100%;padding:calc(4px*var(--
 body.form-panel.layout-thumbnail .row .r1{display:grid;grid-template-columns:calc(18px*var(--u)) minmax(0,1fr);gap:0 calc(6px*var(--u));align-items:center}
 body.form-panel.layout-thumbnail .row .ico{width:calc(18px*var(--u));height:calc(18px*var(--u));border-radius:calc(4px*var(--u));font-size:calc(8px*var(--u))}
 body.form-panel.layout-thumbnail .row .nm .n{height:calc(18px*var(--u));min-width:0;gap:calc(3px*var(--u))}
+body.form-panel.layout-thumbnail .row .nm .dot{margin-left:auto;flex:none}
 body.form-panel.layout-thumbnail .row .nm .nn,body.form-panel.layout-thumbnail .row .nm .nsh,
 body.form-panel.layout-thumbnail .row .nm .s,body.form-panel.layout-thumbnail .row .val .p,
 body.form-panel.layout-thumbnail .row .r2,body.form-panel.layout-thumbnail .row .bar,
 body.form-panel.layout-thumbnail .row .claim-warn,body.form-panel.layout-thumbnail .row .win-warn,
 body.form-panel.layout-thumbnail .row .ckb,body.form-panel.layout-thumbnail .row .qtag{display:none}
-body.form-panel.layout-thumbnail .row .val{grid-column:1/-1;justify-self:stretch;text-align:left;min-width:0}
+body.form-panel.layout-thumbnail .row .val{grid-column:1/-1;justify-self:stretch;min-width:0;display:flex;
+  align-items:center;justify-content:space-between;gap:calc(6px*var(--u));height:calc(26px*var(--u))}
 body.form-panel.layout-thumbnail .row .val .v{font-size:var(--thumb-value-font,calc(22px*var(--u)));height:calc(26px*var(--u));line-height:calc(26px*var(--u));
-  display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:-.03em}
-body.form-panel.layout-thumbnail .thumb-window{display:inline;font-size:calc(11px*var(--u));color:var(--tx2);margin-right:calc(3px*var(--u));letter-spacing:0}
+  display:block;flex:1;min-width:0;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:-.03em}
+body.form-panel.layout-thumbnail .thumb-window{display:block;flex:none;max-width:45%;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;font-size:calc(11px*var(--u));color:var(--tx2);letter-spacing:0}
 body.form-panel.layout-thumbnail .thumb-name{display:block;order:-1;min-width:0;overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap;font-size:calc(12px*var(--u));font-weight:600;line-height:calc(18px*var(--u))}
-body.form-panel.layout-thumbnail .thumb-status{display:block;font-size:calc(12px*var(--u));height:calc(16px*var(--u));line-height:calc(16px*var(--u));
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--tx2)}
+body.form-panel.layout-thumbnail .thumb-status{display:flex;justify-content:space-between;gap:calc(6px*var(--u));
+  font-size:calc(11px*var(--u));height:calc(16px*var(--u));line-height:calc(16px*var(--u));color:var(--tx2)}
+body.form-panel.layout-thumbnail .thumb-status-main{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+body.form-panel.layout-thumbnail .thumb-status-end{flex:none;max-width:65%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right}
+body.form-panel.layout-thumbnail .row{border-color:color-mix(in srgb,var(--line) 75%,transparent)}
 body.form-panel.layout-thumbnail .row[data-railwarn="1"] .thumb-status{color:var(--warn)}
 body.form-panel.layout-thumbnail .row[data-state="limited"] .thumb-status,
 body.form-panel.layout-thumbnail .row[data-state="auth"] .thumb-status{color:var(--bad)}

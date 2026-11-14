@@ -1,7 +1,7 @@
 # Grandettoken 开发进展
 
 > 最后更新:2026-11-15
-> 状态:**桌面 v0.3.53、Android 0.1.14 已发布**，结果见文末最新条目。
+> 状态:**桌面 v0.3.54 准备发布、Android 0.1.14 已发布**，缩略卡片数值右对齐已完成门禁测试，见文末最新条目。
 > 同日做了两轮**代码治理**:产物出库 / 门禁补强 / 静默失败归零 / 经验沉淀,
 > 见 `docs/report/code-governance-2026-11-12.md`、`docs/report/code-quality-2026-11-12-b.md`
 > 与根目录 `AGENTS.md`。
@@ -5176,3 +5176,20 @@ src-tauri `cargo check --all-targets --locked` exit 0;
   端点返回 0.3.53;签名/安装包逐字比对按既有口径 SKIP,由 CI 端完成。
 - 待验收:缩略布局在安装包原生窗口的真实观感(三档倍率/深浅主题/实际显示器工作区);
   真实账号 Antigravity 取数;顾问时长「N 天 M 小时」显示;日期控件回填人工复核(遗留)。
+
+## 2026-11-15 缩略卡片数值右对齐（工作区，待发版）
+
+- 根据用户对 v0.3.53 安装版的实机反馈，采用选定的「数值右对齐」排版。缩略卡顶部名称靠左、状态点靠右；中部口径标签在左、主数字在右；底部到期金额与日期、重置卡与短窗额度两端分列。普通卡片边框减弱。
+- 实现在现有 panel-layout.js / panel-layout.css 内，app.js 仅调整口径标签接线。Google Cloud 的缩略日期展示复用 rail 的赠金筛选，分别呈现日期来源、部分日期未填及已到期状态，完整日期位于右侧。细节更新至 docs/design/design-thumbnail-mode-2026-11-15.md 与 DESIGN.md。
+- 倒计时区分「后重置」和「后恢复」，越过重置点保持「待刷新」。缩略回归覆盖左右字段、已用口径、动态渠道类型、日期来源、跨重置点、保存失败回滚及刷新焦点。
+- 真实渲染的合成夹具通过三档字号、深浅主题、长金额、增加至 16 渠道及高度钳制的浏览器检查。标准单列尺寸下 14 个渠道均在首屏，标签与数值无重叠，主数字及状态末列对齐右边界。漏行、单列网格、超高卡片及把数值改回左对齐的坏样本均被断言拦截。
+- 首轮 core 全量在本地 HTTP 夹具 custom_channels_fetch_in_parallel_keep_order_and_skip_hidden 阻塞，环境存在 HTTP_PROXY 且没有 NO_PROXY。终止本轮测试进程后，仅为验证进程设置 NO_PROXY=127.0.0.1,localhost,::1，独立用例及随后两次单线程全量通过。原始中断、独立及全量复跑日志留在本地 build/qa/thumbnail-right/，经验同步 AGENTS.md。
+- 门禁已串行完成并独立复核通过，包括 IPC、静默失败、文件规模、CSS 及自检、前端 JS 与浏览器验证脚本语法、jsdom、重置顾问 / Google Cloud / 密钥箱冒烟、假 DOM 前端探针、core 单线程全量、src-tauri 全目标编译、浏览器排版和凭据扫描。具体用例数量以命令输出为准。
+- 改动保留在工作区。发布及安装版原生 WebView2 的真实账号、字号倍率、scaleFactor 与屏幕工作区联合验收待完成。
+
+## 2026-11-15 v0.3.54 缩略卡片数值右对齐随版发布
+
+- 集中发布工作区「缩略卡片数值右对齐」改动:缩略卡顶部名称靠左、状态点靠右；中部口径标签在左、主数字在右；底部到期金额与日期、重置卡与短窗额度两端分列；普通卡片边框减弱；Google Cloud 缩略日期复用赠金筛选提示；倒计时区分「后重置」与「后恢复」并在越过重置点保持「待刷新」。
+- 发版前门禁串行复跑(本会话):静态四门及自检(IPC 122 处 invoke / 98 命令、静默失败 6 脚本 74 处 catch、文件规模、CSS 6 样式文件 1303 条规则)、七个前端 JS 与 `verify-thumbnail-layout.py` 语法、jsdom 227/227(含缩略模式 15 项回归)、密钥箱 / Codex 重置顾问 / Google Cloud 冒烟、假 DOM 前端探针、Playwright 浏览器排版校验(三档倍率、深浅主题、16 渠道、760/680px 高度钳制、坏样本拦截及截图核验)、`app/core` `cargo test --locked -- --test-threads=1`（设置 `NO_PROXY=127.0.0.1,localhost,::1`，542 passed / 8 ignored + `sync_fixtures` 6 passed + doc-test 1 ignored）、`app/core` 与 `app/src-tauri` `cargo check --all-targets --locked`、凭据扫描 CLEAN(459 文件)。
+- 版本号三处同步 `0.3.54` 并通过 `cargo fetch --locked`。
+- 待验收:安装版原生 WebView2 真实账号、字号倍率、scaleFactor 与屏幕工作区联合验收，以及既有遗留人工复核项。

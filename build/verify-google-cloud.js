@@ -111,6 +111,14 @@ async function click(action) {
   assert.notEqual(box.querySelector("input").value, "2027-02-12T23:59");
   channel.googleCloud.credits[0].expiresAt = 1;
   assert.match(w.GoogleCloudUI.rail(channel).left, /已到期/);
+  assert.equal(w.GoogleCloudUI.rail(channel, true).left, "赠金已到期");
+  assert.match(w.GoogleCloudUI.rail(channel, true).right, /^\d{4}-\d{2}-\d{2}$/);
+  const future = Math.floor(w.Date.now() / 1000) + 86400;
+  channel.googleCloud.credits[0].expiresAt = future;
+  channel.googleCloud.credits.push({ id: "unknown-date", remaining: 1, expiresAt: null });
+  assert.equal(w.GoogleCloudUI.rail(channel, true).left, "部分日期未填");
+  channel.googleCloud.credits.pop();
+  assert.equal(w.GoogleCloudUI.rail(channel, true).left, "手填到期日");
   render();
   box.querySelector("input").value = "";
   await click("expiry");

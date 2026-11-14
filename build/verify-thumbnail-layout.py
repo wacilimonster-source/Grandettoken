@@ -28,7 +28,18 @@ def measure(page):
         columns: getComputedStyle(list).gridTemplateColumns.split(' ').length,
         height: rows[0].getBoundingClientRect().height,
         overflow: document.documentElement.scrollWidth > innerWidth || foot.scrollWidth > foot.clientWidth + 1,
-        clipped: rows.filter(row => { const value = row.querySelector('.val .v'); return value.scrollWidth > value.clientWidth + 1; }).length
+        clipped: rows.filter(row => { const value = row.querySelector('.val .v'); return value.scrollWidth > value.clientWidth + 1; }).length,
+        misaligned: rows.filter(row => {
+          const value = row.querySelector('.val .v');
+          const box = row.querySelector('.val').getBoundingClientRect();
+          const label = row.querySelector('.thumb-window').getBoundingClientRect();
+          return getComputedStyle(value).textAlign !== 'right' || Math.abs(value.getBoundingClientRect().right - box.right) > 1 || label.right > value.getBoundingClientRect().left + 1;
+        }).length,
+        statusMisaligned: rows.filter(row => {
+          const status = row.querySelector('.thumb-status');
+          const end = row.querySelector('.thumb-status-end');
+          return Math.abs(status.getBoundingClientRect().right - end.getBoundingClientRect().right) > 1;
+        }).length
       };
     }""")
 
@@ -37,6 +48,7 @@ def validate(result, count):
     assert result["count"] == count, result
     assert result["lastVisible"] and result["columns"] == 2, result
     assert not result["overflow"] and not result["clipped"], result
+    assert not result["misaligned"] and not result["statusMisaligned"], result
 
 
 def main():
@@ -85,7 +97,8 @@ def main():
             page.evaluate("window.fixtureU=1;document.documentElement.style.setProperty('--u',1);document.body.classList.remove('light');PanelLayoutUI.schedule()")
             page.wait_for_timeout(80)
             for mutation in ["document.getElementById('list').style.gridTemplateColumns='1fr'",
-                             "document.querySelector('#list>.row:last-child').style.height='800px'"]:
+                             "document.querySelector('#list>.row:last-child').style.height='800px'",
+                             "document.querySelector('#list .val .v').style.textAlign='left'"]:
                 page.evaluate(mutation)
                 try:
                     validate(measure(page), len(data["channels"]))
@@ -93,7 +106,7 @@ def main():
                     print("坏样本被拦截", mutation)
                 else:
                     raise AssertionError("坏样本未报红 " + mutation)
-                page.evaluate("document.getElementById('list').style.gridTemplateColumns='';document.querySelector('#list>.row:last-child').style.height='';PanelLayoutUI.schedule()")
+                page.evaluate("document.getElementById('list').style.gridTemplateColumns='';document.querySelector('#list>.row:last-child').style.height='';document.querySelector('#list .val .v').style.textAlign='';PanelLayoutUI.schedule()")
                 page.wait_for_timeout(80)
             if args.screenshot:
                 page.screenshot(path=str(args.screenshot.resolve()))

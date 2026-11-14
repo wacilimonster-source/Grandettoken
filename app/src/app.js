@@ -1038,7 +1038,7 @@ function renderRow(c, i) {
           <div class="s">${sub}</div>
         </div>
         <div class="val">
-          <div class="v" style="color:${toneFg(mainTone)}">${thumbnail.label || ""}${mainValue}</div>
+          ${thumbnail.label || ""}<div class="v" style="color:${toneFg(mainTone)}">${mainValue}</div>
           <div class="p">${subVal}</div>
         </div>
         <div class="caret">&#9654;</div>

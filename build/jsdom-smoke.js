@@ -47,6 +47,7 @@ if (process.env.CHECKIN_SENTINEL === "1") {
 }
 const vaultJs = fs.readFileSync(path.join(SRC, "vault-view.js"), "utf8");
 const layoutJs = fs.readFileSync(path.join(SRC, "panel-layout.js"), "utf8");
+const cloudJs = fs.readFileSync(path.join(SRC, "google-cloud.js"), "utf8");
 let antigravityJs = fs.readFileSync(path.join(SRC, "antigravity.js"), "utf8");
 if (process.env.AG_LAYOUT_SENTINEL === "1") {
   const marker = 'windowHtml(c, w, w.key === "gemini-weekly")';
@@ -1180,6 +1181,7 @@ w.__DATA = DATA;
     if (js.split(initMarker).length !== 2) throw new Error("初始化入口必须唯一");
     w.eval(vaultJs + "\n;\n" + layoutJs + "\n;\n" + js.replace(initMarker, "window.__INIT = " + initMarker)
       + "\n;\n" + antigravityJs
+      + "\n;\n" + cloudJs
       + "\n;window.__RUN_HARNESS = async () => { await window.__INIT;\n" + HARNESS + "\n};");
     await w.__RUN_HARNESS();
   } catch (e) {

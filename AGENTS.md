@@ -209,6 +209,7 @@ tag 之前**必须**先推 main —— tag 指向的 commit 不在 main 上,GitH
   因资源竞争假红;单独复跑全绿。**门禁要串行,结论要单独复跑一次。**
 - `proxy` 测试服务器的监听套接字为非阻塞;Windows 上 accept 后的连接也可能继承非阻塞状态。
   测试夹具必须把接收的连接改回阻塞并设置读取超时,延迟发送请求的回归用例应在旧夹具上变红。
+- 2026-11-15 复核补充：环境存在 HTTP_PROXY 且未设置 NO_PROXY 时，`custom_channels_fetch_in_parallel_keep_order_and_skip_hidden` 曾阻塞在本地 HTTP 夹具。仅对验证进程设置 `NO_PROXY=127.0.0.1,localhost,::1` 后，独立用例及全量复跑通过。遇到同形阻塞先核对回环请求的代理路径，并保留原始中断记录。
 
 ## 7. 两条棘轮(2026-11-12 新增,不要绕过)
 

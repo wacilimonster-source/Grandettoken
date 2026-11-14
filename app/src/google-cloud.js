@@ -17,12 +17,16 @@
     const left = at * 1000 - Date.now();
     return left <= 0 ? `${when} · 赠金已到期` : `${when} 到期 · 剩余 ${Math.ceil(left / 86400e3)} 天`;
   }
-  function rail(c) {
+  function rail(c, thumbnail = false) {
     const credits = dataOf(c).credits.filter(x => x.remaining > 0);
     const dated = credits.filter(x => x.expiresAt).sort((a, b) => a.expiresAt - b.expiresAt);
     if (!credits.length) return { left: "当前没有可用赠金", right: "", warn: false };
     if (!dated.length) return { left: "赠金到期时间未填", right: "手动填写", warn: false };
     const at = dated[0].expiresAt;
+    if (thumbnail) return {
+      left: at * 1000 <= Date.now() ? "赠金已到期" : dated.length < credits.length ? "部分日期未填" : "手填到期日",
+      right: dateValue(at).slice(0, 10), warn: at * 1000 - Date.now() <= 7 * 86400e3,
+    };
     return { left: expiry(at), right: dated.length < credits.length ? "部分日期未填" : "手填日期",
       warn: at * 1000 - Date.now() <= 7 * 86400e3 };
   }

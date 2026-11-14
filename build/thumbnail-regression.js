@@ -13,12 +13,16 @@ module.exports = async function ({ w, R, data, src }) {
   try {
     const source = fs.readFileSync(path.join(src, "../core/src/providers.rs"), "utf8");
     const table = source.slice(source.indexOf("pub const PROVIDERS:"));
-    const defs = [...table.matchAll(/id:\s*"([^"]+)",\s*name:\s*"([^"]+)"/g)];
+    const defs = [...table.matchAll(/id:\s*"([^"]+)",\s*name:\s*"([^"]+)"[\s\S]*?default_kind:\s*Kind::(\w+)/g)];
     assert(defs.length > 0, "必须从源码读到渠道表");
     const base = data.CHANNELS.find(c => c.kind === "amount");
-    const channels = defs.map(([, id, name]) => ({ ...base, id, name, short: id.slice(0, 2).toUpperCase(),
-      remaining: 7742.08, valid: true, stale: false, hidden: false, expiring: [], windows: [], claim: null }));
-    channels.push({ ...base, id: "google-cloud", name: "Gemini · Google Cloud", remaining: 299.72, unit: "USD", valid: true });
+    const now = Math.floor(w.Date.now() / 1000);
+    const channels = defs.map(([, id, name, kind]) => ({ ...base, id, name, kind: kind.toLowerCase(), short: id.slice(0, 2).toUpperCase(),
+      remaining: kind === "Percent" ? 97 : 7742.08, unit: kind === "Points" ? "credits" : "CNY", valid: true, stale: false, hidden: false,
+      expiring: kind === "Points" ? [{ at: now + 3 * 86400, amount: 174.96 }] : [],
+      windows: kind === "Percent" ? [{ label: "周期", main: true, remainPercent: 97, status: "ok", resetsAt: new Date((now + 28 * 86400) * 1000).toISOString() }] : [], claim: null }));
+    channels.push({ ...base, id: "google-cloud", name: "Gemini · Google Cloud", remaining: 299.72, unit: "USD", valid: true,
+      googleCloud: { account: "layout-fixture", credits: [{ id: "fixture-credit", remaining: 299.72, expiresAt: now + 89 * 86400 }] } });
     const codex = channels.find(c => c.id === "codex");
     Object.assign(codex, { kind: "percent", remaining: 67, resetCredits: { availableCount: 3 }, windows: [
       { key: "weekly", label: "本周", main: true, remainPercent: 67, status: "ok" },
@@ -54,18 +58,23 @@ module.exports = async function ({ w, R, data, src }) {
     });
     check("窄窗尺寸与单列相同", () => assert.deepEqual(w.__TEST.panelContentSize("thumbnail"), w.__TEST.panelContentSize("single")));
     check("Codex 周与短窗以及卡数量同时存在", () => {
-      assert.match(row(codex.id).querySelector(".v").textContent, /周剩67/);
-      assert.match(row(codex.id).querySelector(".thumb-status").textContent, /5h剩 59% · 卡 3/);
+      assert.equal(row(codex.id).querySelector(".thumb-window").textContent, "本周剩余");
+      assert.match(row(codex.id).querySelector(".v").textContent, /67/);
+      assert.equal(row(codex.id).querySelector(".thumb-status-main").textContent, "重置卡 3 张");
+      assert.equal(row(codex.id).querySelector(".thumb-status-end").textContent, "5h剩 59%");
     });
     check("Antigravity 短窗与限流时间同时存在", () => {
       const el = row(ag.id).querySelector(".thumb-status");
-      assert.match(el.textContent, /G5h剩 1% · 限流 49分钟/);
+      assert.equal(el.querySelector(".thumb-status-main").textContent, "G5h剩 1%");
+      assert.equal(el.querySelector(".thumb-status-end").textContent, "限流 49分钟后恢复");
       assert.match(el.title, /Claude\/GPT/);
     });
     check("Google Cloud 短名保留完整名称", () => {
       const el = row("google-cloud").querySelector(".thumb-name");
       assert.equal(el.textContent, "Gemini · GCP");
       assert.equal(el.title, "Gemini · Google Cloud");
+      assert.equal(row("google-cloud").querySelector(".thumb-status-main").textContent, "手填到期日");
+      assert.match(row("google-cloud").querySelector(".thumb-status-end").textContent, /^\d{4}-\d{2}-\d{2}$/);
     });
     check("刷新保留卡片节点与焦点", () => {
       const el = row(codex.id).querySelector(".rhead"); el.focus(); w.render({});
@@ -74,8 +83,9 @@ module.exports = async function ({ w, R, data, src }) {
     });
     check("已用口径同步更新标签与百分比", () => {
       w.__TEST.patchCfg({ showUsed: true }); w.render({});
-      assert.match(row(codex.id).querySelector(".v").textContent, /周已用33/);
-      assert.match(row(codex.id).querySelector(".thumb-status").textContent, /5h用 41%/);
+      assert.equal(row(codex.id).querySelector(".thumb-window").textContent, "本周已用");
+      assert.match(row(codex.id).querySelector(".v").textContent, /33/);
+      assert.equal(row(codex.id).querySelector(".thumb-status-end").textContent, "5h已用 41%");
       w.__TEST.patchCfg({ showUsed: false });
     });
     check("错误与旧数据及零余额区分", () => {
@@ -92,9 +102,24 @@ module.exports = async function ({ w, R, data, src }) {
       assert.match(html, /thumb-status[^>]*[\s\S]*登录失效/);
     });
     check("未知逐笔到期保留账户限定", () => {
-      const c = { ...channels[0], kind: "points", remaining: 100, accountExpiry: { state: "never", at: null }, expiryComplete: false };
+      const c = { ...channels[0], kind: "points", remaining: 100, expiring: [], accountExpiry: { state: "never", at: null }, expiryComplete: false };
       const holder = doc.createElement("div"); holder.innerHTML = w.renderRow(c, 0);
       assert.match(holder.querySelector(".thumb-status").textContent, /账户额度/);
+    });
+    check("到期金额与日期分列", () => {
+      const c = channels.find(c => c.kind === "points");
+      assert.match(row(c.id).querySelector(".thumb-status-main").textContent, /174\.96 分将到期/);
+      assert.match(row(c.id).querySelector(".thumb-status-end").textContent, /^\d{2}-\d{2}$/);
+    });
+    check("跨重置点保留待刷新状态", () => {
+      const el = row(ag.id).querySelector("[data-thumbnail-reset]");
+      const previous = el.dataset.thumbnailReset;
+      el.dataset.thumbnailReset = String(w.Date.now() - 1);
+      w.PanelLayoutUI.tick();
+      assert.equal(el.textContent, "待刷新");
+      el.dataset.thumbnailReset = previous;
+      w.PanelLayoutUI.tick();
+      assert.match(el.textContent, /后恢复$/);
     });
     const saved = [];
     w.__SET_CONFIG_INVOKE = async ({ config }) => saved.push(config.panelLayout);

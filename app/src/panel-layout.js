@@ -41,60 +41,80 @@
     return w && Number.isFinite(w.remainPercent) ? `${dispPct(w.remainPercent).toFixed(0)}%` : "未知";
   }
 
-  function windowTime(w) {
+  function countdown(at, suffix) {
+    return fmtResetTightShort(at) + (at > Date.now() ? suffix : "");
+  }
+
+  function windowTime(w, suffix = "后重置") {
     const at = resetMs(w);
     if (at === null) return "重置未知";
-    return `<span data-thumbnail-reset="${at}">${esc(fmtResetTightShort(at))}</span>`;
+    return `<span data-thumbnail-reset="${at}" data-thumbnail-suffix="${suffix}">${esc(countdown(at, suffix))}</span>`;
   }
 
   function summary(c, row) {
     const { noKey, failed, isOld, mw, sub, subVal, railLeft, railRight, winWarn, claimWarn } = row;
-    let label = "";
+    let label = c.id === "google-cloud" ? "赠金余额" : c.kind === "percent" ? (CFG.showUsed ? "已用额度" : "剩余额度") : "余额";
     let status = railLeft || sub || subVal;
+    let end = railRight || "";
     let detail = [sub, subVal, railLeft, railRight, winWarn, claimWarn].map(plainText).filter(Boolean).join(" · ");
     const health = hvRow(c.id);
     const auth = health && health.state === "auth" || c.recovery && c.recovery.phase === "auth";
     if (mw) {
-      label = mw.label === "本周" || mw.key === "gemini-weekly" ? "周" : mw.label;
-      if (c.id === "antigravity") label = mw.key === "gemini-weekly" ? "G周" : mw.key === "gemini-5h" ? "G5h" : mw.label;
-      label += CFG.showUsed ? "已用" : "剩";
+      label = mw.label;
+      if (c.id === "antigravity") label = mw.key === "gemini-weekly" ? "Gemini周" : mw.key === "gemini-5h" ? "Gemini5h" : mw.label;
+      label += CFG.showUsed ? "已用" : "剩余";
     }
     if (noKey || failed || isOld || auth) {
       const state = noKey ? "待登录/配置" : auth ? "登录失效" : failed && c.remaining == null ? "读取失败" : "数据已旧";
       status = esc(state) + (sub ? " · " + sub : "");
+      end = "";
     } else if (c.id === "codex" && mw) {
       const short = (c.windows || []).find(w => w.label === "5 小时");
       const cards = c.resetCredits && c.resetCredits.availableCount;
-      status = `5h${CFG.showUsed ? "用" : "剩"} ${windowValue(short)} · 卡 ${cards == null ? "未知" : esc(cards)}`;
-      if (short && (short.status === "rate-limited" || short.remainPercent === 0)) status += ` · 耗尽 ${windowTime(short)}`;
+      status = `重置卡 ${cards == null ? "未知" : esc(cards) + " 张"}`;
+      end = `5h${CFG.showUsed ? "已用" : "剩"} ${windowValue(short)}`;
+      if (short && (short.status === "rate-limited" || short.remainPercent === 0)) {
+        status = `5h 已耗尽 · 卡 ${cards == null ? "未知" : esc(cards)}`;
+        end = windowTime(short, "后恢复");
+      }
     } else if (c.id === "antigravity") {
       const wins = c.windows || [];
       const short = wins.find(w => w.key === "gemini-5h");
       const limitedWins = wins.filter(w => w.status === "rate-limited" || w.remainPercent === 0);
       const limited = limitedWins.find(w => health && (w.key === health.bindingWindow || w.label === health.bindingWindow)) || limitedWins[0];
       status = `G5h${CFG.showUsed ? "用" : "剩"} ${windowValue(short)}`;
-      if (limited) status += ` · 限流 ${windowTime(limited)}`;
-      else if (c.limited) status += " · 限流";
-      else if (short) status += ` · ${windowTime(short)}`;
-      detail = [detail, limited ? `${limited.label}限流` : "", plainText(status)].filter(Boolean).join(" · ");
+      end = short ? windowTime(short) : "";
+      if (limited) end = `限流 ${windowTime(limited, "后恢复")}`;
+      else if (c.limited) end = "限流";
+      detail = [detail, limited ? `${limited.label}限流` : ""].filter(Boolean).join(" · ");
     } else if (c.limited) {
       status = `限流 · ${railLeft || sub}`;
+      end = "";
     } else if (winWarn || claimWarn) {
       status = esc(plainText(winWarn || claimWarn));
+      end = "";
+    } else if (c.id === "google-cloud" && window.GoogleCloudUI) {
+      const rail = window.GoogleCloudUI.rail(c, true);
+      status = rail.left;
+      end = rail.right;
     } else if (c.kind === "points") {
       const expiry = (c.expiring || []).filter(e => e.amount > 0 && e.at * 1000 > Date.now()).sort((a, b) => a.at - b.at)[0];
-      if (expiry) status = `${esc(fmtDay(expiry.at))} 到期 ${esc(points(expiry.amount))} ${esc(c.unit && c.unit !== "credits" ? c.unit : "分")}`;
+      if (expiry) {
+        status = `${esc(points(expiry.amount))} ${esc(c.unit && c.unit !== "credits" ? c.unit : "分")}将到期`;
+        end = esc(fmtDay(expiry.at));
+      }
       else status = railLeft || railRight || sub;
     } else if (mw) {
-      status = `${esc(mw.label)} · ${windowTime(mw)}`;
+      status = "重置";
+      end = windowTime(mw);
     }
-    const text = plainText(status);
+    const text = plainText(status) + (end ? " · " + plainText(end) : "");
     const full = [...new Set([text, detail].filter(Boolean))].join(" · ");
     const shortName = c.id === "google-cloud" ? "Gemini · GCP" : c.name;
     return {
-      label: `<span class="thumb-window">${esc(label)}</span>`,
+      label: `<span class="thumb-window" title="${esc(label)}">${esc(label)}</span>`,
       name: `<span class="thumb-name" title="${esc(c.name)}">${esc(shortName)}</span>`,
-      html: `<div class="thumb-status" role="note" title="${esc(full)}" aria-label="${esc(full)}">${status || "&nbsp;"}</div>`,
+      html: `<div class="thumb-status" role="note" title="${esc(full)}" aria-label="${esc(full)}"><span class="thumb-status-main">${status || "&nbsp;"}</span><span class="thumb-status-end">${end}</span></div>`,
     };
   }
 
@@ -133,7 +153,7 @@
 
   function tick() {
     document.querySelectorAll("[data-thumbnail-reset]").forEach(el => {
-      setTextIfChanged(el, fmtResetTightShort(Number(el.dataset.thumbnailReset)));
+      setTextIfChanged(el, countdown(Number(el.dataset.thumbnailReset), el.dataset.thumbnailSuffix || ""));
     });
   }
 
