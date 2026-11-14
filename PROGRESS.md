@@ -1,7 +1,7 @@
 # Grandettoken 开发进展
 
 > 最后更新:2026-11-14
-> 状态:**桌面 v0.3.49、Android 0.1.13 已发布**，结果见文末最新条目。
+> 状态:**桌面 v0.3.50、Android 0.1.13 已发布**，结果见文末最新条目。
 > 同日做了两轮**代码治理**:产物出库 / 门禁补强 / 静默失败归零 / 经验沉淀,
 > 见 `docs/report/code-governance-2026-11-12.md`、`docs/report/code-quality-2026-11-12-b.md`
 > 与根目录 `AGENTS.md`。
@@ -5026,3 +5026,19 @@ src-tauri `cargo check --all-targets --locked` exit 0;
   无凭据泄露,未做历史改写。
 - 待验收:新安装包原生日期控件交互(用户人工验证「清空后重新输入日期」)、Google 真实
   账号后台刷新。e16d535 的时长口径改动(「N 天 M 小时」)在 main 上,随 v0.3.50 发布。
+
+## 2026-11-14 v0.3.50 顾问时长统计改「N 天 M 小时」
+
+- 用户反馈 WAIT 结论「等 约 146.4 小时 的自然重置」不直观:≥24 小时改折「N 天 M 小时」
+  (146.4h → 约 6 天 2 小时),不足一天保留 0.1 小时精度,不足一小时按分钟;
+  小时段四舍五入满 24 进位成整天(47.7h → 约 2 天)。
+- 后端抽 `format_gap_hours`(codex_reset.rs,headline 与 Codex 卡内嵌结论同源),
+  前端 `fmtGap`(codex-reset.js 指标行)保持同口径;两处注释互相标注必须同步修改。
+- 双向验证:Rust `gap_copy_splits_days_and_hours` 边界单测(分钟/0.1h/23.96h 不折天/
+  24h 整天/47.7h 进位/天+小时);顾问冒烟 gapHours 夹具变量化 + 两条 DOM 断言,
+  改夹具必须同时推 uiNow 失效建议缓存(时钟失效棘轮落地)。
+- 发版前门禁串行全绿:静态四门及自检、五个 JS 语法、jsdom 201/201、顾问/密钥箱/
+  Google Cloud 冒烟、core 535 passed / 8 ignored、src-tauri 全目标编译(--locked)、
+  凭据扫描 CLEAN。版本号三处同步 0.3.50 并 `cargo fetch --locked` 复跑通过。
+- 待验收:顾问 headline 与指标行的实际显示效果(需真实账号数据下查看);
+  日期控件回填的人工复核仍开放(v0.3.49 遗留)。
