@@ -5042,3 +5042,15 @@ src-tauri `cargo check --all-targets --locked` exit 0;
   凭据扫描 CLEAN。版本号三处同步 0.3.50 并 `cargo fetch --locked` 复跑通过。
 - 待验收:顾问 headline 与指标行的实际显示效果(需真实账号数据下查看);
   日期控件回填的人工复核仍开放(v0.3.49 遗留)。
+
+## 2026-11-14 v0.3.50 发布结果
+
+- tag `v0.3.50` 指向 `9dc5118`(时长口径发版 commit)。release run `43574206929` 全部成功;
+  main CI 对 9dc5118 与 e16d535 均成功。
+- Release 于北京时间 2026-11-14 16:30:05 公开发布,三件套齐全(安装包 5,893,505 字节,
+  SHA-256 本地匿名下载回验 `fb251a1bc204fd6123d588005f8e37f83330367d44bc634cbef5c1cb5ee16a1f`;
+  签名 444 字节;更新清单 1,702 字节),非 draft。
+- 本机 `node --use-env-proxy build/verify-release.js` 二次核验 PASS(14 项),固定更新端点
+  返回 0.3.50;签名/安装包逐字比对按既有口径 SKIP,由 CI 端完成。
+- 待验收:安装包内顾问 headline 与指标行的「N 天 M 小时」实际显示;日期控件回填的
+  人工复核(v0.3.49 遗留,见验收报告问题 #2)。
