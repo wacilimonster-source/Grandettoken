@@ -5167,8 +5167,7 @@ src-tauri `cargo check --all-targets --locked` exit 0;
 
 ## 2026-11-15 v0.3.53 发布结果
 
-- tag `v0.3.53` 指向 `886aa88`(窄窗双列缩略发版 commit)。release run success(后台
-  监视退出码 0,run id 见 GitHub Actions);main CI 对 886aa88 成功。
+- tag `v0.3.53` 指向 `886aa88`(窄窗双列缩略发版 commit)。release run `43637269540` 全部成功;main CI 对 886aa88 成功。
 - Release 于北京时间 2026-11-15 04:41:33 公开发布,三件套齐全(安装包 5,950,180 字节,
   SHA-256 本地匿名下载回验
   `d47c219e57231b579d5e6c82bf45c3c140d5e69d8e3aff02872a98c480f3d218`;签名 444 字节;
