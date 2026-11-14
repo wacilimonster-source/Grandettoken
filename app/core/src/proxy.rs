@@ -123,7 +123,8 @@ mod tests {
     use super::*;
     use std::{
         io::{Read, Write},
-        net::{SocketAddr, TcpListener},
+        net::{SocketAddr, TcpListener, TcpStream},
+        sync::mpsc,
         thread,
         time::Instant,
     };
@@ -136,7 +137,9 @@ mod tests {
         }
     }
 
-    fn server() -> (SocketAddr, thread::JoinHandle<String>) {
+    fn server_with_signal(
+        accepted: Option<mpsc::Sender<()>>,
+    ) -> (SocketAddr, thread::JoinHandle<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let addr = listener.local_addr().unwrap();
@@ -154,9 +157,14 @@ mod tests {
                     Err(e) => panic!("test server did not receive a request: {e}"),
                 }
             };
+            // Windows may inherit the listener's nonblocking mode on accept.
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(3)))
                 .unwrap();
+            if let Some(accepted) = accepted {
+                accepted.send(()).unwrap();
+            }
             let mut request = Vec::new();
             let mut buf = [0; 1024];
             while !request.windows(4).any(|w| w == b"\r\n\r\n") {
@@ -172,6 +180,23 @@ mod tests {
             String::from_utf8_lossy(&request).into_owned()
         });
         (addr, worker)
+    }
+
+    fn server() -> (SocketAddr, thread::JoinHandle<String>) {
+        server_with_signal(None)
+    }
+
+    #[test]
+    fn test_server_waits_for_delayed_request() {
+        let (accepted, ready) = mpsc::channel();
+        let (addr, worker) = server_with_signal(Some(accepted));
+        let mut stream = TcpStream::connect(addr).unwrap();
+        ready.recv_timeout(Duration::from_secs(2)).unwrap();
+        thread::sleep(Duration::from_millis(100));
+        stream
+            .write_all(b"GET /delayed HTTP/1.1\r\nHost: example\r\n\r\n")
+            .unwrap();
+        assert!(worker.join().unwrap().starts_with("GET /delayed "));
     }
 
     fn proxy_client(addr: SocketAddr) -> reqwest::Client {

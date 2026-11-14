@@ -13,7 +13,7 @@
  *   2. 之后再给这些容器写 display(非 none)的规则,**必须**带 body.<状态> 前缀。
  *
  * 用法:
- *   node build/check-css-forms.js              # 判定 app/src/styles.css
+ *   node build/check-css-forms.js              # 判定 index.html 加载的全部样式
  *   node build/check-css-forms.js --self-test  # 证明自己会对坏样本变红
  *
  * 自检是 2026-11-12 补的:这道门此前只能用"当前文件恰好绿"证明自己,
@@ -106,6 +106,27 @@ function analyze(css, html) {
   return { gated, rules, bad };
 }
 
+function analyzeStyles(styles, html) {
+  return analyze(styles.join("\n"), html);
+}
+
+function stylesheetFiles(html) {
+  const attr = (tag, name) => {
+    const match = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i").exec(tag);
+    return match ? (match[1] ?? match[2] ?? match[3]) : "";
+  };
+  const activeHtml = html.replace(/<!--[\s\S]*?-->/g, "");
+  return [...activeHtml.matchAll(/<link\b[^>]*>/gi)].map((match) => match[0])
+    .filter((tag) => attr(tag, "rel").split(/\s+/).some((word) => word.toLowerCase() === "stylesheet"))
+    .map((tag) => {
+      const href = attr(tag, "href").split(/[?#]/, 1)[0];
+      if (!href || !/\.css$/i.test(href) || /^(?:[a-z]+:|\/\/)/i.test(href)) {
+        throw new Error(`无法检查样式链接: ${tag}`);
+      }
+      return href;
+    });
+}
+
 function selfTest() {
   const htmlOk = `<html><body><div class="probe"><span>inner</span></div></body></html>`;
   const cases = [
@@ -129,16 +150,28 @@ function selfTest() {
       css: `.probe{display:none}\n.probe{display:flex!important}`,
       wantBad: true,
     },
+    {
+      name: "跨样式文件的无状态门覆盖必须判红",
+      styles: [`.probe{display:none}`, `.probe{display:flex}`],
+      wantBad: true,
+    },
   ];
   let fail = 0;
   for (const c of cases) {
-    const got = analyze(c.css, htmlOk).bad.length > 0;
+    const got = analyzeStyles(c.styles || [c.css], htmlOk).bad.length > 0;
     if (got !== c.wantBad) {
       console.error(`  ✗ 自检失败:${c.name}(期望${c.wantBad ? "红" : "绿"},实际${got ? "红" : "绿"})`);
       fail++;
     } else {
       console.log(`  ✓ ${c.name}`);
     }
+  }
+  const found = stylesheetFiles(`<!-- <link rel="stylesheet" href="commented.css"> --><link data-href="wrong.css" href='first.css?v=1' rel='stylesheet'><link rel="preload" href="skip.css"><link media="screen" href="second.css" rel="stylesheet">`);
+  if (found.join(",") !== "first.css,second.css") {
+    console.error("  ✗ 自检失败:样式链接必须按加载顺序完整提取");
+    fail++;
+  } else {
+    console.log("  ✓ 样式链接按加载顺序完整提取");
   }
   return fail === 0;
 }
@@ -149,10 +182,12 @@ function main() {
     process.exit(selfTest() ? 0 : 1);
   }
 
-  const css = fs.readFileSync(path.join(SRC, "styles.css"), "utf8");
   const html = fs.readFileSync(path.join(SRC, "index.html"), "utf8");
-  const { gated, rules, bad } = analyze(css, html);
-  console.log(`形态门守卫:${gated.size} 个整块容器受管 (${[...gated].join(" ")}),规则 ${rules.length} 条`);
+  const files = stylesheetFiles(html);
+  if (!files.length) throw new Error("index.html 未加载任何样式文件");
+  const styles = files.map((file) => fs.readFileSync(path.join(SRC, file), "utf8"));
+  const { gated, rules, bad } = analyzeStyles(styles, html);
+  console.log(`形态门守卫:${files.length} 个样式文件,${gated.size} 个整块容器受管 (${[...gated].join(" ")}),规则 ${rules.length} 条`);
   if (bad.length) {
     for (const b of bad) {
       console.log(`  FAIL ${b.target} 被无条件显示: ${b.sel} { display:${b.display} }`);

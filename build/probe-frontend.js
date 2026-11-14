@@ -5,6 +5,7 @@ const path = require('path');
 const vm = require('vm');
 
 const src = fs.readFileSync(path.join(__dirname, '..', 'app', 'src', 'app.js'), 'utf8');
+const vaultSrc = fs.readFileSync(path.join(__dirname, '..', 'app', 'src', 'vault-view.js'), 'utf8');
 
 const logs = [];
 
@@ -352,6 +353,7 @@ function probeLogCardCheck() {
 
 process.on('unhandledRejection', (e) => logs.push(['UNHANDLED', String(e && e.stack || e)]));
 try {
+  vm.runInContext(vaultSrc, ctx, { filename: 'vault-view.js' });
   vm.runInContext(src, ctx, { filename: 'app.js' });
 } catch (e) {
   logs.push(['THROWN', String(e && e.stack || e)]);

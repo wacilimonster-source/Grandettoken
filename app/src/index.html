@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <title>Grandettoken</title>
 <link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="vault-view.css">
 <link rel="stylesheet" href="codex-reset.css">
 <link rel="stylesheet" href="google-cloud.css">
 </head>
@@ -299,7 +300,7 @@
       <div id="vaultForm"></div>
       <div id="vaultList"></div>
       <div class="vault-foot">
-        <span>列表只显示平台、分组与尾号;「显示」的明文 8 秒后自动收起。</span>
+        <span>密钥默认只显示尾号;「显示」的明文 8 秒后自动隐藏。</span>
         <span>密钥加密存放在 Windows 凭据管理器(绑定当前 Windows 账户),不上传、不导出;复制后剪贴板对其他程序可见。</span>
       </div>
     </div>
@@ -554,6 +555,7 @@
     </div>
   </div>
 
+  <script src="vault-view.js"></script>
   <script src="app.js"></script>
   <script src="codex-reset.js"></script>
   <script src="google-cloud.js"></script>

@@ -25,10 +25,29 @@ try {
 // 换一台机器 / 换个 clone 目录就静默读不到文件,而门禁脚本可能仍然报绿。
 const SRC = path.resolve(__dirname, "..", "app", "src");
 const html = fs.readFileSync(path.join(SRC, "index.html"), "utf8");
-const js = fs.readFileSync(path.join(SRC, "app.js"), "utf8");
+let js = fs.readFileSync(path.join(SRC, "app.js"), "utf8");
+if (process.env.CHECKIN_SENTINEL === "1") {
+  const marker = "CHECKIN_ON.add(x.id);";
+  if (js.split(marker).length !== 2) throw new Error("签到哨兵未命中唯一能力同步入口");
+  js = js.replace(marker, "");
+} else {
+  const { spawnSync } = require("node:child_process");
+  const probe = spawnSync(process.execPath, [__filename], {
+    env: { ...process.env, CHECKIN_SENTINEL: "1" }, encoding: "utf8", timeout: 20000,
+  });
+  if (probe.status !== 1 || !/FAIL 首页与签到中心使用全部后端签到渠道/.test(probe.stdout)) {
+    throw new Error("签到哨兵自检失败：移除能力名单同步后必须被统计回归断言拦截");
+  }
+}
+const vaultJs = fs.readFileSync(path.join(SRC, "vault-view.js"), "utf8");
+const checkinSource = fs.readFileSync(path.join(SRC, "../core/src/checkin.rs"), "utf8");
+const checkinDefs = checkinSource.slice(checkinSource.indexOf("pub const CHECKINS:"), checkinSource.indexOf("pub fn find("));
+const checkinIds = [...checkinDefs.matchAll(/\bid:\s*"([^"]+)"/g)].map((match) => match[1]);
+if (!checkinIds.length) throw new Error("未提取到后端签到渠道");
 
 const dom = new JSDOM(html, { runScripts: "outside-only", pretendToBeVisual: true, url: "http://localhost/" });
 const w = dom.window;
+w.__CHECKIN_IDS = checkinIds;
 
 const CALLS = Object.create(null);
 w.__CALLS = CALLS;
@@ -41,6 +60,10 @@ w.__TAURI__ = {
       if (w.__VAULT_COPY_INVOKE && ["vault_copy", "copy_text"].includes(cmd)) {
         return w.__VAULT_COPY_INVOKE(cmd, args);
       }
+      if (w.__VAULT_REVEAL_INVOKE && cmd === "vault_reveal") return w.__VAULT_REVEAL_INVOKE(cmd, args);
+      if (w.__VAULT_SAVE_INVOKE && cmd === "vault_save") return w.__VAULT_SAVE_INVOKE(cmd, args);
+      if (w.__VAULT_DELETE_INVOKE && cmd === "vault_delete") return w.__VAULT_DELETE_INVOKE(cmd, args);
+      if (w.__VAULT_LIST_INVOKE && cmd === "vault_list") return w.__VAULT_LIST_INVOKE(cmd, args);
       if (w.__DOWNLOAD_INVOKE && ["download_link", "copy_text"].includes(cmd)) {
         return w.__DOWNLOAD_INVOKE(cmd, args);
       }
@@ -103,6 +126,7 @@ const HARNESS = `
   const L = () => document.getElementById("list").innerHTML;
   const S = () => document.getElementById("sum").innerHTML;
   const data = window.__DATA;
+  window.__CHECKIN_IDS.forEach(id => CHECKIN_ON.add(id));
 
   try {
     CHANNELS = data.CHANNELS;
@@ -950,7 +974,7 @@ const HARNESS = `
           createdAt: nowTs, updatedAt: nowTs },
         { id: "v2", platform: "4SAPI", label: "备用", hint: "••••wxyz", note: "",
           createdAt: nowTs - 2, updatedAt: nowTs - 1 },
-        { id: "v3", platform: "Hapi", label: "工作", hint: "••••1234", note: "",
+        { id: "v3", platform: "Hapi", label: "工作", hint: "••••1234", note: "模拟账号", apiEndpoint: "https://example.com/v1", website: "https://example.com",
           createdAt: nowTs - 3, updatedAt: nowTs + 1 },
       ];
       window.__VAULTREF = [["4sapi", "v1"]];
@@ -964,7 +988,8 @@ const HARNESS = `
       ck("被引用的条目写明正被谁使用", /正被 4SAPI 使用/.test(document.getElementById("vaultList").innerHTML));
       ck("未引用条目不显示多余提示", !/未被任何渠道使用/.test(document.getElementById("vaultList").textContent));
       ck("默认按更新时间全局排序", [...document.querySelectorAll("#vaultList .vrow")].map(x=>x.dataset.id).join(",") === "v3,v1,v2");
-      ck("渠道默认密钥只读", !document.querySelector('[data-act="vedit"][data-id="v1"]') && !document.querySelector('[data-act="vdel"][data-id="v1"]') && !!document.querySelector('[data-act="vedit"][data-id="v2"]'));
+      ck("密钥条目初始收起", [...document.querySelectorAll('#vaultList [data-act="vfold"]')].every(b => b.getAttribute("aria-expanded") === "false")
+        && !document.querySelector("#vaultList .vrow-address"));
       const copied = [];
       window.__VAULT_COPY_INVOKE = async (cmd, args) => { copied.push({cmd, args}); return "已复制"; };
       document.querySelector('[data-act="vcopy"][data-id="v1"]').click();
@@ -972,8 +997,66 @@ const HARNESS = `
       await new Promise(resolve => setTimeout(resolve, 0));
       ck("密钥与端点分别复制", copied.length === 2 && copied[0].cmd === "vault_copy" && copied[0].args.id === "v1"
         && copied[1].cmd === "copy_text" && copied[1].args.text === "https://4sapi.com/v1");
+      ck("复制不会展开条目", !document.querySelector('#vaultList [aria-expanded="true"]'));
       ck("未填写端点时禁用复制端点", document.querySelector('[data-act="vcopy-endpoint"][data-id="v2"]').disabled);
+      window.__VAULT_COPY_INVOKE = async () => { throw new Error("模拟复制失败"); };
+      document.querySelector('[data-act="vcopy"][data-id="v1"]').click();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      ck("复制失败明确提示", /复制失败:.*模拟复制失败/.test(document.getElementById("toast").textContent));
       delete window.__VAULT_COPY_INVOKE;
+      document.querySelector('[data-act="vfold"][data-id="v1"]').click();
+      ck("默认条目展开后仍只读", !!document.querySelector('[data-act="vfold"][data-id="v1"][aria-expanded="true"]')
+        && !document.querySelector('[data-act="vedit"][data-id="v1"]') && !document.querySelector('[data-act="vdel"][data-id="v1"]')
+        && /请在渠道管理中修改/.test(document.querySelector('[data-id="v1"].vrow').textContent));
+      document.querySelector('[data-act="vfold"][data-id="v2"]').click();
+      ck("展开另一条会收起前一条且显示编辑操作", document.querySelectorAll('#vaultList [data-act="vfold"][aria-expanded="true"]').length === 1
+        && !!document.querySelector('[data-act="vedit"][data-id="v2"]') && !document.querySelector('[data-act="vreveal"][data-id="v1"]'));
+
+      let finishReveal;
+      window.__VAULT_REVEAL_INVOKE = () => new Promise(resolve => { finishReveal = resolve; });
+      document.querySelector('[data-act="vreveal"][data-id="v2"]').click();
+      document.querySelector('[data-act="vfold"][data-id="v2"]').click();
+      finishReveal("测试明文");
+      await new Promise(resolve => setTimeout(resolve, 0));
+      document.querySelector('[data-act="vfold"][data-id="v2"]').click();
+      ck("收起后迟到的明文不会重新显示", !document.querySelector("#vaultList .vrow-reveal"));
+      delete window.__VAULT_REVEAL_INVOKE;
+
+      document.querySelector('[data-act="vfold"][data-id="v3"]').click();
+      document.querySelector('[data-act="vedit"][data-id="v3"]').click();
+      const extra = document.querySelector("#vaultForm .vform-extra");
+      ck("编辑时补充信息收起并提示已有内容", !!extra && !extra.open && /已填写/.test(extra.querySelector("summary").textContent)
+        && document.getElementById("vEndpoint").value === "https://example.com/v1");
+      extra.open = true;
+      const note = document.getElementById("vNote"); note.value = "尚未保存的账号";
+      note.dispatchEvent(new Event("input", { bubbles: true }));
+      const qDraft = document.getElementById("vaultQ"); qDraft.value = "Hapi";
+      qDraft.dispatchEvent(new Event("input", { bubbles: true }));
+      ck("重绘保留补充信息展开状态和草稿", document.querySelector("#vaultForm .vform-extra").open
+        && document.getElementById("vNote").value === "尚未保存的账号");
+      let failedPayload;
+      window.__VAULT_SAVE_INVOKE = async (cmd, args) => { failedPayload = args.item; throw new Error("模拟写入失败"); };
+      document.querySelector('#vaultForm [data-act="vsave"]').click();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      ck("保存失败保留草稿与选填地址并提示", failedPayload.note === "尚未保存的账号"
+        && failedPayload.apiEndpoint === "https://example.com/v1" && document.getElementById("vNote").value === "尚未保存的账号"
+        && /模拟写入失败/.test(document.getElementById("toast").textContent));
+      let finishSave;
+      window.__VAULT_SAVE_INVOKE = () => new Promise(resolve => { finishSave = resolve; });
+      document.querySelector('#vaultForm [data-act="vsave"]').click();
+      document.querySelector('#vaultForm [data-act="vcancel"]').click();
+      document.querySelector('.vault-top [data-act="vnew"]').click();
+      const nextPlatform = document.getElementById("vPlat"); nextPlatform.value = "新的草稿平台";
+      nextPlatform.dispatchEvent(new Event("input", { bubbles: true }));
+      ck("前一条保存中，新表单的保存按钮被禁用", document.querySelector('#vaultForm [data-act="vsave"]').disabled);
+      finishSave({ id: "v3" });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      ck("迟到的保存成功不会清空新表单", document.getElementById("vPlat").value === "新的草稿平台"
+        && !document.querySelector('#vaultForm [data-act="vsave"]').disabled);
+      delete window.__VAULT_SAVE_INVOKE;
+      document.querySelector('#vaultForm [data-act="vcancel"]').click();
+      qDraft.value = ""; qDraft.dispatchEvent(new Event("input", { bubbles: true }));
+
       const sort = document.getElementById("vaultSort"); sort.value = "platform"; sort.dispatchEvent(new Event("change", {bubbles:true}));
       ck("可按平台排序", [...document.querySelectorAll("#vaultList .vrow")].map(x=>x.dataset.id).join(",") === "v2,v1,v3");
       sort.value = "updated"; sort.dispatchEvent(new Event("change", {bubbles:true}));
@@ -1000,8 +1083,58 @@ const HARNESS = `
       ck("清除搜索恢复列表", document.querySelectorAll("#vaultList .vitem").length === 3
         && document.getElementById("vaultQClear").hidden === true);
 
+      document.querySelector('[data-act="vfold"][data-id="v2"]').click();
+      document.querySelector('[data-act="vdel"][data-id="v2"]').click();
+      ck("展开区删除先要求确认", !!document.querySelector('[data-act="vdel-yes"][data-id="v2"]'));
+      const deletes = [];
+      window.__VAULT_DELETE_INVOKE = async (cmd, args) => {
+        deletes.push(args);
+        if (!args.force) return { deleted: false, referrers: ["4sapi"] };
+        window.__VAULT = window.__VAULT.filter(item => item.id !== args.id);
+        return { deleted: true };
+      };
+      document.querySelector('[data-act="vdel-yes"][data-id="v2"]').click();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      ck("后端报告引用时显示后果并要求二次确认", /正被 4SAPI 使用/.test(document.querySelector(".cfrm").textContent)
+        && !!document.querySelector('[data-act="vdel-force"][data-id="v2"]') && deletes.length === 1 && !deletes[0].force);
+      document.querySelector('[data-act="vdel-force"][data-id="v2"]').click();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      ck("二次确认后按后端结果删除", deletes.length === 2 && deletes[1].force === true
+        && !document.querySelector('.vrow[data-id="v2"]'));
+      delete window.__VAULT_DELETE_INVOKE;
+
+      window.__VAULT_LIST_INVOKE = async () => { throw new Error("模拟读取失败"); };
+      await loadVault();
+      ck("读取失败显示错误和重试，不伪装为空箱", /读不出密钥箱/.test(document.getElementById("vaultList").textContent)
+        && !!document.querySelector('[data-act="vreload"]') && !/密钥箱还是空的/.test(document.getElementById("vaultList").textContent));
+      delete window.__VAULT_LIST_INVOKE;
+      await loadVault();
+
       delete window.__VAULT;
       delete window.__VAULTREF;
+      const oldChannels = CHANNELS, oldCk = CK, oldProgress = HV.checkin;
+      const allIds = window.__CHECKIN_IDS;
+      CHANNELS = allIds.map(id => Object.assign({}, data.CHANNELS[0], { id, name: id, hidden: false }));
+      window.__CK_ST = allIds.map((id, index) => ({ id, name: id, enabled: true, auto: true,
+        doneToday: index < allIds.length - 2, canTry: true, outcome: index < allIds.length - 2 ? "already" : "retry:ready" }));
+      document.body.classList.add("view-manage");
+      CHECKIN_ON.clear();
+      await loadCheckin();
+      HV.checkin = { total: allIds.length, done: allIds.length - 2, pending: allIds.slice(-2) };
+      renderRiskBand(); renderCheckinCenter();
+      const expectedProgress = (allIds.length - 2) + "/" + allIds.length;
+      ck("首页与签到中心使用全部后端签到渠道", document.querySelector("#sum .check-cell").textContent.includes(expectedProgress)
+        && document.querySelector("#ckTodayBox .cktoday b")?.textContent.includes(expectedProgress)
+        && document.querySelectorAll("#ckTodayBox .ckch").length === allIds.length);
+      ck("每个后端签到渠道都有管理入口", allIds.every(id => !!document.querySelector('#ckManageBox [data-act="ckenable"][data-id="' + id + '"]')));
+      ck("首次状态加载后渠道卡补齐签到控制", allIds.every(id => !!document.querySelector('#chList .ckwrap[data-id="' + id + '"]')));
+      window.__CK_ST.push({ id: "future-checkin", name: "未来签到渠道", enabled: false, auto: false });
+      await loadCheckin();
+      ck("新增和关闭的能力仍进入设置名单", CHECKIN_ON.has("future-checkin")
+        && !!document.querySelector('#ckManageBox [data-act="ckenable"][data-id="future-checkin"]') && ckActiveIds().length === allIds.length);
+      CHANNELS = oldChannels; CK = oldCk; HV.checkin = oldProgress;
+      CHECKIN_ON.clear(); allIds.forEach(id => CHECKIN_ON.add(id));
+      delete window.__CK_ST;
       showTab("index");
     });
     closeManage();
@@ -1015,7 +1148,7 @@ const HARNESS = `
 w.__DATA = DATA;
 (async () => {
   try {
-    w.eval(js + "\n;\n" + HARNESS);
+    w.eval(vaultJs + "\n;\n" + js + "\n;\n" + HARNESS);
   } catch (e) {
     console.log("✗ 脚本整体执行抛异常:" + e.message);
     console.log((e.stack || "").split("\n").slice(0, 4).join("\n"));

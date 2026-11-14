@@ -118,6 +118,7 @@ jobs:
         shell: pwsh
         run: |
           node --check app/src/app.js
+          node --check app/src/vault-view.js
           node --check app/src/codex-reset.js
           node --check app/src/google-cloud.js
           node --check app/src-tauri/src/google_cloud_capture.js
@@ -146,6 +147,10 @@ jobs:
       - name: front-end smoke (jsdom)
         shell: pwsh
         run: node build/jsdom-smoke.js
+
+      - name: vault interaction smoke (jsdom)
+        shell: pwsh
+        run: node build/verify-vault.js
 
       # Codex 重置顾问是独立模块,jsdom-smoke 只加载 index.html + app.js,
       # 这条专门覆盖重置卡区入口、页签切换、滑块透传与「不自动兑换」。

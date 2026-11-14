@@ -29,7 +29,7 @@ Google Cloud 赠金渠道另由 `core/src/google_cloud.rs`、`src-tauri/src/goog
 | Qoder | `GET https://openapi.qoder.sh/api/v2/quota/usage` | 积分型 | 国际版;读桌面端 `auth.v1.dat`(Electron safeStorage) |
 | Qoder 国内版 | `GET https://openapi.qoder.com.cn/api/v2/quota/usage` | 积分型 | 国内版;**与上一行是两套账号**,不互通 |
 | MiniMax | `POST https://agent.minimax.cn/matrix/api/v1/commerce/get_membership_info` + `GET …/credit/details` | 积分型 | 读 MiniMax Code 桌面端凭据(`~/.minimax` 明文 OAuth,区域 cn/io/com 跟凭据目录走);**账户端点要官方客户端签名**(x-signature/yy,见 `core/src/minimax.rs`);逐笔账本 + 每日签到 |
-| 豆包工作 | `POST https://www.doubao.com/alice/ug/campaign/v3/detail/` | 积分型 | doubao.com **网页会话**(挂件内登录窗捕获,不落盘;手动粘贴 Cookie 兜底);体验额度读数(自动签到已于 v0.3.44 移除,见 `docs/report/doubao-checkin-710010702-2026-11-14.md`);活动接口按客户端环境放行,URL 要带桌面版平台参数与派生设备号(`core/src/doubao.rs`) |
+| 豆包工作 | `POST https://www.doubao.com/alice/ug/campaign/v3/detail/` | 积分型 | doubao.com **网页会话**(挂件内登录窗捕获,不落盘;手动粘贴 Cookie 兜底);体验额度读数(自动签到已于 v0.3.47 移除,见 `docs/report/doubao-checkin-710010702-2026-11-14.md`);活动接口按客户端环境放行,URL 要带桌面版平台参数与派生设备号(`core/src/doubao.rs`) |
 
 > Qoder 两版是**两个独立渠道**,不是"一个渠道两个域名":账号体系不互通
 > (官方明确不支持跨区迁移),余额无法合并。判定**不要**看 `product.json` 的下载域名 ——
@@ -153,6 +153,7 @@ app/
     index.html
     styles.css
     app.js
+    vault-view.js / vault-view.css  密钥箱紧凑列表、详情与明文显示状态
     logos/                渠道官方图标(来源与版权见该目录 README)
   src-tauri/
     src/
@@ -279,7 +280,7 @@ ZCode 是两份 JSON(`schemaVersion` 不是 1 就放弃),Trae 是 SQLite 的 `It
 
 五个渠道的活动状态每小时检查一次，监测与自动领取分开控制。沿用每渠道原有的监测开关；
 关闭监测后不再发状态查询或领取请求。监测开启、自动领取关闭时仍会读状态，并在可领取时提供手动入口。
-豆包工作的自动签到已于 v0.3.44 移除(服务端拒绝直连领取,见 `docs/report/doubao-checkin-710010702-2026-11-14.md`),渠道保留额度取数。
+豆包工作的自动签到已于 v0.3.47 移除(服务端拒绝直连领取,见 `docs/report/doubao-checkin-710010702-2026-11-14.md`),渠道保留额度取数。
 
 - **纯逻辑**在 `core/src/checkin.rs`(Trae / WorkBuddy / Qoder)与 `core/src/minimax.rs`(MiniMax):
   签到周期日、抖动的触发时刻、退避序列、幂等(先查后领、领后回查)、
