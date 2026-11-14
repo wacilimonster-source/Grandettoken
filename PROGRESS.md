@@ -4995,3 +4995,18 @@ src-tauri `cargo check --all-targets --locked` exit 0;
   顾问/密钥箱/Google Cloud 冒烟、core 534 passed / 8 ignored、src-tauri 全目标编译
   (--locked)、凭据扫描 CLEAN。版本号三处同步 0.3.49 并 `cargo fetch --locked` 复跑通过。
 - 遗留验收:新安装包的原生日期控件交互、Google 真实账号后台刷新,发布后按边界补测。
+
+## 2026-11-14 顾问时长统计改「N 天 M 小时」（未发版,随下版）
+
+- 用户反馈 WAIT 结论的「等 约 146.4 小时 的自然重置」不直观,改为天+小时口径:
+  ≥24 小时折「N 天 M 小时」(146.4h → 约 6 天 2 小时),不足一天保留 0.1 小时精度,
+  不足一小时按分钟;小时段四舍五入满 24 进位成整天(47.7h → 约 2 天)。
+- 后端抽 `format_gap_hours`(codex_reset.rs,headline 与内嵌结论同源),前端 `fmtGap`
+  (codex-reset.js 指标行)保持同口径,注释互相标注必须同步修改。
+- 双向验证:Rust 新增 `gap_copy_splits_days_and_hours` 边界单测(分钟/0.1h/23.96h/
+  24h/47.7h 进位/整天/天+小时);顾问冒烟把 gapHours 夹具变量化,新增两条 DOM 断言
+  (约 5.3 小时 / 146.4 → 约 6 天 2 小时),改夹具必须同时推 uiNow 失效建议缓存
+  (与 AGENTS 7 的时钟失效棘轮一致)。
+- 门禁:core 535 passed / 8 ignored、顾问冒烟(含哨兵自检)、jsdom 201/201、
+  密钥箱/Google 冒烟、文件规模、凭据扫描 CLEAN、src-tauri 全目标编译。
+- 改动在工作区,尚未发版;随下一版走 CI(v0.3.49 已在 CI 中,不含本改动)。

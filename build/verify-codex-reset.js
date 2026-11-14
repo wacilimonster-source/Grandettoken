@@ -84,6 +84,8 @@ w.CHANNELS = [{
 }];
 w.DETAIL_ID = "codex";
 
+let fixtureGapH = 5.26; // 时长口径夹具:改这里观察 fmtGap 的分钟/小时/天折算
+
 function adviceFor(kind) {
   const now = kind === "urgent";
   const inventory = w.CHANNELS[0].resetCredits;
@@ -100,7 +102,7 @@ function adviceFor(kind) {
       weeklyRemainPercent: 0,
       weeklyUsedPercent: 100,
       nextResetAt: FIXTURE_NOW + 18936,
-      gapHours: 5.26,
+      gapHours: fixtureGapH,
       cardsAvailable: 3,
       cardsUnknown: false,
       cardsSource: "live",
@@ -200,6 +202,21 @@ const assert = (ok, msg) => {
   assert(q(".cr-verdict-badge").textContent === "WAIT", "详情结论优先显示 WAIT");
   assert(!!q("[data-codex-reset-back]"), "详情保留回到 Codex 的入口");
   assert(qa("[data-codex-tab]").length === 3, "建议/计划/依据三个页签都在");
+
+  // 时长口径(与后端 format_gap_hours 同步):不足一天 0.1 小时精度,≥24h 折「N 天 M 小时」
+  assert(q(".cr-metrics").textContent.includes("约 5.3 小时"),
+    "指标行时长:不足一天保留 0.1 小时精度");
+  fixtureGapH = 146.4;
+  uiNow += 61; // 建议缓存含时钟,只改夹具不推时钟不会重算
+  tick();
+  await wait(40);
+  assert(q(".cr-metrics").textContent.includes("约 6 天 2 小时")
+    && !q(".cr-metrics").textContent.includes("146.4"),
+    "指标行时长:≥24 小时折成「N 天 M 小时」");
+  fixtureGapH = 5.26;
+  uiNow += 61;
+  tick();
+  await wait(40);
 
   q('[data-codex-need="urgent"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
   await wait(40);

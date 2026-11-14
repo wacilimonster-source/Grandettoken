@@ -91,11 +91,18 @@
     }
   }
 
+  // 与后端 codex_reset.rs 的 format_gap_hours 同一口径:分钟 / 0.1 小时 / 天+小时。
+  // 两处必须一起改,否则卡片内嵌结论与指标行会各说各话。
   function fmtGap(h) {
     if (h == null || !Number.isFinite(Number(h))) return "—";
     const v = Number(h);
     if (v < 1) return `约 ${Math.max(1, Math.round(v * 60))} 分钟`;
-    return `约 ${v.toFixed(1)} 小时`;
+    if (v < 24) return `约 ${v.toFixed(1)} 小时`;
+    const rawDays = Math.floor(v / 24);
+    const rem = Math.round(v - rawDays * 24);
+    if (rem >= 24) return `约 ${rawDays + 1} 天`;
+    if (rem === 0) return `约 ${rawDays} 天`;
+    return `约 ${rawDays} 天 ${rem} 小时`;
   }
 
   function dateValue(t) {

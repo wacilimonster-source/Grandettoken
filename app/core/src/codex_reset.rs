@@ -403,16 +403,34 @@ fn base_metrics(input: &AdviceInput, now: i64) -> (Metrics, Vec<String>) {
     (m, warnings)
 }
 
+/// 时长口播口径:不足一小时按分钟,不足一天保留 0.1 小时精度,
+/// ≥24 小时折成「N 天 M 小时」(小时段四舍五入,满 24 进位成整天)。
+/// 前端 codex-reset.js 的 fmtGap 是同一口径的镜像,改这里必须同步改那边。
+fn format_gap_hours(h: f64) -> String {
+    if h < 1.0 {
+        format!("约 {:.0} 分钟", h * 60.0)
+    } else if h < 24.0 {
+        format!("约 {:.1} 小时", h)
+    } else {
+        let raw_days = (h / 24.0).floor();
+        let mut days = raw_days as u64;
+        let rem = (h - raw_days * 24.0).round() as u64;
+        if rem >= 24 {
+            days += 1;
+            return format!("约 {days} 天");
+        }
+        if rem == 0 {
+            format!("约 {days} 天")
+        } else {
+            format!("约 {days} 天 {rem} 小时")
+        }
+    }
+}
+
 fn reason_copy(code: Reason, m: &Metrics) -> (String, String) {
     let gap = m
         .gap_hours
-        .map(|h| {
-            if h < 1.0 {
-                format!("约 {:.0} 分钟", h * 60.0)
-            } else {
-                format!("约 {:.1} 小时", h)
-            }
-        })
+        .map(format_gap_hours)
         .unwrap_or_else(|| "重置时间未知".into());
     let gain = m
         .card_gain_percent
@@ -760,6 +778,19 @@ mod policy_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gap_copy_splits_days_and_hours() {
+        assert_eq!(format_gap_hours(0.5), "约 30 分钟");
+        assert_eq!(format_gap_hours(5.3), "约 5.3 小时");
+        // 不足一天的边界:23.96h 仍按小时口径,不折天
+        assert_eq!(format_gap_hours(23.96), "约 24.0 小时");
+        assert_eq!(format_gap_hours(24.0), "约 1 天");
+        // 47.7h:小时段四舍五入到 24,进位成整天
+        assert_eq!(format_gap_hours(47.7), "约 2 天");
+        assert_eq!(format_gap_hours(144.0), "约 6 天");
+        assert_eq!(format_gap_hours(146.4), "约 6 天 2 小时");
+    }
 
     pub(super) const NOW: i64 = 1_794_544_860; // 2026-11-13 12:41 CST
     pub(super) const RESET: i64 = 1_794_563_812; // 2026-11-13 17:56:52 CST
