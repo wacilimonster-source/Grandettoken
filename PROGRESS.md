@@ -5164,3 +5164,16 @@ src-tauri `cargo check --all-targets --locked` exit 0;
   版本号三处同步 0.3.53 并 `cargo fetch --locked` 复跑通过。
 - 待验收:缩略布局在安装包原生窗口的真实观感(三档倍率/深浅主题/实际显示器工作区);
   真实账号 Antigravity 取数;顾问时长「N 天 M 小时」显示;日期控件回填人工复核(遗留)。
+
+## 2026-11-15 v0.3.53 发布结果
+
+- tag `v0.3.53` 指向 `886aa88`(窄窗双列缩略发版 commit)。release run success(后台
+  监视退出码 0,run id 见 GitHub Actions);main CI 对 886aa88 成功。
+- Release 于北京时间 2026-11-15 04:41:33 公开发布,三件套齐全(安装包 5,950,180 字节,
+  SHA-256 本地匿名下载回验
+  `d47c219e57231b579d5e6c82bf45c3c140d5e69d8e3aff02872a98c480f3d218`;签名 444 字节;
+  更新清单 1,878 字节),非 draft。
+- 本机 `node --use-env-proxy build/verify-release.js` 二次核验 PASS(14 项),固定更新
+  端点返回 0.3.53;签名/安装包逐字比对按既有口径 SKIP,由 CI 端完成。
+- 待验收:缩略布局在安装包原生窗口的真实观感(三档倍率/深浅主题/实际显示器工作区);
+  真实账号 Antigravity 取数;顾问时长「N 天 M 小时」显示;日期控件回填人工复核(遗留)。
