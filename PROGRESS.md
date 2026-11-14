@@ -5073,3 +5073,21 @@ src-tauri `cargo check --all-targets --locked` exit 0;
     判定路径高亮及用量重置快捷键焦点定位，并微调详情弹层 `.shade` 高度锚点。
 - **版本号与工作流**：桌面端同步 `0.3.50` → `0.3.51`（`Cargo.toml` / `Cargo.lock` / `tauri.conf.json`）；
   `ci.yml` 与 `release.yml` 补充 `app/src/antigravity.js` 语法检查。
+
+## 2026-11-15 v0.3.51 + android-v0.1.14 发布结果
+
+- tag `v0.3.51` 指向 `f7b4969`,tag `android-v0.1.14` 同一 commit。Android release run
+  `43627948065` 与桌面 CI `43627943817` success;桌面 release run `43627948084` success
+  (另一会话执行发布,本会话接手核验与记录)。
+- **桌面** Release 于北京时间 2026-11-15 02:58:24 公开发布,三件套齐全(安装包
+  5,945,166 字节,SHA-256 本地匿名下载回验
+  `9ba779cbfa6abacb9bac53f22904aae8c49db6e13303c1e79b11f2b541ddaafa`;签名 444 字节;
+  更新清单 1,500 字节),非 draft。本机 `verify-release.js` 二次核验 PASS(14 项),
+  固定更新端点返回 0.3.51。
+- **Android** Release `android-v0.1.14` 公开发布(资产 `Grandettoken-android-v0.1.14.apk`,
+  非 draft);`android-stable/android-latest.json` 清单解码确认 versionName 0.1.14 /
+  versionCode 114 / minSdk 26,keyId+payload+signature 结构完整(CI 端
+  verify-android-release.py 已做密码学校验);匿名拉取成功。
+- **桌面 `releases/latest` 未被 Android 抢占**(仍指向 v0.3.51)—— CI 断言口径在实机复核。
+- 待验收:Antigravity 渠道需本机 `agy` CLI 与真实账号下验收;顾问视觉改版的安装包内
+  实际观感;日期控件回填的人工复核(v0.3.49 遗留)持续开放。
