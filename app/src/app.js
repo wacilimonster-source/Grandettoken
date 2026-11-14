@@ -1705,6 +1705,7 @@ function renderDetailSheet() {
     c.error && !c.valid ? c.error : "",
   ].filter(Boolean).join(" · ");
   const resetOpen = c.id === "codex" && window.CodexResetUI && window.CodexResetUI.isOpen();
+  if (resetOpen && window.CodexResetUI.isEditing()) return;
   body.innerHTML = resetOpen
     ? window.CodexResetUI.renderDetail(c)
     : detailHeroHtml(c) +

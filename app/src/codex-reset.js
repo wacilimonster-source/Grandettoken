@@ -483,7 +483,12 @@
     }
   }
 
+  function isEditingDate() {
+    return state.open && !state.saving && document.activeElement?.id === "codexResetSubEnd";
+  }
+
   function paint() {
+    if (isEditingDate()) return;
     const c = currentChannel();
     if (!c) return;
     if (state.open) {
@@ -742,6 +747,7 @@
     isOpen() {
       return state.open;
     },
+    isEditing: isEditingDate,
     onDetailClosed() {
       state.open = false;
       state.tab = "advice";
@@ -750,11 +756,20 @@
 
   const body = document.getElementById("detailBody");
   setInterval(() => {
-    if (!body || !body.querySelector("[data-codex-reset-root],[data-codex-reset-page]") || state.saving) return;
+    if (!body || !body.querySelector("[data-codex-reset-root],[data-codex-reset-page]") || state.saving || isEditingDate()) return;
     const c = currentChannel();
     if (c && c.id === "codex") ensureAdvice(c);
   }, 60_000);
   if (body) {
+    body.addEventListener("focusout", ev => {
+      if (ev.target.id !== "codexResetSubEnd") return;
+      setTimeout(() => {
+        if (!state.open || state.saving || isEditingDate()) return;
+        paint();
+        const c = currentChannel();
+        if (c) ensureAdvice(c);
+      }, 0);
+    });
     body.addEventListener("click", clickHandler);
     body.addEventListener("change", changeHandler);
     body.addEventListener("keydown", keyHandler);

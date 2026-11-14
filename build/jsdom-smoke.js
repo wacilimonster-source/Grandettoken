@@ -126,6 +126,13 @@ const HARNESS = `
   const L = () => document.getElementById("list").innerHTML;
   const S = () => document.getElementById("sum").innerHTML;
   const data = window.__DATA;
+  const waitFor = async (predicate) => {
+    const deadline = Date.now() + 2000;
+    while (!predicate()) {
+      if (Date.now() >= deadline) throw new Error("等待用例结果超时");
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+  };
   window.__CHECKIN_IDS.forEach(id => CHECKIN_ON.add(id));
 
   try {
@@ -631,10 +638,10 @@ const HARNESS = `
   }
 
   // ── 紧凑条可选开关(2026-10-23)──
-  window.__ASYNC = (async () => {
+  window.__ASYNC = async () => {
     try {
-      // 先让真实 init(读配置 → applyForm(panel) → refresh)跑完,别和用例抢形态
-      await new Promise((r) => setTimeout(r, 400));
+      // 初始化已完成，再排空几何队列，避免迟到的形态切换污染本组。
+      await enqueueGeom(async () => {});
       CHANNELS = data.CHANNELS;
       CFG = JSON.parse(JSON.stringify(data.CFG));
       hvApply(data.HOME);
@@ -660,12 +667,12 @@ const HARNESS = `
       // 顶栏折叠入口:关紧凑条时是「胶囊」,不能只剩 Esc/Ctrl+3 两条隐藏路径
       document.body.className = "form-panel";
       document.getElementById("btnPill").click();
-      await new Promise((r) => { const t0 = Date.now(); (function p(){ if (document.body.classList.contains("form-panel") || Date.now() - t0 > 1500) return r(); setTimeout(p, 15); })(); });
+      await enqueueGeom(async () => {});
       ck("关闭紧凑条时顶栏「胶囊」能进胶囊", document.body.classList.contains("form-pill"), document.body.className);
       await applyForm("panel");
 
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "2", ctrlKey: true, bubbles: true }));
-      await new Promise((r) => { const t0 = Date.now(); (function p(){ if (document.body.classList.contains("form-pill") || Date.now() - t0 > 1500) return r(); setTimeout(p, 15); })(); });
+      await enqueueGeom(async () => {});
       ck("关闭时 Ctrl+2 不切形态", document.body.classList.contains("form-panel"), document.body.className);
 
       CFG.compactEnabled = true;
@@ -682,13 +689,12 @@ const HARNESS = `
     } catch (e) {
       ck("紧凑条可选开关", false, e.message);
     }
-  })();
+  };
 
   // 签到中心入口(异步):点首页签到格 → 落到签到中心页签,数据来自
   // checkin_state / checkin_history 桩 —— 验证 openCheckinCenter 整条链路。
-  window.__ASYNC2 = (async () => {
+  window.__ASYNC2 = async () => {
     try {
-      await new Promise((r) => setTimeout(r, 420)); // 等上一个异步块收尾
       document.body.className = "form-panel";
       CHANNELS = data.CHANNELS;
       CFG = JSON.parse(JSON.stringify(data.CFG));
@@ -710,7 +716,9 @@ const HARNESS = `
       const cell = document.querySelector('#sum [data-act="ckstripopen"]');
       if (!cell) { ck("签到格在场", false, document.getElementById("sum").innerHTML.slice(0, 120)); return; }
       cell.click();
-      await new Promise((r) => setTimeout(r, 60));
+      await waitFor(() => document.querySelector('#mTabs [data-p="ck"]').classList.contains("on")
+        && !!document.querySelector('#ckCenter .ckch[data-ch="wb"]')
+        && /已领到 \\+100 分/.test(document.getElementById("ckCenter").innerHTML));
       const btn = document.querySelector('#mTabs [data-p="ck"]');
       ck("点首页签到格:落到签到中心页签且页签可见",
         btn.classList.contains("on") && btn.hidden === false, "hidden=" + btn.hidden);
@@ -733,7 +741,7 @@ const HARNESS = `
       document.body.className = "form-panel";
       render({ updated: false });
     }
-  })();
+  };
 
   // 给外层断言留个后门:CHANNELS / CFG 是 eval 里的 let,外层 window 上看不到
   // (只有函数声明会挂到 globalThis)。自动隐藏那条用例要直接摆一张卡片出来。
@@ -747,6 +755,7 @@ const HARNESS = `
     invalidateKeyMeta: (id, kind) => invalidateKeyMeta(id, kind),
     layoutLabel: () => ($("lkLayout") ? $("lkLayout").textContent : ""),
     panelContentSize: (layout) => panelContentSize(layout),
+    fontUnit: () => fsU(),
     updateLayout: () => updateLayoutUI(),
     theme: (t) => {
       const was = CFG.theme;
@@ -922,19 +931,19 @@ const HARNESS = `
     ck("离开同步页时隐藏同步码", !document.getElementById("syncCodeText").textContent.includes("test-secret"));
     SYNC_STATUS = savedSyncStatus;
     renderSync();
-    window.__ASYNC3 = (async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+    window.__ASYNC3 = async () => {
       SYNC_STATUS = testSync;
       SYNC_CODE_REVEALED = true;
       renderSync();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await waitFor(() => !!document.querySelector("#syncQr svg")
+        && document.getElementById("syncCodeText").textContent === testSync.codeText);
       ck("二维码与同步码同时生成", !!document.querySelector("#syncQr svg"),
         (document.getElementById("syncQr").innerHTML || "").slice(0, 120) + " busy=" + SYNC_QR_BUSY + " failed=" + SYNC_QR_FAILED + " code=" + SYNC_QR_CODE + " revealed=" + SYNC_CODE_REVEALED + " statusCode=" + (SYNC_STATUS && SYNC_STATUS.codeText));
       SYNC_CODE_REVEALED = false;
       renderSync();
       SYNC_STATUS = savedSyncStatus;
       renderSync();
-    })();
+    };
     document.querySelector('#mIndexList [data-p="ch"]').click();
     ck("点索引行进入子页并更新页头", !document.body.classList.contains("manage-index")
       && document.querySelector('#mTabs [data-p="ch"]').classList.contains("on")
@@ -962,8 +971,10 @@ const HARNESS = `
     // 从索引进子页必须触发该页签的「进入时读一次」:密钥箱以前只在隐藏的旧页签栏
     // 的 click 里 loadVault,索引行点进去是个空面板,连「新增一把密钥」都没有。
     document.querySelector('#mIndexList [data-p="vault"]').click();
-    window.__ASYNC3 = (window.__ASYNC3 || Promise.resolve()).then(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+    const verifyQr = window.__ASYNC3;
+    window.__ASYNC3 = async () => {
+      await verifyQr();
+      await loadVault();
       const vaultHtml = document.getElementById("vaultList").innerHTML;
       ck("从索引进密钥箱:读出列表并给出新增入口", /新增一把密钥/.test(vaultHtml), vaultHtml.slice(0, 100));
 
@@ -1136,7 +1147,7 @@ const HARNESS = `
       CHECKIN_ON.clear(); allIds.forEach(id => CHECKIN_ON.add(id));
       delete window.__CK_ST;
       showTab("index");
-    });
+    };
     closeManage();
   } catch (e) {
     ck("设置索引 / 顶栏入口", false, e.message);
@@ -1148,15 +1159,19 @@ const HARNESS = `
 w.__DATA = DATA;
 (async () => {
   try {
-    w.eval(vaultJs + "\n;\n" + js + "\n;\n" + HARNESS);
+    const initMarker = "(async function init() {";
+    if (js.split(initMarker).length !== 2) throw new Error("初始化入口必须唯一");
+    w.eval(vaultJs + "\n;\n" + js.replace(initMarker, "window.__INIT = " + initMarker)
+      + "\n;window.__RUN_HARNESS = async () => { await window.__INIT;\n" + HARNESS + "\n};");
+    await w.__RUN_HARNESS();
   } catch (e) {
     console.log("✗ 脚本整体执行抛异常:" + e.message);
     console.log((e.stack || "").split("\n").slice(0, 4).join("\n"));
     process.exit(1);
   }
-  if (w.__ASYNC) await w.__ASYNC;
-  if (w.__ASYNC2) await w.__ASYNC2;
-  if (w.__ASYNC3) await w.__ASYNC3;
+  if (w.__ASYNC) await w.__ASYNC();
+  if (w.__ASYNC2) await w.__ASYNC2();
+  if (w.__ASYNC3) await w.__ASYNC3();
 
   const R = w.__R || [];
   // 真正点击分享按钮，覆盖获取/复制两阶段失败与重试。
@@ -1397,6 +1412,14 @@ w.__DATA = DATA;
       ok: single[0] === 480 && single[1] === 820 && double[0] === 860 && double[1] === 820,
       extra: JSON.stringify({ single, double }),
     });
+    const fontBefore = w.__TEST.cfg().fontScale;
+    w.__TEST.patchCfg({ fontScale: "lg" });
+    const large = w.__TEST.panelContentSize("single");
+    const unit = w.__TEST.fontUnit();
+    R.push({ name: "大字号按源码倍率放大窗口内容尺寸", ok: unit > 1
+      && large[0] === Math.round(single[0] * unit)
+      && large[1] === Math.round(single[1] * unit) });
+    w.__TEST.patchCfg({ fontScale: fontBefore });
     const before = w.__TEST.cfg().panelLayout;
     w.__TEST.patchCfg({ panelLayout: "double" });
     w.__TEST.updateLayout();

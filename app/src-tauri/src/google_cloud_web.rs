@@ -91,10 +91,15 @@ fn receive(app: &tauri::AppHandle, target: &tauri::Url) {
         Ok(()) => {
             session.complete = true;
             let interactive = session.interactive;
+            let completed_nonce = session.nonce.clone();
             drop(session);
             st.fetcher.invalidate();
             let handle = app.clone();
             crate::on_main(app, move || {
+                let current = lock_rw(&SESSION);
+                if current.nonce != completed_nonce || !current.complete {
+                    return;
+                }
                 if let Some(w) = handle.get_webview_window(LABEL) {
                     if let Err(e) = w.hide() {
                         notify(&handle, &format!("余额已保存，隐藏结算窗口失败: {e}"));
@@ -146,19 +151,30 @@ async fn open(
         return Err("结算账号已变化，已取消旧刷新请求".into());
     }
     let target = url(account.as_deref())?;
-    let nonce = begin(account, visible)?;
+    // 先使旧页面的导航和隐藏回调失效，失败重试沿用本次开始时间节流。
+    *lock_rw(&SESSION) = Session {
+        complete: true,
+        started: now_ts(),
+        ..Default::default()
+    };
     if let Some(w) = app.get_webview_window(LABEL) {
         // 每次重建使 initialization_script 的 nonce 与本轮一致。
         w.destroy()
             .map_err(|e| format!("关闭上次结算窗口失败: {e}"))?;
     }
+    gc::wait_for_window_release(
+        || app.get_webview_window(LABEL).is_some(),
+        std::time::Duration::from_secs(5),
+    )
+    .await?;
     let profile = app
         .path()
         .app_data_dir()
         .map_err(|e| e.to_string())?
         .join("google-cloud-profile");
     let handle = app.clone();
-    tauri::WebviewWindowBuilder::new(app, LABEL, tauri::WebviewUrl::External(target))
+    let nonce = begin(account, visible)?;
+    let result = tauri::WebviewWindowBuilder::new(app, LABEL, tauri::WebviewUrl::External(target))
         .title("Google Cloud 赠金 · 登录并选择结算账号")
         .inner_size(1150.0, 800.0)
         .min_inner_size(800.0, 600.0)
@@ -174,7 +190,14 @@ async fn open(
             target.scheme() == "https"
         })
         .build()
-        .map_err(|e| format!("Google 结算窗口打不开: {e}"))?;
+        .map_err(|e| format!("Google 结算窗口打不开: {e}"));
+    if let Err(error) = result {
+        let mut session = lock_rw(&SESSION);
+        if session.nonce == nonce {
+            session.complete = true;
+        }
+        return Err(error);
+    }
     Ok(())
 }
 

@@ -272,6 +272,21 @@ pub fn channel(store: &Store, cfg: &Config, now: i64) -> ChannelView {
     v
 }
 
+/// 窗口销毁只负责派发，须等管理器释放旧标签后才可创建同名页面。
+pub async fn wait_for_window_release(
+    mut occupied: impl FnMut() -> bool,
+    timeout: std::time::Duration,
+) -> Result<(), String> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    while occupied() {
+        if tokio::time::Instant::now() >= deadline {
+            return Err("上次结算窗口尚未关闭，请稍后重试".into());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,5 +391,31 @@ mod tests {
         let view = channel(&s, &cfg, 1001);
         assert_eq!(view.remaining, Some(0.0));
         assert!(view.hidden && view.has_key && view.valid);
+    }
+    #[test]
+    fn window_release_waits_for_delayed_removal_and_reports_timeout() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let mut observations = 0;
+            wait_for_window_release(
+                || {
+                    observations += 1;
+                    observations < 3
+                },
+                std::time::Duration::from_secs(1),
+            )
+            .await
+            .unwrap();
+            assert_eq!(observations, 3);
+            assert!(wait_for_window_release(|| true, std::time::Duration::ZERO)
+                .await
+                .is_err());
+            wait_for_window_release(|| false, std::time::Duration::ZERO)
+                .await
+                .unwrap();
+        });
     }
 }

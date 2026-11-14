@@ -10,6 +10,10 @@ const appJs = fs.readFileSync(path.join(root, "app/src/app.js"), "utf8");
 let moduleJs = fs.readFileSync(path.join(root, "app/src/codex-reset.js"), "utf8");
 if (process.env.CODEX_RESET_SENTINEL === "1") {
   moduleJs = moduleJs.replace('invoke("codex_reset_advice"', 'invoke("__missing_reset_advice__"');
+} else if (process.env.CODEX_RESET_DATE_SENTINEL === "1") {
+  const marker = 'return state.open && !state.saving && document.activeElement?.id === "codexResetSubEnd";';
+  if (moduleJs.split(marker).length !== 2) throw new Error("日期保护哨兵必须命中唯一入口");
+  moduleJs = moduleJs.replace(marker, "return false;");
 } else {
   const { spawnSync } = require("child_process");
   const probe = spawnSync(process.execPath, [__filename], {
@@ -19,6 +23,13 @@ if (process.env.CODEX_RESET_SENTINEL === "1") {
     throw new Error("重置顾问冒烟自检失败，未知命令未触发预期断言");
   }
   console.log("  ok   注入未知建议命令时冒烟变红");
+  const dateProbe = spawnSync(process.execPath, [__filename], {
+    env: { ...process.env, CODEX_RESET_DATE_SENTINEL: "1" }, encoding: "utf8", timeout: 15000,
+  });
+  if (dateProbe.status !== 1 || !dateProbe.stderr.includes("FAIL: 日期编辑期间时钟刷新")) {
+    throw new Error("日期保护自检失败，移除保护后必须被回归断言拦截");
+  }
+  console.log("  ok   移除日期编辑保护时冒烟变红");
 }
 
 const dom = new JSDOM(html, {
@@ -28,6 +39,7 @@ const dom = new JSDOM(html, {
 });
 const w = dom.window;
 const doc = w.document;
+doc.getElementById("detailShade").hidden = false;
 const calls = [];
 let profileNeed = "patient";
 let profileAmount = null;
@@ -169,6 +181,8 @@ const assert = (ok, msg) => {
   assert(html.includes("codex-reset.css") && html.includes("codex-reset.js"), "index.html 已加载新 CSS/JS");
   assert(appJs.includes("if (window.CodexResetUI) return window.CodexResetUI.render(c)"), "coreCodexResets 已委托新模块");
   assert(appJs.includes("window.CodexResetUI.renderDetail(c)"), "详情弹层已切到重置顾问子视图");
+  assert(appJs.includes("if (resetOpen && window.CodexResetUI.isEditing()) return;"),
+    "渠道刷新接线保留正在编辑的日期控件");
   assert(appJs.includes("window.CodexResetUI.onDetailClosed()"), "关闭详情会清掉子视图状态");
   const host = doc.getElementById("detailBody");
   host.innerHTML = w.CodexResetUI.render(w.CHANNELS[0]);
@@ -240,8 +254,17 @@ const assert = (ok, msg) => {
 
   q("[data-codex-reset-root]").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
   await wait(20);
+  await wait(40);
   const date = q("#codexResetSubEnd");
   assert(!!date, "建议页有订阅到期日输入");
+  date.focus();
+  assert(doc.activeElement === date, "日期输入可获得编辑焦点");
+  date.value = "2026-11-30";
+  uiNow += 61;
+  tick();
+  await wait(40);
+  assert(q("#codexResetSubEnd") === date && doc.activeElement === date
+    && date.value === "2026-11-30", "日期编辑期间时钟刷新保留输入节点、焦点和草稿");
   date.value = "2026-11-30";
   date.dispatchEvent(new w.Event("change", { bubbles: true }));
   await wait(40);
