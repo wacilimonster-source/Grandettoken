@@ -68,5 +68,5 @@ debug.log
 *.log
 !.gitignore
 
-# QA 截图(实机验收留档,可能含明文密钥,一律不入库)
-build/qa/**/*.png
+# QA 产物(截图/安装包/抓包等实机验收留档,可能含明文密钥,一律不入库)
+build/qa/
