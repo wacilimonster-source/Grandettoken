@@ -5263,4 +5263,11 @@ src-tauri `cargo check --all-targets --locked` exit 0;
 - 流式 SSE 与非流式统一将 `reasoning` / `thinking` / `extra_content.google.thought` 及正文开头
   `<think>` / `<thinking>` / `<thought>` / Harmony 标签归一至 `reasoning_content`；`openai_compat` 默认开启自动切分且可按渠道切换 `auto` / `fields_only` / `passthrough`。
 - 每渠道系统代理开关默认开启(`system_proxy: true`)；密钥箱(`vault_save` / `vault_list`)与渠道密钥变更(`set_key` / `delete_key` / `set_key_ref` / `clear_key_ref`)自动同步关联渠道；新增连通测试、流式思维链联调台与脱敏诊断环缓冲区，并在 `check-file-size.js` 下调 `app.js`/`lib.rs`/`styles.css` 上限。
-- 发版前门禁将在最终改版后全量串行跑通（见下一条发布结果记录）。
+- 发版前门禁已在最终改版后全部串行复跑通过（NO_PROXY=127.0.0.1,localhost,::1）：静态四门及三项 `--self-test`、8 个前端/扩展 JS 语法检查、`jsdom-smoke.js`（232/232）、`verify-vault.js`、`verify-codex-reset.js`、`verify-google-cloud.js`、`verify-gateway.js`（含 cmd/proxy 双向哨兵）、`app/core` `cargo test --locked -- --test-threads=1`（561 passed / 8 ignored + `sync_fixtures` 6 passed）、`app/src-tauri` `cargo check --all-targets --locked`、`cargo fetch --locked` 与凭据扫描 CLEAN。
+
+## 2026-11-15 v0.3.56 发布结果
+
+- tag `v0.3.56` 指向 `273bdd4`（本地模型网关三源统一与思维链折叠发版 commit）。release run `43681946950` 全部成功；main CI run `43681924507` 对 `273bdd4` 全部成功。
+- Release 于北京时间 2026-11-15 13:59:21（`2026-11-15T05:59:21Z`）公开发布，三件套齐全（安装包 `Grandettoken_0.3.56_x64-setup.exe` `6,031,502` 字节，本机匿名下载回验 SHA-256 `8bdcd7f7f9cc4b392aa5aaac5b5113bd2672588e609c9edefd4d31cb40beb9a7`；签名 `.sig` `444` 字节；更新清单 `latest.json` `1,819` 字节），非 draft，`notes intact` 665 字符 / 192 中文字符。
+- 本机 `node --use-env-proxy build/verify-release.js` 二次核验 PASS（14 项含固定更新端点返回 `0.3.56`；本地无 `.sig` 与安装包文件两项按既有口径 SKIP，由 CI 端完成）。
+- 待验收：实机安装版自动更新及新网关面板在 SillyTavern / PocketTavern 与主流 Agent 下的真实流式/思维链联调效果；v0.3.55 遗留真机核验项（`本周X/下周X`、Antigravity 真实账号取数、顾问时长等）。
