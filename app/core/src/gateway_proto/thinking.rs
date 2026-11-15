@@ -232,7 +232,7 @@ pub fn split_think_tags_complete(text: &str) -> SplitOutput {
     out
 }
 
-/// 检查 `extra_content.google.thought == true`；若为真则返回 true，并清理 `thought` 标记同时保留 `thought_signature`。
+/// 检查 `extra_content.google.thought == true`（或直接 `thought == true`）；若为真则返回 true，并清理 `thought` 标记同时保留 `thought_signature`。
 fn consume_google_thought_flag(container: &mut serde_json::Map<String, Value>) -> bool {
     let mut is_thought = false;
     if let Some(Value::Object(extra)) = container.get_mut("extra_content") {
@@ -242,6 +242,10 @@ fn consume_google_thought_flag(container: &mut serde_json::Map<String, Value>) -
                 google.remove("thought");
             }
         }
+    }
+    if container.get("thought").and_then(Value::as_bool) == Some(true) {
+        is_thought = true;
+        container.remove("thought");
     }
     is_thought
 }

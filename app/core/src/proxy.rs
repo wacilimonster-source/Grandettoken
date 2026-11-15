@@ -75,9 +75,10 @@ fn build_client(system_proxy: bool) -> Result<reqwest::Client, String> {
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(15))
         // 读空闲超时(报告 B7):上游握手完成后若不吐响应头、或 SSE 流中途断流,
-        // 没有这一项连接会**永久悬挂**,网关任务堆积只能重启恢复。60s 对流式足够宽
-        // —— 正常打字也会持续吐 chunk,真静默 60 秒就是挂了。
-        .read_timeout(Duration::from_secs(60));
+        // 没有这一项连接会**永久悬挂**,网关任务堆积只能重启恢复。
+        // 慢思考模型(如 gemini-4-hydrogen)首字常需 50–90 秒以上才返回响应头/首个 chunk,
+        // 60 秒会在正常等待期间误杀连接,放宽到 150 秒既容忍慢首字又防止永久挂死。
+        .read_timeout(Duration::from_secs(150));
     let builder = if system_proxy {
         builder
     } else {

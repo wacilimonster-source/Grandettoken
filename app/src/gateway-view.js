@@ -2,6 +2,7 @@
 (() => {
   let GW = null;
   let GW_BUSY = false;
+  let GW_TAB = "channels";
   let GW_KIND = "openai_compat";
   let GW_CATALOG_FILTER = "";
   let GW_VAULT_FILTER = "";
@@ -169,7 +170,7 @@
         <button class="btn" data-gw="remove" data-id="${escHtml(id)}" ${GW_BUSY ? "disabled" : ""}>下架</button>
       </div>
       <details class="gw-details" data-gw-detail="ch-${escHtml(id)}">
-        <summary>渠道配置 · 模型与思维链 <span>别名 / 端点 / 手动模型 / 勾选(${enabledCount}/${avail.length})</span></summary>
+        <summary>配置与模型 <span>(${enabledCount}/${avail.length} 可调用)</span></summary>
         <div class="gw-details-body">
           <div class="gw-edit-grid">
             <label class="gw-add-field">
@@ -182,41 +183,15 @@
             </label>
             ${
               c.noUpstreamKey
-                ? `<div class="gw-add-field"><span>鉴权模式</span><div class="gw-readonly-chip">免上游密钥（不附带 Authorization）</div></div>`
-                : `<label class="gw-add-field"><span>关联密钥箱条目</span><select class="sel" data-gw-vault-edit="${escHtml(id)}">${vault
+                ? `<div class="gw-add-field gw-span-2"><span>鉴权模式</span><div class="gw-readonly-chip">免上游密钥（不附带 Authorization）</div></div>`
+                : `<label class="gw-add-field gw-span-2"><span>关联密钥箱条目</span><select class="sel" data-gw-vault-edit="${escHtml(id)}">${vault
                     .map((v) => `<option value="${escHtml(v.id)}" ${v.id === c.vaultId ? "selected" : ""}>${escHtml(v.platform)} · ${escHtml(v.label)} (${escHtml(v.hint)})</option>`)
                     .join("")}</select></label>`
             }
-            <label class="gw-add-field">
-              <span>思维链归一（Thinking Mode）</span>
-              <select class="sel" data-gw-thinking="${escHtml(id)}">
-                <option value="auto" ${c.thinkingMode === "auto" ? "selected" : ""}>自动归并 + 切分 &lt;think&gt;（推荐）</option>
-                <option value="fields_only" ${c.thinkingMode === "fields_only" ? "selected" : ""}>仅转结构化字段（reasoning/thought）</option>
-                <option value="passthrough" ${c.thinkingMode === "passthrough" ? "selected" : ""}>原样透传不切分</option>
-              </select>
-            </label>
-            ${
-              c.source === "agent_platform" || c.source === "gemini_aistudio"
-                ? `<label class="gw-add-field"><span>Google 思考摘要请求策略</span><select class="sel" data-gw-policy="${escHtml(id)}">
-                    <option value="follow_client" ${c.thoughtPolicy === "follow_client" ? "selected" : ""}>跟随客户端传入参数（默认）</option>
-                    <option value="force_include" ${c.thoughtPolicy === "force_include" ? "selected" : ""}>对通用 Agent 默认请求思考摘要</option>
-                  </select></label>`
-                : ""
-            }
-          </div>
-          <div class="gw-edit-grid">
-            <label class="gw-add-field">
-              <span>手动模型列表（每行或逗号分隔，无 /models 接口或新模型可在此增补）</span>
-              <textarea class="inp gw-textarea" rows="3" data-gw-manual="${escHtml(id)}" placeholder="例如：google/gemini-3.8-flash">${escHtml((c.manualModels || []).join("\n"))}</textarea>
-            </label>
-            <label class="gw-add-field">
-              <span>自定义请求头（可选，每行 Header: Value）</span>
-              <textarea class="inp gw-textarea" rows="3" data-gw-headers="${escHtml(id)}" placeholder="例如：HTTP-Referer: https://example.com">${escHtml(headersToText(c.customHeaders))}</textarea>
-            </label>
           </div>
           <div class="gw-model-config">
             <div class="gw-model-config-head">
-              <b>可见模型清单（点击右侧保存后生效）</b>
+              <b>可见模型清单（保存后生效）</b>
               <div class="gw-model-filter-row">
                 <input class="inp gw-filter-inp" data-gw-model-filter="${escHtml(id)}" value="${escHtml(GW_MODEL_FILTERS[id] || "")}" placeholder="筛选模型...">
                 <button type="button" class="btn" data-gw="select-all-models" data-id="${escHtml(id)}">全选</button>
@@ -234,10 +209,41 @@
                         </label>`
                       )
                       .join("")
-                  : `<div class="gw-empty-note">${avail.length ? "没有匹配的模型" : "暂无模型，请在上方手动模型中补充后保存"}</div>`
+                  : `<div class="gw-empty-note">${avail.length ? "没有匹配的模型" : "暂无模型，可在下方「高级选项」补充手动模型"}</div>`
               }
             </div>
           </div>
+          <details class="gw-subdetails" data-gw-detail="ch-adv-${escHtml(id)}">
+            <summary>高级选项 <span>思维链策略 · 手动模型 · 自定义请求头</span></summary>
+            <div class="gw-subdetails-body">
+              <div class="gw-edit-grid">
+                <label class="gw-add-field ${c.source === "agent_platform" || c.source === "gemini_aistudio" ? "" : "gw-span-2"}">
+                  <span>思维链归一（Thinking Mode）</span>
+                  <select class="sel" data-gw-thinking="${escHtml(id)}">
+                    <option value="auto" ${c.thinkingMode === "auto" ? "selected" : ""}>自动归并 + 切分 &lt;think&gt;（推荐）</option>
+                    <option value="fields_only" ${c.thinkingMode === "fields_only" ? "selected" : ""}>仅转结构化字段（reasoning/thought）</option>
+                    <option value="passthrough" ${c.thinkingMode === "passthrough" ? "selected" : ""}>原样透传不切分</option>
+                  </select>
+                </label>
+                ${
+                  c.source === "agent_platform" || c.source === "gemini_aistudio"
+                    ? `<label class="gw-add-field"><span>Google 思考摘要请求策略</span><select class="sel" data-gw-policy="${escHtml(id)}">
+                        <option value="follow_client" ${c.thoughtPolicy === "follow_client" ? "selected" : ""}>跟随客户端传入参数（默认）</option>
+                        <option value="force_include" ${c.thoughtPolicy === "force_include" ? "selected" : ""}>对通用 Agent 默认请求思考摘要</option>
+                      </select></label>`
+                    : ""
+                }
+                <label class="gw-add-field">
+                  <span>手动模型列表（每行或逗号分隔）</span>
+                  <textarea class="inp gw-textarea" rows="2" data-gw-manual="${escHtml(id)}" placeholder="例如：google/gemini-3.8-flash">${escHtml((c.manualModels || []).join("\n"))}</textarea>
+                </label>
+                <label class="gw-add-field">
+                  <span>自定义请求头（每行 Header: Value）</span>
+                  <textarea class="inp gw-textarea" rows="2" data-gw-headers="${escHtml(id)}" placeholder="例如：HTTP-Referer: https://example.com">${escHtml(headersToText(c.customHeaders))}</textarea>
+                </label>
+              </div>
+            </div>
+          </details>
           <div class="gw-card-footer">
             <label class="gw-proxy-inline"><input type="checkbox" data-gw-proxy="${escHtml(id)}" ${c.systemProxy ? "checked" : ""}> 使用系统代理（默认开启）</label>
             <button class="btn p" data-gw="save-channel" data-id="${escHtml(id)}" ${GW_BUSY ? "disabled" : ""}>保存渠道配置</button>
@@ -247,7 +253,7 @@
     </article>`;
   }
 
-  function renderAddWizard(vault, draft) {
+  function renderAddWizard(vault, draft, hasChannels) {
     const presets = GW.presets || [];
     const kind = draft?.kind || GW_KIND;
     GW_KIND = kind;
@@ -260,103 +266,115 @@
     const defaultProxyChecked = draft ? draft.proxy : true;
     const defaultNoKey = draft ? draft.noKey : false;
 
-    return `<section class="gw-section gw-add-section">
-      <div class="gw-section-head">
-        <b>添加上游渠道</b>
-        <span>三类接入统一转为 OpenAI 格式 · 支持密钥箱多端点复用</span>
-      </div>
-      <div class="gw-kind-tabs" role="tablist">
-        <button type="button" class="gw-kind-tab ${kind === "openai_compat" ? "is-active" : ""}" data-gw-kind="openai_compat">
-          <b>OpenAI 兼容端点</b><small>密钥箱 / 中转站 / DeepSeek / Ollama</small>
-        </button>
-        <button type="button" class="gw-kind-tab ${kind === "agent_platform" ? "is-active" : ""}" data-gw-kind="agent_platform">
-          <b>Agent Platform</b><small>Vertex OpenAI · x-goog-api-key</small>
-        </button>
-        <button type="button" class="gw-kind-tab ${kind === "gemini_aistudio" ? "is-active" : ""}" data-gw-kind="gemini_aistudio">
-          <b>Gemini AI Studio</b><small>Google 官方接口 · 分页与思考摘要</small>
-        </button>
-      </div>
-
-      <div class="gw-add">
-        ${
-          kind === "openai_compat"
-            ? `<label class="gw-add-field">
-                <span>快捷模板</span>
-                <select class="sel" id="gwTemplate">
-                  ${presets.map((p) => `<option value="${escHtml(p.id)}" ${draft?.template === p.id ? "selected" : ""}>${escHtml(p.name)}</option>`).join("")}
-                </select>
-              </label>`
-            : `<div class="gw-add-field">
-                <span>鉴权策略</span>
-                <div class="gw-readonly-chip">${kind === "agent_platform" ? "固定发送 x-goog-api-key（绝不发 Bearer）" : "OpenAI 兼容 Bearer + 自动 400 修复"}</div>
-              </div>`
-        }
-
-        <label class="gw-add-field">
-          <span>搜索并选择密钥箱条目</span>
-          <div class="gw-vault-picker">
-            <input class="inp gw-filter-inp" id="gwVaultSearch" value="${escHtml(GW_VAULT_FILTER)}" placeholder="按平台 / 名称 / 端点筛选密钥..." ${defaultNoKey ? "disabled" : ""}>
-            <select class="sel" id="gwVault" ${defaultNoKey ? "disabled" : ""}>
-              <option value="">选择密钥箱条目（支持同一密钥多次上架）</option>
-              ${filteredVault
-                .map(
-                  (v) =>
-                    `<option value="${escHtml(v.id)}" ${draft?.vaultId === v.id ? "selected" : ""}>${escHtml(v.platform)} · ${escHtml(v.label)} (${escHtml(v.hint)})${v.apiEndpoint ? ` — ${escHtml(v.apiEndpoint)}` : ""}</option>`
-                )
-                .join("")}
-            </select>
-          </div>
-        </label>
-
-        <label class="gw-add-field gw-span-2">
-          <span>API Base URL ${kind === "openai_compat" ? "（支持自动补全 /v1，选中密钥箱条目会自动带入）" : "（已预置官方地址，可按需修改）"}</span>
-          <input class="inp" id="gwBaseUrl" value="${escHtml(draft?.baseUrl ?? (kind === "agent_platform" ? GW.agentPlatformDefaults?.baseUrl || "" : kind === "gemini_aistudio" ? "https://generativelanguage.googleapis.com/v1beta/openai" : ""))}" placeholder="例如：https://api.example.com/v1">
-        </label>
-
-        <label class="gw-add-field">
-          <span>英文调用别名（前缀：别名/模型名）</span>
-          <input class="inp" id="gwAlias" value="${escHtml(draft?.alias ?? (kind === "agent_platform" ? "agent" : kind === "gemini_aistudio" ? "gemini" : ""))}" placeholder="例如 main / deepseek / agent" maxlength="32">
-        </label>
-
-        <label class="gw-add-field">
-          <span>思维链输出策略</span>
-          <select class="sel" id="gwNewThinkingMode">
-            <option value="auto" ${(draft?.thinkingMode || "auto") === "auto" ? "selected" : ""}>自动归并 + 切分 &lt;think&gt;（推荐）</option>
-            <option value="fields_only" ${draft?.thinkingMode === "fields_only" ? "selected" : ""}>仅转结构化字段（reasoning/thought）</option>
-            <option value="passthrough" ${draft?.thinkingMode === "passthrough" ? "selected" : ""}>原样透传</option>
-          </select>
-        </label>
-
-        ${
-          kind === "agent_platform" || kind === "gemini_aistudio"
-            ? `<label class="gw-add-field gw-span-2">
-                <span>Google 思考摘要请求策略</span>
-                <select class="sel" id="gwNewThoughtPolicy">
-                  <option value="follow_client" ${(draft?.thoughtPolicy || "follow_client") === "follow_client" ? "selected" : ""}>跟随客户端 include_reasoning / reasoning_effort（推荐给 SillyTavern）</option>
-                  <option value="force_include" ${draft?.thoughtPolicy === "force_include" ? "selected" : ""}>强制开启思考摘要（除非 reasoning_effort=none，推荐给通用 Agent）</option>
-                </select>
-              </label>`
-            : ""
-        }
-
-        <label class="gw-add-field gw-span-2">
-          <span>手动补充模型（可选，每行或逗号分隔；无 /models 的私有端点必填）</span>
-          <textarea class="inp gw-textarea" id="gwManualModels" rows="2" placeholder="${kind === "agent_platform" ? "已内置 PocketTavern 5 个 Agent Platform 预置模型，可在此追加更多模型 ID" : "例如：gpt-4o-mini, deepseek-reasoner"}">${escHtml(draft?.manualModels ?? "")}</textarea>
-        </label>
-
-        <div class="gw-add-flags gw-span-2">
-          <label class="gw-proxy-new"><input type="checkbox" id="gwNewProxy" ${defaultProxyChecked ? "checked" : ""}> 使用系统代理（默认开启）</label>
-          ${
-            kind === "openai_compat"
-              ? `<label class="gw-proxy-new"><input type="checkbox" id="gwNoUpstreamKey" ${defaultNoKey ? "checked" : ""}> 此端点无需上游密钥（如本地 Ollama）</label>
-                 <label class="gw-proxy-new"><input type="checkbox" id="gwSaveEndpointToVault" ${draft?.saveEndpoint ? "checked" : ""} ${defaultNoKey ? "disabled" : ""}> 将端点地址写回所选密钥箱条目</label>`
-              : ""
-          }
-          <button class="btn p" data-gw="publish" ${GW_BUSY ? "disabled" : ""}>上架渠道</button>
+    return `<details class="gw-section gw-add-drawer" data-gw-detail="add-channel" ${!hasChannels || draft ? "open" : ""}>
+      <summary class="gw-add-summary">
+        <b>+ 添加上游渠道</b>
+        <span>OpenAI 兼容 · Agent Platform · Gemini AI Studio</span>
+      </summary>
+      <div class="gw-add-drawer-body">
+        <div class="gw-kind-tabs" role="tablist">
+          <button type="button" class="gw-kind-tab ${kind === "openai_compat" ? "is-active" : ""}" data-gw-kind="openai_compat">
+            <b>OpenAI 兼容</b><small>密钥箱 / 中转站 / Ollama</small>
+          </button>
+          <button type="button" class="gw-kind-tab ${kind === "agent_platform" ? "is-active" : ""}" data-gw-kind="agent_platform">
+            <b>Agent Platform</b><small>Vertex · x-goog-api-key</small>
+          </button>
+          <button type="button" class="gw-kind-tab ${kind === "gemini_aistudio" ? "is-active" : ""}" data-gw-kind="gemini_aistudio">
+            <b>Gemini AI Studio</b><small>Google 官方 · 分页模型</small>
+          </button>
         </div>
+
+        <div class="gw-add">
+          <div class="gw-add-field gw-span-2">
+            <span>选择密钥箱条目</span>
+            <div class="gw-vault-picker gw-vault-picker-row">
+              <input class="inp gw-filter-inp" id="gwVaultSearch" value="${escHtml(GW_VAULT_FILTER)}" placeholder="筛选密钥..." ${defaultNoKey ? "disabled" : ""}>
+              <select class="sel" id="gwVault" ${defaultNoKey ? "disabled" : ""}>
+                <option value="">选择密钥（支持同密钥多次上架）</option>
+                ${filteredVault
+                  .map(
+                    (v) =>
+                      `<option value="${escHtml(v.id)}" ${draft?.vaultId === v.id ? "selected" : ""}>${escHtml(v.platform)} · ${escHtml(v.label)} (${escHtml(v.hint)})${v.apiEndpoint ? ` — ${escHtml(v.apiEndpoint)}` : ""}</option>`
+                  )
+                  .join("")}
+              </select>
+            </div>
+          </div>
+
+          <label class="gw-add-field">
+            <span>API Base URL ${kind === "openai_compat" ? "（可选中密钥自动带入）" : "（已预置）"}</span>
+            <input class="inp" id="gwBaseUrl" value="${escHtml(draft?.baseUrl ?? (kind === "agent_platform" ? GW.agentPlatformDefaults?.baseUrl || "" : kind === "gemini_aistudio" ? "https://generativelanguage.googleapis.com/v1beta/openai" : ""))}" placeholder="https://api.example.com/v1">
+          </label>
+
+          <label class="gw-add-field">
+            <span>英文调用别名（模型前缀）</span>
+            <input class="inp" id="gwAlias" value="${escHtml(draft?.alias ?? (kind === "agent_platform" ? "agent" : kind === "gemini_aistudio" ? "gemini" : ""))}" placeholder="例如 main / agent" maxlength="32">
+          </label>
+
+          <details class="gw-subdetails gw-span-2" data-gw-detail="add-adv">
+            <summary>高级选项 <span>${kind === "openai_compat" ? "快捷模板 · 免密钥 · " : ""}思维链策略 · 手动补充模型</span></summary>
+            <div class="gw-subdetails-body">
+              <div class="gw-edit-grid">
+                ${
+                  kind === "openai_compat"
+                    ? `<label class="gw-add-field">
+                        <span>快捷模板</span>
+                        <select class="sel" id="gwTemplate">
+                          ${presets.map((p) => `<option value="${escHtml(p.id)}" ${draft?.template === p.id ? "selected" : ""}>${escHtml(p.name)}</option>`).join("")}
+                        </select>
+                      </label>`
+                    : `<div class="gw-add-field">
+                        <span>鉴权策略</span>
+                        <div class="gw-readonly-chip">${kind === "agent_platform" ? "固定发送 x-goog-api-key（不发 Bearer）" : "OpenAI 兼容 Bearer + 自动 400 修复"}</div>
+                      </div>`
+                }
+
+                <label class="gw-add-field">
+                  <span>思维链输出策略</span>
+                  <select class="sel" id="gwNewThinkingMode">
+                    <option value="auto" ${(draft?.thinkingMode || "auto") === "auto" ? "selected" : ""}>自动归并 + 切分 &lt;think&gt;（推荐）</option>
+                    <option value="fields_only" ${draft?.thinkingMode === "fields_only" ? "selected" : ""}>仅转结构化字段（reasoning/thought）</option>
+                    <option value="passthrough" ${draft?.thinkingMode === "passthrough" ? "selected" : ""}>原样透传</option>
+                  </select>
+                </label>
+
+                ${
+                  kind === "agent_platform" || kind === "gemini_aistudio"
+                    ? `<label class="gw-add-field gw-span-2">
+                        <span>Google 思考摘要请求策略</span>
+                        <select class="sel" id="gwNewThoughtPolicy">
+                          <option value="follow_client" ${(draft?.thoughtPolicy || "follow_client") === "follow_client" ? "selected" : ""}>跟随客户端（支持仅传 reasoning_effort；推荐 SillyTavern）</option>
+                          <option value="force_include" ${draft?.thoughtPolicy === "force_include" ? "selected" : ""}>强制开启思考摘要（除非 reasoning_effort=none）</option>
+                        </select>
+                      </label>`
+                    : ""
+                }
+
+                <label class="gw-add-field gw-span-2">
+                  <span>手动补充模型（可选，每行或逗号分隔；无 /models 的私有端点必填）</span>
+                  <textarea class="inp gw-textarea" id="gwManualModels" rows="2" placeholder="${kind === "agent_platform" ? "已内置 PocketTavern 5 个 Agent Platform 预置模型，可在此追加" : "例如：gpt-4o-mini, deepseek-reasoner"}">${escHtml(draft?.manualModels ?? "")}</textarea>
+                </label>
+
+                ${
+                  kind === "openai_compat"
+                    ? `<div class="gw-adv-checks gw-span-2">
+                        <label class="gw-proxy-new"><input type="checkbox" id="gwNoUpstreamKey" ${defaultNoKey ? "checked" : ""}> 此端点无需上游密钥（如本地 Ollama）</label>
+                        <label class="gw-proxy-new"><input type="checkbox" id="gwSaveEndpointToVault" ${draft?.saveEndpoint ? "checked" : ""} ${defaultNoKey ? "disabled" : ""}> 将端点地址写回所选密钥箱条目</label>
+                      </div>`
+                    : ""
+                }
+              </div>
+            </div>
+          </details>
+
+          <div class="gw-add-flags gw-span-2">
+            <label class="gw-proxy-new"><input type="checkbox" id="gwNewProxy" ${defaultProxyChecked ? "checked" : ""}> 使用系统代理（默认开启）</label>
+            <button class="btn p" data-gw="publish" ${GW_BUSY ? "disabled" : ""}>上架渠道</button>
+          </div>
+        </div>
+        <p class="gw-footnote">密钥箱与渠道管理修改密钥后自动同步刷新；下架不会删除密钥箱中的密钥。</p>
       </div>
-      <p class="gw-footnote">密钥箱与渠道管理页修改密钥后，已关联该密钥的网关渠道会自动同步刷新；下架不会删除密钥箱中的密钥。</p>
-    </section>`;
+    </details>`;
   }
 
   function renderTestPlayground(channels) {
@@ -377,8 +395,8 @@
     const prevReason = byId("gwTestReasoning") ? byId("gwTestReasoning").checked : true;
     const prevEffort = byId("gwTestEffort")?.value || "";
 
-    return `<details class="gw-section gw-model-catalog" data-gw-detail="test-playground" ${GW_TEST_RESULT ? "open" : ""}>
-      <summary><span>在线流式与思维链联调（验证 SillyTavern / Agent 输出）</span><small>${callableModels.length} 个可测试模型</small></summary>
+    return `<section class="gw-section gw-card-box">
+      <div class="gw-section-head"><b>在线流式与思维链联调</b><span>${callableModels.length} 个可测试模型</span></div>
       <div class="gw-playground">
         ${
           callableModels.length
@@ -404,7 +422,7 @@
                 <button class="btn p" data-gw="run-test-chat" ${GW_TEST_BUSY ? "disabled" : ""}>${GW_TEST_BUSY ? "请求中..." : "发送测试"}</button>
               </div>
               <input class="inp gw-play-prompt" id="gwTestPrompt" value="${escHtml(prevPrompt)}" placeholder="输入测试提示词...">`
-            : `<div class="gw-empty-note">请先上架至少一个包含可用模型的渠道</div>`
+            : `<div class="gw-empty-note">请先到「渠道与接入」上架至少一个可用渠道</div>`
         }
         ${
           GW_TEST_RESULT
@@ -418,7 +436,7 @@
                 ${GW_TEST_RESULT.error ? `<p class="gw-error">${escHtml(GW_TEST_RESULT.error)}</p>` : ""}
                 ${
                   GW_TEST_RESULT.thinking
-                    ? `<details class="gw-test-think" open><summary>思维链摘要（reasoning_content · ${GW_TEST_RESULT.thinking.length} 字，SillyTavern 将自动折叠展示）</summary><pre>${escHtml(GW_TEST_RESULT.thinking)}</pre></details>`
+                    ? `<details class="gw-test-think" open><summary>思维链摘要（reasoning_content · ${GW_TEST_RESULT.thinking.length} 字）</summary><pre>${escHtml(GW_TEST_RESULT.thinking)}</pre></details>`
                     : `<div class="gw-empty-note">本次响应未返回思维链（reasoning_content 为空）</div>`
                 }
                 ${GW_TEST_RESULT.content ? `<div class="gw-test-content"><small>正文输出（content）</small><pre>${escHtml(GW_TEST_RESULT.content)}</pre></div>` : ""}
@@ -426,7 +444,7 @@
             : ""
         }
       </div>
-    </details>`;
+    </section>`;
   }
 
   function renderGateway(snap, draft) {
@@ -443,53 +461,121 @@
     const rows = channels.map((c) => renderChannelCard(c, vault)).join("");
 
     box.innerHTML = `<div class="gw-shell">
-      <section class="gw-overview">
-        <div class="gw-overview-head">
-          <div>
-            <b>网关状态</b>
-            <span class="gw-running ${GW.running ? "is-running" : "is-stopped"}"><i></i>${GW.running ? "运行中" : "已停止"}</span>
-          </div>
-          <div class="gw-head-btns">
-            <button class="btn p" data-gw="${GW.running ? "stop" : "start"}" ${GW_BUSY ? "disabled" : ""}>${GW.running ? "停止网关" : "启动网关"}</button>
-          </div>
+      <div class="gw-topbar">
+        <div class="gw-topbar-info">
+          <span class="gw-running ${GW.running ? "is-running" : "is-stopped"}"><i></i>${GW.running ? "运行中" : "已停止"}</span>
+          <span class="gw-topbar-meta">端口 ${escHtml(GW.port)} · ${channels.length} 渠道 · ${allLiveModels.length} 模型${GW.lan ? " · 局域网已开" : ""}</span>
         </div>
-        ${GW.startupError ? `<p class="gw-error">启动失败：${escHtml(GW.startupError)}</p>` : ""}
-        <div class="gw-endpoints">
-          <div class="gw-section-head"><b>统一接入地址（SillyTavern / PocketTavern 自定义源填此处，末尾无斜杠）</b></div>
+        <button class="btn p" data-gw="${GW.running ? "stop" : "start"}" ${GW_BUSY ? "disabled" : ""}>${GW.running ? "停止网关" : "启动网关"}</button>
+      </div>
+      ${GW.startupError ? `<p class="gw-error">启动失败：${escHtml(GW.startupError)}</p>` : ""}
+
+      <div class="gw-nav-tabs" role="tablist">
+        <button type="button" class="gw-nav-tab ${GW_TAB === "channels" ? "is-active" : ""}" data-gw-tab="channels">渠道与接入 <small>${channels.length}</small></button>
+        <button type="button" class="gw-nav-tab ${GW_TAB === "tools" ? "is-active" : ""}" data-gw-tab="tools">模型与联调 <small>${allLiveModels.length}</small></button>
+        <button type="button" class="gw-nav-tab ${GW_TAB === "network" ? "is-active" : ""}" data-gw-tab="network">网络与示例</button>
+      </div>
+
+      <div class="gw-tab-pane" data-gw-pane="channels" ${GW_TAB === "channels" ? "" : "hidden"}>
+        <section class="gw-endpoints">
           <div class="gw-endpoint-row">
-            <div class="gw-endpoint-label"><span class="gw-endpoint-dot"></span><span>本机 OpenAI Base URL</span></div>
+            <div class="gw-endpoint-label"><span class="gw-endpoint-dot"></span><span>本机接入</span></div>
             <code>${escHtml(baseLocalUrl)}</code>
             <button class="btn" data-gw="copy-local">复制地址</button>
           </div>
           ${
             GW.lan
               ? `<div class="gw-lan">
-                  <label for="gwLanIp">局域网网卡</label><span class="gw-lan-hint">同局域网设备（如 PocketTavern 手机端）连接用</span>
+                  <div class="gw-lan-pick">
+                    <label for="gwLanIp">局域网</label>
+                    ${
+                      (GW.lanIps || []).length
+                        ? `<select class="sel" id="gwLanIp">${GW.lanIps.map((i) => `<option value="${escHtml(i.address)}" data-iface="${escHtml(i.name)}">${escHtml(i.name)} · ${escHtml(i.address)}</option>`).join("")}</select>`
+                        : `<span class="gw-no-ip">未检测到私有局域网 IPv4</span>`
+                    }
+                  </div>
                   ${
                     (GW.lanIps || []).length
-                      ? `<select class="sel" id="gwLanIp">${GW.lanIps.map((i) => `<option value="${escHtml(i.address)}" data-iface="${escHtml(i.name)}">${escHtml(i.name)} · ${escHtml(i.address)}</option>`).join("")}</select>
-                         <div class="gw-endpoint-row"><div class="gw-endpoint-label"><span class="gw-endpoint-dot is-lan"></span><span>局域网 Base URL</span></div><code id="gwLanEndpoint"></code><button class="btn" data-gw="copy-lan">复制地址</button></div>`
-                      : `<p class="gw-no-ip">未检测到可用的私有局域网 IPv4 地址</p>`
+                      ? `<div class="gw-endpoint-row"><div class="gw-endpoint-label"><span class="gw-endpoint-dot is-lan"></span><span>局域网接入</span></div><code id="gwLanEndpoint"></code><button class="btn" data-gw="copy-lan">复制地址</button></div>`
+                      : ""
                   }
                 </div>`
               : ""
           }
-        </div>
-        <div class="gw-overview-actions">
-          <span>网关访问密钥（支持 Bearer 与 x-api-key）</span>
-          <div>
-            <button class="btn" data-gw="copy-secret">复制密钥</button>
-            <button class="btn" data-gw="rotate-secret">重新生成</button>
+          <div class="gw-overview-actions">
+            <span>访问密钥（Bearer / x-api-key）</span>
+            <div>
+              <button class="btn" data-gw="copy-secret">复制密钥</button>
+              <button class="btn" data-gw="rotate-secret">重新生成</button>
+            </div>
           </div>
-        </div>
-        <details class="gw-snippets" data-gw-detail="snippets">
-          <summary>SillyTavern / Agent 配置示例 <span>查看环境变量与自定义源填写方式</span></summary>
+        </section>
+
+        <section class="gw-section">
+          <div class="gw-section-head"><b>已上架渠道</b><span>${channels.length} 个渠道 · ${allLiveModels.length} 个模型</span></div>
+          ${rows || `<div class="gw-empty"><span>尚无已上架渠道</span><small>在下方添加 OpenAI 兼容端点、Agent Platform 或 Gemini AI Studio</small></div>`}
+        </section>
+
+        ${renderAddWizard(vault, draft, channels.length > 0)}
+      </div>
+
+      <div class="gw-tab-pane" data-gw-pane="tools" ${GW_TAB === "tools" ? "" : "hidden"}>
+        ${renderTestPlayground(channels)}
+
+        <section class="gw-section gw-card-box">
+          <div class="gw-section-head"><b>统一模型目录（点击复制 ID）</b><span>${allLiveModels.length} 个可调用模型</span></div>
+          <div class="gw-catalog-bar">
+            <input class="inp gw-filter-inp" id="gwCatalogFilter" value="${escHtml(GW_CATALOG_FILTER)}" placeholder="搜索模型 ID（如 flash / deepseek / agent）...">
+          </div>
+          <div class="gw-models">
+            ${visibleCatalog.length ? visibleCatalog.map((id) => `<button type="button" class="gw-model-pill" data-gw="copy-model" data-model="${escHtml(id)}" title="点击复制完整模型 ID">${escHtml(id)}</button>`).join("") : `<span class="gw-empty-note">${allLiveModels.length ? "无匹配模型" : "暂无可调用模型"}</span>`}
+          </div>
+        </section>
+
+        <section class="gw-section gw-card-box">
+          <div class="gw-section-head">
+            <b>最近请求诊断（脱敏，最多 50 条）</b>
+            <div class="gw-diag-bar">
+              <button type="button" class="btn" data-gw="refresh-diag">刷新</button>
+              <button type="button" class="btn" data-gw="clear-diag">清空</button>
+            </div>
+          </div>
+          <div class="gw-diag-list">
+            ${
+              GW_DIAGS.length
+                ? GW_DIAGS.map((d) => `<div class="gw-diag-row ${d.status >= 400 ? "is-err" : ""}">
+                    <div class="gw-diag-top"><b>${escHtml(d.model)}</b><span>HTTP ${escHtml(d.status)} · ${escHtml(d.latencyMs)}ms · ${d.stream ? "SSE" : "JSON"} · 思考 ${escHtml(d.thinkingChars)}字 / 正文 ${escHtml(d.contentChars)}字</span></div>
+                    ${d.transforms?.length ? `<div class="gw-diag-sub">转换：${escHtml(d.transforms.join(", "))}</div>` : ""}
+                    ${d.error ? `<div class="gw-diag-err">${escHtml(d.error)}</div>` : ""}
+                  </div>`).join("")
+                : `<div class="gw-empty-note">暂无请求记录</div>`
+            }
+          </div>
+        </section>
+      </div>
+
+      <div class="gw-tab-pane" data-gw-pane="network" ${GW_TAB === "network" ? "" : "hidden"}>
+        <section class="gw-section">
+          <div class="gw-section-head">
+            <b>访问与网络设置</b>
+            <button class="btn p" data-gw="apply-restart" ${GW_BUSY ? "disabled" : ""}>${GW.running ? "应用设置并重启网关" : "保存并启动网关"}</button>
+          </div>
+          <div class="gw-settings-grid">
+            <label class="gw-setting"><span><b>监听端口</b><small>默认 18771</small></span><input class="sel" id="gwPort" type="number" min="1" max="65535" value="${GW.port}"></label>
+            <label class="gw-setting"><span><b>允许局域网访问</b><small>允许同局域网私有 IP 访问，开启时自动要求密钥</small></span><input id="gwLan" type="checkbox" ${GW.lan ? "checked" : ""}></label>
+            <label class="gw-setting"><span><b>需要网关密钥</b><small>仅限本地回环不勾选时可免密；始终校验 Host 防重绑定</small></span><input id="gwAuth" type="checkbox" ${GW.auth ? "checked" : ""} ${GW.lan ? "disabled" : ""}></label>
+          </div>
+          ${GW.lan ? `<p class="gw-footnote">局域网访问仅限于可信网络；跨设备连不上时请放行 Windows 防火墙端口 ${GW.port}。</p>` : ""}
+        </section>
+
+        <section class="gw-section">
+          <div class="gw-section-head"><b>客户端接入示例</b><span>Base URL 末尾不带斜杠</span></div>
           <div class="gw-snippets-body">
             <div class="gw-snippet-card">
               <div class="gw-snippet-head"><b>SillyTavern / PocketTavern 自定义源（Custom OpenAI）</b></div>
               <pre>Chat Completion Source: Custom (OpenAI-compatible)
 Custom Endpoint (Base URL): ${escHtml(baseLocalUrl)}
-API Key: [点击上方「复制密钥」获取]
+API Key: [点击「渠道与接入 → 复制密钥」获取]
 Model ID: ${escHtml(sampleModel)}
 提示：网关已自动统一 reasoning_content 与 &lt;think&gt; 标签，可直接开启思维链折叠。</pre>
             </div>
@@ -500,59 +586,8 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
 # 示例模型：${escHtml(sampleModel)}</pre>
             </div>
           </div>
-        </details>
-      </section>
-
-      <section class="gw-section">
-        <div class="gw-section-head">
-          <b>访问与网络设置</b>
-          <button class="btn" data-gw="apply-restart" ${GW_BUSY ? "disabled" : ""}>${GW.running ? "应用设置并重启网关" : "保存并启动网关"}</button>
-        </div>
-        <div class="gw-settings-grid">
-          <label class="gw-setting"><span><b>监听端口</b><small>默认 18771</small></span><input class="sel" id="gwPort" type="number" min="1" max="65535" value="${GW.port}"></label>
-          <label class="gw-setting"><span><b>允许局域网访问</b><small>允许同局域网私有 IP 访问，开启时自动要求密钥</small></span><input id="gwLan" type="checkbox" ${GW.lan ? "checked" : ""}></label>
-          <label class="gw-setting"><span><b>需要网关密钥</b><small>仅限本地回环不勾选时可免密；始终校验 Host 防重绑定</small></span><input id="gwAuth" type="checkbox" ${GW.auth ? "checked" : ""} ${GW.lan ? "disabled" : ""}></label>
-        </div>
-        ${GW.lan ? `<p class="gw-footnote">局域网访问仅限于可信网络；跨设备连不上时请放行 Windows 防火墙端口 ${GW.port}。</p>` : ""}
-      </section>
-
-      <section class="gw-section">
-        <div class="gw-section-head"><b>已上架渠道</b><span>${channels.length} 个渠道 · 共 ${allLiveModels.length} 个可调用模型</span></div>
-        ${rows || `<div class="gw-empty"><span>尚无已上架渠道</span><small>在下方选择 OpenAI 兼容端点、Agent Platform 或 Gemini AI Studio 即可统一暴露</small></div>`}
-      </section>
-
-      ${renderAddWizard(vault, draft)}
-
-      <details class="gw-section gw-model-catalog" data-gw-detail="catalog" open>
-        <summary><span>网关统一模型目录（点击模型 ID 即可复制）</span><small>${allLiveModels.length} 个可调用模型</small></summary>
-        <div class="gw-catalog-bar">
-          <input class="inp gw-filter-inp" id="gwCatalogFilter" value="${escHtml(GW_CATALOG_FILTER)}" placeholder="搜索模型 ID（如 flash / deepseek / agent）...">
-        </div>
-        <div class="gw-models">
-          ${visibleCatalog.length ? visibleCatalog.map((id) => `<button type="button" class="gw-model-pill" data-gw="copy-model" data-model="${escHtml(id)}" title="点击复制完整模型 ID">${escHtml(id)}</button>`).join("") : `<span class="gw-empty-note">${allLiveModels.length ? "无匹配模型" : "暂无可调用模型"}</span>`}
-        </div>
-      </details>
-
-      ${renderTestPlayground(channels)}
-
-      <details class="gw-section gw-model-catalog" data-gw-detail="diagnostics">
-        <summary><span>最近请求诊断（脱敏，最多 50 条）</span><small>${GW_DIAGS.length} 条记录</small></summary>
-        <div class="gw-diag-bar">
-          <button type="button" class="btn" data-gw="refresh-diag">刷新日志</button>
-          <button type="button" class="btn" data-gw="clear-diag">清空</button>
-        </div>
-        <div class="gw-diag-list">
-          ${
-            GW_DIAGS.length
-              ? GW_DIAGS.map((d) => `<div class="gw-diag-row ${d.status >= 400 ? "is-err" : ""}">
-                  <div class="gw-diag-top"><b>${escHtml(d.model)}</b><span>HTTP ${escHtml(d.status)} · ${escHtml(d.latencyMs)}ms · ${d.stream ? "SSE" : "JSON"} · 思考 ${escHtml(d.thinkingChars)}字 / 正文 ${escHtml(d.contentChars)}字</span></div>
-                  ${d.transforms?.length ? `<div class="gw-diag-sub">转换：${escHtml(d.transforms.join(", "))}</div>` : ""}
-                  ${d.error ? `<div class="gw-diag-err">${escHtml(d.error)}</div>` : ""}
-                </div>`).join("")
-              : `<div class="gw-empty-note">暂无请求记录</div>`
-          }
-        </div>
-      </details>
+        </section>
+      </div>
     </div>`;
 
     wireRenderedEvents(box, channels, vault);
@@ -710,6 +745,18 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
     GW_UI_WIRED = true;
 
     box.addEventListener("click", async (e) => {
+      const navTab = e.target.closest("[data-gw-tab]");
+      if (navTab) {
+        GW_TAB = navTab.dataset.gwTab;
+        box.querySelectorAll("[data-gw-tab]").forEach((el) => {
+          el.classList.toggle("is-active", el.dataset.gwTab === GW_TAB);
+        });
+        box.querySelectorAll("[data-gw-pane]").forEach((pane) => {
+          pane.hidden = pane.dataset.gwPane !== GW_TAB;
+        });
+        return;
+      }
+
       const tab = e.target.closest("[data-gw-kind]");
       if (tab && !GW_BUSY) {
         GW_KIND = tab.dataset.gwKind;
@@ -912,7 +959,10 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
           };
           GW = await invoke("gateway_publish", { input });
           notify("渠道已上架");
-          renderGateway(snapshotOpenState(box), null);
+          const snapAfterPub = snapshotOpenState(box);
+          snapAfterPub.openSet.delete("add-channel");
+          snapAfterPub.openSet.delete("add-adv");
+          renderGateway(snapAfterPub, null);
         }
       } catch (err) {
         notify(String(err), true);

@@ -174,10 +174,18 @@ fn sanitize_google_body(
         .get("reasoning_effort")
         .and_then(Value::as_str)
         .map(str::to_string);
+    let is_thinking_only = bare_model == "gemini-4-hydrogen";
     let wants_thoughts = match include_reasoning {
         Some(true) => true,
         Some(false) => false,
-        None => thought_policy == ThoughtRequestPolicy::ForceInclude,
+        None => match thought_policy {
+            ThoughtRequestPolicy::ForceInclude => true,
+            ThoughtRequestPolicy::FollowClient => {
+                // SillyTavern custom 源不会在发往上游的请求体里保留 include_reasoning，只会传 reasoning_effort；
+                // 对始终思考模型（如 gemini-4-hydrogen），未显式关闭时也应请求思维链摘要。
+                effort_opt.as_deref().is_some_and(|e| e != "none") || is_thinking_only
+            }
+        },
     };
 
     if wants_thoughts && effort_opt.as_deref() != Some("none") {
@@ -406,6 +414,71 @@ mod tests {
         );
         assert_eq!(allowed["frequency_penalty"], 0.5);
         assert_eq!(allowed["presence_penalty"], 0.3);
+    }
+
+    #[test]
+    fn follow_client_maps_reasoning_effort_without_include_reasoning_and_hydrogen_default() {
+        // SillyTavern custom 源不传 include_reasoning，仅传 reasoning_effort
+        let mut st_req: Value = serde_json::from_str(
+            r#"{"model":"agent/google/gemini-4-hydrogen","stream":true,"reasoning_effort":"medium","presence_penalty":0.1}"#,
+        )
+        .unwrap();
+        prepare_upstream_body(
+            GatewaySourceKind::AgentPlatform,
+            "",
+            "google/gemini-4-hydrogen",
+            ThoughtRequestPolicy::FollowClient,
+            &mut st_req,
+        );
+        let st_obj = st_req.as_object().unwrap();
+        assert!(!st_obj.contains_key("reasoning_effort"));
+        assert!(!st_obj.contains_key("presence_penalty"));
+        assert_eq!(
+            st_obj["extra_body"]["google"]["thinking_config"]["include_thoughts"],
+            true
+        );
+        assert_eq!(
+            st_obj["extra_body"]["google"]["thinking_config"]["thinking_level"],
+            "medium"
+        );
+
+        // 既无 include_reasoning 也无 reasoning_effort 时，思考专用模型 gemini-4-hydrogen 仍请求思维链摘要
+        let mut bare_hydrogen: Value = serde_json::from_str(r#"{"stream":true}"#).unwrap();
+        prepare_upstream_body(
+            GatewaySourceKind::AgentPlatform,
+            "",
+            "google/gemini-4-hydrogen",
+            ThoughtRequestPolicy::FollowClient,
+            &mut bare_hydrogen,
+        );
+        assert_eq!(
+            bare_hydrogen["extra_body"]["google"]["thinking_config"]["include_thoughts"],
+            true
+        );
+
+        // 客户端显式关闭（include_reasoning=false 或 reasoning_effort="none"）时不强加 thinking_config
+        let mut off_req: Value =
+            serde_json::from_str(r#"{"include_reasoning":false,"reasoning_effort":"medium"}"#)
+                .unwrap();
+        prepare_upstream_body(
+            GatewaySourceKind::AgentPlatform,
+            "",
+            "google/gemini-4-hydrogen",
+            ThoughtRequestPolicy::FollowClient,
+            &mut off_req,
+        );
+        assert!(off_req.get("extra_body").is_none());
+
+        let mut none_req: Value =
+            serde_json::from_str(r#"{"reasoning_effort":"none"}"#).unwrap();
+        prepare_upstream_body(
+            GatewaySourceKind::GeminiAiStudio,
+            "",
+            "gemini-3.5-flash",
+            ThoughtRequestPolicy::FollowClient,
+            &mut none_req,
+        );
+        assert!(none_req.get("extra_body").is_none());
     }
 
     #[test]

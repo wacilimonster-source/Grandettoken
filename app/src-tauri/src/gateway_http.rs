@@ -32,7 +32,7 @@ use crate::gateway::{authorized, effective_models, lock, model_id, peer_allowed,
 
 const MAX_GEMINI_MODEL_PAGES: usize = 5;
 const MODELS_TIMEOUT_SECS: u64 = 25;
-const CHAT_TIMEOUT_SECS: u64 = 180;
+const CHAT_TIMEOUT_SECS: u64 = 300;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -84,6 +84,10 @@ pub fn build_router(g: Gateway) -> Router {
         .route("/v1/models", get(list_models))
         .route("/v1/models/{*id}", get(get_model))
         .route("/v1/chat/completions", post(chat))
+        // 兼容未在 custom_url 末尾填写 `/v1` 的客户端（例如直接填 http://host:18771）
+        .route("/models", get(list_models))
+        .route("/models/{*id}", get(get_model))
+        .route("/chat/completions", post(chat))
         .layer(DefaultBodyLimit::max(8 * 1024 * 1024))
         .with_state(g)
 }
@@ -384,10 +388,11 @@ async fn send_upstream_with_repair(
         let upstream = match req.send().await {
             Ok(r) => r,
             Err(e) => {
+                let (status, code, msg) = classify_upstream_send_error(e.is_timeout(), &e.to_string());
                 return UpstreamReady::Err {
-                    status: StatusCode::BAD_GATEWAY,
-                    message: redact_secrets(&format!("无法连接上游服务：{e}")),
-                    code: Some("upstream_unreachable".into()),
+                    status,
+                    message: redact_secrets(&msg),
+                    code: Some(code.into()),
                     retry_after: None,
                     transforms: prepared.transforms,
                 };
@@ -1078,4 +1083,40 @@ pub fn dedupe_nonempty(list: Vec<String>) -> Vec<String> {
         }
     }
     out
+}
+
+/// 区分连接失败(502 upstream_unreachable)与首字/响应等待超时(504 upstream_timeout),
+/// 避免慢思考模型等待超过阈值时被误报成网络连不上上游。
+fn classify_upstream_send_error(is_timeout: bool, err: &str) -> (StatusCode, &'static str, String) {
+    if is_timeout {
+        (
+            StatusCode::GATEWAY_TIMEOUT,
+            "upstream_timeout",
+            format!("等待上游响应超时（模型首字耗时过长或网络卡顿）：{err}"),
+        )
+    } else {
+        (
+            StatusCode::BAD_GATEWAY,
+            "upstream_unreachable",
+            format!("无法连接上游服务：{err}"),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upstream_send_timeout_maps_to_504_instead_of_unreachable() {
+        let (status, code, msg) = classify_upstream_send_error(true, "operation timed out");
+        assert_eq!(status, StatusCode::GATEWAY_TIMEOUT);
+        assert_eq!(code, "upstream_timeout");
+        assert!(msg.contains("等待上游响应超时"));
+
+        let (status2, code2, msg2) = classify_upstream_send_error(false, "tcp connect error");
+        assert_eq!(status2, StatusCode::BAD_GATEWAY);
+        assert_eq!(code2, "upstream_unreachable");
+        assert!(msg2.contains("无法连接上游服务"));
+    }
 }

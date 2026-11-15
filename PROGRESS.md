@@ -5271,3 +5271,14 @@ src-tauri `cargo check --all-targets --locked` exit 0;
 - Release 于北京时间 2026-11-15 13:59:21（`2026-11-15T05:59:21Z`）公开发布，三件套齐全（安装包 `Grandettoken_0.3.56_x64-setup.exe` `6,031,502` 字节，本机匿名下载回验 SHA-256 `8bdcd7f7f9cc4b392aa5aaac5b5113bd2672588e609c9edefd4d31cb40beb9a7`；签名 `.sig` `444` 字节；更新清单 `latest.json` `1,819` 字节），非 draft，`notes intact` 665 字符 / 192 中文字符。
 - 本机 `node --use-env-proxy build/verify-release.js` 二次核验 PASS（14 项含固定更新端点返回 `0.3.56`；本地无 `.sig` 与安装包文件两项按既有口径 SKIP，由 CI 端完成）。
 - 待验收：实机安装版自动更新及新网关面板在 SillyTavern / PocketTavern 与主流 Agent 下的真实流式/思维链联调效果；v0.3.55 遗留真机核验项（`本周X/下周X`、Antigravity 真实账号取数、顾问时长等）。
+
+## 2026-11-15 v0.3.57 本地模型网关路由/思考链/慢首字超时修复与设置页分组精简随版发布
+
+- 修复 PocketTavern / SillyTavern 自定义源拉取模型列表与鉴权兼容性问题：
+  1) `gateway_http.rs` 为 `/models`、`/models/{*id}`、`/chat/completions` 补齐无 `/v1` 前缀别名路由，适配不同 Base URL 拼接习惯；
+  2) `gateway.rs` 的 `live_channels()` 移除过时的 `v.updated_at == c.updated_at` 过滤、`authorized()` 放宽 `Bearer` 大小写并去空白、`peer_allowed()` 补齐 IPv6 loopback / v4-mapped IPv6，并在 `lib.rs` 启动 `import_channel_keys` 后同步刷新网关渠道快照，防止已上架渠道在密钥更新后从 `/models` 消失。
+- 修复 Agent Platform（含 `gemini-4-hydrogen`）在 SillyTavern 自定义源下的思考链传递与慢首字 502 假报错：
+  1) `request.rs` 在 `FollowClient` 策略下兼容仅传 `reasoning_effort`（未传被 SillyTavern 剥离的 `include_reasoning`）及 thinking-only 模型 `gemini-4-hydrogen` 未显式关闭时主动注入 `extra_body.google.thinking_config.include_thoughts = true`，同时 `thinking.rs` 的 `consume_google_thought_flag()` 补齐直接 `thought: true` 分片判定；
+  2) `proxy.rs` 将 `read_timeout` 由 60s 放宽到 150s（覆盖长上下文如 `gemini-4-hydrogen` 50–90s+ 慢首字），`gateway_http.rs` 将 `CHAT_TIMEOUT_SECS` 放宽到 300s 并按 `e.is_timeout()` 区分 `504 upstream_timeout` 与 `502 upstream_unreachable`。
+- 优化「设置 → 本地模型网关」页签布局（`gateway-view.{js,css}`）：拆分为「渠道与接入」「模型与联调」「网络与示例」三栏保留草稿与状态；已有渠道时自动折叠添加抽屉，并将思维链策略/手动模型/自定义请求头收进二级高级折叠区，同步更新 `build/verify-gateway.js` 分栏哨兵与断言。
+- 三处版本号已同步至 `0.3.57`（`Cargo.toml` / `tauri.conf.json` / `Cargo.lock`），并在最终改动后串行复跑全部门禁、单测、编译校对与凭据扫描通过。

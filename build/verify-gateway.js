@@ -16,6 +16,10 @@ if (process.env.GATEWAY_SENTINEL === "cmd") {
   const marker = "const defaultProxyChecked = draft ? draft.proxy : true;";
   if (!gatewayJs.includes(marker)) throw new Error("proxy 哨兵未找到目标行");
   gatewayJs = gatewayJs.replace(marker, "const defaultProxyChecked = draft ? draft.proxy : false;");
+} else if (process.env.GATEWAY_SENTINEL === "tabs") {
+  const marker = '${GW_TAB === "tools" ? "" : "hidden"}';
+  if (!gatewayJs.includes(marker)) throw new Error("tabs 哨兵未找到目标行");
+  gatewayJs = gatewayJs.replace(marker, "");
 } else {
   const probeCmd = spawnSync(process.execPath, [__filename], {
     env: { ...process.env, GATEWAY_SENTINEL: "cmd" },
@@ -36,6 +40,16 @@ if (process.env.GATEWAY_SENTINEL === "cmd") {
     throw new Error("网关冒烟自检失败：代理默认值哨兵未触发 FAIL");
   }
   console.log("  ok   关闭新渠道默认代理时冒烟变红");
+
+  const probeTabs = spawnSync(process.execPath, [__filename], {
+    env: { ...process.env, GATEWAY_SENTINEL: "tabs" },
+    encoding: "utf8",
+    timeout: 15000,
+  });
+  if (probeTabs.status !== 1 || !probeTabs.stderr.includes("分栏默认隐藏")) {
+    throw new Error("网关冒烟自检失败：分栏收起哨兵未触发 FAIL");
+  }
+  console.log("  ok   分栏被展开平铺时冒烟变红");
 }
 
 const dom = new JSDOM(html, {
@@ -234,7 +248,24 @@ function ck(name, cond, detail) {
 async function run() {
   await w.loadGateway();
 
-  // 1. 地址末尾无斜杠
+  // 1. 分栏默认收起次要面板 & 已有渠道时添加抽屉与高级项默认收起
+  const paneChannels = doc.querySelector('[data-gw-pane="channels"]');
+  const paneTools = doc.querySelector('[data-gw-pane="tools"]');
+  const paneNetwork = doc.querySelector('[data-gw-pane="network"]');
+  ck(
+    "分栏默认隐藏非当前面板",
+    !!paneChannels && !paneChannels.hidden && !!paneTools && paneTools.hidden && !!paneNetwork && paneNetwork.hidden,
+    `ch=${paneChannels?.hidden} tools=${paneTools?.hidden} net=${paneNetwork?.hidden}`
+  );
+  const addDrawer = doc.querySelector('details[data-gw-detail="add-channel"]');
+  const chAdv = doc.querySelector('details[data-gw-detail="ch-adv-ch_existing"]');
+  ck(
+    "已有渠道时添加抽屉与高级配置默认折叠",
+    !!addDrawer && !addDrawer.open && !!chAdv && !chAdv.open,
+    `add=${addDrawer?.open} chAdv=${chAdv?.open}`
+  );
+
+  // 2. 地址末尾无斜杠
   const endpointCode = doc.querySelector(".gw-endpoint-row code")?.textContent || "";
   ck("接入地址末尾无斜杠(/v1)", endpointCode === "http://127.0.0.1:18771/v1", endpointCode);
 
@@ -301,7 +332,13 @@ async function run() {
   const detAfter = doc.querySelector('details[data-gw-detail="ch-ch_existing"]');
   ck("刷新重绘后保留已打开的渠道详情", !!detAfter && detAfter.open === true);
 
-  // 9. 运行在线测试验证思维链折叠展示
+  // 9. 切换到「模型与联调」页签并运行在线测试验证思维链折叠展示
+  doc.querySelector('[data-gw-tab="tools"]').click();
+  ck(
+    "切到模型与联调页签正确切换可见面板",
+    doc.querySelector('[data-gw-pane="tools"]')?.hidden === false &&
+      doc.querySelector('[data-gw-pane="channels"]')?.hidden === true
+  );
   doc.querySelector('[data-gw="run-test-chat"]').click();
   await new Promise((r) => setTimeout(r, 20));
   const thinkText = doc.querySelector(".gw-test-think pre")?.textContent || "";

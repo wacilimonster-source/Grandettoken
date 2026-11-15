@@ -248,9 +248,9 @@ impl Gateway {
             .into_iter()
             .filter(|c| {
                 (c.no_upstream_key && c.kind() == GatewaySourceKind::OpenAiCompat)
-                    || vault
-                        .iter()
-                        .any(|v| v.id == c.vault_id && v.updated_at == c.updated_at)
+                    // 上游请求按 vault_id 实时读密钥箱最新凭据；更新密钥后异步刷模型期间
+                    // 不得把渠道从 /v1/models 里临时抹掉（否则外部客户端拉到空模型列表）。
+                    || vault.iter().any(|v| v.id == c.vault_id)
             })
             .collect()
     }
@@ -303,8 +303,21 @@ pub fn authorized(headers: &HeaderMap, settings: &Settings) -> bool {
     let provided = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .or_else(|| headers.get("x-api-key").and_then(|v| v.to_str().ok()))
+        .and_then(|s| {
+            let trimmed = s.trim();
+            let (scheme, token) = trimmed.split_once(' ')?;
+            if scheme.eq_ignore_ascii_case("bearer") {
+                Some(token.trim())
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            headers
+                .get("x-api-key")
+                .and_then(|v| v.to_str().ok())
+                .map(str::trim)
+        })
         .unwrap_or("");
     let expected = match secrets::get(SECRET_KEY) {
         Ok(Some(s)) => s,
@@ -321,11 +334,12 @@ pub fn authorized(headers: &HeaderMap, settings: &Settings) -> bool {
 }
 
 pub fn peer_allowed(peer: SocketAddr, settings: &Settings) -> bool {
+    let allow_v4 = |ip: Ipv4Addr| {
+        ip.is_loopback() || (settings.lan && (ip.is_private() || ip.is_link_local()))
+    };
     match peer.ip() {
-        IpAddr::V4(ip) => {
-            ip.is_loopback() || (settings.lan && (ip.is_private() || ip.is_link_local()))
-        }
-        _ => false,
+        IpAddr::V4(ip) => allow_v4(ip),
+        IpAddr::V6(ip) => ip.is_loopback() || ip.to_ipv4_mapped().is_some_and(allow_v4),
     }
 }
 
@@ -1160,10 +1174,60 @@ mod tests {
         let mut s = Settings::default();
         s.lan = false;
         assert!(peer_allowed("127.0.0.1:1234".parse().unwrap(), &s));
+        assert!(peer_allowed("[::1]:1234".parse().unwrap(), &s));
+        assert!(peer_allowed("[::ffff:127.0.0.1]:1234".parse().unwrap(), &s));
         assert!(!peer_allowed("192.168.1.10:1234".parse().unwrap(), &s));
+        assert!(!peer_allowed("[::ffff:192.168.1.10]:1234".parse().unwrap(), &s));
         s.lan = true;
         assert!(peer_allowed("192.168.1.10:1234".parse().unwrap(), &s));
+        assert!(peer_allowed("[::ffff:192.168.1.10]:1234".parse().unwrap(), &s));
         assert!(!peer_allowed("8.8.8.8:1234".parse().unwrap(), &s));
+    }
+
+    #[test]
+    fn live_channels_survive_vault_timestamp_bump_until_deleted() {
+        let file = std::env::temp_dir().join(format!("gw-live-{}.db", token().unwrap()));
+        let store = Arc::new(Mutex::new(Store::open(&file).unwrap()));
+        lock(&store)
+            .vault_upsert(&tokenscope_core::store::VaultItem {
+                id: "v_1".into(),
+                platform: "openai".into(),
+                label: "k1".into(),
+                hint: "sk-***".into(),
+                note: String::new(),
+                api_endpoint: "https://api.example.com/v1".into(),
+                website: String::new(),
+                created_at: 10,
+                updated_at: 20, // 已更新，比已发布渠道的 updated_at=10 更新
+            })
+            .unwrap();
+        let g = Gateway::new(store.clone()).unwrap();
+        lock(&g.inner).settings.channels.push(Published {
+            channel_id: "ch_1".into(),
+            vault_id: "v_1".into(),
+            no_upstream_key: false,
+            source: "openai_compat".into(),
+            template: "custom".into(),
+            base_url: "https://api.example.com/v1".into(),
+            alias: "demo".into(),
+            host: "api.example.com".into(),
+            models: vec!["gpt-4o".into()],
+            manual_models: vec![],
+            updated_at: 10,
+            allowed_models: None,
+            system_proxy: true,
+            custom_headers: BTreeMap::new(),
+            thinking_mode: ThinkingMode::Auto,
+            thought_policy: ThoughtRequestPolicy::FollowClient,
+            last_status: "ok".into(),
+            last_error: None,
+            last_checked_at: Some(10),
+        });
+        assert_eq!(g.live_channels().len(), 1);
+        lock(&store).vault_delete("v_1").unwrap();
+        assert!(g.live_channels().is_empty());
+        drop(store);
+        let _ = std::fs::remove_file(file);
     }
 
     #[test]
@@ -1256,6 +1320,23 @@ mod tests {
             .collect();
         assert!(ids.contains(&"local/qwen-think"));
         assert!(ids.contains(&"local/custom-m"));
+
+        // 未带 /v1 前缀的 /models 也必须兼容，避免 custom_url 漏写 /v1 返回 404
+        let root_models: Value = client
+            .get(format!("http://{gw_addr}/models"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let root_ids: Vec<&str> = root_models["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|x| x["id"].as_str())
+            .collect();
+        assert_eq!(root_ids, ids);
 
         // /v1/chat/completions 流式归一化输出标准 reasoning_content 与 content
         let sse_text = client

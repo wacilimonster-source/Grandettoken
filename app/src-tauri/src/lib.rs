@@ -6104,11 +6104,20 @@ pub fn run() {
                 }
             }
             // 后台一次性导入现有渠道密钥；不阻塞首屏，也不更改渠道引用。
+            let import_app = app.handle().clone();
             let import_store = app.state::<AppState>().store.clone();
             let import_cfg = config.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = tokio::task::spawn_blocking(move || import_channel_keys(&import_store, &import_cfg)).await.unwrap_or_else(|e| Err(e.to_string())) {
-                    eprintln!("导入渠道密钥失败: {e}");
+                match tokio::task::spawn_blocking(move || import_channel_keys(&import_store, &import_cfg))
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()))
+                {
+                    Ok(vids) => {
+                        for vid in vids {
+                            gateway::spawn_vault_sync(&import_app, vid);
+                        }
+                    }
+                    Err(e) => eprintln!("导入渠道密钥失败: {e}"),
                 }
             });
 
