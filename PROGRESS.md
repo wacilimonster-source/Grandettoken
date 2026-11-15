@@ -5310,3 +5310,20 @@ src-tauri `cargo check --all-targets --locked` exit 0;
   `cargo fetch --locked` 复跑通过。
 - 待验收:明后天与周重置日期在真实数据与原生窗口的显示(含跨日翻转);Antigravity
   真实账号取数;日期控件回填人工复核(遗留)。
+
+## 2026-11-16 v0.3.58 发布结果
+
+- tag `v0.3.58` 指向 `66b9583`(明后天提示与周重置日期发版 commit)。release run
+  `43732308060` 全部成功;main CI 对 66b9583 成功。
+- Release 于北京时间 2026-11-16 00:08:17 公开发布,三件套齐全(安装包 6,032,874 字节,
+  SHA-256 本地匿名下载回验
+  `c640d1bc63fabed340887f70195e5d094fb9efc09aeabd66678328211ff2bba5`;签名 444 字节;
+  更新清单 2,020 字节),非 draft。
+- 本机 `node --use-env-proxy build/verify-release.js` 二次核验 PASS(14 项),固定更新
+  端点返回 0.3.58;签名/安装包逐字比对按既有口径 SKIP,由 CI 端完成。
+- CI 耗时诊断(本 run 实测):step 总和 612 秒,其中 Install cargo-tauri 403 秒(66%)
+  —— cargo-tauri 缓存因 GitHub 缓存作用域隔离(tag run 只能读 default branch 与当前
+  tag 自己的缓存)从未跨 run 命中,每次发版都在 cargo install tauri-cli 现场编译。
+  优化方案(换官方预编译 @tauri-apps/cli 等)已分析,待用户拍板后实施。
+- 待验收:明后天与周重置日期在真实数据与原生窗口的显示;Antigravity 真实账号取数;
+  日期控件回填人工复核(遗留)。
