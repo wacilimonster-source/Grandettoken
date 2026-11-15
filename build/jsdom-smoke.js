@@ -1439,7 +1439,7 @@ w.__DATA = DATA;
     R.push({
       name: "积分获取文案:活跃 / 充值 / 未获取 / 不记",
       ok:
-        /今日活跃 \+30/.test(active) && /推算/.test(active) &&
+        /今日活跃 \+30/.test(active) && !/推算/.test(active) &&
         /今日活跃 \+30/.test(api) && !/推算/.test(api) &&
         /非活跃/.test(topup) && none === "今日未获取积分" && line(null) === "",
       extra: [active, api, topup, none].join(" | "),

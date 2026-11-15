@@ -29,16 +29,18 @@ module.exports = async function ({ w, R, data, src }) {
       { key: "5h", label: "5 小时", remainPercent: 59, status: "ok" },
     ] });
     const ag = channels.find(c => c.id === "antigravity");
-    Object.assign(ag, { kind: "percent", remaining: 71.4, windows: [
+    Object.assign(ag, { kind: "percent", remaining: 71.4, limited: true, windows: [
       { key: "gemini-weekly", label: "Gemini 本周", main: true, remainPercent: 71.4, status: "ok" },
-      { key: "gemini-5h", label: "Gemini 5 小时", remainPercent: 1, status: "ok" },
+      { key: "gemini-5h", label: "Gemini 5 小时", remainPercent: 77, status: "ok", resetsAt: new Date(w.Date.now() + 4 * 3600000).toISOString() },
       { key: "other-5h", label: "Claude/GPT 5 小时", remainPercent: 0, status: "rate-limited", resetsAt: new Date(w.Date.now() + 49 * 60000).toISOString() },
     ] });
     w.__TEST.patchCfg({ panelLayout: "thumbnail", form: "panel", showUsed: false });
     doc.body.className = "form-panel";
     w.__TEST.updateLayout();
     w.__TEST.setChannels(channels);
-    w.hvApply({ ...data.HOME, rows: channels.map(c => ({ id: c.id, state: c.id === ag.id ? "limited" : "fresh", tone: "ok", tier: 1 })) });
+    w.hvApply({ ...data.HOME, rows: channels.map(c => ({ id: c.id, state: c.id === ag.id ? "limited" : "fresh", tone: c.id === ag.id ? "bad" : "ok", tier: 1,
+      bindingWindow: c.id === ag.id ? "Claude/GPT 5 小时" : null,
+      secondary: c.id === ag.id ? "Claude/GPT 限流 · 6天后恢复" : null })) });
     w.render({});
     const row = id => doc.querySelector(`#list .row[data-id="${id}"]`);
     check("动态渠道无遗漏或重复", () => {
@@ -63,11 +65,27 @@ module.exports = async function ({ w, R, data, src }) {
       assert.equal(row(codex.id).querySelector(".thumb-status-main").textContent, "重置卡 3 张");
       assert.equal(row(codex.id).querySelector(".thumb-status-end").textContent, "5h剩 59%");
     });
-    check("Antigravity 短窗与限流时间同时存在", () => {
+    check("Antigravity 缩略仅显示 Gemini 且不继承 Claude 限流", () => {
       const el = row(ag.id).querySelector(".thumb-status");
-      assert.equal(el.querySelector(".thumb-status-main").textContent, "G5h剩 1%");
-      assert.equal(el.querySelector(".thumb-status-end").textContent, "限流 49分钟后恢复");
-      assert.match(el.title, /Claude\/GPT/);
+      assert.equal(el.querySelector(".thumb-status-main").textContent, "G5h剩 77%");
+      assert.equal(el.querySelector(".thumb-status-end").textContent, "4小时后重置");
+      assert(!/Claude|GPT|限流|6天/.test(row(ag.id).outerHTML));
+      assert.equal(row(ag.id).dataset.dtone, "");
+      assert.equal(row(ag.id).dataset.state, "fresh");
+      assert.equal(ag.windows.length, 3);
+      assert.equal(ag.limited, true);
+    });
+    check("Antigravity Gemini 耗尽保留恢复时间", () => {
+      const windows = ag.windows.map(quota => quota.key === "gemini-5h" ? { ...quota, remainPercent: 0, status: "rate-limited", resetsAt: new Date(w.Date.now() + 49 * 60000).toISOString() } : quota);
+      const box = doc.createElement("div"); box.innerHTML = w.renderRow({ ...ag, windows }, 0);
+      assert.equal(box.querySelector(".thumb-status-main").textContent, "G5h剩 0%");
+      assert.match(box.querySelector(".thumb-status-end").textContent, /限流 49分钟后恢复/);
+      assert.equal(box.firstElementChild.dataset.dtone, "b");
+    });
+    check("Antigravity 缺 Gemini 时不借用其他池额度", () => {
+      const box = doc.createElement("div"); box.innerHTML = w.renderRow({ ...ag, windows: ag.windows.filter(w => !w.key.startsWith("gemini-")) }, 0);
+      assert.match(box.querySelector(".v").textContent, /——/);
+      assert(!/Claude|GPT|限流/.test(box.querySelector(".thumb-status").outerHTML));
     });
     check("Google Cloud 短名保留完整名称", () => {
       const el = row("google-cloud").querySelector(".thumb-name");
@@ -109,7 +127,56 @@ module.exports = async function ({ w, R, data, src }) {
     check("到期金额与日期分列", () => {
       const c = channels.find(c => c.kind === "points");
       assert.match(row(c.id).querySelector(".thumb-status-main").textContent, /174\.96 分将到期/);
-      assert.match(row(c.id).querySelector(".thumb-status-end").textContent, /^\d{2}-\d{2}$/);
+      const date = row(c.id).querySelector(".thumb-status-end").textContent;
+      const pattern = /^(?:\d{4}-)?\d{1,2}-\d{2} (?:本|下)?周[日一二三四五六]$/;
+      assert.match(date, pattern);
+      assert.throws(() => assert.match(date.split(" ")[0], pattern), assert.AssertionError);
+    });
+    check("星期按自然周计算并覆盖跨月跨年闰日", () => {
+      const at = (year, month, day) => new w.Date(year, month - 1, day, 12).getTime();
+      const examples = [
+        [[2026, 11, 15], [2026, 11, 15], "11-15 本周日"],
+        [[2026, 11, 15], [2026, 11, 16], "11-16 下周一"],
+        [[2026, 11, 15], [2026, 11, 18], "11-18 下周三"],
+        [[2026, 11, 16], [2026, 11, 18], "11-18 本周三"],
+        [[2026, 11, 15], [2026, 12, 9], "12-09 周三"],
+        [[2026, 11, 30], [2026, 12, 1], "12-01 本周二"],
+        [[2026, 12, 27], [2027, 1, 2], "2027-1-02 下周六"],
+        [[2028, 2, 28], [2028, 2, 29], "2-29 本周二"],
+      ];
+      for (const [today, target, expected] of examples) {
+        assert.equal(w.PanelLayoutUI.expiryDate(at(...target) / 1000, at(...today)), expected);
+      }
+      assert.equal(w.PanelLayoutUI.expiryDate(null), "日期未知");
+      assert.equal(w.PanelLayoutUI.expiryDate(NaN), "日期未知");
+      assert.equal(w.PanelLayoutUI.expiryDate(Infinity), "日期未知");
+    });
+    check("跨周分钟刷新更新日期及辅助提示并保留焦点", () => {
+      const RealDate = w.Date;
+      let time = new RealDate(2026, 10, 15, 23, 59).getTime();
+      const expiry = new RealDate(2026, 10, 18, 10, 26).getTime() / 1000;
+      w.Date = class extends RealDate {
+        constructor(...args) { super(...(args.length ? args : [time])); }
+        static now() { return time; }
+      };
+      try {
+        const c = { ...channels.find(c => c.kind === "points"), expiring: [{ at: expiry, amount: 30 }] };
+        w.__TEST.setChannels([c]); w.render({});
+        const head = row(c.id).querySelector(".rhead"); head.focus();
+        assert.match(row(c.id).querySelector(".thumb-status-end").textContent, /下周三/);
+        time = new RealDate(2026, 10, 16, 0, 1).getTime();
+        w.PanelLayoutUI.tick();
+        assert.equal(row(c.id).querySelector(".thumb-status-end").textContent, "11-18 本周三");
+        assert(!row(c.id).querySelector(".thumb-status").title.includes("下周三"));
+        assert.match(row(c.id).querySelector(".thumb-status-end span").title, /2026-11-18 周三 10:26/);
+        assert.equal(doc.activeElement, head);
+        w.__TEST.patchCfg({ panelLayout: "single" }); w.__TEST.updateLayout(); w.render({});
+        assert.match(row(c.id).querySelector(".r2").textContent, /11-18 本周三/);
+      } finally {
+        w.Date = RealDate;
+        w.__TEST.patchCfg({ panelLayout: "thumbnail" }); w.__TEST.updateLayout();
+        w.__TEST.setChannels(channels); w.render({});
+      }
     });
     check("跨重置点保留待刷新状态", () => {
       const el = row(ag.id).querySelector("[data-thumbnail-reset]");
@@ -119,7 +186,24 @@ module.exports = async function ({ w, R, data, src }) {
       assert.equal(el.textContent, "待刷新");
       el.dataset.thumbnailReset = previous;
       w.PanelLayoutUI.tick();
-      assert.match(el.textContent, /后恢复$/);
+      assert.match(el.textContent, /后重置$/);
+    });
+    check("所有模式的渠道摘要隐藏推算文字", () => {
+      const amount = { ...base, estimated: true, day: 3 };
+      const grant = { ...channels.find(c => c.kind === "points"), grantToday: { hasActivity: true, activityTotal: 30, total: 30, fromApi: false } };
+      try {
+        for (const [layout, form] of [["single", "panel"], ["double", "panel"], ["thumbnail", "panel"], ["single", "compact"], ["single", "pill"]]) {
+          w.__TEST.patchCfg({ panelLayout: layout, form });
+          doc.body.className = "form-" + form; w.__TEST.updateLayout();
+          for (const c of [amount, grant]) {
+            const box = doc.createElement("div"); box.innerHTML = w.renderRow(c, 0);
+            assert(!/推算/.test(box.querySelector(".rhead").textContent), layout + "/" + form);
+          }
+        }
+      } finally {
+        w.__TEST.patchCfg({ panelLayout: "thumbnail", form: "panel" });
+        doc.body.className = "form-panel"; w.__TEST.updateLayout(); w.render({});
+      }
     });
     const saved = [];
     w.__SET_CONFIG_INVOKE = async ({ config }) => saved.push(config.panelLayout);

@@ -701,14 +701,14 @@ function hvTone(c) {
  *    · 有活跃奖励 → "今日活跃 +30 · 08:12"(不是自己领的就不写"已领取")
  *    · 只有充值   → "今日新增 +500 · 非活跃"(充值到账 ≠ 活跃获取)
  *    · 什么都没到 → "今日未获取积分"(确定的结论,不是"读不到")
- *  `fromApi` 为 false 时补一个"推算" —— 余额正增量反推的,不能当平台确认说。
+ *  渠道摘要只显示活动与数额，来源由到账记录明细承载。
  */
 function grantLine(c) {
   const g = c.grantToday;
   if (!g) return "";
   if (g.hasActivity) {
     const t = g.lastAt ? " · " + fmtClock(g.lastAt) : "";
-    return `今日活跃 +${points(g.activityTotal)}${t}${g.fromApi ? "" : " · 推算"}`;
+    return `今日活跃 +${points(g.activityTotal)}${t}`;
   }
   if (g.total > 0) return `今日新增 +${points(g.total)} · 非活跃`;
   return "今日未获取积分";
@@ -744,7 +744,9 @@ function plainText(html) {
 }
 
 function renderRow(c, i) {
-  const tone = hvTone(c); // 与其余三种形态同源(设计 P3 · 状态同源)
+  const gemini = c.id === "antigravity" && window.PanelLayoutUI && panelLayout() === "thumbnail" && currentForm() === "panel" ? window.PanelLayoutUI.gemini(c) : null;
+  if (gemini) c = gemini.channel;
+  const tone = gemini ? gemini.tone : hvTone(c);
   const noKey = !c.hasKey;
   const failed = c.hasKey && !c.valid && !c.stale;
   const r = remainRatio(c);
@@ -788,7 +790,7 @@ function renderRow(c, i) {
   // 2026-10-23(设计 docs/design/design-row-detail-2026-10-23.html §5):失败 / 需登录 / 陈旧
   // 这三种"旧快照"行,同一句话只说一次 —— 状态标签说"坏了",副标题只说原因,
   // 右侧只说"多久以前的快照"。以前这三样各写两遍,折叠行 94px、五行字。
-  const hv = hvRow(c.id);
+  const hv = gemini ? gemini.health : hvRow(c.id);
   const isStale = !!c.stale || !!(hv && hv.state === "stale");
   const isOld = isStale || failed;
   const hasTag = !!(hv && hv.qualifier && hv.qualifier !== "~") || !!(CFG && CFG.textTone);
@@ -887,7 +889,7 @@ function renderRow(c, i) {
 
   // 金额型第二行两边都空时给今日消耗兜底:否则整行会比别的行矮一截(Hapi 39px vs 51px)
   if (!noKey && !failed && c.kind === "amount" && !sub && !subVal && c.day !== null) {
-    sub = `今日 ${money(c.day, c.unit)}${c.estimated ? "(推算)" : ""}`;
+    sub = `今日 ${money(c.day, c.unit)}`;
     subVal = "&nbsp;"; // 右侧留一行空位,和别的行一样高(不留就矮 2px)
   }
 
@@ -905,7 +907,7 @@ function renderRow(c, i) {
   }
 
   // 状态点(U2 分层):未配置=空心环,失联=斜杠灰点 —— 两种灰色不再共用
-  const dcls = dotCls(c);
+  const dcls = gemini ? gemini.dot : dotCls(c);
   const dot = `<span class="dot${dcls ? " " + dcls : ""}"></span>`;
 
   // 配额型的三条迷你条已经表达了余量,积分型的到期列表也没有"余量比例"可画
@@ -974,7 +976,7 @@ function renderRow(c, i) {
       .sort((a, b) => a.at - b.at);
     if (upcoming.length) {
       const e = upcoming[0];
-      railLeft = `最近 ${fmtDay(e.at)} ${fmtClock(e.at)} 到期 · ${points(e.amount)} 分`;
+      railLeft = `最近 ${window.PanelLayoutUI.expiryDateHtml(e.at)} ${fmtClock(e.at)} 到期 · ${points(e.amount)} 分`;
       railRight = expiryRelativeSpan(e.at);
       railWarn = e.at * 1000 - Date.now() <= 7 * 86400e3;
     } else {
@@ -1018,7 +1020,7 @@ function renderRow(c, i) {
     // 副标题已经说了申请制 / 峰谷;状态轨给"今天花了多少"和剩余比例,
     // 两条信息不重复。没有今日数据时如实写"暂无",不补 0。
     railLeft = c.day !== null
-      ? `今日 ${money(c.day, c.unit)}${c.estimated ? " · 推算" : ""}`
+      ? `今日 ${money(c.day, c.unit)}`
       : c.peak
         ? esc(peakParts(c).label)
         : "今日消耗暂无";

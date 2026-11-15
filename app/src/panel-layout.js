@@ -3,6 +3,7 @@
   const layouts = ["single", "double", "thumbnail"];
   let saving = false;
   let frame = 0;
+  let calendarKey = null;
 
   function normalize(layout) {
     return layouts.includes(layout) ? layout : "single";
@@ -39,6 +40,44 @@
 
   function windowValue(w) {
     return w && Number.isFinite(w.remainPercent) ? `${dispPct(w.remainPercent).toFixed(0)}%` : "未知";
+  }
+
+  function expiryDate(at, now = Date.now()) {
+    const date = new Date(at * 1000);
+    const today = new Date(now);
+    if (!Number.isFinite(at) || at <= 0 || !Number.isFinite(date.getTime())) return "日期未知";
+    // 用本地日历字段构造日序，避免夏令时的 23/25 小时日改变周归属。
+    const day = value => Date.UTC(value.getFullYear(), value.getMonth(), value.getDate()) / 86400000;
+    const monday = value => day(value) - (value.getDay() + 6) % 7;
+    const currentWeek = monday(today);
+    const targetWeek = monday(date);
+    const week = targetWeek === currentWeek ? "本周" : targetWeek === currentWeek + 7 ? "下周" : "周";
+    const year = date.getFullYear() === today.getFullYear() ? "" : date.getFullYear() + "-";
+    return `${year}${fmtDay(at)} ${week}${"日一二三四五六"[date.getDay()]}`;
+  }
+
+  function expiryDateHtml(at) {
+    const date = new Date(at * 1000);
+    if (!Number.isFinite(at) || at <= 0 || !Number.isFinite(date.getTime())) return "日期未知";
+    const full = `${date.getFullYear()}-${fmtDay(at)} 周${"日一二三四五六"[date.getDay()]} ${fmtClock(at)}`;
+    return `<span data-points-expiry="${at}" title="${esc(full)}">${esc(expiryDate(at))}</span>`;
+  }
+
+  function gemini(c) {
+    const windows = (c.windows || []).filter(w => w.key === "gemini-weekly" || w.key === "gemini-5h");
+    const main = windows.find(w => w.key === "gemini-weekly") || windows[0];
+    const limited = windows.some(w => w.status === "rate-limited" || w.remainPercent === 0);
+    const channel = { ...c, windows, remaining: main && Number.isFinite(main.remainPercent) ? main.remainPercent : null, limited };
+    const health = hvRow(c.id);
+    if (!c.hasKey || !c.valid || c.stale || health && ["auth", "error", "stale"].includes(health.state)) {
+      return { channel, health: { ...health, secondary: null, bindingWindow: null,
+        qualifier: health && health.state === "limited" ? null : health && health.qualifier }, tone: "off", dot: c.hasKey ? "st" : "off" };
+    }
+    const tones = windows.map(w => quotaTone(channel, w));
+    const tone = limited || tones.includes("bad") ? "bad" : tones.includes("warn") ? "warn" : tones.includes("ok") ? "ok" : "off";
+    return { channel, tone, dot: { bad: "b", warn: "w", off: "off", ok: "" }[tone],
+      health: { ...health, state: limited ? "limited" : "fresh", tone, tier: limited ? 0 : 1,
+        secondary: null, qualifier: null, bindingWindow: null } };
   }
 
   function countdown(at, suffix) {
@@ -85,7 +124,6 @@
       status = `G5h${CFG.showUsed ? "用" : "剩"} ${windowValue(short)}`;
       end = short ? windowTime(short) : "";
       if (limited) end = `限流 ${windowTime(limited, "后恢复")}`;
-      else if (c.limited) end = "限流";
       detail = [detail, limited ? `${limited.label}限流` : ""].filter(Boolean).join(" · ");
     } else if (c.limited) {
       status = `限流 · ${railLeft || sub}`;
@@ -101,7 +139,7 @@
       const expiry = (c.expiring || []).filter(e => e.amount > 0 && e.at * 1000 > Date.now()).sort((a, b) => a.at - b.at)[0];
       if (expiry) {
         status = `${esc(points(expiry.amount))} ${esc(c.unit && c.unit !== "credits" ? c.unit : "分")}将到期`;
-        end = esc(fmtDay(expiry.at));
+        end = expiryDateHtml(expiry.at);
       }
       else status = railLeft || railRight || sub;
     } else if (mw) {
@@ -155,6 +193,11 @@
     document.querySelectorAll("[data-thumbnail-reset]").forEach(el => {
       setTextIfChanged(el, countdown(Number(el.dataset.thumbnailReset), el.dataset.thumbnailSuffix || ""));
     });
+    const now = new Date();
+    const key = [now.getFullYear(), now.getMonth(), now.getDate(), now.getTimezoneOffset()].join("/");
+    const changed = calendarKey !== null && calendarKey !== key;
+    calendarKey = key;
+    if (changed && document.querySelector("[data-points-expiry]")) render({});
   }
 
   document.getElementById("lkLayout").addEventListener("click", event => {
@@ -166,5 +209,5 @@
   });
   window.addEventListener("resize", schedule);
   if (typeof ResizeObserver === "function") new ResizeObserver(schedule).observe(document.getElementById("list"));
-  window.PanelLayoutUI = { normalize, update, select, summary, schedule, tick };
+  window.PanelLayoutUI = { normalize, update, select, summary, schedule, tick, gemini, expiryDate, expiryDateHtml };
 })();

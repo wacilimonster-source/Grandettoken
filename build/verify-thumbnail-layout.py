@@ -38,7 +38,7 @@ def measure(page):
         statusMisaligned: rows.filter(row => {
           const status = row.querySelector('.thumb-status');
           const end = row.querySelector('.thumb-status-end');
-          return Math.abs(status.getBoundingClientRect().right - end.getBoundingClientRect().right) > 1;
+          return Math.abs(status.getBoundingClientRect().right - end.getBoundingClientRect().right) > 1 || Math.abs(status.getBoundingClientRect().top - end.getBoundingClientRect().top) > 1 || end.scrollWidth > end.clientWidth + 1;
         }).length
       };
     }""")
@@ -57,6 +57,12 @@ def main():
     parser.add_argument("--screenshot", type=Path)
     args = parser.parse_args()
     data = json.loads(args.fixture.read_text(encoding="utf-8"))
+    app_source = (SOURCE / "app.js").read_text(encoding="utf-8")
+    date_helpers = "\n".join(re.findall(r"^function (?:fmtDay|fmtClock)\(ts\) \{.*?^\}", app_source, re.M | re.S))
+    assert date_helpers, "日期格式依赖必须从 app.js 读取"
+    escape_helper = re.search(r"^const esc =.*?^  \);", app_source, re.M | re.S)
+    assert escape_helper, "日期节点的转义依赖必须从 app.js 读取"
+    date_helpers += "\n" + escape_helper.group(0)
     styles = "".join("<style>" + path.read_text(encoding="utf-8") + "</style>" for path in SOURCE.glob("*.css"))
     body = re.sub(r"<script\b[^>]*>[\s\S]*?</script>", "", data["body"])
     document = ('<!doctype html><html><head><meta charset="utf-8"><base href="' + SOURCE.as_uri() + '/">'
@@ -79,6 +85,7 @@ def main():
               window.plainText = html => { const element = document.createElement('div'); element.innerHTML = html; return element.textContent; };
             }""", data["channels"])
             page.add_script_tag(content=(SOURCE / "panel-layout.js").read_text(encoding="utf-8"))
+            page.add_script_tag(content=date_helpers)
             for unit in [1, 1.15, 1.3]:
                 for light in [False, True]:
                     page.set_viewport_size({"width": round(480 * unit) + 20, "height": round(820 * unit) + 20})
@@ -111,6 +118,13 @@ def main():
             if args.screenshot:
                 page.screenshot(path=str(args.screenshot.resolve()))
             page.evaluate("""() => {
+              document.querySelectorAll('.thumb-status-end [data-points-expiry]').forEach(element => {
+                const at = new Date(2027, 0, 2, 10, 26).getTime() / 1000;
+                element.outerHTML = PanelLayoutUI.expiryDateHtml(at);
+              });
+            }""")
+            validate(measure(page), len(data["channels"]))
+            page.evaluate("""() => {
               const list = document.getElementById('list');
               while (list.querySelectorAll(':scope > .row').length < 16) {
                 const row = list.querySelector('.row').cloneNode(true);
@@ -135,6 +149,24 @@ def main():
                     validate(result, len(data["channels"]))
                 print({"clampedHeight": height, **result})
             assert not errors, errors
+            with browser.new_context(timezone_id="America/New_York") as context:
+                date_page = context.new_page()
+                date_page.on("pageerror", lambda error: errors.append(str(error)))
+                date_page.goto(preview.as_uri())
+                date_page.evaluate("document.body.className='form-panel'")
+                date_page.add_script_tag(content=date_helpers)
+                date_page.add_script_tag(content=(SOURCE / "panel-layout.js").read_text(encoding="utf-8"))
+                cases = date_page.evaluate("""() => {
+                  const stamp = (year, month, day) => new Date(year, month - 1, day, 12).getTime();
+                  return [
+                    PanelLayoutUI.expiryDate(stamp(2026, 3, 9) / 1000, stamp(2026, 3, 7)),
+                    PanelLayoutUI.expiryDate(stamp(2026, 11, 2) / 1000, stamp(2026, 10, 31)),
+                    PanelLayoutUI.expiryDate(Date.UTC(2026, 10, 16, 1) / 1000, stamp(2026, 11, 15))
+                  ];
+                }""")
+                assert cases == ["3-09 下周一", "11-02 下周一", "11-15 本周日"], cases
+                print("Local weekday and daylight-saving boundaries PASS")
+                assert not errors, errors
             browser.close()
 
 
