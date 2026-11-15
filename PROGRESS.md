@@ -5249,3 +5249,18 @@ src-tauri `cargo check --all-targets --locked` exit 0;
   端点返回 0.3.55;签名/安装包逐字比对按既有口径 SKIP,由 CI 端完成。
 - 待验收:「本周X / 下周X / 周X」在真实数据与原生窗口的显示(含跨日翻转);Antigravity
   真实账号取数;顾问时长「N 天 M 小时」;日期控件回填人工复核(遗留)。
+
+## 2026-11-15 v0.3.56 本地模型网关三源统一与思维链折叠随版发布
+
+- 整体重构 PC 端本地模型网关并拆出协议层 `app/core/src/gateway_proto/*`、HTTP/流式引擎
+  `app/src-tauri/src/gateway_http.rs`、渠道同步 `app/src-tauri/src/vault_sync.rs` 与前端
+  模块 `app/src/gateway-view.{js,css}`，同步接入 `release.yml` 门禁。
+- 三类上游接入统一转为 SillyTavern / PocketTavern 自定义源与主流 Agent 兼容的 OpenAI 接口
+  (`/healthz`、`/v1/models`、`/v1/models/{*id}`、`/v1/chat/completions`)：
+  1) `openai_compat`：支持任意 `/v1` 端点、密钥箱自动带入与模板、本地免密模式及同密钥多别名上架；
+  2) `agent_platform`：对齐 PocketTavern 默认 Vertex 端点与 5 个预置模型，鉴权头固定 `x-goog-api-key` 并剥离 `Authorization`，含 `google/gemini-3.1-flash-lite` penalty 白名单；
+  3) `gemini_aistudio`：分页拉取 `/v1beta/models`、`thinking_config` 映射与 HTTP 400 单次自动修复重试。
+- 流式 SSE 与非流式统一将 `reasoning` / `thinking` / `extra_content.google.thought` 及正文开头
+  `<think>` / `<thinking>` / `<thought>` / Harmony 标签归一至 `reasoning_content`；`openai_compat` 默认开启自动切分且可按渠道切换 `auto` / `fields_only` / `passthrough`。
+- 每渠道系统代理开关默认开启(`system_proxy: true`)；密钥箱(`vault_save` / `vault_list`)与渠道密钥变更(`set_key` / `delete_key` / `set_key_ref` / `clear_key_ref`)自动同步关联渠道；新增连通测试、流式思维链联调台与脱敏诊断环缓冲区，并在 `check-file-size.js` 下调 `app.js`/`lib.rs`/`styles.css` 上限。
+- 发版前门禁将在最终改版后全量串行跑通（见下一条发布结果记录）。

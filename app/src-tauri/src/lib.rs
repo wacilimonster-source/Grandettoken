@@ -15,6 +15,12 @@ use tokenscope_core::{appauth, checkin, inject, models, providers, secrets, stor
 mod sync_cmds;
 mod download;
 mod gateway;
+mod gateway_http;
+mod vault_sync;
+use vault_sync::{
+    ensure_vault_mutable, import_channel_keys, sync_channel_to_gateway, vault_default_channel,
+    vault_defaults_lock,
+};
 mod doubao_web;
 mod codex_reset_cmd;
 mod google_cloud_web;
@@ -457,6 +463,7 @@ async fn set_key(app: tauri::AppHandle, id: String, key: String) -> Result<(), S
     lock_rw(&store).vault_ref_clear(&id)?;
     // 与删除同理:刚换过凭据就别再复用 5 秒内的旧结果,否则"保存了却还显示未配置/旧数值"
     app.state::<AppState>().fetcher.invalidate();
+    sync_channel_to_gateway(&app, &id);
     Ok(())
 }
 
@@ -501,6 +508,7 @@ async fn delete_key(app: tauri::AppHandle, id: String) -> Result<String, String>
     // 取到的那份)端上来,用户看到"清掉了却还显示已登录"。
     let state = app.state::<AppState>();
     state.fetcher.forget_channel(&lock_rw(&state.store), &id);
+    sync_channel_to_gateway(&app, &id);
     Ok(if is_web {
         format!("已清除 {} 的登录会话{warn}", def.name)
     } else {
@@ -637,6 +645,7 @@ async fn set_key_ref(app: tauri::AppHandle, id: String, vault_id: String) -> Res
     // 反查索引(仅为"这把被谁用了"服务;权威来源仍是凭据管理器里的指针)
     lock_rw(&store).vault_ref_set(&id, &vault_id)?;
     app.state::<AppState>().fetcher.invalidate();
+    sync_channel_to_gateway(&app, &id);
     Ok(())
 }
 
@@ -651,6 +660,7 @@ async fn clear_key_ref(app: tauri::AppHandle, id: String) -> Result<(), String> 
         .map_err(|e| format!("清除密钥引用失败: {e}"))??;
     lock_rw(&store).vault_ref_clear(&id)?;
     app.state::<AppState>().fetcher.forget_channel(&lock_rw(&store), &id);
+    sync_channel_to_gateway(&app, &id);
     Ok(())
 }
 
@@ -2942,88 +2952,7 @@ fn vault_url(value: &str) -> Result<String, String> {
     Ok(value.to_string())
 }
 
-// 默认条目记录在数据库设置中，ID 与普通用户创建的密钥分开。
-fn vault_defaults_lock() -> &'static Mutex<()> {
-    static LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
-fn vault_default_channel(store: &Store, vault_id: &str) -> Result<Option<String>, String> {
-    for id in ["4sapi", "hapi", "opencode-go"] {
-        if store.get_setting(&format!("vault_default_channel:{id}"))?.as_deref() == Some(vault_id) {
-            return Ok(Some(id.to_string()));
-        }
-    }
-    Ok(None)
-}
-fn ensure_vault_mutable(store: &Store, vault_id: &str) -> Result<(), String> {
-    if vault_default_channel(store, vault_id)?.is_some() {
-        return Err("渠道默认密钥仅供查看，请在渠道管理中修改".into());
-    }
-    Ok(())
-}
-// 复用旧版自动导入的默认条目；其他用户创建的条目不会被标记为只读。
-fn import_channel_keys(store: &Arc<Mutex<Store>>, cfg: &Config) -> Result<(), String> {
-    let _guard = lock_rw(vault_defaults_lock());
-    for (id, platform, website) in [
-        ("4sapi", "4SAPI", "https://4sapi.com"),
-        ("hapi", "Hapi", "https://ai.yuchuantest.com"),
-        ("opencode-go", "OpenCode Go", "https://opencode.ai"),
-    ] {
-        let mapping = format!("vault_default_channel:{id}");
-        let mut existing_id = lock_rw(store).get_setting(&mapping)?;
-        let items = lock_rw(store).vault_list()?;
-        let legacy_marker = lock_rw(store).get_setting(&format!("vault_channel_import_v1:{id}"))?.is_some();
-        let legacy: Vec<_> = items.iter().filter(|v| legacy_marker && v.platform.eq_ignore_ascii_case(platform) && v.label == "渠道当前密钥").collect();
-        if existing_id.is_none() && legacy.len() == 1 {
-            lock_rw(store).set_setting(&mapping, &legacy[0].id)?;
-            existing_id = Some(legacy[0].id.clone());
-        }
-        let existing = existing_id.as_ref().and_then(|vid| items.iter().find(|v| &v.id == vid)).cloned();
-        let key = match secrets::channel_key(id)? {
-            Some(key) if !key.trim().is_empty() => key,
-            _ => {
-                // 渠道密钥被移除后，不保留仍可调用的旧副本；只读记录继续显示“未配置”。
-                if let Some(mut item) = existing {
-                    if secrets::vault_get(&item.id)?.is_some() {
-                        secrets::vault_delete(&item.id)?;
-                        item.hint.clear();
-                        item.updated_at = now_ts().max(item.updated_at.saturating_add(1));
-                        lock_rw(store).vault_upsert(&item)?;
-                    }
-                }
-                continue;
-            }
-        };
-        let mut item = if let Some(v) = existing { v }
-            else if legacy.len() == 1 { legacy[0].clone() }
-            else {
-                let now = now_ts();
-                tokenscope_core::store::VaultItem {
-                    id: tokenscope_core::vault::new_id(), platform: platform.into(), label: "渠道当前密钥".into(),
-                    hint: String::new(), note: String::new(), api_endpoint: String::new(), website: website.into(),
-                    created_at: now, updated_at: now,
-                }
-            };
-        let is_new = !items.iter().any(|v| v.id == item.id);
-        let old_key = secrets::vault_get(&item.id)?;
-        let def = models::find_source(id).ok_or("渠道配置缺失")?;
-        let cache = { let s = lock_rw(store); models::ModelCache::load(&s) };
-        let endpoint = source_base(cfg, cache.as_ref(), def);
-        let changed = old_key.as_deref() != Some(key.as_str()) || item.api_endpoint != endpoint;
-        if changed || is_new {
-            if old_key.as_deref() != Some(key.as_str()) { secrets::vault_set(&item.id, &key)?; }
-            item.hint = secrets::mask_of(&key);
-            item.api_endpoint = endpoint;
-            if !is_new { item.updated_at = now_ts().max(item.updated_at.saturating_add(1)); }
-            if let Err(e) = lock_rw(store).vault_upsert(&item) {
-                if is_new { let _ = secrets::vault_delete(&item.id); }
-                return Err(e);
-            }
-        }
-        lock_rw(store).set_setting(&mapping, &item.id)?;
-    }
-    Ok(())
-}
+// 渠道默认密钥导入与网关自动同步已拆至 vault_sync.rs。
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -3034,11 +2963,11 @@ struct VaultListItem {
     default_available: bool,
 }
 #[tauri::command]
-async fn vault_list(state: State<'_, AppState>) -> Result<Vec<VaultListItem>, String> {
+async fn vault_list(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<Vec<VaultListItem>, String> {
     let store = state.store.clone();
     let cfg = lock_rw(&state.config).clone();
-    tokio::task::spawn_blocking(move || {
-        import_channel_keys(&store, &cfg)?;
+    let (vids, out) = tokio::task::spawn_blocking(move || {
+        let vids = import_channel_keys(&store, &cfg)?;
         let items = lock_rw(&store).vault_list()?;
         let mut out = Vec::with_capacity(items.len());
         for item in items {
@@ -3046,10 +2975,12 @@ async fn vault_list(state: State<'_, AppState>) -> Result<Vec<VaultListItem>, St
             let default_available = default_channel.as_ref().map(|id| secrets::channel_key(id).ok().flatten().map(|s| !s.trim().is_empty()).unwrap_or(false)).unwrap_or(true);
             out.push(VaultListItem { item, default_channel, default_available });
         }
-        Ok(out)
+        Ok::<_, String>((vids, out))
     })
     .await
-    .map_err(|e| format!("读取密钥箱失败: {e}"))?
+    .map_err(|e| format!("读取密钥箱失败: {e}"))??;
+    for vid in vids { gateway::spawn_vault_sync(&app, vid); }
+    Ok(out)
 }
 
 /// 新建或编辑一条。**先写凭据、再写索引**:索引写失败就把刚写的凭据删掉,不留半条。
@@ -3125,10 +3056,7 @@ async fn vault_save(
     })
     .await
     .map_err(|e| format!("保存失败: {e}"))??;
-    if let Ok(Some((source, alias))) = app.state::<gateway::Gateway>().invalidate_vault(&saved.id) {
-        let id = saved.id.clone(); let handle = app.clone();
-        tauri::async_runtime::spawn(async move { let _ = gateway::gateway_publish(handle, id, source, alias, None).await; });
-    }
+    gateway::spawn_vault_sync(&app, saved.id.clone());
     Ok(saved)
 }
 
@@ -4972,7 +4900,7 @@ struct InjectOverview {
 /// 写进客户端的接入地址。
 /// 4SAPI:用户指定 > 实测可用的域名 > 主域名(它有几个域名,得挑一个真通的);
 /// 其它来源:用来源定义里的固定地址。
-fn source_base(cfg: &Config, cache: Option<&models::ModelCache>, def: &models::SourceDef) -> String {
+pub(crate) fn source_base(cfg: &Config, cache: Option<&models::ModelCache>, def: &models::SourceDef) -> String {
     if def.id != "4sapi" {
         return def.base_url.to_string();
     }
@@ -6351,11 +6279,16 @@ pub fn run() {
             gateway::gateway_status,
             gateway::gateway_start,
             gateway::gateway_stop,
+            gateway::gateway_restart,
             gateway::gateway_secret,
             gateway::gateway_publish,
+            gateway::gateway_update_channel,
+            gateway::gateway_refresh_channel,
             gateway::gateway_unpublish,
-            gateway::gateway_set_models,
-            gateway::gateway_set_proxy,
+            gateway::gateway_test_channel,
+            gateway::gateway_test_chat,
+            gateway::gateway_diagnostics,
+            gateway::gateway_clear_diagnostics,
             inject_preview,
             inject_apply,
             inject_remove,

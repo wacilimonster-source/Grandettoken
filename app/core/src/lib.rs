@@ -21,6 +21,7 @@ pub mod doubao_client;
 pub mod errcodes;
 pub mod fetch;
 pub mod fx;
+pub mod gateway_proto;
 pub mod grants;
 pub mod google_cloud;
 pub mod inject;

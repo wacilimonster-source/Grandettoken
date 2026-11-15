@@ -1,0 +1,325 @@
+// 本地模型网关前端冒烟（含双向哨兵自检）：验证三类上游接入、代理默认开启、无尾斜杠地址、
+// 密钥箱同密钥多次上架、代理开关失败回滚、详情展开状态保留以及思维链测试台。
+// 运行需本机或 NODE_PATH 中已安装 jsdom。
+const fs = require("fs");
+const path = require("path");
+const { spawnSync } = require("child_process");
+const { JSDOM } = require("jsdom");
+
+const root = path.resolve(__dirname, "..");
+const html = fs.readFileSync(path.join(root, "app/src/index.html"), "utf8");
+let gatewayJs = fs.readFileSync(path.join(root, "app/src/gateway-view.js"), "utf8");
+
+if (process.env.GATEWAY_SENTINEL === "cmd") {
+  gatewayJs = gatewayJs.replace('invoke("gateway_publish"', 'invoke("__missing_gateway_publish__"');
+} else if (process.env.GATEWAY_SENTINEL === "proxy") {
+  const marker = "const defaultProxyChecked = draft ? draft.proxy : true;";
+  if (!gatewayJs.includes(marker)) throw new Error("proxy 哨兵未找到目标行");
+  gatewayJs = gatewayJs.replace(marker, "const defaultProxyChecked = draft ? draft.proxy : false;");
+} else {
+  const probeCmd = spawnSync(process.execPath, [__filename], {
+    env: { ...process.env, GATEWAY_SENTINEL: "cmd" },
+    encoding: "utf8",
+    timeout: 15000,
+  });
+  if (probeCmd.status !== 1 || !probeCmd.stderr.includes("FAIL:")) {
+    throw new Error("网关冒烟自检失败：未知命令哨兵未触发 FAIL");
+  }
+  console.log("  ok   注入未知 IPC 命令时冒烟变红");
+
+  const probeProxy = spawnSync(process.execPath, [__filename], {
+    env: { ...process.env, GATEWAY_SENTINEL: "proxy" },
+    encoding: "utf8",
+    timeout: 15000,
+  });
+  if (probeProxy.status !== 1 || !probeProxy.stderr.includes("默认开启系统代理")) {
+    throw new Error("网关冒烟自检失败：代理默认值哨兵未触发 FAIL");
+  }
+  console.log("  ok   关闭新渠道默认代理时冒烟变红");
+}
+
+const dom = new JSDOM(html, {
+  runScripts: "outside-only",
+  pretendToBeVisual: true,
+  url: "http://localhost/",
+});
+const w = dom.window;
+const doc = w.document;
+const calls = [];
+const toasts = [];
+let failNextProxyUpdate = false;
+
+const vaultItems = [
+  {
+    id: "v1",
+    platform: "OpenAI",
+    label: "主力 Key",
+    hint: "sk-12...abcd",
+    note: "",
+    apiEndpoint: "https://api.example.com/v1",
+    website: "",
+    createdAt: 100,
+    updatedAt: 100,
+  },
+  {
+    id: "v2",
+    platform: "Gemini",
+    label: "Google Key",
+    hint: "AIza...9999",
+    note: "",
+    apiEndpoint: "",
+    website: "",
+    createdAt: 101,
+    updatedAt: 101,
+  },
+];
+
+let statusState = {
+  port: 18771,
+  lan: true,
+  auth: true,
+  running: true,
+  startupError: null,
+  lanIps: [{ name: "WLAN", address: "192.168.1.88" }],
+  presets: [
+    { id: "custom", name: "自定义 OpenAI 端点", baseUrl: "", defaultAlias: "custom", hint: "" },
+    { id: "deepseek", name: "DeepSeek 官方", baseUrl: "https://api.deepseek.com/v1", defaultAlias: "deepseek", hint: "" },
+  ],
+  agentPlatformDefaults: {
+    baseUrl: "https://aiplatform.googleapis.com/v1/projects/project-11ce9e7c-f85d-4842-951/locations/global/endpoints/openapi",
+    models: ["google/gemini-3.8-flash", "google/gemini-3.1-flash-lite"],
+  },
+  channels: [
+    {
+      channelId: "ch_existing",
+      vaultId: "v1",
+      noUpstreamKey: false,
+      source: "openai_compat",
+      template: "custom",
+      baseUrl: "https://api.example.com/v1",
+      alias: "main",
+      host: "api.example.com",
+      label: "主力 Key",
+      platform: "OpenAI",
+      fetchedModels: ["gpt-4o-mini", "deepseek-r1"],
+      manualModels: [],
+      availableModels: ["gpt-4o-mini", "deepseek-r1"],
+      allowedModels: null,
+      systemProxy: true,
+      customHeaders: {},
+      thinkingMode: "auto",
+      thoughtPolicy: "follow_client",
+      count: 2,
+      totalCount: 2,
+      models: ["main/gpt-4o-mini", "main/deepseek-r1"],
+      stale: false,
+      lastStatus: "ok",
+      lastError: null,
+      lastCheckedAt: 1000,
+    },
+  ],
+  vault: vaultItems,
+  diagCount: 0,
+};
+
+w.$ = (id) => doc.getElementById(id);
+w.esc = (s) =>
+  String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+w.showToast = (msg, bad) => toasts.push({ msg, bad: !!bad });
+w.confirm = () => true;
+w.CSS = w.CSS || { escape: (s) => String(s).replace(/["\\]/g, "\\$&") };
+
+// 严格 invoke 桩：未知命令必须抛出错误，防止静默假绿
+w.invoke = async (cmd, args = {}) => {
+  calls.push({ cmd, args });
+  switch (cmd) {
+    case "gateway_status":
+      return JSON.parse(JSON.stringify(statusState));
+    case "gateway_diagnostics":
+      return [
+        {
+          id: 1,
+          timestamp: 1000,
+          channelId: "ch_existing",
+          channelAlias: "main",
+          source: "openai_compat",
+          model: "main/deepseek-r1",
+          stream: true,
+          status: 200,
+          latencyMs: 320,
+          transforms: [],
+          thinkingChars: 42,
+          contentChars: 12,
+          finishReason: "stop",
+          error: null,
+        },
+      ];
+    case "gateway_publish": {
+      const inp = args.input;
+      const ch = {
+        channelId: "ch_new",
+        vaultId: inp.vaultId,
+        noUpstreamKey: !!inp.noUpstreamKey,
+        source: inp.source,
+        template: inp.template || "",
+        baseUrl: inp.baseUrl,
+        alias: inp.alias,
+        host: "host.local",
+        label: "新渠道",
+        platform: "Gemini",
+        fetchedModels: ["google/gemini-3.8-flash"],
+        manualModels: inp.manualModels || [],
+        availableModels: ["google/gemini-3.8-flash", ...(inp.manualModels || [])],
+        allowedModels: null,
+        systemProxy: inp.systemProxy,
+        customHeaders: {},
+        thinkingMode: inp.thinkingMode || "auto",
+        thoughtPolicy: inp.thoughtPolicy || "follow_client",
+        count: 1,
+        totalCount: 1,
+        models: [`${inp.alias}/google/gemini-3.8-flash`],
+        stale: false,
+        lastStatus: "ok",
+        lastError: null,
+        lastCheckedAt: 1001,
+      };
+      statusState.channels.push(ch);
+      return JSON.parse(JSON.stringify(statusState));
+    }
+    case "gateway_update_channel": {
+      if (failNextProxyUpdate) {
+        failNextProxyUpdate = false;
+        throw new Error("模拟代理更新失败");
+      }
+      const inp = args.input;
+      const ch = statusState.channels.find((c) => c.channelId === inp.channelId);
+      if (!ch) throw new Error("channel not found");
+      if (typeof inp.systemProxy === "boolean") ch.systemProxy = inp.systemProxy;
+      return JSON.parse(JSON.stringify(statusState));
+    }
+    case "gateway_test_chat":
+      return {
+        ok: true,
+        status: 200,
+        latencyMs: 128,
+        requestedModel: args.input.model,
+        upstreamModel: "deepseek-r1",
+        thinking: "先算 12+23 = 35",
+        content: "35",
+        finishReason: "stop",
+        transforms: ["map:thinking_config(include_thoughts)"],
+        promptTokens: 10,
+        completionTokens: 20,
+        error: null,
+      };
+    case "copy_text":
+      return null;
+    default:
+      throw new Error(`未登记的 IPC 命令：${cmd}`);
+  }
+};
+
+w.eval(gatewayJs);
+
+let failed = 0;
+function ck(name, cond, detail) {
+  if (!cond) {
+    console.error(`  FAIL: ${name} (${detail || ""})`);
+    failed++;
+  } else {
+    console.log(`  ok   ${name}`);
+  }
+}
+
+async function run() {
+  await w.loadGateway();
+
+  // 1. 地址末尾无斜杠
+  const endpointCode = doc.querySelector(".gw-endpoint-row code")?.textContent || "";
+  ck("接入地址末尾无斜杠(/v1)", endpointCode === "http://127.0.0.1:18771/v1", endpointCode);
+
+  // 2. 新渠道默认开启系统代理
+  const newProxy = doc.getElementById("gwNewProxy");
+  ck("新建渠道默认开启系统代理", !!newProxy && newProxy.checked === true, String(newProxy?.checked));
+
+  // 3. 三类接入 Tab 存在
+  const tabs = [...doc.querySelectorAll("[data-gw-kind]")].map((x) => x.dataset.gwKind);
+  ck(
+    "展示三类上游接入页签",
+    tabs.includes("openai_compat") && tabs.includes("agent_platform") && tabs.includes("gemini_aistudio"),
+    tabs.join(",")
+  );
+
+  // 4. 同一把密钥支持重复出现在下拉框以便多端点发布
+  const vaultOpts = [...doc.querySelectorAll("#gwVault option")].map((o) => o.value);
+  ck("已上架密钥仍可二次选择上架(v1 在可选列中)", vaultOpts.includes("v1"), vaultOpts.join(","));
+
+  // 5. 模型筛选 + <details> 展开态保持
+  const det = doc.querySelector('details[data-gw-detail="ch-ch_existing"]');
+  det.open = true;
+  const filterInp = doc.querySelector('[data-gw-model-filter="ch_existing"]');
+  filterInp.value = "deepseek";
+  filterInp.dispatchEvent(new w.Event("input"));
+  const checks = [...doc.querySelectorAll('[data-gw-model="ch_existing"]')];
+  const hiddenCount = checks.filter((c) => c.closest(".gw-model-check").style.display === "none").length;
+  ck("模型 checklist 搜索实时过滤", hiddenCount === 1, `hidden=${hiddenCount}`);
+
+  // 6. 快捷开关代理失败时必须回滚状态 + toast 报错
+  const quickProxy = doc.querySelector('[data-gw-quick-proxy="ch_existing"]');
+  failNextProxyUpdate = true;
+  quickProxy.checked = false;
+  await quickProxy.onchange();
+  ck(
+    "代理设置写失败时回滚勾选框并报错提示",
+    quickProxy.checked === true && toasts.some((t) => t.bad && t.msg.includes("模拟代理更新失败")),
+    `checked=${quickProxy.checked}`
+  );
+
+  // 7. 切换到 Agent Platform 自动填入 Vertex 地址与别名
+  doc.querySelector('[data-gw-kind="agent_platform"]').click();
+  const baseUrlVal = doc.getElementById("gwBaseUrl").value;
+  ck(
+    "切换到 Agent Platform 自动填入默认端点",
+    baseUrlVal.includes("aiplatform.googleapis.com") && baseUrlVal.endsWith("/endpoints/openapi"),
+    baseUrlVal
+  );
+
+  // 8. 上架新渠道后检查参数 + 保留已有渠道详情展开态
+  doc.getElementById("gwVault").value = "v2";
+  doc.getElementById("gwAlias").value = "vertex1";
+  doc.querySelector('[data-gw="publish"]').click();
+  await new Promise((r) => setTimeout(r, 20));
+  const pubCall = calls.find((c) => c.cmd === "gateway_publish");
+  ck(
+    "上架 Agent Platform 发送正确载荷且系统代理默认开启",
+    !!pubCall &&
+      pubCall.args.input.source === "agent_platform" &&
+      pubCall.args.input.systemProxy === true &&
+      pubCall.args.input.alias === "vertex1",
+    JSON.stringify(pubCall?.args)
+  );
+  const detAfter = doc.querySelector('details[data-gw-detail="ch-ch_existing"]');
+  ck("刷新重绘后保留已打开的渠道详情", !!detAfter && detAfter.open === true);
+
+  // 9. 运行在线测试验证思维链折叠展示
+  doc.querySelector('[data-gw="run-test-chat"]').click();
+  await new Promise((r) => setTimeout(r, 20));
+  const thinkText = doc.querySelector(".gw-test-think pre")?.textContent || "";
+  const contentText = doc.querySelector(".gw-test-content pre")?.textContent || "";
+  ck(
+    "测试台正确折叠展示思维链与正文",
+    thinkText.includes("35") && contentText === "35",
+    `think=${thinkText} content=${contentText}`
+  );
+
+  if (failed > 0) {
+    console.error(`gateway 冒烟结果: ${failed} 项失败`);
+    process.exit(1);
+  }
+  console.log("gateway 冒烟全部通过");
+}
+
+run().catch((e) => {
+  console.error("FAIL:", e);
+  process.exit(1);
+});
