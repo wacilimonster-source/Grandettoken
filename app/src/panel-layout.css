@@ -39,7 +39,11 @@ body.form-panel.layout-thumbnail .row .val{grid-column:1/-1;justify-self:stretch
 body.form-panel.layout-thumbnail .row .val .v{font-size:var(--thumb-value-font,calc(22px*var(--u)));height:calc(26px*var(--u));line-height:calc(26px*var(--u));
   display:block;flex:1;min-width:0;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:-.03em}
 body.form-panel.layout-thumbnail .thumb-window{display:block;flex:none;max-width:45%;overflow:hidden;text-overflow:ellipsis;
-  white-space:nowrap;font-size:calc(11px*var(--u));color:var(--tx2);letter-spacing:0}
+  white-space:nowrap;font-size:calc(11px*var(--u));color:var(--tx2);letter-spacing:0;text-align:left}
+body.form-panel.layout-thumbnail .thumb-window.has-week-reset{max-width:55%;line-height:calc(13px*var(--u))}
+body.form-panel.layout-thumbnail .has-week-reset .thumb-caption,
+body.form-panel.layout-thumbnail .has-week-reset .thumb-week-reset{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+body.form-panel.layout-thumbnail .has-week-reset .thumb-week-reset{color:var(--tx3)}
 body.form-panel.layout-thumbnail .thumb-name{display:block;order:-1;min-width:0;overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap;font-size:calc(12px*var(--u));font-weight:600;line-height:calc(18px*var(--u))}
 body.form-panel.layout-thumbnail .thumb-status{display:flex;justify-content:space-between;gap:calc(6px*var(--u));

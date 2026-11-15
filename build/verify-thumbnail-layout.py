@@ -39,7 +39,8 @@ def measure(page):
           const status = row.querySelector('.thumb-status');
           const end = row.querySelector('.thumb-status-end');
           return Math.abs(status.getBoundingClientRect().right - end.getBoundingClientRect().right) > 1 || Math.abs(status.getBoundingClientRect().top - end.getBoundingClientRect().top) > 1 || end.scrollWidth > end.clientWidth + 1;
-        }).length
+        }).length,
+        weeklyClipped: [...list.querySelectorAll('.thumb-window .thumb-week-reset')].filter(element => element.scrollWidth > element.clientWidth + 1).length
       };
     }""")
 
@@ -49,6 +50,7 @@ def validate(result, count):
     assert result["lastVisible"] and result["columns"] == 2, result
     assert not result["overflow"] and not result["clipped"], result
     assert not result["misaligned"] and not result["statusMisaligned"], result
+    assert not result["weeklyClipped"], result
 
 
 def main():
@@ -137,7 +139,7 @@ def main():
             page.wait_for_timeout(80)
             validate(measure(page), max(16, len(data["channels"])))
             page.evaluate("document.querySelectorAll('.fixture-extra').forEach(row=>row.remove());PanelLayoutUI.schedule()")
-            page.evaluate("document.querySelectorAll('#list .val .v').forEach(el=>el.textContent='USD 1,234,567.89');PanelLayoutUI.schedule()")
+            page.evaluate("document.querySelectorAll('#list .val .v').forEach(el=>el.textContent=el.closest('.row').dataset.kind==='percent'?'100.0%':'USD 1,234,567.89');PanelLayoutUI.schedule()")
             page.wait_for_timeout(80)
             validate(measure(page), len(data["channels"]))
             for height in [760, 680]:
@@ -164,7 +166,7 @@ def main():
                     PanelLayoutUI.expiryDate(Date.UTC(2026, 10, 16, 1) / 1000, stamp(2026, 11, 15))
                   ];
                 }""")
-                assert cases == ["3-09 下周一", "11-02 下周一", "11-15 本周日"], cases
+                assert cases == ["3-09 后天", "11-02 后天", "11-15 本周日"], cases
                 print("Local weekday and daylight-saving boundaries PASS")
                 assert not errors, errors
             browser.close()

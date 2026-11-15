@@ -1026,6 +1026,9 @@ function renderRow(c, i) {
         : "今日消耗暂无";
     railRight = pct !== null ? `剩 ${pct}%` : hv && hv.qualifier ? esc(hv.qualifier) : "";
   }
+  if ((c.id === "codex" || c.id === "antigravity") && !noKey && !failed && !isStale && !(hv && hv.state === "auth")) {
+    railRight = [railRight, window.PanelLayoutUI.weeklyReset(c, true)].filter(Boolean).join(" · ");
+  }
   const railIcon = isPts || mw ? "#i-clock" : failed || isStale ? "#i-info" : "#i-info";
   const thumbnail = window.PanelLayoutUI && panelLayout() === "thumbnail" && currentForm() === "panel" ? window.PanelLayoutUI.summary(c, { noKey, failed, isOld, mw, sub, subVal, railLeft, railRight, winWarn, claimWarn }) : {};
 

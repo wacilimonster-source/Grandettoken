@@ -51,16 +51,39 @@
     const monday = value => day(value) - (value.getDay() + 6) % 7;
     const currentWeek = monday(today);
     const targetWeek = monday(date);
-    const week = targetWeek === currentWeek ? "本周" : targetWeek === currentWeek + 7 ? "下周" : "周";
+    const distance = day(date) - day(today);
+    const week = distance === 1 ? "明天" : distance === 2 ? "后天" :
+      (targetWeek === currentWeek ? "本周" : targetWeek === currentWeek + 7 ? "下周" : "周") + "日一二三四五六"[date.getDay()];
     const year = date.getFullYear() === today.getFullYear() ? "" : date.getFullYear() + "-";
-    return `${year}${fmtDay(at)} ${week}${"日一二三四五六"[date.getDay()]}`;
+    return `${year}${fmtDay(at)} ${week}`;
+  }
+
+  function dateTitle(date) {
+    const at = date.getTime() / 1000;
+    return `${date.getFullYear()}-${fmtDay(at)} 周${"日一二三四五六"[date.getDay()]} ${fmtClock(at)}`;
   }
 
   function expiryDateHtml(at) {
     const date = new Date(at * 1000);
     if (!Number.isFinite(at) || at <= 0 || !Number.isFinite(date.getTime())) return "日期未知";
-    const full = `${date.getFullYear()}-${fmtDay(at)} 周${"日一二三四五六"[date.getDay()]} ${fmtClock(at)}`;
+    const full = dateTitle(date);
     return `<span data-points-expiry="${at}" title="${esc(full)}">${esc(expiryDate(at))}</span>`;
+  }
+
+  function weeklyResetText(at, prefix = false) {
+    if (!Number.isFinite(at) || at <= 0) return "周重置未知";
+    if (at <= Date.now()) return "周重置待刷新";
+    return prefix ? "周重置 " + expiryDate(at / 1000) : expiryDate(at / 1000) + "重置";
+  }
+
+  function weeklyReset(c, prefix = false) {
+    const windows = c.windows || [];
+    const weekly = c.id === "antigravity" ? windows.find(w => w.key === "gemini-weekly") :
+      windows.find(w => w.key === "weekly") || windows.find(w => w.label === "本周");
+    const at = resetMs(weekly);
+    const title = (c.id === "antigravity" ? "Gemini 周额度下次重置" : "周额度下次重置") +
+      (at === null ? "时间未知" : " · " + dateTitle(new Date(at)));
+    return `<span class="thumb-week-reset" data-weekly-reset="${at ?? ""}" data-weekly-prefix="${prefix}" title="${esc(title)}">${esc(weeklyResetText(at, prefix))}</span>`;
   }
 
   function gemini(c) {
@@ -149,8 +172,9 @@
     const text = plainText(status) + (end ? " · " + plainText(end) : "");
     const full = [...new Set([text, detail].filter(Boolean))].join(" · ");
     const shortName = c.id === "google-cloud" ? "Gemini · GCP" : c.name;
+    const weekly = ["codex", "antigravity"].includes(c.id) && !noKey && !failed && !isOld && !auth ? weeklyReset(c) : "";
     return {
-      label: `<span class="thumb-window" title="${esc(label)}">${esc(label)}</span>`,
+      label: `<span class="thumb-window${weekly ? " has-week-reset" : ""}" title="${esc(label)}"><span class="thumb-caption">${esc(label)}</span>${weekly}</span>`,
       name: `<span class="thumb-name" title="${esc(c.name)}">${esc(shortName)}</span>`,
       html: `<div class="thumb-status" role="note" title="${esc(full)}" aria-label="${esc(full)}"><span class="thumb-status-main">${status || "&nbsp;"}</span><span class="thumb-status-end">${end}</span></div>`,
     };
@@ -193,11 +217,14 @@
     document.querySelectorAll("[data-thumbnail-reset]").forEach(el => {
       setTextIfChanged(el, countdown(Number(el.dataset.thumbnailReset), el.dataset.thumbnailSuffix || ""));
     });
+    document.querySelectorAll("[data-weekly-reset]").forEach(el => {
+      setTextIfChanged(el, weeklyResetText(el.dataset.weeklyReset ? Number(el.dataset.weeklyReset) : null, el.dataset.weeklyPrefix === "true"));
+    });
     const now = new Date();
     const key = [now.getFullYear(), now.getMonth(), now.getDate(), now.getTimezoneOffset()].join("/");
     const changed = calendarKey !== null && calendarKey !== key;
     calendarKey = key;
-    if (changed && document.querySelector("[data-points-expiry]")) render({});
+    if (changed && document.querySelector("[data-points-expiry], [data-weekly-reset]")) render({});
   }
 
   document.getElementById("lkLayout").addEventListener("click", event => {
@@ -209,5 +236,5 @@
   });
   window.addEventListener("resize", schedule);
   if (typeof ResizeObserver === "function") new ResizeObserver(schedule).observe(document.getElementById("list"));
-  window.PanelLayoutUI = { normalize, update, select, summary, schedule, tick, gemini, expiryDate, expiryDateHtml };
+  window.PanelLayoutUI = { normalize, update, select, summary, schedule, tick, gemini, expiryDate, expiryDateHtml, weeklyReset };
 })();

@@ -25,12 +25,12 @@ module.exports = async function ({ w, R, data, src }) {
       googleCloud: { account: "layout-fixture", credits: [{ id: "fixture-credit", remaining: 299.72, expiresAt: now + 89 * 86400 }] } });
     const codex = channels.find(c => c.id === "codex");
     Object.assign(codex, { kind: "percent", remaining: 67, resetCredits: { availableCount: 3 }, windows: [
-      { key: "weekly", label: "本周", main: true, remainPercent: 67, status: "ok" },
+      { key: "weekly", label: "本周", main: true, remainPercent: 67, status: "ok", resetsAt: new Date(w.Date.now() + 5 * 86400000).toISOString() },
       { key: "5h", label: "5 小时", remainPercent: 59, status: "ok" },
     ] });
     const ag = channels.find(c => c.id === "antigravity");
     Object.assign(ag, { kind: "percent", remaining: 71.4, limited: true, windows: [
-      { key: "gemini-weekly", label: "Gemini 本周", main: true, remainPercent: 71.4, status: "ok" },
+      { key: "gemini-weekly", label: "Gemini 本周", main: true, remainPercent: 71.4, status: "ok", resetsAt: new Date(w.Date.now() + 6 * 86400000).toISOString() },
       { key: "gemini-5h", label: "Gemini 5 小时", remainPercent: 77, status: "ok", resetsAt: new Date(w.Date.now() + 4 * 3600000).toISOString() },
       { key: "other-5h", label: "Claude/GPT 5 小时", remainPercent: 0, status: "rate-limited", resetsAt: new Date(w.Date.now() + 49 * 60000).toISOString() },
     ] });
@@ -60,7 +60,7 @@ module.exports = async function ({ w, R, data, src }) {
     });
     check("窄窗尺寸与单列相同", () => assert.deepEqual(w.__TEST.panelContentSize("thumbnail"), w.__TEST.panelContentSize("single")));
     check("Codex 周与短窗以及卡数量同时存在", () => {
-      assert.equal(row(codex.id).querySelector(".thumb-window").textContent, "本周剩余");
+      assert.equal(row(codex.id).querySelector(".thumb-caption").textContent, "本周剩余");
       assert.match(row(codex.id).querySelector(".v").textContent, /67/);
       assert.equal(row(codex.id).querySelector(".thumb-status-main").textContent, "重置卡 3 张");
       assert.equal(row(codex.id).querySelector(".thumb-status-end").textContent, "5h剩 59%");
@@ -101,7 +101,7 @@ module.exports = async function ({ w, R, data, src }) {
     });
     check("已用口径同步更新标签与百分比", () => {
       w.__TEST.patchCfg({ showUsed: true }); w.render({});
-      assert.equal(row(codex.id).querySelector(".thumb-window").textContent, "本周已用");
+      assert.equal(row(codex.id).querySelector(".thumb-caption").textContent, "本周已用");
       assert.match(row(codex.id).querySelector(".v").textContent, /33/);
       assert.equal(row(codex.id).querySelector(".thumb-status-end").textContent, "5h已用 41%");
       w.__TEST.patchCfg({ showUsed: false });
@@ -128,7 +128,7 @@ module.exports = async function ({ w, R, data, src }) {
       const c = channels.find(c => c.kind === "points");
       assert.match(row(c.id).querySelector(".thumb-status-main").textContent, /174\.96 分将到期/);
       const date = row(c.id).querySelector(".thumb-status-end").textContent;
-      const pattern = /^(?:\d{4}-)?\d{1,2}-\d{2} (?:本|下)?周[日一二三四五六]$/;
+      const pattern = /^(?:\d{4}-)?\d{1,2}-\d{2} (?:(?:本|下)?周[日一二三四五六]|明天|后天)$/;
       assert.match(date, pattern);
       assert.throws(() => assert.match(date.split(" ")[0], pattern), assert.AssertionError);
     });
@@ -136,13 +136,16 @@ module.exports = async function ({ w, R, data, src }) {
       const at = (year, month, day) => new w.Date(year, month - 1, day, 12).getTime();
       const examples = [
         [[2026, 11, 15], [2026, 11, 15], "11-15 本周日"],
-        [[2026, 11, 15], [2026, 11, 16], "11-16 下周一"],
+        [[2026, 11, 15], [2026, 11, 16], "11-16 明天"],
+        [[2026, 11, 15], [2026, 11, 17], "11-17 后天"],
         [[2026, 11, 15], [2026, 11, 18], "11-18 下周三"],
-        [[2026, 11, 16], [2026, 11, 18], "11-18 本周三"],
+        [[2026, 11, 16], [2026, 11, 18], "11-18 后天"],
+        [[2026, 11, 16], [2026, 11, 19], "11-19 本周四"],
         [[2026, 11, 15], [2026, 12, 9], "12-09 周三"],
-        [[2026, 11, 30], [2026, 12, 1], "12-01 本周二"],
+        [[2026, 11, 30], [2026, 12, 1], "12-01 明天"],
         [[2026, 12, 27], [2027, 1, 2], "2027-1-02 下周六"],
-        [[2028, 2, 28], [2028, 2, 29], "2-29 本周二"],
+        [[2028, 2, 28], [2028, 2, 29], "2-29 明天"],
+        [[2026, 12, 31], [2027, 1, 2], "2027-1-02 后天"],
       ];
       for (const [today, target, expected] of examples) {
         assert.equal(w.PanelLayoutUI.expiryDate(at(...target) / 1000, at(...today)), expected);
@@ -154,7 +157,7 @@ module.exports = async function ({ w, R, data, src }) {
     check("跨周分钟刷新更新日期及辅助提示并保留焦点", () => {
       const RealDate = w.Date;
       let time = new RealDate(2026, 10, 15, 23, 59).getTime();
-      const expiry = new RealDate(2026, 10, 18, 10, 26).getTime() / 1000;
+      const expiry = new RealDate(2026, 10, 19, 10, 26).getTime() / 1000;
       w.Date = class extends RealDate {
         constructor(...args) { super(...(args.length ? args : [time])); }
         static now() { return time; }
@@ -163,19 +166,75 @@ module.exports = async function ({ w, R, data, src }) {
         const c = { ...channels.find(c => c.kind === "points"), expiring: [{ at: expiry, amount: 30 }] };
         w.__TEST.setChannels([c]); w.render({});
         const head = row(c.id).querySelector(".rhead"); head.focus();
-        assert.match(row(c.id).querySelector(".thumb-status-end").textContent, /下周三/);
+        assert.match(row(c.id).querySelector(".thumb-status-end").textContent, /下周四/);
         time = new RealDate(2026, 10, 16, 0, 1).getTime();
         w.PanelLayoutUI.tick();
-        assert.equal(row(c.id).querySelector(".thumb-status-end").textContent, "11-18 本周三");
-        assert(!row(c.id).querySelector(".thumb-status").title.includes("下周三"));
-        assert.match(row(c.id).querySelector(".thumb-status-end span").title, /2026-11-18 周三 10:26/);
+        assert.equal(row(c.id).querySelector(".thumb-status-end").textContent, "11-19 本周四");
+        assert(!row(c.id).querySelector(".thumb-status").title.includes("下周四"));
+        assert.match(row(c.id).querySelector(".thumb-status-end span").title, /2026-11-19 周四 10:26/);
         assert.equal(doc.activeElement, head);
         w.__TEST.patchCfg({ panelLayout: "single" }); w.__TEST.updateLayout(); w.render({});
-        assert.match(row(c.id).querySelector(".r2").textContent, /11-18 本周三/);
+        assert.match(row(c.id).querySelector(".r2").textContent, /11-19 本周四/);
+        w.__TEST.patchCfg({ panelLayout: "thumbnail" }); w.__TEST.updateLayout(); w.render({});
+        time = new RealDate(2026, 10, 17, 0, 1).getTime(); w.PanelLayoutUI.tick();
+        assert.equal(row(c.id).querySelector(".thumb-status-end").textContent, "11-19 后天");
+        time = new RealDate(2026, 10, 18, 0, 1).getTime(); w.PanelLayoutUI.tick();
+        assert.equal(row(c.id).querySelector(".thumb-status-end").textContent, "11-19 明天");
       } finally {
         w.Date = RealDate;
         w.__TEST.patchCfg({ panelLayout: "thumbnail" }); w.__TEST.updateLayout();
         w.__TEST.setChannels(channels); w.render({});
+      }
+    });
+    check("Codex 和 Gemini 周重置取各自周窗口", () => {
+      for (const c of [codex, ag]) {
+        const weekly = c.windows.find(w => w.key === (c.id === "codex" ? "weekly" : "gemini-weekly"));
+        const el = row(c.id).querySelector(".thumb-window [data-weekly-reset]");
+        assert.equal(Number(el.dataset.weeklyReset), Date.parse(weekly.resetsAt));
+        assert.equal(el.textContent, w.PanelLayoutUI.expiryDate(Date.parse(weekly.resetsAt) / 1000) + "重置");
+        assert.match(el.title, /周额度下次重置/);
+        assert(!el.title.includes("Claude"));
+      }
+      try {
+        w.__TEST.patchCfg({ panelLayout: "single" }); w.__TEST.updateLayout(); w.render({});
+        assert.match(row(codex.id).querySelector(".r2").textContent, /周重置/);
+        assert(row(ag.id).querySelector(".r2 [data-reset-at]"), "单列保留 Gemini 短窗倒计时");
+        assert(row(ag.id).querySelector(".r2 [data-weekly-reset]"), "单列显示 Gemini 周重置日期");
+      } finally {
+        w.__TEST.patchCfg({ panelLayout: "thumbnail" }); w.__TEST.updateLayout(); w.render({});
+      }
+    });
+    check("周重置时间未知及已到时间如实展示", () => {
+      const box = doc.createElement("div");
+      box.innerHTML = w.renderRow({ ...codex, windows: codex.windows.filter(w => w.key !== "weekly") }, 0);
+      assert.equal(box.querySelector(".thumb-week-reset").textContent, "周重置未知");
+      assert.match(w.PanelLayoutUI.weeklyReset({ ...ag, windows: [{ key: "claude-weekly", label: "Claude/GPT 本周", resetsAt: new Date(w.Date.now() + 6 * 86400000).toISOString() }] }), /周重置未知/);
+      w.PanelLayoutUI.tick();
+      const el = row(codex.id).querySelector(".thumb-window [data-weekly-reset]");
+      const previous = el.dataset.weeklyReset;
+      el.dataset.weeklyReset = String(w.Date.now() - 1); w.PanelLayoutUI.tick();
+      assert.equal(el.textContent, "周重置待刷新");
+      el.dataset.weeklyReset = previous; w.PanelLayoutUI.tick();
+    });
+    check("只有周额度渠道时跨日同步更新周重置辅助提示", () => {
+      const RealDate = w.Date;
+      let time = new RealDate(2026, 10, 15, 23, 59).getTime();
+      const reset = new RealDate(2026, 10, 18, 10, 26).toISOString();
+      w.Date = class extends RealDate {
+        constructor(...args) { super(...(args.length ? args : [time])); }
+        static now() { return time; }
+      };
+      try {
+        const c = { ...codex, windows: codex.windows.map(quota => quota.key === "weekly" ? { ...quota, resetsAt: reset } : quota) };
+        w.__TEST.setChannels([c]); w.render({});
+        assert.equal(doc.querySelectorAll("[data-points-expiry]").length, 0);
+        assert.match(row(c.id).querySelector(".thumb-window").textContent, /下周三重置/);
+        time = new RealDate(2026, 10, 16, 0, 1).getTime(); w.PanelLayoutUI.tick();
+        assert.match(row(c.id).querySelector(".thumb-window").textContent, /后天重置/);
+        assert.match(row(c.id).querySelector(".thumb-status").title, /后天/);
+        assert(!row(c.id).querySelector(".thumb-status").title.includes("下周三"));
+      } finally {
+        w.Date = RealDate; w.__TEST.setChannels(channels); w.render({});
       }
     });
     check("跨重置点保留待刷新状态", () => {
