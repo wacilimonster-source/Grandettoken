@@ -14,6 +14,7 @@ function setTextIfChanged(el, text) {
 }
 
 let CHANNELS = [];
+let WINDOW_VISIBLE = true;
 let CFG = null;
 let VER = "";          // app_version 命令回来的版本号,关于页在首检之前也有的显示
 let SYNC_STATUS = null; // 同步状态缓存(sync_status 命令),设置索引与同步子页共用
@@ -228,6 +229,7 @@ function peakCountdown(p, nowMs) {
  * 3600 次回调、每次都扫全文档。定时器误差可能落在边界前几毫秒,统一 +20ms 起跳。
  */
 function tickPeakCountdowns() {
+  if (!WINDOW_VISIBLE) return;
   if (window.PanelLayoutUI) window.PanelLayoutUI.tick();
   const nowMs = Date.now();
   document.querySelectorAll("[data-peakcd]").forEach((el) => {
@@ -2200,6 +2202,10 @@ const DOT_FLASH_GEN = new WeakMap();
 
 /** 过滤条:默认收起,放大镜展开;渠道多起来(>=12)时仍自动放出输入框。 */
 function renderInner(opts) {
+  if (!WINDOW_VISIBLE) {
+    renderPill(sortChannels(CHANNELS, LAST_RENDER_ORDER));
+    return;
+  }
   // updated=true 只由「数据刷新」调用方传。首页数据刷新已改为直接写数值,
   // 不再做主数字翻页位移 / 幽灵 / 整卡扫光(见 rollValue 与 CSS 动效层说明)。
   const updated = !!(opts && opts.updated);
@@ -3677,10 +3683,10 @@ async function fillKeySources(force = false) {
 /** 管理页里的胶囊渠道选择:点一下加入/移出轮播列表。 */
 function renderPillPick() {
   const sel = (CFG && CFG.pillChannels) || [];
-  $("cfgPill").innerHTML = CHANNELS.filter((c) => !c.hidden).map(
+  qReconcile($("cfgPill"), CHANNELS.filter((c) => !c.hidden).map(
     (c) =>
-      `<button class="pick${sel.includes(c.id) ? " on" : ""}" data-act="pillpick" data-id="${c.id}">${esc(c.name)}</button>`
-  ).join("");
+      ({ key: c.id, html: `<button class="pick${sel.includes(c.id) ? " on" : ""}" data-act="pillpick" data-id="${c.id}">${esc(c.name)}</button>` })
+  ));
 }
 
 // ───────────── 形态切换 ─────────────
@@ -4487,7 +4493,7 @@ function showToast(msg, bad) {
 function updateHeaderLive() {
   const el = $("tbLive");
   const ts = Math.max(0, ...CHANNELS.filter((c) => c.hasKey && !c.hidden).map((c) => c.updatedAt || 0));
-  if (el) el.textContent = ts ? relTime(ts) : "";
+  setTextIfChanged(el, ts ? relTime(ts) : "");
 }
 
 $("btnR").addEventListener("click", async () => {
@@ -4570,11 +4576,11 @@ function renderManageIndex() {
   const about = `${VER || "—"} · 上次检查 ${
     last ? new Date(last * 1000).toLocaleDateString("zh-CN") : "从未"
   }`;
-  const row = (p, icon, title, sub, cls = "") => `<button type="button" class="midx-row" data-p="${p}">
+  const row = (p, icon, title, sub, cls = "") => ({ key: p, html: `<button type="button" class="midx-row" data-p="${p}">
     <span class="midx-ico ${cls}"><svg aria-hidden="true"><use href="#${icon}"/></svg></span>
     <span class="midx-tx"><span class="midx-tt">${esc(title)}</span><span class="midx-ss">${esc(sub)}</span></span>
-    <svg class="midx-chev" aria-hidden="true"><use href="#i-chev"/></svg></button>`;
-  box.innerHTML = [
+    <svg class="midx-chev" aria-hidden="true"><use href="#i-chev"/></svg></button>` });
+  qReconcile(box, [
     row("ch", "i-layers", "渠道管理",
       withKey.length ? `${withKey.length} 个渠道` : "尚未配置渠道"),
     row("mdl", "i-spark", "模型与客户端", "4SAPI · Hapi · OpenCode Go", "mdl"),
@@ -4586,7 +4592,7 @@ function renderManageIndex() {
     row("gateway", "i-layers", "本地模型网关", "汇总模型 · 本机或局域网调用"),
     row("sync", "i-sync", "同步到手机", syncSummary(), "sync"),
     row("about", "i-info", "关于与诊断", about),
-  ].join("");
+  ]);
 }
 
 function syncSummary() {
@@ -8964,13 +8970,17 @@ function applyChannelsPush(payload) {
   // 从托盘/热键唤回窗口:Rust 侧在「隐藏 → 显示」那一刻发 window-shown,这里重放入场。
   // 不能监听 focus / visibilitychange —— 它们分不清"从托盘唤回"和普通 alt-tab,
   // 每次切走再切回都会重播一遍(报告 B8)。
+  await listen("window-hidden", () => { WINDOW_VISIBLE = false; });
   await listen("window-shown", () => {
+    WINDOW_VISIBLE = true;
+    render({ updated: false });
     // 隐藏期间分钟定时器仍会跑,但窗口可能错过最后一次重绘;唤回时先补一次文案
     tickPeakCountdowns();
     if (currentForm() === "panel") playEntrance();
   });
 
   // 监听都挂好了才做首轮取数(与上方 L8 注释同一理由);首帧入场随后放
+  WINDOW_VISIBLE = await appWindow.isVisible();
   await refresh();
   playEntrance(); // 启动首帧也来一次入场(上面 applyForm 没换形态,不会自动放)
 

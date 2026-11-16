@@ -257,14 +257,18 @@ pub async fn google_cloud_disconnect(app: tauri::AppHandle) -> Result<(), String
 /// 后台只在已连接且未隐藏时打开赠金页。页面加载失败会沿用旧余额并标记失败。
 pub fn start(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
+        let mut ledger_cache = gc::LedgerCache::default();
         loop {
             let (hidden, interval, account, updated) = {
                 let st = app.state::<AppState>();
-                let cfg = lock_rw(&st.config).clone();
-                let ledger = gc::load(&lock_rw(&st.store));
+                let (hidden, interval) = {
+                    let cfg = lock_rw(&st.config);
+                    (cfg.hidden_channels.iter().any(|id| id == gc::ID), cfg.idle_interval_sec.max(60) as i64)
+                };
+                let ledger = ledger_cache.get(&lock_rw(&st.store), std::time::Instant::now());
                 let account = ledger.as_ref().ok().and_then(|l| l.selected.clone());
                 let updated = ledger
-                    .ok()
+                    .as_ref().ok()
                     .and_then(|l| {
                         account
                             .as_ref()
@@ -273,8 +277,8 @@ pub fn start(app: tauri::AppHandle) {
                     })
                     .unwrap_or(0);
                 (
-                    cfg.hidden_channels.iter().any(|id| id == gc::ID),
-                    cfg.idle_interval_sec.max(60) as i64,
+                    hidden,
+                    interval,
                     account,
                     updated,
                 )

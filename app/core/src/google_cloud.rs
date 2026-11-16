@@ -1,5 +1,6 @@
 //! Google Cloud 赠金账本。只接收登录页上的结构化金额，账号和日期一起原子保存。
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -7,6 +8,38 @@ use crate::{config::Config, fetch::ChannelView, providers::Kind, store::Store};
 
 pub const ID: &str = "google-cloud";
 const KEY: &str = "google_cloud_credits_v1";
+static REVISION: AtomicU64 = AtomicU64::new(0);
+
+/// 账本成功写入后才推进，让后台调度立即重新读取连接和账号状态。
+fn revision() -> u64 {
+    REVISION.load(Ordering::Acquire)
+}
+
+#[derive(Default)]
+pub struct LedgerCache {
+    cached: Option<Result<Ledger, String>>,
+    revision: u64,
+    read_at: Option<std::time::Instant>,
+}
+
+impl LedgerCache {
+    pub fn get(&mut self, store: &Store, now: std::time::Instant) -> &Result<Ledger, String> {
+        self.get_at(store, now, revision())
+    }
+
+    /// 修订号显式传入：并行测试里全局写入计数会被同模块其它用例推进，
+    /// 直接用全局值会让「稳态不重读」的断言变成竞态。
+    fn get_at(&mut self, store: &Store, now: std::time::Instant, revision: u64) -> &Result<Ledger, String> {
+        if self.cached.is_none() || self.revision != revision
+            || self.read_at.is_some_and(|at| now.duration_since(at).as_secs() >= 60)
+        {
+            self.cached = Some(load(store));
+            self.revision = revision;
+            self.read_at = Some(now);
+        }
+        self.cached.as_ref().unwrap()
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -77,7 +110,9 @@ pub fn load(store: &Store) -> Result<Ledger, String> {
 
 fn save(store: &Store, ledger: &Ledger) -> Result<(), String> {
     let raw = serde_json::to_string(ledger).map_err(|_| "赠金记录无法序列化".to_string())?;
-    store.set_setting(KEY, &raw)
+    store.set_setting(KEY, &raw)?;
+    REVISION.fetch_add(1, Ordering::Release);
+    Ok(())
 }
 
 /// 页面固定为英文数字格式。未知币种、逗号格式或非有限金额一律报错。
@@ -298,6 +333,30 @@ mod tests {
     }
     const A: &str = "AAAAAA-BBBBBB-CCCCCC";
     const B: &str = "DDDDDD-EEEEEE-FFFFFF";
+    #[test]
+    fn scheduler_cache_reloads_on_write_and_expires_even_without_notification() {
+        let s = Store::open_memory().unwrap();
+        let mut cache = LedgerCache::default();
+        let mut rev = 0;
+        let now = std::time::Instant::now();
+        assert!(cache.get_at(&s, now, rev).as_ref().unwrap().selected.is_none());
+        let before = revision();
+        capture(&s, sample(A), None, 1000).unwrap();
+        assert!(revision() > before, "成功写入必须推进修订号");
+        rev += 1;
+        assert_eq!(cache.get_at(&s, now, rev).as_ref().unwrap().selected.as_deref(), Some(A));
+        // 模拟外部改写：常规 tick 不重新解析，到兜底期限必须发现损坏。
+        s.set_setting(KEY, "invalid json").unwrap();
+        assert!(cache.get_at(&s, now + std::time::Duration::from_secs(5), rev).is_ok());
+        assert!(cache.get_at(&s, now + std::time::Duration::from_secs(60), rev).is_err());
+        s.set_setting(KEY, "{}").unwrap();
+        capture(&s, sample(B), None, 1020).unwrap();
+        rev += 1;
+        assert_eq!(cache.get_at(&s, now + std::time::Duration::from_secs(61), rev).as_ref().unwrap().selected.as_deref(), Some(B));
+        disconnect(&s).unwrap();
+        rev += 1;
+        assert!(cache.get_at(&s, now + std::time::Duration::from_secs(62), rev).as_ref().unwrap().selected.is_none());
+    }
     #[test]
     fn expired_rows_are_excluded_and_failure_retains_snapshot() {
         let s = Store::open_memory().unwrap();

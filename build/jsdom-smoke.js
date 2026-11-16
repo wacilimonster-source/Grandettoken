@@ -26,6 +26,10 @@ try {
 const SRC = path.resolve(__dirname, "..", "app", "src");
 const html = fs.readFileSync(path.join(SRC, "index.html"), "utf8");
 let js = fs.readFileSync(path.join(SRC, "app.js"), "utf8");
+if (process.env.PERFORMANCE_SENTINEL === "1") {
+  js = js.replace('if (!WINDOW_VISIBLE) {', 'if (false && !WINDOW_VISIBLE) {');
+  js = js.replace('function qReconcile(box, items) {', 'function qReconcile(box, items) { if (box && ["cfgPill", "mIndexList"].includes(box.id)) box.innerHTML = "";');
+}
 if (process.env.CHECKIN_SENTINEL === "1") {
   const marker = "CHECKIN_ON.add(x.id);";
   if (js.split(marker).length !== 2) throw new Error("签到哨兵未命中唯一能力同步入口");
@@ -43,6 +47,13 @@ if (process.env.CHECKIN_SENTINEL === "1") {
   });
   if (agProbe.status !== 1 || !/FAIL Antigravity Gemini 周窗优先且其他组默认折叠/.test(agProbe.stdout)) {
     throw new Error("Antigravity 哨兵自检失败：移除周窗主数字样式必须被断言拦截");
+  }
+  const perfProbe = spawnSync(process.execPath, [__filename], {
+    env: { ...process.env, CHECKIN_SENTINEL: "1", PERFORMANCE_SENTINEL: "1" }, encoding: "utf8", timeout: 20000,
+  });
+  if (perfProbe.status !== 1 || !/FAIL 隐藏窗口保留列表且继续更新托盘来源/.test(perfProbe.stdout)
+      || !/FAIL 设置选择与索引复用按钮/.test(perfProbe.stdout)) {
+    throw new Error("性能哨兵自检失败：隐藏门控和按钮复用退化必须被断言拦截");
   }
 }
 const vaultJs = fs.readFileSync(path.join(SRC, "vault-view.js"), "utf8");
@@ -164,6 +175,28 @@ const HARNESS = `
   }
 
   // ── 顶部待签提示条:说清"哪个渠道 + 下一步"(2026-10-23) ──
+  try {
+    renderPillPick(); renderManageIndex();
+    const pick = $("cfgPill").firstElementChild;
+    const index = $("mIndexList").firstElementChild;
+    renderPillPick(); renderManageIndex();
+    ck("设置选择与索引复用按钮", pick === $("cfgPill").firstElementChild && index === $("mIndexList").firstElementChild);
+    const original = CHANNELS;
+    const before = $("list").innerHTML;
+    CHANNELS = CHANNELS.map((c, i) => i === 0 ? { ...c, name: "隐藏期间的新数据" } : c);
+    WINDOW_VISIBLE = false;
+    render({ updated: true });
+    ck("隐藏窗口保留列表且继续更新托盘来源", $("list").innerHTML === before && PILL.sorted.some(c => c.name === "隐藏期间的新数据"));
+    WINDOW_VISIBLE = true;
+    render({ updated: false });
+    ck("唤回窗口显示隐藏期间的新数据", $("list").textContent.includes("隐藏期间的新数据"));
+    CHANNELS = original;
+    render({ updated: false });
+  } catch (e) {
+    WINDOW_VISIBLE = true;
+    ck("性能回归全流程不抛异常", false, e.stack);
+  }
+
   // 现场:条上只写「去查看」,点进去是签到设置(只有开关),用户不知道要做什么。
   try {
     document.body.className = "form-panel";

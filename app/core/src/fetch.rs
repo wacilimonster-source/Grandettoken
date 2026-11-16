@@ -1476,7 +1476,7 @@ async fn fetch_codex_reset_credits(
 ///
 /// 分区不是优化:国际版 token 打国区域名一定 401(反之亦然),两个渠道混用同一份
 /// 列表会让每轮先失败一次,真正的凭据失效被 `cred-switch` 噪音埋掉。
-fn read_desktop_tokens_region(region: Option<bool>) -> Vec<String> {
+fn read_desktop_tokens_region(region: Option<bool>, cycle: Option<&crate::workbuddy_cycle::Credentials>) -> Vec<String> {
     if cfg!(test) {
         // 单测绝不能真去碰本机凭据:会让测试依赖本机装了什么,还会把并发测试拖慢
         // (2026-10-19 就因此让两条无关用例挂掉)。v0.3.36 起测试隔离只靠这个早退,
@@ -1485,7 +1485,7 @@ fn read_desktop_tokens_region(region: Option<bool>) -> Vec<String> {
     }
     let now_ms = chrono::Local::now().timestamp_millis();
     // desktop_tokens_region 内部已经处理:上次续期的成果 → 桌面端文件 → 过期时自动续期
-    crate::workbuddy::desktop_tokens_region(now_ms, region)
+    cycle.map_or_else(|| crate::workbuddy::desktop_tokens_region(now_ms, region), |c| c.tokens(now_ms, region))
         .into_iter()
         .map(|t| format!("{}{}", DESKTOP_TOKEN_PREFIX, t))
         .collect()
@@ -1540,6 +1540,7 @@ pub fn auto_hide_candidates(cfg: &Config) -> Vec<String> {
 fn credentials(
     def: &providers::ProviderDef,
     web_src: Option<&(dyn Fn(&str) -> Option<String> + Send + Sync)>,
+    cycle: Option<&crate::workbuddy_cycle::Credentials>,
 ) -> (Vec<appauth::Credential>, Option<String>) {
     match def.auth {
         // Keyring 与 WebSession 都躺在 Windows 凭据管理器里;网页登录型还可能有一份
@@ -1583,7 +1584,7 @@ fn credentials(
                 } else {
                     "WorkBuddy 桌面端"
                 };
-                for tok in read_desktop_tokens_region(region) {
+                for tok in read_desktop_tokens_region(region, cycle) {
                     out.push(appauth::Credential {
                         token: tok,
                         source: src.into(),
@@ -2563,7 +2564,7 @@ pub struct Fetcher {
     cache: Mutex<HashMap<String, (FetchResult, i64)>>,
     scopes: Mutex<HashMap<String, String>>,
     recovery: Mutex<HashMap<String, Recovery>>,
-    progress: Mutex<Vec<ChannelView>>,
+    progress: Mutex<crate::progress::Progress>,
     progress_sink: Mutex<Option<Arc<dyn Fn(Vec<ChannelView>) + Send + Sync>>>,
     /// 每个渠道上次成功的入口地址。本轮先试它,避免每分钟都先撞挂掉的域名。
     /// 只存内存:重启后退回定义顺序,不往磁盘写状态。
@@ -2618,14 +2619,13 @@ impl Fetcher {
     }
 
     fn publish(&self, v: ChannelView) {
-        let views = {
-            let mut rows = self.progress.lock().unwrap();
-            if let Some(old) = rows.iter_mut().find(|r| r.id == v.id) { *old = v; }
-            else { rows.push(v); }
-            rows.clone()
-        };
+        let views = self.progress.lock().unwrap().update(v);
+        self.emit_progress(views);
+    }
+
+    fn emit_progress(&self, views: Option<Vec<ChannelView>>) {
         let sink = self.progress_sink.lock().unwrap().clone();
-        if let Some(sink) = sink { sink(views); }
+        if let (Some(sink), Some(views)) = (sink, views) { sink(views); }
     }
 
     fn failed(&self, id: &str, kind: Option<FailKind>) -> RecoveryView {
@@ -2696,7 +2696,7 @@ impl Fetcher {
         self.cache.lock().unwrap().remove(id);
         self.scopes.lock().unwrap().remove(id);
         self.recovery.lock().unwrap().remove(id);
-        self.progress.lock().unwrap().retain(|v| v.id != id);
+        self.progress.lock().unwrap().rows.retain(|v| v.id != id);
         self.qoder_packs.lock().unwrap().remove(id);
         self.qoder_memos.lock().unwrap().remove(id);
         let _ = store.delete_setting(&format!("quota_snapshot_v1:{id}"));
@@ -2725,7 +2725,7 @@ impl Fetcher {
             cache: Mutex::new(HashMap::new()),
             scopes: Mutex::new(HashMap::new()),
             recovery: Mutex::new(HashMap::new()),
-            progress: Mutex::new(Vec::new()),
+            progress: Mutex::new(crate::progress::Progress::default()),
             progress_sink: Mutex::new(None),
             url_memo: Mutex::new(HashMap::new()),
             cfg_cache: Mutex::new(None),
@@ -2817,7 +2817,7 @@ impl Fetcher {
         }
         let web_src = self.web_cred_src.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let (creds, secret_err) =
-            tokio::task::spawn_blocking(move || credentials(def, web_src.as_deref()))
+            tokio::task::spawn_blocking(move || credentials(def, web_src.as_deref(), None))
                 .await
                 .unwrap_or_else(|_| (Vec::new(), Some("凭据读取异常".to_string())));
         // 本地这一半:快照管道有没有在动(照小鲸鱼的"两半区自检"—— 网络通了不等于
@@ -2958,7 +2958,8 @@ impl Fetcher {
     }
 
     async fn fetch_selected(&self, store: &Arc<Mutex<Store>>, selected: Option<&HashSet<String>>) -> Vec<ChannelView> {
-        let previous = self.progress.lock().unwrap().clone();
+        let previous = self.progress.lock().unwrap().rows.clone();
+        self.progress.lock().unwrap().begin();
         let should_fetch = |id: &str| selected.map_or_else(
             || self.recovery.lock().unwrap().get(id).map_or(true, |r| r.next <= now_ts()),
             |ids| ids.contains(id));
@@ -2982,11 +2983,13 @@ impl Fetcher {
         let fx_now = fx::refresh(&self.http, fx_cached.clone(), now_ts()).await;
         let web_src: Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>> = self.web_cred_src.lock().unwrap_or_else(|p| p.into_inner()).clone();
 
+        let wb_cycle = Arc::new(crate::workbuddy_cycle::Credentials::default());
         let builtin = futures::future::join_all(
             providers::PROVIDERS
                 .iter()
                 .enumerate()
                 .map(|(i, def)| {
+                    let wb_cycle = wb_cycle.clone();
                     let hidden = hidden.clone();
                     let auto_hide = auto_hide.clone();
                     let web_src = web_src.clone();
@@ -3032,8 +3035,9 @@ impl Fetcher {
                     // 逐包到期那步还要再问一次会话(不同的 id),这里先克隆一份:
                     // 上面那个克隆会被 credentials 的闭包移走(报告 O-5 的同一段路)
                     let qoder_web_src = web_src.clone();
+                    let wb_reader = wb_cycle.clone();
                     let (creds, secret_err) =
-                        tokio::task::spawn_blocking(move || credentials(def, web_src.as_deref()))
+                        tokio::task::spawn_blocking(move || credentials(def, web_src.as_deref(), Some(&wb_reader)))
                             .await
                             .unwrap_or_else(|_| (Vec::new(), Some("凭据读取异常".to_string())));
                     // 被服务器拒过(401/403)的凭据沉到末尾:一份早已作废的手动令牌排在
@@ -3059,13 +3063,8 @@ impl Fetcher {
                             .map(|c| key_fp(&c.token))
                             .unwrap_or_default()
                     } else if wb_desktop_only(def.id) && !creds.is_empty() {
-                        // 国际版按"当前登着的账户集合"分段(全量测评 P3-5):换账号后
-                        // 旧余额不再被当成新账户的基线,不会凭空记出大额"到账"。
-                        // auth 文件没写 uin 的老客户端 → 空集合 → 退回不分段,行为同旧版。
-                        // 老快照的 key_fp 是空串,升级后第一轮按"无基线"处理 ——
-                        // 一次性重置,宁可漏记一笔、不可错记一笔。
-                        let now_ms = chrono::Local::now().timestamp_millis();
-                        accounts_fp(&crate::workbuddy::region_account_uins(now_ms, true))
+                        // 与令牌共享本轮账户快照，换账号后的余额不能认作旧账户到账。
+                        accounts_fp(&wb_cycle.accounts(true))
                     } else {
                         String::new()
                     };
@@ -3495,7 +3494,10 @@ impl Fetcher {
             |id| secrets::channel_key(id).ok().flatten(),
             Some(&custom_observer),
         );
-        let (fetched, custom_results) = futures::join!(builtin, custom);
+        let (fetched, custom_results) = crate::progress::drive(async { futures::join!(builtin, custom) }, || {
+            let views = self.progress.lock().unwrap().flush();
+            self.emit_progress(views);
+        }).await;
 
         let cache_updates: Vec<(String, FetchResult, i64)> = fetched
             .iter()
@@ -3709,7 +3711,7 @@ impl Fetcher {
         for v in &mut all {
             v.recovery = self.recovery.lock().unwrap().get(&v.id).map(|r| r.view(now_ts()));
         }
-        *self.progress.lock().unwrap() = all.clone();
+        self.progress.lock().unwrap().finish(all.clone());
         all
     }
 }

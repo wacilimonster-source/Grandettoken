@@ -199,13 +199,15 @@
     const u = fsU();
     const height = lines ? Math.max(68 * u, Math.min(80 * u, (room - gap * (lines - 1)) / lines)) : 80 * u;
     list.style.setProperty("--thumb-card-h", `${Math.floor(height)}px`);
-    rows.forEach(row => {
-      const value = row.querySelector(".val .v");
+    const values = rows.map(row => row.querySelector(".val .v"));
+    values.forEach(value => {
       value.style.setProperty("--thumb-value-font", `${22 * u}px`);
       value.title = plainText(value.innerHTML);
-      if (value.scrollWidth > value.clientWidth && value.clientWidth > 0) {
-        value.style.setProperty("--thumb-value-font", `${Math.max(14 * u, 22 * u * value.clientWidth / value.scrollWidth)}px`);
-      }
+    });
+    const sizes = values.map(value => ({ width: value.clientWidth, scroll: value.scrollWidth }));
+    values.forEach((value, i) => {
+      const { width, scroll } = sizes[i];
+      if (scroll > width && width > 0) value.style.setProperty("--thumb-value-font", `${Math.max(14 * u, 22 * u * width / scroll)}px`);
     });
   }
 

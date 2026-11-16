@@ -1716,7 +1716,10 @@ fn set_tray_tooltip(app: tauri::AppHandle, tooltip: String) -> Result<(), String
 fn window_cmd(app: tauri::AppHandle, action: String) -> Result<(), String> {
     let win = app.get_webview_window("main").ok_or("窗口不存在")?;
     match action.as_str() {
-        "hide" => win.hide().map_err(|e| e.to_string())?,
+        "hide" => {
+            win.hide().map_err(|e| e.to_string())?;
+            let _ = app.emit("window-hidden", ());
+        }
         "minimize" => win.minimize().map_err(|e| e.to_string())?,
         "quit" => {
             // 正在写客户端配置时立刻退出,进程会停在"已落盘、还没记账"的瞬间,
@@ -4532,27 +4535,31 @@ async fn checkin_state(app: tauri::AppHandle, state: State<'_, AppState>) -> Res
     // 都传 None,于是界面上那条「去登录」分支永远是死代码,用户只能反复点领取(报告 P2-37)。
     // 探测是阻塞活(读第三方登录文件 / 问 webview 要 Cookie),所以:只对"开着签到且今天
     // 还没签完"的渠道做,并且放阻塞任务里。
-    for (i, def) in checkin::CHECKINS.iter().enumerate() {
-        let item = &mut list[i];
-        if !item.enabled {
-            continue;
+    let probes = checkin::CHECKINS.iter().enumerate().map(|(i, def)| {
+        let item = &list[i];
+        let app = &app;
+        let cfg = &cfg;
+        async move {
+            if !item.enabled {
+                return (i, None);
+            }
+            // 隐藏渠道不能读取本机凭据，探测也必须服从同一规则。
+            if cfg.hidden_channels.iter().any(|h| h == def.id) {
+                return (i, None);
+            }
+            let outcome = item.outcome.as_str();
+            if outcome.starts_with("claimed") || outcome.starts_with("already") || outcome.starts_with("inactive") {
+                return (i, None);
+            }
+            let handle = app.clone();
+            let err = tokio::task::spawn_blocking(move || checkin_credential(&handle, def).err())
+                .await
+                .unwrap_or(None);
+            (i, err)
         }
-        // 隐藏中的渠道连探测都不能做:「隐藏 = 不读本机登录凭据」这条红线对取数、
-        // 签到、以及这个"只为填 note"的读取同样成立(报告 P0-6)。
-        if cfg.hidden_channels.iter().any(|h| h == def.id) {
-            continue;
-        }
-        let o = item.outcome.as_str();
-        if o.starts_with("claimed") || o.starts_with("already") || o.starts_with("inactive") {
-            continue;
-        }
-        let a2 = app.clone();
-        let err = tokio::task::spawn_blocking(move || checkin_credential(&a2, def).err())
-            .await
-            .unwrap_or(None);
-        if let Some(msg) = err {
-            item.note = Some(msg);
-        }
+    });
+    for (i, err) in futures::future::join_all(probes).await {
+        if let Some(msg) = err { list[i].note = Some(msg); }
     }
     Ok(list)
 }
@@ -5976,7 +5983,7 @@ pub fn run() {
                     }
                     if let Some(w) = app.get_webview_window("main") {
                         if w.is_visible().unwrap_or(false) {
-                            let _ = w.hide();
+                            if w.hide().is_ok() { let _ = app.emit("window-hidden", ()); }
                         } else {
                             let _ = w.show();
                             let _ = w.set_focus();
@@ -6190,7 +6197,7 @@ pub fn run() {
                         let app = tray.app_handle();
                         if let Some(w) = app.get_webview_window("main") {
                             if w.is_visible().unwrap_or(false) {
-                                let _ = w.hide();
+                                if w.hide().is_ok() { let _ = app.emit("window-hidden", ()); }
                             } else {
                                 let _ = w.show();
                                 let _ = w.set_focus();

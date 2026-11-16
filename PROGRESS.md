@@ -5327,3 +5327,19 @@ src-tauri `cargo check --all-targets --locked` exit 0;
   优化方案(换官方预编译 @tauri-apps/cli 等)已分析,待用户拍板后实施。
 - 待验收:明后天与周重置日期在真实数据与原生窗口的显示;Antigravity 真实账号取数;
   日期控件回填人工复核(遗留)。
+
+## 2026-11-16 每轮取数合并推送与隐藏窗口降载（v0.3.59，待发版）
+
+- 按 `docs/report/performance-audit-2026-11-16.md` 的拍板批次实施高确定性优化，全部落新模块或既有函数内最小改动：
+  1) **P1-1**：新增 `app/core/src/progress.rs`，同一轮取数的渐进结果首个渠道立即推送，其余 150 ms 合批，终态仍由 `poll_loop` / `get_channels` 推送；`finish()` 清脏，Drive 定时器随 future 结束停止，不存在迟到覆盖。
+  2) **P1-2**：Rust 在 `window_cmd("hide")`、全局热键、托盘菜单三个隐藏入口补发 `window-hidden`；前端维护 `WINDOW_VISIBLE`，隐藏时只更新托盘胶囊/数字，唤回时补一次全量 `render()` 与分钟 ticker；数据接收、托盘、签到、同步、网络请求不门控。
+  3) **P2-1**：新增 `app/core/src/workbuddy_cycle.rs`，每轮取数共享一份桌面端凭据快照，国内/国际令牌与账户指纹同源；真机日志每轮「解开 live 凭据」由 6 条（3 遍扫描）降为 2 条（1 遍扫描）。
+  4) **§3.1**：`google_cloud::LedgerCache` 加 60 s 兜底 TTL + 写入修订号，后台调度不再每 5 s 克隆整份 Config、也不再每 5 s 解析账本 JSON；hidden / pending / 90 s 超时语义不变。
+  5) **§3.2**：`checkin_state` 的凭据探测改 `join_all` 并发，按索引回写 note；隐藏渠道不探测的红线不变。
+  6) **§3.3**：缩略卡 `fit()` 先批量读宽高、再集中写字体，保留原有像素级宽度算法。
+  7) **§3.5.3**：`#cfgPill` / `#mIndexList` 改 `qReconcile` 按 key 复用节点，`updateHeaderLive` 改 `setTextIfChanged`。
+- 测试补充：`progress.rs` 覆盖合批、flush 停止与跨轮 reset；`google_cloud.rs` 覆盖写入重读、60 s 兜底与外部损坏；`workbuddy_cycle.rs` 覆盖同轮单读与换账号；`jsdom-smoke.js` 新增「设置选择与索引复用按钮」「隐藏窗口保留列表且继续更新托盘来源」「唤回窗口显示隐藏期间的新数据」，并内置 `PERFORMANCE_SENTINEL` 反向哨兵（关闭门控或退回 `innerHTML` 重建时必须变红）。
+- 修复本轮首跑暴露的测试竞态：`google_cloud` 缓存的修订号是模块级 `AtomicU64`，`cargo test` 默认并行下会被同模块其它用例推进，导致「5 秒内不重读」随机失败；改为 `LedgerCache::get_at(store, now, revision)` 注入修订号，另断言真实写入确实推进全局修订号。结论已写入 `AGENTS.md` §7.3。
+- 门禁串行复跑（NO_PROXY=127.0.0.1,localhost,::1）：IPC 契约 133 调用 / 103 命令、静默失败 7 脚本 74 处 catch、文件规模、CSS 形态、`node --check app.js`、jsdom 238/238、顾问/Google Cloud/密钥箱/网关/托盘冒烟、core `cargo test --locked` 566 passed / 8 ignored（`sync_fixtures` 6 passed）、src-tauri `cargo check --all-targets --locked`、凭据扫描 CLEAN。`verify-tray.js` 128/128（临时目录安装 `playwright-core` + 系统 Edge，未改仓库依赖）。
+- 真机 release 实测（`build.ps1 build` 产物）：14 渠道完整渲染；设置索引/子页/胶囊选择可点且持久化；隐藏后主窗口不可见、托盘进程存活，二次启动触发单实例回调唤回，唤回后全量重绘、单列/缩略切换正常；手动刷新终态完整；空闲 30 s CPU 0%、工作集约 60 MB；验证后已恢复安装版进程。
+- 三处版本号同步至 `0.3.59`（`Cargo.toml` / `tauri.conf.json` / `Cargo.lock`），`cargo fetch --locked` 通过。未实施：P2-2 单事务、P3-2 VACUUM、P3-3 Antigravity、§3.5.2 签名墙钟文本。

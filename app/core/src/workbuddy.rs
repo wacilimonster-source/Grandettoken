@@ -915,7 +915,7 @@ fn accept(c: &DesktopCredential, now_ms: i64, include_expired: bool) -> bool {
 ///      2026-10-19 真机上一份 6 月的备份 token 未过期却 401)。
 ///
 /// 返回全部候选是为了让上层在 401 时能换下一份,而不是直接让用户重新登录。
-fn collect_desktop_credentials(now_ms: i64, include_expired: bool) -> Result<Vec<DesktopCredential>, DesktopErr> {
+pub(crate) fn collect_desktop_credentials(now_ms: i64, include_expired: bool) -> Result<Vec<DesktopCredential>, DesktopErr> {
     collect_from(&credential_files(), now_ms, include_expired)
 }
 
@@ -1338,7 +1338,7 @@ fn push_unique(v: &mut Vec<String>, t: &str) {
 /// 否则日志里天天是 `cred-switch`,真正的凭据失效反而被噪音埋掉。
 pub fn desktop_tokens_region(now_ms: i64, region: Option<bool>) -> Vec<String> {
     // include_expired = true:过期那份正是续期要的对象(见 plan_tokens 的来由)
-    let mut creds = match collect_desktop_credentials(now_ms, true) {
+    let creds = match collect_desktop_credentials(now_ms, true) {
         Ok(c) => c,
         Err(e) => {
             // 以前这里 unwrap_or_default 一吞,日志里就只剩"取数失败"。
@@ -1351,6 +1351,10 @@ pub fn desktop_tokens_region(now_ms: i64, region: Option<bool>) -> Vec<String> {
             Vec::new()
         }
     };
+    desktop_tokens_from(now_ms, region, creds)
+}
+
+pub(crate) fn desktop_tokens_from(now_ms: i64, region: Option<bool>, mut creds: Vec<DesktopCredential>) -> Vec<String> {
     if let Some(global) = region {
         creds.retain(|c| c.is_global() == global);
     }
