@@ -5328,7 +5328,7 @@ src-tauri `cargo check --all-targets --locked` exit 0;
 - 待验收:明后天与周重置日期在真实数据与原生窗口的显示;Antigravity 真实账号取数;
   日期控件回填人工复核(遗留)。
 
-## 2026-11-16 每轮取数合并推送与隐藏窗口降载（v0.3.59，待发版）
+## 2026-11-16 每轮取数合并推送与隐藏窗口降载（v0.3.59）
 
 - 按 `docs/report/performance-audit-2026-11-16.md` 的拍板批次实施高确定性优化，全部落新模块或既有函数内最小改动：
   1) **P1-1**：新增 `app/core/src/progress.rs`，同一轮取数的渐进结果首个渠道立即推送，其余 150 ms 合批，终态仍由 `poll_loop` / `get_channels` 推送；`finish()` 清脏，Drive 定时器随 future 结束停止，不存在迟到覆盖。
@@ -5343,3 +5343,19 @@ src-tauri `cargo check --all-targets --locked` exit 0;
 - 门禁串行复跑（NO_PROXY=127.0.0.1,localhost,::1）：IPC 契约 133 调用 / 103 命令、静默失败 7 脚本 74 处 catch、文件规模、CSS 形态、`node --check app.js`、jsdom 238/238、顾问/Google Cloud/密钥箱/网关/托盘冒烟、core `cargo test --locked` 566 passed / 8 ignored（`sync_fixtures` 6 passed）、src-tauri `cargo check --all-targets --locked`、凭据扫描 CLEAN。`verify-tray.js` 128/128（临时目录安装 `playwright-core` + 系统 Edge，未改仓库依赖）。
 - 真机 release 实测（`build.ps1 build` 产物）：14 渠道完整渲染；设置索引/子页/胶囊选择可点且持久化；隐藏后主窗口不可见、托盘进程存活，二次启动触发单实例回调唤回，唤回后全量重绘、单列/缩略切换正常；手动刷新终态完整；空闲 30 s CPU 0%、工作集约 60 MB；验证后已恢复安装版进程。
 - 三处版本号同步至 `0.3.59`（`Cargo.toml` / `tauri.conf.json` / `Cargo.lock`），`cargo fetch --locked` 通过。未实施：P2-2 单事务、P3-2 VACUUM、P3-3 Antigravity、§3.5.2 签名墙钟文本。
+
+## 2026-11-16 v0.3.59 发布结果
+
+- tag `v0.3.59` 指向 `757b139`（取数推送合批与隐藏窗口降载发版 commit）。release run
+  `43889962747` 全部成功（job 14:50:20Z → 15:14:35Z）；main CI run `43889935390` 对
+  `757b139` 成功。
+- Release 于北京时间 2026-11-16 23:14:35 公开发布,三件套齐全(安装包
+  `Grandettoken_0.3.59_x64-setup.exe` `6,036,936` 字节;签名 `.sig` `444` 字节;
+  更新清单 `latest.json` `2,053` 字节),非 draft。
+- 本机 `node --use-env-proxy build/verify-release.js` 二次核验 PASS(13 项,含固定
+  更新端点返回 `0.3.59`、安装包匿名下载 200 且 SHA-256
+  `347e45a243afea00277a816e0c8ee9ae5e544f9a262182481cc82ed3123569bf`;本地无 `.sig`
+  与安装包文件两项按既有口径 SKIP,由 CI 端完成)。
+- 说明完整:697 字符 / 269 中文字符,0 替换字符。
+- 待验收:真机安装版自动更新;每轮推送合批与隐藏态降载在真实使用中的观感
+  (渐进显示、托盘轮播、唤回刷新);P2-2 / P3-2 / P3-3 / §3.5.2 未实施项仍待拍板。
