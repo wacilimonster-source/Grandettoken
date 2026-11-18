@@ -66,9 +66,14 @@ CI 的 `Resolve tag and version` 会断言 tag 与版本号一致,不一致直�
 ### 2. 提交并推 main
 
 ```bash
-git add -A && git commit -m "release: vX.Y.Z - 一句话亮点"
+git add -A && git commit -m "release: vX.Y.Z - 一句话亮点" \
+  -m "- 本版变更一" -m "- 本版变更二"
 git push origin main
 ```
+
+> ⚠ **发版提交必须带说明正文。** 提交信息会原样写进 `latest.json.notes` 与 Release 正文;
+> 只写标题时正文中文字符不足 20,`verify-release.js` 的 `notes intact` 会在发布后判 FAIL。
+> `release.yml` 已在打包前按同一判据拦截(v0.3.64 踩过:标题 68 字符 / 13 个中文字符)。
 
 > ⚠ **先推 main 再打 tag**(2026-11-10 v0.3.31 踩过)。`gh release create` 发现远端
 > 没有这个 tag 时会**自动建一个**,取的是**当时的默认分支尖端** —— main 还没推的话,

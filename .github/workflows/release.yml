@@ -306,7 +306,12 @@ jobs:
             Write-Host "head_commit 为空(workflow_dispatch),已按 tag $env:TAG 反查提交信息: $($msg.Length) 字符"
           }
           $notes = "## Grandettoken $env:VER`n`n$msg"
-          if ($notes.Length -lt 40) { throw "release notes 太短($($notes.Length) 字符),疑似提交信息没取到" }
+          # 与 build/verify-release.js 的 notes intact 判据对齐：发版提交只写标题时，
+          # 说明会原样进 latest.json，发布后核验才判 FAIL，只能事后改更新清单。
+          $cjk = ([regex]::Matches($notes, '[\u4e00-\u9fff]')).Count
+          if ($notes.Length -lt 40 -or $cjk -lt 20) {
+            throw "release notes 太短($($notes.Length) 字符 / $cjk 中文字符)，发版提交需带说明正文"
+          }
           $notesFile = Join-Path $env:RUNNER_TEMP 'release-notes.md'
           [System.IO.File]::WriteAllText($notesFile, $notes)
           node build/make-latest-json.js --notes-file $notesFile

@@ -5472,4 +5472,12 @@ src-tauri `cargo check --all-targets --locked` exit 0;
 - 本地串行通过静态四门及 `--self-test`、全部前端 JS 语法、jsdom 277/277、临期与 Qoder 门禁、密钥箱 / Codex 重置顾问 / Google Cloud / Antigravity / 网关冒烟、`app/core` `cargo test --locked -- --test-threads=1`（586 passed / 10 ignored + `sync_fixtures` 6 passed）、`app/src-tauri` `cargo fetch --locked` 与 `cargo check --all-targets --locked`、凭据扫描 CLEAN（483 文件）。验证进程设置回环 `NO_PROXY`。
 - `build/verify-settings-entry.js` 依赖真实窗口 CDP，本轮未运行；待安装版原生窗口核验。
 
+## 2026-11-18 v0.3.64 发布结果
+
+- tag `v0.3.64` 指向 `991f0e4`，该提交先推送到 `main`。main CI `44330050381` 全部通过。桌面发版 run `44330074895` 的构建、签名、建 Release 与三件套补传均成功；Release 于北京时间 23:21:54（`2026-11-18T15:21:54Z`）公开发布，非 draft / prerelease。
+- 安装包 `Grandettoken_0.3.64_x64-setup.exe` 6,080,665 字节，本机匿名下载回验 SHA-256 `b885a25a29f057b63afe1aecd3390120ce1c8c2605acff35500dde122806cc36`；签名 `.sig` 444 字符。
+- 首次发版说明只写提交标题，`latest.json.notes` 为 68 字符 / 13 个中文字符，CI 最后一步 `verify-release.js` 的 `notes intact` 判 FAIL；该 run 保留为红，不改写记录。已补齐 GitHub Release 正文并重传 `latest.json`（notes 316 字符 / 174 中文字符 / 0 替换字符，签名与下载地址未改动，资产 1,453 字节），本机 `node --use-env-proxy build/verify-release.js` 全部 PASS。
+- 根因门禁前移：`release.yml` 的 notes 长度检查改为与 `verify-release.js` 同一判据（正文至少 20 个中文字符），在打包前失败；`RELEASE.md` 的发版提交示例改为带说明正文，`AGENTS.md` 同步该结论。
+- 待验收：安装版真实 AgentRouter / Responses 接入、原生窗口底栏设置与退出按钮、`verify-settings-entry.js` 的 CDP 检查；v0.3.63 及更早的遗留真机核验项仍待完成。
+
 
