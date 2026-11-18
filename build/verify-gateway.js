@@ -77,6 +77,8 @@ const calls = [];
 const toasts = [];
 let failNextProxyUpdate = false;
 let failNextTestChat = false;
+let holdNextTestChat = false;
+let resolveHeldTestChat;
 let finishUnpublish;
 
 const vaultItems = [
@@ -177,10 +179,40 @@ w.invoke = async (cmd, args = {}) => {
           stream: true,
           status: 200,
           latencyMs: 320,
+          firstByteMs: 110,
+          frameCount: 4,
           transforms: [],
           thinkingChars: 42,
           contentChars: 12,
-          finishReason: "stop",
+          toolCallCount: 1,
+          toolCallChars: 18,
+          finishReason: "tool_calls",
+          promptTokens: 10,
+          completionTokens: 20,
+          diagNote: null,
+          error: null,
+        },
+        {
+          id: 2,
+          timestamp: 999,
+          channelId: "ch_existing",
+          channelAlias: "main",
+          source: "openai_compat",
+          model: "main/empty-check",
+          stream: true,
+          status: 200,
+          latencyMs: 1650,
+          firstByteMs: 1600,
+          frameCount: 2,
+          transforms: [],
+          thinkingChars: 0,
+          contentChars: 0,
+          toolCallCount: 0,
+          toolCallChars: 0,
+          finishReason: "content_filter",
+          promptTokens: 15,
+          completionTokens: 0,
+          diagNote: "上游已结束（finish_reason=content_filter，2 帧），未返回文本或工具调用",
           error: null,
         },
       ];
@@ -236,6 +268,11 @@ w.invoke = async (cmd, args = {}) => {
       return;
     }
     case "gateway_test_chat":
+      if (holdNextTestChat) {
+        holdNextTestChat = false;
+        await new Promise((resolve) => { resolveHeldTestChat = resolve; });
+        throw new Error("已取消本次联调测试");
+      }
       if (failNextTestChat) {
         failNextTestChat = false;
         throw new Error("模拟联调请求失败");
@@ -244,16 +281,28 @@ w.invoke = async (cmd, args = {}) => {
         ok: true,
         status: 200,
         latencyMs: 128,
+        firstByteMs: 45,
+        frameCount: 3,
         requestedModel: args.input.model,
         upstreamModel: "deepseek-r1",
         thinking: "先算 12+23 = 35",
         content: "35",
+        toolCallCount: 0,
+        toolCallChars: 0,
         finishReason: "stop",
         transforms: ["map:thinking_config(include_thoughts)"],
         promptTokens: 10,
         completionTokens: 20,
+        diagNote: null,
         error: null,
       };
+    case "gateway_cancel_test_chat":
+      if (resolveHeldTestChat) {
+        const done = resolveHeldTestChat;
+        resolveHeldTestChat = null;
+        done();
+      }
+      return true;
     case "copy_text":
       return null;
     default:
@@ -432,12 +481,38 @@ async function run() {
     c.args.input.channelId === "ch_new" && c.args.input.wire === responsePayload?.wire));
 
   doc.querySelector('[data-gw-tab="tools"]').click();
+  const diagText = doc.querySelector(".gw-diag-list")?.textContent || "";
+  ck(
+    "诊断列表展示首字耗时、工具调用、finishReason 与零输出说明",
+    diagText.includes("首字 110ms") &&
+      diagText.includes("工具 1次(18字)") &&
+      diagText.includes("结束 tool_calls") &&
+      diagText.includes("tok 10/20") &&
+      diagText.includes("finish_reason=content_filter"),
+    diagText
+  );
   failNextTestChat = true;
   doc.querySelector('[data-gw="run-test-chat"]').click();
   await settle();
   const testBtn = doc.querySelector('[data-gw="run-test-chat"]');
   ck("联调请求异常后可重新发送", !testBtn.disabled && testBtn.textContent === "发送测试" &&
     toasts.some((t) => t.bad && t.msg.includes("模拟联调请求失败")));
+
+  holdNextTestChat = true;
+  doc.querySelector('[data-gw="run-test-chat"]').click();
+  await settle();
+  const cancelBtn = doc.querySelector('[data-gw="cancel-test-chat"]');
+  ck("联调请求进行中显示取消按钮", !!cancelBtn && !cancelBtn.hidden && testBtn.disabled);
+  cancelBtn.click();
+  await settle();
+  ck(
+    "点击取消后调用后端取消命令并恢复发送按钮",
+    calls.some((c) => c.cmd === "gateway_cancel_test_chat") &&
+      !testBtn.disabled &&
+      testBtn.textContent === "发送测试" &&
+      cancelBtn.hidden &&
+      toasts.some((t) => !t.bad && t.msg.includes("已取消本次联调测试"))
+  );
 
   if (failed > 0) {
     console.error(`gateway 冒烟结果: ${failed} 项失败`);

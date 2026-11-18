@@ -25,7 +25,7 @@ use tokenscope_core::gateway_proto::{
     },
     responses::from_chat_request,
     stream::StreamStats,
-    thinking::normalize_non_stream_response,
+    thinking::{normalize_non_stream_response, summarize_non_stream_tools},
     GatewaySourceKind, OpenAiWire,
 };
 use tokenscope_core::secrets;
@@ -48,10 +48,24 @@ pub struct GatewayDiagEntry {
     pub stream: bool,
     pub status: u16,
     pub latency_ms: u64,
+    #[serde(default)]
+    pub first_byte_ms: Option<u64>,
+    #[serde(default)]
+    pub frame_count: usize,
     pub transforms: Vec<String>,
     pub thinking_chars: usize,
     pub content_chars: usize,
+    #[serde(default)]
+    pub tool_call_count: usize,
+    #[serde(default)]
+    pub tool_call_chars: usize,
     pub finish_reason: Option<String>,
+    #[serde(default)]
+    pub prompt_tokens: Option<u64>,
+    #[serde(default)]
+    pub completion_tokens: Option<u64>,
+    #[serde(default)]
+    pub diag_note: Option<String>,
     pub error: Option<String>,
 }
 
@@ -69,14 +83,19 @@ pub struct ChatTestResult {
     pub ok: bool,
     pub status: u16,
     pub latency_ms: u64,
+    pub first_byte_ms: Option<u64>,
+    pub frame_count: usize,
     pub requested_model: String,
     pub upstream_model: String,
     pub thinking: String,
     pub content: String,
+    pub tool_call_count: usize,
+    pub tool_call_chars: usize,
     pub finish_reason: Option<String>,
     pub transforms: Vec<String>,
     pub prompt_tokens: Option<u64>,
     pub completion_tokens: Option<u64>,
+    pub diag_note: Option<String>,
     pub error: Option<String>,
 }
 
@@ -452,6 +471,67 @@ async fn send_upstream_with_repair(
     }
 }
 
+fn infer_zero_output_note(
+    status: u16,
+    thinking_chars: usize,
+    content_chars: usize,
+    tool_call_count: usize,
+    frame_count: usize,
+    finish_reason: Option<&str>,
+    stats_note: Option<&str>,
+    error: Option<&str>,
+) -> Option<String> {
+    if let Some(note) = stats_note {
+        return Some(redact_secrets(note));
+    }
+    if error.is_some() || status >= 400 {
+        return None;
+    }
+    if thinking_chars == 0 && content_chars == 0 && tool_call_count == 0 {
+        return Some(match finish_reason {
+            Some(fr) => format!("上游已结束（finish_reason={fr}，{frame_count} 帧），未返回文本或工具调用"),
+            None if frame_count == 0 => "上游未返回任何有效数据帧".to_string(),
+            None => format!("上游返回 {frame_count} 帧，但未解析出文本或工具调用"),
+        });
+    }
+    None
+}
+
+fn record_error_diag(
+    g: &Gateway,
+    channel: &Published,
+    requested_model: &str,
+    stream: bool,
+    status: u16,
+    started: Instant,
+    transforms: Vec<String>,
+    message: &str,
+) {
+    g.record_diag(GatewayDiagEntry {
+        id: 0,
+        timestamp: now_unix(),
+        channel_id: channel.channel_id.clone(),
+        channel_alias: channel.alias.clone(),
+        source: channel.kind().as_str().to_string(),
+        model: requested_model.to_string(),
+        stream,
+        status,
+        latency_ms: started.elapsed().as_millis() as u64,
+        first_byte_ms: None,
+        frame_count: 0,
+        transforms,
+        thinking_chars: 0,
+        content_chars: 0,
+        tool_call_count: 0,
+        tool_call_chars: 0,
+        finish_reason: None,
+        prompt_tokens: None,
+        completion_tokens: None,
+        diag_note: None,
+        error: Some(redact_secrets(message)),
+    });
+}
+
 async fn execute_inference_http(
     g: &Gateway,
     channel: Published,
@@ -469,22 +549,16 @@ async fn execute_inference_http(
             retry_after,
             transforms,
         } => {
-            g.record_diag(GatewayDiagEntry {
-                id: 0,
-                timestamp: now_unix(),
-                channel_id: channel.channel_id.clone(),
-                channel_alias: channel.alias.clone(),
-                source: channel.kind().as_str().to_string(),
-                model: requested_model.to_string(),
+            record_error_diag(
+                g,
+                &channel,
+                requested_model,
                 stream,
-                status: status.as_u16(),
-                latency_ms: started.elapsed().as_millis() as u64,
+                status.as_u16(),
+                started,
                 transforms,
-                thinking_chars: 0,
-                content_chars: 0,
-                finish_reason: None,
-                error: Some(message.clone()),
-            });
+                &message,
+            );
             let error_type = if code.as_deref() == Some("responses_conversion") {
                 "invalid_request_error"
             } else {
@@ -548,6 +622,7 @@ fn build_sse_response(
         normalizer: responses::ChatSse,
         pending: VecDeque<String>,
         finished: bool,
+        first_byte_ms: Option<u64>,
         g: Gateway,
         channel: Published,
         requested_model: String,
@@ -560,6 +635,7 @@ fn build_sse_response(
         normalizer: responses::ChatSse::new(&requested_model, channel.thinking_mode, channel.wire, include_usage),
         pending: VecDeque::new(),
         finished: false,
+        first_byte_ms: None,
         g,
         channel,
         requested_model,
@@ -577,8 +653,11 @@ fn build_sse_response(
             }
             let transport_error = match st.stream.next().await {
                 Some(Ok(chunk)) => {
+                    if st.first_byte_ms.is_none() && !chunk.is_empty() {
+                        st.first_byte_ms = Some(st.started.elapsed().as_millis() as u64);
+                    }
                     st.pending.extend(st.normalizer.push_bytes(&chunk));
-                    if !st.normalizer.responses_terminal() {
+                    if !st.normalizer.is_terminal() {
                         continue;
                     }
                     None
@@ -589,8 +668,24 @@ fn build_sse_response(
             st.finished = true;
             st.pending.extend(st.normalizer.finish());
             let stats = st.normalizer.stats();
-            let error = transport_error.or_else(|| stats.saw_error.then(|| "上游流式未正常完成".into()));
-            record_stream_diag(&st.g, &st.channel, &st.requested_model, &st.transforms, st.started, stats, error);
+            let error = transport_error.or_else(|| {
+                stats.saw_error.then(|| {
+                    stats
+                        .diagnostic_note
+                        .clone()
+                        .unwrap_or_else(|| "上游流式未正常完成".into())
+                })
+            });
+            record_stream_diag(
+                &st.g,
+                &st.channel,
+                &st.requested_model,
+                &st.transforms,
+                st.started,
+                st.first_byte_ms,
+                stats,
+                error,
+            );
         }
     });
 
@@ -612,9 +707,22 @@ fn record_stream_diag(
     requested_model: &str,
     transforms: &[String],
     started: Instant,
+    first_byte_ms: Option<u64>,
     stats: &StreamStats,
     err_note: Option<String>,
 ) {
+    let status = if err_note.is_some() { 502 } else { 200 };
+    let error = err_note.map(|e| redact_secrets(&e));
+    let diag_note = infer_zero_output_note(
+        status,
+        stats.thinking_chars,
+        stats.content_chars,
+        stats.tool_call_count,
+        stats.frame_count,
+        stats.finish_reason.as_deref(),
+        stats.diagnostic_note.as_deref(),
+        error.as_deref(),
+    );
     g.record_diag(GatewayDiagEntry {
         id: 0,
         timestamp: now_unix(),
@@ -623,13 +731,20 @@ fn record_stream_diag(
         source: channel.kind().as_str().to_string(),
         model: requested_model.to_string(),
         stream: true,
-        status: if err_note.is_some() { 502 } else { 200 },
+        status,
         latency_ms: started.elapsed().as_millis() as u64,
+        first_byte_ms,
+        frame_count: stats.frame_count,
         transforms: transforms.to_vec(),
         thinking_chars: stats.thinking_chars,
         content_chars: stats.content_chars,
+        tool_call_count: stats.tool_call_count,
+        tool_call_chars: stats.tool_call_chars,
         finish_reason: stats.finish_reason.clone(),
-        error: err_note.map(|e| redact_secrets(&e)),
+        prompt_tokens: stats.prompt_tokens,
+        completion_tokens: stats.completion_tokens,
+        diag_note,
+        error,
     });
 }
 
@@ -645,28 +760,14 @@ async fn build_json_response(
     let mut val = match responses::read_chat_json(upstream, channel.wire, requested_model).await {
         Ok(value) => value,
         Err(msg) => {
-            g.record_diag(GatewayDiagEntry {
-                id: 0,
-                timestamp: now_unix(),
-                channel_id: channel.channel_id.clone(),
-                channel_alias: channel.alias.clone(),
-                source: channel.kind().as_str().to_string(),
-                model: requested_model.to_string(),
-                stream: false,
-                status: 502,
-                latency_ms: started.elapsed().as_millis() as u64,
-                transforms,
-                thinking_chars: 0,
-                content_chars: 0,
-                finish_reason: None,
-                error: Some(msg.clone()),
-            });
+            record_error_diag(g, channel, requested_model, false, 502, started, transforms, &msg);
             return json_error(StatusCode::BAD_GATEWAY, &msg, "gateway_protocol", Some("gateway_protocol"), None);
         }
     };
 
     let (thinking_chars, content_chars) =
         normalize_non_stream_response(&mut val, requested_model, channel.thinking_mode);
+    let (tool_call_count, tool_call_chars) = summarize_non_stream_tools(&val);
     let finish_reason = val
         .get("choices")
         .and_then(Value::as_array)
@@ -674,6 +775,23 @@ async fn build_json_response(
         .and_then(|c| c.get("finish_reason"))
         .and_then(Value::as_str)
         .map(str::to_string);
+    let prompt_tokens = val.pointer("/usage/prompt_tokens").and_then(Value::as_u64);
+    let completion_tokens = val.pointer("/usage/completion_tokens").and_then(Value::as_u64);
+    let frame_count = val
+        .get("choices")
+        .and_then(Value::as_array)
+        .map(|a| usize::from(!a.is_empty()))
+        .unwrap_or(0);
+    let diag_note = infer_zero_output_note(
+        status.as_u16(),
+        thinking_chars,
+        content_chars,
+        tool_call_count,
+        frame_count,
+        finish_reason.as_deref(),
+        None,
+        None,
+    );
 
     g.record_diag(GatewayDiagEntry {
         id: 0,
@@ -685,10 +803,17 @@ async fn build_json_response(
         stream: false,
         status: status.as_u16(),
         latency_ms: started.elapsed().as_millis() as u64,
+        first_byte_ms: None,
+        frame_count,
         transforms,
         thinking_chars,
         content_chars,
+        tool_call_count,
+        tool_call_chars,
         finish_reason,
+        prompt_tokens,
+        completion_tokens,
+        diag_note,
         error: None,
     });
 
@@ -726,34 +851,33 @@ pub async fn run_test_chat(
             transforms,
             ..
         } => {
-            g.record_diag(GatewayDiagEntry {
-                id: 0,
-                timestamp: now_unix(),
-                channel_id: channel.channel_id.clone(),
-                channel_alias: channel.alias.clone(),
-                source: channel.kind().as_str().to_string(),
-                model: requested_model.clone(),
+            record_error_diag(
+                g,
+                &channel,
+                &requested_model,
                 stream,
-                status: status.as_u16(),
-                latency_ms: started.elapsed().as_millis() as u64,
-                transforms: transforms.clone(),
-                thinking_chars: 0,
-                content_chars: 0,
-                finish_reason: None,
-                error: Some(message.clone()),
-            });
+                status.as_u16(),
+                started,
+                transforms.clone(),
+                &message,
+            );
             ChatTestResult {
                 ok: false,
                 status: status.as_u16(),
                 latency_ms: started.elapsed().as_millis() as u64,
+                first_byte_ms: None,
+                frame_count: 0,
                 requested_model,
                 upstream_model,
                 thinking: String::new(),
                 content: String::new(),
+                tool_call_count: 0,
+                tool_call_chars: 0,
                 finish_reason: None,
                 transforms,
                 prompt_tokens: None,
                 completion_tokens: None,
+                diag_note: None,
                 error: Some(message),
             }
         }
@@ -777,13 +901,17 @@ pub async fn run_test_chat(
                 let mut thinking = String::new();
                 let mut content = String::new();
                 let mut error_msg: Option<String> = None;
+                let mut first_byte_ms: Option<u64> = None;
                 let mut frames_text = Vec::new();
                 let mut bytes_stream = resp.bytes_stream();
                 while let Some(item) = bytes_stream.next().await {
                     match item {
                         Ok(chunk) => {
+                            if first_byte_ms.is_none() && !chunk.is_empty() {
+                                first_byte_ms = Some(started.elapsed().as_millis() as u64);
+                            }
                             frames_text.extend(normalizer.push_bytes(&chunk));
-                            if normalizer.responses_terminal() {
+                            if normalizer.is_terminal() {
                                 break;
                             }
                         }
@@ -820,45 +948,85 @@ pub async fn run_test_chat(
                 }
                 let stats = normalizer.stats();
                 let ok = error_msg.is_none() && stats.completed_cleanly;
+                let final_error = error_msg.or_else(|| {
+                    (!ok).then(|| {
+                        stats
+                            .diagnostic_note
+                            .clone()
+                            .unwrap_or_else(|| "上游流式未正常完成".into())
+                    })
+                });
+                let diag_note = infer_zero_output_note(
+                    if ok { status } else { 502 },
+                    stats.thinking_chars,
+                    stats.content_chars,
+                    stats.tool_call_count,
+                    stats.frame_count,
+                    stats.finish_reason.as_deref(),
+                    stats.diagnostic_note.as_deref(),
+                    final_error.as_deref(),
+                );
                 record_stream_diag(
                     g,
                     &channel,
                     &requested_model,
                     &transforms,
                     started,
+                    first_byte_ms,
                     stats,
-                    error_msg.clone(),
+                    final_error.clone(),
                 );
                 ChatTestResult {
                     ok,
                     status: if ok { status } else { 502 },
                     latency_ms: started.elapsed().as_millis() as u64,
+                    first_byte_ms,
+                    frame_count: stats.frame_count,
                     requested_model,
                     upstream_model,
                     thinking,
                     content,
+                    tool_call_count: stats.tool_call_count,
+                    tool_call_chars: stats.tool_call_chars,
                     finish_reason: stats.finish_reason.clone(),
                     transforms,
                     prompt_tokens: stats.prompt_tokens,
                     completion_tokens: stats.completion_tokens,
-                    error: error_msg,
+                    diag_note,
+                    error: final_error,
                 }
             } else {
+                let first_byte_ms = Some(started.elapsed().as_millis() as u64);
                 let mut val = match responses::read_chat_json(resp, channel.wire, &requested_model).await {
                     Ok(v) => v,
                     Err(msg) => {
+                        record_error_diag(
+                            g,
+                            &channel,
+                            &requested_model,
+                            false,
+                            502,
+                            started,
+                            transforms.clone(),
+                            &msg,
+                        );
                         return ChatTestResult {
                             ok: false,
                             status: 502,
                             latency_ms: started.elapsed().as_millis() as u64,
+                            first_byte_ms,
+                            frame_count: 0,
                             requested_model,
                             upstream_model,
                             thinking: String::new(),
                             content: String::new(),
+                            tool_call_count: 0,
+                            tool_call_chars: 0,
                             finish_reason: None,
                             transforms,
                             prompt_tokens: None,
                             completion_tokens: None,
+                            diag_note: None,
                             error: Some(msg),
                         };
                     }
@@ -868,6 +1036,7 @@ pub async fn run_test_chat(
                     &requested_model,
                     channel.thinking_mode,
                 );
+                let (tool_call_count, tool_call_chars) = summarize_non_stream_tools(&val);
                 let msg = val.pointer("/choices/0/message").cloned().unwrap_or(Value::Null);
                 let thinking = msg
                     .get("reasoning_content")
@@ -885,6 +1054,21 @@ pub async fn run_test_chat(
                     .map(str::to_string);
                 let prompt_tokens = val.pointer("/usage/prompt_tokens").and_then(Value::as_u64);
                 let completion_tokens = val.pointer("/usage/completion_tokens").and_then(Value::as_u64);
+                let frame_count = val
+                    .get("choices")
+                    .and_then(Value::as_array)
+                    .map(|a| usize::from(!a.is_empty()))
+                    .unwrap_or(0);
+                let diag_note = infer_zero_output_note(
+                    status,
+                    tc,
+                    cc,
+                    tool_call_count,
+                    frame_count,
+                    finish_reason.as_deref(),
+                    None,
+                    None,
+                );
                 g.record_diag(GatewayDiagEntry {
                     id: 0,
                     timestamp: now_unix(),
@@ -895,24 +1079,36 @@ pub async fn run_test_chat(
                     stream: false,
                     status,
                     latency_ms: started.elapsed().as_millis() as u64,
+                    first_byte_ms,
+                    frame_count,
                     transforms: transforms.clone(),
                     thinking_chars: tc,
                     content_chars: cc,
+                    tool_call_count,
+                    tool_call_chars,
                     finish_reason: finish_reason.clone(),
+                    prompt_tokens,
+                    completion_tokens,
+                    diag_note: diag_note.clone(),
                     error: None,
                 });
                 ChatTestResult {
                     ok: true,
                     status,
                     latency_ms: started.elapsed().as_millis() as u64,
+                    first_byte_ms,
+                    frame_count,
                     requested_model,
                     upstream_model,
                     thinking,
                     content,
+                    tool_call_count,
+                    tool_call_chars,
                     finish_reason,
                     transforms,
                     prompt_tokens,
                     completion_tokens,
+                    diag_note,
                     error: None,
                 }
             }

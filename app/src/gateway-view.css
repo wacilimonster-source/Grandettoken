@@ -117,8 +117,10 @@
 #gatewayBox .gw-diag-list{display:grid;gap:calc(6px*var(--u));max-height:calc(240px*var(--u));overflow:auto;padding-top:calc(4px*var(--u))}
 #gatewayBox .gw-diag-row{padding:calc(7px*var(--u)) calc(9px*var(--u));border:1px solid var(--line);border-radius:calc(6px*var(--u));background:var(--bg2);font-size:max(11.5px,calc(11.5px*var(--u)))}
 #gatewayBox .gw-diag-row.is-err{border-color:var(--bad)}
+#gatewayBox .gw-diag-row.is-warn{border-color:var(--warn)}
 #gatewayBox .gw-diag-top{display:flex;justify-content:space-between;flex-wrap:wrap;gap:calc(6px*var(--u));color:var(--tx2)}
 #gatewayBox .gw-diag-sub{color:var(--tx3);margin-top:calc(2px*var(--u))}
+#gatewayBox .gw-diag-note{color:var(--warn);margin-top:calc(3px*var(--u));font-size:max(11.5px,calc(11.5px*var(--u)));overflow-wrap:anywhere}
 #gatewayBox .gw-diag-err{color:var(--bad);margin-top:calc(3px*var(--u));overflow-wrap:anywhere}
 #gatewayBox .gw-card-box{padding:calc(10px*var(--u)) calc(11px*var(--u));border:1px solid var(--line);border-radius:calc(10px*var(--u));background:var(--bg2)}
 #gatewayBox .gw-lan-pick{display:flex;align-items:center;gap:calc(8px*var(--u));margin-bottom:calc(4px*var(--u))}

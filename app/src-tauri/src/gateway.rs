@@ -166,6 +166,8 @@ pub struct Inner {
     pub startup_error: Option<String>,
     pub diagnostics: VecDeque<GatewayDiagEntry>,
     pub next_diag_id: u64,
+    pub test_chat_abort: Option<(u64, tokio::task::AbortHandle)>,
+    pub next_test_id: u64,
 }
 
 #[derive(Clone)]
@@ -203,6 +205,8 @@ impl Gateway {
                 startup_error: None,
                 diagnostics: VecDeque::with_capacity(MAX_DIAG_ENTRIES),
                 next_diag_id: 1,
+                test_chat_abort: None,
+                next_test_id: 1,
             })),
             clients: Arc::new(clients),
             lifecycle: Arc::new(tokio::sync::Mutex::new(())),
@@ -231,13 +235,55 @@ impl Gateway {
     }
 
     pub fn record_diag(&self, mut entry: GatewayDiagEntry) {
-        let mut inner = lock(&self.inner);
-        entry.id = inner.next_diag_id;
-        inner.next_diag_id += 1;
-        if inner.diagnostics.len() >= MAX_DIAG_ENTRIES {
-            inner.diagnostics.pop_front();
+        let log_line = (entry.status >= 400
+            || entry.error.is_some()
+            || entry.diag_note.is_some()
+            || (entry.thinking_chars == 0
+                && entry.content_chars == 0
+                && entry.tool_call_count == 0))
+            .then(|| {
+                let mut parts = vec![
+                    format!("HTTP {}", entry.status),
+                    format!("{}ms", entry.latency_ms),
+                    if entry.stream { "SSE" } else { "JSON" }.to_string(),
+                    format!(
+                        "think={}/content={}/tools={}({})",
+                        entry.thinking_chars,
+                        entry.content_chars,
+                        entry.tool_call_count,
+                        entry.tool_call_chars
+                    ),
+                ];
+                if let Some(ttft) = entry.first_byte_ms {
+                    parts.push(format!("ttft={ttft}ms"));
+                }
+                if entry.frame_count > 0 {
+                    parts.push(format!("frames={}", entry.frame_count));
+                }
+                if let Some(ref fr) = entry.finish_reason {
+                    parts.push(format!("finish={fr}"));
+                }
+                if let Some(ref note) = entry.diag_note {
+                    parts.push(format!("note={note}"));
+                }
+                if let Some(ref err) = entry.error {
+                    parts.push(format!("err={err}"));
+                }
+                (entry.model.clone(), redact_secrets(&parts.join(" · ")))
+            });
+
+        {
+            let mut inner = lock(&self.inner);
+            entry.id = inner.next_diag_id;
+            inner.next_diag_id += 1;
+            if inner.diagnostics.len() >= MAX_DIAG_ENTRIES {
+                inner.diagnostics.pop_front();
+            }
+            inner.diagnostics.push_back(entry);
         }
-        inner.diagnostics.push_back(entry);
+        if let Some((model, msg)) = log_line {
+            tokenscope_core::diaglog::write_keyed("gateway", &model, &msg);
+        }
     }
 
     pub fn live_channels(&self) -> Vec<Published> {
@@ -1122,17 +1168,55 @@ pub async fn gateway_test_chat(
     } else {
         input.prompt
     };
-    let res = run_test_chat(
-        &g,
-        channel,
-        stripped,
-        prompt,
-        input.stream.unwrap_or(true),
-        input.include_reasoning.unwrap_or(true),
-        input.reasoning_effort,
-    )
-    .await;
-    serde_json::to_value(res).map_err(|e| e.to_string())
+    let stream = input.stream.unwrap_or(true);
+    let include_reasoning = input.include_reasoning.unwrap_or(true);
+    let reasoning_effort = input.reasoning_effort;
+    let gw = g.inner().clone();
+    let handle = tokio::spawn(async move {
+        run_test_chat(
+            &gw,
+            channel,
+            stripped,
+            prompt,
+            stream,
+            include_reasoning,
+            reasoning_effort,
+        )
+        .await
+    });
+    let test_id = {
+        let mut inner = lock(&g.inner);
+        if let Some((_, prev)) = inner.test_chat_abort.take() {
+            prev.abort();
+        }
+        let id = inner.next_test_id;
+        inner.next_test_id += 1;
+        inner.test_chat_abort = Some((id, handle.abort_handle()));
+        id
+    };
+    let joined = handle.await;
+    {
+        let mut inner = lock(&g.inner);
+        if inner.test_chat_abort.as_ref().is_some_and(|(id, _)| *id == test_id) {
+            inner.test_chat_abort = None;
+        }
+    }
+    match joined {
+        Ok(res) => serde_json::to_value(res).map_err(|e| e.to_string()),
+        Err(e) if e.is_cancelled() => Err("已取消本次联调测试".into()),
+        Err(e) => Err(format!("联调测试任务异常结束：{e}")),
+    }
+}
+
+#[tauri::command]
+pub async fn gateway_cancel_test_chat(app: tauri::AppHandle) -> Result<bool, String> {
+    let g = app.state::<Gateway>();
+    let prev = lock(&g.inner).test_chat_abort.take();
+    if let Some((_, abort)) = prev {
+        abort.abort();
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 #[tauri::command]

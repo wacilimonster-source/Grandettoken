@@ -6303,6 +6303,7 @@ pub fn run() {
             gateway::gateway_unpublish,
             gateway::gateway_test_channel,
             gateway::gateway_test_chat,
+            gateway::gateway_cancel_test_chat,
             gateway::gateway_diagnostics,
             gateway::gateway_clear_diagnostics,
             inject_preview,

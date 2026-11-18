@@ -9,6 +9,9 @@
   let GW_MODEL_FILTERS = {};
   let GW_TEST_RESULT = null;
   let GW_TEST_BUSY = false;
+  let GW_TEST_STARTED_AT = 0;
+  let GW_TEST_TIMER = null;
+  let GW_TEST_RUN_ID = 0;
   let GW_DIAGS = [];
   let GW_UI_WIRED = false;
 
@@ -26,6 +29,64 @@
     box.querySelectorAll("[data-gw-exclusive]").forEach((button) => {
       button.disabled = GW_BUSY;
     });
+  }
+
+  function testButtonLabel() {
+    if (!GW_TEST_BUSY) return "发送测试";
+    const sec = Math.max(0, Math.floor((Date.now() - GW_TEST_STARTED_AT) / 1000));
+    return sec > 0 ? `请求中 ${sec}s...` : "请求中...";
+  }
+
+  function syncTestBusyUi(box) {
+    const runBtn = box.querySelector('[data-gw="run-test-chat"]');
+    if (runBtn) {
+      runBtn.disabled = GW_TEST_BUSY;
+      runBtn.textContent = testButtonLabel();
+    }
+    const cancelBtn = box.querySelector('[data-gw="cancel-test-chat"]');
+    if (cancelBtn) {
+      cancelBtn.hidden = !GW_TEST_BUSY;
+    }
+  }
+
+  function stopTestTimer(box) {
+    if (GW_TEST_TIMER) {
+      clearInterval(GW_TEST_TIMER);
+      GW_TEST_TIMER = null;
+    }
+    if (box) syncTestBusyUi(box);
+  }
+
+  function startTestTimer(box) {
+    stopTestTimer(null);
+    GW_TEST_STARTED_AT = Date.now();
+    syncTestBusyUi(box);
+    GW_TEST_TIMER = setInterval(() => {
+      if (!GW_TEST_BUSY) {
+        stopTestTimer(box);
+        return;
+      }
+      syncTestBusyUi(box);
+    }, 1000);
+  }
+
+  function formatDiagMeta(d) {
+    const parts = [
+      `HTTP ${d.status}`,
+      d.firstByteMs != null ? `${d.latencyMs}ms (首字 ${d.firstByteMs}ms)` : `${d.latencyMs}ms`,
+      d.stream ? (d.frameCount != null ? `SSE ${d.frameCount}帧` : "SSE") : "JSON",
+      `思考 ${d.thinkingChars}字 / 正文 ${d.contentChars}字`,
+    ];
+    if ((d.toolCallCount || 0) > 0) {
+      parts.push(`工具 ${d.toolCallCount}次(${d.toolCallChars || 0}字)`);
+    }
+    if (d.finishReason) {
+      parts.push(`结束 ${d.finishReason}`);
+    }
+    if (d.promptTokens != null || d.completionTokens != null) {
+      parts.push(`tok ${d.promptTokens ?? "?"}/${d.completionTokens ?? "?"}`);
+    }
+    return parts.join(" · ");
   }
 
   function sourceBadge(kind) {
@@ -448,7 +509,8 @@
                 </select>
                 <label class="gw-proxy-new"><input type="checkbox" id="gwTestStream" ${prevStream ? "checked" : ""}> 流式 SSE</label>
                 <label class="gw-proxy-new"><input type="checkbox" id="gwTestReasoning" ${prevReason ? "checked" : ""}> 请求思考摘要</label>
-                <button class="btn p" data-gw="run-test-chat" ${GW_TEST_BUSY ? "disabled" : ""}>${GW_TEST_BUSY ? "请求中..." : "发送测试"}</button>
+                <button class="btn p" data-gw="run-test-chat" ${GW_TEST_BUSY ? "disabled" : ""}>${escHtml(testButtonLabel())}</button>
+                <button type="button" class="btn" data-gw="cancel-test-chat" ${GW_TEST_BUSY ? "" : "hidden"}>取消</button>
               </div>
               <input class="inp gw-play-prompt" id="gwTestPrompt" value="${escHtml(prevPrompt)}" placeholder="输入测试提示词...">`
             : `<div class="gw-empty-note">请先到「渠道与接入」上架至少一个可用渠道</div>`
@@ -458,11 +520,14 @@
             ? `<div class="gw-test-output ${GW_TEST_RESULT.ok ? "is-ok" : "is-err"}">
                 <div class="gw-test-meta">
                   <span>状态 <b>HTTP ${escHtml(GW_TEST_RESULT.status)}</b></span>
-                  <span>耗时 <b>${escHtml(GW_TEST_RESULT.latencyMs)} ms</b></span>
+                  <span>耗时 <b>${escHtml(GW_TEST_RESULT.latencyMs)} ms</b>${GW_TEST_RESULT.firstByteMs != null ? `（首字 ${escHtml(GW_TEST_RESULT.firstByteMs)} ms）` : ""}</span>
                   ${GW_TEST_RESULT.finishReason ? `<span>finish_reason: <code>${escHtml(GW_TEST_RESULT.finishReason)}</code></span>` : ""}
+                  ${(GW_TEST_RESULT.toolCallCount || 0) > 0 ? `<span>工具调用: <code>${escHtml(GW_TEST_RESULT.toolCallCount)} 次 (${escHtml(GW_TEST_RESULT.toolCallChars || 0)} 字)</code></span>` : ""}
+                  ${GW_TEST_RESULT.promptTokens != null || GW_TEST_RESULT.completionTokens != null ? `<span>tokens: <code>${escHtml(GW_TEST_RESULT.promptTokens ?? "?")} / ${escHtml(GW_TEST_RESULT.completionTokens ?? "?")}</code></span>` : ""}
                   ${(GW_TEST_RESULT.transforms || []).length ? `<span>参数转换: <code>${escHtml(GW_TEST_RESULT.transforms.join(", "))}</code></span>` : ""}
                 </div>
                 ${GW_TEST_RESULT.error ? `<p class="gw-error">${escHtml(GW_TEST_RESULT.error)}</p>` : ""}
+                ${GW_TEST_RESULT.diagNote ? `<div class="gw-diag-note">${escHtml(GW_TEST_RESULT.diagNote)}</div>` : ""}
                 ${
                   GW_TEST_RESULT.thinking
                     ? `<details class="gw-test-think" open><summary>思维链摘要（reasoning_content · ${GW_TEST_RESULT.thinking.length} 字）</summary><pre>${escHtml(GW_TEST_RESULT.thinking)}</pre></details>`
@@ -572,9 +637,10 @@
           <div class="gw-diag-list">
             ${
               GW_DIAGS.length
-                ? GW_DIAGS.map((d) => `<div class="gw-diag-row ${d.status >= 400 ? "is-err" : ""}">
-                    <div class="gw-diag-top"><b>${escHtml(d.model)}</b><span>HTTP ${escHtml(d.status)} · ${escHtml(d.latencyMs)}ms · ${d.stream ? "SSE" : "JSON"} · 思考 ${escHtml(d.thinkingChars)}字 / 正文 ${escHtml(d.contentChars)}字</span></div>
+                ? GW_DIAGS.map((d) => `<div class="gw-diag-row ${d.status >= 400 ? "is-err" : d.diagNote ? "is-warn" : ""}">
+                    <div class="gw-diag-top"><b>${escHtml(d.model)}</b><span>${escHtml(formatDiagMeta(d))}</span></div>
                     ${d.transforms?.length ? `<div class="gw-diag-sub">转换：${escHtml(d.transforms.join(", "))}</div>` : ""}
+                    ${d.diagNote ? `<div class="gw-diag-note">${escHtml(d.diagNote)}</div>` : ""}
                     ${d.error ? `<div class="gw-diag-err">${escHtml(d.error)}</div>` : ""}
                   </div>`).join("")
                 : `<div class="gw-empty-note">暂无请求记录</div>`
@@ -876,6 +942,15 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
           notify("诊断记录已清空");
           return;
         }
+        if (action === "cancel-test-chat") {
+          if (!GW_TEST_BUSY) return;
+          GW_TEST_RUN_ID += 1;
+          GW_TEST_BUSY = false;
+          stopTestTimer(box);
+          await invoke("gateway_cancel_test_chat");
+          notify("已取消本次联调测试");
+          return;
+        }
         if (action === "run-test-chat") {
           if (GW_TEST_BUSY) return;
           const val = byId("gwTestModel")?.value || "";
@@ -883,11 +958,11 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
           if (sep <= 0) throw new Error("请选择要测试的模型");
           const channelId = val.slice(0, sep);
           const model = val.slice(sep + 2);
+          const runId = ++GW_TEST_RUN_ID;
           GW_TEST_BUSY = true;
-          b.disabled = true;
-          b.textContent = "请求中...";
+          startTestTimer(box);
           try {
-            GW_TEST_RESULT = await invoke("gateway_test_chat", {
+            const res = await invoke("gateway_test_chat", {
               input: {
                 channelId,
                 model,
@@ -897,13 +972,16 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
                 reasoningEffort: byId("gwTestEffort")?.value || null,
               },
             });
+            if (GW_TEST_RUN_ID !== runId) return;
+            GW_TEST_RESULT = res;
             GW_DIAGS = await invoke("gateway_diagnostics").catch(() => GW_DIAGS);
+          } catch (err) {
+            if (GW_TEST_RUN_ID !== runId) return;
+            throw err;
           } finally {
-            GW_TEST_BUSY = false;
-            const current = box.querySelector('[data-gw="run-test-chat"]');
-            if (current) {
-              current.disabled = false;
-              current.textContent = "发送测试";
+            if (GW_TEST_RUN_ID === runId) {
+              GW_TEST_BUSY = false;
+              stopTestTimer(box);
             }
           }
           renderGateway(snapshotOpenState(box), captureAddDraft());

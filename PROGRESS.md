@@ -5486,4 +5486,11 @@ src-tauri `cargo check --all-targets --locked` exit 0;
 - 回归：`jsdom-smoke.js` 断言两者类名一致且设置不带 `p`；`verify-settings-entry.js` 的三档字号几何检查改为断言宽高一致、底色/边框/字号一致，并继续检查底栏零溢出。
 - 静态四门、前端语法、jsdom 278/278 通过；`verify-settings-entry.js` 依赖真实窗口 CDP，本轮未运行。
 
+## 2026-11-19 网关诊断、空流识别与联调取消（工作区）
+
+- 网关诊断新增首字耗时、帧数、工具调用次数与参数字符数、token 用量、finish_reason 和零输出说明；诊断列表按状态区分错误与警告，错误和零输出同时写入脱敏诊断日志，便于定位上游空流、代理拦截和结构不兼容。
+- 流式处理补齐聊天上游的终止判定，收到 `[DONE]` 后不再继续等待 EOF；只收到结束标记但没有任何有效帧时明确返回 `incomplete_stream`，非 JSON 数据会保留片段并在诊断中说明，同时兼容 OpenAI 多段 content 数组与 Gemini `candidates` 结构。
+- 「模型与联调」的发送按钮显示已等待秒数，并新增取消按钮；取消会中止后端联调任务，前端按运行 ID 丢弃迟到结果，不会覆盖取消后的界面状态。
+- 回归覆盖空流错误、工具调用统计、诊断字段展示、取消命令调用与按钮恢复；`verify-gateway.js` 全部通过，jsdom 278/278，core 587 passed / 10 ignored，src-tauri `cargo check --all-targets --locked` 通过。
+
 

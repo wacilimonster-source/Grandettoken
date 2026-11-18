@@ -47,10 +47,12 @@ impl ChatSse {
         frames
     }
 
-    pub fn responses_terminal(&self) -> bool {
-        self.responses
-            .as_ref()
-            .is_some_and(ResponsesChatStream::is_terminal)
+    pub fn is_terminal(&self) -> bool {
+        self.chat.is_terminal()
+            || self
+                .responses
+                .as_ref()
+                .is_some_and(ResponsesChatStream::is_terminal)
     }
 
     pub fn stats(&self) -> &StreamStats {

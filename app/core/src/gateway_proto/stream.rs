@@ -9,7 +9,7 @@
 //! - 在 `[DONE]` 或 EOF 前刷新 `<think>` 状态机残余缓冲。
 
 use super::error::openai_error_value;
-use super::thinking::{normalize_stream_delta, ThinkTagSplitter};
+use super::thinking::{count_tool_calls, normalize_stream_delta, ThinkTagSplitter};
 use super::ThinkingMode;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -20,11 +20,14 @@ pub struct StreamStats {
     pub frame_count: usize,
     pub thinking_chars: usize,
     pub content_chars: usize,
+    pub tool_call_count: usize,
+    pub tool_call_chars: usize,
     pub finish_reason: Option<String>,
     pub prompt_tokens: Option<u64>,
     pub completion_tokens: Option<u64>,
     pub saw_error: bool,
     pub completed_cleanly: bool,
+    pub diagnostic_note: Option<String>,
 }
 
 /// 跨分片 UTF-8 与 SSE 行读取器（支持 `\n`、`\r\n` 与单独 `\r`）。
@@ -200,6 +203,10 @@ impl SseStreamNormalizer {
         out
     }
 
+    pub fn is_terminal(&self) -> bool {
+        self.done_emitted
+    }
+
     /// 上游结束（EOF），刷新尾部事件、思维链状态机，并在必要时补 `[DONE]` 或断流错误帧。
     pub fn finish(&mut self) -> Vec<String> {
         let mut out = Vec::new();
@@ -274,6 +281,8 @@ impl SseStreamNormalizer {
                 out.push("data: [DONE]\n\n".to_string());
             } else if self.stats.frame_count > 0 {
                 self.stats.saw_error = true;
+                self.stats.diagnostic_note =
+                    Some("上游流式只收到结束标记，未见 finish_reason".into());
                 let err = openai_error_value(
                     "上游只发送了结束标记，没有合法完成帧",
                     "upstream_incomplete_stream",
@@ -283,6 +292,23 @@ impl SseStreamNormalizer {
                 out.push(format!("data: {}\n\n", err));
                 out.push("data: [DONE]\n\n".to_string());
             } else {
+                // 0 个有效数据帧却收到 [DONE]（常见于代理空流或非 JSON 数据被跳过）
+                self.stats.saw_error = true;
+                let raw = self.non_sse_buf.trim();
+                let msg = if raw.is_empty() {
+                    "上游未返回任何有效数据帧（仅收到结束标记）".to_string()
+                } else {
+                    let short: String = raw.chars().take(300).collect();
+                    format!("上游 SSE 数据未包含合法 JSON 帧：{short}")
+                };
+                self.stats.diagnostic_note = Some(msg.clone());
+                let err = openai_error_value(
+                    &msg,
+                    "upstream_incomplete_stream",
+                    Some("incomplete_stream"),
+                    None,
+                );
+                out.push(format!("data: {}\n\n", err));
                 out.push("data: [DONE]\n\n".to_string());
             }
             self.done_emitted = true;
@@ -290,6 +316,10 @@ impl SseStreamNormalizer {
         }
 
         let Ok(val) = serde_json::from_str::<Value>(payload) else {
+            if !payload.trim().is_empty() && self.non_sse_buf.len() < 1024 {
+                self.non_sse_buf.push_str(payload.trim());
+                self.non_sse_buf.push('\n');
+            }
             return;
         };
         self.handle_value(val, out);
@@ -326,6 +356,11 @@ impl SseStreamNormalizer {
             if let Some(c) = usage.get("completion_tokens").and_then(Value::as_u64) {
                 self.stats.completion_tokens = Some(c);
             }
+        }
+
+        if root.get("choices").is_none() && root.get("candidates").is_some() {
+            self.stats.diagnostic_note =
+                Some("上游返回了原生 Gemini candidates 结构，而非 OpenAI choices".into());
         }
 
         if let Some(Value::Array(choices)) = root.get_mut("choices") {
@@ -369,11 +404,21 @@ impl SseStreamNormalizer {
                         out.push(format!("data: {tail_chunk}\n\n"));
                     }
                 }
+                if !choice_obj.contains_key("delta")
+                    && choice_obj.get("message").is_some_and(Value::is_object)
+                {
+                    if let Some(msg) = choice_obj.remove("message") {
+                        choice_obj.insert("delta".into(), msg);
+                    }
+                }
                 if let Some(Value::Object(delta)) = choice_obj.get_mut("delta") {
                     let splitter = self.splitters.entry(idx).or_insert_with(ThinkTagSplitter::new);
                     let (tc, cc) = normalize_stream_delta(delta, self.mode, splitter);
+                    let (tool_n, tool_c) = count_tool_calls(delta);
                     self.stats.thinking_chars += tc;
                     self.stats.content_chars += cc;
+                    self.stats.tool_call_count += tool_n;
+                    self.stats.tool_call_chars += tool_c;
                 }
             }
         }
@@ -471,5 +516,19 @@ mod tests {
         assert!(text.contains("\"tool_calls\""));
         assert!(text.contains("\"finish_reason\":\"tool_calls\""));
         assert!(norm.stats.completed_cleanly);
+        assert_eq!(norm.stats.tool_call_count, 1);
+        assert_eq!(norm.stats.tool_call_chars, 2);
+        assert!(norm.is_terminal());
+    }
+
+    #[test]
+    fn normalizer_flags_empty_done_stream_without_frames_as_error() {
+        let mut norm = SseStreamNormalizer::new("ap/g4", ThinkingMode::Auto);
+        let out = norm.push_bytes(b"data: [DONE]\n\n").join("");
+        assert!(norm.is_terminal());
+        assert!(norm.stats.saw_error);
+        assert!(!norm.stats.completed_cleanly);
+        assert!(out.contains("incomplete_stream"));
+        assert!(out.contains("data: [DONE]"));
     }
 }

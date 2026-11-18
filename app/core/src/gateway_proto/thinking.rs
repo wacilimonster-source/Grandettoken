@@ -273,6 +273,64 @@ fn collect_existing_reasoning(obj: &mut serde_json::Map<String, Value>) -> Strin
     out
 }
 
+/// 提取 `content` 文本（兼容字符串或 OpenAI 多段内容数组）。
+fn extract_text_from_value(val: &Value) -> Option<String> {
+    if let Some(s) = val.as_str() {
+        return Some(s.to_string());
+    }
+    let arr = val.as_array()?;
+    let mut joined = String::new();
+    for part in arr {
+        if let Some(t) = part.get("text").and_then(Value::as_str) {
+            joined.push_str(t);
+        }
+    }
+    (!joined.is_empty()).then_some(joined)
+}
+
+/// 统计 `delta` / `message` 中的 `tool_calls` 次数与参数字符数。
+pub fn count_tool_calls(container: &serde_json::Map<String, Value>) -> (usize, usize) {
+    let Some(arr) = container.get("tool_calls").and_then(Value::as_array) else {
+        return (0, 0);
+    };
+    let mut count = 0usize;
+    let mut chars = 0usize;
+    for call in arr {
+        let has_id = call
+            .get("id")
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.is_empty());
+        let name_nonempty = call
+            .pointer("/function/name")
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.is_empty());
+        if has_id || name_nonempty {
+            count += 1;
+        }
+        if let Some(args) = call.pointer("/function/arguments").and_then(Value::as_str) {
+            chars += args.chars().count();
+        }
+    }
+    (count, chars)
+}
+
+/// 统计非流式响应中所有 `choices[*].message.tool_calls` 的次数与参数字符数。
+pub fn summarize_non_stream_tools(value: &Value) -> (usize, usize) {
+    let Some(choices) = value.get("choices").and_then(Value::as_array) else {
+        return (0, 0);
+    };
+    let mut total_count = 0usize;
+    let mut total_chars = 0usize;
+    for choice in choices {
+        if let Some(msg) = choice.get("message").and_then(Value::as_object) {
+            let (c, ch) = count_tool_calls(msg);
+            total_count += c;
+            total_chars += ch;
+        }
+    }
+    (total_count, total_chars)
+}
+
 /// 归一化单条流式 delta 对象（返回 `(thinking_chars, content_chars)` 统计）。
 pub fn normalize_stream_delta(
     delta: &mut serde_json::Map<String, Value>,
@@ -288,7 +346,7 @@ pub fn normalize_stream_delta(
             .unwrap_or(0);
         let cc = delta
             .get("content")
-            .and_then(Value::as_str)
+            .and_then(extract_text_from_value)
             .map(|s| s.chars().count())
             .unwrap_or(0);
         return (tc, cc);
@@ -296,10 +354,7 @@ pub fn normalize_stream_delta(
 
     let mut reasoning = collect_existing_reasoning(delta);
     let google_thought = consume_google_thought_flag(delta);
-    let raw_content = delta
-        .get("content")
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    let raw_content = delta.get("content").and_then(extract_text_from_value);
 
     if google_thought {
         if let Some(c) = raw_content {
@@ -329,7 +384,7 @@ pub fn normalize_stream_delta(
     let tc = reasoning.chars().count();
     let cc = delta
         .get("content")
-        .and_then(Value::as_str)
+        .and_then(extract_text_from_value)
         .map(|s| s.chars().count())
         .unwrap_or(0);
     (tc, cc)
@@ -365,7 +420,7 @@ pub fn normalize_non_stream_response(
                 .unwrap_or(0);
             content_chars += msg
                 .get("content")
-                .and_then(Value::as_str)
+                .and_then(extract_text_from_value)
                 .map(|s| s.chars().count())
                 .unwrap_or(0);
             continue;
@@ -374,12 +429,12 @@ pub fn normalize_non_stream_response(
         let mut reasoning = collect_existing_reasoning(msg);
         let google_thought = consume_google_thought_flag(msg);
         if google_thought {
-            if let Some(c) = msg.get("content").and_then(Value::as_str).map(str::to_string) {
+            if let Some(c) = msg.get("content").and_then(extract_text_from_value) {
                 reasoning.push_str(&c);
                 msg.insert("content".into(), Value::String(String::new()));
             }
         } else if mode == ThinkingMode::Auto && reasoning.is_empty() {
-            if let Some(c) = msg.get("content").and_then(Value::as_str).map(str::to_string) {
+            if let Some(c) = msg.get("content").and_then(extract_text_from_value) {
                 let split = split_think_tags_complete(&c);
                 if !split.thinking.is_empty() {
                     reasoning = split.thinking;
@@ -394,7 +449,7 @@ pub fn normalize_non_stream_response(
         }
         content_chars += msg
             .get("content")
-            .and_then(Value::as_str)
+            .and_then(extract_text_from_value)
             .map(|s| s.chars().count())
             .unwrap_or(0);
     }
