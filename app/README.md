@@ -21,6 +21,10 @@ Google Cloud 赠金渠道另由 `core/src/google_cloud.rs`、`src-tauri/src/goog
 赠金表，按结算账号与赠金 ID 保存余额、手填到期时间。测试入口为 `node build/verify-google-cloud.js`，
 需通过 `npm install jsdom --no-save` 安装开发依赖；真实 Google 登录与页面读取需另做在线验证。
 
+首页临期筛选由 `src/expiry-ui.js` 统一判断：今天起七个本地自然日内的逐笔积分计入金额，
+Qoder 账户额度到期单独进入筛选而不折算积分；旧逐笔快照不算作当前已确认金额。
+`node build/verify-expiry.js` 覆盖时间边界及反向哨兵，界面交互由 jsdom 冒烟覆盖。
+
 | 渠道 | 接口 | 类型 | 说明 |
 |---|---|---|---|
 | 4SAPI | `GET https://4sapi.com/api/usage/token` | 金额型 | 积分制,500000 积分 = ¥1 |

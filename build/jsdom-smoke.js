@@ -78,8 +78,20 @@ if (process.env.CHECKIN_SENTINEL === "1") {
       || !/FAIL 125% 贴边展开与解除贴边使用相同的工作区高度/.test(workAreaProbe.stdout)) {
     throw new Error("工作区哨兵自检失败：使用整屏边界必须触发普通面板与贴边回归");
   }
+  const expiryProbe = spawnSync(process.execPath, [__filename], {
+    env: { ...process.env, CHECKIN_SENTINEL: "1", EXPIRY_UI_SENTINEL: "1" }, encoding: "utf8", timeout: 20000,
+  });
+  if (expiryProbe.status !== 1 || !/FAIL 账户到期单独出现时仍可筛选/.test(expiryProbe.stdout)) {
+    throw new Error("临期哨兵自检失败：漏掉账户到期必须被实际界面断言拦截");
+  }
 }
 const vaultJs = fs.readFileSync(path.join(SRC, "vault-view.js"), "utf8");
+let expiryJs = fs.readFileSync(path.join(SRC, "expiry-ui.js"), "utf8");
+if (process.env.EXPIRY_UI_SENTINEL === "1") {
+  const marker = "const first = [...entries, ...accounts].sort";
+  if (expiryJs.split(marker).length !== 2) throw new Error("临期哨兵未命中账户摘要入口");
+  expiryJs = expiryJs.replace(marker, "accounts.length = 0; const first = [...entries, ...accounts].sort");
+}
 const layoutJs = fs.readFileSync(path.join(SRC, "panel-layout.js"), "utf8");
 const cloudJs = fs.readFileSync(path.join(SRC, "google-cloud.js"), "utf8");
 let antigravityJs = fs.readFileSync(path.join(SRC, "antigravity.js"), "utf8");
@@ -278,6 +290,81 @@ const HARNESS = `
   ck("最先到期分两行:渠道名 + 日期", !!document.querySelector("#sum .due-name") && !!document.querySelector("#sum .due-date"), S().slice(0, 400));
   ck("底栏状态各自带状态点", document.querySelectorAll("#fstat .fb-dot").length >= 2,
     document.getElementById("fstat").innerHTML);
+
+  // 账户级有效期与逐笔积分分开计数，但都能通过同一个入口筛选。
+  {
+    const RealDate = window.Date;
+    const oldLayout = CFG.panelLayout;
+    let clock = new RealDate(2026, 10, 18, 12).getTime();
+    class FixedDate extends RealDate {
+      constructor(...args) { super(...(args.length ? args : [clock])); }
+      static now() { return clock; }
+    }
+    window.Date = FixedDate;
+    try {
+      const q = { id: "qoder-cn", name: "Qoder 国内版", short: "QC", kind: "points", color: "#888",
+        unit: "credits", remaining: 500, valid: true, hasKey: true, hidden: false, expiryComplete: false,
+        accountExpiry: { state: "dated", at: new RealDate(2026, 10, 22, 0, 31).getTime() / 1000 }, expiring: [],
+        extra: [["逐笔到期明细", "网页会话失效或未登录 · 请登录网页版"]] };
+      CHANNELS = [q]; EXPIRY_FILTER = false;
+      window.__EXPIRY_LAYOUTS = {};
+      for (const layout of ["single", "double", "thumbnail"]) {
+        CFG.panelLayout = layout; window.PanelLayoutUI.update(layout); render({});
+        const button = document.querySelector('#sum [data-act="expiry-filter"]');
+        const row = document.querySelector('#list .row[data-id="qoder-cn"]');
+        ck("账户到期单独出现时仍可筛选 " + layout,
+          !!button && !button.disabled && /账户到期/.test(button.textContent) && /不计入积分合计/.test(button.title),
+          button && button.outerHTML);
+        ck("Qoder 账户到期注明范围 " + layout, !!row && /账户额度/.test(row.textContent) &&
+          (layout !== "thumbnail" || /账户额度到期/.test(row.querySelector('.thumb-status').textContent)), row && row.textContent);
+        window.__EXPIRY_LAYOUTS[layout] = { sum: document.getElementById('sum').innerHTML, row: row && row.outerHTML };
+        if (button && !button.disabled) button.click();
+        ck("点击账户到期筛选并恢复 " + layout,
+          EXPIRY_FILTER && !!document.querySelector('#list .row[data-id="qoder-cn"]') &&
+          document.querySelector('#sum [data-act="expiry-filter"]').getAttribute('aria-pressed') === 'true');
+        if (EXPIRY_FILTER) document.querySelector('#sum [data-act="expiry-filter"]').click();
+        CHANNELS = [{ ...q, expiring: [{ at: new RealDate(2026, 10, 27, 10).getTime() / 1000, amount: 25 }] }];
+        render({});
+        const withLaterPack = document.querySelector('#list .row[data-id="qoder-cn"]');
+        ck("账户早于积分包时卡片显示账户到期 " + layout,
+          !!withLaterPack && (layout === 'thumbnail' ? /账户额度到期/.test(withLaterPack.querySelector('.thumb-status').textContent) :
+            /账户额度/.test(withLaterPack.querySelector('.r2').textContent)), withLaterPack && withLaterPack.textContent);
+        CHANNELS = [q];
+      }
+      const wb = { ...q, id: "wb-expiry", name: "WorkBuddy", accountExpiry: null, expiryComplete: true,
+        expiring: [{ at: new RealDate(2026, 10, 23, 10).getTime() / 1000, amount: 75 }], extra: [] };
+      CHANNELS = [wb, q]; render({});
+      const mixed = document.querySelector('#sum [data-act="expiry-filter"]');
+      const due = document.querySelector('#sum [data-act="jump"]');
+      window.__EXPIRY_LAYOUTS.mixed = { sum: document.getElementById('sum').innerHTML };
+      ck("账户与逐笔同时临期时积分只算逐笔且最早日期注明账户",
+        /75/.test(mixed.textContent) && /1 账户/.test(mixed.textContent) && /不计入积分合计/.test(mixed.title) &&
+        due && due.dataset.id === 'qoder-cn' && /账户额度到期/.test(due.textContent), mixed && mixed.outerHTML);
+      if (mixed) mixed.click();
+      ck("混合筛选按最早到期排序并包含两种渠道",
+        [...document.querySelectorAll('#list .row')].map(row => row.dataset.id).join(',') === 'qoder-cn,wb-expiry');
+      CHANNELS = [q]; render({});
+      clock = new RealDate(2026, 10, 22, 0, 32).getTime();
+      tickPeakCountdowns();
+      ck("跨过账户到期时刻自动退出旧筛选", !EXPIRY_FILTER && document.querySelector('#sum [data-act="expiry-filter"]').disabled);
+      const note = renderDetail(q);
+      ck("Qoder 详情显示真实网页会话失败原因", /网页会话失效或未登录/.test(note) && /登录网页版/.test(note));
+      const cached = renderDetail({ ...q, expiryComplete: false, expiryStale: true,
+        expiring: [{ at: new RealDate(2026, 10, 23, 10).getTime() / 1000, amount: 50 }],
+        extra: [["逐笔到期明细", "网页会话失效或未登录 · 请登录网页版 · 沿用 11-18 12:00 抓到的列表"]] });
+      ck("Qoder 沿用旧明细时不宣称当前登录有效", /沿用 11-18/.test(cached) &&
+        (cached.match(/网页会话失效/g) || []).length === 1 && /50 分/.test(cached));
+      const oldQuick = qoderQuickHtml({ ...q, expiryComplete: false, expiryStale: true,
+        extra: [["逐笔到期明细", "网页会话失效 · 沿用上次列表"]] });
+      const shapeQuick = qoderQuickHtml({ ...q, extra: [["逐笔到期明细", "网页已登录 · 积分明细接口返回结构未识别"]] });
+      ck("Qoder 管理页分别显示旧明细和已登录但结构未知", /沿用/.test(oldQuick) && !/ccquick-ok/.test(oldQuick) &&
+        /网页已登录/.test(shapeQuick) && /结构未识别/.test(shapeQuick));
+    } catch (e) { ck("账户与积分临期界面交互", false, e.stack); }
+    finally {
+      window.Date = RealDate; EXPIRY_FILTER = false; CHANNELS = data.CHANNELS;
+      CFG.panelLayout = oldLayout; window.PanelLayoutUI.update(oldLayout); render({});
+    }
+  }
 
   // ── 颜色纪律:健康行大数字不再染色 ──
   const ocRow = document.querySelector('.row[data-id="oc"]');
@@ -913,8 +1000,8 @@ const HARNESS = `
     window.__TEST.openManage();
     const qcardOff = document.querySelector('#chList .ccard[data-id="qoder"]');
     const qquickOff = qcardOff && qcardOff.querySelector(".ccquick");
-    ck("未登录:Qoder 渠道卡仍写「需登录」并给「登录网页版」",
-      !!qquickOff && /逐笔积分到期明细需登录网页账号/.test(qquickOff.textContent) &&
+    ck("未登录:Qoder 渠道卡说明逐笔明细暂不可用并给登录入口",
+      !!qquickOff && /逐笔明细暂不可用/.test(qquickOff.textContent) &&
       /登录网页版/.test(qquickOff.textContent) && !/重新登录/.test(qquickOff.textContent),
       qquickOff && qquickOff.innerHTML.slice(0, 320));
     const ocard = document.querySelector('#chList .ccard[data-id="ds"]');
@@ -922,8 +1009,8 @@ const HARNESS = `
 
     const qd2 = Object.assign({}, qd, { expiring: [], expiryComplete: false });
     const dq2 = renderDetail(qd2);
-    ck("没有包数据:空态仍说「接口未提供完整的逐笔到期信息」",
-      /接口未提供完整的逐笔到期信息/.test(dq2), dq2.slice(0, 200));
+    ck("没有包数据:空态说明逐笔到期信息尚未获取完整",
+      /逐笔到期信息尚未获取完整/.test(dq2), dq2.slice(0, 200));
     const qd3 = Object.assign({}, qd, { expiring: [], expiryComplete: true });
     const dq3 = renderDetail(qd3);
     ck("平台确认无包:说「没有已知到期日」而不是装失败",
@@ -1244,11 +1331,12 @@ w.__DATA = DATA;
   try {
     const initMarker = "(async function init() {";
     if (js.split(initMarker).length !== 2) throw new Error("初始化入口必须唯一");
-    w.eval(vaultJs + "\n;\n" + layoutJs + "\n;\n" + js.replace(initMarker, "window.__INIT = " + initMarker)
+    w.eval(vaultJs + "\n;\n" + expiryJs + "\n;\n" + layoutJs + "\n;\n" + js.replace(initMarker, "window.__INIT = " + initMarker)
       + "\n;\n" + antigravityJs
       + "\n;\n" + cloudJs
       + "\n;window.__RUN_HARNESS = async () => { await window.__INIT;\n" + HARNESS + "\n};");
     await w.__RUN_HARNESS();
+    if (process.env.EXPIRY_LAYOUT_FIXTURES) fs.writeFileSync(process.env.EXPIRY_LAYOUT_FIXTURES, JSON.stringify(w.__EXPIRY_LAYOUTS));
   } catch (e) {
     console.log("✗ 脚本整体执行抛异常:" + e.message);
     console.log((e.stack || "").split("\n").slice(0, 4).join("\n"));

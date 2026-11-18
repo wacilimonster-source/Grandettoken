@@ -161,10 +161,11 @@
       status = rail.left;
       end = rail.right;
     } else if (c.kind === "points") {
-      const expiry = (c.expiring || []).filter(e => e.amount > 0 && e.at * 1000 > Date.now()).sort((a, b) => a.at - b.at)[0];
-      if (expiry) {
-        status = `${esc(points(expiry.amount))} ${esc(c.unit && c.unit !== "credits" ? c.unit : "分")}将到期`;
-        end = expiryDateHtml(expiry.at);
+      const next = window.ExpiryUI.nextEvent(c);
+      if (next) {
+        status = next.type === "account" ? "账户额度到期" :
+          `${esc(points(next.entry.amount))} ${esc(c.unit && c.unit !== "credits" ? c.unit : "分")}将到期`;
+        end = expiryDateHtml(next.at);
       }
       else status = railLeft || railRight || sub;
     } else if (mw) {

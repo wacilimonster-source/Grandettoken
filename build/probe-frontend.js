@@ -182,6 +182,7 @@ const windowMock = {
         outerSize: async () => ({ width: 400, height: 580 }),
         scaleFactor: async () => 1,
         isAlwaysOnTop: async () => false,
+        isVisible: async () => true,
         onMoved: async () => () => {},
       }),
       currentMonitor: async () => ({
@@ -355,6 +356,7 @@ function probeLogCardCheck() {
 process.on('unhandledRejection', (e) => logs.push(['UNHANDLED', String(e && e.stack || e)]));
 try {
   vm.runInContext(vaultSrc, ctx, { filename: 'vault-view.js' });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../app/src/expiry-ui.js'), 'utf8'), ctx, { filename: 'expiry-ui.js' });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../app/src/panel-layout.js'), 'utf8'), ctx, { filename: 'panel-layout.js' });
   vm.runInContext(src, ctx, { filename: 'app.js' });
 } catch (e) {

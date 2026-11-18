@@ -50,6 +50,8 @@ ZCode / DeepSeek Harness(写入前备份、写完读回校验、失败自动回�
 装了之后点「检查更新」就能收到新版 —— 更新走
 `releases/latest/download/latest.json`,该地址永远指向最新可用版。
 数据与密钥都在安装目录之外,**覆盖安装、升级、重装都不丢**。
+Qoder 的逐笔到期明细另用挂件内的网页会话；升级不会主动清除此会话，但平台会话可能失效，
+此时需在对应区域的渠道卡重新登录。桌面端余额凭据与网页会话彼此独立。
 
 ```
 installer   Grandettoken_<版本>_x64-setup.exe

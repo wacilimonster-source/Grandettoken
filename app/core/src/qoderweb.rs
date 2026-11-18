@@ -111,6 +111,24 @@ pub enum PacksErr {
     Other(String),
 }
 
+impl PacksErr {
+    /// 同一失败原因无论是否有旧明细都应显示给用户。
+    pub fn user_message(&self) -> &'static str {
+        match self {
+            Self::Unauthorized => "网页会话失效或未登录 · 请登录网页版",
+            Self::Unrecognized(_) => "网页已登录 · 积分明细接口返回结构未识别",
+            Self::Other(_) => "逐笔明细暂时获取失败 · 稍后自动重试",
+        }
+    }
+}
+
+/// 保留上一轮逐笔列表供查看，但不能把它当成本轮完整明细。
+pub fn use_cached_packs(result: &mut crate::providers::FetchResult, packs: Vec<Expiring>) {
+    result.expiring = packs;
+    result.expiry_complete = false;
+    result.expiry_stale = true;
+}
+
 /// 按候选顺序抓一次逐包列表。全都不像包形状 → Err(带结构说明,只记形状不记值)。
 ///
 /// `memo` 命中时先试赢过的那条,失败再回落全链 —— 国际版每轮最多 3 个请求,
@@ -499,6 +517,34 @@ fn packs_from_array(arr: &[serde_json::Value]) -> Vec<CreditPack> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn pack_errors_offer_distinct_actions_without_exposing_details() {
+        let rejected = PacksErr::Unauthorized.user_message();
+        let shape = PacksErr::Unrecognized("private detail".into()).user_message();
+        let network = PacksErr::Other("private detail".into()).user_message();
+        assert!(rejected.contains("登录网页版"));
+        assert!(shape.contains("已登录") && !shape.contains("请登录"));
+        assert!(network.contains("重试") && !network.contains("登录"));
+        assert!(!shape.contains("private") && !network.contains("private"));
+    }
+
+    #[test]
+    fn cached_packs_remain_visible_without_claiming_current_completeness() {
+        let mut result = crate::providers::FetchResult {
+            valid: true, remaining: Some(100.0), expiry_complete: true,
+            account_expiry: Some(crate::providers::AccountExpiry {
+                state: crate::providers::AccountExpiryState::Dated, at: Some(200),
+            }),
+            ..Default::default()
+        };
+        let packs = vec![Expiring { at: 180, amount: 50.0, label: "test".into() }];
+        use_cached_packs(&mut result, packs);
+        assert_eq!(result.expiring.len(), 1);
+        assert!(!result.expiry_complete && result.expiry_stale);
+        assert_eq!(result.remaining, Some(100.0));
+        assert_eq!(result.account_expiry.unwrap().at, Some(200));
+    }
 
     /// 组织版 dedicated 包的确证形状(camelCase):details 逐包带 expiresAt。
     #[test]

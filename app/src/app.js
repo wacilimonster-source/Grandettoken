@@ -459,74 +459,25 @@ function fmtDay(ts) {
   return `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-/** 未来 days 个**自然日**内会过期的积分合计。窗口从今天 00:00 起算
- *  (报告 L4):以前从"当前时刻 + N×24h"起算,晚间横跨 8 个自然日,
- *  柱状图按自然日切桶就会漏掉第 8 天的到期,图与合计对不上。 */
+/** 从今天起 days 个本地自然日内的逐笔积分合计。 */
 function expiringWithin(c, days) {
-  const now = Date.now() / 1000;
-  const base = new Date();
-  base.setHours(0, 0, 0, 0);
-  const limit = base.getTime() / 1000 + days * 86400;
-  return (c.expiring || [])
-    .filter((e) => e.at >= now && e.at <= limit)
-    .reduce((a, e) => a + e.amount, 0);
-}
-
-/** 积分到期摘要中的有效记录。未知的逐笔到期信息不伪装成“没有临期”。 */
-function expiringEntriesWithin(c, days) {
-  const now = Date.now() / 1000;
-  const base = new Date();
-  base.setHours(0, 0, 0, 0);
-  const limit = base.getTime() / 1000 + days * 86400;
-  return (c && c.expiring ? c.expiring : []).filter(
-    (e) =>
-      e &&
-      Number.isFinite(Number(e.at)) &&
-      Number.isFinite(Number(e.amount)) &&
-      Number(e.amount) > 0 &&
-      e.at >= now &&
-      e.at <= limit
-  );
+  return window.ExpiryUI.entriesWithin(c, days).reduce((sum, e) => sum + Number(e.amount), 0);
 }
 
 /** 顶部摘要的临期窗口(天)。只影响首页摘要 / 临期筛选;
  *  详情仍列全部记录,风控 / 通知 / 30 日历史查询不跟着改窗口。 */
 const SUMMARY_EXPIRY_DAYS = 7;
 
-/** 顶部摘要只统计当前可见、取数有效的积分渠道；逐笔明细未知的渠道单独计数。 */
 function expirySummary() {
-  const channels = CHANNELS.filter(
-    (c) => c.hasKey && !c.hidden && c.valid && c.kind === "points"
-  );
-  const unknown = channels.filter(
-    (c) => c.expiryComplete !== true && Number(c.remaining || 0) > 0
-  );
-  const entries = channels.flatMap((c) =>
-    expiringEntriesWithin(c, SUMMARY_EXPIRY_DAYS).map((entry) => ({ channel: c, entry }))
-  );
-  entries.sort((a, b) => a.entry.at - b.entry.at);
-  const total = entries.reduce((sum, x) => sum + Number(x.entry.amount), 0);
-  return {
-    total: Math.round(total * 100) / 100,
-    channels: new Set(entries.map((x) => x.channel.id)).size,
-    entries,
-    first: entries[0] || null,
-    unknown,
-  };
+  return window.ExpiryUI.summary(CHANNELS, SUMMARY_EXPIRY_DAYS);
 }
 
 let EXPIRY_FILTER = false;
 function hasConfirmedExpiry(c) {
-  return (
-    c && c.hasKey && !c.hidden && c.valid && c.kind === "points" &&
-    expiringWithin(c, SUMMARY_EXPIRY_DAYS) > 0
-  );
+  return nearestExpiryAt(c) !== null;
 }
 function nearestExpiryAt(c) {
-  return expiringEntriesWithin(c, SUMMARY_EXPIRY_DAYS).reduce(
-    (at, e) => (at === null || e.at < at ? e.at : at),
-    null
-  );
+  return window.ExpiryUI.nearest(c, SUMMARY_EXPIRY_DAYS);
 }
 
 function toneOf(c) {
@@ -984,22 +935,21 @@ function renderRow(c, i) {
     railLeft = rail.left;
     railRight = rail.right;
   } else if (isPts) {
-    const upcoming = (c.expiring || [])
-      .filter((e) => e && Number(e.amount) > 0 && e.at * 1000 > Date.now())
-      .sort((a, b) => a.at - b.at);
-    if (upcoming.length) {
-      const e = upcoming[0];
+    const next = window.ExpiryUI.nextEvent(c);
+    if (next && next.type === "points") {
+      const e = next.entry;
       railLeft = `最近 ${window.PanelLayoutUI.expiryDateHtml(e.at)} ${fmtClock(e.at)} 到期 · ${points(e.amount)} 分`;
       railRight = expiryRelativeSpan(e.at);
       railWarn = e.at * 1000 - Date.now() <= 7 * 86400e3;
+    } else if (next && next.type === "account") {
+      railLeft = `账户额度 ${window.PanelLayoutUI.expiryDateHtml(next.at)} ${fmtClock(next.at)} 到期`;
+      railRight = expiryRelativeSpan(next.at);
+      railWarn = next.at * 1000 - Date.now() <= 7 * 86400e3;
     } else {
-      // 没有逐笔明细时,Qoder 的账户级有效期是唯一能确认的时间信息;
-      // 它仍然只代表账户,不能写成"积分全部到期"。
       const acc = accountExpiryOf(c);
       if (acc && acc.state === "dated" && acc.at) {
         railLeft = `账户额度 ${expiryParts(acc.at).date} ${expiryParts(acc.at).time} 到期`;
         railRight = expiryRelativeSpan(acc.at);
-        railWarn = acc.at * 1000 - Date.now() <= 7 * 86400e3;
       } else if (acc && acc.state === "never") {
         railLeft = "账户额度不过期";
         railRight = "逐笔到期未知";
@@ -1236,18 +1186,17 @@ function accountExpiryHtml(c) {
 /**
  * 详情里的「登录网页版」就地入口(2026-11-08 用户反馈"页面上找不到入口")。
  *
- * 只在**逐笔明细还不完整**时出现:数据已经在的时候别再劝登录。位置就在
- * 「逐笔积分到期 · 未知」那一段下面 —— 用户是在这里发现"未知"的,入口必须也在
- * 这里,而不是让他去设置页里翻两层折叠。
+ * 逐笔明细不完整或沿用旧数据时，就地显示原因与登录入口。
  */
 function qoderLoginBar(c) {
   if (c.id !== "qoder" && c.id !== "qoder-cn") return "";
-  if (c.expiryComplete === true) return "";
+  const notice = window.ExpiryUI.qoderNotice(c);
+  if (notice.fresh) return "";
   return `<div class="qoder-login-bar">
-    <span>逐笔积分到期明细需登录网页账号</span>
+    <span>${esc(notice.text)}</span>
     <button class="btn s" data-act="qoderweblogin" data-id="${c.id}"${
     QODER_LOGGING ? " disabled" : ""
-  }>${QODER_LOGGING ? "登录中…" : "登录网页版"}</button>
+  }>${QODER_LOGGING ? "登录中…" : notice.button}</button>
     <button class="why" data-why="qoderweb" aria-expanded="false" aria-label="网页会话的说明"></button>
   </div>`;
 }
@@ -1334,12 +1283,12 @@ function pointsExpiryHtml(c, showAll) {
       // 不再叠一张「暂未提供」的大卡(两句话说的是同一件事)。
       html += `<div class="expiry-table"><div class="expiry-entry">
         <div><b>逐笔积分到期</b><p>${
-          unknownItemized ? "当前未提供逐笔明细" : "当前剩余积分没有已知到期日"
+          unknownItemized ? "当前未获取逐笔明细" : "当前剩余积分没有已知到期日"
         }</p></div>
         <span class="setting-end">${unknownItemized ? "未知" : "无记录"}</span></div></div>`;
       html += `<p class="expiry-footnote">${
         unknownItemized
-          ? "接口未提供完整的逐笔到期信息;账户有效期与逐笔积分到期不同,不能据此判断所有积分的到期时间。"
+          ? "逐笔到期信息尚未获取完整;账户有效期与逐笔积分到期不同,不能据此判断所有积分的到期时间。"
           : "账户有效期与逐笔积分到期不同,不能据此判断所有积分在同一时间到期。"
       }</p>`;
       return html;
@@ -1592,7 +1541,8 @@ function renderDetail(c, inDialog = false) {
     (isAntigravity(c) && (c.windows || []).length && window.AntigravityUI && window.AntigravityUI.ownsExtra(k)) ||
     (k === "套餐" && c.id === "codex") ||
     ((k === "额度包" || k === "积分包") && hasExpList) ||
-    (k === "逐笔到期明细" && c.kind === "points" && !hasExpList) ||
+    (k === "逐笔到期明细" && c.kind === "points" && (!hasExpList ||
+      ((c.id === "qoder" || c.id === "qoder-cn") && !window.ExpiryUI.qoderNotice(c).fresh))) ||
     // 账户额度到期已经由积分组件顶部的账户卡说了,不再在明细里重复
     (k === "账户额度到期" && c.kind === "points" && !!accountExpiryOf(c));
   const extras = (c.extra || []).filter(([k]) => !dupExtra(k));
@@ -2089,16 +2039,12 @@ function qReconcile(box, items) {
   while (box.children[i]) box.removeChild(box.children[i]);
 }
 
-/** 顶部临期摘要:30 天内确认到期积分 / 最先到期渠道 / 签到进度。 */
 /** 未来 7 天的临期分布:按本地日切桶,用迷你柱表示"哪几天集中到期"。
  *  没有可确认的到期记录时只画一条虚线基线 —— 不虚构柱子。 */
 function expiry7Bars(summary) {
-  const base = new Date();
-  base.setHours(0, 0, 0, 0);
-  const baseSec = base.getTime() / 1000;
   const buckets = Array(7).fill(0);
   for (const x of (summary && summary.entries) || []) {
-    const idx = Math.floor((x.entry.at - baseSec) / 86400);
+    const idx = window.ExpiryUI.dayIndex(Number(x.entry.at));
     if (idx >= 0 && idx < 7) buckets[idx] += Number(x.entry.amount) || 0;
   }
   const max = Math.max(...buckets);
@@ -2116,21 +2062,24 @@ function renderRiskBand() {
   const box = $("sum");
   if (!box) return;
   const summary = expirySummary();
-  const hasConfirmed = summary.total >= 0.01;
-  // 如果一轮新数据已没有可确认的临期积分,退出旧筛选避免渠道列表空白。
+  const hasConfirmed = summary.hasConfirmed;
+  const hasPoints = summary.entries.length > 0;
+  // 如果一轮新数据已没有可确认的临期事项,退出旧筛选避免渠道列表空白。
   if (EXPIRY_FILTER && !hasConfirmed) EXPIRY_FILTER = false;
 
   const riskLabel = hasConfirmed
-    ? summary.unknown.length ? "已确认临期" : "临期积分"
+    ? summary.unknown.length || summary.accounts.length ? "已确认临期" : "临期积分"
     : "临期积分";
   const riskValue = hasConfirmed
-    ? points(summary.total)
+    ? hasPoints ? points(summary.total) : "账户到期"
     : summary.unknown.length
       ? "已知 0"
       : CHANNELS.length ? "暂无" : "——";
   const riskSub = hasConfirmed
     ? EXPIRY_FILTER
       ? "点击恢复全部渠道"
+      : summary.accounts.length
+        ? hasPoints ? `${summary.channels} 积分渠道 · ${summary.accounts.length} 账户` : `${summary.accounts.length} 个账户到期 · 筛选`
       : summary.unknown.length
         ? `${summary.channels} 渠道 · ${summary.unknown.length} 未知`
         : `${summary.channels} 个渠道 · 筛选`
@@ -2138,19 +2087,21 @@ function renderRiskBand() {
       ? "部分渠道到期信息未知"
       : CHANNELS.length ? `${SUMMARY_EXPIRY_DAYS} 天内暂无到期` : "等待数据";
   const riskTitle = EXPIRY_FILTER
-    ? "当前只显示临期积分渠道;点击恢复全部渠道"
+    ? "当前只显示临期积分或账户额度到期的渠道;账户额度不计入积分合计;点击恢复全部渠道"
     : hasConfirmed
-      ? `未来 ${SUMMARY_EXPIRY_DAYS} 天可确认的积分到期合计 · 点击筛选临期渠道${
+      ? `今天起 ${SUMMARY_EXPIRY_DAYS} 个自然日内可确认的逐笔积分合计 · 点击筛选临期渠道${
+          summary.accounts.length ? `;${summary.accounts.length} 个账户额度到期,不计入积分合计` : ""
+        }${
           summary.unknown.length ? `;另有 ${summary.unknown.length} 个渠道到期明细未知` : ""
         }`
       : summary.unknown.length
         ? "有积分渠道未提供逐笔到期信息,无法确认是否临期"
         : `未来 ${SUMMARY_EXPIRY_DAYS} 天没有可确认的积分到期记录`;
-  const riskCount = hasConfirmed ? `${points(summary.total)} 分` : "";
+  const riskCount = hasPoints ? `${points(summary.total)} 分` : "";
   const cell1 = `<button type="button" class="cell metric risk-cell${EXPIRY_FILTER ? " on" : ""}${hasConfirmed ? " has-risk" : ""}"
       data-act="expiry-filter" aria-pressed="${EXPIRY_FILTER}" title="${esc(riskCount ? riskCount + " · " + riskTitle : riskTitle)}"${hasConfirmed ? "" : " disabled"}>
       <div class="metric-label lb"><svg aria-hidden="true"><use href="#i-clock"/></svg>${riskLabel}</div>
-      <div class="metric-number vv">${hasConfirmed
+      <div class="metric-number vv">${hasPoints
         ? `<span class="hero-v">${points(summary.total)}</span><span class="hero-unit">分</span>`
         : `<span class="hero-v" style="color:var(--tx3)">${riskValue}</span>`}</div>
       <div class="metric-sub sb sb-row"><span class="sb-tx">${riskSub}</span>${expiry7Bars(summary)}</div></button>`;
@@ -2161,18 +2112,15 @@ function renderRiskBand() {
   if (first) {
     // 自然日差,与 expiryRelative 同一口径(报告 L4):ceil 的"剩 N 天"会把
     // 今天 23:00 到期的积分写成"剩 1 天",同一界面另一处却是"今天到期"。
-    const d0 = new Date();
-    d0.setHours(0, 0, 0, 0);
-    const d1 = new Date(first.entry.at * 1000);
-    d1.setHours(0, 0, 0, 0);
-    const days = Math.round((d1 - d0) / 86400000);
+    const days = window.ExpiryUI.dayIndex(Number(first.entry.at));
     const when = days <= 0 ? "今天" : days === 1 ? "明天" : `剩 ${days} 天`;
     const dueColor = days <= 7 ? "var(--warn)" : "var(--tx)";
-    const title = `打开 ${first.channel.name} 的到期明细 · ${fmtDay(first.entry.at)} · ${points(first.entry.amount)} 分`;
+    const description = first.type === "account" ? "账户额度到期" : `${points(first.entry.amount)} 分`;
+    const title = `打开 ${first.channel.name} 的到期明细 · ${fmtDay(first.entry.at)} · ${description}`;
     cell2 = `<button type="button" class="cell metric" data-act="jump" data-id="${esc(first.channel.id)}" title="${esc(title)}">
       <div class="metric-label lb">${summary.unknown.length ? "最早可确认" : "最先到期"}</div>
       <div class="metric-number due-date" style="color:${dueColor}">${fmtDay(first.entry.at)}<small style="font-size:11px;color:var(--tx3);margin-left:5px;letter-spacing:0">${when}</small></div>
-      <div class="metric-sub"><span class="due-name">${esc(first.channel.name)} · ${points(first.entry.amount)} 分</span></div></button>`;
+      <div class="metric-sub"><span class="due-name">${esc(first.channel.name)} · ${description}</span></div></button>`;
   } else if (summary.unknown.length) {
     const unknown = summary.unknown[0];
     cell2 = `<div class="cell metric"><div class="metric-label lb">到期日期未知</div>
@@ -2829,7 +2777,7 @@ function renderPillFace() {
       const ms2 = resetMs(mw2);
       if (ms2 !== null) bits.push(`${mw2.label}窗 ${fmtReset(ms2, false)}`);
     }
-    if (c.kind === "points" && c.expiringSoon) {
+    if (c.kind === "points" && c.expiringSoon && !c.expiryStale && !c.stale) {
       bits.push(`近 30 天过期 ${points(c.expiringSoon.amount)} 分`);
     }
     if (c.limited) bits.push("已限流");
@@ -3231,23 +3179,16 @@ function toggleWhy(btn) {
 /**
  * 设置页 Qoder 网页会话入口(常驻在折叠体外面,别再藏进 .ccbody)。
  *
- * 已登录的判据与详情栏 qoderLoginBar **完全一致**:expiryComplete === true 表示
- * 本轮已用网页会话取到逐笔明细(Rust fetch.rs 只在 fetch_packs 成功、或沿用
- * 同一本账缓存时置 true;会话失效 / 换过账号会置 false)。不另存一份"登录过"的
- * 内存标记 —— 那样会话早失效了界面还挂着「已登录」,等于骗人。
- * 两态只换状态文案与按钮叫法,操作仍是同一个 qoderweb_login:平台会话会过期,
- * 已登录态也保留「重新登录」(重开窗口会重新确认会话并刷一轮明细)与「切换账号」。
+ * 失败时展示取数层的原因；沿用旧明细不能当成本轮会话仍然有效。
  */
 function qoderQuickHtml(c) {
   if (c.id !== "qoder" && c.id !== "qoder-cn") return "";
-  const logged = c.expiryComplete === true;
+  const notice = window.ExpiryUI.qoderNotice(c);
   const dis = QODER_LOGGING ? " disabled" : "";
-  const loginBtn = QODER_LOGGING ? "登录中…" : logged ? "重新登录" : "登录网页版";
-  return `<div class="ccquick"><span${logged ? ' class="ccquick-ok"' : ""}>${
-    logged ? "已登录网页账号 · 逐笔明细可用" : "逐笔积分到期明细需登录网页账号"
-  }</span>
+  const loginBtn = QODER_LOGGING ? "登录中…" : notice.button;
+  return `<div class="ccquick"><span${notice.fresh ? ' class="ccquick-ok"' : ""}>${esc(notice.text)}</span>
       <button class="btn s" data-act="qoderweblogin" data-id="${c.id}"${dis} title="${
-    logged ? "平台会话会过期;重新确认并刷新逐笔明细" : "打开独立窗口登录网页账号"
+    notice.fresh ? "平台会话会过期;重新确认并刷新逐笔明细" : "打开独立窗口登录网页账号"
   }">${loginBtn}</button>
       <button class="btn s" data-act="qoderwebswitch" data-id="${c.id}"${dis} title="先退出当前网页登录,再用另一个账号登录(换号后用这个)">切换账号</button>
       <button class="why" data-why="qoderweb" aria-expanded="false" aria-label="网页会话的说明"></button></div>`;
@@ -4298,7 +4239,7 @@ $("sum").addEventListener("click", async (e) => {
   if (!act) return;
   const a = act.dataset.act;
   if (a === "expiry-filter") {
-    if (expirySummary().total < 0.01) return;
+    if (!expirySummary().hasConfirmed) return;
     EXPIRY_FILTER = !EXPIRY_FILTER;
     render({});
     return;
@@ -7205,7 +7146,7 @@ async function qoderWebLogin(id, switchAccount = false) {
     renderChCards();
     if (DETAIL_ID) renderDetailSheet();
     // 已登录态点的是「重新登录」:提示别再说成"完成登录",它只是重新确认会话并刷新。
-    const logged = (CHANNELS.find((x) => x.id === id) || {}).expiryComplete === true;
+    const logged = window.ExpiryUI.qoderNotice(CHANNELS.find((x) => x.id === id) || {}).fresh;
     showToast(
       switchAccount
         ? "已退出旧网页登录 · 请用要使用的账号登录,完成后自动关窗"

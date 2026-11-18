@@ -108,6 +108,8 @@ fn build_channel(view: &ChannelView, cfg: &Config, store: &Store, now: i64) -> C
     let expiring = view
         .expiring
         .iter()
+        // v1 同步协议没有逐笔快照年龄，不能把旧明细发成当前明细。
+        .filter(|_| !view.expiry_stale)
         .filter_map(|e| {
             decimal_string(e.amount).map(|amount| ExpiringSnapshot {
                 amount,
@@ -418,6 +420,23 @@ pub(crate) fn build_totals(channels: &[ChannelSnapshot]) -> TotalsSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_itemized_expiry_is_not_published_as_current() {
+        let store = Store::open_memory().unwrap();
+        let cfg = Config::default();
+        let mut view = ChannelView {
+            id: "qoder".into(), name: "Qoder".into(), kind: Kind::Points,
+            valid: true, has_key: true, remaining: Some(100.0), unit: "credits".into(),
+            expiring: vec![crate::providers::Expiring { at: 200, amount: 50.0, label: "test".into() }],
+            updated_at: 100, ..Default::default()
+        };
+        assert_eq!(build_channel(&view, &cfg, &store, 100).expiring.len(), 1);
+        view.expiry_stale = true;
+        let old = build_channel(&view, &cfg, &store, 100);
+        assert!(old.expiring.is_empty());
+        assert_eq!(old.remaining.as_deref(), Some("100"));
+    }
 
     #[test]
     fn antigravity_accounts_publish_separate_keys_under_existing_group_selection() {

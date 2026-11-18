@@ -162,6 +162,7 @@ pub struct ChannelView {
     pub expiring: Vec<Expiring>,
     /// false 时空的 expiring 列表表示“接口没有完整明细”,不能说成“没有到期”。
     pub expiry_complete: bool,
+    pub expiry_stale: bool,
     /// 账户额度有效期(Qoder):账户级字段,与逐笔 `expiring` 严格分开。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account_expiry: Option<providers::AccountExpiry>,
@@ -2053,7 +2054,7 @@ pub(crate) fn build_view(
         gap_days,
     } = stats;
 
-    let soon = expiring_soon(&result.expiring, now2);
+    let soon = if result.expiry_stale { None } else { expiring_soon(&result.expiring, now2) };
 
     // 网页会话型(WorkBuddy):平台会话是约 7 天的**绝对 TTL**(证据链见
     // core::weblogin::web_session_hint 的注释)。在卡片变红之前把"用了几天"
@@ -2107,6 +2108,7 @@ pub(crate) fn build_view(
         reset_credits: result.reset_credits,
         expiring: result.expiring,
         expiry_complete: result.expiry_complete,
+        expiry_stale: result.expiry_stale,
         account_expiry: result.account_expiry,
         expiring_soon: soon,
         extra: result.extra,
@@ -2206,6 +2208,7 @@ pub(crate) fn placeholder(def: &providers::ProviderDef) -> ChannelView {
         reset_credits: None,
         expiring: vec![],
         expiry_complete: false,
+        expiry_stale: false,
         account_expiry: None,
         expiring_soon: None,
         extra: vec![],
@@ -2327,6 +2330,7 @@ fn build_custom_view(
         reset_credits: None,
         expiring: Vec::new(),
         expiry_complete: false,
+        expiry_stale: false,
         account_expiry: None,
         expiring_soon: None,
         extra: vec![(
@@ -2392,6 +2396,7 @@ fn custom_placeholder(
         reset_credits: None,
         expiring: Vec::new(),
         expiry_complete: false,
+        expiry_stale: false,
         account_expiry: None,
         expiring_soon: None,
         extra: vec![("取数".to_string(), "自定义渠道".to_string())],
@@ -3245,12 +3250,7 @@ impl Fetcher {
                     );
 
                     // ── Qoder 逐包到期(2026-10-30,docs/product/product-qoder-credit-expiry-2026-10-30.md)──
-                    // 与余额同一轮但**独立请求**:网页会话只读账务,签到与余额的桌面 Bearer
-                    // 链路一概不碰(设计红线)。三条退路全是"如实":没会话 → 引导登录;
-                    // 这轮失败 → 沿用上次成功列表 + 标时间;从未成功 → 维持"接口未提供",
-                    // 绝不编一个到期日,也不把"没抓到"渲染成"没有临期"。
-                    // 国际版与国内版都走这条链;会话来源按**渠道 id**取,两套 Cookie 罐
-                    // 由外壳分别按域抓取 —— 这里绝不共用一份会话。
+                    // 逐包网页会话独立于余额及签到，并按区域隔离。
                     if matches!(def.id, "qoder" | "qoder-cn") && result.valid {
                         let site = crate::weblogin::qoder_site(def.id)
                             .expect("上面已限定 qoder | qoder-cn,站点配置必然存在");
@@ -3333,8 +3333,7 @@ impl Fetcher {
                                             .filter(|c| c.scope == qoder_scope);
                                         match cached {
                                             Some(c) => {
-                                                result.expiring = c.packs;
-                                                result.expiry_complete = true;
+                                                qoderweb::use_cached_packs(&mut result, c.packs);
                                                 let when = chrono::DateTime::from_timestamp(c.ts, 0)
                                                     .map(|d| {
                                                         d.with_timezone(&chrono::Local)
@@ -3345,30 +3344,11 @@ impl Fetcher {
                                                 extra_set(
                                                     &mut result.extra,
                                                     "逐笔到期明细",
-                                                    &format!("按平台返回 · 沿用 {when} 抓到的列表"),
+                                                    &format!("{} · 沿用 {when} 抓到的列表", e.user_message()),
                                                 );
                                             }
                                             None => {
-                                                // 指引按失败原因分叉:被平台拒 = 该去登录;
-                                                // 结构没认出来 = 挂件的事,别让用户白重登;
-                                                // 别的错 = 取数问题,别把用户引去登录窗
-                                                match &e {
-                                                    qoderweb::PacksErr::Unauthorized => extra_set(
-                                                        &mut result.extra,
-                                                        "逐笔到期明细",
-                                                        "网页会话未登录 · 渠道卡点「登录网页版」",
-                                                    ),
-                                                    qoderweb::PacksErr::Unrecognized(_) => extra_set(
-                                                        &mut result.extra,
-                                                        "逐笔到期明细",
-                                                        "登录是好的,但积分明细接口的返回结构还没识别 · 已记入诊断",
-                                                    ),
-                                                    qoderweb::PacksErr::Other(_) => extra_set(
-                                                        &mut result.extra,
-                                                        "逐笔到期明细",
-                                                        "积分包明细这轮没取到 · 稍后自动重试",
-                                                    ),
-                                                }
+                                                extra_set(&mut result.extra, "逐笔到期明细", e.user_message());
                                             }
                                         }
                                         // 只记形状不记值:响应里可能有余额与会话;诊断按渠道分开

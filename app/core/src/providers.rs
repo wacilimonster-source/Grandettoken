@@ -96,6 +96,8 @@ pub struct FetchResult {
     /// 是否已拿到完整的逐笔到期信息。false 表示空列表不能解释为“没有积分到期”。
     #[serde(default)]
     pub expiry_complete: bool,
+    /// 逐笔列表沿用旧快照，不能作为本轮确认的剩余积分。
+    pub expiry_stale: bool,
     /// 账户额度有效期(Qoder)。与逐笔 `expiring` 严格分开。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account_expiry: Option<AccountExpiry>,

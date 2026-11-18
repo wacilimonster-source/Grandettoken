@@ -3,6 +3,23 @@
 //    且入口常驻折叠体**外**的 .ccquick(原来藏进 .ccbody,用户找不到);
 // ② 点它开 qoder-login 窗;
 // ③ 无会话时明细卡的「逐笔到期明细」引导行如实出现;④ 有会话时 expiring 真数据(若用户已登录)。
+function honestHint(line) {
+  return /需网页登录|未登录|接口未提供|按平台返回|结构(?:还没|未)识别|暂时获取失败|余额凭据已更换/.test(line);
+}
+if (process.argv.includes('--self-test')) {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const source = fs.readFileSync(path.join(__dirname, '../app/core/src/qoderweb.rs'), 'utf8');
+  const variantsSection = source.slice(source.indexOf('pub enum PacksErr {'), source.indexOf('impl PacksErr {'));
+  const variants = [...variantsSection.matchAll(/^\s*(\w+)(?:\(String\))?,/gm)].map(m => m[1]);
+  const section = source.slice(source.indexOf('pub fn user_message('), source.indexOf('/// 按候选顺序抓一次逐包列表'));
+  const messages = new Map([...section.matchAll(/Self::(\w+)(?:\(_\))?\s*=>\s*"([^"]+)"/g)].map(m => [m[1], m[2]]));
+  if (!variants.length || messages.size !== variants.length || variants.some(name => !honestHint(messages.get(name) || '')) || honestHint('无意义的状态')) {
+    throw new Error('Qoder 明细提示分类自检失败');
+  }
+  console.log('PASS Qoder 明细提示分类与坏样本');
+  process.exit(0);
+}
 const PORT = Number(process.argv[2] || process.env.CDP_PORT || 9222);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -69,7 +86,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         extra: q.extra || [], expiryComplete: q.expiryComplete, expiring: (q.expiring || []).length });
     })()`, true));
     const line = (extra.extra.find((x) => x[0] === "逐笔到期明细") || [])[1] || "(无该行)";
-    const honest = /需网页登录|未登录|接口未提供|按平台返回|结构还没识别/.test(line);
+    const honest = honestHint(line);
     // 桌面凭据都无效的区不进逐包链,行缺席也是如实 —— 只在有效区上要求行存在
     const check1 = extra.valid ? honest || extra.expiryComplete === true : line === "(无该行)" || honest;
     check(`「逐笔到期明细」行如实(${extra.which} · 当前:${line})`, check1, line);

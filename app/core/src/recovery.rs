@@ -226,6 +226,7 @@ mod tests {
                 main: true,
             }],
             expiry_complete: true,
+            expiry_stale: true,
             ..Default::default()
         };
         Snapshot::new("a".into(), 100, result)
@@ -238,5 +239,8 @@ mod tests {
             Some("2026-11-07T00:00:00Z")
         );
         assert!(r.expiry_complete);
+        assert!(r.expiry_stale, "逐笔旧快照标记必须跨重启保留");
+        let old: FetchResult = serde_json::from_str(r#"{"valid":true}"#).unwrap();
+        assert!(!old.expiry_stale, "旧版快照缺少字段时按默认值加载");
     }
 }

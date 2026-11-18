@@ -432,6 +432,7 @@ fn tone_of_state(s: ViewState, v: &ChannelView, input: &ViewInput) -> Tone {
 
 /// 近 `days` 天内到期的量占剩余的比例。
 fn expiring_share(v: &ChannelView, days: i64, now: i64) -> f64 {
+    if v.expiry_stale || v.stale { return 0.0; }
     let Some(rem) = v.remaining else { return 0.0 };
     if rem <= 0.0 {
         return 0.0;
@@ -440,7 +441,7 @@ fn expiring_share(v: &ChannelView, days: i64, now: i64) -> f64 {
     let soon: f64 = v
         .expiring
         .iter()
-        .filter(|e| e.at > 0 && e.at <= horizon)
+        .filter(|e| e.at > now && e.at <= horizon)
         .map(|e| e.amount.max(0.0))
         .sum();
     clamp01(soon / rem)
@@ -871,6 +872,7 @@ mod tests {
             reset_credits: None,
             expiring: Vec::new(),
             expiry_complete: false,
+            expiry_stale: false,
             account_expiry: None,
             expiring_soon: None,
             extra: Vec::new(),
@@ -1121,6 +1123,17 @@ mod tests {
         assert_eq!(home.order, vec!["near".to_string(), "far".to_string()]);
         let near_row = home.rows.iter().find(|r| r.id == "near").unwrap();
         assert_eq!(near_row.tone, Tone::Bad, "7 天内到期占比 60% ≥ 30% → 红");
+    }
+
+    #[test]
+    fn expired_and_stale_points_do_not_create_current_risk() {
+        let mut ch = points_ch("qoder", 100.0, vec![
+            Expiring { at: NOW - 1, amount: 80.0, label: "已过期".into() },
+            Expiring { at: NOW + 60, amount: 20.0, label: "临期".into() },
+        ]);
+        assert!((expiring_share(&ch, 7, NOW) - 0.2).abs() < f64::EPSILON);
+        ch.expiry_stale = true;
+        assert_eq!(expiring_share(&ch, 7, NOW), 0.0);
     }
 
     // ── 绑定窗(D03)─────────────────────────────────────────────────

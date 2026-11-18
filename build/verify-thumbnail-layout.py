@@ -166,7 +166,7 @@ def main():
                     PanelLayoutUI.expiryDate(Date.UTC(2026, 10, 16, 1) / 1000, stamp(2026, 11, 15))
                   ];
                 }""")
-                assert cases == ["3-09 后天", "11-02 后天", "11-15 本周日"], cases
+                assert cases == ["3-09 后天", "11-02 后天", "11-15 今天"], cases
                 print("Local weekday and daylight-saving boundaries PASS")
                 assert not errors, errors
             browser.close()
