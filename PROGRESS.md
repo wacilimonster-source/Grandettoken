@@ -5480,4 +5480,10 @@ src-tauri `cargo check --all-targets --locked` exit 0;
 - 根因门禁前移：`release.yml` 的 notes 长度检查改为与 `verify-release.js` 同一判据（正文至少 20 个中文字符），在打包前失败；`RELEASE.md` 的发版提交示例改为带说明正文，`AGENTS.md` 同步该结论。
 - 待验收：安装版真实 AgentRouter / Responses 接入、原生窗口底栏设置与退出按钮、`verify-settings-entry.js` 的 CDP 检查；v0.3.63 及更早的遗留真机核验项仍待完成。
 
+## 2026-11-18 底栏设置与退出按钮统一（工作区）
+
+- 按实机反馈，设置与退出改为同尺寸、同样式的普通按钮：两者共用 `56u` 最小宽度、`32u` 高度和 `12u` 字号，设置去掉主按钮配色；按钮间距保持原样。
+- 回归：`jsdom-smoke.js` 断言两者类名一致且设置不带 `p`；`verify-settings-entry.js` 的三档字号几何检查改为断言宽高一致、底色/边框/字号一致，并继续检查底栏零溢出。
+- 静态四门、前端语法、jsdom 278/278 通过；`verify-settings-entry.js` 依赖真实窗口 CDP，本轮未运行。
+
 

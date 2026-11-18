@@ -130,6 +130,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
             lkUpd.textContent = '有新版本 0.1.43';  // showCard() 的原样文案
             const settings = keys.getBoundingClientRect();
             const exit = quit.getBoundingClientRect();
+            const ks = getComputedStyle(keys), qs = getComputedStyle(quit);
             out.push({
               u, withChip, withUpd,
               tbarOver: Math.round(tbar.scrollWidth - tbar.clientWidth),
@@ -137,7 +138,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
               titleTrunc: tt.scrollWidth > tt.clientWidth + 1,
               footOver: Math.round(foot.scrollWidth - foot.clientWidth),
               footSlack: Math.round(foot.querySelector('.spacer').getBoundingClientRect().width),
-              keysEnlarged: settings.width >= 75 * u && settings.height >= 31 * u && settings.width > exit.width,
+              buttonsSame: Math.abs(settings.width - exit.width) <= 1
+                && Math.abs(settings.height - exit.height) <= 1
+                && settings.height >= 31 * u && settings.width >= 55 * u,
+              buttonsStyle: ks.backgroundColor === qs.backgroundColor
+                && ks.borderColor === qs.borderColor && ks.fontSize === qs.fontSize,
             });
           }
         }
@@ -152,7 +157,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       geom.map((g) => `${g.u}${g.withChip ? '+chip' : ''}:${g.tbarOver}`).join(' '));
     check('三档字号与更新提示组合下底栏零溢出', worst.filter((g) => g.footOver > 0).length === 0,
       geom.map((g) => `${g.u}${g.withUpd ? '+upd' : ''}:${g.footOver}`).join(' '));
-    check('三档字号下设置按钮保有加宽点击区', geom.every((g) => g.keysEnlarged));
+    check('三档字号下设置与退出同尺寸', geom.every((g) => g.buttonsSame));
+    check('设置与退出底色、边框和字号一致', geom.every((g) => g.buttonsStyle));
     const std = geom.find((g) => g.u === 1 && g.withChip && !g.withUpd);
     check('标准字号 + 角标:标题不被截断', std.titleTrunc === false, 'avail=' + std.titleAvail);
     console.log('  底栏弹性空隙(px):', geom.map((g) => `${g.u}${g.withUpd ? '+upd' : ''}=${g.footSlack}`).join(' '));

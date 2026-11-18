@@ -1348,9 +1348,13 @@ w.__DATA = DATA;
   if (w.__ASYNC3) await w.__ASYNC3();
 
   const R = w.__R || [];
+  const keysBtn = w.document.getElementById("lkKeys");
   const quit = w.document.getElementById("lkQuit");
   R.push({ name: "退出直接显示在设置旁",
     ok: quit?.matches('.foot > #lkKeys + button#lkQuit') && !quit.hidden && quit.tabIndex === 0 });
+  R.push({ name: "设置与退出按钮使用同一套样式",
+    ok: keysBtn?.className === quit?.className && keysBtn?.classList.contains("btn")
+      && !keysBtn.classList.contains("p") });
   if (quit) {
     const actions = [];
     w.__QUIT_INVOKE = async ({ action }) => {
