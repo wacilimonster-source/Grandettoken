@@ -1,18 +1,13 @@
 // End-to-end check for the window forms. For every form it asserts:
 //   1. body class and the real window size change together (the original bug
 //      left the window at panel size while the DOM had already switched)
-//   2. panel/compact report resizable=true, pill reports false
-// Then it reads the Win32 style bits: panel (last form in the loop) must carry
-// WS_THICKFRAME (the undecorated resize border) and must NOT carry WS_MAXIMIZEBOX
-// (we still do not expose system maximize). min/max are ranges for panel/compact.
+//   2. every form uses fixed sizing
+// On Windows, the final panel must omit WS_THICKFRAME and WS_MAXIMIZEBOX.
 //
 // Usage: launch-debug.ps1 first, then  node build/verify-form.js [port]
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 
 const PORT = Number(process.argv[2] || process.env.CDP_PORT || 9222);
-// 2026-09-23 起窗口 = 内容 + 四周 10px 透明边距(卡片阴影画在边距里):
-// 面板内容 380×560 → 窗口 400×580;紧凑条/胶囊内容高 46 → 窗口高 66。
-const EXPECT = { compact: [400, 66], pill: [220, 66], panel: [400, 580] };
 const WS_THICKFRAME = 0x00040000;
 const WS_MAXIMIZEBOX = 0x00010000;
 
@@ -115,20 +110,25 @@ async function cornerAlpha(send, evalJs) {
   const { ws, evalJs, send } = await connect();
   const rows = [];
   let ok = true;
-
   for (const form of ['compact', 'pill', 'panel']) {
     // remember=false: exercise the real switch without touching the persisted config
-    await evalJs(`applyForm(${JSON.stringify(form)}, false)`, true);
+    await evalJs(`(async()=>{
+      const compactEnabled=CFG.compactEnabled;
+      try { CFG.compactEnabled=true; await applyForm(${JSON.stringify(form)},false); }
+      finally { CFG.compactEnabled=compactEnabled; }
+    })()`, true);
     await sleep(900);
 
     const state = JSON.parse(await evalJs(`(async () => {
       const rows = [...document.querySelectorAll('#list .row')];
       const visible = rows.filter((r) => r.style.display !== 'none').length;
       const badge = document.querySelector('#list .more');
+      const form = ${JSON.stringify(form)};
       return JSON.stringify({
         bodyClass: document.body.className,
         w: window.innerWidth,
         h: window.innerHeight,
+        want: formSize(form, form === 'panel' ? await monitorInfo() : null),
         tbar: getComputedStyle(document.querySelector('.tbar')).display,
         resizable: await appWindow.isResizable(),
         rows: rows.length,
@@ -137,14 +137,8 @@ async function cornerAlpha(send, evalJs) {
       });
     })()`, true));
 
-    const [ew, eh] = EXPECT[form];
-    // 胶囊/紧凑条宽度随内容自适应(窗口 = 内容 + 20px 边距),只卡高度与合理区间
-    const sizeOk =
-      form === 'pill'
-        ? near(state.h, eh) && state.w >= 150 && state.w <= 264
-        : form === 'compact'
-          ? near(state.h, eh) && state.w >= 150 && state.w <= 620
-          : state.w >= 340 + 20 && state.w <= 740 + 20 && state.h >= 460 + 20 && state.h <= 920 + 20;
+    const [ew, eh] = state.want;
+    const sizeOk = near(state.w, ew) && near(state.h, eh);
     const classOk = state.bodyClass.includes('form-' + form);
     // 行可见性:面板必须显示全部行(紧凑条藏起来的行要还原);
     // 紧凑条若有隐藏行,数目必须和 "+N" 徽标对得上
@@ -161,19 +155,20 @@ async function cornerAlpha(send, evalJs) {
       corner = await cornerAlpha(send, evalJs);
       cornerOk = corner.cornerAlpha === 0 && corner.centerAlpha > 200;
     }
-    const wantResizable = form === 'panel' || form === 'compact';
-    const resizableOk = state.resizable === wantResizable;
+    const resizableOk = state.resizable === false;
     const pass = sizeOk && classOk && resizableOk && rowsOk && cornerOk;
     if (!pass) ok = false;
     rows.push({ form, ...state, ew, eh, sizeOk, classOk, rowsOk, corner, cornerOk, pass });
   }
 
-  // Win32 style bits: panel (last form) must have the resize border, never a maximize box
+  // Read the same window as CDP, even when an installed copy is also running.
   let style = null;
   let styleErr = null;
   try {
     const helper = require('path').join(__dirname, 'win-style.ps1');
-    const out = execSync(`powershell -NoProfile -ExecutionPolicy Bypass -File "${helper}"`, { encoding: 'utf8', timeout: 20000 }).trim();
+    const title = await evalJs(`appWindow.title()`, true);
+    const out = execFileSync('powershell',
+      ['-NoProfile', '-File', helper, '-WindowTitle', title], { encoding: 'utf8', timeout: 20000 }).trim();
     if (!/^[0-9A-F]{8}$/i.test(out)) styleErr = `unexpected output: ${out}`;
     else style = parseInt(out, 16);
   } catch (e) {
@@ -184,7 +179,7 @@ async function cornerAlpha(send, evalJs) {
   console.log('=== form verification ===');
   for (const r of rows) {
     console.log(
-      `  ${r.form.padEnd(8)} body=${r.bodyClass.padEnd(18)} tbar=${r.tbar.padEnd(6)} window=${r.w}x${r.h} expected=${r.form === 'pill' ? '150~264' : r.form === 'compact' ? '150~620' : '340~760 x 480~940'}  ` +
+      `  ${r.form.padEnd(8)} body=${r.bodyClass.padEnd(18)} tbar=${r.tbar.padEnd(6)} window=${r.w}x${r.h} expected=${r.ew}x${r.eh}  ` +
       `switch=${r.sizeOk && r.classOk ? 'PASS' : 'FAIL'}  resizable=${r.resizable ? 'yes' : 'no'}  ` +
       `rows=${r.visible}/${r.rows}${r.badge ? ' (' + r.badge + ')' : ''} ${r.rowsOk ? 'PASS' : 'FAIL(rows)'}`
     );
@@ -202,12 +197,12 @@ async function cornerAlpha(send, evalJs) {
   } else {
     const thick = (style & WS_THICKFRAME) !== 0;
     const maxbox = (style & WS_MAXIMIZEBOX) !== 0;
-    const styleOk = thick && !maxbox;
+    const styleOk = !thick && !maxbox;
     if (!styleOk) ok = false;
     console.log(
       `  win32 style          0x${style.toString(16).padStart(8, '0')}  ` +
-      `WS_THICKFRAME(resize border)=${thick ? 'yes' : 'NO(BAD)'}  ` +
-      `WS_MAXIMIZEBOX=${maxbox ? 'YES(BAD)' : 'no'}  panel-resizable=${styleOk ? 'PASS' : 'FAIL'}`
+      `WS_THICKFRAME(resize border)=${thick ? 'YES(BAD)' : 'no'}  ` +
+      `WS_MAXIMIZEBOX=${maxbox ? 'YES(BAD)' : 'no'}  panel-fixed=${styleOk ? 'PASS' : 'FAIL'}`
     );
   }
 

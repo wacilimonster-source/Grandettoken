@@ -57,7 +57,9 @@ WorkBuddy AI、Qoder 国内版使用能区分版本的名称。Google Cloud 小�
 
 渠道数取实际可见列表。临期筛选显示「显示 N / 总数 个渠道」，关闭筛选后恢复完整集合。隐藏和未配置渠道沿用原有过滤条件。
 
-遇到屏幕工作区钳制时以实际列表高度为准。验收记录窗口逻辑尺寸、字号倍率、scaleFactor、列表可用高度及末卡位置，当前本机 14 渠道应全部一屏可见。
+单列、双列和缩略面板共用工作区适配。普通打开、贴边展开和解除贴边时，窗口尺寸上限按当前显示器扣除任务栏后的物理工作区及实际 DPI 换算。切换 DPI 或拖到同 DPI 的另一台显示器后重算。字号按用户选择，标题栏和底栏保留可见空间，可用高度不足时列表内部滚动。
+
+验收记录实际工作区、窗口物理边界和逻辑视口、字号倍率、scaleFactor、列表可用高度及末卡可达性。有足够高度时，当前本机 14 渠道应全部一屏可见。
 
 ## 交互与失败路径
 
@@ -72,6 +74,7 @@ WorkBuddy AI、Qoder 国内版使用能区分版本的名称。Google Cloud 小�
 - app.js 保留窗口尺寸入口、行渲染接线和分钟 ticker 接线。
 - core/config.rs 接受 thumbnail 并验证序列化与非法值回退。
 - thumbnail-regression.js 在 jsdom-smoke 初始化完成后串行执行，覆盖动态渠道、多窗口、口径、节点焦点、保存成功与失败。漏行坏样本验证断言会报红。
+- window-work-area-regression.js 覆盖 1920×1080、125% 下的三种布局和贴边往返，以及同 DPI 跨屏后落点保存。verify-resize.js 通过 CDP 核对真机工作区、布局切换、列表滚动和底栏可见性。
 - 浏览器排版使用真实渲染得到的合成夹具，覆盖三档字号、深浅主题、屏幕高度钳制和更长数值。同时检查口径标签与数值无重叠，主数字与状态末列都对齐右边界。卡片高度超限、单列网格和数值改回左对齐的坏样本必须报红。
 
 浏览器排版检查属于开发期验证，使用 Python Playwright 与系统 Edge，安装方式为 python -m pip install playwright。布局夹具由 THUMBNAIL_LAYOUT_FIXTURES 环境变量指定 jsdom-smoke 的输出路径，然后执行 python build/verify-thumbnail-layout.py <夹具路径>，可选 --screenshot <本地PNG路径>。凭据与用户配置不写入夹具。CI 使用现有 jsdom 冒烟和静态门。

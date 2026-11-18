@@ -5,7 +5,7 @@
 //   · 拖动缩放入口已移除(rzFrame / rzGrip 不存在)
 //   · 单列 / 双列 / 缩略固定尺寸与 data-w 断点、关键区域不越界
 //   · 形态往返(紧凑条 / 胶囊 → 面板)后固定尺寸保持
-//   · xl 字号:窗口高度被显示器钳制,不超出屏幕
+//   · 大 / 特大字号下普通面板、贴边展开与解除贴边均避开任务栏
 // 说明:布局切换用内存预览(CFG.panelLayout + applyForm),不写用户配置;
 //       结束时还原原布局并 refresh()。
 const PORT = Number(process.argv[2] || process.env.CDP_PORT || 9222);
@@ -35,8 +35,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   try {
     console.log('=== 固定窗口布局 ===');
-    await evalJs(`(()=>{window.__vPush=applyChannelsPush;window.__vRefresh=refresh;applyChannelsPush=()=>{};refresh=async()=>{};window.__vCfg=JSON.stringify(CFG);})()`);
-    await evalJs(`(()=>{CFG.panelLayout='single';CFG.theme='dark';applyTheme();applyForm('panel',false,true);})()`);
+    await evalJs(`(async()=>{
+      if(DOCK.on) throw new Error('请先解除贴边');
+      window.__vState={cfg:JSON.stringify(CFG),pos:await appWindow.outerPosition(),
+        form:currentForm(),push:applyChannelsPush,refresh};
+      applyChannelsPush=()=>{};refresh=async()=>{};
+      CFG.panelLayout='single';CFG.fontScale='md';CFG.theme='dark';applyTheme();applyFontScale();
+      await applyForm('panel',false,true);
+    })()`, true);
     await sleep(900);
 
     // 1. 拖动缩放入口已移除
@@ -45,9 +51,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
     // 2. 两档固定尺寸(期望值按当前字号档位计算:md=1.0 / lg=1.15 / xl=1.3)
     for (const [layout, wantWcls] of [['single', 'sm'], ['double', 'lg'], ['thumbnail', 'sm']]) {
-      await evalJs(`(()=>{CFG.panelLayout='${layout}';updateLayoutUI();applyForm('panel',false,true);})()`);
+      await evalJs(`(async()=>{CFG.panelLayout='${layout}';updateLayoutUI();render();await applyForm('panel',false,true);})()`, true);
       await sleep(900);
-      const [wantW, wantH] = JSON.parse(await evalJs(`JSON.stringify(formSize('panel'))`));
+      const [wantW, wantH] = await evalJs(`(async()=>{
+        const nominal=formSize('panel');
+        const mon=await T.window.currentMonitor(), sf=await appWindow.scaleFactor();
+        return [Math.min(nominal[0],Math.floor(mon.workArea.size.width/sf)),
+          Math.min(nominal[1],Math.floor(mon.workArea.size.height/sf))];
+      })()`, true);
       const s = JSON.parse(await evalJs(`(()=>{const btn=document.querySelector('.tbar').getBoundingClientRect();
         const foot=document.querySelector('.foot').getBoundingClientRect();
         return JSON.stringify({w:innerWidth,h:innerHeight,dw:document.body.dataset.w,
@@ -62,28 +73,86 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     }
 
     // 3. 形态往返后固定尺寸保持
-    await evalJs(`(()=>{CFG.panelLayout='single';updateLayoutUI();applyForm('panel',false,true);})()`);
+    await evalJs(`(async()=>{CFG.panelLayout='single';CFG.compactEnabled=true;updateLayoutUI();await applyForm('panel',false,true);})()`, true);
     await sleep(700);
-    await evalJs(`applyForm('compact',false)`); await sleep(700);
-    await evalJs(`applyForm('pill',false)`); await sleep(700);
-    await evalJs(`applyForm('panel',false)`); await sleep(900);
-    const back = JSON.parse(await evalJs(`JSON.stringify({w:innerWidth,h:innerHeight,form:document.body.className.includes('form-panel'),want:formSize('panel')})`));
+    await evalJs(`applyForm('compact',false)`, true); await sleep(700);
+    check('切到紧凑条', await evalJs(`document.body.classList.contains('form-compact')`));
+    await evalJs(`applyForm('pill',false)`, true); await sleep(700);
+    check('切到胶囊', await evalJs(`document.body.classList.contains('form-pill')`));
+    await evalJs(`applyForm('panel',false)`, true); await sleep(900);
+    const back = await evalJs(`(async()=>({w:innerWidth,h:innerHeight,form:document.body.classList.contains('form-panel'),want:formSize('panel',await monitorInfo())}))()`, true);
     check('形态往返后面板回到固定尺寸', back.form && Math.abs(back.w - back.want[0]) <= 1 && Math.abs(back.h - back.want[1]) <= 1, JSON.stringify(back));
 
-    // 4. xl 字号:高度被显示器钳制
-    await evalJs(`(()=>{const o=CFG.fontScale;CFG.fontScale='xl';applyForm('panel',false,true);CFG.fontScale=o;})()`);
-    await sleep(900);
-    const xl = JSON.parse(await evalJs(`JSON.stringify({h:innerHeight,screen:screen.height,fit:innerHeight<=screen.height})`));
-    check('xl 字号:窗口高度不超过屏幕', xl.fit, JSON.stringify(xl));
+    // 4. 从接近任务栏的位置重排。独立用 Tauri 原始工作区与窗口实测边界核对。
+    const verifyWorkArea = async (label, docked = false) => {
+      await sleep(350);
+      const s = await evalJs(`(async()=>{
+        const mon=await T.window.currentMonitor(), sf=await appWindow.scaleFactor();
+        const pos=await appWindow.outerPosition(), size=await appWindow.outerSize();
+        const area=mon.workArea, footer=document.querySelector('.foot').getBoundingClientRect();
+        const top=document.querySelector('.tbar').getBoundingClientRect().top;
+        const settings=document.querySelector('#lkKeys').getBoundingClientRect();
+        const list=document.querySelector('#list'), scrollTop=list.scrollTop;
+        list.scrollTop=list.scrollHeight;
+        const last=Array.from(list.querySelectorAll('.row')).at(-1)?.getBoundingClientRect();
+        const scrollOk=list.scrollHeight<=list.clientHeight ||
+          (list.scrollTop>0 && last && last.bottom<=list.getBoundingClientRect().bottom+1);
+        list.scrollTop=scrollTop;
+        return {pos,size,area,sf,full:mon.size,viewport:[innerWidth,innerHeight],
+          font:CFG.fontScale,fontUnit:fsU(),listHeight:list.clientHeight,listScroll:list.scrollHeight,
+          resizable:await appWindow.isResizable(),scrollOk,
+          inView:top>=0&&footer.height>0&&footer.bottom<=innerHeight&&settings.height>0&&settings.bottom<=innerHeight};
+      })()`, true);
+      const margin = docked ? Math.round(10 * s.sf) : 0;
+      const { position, size } = s.area;
+      const fits = s.pos.x >= position.x - margin && s.pos.x + s.size.width <= position.x + size.width + margin &&
+        s.pos.y >= position.y && s.pos.y + s.size.height <= position.y + size.height;
+      check(label, fits && s.inView && s.scrollOk && !s.resizable);
+      console.log('    ' + JSON.stringify(s));
+    };
+    await evalJs(`(async()=>{const {position,size}= (await T.window.currentMonitor()).workArea;
+      markSelfMove(FORM_SELF_MOVE_MS);
+      await appWindow.setPosition(new T.dpi.PhysicalPosition(position.x+40,position.y+Math.round(size.height/3)));
+    })()`, true);
+    for (const layout of ['single', 'double', 'thumbnail']) {
+      await evalJs(`(async()=>{CFG.fontScale='lg';CFG.panelLayout='${layout}';applyFontScale();render();
+        await applyForm('panel',false,true);})()`, true);
+      await verifyWorkArea(`大字号 ${layout} 工作区、底栏与列表`);
+    }
+    await evalJs(`(async()=>{CFG.fontScale='xl';applyFontScale();await applyForm('panel',false,true);})()`, true);
+    await verifyWorkArea('特大字号 工作区、底栏与列表');
+    for (const side of ['right', 'left']) {
+      await evalJs(`(async()=>{const info=await monitorInfo();
+        await dockEnter('${side}',{y:info.bottom-100});await dockLayout(true);})()`, true);
+      check(`贴边 ${side} 已展开`, await evalJs(`document.body.classList.contains('dock-open')`));
+      await verifyWorkArea(`贴边 ${side} 展开避开任务栏`, true);
+      await evalJs(`dockExit(false)`, true);
+      await verifyWorkArea(`贴边 ${side} 解除后避开任务栏`);
+    }
 
-    // 还原
-    await evalJs(`(()=>{const o=JSON.parse(window.__vCfg);Object.assign(CFG,o);applyTheme();updateLayoutUI();applyForm('panel',false,true);applyChannelsPush=window.__vPush;refresh=window.__vRefresh;})()`);
-    await sleep(400);
-    await evalJs(`refresh()`); await sleep(600);
-    check('现场还原', true);
   } catch (e) {
     console.log('  FAIL  脚本异常 · ' + e.message);
     fails++;
+  } finally {
+    try {
+      await evalJs(`(async()=>{
+        const state=window.__vState;
+        if(!state) return;
+        try{
+          if(DOCK.on) await dockExit(true);
+          markSelfMove(FORM_SELF_MOVE_MS);
+          await appWindow.setPosition(new T.dpi.PhysicalPosition(state.pos.x,state.pos.y));
+          Object.assign(CFG,JSON.parse(state.cfg));applyTheme();applyFontScale();
+          await applyForm(state.form,false,true);
+        }finally{
+          applyChannelsPush=state.push;refresh=state.refresh;delete window.__vState;
+        }
+        await refresh();
+      })()`, true);
+      check('现场还原', true);
+    } catch (e) {
+      check('现场还原', false, e.message);
+    }
   }
   ws.close();
   console.log(fails ? `✗ ${fails} 项失败` : '✓ 固定布局真机校验通过');

@@ -35,6 +35,11 @@ if (process.env.PERFORMANCE_SENTINEL === "1") {
   js = js.replace('if (!WINDOW_VISIBLE) {', 'if (false && !WINDOW_VISIBLE) {');
   js = js.replace('function qReconcile(box, items) {', 'function qReconcile(box, items) { if (box && ["cfgPill", "mIndexList"].includes(box.id)) box.innerHTML = "";');
 }
+if (process.env.WORK_AREA_SENTINEL === "1") {
+  const marker = "const { position, size } = mon.workArea || mon;";
+  if (js.split(marker).length !== 2) throw new Error("工作区哨兵未命中显示器坐标入口");
+  js = js.replace(marker, "const { position, size } = mon;");
+}
 if (process.env.CHECKIN_SENTINEL === "1") {
   const marker = "CHECKIN_ON.add(x.id);";
   if (js.split(marker).length !== 2) throw new Error("签到哨兵未命中唯一能力同步入口");
@@ -65,6 +70,13 @@ if (process.env.CHECKIN_SENTINEL === "1") {
   });
   if (accountProbe.status !== 1 || !/FAIL Antigravity 多账号 管理页只有一个分组且列出全部账号/.test(accountProbe.stdout)) {
     throw new Error("Antigravity 多账号哨兵自检失败：分组退化必须由账号分组断言拦截");
+  }
+  const workAreaProbe = spawnSync(process.execPath, [__filename], {
+    env: { ...process.env, CHECKIN_SENTINEL: "1", WORK_AREA_SENTINEL: "1" }, encoding: "utf8", timeout: 20000,
+  });
+  if (workAreaProbe.status !== 1 || !/FAIL 125% 大字号普通面板完整落在工作区/.test(workAreaProbe.stdout)
+      || !/FAIL 125% 贴边展开与解除贴边使用相同的工作区高度/.test(workAreaProbe.stdout)) {
+    throw new Error("工作区哨兵自检失败：使用整屏边界必须触发普通面板与贴边回归");
   }
 }
 const vaultJs = fs.readFileSync(path.join(SRC, "vault-view.js"), "utf8");
@@ -124,17 +136,26 @@ w.__TAURI__ = {
     PhysicalPosition: class { constructor(x, y) { this.x = x; this.y = y; } },
   },
   window: {
-    currentMonitor: async () => null,
+    currentMonitor: async () => w.__GEOMETRY?.monitor || null,
     // 窗口对象方法很多(onMoved / 主题 / 拖拽…),用 Proxy 兜住未知的:
     // 监听类方法返回"可解绑的空函数",查询类返回真值。
     getCurrentWindow: () =>
       new Proxy(
         {
-          outerPosition: async () => ({ x: 0, y: 0 }),
-          outerSize: async () => ({ width: 400, height: 580 }),
+          outerPosition: async () => w.__GEOMETRY?.position || { x: 0, y: 0 },
+          outerSize: async () => w.__GEOMETRY?.size || { width: 400, height: 580 },
           innerSize: async () => ({ width: 380, height: 560 }),
           isVisible: async () => true,
           scaleFactor: async () => 1.25,
+          setSize: async ({ width, height }) => {
+            if (w.__GEOMETRY) w.__GEOMETRY.size = { width: Math.round(width * 1.25), height: Math.round(height * 1.25) };
+          },
+          setPosition: async ({ x, y }) => {
+            if (w.__GEOMETRY) w.__GEOMETRY.position = { x, y };
+          },
+          setResizable: async (enabled) => {
+            if (w.__GEOMETRY) w.__GEOMETRY.resizable = enabled;
+          },
           theme: async () => "dark",
         },
         { get: (t, k) => (k in t ? t[k] : async () => () => {}) }
@@ -1669,6 +1690,7 @@ w.__DATA = DATA;
 
   await require("./thumbnail-regression.js")({ w, R, data: DATA, src: SRC });
   await require("./antigravity-account-regression.js")({ w, R, data: DATA });
+  await require("./window-work-area-regression.js")({ w, R });
 
   let ok = 0, bad = 0;
   for (const r of R) {

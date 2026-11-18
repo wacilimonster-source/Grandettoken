@@ -3742,11 +3742,15 @@ function compactMaxPx() {
 }
 
 /** 当前字号档位下某形态的**窗口**尺寸(内容 + 两侧透明边距)。 */
-function formSize(form) {
+function formSize(form, monitor) {
   const u = fsU();
   if (form === "panel") {
     const [cw, ch] = panelContentSize();
-    return [cw + CARD_MARGIN * 2, ch + CARD_MARGIN * 2];
+    const w = cw + CARD_MARGIN * 2;
+    const h = ch + CARD_MARGIN * 2;
+    if (!monitor) return [w, h];
+    return [Math.min(w, Math.floor((monitor.right - monitor.left) / monitor.sf)),
+      Math.min(h, Math.floor((monitor.bottom - monitor.top) / monitor.sf))];
   }
   if (form === "compact") {
     const cw = clampNum(compactW, Math.round(COMPACT_MIN_W * u), compactMaxPx());
@@ -3845,19 +3849,7 @@ async function applyFormInner(form, remember = true, forceSize = false) {
     if (DOCK.open) dockLayout(true);
     return;
   }
-  let [w, h] = formSize(form);
-  if (form === "panel") {
-    // 固定尺寸也要尊重物理屏幕:大字号档在 1080p 上会超出工作区。
-    // 窗口按显示器尺寸钳制(列表自身滚动,标题栏 / 页脚始终可见)。
-    const mon = await T.window.currentMonitor();
-    const sf = (await appWindow.scaleFactor()) || 1;
-    if (mon) {
-      const maxW = Math.floor(mon.size.width / sf) - 2;
-      const maxH = Math.floor(mon.size.height / sf) - 48; // 任务栏余量
-      w = Math.min(w, maxW);
-      h = Math.min(h, maxH);
-    }
-  }
+  const [w, h] = formSize(form, form === "panel" ? await monitorInfo() : null);
   SIZE_APPLYING = true;
   try {
     // 改尺寸在 Windows 上会连带挪动窗口(被工作区/边缘约束顶开),那一发 moved
@@ -3980,10 +3972,12 @@ const FORM_SELF_MOVE_MS = 1500;
 
 async function monitorInfo() {
   const mon = await T.window.currentMonitor();
-  const sf = await appWindow.scaleFactor();
   if (!mon) return null;
-  return { mon, sf, left: mon.position.x, right: mon.position.x + mon.size.width,
-    top: mon.position.y, bottom: mon.position.y + mon.size.height };
+  const sf = (await appWindow.scaleFactor()) || mon.scaleFactor || 1;
+  // Tauri 的工作区和窗口位置都是物理坐标，只有设尺寸时才转逻辑像素。
+  const { position, size } = mon.workArea || mon;
+  return { mon, sf, left: position.x, right: position.x + size.width,
+    top: position.y, bottom: position.y + size.height };
 }
 
 /** 吸附。side = right | left,y 保持当前竖直位置(夹进显示器范围)。 */
@@ -4011,7 +4005,7 @@ async function dockEnter(side, pos) {
 async function dockLayoutNow(open) {
   const info = await monitorInfo();
   if (!info) return;
-  const [w, h] = open ? formSize(currentForm()) : DOCK_SIZE;
+  const [w, h] = open ? formSize(currentForm(), info) : DOCK_SIZE;
   const barW = Math.round(DOCK_SIZE[0] * info.sf);
   const mgn = Math.round(CARD_MARGIN * info.sf);
   const x = DOCK.side === "right"
@@ -4047,6 +4041,7 @@ async function dockLayoutNow(open) {
     void document.body.offsetWidth;
     document.body.classList.add("dock-anim");
     setTimeout(() => document.body.classList.remove("dock-anim"), 240);
+    setTimeout(updateSizeClass, 30);
     scheduleFitCompact();
   }
 }
@@ -4061,8 +4056,8 @@ async function dockExitNow(keepPos) {
   DOCK.on = false;
   DOCK.open = false;
   document.body.classList.remove("docked", "dock-open", "dock-anim");
-  const [w, h] = formSize(currentForm());
   const info = await monitorInfo();
+  const [w, h] = formSize(currentForm(), info);
   try {
     // 与 dockLayoutNow 同理:解除吸附也是多连 await 的几何链,用长档掩护(G2)
     markSelfMove(FORM_SELF_MOVE_MS);
@@ -4077,7 +4072,7 @@ async function dockExitNow(keepPos) {
       const maxX = info.right - Math.round(w * info.sf);
       const maxY = info.bottom - Math.round(h * info.sf);
       const x = keepPos ? Math.max(info.left, Math.min(maxX, pos.x)) : Math.max(info.left, maxX - 24);
-      const y = keepPos ? Math.max(info.top, Math.min(maxY, pos.y)) : Math.max(info.top + 60, Math.min(maxY, pos.y));
+      const y = clampNum(keepPos ? pos.y : Math.max(info.top + 60, pos.y), info.top, maxY);
       await appWindow.setPosition(new T.dpi.PhysicalPosition(x, y));
     }
     if (currentForm() !== "panel" && currentForm() !== "compact") {
@@ -4115,7 +4110,7 @@ function scheduleSettleCheck() {
     setDockPreview(null); // 拖动已停:预览线使命结束(吸上与否都收掉)
     const info = await monitorInfo();
     if (!info) return;
-    const pos = await appWindow.outerPosition();
+    let pos = await appWindow.outerPosition();
     const size = await appWindow.outerSize();
     const snap = Math.round(DOCK_SNAP_LOGICAL * info.sf);
     // "拖到边"的实际情况是窗口探出屏幕外(拖动时光标能到屏幕边缘,窗口会超出去),
@@ -4125,6 +4120,17 @@ function scheduleSettleCheck() {
     // 自由态下把落点记进配置(报告 O-6):吸附态不记,那坐标是布局算出来的。
     // 停稳 250ms 才写,一次拖拽只落一次盘,不会拖动途中反复写库。
     if (!DOCK.on) {
+      const snapSide = CFG?.dockEnabled && (nearRight ? "right" : nearLeft ? "left" : null);
+      if (!snapSide && currentForm() === "panel") {
+        const [w, h] = formSize("panel", info);
+        if (Math.abs(size.width - w * info.sf) > 2 || Math.abs(size.height - h * info.sf) > 2) {
+          await applyForm("panel", false);
+          pos = await appWindow.outerPosition();
+        } else if (pos.x < info.left || pos.y < info.top || pos.x + size.width > info.right || pos.y + size.height > info.bottom) {
+          await enqueueGeom(clampToMonitor);
+          pos = await appWindow.outerPosition();
+        }
+      }
       if (CFG.winX !== pos.x || CFG.winY !== pos.y) {
         const prevX = CFG.winX, prevY = CFG.winY;
         CFG.winX = pos.x;
@@ -4142,8 +4148,7 @@ function scheduleSettleCheck() {
         });
       }
       // 开关关着就不吸附:挂件随手一拖就变竖条太意外,所以默认关闭
-      if (!(CFG && CFG.dockEnabled)) return;
-      if (nearRight || nearLeft) await dockEnter(nearRight ? "right" : "left", pos);
+      if (snapSide) await dockEnter(snapSide, pos);
     } else {
       // 吸附中:把用户拖出来的竖直位置记下来。以前 DOCK.y 只在吸附那一刻算一次,
       // 之后上下拖动竖条,松手后一展开又弹回原处(报告 P1-7)
