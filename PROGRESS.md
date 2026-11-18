@@ -5438,4 +5438,5 @@ src-tauri `cargo check --all-targets --locked` exit 0;
 - tag `v0.3.62` 指向 `b6227d5`，该提交先推送到 `main`。桌面发版 run `44254517449` 的 `build-and-release` 全部步骤成功；Release 于北京时间 15:11:27 公开发布，非 draft / prerelease。
 - 三件套齐全：安装包 `Grandettoken_0.3.62_x64-setup.exe` 6,056,093 字节，GitHub 资产记录 SHA-256 `4b566e2a609cbae6270055d40a8df704cac962732aa571aebbb7b3928823aff8`；签名 `.sig` 444 字节；更新清单 `latest.json` 1,337 字节（notes 249 字符 / 163 中文字符、0 替换字符）。固定更新端点 `latest/download/latest.json` 返回 0.3.62。
 - 本机 `node --use-env-proxy build/verify-release.js` PASS（13 项；本地 `.sig` 与安装包两项按既有口径 SKIP，签名逐字比对在 CI 端完成）。`build/verify-antigravity-capture.js` 本机独立复跑 PASS。
-- main CI `44254504241` 首轮在「Antigravity callback whitelist」步骤以 exit 1 结束：该步用时 11 秒，与夹具 `spawnSync` 的 10 秒超时吻合；同一提交的发版流程与本机同一夹具均通过，形态与 v0.3.61 首轮相同。该步骤尚未重跑，重跑需 GitHub 认证（本机 `gh` 未登录、浏览器无会话）。
+- main CI `44254504241` 首轮在「Antigravity callback whitelist」步骤以 exit 1 结束：该步用时 11 秒，与夹具 `spawnSync` 的 10 秒超时吻合；同一提交的发版流程与本机同一夹具均通过，形态与 v0.3.61 首轮相同。
+- 该假红按 AGENTS.md §6.7 新增条目修复：`build/verify-antigravity-capture.js` 的超时改为 30 秒，失败信息补上 `status` / `signal` / `error` / 截断后的 `stderr`，提交 `08d1865`（不动产品代码）。推送后 main CI `44259165813` 全部步骤通过，该步骤用时 6 秒；`b6227d5` 那一轮仍保留为红，记录不改写。修复前后本机复跑 `verify-antigravity-capture.js`、静态门及自检、jsdom 275/275、顾问冒烟、core `580 passed / 10 ignored`、Tauri 全目标编译与凭据扫描均通过。
