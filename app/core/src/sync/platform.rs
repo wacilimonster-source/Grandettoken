@@ -12,7 +12,8 @@ use super::model::valid_platform_id;
 
 /// 内置 provider id 的集合。
 pub fn is_builtin(channel_id: &str) -> bool {
-    channel_id == crate::google_cloud::ID || providers::PROVIDERS.iter().any(|p| p.id == channel_id)
+    channel_id == crate::google_cloud::ID || crate::antigravity_accounts::account_id(channel_id).is_some()
+        || providers::PROVIDERS.iter().any(|p| p.id == channel_id)
 }
 
 /// 把本机渠道映射成跨来源合并键。

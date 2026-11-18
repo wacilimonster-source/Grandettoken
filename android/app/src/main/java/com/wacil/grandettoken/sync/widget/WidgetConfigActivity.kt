@@ -396,7 +396,7 @@ private fun buildOptions(
     cache?.channels.orEmpty().forEach { channel ->
         when {
             channel.kind == ChannelKind.Quota &&
-                (channel.platformId == "codex" || channel.platformId == "antigravity") &&
+                (channel.platformId == "codex" || channel.platformId.substringBefore(':') == "antigravity") &&
                 channel.windows.any { it.key.isNotBlank() } -> {
                 val sorted = channel.windows
                     .filter { it.key.isNotBlank() }

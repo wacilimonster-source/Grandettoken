@@ -1962,7 +1962,7 @@ fn with_amount_history<T>(
     }
 }
 
-fn build_view(
+pub(crate) fn build_view(
     def: &providers::ProviderDef,
     mut result: FetchResult,
     stale: bool,
@@ -2184,7 +2184,7 @@ fn gap_of_day(d: &crate::store::DayCoverage, now: i64) -> bool {
 }
 
 /// 没有可用凭据的渠道占位。这不是故障,只是没启用。
-fn placeholder(def: &providers::ProviderDef) -> ChannelView {
+pub(crate) fn placeholder(def: &providers::ProviderDef) -> ChannelView {
     ChannelView {
         google_cloud: None,
         id: def.id.into(),
@@ -2702,7 +2702,6 @@ impl Fetcher {
         let _ = store.delete_setting(&format!("quota_snapshot_v1:{id}"));
         let _ = store.delete_setting(&format!("{QODER_SCOPE_KEY}:{id}"));
         let _ = store.delete_setting(&format!("{QODER_CHANGED_KEY}:{id}"));
-        if id == "antigravity" { crate::antigravity::clear_cooldown(); }
         self.invalidate();
     }
 
@@ -2757,7 +2756,6 @@ impl Fetcher {
     pub fn invalidate(&self) {
         *self.last_run.lock().unwrap_or_else(|p| p.into_inner()) = None;
         self.recovery.lock().unwrap().retain(|_, r| matches!(r.kind, Some(FailKind::RateLimited(_))) && r.next > now_ts());
-        crate::antigravity::clear_cooldown();
     }
 
     /// 用一份**还没生效**的凭据试打一次:网页登录抓到会话之后,先证明这份会话真能取数,
@@ -2813,7 +2811,6 @@ impl Fetcher {
             if let Ok(c) = Config::try_load(&store.lock().unwrap_or_else(|p| p.into_inner())) {
                 crate::antigravity::set_cli_path(c.antigravity_cli_path);
             }
-            crate::antigravity::clear_cooldown();
         }
         let web_src = self.web_cred_src.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let (creds, secret_err) =
@@ -3023,17 +3020,20 @@ impl Fetcher {
                         };
                     }
                     if !should_fetch(def.id) {
-                        if let Some(v) = previous.iter().find(|v| v.id == def.id) {
-                            return FetchedOne { i, def, fp: String::new(), view: Some(v.clone()), pending: None, success: None };
+                        if let Some(v) = crate::antigravity_accounts::previous_view(previous, def.id) {
+                            return FetchedOne { i, def, fp: String::new(), view: Some(v), pending: None, success: None };
                         }
+                    }
+                    if def.id == "antigravity" {
+                        let view = crate::antigravity_accounts::collect(store, cfg).await;
+                        return FetchedOne { i, def, fp: String::new(), view: Some(view), pending: None, success: None };
                     }
                     // 文件 IO + AES + keyring RPC 都是阻塞调用:下沉到 spawn_blocking,
                     // 凭据服务卡住不再拖垮 tokio worker 上的整轮取数(扫描报告 O-5)。
                     // 网页登录的会话来源也是阻塞的(要同步问 webview 的 Cookie 罐),
                     // 正好一起待在这个阻塞任务里。
                     let web_src = web_src.clone();
-                    // 逐包到期那步还要再问一次会话(不同的 id),这里先克隆一份:
-                    // 上面那个克隆会被 credentials 的闭包移走(报告 O-5 的同一段路)
+                    // 逐包到期需要独立的网页会话来源，避免被凭据闭包移走。
                     let qoder_web_src = web_src.clone();
                     let wb_reader = wb_cycle.clone();
                     let (creds, secret_err) =
@@ -3052,11 +3052,8 @@ impl Fetcher {
                             .unwrap_or_default();
                         demote_rejected(creds, &rej, now, |t| key_fp(t))
                     };
-                    // 密钥指纹只对"稳定的 API Key"有意义:网页会话 / 本机登录态的凭据
-                    // 每轮都可能轮换,拿它分段等于每轮开一本新账 —— 那两类一律空串,
-                    // 退回"不分段"的老口径(与后端 store::record_fp 的约定一致)。
-                    // 用**库里现在存的那把钥匙**算,不用"这次试成功的那把":
-                    // 取数失败时也要按当前 key 分段,否则失败期间的快照会落错账。
+                    // API Key 按当前库中密钥分段，失败期间也保持账目归属。
+                    // 轮换的网页/应用令牌使用空指纹，账号隔离由各渠道独立处理。
                     let fp: String = if matches!(def.auth, AuthKind::Keyring) {
                         creds
                             .first()
@@ -3706,6 +3703,7 @@ impl Fetcher {
 
         // 内置渠道在前、自定义渠道在后(顺序由前端的排序/自定义排序再排一次)
         let mut all: Vec<ChannelView> = out.into_iter().flatten().collect();
+        all = crate::antigravity_accounts::expand_all(all, &store.lock().unwrap_or_else(|p| p.into_inner()), &cfg);
         all.extend(custom_views);
         all.push(crate::google_cloud::channel(&store.lock().unwrap(), &cfg, now_ts()));
         for v in &mut all {

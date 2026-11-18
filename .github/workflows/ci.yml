@@ -80,7 +80,7 @@ jobs:
       - name: cargo test (core)
         shell: pwsh
         working-directory: app/core
-        # 8 条 #[ignore] 是真机用例 / 基准(要读本机凭据、要打真接口、要写真实文件),
+        # #[ignore] 是真机用例 / 基准(要读本机凭据、要打真接口、要写真实文件),
         # doc-test 里另有 1 条忽略的示例。runner 上没有这些前提,跳过是对的。
         # 它们在任何环境都不该自动跑 —— 见各用例的注释。
         run: cargo test --locked
@@ -163,6 +163,10 @@ jobs:
       - name: Google Cloud credits smoke (jsdom)
         shell: pwsh
         run: node build/verify-google-cloud.js
+
+      - name: Antigravity callback whitelist
+        shell: pwsh
+        run: node build/verify-antigravity-capture.js
 
       # 形态门守卫:吸附条 / 胶囊 / 紧凑条控件这些"整块容器"的 display 必须挂在
       # body.<状态> 下。v0.1.56 的吸附条漏了这道门(.dock-body{display:flex!important}),

@@ -40,7 +40,8 @@ pub fn build_snapshot(input: BuildInput<'_>) -> Result<SyncSnapshot, SyncError> 
         .iter()
         .filter(|v| !v.hidden && !v.auto_hidden)
         .filter(|v| {
-            input.cfg.sync_channels.is_empty() || input.cfg.sync_channels.iter().any(|id| id == &v.id)
+            input.cfg.sync_channels.is_empty() || input.cfg.sync_channels.iter().any(|id| id == &v.id
+                || id == "antigravity" && crate::antigravity_accounts::is_channel(&v.id))
         })
         .collect();
 
@@ -417,6 +418,26 @@ pub(crate) fn build_totals(channels: &[ChannelSnapshot]) -> TotalsSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn antigravity_accounts_publish_separate_keys_under_existing_group_selection() {
+        let store = Store::open_memory().unwrap();
+        let mut cfg = Config::default();
+        cfg.sync_channels = vec!["antigravity".into()];
+        let rows: Vec<_> = ["a", "b"].iter().enumerate().map(|(i, letter)| ChannelView {
+            id: format!("antigravity:{}", letter.repeat(24)), name: format!("Antigravity · 账号 {}", i + 1),
+            kind: Kind::Percent, valid: true, has_key: true, remaining: Some(if i == 0 { 68.0 } else { 35.0 }),
+            unit: "%".into(), stale: i == 1, updated_at: 100, ..Default::default()
+        }).collect();
+        let snapshot = build_snapshot(BuildInput { cfg: &cfg, views: &rows, store: &store,
+            source: "s_0123456789abcdef0123456789abcdef", seq: 1, now: 200, app: "fixture" }).unwrap();
+        assert_eq!(snapshot.channels.len(), rows.len());
+        assert_ne!(snapshot.channels[0].platform_id, snapshot.channels[1].platform_id);
+        for (channel, view) in snapshot.channels.iter().zip(&rows) { assert_eq!(channel.platform_id, view.id); }
+        assert_eq!(snapshot.channels[0].percent.as_deref(), Some("68"));
+        assert_eq!(snapshot.channels[1].percent.as_deref(), Some("35"));
+        assert!(snapshot.channels[1].stale);
+    }
 
     #[test]
     fn offset_label_formats_utc8() {

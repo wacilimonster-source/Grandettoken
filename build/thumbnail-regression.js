@@ -128,14 +128,14 @@ module.exports = async function ({ w, R, data, src }) {
       const c = channels.find(c => c.kind === "points");
       assert.match(row(c.id).querySelector(".thumb-status-main").textContent, /174\.96 分将到期/);
       const date = row(c.id).querySelector(".thumb-status-end").textContent;
-      const pattern = /^(?:\d{4}-)?\d{1,2}-\d{2} (?:(?:本|下)?周[日一二三四五六]|明天|后天)$/;
+      const pattern = /^(?:\d{4}-)?\d{1,2}-\d{2} (?:(?:本|下)?周[日一二三四五六]|今天|明天|后天)$/;
       assert.match(date, pattern);
       assert.throws(() => assert.match(date.split(" ")[0], pattern), assert.AssertionError);
     });
     check("星期按自然周计算并覆盖跨月跨年闰日", () => {
       const at = (year, month, day) => new w.Date(year, month - 1, day, 12).getTime();
       const examples = [
-        [[2026, 11, 15], [2026, 11, 15], "11-15 本周日"],
+        [[2026, 11, 15], [2026, 11, 15], "11-15 今天"],
         [[2026, 11, 15], [2026, 11, 16], "11-16 明天"],
         [[2026, 11, 15], [2026, 11, 17], "11-17 后天"],
         [[2026, 11, 15], [2026, 11, 18], "11-18 下周三"],
@@ -153,6 +153,37 @@ module.exports = async function ({ w, R, data, src }) {
       assert.equal(w.PanelLayoutUI.expiryDate(null), "日期未知");
       assert.equal(w.PanelLayoutUI.expiryDate(NaN), "日期未知");
       assert.equal(w.PanelLayoutUI.expiryDate(Infinity), "日期未知");
+    });
+    check("WorkBuddy 当天到期与首页摘要一致并在午夜自动更新", () => {
+      const RealDate = w.Date;
+      let time = new RealDate(2026, 10, 17, 23, 59).getTime();
+      const at = new RealDate(2026, 10, 18, 10, 26).getTime() / 1000;
+      w.Date = class extends RealDate {
+        constructor(...args) { super(...(args.length ? args : [time])); }
+        static now() { return time; }
+      };
+      try {
+        const workbuddy = channels.find(c => c.id === "workbuddy");
+        w.__TEST.setChannels([{ ...workbuddy, expiring: [{ at, amount: 23.03 }], expiryComplete: true }]);
+        w.render({});
+        w.tickPeakCountdowns();
+        const date = () => row(workbuddy.id).querySelector(".thumb-status-end").textContent;
+        assert.equal(date(), "11-18 明天");
+        time = new RealDate(2026, 10, 18, 0, 1).getTime();
+        w.tickPeakCountdowns();
+        assert.equal(date(), "11-18 今天");
+        assert.match(doc.querySelector('.metric[data-id="workbuddy"] .due-date').textContent, /11-18今天/);
+        assert.match(row(workbuddy.id).querySelector(".thumb-status").title, /11-18 今天/);
+        assert.match(row(workbuddy.id).querySelector("[data-points-expiry]").title, /2026-11-18 周三 10:26/);
+        for (const layout of ["single", "double"]) {
+          w.__TEST.patchCfg({ panelLayout: layout }); w.__TEST.updateLayout(); w.render({});
+          assert.match(row(workbuddy.id).querySelector(".r2").textContent, /11-18 今天 10:26/);
+        }
+      } finally {
+        w.Date = RealDate;
+        w.__TEST.patchCfg({ panelLayout: "thumbnail" }); w.__TEST.updateLayout();
+        w.__TEST.setChannels(channels); w.render({});
+      }
     });
     check("跨周分钟刷新更新日期及辅助提示并保留焦点", () => {
       const RealDate = w.Date;
@@ -233,6 +264,9 @@ module.exports = async function ({ w, R, data, src }) {
         assert.match(row(c.id).querySelector(".thumb-window").textContent, /后天重置/);
         assert.match(row(c.id).querySelector(".thumb-status").title, /后天/);
         assert(!row(c.id).querySelector(".thumb-status").title.includes("下周三"));
+        time = new RealDate(2026, 10, 18, 0, 1).getTime(); w.PanelLayoutUI.tick();
+        assert.equal(row(c.id).querySelector("[data-weekly-reset]").textContent, "11-18 今天重置");
+        assert.match(row(c.id).querySelector(".thumb-status").title, /周重置 11-18 今天/);
       } finally {
         w.Date = RealDate; w.__TEST.setChannels(channels); w.render({});
       }

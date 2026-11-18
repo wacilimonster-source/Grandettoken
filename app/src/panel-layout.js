@@ -52,10 +52,10 @@
     const currentWeek = monday(today);
     const targetWeek = monday(date);
     const distance = day(date) - day(today);
-    const week = distance === 1 ? "明天" : distance === 2 ? "后天" :
+    const label = ["今天", "明天", "后天"][distance] ??
       (targetWeek === currentWeek ? "本周" : targetWeek === currentWeek + 7 ? "下周" : "周") + "日一二三四五六"[date.getDay()];
     const year = date.getFullYear() === today.getFullYear() ? "" : date.getFullYear() + "-";
-    return `${year}${fmtDay(at)} ${week}`;
+    return `${year}${fmtDay(at)} ${label}`;
   }
 
   function dateTitle(date) {
@@ -78,10 +78,10 @@
 
   function weeklyReset(c, prefix = false) {
     const windows = c.windows || [];
-    const weekly = c.id === "antigravity" ? windows.find(w => w.key === "gemini-weekly") :
+    const weekly = isAntigravity(c) ? windows.find(w => w.key === "gemini-weekly") :
       windows.find(w => w.key === "weekly") || windows.find(w => w.label === "本周");
     const at = resetMs(weekly);
-    const title = (c.id === "antigravity" ? "Gemini 周额度下次重置" : "周额度下次重置") +
+    const title = (isAntigravity(c) ? "Gemini 周额度下次重置" : "周额度下次重置") +
       (at === null ? "时间未知" : " · " + dateTitle(new Date(at)));
     return `<span class="thumb-week-reset" data-weekly-reset="${at ?? ""}" data-weekly-prefix="${prefix}" title="${esc(title)}">${esc(weeklyResetText(at, prefix))}</span>`;
   }
@@ -123,10 +123,11 @@
     const auth = health && health.state === "auth" || c.recovery && c.recovery.phase === "auth";
     if (mw) {
       label = mw.label;
-      if (c.id === "antigravity") label = mw.key === "gemini-weekly" ? "Gemini周" : mw.key === "gemini-5h" ? "Gemini5h" : mw.label;
+      if (isAntigravity(c)) label = mw.key === "gemini-weekly" ? "Gemini周" : mw.key === "gemini-5h" ? "Gemini5h" : mw.label;
       label += CFG.showUsed ? "已用" : "剩余";
     }
-    if (noKey || failed || isOld || auth) {
+    const archivedAccount = isAntigravity(c) && c.id !== "antigravity" && c.valid && c.stale;
+    if (noKey || failed || isOld && !archivedAccount || auth) {
       const state = noKey ? "待登录/配置" : auth ? "登录失效" : failed && c.remaining == null ? "读取失败" : "数据已旧";
       status = esc(state) + (sub ? " · " + sub : "");
       end = "";
@@ -139,7 +140,7 @@
         status = `5h 已耗尽 · 卡 ${cards == null ? "未知" : esc(cards)}`;
         end = windowTime(short, "后恢复");
       }
-    } else if (c.id === "antigravity") {
+    } else if (isAntigravity(c)) {
       const wins = c.windows || [];
       const short = wins.find(w => w.key === "gemini-5h");
       const limitedWins = wins.filter(w => w.status === "rate-limited" || w.remainPercent === 0);
@@ -147,6 +148,7 @@
       status = `G5h${CFG.showUsed ? "用" : "剩"} ${windowValue(short)}`;
       end = short ? windowTime(short) : "";
       if (limited) end = `限流 ${windowTime(limited, "后恢复")}`;
+      if (archivedAccount) end = wins.some(w => resetMs(w) !== null && resetMs(w) <= Date.now()) ? "重置待刷新" : "";
       detail = [detail, limited ? `${limited.label}限流` : ""].filter(Boolean).join(" · ");
     } else if (c.limited) {
       status = `限流 · ${railLeft || sub}`;
@@ -169,10 +171,13 @@
       status = "重置";
       end = windowTime(mw);
     }
+    if (isAntigravity(c) && c.id !== "antigravity" && window.AntigravityUI) {
+      end = window.AntigravityUI.accountStatus(c, true);
+    }
     const text = plainText(status) + (end ? " · " + plainText(end) : "");
     const full = [...new Set([text, detail].filter(Boolean))].join(" · ");
     const shortName = c.id === "google-cloud" ? "Gemini · GCP" : c.name;
-    const weekly = ["codex", "antigravity"].includes(c.id) && !noKey && !failed && !isOld && !auth ? weeklyReset(c) : "";
+    const weekly = (c.id === "codex" || isAntigravity(c)) && !noKey && !failed && (!isOld || archivedAccount) && !auth ? weeklyReset(c) : "";
     return {
       label: `<span class="thumb-window${weekly ? " has-week-reset" : ""}" title="${esc(label)}"><span class="thumb-caption">${esc(label)}</span>${weekly}</span>`,
       name: `<span class="thumb-name" title="${esc(c.name)}">${esc(shortName)}</span>`,

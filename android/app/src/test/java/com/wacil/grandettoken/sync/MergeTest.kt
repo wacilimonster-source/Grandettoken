@@ -17,6 +17,21 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class MergeTest {
+    @Test
+    fun antigravity_accounts_stay_separate_and_same_account_merges_across_sources() {
+        val accountA = "antigravity:" + "a".repeat(24)
+        val accountB = "antigravity:" + "b".repeat(24)
+        val a = channel(accountA, 100, "0").copy(kind = ChannelKind.Quota, unit = "%", remaining = null, percent = "68")
+        val b = channel(accountB, 90, "0", stale = true).copy(kind = ChannelKind.Quota, unit = "%", remaining = null, percent = "35")
+        val first = snap("s_0123456789abcdef0123456789abcdef", 1, listOf(a, b))
+        val second = snap("s_fedcba9876543210fedcba9876543210", 1, listOf(a.copy(updatedAt = 200, percent = "60")))
+        val merged = SyncMerge.merge(listOf(first, second))
+        assertEquals(2, merged.channels.size)
+        assertEquals("60", merged.channels.first { it.platformId == accountA }.percent)
+        assertEquals("35", merged.channels.first { it.platformId == accountB }.percent)
+        assertTrue(merged.channels.first { it.platformId == accountB }.stale)
+    }
+
     private fun channel(
         platform: String,
         updated: Long,

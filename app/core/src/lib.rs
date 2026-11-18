@@ -8,6 +8,8 @@
 #![recursion_limit = "256"]
 
 pub mod antigravity;
+pub mod antigravity_accounts;
+mod antigravity_console;
 pub mod appauth;
 pub mod backup_crypto;
 pub mod checkin;

@@ -1,5 +1,13 @@
 /* Gemini 周额度承担主数字，短窗口与其他模型组按层级排列。 */
 .ag-quota{font-size:max(12px,calc(12px*var(--u)))}
+.ag-accounts{margin-top:calc(14px*var(--u));border-top:1px solid var(--line)}
+.ag-account{padding:calc(12px*var(--u)) 0;border-bottom:1px solid var(--line)}
+.ag-account-heading{display:flex;flex-wrap:wrap;align-items:baseline;gap:calc(6px*var(--u)) calc(12px*var(--u));margin-bottom:calc(8px*var(--u))}
+.ag-account-heading b{color:var(--tx2);overflow-wrap:anywhere}
+.ag-account-heading>span{color:var(--tx3);font-size:max(11px,calc(11px*var(--u)))}
+.ag-account .ccbtns{flex-wrap:wrap}
+.ag-account input{min-width:120px;flex:1}
+.ag-snapshot{padding:calc(10px*var(--u)) 0;overflow-wrap:anywhere}
 .ag-gemini h3{font-size:calc(15px*var(--u));font-weight:600;margin:0 0 calc(12px*var(--u));color:var(--tx)}
 .ag-window{padding:calc(12px*var(--u)) 0;min-width:0}
 .ag-window+.ag-window{border-top:1px solid var(--line)}

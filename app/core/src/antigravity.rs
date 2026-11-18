@@ -1,12 +1,13 @@
-//! Antigravity 配额取数（仅官方 `agy` CLI 公开输出，零凭据/桌面库嗅探）。
+//! 官方 agy 发现与配额解析，当前会话采集由 antigravity_accounts 管理。
 //!
 //! 产品设计见 `docs/product/product-antigravity-quota-2026-11-15.md`：
-//! - 通过 `agy -p /usage --output-format json --print-timeout 25s` 获取配额快照；
+//! - 官方 statusLine 回调同时提供身份与额度，复用下方配额解析器；
 //! - 主数字优先锁定 `gemini-weekly`（`w.main = true`），其次 `gemini-5h`，否则首条有效窗口；
 //! - AI Credits 一期不读取、不展示；
 //! - 支持可选自定义 CLI 路径；未找到 / 未登录时如实报错，绝不把未知数值伪装为 `0%`。
 
 use crate::appauth::Credential;
+#[cfg(test)]
 use crate::errcodes;
 use crate::providers::{num, round1, FetchResult, Kind, Window};
 use serde_json::Value;
@@ -16,30 +17,19 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
-/// 子进程单次硬超时（高于 `--print-timeout 25s`，留给冷启动与退场缓冲）。
-const HARD_TIMEOUT: Duration = Duration::from_secs(35);
 /// `--version` 探测超时。
 const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 /// stdout / stderr 单流读取上限（1 MiB）。
 const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
-/// 自动轮询最小冷却时间（秒）：手点刷新与测试连接可跳过。
+/// CLI 启动最小冷却时间（秒），轮询、手动刷新和测试连接共用。
 pub const AUTO_COOLDOWN_SECS: i64 = 120;
 
 static CUSTOM_CLI_PATH: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 static VERSION_CACHE: OnceLock<Mutex<HashMap<(PathBuf, Option<u64>), Option<String>>>> =
     OnceLock::new();
-static USAGE_CACHE: OnceLock<Mutex<Option<CachedUsage>>> = OnceLock::new();
-static CLI_GATE: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
-
-#[derive(Clone)]
-struct CachedUsage {
-    path: String,
-    ts: i64,
-    outcome: AgyOutcome,
-}
 
 /// CLI 调用结果（与 `fetch.rs` 解耦，仅传错误分类标签）。
 #[derive(Debug, Clone)]
@@ -62,22 +52,7 @@ fn cli_path_slot() -> &'static Mutex<Option<String>> {
     CUSTOM_CLI_PATH.get_or_init(|| Mutex::new(None))
 }
 
-fn usage_cache_slot() -> &'static Mutex<Option<CachedUsage>> {
-    USAGE_CACHE.get_or_init(|| Mutex::new(None))
-}
-
-fn cli_gate() -> &'static tokio::sync::Mutex<()> {
-    CLI_GATE.get_or_init(|| tokio::sync::Mutex::new(()))
-}
-
-fn now_secs() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-}
-
-/// 更新内存中的自定义 `agy` 路径（留空则回到自动探测）；变更时清空冷却缓存。
+/// 更新内存中的自定义 `agy` 路径（留空则回到自动探测）。
 pub fn set_cli_path(path: Option<String>) {
     let normalized = path
         .map(|s| s.trim().to_string())
@@ -85,13 +60,7 @@ pub fn set_cli_path(path: Option<String>) {
     let mut slot = cli_path_slot().lock().unwrap_or_else(|p| p.into_inner());
     if *slot != normalized {
         *slot = normalized;
-        clear_cooldown();
     }
-}
-
-/// 清除 120s 自动轮询冷却（手动刷新、配置保存、遗忘渠道时调用）。
-pub fn clear_cooldown() {
-    *usage_cache_slot().lock().unwrap_or_else(|p| p.into_inner()) = None;
 }
 
 /// 按配置或本机默认安装位置解析 `agy` 可执行文件路径。
@@ -352,76 +321,19 @@ pub fn app_credentials() -> (Vec<Credential>, Option<String>) {
         Err(ResolveError::NotFound) => (
             Vec::new(),
             Some(
-                "未检测到 agy CLI · 请先安装并在终端运行 agy auth login，或在设置中指定路径"
+                "未检测到 agy CLI · 请先安装并在终端启动 agy 完成登录，或在设置中指定路径"
                     .to_string(),
             ),
         ),
     }
 }
 
-/// 单飞 + 120s 冷却获取 Antigravity 配额；`cli_path` 来自 `Credential.token`。
+/// 测试连接复用账号采集的单飞与冷却，结果只用于探活。
 pub async fn fetch_usage(cli_path: &str) -> AgyOutcome {
-    let _guard = cli_gate().lock().await;
-    let now = now_secs();
-    {
-        let cache = usage_cache_slot().lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(hit) = cache.as_ref() {
-            if hit.path == cli_path
-                && hit.outcome.result.valid
-                && hit.ts <= now
-                && now - hit.ts < AUTO_COOLDOWN_SECS
-            {
-                return hit.outcome.clone();
-            }
-        }
-    }
-
-    let path = PathBuf::from(cli_path);
-    let outcome = tokio::task::spawn_blocking(move || exec_agy_usage(&path))
-        .await
-        .unwrap_or_else(|_| fail_outcome("agy CLI 后台任务异常退出", "transport", errcodes::CONNECT, 0, String::new()));
-
-    if outcome.result.valid {
-        *usage_cache_slot().lock().unwrap_or_else(|p| p.into_inner()) = Some(CachedUsage {
-            path: cli_path.to_string(),
-            ts: now_secs(),
-            outcome: outcome.clone(),
-        });
-    }
-    outcome
+    crate::antigravity_accounts::probe_usage(cli_path).await
 }
 
-fn exec_agy_usage(path: &Path) -> AgyOutcome {
-    if !path.is_file() {
-        return fail_outcome(
-            &format!("找不到 agy CLI 可执行文件: {}", path.display()),
-            "business",
-            errcodes::BODY_SHAPE,
-            0,
-            String::new(),
-        );
-    }
-    match run_command_capped(
-        path,
-        &["-p", "/usage", "--output-format", "json", "--print-timeout", "25s"],
-        HARD_TIMEOUT,
-    ) {
-        Ok((code, out, err)) => {
-            if out.truncated {
-                return fail_outcome(
-                    "agy CLI 输出超过 1 MiB 上限，已丢弃",
-                    "server",
-                    errcodes::BODY_SHAPE,
-                    out.bytes.len(),
-                    String::new(),
-                );
-            }
-            parse_cli_output(code, &out.bytes, &err.bytes)
-        }
-        Err(msg) => fail_outcome(&msg, "transport", errcodes::TIMEOUT, 0, String::new()),
-    }
-}
-
+#[cfg(test)]
 fn fail_outcome(
     msg: &str,
     kind: &'static str,
@@ -444,6 +356,7 @@ fn fail_outcome(
     }
 }
 
+#[cfg(test)]
 fn looks_like_auth_error(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     [
@@ -462,6 +375,7 @@ fn looks_like_auth_error(text: &str) -> bool {
     .any(|kw| lower.contains(kw))
 }
 
+#[cfg(test)]
 fn safe_hint(raw: &[u8]) -> String {
     let txt = String::from_utf8_lossy(&raw[..raw.len().min(300)]);
     let clean: String = txt
@@ -472,6 +386,7 @@ fn safe_hint(raw: &[u8]) -> String {
     clean.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+#[cfg(test)]
 fn parse_cli_output(exit_code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> AgyOutcome {
     let bytes = stdout.len();
     if let Ok(body) = serde_json::from_slice::<Value>(stdout) {

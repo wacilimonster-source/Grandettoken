@@ -113,6 +113,7 @@ jobs:
           Invoke-Gate 'vault-view'        { node build/verify-vault.js }
           Invoke-Gate 'codex-reset'       { node build/verify-codex-reset.js }
           Invoke-Gate 'google-cloud'      { node build/verify-google-cloud.js }
+          Invoke-Gate 'antigravity'       { node build/verify-antigravity-capture.js }
           Invoke-Gate 'gateway-view'      { node build/verify-gateway.js }
 
       - name: Install GNU toolchain + target

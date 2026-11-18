@@ -75,7 +75,7 @@ installer   Grandettoken_<版本>_x64-setup.exe
 | **Qoder 国内版** | 积分型 | 与上一行是**两套账号**,不互通;国内站 `qoder.cn` |
 | **MiniMax** | 积分型 | 读 MiniMax Code 桌面端凭据(`~/.minimax`,明文文件);逐笔到期积分 + 每日签到;免费积分每天发、30 天到期 |
 | **豆包工作** | 积分型 | doubao.com 网页会话(挂件内登录窗捕获,不落盘;也可手动粘贴 Cookie 自救);体验额度读数(自动签到已于 v0.3.47 移除:服务端拒绝直连领取,连官方客户端都报错,复盘见 `docs/report/doubao-checkin-710010702-2026-11-14.md`) |
-| **Antigravity** | 配额型 | 仅调用官方 `agy` CLI (`agy -p /usage --output-format json`) 查询各模型组配额;主数字锁定 Gemini 周池,可展开全部分组倒计时;需先在终端完成 `agy auth login` |
+| **Antigravity** | 配额型 | 官方 `agy` 状态栏回调识别当前账号与配额；账号分别成卡，历史账号保留最后记录；主数字锁定 Gemini 周池，可展开其他分组；先在官方客户端完成登录 |
 
 还有**自定义渠道**:填一个地址、字段路径和换算倍数,就能接任何没内置支持的中转站
 余额接口(测试通过才让保存)。
@@ -136,7 +136,7 @@ Google 登录会话由本机 `google-cloud-profile` 浏览器配置保存；应�
 | 数据库 | `%APPDATA%\com.wacil.tokenscope\tokenscope.db`(本地 SQLite,90 天明细 + 365 天归档) |
 | 体检报告 | 逐渠道真打一次接口 + 本机四项检查,结果可复制的纯文本 —— 里面只有域名、状态与数值,**没有任何密钥** |
 | MiniMax 凭据 | 读本机 MiniMax Code 客户端的**明文**登录文件(`~/.minimax/auth/prod/<区域>/mcode-public/auth.json`,与其它客户端登录态同一信任级别)。**令牌托管默认开**:MiniMax 的 access token 只有约 1 小时寿命,临近过期时挂件自动续期,并把轮换后的新令牌**原子回写**进同一份文件(保留 `generation` 字段,不会让客户端误判"在别处登录过")。设置 → 刷新与启动 → 「MiniMax 凭据」可关;关掉即**只读模式**(不刷新也不回写,令牌过期后渠道显示"需重新登录")。也可用环境变量 `MINIMAX_NOWRITEBACK=1` 硬关。令牌只进内存与该文件本身,不进日志(排查日志只记长度 + 指纹前 8 位) |
-| Antigravity CLI | 仅以子进程无窗口方式调用本机官方 `agy` CLI(`agy -p /usage --output-format json --print-timeout 25s`,带 `AGY_CLI_DISABLE_AUTO_UPDATE=true`、`BROWSER=NUL` 与独立空临时目录;自动探测 `%LOCALAPPDATA%\agy\bin\agy.exe` / `PATH`,或由用户在渠道卡手动指定路径;自动轮询冷却 ≥120 秒)。**不读取** Antigravity 客户端 `state.vscdb`、不扫描桌面端本地端口、不提取或持久化 Google OAuth 令牌。隐藏该渠道后立即停止调用 `agy` CLI |
+| Antigravity CLI | 启用渠道后，以 Windows 隐式 ConPTY 临时会话调用本机官方 `agy`，通过单次 `--settings` 配置官方 `statusLine` 回调，取得同一会话的账号身份与配额；过程保持空输入。回调用系统 PowerShell 在内存解析白名单，仅保存邮箱指纹、额度和采集时间。带 `AGY_CLI_DISABLE_AUTO_UPDATE=true`、`BROWSER=NUL` 与独立空临时目录，完成或超时后通过 Job Object 清理整棵子进程树。成功、失败和手动刷新共用至少 120 秒启动冷却。CLI 路径支持自动探测及手填。历史账号显示最后快照。隐藏账号卡冻结其记录并保留当前会话识别，隐藏整个 Antigravity 分组后停止 CLI 采集。第三方查询受 [Google 服务条款](https://antigravity.google/terms) 约束，账号风控风险仍存在 |
 
 ## 已知边界(不是 bug,是设计或上游限制)
 

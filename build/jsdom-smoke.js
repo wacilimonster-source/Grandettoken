@@ -26,6 +26,11 @@ try {
 const SRC = path.resolve(__dirname, "..", "app", "src");
 const html = fs.readFileSync(path.join(SRC, "index.html"), "utf8");
 let js = fs.readFileSync(path.join(SRC, "app.js"), "utf8");
+if (process.env.ANTIGRAVITY_ACCOUNT_SENTINEL === "1") {
+  const marker = "window.AntigravityUI.managementList(ordered)";
+  if (!js.includes(marker)) throw new Error("Antigravity 管理分组哨兵未命中");
+  js = js.replace(marker, "ordered");
+}
 if (process.env.PERFORMANCE_SENTINEL === "1") {
   js = js.replace('if (!WINDOW_VISIBLE) {', 'if (false && !WINDOW_VISIBLE) {');
   js = js.replace('function qReconcile(box, items) {', 'function qReconcile(box, items) { if (box && ["cfgPill", "mIndexList"].includes(box.id)) box.innerHTML = "";');
@@ -54,6 +59,12 @@ if (process.env.CHECKIN_SENTINEL === "1") {
   if (perfProbe.status !== 1 || !/FAIL 隐藏窗口保留列表且继续更新托盘来源/.test(perfProbe.stdout)
       || !/FAIL 设置选择与索引复用按钮/.test(perfProbe.stdout)) {
     throw new Error("性能哨兵自检失败：隐藏门控和按钮复用退化必须被断言拦截");
+  }
+  const accountProbe = spawnSync(process.execPath, [__filename], {
+    env: { ...process.env, CHECKIN_SENTINEL: "1", ANTIGRAVITY_ACCOUNT_SENTINEL: "1" }, encoding: "utf8", timeout: 20000,
+  });
+  if (accountProbe.status !== 1 || !/FAIL Antigravity 多账号 管理页只有一个分组且列出全部账号/.test(accountProbe.stdout)) {
+    throw new Error("Antigravity 多账号哨兵自检失败：分组退化必须由账号分组断言拦截");
   }
 }
 const vaultJs = fs.readFileSync(path.join(SRC, "vault-view.js"), "utf8");
@@ -1657,6 +1668,7 @@ w.__DATA = DATA;
   }
 
   await require("./thumbnail-regression.js")({ w, R, data: DATA, src: SRC });
+  await require("./antigravity-account-regression.js")({ w, R, data: DATA });
 
   let ok = 0, bad = 0;
   for (const r of R) {

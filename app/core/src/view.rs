@@ -333,7 +333,7 @@ fn is_limited(v: &ChannelView) -> bool {
 
 /// 通知沿用各渠道既有口径。Codex 周窗是展示重点,通知仍看实际最紧的窗。
 pub fn notification_window(v: &ChannelView) -> Option<&Window> {
-    if matches!(v.id.as_str(), "codex" | "antigravity") {
+    if v.id == "codex" || crate::antigravity_accounts::is_channel(&v.id) {
         binding_window(v)
     } else {
         v.windows.iter().find(|w| w.main).or_else(|| v.windows.first())
@@ -401,7 +401,7 @@ pub fn state_of(v: &ChannelView, input: &ViewInput) -> ViewState {
 fn tone_of_state(s: ViewState, v: &ChannelView, input: &ViewInput) -> Tone {
     match s {
         ViewState::NoKey | ViewState::Auth | ViewState::Error => Tone::Off,
-        ViewState::Stale if !v.valid => Tone::Off,
+        ViewState::Stale if !v.valid || crate::antigravity_accounts::account_id(&v.id).is_some() => Tone::Off,
         ViewState::Limited | ViewState::Exhausted => Tone::Bad,
         _ => {
             // 积分型的风险是过期,不是余额低 —— 这一段沿用前端 `toneOf` 里已经验过的口径:
@@ -603,7 +603,7 @@ fn headline_of(v: &ChannelView, state: ViewState) -> Headline {
         return Headline::unknown();
     }
     match v.kind {
-        Kind::Percent => match if matches!(v.id.as_str(), "codex" | "antigravity") {
+        Kind::Percent => match if v.id == "codex" || crate::antigravity_accounts::is_channel(&v.id) {
             v.windows.iter().find(|w| w.main).or_else(|| binding_window(v))
         } else {
             binding_window(v)

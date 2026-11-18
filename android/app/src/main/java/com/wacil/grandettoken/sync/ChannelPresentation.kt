@@ -172,7 +172,7 @@ private fun ChannelProgress(fraction: Float, color: Color) {    Box(Modifier.fil
 
 @Composable
 private fun ChannelLogo(ch: ChannelSnapshot) {
-    val logo = when (ch.platformId) {
+    val logo = when (ch.platformId.substringBefore(':')) {
         "deepseek" -> R.drawable.channel_deepseek
         "codex" -> R.drawable.channel_codex
         "trae" -> R.drawable.channel_trae

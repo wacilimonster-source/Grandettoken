@@ -144,6 +144,10 @@ function relTime(ts) {
  * 配额型渠道的主窗口:后端用 `main` 标出来(OpenCode = 「周期」窗,Codex = 周窗优先),
  * 大数字与状态色都按它走。老数据没有这个标志时退回「周期」标签,再退到数组首位。
  */
+function isAntigravity(c) {
+  return c.id === "antigravity" || /^antigravity:[a-f0-9]{24}$/.test(c.id);
+}
+
 function mainWindow(c) {
   const wins = c.windows || [];
   if (!wins.length) return null;
@@ -151,7 +155,7 @@ function mainWindow(c) {
     const weekly = wins.find((w) => w.label === "本周");
     if (weekly) return weekly;
   }
-  if (c.id === "antigravity") {
+  if (isAntigravity(c)) {
     return wins.find((w) => w.main) || wins.find((w) => w.key === "gemini-weekly") || wins.find((w) => w.key === "gemini-5h") || wins[0];
   }
   return wins.find((w) => w.main) || wins.find((w) => w.label === "周期") || wins[0];
@@ -231,6 +235,7 @@ function peakCountdown(p, nowMs) {
 function tickPeakCountdowns() {
   if (!WINDOW_VISIBLE) return;
   if (window.PanelLayoutUI) window.PanelLayoutUI.tick();
+  if (window.AntigravityUI) window.AntigravityUI.tick();
   const nowMs = Date.now();
   document.querySelectorAll("[data-peakcd]").forEach((el) => {
     let p = null;
@@ -567,6 +572,7 @@ function quotaTone(c, w) {
  */
 function dotCls(c) {
   if (!c.hasKey) return "off";
+  if (isAntigravity(c) && c.stale) return "st";
   if (!c.valid) return "st";
   // 阈值判断与行 / 胶囊 / 托盘同源:以后端那一份为准(没有视图时退回本地 toneOf)
   if (c.limited || hvTone(c) === "bad") return "b";
@@ -610,7 +616,7 @@ function shortLabel(c) {
 }
 
 function iconHtml(c, cls = "ico", off = false) {
-  const src = LOGOS[c.id];
+  const src = LOGOS[isAntigravity(c) ? "antigravity" : c.id];
   const label = shortLabel(c);
   if (!src) {
     return `<div class="${cls}" title="${esc(c.name)}" style="background:${off ? "#343d4f" : c.color}">${esc(label)}</div>`;
@@ -746,7 +752,7 @@ function plainText(html) {
 }
 
 function renderRow(c, i) {
-  const gemini = c.id === "antigravity" && window.PanelLayoutUI && panelLayout() === "thumbnail" && currentForm() === "panel" ? window.PanelLayoutUI.gemini(c) : null;
+  const gemini = isAntigravity(c) && window.PanelLayoutUI && panelLayout() === "thumbnail" && currentForm() === "panel" ? window.PanelLayoutUI.gemini(c) : null;
   if (gemini) c = gemini.channel;
   const tone = gemini ? gemini.tone : hvTone(c);
   const noKey = !c.hasKey;
@@ -759,9 +765,9 @@ function renderRow(c, i) {
   // 下面三行各带一条迷你条把 5 小时 / 本周 / 周期都摊开,右侧附重置倒计时
   const wins = isPct && c.windows && c.windows.length ? c.windows : [];
   const mw = wins.length ? mainWindow(c) : null;
-  const quotaMain = (c.id === "codex" || c.id === "antigravity") && !!mw;
+  const quotaMain = (c.id === "codex" || isAntigravity(c)) && !!mw;
   const codex = c.id === "codex" && !!mw;
-  const ag = c.id === "antigravity" && window.AntigravityUI;
+  const ag = isAntigravity(c) && window.AntigravityUI;
   const fiveHour = codex ? wins.find((w) => w.label === "5 小时") : null;
   const codexDual = codex && mw.label === "本周" && !!fiveHour && !noKey && c.remaining != null;
 
@@ -850,6 +856,7 @@ function renderRow(c, i) {
   else if (c.peak) sub = esc(peakParts(c).label);
   else sub = ""; // 金额型拿到多少就是可用多少,不加说明
 
+  if (ag && c.id !== "antigravity") sub = ag.accountStatus(c);
   let subVal;
   if (noKey)
     subVal = c.authSource === "app" ? "需打开应用" : c.authSource === "web" ? "待登录" : "待配置";
@@ -964,6 +971,10 @@ function renderRow(c, i) {
     railLeft = rail.left;
     railRight = rail.right;
     railWarn = rail.warn;
+  } else if (ag && mw && c.id !== "antigravity") {
+    const rail = ag.rail(c);
+    railLeft = rail.left;
+    railRight = c.stale ? window.PanelLayoutUI.weeklyReset(c, true) : rail.right;
   } else if (noKey || failed || isStale) {
     // 原因与快照年龄已经分别写在 .s / .p 里,状态轨不再重复(HUD 同一句话只说一次)
     railLeft = "";
@@ -1028,7 +1039,7 @@ function renderRow(c, i) {
         : "今日消耗暂无";
     railRight = pct !== null ? `剩 ${pct}%` : hv && hv.qualifier ? esc(hv.qualifier) : "";
   }
-  if ((c.id === "codex" || c.id === "antigravity") && !noKey && !failed && !isStale && !(hv && hv.state === "auth")) {
+  if ((c.id === "codex" || isAntigravity(c)) && !noKey && !failed && !isStale && !(hv && hv.state === "auth")) {
     railRight = [railRight, window.PanelLayoutUI.weeklyReset(c, true)].filter(Boolean).join(" · ");
   }
   const railIcon = isPts || mw ? "#i-clock" : failed || isStale ? "#i-info" : "#i-info";
@@ -1090,9 +1101,9 @@ function coreAmount(c) {
 
 /** ① 核心 · 配额:一窗一行。重置 < 24 小时写相对时间,更久写「N 天 · MM-DD HH:MM」。 */
 function coreWindows(c) {
-  if (c.id === "antigravity" && window.AntigravityUI) return window.AntigravityUI.windows(c);
+  if (isAntigravity(c) && window.AntigravityUI) return window.AntigravityUI.windows(c);
   const codex = c.id === "codex";
-  const exactReset = codex || c.id === "antigravity";
+  const exactReset = codex || isAntigravity(c);
   const rows = (c.windows || []).map((w) => {
     const wr = Math.max(0, Math.min(100, w.remainPercent));
     const lim = w.status === "rate-limited";
@@ -1578,7 +1589,7 @@ function renderDetail(c, inDialog = false) {
   //   逐笔到期明细  —— 「接口未提供」,核心段的兜底文案已经说了
   const hasExpList = c.kind === "points" && (c.expiring || []).length > 0;
   const dupExtra = (k) =>
-    (c.id === "antigravity" && (c.windows || []).length && window.AntigravityUI && window.AntigravityUI.ownsExtra(k)) ||
+    (isAntigravity(c) && (c.windows || []).length && window.AntigravityUI && window.AntigravityUI.ownsExtra(k)) ||
     (k === "套餐" && c.id === "codex") ||
     ((k === "额度包" || k === "积分包") && hasExpList) ||
     (k === "逐笔到期明细" && c.kind === "points" && !hasExpList) ||
@@ -1670,7 +1681,7 @@ const KIND_CAPTION = {
 
 /** 弹层顶部的大数字:与卡片主数字同一口径,只放大。 */
 function detailHeroHtml(c) {
-  if (c.id === "antigravity" && c.hasKey && (c.windows || []).length && window.AntigravityUI) return "";
+  if (isAntigravity(c) && c.hasKey && (c.windows || []).length && window.AntigravityUI) return "";
   if (c.id === "google-cloud") return `<div class="detail-hero">${esc(money(c.remaining, c.unit))}</div>`;
   if (!c.hasKey) return `<div class="detail-hero" style="color:var(--tx3)">——</div>`;
   if (c.remaining === null || c.remaining === undefined) {
@@ -1737,9 +1748,10 @@ function renderDetailSheet() {
     : detailHeroHtml(c) +
       `<div class="detail-caption">${esc(caption)}</div>` +
       renderDetail(c, true) +
+      (isAntigravity(c) && window.AntigravityUI ? window.AntigravityUI.snapshotNotice(c) : "") +
       `<div class="detail-actions"><button type="button" class="btn" data-act="detail-refresh"${
         DETAIL_BUSY ? " disabled" : ""
-      }>${DETAIL_BUSY ? "刷新中…" : c.valid ? "刷新数据" : "重试连接"}</button>
+      }>${DETAIL_BUSY ? "刷新中…" : isAntigravity(c) ? "刷新当前登录账号" : c.valid ? "刷新数据" : "重试连接"}</button>
       <button type="button" class="btn p" data-act="detail-manage">设置与管理</button></div>`;
   body.scrollTop = keepTop;
   if (focusSel) {
@@ -1849,7 +1861,8 @@ async function detailAction(act) {
     closeDetail(false);
     openManage();
     showTab("ch");
-    const cid = act.dataset.id || id;
+    const target = act.dataset.id || id;
+    const cid = isAntigravity({ id: target }) ? "antigravity" : target;
     requestAnimationFrame(() => {
       const card = cid && document.querySelector(`#chList .ccard[data-id="${cid}"]`);
       if (card) {
@@ -2530,7 +2543,8 @@ const PILL = { list: [], sorted: [], idx: 0, auto: true, degraded: false };
 
 function renderPill(sorted) {
   PILL.sorted = sorted;
-  const picked = (CFG && CFG.pillChannels) || [];
+  const selection = (CFG && CFG.pillChannels) || [];
+  const picked = window.AntigravityUI ? window.AntigravityUI.expandSelection(selection) : selection;
   const autoPick = () => {
     // 自动轮播是「最紧张的一个」,口径独立于列表排序(列表顺序只按设置):
     // 绑定窗比例升序 → 无分母金额型按「余额 / 底线」贴近度 → 积分按 7 日到期占比。
@@ -3113,11 +3127,7 @@ const grantOpen = new Set();
 const GRANTS = {};
 
 function chDot(c) {
-  if (c.hidden || !c.hasKey) return "off";
-  if (!c.valid) return "st";
-  if (c.limited || hvTone(c) === "bad") return "b";
-  if (hvTone(c) === "warn") return "w";
-  return "";
+  return c.hidden ? "off" : dotCls(c);
 }
 
 /** 未保存的密钥输入草稿:重绘 #chList 前存、重建后回填(报告 P2-28)。 */
@@ -3163,7 +3173,7 @@ const WHY = {
   dblogin: "点「登录」开一个独立窗口走豆包网页登录,成功后窗口自动关掉,挂件用这份会话查体验额度 —— 会话留在挂件自己的浏览器 profile 里,不复制、不落盘;粘贴 Cookie 是登录窗口不通时的自救路径。",
   qoderweb: "逐笔到期明细只有网页会话能拿到,桌面端凭据只有汇总(平台两套接口的差别)。显示「已登录」= 本轮已用网页会话取到逐笔明细;平台会话会过期,失效后状态会自己退回「需登录」,届时点「重新登录」重开窗口刷新即可,历史快照不丢。未登录时点「登录网页版」开独立窗口,完成后自动关窗并刷新;这套会话只读明细,签到与余额照旧走桌面端。换过账号或令牌时点「切换账号」——旧网页会话属于上一本账,不先退出就会把旧账号的已到期记录挂到新账号下。",
   appauth: "凭据来自本机已登录的客户端;失效时打开一次客户端即可。隐藏本渠道后连读取也会停止。",
-  agy: "仅通过官方 agy CLI 的公开 /usage JSON 接口读取配额，不读取桌面端内部凭据库，也不持久化任何密钥。",
+  agy: "通过官方 agy statusLine 回调读取当前账号与配额，每次临时会话结束后清理进程树。成功和失败均有至少 120 秒采集冷却。账号身份保存为指纹，历史账号显示最后记录。分组隐藏后停止采集，单账号隐藏在识别当前账号后跳过更新。第三方查询仍受 Google 服务条款约束。",
   compact: "开启后可切成 380×46 的横向条;顶栏固定四枚入口不再显示「紧凑」,用 Ctrl+2 切换紧凑条,Esc 在面板与胶囊之间切换。",
   trayNum: "托盘显示缩写(74 / 1.2k / 82),悬停可看完整数值;关闭后回到品牌样式。",
   pulse: "只有红色状态点会 2 秒一次红晕。低位持续期间不重复播报,免得常驻桌面一直闪。",
@@ -3272,16 +3282,19 @@ function renderChCards() {
     keyDraft[el.id.slice(4)] = el.value;
   });
   const ids = currentOrderIds();
-  const list = ids.map((id) => CHANNELS.find((c) => c.id === id)).filter(Boolean);
+  const ordered = ids.map((id) => CHANNELS.find((c) => c.id === id)).filter(Boolean);
+  const list = window.AntigravityUI ? window.AntigravityUI.managementList(ordered) : ordered;
   const map = (CFG && CFG.claimChannels) || {};
   // 顶部恢复条:从**配置**里算,不依赖渠道视图 —— 万一某条卡片被渲染分支吞掉,
   // 这里仍然给得出恢复入口(兜底);点一下全部恢复。
   const hidIds = ((CFG && CFG.hiddenChannels) || []).filter((x) => CHANNELS.some((c) => c.id === x));
   const hidNames = hidIds.map((x) => (CHANNELS.find((c) => c.id === x) || {}).name || x);
+  const hiddenHint = hidIds.some(id => id !== "antigravity" && isAntigravity({ id }))
+    ? "Antigravity 账号卡冻结记录并保留会话识别，其余隐藏渠道停止取数" : "隐藏期间不取数,历史快照保留";
   const restoreBar = hidIds.length
     ? `<div class="restorebar" data-id="__all"><span><b>已隐藏 ${hidIds.length} 个</b>(${esc(
         hidNames.join("、")
-      )})—— 隐藏期间不取数,历史快照保留</span><span class="btn s" data-act="chshowall">全部恢复</span></div>`
+      )})—— ${hiddenHint}</span><span class="btn s" data-act="chshowall">全部恢复</span></div>`
     : "";
   $("chList").innerHTML = restoreBar + list
     .map((c, i) => {
@@ -3426,12 +3439,12 @@ function renderChCards() {
           : ""
       }
       ${CHECKIN_ON.has(c.id) ? '<div class="ckwrap" data-id="' + esc(c.id) + '">' + ckRowHtml(c.id) + "</div>" : ""}
-          <div class="ccord"><span class="mini">在列表中的位置</span>
+          ${c.id === "antigravity" && window.AntigravityUI ? "" : `<div class="ccord"><span class="mini">在列表中的位置</span>
             <span class="ord">
               <button class="btn ord" data-act="ordermove" data-id="${c.id}" data-dir="-1"${i === 0 ? " disabled" : ""} title="上移">&#9650;</button>
               <button class="btn ord" data-act="ordermove" data-id="${c.id}" data-dir="1"${i === list.length - 1 ? " disabled" : ""} title="下移">&#9660;</button>
             </span>
-          </div>
+          </div>`}
         </div>
       </div>`;
     })
@@ -3682,7 +3695,8 @@ async function fillKeySources(force = false) {
 
 /** 管理页里的胶囊渠道选择:点一下加入/移出轮播列表。 */
 function renderPillPick() {
-  const sel = (CFG && CFG.pillChannels) || [];
+  const selection = (CFG && CFG.pillChannels) || [];
+  const sel = window.AntigravityUI ? window.AntigravityUI.expandSelection(selection) : selection;
   qReconcile($("cfgPill"), CHANNELS.filter((c) => !c.hidden).map(
     (c) =>
       ({ key: c.id, html: `<button class="pick${sel.includes(c.id) ? " on" : ""}" data-act="pillpick" data-id="${c.id}">${esc(c.name)}</button>` })
@@ -4823,7 +4837,7 @@ function renderSync() {
       .map(
         (c) =>
           `<label class="row"><input type="checkbox" data-ch="${esc(c.id)}" ${
-            selected.has(c.id) ? "checked" : ""
+            selected.has(c.id) || isAntigravity(c) && selected.has("antigravity") ? "checked" : ""
           }><span>${esc(c.name)}</span></label>`
       )
       .join("");
@@ -6197,6 +6211,7 @@ $("manage").addEventListener("click", async (e) => {
     await saveCfg();
     render(); // 排序是前端算的,不用重新取数
   } else if (a === "pillpick") {
+    if (window.AntigravityUI) CFG.pillChannels = window.AntigravityUI.expandSelection(CFG.pillChannels || []);
     const sel = CFG.pillChannels || (CFG.pillChannels = []);
     const at = sel.indexOf(id);
     if (at >= 0) sel.splice(at, 1);
