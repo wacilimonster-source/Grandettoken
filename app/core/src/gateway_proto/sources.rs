@@ -25,6 +25,9 @@ pub const GEMINI_AISTUDIO_OPENAI_BASE_URL: &str =
 pub const GEMINI_AISTUDIO_MODELS_URL: &str =
     "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000";
 
+/// 网关访问上游的默认 User-Agent（对齐官方 OpenAI SDK，避免空 UA 被中转站 WAF 拦截且不暴露特殊指纹）。
+pub const DEFAULT_UPSTREAM_USER_AGENT: &str = "OpenAI/JS 4.77.0";
+
 /// 供前端展示的 OpenAI 兼容快捷模板。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -259,6 +262,16 @@ pub fn build_upstream_headers(
         map.insert(lower, (name.to_string(), cleaned));
     }
 
+    if !map
+        .get("user-agent")
+        .is_some_and(|(_, v)| !v.trim().is_empty())
+    {
+        map.insert(
+            "user-agent".into(),
+            ("User-Agent".into(), DEFAULT_UPSTREAM_USER_AGENT.into()),
+        );
+    }
+
     if let Some(raw_key) = api_key {
         let cleaned_key = strip_paste_artifacts(raw_key);
         if !cleaned_key.is_empty() {
@@ -332,6 +345,44 @@ mod tests {
             .iter()
             .any(|(k, v)| k == "x-goog-api-key" && v == "AIzaTest123"));
         assert!(hdrs.iter().any(|(k, v)| k == "X-Test" && v == "ok"));
+        assert!(hdrs
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("user-agent") && v == DEFAULT_UPSTREAM_USER_AGENT));
+    }
+
+    #[test]
+    fn upstream_headers_default_user_agent_and_allow_custom_override() {
+        let default_hdrs = build_upstream_headers(
+            GatewaySourceKind::OpenAiCompat,
+            Some("sk-test123456"),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            default_hdrs
+                .iter()
+                .filter(|(k, _)| k.eq_ignore_ascii_case("user-agent"))
+                .map(|(_, v)| v.as_str())
+                .collect::<Vec<_>>(),
+            vec![DEFAULT_UPSTREAM_USER_AGENT]
+        );
+
+        let mut custom = BTreeMap::new();
+        custom.insert("user-agent".into(), "CustomClient/2.0\n".into());
+        let overridden = build_upstream_headers(
+            GatewaySourceKind::OpenAiCompat,
+            Some("sk-test123456"),
+            &custom,
+        )
+        .unwrap();
+        assert_eq!(
+            overridden
+                .iter()
+                .filter(|(k, _)| k.eq_ignore_ascii_case("user-agent"))
+                .map(|(_, v)| v.as_str())
+                .collect::<Vec<_>>(),
+            vec!["CustomClient/2.0"]
+        );
     }
 
     #[test]

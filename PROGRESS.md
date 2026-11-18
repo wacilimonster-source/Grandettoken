@@ -1,7 +1,7 @@
 # Grandettoken 开发进展
 
 > 最后更新:2026-11-18
-> 状态:**桌面 v0.3.61、Android 0.1.14 已发布**。Qoder 账户到期与逐笔临期修正保留在工作区，尚未发版；真实双账号切换及 Qoder 网页重新登录后的明细待验收。
+> 状态:**桌面 v0.3.63 发布中、Android 0.1.14 已发布**。本地网关访问上游默认补充 `User-Agent: OpenAI/JS 4.77.0` 并支持渠道 `customHeaders` 覆盖；真实双账号切换及 Qoder 网页重新登录后的明细待验收。
 > 同日做了两轮**代码治理**:产物出库 / 门禁补强 / 静默失败归零 / 经验沉淀,
 > 见 `docs/report/code-governance-2026-11-12.md`、`docs/report/code-quality-2026-11-12-b.md`
 > 与根目录 `AGENTS.md`。
@@ -5440,3 +5440,10 @@ src-tauri `cargo check --all-targets --locked` exit 0;
 - 本机 `node --use-env-proxy build/verify-release.js` PASS（13 项；本地 `.sig` 与安装包两项按既有口径 SKIP，签名逐字比对在 CI 端完成）。`build/verify-antigravity-capture.js` 本机独立复跑 PASS。
 - main CI `44254504241` 首轮在「Antigravity callback whitelist」步骤以 exit 1 结束：该步用时 11 秒，与夹具 `spawnSync` 的 10 秒超时吻合；同一提交的发版流程与本机同一夹具均通过，形态与 v0.3.61 首轮相同。
 - 该假红按 AGENTS.md §6.7 新增条目修复：`build/verify-antigravity-capture.js` 的超时改为 30 秒，失败信息补上 `status` / `signal` / `error` / 截断后的 `stderr`，提交 `08d1865`（不动产品代码）。推送后 main CI `44259165813` 全部步骤通过，该步骤用时 6 秒；`b6227d5` 那一轮仍保留为红，记录不改写。修复前后本机复跑 `verify-antigravity-capture.js`、静态门及自检、jsdom 275/275、顾问冒烟、core `580 passed / 10 ignored`、Tauri 全目标编译与凭据扫描均通过。
+
+## 2026-11-18 v0.3.63 网关上游默认 User-Agent 随版发布
+
+- 本地模型网关请求上游时默认附带 `User-Agent: OpenAI/JS 4.77.0`（`gateway_proto::sources::DEFAULT_UPSTREAM_USER_AGENT`），同时写入 `proxy::build_client` 与 `build_upstream_headers`，避免第三方中转站前置 Cloudflare / WAF 因空 `User-Agent` 返回 403 且不暴露特定桌面软件指纹；渠道在 `customHeaders` 中配置非空 `User-Agent`（不区分大小写）时优先使用自定义值。
+- 双向验证：`sources::tests::upstream_headers_default_user_agent_and_allow_custom_override` 与 `proxy::tests::proxy_changes_refresh_the_client_and_direct_groups_bypass_it` 覆盖默认 UA、自定义覆盖与真实 HTTP 报文头；临时移除 `build_client` 的 `.user_agent(...)` 时 `proxy` 单测按预期变红，恢复后复绿。
+- 桌面版本号三处同步至 `0.3.63`（`Cargo.toml` / `tauri.conf.json` / `Cargo.lock`）。本地串行通过静态四门及自检、临期与 Qoder 门禁、9 个前端/捕获 JS 语法、jsdom 275/275、密钥箱 / Codex 重置顾问 / Google Cloud / Antigravity / 网关冒烟、`app/core` `cargo test --locked -- --test-threads=1`（581 passed / 10 ignored + `sync_fixtures` 6 passed）、`app/src-tauri` `cargo fetch --locked` 与 `cargo check --all-targets --locked`、凭据扫描 CLEAN。
+

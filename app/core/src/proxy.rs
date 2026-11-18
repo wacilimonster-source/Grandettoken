@@ -72,6 +72,7 @@ impl ProxyClientCache {
 
 fn build_client(system_proxy: bool) -> Result<reqwest::Client, String> {
     let builder = reqwest::Client::builder()
+        .user_agent(crate::gateway_proto::sources::DEFAULT_UPSTREAM_USER_AGENT)
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(15))
         // 读空闲超时(报告 B7):上游握手完成后若不吐响应头、或 SSE 流中途断流,
@@ -266,10 +267,20 @@ mod tests {
             .join()
             .unwrap()
             .starts_with("GET http://gateway-test.invalid/v1/models "));
-        assert!(second
+        assert!( second
             .join()
             .unwrap()
             .starts_with("POST http://gateway-test.invalid/v1/chat/completions "));
-        assert!(direct.join().unwrap().starts_with("GET /direct "));
+        let direct_req = direct.join().unwrap();
+        assert!(direct_req.starts_with("GET /direct "));
+        assert!(
+            direct_req
+                .to_ascii_lowercase()
+                .contains(&format!(
+                    "user-agent: {}",
+                    crate::gateway_proto::sources::DEFAULT_UPSTREAM_USER_AGENT.to_ascii_lowercase()
+                )),
+            "expected default User-Agent in request: {direct_req}"
+        );
     }
 }
