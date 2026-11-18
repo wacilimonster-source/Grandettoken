@@ -5453,4 +5453,23 @@ src-tauri `cargo check --all-targets --locked` exit 0;
 - 三件套齐全：安装包 `Grandettoken_0.3.63_x64-setup.exe` 6,057,308 字节，GitHub 资产记录与本机匿名下载回验 SHA-256 均为 `7d7d3f6a7ef4c61da05f4a0a53647fb5901489447902dcb591e38cd57a701f7e`；签名 `.sig` 444 字节；更新清单 `latest.json` 1,387 字节（notes 311 字符 / 157 中文字符、0 替换字符）。固定更新端点 `latest/download/latest.json` 返回 `0.3.63`。
 - 本机 `node --use-env-proxy build/verify-release.js` 二次核验 PASS（本地 `.sig` 与安装包文件两项按既有口径 SKIP，签名逐字比对在 CI 端完成）。
 
+## 2026-11-18 本地模型网关支持 Responses（工作区）
+
+- 按用户确认的接口口径，保留客户端现有 `POST /v1/chat/completions`，仅 OpenAI 兼容渠道上游可切换为 Responses。旧渠道默认沿用 Chat Completions。
+- 适配器把历史消息、工具及关联结果映射成 Responses input，再把上游 JSON 与 SSE 转回 Chat Completions，保留模型别名、推理摘要、函数调用、完成原因和用量。Responses 渠道填写手动模型后跳过 `/models`，联调复用同一转换路径。
+- 隔离的回环 HTTP 夹具从同一个 Chat Completions 入口验证传统聊天上游与 Responses 上游，覆盖 JSON、SSE、工具结果、用量和鉴权。移除工具结果映射的坏样本在上游断言处失败。隔离程序复用网关源码，规避本机原生 Tauri 测试二进制的 WebView2 加载问题。安装版与真实 AgentRouter 接入待验收。
+
+## 2026-11-18 底栏设置/退出常驻与网关忙碌态修复（工作区）
+
+- 底栏去掉「•••」更多菜单，把「设置」改成加宽的主按钮，并把「退出」直接常驻在它右边；两者的高度和 `#dockClose` 预留空间改用统一的 `--foot-height`，详情弹层的底部边界同步到同一变量。底栏在缩略布局沿用同一高度，避免退出入口在窄窗或大字号下被挤压。
+- 网关操作按钮统一加 `data-gw-exclusive`，忙碌时按当前 DOM 批量同步禁用态；异步操作跨过一次重绘后，结束只释放当前页面上的按钮，不再解禁已被替换掉的旧节点。联调「发送测试」在自己的 `finally` 里恢复，不占用全局操作锁。
+- `jsdom-smoke.js` 断言退出按钮直接位于设置按钮之后、失败后提示并可重试；`verify-gateway.js` 覆盖下架重绘后按钮可用、失败保留草稿可直接上架、复制地址未结束时下架仍持有锁。`verify-settings-entry.js` 改为断言加宽设置按钮与直达退出，并检查三档字号下底栏零溢出；它需要真实窗口 CDP，安装版本轮未运行。
+- `README.md` 补充本地模型网关的 Chat Completions / Responses 接入口径与客户端配置示例；`DESIGN.md`、`AGENTS.md` 同步底栏入口与网关协议约束。
+
+## 2026-11-18 v0.3.64 发版验证
+
+- 桌面版本号三处同步至 0.3.64。本版包含本地模型网关 Responses 上游、底栏设置/退出常驻和网关忙碌态修复。
+- 本地串行通过静态四门及 `--self-test`、全部前端 JS 语法、jsdom 277/277、临期与 Qoder 门禁、密钥箱 / Codex 重置顾问 / Google Cloud / Antigravity / 网关冒烟、`app/core` `cargo test --locked -- --test-threads=1`（586 passed / 10 ignored + `sync_fixtures` 6 passed）、`app/src-tauri` `cargo fetch --locked` 与 `cargo check --all-targets --locked`、凭据扫描 CLEAN（483 文件）。验证进程设置回环 `NO_PROXY`。
+- `build/verify-settings-entry.js` 依赖真实窗口 CDP，本轮未运行；待安装版原生窗口核验。
+
 

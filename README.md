@@ -111,6 +111,20 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 
 带 5 秒抖动,避免多渠道同秒并发。
 
+## 本地模型网关
+
+设置 → 本地模型网关 → 添加上游渠道 → OpenAI 兼容。按上游选择 **Chat Completions** 或 **Responses**。
+只提供 `/v1/responses` 的上游可以填写 Base URL（例如 `https://agentrouter.org/v1`），选择密钥箱条目，
+并在高级选项中填写模型 ID（例如 `gpt-6.1-sol`）。Responses 渠道填写手动模型后使用这份清单，可直接保存。
+点击「测连通」或「模型与联调」可实际验证请求，联调可能消耗上游额度。
+
+客户端使用 OpenAI Chat Completions（`POST /v1/chat/completions`），Base URL 填
+`http://127.0.0.1:18771/v1`，密钥使用界面复制的**网关密钥**，模型填完整 ID，例如 `ar/gpt-6.1-sol`。
+网关为 Responses 上游双向转换多轮消息、JSON、SSE 和函数工具调用。Responses 渠道支持单个候选输出，
+会跳过没有直接对应字段的 `stop`、`top_k`、惩罚参数、`seed` 和 `logit_bias`，可在诊断中查看。
+后续请求根据客户端提交的 Chat 消息历史重建上下文，Responses 特有的加密推理状态不在这份历史中。
+停止网关可关闭监听，启用局域网时必须使用网关密钥。
+
 ## 安全与隐私
 
 ### Google Cloud 赠金渠道

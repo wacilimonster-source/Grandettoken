@@ -1,5 +1,5 @@
 use crate::gateway_http::{
-    build_router, dedupe_nonempty, fetch_channel_models, now_unix, run_test_chat,
+    build_router, dedupe_nonempty, fetch_channel_models, fetch_configured_models, now_unix, run_test_chat,
     GatewayDiagEntry,
 };
 use axum::http::{header, HeaderMap};
@@ -20,7 +20,7 @@ use tokenscope_core::{
             host_of_url, resolve_source_defaults, AGENT_PLATFORM_DEFAULT_BASE_URL,
             AGENT_PLATFORM_PRESET_MODELS, OPENAI_PRESETS,
         },
-        GatewaySourceKind, ThinkingMode, ThoughtRequestPolicy,
+        GatewaySourceKind, OpenAiWire, ThinkingMode, ThoughtRequestPolicy,
     },
     proxy::ProxyClients,
     secrets,
@@ -49,6 +49,8 @@ pub struct Published {
     #[serde(default)]
     pub no_upstream_key: bool,
     pub source: String,
+    #[serde(default)]
+    pub wire: OpenAiWire,
     #[serde(default)]
     pub template: String,
     #[serde(default)]
@@ -96,7 +98,7 @@ impl Published {
             changed = true;
         }
         if let Ok((kind, tpl, url)) =
-            resolve_source_defaults(&self.source, &self.template, &self.base_url)
+            resolve_source_defaults(&self.source, &self.template, self.wire.base_url_input(&self.base_url))
         {
             if self.source != kind.as_str() {
                 self.source = kind.as_str().to_string();
@@ -409,9 +411,7 @@ async fn refresh_single_channel(g: &Gateway, mut c: Published) -> Published {
     let now = now_unix();
     match (key_res, client_res) {
         (Ok(key), Ok(client)) => {
-            match fetch_channel_models(&client, kind, &c.base_url, key.as_deref(), &c.custom_headers)
-                .await
-            {
+            match fetch_configured_models(&client, &c, key.as_deref()).await {
                 Ok(res) => {
                     c.models = res.fetched;
                     if !res.host.is_empty() {
@@ -499,6 +499,8 @@ pub struct PublishChannelInput {
     pub no_upstream_key: Option<bool>,
     pub source: String,
     #[serde(default)]
+    pub wire: Option<OpenAiWire>,
+    #[serde(default)]
     pub template: Option<String>,
     #[serde(default)]
     pub base_url: Option<String>,
@@ -521,6 +523,8 @@ pub struct PublishChannelInput {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateChannelInput {
     pub channel_id: String,
+    #[serde(default)]
+    pub wire: Option<OpenAiWire>,
     #[serde(default)]
     pub vault_id: Option<String>,
     #[serde(default)]
@@ -599,6 +603,7 @@ pub async fn gateway_status(app: tauri::AppHandle) -> Result<Value, String> {
                 "vaultId": c.vault_id,
                 "noUpstreamKey": c.no_upstream_key,
                 "source": c.kind().as_str(),
+                "wire": c.wire,
                 "template": c.template,
                 "baseUrl": c.base_url,
                 "alias": c.alias,
@@ -749,16 +754,7 @@ pub async fn gateway_publish(
 ) -> Result<Value, String> {
     let g = app.state::<Gateway>();
     let alias = normalize_alias(&input.alias)?;
-    let (kind, template, base_url) = resolve_source_defaults(
-        &input.source,
-        input.template.as_deref().unwrap_or(""),
-        input.base_url.as_deref().unwrap_or(""),
-    )?;
     let no_upstream_key = input.no_upstream_key.unwrap_or(false);
-    if no_upstream_key && kind != GatewaySourceKind::OpenAiCompat {
-        return Err("仅 OpenAI 兼容端点支持免上游密钥模式".into());
-    }
-
     let channel_id = match input.channel_id.filter(|s| !s.trim().is_empty()) {
         Some(id) => id,
         None => new_channel_id()?,
@@ -769,6 +765,16 @@ pub async fn gateway_publish(
         .iter()
         .find(|c| c.channel_id == channel_id)
         .cloned();
+    let wire = input.wire.or_else(|| existing.as_ref().map(|c| c.wire)).unwrap_or_default();
+    let (kind, template, base_url) = resolve_source_defaults(
+        &input.source,
+        input.template.as_deref().unwrap_or(""),
+        wire.base_url_input(input.base_url.as_deref().unwrap_or("")),
+    )?;
+    if no_upstream_key && kind != GatewaySourceKind::OpenAiCompat {
+        return Err("仅 OpenAI 兼容端点支持免上游密钥模式".into());
+    }
+    wire.validate_source(kind)?;
     {
         let inner = lock(&g.inner);
         check_alias_unique(&inner.settings.channels, &channel_id, &alias)?;
@@ -814,36 +820,17 @@ pub async fn gateway_publish(
         updated_at = item.updated_at;
     }
 
-    let client = g.clients.client(use_proxy)?;
-    let fetch_res = fetch_channel_models(
-        &client,
-        kind,
-        &base_url,
-        key.as_deref(),
-        &custom_headers,
-    )
-    .await;
-
-    let (fetched_models, host, last_status, last_error) = match fetch_res {
-        Ok(res) => (res.fetched, res.host, "ok".to_string(), res.probe_note),
-        Err(err) => {
-            if manual_models.is_empty() {
-                return Err(err);
-            }
-            (vec![], host_of_url(&base_url), "error".to_string(), Some(redact_secrets(&err)))
-        }
-    };
-
     let mut channel = Published {
         channel_id: channel_id.clone(),
         vault_id: if no_upstream_key { String::new() } else { input.vault_id },
         no_upstream_key,
         source: kind.as_str().to_string(),
+        wire,
         template,
         base_url,
         alias,
-        host,
-        models: fetched_models,
+        host: String::new(),
+        models: Vec::new(),
         manual_models,
         updated_at,
         allowed_models: existing.as_ref().and_then(|c| c.allowed_models.clone()),
@@ -851,11 +838,28 @@ pub async fn gateway_publish(
         custom_headers,
         thinking_mode,
         thought_policy,
-        last_status,
-        last_error,
+        last_status: "ok".into(),
+        last_error: None,
         last_checked_at: Some(now_unix()),
     };
+    let client = g.clients.client(use_proxy)?;
+    match fetch_configured_models(&client, &channel, key.as_deref()).await {
+        Ok(res) => {
+            channel.models = res.fetched;
+            channel.host = res.host;
+            channel.last_error = res.probe_note;
+        }
+        Err(err) if channel.manual_models.is_empty() || wire == OpenAiWire::Responses => return Err(err),
+        Err(err) => {
+            channel.host = host_of_url(&channel.base_url);
+            channel.last_status = "error".into();
+            channel.last_error = Some(redact_secrets(&err));
+        }
+    }
     let all = all_channel_models(&channel);
+    if wire == OpenAiWire::Responses && all.is_empty() {
+        return Err("未取得 Responses 模型，请填写手动模型列表".into());
+    }
     if let Some(ref mut allowed) = channel.allowed_models {
         allowed.retain(|m| all.contains(m));
     }
@@ -909,10 +913,16 @@ pub async fn gateway_update_channel(
             channel.updated_at = item.updated_at;
         }
     }
-    if input.template.is_some() || input.base_url.is_some() {
+    if let Some(wire) = input.wire {
+        wire.validate_source(channel.kind())?;
+        channel.wire = wire;
+    }
+    if input.template.is_some() || input.base_url.is_some() || input.wire.is_some() {
         let tpl = input.template.unwrap_or_else(|| channel.template.clone());
         let url_raw = input.base_url.unwrap_or_else(|| channel.base_url.clone());
-        let (kind, next_tpl, next_url) = resolve_source_defaults(&channel.source, &tpl, &url_raw)?;
+        let (kind, next_tpl, next_url) = resolve_source_defaults(
+            &channel.source, &tpl, channel.wire.base_url_input(&url_raw),
+        )?;
         channel.source = kind.as_str().to_string();
         channel.template = next_tpl;
         channel.base_url = next_url;
@@ -923,6 +933,12 @@ pub async fn gateway_update_channel(
     }
     if let Some(manual) = input.manual_models {
         channel.manual_models = dedupe_nonempty(manual);
+    }
+    if channel.wire == OpenAiWire::Responses && !channel.manual_models.is_empty() {
+        channel.models.clear();
+        if let Some(allowed) = channel.allowed_models.as_mut() {
+            allowed.retain(|m| channel.manual_models.contains(m));
+        }
     }
     if let Some(hdrs) = input.custom_headers {
         channel.custom_headers = hdrs;
@@ -943,7 +959,14 @@ pub async fn gateway_update_channel(
         channel.allowed_models = opt_allowed;
     }
 
-    if input.refresh_models.unwrap_or(false) {
+    if channel.wire == OpenAiWire::Responses && all_channel_models(&channel).is_empty() {
+        channel.allowed_models = None;
+        channel = refresh_single_channel(&g, channel).await;
+        if channel.models.is_empty() {
+            let reason = channel.last_error.as_deref().unwrap_or("上游模型列表为空");
+            return Err(format!("{reason}。Responses 渠道可填写手动模型"));
+        }
+    } else if input.refresh_models.unwrap_or(false) {
         channel = refresh_single_channel(&g, channel).await;
     }
 
@@ -1024,7 +1047,7 @@ pub async fn gateway_test_channel(
         .ok_or("当前渠道没有任何可用模型，请先刷新或填写手动模型")?;
 
     let started = std::time::Instant::now();
-    if channel.kind() == GatewaySourceKind::AgentPlatform {
+    if channel.kind() == GatewaySourceKind::AgentPlatform || channel.wire == OpenAiWire::Responses {
         let res = run_test_chat(
             &g,
             channel.clone(),
@@ -1032,7 +1055,7 @@ pub async fn gateway_test_channel(
             "Reply with OK only.".into(),
             false,
             false,
-            Some("none".into()),
+            (channel.kind() == GatewaySourceKind::AgentPlatform).then(|| "none".into()),
         )
         .await;
         return Ok(json!({
@@ -1129,8 +1152,7 @@ pub async fn gateway_clear_diagnostics(app: tauri::AppHandle) -> Result<(), Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{routing::post, Router};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    mod http_bridge;
 
     #[test]
     fn legacy_groups_keep_system_proxy_and_migrate_sources() {
@@ -1207,6 +1229,7 @@ mod tests {
             vault_id: "v_1".into(),
             no_upstream_key: false,
             source: "openai_compat".into(),
+            wire: OpenAiWire::default(),
             template: "custom".into(),
             base_url: "https://api.example.com/v1".into(),
             alias: "demo".into(),
@@ -1237,143 +1260,5 @@ mod tests {
         assert!(!advertised_lan_ip("100.69.220.4".parse().unwrap()));
         assert!(!advertised_lan_ip("8.8.8.8".parse().unwrap()));
         assert!(!advertised_lan_ip("127.0.0.1".parse().unwrap()));
-    }
-
-    #[tokio::test]
-    async fn http_router_lists_models_and_normalizes_streaming_think_tags() {
-        // 1. 启动一个本地模拟 OpenAI 上游（无外部网络依赖）
-        let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let upstream_addr = upstream_listener.local_addr().unwrap();
-        let upstream_router = Router::new().route(
-            "/v1/chat/completions",
-            post(|| async {
-                let sse = concat!(
-                    "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"upstream-m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"<think>先想\"},\"finish_reason\":null}]}\n\n",
-                    "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"upstream-m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"一想</think>\\n\\n最终答案\"},\"finish_reason\":null}]}\n\n",
-                    "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"upstream-m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
-                    "data: [DONE]\n\n"
-                );
-                ([(header::CONTENT_TYPE, "text/event-stream")], sse)
-            }),
-        );
-        let up_task = tokio::spawn(async move {
-            axum::serve(upstream_listener, upstream_router).await.unwrap();
-        });
-
-        // 2. 启动 Gateway（免上游密钥的本地兼容渠道 + 无网关认证的本机测试模式）
-        let file = std::env::temp_dir().join(format!("gw-test-{}.db", token().unwrap()));
-        let store = Arc::new(Mutex::new(Store::open(&file).unwrap()));
-        let g = Gateway::new(store.clone()).unwrap();
-        {
-            let mut inner = lock(&g.inner);
-            inner.settings.auth = false;
-            inner.settings.lan = false;
-            inner.settings.channels.push(Published {
-                channel_id: "ch_local".into(),
-                vault_id: String::new(),
-                no_upstream_key: true,
-                source: "openai_compat".into(),
-                template: "custom".into(),
-                base_url: format!("http://{upstream_addr}/v1"),
-                alias: "local".into(),
-                host: "127.0.0.1".into(),
-                models: vec!["qwen-think".into()],
-                manual_models: vec!["custom-m".into()],
-                updated_at: 1,
-                allowed_models: None,
-                system_proxy: false,
-                custom_headers: BTreeMap::new(),
-                thinking_mode: ThinkingMode::Auto,
-                thought_policy: ThoughtRequestPolicy::FollowClient,
-                last_status: "ok".into(),
-                last_error: None,
-                last_checked_at: Some(1),
-            });
-        }
-        let gw_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let gw_addr = gw_listener.local_addr().unwrap();
-        let router = build_router(g);
-        let gw_task = tokio::spawn(async move {
-            axum::serve(
-                gw_listener,
-                router.into_make_service_with_connect_info::<SocketAddr>(),
-            )
-            .await
-            .unwrap();
-        });
-
-        let client = reqwest::Client::builder().no_proxy().build().unwrap();
-        // /v1/models 同时包含自动拉取和手动模型
-        let list_val: Value = client
-            .get(format!("http://{gw_addr}/v1/models"))
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        let ids: Vec<&str> = list_val["data"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|x| x["id"].as_str())
-            .collect();
-        assert!(ids.contains(&"local/qwen-think"));
-        assert!(ids.contains(&"local/custom-m"));
-
-        // 未带 /v1 前缀的 /models 也必须兼容，避免 custom_url 漏写 /v1 返回 404
-        let root_models: Value = client
-            .get(format!("http://{gw_addr}/models"))
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        let root_ids: Vec<&str> = root_models["data"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|x| x["id"].as_str())
-            .collect();
-        assert_eq!(root_ids, ids);
-
-        // /v1/chat/completions 流式归一化输出标准 reasoning_content 与 content
-        let sse_text = client
-            .post(format!("http://{gw_addr}/v1/chat/completions"))
-            .json(&json!({
-                "model": "local/qwen-think",
-                "messages": [{"role": "user", "content": "hi"}],
-                "stream": true
-            }))
-            .send()
-            .await
-            .unwrap()
-            .text()
-            .await
-            .unwrap();
-        assert!(sse_text.contains("\"model\":\"local/qwen-think\""));
-        assert!(sse_text.contains("\"reasoning_content\""));
-        assert!(sse_text.contains("最终答案"));
-        assert!(sse_text.contains("data: [DONE]"));
-
-        // 验证原始 TCP 上浏览器 Origin 仍被拒绝
-        let mut sock = tokio::net::TcpStream::connect(gw_addr).await.unwrap();
-        sock.write_all(
-            format!(
-                "GET /v1/models HTTP/1.1\r\nHost: {gw_addr}\r\nOrigin: https://evil.test\r\nConnection: close\r\n\r\n"
-            )
-            .as_bytes(),
-        )
-        .await
-        .unwrap();
-        let mut buf = String::new();
-        sock.read_to_string(&mut buf).await.unwrap();
-        assert!(buf.starts_with("HTTP/1.1 401"));
-
-        gw_task.abort();
-        up_task.abort();
-        drop(store);
-        let _ = std::fs::remove_file(file);
     }
 }

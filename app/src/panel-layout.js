@@ -239,9 +239,6 @@
     const button = event.target.closest("[data-layout]");
     if (button) setPanelLayout(button.dataset.layout);
   });
-  document.addEventListener("keydown", event => {
-    if (event.key === "Escape") document.getElementById("footerMore").open = false;
-  });
   window.addEventListener("resize", schedule);
   if (typeof ResizeObserver === "function") new ResizeObserver(schedule).observe(document.getElementById("list"));
   window.PanelLayoutUI = { normalize, update, select, summary, schedule, tick, gemini, expiryDate, expiryDateHtml, weeklyReset };

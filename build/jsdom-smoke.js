@@ -130,6 +130,7 @@ w.__TAURI__ = {
       if (w.__SET_CONFIG_INVOKE && cmd === "set_config") {
         return w.__SET_CONFIG_INVOKE(args);
       }
+      if (w.__QUIT_INVOKE && cmd === "window_cmd") return w.__QUIT_INVOKE(args);
       if (cmd === "get_config") return JSON.parse(JSON.stringify(DATA.CFG));
       if (cmd === "get_channels") return JSON.parse(JSON.stringify(DATA.CHANNELS));
       if (cmd === "home_view") return JSON.parse(JSON.stringify(DATA.HOME));
@@ -1347,6 +1348,23 @@ w.__DATA = DATA;
   if (w.__ASYNC3) await w.__ASYNC3();
 
   const R = w.__R || [];
+  const quit = w.document.getElementById("lkQuit");
+  R.push({ name: "退出直接显示在设置旁",
+    ok: quit?.matches('.foot > #lkKeys + button#lkQuit') && !quit.hidden && quit.tabIndex === 0 });
+  if (quit) {
+    const actions = [];
+    w.__QUIT_INVOKE = async ({ action }) => {
+      actions.push(action);
+      if (actions.length === 1) throw new Error("模拟退出失败");
+    };
+    quit.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const failed = w.document.getElementById("toast").textContent.includes("退出失败");
+    quit.click();
+    delete w.__QUIT_INVOKE;
+    R.push({ name: "底栏退出调用原生命令且失败后可重试", ok: failed && actions.join(",") === "quit,quit" });
+  }
+
   // 真正点击分享按钮，覆盖获取/复制两阶段失败与重试。
   for (const [id, platform] of [
     ["btnCopyWindowsDownload", "windows"], ["btnCopyAndroidDownload", "android"],

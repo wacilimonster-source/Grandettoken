@@ -37,6 +37,7 @@ html,body{height:100%;overflow:hidden}
    加这行前窗口四角 rgba(18,20,26,238),加完 alpha=0,中心色值一字不变。 */
 html{background:linear-gradient(transparent,transparent)}
 body{
+  --foot-height:calc(44px*var(--u));
   background:var(--bg);color:var(--tx);border-radius:var(--r);
   border:1px solid var(--line);
   /* 卡片悬浮感(2026-09-23):窗口四周留 10px 真透明边距,阴影画进边距里。
@@ -676,7 +677,7 @@ body.form-compact .ckstrip,body.form-pill .ckstrip{display:none}
   outline:2px solid var(--ac);outline-offset:2px}
 
 /* ── 底栏 ── */
-.foot{display:flex;align-items:center;gap:calc(8px*var(--u));padding:calc(7px*var(--u)) calc(12px*var(--u));background:var(--bg2);
+.foot{display:flex;align-items:center;gap:calc(8px*var(--u));height:var(--foot-height);padding:0 calc(12px*var(--u));background:var(--bg2);
   border-top:1px solid var(--line);font-size:max(12px,calc(12px*var(--u)));color:var(--tx3);flex:none}
 .foot #fdot{display:none}
 .foot .fb-dot{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--ok);
@@ -687,18 +688,16 @@ body.form-compact .ckstrip,body.form-pill .ckstrip{display:none}
 .foot .fb-sep{color:var(--line2);margin:0 calc(4px*var(--u))}
 .foot .lk{color:var(--tx2);cursor:pointer}
 .foot .lk:hover{color:var(--ac)}
-/* 底栏链接是 <button>(2026-10-20 收敛设置入口时一起改的):按钮默认的边框/底色/内边距/字体
-   全部归零,视觉与原来的 <span> 逐像素一致;唯一的有意差别是它能拿到 :focus-visible 焦点环。
-   不用 `font:inherit` 一条盖全部 —— .foot 的 font-size 里带 max() 兜底,inherit 会把它带过来,
-   但按钮在 Chromium 里有自己的 UA font-family,分开写更明确。 */
 .foot button.lk{border:0;background:none;padding:0;margin:0;font-family:inherit;
   font-size:inherit;line-height:inherit;text-align:inherit;color:var(--tx2)}
 .foot button.lk:hover{color:var(--ac)}
 .foot button.lk:focus-visible{outline:2px solid var(--ac);outline-offset:2px;border-radius:calc(3px*var(--u))}
-/* 吸附展开态(docked 已摘、底栏在):右下角的「收回」按钮(#dockClose,.ib 24px)会压住
-   底栏最右的「退出」—— 按钮横向 8~32px、纵向 8~32px,退出文字 12~35px,重叠 ~87%×94%,
-   点「退出」实际是收成竖条。只在这一态给底栏让出右侧空间(44u = 按钮左缘 32u + 12u 空隙),
-   紧凑条/胶囊的 .foot 是 display:none,docked 态与 dock-open 互斥,几何都不受影响。 */
+.foot .layout-picker,.foot .btn{flex:none;white-space:nowrap}
+.foot .btn{min-height:calc(32px*var(--u));min-width:calc(48px*var(--u));outline-offset:1px}
+.foot #lkKeys{min-width:calc(76px*var(--u));font-size:calc(13px*var(--u))}
+.foot .promo-entry,.foot #lkUpd{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.foot .promo-entry{min-width:calc(58px*var(--u))}
+/* 预留右下角「收回」按钮的点击空间。 */
 body.dock-open .foot{padding-right:calc(44px*var(--u))}
 
 /* 紧凑条专属的形态切换按钮(条内其余部分不放按钮) */
@@ -1575,7 +1574,7 @@ body.form-panel[data-w="lg"] .row .val .p{flex:none;min-width:0}
    时 .s / .r2 的左边界不动,标题与状态区没有横向抖动,故不改列定义。 */
 
 /* ── 详情底部弹层 ── */
-.shade{position:absolute;inset:calc(44px*var(--u) + 1px) 0 calc(14px*var(--u) + max(18px,18px*var(--u)) + 1px);z-index:30;
+.shade{position:absolute;inset:calc(44px*var(--u) + 1px) 0 var(--foot-height);z-index:30;
   background:#00000066;display:flex;align-items:flex-end;
   animation:fadeIn var(--t2) var(--ease)}
 .shade[hidden]{display:none!important}

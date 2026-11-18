@@ -193,6 +193,13 @@ impl SseStreamNormalizer {
         out
     }
 
+    /// 协议适配器可直接传入已解析的 Chat Completions 帧。
+    pub fn push_value(&mut self, value: Value) -> Vec<String> {
+        let mut out = Vec::new();
+        self.handle_value(value, &mut out);
+        out
+    }
+
     /// 上游结束（EOF），刷新尾部事件、思维链状态机，并在必要时补 `[DONE]` 或断流错误帧。
     pub fn finish(&mut self) -> Vec<String> {
         let mut out = Vec::new();
@@ -282,9 +289,16 @@ impl SseStreamNormalizer {
             return;
         }
 
-        let Ok(mut val) = serde_json::from_str::<Value>(payload) else {
+        let Ok(val) = serde_json::from_str::<Value>(payload) else {
             return;
         };
+        self.handle_value(val, out);
+    }
+
+    fn handle_value(&mut self, mut val: Value, out: &mut Vec<String>) {
+        if self.done_emitted {
+            return;
+        }
         let Some(root) = val.as_object_mut() else {
             return;
         };

@@ -20,6 +20,10 @@ if (process.env.GATEWAY_SENTINEL === "cmd") {
   const marker = '${GW_TAB === "tools" ? "" : "hidden"}';
   if (!gatewayJs.includes(marker)) throw new Error("tabs 哨兵未找到目标行");
   gatewayJs = gatewayJs.replace(marker, "");
+} else if (process.env.GATEWAY_SENTINEL === "wire") {
+  const marker = 'wire: byId("gwNewWire")?.value,';
+  if (!gatewayJs.includes(marker)) throw new Error("Responses 哨兵未找到上架协议");
+  gatewayJs = gatewayJs.replace(marker, 'wire: "chat_completions",');
 } else {
   const probeCmd = spawnSync(process.execPath, [__filename], {
     env: { ...process.env, GATEWAY_SENTINEL: "cmd" },
@@ -50,6 +54,16 @@ if (process.env.GATEWAY_SENTINEL === "cmd") {
     throw new Error("网关冒烟自检失败：分栏收起哨兵未触发 FAIL");
   }
   console.log("  ok   分栏被展开平铺时冒烟变红");
+
+  const probeWire = spawnSync(process.execPath, [__filename], {
+    env: { ...process.env, GATEWAY_SENTINEL: "wire" },
+    encoding: "utf8",
+    timeout: 15000,
+  });
+  if (probeWire.status !== 1 || !probeWire.stderr.includes("FAIL: 上架 Responses 发送原生协议与手动模型")) {
+    throw new Error("网关冒烟自检失败：Responses 协议哨兵未触发指定 FAIL");
+  }
+  console.log("  ok   Responses 上架误传 Chat Completions 时冒烟变红");
 }
 
 const dom = new JSDOM(html, {
@@ -62,6 +76,8 @@ const doc = w.document;
 const calls = [];
 const toasts = [];
 let failNextProxyUpdate = false;
+let failNextTestChat = false;
+let finishUnpublish;
 
 const vaultItems = [
   {
@@ -175,6 +191,7 @@ w.invoke = async (cmd, args = {}) => {
         vaultId: inp.vaultId,
         noUpstreamKey: !!inp.noUpstreamKey,
         source: inp.source,
+        wire: inp.wire,
         template: inp.template || "",
         baseUrl: inp.baseUrl,
         alias: inp.alias,
@@ -209,9 +226,20 @@ w.invoke = async (cmd, args = {}) => {
       const ch = statusState.channels.find((c) => c.channelId === inp.channelId);
       if (!ch) throw new Error("channel not found");
       if (typeof inp.systemProxy === "boolean") ch.systemProxy = inp.systemProxy;
+      if (inp.wire) ch.wire = inp.wire;
       return JSON.parse(JSON.stringify(statusState));
     }
+    case "gateway_unpublish": {
+      const error = await new Promise((resolve) => { finishUnpublish = resolve; });
+      if (error) throw error;
+      statusState.channels = statusState.channels.filter((c) => c.channelId !== args.channelId);
+      return;
+    }
     case "gateway_test_chat":
+      if (failNextTestChat) {
+        failNextTestChat = false;
+        throw new Error("模拟联调请求失败");
+      }
       return {
         ok: true,
         status: 200,
@@ -331,6 +359,7 @@ async function run() {
   );
   const detAfter = doc.querySelector('details[data-gw-detail="ch-ch_existing"]');
   ck("刷新重绘后保留已打开的渠道详情", !!detAfter && detAfter.open === true);
+  ck("上架重绘后恢复上架和停止按钮", !doc.querySelector('[data-gw="publish"]').disabled && !doc.querySelector('[data-gw="stop"]').disabled);
 
   // 9. 切换到「模型与联调」页签并运行在线测试验证思维链折叠展示
   doc.querySelector('[data-gw-tab="tools"]').click();
@@ -348,6 +377,67 @@ async function run() {
     thinkText.includes("35") && contentText === "35",
     `think=${thinkText} content=${contentText}`
   );
+
+  // 下架和刷新期间可复制地址，复制结束不能提前放开网关操作。
+  // 重新进入网关，确保前一个场景的按钮状态不会影响这里。
+  await w.loadGateway();
+  doc.querySelector('[data-gw-tab="channels"]').click();
+  doc.querySelector('[data-gw-kind="openai_compat"]').click();
+  doc.querySelector('details[data-gw-detail="add-channel"]').open = true;
+  doc.getElementById("gwVault").value = "v1";
+  doc.getElementById("gwBaseUrl").value = "https://api.example.com/v1";
+  doc.getElementById("gwAlias").value = "ar";
+  const newWire = doc.getElementById("gwNewWire");
+  ck("OpenAI 兼容新渠道默认 Chat Completions", newWire?.value === "chat_completions");
+  newWire.value = "responses";
+  newWire.dispatchEvent(new w.Event("change"));
+  ck("选择 Responses 展开手动模型输入", !doc.getElementById("gwResponsesHint").hidden &&
+    doc.querySelector('details[data-gw-detail="add-adv"]').open);
+  doc.getElementById("gwManualModels").value = "responses-test-model";
+  const removeBtn = () => doc.querySelector('[data-gw="remove"][data-id="ch_new"]');
+  const gatewayButtons = () => [...doc.querySelectorAll('[data-gw="publish"], [data-gw="stop"], [data-gw="remove"]')];
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  removeBtn().click();
+  doc.querySelector('[data-gw="copy-local"]').click();
+  await settle();
+  ck("复制地址结束时网关操作仍在等待下架", gatewayButtons().every((button) => button.disabled));
+  finishUnpublish(new Error("模拟下架写入失败"));
+  await settle();
+  ck("下架写入失败保留渠道并恢复按钮", !!removeBtn() &&
+    gatewayButtons().every((button) => !button.disabled) &&
+    toasts.some((t) => t.bad && t.msg.includes("模拟下架写入失败")));
+
+  removeBtn().click();
+  finishUnpublish();
+  await settle();
+  ck("下架重绘后恢复网关操作按钮", !removeBtn() && gatewayButtons().every((button) => !button.disabled));
+  ck("下架重绘保留已填的上架草稿", doc.querySelector('details[data-gw-detail="add-channel"]').open &&
+    doc.getElementById("gwVault").value === "v1" &&
+    doc.getElementById("gwBaseUrl").value === "https://api.example.com/v1" &&
+    doc.getElementById("gwAlias").value === "ar" &&
+    doc.getElementById("gwNewWire").value === "responses" &&
+    doc.getElementById("gwManualModels").value === "responses-test-model");
+  doc.querySelector('[data-gw="publish"]').click();
+  await settle();
+  ck("下架后可直接上架保留的渠道草稿", calls.some((c) =>
+    c.cmd === "gateway_publish" && c.args.input.alias === "ar"));
+  const responsePayload = calls.find((c) => c.cmd === "gateway_publish" && c.args.input.alias === "ar")?.args.input;
+  ck("上架 Responses 发送原生协议与手动模型", responsePayload?.wire === "responses" &&
+    responsePayload.manualModels.join(",") === "responses-test-model");
+  const responseCard = doc.querySelector('[data-gw-card="ch_new"]');
+  ck("上架后渠道配置回显协议", responseCard?.querySelector("[data-gw-wire]")?.value === responsePayload?.wire);
+  responseCard?.querySelector('[data-gw="save-channel"]')?.click();
+  await settle();
+  ck("保存渠道配置沿用所选协议", calls.some((c) => c.cmd === "gateway_update_channel" &&
+    c.args.input.channelId === "ch_new" && c.args.input.wire === responsePayload?.wire));
+
+  doc.querySelector('[data-gw-tab="tools"]').click();
+  failNextTestChat = true;
+  doc.querySelector('[data-gw="run-test-chat"]').click();
+  await settle();
+  const testBtn = doc.querySelector('[data-gw="run-test-chat"]');
+  ck("联调请求异常后可重新发送", !testBtn.disabled && testBtn.textContent === "发送测试" &&
+    toasts.some((t) => t.bad && t.msg.includes("模拟联调请求失败")));
 
   if (failed > 0) {
     console.error(`gateway 冒烟结果: ${failed} 项失败`);

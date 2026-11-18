@@ -10,11 +10,46 @@
 
 pub mod error;
 pub mod request;
+pub mod responses;
 pub mod sources;
 pub mod stream;
 pub mod thinking;
 
 use serde::{Deserialize, Serialize};
+
+/// OpenAI 兼容渠道的上游请求协议。旧渠道默认沿用聊天补全。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenAiWire {
+    #[default]
+    ChatCompletions,
+    Responses,
+}
+
+impl OpenAiWire {
+    pub fn validate_source(self, source: GatewaySourceKind) -> Result<(), String> {
+        if self == Self::Responses && source != GatewaySourceKind::OpenAiCompat {
+            return Err("Responses 协议仅适用于 OpenAI 兼容渠道".into());
+        }
+        Ok(())
+    }
+
+    pub fn endpoint(self) -> &'static str {
+        match self {
+            Self::ChatCompletions => "/chat/completions",
+            Self::Responses => "/responses",
+        }
+    }
+
+    pub fn base_url_input(self, url: &str) -> &str {
+        let url = url.trim().trim_end_matches('/');
+        let authority_and_path = url.split_once("://").map_or(url, |(_, rest)| rest);
+        if self == Self::Responses && authority_and_path.ends_with(self.endpoint()) {
+            return url.strip_suffix(self.endpoint()).unwrap_or(url);
+        }
+        url
+    }
+}
 
 /// 三类网关接入源。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

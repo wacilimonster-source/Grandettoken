@@ -39,8 +39,8 @@ const BUDGETS = {
   "app/core/src/checkin.rs": 2242,
   "app/core/src/providers.rs": 2095,
   "app/core/src/diaglog.rs": 1740,
-  "app/src/index.html": 700,
-  "app/src/styles.css": 1755,
+  "app/src/index.html": 698,
+  "app/src/styles.css": 1754,
 };
 
 // 不参与判定的路径:构建产物、依赖、测试夹具

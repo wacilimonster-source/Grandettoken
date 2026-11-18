@@ -22,10 +22,26 @@
     if (typeof showToast === "function") showToast(msg, !!isErr);
   }
 
+  function syncGatewayButtons(box) {
+    box.querySelectorAll("[data-gw-exclusive]").forEach((button) => {
+      button.disabled = GW_BUSY;
+    });
+  }
+
   function sourceBadge(kind) {
     if (kind === "agent_platform") return { cls: "is-agent", text: "Agent Platform" };
     if (kind === "gemini_aistudio") return { cls: "is-gemini", text: "Gemini AI Studio" };
     return { cls: "is-openai", text: "OpenAI 兼容" };
+  }
+
+  function wireOptions(wire) {
+    return `<option value="chat_completions">Chat Completions</option>
+      <option value="responses" ${wire === "responses" ? "selected" : ""}>Responses</option>`;
+  }
+
+  function exampleModel() {
+    const channel = (GW.channels || []).find((c) => !c.stale && c.models?.length);
+    return channel?.models[0] || "alias/model";
   }
 
   function headersToText(map) {
@@ -115,6 +131,7 @@
     if (!aliasEl) return null;
     return {
       kind: GW_KIND,
+      wire: byId("gwNewWire")?.value || "chat_completions",
       template: tplEl ? tplEl.value : "",
       vaultId: vaultEl ? vaultEl.value : "",
       baseUrl: urlEl ? urlEl.value : "",
@@ -131,6 +148,7 @@
   function renderChannelCard(c, vault) {
     const id = c.channelId || c.vaultId;
     const badge = sourceBadge(c.source);
+    const isResponses = c.wire === "responses";
     const avail = c.availableModels || [];
     const allowedSet = c.allowedModels ? new Set(c.allowedModels) : null;
     const enabledCount = avail.filter((m) => !allowedSet || allowedSet.has(m)).length;
@@ -149,6 +167,7 @@
           <div class="gw-title-wrap">
             <b>${escHtml(c.label || c.alias)}</b>
             <span class="gw-badge ${badge.cls}">${escHtml(badge.text)}</span>
+            ${isResponses ? '<span class="gw-badge is-openai">Responses</span>' : ""}
             <span class="gw-count ${statusCls}">${escHtml(statusText)}</span>
           </div>
         </div>
@@ -165,9 +184,9 @@
           <input type="checkbox" data-gw-quick-proxy="${escHtml(id)}" ${c.systemProxy ? "checked" : ""}>
           <span>代理</span>
         </label>
-        <button class="btn" data-gw="test-channel" data-id="${escHtml(id)}" ${GW_BUSY ? "disabled" : ""}>测连通</button>
-        <button class="btn" data-gw="refresh" data-id="${escHtml(id)}" ${GW_BUSY ? "disabled" : ""}>刷新模型</button>
-        <button class="btn" data-gw="remove" data-id="${escHtml(id)}" ${GW_BUSY ? "disabled" : ""}>下架</button>
+        <button class="btn" data-gw="test-channel" data-id="${escHtml(id)}" data-gw-exclusive ${isResponses ? 'title="发送一条实际模型请求，可能消耗上游额度"' : ""}>测连通</button>
+        <button class="btn" data-gw="refresh" data-id="${escHtml(id)}" data-gw-exclusive>刷新模型</button>
+        <button class="btn" data-gw="remove" data-id="${escHtml(id)}" data-gw-exclusive>下架</button>
       </div>
       <details class="gw-details" data-gw-detail="ch-${escHtml(id)}">
         <summary>配置与模型 <span>(${enabledCount}/${avail.length} 可调用)</span></summary>
@@ -181,6 +200,10 @@
               <span>上游 Base URL</span>
               <input class="inp" data-gw-baseurl="${escHtml(id)}" value="${escHtml(c.baseUrl)}">
             </label>
+            ${c.source === "openai_compat" ? `<label class="gw-add-field gw-span-2">
+              <span>上游 API 协议</span>
+              <select class="sel" data-gw-wire>${wireOptions(c.wire)}</select>
+            </label>` : ""}
             ${
               c.noUpstreamKey
                 ? `<div class="gw-add-field gw-span-2"><span>鉴权模式</span><div class="gw-readonly-chip">免上游密钥（不附带 Authorization）</div></div>`
@@ -246,7 +269,7 @@
           </details>
           <div class="gw-card-footer">
             <label class="gw-proxy-inline"><input type="checkbox" data-gw-proxy="${escHtml(id)}" ${c.systemProxy ? "checked" : ""}> 使用系统代理（默认开启）</label>
-            <button class="btn p" data-gw="save-channel" data-id="${escHtml(id)}" ${GW_BUSY ? "disabled" : ""}>保存渠道配置</button>
+            <button class="btn p" data-gw="save-channel" data-id="${escHtml(id)}" data-gw-exclusive>保存渠道配置</button>
           </div>
         </div>
       </details>
@@ -311,6 +334,12 @@
             <input class="inp" id="gwAlias" value="${escHtml(draft?.alias ?? (kind === "agent_platform" ? "agent" : kind === "gemini_aistudio" ? "gemini" : ""))}" placeholder="例如 main / agent" maxlength="32">
           </label>
 
+          ${kind === "openai_compat" ? `<label class="gw-add-field gw-span-2">
+            <span>上游 API 协议</span>
+            <select class="sel" id="gwNewWire">${wireOptions(draft?.wire)}</select>
+          </label>
+          <p class="gw-inline-note gw-span-2" id="gwResponsesHint" ${draft?.wire === "responses" ? "" : "hidden"}>客户端继续使用 Chat Completions。上游没有 /models 时，请在高级选项中填写模型 ID。</p>` : ""}
+
           <details class="gw-subdetails gw-span-2" data-gw-detail="add-adv">
             <summary>高级选项 <span>${kind === "openai_compat" ? "快捷模板 · 免密钥 · " : ""}思维链策略 · 手动补充模型</span></summary>
             <div class="gw-subdetails-body">
@@ -369,7 +398,7 @@
 
           <div class="gw-add-flags gw-span-2">
             <label class="gw-proxy-new"><input type="checkbox" id="gwNewProxy" ${defaultProxyChecked ? "checked" : ""}> 使用系统代理（默认开启）</label>
-            <button class="btn p" data-gw="publish" ${GW_BUSY ? "disabled" : ""}>上架渠道</button>
+            <button class="btn p" data-gw="publish" data-gw-exclusive>上架渠道</button>
           </div>
         </div>
         <p class="gw-footnote">密钥箱与渠道管理修改密钥后自动同步刷新；下架不会删除密钥箱中的密钥。</p>
@@ -456,7 +485,7 @@
     const allLiveModels = channels.filter((c) => !c.stale).flatMap((c) => c.models || []);
     const catFilter = GW_CATALOG_FILTER.trim().toLowerCase();
     const visibleCatalog = allLiveModels.filter((id) => !catFilter || id.toLowerCase().includes(catFilter));
-    const sampleModel = allLiveModels[0] || "alias/model";
+    const sampleModel = exampleModel();
 
     const rows = channels.map((c) => renderChannelCard(c, vault)).join("");
 
@@ -466,7 +495,7 @@
           <span class="gw-running ${GW.running ? "is-running" : "is-stopped"}"><i></i>${GW.running ? "运行中" : "已停止"}</span>
           <span class="gw-topbar-meta">端口 ${escHtml(GW.port)} · ${channels.length} 渠道 · ${allLiveModels.length} 模型${GW.lan ? " · 局域网已开" : ""}</span>
         </div>
-        <button class="btn p" data-gw="${GW.running ? "stop" : "start"}" ${GW_BUSY ? "disabled" : ""}>${GW.running ? "停止网关" : "启动网关"}</button>
+        <button class="btn p" data-gw="${GW.running ? "stop" : "start"}" data-gw-exclusive>${GW.running ? "停止网关" : "启动网关"}</button>
       </div>
       ${GW.startupError ? `<p class="gw-error">启动失败：${escHtml(GW.startupError)}</p>` : ""}
 
@@ -558,7 +587,7 @@
         <section class="gw-section">
           <div class="gw-section-head">
             <b>访问与网络设置</b>
-            <button class="btn p" data-gw="apply-restart" ${GW_BUSY ? "disabled" : ""}>${GW.running ? "应用设置并重启网关" : "保存并启动网关"}</button>
+            <button class="btn p" data-gw="apply-restart" data-gw-exclusive>${GW.running ? "应用设置并重启网关" : "保存并启动网关"}</button>
           </div>
           <div class="gw-settings-grid">
             <label class="gw-setting"><span><b>监听端口</b><small>默认 18771</small></span><input class="sel" id="gwPort" type="number" min="1" max="65535" value="${GW.port}"></label>
@@ -590,6 +619,7 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
       </div>
     </div>`;
 
+    syncGatewayButtons(box);
     wireRenderedEvents(box, channels, vault);
     restoreOpenState(box, snap);
   }
@@ -631,6 +661,14 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
         if (aliasEl && (!aliasEl.value.trim() || (GW.presets || []).some((x) => x.defaultAlias === aliasEl.value.trim()))) {
           aliasEl.value = p.defaultAlias;
         }
+      };
+    }
+    const wire = byId("gwNewWire");
+    if (wire) {
+      wire.onchange = () => {
+        const isResponses = wire.value === "responses";
+        byId("gwResponsesHint").hidden = !isResponses;
+        if (isResponses) box.querySelector('details[data-gw-detail="add-adv"]').open = true;
       };
     }
 
@@ -783,6 +821,12 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
       const b = e.target.closest("[data-gw]");
       if (!b) return;
       const action = b.dataset.gw;
+      const exclusive = b.hasAttribute("data-gw-exclusive");
+      if (exclusive) {
+        if (GW_BUSY) return;
+        GW_BUSY = true;
+        syncGatewayButtons(box);
+      }
 
       try {
         if (action === "copy-local" || action === "copy-lan") {
@@ -799,7 +843,7 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
         }
         if (action === "copy-env-snippet") {
           const key = await invoke("gateway_secret", { rotate: false });
-          const sample = (GW.channels || []).filter((c) => !c.stale).flatMap((c) => c.models || [])[0] || "alias/model";
+          const sample = exampleModel();
           const txt = `OPENAI_BASE_URL=http://127.0.0.1:${GW.port}/v1\nOPENAI_API_KEY=${key}\n# 示例模型：${sample}`;
           await invoke("copy_text", { text: txt });
           notify("Agent 环境变量已复制");
@@ -856,14 +900,15 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
             GW_DIAGS = await invoke("gateway_diagnostics").catch(() => GW_DIAGS);
           } finally {
             GW_TEST_BUSY = false;
+            const current = box.querySelector('[data-gw="run-test-chat"]');
+            if (current) {
+              current.disabled = false;
+              current.textContent = "发送测试";
+            }
           }
           renderGateway(snapshotOpenState(box), captureAddDraft());
           return;
         }
-
-        if (GW_BUSY) return;
-        GW_BUSY = true;
-        b.disabled = true;
 
         if (action === "start" || action === "apply-restart") {
           const port = Number(byId("gwPort")?.value);
@@ -913,7 +958,9 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
           const manualModels = parseManualModels(card.querySelector("[data-gw-manual]")?.value || "");
           const customHeaders = parseHeadersText(card.querySelector("[data-gw-headers]")?.value || "");
           const ch = (GW.channels || []).find((x) => (x.channelId || x.vaultId) === id);
-          const allAvail = new Set([...(ch?.fetchedModels || []), ...manualModels]);
+          const wire = card.querySelector("[data-gw-wire]")?.value;
+          const fetched = wire === "responses" && manualModels.length ? [] : ch?.fetchedModels || [];
+          const allAvail = new Set([...fetched, ...manualModels]);
           const checkedModels = [...card.querySelectorAll("[data-gw-model]")].filter((x) => x.checked && allAvail.has(x.value)).map((x) => x.value);
           // 新增的手动模型默认纳入可见清单
           for (const mm of manualModels) {
@@ -921,6 +968,7 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
           }
           const payload = {
             channelId: id,
+            wire,
             alias: card.querySelector("[data-gw-alias]")?.value || "",
             baseUrl: card.querySelector("[data-gw-baseurl]")?.value || "",
             systemProxy: !!card.querySelector("[data-gw-proxy]")?.checked,
@@ -948,6 +996,7 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
             vaultId,
             noUpstreamKey: noKey,
             source: GW_KIND,
+            wire: byId("gwNewWire")?.value,
             template: GW_KIND === "openai_compat" ? byId("gwTemplate")?.value || "custom" : "",
             baseUrl,
             saveEndpointToVault: !!byId("gwSaveEndpointToVault")?.checked,
@@ -967,8 +1016,11 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
       } catch (err) {
         notify(String(err), true);
       } finally {
-        GW_BUSY = false;
-        b.disabled = false;
+        if (exclusive) {
+          GW_BUSY = false;
+          // 操作期间可能已重绘，按忙碌状态更新当前页面上的按钮。
+          syncGatewayButtons(box);
+        }
       }
     });
   }

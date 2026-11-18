@@ -71,23 +71,19 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
     // ② 底栏三枚是 <button> 且键盘可达(tabIndex 0、非 disabled)
     const foot = JSON.parse(await evalJs(`JSON.stringify({
-      tags: [...document.querySelectorAll('.foot > *')].map(e => e.tagName + (e.id ? '#' + e.id : '')),
-      keys: (() => { const k = document.getElementById('lkKeys'); return k && { tag: k.tagName, tab: k.tabIndex, dis: k.disabled, text: k.textContent.trim() }; })(),
-      quit: (() => { const k = document.getElementById('lkQuit'); return k && { tag: k.tagName, tab: k.tabIndex, dis: k.disabled }; })(),
+      keys: (() => { const k = document.getElementById('lkKeys'); return k && { tag: k.tagName, tab: k.tabIndex, dis: k.disabled }; })(),
+      quit: (() => { const k = document.getElementById('lkQuit'); return k && { tag: k.tagName, tab: k.tabIndex, dis: k.disabled,
+        direct: k.matches('.foot > #lkKeys + #lkQuit') && k.getBoundingClientRect().width > 0 }; })(),
       upd: (() => { const k = document.getElementById('lkUpd'); return k && { tag: k.tagName, tab: k.tabIndex }; })(),
-      keysStyle: (() => { const k = document.getElementById('lkKeys'); const s = getComputedStyle(k);
-        return { bg: s.backgroundColor, border: s.borderTopWidth, font: s.fontSize, color: s.color }; })(),
     })`));
     check('#lkKeys 是 BUTTON', foot.keys.tag === 'BUTTON', foot.keys.tag);
     check('#lkQuit 是 BUTTON', foot.quit.tag === 'BUTTON', foot.quit.tag);
     check('#lkUpd 是 BUTTON', foot.upd.tag === 'BUTTON', foot.upd.tag);
     check('底栏入口可 Tab(不是 -1 / 不是 disabled)', foot.keys.tab === 0 && foot.keys.dis === false, 'tab=' + foot.keys.tab);
-    check('按钮外观已归零(无底色/无边框)', foot.keysStyle.bg === 'rgba(0, 0, 0, 0)' && foot.keysStyle.border === '0px',
-      `${foot.keysStyle.bg} / ${foot.keysStyle.border}`);
+    check('退出直接显示在设置旁且可 Tab', foot.quit.direct && foot.quit.tab === 0 && !foot.quit.dis);
 
     // ③ 焦点往返:点底栏入口 → 焦点在页头「← 返回」;关掉 → 焦点回底栏入口
     const focusRound = JSON.parse(await evalJs(`(async () => {
-      // 前置状态不假设:手动开着设置页时,再点常驻入口是"不重置"的 no-op
       if (document.body.classList.contains('view-manage')) closeManage(false);
       await new Promise(r => setTimeout(r, 120));
       const k = document.getElementById('lkKeys');
@@ -117,6 +113,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const tt = tbar.querySelector('.tt');
       const chip = document.getElementById('updChip');
       const foot = document.querySelector('.foot');
+      const keys = document.getElementById('lkKeys');
+      const quit = document.getElementById('lkQuit');
       const lkUpd = document.getElementById('lkUpd');
       const prevU = root.style.getPropertyValue('--u');
       const prevChip = chip.style.display, prevChipTxt = chip.textContent;
@@ -130,6 +128,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
             chip.textContent = '新版本';          // renderUpdChip() 里最宽的三字档
             lkUpd.style.display = withUpd ? '' : 'none';
             lkUpd.textContent = '有新版本 0.1.43';  // showCard() 的原样文案
+            const settings = keys.getBoundingClientRect();
+            const exit = quit.getBoundingClientRect();
             out.push({
               u, withChip, withUpd,
               tbarOver: Math.round(tbar.scrollWidth - tbar.clientWidth),
@@ -137,6 +137,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
               titleTrunc: tt.scrollWidth > tt.clientWidth + 1,
               footOver: Math.round(foot.scrollWidth - foot.clientWidth),
               footSlack: Math.round(foot.querySelector('.spacer').getBoundingClientRect().width),
+              keysEnlarged: settings.width >= 75 * u && settings.height >= 31 * u && settings.width > exit.width,
             });
           }
         }
@@ -147,34 +148,29 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       return JSON.stringify(out);
     })()`));
     const worst = geom.filter((g) => g.tbarOver > 0 || g.footOver > 0);
-    check('6 种组合下标题栏零溢出', worst.filter((g) => g.tbarOver > 0).length === 0,
+    check('三档字号与更新提示组合下标题栏零溢出', worst.filter((g) => g.tbarOver > 0).length === 0,
       geom.map((g) => `${g.u}${g.withChip ? '+chip' : ''}:${g.tbarOver}`).join(' '));
-    check('6 种组合下底栏零溢出', worst.filter((g) => g.footOver > 0).length === 0,
+    check('三档字号与更新提示组合下底栏零溢出', worst.filter((g) => g.footOver > 0).length === 0,
       geom.map((g) => `${g.u}${g.withUpd ? '+upd' : ''}:${g.footOver}`).join(' '));
+    check('三档字号下设置按钮保有加宽点击区', geom.every((g) => g.keysEnlarged));
     const std = geom.find((g) => g.u === 1 && g.withChip && !g.withUpd);
     check('标准字号 + 角标:标题不被截断', std.titleTrunc === false, 'avail=' + std.titleAvail);
-    const slack = geom.map((g) => g.footSlack);
     console.log('  底栏弹性空隙(px):', geom.map((g) => `${g.u}${g.withUpd ? '+upd' : ''}=${g.footSlack}`).join(' '));
 
-    // ⑤ 管理页里入口常驻:再点不重置(不把用户正在读的子页抖回索引页)
+    // ⑤ 管理页里入口常驻，再点返回首页。
     const reentry = await evalJs(`(async () => {
       openManage();
       await new Promise(r => setTimeout(r, 200));
       const d = getComputedStyle(document.getElementById('lkKeys')).display;
-      // 摆到子页(渠道),点常驻入口后必须仍停在原地
       showTab('ch');
       await new Promise(r => setTimeout(r, 100));
       document.getElementById('lkKeys').click();
       await new Promise(r => setTimeout(r, 100));
-      const stayed = document.querySelector('#mTabs [data-p="ch"]').classList.contains('on')
-        && !document.body.classList.contains('manage-index');
-      closeManage();
-      await new Promise(r => setTimeout(r, 200));
-      return JSON.stringify({ d, stayed });
+      return JSON.stringify({ d, closed: !document.body.classList.contains('view-manage') });
     })()`, true);
     const re = JSON.parse(reentry);
     check('管理页内入口常驻显示', re.d !== 'none', re.d);
-    check('页内再点入口不重置子页', re.stayed === true, JSON.stringify(re));
+    check('页内再点设置返回首页', re.closed === true, JSON.stringify(re));
 
     // ⑥ 设置页内部结构未被波及(2026-11-08 起多一个「本地模型网关」分区)
     const tabs = JSON.parse(await evalJs(`JSON.stringify([...document.querySelectorAll('#mTabs button')].map(b => b.dataset.p))`));
