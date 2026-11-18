@@ -5493,4 +5493,12 @@ src-tauri `cargo check --all-targets --locked` exit 0;
 - 「模型与联调」的发送按钮显示已等待秒数，并新增取消按钮；取消会中止后端联调任务，前端按运行 ID 丢弃迟到结果，不会覆盖取消后的界面状态。
 - 回归覆盖空流错误、工具调用统计、诊断字段展示、取消命令调用与按钮恢复；`verify-gateway.js` 全部通过，jsdom 278/278，core 587 passed / 10 ignored，src-tauri `cargo check --all-targets --locked` 通过。
 
+## 2026-11-19 v0.3.65 发布结果
+
+- 首次 v0.3.65 发版在用户要求下取消并删除 tag，未产生 Release。合并网关诊断与联调取消改动后重新打 tag，`v0.3.65` 指向 `bc74284`，该提交先推送到 `main`。
+- main CI `44342986043` 与桌面发版 run `44342998823` 全部通过。Release 于北京时间 2026-11-19 00:29:05（`2026-11-18T16:29:05Z`）公开发布，非 draft / prerelease。
+- 三件套齐全：安装包 `Grandettoken_0.3.65_x64-setup.exe` 6,087,045 字节，本机匿名下载回验 SHA-256 `829d0660e18085fc46ce7b8bbc38fc669f2e89562f199b1cc8f0074108c1d26b`；签名 `.sig` 444 字节；更新清单 `latest.json` 1,270 字节（notes 238 字符 / 132 中文字符、0 替换字符）。固定更新端点返回 `0.3.65`。
+- 本机 `node --use-env-proxy build/verify-release.js` 二次核验 PASS；本地 `.sig` 与安装包两项按既有口径 SKIP，签名逐字比对在 CI 端完成。
+- 待验收：安装版底栏设置/退出按钮的实际观感，以及网关诊断、空流提示和联调取消在真实 AgentRouter / Responses 上游下的表现。
+
 
