@@ -1,7 +1,7 @@
 # Grandettoken 开发进展
 
 > 最后更新:2026-11-18
-> 状态:**桌面 v0.3.59、Android 0.1.14 已发布**；Antigravity 多账号已在工作区实现，账号卡隐藏口径已获裁决，真实双账号切换待验收，结果见文末最新条目。
+> 状态:**桌面 v0.3.60、Android 0.1.14 已发布**。桌面版包含 Antigravity 多账号及当天到期日期修正，真实双账号切换待验收。发布结果见文末最新条目。
 > 同日做了两轮**代码治理**:产物出库 / 门禁补强 / 静默失败归零 / 经验沉淀,
 > 见 `docs/report/code-governance-2026-11-12.md`、`docs/report/code-quality-2026-11-12-b.md`
 > 与根目录 `AGENTS.md`。
@@ -5390,3 +5390,10 @@ src-tauri `cargo check --all-targets --locked` exit 0;
 - 发版内容包括 Antigravity 多账号卡与独立隐藏、账号快照同步兼容，以及积分卡和周重置日期的当天显示修正。桌面版本号三处同步至 0.3.60。
 - 本地串行复跑静态门及自检、前端语法、jsdom、官方回调白名单、顾问 / Google Cloud / 密钥箱 / 网关冒烟、core 单测、Tauri 全目标编译、`cargo fetch --locked` 和凭据扫描。凭据扫描覆盖待提交文件。
 - 当前真实 Antigravity 账号的采集、账本和探活复用通过。Android Debug 单测及 Kotlin 编译通过。真实双账号切换与安装后的界面显示待验收。
+
+## 2026-11-18 v0.3.60 发布结果
+
+- `v0.3.60` 指向 `2edfcb3`，该提交先推送到 `main`。main CI `44222968581` 和桌面发版 `44222979277` 均完成并通过。
+- Release 于北京时间 10:49:10 公开发布。Windows x64 安装包为 6,054,805 字节，签名及更新清单均已公开。`releases/latest/download/latest.json` 指向 0.3.60。
+- CI 和本地 `verify-release.js` 均通过。本地匿名下载三件套并用应用配置的公钥验签，更新清单内签名与 `.sig` 一致，篡改安装包的坏样本验签失败。下载所得 SHA-256 与 GitHub 资产记录一致，为 `e1a49e84a5fd4a803882bf8f2601298ae5e1cd4c3d3102d73eecbf71973dfe3c`。
+- Android 同步兼容改动通过单测与编译，本次发布 Windows 桌面安装包。真实双账号切换与安装后的界面显示待验收。
