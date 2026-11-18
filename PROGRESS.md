@@ -1,7 +1,7 @@
 # Grandettoken 开发进展
 
 > 最后更新:2026-11-18
-> 状态:**桌面 v0.3.63 发布中、Android 0.1.14 已发布**。本地网关访问上游默认补充 `User-Agent: OpenAI/JS 4.77.0` 并支持渠道 `customHeaders` 覆盖；真实双账号切换及 Qoder 网页重新登录后的明细待验收。
+> 状态:**桌面 v0.3.63、Android 0.1.14 已发布**。本地网关访问上游默认补充 `User-Agent: OpenAI/JS 4.77.0` 并支持渠道 `customHeaders` 覆盖；真实双账号切换及 Qoder 网页重新登录后的明细待验收。
 > 同日做了两轮**代码治理**:产物出库 / 门禁补强 / 静默失败归零 / 经验沉淀,
 > 见 `docs/report/code-governance-2026-11-12.md`、`docs/report/code-quality-2026-11-12-b.md`
 > 与根目录 `AGENTS.md`。
@@ -5446,4 +5446,11 @@ src-tauri `cargo check --all-targets --locked` exit 0;
 - 本地模型网关请求上游时默认附带 `User-Agent: OpenAI/JS 4.77.0`（`gateway_proto::sources::DEFAULT_UPSTREAM_USER_AGENT`），同时写入 `proxy::build_client` 与 `build_upstream_headers`，避免第三方中转站前置 Cloudflare / WAF 因空 `User-Agent` 返回 403 且不暴露特定桌面软件指纹；渠道在 `customHeaders` 中配置非空 `User-Agent`（不区分大小写）时优先使用自定义值。
 - 双向验证：`sources::tests::upstream_headers_default_user_agent_and_allow_custom_override` 与 `proxy::tests::proxy_changes_refresh_the_client_and_direct_groups_bypass_it` 覆盖默认 UA、自定义覆盖与真实 HTTP 报文头；临时移除 `build_client` 的 `.user_agent(...)` 时 `proxy` 单测按预期变红，恢复后复绿。
 - 桌面版本号三处同步至 `0.3.63`（`Cargo.toml` / `tauri.conf.json` / `Cargo.lock`）。本地串行通过静态四门及自检、临期与 Qoder 门禁、9 个前端/捕获 JS 语法、jsdom 275/275、密钥箱 / Codex 重置顾问 / Google Cloud / Antigravity / 网关冒烟、`app/core` `cargo test --locked -- --test-threads=1`（581 passed / 10 ignored + `sync_fixtures` 6 passed）、`app/src-tauri` `cargo fetch --locked` 与 `cargo check --all-targets --locked`、凭据扫描 CLEAN。
+
+## 2026-11-18 v0.3.63 发布结果
+
+- tag `v0.3.63` 指向 `fffb4b0`，该提交先推送到 `main`。main CI `44287851779` 与桌面发版 run `44287896071` 的 `build-and-release` 全部步骤一次通过；Release 于北京时间 19:00:55（`2026-11-18T11:00:55Z`）公开发布，非 draft / prerelease。
+- 三件套齐全：安装包 `Grandettoken_0.3.63_x64-setup.exe` 6,057,308 字节，GitHub 资产记录与本机匿名下载回验 SHA-256 均为 `7d7d3f6a7ef4c61da05f4a0a53647fb5901489447902dcb591e38cd57a701f7e`；签名 `.sig` 444 字节；更新清单 `latest.json` 1,387 字节（notes 311 字符 / 157 中文字符、0 替换字符）。固定更新端点 `latest/download/latest.json` 返回 `0.3.63`。
+- 本机 `node --use-env-proxy build/verify-release.js` 二次核验 PASS（本地 `.sig` 与安装包文件两项按既有口径 SKIP，签名逐字比对在 CI 端完成）。
+
 
