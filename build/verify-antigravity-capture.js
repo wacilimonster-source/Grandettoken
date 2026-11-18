@@ -10,14 +10,23 @@ const source = fs.readFileSync(path.join(__dirname, "../app/core/src/antigravity
 const executable = path.join(process.env.SystemRoot, "System32/WindowsPowerShell/v1.0/powershell.exe");
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "grandettoken-ag-fixture-"));
 const output = path.join(dir, "account.json");
+// 超时只防挂死，不参与白名单判定。CI runner 上第一次拉起 powershell.exe
+// （模块扫描 + 整份回调脚本解析）实测能到 10 秒，用 10 秒会把冷启动误判成回调失败。
+const TIMEOUT_MS = 30000;
 function run(state) {
   if (fs.existsSync(output)) fs.unlinkSync(output);
   const script = `& { ${source} } -CaptureDirectory '${dir.replaceAll("'", "''")}'`;
   const encoded = Buffer.from(script, "utf16le").toString("base64");
   const result = spawnSync(executable, ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], {
-    input: JSON.stringify(state), encoding: "utf8", windowsHide: true, timeout: 10000,
+    input: JSON.stringify(state), encoding: "utf8", windowsHide: true, timeout: TIMEOUT_MS,
   });
-  assert.equal(result.status, 0, "回调执行应成功或明确拒绝无效样本");
+  assert.equal(
+    result.status,
+    0,
+    `回调执行应成功或明确拒绝无效样本（status=${result.status} signal=${result.signal} ` +
+      `error=${result.error?.code ?? "-"} timeout=${TIMEOUT_MS}ms ` +
+      `stderr=${(result.stderr ?? "").trim().slice(-400) || "-"}）`,
+  );
   return fs.existsSync(output) ? JSON.parse(fs.readFileSync(output, "utf8")) : null;
 }
 try {
