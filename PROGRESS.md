@@ -5530,3 +5530,9 @@ src-tauri `cargo check --all-targets --locked` exit 0;
 ## 2026-11-19 v0.3.67 发布结果
 
 - tag `v0.3.67` 指向 `2a4416e`，该提交先推送到 `main`。main CI `44445170461` 与桌面发�?run `44445184222` 全部通过。Release 于北京时�?2026-11-19 10:55:51（`2026-11-19T02:55:51Z`）公开发布，非 draft / prerelease�?- 三件套齐全：安装�?`Grandettoken_0.3.67_x64-setup.exe` 6,086,675 字节，本机匿名下载回�?SHA-256 `c1578baa0634e37003b06452e41ce8b31f4d78ec92317f48bd94dcc27b227c14`；签�?`.sig` 444 字节；更新清�?`latest.json` 1,092 字节（notes 180 字符 / 78 中文字符�? 替换字符）。固定更新端点返�?`0.3.67`�?- 本机 `node --use-env-proxy build/verify-release.js` 二次核验 PASS；本�?`.sig` 与安装包两项按既有口�?SKIP，签名逐字比对�?CI 端完成�?- 待验收：底栏按钮与布局切换按钮在真实窗口下的观感统一性�?
+## 2026-11-20 v0.3.68 发布结果
+
+- tag `v0.3.68` 指向 `aaab970`，该提交先推送到 `main`。main CI `44557993432` 与发版 run `44558459930` 全部通过。Release 于北京时间 2026-11-20 00:10:21（`2026-11-19T16:10:21Z`）公开发布，非 draft / prerelease。
+- 三件套齐全：安装包 `Grandettoken_0.3.68_x64-setup.exe` 6,112,977 字节，本机下载回验 SHA-256 `7920222f96c66a0ea53720e2f849813c15762a188a151481176e77fe9784b526`；签名 `.sig` 444 字节；更新清单 `latest.json` 版本 `0.3.68`、notes 1,198 字节，正文与发版提交一致（notes intact）。固定更新端点返回 `0.3.68`。
+- 发版前本机复测：全量静态门禁与冒烟、core 647 通过 / 0 失败（10 ignored 真实账户用例未跑）、两 crate check、凭据扫描 CLEAN；网关相关 87 用例按 CI 同款并行线程 0 失败；`src-tauri` release profile 预检通过。`cargo fetch --locked` 因锁文件需随本包版本号更新而报错，改用 `cargo fetch --offline`（仅 tokenscope 版本行与 core 新增 axum 依赖条目），与 RELEASE.md 第 1 步描述不符，后续发版按此口径执行。
+- 待验收：原生 WebView 焦点/输入法、真实局域网另一台设备、真实上游与发布版负载；本版未消耗真实模型额度。
