@@ -5526,3 +5526,7 @@ src-tauri `cargo check --all-targets --locked` exit 0;
 ## 2026-11-19 v0.3.67 发版验证
 
 - 桌面版本号三处同步至 0.3.67。本版调整底栏「设置」和「退出」按钮尺寸与样式，使其与左侧布局切换按钮保持统一�?- 本机串行通过静态四门及自检、全部前�?JS 语法、jsdom 278/278、临期与 Qoder 门禁、密钥箱 / Codex 重置顾问 / Google Cloud / Antigravity / 网关冒烟、core `cargo test --locked -- --test-threads=1`�?87 passed / 10 ignored + `sync_fixtures` 6 passed）、`app/src-tauri` `cargo fetch --locked` �?`cargo check --all-targets --locked`、凭据扫�?CLEAN�?
+
+## 2026-11-19 v0.3.67 发布结果
+
+- tag `v0.3.67` 指向 `2a4416e`，该提交先推送到 `main`。main CI `44445170461` 与桌面发�?run `44445184222` 全部通过。Release 于北京时�?2026-11-19 10:55:51（`2026-11-19T02:55:51Z`）公开发布，非 draft / prerelease�?- 三件套齐全：安装�?`Grandettoken_0.3.67_x64-setup.exe` 6,086,675 字节，本机匿名下载回�?SHA-256 `c1578baa0634e37003b06452e41ce8b31f4d78ec92317f48bd94dcc27b227c14`；签�?`.sig` 444 字节；更新清�?`latest.json` 1,092 字节（notes 180 字符 / 78 中文字符�? 替换字符）。固定更新端点返�?`0.3.67`�?- 本机 `node --use-env-proxy build/verify-release.js` 二次核验 PASS；本�?`.sig` 与安装包两项按既有口�?SKIP，签名逐字比对�?CI 端完成�?- 待验收：底栏按钮与布局切换按钮在真实窗口下的观感统一性�?
