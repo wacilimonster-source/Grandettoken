@@ -5516,3 +5516,7 @@ src-tauri `cargo check --all-targets --locked` exit 0;
 - 本机串行通过静态四门及自检、全部前端 JS 语法、jsdom 278/278、临期与 Qoder 门禁、密钥箱 / Codex 重置顾问 / Google Cloud / Antigravity / 网关冒烟、core `cargo test --locked -- --test-threads=1`（587 passed / 10 ignored + `sync_fixtures` 6 passed）、`app/src-tauri` `cargo fetch --locked` 与 `cargo check --all-targets --locked`、凭据扫描 CLEAN。原生 `verify_webview_cookies` 正常路径 PASS，sentinel 路径按预期 FAIL。
 
 
+
+## 2026-11-19 v0.3.66 发布结果
+
+- tag `v0.3.66` 指向 `5ddccf2`，该提交先推送到 `main`。main CI `44442091013` 与桌面发�?run `44442099550` 全部通过。Release 于北京时�?2026-11-19 10:27:09（`2026-11-19T02:27:09Z`）公开发布，非 draft / prerelease�?- 三件套齐全：安装�?`Grandettoken_0.3.66_x64-setup.exe` 6,088,391 字节，本机匿名下载回�?SHA-256 `0486d1082325375ef8d6be46a4adee6976435ac2e09a5655ace191170aeb39f7`；签�?`.sig` 444 字节；更新清�?`latest.json` 1,270 字节（notes 291 字符 / 127 中文字符�? 替换字符）。固定更新端点返�?`0.3.66`�?- 本机 `node --use-env-proxy build/verify-release.js` 二次核验 PASS；本�?`.sig` 与安装包两项按既有口�?SKIP，签名逐字比对�?CI 端完成�?- 待验收：安装版在 Windows 上的无响应问题是否彻底改善，以及网页会话读取、清理和取数链路的真实表现�?
