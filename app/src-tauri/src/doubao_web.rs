@@ -53,7 +53,7 @@ pub async fn login(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 /// 登录窗被销毁(用户自己关掉):观察者靠它收工,不再去问一个正在销毁的窗口
-/// (那种调用会 panic,见 on_main_with_timeout)。挂件主动关窗时先置 DONE,
+/// 挂件主动关窗时先置 DONE,
 /// 这里靠 swap 区分,不再发"已取消"。
 pub fn on_login_window_destroyed(window: &tauri::Window) {
     LOGIN_CLOSED.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -68,18 +68,8 @@ pub fn on_login_window_destroyed(window: &tauri::Window) {
 /// **只读主窗口**:它从启动活到退出,登录窗随时可能被用户关掉;Cookie 按
 /// profile 存,主窗口与登录窗读到的是同一份(WorkBuddy 2026-10-08 实测同款结论)。
 pub fn session_of(app: &tauri::AppHandle) -> Option<String> {
-    let handle = app.clone();
-    crate::on_main_with_timeout(
-        app,
-        move || {
-            let w = handle.get_webview_window("main")?;
-            let url: tauri::Url = format!("https://{DOUBAO_HOST}/").parse().ok()?;
-            let jar = w.cookies_for_url(url).ok()?;
-            tokenscope_core::weblogin::doubao_cookie_credential(jar.iter().map(|x| (x.name(), x.value())))
-        },
-        std::time::Duration::from_secs(3),
-    )
-    .flatten()
+    let jar = crate::webview_cookies::read(app, format!("https://{DOUBAO_HOST}/")).ok()?;
+    tokenscope_core::weblogin::doubao_cookie_credential(jar.iter().map(|x| (x.name.as_str(), x.value.as_str())))
 }
 
 /// 会话可用吗:真打一次任务面板接口(走 fetcher.probe,与取数同一条链)。
@@ -102,7 +92,7 @@ fn spawn_watcher(app: tauri::AppHandle) {
             if LOGIN_CLOSED.load(std::sync::atomic::Ordering::Relaxed) {
                 return; // 用户自己把窗口关了
             }
-            // 读 Cookie 是阻塞调用(要同步问 webview),下沉到 spawn_blocking
+            // 只在工作线程等待 WebView 的异步回调。
             let probe_app = app.clone();
             let session = tokio::task::spawn_blocking(move || session_of(&probe_app))
                 .await
@@ -194,33 +184,6 @@ async fn finish_login(app: tauri::AppHandle) {
 /// 清豆包的登录会话(「删除密钥」时用):删掉 main 窗 Cookie 罐里所有
 /// doubao.com 的 Cookie。找不到会话不算失败(目标状态本来就成立)。
 pub fn clear_session(app: &tauri::AppHandle) -> Result<(), String> {
-    let handle = app.clone();
-    let job = crate::on_main_with_timeout(
-        app,
-        move || {
-            let Some(w) = handle.get_webview_window("main") else {
-                return (0usize, 0usize);
-            };
-            let Ok(url) = format!("https://{DOUBAO_HOST}/").parse::<tauri::Url>() else {
-                return (0usize, 0usize);
-            };
-            let mut matched = 0usize;
-            let mut failed = 0usize;
-            if let Ok(jar) = w.cookies_for_url(url) {
-                for c in jar {
-                    matched += 1;
-                    if w.delete_cookie(c).is_err() {
-                        failed += 1;
-                    }
-                }
-            }
-            (matched, failed)
-        },
-        std::time::Duration::from_secs(3),
-    );
-    match job {
-        None => Err("主线程 3 秒内没回信(窗口正忙或正在销毁)".to_string()),
-        Some((_, failed)) if failed > 0 => Err(format!("有 {failed} 个会话 cookie 没删掉")),
-        Some(_) => Ok(()),
-    }
+    crate::webview_cookies::clear(app, [format!("https://{DOUBAO_HOST}/")], |_| true, false)
+        .map(|_| ())
 }

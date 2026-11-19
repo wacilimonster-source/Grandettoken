@@ -4925,7 +4925,7 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tokenscope"
-version = "0.3.65"
+version = "0.3.66"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -4944,6 +4944,8 @@ dependencies = [
  "tauri-plugin-updater",
  "tokenscope-core",
  "tokio",
+ "webview2-com",
+ "windows 0.61.3",
  "windows-sys 0.61.2",
  "winreg 0.52.0",
 ]

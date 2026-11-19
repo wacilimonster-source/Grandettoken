@@ -5501,4 +5501,18 @@ src-tauri `cargo check --all-targets --locked` exit 0;
 - 本机 `node --use-env-proxy build/verify-release.js` 二次核验 PASS；本地 `.sig` 与安装包两项按既有口径 SKIP，签名逐字比对在 CI 端完成。
 - 待验收：安装版底栏设置/退出按钮的实际观感，以及网关诊断、空流提示和联调取消在真实 AgentRouter / Responses 上游下的表现。
 
+## 2026-11-19 Windows 桌面窗口无响应
+
+- 现场安装版 v0.3.64 的窗口被 Windows 判定无响应。两次附加 GDB 都看到主线程停在同一处 `WaitOnAddress`。用 PE 导入表和 COM 接口标识回查，堆栈下方是 Wry 同步读取 Cookie 时运行的 `DispatchMessageA` 嵌套循环，上方是重入的 WebView2 导航回调尝试取得 Tauri 的 WebView 注册表锁。后台调用的三秒超时无法解除界面线程的等待。采集线程栈后重启旧版，窗口恢复响应。
+- WorkBuddy、Qoder 两个区域和豆包的网页登录会话共用 `webview_cookies.rs`。Windows 界面线程登记 `GetCookies` 回调后立即返回，工作线程负责等待和超时。清理保留原始域名及路径，任何入口读取失败都会先返回错误。原生回归用隔离 profile 验证回调时序及同名 Cookie 的域名和路径隔离。
+- 原生示例首轮因缺少 Common Controls v6 manifest 在 `TaskDialogIndirect` 处无法启动。给示例链入 Tauri 同一份 Windows 资源后，旧同步路径命中时序断言。另一次原生复跑检出删除请求返回后立即读取仍可能看到旧条目。清理改为在同一截止时间内读回核对。最终正样本连续复跑通过，`--sync-sentinel` 在时序断言处退出 1。用例同时核对前导点域名、同名子路径和其它站点隔离。
+- 本机通过替换可执行文件运行基于 v0.3.65 的修复构建，保留原 v0.3.64 可执行文件备份。实机触发刷新、进入设置并回到首页，后台轮询持续记录成功取数。清理回归使用合成会话。
+- 串行通过 IPC、静默失败、文件规模、CSS 形态、前端语法、jsdom、Codex 重置顾问、网关冒烟、core 单测、Tauri 全目标编译及凭据扫描。新 Rust 源一并扫描。首轮文件规模门因用 PowerShell 统计时漏计空行而误设预算，按门禁的物理行数修正预算后复跑通过。jsdom、core 和 Tauri 已分别复跑确认。
+- 原生回归 `verify_webview_cookies` 正常路径 PASS，`--sync-sentinel` 在时序断言处按预期 FAIL（退出码 1）。
+
+## 2026-11-19 v0.3.66 发版验证
+
+- 桌面版本号三处同步至 0.3.66。本版把 WorkBuddy、Qoder 和豆包的网页会话读写统一到 `webview_cookies.rs`，避免 Windows WebView2 的同步 Cookie API 在界面线程开启嵌套消息循环导致卡死；清理保留原始域名与路径、按名称域名路径去重，并读回核对后才报告成功。
+- 本机串行通过静态四门及自检、全部前端 JS 语法、jsdom 278/278、临期与 Qoder 门禁、密钥箱 / Codex 重置顾问 / Google Cloud / Antigravity / 网关冒烟、core `cargo test --locked -- --test-threads=1`（587 passed / 10 ignored + `sync_fixtures` 6 passed）、`app/src-tauri` `cargo fetch --locked` 与 `cargo check --all-targets --locked`、凭据扫描 CLEAN。原生 `verify_webview_cookies` 正常路径 PASS，sentinel 路径按预期 FAIL。
+
 

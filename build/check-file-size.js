@@ -32,7 +32,7 @@ const SOFT_LIMIT = 1500;
 const BUDGETS = {
   "app/src/app.js": 9050, // 临期计算拆入 expiry-ui.js，收回大文件预算。
   "app/core/src/inject.rs": 7320,
-  "app/src-tauri/src/lib.rs": 6450,
+  "app/src-tauri/src/lib.rs": 6310, // 网页会话的 Cookie 读取与清理移入 webview_cookies.rs。
   "app/core/src/fetch.rs": 5258, // Qoder 缓存与错误文案统一到 qoderweb.rs。
   "app/core/src/store.rs": 3000,
   "app/core/src/workbuddy.rs": 2420,

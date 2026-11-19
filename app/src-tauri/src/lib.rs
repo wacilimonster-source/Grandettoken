@@ -24,6 +24,7 @@ use vault_sync::{
 mod doubao_web;
 mod codex_reset_cmd;
 mod google_cloud_web;
+mod webview_cookies;
 pub use sync_cmds::{
     sync_create, sync_disconnect_github, sync_forget,
     sync_join, sync_oauth_cancel, sync_oauth_poll, sync_oauth_start, sync_preview,
@@ -486,19 +487,20 @@ async fn delete_key(app: tauri::AppHandle, id: String) -> Result<String, String>
     }
     // 网页登录型的会话住在浏览器 profile 里,不在凭据管理器 —— 一并清掉。
     // 不清的话这个按钮点了等于没点:下一轮取数照样读得到 Cookie(2026-10-08)。
-    // 这条命令因此必须是 async:清 Cookie 要同步问 webview,不能占着主线程等。
+    // 清理会等待 WebView 的异步响应，放到阻塞线程，给运行时留出处理其它请求的线程。
     let is_web = matches!(def.auth, providers::AuthKind::WebSession);
     let mut warn = String::new();
     if is_web {
         // 各渠道的会话住在各自域的 Cookie 罐里:WorkBuddy 清工作台两域,豆包清
         // doubao.com —— 用错清单会把别人的会话误伤或漏清
-        let cleared = if def.id == WB_CHANNEL_ID {
-            wb_clear_session(&app)
-        } else if def.id == "doubao" {
-            doubao_web::clear_session(&app)
-        } else {
-            Ok(())
-        };
+        let handle = app.clone();
+        let cleared = tokio::task::spawn_blocking(move || match def.id {
+            WB_CHANNEL_ID => wb_clear_session(&handle),
+            "doubao" => doubao_web::clear_session(&handle),
+            _ => Ok(()),
+        })
+        .await
+        .map_err(|error| error.to_string())?;
         if let Err(e) = cleared {
             warn = format!(";浏览器登录会话可能没清干净({e}),请在客户端里退出登录一次");
         }
@@ -705,7 +707,7 @@ const WB_LOGIN_URL: &str = "https://www.workbuddy.cn/login?platform=usercenter&s
 static WB_LOGIN_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// 登录窗已经销毁(用户自己关的,或者我们收尾时关的)。观察者靠它收工 ——
-/// 有了这个标志,就不必去问那个可能正在销毁的窗口(问它会 panic,见 on_main_with_timeout)。
+/// 有了这个标志,就不必去问那个可能正在销毁的窗口。
 static WB_LOGIN_CLOSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 /// 页面是否已经落到"登录完成"的路径上(判定规则在 core::weblogin)。由 on_navigation
@@ -717,28 +719,6 @@ fn on_main(app: &tauri::AppHandle, f: impl FnOnce() + Send + 'static) {
     let _ = app.run_on_main_thread(f);
 }
 
-/// 把一段"要碰 webview"的代码投到主线程去跑,带**自己的**超时把结果等回来。
-///
-/// 为什么不能直接在外壳里调 `cookies_for_url`:它内部走的是**阻塞派发** ——
-/// 从 worker 线程发消息给主线程,然后在 `rx.recv().unwrap()` 上等回信。目标 webview
-/// 正在销毁、或者应用正在退出时,那条回信永远不会来,`unwrap` 直接 panic;而 release
-/// 是 `panic = "abort"`,一次派发失败等于整个挂件原地消失(2026-10-08 踩到:刚关掉
-/// 登录窗就去读 Cookie,日志里留下 RecvError panic)。
-/// 这里改成"投递任务 + 自己带超时地等",拿不到就当作没读到,让这一轮取数退回"未登录",
-/// 绝不让挂件崩。投递本身在主线程上是就地执行,不存在回信问题。
-fn on_main_with_timeout<T: Send + 'static>(
-    app: &tauri::AppHandle,
-    f: impl FnOnce() -> T + Send + 'static,
-    timeout: std::time::Duration,
-) -> Option<T> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    app.run_on_main_thread(move || {
-        let _ = tx.send(f());
-    })
-    .ok()?;
-    rx.recv_timeout(timeout).ok()
-}
-
 /// 从 webview 的 Cookie 罐里取会话。
 ///
 /// **只读主窗口**:它从启动活到退出,而登录窗随时可能被用户关掉(读一个正在销毁的
@@ -748,72 +728,24 @@ fn wb_session_of(app: &tauri::AppHandle, id: &str) -> Option<String> {
     if id != WB_CHANNEL_ID {
         return None; // 只有 WorkBuddy 走这条路
     }
-    let handle = app.clone();
-    on_main_with_timeout(
-        app,
-        move || {
-            let w = handle.get_webview_window("main")?;
-            // `is_post_login` 认的工作台域名有两个(www.workbuddy.cn / www.codebuddy.cn),
-            // 以前这里只查第一个:在第二个域上完成登录 → 判定"已登录"却永远取不到会话,
-            // 界面只剩"看着登录了但取不到数"这种最难排查的样子(报告 P2-16)。
-            for host in tokenscope_core::weblogin::SITE_HOSTS {
-                let Some(url) = format!("https://{host}/").parse::<tauri::Url>().ok() else {
-                    continue;
-                };
-                let Ok(jar) = w.cookies_for_url(url) else { continue };
-                if let Some(c) =
-                    tokenscope_core::weblogin::cookie_credential(jar.iter().map(|x| (x.name(), x.value())))
-                {
-                    return Some(c);
-                }
-            }
-            None
-        },
-        std::time::Duration::from_secs(3),
-    )
-    .flatten()
+    // 两个工作台域名都能完成登录，必须使用同一份站点名单查找会话。
+    tokenscope_core::weblogin::SITE_HOSTS.iter().find_map(|host| {
+        let jar = webview_cookies::read(app, format!("https://{host}/")).ok()?;
+        tokenscope_core::weblogin::cookie_credential(jar.iter().map(|x| (x.name.as_str(), x.value.as_str())))
+    })
 }
 
 /// 清 WorkBuddy 的登录会话(「清除登录」用)。**返回结果不能丢**:以前调用方
 /// `let _ =` 一吞,超时 / 删失败都变成"命令成功",界面说清掉了、下一轮取数又读到那个 Cookie。
 /// 找不到会话不算失败(目标状态"没有会话"本来就成立),超时与删失败才报错。
 fn wb_clear_session(app: &tauri::AppHandle) -> Result<(), String> {
-    let handle = app.clone();
-    let job = on_main_with_timeout(
+    webview_cookies::clear(
         app,
-        move || {
-            let Some(w) = handle.get_webview_window("main") else {
-                return (0usize, 0usize);
-            };
-            let mut matched = 0usize;
-            let mut failed = 0usize;
-            // 两个工作台域名都要清:只在其中一个上登过的人,点「清除登录」后
-            // 另一个域的会话还在,下一轮取数照样读得到(报告 P2-16)
-            for host in tokenscope_core::weblogin::SITE_HOSTS {
-                let Ok(url) = format!("https://{host}/").parse::<tauri::Url>() else {
-                    continue;
-                };
-                let Ok(jar) = w.cookies_for_url(url) else {
-                    continue;
-                };
-                for c in jar {
-                    if tokenscope_core::weblogin::is_session_cookie(c.name()) {
-                        matched += 1;
-                        if w.delete_cookie(c).is_err() {
-                            failed += 1;
-                        }
-                    }
-                }
-            }
-            (matched, failed)
-        },
-        std::time::Duration::from_secs(3),
-    );
-    match job {
-        None => Err("主线程 3 秒内没回信(窗口正忙或正在销毁)".to_string()),
-        Some((_, failed)) if failed > 0 => Err(format!("有 {failed} 个会话 cookie 没删掉")),
-        Some(_) => Ok(()),
-    }
+        tokenscope_core::weblogin::SITE_HOSTS.iter().map(|host| format!("https://{host}/")),
+        |cookie| tokenscope_core::weblogin::is_session_cookie(&cookie.name),
+        false,
+    )
+    .map(|_| ())
 }
 
 /// 会话可用吗:用挂件自己的 HTTP 栈真打一次接口(见 Fetcher::probe)。
@@ -957,23 +889,8 @@ fn qoder_label_id(label: &str) -> Option<&'static str> {
 /// 否则会把国际版会话发给国内账务接口(必然 401,还会误导用户)。
 fn qoder_web_session_of(app: &tauri::AppHandle, id: &str) -> Option<String> {
     let site = tokenscope_core::weblogin::qoder_site(id)?;
-    let host = site.host;
-    let handle = app.clone();
-    on_main_with_timeout(
-        app,
-        move || {
-            let w = handle.get_webview_window("main")?;
-            let url = format!("https://{host}/").parse::<tauri::Url>().ok()?;
-            let Ok(jar) = w.cookies_for_url(url) else {
-                return None;
-            };
-            tokenscope_core::weblogin::qoder_cookie_credential(
-                jar.iter().map(|x| (x.name(), x.value())),
-            )
-        },
-        std::time::Duration::from_secs(3),
-    )
-    .flatten()
+    let jar = webview_cookies::read(app, format!("https://{}/", site.host)).ok()?;
+    tokenscope_core::weblogin::qoder_cookie_credential(jar.iter().map(|x| (x.name.as_str(), x.value.as_str())))
 }
 
 /// 清掉某个 Qoder 区域的网页会话。**只清该区域站点 + 该区域登录页会用来免选账号的
@@ -994,15 +911,13 @@ fn qoder_web_session_of(app: &tauri::AppHandle, id: &str) -> Option<String> {
 /// 登录页重新选账号;这只动挂件自己的 WebView2 profile,不影响系统浏览器。
 /// 国内版登录不走 Google,不扩这一刀。
 ///
-/// 返回 (匹配到的总数, 删除失败数);**一个都没匹配到但有 Cookie 就报错** ——
+/// 返回清除的条数;**一个都没匹配到但有 Cookie 就报错** ——
 /// 以前 matched=0 被当成"本来就没有会话"静默放过,才会出现"日志说已清、实际没清"。
-fn qoder_clear_session(app: &tauri::AppHandle, id: &str) -> Result<(usize, usize), String> {
+fn qoder_clear_session(app: &tauri::AppHandle, id: &str) -> Result<usize, String> {
     let site = tokenscope_core::weblogin::qoder_site(id)
         .ok_or_else(|| format!("未知的 Qoder 区域: {id}"))?;
     let host = site.host.to_ascii_lowercase();
     let suffix = format!(".{host}");
-    // 国际版 Qoder 的网页登录拿 Google 会话免选账号;国内版不走这条路。
-    let sso: Vec<&'static str> = if id == "qoder" { vec!["google.com"] } else { Vec::new() };
     let mut urls: Vec<String> = ["/", "/account/usage", "/users/sign-in"]
         .iter()
         .map(|p| format!("https://{host}{p}"))
@@ -1012,73 +927,11 @@ fn qoder_clear_session(app: &tauri::AppHandle, id: &str) -> Result<(usize, usize
         urls.push("https://google.com/".into());
         urls.push("https://accounts.google.com/".into());
     }
-    let handle = app.clone();
-    let job = on_main_with_timeout(
-        app,
-        move || -> Result<(usize, usize), String> {
-            let Some(w) = handle.get_webview_window("main") else {
-                return Ok((0, 0));
-            };
-            let mut total = 0usize;
-            let mut matched = 0usize;
-            let mut failed = 0usize;
-            let mut read_ok = 0usize;
-            let mut seen: Vec<(String, String, String)> = Vec::new();
-            for url in urls {
-                let Ok(u) = url.parse::<tauri::Url>() else {
-                    continue;
-                };
-                let Ok(jar) = w.cookies_for_url(u) else {
-                    continue;
-                };
-                read_ok += 1;
-                for c in jar {
-                    let key = (
-                        c.name().to_string(),
-                        c.domain().unwrap_or("").to_string(),
-                        c.path().unwrap_or("").to_string(),
-                    );
-                    if seen.contains(&key) {
-                        continue;
-                    }
-                    seen.push(key);
-                    total += 1;
-                    let domain = c
-                        .domain()
-                        .unwrap_or("")
-                        .trim_start_matches('.')
-                        .to_ascii_lowercase();
-                    let in_region = domain == host || domain.ends_with(&suffix);
-                    let in_sso = sso.iter().any(|h| {
-                        domain == *h || domain.ends_with(&format!(".{h}"))
-                    });
-                    if !in_region && !in_sso {
-                        continue;
-                    }
-                    matched += 1;
-                    if w.delete_cookie(c).is_err() {
-                        failed += 1;
-                    }
-                }
-            }
-            if read_ok == 0 {
-                return Err("读不到 Cookie 罐".to_string());
-            }
-            if total > 0 && matched == 0 {
-                return Err(format!(
-                    "Cookie 罐里有 {total} 个条目,但没有一个匹配 {host} —— 会话没清掉"
-                ));
-            }
-            Ok((matched, failed))
-        },
-        std::time::Duration::from_secs(3),
-    );
-    match job {
-        None => Err("主线程 3 秒内没回信(窗口正忙或正在销毁)".to_string()),
-        Some(Err(e)) => Err(e),
-        Some(Ok((_, failed))) if failed > 0 => Err(format!("有 {failed} 个 Cookie 没删掉")),
-        Some(Ok(counts)) => Ok(counts),
-    }
+    webview_cookies::clear(app, urls, |cookie| {
+        let domain = cookie.domain.trim_start_matches('.').to_ascii_lowercase();
+        domain == host || domain.ends_with(&suffix)
+            || (id == "qoder" && (domain == "google.com" || domain.ends_with(".google.com")))
+    }, true)
 }
 
 /// 取数管线的会话分发。**故意不并进 wb_session_of**:签到凭据兜底(checkin_credentials
@@ -1171,7 +1024,10 @@ async fn qoderweb_login(
         )
     };
     if switch || stale {
-        let (cleared, _) = qoder_clear_session(&app, id)?;
+        let handle = app.clone();
+        let cleared = tokio::task::spawn_blocking(move || qoder_clear_session(&handle, id))
+            .await
+            .map_err(|error| error.to_string())??;
         {
             let st = app.state::<AppState>();
             let store = lock_rw(&st.store);
@@ -1356,7 +1212,7 @@ fn spawn_qoder_login_watcher(app: tauri::AppHandle, id: &'static str) {
 /// 窗口发呆(2026-10-08 真机踩到)。
 ///
 /// 两条状态都由主线程侧的钩子置位(窗口事件、导航事件),**不去碰登录窗的任何 API**:
-/// 那类调用是阻塞派发,窗口正在销毁时会让挂件 panic-abort(见 on_main_with_timeout)。
+/// 那类调用在窗口正在销毁时可能因阻塞派发失败而终止进程。
 fn spawn_login_watcher(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let mut tried = String::new();
@@ -6234,7 +6090,7 @@ pub fn run() {
         // WorkBuddy 登录窗被用户自己关掉(没抓到会话)时,要让界面把「登录中」收回去,
         // 否则会一直卡在等令牌的样子。抓到会话那一次是我们主动关窗的,由 WB_LOGIN_DONE
         // 标位区分,不该再报一次"已取消"。观察者也靠 WB_LOGIN_CLOSED 收工 ——
-        // 它因此不用去问一个正在销毁的窗口(那种调用会 panic,见 on_main_with_timeout)。
+        // 它因此不用去问一个正在销毁的窗口。
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 // WorkBuddy 登录窗被用户自己关掉(没抓到会话)时,要让界面把「登录中」

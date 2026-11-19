@@ -109,5 +109,15 @@ fn main() {
             None => {}
         }
     }
-    tauri_build::build()
+    tauri_build::build();
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        // tauri-build 只给 bin 链入资源。原生 WebView2 夹具也需要 Common Controls v6 manifest。
+        let resource = match std::env::var("CARGO_CFG_TARGET_ENV").as_deref() {
+            Ok("gnu") => "libresource.a",
+            Ok("msvc") => "resource.lib",
+            _ => return,
+        };
+        let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("missing OUT_DIR"));
+        println!("cargo:rustc-link-arg-examples={}", out.join(resource).display());
+    }
 }
