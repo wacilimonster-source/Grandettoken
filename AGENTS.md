@@ -1,10 +1,15 @@
 # AGENTS.md — 自动化改代码的硬约束
 
 > **写给所有会改这个仓库的 agent / 工具。** 本文件受版本控制,是跨 agent 的公共记忆。
-> 仓库里同时存在 `.workbuddy/`、`.workbuddy-ai/`、`.zcode/`、`.trae-html-share-packages/`、
-> `.dsh-acl-report/` 等多套 agent 工作目录,它们**都被 gitignore 且互不共享**。
-> 把结论只写进自己那一份 memory,下一个 agent 一定看不到 —— 这是本项目反复踩坑的结构性原因。
-> 任何「下次别再这样」的结论,必须落到本文件,再顺手记进自己的日志。
+> 仓库里 `.workbuddy/`、`.workbuddy-ai/`、`.zcode/`、`.trae-html-share-packages/`、`.dsh-acl-report/`
+> 等目录**都被 gitignore 且互不共享**。任何「下次别再这样」的结论必须落到本文件,再记进自己的日志。
+
+### 写入纪律
+
+- **按主题归位,不追加到文末或当前小节**:通用验证教训进 §6,用户裁决进 §5,模块陷阱进 §8(无合适小节则新建)。
+- 以日期开头,写「现象 → 原因 → 以后怎么做」;长证据放 `docs/report/`,这里只留结论和路径。
+- 写入前先搜同主题条目,**合并改写**而非新增「补充」;不写会腐烂的数字(测试数/行数/文件数/文档行号),改用「以某命令输出为准」。
+- **控长**:本文件会被注入每个 agent 上下文,超过 ~24 KB 会截断末尾(曾导致 §8 被切掉)。总长保持在 **22 KB 以内**,宁可精简旧案例也不要无限增长。
 
 ---
 
@@ -13,33 +18,19 @@
 | 要确认什么 | 看哪里 |
 |---|---|
 | 当前版本、最近改了什么 | `PROGRESS.md` **文末最新条目** + `git log`(头部状态是快照,会过时) |
-| 产品口径 / 设计裁决 | `DESIGN.md` |
+| 产品口径 / 设计裁决 | `DESIGN.md`;§5 是用户明确裁决、不许推翻的部分 |
 | 发版流程、签名、回滚 | `RELEASE.md` |
-| 模块划分、加渠道/客户端的步骤 | `app/README.md` |
+| 模块划分、加渠道/客户端 | `app/README.md` |
+| 门禁实际跑了什么 | `.github/workflows/ci.yml`、`.github/workflows/release.yml` |
 | 历史体检、冗余审计 | `docs/report/` |
 
-**改之前先 grep 现有实现。** 本项目多次出现「同一件事写了第二份」:旧摘要 CSS 段被新段完全覆盖、
-`SyncStatus` 与 `GithubStatus` 两套等价结构、`savePosSoon` 与 `scheduleSettleCheck` 并存。
-找不到调用方 ≠ 可以新增一份,先用 `build/check-ipc-contract.js` 和全仓 grep 确认。
+**改之前先 grep 现有实现。** 本项目多次出现「同一件事写了第二份」(旧摘要 CSS 被覆盖、`SyncStatus`/`GithubStatus` 重复、`savePosSoon`/`scheduleSettleCheck` 并存)。找不到调用方 ≠ 可新增,先用 `build/check-ipc-contract.js` 和全仓 grep 确认。
 
 ---
 
-## 1. 本次治理查到的真实问题(别重犯)
+## 1. 2026-11-12 治理基线
 
-2026-11-12 全量审计的结论与证据见 `docs/report/code-governance-2026-11-12.md`。
-下面每条都是**实测**出来的,不是通用建议。
-
-| # | 现象 | 证据 |
-|---|---|---|
-| 1 | 机器产物被提交进版本库 | 2 个 APK(21.5 MB)、6 份 `refresh-*.json`(每份 1.4 MB / 5.8 万行)、1 个 Trae 分享 zip 被 git 跟踪,合计约 30 MB;`--stat` 里一次提交出现 11.6 万行「新增」 |
-| 2 | 验证桩让错误永远测不出来 | `jsdom-smoke.js` 的 invoke 桩对未登记命令一律 `return null`;窗口对象用 Proxy 把未知方法变成恒成功的空函数。命令名拼错、漏注册都能 182/182 全绿 |
-| 3 | 门禁只在某台机器上存在 | 同一脚本曾写死 `G:/game/nw/Grandettoken/app/src`;jsdom 未随仓库固化,换个目录直接报「需要 jsdom」,而 `RELEASE.md` 仍宣称全绿。CI 当时只跑 5 个文件的 `node --check` |
-| 4 | 验证脚本自己会腐烂且没人复核 | `verify-codex-layout.js` 在 v0.3.35 基线就必然抛 TypeError(引用已删除的 `.quota-number`),直到 11-12 清理时才被发现;`verify-refresh-stability.js --compare` 只打印表格就 `exit(0)`,没有阈值也没有断言 |
-| 5 | 构建链路曾「失败却报成功」 | `build.ps1` 注释记录:捕获失败的构建打印了 `ok import table clean` 并退出 0(PROGRESS 报告 P0-3) |
-| 6 | 文档数字与实测长期不一致 | README 写「227 个单元测试」、CI 注释写「422 tests, 9 ignored」,实测 `425 passed / 8 ignored`;PROGRESS 头部停在 v0.3.22,实际已 v0.3.36 |
-| 7 | 纪律写了却没有门禁 | `app.js` 注释明确写「**不许吞错**」,全文件仍有 14 处空 catch,其中 5 处是 IPC 写操作(`set_pin` / `save_window_pos` / `skip_update_version` 等) |
-| 8 | 一次性脚本像正式代码一样躺着 | `.dsh-acl-report/` 64 个探针:`decrypt_desktop*.js` 解桌面端凭据、`dump_ck.py` 导 Cookie、`fix_n05.py` 对源码做全局字符串替换(只靠一个 `assert` 校验),路径写死到本机 |
-| 9 | 门禁自身也会假阳性 | 新写的 IPC 门禁第一版把带 `//` 注释的注册行整项丢掉,误报 `key_source` 未注册。**门禁报错不等于代码有错,先证伪自己** |
+全量审计证据见 `docs/report/code-governance-2026-11-12.md`,冗余审计与 11 类误报见 `docs/report/redundancy-audit-2026-11-11.md`。当时实测出的结构性问题(机器产物入库 ~30 MB、宽松桩让错误永不暴露、门禁硬编码本机路径、脚本腐烂无人复核、`build.ps1` 构建失败仍打印 ok 退出 0、文档测试数长期漂移、空 catch 吞错、临时探针脚本滞留、门禁自身假阳性)已全部转化为下方 §2、§4、§6、§7 的硬约束。
 
 ---
 
@@ -47,256 +38,207 @@
 
 ### 2.1 验证(最重要)
 
-1. **双向验证**:门禁必须既能「当前代码全绿」,也能「注入一个已知坏样本时变红」。
-   单向的「变绿了」说明不了任何事 —— 这条纪律项目里早有(`PROGRESS.md` 里 `scan-secrets.ps1` 的夹具仓库实测),但没推广开。
-   `build/check-ipc-contract.js` 内置了哨兵命令自检,照这个模式写新门禁。
-2. **期望值从源码实时提取,不写死**。命令表、测试用例数、版本号一旦写死就会腐烂。
-   同理,文档里不要写具体测试数量,以命令输出为准。
-3. **能进 CI 的门禁必须零外部依赖**;有依赖的必须写明安装方式、失效条件,并且不许在文档里把它说成「已通过」。
-4. **验证脚本本身也要被验证**:改了渲染 / CSS / 命令后,先确认 `build/verify-*.js` 引用的选择器、命令、路径还存在。
-   破损的脚本宁可删掉,也不要留着冒充门禁。
-5. **「只打印、不判定」必须显式标注**。`--compare` 之类报告工具的 `exit 0` 不代表通过。
-6. **不许静默吞错**。写操作失败的范式是 `saveCfg()`:回滚状态 + `showToast(...)` 用户可见。
-   GUI 程序里 `console.warn` / `eprintln!` 没人看得见,不能拿它当「已处理」。
-7. 提交前门禁清单见第 4 节;**没跑完不许写「已验证」**。
+1. **双向验证**:门禁必须既能「当前代码全绿」,也能「注入坏样本时变红」(如 `check-ipc-contract.js` 哨兵、`--self-test`、`scan-secrets.ps1` 夹具)。单向变绿说明不了任何事。
+2. **期望值从源码实时提取,不写死**:命令表、测试数、版本号、行数均以命令输出为准,不写进文档。
+3. **CI 门禁优先零外部依赖**;有依赖(如 jsdom)须写明安装方式与失效条件,未跑不许写「已通过」。
+4. **验证脚本本身要随代码复核**:改了渲染/CSS/命令后确认 `build/verify-*.js` 引用的选择器和命令还在;破损脚本宁删勿留。
+5. **只打印不判定的工具须显式标注**:`verify-refresh-stability.js --compare` 等报告工具的 `exit 0` 不代表通过。
+6. **不许静默吞错**:写操作失败按 `saveCfg()` 范式(回滚内存状态 + `showToast(...)` 用户可见);GUI 里 `console.warn`/`eprintln!` 不算已处理。
+7. 提交前按 §4.1 跑完门禁;**没跑完不许写「已验证」**。
 
 ### 2.2 仓库与产物
 
-- 抓包 JSON、APK、安装包、截图归档、分享包 zip **一律不入库**,加进 `.gitignore`,本地留档即可。
-- 一次性探针 / 补丁脚本放 `build/tmp/` 并在同一轮改动里删掉;**禁止**把本机绝对路径、真实凭据、解密脚本写进仓库。
-- 脚本里禁止硬编码 `G:/...`、`C:/Users/...`;一律 `path.resolve(__dirname, ...)` / `os.tmpdir()` / 环境变量。
-- 纯追加的日志型文档要定期修头部状态;头部与 `git log` 冲突时以 `git log` 为准。
+- 抓包 JSON、APK、安装包、截图归档、分享 zip **一律不入库**,放 `.gitignore`。
+- 一次性探针/补丁脚本放 `build/tmp/` 并在同一轮删掉;禁止提交本机绝对路径、真实凭据、解密脚本。
+- 脚本禁止硬编码 `G:/...`、`C:/Users/...`,统一用 `path.resolve(__dirname, ...)` / `os.tmpdir()` / 环境变量。
+- 追加型日志文档定期同步头部;头部与 `git log` 冲突时以 `git log` 为准。
 
 ### 2.3 改代码
 
-- **批量字符串替换是最后手段**。必须逐处列出命中、说明为什么每处都该改,改完跑全量门禁;
-  `.dsh-acl-report/fix_n05.py` 那种 `s.replace("secrets::get(", "secrets::channel_key(")` 不许再用。
-- 大文件已经超标:`app.js` 9.1k 行、`inject.rs` 7.1k 行、`src-tauri/lib.rs` 6.4k 行、`fetch.rs` 5.2k 行。
-  **新增功能优先拆出新模块,不要继续往这几个文件里堆**;单个改动超过 300 行时先说明拆分方案。
-- 注释要写「为什么」,不要写「以前这里有个 bug」的流水账;修复完成后删掉临时性注释。
-- 删东西前先确认零引用(含 `build/`、跨端协议 `contract/`、Android、文档),并注意 `pub` 符号与 Tauri 命令注册是编译器看不见的引用。
-  参考 `docs/report/redundancy-audit-2026-11-11.md` 的二次确认方法与 11 类误报清单。
+- **批量字符串替换是最后手段**:须逐处列出命中和理由,改完跑全量门禁;禁止 `s.replace(...)` 盲替。
+- 大文件已超标(`app.js`、`inject.rs`、`src-tauri/lib.rs`、`fetch.rs` 等,实测看 `node build/check-file-size.js`)。**新功能优先拆新模块**;单次改动超 300 行先说明拆分方案(见 §7.2)。
+- 注释写「为什么」,不写修 bug 流水账;修完删临时注释。
+- 删代码前确认全仓零引用(含 `build/`、`contract/`、`android/`、文档),注意 `pub` 符号和 Tauri 命令注册是编译器看不见的引用。
+- **能交给编译器强制的就不留给约定**:状态码→文案、枚举→分支用穷举 `match` 保证漏分支编译失败(见 §8.2 `Reason`)。
 
 ### 2.4 高权限 / 敏感行为
 
-本项目会做这些事,**每一项都必须在 README 披露、可关闭、有明确触发条件**:
+以下能力**每一项都必须在 README 披露、可关闭、有明确触发条件**:
 
-- 用 `ELECTRON_RUN_AS_NODE=1` 启动其它桌面应用并读其内部存储以派生凭据密钥,超时用 `taskkill /T /F` 杀进程树;
-- 改写其它客户端(Trae / WorkBuddy / ZCode / DSH)的配置文件与 SQLite,留下备份快照
-  (**2026-11-12 起每份都用 Windows DPAPI 加密**,见 `backup_crypto.rs`;换 Windows 账户后旧快照无法解密);
+- 用 `ELECTRON_RUN_AS_NODE=1` 启动其它桌面应用并读其内部存储派生凭据密钥,超时用 `taskkill /T /F` 杀进程树;
+- 改写其它客户端(Trae / WorkBuddy / ZCode / DSH)的配置与 SQLite,留备份快照(**2026-11-12 起 Windows DPAPI 加密**,见 `app/core/src/backup_crypto.rs`;换 Windows 账户后旧快照不可解);
 - 读取并解密本机 WebView2 Cookie / 桌面端加密凭据;
 - 默认开启的每日自动签到、写注册表自启动、监听局域网的本地网关。
 
-**新增同类能力前先问用户**。不允许用「方便」「自动化」为由默认打开,也不允许把凭据、令牌、Cookie
-写进日志、配置、导出文件或 QA 数据 —— `diaglog.rs` 的脱敏白名单和 `publish.rs` 的 `crypto::seal`
-是既有防线,改动时先跑相应单测。
+**新增同类能力前先问用户**,禁止以「方便」为由默认打开。禁止把凭据、令牌、Cookie 写入日志/配置/导出/QA 数据 —— `app/core/src/diaglog.rs` 脱敏白名单和 `app/core/src/sync/publish.rs` 的 `crypto::seal` 是既有防线,改动先跑单测。
 
 ---
 
-## 3. 「恶意代码」的判定口径
+## 3. 「恶意代码」判定口径
 
-2026-11-12 全量扫描**未发现传统后门**:出网域名全部是渠道自身域名 / GitHub / 汇率 API / 官方 CDN;
-无 `eval` / `new Function` / 远程脚本加载;CSP 只放行自身;日志有脱敏;同步载荷先加密再上传;
-无凭据外发。但上面 2.4 的高权限链确实存在,且是多次自动化迭代逐渐加进来的 ——
-**它们不是后门,却同样需要逐项知情同意**。发现新的出网目标、新的凭据读取路径、新的持久化写入时,
-先当作可疑项报告,不要静默合入。
+2026-11-12 全量扫描**未发现传统后门**:出网域名全为渠道自身/GitHub/汇率 API/官方 CDN;无 `eval`/`new Function`/远程脚本;CSP 只放行自身;日志脱敏;同步先加密再传;无凭据外发。但 §2.4 高权限链同样需要逐项知情同意:发现新的出网目标、凭据读取路径或持久化写入时先当作可疑项报告,不静默合入。
 
 ---
 
-## 4. 提交前门禁(可直接复制)
+## 4. 提交前门禁与发版
+
+### 4.1 门禁清单(仓库根目录,Git Bash 可直接复制)
+
+与 `ci.yml` / `release.yml` 对齐;**不一致时以 workflow 为准并回头修本节**,新增门禁时三处一起改。
 
 ```bash
-node build/check-ipc-contract.js          # 调用/定义/注册三方比对,零依赖
-node build/check-silent-failures.js       # 空 catch 必须认领(silent: 理由)
-node build/check-file-size.js             # 文件规模棘轮,上限只许下调
-node --check app/src/app.js
-node build/check-css-forms.js             # CSS 形态门
-node build/jsdom-smoke.js                 # 需 jsdom: npm install jsdom --no-save
-node build/verify-codex-reset.js          # Codex 重置顾问独立模块冒烟（同样需 jsdom）
-cd app/core && cargo test --locked        # 用例数看输出,别写死
-cd ../src-tauri && cargo check --all-targets --locked
-cd ../.. && powershell -File build/scan-secrets.ps1   # 凭据扫描,非零退出必须停
+# 零依赖静态门:带 --self-test 的先证红,再正式检查
+node build/check-ipc-contract.js
+node build/check-silent-failures.js --self-test && node build/check-silent-failures.js
+node build/check-file-size.js --self-test && node build/check-file-size.js
+node build/check-css-forms.js --self-test && node build/check-css-forms.js
+node build/verify-expiry.js
+node build/verify-qoder-expiry.js --self-test
+for f in app/src/*.js app/src-tauri/src/google_cloud_capture.js; do node --check "$f" || echo "FAIL $f"; done
+
+# 界面冒烟:需 jsdom(npm install jsdom --no-save --no-audit --no-fund)
+node build/jsdom-smoke.js
+node build/verify-vault.js
+node build/verify-codex-reset.js
+node build/verify-google-cloud.js
+node build/verify-antigravity-capture.js
+node build/verify-gateway.js
+
+# Rust(用例数看输出,不写死)
+(cd app/core && cargo test --locked && cargo check --all-targets --locked)
+(cd app/src-tauri && cargo check --all-targets --locked)
+
+# 凭据扫描(非零退出必须停)
+powershell -NoProfile -ExecutionPolicy Bypass -File build/scan-secrets.ps1
 ```
 
-本机 GNU 工具链前置:`PATH` 含 `C:/Users/wacil/mingw64/bin`(gcc)与 `~/.cargo/bin`,
-工具链 `stable-x86_64-pc-windows-gnu`。**门禁缺依赖就如实写「未跑」,不要用别处的历史结果冒充本次验证。**
+- 本机 GNU 工具链:`PATH` 含 `C:/Users/wacil/mingw64/bin` 与 `~/.cargo/bin`,工具链 `stable-x86_64-pc-windows-gnu`。缺依赖如实写「未跑」,不拿历史结果冒充。
+- **串行执行,结论单独复跑确认**;并发假红、代理阻塞、`src-tauri` 本机无法跑 `cargo test` 见 §6.7。
 
-**发版走 CI,不要本地打包**(2026-11-12 起):同步三处版本号 → 推 main → 推 `v*` tag,
-`release.yml` 自动跑「门禁 → 构建 → 签名 → 建 release → `verify-release.js` 核验」。
-本地 `build/release-local.sh` 只在 Actions 不可用时用。完整步骤见 `RELEASE.md`。
-tag 之前**必须**先推 main —— tag 指向的 commit 不在 main 上,GitHub 生成的源码归档会与代码不一致。
+### 4.2 发版
 
-**门禁要串行跑,并单独复跑确认**:2026-11-12 把 core 编译、src-tauri 链接、jsdom 冒烟
-并行跑时,`proxy` 一个用例与 jsdom 两项因资源竞争假红,单独复跑立刻全绿。
-假红不能当回归,真红也不能当噪音 —— 结论必须是「单独跑一次仍成立」。
+- **发版走 CI**(2026-11-12 起):三处版本号同步 → **先推 main** → 再推 `v*` tag(`release.yml` 跑门禁→构建→签名→建 release→`verify-release.js`)。本地 `build/release-local.sh` 仅 Actions 不可用时使用;详见 `RELEASE.md`。tag 指向的 commit 不在 main 上会导致源码归档不一致。
+- **发版说明**:Release 正文和 `latest.json.notes` 取自发版提交正文,提交必须带说明正文。`release.yml` 在打包前按与 `verify-release.js` 相同的判据(见 `$cjk` 检查)拦截。`notes intact` 读线上 `latest.json.notes`,**只改 Release 正文不改核验结果**;修正时须同时更新 Release 正文和 `latest.json` 资产,并保留原始失败记录(v0.3.42 / v0.3.64 实测)。
 
-`src-tauri` 的 `cargo test` 二进制在本机启动即 `STATUS_ENTRYPOINT_NOT_FOUND`
-(WebView2 静态加载器链栈老问题,`PROGRESS.md` 1464 / 4340 行早有记录),
-**与业务逻辑改动无关**;CI 用 `cargo check --all-targets` 覆盖编译期,别把历史文档里
-「19 passed」当成本机可复现的结论。
+---
 
-## 5. 2026-11-12 用户裁决(不许被后续 agent 推翻)
+## 5. 用户裁决(不许被后续 agent 推翻)
 
-| 项 | 裁决 |
-|---|---|
-| 每日签到默认开启 | **保持默认开**,不要改成默认关 |
-| 可监听局域网的本地网关 | **保留**,不要改成只绑 127.0.0.1 |
-| 含明文密钥的备份快照 | **必须加密**,已用 Windows DPAPI 实现,见 `app/core/src/backup_crypto.rs` 与 `docs/report/code-governance-2026-11-12.md` 第七节 |
-| 2026-11-18 Antigravity 账号卡隐藏 | **隐藏账号卡并冻结其记录，保留当前会话识别；隐藏整个 Antigravity 分组才停止 CLI**。这是用户确认的账号卡级例外，取数继续遵守单飞、最小冷却和失败退避 |
+新裁决按日期追加;用户改口时直接改写对应行并标「按用户 YYYY-MM-DD 最新要求」。
 
-## 6. 验证不缜密的七种真实形态(2026-11-12 第二轮,逐条有案发现场)
+| 日期 | 项 | 裁决 |
+|---|---|---|
+| 2026-11-12 | 每日签到默认开启 | **保持默认开**,不改默认关 |
+| 2026-11-12 | 局域网本地网关 | **保留**,不改只绑 127.0.0.1 |
+| 2026-11-12 | 含明文密钥的备份快照 | **必须加密**(Windows DPAPI,见 `app/core/src/backup_crypto.rs` 与治理报告第七节) |
+| 2026-11-14 | 重置顾问订阅到期日 | **允许留空和清空**,详见 §8.2 |
+| 2026-11-15 | Antigravity 缩略卡 | **仅展示 Gemini 周窗与 5 小时窗**,状态点/颜色/提示同池,详见 §8.5 |
+| 2026-11-15 | 渠道卡摘要措辞 | 各模式今日消耗与积分获取摘要**移除「推算」字样** |
+| 2026-11-15 | 日期显示 | 「今天 / 明天 / 后天」优先,其余按周一开始的本地自然周显示,详见 §8.1 |
+| 2026-11-18 | Antigravity 账号卡隐藏 | **隐藏账号卡并冻结记录,保留当前会话识别;隐藏整个分组才停止 CLI**(账号卡级例外,仍遵守单飞/冷却/退避) |
+| 2026-11-18 | 网关 Responses 协议 | **Responses 只作上游选项**,客户端继续调用 Chat Completions,详见 §8.6 |
 
-> 这一节不是通用建议,是本仓库**实际发生过的**失效方式。写在这里是因为
-> 它们全都有一个共同特征:**验证做过了,结论是绿的,但绿得没有意义。**
+---
+
+## 6. 验证不缜密的七种真实形态
+
+> 均为本仓库真实踩过的「绿得没意义」案例。
 
 ### 6.1 「只测成功路径」
-
-`saveCfg()` / `saveConfigAndRefresh()` 的回滚逻辑是后补的:在此之前所有保存路径
-都只验证过"能存进去",没人验证"存不进去会怎样"。后果是用户实测「隐藏渠道点 – 恢复不动」——
-界面先把状态改了,写盘失败后既不回滚也不提示,看起来就是"点了没反应"。
-**任何写操作,验完成功必须再问一句:失败时用户看到什么?**
+`saveCfg()`/`saveConfigAndRefresh()` 的回滚与 toast 都是后补的,此前「隐藏渠道点 – 恢复不动」因写盘失败不回滚不提示。**任何写操作验完成功须再验失败时用户看到什么。**
 
 ### 6.2 「桩的默认行为是成功」
-
-`jsdom-smoke.js` 的 invoke 桩对未登记命令 `return null`,窗口对象 Proxy 把未知方法
-变成恒成功空函数。于是命令名拼错、Tauri 命令漏注册,182 项冒烟照样全绿。
-**mock 的默认值必须是"失败"或"抛出",不能是 null / 无声成功**;要用宽松桩,
-就必须另配一道从源码提取的静态门(见 `check-ipc-contract.js`)。
+`jsdom-smoke.js` 曾对未登记 invoke `return null`、窗口 Proxy 恒成功,导致命令漏注册也能全绿。**mock 默认须失败/抛出**,宽松桩必须配源码级静态门(`check-ipc-contract.js`)。mock 与 IPC 门也测不出后端新增 reason code 前端漏文案(§8.2)或服务端风控变脸(§8.3)。
 
 ### 6.3 「只测存在,不测顺序 / 状态 / 时序」
+顶栏按钮曾只断言存在不测顺序(后补 `compareDocumentPosition`),`loadCheckin` 曾因并发旧快照覆盖新结论。**加入口须问:顺序变了/并发到达会不会坏?**
+- 2026-11-14(v0.3.48):声明时立即启动的 async 块即使外层依次 await 仍会并发,冒烟须等初始化后按组调用。
+- 2026-11-14 时钟夹具:涉及缓存/需求时效的前端冒烟,固定日期数据必须配同一固定时钟(v0.3.45 曾因真实时钟跨 12h 边界连续失败)。
 
-顶栏四枚按钮的冒烟原来只断言"四枚存在且可见",顺序怎么挪都绿;后来用户要求把
-隐藏挪到最右,才补上 `compareDocumentPosition`。`loadCheckin` 的并发乱序
-(两次读晚到的旧快照盖掉新结论)是线上撞出来的,测试里从来没并发过。
-**加了新入口就问:顺序变了会不会坏?两个请求同时到会不会坏?**
-
-### 6.4 「验证脚本自己会腐烂,而且没人复核它」
-
-`verify-codex-layout.js` 在 v0.3.35 基线就必然抛 TypeError —— 它引用的 `.quota-number`
-类早已不存在。脚本躺在 `build/` 里,文档还宣称它通过过。
-**改了渲染 / CSS / 命令之后,先确认 `build/verify-*.js` 引用的选择器和命令还在。**
-破损的脚本宁可删掉,也不要留着冒充门禁。
-
-同类但更隐蔽的一种:**脚本对"前置条件不满足"的处理前后不一致**。
-`verify-release.js` 在本地没有安装包时 SKIP(合理),没有 `.sig` 时却判 FAIL ——
-而 CI 发版后本地恰好两者都没有,于是"二次确认"稳定报一个假失败(2026-11-12 v0.3.38 实测)。
-假失败比不设门禁更糟:它会训练人忽略这道门。**同一个脚本里,同一类前置缺失必须用同一种口径。**
+### 6.4 「验证脚本腐烂与前置口径不一致」
+- `verify-codex-layout.js` 曾长期引用已删的 `.quota-number` 必抛 TypeError;改 DOM/CSS 后须复核所有 `build/verify-*.js`。
+- `verify-release.js` 曾对本地缺安装包 SKIP、缺 `.sig` 却判 FAIL,CI 发版后稳定假红(v0.3.38)。**同一脚本里同类前置缺失必须用同一种口径。**
 
 ### 6.5 「门禁报错就照着改代码」
+2026-11-12 两次门禁假红:IPC 门把 `//` 注释与下一行注册项粘在一起误报 `key_source` 未注册;静默失败门用不存在的 `m.end` 算出 NaN 误报 115 处空 catch。**门禁红了先拿已知正确样本证伪门禁自己。**
 
-2026-11-12 出现过两次,方向相反但根因相同:
+### 6.6 「门禁没有自检与哨兵串扰」
+- 新门禁必须能证明自己会变红(`--self-test` / 哨兵命令),坏样本要贴近真实失败(缩略漏行/单列/异常卡高、工作区用整屏替代、`--sync-sentinel`)。
+- 2026-11-17 哨兵串扰:新哨兵环境变量会被已有自检子进程继承,曾让 Antigravity 坏样本先触发签到哨兵失败。新增哨兵须核对**具体功能的 FAIL 行**,前置控件缺失时保留失败断言并跳过依赖交互,避免 TypeError 盖住定位。
 
-| 次数 | 现象 | 真实原因 | 如果照改会怎样 |
-|---|---|---|---|
-| 第一次 | IPC 门禁报 `key_source` 未注册 | 注册表里那行上一行是 `//` 注释,按逗号切分把注释和命令粘成一项丢了 | 会去给一个**已经注册**的命令补注册,制造重复注册 |
-| 第二次 | 静默失败门禁报 115 处空 catch | JS 的正则匹配结果**没有** `.end`(那是 .NET 的 API),`m.end - 1` 得 NaN,块体全取成空串 | 会去给 100 多处**本来有处理逻辑**的 catch 加提示,把界面刷满 toast |
+### 6.7 「在错误的机器 / 并行度 / 环境下取结论」
+- `src-tauri` 的 `cargo test` 本机启动即 `STATUS_ENTRYPOINT_NOT_FOUND`(WebView2 静态加载器老问题,见 `PROGRESS.md`),与业务无关;本机/CI 均用 `cargo check --all-targets`,别拿历史「19 passed」当基线。
+- 并发跑 core + src-tauri + jsdom 曾导致 `proxy` 和 jsdom 资源竞争假红:**门禁须串行,结论须单独复跑一次仍成立**。
+- `proxy` 测试服务器监听套接字非阻塞,Windows 上 accept 连接可能继承非阻塞:夹具须改回阻塞并设读超时,延迟请求回归应在旧夹具上变红。
+- 2026-11-14:`proxy_changes_refresh_the_client_and_direct_groups_bypass_it` 并发测试时可能 10035/WouldBlock 或 10054/ConnectionReset;遇同形失败保留原始记录,单测及 `cargo test --locked -- --test-threads=1` 复核后仍需全量确认。
+- 2026-11-15:存在 `HTTP_PROXY` 且未设 `NO_PROXY` 时,`custom_channels_fetch_in_parallel_keep_order_and_skip_hidden` 阻塞在本地回环夹具;仅为验证进程设 `NO_PROXY=127.0.0.1,localhost,::1` 后通过。
+- 2026-11-16 全局状态:模块级 `AtomicU64` 修订号在 `cargo test` 并行下会被同模块用例推进,致 Google Cloud 缓存「5 秒不重读」随机红(v0.3.59)。这类缓存必须做可注入口(`LedgerCache::get_at`),测试只驱动注入值,另用 `revision() > before` 验真实写入。静态缓存/全局计数/进程单例均属同风险面。
+- 2026-11-18:`spawnSync` 超时是防挂死护栏而非断言。`build/verify-antigravity-capture.js` 原 10s 撞上 CI 的 `powershell.exe` 冷启动致 v0.3.61/v0.3.62 首轮 CI 红,现改 30s 并在失败输出带 `status`/`signal`/`error`/截断 `stderr`。
 
-**门禁红了先证伪门禁自己。** 具体做法:把已知正确的样本丢进去,它必须是绿的;
-做不到就说明门禁坏了,不是代码坏了。
+---
 
-### 6.6 「门禁没有自检」
-
-上面两次假红之所以能被快速识别,是因为新门禁都带 `--self-test`。
-不带自检的门禁只能用"当前代码恰好绿"来证明自己,而"当前代码恰好绿"同样可以由
-"门禁什么都没检查"造成。
-**新门禁必须能证明自己会变红**(`check-ipc-contract.js` 的哨兵命令、
-`check-silent-failures.js` / `check-file-size.js` 的 `--self-test` 都是这个模式)。
-
-### 6.7 「在错误的机器 / 错误的并行度上取结论」
-
-- `src-tauri` 的 `cargo test` 二进制在本机启动即 `STATUS_ENTRYPOINT_NOT_FOUND`,
-  历史文档却长期写着「19 passed」。**换机器跑不通的结论不能当基线。**
-- 并行跑 core 编译 + src-tauri 链接 + jsdom 冒烟时,`proxy` 一个用例与 jsdom 两项
-  因资源竞争假红;单独复跑全绿。**门禁要串行,结论要单独复跑一次。**
-- `proxy` 测试服务器的监听套接字为非阻塞;Windows 上 accept 后的连接也可能继承非阻塞状态。
-  测试夹具必须把接收的连接改回阻塞并设置读取超时,延迟发送请求的回归用例应在旧夹具上变红。
-- 2026-11-15 复核补充：环境存在 HTTP_PROXY 且未设置 NO_PROXY 时，`custom_channels_fetch_in_parallel_keep_order_and_skip_hidden` 曾阻塞在本地 HTTP 夹具。仅对验证进程设置 `NO_PROXY=127.0.0.1,localhost,::1` 后，独立用例及全量复跑通过。遇到同形阻塞先核对回环请求的代理路径，并保留原始中断记录。
-- 2026-11-18 补充：`spawnSync` 的超时是**防挂死**的护栏,不是断言。`build/verify-antigravity-capture.js` 原来用 10 秒,CI 首次拉起 `powershell.exe` 的冷启动正好撞上,导致 v0.3.61 和 v0.3.62 的首轮 main CI 各红一次(同一提交的发版流程与本机复跑都绿)。现统一提到 30 秒,并在失败信息里带上 `status` / `signal` / `error` / 截断后的 `stderr`。超时值要按最慢环境的冷启动定,超时红要能和真断言红区分开。
-
-## 7. 两条棘轮(2026-11-12 新增,不要绕过)
-
-2026-11-14 签到统计补充：前端签到能力名单必须从 `checkin_state` 返回值生成，包含已关闭的渠道以便重新开启；禁止另写固定渠道名单。签到中心、渠道卡控制与首页统计须覆盖后端 `CHECKINS` 的全部定义，新增渠道时用动态提取名单的回归用例核对。
-
-2026-11-14 时钟夹具补充：涉及缓存有效期或需求时效的前端冒烟，固定日期数据必须配同一固定时钟；不能把早先通过当成晚些时候仍有效的结论。v0.3.45 发布曾因顾问夹具跨过真实时钟十二小时边界而连续失败，未产生安装包。
-
-2026-11-13 Google Cloud 赠金接入补充：赠金表中的已过期记录仍可能显示正的剩余金额，
-必须先按状态排除再汇总。网页读取需检查表格加载、过滤与分页，未知结构保留旧快照并报错。
-手填日期按结算账号与赠金 ID 隔离，日期到期只改变到期提示，余额仍保留上游最近上报值待刷新核对。
-独立前端模块的 IPC 同样纳入全目录扫描，避免门禁只检查 app.js 而遗漏新模块。
-
-2026-11-13 重置顾问评审补充：时间敏感的建议缓存必须包含时钟失效，不能只看快照更新时间；已过期项目不能降级成“到期日未知”继续参与供给模拟。账号隔离除了存储键，还必须检查前端缓存与迟到写请求的账号指纹。证据见 `docs/report/codex-reset-review-2026-11-13.md`。
-
-2026-11-13 重置顾问二轮补充：判定矩阵新增 reason code 时文案表必须同步——实机曾因 `reason_copy` 漏 `deadline_before_reset` 分支，前端永远显示「暂时无法判断」，而 mock 桩与 IPC 门禁都测不出这类漂移。已改为穷举 `Reason` enum，文案表漏分支编译失败；能给编译器强制的就不留给约定。「今天要用」按本地当天 23:59:59 界定（`AdviceInput.today_end_at`），不按 24 小时近似；前端建议命令失败显示「建议暂时不可用」，与后端「无法判断」结论区分。证据见 `docs/report/codex-reset-review-2026-11-13.md` 二轮章节。
-
-v0.3.42 发布核验补充：`verify-release.js` 的 `notes intact` 检查读取线上 `latest.json.notes`，单独编辑 GitHub Release 正文不会改变检查结果。修正发布说明时需同步核对更新清单，并记录原始失败与修正后的实测结果，不能把原 run 写成全绿。
-
-2026-11-14 豆包签到移除:平台 2026-10-24 起对活动接口收紧,挂件 claim 五次全部
-710010702「系统错误」,连官方客户端手动领取都报错 —— 直连伪接口是在跟风控打追赶战,
-依赖它的功能要有「平台一收紧就下线」的预案,而不是无限堆修补。跟客户端版本联动的参数
-抓包钉死一个月就腐烂(core/src/doubao_client.rs 的运行时探测是这次的落地,带 Golden
-双向验证)。门禁测不出服务端变脸:mock 全绿不妨碍平台开始拒人。渠道保留取数,完整复盘见
-docs/report/doubao-checkin-710010702-2026-11-14.md。
+## 7. 两条棘轮(不要绕过)
 
 ### 7.1 静默失败:空 catch 必须认领
-
-2026-11-14 v0.3.48 验收复核补充：声明时立即启动的 async 块即使外层依次 await 仍会并发，界面冒烟须等待初始化后按组调用。日期编辑期间的分钟重算与详情刷新必须保留输入节点、焦点和草稿，回归夹具须显示真实可聚焦容器。Tauri `destroy()` 仅异步派发，同名窗口重建必须等待标签释放，并使旧 session 回调失效。窗口尺寸核验须同时记录字号倍率、屏幕钳制与实际 scaleFactor，不能直接假定显示器缩放。
-
-2026-11-14 顾问复核补充：临近重置的省卡规则也必须检查「今天要用」的当天截止，避免让用户等到次日。卡查询失败保留的旧库存只能用于展示，不能据此建议立即用卡。跨日和读失败测试须分别验证判定结果。
-
-2026-11-14 可选日期补充（按用户最新要求更新）：重置顾问的订阅到期日允许留空和清空，空值时按最后一张有效卡的到期时间规划，各卡有效期仍逐张检查，界面明确假设订阅持续有效。不能把卡到期日写回订阅字段。缺失有效日期或查询失败不构造截止。清空沿用 `clearSubEnd` 协议，必须验证持久状态、失败回滚、有/无日期、跨到期时刻重算。
-
-2026-11-14 验证补充：`proxy_changes_refresh_the_client_and_direct_groups_bypass_it` 在全量测试内部并发时仍可能报 10035/WouldBlock 和 10054/ConnectionReset；本轮单测及 `cargo test --locked -- --test-threads=1` 全量通过。遇到同形失败需独立复核并保留原始失败，单测通过后仍需全量确认。
-
-2026-11-14 独立规则复核补充：明确的「现在就要」优先于一小时省卡偏好；「今天要用」先判断所有已耗尽窗口能否在期限内恢复，卡临期只提示风险。周额度与五小时百分比分别处理，完整重置涵盖范围按套餐核对，已确认不符合手动兑换门槛时不能输出 NOW。当前长期模拟仍是周额度供给估算。当前规则见 `docs/report/codex-reset-policy-review-2026-11-14.md`，旧 v3 记录不能覆盖本次用户要求。
-
-`build/check-silent-failures.js` 扫前端所有 `catch {}` / `.catch(() => {})`,
-块内没有任何语句的必须带 `silent: <理由>`:
-
-```js
-try { await invoke("save_window_pos", { x, y }); }
-catch (e) { /* silent: 位置存不下只影响下次启动的落点 */ }
-```
-
-写操作(尤其是 `set_config` / `set_pin` / `save_window_pos` / `skip_update_version`
-这类落盘命令)**不该用 silent** —— 按 `saveCfg()` 范式:回滚内存状态 + `showToast`。
-`silent` 只用于"读失败就降级、没有用户需要知道的状态"。
+`build/check-silent-failures.js` 扫描前端所有空 `catch {}`/`.catch(() => {})`,无语句块须标 `/* silent: <理由> */`。落盘写操作(`set_config`/`set_pin`/`save_window_pos`/`skip_update_version` 等)**不该用 silent**,按 `saveCfg()` 回滚 + `showToast`;`silent` 仅用于读失败降级。
 
 ### 7.2 文件规模:上限只许下调
+`build/check-file-size.js` 为超标文件钉了物理行数预算(含空行;名单与上限以脚本为准,勿用 PowerShell `Measure-Object -Line` 核对)。**清理代码后须同步下调上限**;新功能被拦时拆新模块,确需上调须在脚本注释写理由。
 
-2026-11-15 缩略布局补充：缩略专用名称和状态只在对应布局生成。仅用 CSS 隐藏重复文案仍会进入 textContent 与基于 HTML 的文案唯一性断言，本轮首轮冒烟即检出重复。卡片容量必须按真实列表高度计算，扣除失败横幅、签到提示条与间距；同时检查末卡可见和网格列数，并用漏行、改成单列及异常卡高坏样本验证断言。
+---
 
-2026-11-15 用户裁决补充：Antigravity 缩略卡仅展示 Gemini 周窗与 5 小时窗。限制为单个池的展示时，状态点、颜色和辅助提示必须采用同一池范围，不能把 Claude/GPT 的全局限流混进 Gemini 缩略卡。各模式渠道卡上的今日消耗与积分获取摘要移除「推算」字样。
+## 8. 按模块的已知陷阱
 
-2026-11-15 日期显示补充：按用户最新要求，积分到期优先显示「明天 / 后天」，其余按周一开始的本地自然周显示「本周X / 下周X / 周X」。Codex 与 Antigravity 周重置日期必须取各自周窗口，Antigravity 取 Gemini 周池，缺失时间不借用短窗时间。跨日后的可见日期和辅助提示均须重算，不能仅等取数刷新。回归使用固定时钟覆盖周日到周一、跨月跨年、闰日及夏令时，避免把一周近似为固定毫秒长度。
+> 改到对应模块前先读本节,回归须覆盖所列边界。
 
-2026-11-18 工作区适配补充：面板尺寸和落点都以 Tauri 显示器工作区为准。普通打开、贴边展开和解除贴边共用面板尺寸计算；同 DPI 跨屏也在停稳后按新工作区复算。验证分别记录工作区和整屏物理矩形、窗口边界、实际缩放、字号倍率及底栏和列表的几何位置。回归应注入整屏代替工作区的坏样本。
+### 8.1 日期、时钟与缓存时效
+- 2026-11-13:时间敏感缓存必须包含**时钟失效**,不能只看快照时间;已过期项目不能降级成「到期日未知」参与计算。
+- 2026-11-15/18 日期显示(§5):积分卡与周重置共用格式,优先「今天 / 明天 / 后天」,其余按周一开始的本地自然周显示「本周X / 下周X / 周X」,完整提示保留星期和时刻(11-18 曾出现当天显示「本周三」)。
+- Codex/Antigravity 周重置取各自周窗(Antigravity 取 Gemini 周池),缺失不借短窗;跨日须重算可见日期与提示。
+- 回归配固定时钟,覆盖跨本地午夜、周日到周一、跨月跨年、闰日、夏令时及三种布局+首页摘要;**勿把一周近似为固定毫秒**。
 
-2026-11-18 日期显示修正：积分卡与周重置共用的日期格式须优先处理「今天 / 明天 / 后天」。实机 WorkBuddy 卡曾将当天到期显示为「本周三」，与首页摘要的「今天」不一致。回归固定到期时刻跨过本地午夜，检查三种布局与首页摘要，并保留完整日期提示里的星期和时刻。
+### 8.2 Codex 重置顾问
+规则以 `docs/report/codex-reset-policy-review-2026-11-14.md` 为准(旧 v3 不得覆盖);历史见 `docs/report/codex-reset-review-2026-11-13.md`。
+- 账号隔离须同时检查存储键、前端缓存与迟到写请求的账号指纹。
+- reason code→文案曾漏 `deadline_before_reset` 致恒显「暂时无法判断」,已改穷举 `Reason` enum 编译期防漏;前端命令失败显「建议暂时不可用」,与后端「无法判断」区分。
+- 「今天要用」按本地当天 23:59:59(`AdviceInput.today_end_at`),不按 24h 近似;临近重置省卡规则也须检查此截止。
+- 明确「现在就要」优先于 1 小时省卡偏好;「今天要用」先判已耗尽窗口能否在期限内恢复,卡临期只提示风险。
+- 周额度与 5h 百分比分别处理,完整重置范围按套餐核对,不符手动兑换门槛不输出 NOW;长期模拟仍为周额度供给估算。
+- 卡查询失败保留的旧库存仅展示,不据此建议立即用卡;跨日与读失败分别验判定。
+- 订阅到期日(§5):允许留空/清空,空值按最后有效卡到期规划,逐张检查卡有效期,界面明示假设订阅持续有效,禁将卡到期写回订阅字段,缺日期或查询失败不构造截止;清空走 `clearSubEnd`,验持久/失败回滚/有或无日期/跨到期重算。
+- 日期编辑期间的分钟重算与详情刷新须保留输入节点、焦点和草稿,回归用真实可聚焦容器(v0.3.48)。
 
-2026-11-18 临期筛选补充：Qoder 的账户额度到期与逐笔积分是不同口径。账户额度在首页窗口内时必须可筛选，但不能把账户余额计入逐笔临期金额；两类事件按实际时间排序。网页明细失败后沿用的列表只供查看，必须用结构化 `expiryStale` 标记，不能因旧文案或 `expiryComplete` 推断会话仍有效，也不能算作当前确认的金额。自然日窗口、柱图和筛选共用边界，覆盖第八日零点、夏令时、过期点、单独账户及混合临期；登录状态需区分平台拒绝、结构未知、网络失败和旧快照。Qoder 网页会话本身可能在升级前被平台拒绝，排查升级影响须对照诊断时间及进程内缓存生命周期。
+### 8.3 签到
+- 2026-11-14:前端签到能力名单必须从 `checkin_state` 动态生成(含已关闭渠道以便重开),禁写固定名单;签到中心/渠道卡/首页统计须覆盖后端 `CHECKINS` 全部定义,回归动态提取核对。
+- 2026-11-14 豆包签到移除:平台收紧致 claim 全报 710010702,直连伪接口要有「平台收紧即下线」预案;与客户端版本联动参数禁抓包写死(`app/core/src/doubao_client.rs` 运行时探测 + Golden 双向验证)。渠道保留取数,复盘见 `docs/report/doubao-checkin-710010702-2026-11-14.md`。
 
-`build/check-file-size.js` 给 10 个已超标文件钉了行数预算(约当前值 +1%)。
-**清理掉代码后要把上限一起调下来**,否则清理出来的空间会被下一轮改动吃回去 ——
-这正是 2026-11-11 清理完、11-12 又长回原样(425 → 431 行 diff)的原因。
-预算以门禁输出的物理行数为准，包含空行。PowerShell 的 `Measure-Object -Line` 不适合核对这道门。
+### 8.4 面板布局与窗口
+- 2026-11-14:Tauri `destroy()` 异步派发,同名窗口重建须等标签释放并使旧 session 回调失效。
+- 2026-11-15 缩略布局:缩略专用名称/状态只在缩略生成(CSS 隐藏仍入 `textContent` 与 HTML 唯一性断言)。卡片容量按真实列表高度扣失败横幅、签到条、间距计算,检末卡可见与列数,用漏行/单列/异常卡高坏样本验断言。
+- 2026-11-18 工作区适配:尺寸与落点以 Tauri 显示器**工作区**为准;普通打开/贴边展开/解除贴边共用计算,同 DPI 跨屏停稳后复算。核验记录工作区与整屏物理矩形、窗口边界、实际 `scaleFactor`、字号倍率、屏幕钳制及底栏/列表几何位置,勿假定缩放;坏样本用整屏替代工作区。
 
-新增功能写在 `app.js` / `inject.rs` / `lib.rs` / `fetch.rs` 里会被这道门拦下。
-拦下时的正确做法是**拆新模块**,不是上调预算;确需上调,理由写在
-`check-file-size.js` 的注释里(会被 review 看到)。
+### 8.5 Antigravity
+- 2026-11-15 缩略卡(§5):仅 Gemini 周窗与 5h 窗,状态点/颜色/提示同池,不混入 Claude/GPT 限流。
+- 2026-11-17 多账号:`/usage` 缺账号身份,禁按 CLI 路径或额度推断;身份与配额走官方 `statusLine` 同回调,邮箱只在回调内生成指纹。
+- `-p` 模式不触发回调,Windows 用临时 ConPTY + 单次 `--settings`;回调命令用系统 PowerShell UTF-16 `EncodedCommand`,避免 `cmd /c` 引号超时。
+- 进程恢复运行前入 kill-on-close Job Object,ConPTY 关闭期间继续排空输出;系统 `cmd.exe` 路径逐段 join 防正斜杠被当开关,回归覆盖空格/`&`/`!`。
+- 成功与失败共用冷却,时钟用注入值测试;账号独立快照/卡片/备注/隐藏/排序,越过重置点留原余额提示待刷新;隐藏行为按 §5(2026-11-18)。断言覆盖合并、错归属、敏感字段泄露、保存失败。
 
-### 7.3 全局状态与并行测试
+### 8.6 本地网关
+- 2026-11-18 操作状态:v0.3.63 下架重绘后只解禁旧节点致按钮恒灰。异步开始/重绘/结束须对**当前控件**同步忙碌状态,仅持锁处理器可释放;回归覆盖下架留草稿再上架、写失败重试、复制先完而下架仍持锁。
+- 2026-11-18 协议(§5):模型列表与推理接口独立,仅 Responses 上游可手动模型上架;Responses 仅作上游选项,客户端继续 Chat Completions(旧配置默认)。回归在同一次回环 HTTP 核对上下游路径和载荷:裸模型 ID、工具结果按 call ID 回传、流式工具索引、用量、断流、共用鉴权。
 
-2026-11-19 Windows WebView2 卡死源于 Tauri/Wry 的同步 Cookie 读取在界面线程开启嵌套消息循环。实机抓栈时，循环内重入的导航回调等在 Tauri 的 WebView 注册表锁上，界面线程无法返回。工作线程外层超时无法解开这个等待。Windows 网页会话读取和清理统一走 `webview_cookies.rs`，界面线程注册 `GetCookies` 回调后立即返回，只有工作线程等待结果。清理保留 WebView2 原始域名的前导点，按名称、域名和路径去重，读回确认删除后才报告成功。原生回归用隔离 profile 和合成 Cookie，正常路径须通过，`--sync-sentinel` 须在时序断言处失败。原生 example 须像 Tauri 应用 bin 一样链入 Common Controls v6 manifest，Windows 在启动时才能找到 `TaskDialogIndirect`。
+### 8.7 Windows WebView2 网页会话
+- 2026-11-19 卡死:Tauri/Wry 同步 Cookie 读取在 UI 线程开嵌套消息循环,重入导航回调等 WebView 注册表锁致卡死,工作线程超时解不开。
+- 读写与清理统一走 `app/src-tauri/src/webview_cookies.rs`:UI 线程注册 `GetCookies` 回调即返回,工作线程等结果;清理保留前导点、按名/域/路径去重,**读回确认删除后才成功**。
+- 原生回归用隔离 profile + 合成 Cookie,正常须过、`--sync-sentinel` 须在时序断言失败;原生 example 须链入 Common Controls v6 manifest 以找到 `TaskDialogIndirect`。
 
-2026-11-18 网关操作补充：v0.3.63 下架成功后重绘按钮，操作结束却只解禁了重绘前的节点，导致上架、停止网关等按钮仍灰。异步操作开始、重绘及结束都要对当前控件同步忙碌状态；只有取得操作锁的处理器可以释放它。回归须覆盖下架成功后保留草稿并直接上架、写入失败仍可重试，以及复制地址先结束时下架仍持有锁。
+### 8.8 Google Cloud 赠金
+- 2026-11-13:已过期记录仍可能带正剩余金额,须先按状态排除再汇总;网页读取检表格加载/过滤/分页,未知结构留旧快照并报错。
+- 手填日期按结算账号+赠金 ID 隔离,到期只改提示,余额留上游最近值待核对。
+- 独立前端模块 IPC 纳入全目录扫描,避免漏扫;账本缓存修订号并行陷阱见 §6.7。
 
-2026-11-18 网关协议补充：模型列表与推理是不同接口，只有 Responses 的上游可通过手动模型上架。用户确认 Responses 只作为上游选项，客户端继续调用 Chat Completions。回归须在同一次回环 HTTP 交互核对上下游各自的路径和载荷，覆盖裸模型 ID、工具结果按 call ID 回传、流式工具索引、用量、断流与共用鉴权。旧配置默认 Chat Completions。
-
-2026-11-17 Antigravity 多账号补充：`/usage` 实测缺少账号身份，禁止用 CLI 路径或额度差异推断账号。身份与配额采用官方 `statusLine` 同一回调，邮箱只在回调内生成指纹。`-p` 模式实测不触发回调，Windows 使用临时 ConPTY 和单次 `--settings`；回调命令使用系统 PowerShell 的 UTF-16 EncodedCommand，避免 `cmd /c` 多层引号导致静默超时。进程必须在恢复运行前进入 kill-on-close Job Object，ConPTY 关闭期间继续排空输出。成功和失败共用冷却，缓存时钟用注入值测试。账号独立快照、卡片、备注、隐藏和排序，旧记录越过重置点保留原余额并提示待刷新。2026-11-18 用户已裁决隐藏账号卡冻结记录并保留当前会话识别，隐藏整个分组才停止 CLI，见第 5 节。新增断言须覆盖账号合并、错归属、回调敏感字段泄露和保存失败。系统 cmd.exe 路径逐段 join，避免正斜杠被其命令行解析器当作开关；启动兼容回归覆盖路径中的空格、& 与 !。
-
-2026-11-17 哨兵串扰补充：新哨兵环境变量会被已有自检子进程继承，曾导致 Antigravity 坏样本先触发「签到哨兵自检失败」。新增哨兵必须核对具体功能的 FAIL 行，不能只看非零退出；前置控件缺失时保留已失败的结构断言并跳过依赖交互，避免 TypeError 覆盖真正的失败定位。
-
-2026-11-16 Google Cloud 账本缓存补充：模块级 `AtomicU64` 修订号在 `cargo test` 默认并行下会被同模块其它用例推进，导致「稳态 5 秒内不重读」的断言随机变红（v0.3.59 首轮全量实测 1/575 失败，单独跑该模块必绿）。验证这类缓存失效必须把修订号做成可注入口（`LedgerCache::get_at`），测试只驱动注入值；真实写入是否推进修订号另用一次 `revision() > before` 断言。Rust 单测里的全局计数器、静态缓存、进程级单例都属于同一风险面：不能用「这次并行度下恰好绿」当作正确性证据。
-
-2026-11-18 发版说明补充：Release 正文与 `latest.json.notes` 直接取自发版提交信息，发版提交必须带说明正文。v0.3.64 只写标题，发布后 `verify-release.js` 的 `notes intact` 因正文仅 68 字符 / 13 个中文字符判 FAIL；`release.yml` 现在打包前按同一判据（正文至少 20 个中文字符）拦截。修正说明时必须同时改 GitHub Release 正文和 `latest.json` 资产，只改 Release 正文不会改变核验结果。
-
+### 8.9 Qoder 临期
+- 2026-11-18:账户额度到期与逐笔积分口径不同:账户额度在窗口内可筛选,但不计入逐笔临期金额,两类按实际时间排序。
+- 网页明细失败沿用的列表仅供查看,须用结构化 `expiryStale` 标记,禁凭旧文案或 `expiryComplete` 推断会话有效或计入确认金额。
+- 自然日窗口/柱图/筛选共用边界(第八日零点、夏令时、过期点、单账户、混合临期);登录态区分平台拒绝/结构未知/网络失败/旧快照,排查升级影响对照诊断时间与缓存生命周期。
