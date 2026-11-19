@@ -140,7 +140,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
               footSlack: Math.round(foot.querySelector('.spacer').getBoundingClientRect().width),
               buttonsSame: Math.abs(settings.width - exit.width) <= 1
                 && Math.abs(settings.height - exit.height) <= 1
-                && settings.height >= 31 * u && settings.width >= 55 * u,
+                && settings.height >= 14 * u && settings.width >= 24 * u,
               buttonsStyle: ks.backgroundColor === qs.backgroundColor
                 && ks.borderColor === qs.borderColor && ks.fontSize === qs.fontSize,
             });

@@ -5520,3 +5520,9 @@ src-tauri `cargo check --all-targets --locked` exit 0;
 ## 2026-11-19 v0.3.66 发布结果
 
 - tag `v0.3.66` 指向 `5ddccf2`，该提交先推送到 `main`。main CI `44442091013` 与桌面发�?run `44442099550` 全部通过。Release 于北京时�?2026-11-19 10:27:09（`2026-11-19T02:27:09Z`）公开发布，非 draft / prerelease�?- 三件套齐全：安装�?`Grandettoken_0.3.66_x64-setup.exe` 6,088,391 字节，本机匿名下载回�?SHA-256 `0486d1082325375ef8d6be46a4adee6976435ac2e09a5655ace191170aeb39f7`；签�?`.sig` 444 字节；更新清�?`latest.json` 1,270 字节（notes 291 字符 / 127 中文字符�? 替换字符）。固定更新端点返�?`0.3.66`�?- 本机 `node --use-env-proxy build/verify-release.js` 二次核验 PASS；本�?`.sig` 与安装包两项按既有口�?SKIP，签名逐字比对�?CI 端完成�?- 待验收：安装版在 Windows 上的无响应问题是否彻底改善，以及网页会话读取、清理和取数链路的真实表现�?
+
+## 2026-11-19 底栏设置与退出按钮统一尺寸（工作区�?
+- 底栏「设置」和「退出」改为与左侧布局切换按钮同尺寸、同样式：取�?56u 最小宽度与 32u 高度，改�?3u/8u 内边距�?2u 字号�?px 圆角、透明背景，间距保持不变�?- 回归：`jsdom-smoke.js` 仍断言两者类名一致且设置不带主按钮类；`verify-settings-entry.js` 的几何断言同步为小按钮尺寸（高度至�?14u、宽度至�?24u）并继续检查底栏零溢出�?- 静态四门、前端语法、jsdom 278/278 通过；`verify-settings-entry.js` 依赖真实窗口 CDP，本轮未运行�?
+## 2026-11-19 v0.3.67 发版验证
+
+- 桌面版本号三处同步至 0.3.67。本版调整底栏「设置」和「退出」按钮尺寸与样式，使其与左侧布局切换按钮保持统一�?- 本机串行通过静态四门及自检、全部前�?JS 语法、jsdom 278/278、临期与 Qoder 门禁、密钥箱 / Codex 重置顾问 / Google Cloud / Antigravity / 网关冒烟、core `cargo test --locked -- --test-threads=1`�?87 passed / 10 ignored + `sync_fixtures` 6 passed）、`app/src-tauri` `cargo fetch --locked` �?`cargo check --all-targets --locked`、凭据扫�?CLEAN�?
