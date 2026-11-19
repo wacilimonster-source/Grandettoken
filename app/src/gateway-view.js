@@ -14,6 +14,8 @@
   let GW_TEST_RUN_ID = 0;
   let GW_DIAGS = [];
   let GW_UI_WIRED = false;
+  const UI = createGatewayUiState();
+  let GW_SYNC_LISTENER = null;
 
   const byId = (id) => document.getElementById(id);
   const escHtml = (v) =>
@@ -29,6 +31,12 @@
     box.querySelectorAll("[data-gw-exclusive]").forEach((button) => {
       button.disabled = GW_BUSY;
     });
+  }
+
+  async function writeGateway(work) {
+    UI.beginWrite();
+    try { return await work(); }
+    finally { UI.endWrite(); }
   }
 
   function testButtonLabel() {
@@ -160,22 +168,73 @@
     if (snap.scrollTop > 0) box.scrollTop = snap.scrollTop;
   }
 
-  async function refreshGatewayData(preserveAddDraft) {
+  async function refreshDiagnostics() {
+    const ticket = UI.read("diag");
+    try {
+      const diags = await invoke("gateway_diagnostics");
+      if (!UI.current("diag", ticket)) return;
+      GW_DIAGS = Array.isArray(diags) ? diags : [];
+      renderDiagnostics(); // diagnostic-only
+    } catch (err) {
+      if (UI.current("diag", ticket)) notify(`读取诊断失败：${String(err)}`, true);
+    }
+  }
+
+  async function clearDiagnostics() {
+    UI.beginDiagWrite();
+    try {
+      await invoke("gateway_clear_diagnostics");
+      GW_DIAGS = [];
+      renderDiagnostics();
+    } finally {
+      UI.endDiagWrite();
+    }
+  }
+
+  async function refreshGatewayData(options = {}) {
     const box = byId("gatewayBox");
     if (!box) return;
-    const snap = snapshotOpenState(box);
-    const draft = preserveAddDraft ? captureAddDraft() : null;
+    const ticket = UI.read("state");
+    const diagnostics = refreshDiagnostics();
     try {
-      const [status, diags] = await Promise.all([
-        invoke("gateway_status"),
-        invoke("gateway_diagnostics").catch(() => []),
-      ]);
+      const status = await invoke("gateway_status");
+      if (!UI.current("state", ticket)) return;
       GW = status;
-      GW_DIAGS = Array.isArray(diags) ? diags : [];
-      renderGateway(snap, draft);
+      UI.sync(status.syncState);
+      const snap = snapshotOpenState(box);
+      const uiSnap = UI.snapshot(box);
+      const clearAdd = options.clearAdd && !UI.hasDirty(box.querySelector('[data-gw-detail="add-channel"]'));
+      if (clearAdd) {
+        snap.openSet.delete("add-channel");
+        snap.openSet.delete("add-adv");
+      }
+      renderGateway(snap, clearAdd ? null : captureAddDraft(), uiSnap);
     } catch (e) {
-      box.innerHTML = `<div class="empty">读取网关失败：${escHtml(String(e))}</div>`;
+      if (!UI.current("state", ticket)) return;
+      if (GW) notify(`读取网关失败：${String(e)}`, true);
+      else box.innerHTML = `<div class="empty">读取网关失败：${escHtml(String(e))}</div>`;
+    } finally {
+      await diagnostics;
     }
+  }
+
+  function renderSyncStatus() {
+    const el = byId("gatewayBox")?.querySelector("[data-gw-sync-status]");
+    if (!el) return;
+    const sync = UI.syncState();
+    el.hidden = !sync;
+    el.className = sync?.error ? "gw-error" : "gw-footnote";
+    el.textContent = sync?.error ? `后台同步失败：${sync.error}` : sync?.pending ? "后台同步中…" : "后台同步已完成";
+  }
+
+  async function listenGatewaySync() {
+    if (!GW_SYNC_LISTENER) GW_SYNC_LISTENER = listen("gateway-sync-status", (event) => {
+      if (UI.sync(event.payload)) renderSyncStatus();
+    }).catch((err) => {
+      GW_SYNC_LISTENER = null;
+      notify(`监听网关同步状态失败：${String(err)}`, true);
+    });
+    await GW_SYNC_LISTENER;
   }
 
   function captureAddDraft() {
@@ -213,8 +272,8 @@
     const avail = c.availableModels || [];
     const allowedSet = c.allowedModels ? new Set(c.allowedModels) : null;
     const enabledCount = avail.filter((m) => !allowedSet || allowedSet.has(m)).length;
-    const filter = (GW_MODEL_FILTERS[id] || "").toLowerCase();
-    const visibleModels = avail.filter((m) => !filter || m.toLowerCase().includes(filter));
+    const filter = (GW_MODEL_FILTERS[id] || "").trim().toLowerCase();
+    const hasMatches = avail.some((m) => !filter || m.toLowerCase().includes(filter));
     const statusText = c.stale
       ? "待同步"
       : c.lastStatus === "error"
@@ -283,18 +342,11 @@
               </div>
             </div>
             <div class="gw-model-checklist">
-              ${
-                visibleModels.length
-                  ? visibleModels
-                      .map(
-                        (m) => `<label class="gw-model-check">
-                          <input type="checkbox" data-gw-model="${escHtml(id)}" value="${escHtml(m)}" ${!allowedSet || allowedSet.has(m) ? "checked" : ""}>
-                          <span>${escHtml(m)}</span>
-                        </label>`
-                      )
-                      .join("")
-                  : `<div class="gw-empty-note">${avail.length ? "没有匹配的模型" : "暂无模型，可在下方「高级选项」补充手动模型"}</div>`
-              }
+              ${avail.map((m) => `<label class="gw-model-check" style="display:${!filter || m.toLowerCase().includes(filter) ? "" : "none"}">
+                <input type="checkbox" data-gw-model="${escHtml(id)}" value="${escHtml(m)}" ${!allowedSet || allowedSet.has(m) ? "checked" : ""}>
+                <span>${escHtml(m)}</span>
+              </label>`).join("")}
+              <div class="gw-empty-note" data-gw-model-empty ${hasMatches ? "hidden" : ""}>${avail.length ? "没有匹配的模型" : "暂无模型，可在下方「高级选项」补充手动模型"}</div>
             </div>
           </div>
           <details class="gw-subdetails" data-gw-detail="ch-adv-${escHtml(id)}">
@@ -541,9 +593,24 @@
     </section>`;
   }
 
-  function renderGateway(snap, draft) {
+  function diagnosticsHtml() {
+    return GW_DIAGS.length ? GW_DIAGS.map((d) => `<div class="gw-diag-row ${d.status >= 400 ? "is-err" : d.diagNote ? "is-warn" : ""}">
+      <div class="gw-diag-top"><b>${escHtml(d.model)}</b><span>${escHtml(formatDiagMeta(d))}</span></div>
+      ${d.transforms?.length ? `<div class="gw-diag-sub">转换：${escHtml(d.transforms.join(", "))}</div>` : ""}
+      ${d.diagNote ? `<div class="gw-diag-note">${escHtml(d.diagNote)}</div>` : ""}
+      ${d.error ? `<div class="gw-diag-err">${escHtml(d.error)}</div>` : ""}
+    </div>`).join("") : `<div class="gw-empty-note">暂无请求记录</div>`;
+  }
+
+  function renderDiagnostics() {
+    const list = byId("gatewayBox")?.querySelector(".gw-diag-list");
+    if (list) list.innerHTML = diagnosticsHtml();
+  }
+
+  function renderGateway(snap, draft, uiSnap) {
     const box = byId("gatewayBox");
     if (!box || !GW) return;
+    uiSnap = uiSnap || UI.snapshot(box);
     const channels = GW.channels || [];
     const vault = GW.vault || [];
     const baseLocalUrl = `http://127.0.0.1:${GW.port}/v1`;
@@ -563,6 +630,7 @@
         <button class="btn p" data-gw="${GW.running ? "stop" : "start"}" data-gw-exclusive>${GW.running ? "停止网关" : "启动网关"}</button>
       </div>
       ${GW.startupError ? `<p class="gw-error">启动失败：${escHtml(GW.startupError)}</p>` : ""}
+      <p data-gw-sync-status hidden></p>
 
       <div class="gw-nav-tabs" role="tablist">
         <button type="button" class="gw-nav-tab ${GW_TAB === "channels" ? "is-active" : ""}" data-gw-tab="channels">渠道与接入 <small>${channels.length}</small></button>
@@ -634,18 +702,7 @@
               <button type="button" class="btn" data-gw="clear-diag">清空</button>
             </div>
           </div>
-          <div class="gw-diag-list">
-            ${
-              GW_DIAGS.length
-                ? GW_DIAGS.map((d) => `<div class="gw-diag-row ${d.status >= 400 ? "is-err" : d.diagNote ? "is-warn" : ""}">
-                    <div class="gw-diag-top"><b>${escHtml(d.model)}</b><span>${escHtml(formatDiagMeta(d))}</span></div>
-                    ${d.transforms?.length ? `<div class="gw-diag-sub">转换：${escHtml(d.transforms.join(", "))}</div>` : ""}
-                    ${d.diagNote ? `<div class="gw-diag-note">${escHtml(d.diagNote)}</div>` : ""}
-                    ${d.error ? `<div class="gw-diag-err">${escHtml(d.error)}</div>` : ""}
-                  </div>`).join("")
-                : `<div class="gw-empty-note">暂无请求记录</div>`
-            }
-          </div>
+          <div class="gw-diag-list">${diagnosticsHtml()}</div>
         </section>
       </div>
 
@@ -685,9 +742,12 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
       </div>
     </div>`;
 
+    UI.bind(box);
+    restoreOpenState(box, snap);
+    UI.restore(box, uiSnap);
     syncGatewayButtons(box);
     wireRenderedEvents(box, channels, vault);
-    restoreOpenState(box, snap);
+    renderSyncStatus();
   }
 
   function wireRenderedEvents(box, channels, vault) {
@@ -821,6 +881,9 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
           const lbl = cb.closest(".gw-model-check");
           if (lbl) lbl.style.display = !q || cb.value.toLowerCase().includes(q) ? "" : "none";
         });
+        const card = inp.closest("[data-gw-card]");
+        const empty = card.querySelector("[data-gw-model-empty]");
+        empty.hidden = [...card.querySelectorAll("[data-gw-model]")].some((cb) => !q || cb.value.toLowerCase().includes(q));
       };
     });
 
@@ -829,8 +892,11 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
         const id = cb.dataset.gwQuickProxy;
         const nextVal = cb.checked;
         cb.disabled = true;
+        UI.observe(box);
+        const submitted = UI.submitted(box, cb.parentElement);
         try {
-          await invoke("gateway_update_channel", { input: { channelId: id, systemProxy: nextVal } });
+          await writeGateway(() => invoke("gateway_update_channel", { input: { channelId: id, systemProxy: nextVal } }));
+          UI.commit(box, submitted);
           notify(nextVal ? "已开启系统代理访问该渠道" : "已改为直连该渠道");
           await refreshGatewayData(true);
         } catch (err) {
@@ -847,6 +913,8 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
     const box = byId("gatewayBox");
     if (!box || GW_UI_WIRED) return;
     GW_UI_WIRED = true;
+    box.addEventListener("input", () => UI.observe(box));
+    box.addEventListener("change", () => UI.observe(box));
 
     box.addEventListener("click", async (e) => {
       const navTab = e.target.closest("[data-gw-tab]");
@@ -894,6 +962,7 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
         syncGatewayButtons(box);
       }
 
+      const runtimeWrite = action === "start" || action === "apply-restart" || action === "stop";
       try {
         if (action === "copy-local" || action === "copy-lan") {
           const ip = action === "copy-local" ? "127.0.0.1" : byId("gwLanIp")?.value;
@@ -931,14 +1000,11 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
           return;
         }
         if (action === "refresh-diag") {
-          GW_DIAGS = await invoke("gateway_diagnostics");
-          renderGateway(snapshotOpenState(box), captureAddDraft());
+          await refreshDiagnostics();
           return;
         }
         if (action === "clear-diag") {
-          await invoke("gateway_clear_diagnostics");
-          GW_DIAGS = [];
-          renderGateway(snapshotOpenState(box), captureAddDraft());
+          await clearDiagnostics();
           notify("诊断记录已清空");
           return;
         }
@@ -974,7 +1040,8 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
             });
             if (GW_TEST_RUN_ID !== runId) return;
             GW_TEST_RESULT = res;
-            GW_DIAGS = await invoke("gateway_diagnostics").catch(() => GW_DIAGS);
+            await refreshDiagnostics();
+            if (GW_TEST_RUN_ID !== runId) return;
           } catch (err) {
             if (GW_TEST_RUN_ID !== runId) return;
             throw err;
@@ -993,18 +1060,20 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
           if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("请输入 1 到 65535 的端口");
           const lan = !!byId("gwLan")?.checked;
           const auth = lan || !!byId("gwAuth")?.checked;
+          const submitted = UI.submitted(box, box.querySelector(".gw-settings-grid"));
           if (GW.running) {
-            await invoke("gateway_restart", { port, lan, auth });
+            await writeGateway(() => invoke("gateway_restart", { port, lan, auth }));
             notify("已应用设置并重启网关");
           } else {
-            await invoke("gateway_start", { port, lan, auth });
+            await writeGateway(() => invoke("gateway_start", { port, lan, auth }));
             notify("网关已启动");
           }
+          UI.commit(box, submitted);
           await refreshGatewayData(true);
           return;
         }
         if (action === "stop") {
-          await invoke("gateway_stop");
+          await writeGateway(() => invoke("gateway_stop"));
           notify("网关已停止");
           await refreshGatewayData(true);
           return;
@@ -1012,13 +1081,13 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
         if (action === "remove") {
           const ch = (GW.channels || []).find((x) => (x.channelId || x.vaultId) === b.dataset.id);
           if (!confirm(`确定下架渠道「${ch?.alias || b.dataset.id}」？不会删除密钥箱中的密钥。`)) return;
-          await invoke("gateway_unpublish", { channelId: b.dataset.id });
+          await writeGateway(() => invoke("gateway_unpublish", { channelId: b.dataset.id }));
           notify("渠道已下架");
           await refreshGatewayData(true);
           return;
         }
         if (action === "refresh") {
-          await invoke("gateway_refresh_channel", { channelId: b.dataset.id });
+          await writeGateway(() => invoke("gateway_refresh_channel", { channelId: b.dataset.id }));
           notify("模型列表已刷新");
           await refreshGatewayData(true);
           return;
@@ -1058,7 +1127,9 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
           };
           const vSel = card.querySelector("[data-gw-vault-edit]");
           if (vSel) payload.vaultId = vSel.value;
-          await invoke("gateway_update_channel", { input: payload });
+          const submitted = UI.submitted(box, card);
+          await writeGateway(() => invoke("gateway_update_channel", { input: payload }));
+          UI.commit(box, submitted);
           notify("渠道配置已保存");
           await refreshGatewayData(true);
           return;
@@ -1084,15 +1155,15 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
             thinkingMode: byId("gwNewThinkingMode")?.value || "auto",
             thoughtPolicy: byId("gwNewThoughtPolicy")?.value || "follow_client",
           };
-          GW = await invoke("gateway_publish", { input });
+          const submitted = UI.submitted(box, box.querySelector('[data-gw-detail="add-channel"]'));
+          const published = await writeGateway(() => invoke("gateway_publish", { input }));
+          UI.commit(box, submitted);
           notify("渠道已上架");
-          const snapAfterPub = snapshotOpenState(box);
-          snapAfterPub.openSet.delete("add-channel");
-          snapAfterPub.openSet.delete("add-adv");
-          renderGateway(snapAfterPub, null);
+          await refreshGatewayData({ clearAdd: true }); // canonical-publish
         }
       } catch (err) {
         notify(String(err), true);
+        if (runtimeWrite) await refreshGatewayData(true);
       } finally {
         if (exclusive) {
           GW_BUSY = false;
@@ -1105,6 +1176,8 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
 
   window.loadGateway = async function loadGateway() {
     wireBoxDelegation();
-    await refreshGatewayData(false);
+    const subscription = listenGatewaySync();
+    await refreshGatewayData();
+    await subscription;
   };
 })();

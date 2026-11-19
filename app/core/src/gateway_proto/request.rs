@@ -231,6 +231,11 @@ fn sanitize_google_body(
 pub fn repairable_params_on_400(kind: GatewaySourceKind, err_body: &str) -> Option<Vec<String>> {
     let v: Value = serde_json::from_str(err_body).ok()?;
     let err = v.get("error")?;
+    let msg = err.get("message").and_then(Value::as_str).unwrap_or("").to_ascii_lowercase();
+    // 值域和业务约束错误不能通过删掉客户端的预算/停止条件来修复。
+    let unsupported = ["not supported", "unsupported", "unrecognized", "unknown argument", "unknown parameter", "not enabled", "not allowed"].iter().any(|s| msg.contains(s));
+    let invalid_value = ["invalid value", "must be", "out of range", "greater than", "less than", "maximum", "minimum"].iter().any(|s| msg.contains(s));
+    if !unsupported || invalid_value { return None; }
 
     if let Some(p) = err.get("param").and_then(Value::as_str) {
         if GOOGLE_REPAIRABLE_PARAMS.contains(&p) {
@@ -240,12 +245,6 @@ pub fn repairable_params_on_400(kind: GatewaySourceKind, err_body: &str) -> Opti
             return Some(vec!["extra_body".to_string()]);
         }
     }
-
-    let msg = err
-        .get("message")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_ascii_lowercase();
 
     if msg.contains("penalty") {
         return Some(vec![
@@ -479,6 +478,14 @@ mod tests {
             &mut none_req,
         );
         assert!(none_req.get("extra_body").is_none());
+    }
+
+    #[test]
+    fn value_errors_never_remove_client_limits() {
+        for param in ["max_completion_tokens", "stop", "frequency_penalty"] {
+            let error = json!({"error":{"param":param,"message":"Invalid value: must be greater than zero"}}).to_string();
+            assert!(repairable_params_on_400(GatewaySourceKind::OpenAiCompat, &error).is_none());
+        }
     }
 
     #[test]

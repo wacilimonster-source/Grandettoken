@@ -56,7 +56,7 @@ async fn http_router_bridges_chat_clients_to_a_responses_only_upstream() {
     });
 
     // 2. 启动 Gateway（免上游密钥的本地兼容渠道 + 无网关认证的本机测试模式）
-    let file = std::env::temp_dir().join(format!("gw-test-{}.db", token().unwrap()));
+    let file = std::env::temp_dir().join(format!("gw-test-{}.db", crate::vault::new_id()));
     let store = Arc::new(Mutex::new(Store::open(&file).unwrap()));
     let g = Gateway::new(store.clone()).unwrap();
     let responses_channel = {

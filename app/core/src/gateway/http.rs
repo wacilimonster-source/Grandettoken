@@ -16,8 +16,8 @@ use std::{
     str::FromStr,
     time::{Duration, Instant},
 };
-use tokenscope_core::gateway_proto::{
-    error::{openai_error_value, parse_upstream_error_summary, redact_secrets},
+use crate::gateway_proto::{
+    error::{openai_error_value, parse_upstream_error_summary, redact_known, redact_secrets},
     request::{apply_400_repairs, prepare_upstream_body, repairable_params_on_400},
     sources::{
         build_upstream_headers, host_of_url, AGENT_PLATFORM_PRESET_MODELS,
@@ -28,9 +28,8 @@ use tokenscope_core::gateway_proto::{
     thinking::{normalize_non_stream_response, summarize_non_stream_tools},
     GatewaySourceKind, OpenAiWire,
 };
-use tokenscope_core::secrets;
 
-use crate::gateway::{authorized, effective_models, lock, model_id, peer_allowed, Gateway, Published};
+use crate::gateway::{authorized_with, effective_models, lock, model_id, peer_allowed, Gateway, Published};
 
 const MAX_GEMINI_MODEL_PAGES: usize = 5;
 const MODELS_TIMEOUT_SECS: u64 = 25;
@@ -55,6 +54,8 @@ pub struct GatewayDiagEntry {
     pub transforms: Vec<String>,
     pub thinking_chars: usize,
     pub content_chars: usize,
+    #[serde(default)]
+    pub refusal_chars: usize,
     #[serde(default)]
     pub tool_call_count: usize,
     #[serde(default)]
@@ -89,6 +90,7 @@ pub struct ChatTestResult {
     pub upstream_model: String,
     pub thinking: String,
     pub content: String,
+    pub refusal_chars: usize,
     pub tool_call_count: usize,
     pub tool_call_chars: usize,
     pub finish_reason: Option<String>,
@@ -154,7 +156,7 @@ async fn list_models(
     if !peer_allowed(peer, &settings) {
         return json_error(StatusCode::FORBIDDEN, "仅允许本机或局域网访问", "gateway_error", None, None);
     }
-    if !authorized(&headers, &settings) {
+    if !authorized_with(&headers, &settings, g.access.as_ref()) {
         return json_error(StatusCode::UNAUTHORIZED, "网关密钥无效", "gateway_error", None, None);
     }
     let mut seen = BTreeSet::new();
@@ -185,7 +187,7 @@ async fn get_model(
     if !peer_allowed(peer, &settings) {
         return json_error(StatusCode::FORBIDDEN, "仅允许本机或局域网访问", "gateway_error", None, None);
     }
-    if !authorized(&headers, &settings) {
+    if !authorized_with(&headers, &settings, g.access.as_ref()) {
         return json_error(StatusCode::UNAUTHORIZED, "网关密钥无效", "gateway_error", None, None);
     }
     for c in g.live_channels() {
@@ -220,7 +222,7 @@ async fn chat(
     if !peer_allowed(peer, &settings) {
         return json_error(StatusCode::FORBIDDEN, "仅允许本机或局域网访问", "gateway_error", None, None);
     }
-    if !authorized(&headers, &settings) {
+    if !authorized_with(&headers, &settings, g.access.as_ref()) {
         return json_error(StatusCode::UNAUTHORIZED, "网关密钥无效", "gateway_error", None, None);
     }
     let is_json = headers
@@ -296,7 +298,7 @@ fn resolve_channel_and_model(
     Ok(first)
 }
 
-async fn load_upstream_key(channel: &Published) -> Result<Option<String>, String> {
+async fn load_upstream_key(g: &Gateway, channel: &Published) -> Result<Option<String>, String> {
     if channel.no_upstream_key && channel.kind() == GatewaySourceKind::OpenAiCompat {
         return Ok(None);
     }
@@ -304,7 +306,8 @@ async fn load_upstream_key(channel: &Published) -> Result<Option<String>, String
     if vid.trim().is_empty() {
         return Err("未关联密钥箱条目".into());
     }
-    match tokio::task::spawn_blocking(move || secrets::vault_get(&vid)).await {
+    let credentials = g.credentials.clone();
+    match tokio::task::spawn_blocking(move || credentials.get(&vid)).await {
         Ok(Ok(Some(k))) if !k.trim().is_empty() => Ok(Some(k)),
         _ => Err("上游密钥不可用（请在密钥箱确认已填写密钥）".into()),
     }
@@ -328,6 +331,8 @@ enum UpstreamReady {
         transforms: Vec<String>,
         requested_stream: bool,
         include_usage: bool,
+        expected_choices: Option<u64>,
+        sensitive: Vec<String>,
     },
     Err {
         status: StatusCode,
@@ -345,7 +350,7 @@ async fn send_upstream_with_repair(
     mut data: Value,
 ) -> UpstreamReady {
     let kind = channel.kind();
-    let api_key = match load_upstream_key(channel).await {
+    let api_key = match load_upstream_key(g, channel).await {
         Ok(k) => k,
         Err(msg) => {
             return UpstreamReady::Err {
@@ -357,12 +362,13 @@ async fn send_upstream_with_repair(
             };
         }
     };
+    let sensitive = responses::sensitive_values(api_key.as_deref(), &channel.custom_headers);
     let hdrs = match build_upstream_headers(kind, api_key.as_deref(), &channel.custom_headers) {
         Ok(h) => h,
         Err(msg) => {
             return UpstreamReady::Err {
                 status: StatusCode::BAD_REQUEST,
-                message: msg,
+                message: redact_known(&msg, &sensitive),
                 code: Some("invalid_upstream_header".into()),
                 retry_after: None,
                 transforms: vec![],
@@ -385,6 +391,7 @@ async fn send_upstream_with_repair(
     data["model"] = Value::String(upstream_model.to_string());
     let requested_stream = data.get("stream").and_then(Value::as_bool).unwrap_or(false);
     let include_usage = data.pointer("/stream_options/include_usage") == Some(&Value::Bool(true));
+    let expected_choices = data.get("n").and_then(Value::as_u64);
     let wire = channel.wire;
     let mut transforms = match wire {
         OpenAiWire::ChatCompletions => prepare_upstream_body(
@@ -397,7 +404,7 @@ async fn send_upstream_with_repair(
             }
             Err(message) => return UpstreamReady::Err {
                 status: StatusCode::BAD_REQUEST,
-                message,
+                message: redact_known(&message, &sensitive),
                 code: Some("responses_conversion".into()),
                 retry_after: None,
                 transforms: vec![],
@@ -413,7 +420,7 @@ async fn send_upstream_with_repair(
             Err(msg) => {
                 return UpstreamReady::Err {
                     status: StatusCode::BAD_REQUEST,
-                    message: msg,
+                    message: redact_known(&msg, &sensitive),
                     code: Some("invalid_upstream_header".into()),
                     retry_after: None,
                     transforms,
@@ -426,7 +433,7 @@ async fn send_upstream_with_repair(
                 let (status, code, msg) = classify_upstream_send_error(e.is_timeout(), &e.to_string());
                 return UpstreamReady::Err {
                     status,
-                    message: redact_secrets(&msg),
+                    message: redact_known(&msg, &sensitive),
                     code: Some(code.into()),
                     retry_after: None,
                     transforms,
@@ -440,11 +447,20 @@ async fn send_upstream_with_repair(
                 transforms,
                 requested_stream,
                 include_usage,
+                expected_choices,
+                sensitive,
             };
         }
 
-        let retry_after = upstream.headers().get(header::RETRY_AFTER).cloned();
-        let err_body = upstream.text().await.unwrap_or_default();
+        let retry_after = upstream.headers().get(header::RETRY_AFTER).cloned()
+            .and_then(|v| v.to_str().ok().and_then(|s| HeaderValue::from_str(&redact_known(s, &sensitive)).ok()));
+        let err_body = match responses::read_error_body(upstream, &sensitive).await {
+            Ok(body) => body,
+            Err(message) => return UpstreamReady::Err {
+                status: StatusCode::BAD_GATEWAY, message,
+                code: Some("gateway_protocol".into()), retry_after: None, transforms,
+            },
+        };
         if status == StatusCode::BAD_REQUEST && repairs < 1 {
             if let Some(mut params) = repairable_params_on_400(kind, &err_body) {
                 if wire == OpenAiWire::Responses {
@@ -475,6 +491,7 @@ fn infer_zero_output_note(
     status: u16,
     thinking_chars: usize,
     content_chars: usize,
+    refusal_chars: usize,
     tool_call_count: usize,
     frame_count: usize,
     finish_reason: Option<&str>,
@@ -487,7 +504,7 @@ fn infer_zero_output_note(
     if error.is_some() || status >= 400 {
         return None;
     }
-    if thinking_chars == 0 && content_chars == 0 && tool_call_count == 0 {
+    if thinking_chars == 0 && content_chars == 0 && refusal_chars == 0 && tool_call_count == 0 {
         return Some(match finish_reason {
             Some(fr) => format!("上游已结束（finish_reason={fr}，{frame_count} 帧），未返回文本或工具调用"),
             None if frame_count == 0 => "上游未返回任何有效数据帧".to_string(),
@@ -522,6 +539,7 @@ fn record_error_diag(
         transforms,
         thinking_chars: 0,
         content_chars: 0,
+        refusal_chars: 0,
         tool_call_count: 0,
         tool_call_chars: 0,
         finish_reason: None,
@@ -541,6 +559,7 @@ async fn execute_inference_http(
 ) -> Response {
     let started = Instant::now();
     let stream = data.get("stream").and_then(Value::as_bool).unwrap_or(false);
+    let mut guard = responses::DiagnosticGuard::new(g, &channel, requested_model, stream, started);
     match send_upstream_with_repair(g, &channel, upstream_model, data).await {
         UpstreamReady::Err {
             status,
@@ -559,6 +578,7 @@ async fn execute_inference_http(
                 transforms,
                 &message,
             );
+            guard.disarm();
             let error_type = if code.as_deref() == Some("responses_conversion") {
                 "invalid_request_error"
             } else {
@@ -575,6 +595,8 @@ async fn execute_inference_http(
             transforms,
             requested_stream,
             include_usage,
+            expected_choices,
+            sensitive,
         } => {
             let ct = resp
                 .headers()
@@ -583,64 +605,54 @@ async fn execute_inference_http(
                 .unwrap_or("")
                 .to_ascii_lowercase();
             let is_sse = requested_stream || ct.contains("text/event-stream");
+            guard.update(&transforms, is_sse);
             if is_sse {
                 build_sse_response(
-                    g.clone(),
                     channel,
                     requested_model.to_string(),
-                    transforms,
-                    started,
                     resp,
                     include_usage,
+                    expected_choices,
+                    sensitive,
+                    guard,
                 )
             } else {
-                build_json_response(
-                    g,
-                    &channel,
-                    requested_model,
-                    transforms,
-                    started,
-                    resp,
-                )
-                .await
+                let response = build_json_response(
+                    g, &channel, requested_model, transforms, started, resp, &sensitive,
+                ).await;
+                guard.disarm();
+                response
             }
         }
     }
 }
 
 fn build_sse_response(
-    g: Gateway,
     channel: Published,
     requested_model: String,
-    transforms: Vec<String>,
-    started: Instant,
     upstream: reqwest::Response,
     include_usage: bool,
+    expected_choices: Option<u64>,
+    sensitive: Vec<String>,
+    guard: responses::DiagnosticGuard,
 ) -> Response {
     struct StreamState<S> {
         stream: S,
         normalizer: responses::ChatSse,
         pending: VecDeque<String>,
         finished: bool,
-        first_byte_ms: Option<u64>,
-        g: Gateway,
-        channel: Published,
-        requested_model: String,
-        transforms: Vec<String>,
-        started: Instant,
+        sensitive: Vec<String>,
+        guard: responses::DiagnosticGuard,
     }
 
     let state = StreamState {
         stream: Box::pin(upstream.bytes_stream()),
-        normalizer: responses::ChatSse::new(&requested_model, channel.thinking_mode, channel.wire, include_usage),
+        normalizer: responses::ChatSse::new(&requested_model, channel.thinking_mode, channel.wire, include_usage)
+            .with_expected_choices(expected_choices).with_sensitive_values(sensitive.clone()),
         pending: VecDeque::new(),
         finished: false,
-        first_byte_ms: None,
-        g,
-        channel,
-        requested_model,
-        transforms,
-        started,
+        sensitive,
+        guard,
     };
 
     let body_stream = futures::stream::unfold(state, |mut st| async move {
@@ -653,16 +665,14 @@ fn build_sse_response(
             }
             let transport_error = match st.stream.next().await {
                 Some(Ok(chunk)) => {
-                    if st.first_byte_ms.is_none() && !chunk.is_empty() {
-                        st.first_byte_ms = Some(st.started.elapsed().as_millis() as u64);
-                    }
                     st.pending.extend(st.normalizer.push_bytes(&chunk));
+                    st.guard.observe(st.normalizer.stats(), !chunk.is_empty());
                     if !st.normalizer.is_terminal() {
                         continue;
                     }
                     None
                 }
-                Some(Err(e)) => Some(format!("流式传输中断：{e}")),
+                Some(Err(e)) => Some(redact_known(&format!("流式传输中断：{e}"), &st.sensitive)),
                 None => None,
             };
             st.finished = true;
@@ -676,16 +686,7 @@ fn build_sse_response(
                         .unwrap_or_else(|| "上游流式未正常完成".into())
                 })
             });
-            record_stream_diag(
-                &st.g,
-                &st.channel,
-                &st.requested_model,
-                &st.transforms,
-                st.started,
-                st.first_byte_ms,
-                stats,
-                error,
-            );
+            st.guard.finish_stream(stats, error);
         }
     });
 
@@ -717,6 +718,7 @@ fn record_stream_diag(
         status,
         stats.thinking_chars,
         stats.content_chars,
+        stats.refusal_chars,
         stats.tool_call_count,
         stats.frame_count,
         stats.finish_reason.as_deref(),
@@ -738,6 +740,7 @@ fn record_stream_diag(
         transforms: transforms.to_vec(),
         thinking_chars: stats.thinking_chars,
         content_chars: stats.content_chars,
+        refusal_chars: stats.refusal_chars,
         tool_call_count: stats.tool_call_count,
         tool_call_chars: stats.tool_call_chars,
         finish_reason: stats.finish_reason.clone(),
@@ -755,9 +758,10 @@ async fn build_json_response(
     transforms: Vec<String>,
     started: Instant,
     upstream: reqwest::Response,
+    sensitive: &[String],
 ) -> Response {
     let status = upstream.status();
-    let mut val = match responses::read_chat_json(upstream, channel.wire, requested_model).await {
+    let mut val = match responses::read_chat_json(upstream, channel.wire, requested_model, sensitive).await {
         Ok(value) => value,
         Err(msg) => {
             record_error_diag(g, channel, requested_model, false, 502, started, transforms, &msg);
@@ -768,6 +772,7 @@ async fn build_json_response(
     let (thinking_chars, content_chars) =
         normalize_non_stream_response(&mut val, requested_model, channel.thinking_mode);
     let (tool_call_count, tool_call_chars) = summarize_non_stream_tools(&val);
+    let refusal_chars = responses::refusal_chars(&val);
     let finish_reason = val
         .get("choices")
         .and_then(Value::as_array)
@@ -786,6 +791,7 @@ async fn build_json_response(
         status.as_u16(),
         thinking_chars,
         content_chars,
+        refusal_chars,
         tool_call_count,
         frame_count,
         finish_reason.as_deref(),
@@ -808,6 +814,7 @@ async fn build_json_response(
         transforms,
         thinking_chars,
         content_chars,
+        refusal_chars,
         tool_call_count,
         tool_call_chars,
         finish_reason,
@@ -831,6 +838,7 @@ pub async fn run_test_chat(
 ) -> ChatTestResult {
     let started = Instant::now();
     let requested_model = model_id(&channel, &upstream_model);
+    let mut guard = responses::DiagnosticGuard::new(g, &channel, &requested_model, stream, started);
     let mut body = json!({
         "messages": [{ "role": "user", "content": prompt }],
         "stream": stream,
@@ -861,6 +869,7 @@ pub async fn run_test_chat(
                 transforms.clone(),
                 &message,
             );
+            guard.disarm();
             ChatTestResult {
                 ok: false,
                 status: status.as_u16(),
@@ -871,6 +880,7 @@ pub async fn run_test_chat(
                 upstream_model,
                 thinking: String::new(),
                 content: String::new(),
+                refusal_chars: 0,
                 tool_call_count: 0,
                 tool_call_chars: 0,
                 finish_reason: None,
@@ -886,6 +896,8 @@ pub async fn run_test_chat(
             transforms,
             requested_stream,
             include_usage,
+            expected_choices,
+            sensitive,
         } => {
             let status = resp.status().as_u16();
             let ct = resp
@@ -894,10 +906,11 @@ pub async fn run_test_chat(
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("")
                 .to_ascii_lowercase();
+            guard.update(&transforms, requested_stream || ct.contains("text/event-stream"));
             if requested_stream || ct.contains("text/event-stream") {
                 let mut normalizer = responses::ChatSse::new(
                     &requested_model, channel.thinking_mode, channel.wire, include_usage,
-                );
+                ).with_expected_choices(expected_choices).with_sensitive_values(sensitive.clone());
                 let mut thinking = String::new();
                 let mut content = String::new();
                 let mut error_msg: Option<String> = None;
@@ -911,12 +924,13 @@ pub async fn run_test_chat(
                                 first_byte_ms = Some(started.elapsed().as_millis() as u64);
                             }
                             frames_text.extend(normalizer.push_bytes(&chunk));
+                            guard.observe(normalizer.stats(), !chunk.is_empty());
                             if normalizer.is_terminal() {
                                 break;
                             }
                         }
                         Err(e) => {
-                            error_msg = Some(redact_secrets(&format!("读取流失败：{e}")));
+                            error_msg = Some(redact_known(&format!("读取流失败：{e}"), &sensitive));
                             break;
                         }
                     }
@@ -960,22 +974,14 @@ pub async fn run_test_chat(
                     if ok { status } else { 502 },
                     stats.thinking_chars,
                     stats.content_chars,
+                    stats.refusal_chars,
                     stats.tool_call_count,
                     stats.frame_count,
                     stats.finish_reason.as_deref(),
                     stats.diagnostic_note.as_deref(),
                     final_error.as_deref(),
                 );
-                record_stream_diag(
-                    g,
-                    &channel,
-                    &requested_model,
-                    &transforms,
-                    started,
-                    first_byte_ms,
-                    stats,
-                    final_error.clone(),
-                );
+                guard.finish_stream(stats, final_error.clone());
                 ChatTestResult {
                     ok,
                     status: if ok { status } else { 502 },
@@ -986,6 +992,7 @@ pub async fn run_test_chat(
                     upstream_model,
                     thinking,
                     content,
+                    refusal_chars: stats.refusal_chars,
                     tool_call_count: stats.tool_call_count,
                     tool_call_chars: stats.tool_call_chars,
                     finish_reason: stats.finish_reason.clone(),
@@ -997,7 +1004,7 @@ pub async fn run_test_chat(
                 }
             } else {
                 let first_byte_ms = Some(started.elapsed().as_millis() as u64);
-                let mut val = match responses::read_chat_json(resp, channel.wire, &requested_model).await {
+                let mut val = match responses::read_chat_json(resp, channel.wire, &requested_model, &sensitive).await {
                     Ok(v) => v,
                     Err(msg) => {
                         record_error_diag(
@@ -1010,6 +1017,7 @@ pub async fn run_test_chat(
                             transforms.clone(),
                             &msg,
                         );
+                        guard.disarm();
                         return ChatTestResult {
                             ok: false,
                             status: 502,
@@ -1020,6 +1028,7 @@ pub async fn run_test_chat(
                             upstream_model,
                             thinking: String::new(),
                             content: String::new(),
+                            refusal_chars: 0,
                             tool_call_count: 0,
                             tool_call_chars: 0,
                             finish_reason: None,
@@ -1037,6 +1046,7 @@ pub async fn run_test_chat(
                     channel.thinking_mode,
                 );
                 let (tool_call_count, tool_call_chars) = summarize_non_stream_tools(&val);
+                let refusal_chars = responses::refusal_chars(&val);
                 let msg = val.pointer("/choices/0/message").cloned().unwrap_or(Value::Null);
                 let thinking = msg
                     .get("reasoning_content")
@@ -1063,6 +1073,7 @@ pub async fn run_test_chat(
                     status,
                     tc,
                     cc,
+                    refusal_chars,
                     tool_call_count,
                     frame_count,
                     finish_reason.as_deref(),
@@ -1084,6 +1095,7 @@ pub async fn run_test_chat(
                     transforms: transforms.clone(),
                     thinking_chars: tc,
                     content_chars: cc,
+                    refusal_chars,
                     tool_call_count,
                     tool_call_chars,
                     finish_reason: finish_reason.clone(),
@@ -1092,6 +1104,7 @@ pub async fn run_test_chat(
                     diag_note: diag_note.clone(),
                     error: None,
                 });
+                guard.disarm();
                 ChatTestResult {
                     ok: true,
                     status,
@@ -1102,6 +1115,7 @@ pub async fn run_test_chat(
                     upstream_model,
                     thinking,
                     content,
+                    refusal_chars,
                     tool_call_count,
                     tool_call_chars,
                     finish_reason,
@@ -1123,7 +1137,9 @@ pub async fn fetch_configured_models(
 ) -> Result<ModelFetchResult, String> {
     let kind = channel.kind();
     if channel.wire == OpenAiWire::Responses && !channel.manual_models.is_empty() {
-        build_upstream_headers(kind, api_key, &channel.custom_headers)?;
+        let sensitive = responses::sensitive_values(api_key, &channel.custom_headers);
+        build_upstream_headers(kind, api_key, &channel.custom_headers)
+            .map_err(|e| redact_known(&e, &sensitive))?;
         return Ok(ModelFetchResult {
             fetched: vec![],
             host: host_of_url(&channel.base_url),
@@ -1141,10 +1157,12 @@ pub async fn fetch_channel_models(
     custom_headers: &BTreeMap<String, String>,
 ) -> Result<ModelFetchResult, String> {
     let host = host_of_url(base_url);
+    let sensitive = responses::sensitive_values(api_key, custom_headers);
     match kind {
         GatewaySourceKind::AgentPlatform => {
             // 校验自定义头语法合法性
-            let _ = build_upstream_headers(kind, api_key, custom_headers)?;
+            let _ = build_upstream_headers(kind, api_key, custom_headers)
+                .map_err(|e| redact_known(&e, &sensitive))?;
             let fetched = AGENT_PLATFORM_PRESET_MODELS
                 .iter()
                 .map(|s| s.to_string())
@@ -1175,14 +1193,15 @@ pub async fn fetch_channel_models(
                         .timeout(Duration::from_secs(MODELS_TIMEOUT_SECS))
                         .send()
                         .await
-                        .map_err(|e| redact_secrets(&format!("读取 Gemini 模型列表失败：{e}")))?;
+                        .map_err(|e| redact_known(&format!("读取 Gemini 模型列表失败：{e}"), &sensitive))?;
                     let status = res.status();
                     if !status.is_success() {
-                        let txt = res.text().await.unwrap_or_default();
+                        let txt = responses::read_error_body(res, &sensitive).await?;
                         let (summary, _) = parse_upstream_error_summary(status.as_u16(), &txt);
                         return Err(summary);
                     }
-                    let body: Value = res.json().await.map_err(|_| "Gemini 返回格式异常".to_string())?;
+                    let bytes = responses::read_body_capped(res, &sensitive).await?;
+                    let body: Value = serde_json::from_slice(&bytes).map_err(|_| "Gemini 返回格式异常".to_string())?;
                     for item in body.get("models").and_then(Value::as_array).into_iter().flatten() {
                         let supports_gen = item
                             .get("supportedGenerationMethods")
@@ -1231,16 +1250,18 @@ async fn fetch_openai_models(
     custom_headers: &BTreeMap<String, String>,
     host: String,
 ) -> Result<ModelFetchResult, String> {
-    let hdrs = build_upstream_headers(kind, api_key, custom_headers)?;
+    let sensitive = responses::sensitive_values(api_key, custom_headers);
+    let hdrs = build_upstream_headers(kind, api_key, custom_headers)
+        .map_err(|e| redact_known(&e, &sensitive))?;
     let url = format!("{}/models", base_url.trim_end_matches('/'));
     let req = apply_headers(
         client.get(&url).timeout(Duration::from_secs(MODELS_TIMEOUT_SECS)),
         &hdrs,
-    )?;
+    ).map_err(|e| redact_known(&e, &sensitive))?;
     let res = match req.send().await {
         Ok(r) => r,
         Err(e) => {
-            return Err(redact_secrets(&format!("读取 /models 失败：{e}")));
+            return Err(redact_known(&format!("读取 /models 失败：{e}"), &sensitive));
         }
     };
     let status = res.status();
@@ -1252,11 +1273,12 @@ async fn fetch_openai_models(
         });
     }
     if !status.is_success() {
-        let txt = res.text().await.unwrap_or_default();
+        let txt = responses::read_error_body(res, &sensitive).await?;
         let (summary, _) = parse_upstream_error_summary(status.as_u16(), &txt);
         return Err(summary);
     }
-    let body: Value = match res.json().await {
+    let bytes = responses::read_body_capped(res, &sensitive).await?;
+    let body: Value = match serde_json::from_slice(&bytes) {
         Ok(v) => v,
         Err(_) => {
             return Ok(ModelFetchResult {
@@ -1321,19 +1343,4 @@ fn classify_upstream_send_error(is_timeout: bool, err: &str) -> (StatusCode, &'s
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn upstream_send_timeout_maps_to_504_instead_of_unreachable() {
-        let (status, code, msg) = classify_upstream_send_error(true, "operation timed out");
-        assert_eq!(status, StatusCode::GATEWAY_TIMEOUT);
-        assert_eq!(code, "upstream_timeout");
-        assert!(msg.contains("等待上游响应超时"));
-
-        let (status2, code2, msg2) = classify_upstream_send_error(false, "tcp connect error");
-        assert_eq!(status2, StatusCode::BAD_GATEWAY);
-        assert_eq!(code2, "upstream_unreachable");
-        assert!(msg2.contains("无法连接上游服务"));
-    }
-}
+mod tests;

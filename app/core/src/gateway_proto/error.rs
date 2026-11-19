@@ -6,12 +6,12 @@ use serde_json::{json, Value};
 pub fn openai_error_value(message: &str, err_type: &str, code: Option<&str>, param: Option<&str>) -> Value {
     let mut err = serde_json::Map::new();
     err.insert("message".into(), Value::String(redact_secrets(message)));
-    err.insert("type".into(), Value::String(err_type.to_string()));
+    err.insert("type".into(), Value::String(redact_secrets(err_type)));
     if let Some(c) = code.filter(|s| !s.is_empty()) {
-        err.insert("code".into(), Value::String(c.to_string()));
+        err.insert("code".into(), Value::String(redact_secrets(c)));
     }
     if let Some(p) = param.filter(|s| !s.is_empty()) {
-        err.insert("param".into(), Value::String(p.to_string()));
+        err.insert("param".into(), Value::String(redact_secrets(p)));
     }
     json!({ "error": Value::Object(err) })
 }
@@ -55,7 +55,36 @@ pub fn parse_upstream_error_summary(status: u16, body: &str) -> (String, Option<
 
     let clean = redact_secrets(&msg);
     let short: String = clean.chars().take(400).collect();
-    (format!("上游返回 {status} · {short}"), code)
+    (format!("上游返回 {status} · {short}"), code.map(|c| redact_secrets(&c).chars().take(120).collect()))
+}
+
+/// 错误出口仅保留协议字段，避免附加调试对象泄漏凭据。
+pub fn sanitize_upstream_error(value: &Value) -> Value {
+    let error = value.get("error").unwrap_or(value);
+    let message = error.get("message").or_else(|| error.get("msg")).and_then(Value::as_str)
+        .or_else(|| error.as_str()).unwrap_or("上游服务返回错误");
+    let short: String = redact_secrets(message).chars().take(400).collect();
+    let code = error.get("code").and_then(Value::as_str);
+    let param = error.get("param").and_then(Value::as_str);
+    openai_error_value(&short, "upstream_error", code, param)
+}
+
+/// 本次请求已知的敏感值只参与错误清洗，不修改正常模型输出。
+pub fn redact_known(input: &str, sensitive: &[String]) -> String {
+    let mut text = input.to_string();
+    for value in sensitive.iter().filter(|v| !v.is_empty()) {
+        text = text.replace(value, "***");
+    }
+    redact_secrets(&text)
+}
+
+pub fn redact_error_strings(value: &mut Value, sensitive: &[String]) {
+    match value {
+        Value::String(s) => *s = redact_known(s, sensitive),
+        Value::Array(items) => items.iter_mut().for_each(|v| redact_error_strings(v, sensitive)),
+        Value::Object(fields) => fields.values_mut().for_each(|v| redact_error_strings(v, sensitive)),
+        _ => {}
+    }
 }
 
 /// 剥离文本中可能被上游回显的密钥与令牌（对齐 pockettavern `_redactSensitive` 口径）。
@@ -120,6 +149,13 @@ fn mask_token_prefix(input: &str, prefix: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn error_metadata_is_redacted_with_the_message() {
+        let fake = ["sk-", "syntheticfixture123456789"].concat();
+        let value = openai_error_value(&fake, &fake, Some(&fake), Some(&fake));
+        assert!(!value.to_string().contains(&fake));
+    }
 
     #[test]
     fn redact_secrets_masks_keys_without_corrupting_normal_text() {

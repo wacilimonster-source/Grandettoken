@@ -15,10 +15,9 @@ use tokenscope_core::{appauth, checkin, inject, models, providers, secrets, stor
 mod sync_cmds;
 mod download;
 mod gateway;
-mod gateway_http;
 mod vault_sync;
 use vault_sync::{
-    ensure_vault_mutable, import_channel_keys, sync_channel_to_gateway, vault_default_channel,
+    ensure_vault_mutable, sync_channel_to_gateway, vault_default_channel,
     vault_defaults_lock,
 };
 mod doubao_web;
@@ -2825,8 +2824,9 @@ struct VaultListItem {
 async fn vault_list(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<Vec<VaultListItem>, String> {
     let store = state.store.clone();
     let cfg = lock_rw(&state.config).clone();
-    let (vids, out) = tokio::task::spawn_blocking(move || {
-        let vids = import_channel_keys(&store, &cfg)?;
+    let import_app = app.clone();
+    let out = tokio::task::spawn_blocking(move || {
+        vault_sync::import_for_gateway(&import_app, &store, &cfg);
         let items = lock_rw(&store).vault_list()?;
         let mut out = Vec::with_capacity(items.len());
         for item in items {
@@ -2834,15 +2834,14 @@ async fn vault_list(app: tauri::AppHandle, state: State<'_, AppState>) -> Result
             let default_available = default_channel.as_ref().map(|id| secrets::channel_key(id).ok().flatten().map(|s| !s.trim().is_empty()).unwrap_or(false)).unwrap_or(true);
             out.push(VaultListItem { item, default_channel, default_available });
         }
-        Ok::<_, String>((vids, out))
+        Ok::<_, String>(out)
     })
     .await
     .map_err(|e| format!("读取密钥箱失败: {e}"))??;
-    for vid in vids { gateway::spawn_vault_sync(&app, vid); }
     Ok(out)
 }
 
-/// 新建或编辑一条。**先写凭据、再写索引**:索引写失败就把刚写的凭据删掉,不留半条。
+/// 新建或编辑一条；索引失败时恢复凭据的写入前状态。
 #[tauri::command]
 async fn vault_save(
     app: tauri::AppHandle,
@@ -2850,10 +2849,13 @@ async fn vault_save(
 ) -> Result<tokenscope_core::store::VaultItem, String> {
     let store = app.state::<AppState>().store.clone();
     let cfg = lock_rw(&app.state::<AppState>().config).clone();
-    let saved = tokio::task::spawn_blocking(move || {
+    let gateway = app.try_state::<gateway::Gateway>().map(|g| g.inner().clone());
+    if let Some(g) = gateway.as_ref() { lock_rw(&g.inner).config_revision += 1; }
+    let import_app = app.clone();
+    let saved_result = tokio::task::spawn_blocking(move || -> Result<tokenscope_core::store::VaultItem, String> {
         use tokenscope_core::vault;
         refuse_while_updating("保存密钥")?;
-        import_channel_keys(&store, &cfg)?;
+        vault_sync::import_for_gateway(&import_app, &store, &cfg);
         let _guard = lock_rw(vault_defaults_lock());
         if let Some(id) = item.id.as_deref() { ensure_vault_mutable(&lock_rw(&store), id)?; }
         let platform = vault::valid_platform(&item.platform)?;
@@ -2882,8 +2884,6 @@ async fn vault_save(
                 .map(|e| e.hint.clone())
                 .unwrap_or_else(|| "••••".into())
         } else {
-            // 先写凭据:写不进去就别动索引
-            secrets::vault_set(&id, &key)?;
             secrets::mask_of(&key)
         };
         if existing.is_none() && key.is_empty() {
@@ -2900,21 +2900,16 @@ async fn vault_save(
             created_at: existing.as_ref().map(|e| e.created_at).unwrap_or(now),
             updated_at: existing.as_ref().map(|e| now.max(e.updated_at.saturating_add(1))).unwrap_or(now),
         };
-        let up = {
-            let s = lock_rw(&store);
-            s.vault_upsert(&out)
-        };
-        if let Err(e) = up {
-            // 新建时回滚凭据,不留"索引里没有、凭据里有"的孤儿
-            if existing.is_none() {
-                let _ = secrets::vault_delete(&id);
-            }
-            return Err(e);
+        if key.is_empty() {
+            lock_rw(&store).vault_upsert(&out)?;
+        } else {
+            tokenscope_core::vault::transaction::commit(&tokenscope_core::vault::transaction::NativeVault, &id, Some(&key), || lock_rw(&store).vault_upsert(&out))?;
         }
         Ok(out)
     })
-    .await
-    .map_err(|e| format!("保存失败: {e}"))??;
+    .await;
+    if let Some(g) = gateway.as_ref() { lock_rw(&g.inner).config_revision += 1; }
+    let saved = saved_result.map_err(|_| "保存任务失败，密钥状态请核对后重试".to_string())??;
     gateway::spawn_vault_sync(&app, saved.id.clone());
     Ok(saved)
 }
@@ -3021,8 +3016,9 @@ async fn vault_delete(
 ) -> Result<VaultDeleteResult, String> {
     let import_store = app.state::<AppState>().store.clone();
     let import_cfg = lock_rw(&app.state::<AppState>().config).clone();
-    tokio::task::spawn_blocking(move || import_channel_keys(&import_store, &import_cfg))
-        .await.map_err(|e| format!("检查默认密钥失败: {e}"))??;
+    let import_app = app.clone();
+    tokio::task::spawn_blocking(move || vault_sync::import_for_gateway(&import_app, &import_store, &import_cfg))
+        .await.map_err(|_| "检查默认密钥任务失败".to_string())?;
     ensure_vault_mutable(&lock_rw(&app.state::<AppState>().store), &id)?;
     // N07:删前拦截搬到后端,并且**扫真实指针**而不是查索引。
     // 以前拦截在浏览器里靠索引:索引读失败就静默放行、索引不准就拦了个寂寞。
@@ -3032,7 +3028,7 @@ async fn vault_delete(
     }
     let state = app.state::<AppState>();
     let store = state.store.clone();
-    let gateway = app.state::<gateway::Gateway>().inner().clone();
+    let gateway = app.try_state::<gateway::Gateway>().map(|g| g.inner().clone());
     tokio::task::spawn_blocking(move || {
         let _guard = lock_rw(vault_defaults_lock());
         ensure_vault_mutable(&lock_rw(&store), &id)?;
@@ -3041,7 +3037,7 @@ async fn vault_delete(
             let s = lock_rw(&store);
             s.vault_delete(&id)?;
         }
-        let _ = gateway.remove_vault(&id);
+        let gateway_cleanup = gateway.map(|g| g.remove_vault(&id)).transpose();
         // 索引已经删了,凭据删不掉的话那把密钥的密文会**永远**留在凭据管理器里:
         // 界面再也列不出、也删不掉(vault_reveal 先校验索引)。以前只 eprintln 就当成功
         // (报告 P2-14)。重试一次,仍失败就把话说明白,让用户知道要去手动清。
@@ -3055,6 +3051,7 @@ async fn vault_delete(
                  结尾为 {id} 的那一条。"
             ));
         }
+        gateway_cleanup.map_err(|e| format!("条目和密文已删除，但网关映射清理失败，请刷新网关：{e}"))?;
         Ok(())
     })
     .await
@@ -5971,16 +5968,9 @@ pub fn run() {
             let import_store = app.state::<AppState>().store.clone();
             let import_cfg = config.clone();
             tauri::async_runtime::spawn(async move {
-                match tokio::task::spawn_blocking(move || import_channel_keys(&import_store, &import_cfg))
-                    .await
-                    .unwrap_or_else(|e| Err(e.to_string()))
-                {
-                    Ok(vids) => {
-                        for vid in vids {
-                            gateway::spawn_vault_sync(&import_app, vid);
-                        }
-                    }
-                    Err(e) => eprintln!("导入渠道密钥失败: {e}"),
+                let worker = import_app.clone();
+                if tokio::task::spawn_blocking(move || vault_sync::import_for_gateway(&worker, &import_store, &import_cfg)).await.is_err() {
+                    gateway::report_sync_error(&import_app, "导入渠道密钥任务失败".into());
                 }
             });
 

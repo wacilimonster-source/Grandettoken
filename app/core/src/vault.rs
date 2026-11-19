@@ -5,6 +5,8 @@
 
 use crate::store::VaultItem;
 
+pub mod transaction;
+
 /// 平台名/标签的规矩:非空、去掉首尾空白、长度上限(界面里是单行输入)。
 const MAX_LEN: usize = 40;
 

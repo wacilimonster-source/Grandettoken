@@ -1608,6 +1608,37 @@ impl Store {
         Ok(())
     }
 
+    /// 默认条目和映射属于同一次索引提交；失败时两者都保留旧值。
+    pub fn vault_upsert_default(&self, item: &VaultItem, mapping: &str) -> Result<(), String> {
+        let transaction = self.conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        self.vault_upsert(item)?;
+        self.set_setting(mapping, &item.id)?;
+        transaction.commit().map_err(|e| format!("保存默认密钥映射失败: {e}"))
+    }
+
+    /// 发布端点和网关设置共享提交边界；只改端点元数据，避免旧快照覆盖备注或密钥提示。
+    pub fn vault_metadata_and_setting(
+        &self, key: &str, value: &str, vault_version: Option<(&str, i64)>,
+        endpoint: Option<(&str, i64)>,
+    ) -> Result<(), String> {
+        let transaction = self.conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        if let Some((id, expected)) = vault_version {
+            if self.vault_get(id)?.map(|item| item.updated_at) != Some(expected) {
+                return Err("关联密钥已变化或删除，请重新上架".into());
+            }
+            if let Some((url, updated_at)) = endpoint {
+                self.conn.execute(
+                    "UPDATE vault_items SET api_endpoint = ?1, updated_at = ?2 WHERE id = ?3 AND updated_at = ?4",
+                    params![url, updated_at, id, expected],
+                ).map_err(|e| format!("保存密钥箱端点失败: {e}"))?;
+            }
+        } else if endpoint.is_some() {
+            return Err("保存端点需要关联密钥箱条目".into());
+        }
+        self.set_setting(key, value)?;
+        transaction.commit().map_err(|e| format!("保存网关及端点失败: {e}"))
+    }
+
     pub fn vault_delete(&self, id: &str) -> Result<(), String> {
         self.conn
             .execute("DELETE FROM vault_items WHERE id = ?1", params![id])

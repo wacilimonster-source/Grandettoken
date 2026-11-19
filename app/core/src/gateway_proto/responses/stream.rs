@@ -1,7 +1,7 @@
 use super::output::{chat_id, chat_usage, clean_error, finish_reason, function_call, message_part};
 use crate::gateway_proto::{
-    error::openai_error_value,
-    stream::{SseEventBuffer, SseLineReader},
+    error::{openai_error_value, redact_error_strings},
+    stream::{SseEventBuffer, SseLineReader, MAX_SSE_BUFFER_BYTES},
 };
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -24,6 +24,8 @@ pub struct ResponsesChatStream {
     terminal: bool,
     parts: BTreeMap<Part, usize>,
     tools: BTreeMap<u64, ToolProgress>,
+    tool_buffer_bytes: usize,
+    sensitive_values: Vec<String>,
 }
 
 impl ResponsesChatStream {
@@ -39,7 +41,14 @@ impl ResponsesChatStream {
             terminal: false,
             parts: BTreeMap::new(),
             tools: BTreeMap::new(),
+            tool_buffer_bytes: 0,
+            sensitive_values: Vec::new(),
         }
+    }
+
+    pub fn with_sensitive_values(mut self, values: Vec<String>) -> Self {
+        self.sensitive_values = values;
+        self
     }
 
     pub fn is_terminal(&self) -> bool {
@@ -47,11 +56,24 @@ impl ResponsesChatStream {
     }
 
     pub fn push_bytes(&mut self, bytes: &[u8]) -> Vec<Value> {
-        let lines = self.lines.feed_bytes(bytes);
-        self.read_lines(lines)
+        if self.terminal {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for part in bytes.chunks(16 * 1024) {
+            let lines = self.lines.feed_bytes(part);
+            out.extend(self.read_lines(lines));
+            if self.terminal {
+                break;
+            }
+        }
+        out
     }
 
     pub fn finish(&mut self) -> Vec<Value> {
+        if self.terminal {
+            return Vec::new();
+        }
         let lines = self.lines.flush();
         let mut out = self.read_lines(lines);
         if let Some(event) = self.events.take_event() {
@@ -73,20 +95,45 @@ impl ResponsesChatStream {
             if let Some(event) = self.events.feed_line(&line) {
                 self.event(&event, &mut out);
             }
+            if self.events.limit_exceeded() {
+                self.check_buffer_limit(&mut out);
+            }
             if self.terminal {
                 break;
             }
         }
+        self.check_buffer_limit(&mut out);
         out
+    }
+
+    fn check_buffer_limit(&mut self, out: &mut Vec<Value>) {
+        if !self.terminal && (self.lines.limit_exceeded() || self.events.limit_exceeded()) {
+            self.error("上游 SSE 单行或单事件超过 8 MiB 缓冲限制", "stream_buffer_limit", out);
+        }
+    }
+
+    fn reserve_tool_bytes(&mut self, added: usize, out: &mut Vec<Value>) -> bool {
+        if added > MAX_SSE_BUFFER_BYTES.saturating_sub(self.tool_buffer_bytes) {
+            self.error("上游 Responses 工具参数累计超过 8 MiB 缓冲限制", "stream_buffer_limit", out);
+            return false;
+        }
+        self.tool_buffer_bytes += added;
+        true
     }
 
     fn event(&mut self, payload: &str, out: &mut Vec<Value>) {
         if self.terminal {
             return;
         }
-        let Ok(event) = serde_json::from_str::<Value>(payload) else {
+        let Ok(mut event) = serde_json::from_str::<Value>(payload) else {
             return;
         };
+        // 必须在 clean_error/finish_reason 截断之前清洗完整错误值，正常 output 不改写。
+        if event["type"].as_str() == Some("error") {
+            redact_error_strings(&mut event, &self.sensitive_values);
+        } else if let Some(error) = event.pointer_mut("/response/error") {
+            redact_error_strings(error, &self.sensitive_values);
+        }
         let response = &event["response"];
         let index = event["output_index"].as_u64().unwrap_or_default();
         let result = match event["type"].as_str() {
@@ -196,6 +243,9 @@ impl ResponsesChatStream {
             .unwrap_or_default()
             .to_owned();
         if !self.tools.contains_key(&index) {
+            if !self.reserve_tool_bytes(arguments.len(), out) {
+                return Ok(());
+            }
             let tool_index = self.tools.len();
             self.tools.insert(
                 index,
@@ -234,6 +284,11 @@ impl ResponsesChatStream {
         if delta.is_empty() {
             return;
         }
+        if self.tools.contains_key(&index) {
+            if !self.reserve_tool_bytes(delta.len(), out) {
+                return;
+            }
+        }
         if let Some(tool) = self.tools.get_mut(&index) {
             tool.arguments.push_str(delta);
             let tool_index = tool.index;
@@ -253,6 +308,9 @@ impl ResponsesChatStream {
             .enumerate()
         {
             self.final_item(index as u64, item, out)?;
+            if self.terminal {
+                return Ok(());
+            }
         }
         let reason = finish_reason(response, !self.tools.is_empty())?;
         self.start(out);

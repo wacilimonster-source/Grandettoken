@@ -436,7 +436,7 @@ pub fn normalize_non_stream_response(
         } else if mode == ThinkingMode::Auto && reasoning.is_empty() {
             if let Some(c) = msg.get("content").and_then(extract_text_from_value) {
                 let split = split_think_tags_complete(&c);
-                if !split.thinking.is_empty() {
+                if !split.thinking.is_empty() || split.content != c {
                     reasoning = split.thinking;
                     msg.insert("content".into(), Value::String(split.content));
                 }
@@ -515,6 +515,36 @@ mod tests {
         assert!(d.get("content").is_none());
         assert_eq!(d["extra_content"]["google"]["thought_signature"], "sig_1");
         assert!(d["extra_content"]["google"].get("thought").is_none());
+    }
+
+    #[test]
+    fn empty_think_tags_match_stream_and_nonstream_without_changing_other_modes() {
+        for tag in ["think", "thinking", "thought"] {
+            for body in ["", "\n\n"] {
+                let text = format!("<{tag}>{body}</{tag}>\r\nOK");
+                for mode in [ThinkingMode::Auto, ThinkingMode::FieldsOnly, ThinkingMode::Passthrough] {
+                    let mut response = json!({"choices":[{"message":{"content":text}}]});
+                    let counts = normalize_non_stream_response(&mut response, "m", mode);
+                    let mut splitter = ThinkTagSplitter::new();
+                    let mut delta = json!({"content":text});
+                    normalize_stream_delta(delta.as_object_mut().unwrap(), mode, &mut splitter);
+                    let tail = splitter.finish();
+                    let stream_content = format!("{}{}", delta["content"].as_str().unwrap_or_default(), tail.content);
+                    assert_eq!(response["choices"][0]["message"]["content"], stream_content, "tag={tag}, mode={mode:?}");
+                    if mode == ThinkingMode::Auto {
+                        assert_eq!(stream_content, "OK");
+                        assert_eq!(counts, (0, 2));
+                    } else {
+                        assert_eq!(stream_content, text);
+                    }
+                    assert!(response["choices"][0]["message"].get("reasoning_content").is_none());
+                }
+            }
+        }
+        let text = "<think></think>";
+        let mut response = json!({"choices":[{"message":{"content":text}}]});
+        assert_eq!(normalize_non_stream_response(&mut response, "m", ThinkingMode::Auto), (0, 0));
+        assert_eq!(response["choices"][0]["message"]["content"], "");
     }
 
     #[test]

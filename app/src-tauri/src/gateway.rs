@@ -1,309 +1,12 @@
-use crate::gateway_http::{
-    build_router, dedupe_nonempty, fetch_channel_models, fetch_configured_models, now_unix, run_test_chat,
-    GatewayDiagEntry,
-};
-use axum::http::{header, HeaderMap};
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use std::{
-    collections::{BTreeMap, VecDeque},
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::{Arc, Mutex},
-    time::Duration,
-};
-use tauri::Manager;
-use tokenscope_core::{
-    gateway_proto::{
-        error::redact_secrets,
-        normalize_alias,
-        sources::{
-            host_of_url, resolve_source_defaults, AGENT_PLATFORM_DEFAULT_BASE_URL,
-            AGENT_PLATFORM_PRESET_MODELS, OPENAI_PRESETS,
-        },
-        GatewaySourceKind, OpenAiWire, ThinkingMode, ThoughtRequestPolicy,
-    },
-    proxy::ProxyClients,
-    secrets,
-    store::Store,
-};
-
-const CONFIG_KEY: &str = "local_gateway_v1";
-const SECRET_KEY: &str = "local-gateway-access";
-const MAX_DIAG_ENTRIES: usize = 50;
-
-fn default_system_proxy() -> bool {
-    true
-}
-
-fn default_last_status() -> String {
-    "unknown".into()
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Published {
-    #[serde(default)]
-    pub channel_id: String,
-    #[serde(default)]
-    pub vault_id: String,
-    #[serde(default)]
-    pub no_upstream_key: bool,
-    pub source: String,
-    #[serde(default)]
-    pub wire: OpenAiWire,
-    #[serde(default)]
-    pub template: String,
-    #[serde(default)]
-    pub base_url: String,
-    pub alias: String,
-    #[serde(default)]
-    pub host: String,
-    #[serde(default)]
-    pub models: Vec<String>,
-    #[serde(default)]
-    pub manual_models: Vec<String>,
-    #[serde(default)]
-    pub updated_at: i64,
-    #[serde(default)]
-    pub allowed_models: Option<Vec<String>>,
-    #[serde(default = "default_system_proxy")]
-    pub system_proxy: bool,
-    #[serde(default)]
-    pub custom_headers: BTreeMap<String, String>,
-    #[serde(default)]
-    pub thinking_mode: ThinkingMode,
-    #[serde(default)]
-    pub thought_policy: ThoughtRequestPolicy,
-    #[serde(default = "default_last_status")]
-    pub last_status: String,
-    #[serde(default)]
-    pub last_error: Option<String>,
-    #[serde(default)]
-    pub last_checked_at: Option<i64>,
-}
-
-impl Published {
-    pub fn kind(&self) -> GatewaySourceKind {
-        GatewaySourceKind::parse(&self.source).unwrap_or(GatewaySourceKind::OpenAiCompat)
-    }
-
-    pub fn normalize_in_place(&mut self, fallback_id: &str) -> bool {
-        let mut changed = false;
-        if self.channel_id.trim().is_empty() {
-            self.channel_id = if !self.vault_id.trim().is_empty() {
-                self.vault_id.clone()
-            } else {
-                fallback_id.to_string()
-            };
-            changed = true;
-        }
-        if let Ok((kind, tpl, url)) =
-            resolve_source_defaults(&self.source, &self.template, self.wire.base_url_input(&self.base_url))
-        {
-            if self.source != kind.as_str() {
-                self.source = kind.as_str().to_string();
-                changed = true;
-            }
-            if self.template != tpl {
-                self.template = tpl;
-                changed = true;
-            }
-            if self.base_url != url {
-                self.base_url = url;
-                changed = true;
-            }
-        }
-        let h = host_of_url(&self.base_url);
-        if !h.is_empty() && self.host != h {
-            self.host = h;
-            changed = true;
-        }
-        changed
-    }
-}
-
-pub fn all_channel_models(c: &Published) -> Vec<String> {
-    let mut combined = c.models.clone();
-    combined.extend(c.manual_models.clone());
-    dedupe_nonempty(combined)
-}
-
-pub fn effective_models(c: &Published) -> Vec<String> {
-    let mut all = all_channel_models(c);
-    if let Some(ref allowed) = c.allowed_models {
-        all.retain(|m| allowed.contains(m));
-    }
-    all
-}
-
-pub fn model_id(c: &Published, id: &str) -> String {
-    format!("{}/{}", c.alias, id)
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct Settings {
-    pub port: u16,
-    pub lan: bool,
-    pub auth: bool,
-    pub channels: Vec<Published>,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            port: 18771,
-            lan: true,
-            auth: true,
-            channels: vec![],
-        }
-    }
-}
-
-pub struct Inner {
-    pub settings: Settings,
-    pub shutdown: Option<tokio::sync::oneshot::Sender<()>>,
-    pub startup_error: Option<String>,
-    pub diagnostics: VecDeque<GatewayDiagEntry>,
-    pub next_diag_id: u64,
-    pub test_chat_abort: Option<(u64, tokio::task::AbortHandle)>,
-    pub next_test_id: u64,
-}
-
-#[derive(Clone)]
-pub struct Gateway {
-    pub store: Arc<Mutex<Store>>,
-    pub inner: Arc<Mutex<Inner>>,
-    pub clients: Arc<ProxyClients>,
-    pub lifecycle: Arc<tokio::sync::Mutex<()>>,
-}
-
-pub fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
-}
-
-impl Gateway {
-    pub fn new(store: Arc<Mutex<Store>>) -> Result<Self, String> {
-        let mut settings: Settings = lock(&store)
-            .get_setting(CONFIG_KEY)
-            .ok()
-            .flatten()
-            .and_then(|v| serde_json::from_str(&v).ok())
-            .unwrap_or_default();
-        let mut migrated = false;
-        for (i, ch) in settings.channels.iter_mut().enumerate() {
-            if ch.normalize_in_place(&format!("legacy_{i}")) {
-                migrated = true;
-            }
-        }
-        let clients = ProxyClients::new()?;
-        let gw = Self {
-            store,
-            inner: Arc::new(Mutex::new(Inner {
-                settings,
-                shutdown: None,
-                startup_error: None,
-                diagnostics: VecDeque::with_capacity(MAX_DIAG_ENTRIES),
-                next_diag_id: 1,
-                test_chat_abort: None,
-                next_test_id: 1,
-            })),
-            clients: Arc::new(clients),
-            lifecycle: Arc::new(tokio::sync::Mutex::new(())),
-        };
-        if migrated {
-            let current = lock(&gw.inner).settings.clone();
-            let _ = gw.save(&current);
-        }
-        Ok(gw)
-    }
-
-    pub fn save(&self, settings: &Settings) -> Result<(), String> {
-        lock(&self.store).set_setting(
-            CONFIG_KEY,
-            &serde_json::to_string(settings).map_err(|e| e.to_string())?,
-        )
-    }
-
-    pub fn remove_vault(&self, id: &str) -> Result<(), String> {
-        let mut inner = lock(&self.inner);
-        let mut next = inner.settings.clone();
-        next.channels.retain(|c| c.no_upstream_key || c.vault_id != id);
-        self.save(&next)?;
-        inner.settings = next;
-        Ok(())
-    }
-
-    pub fn record_diag(&self, mut entry: GatewayDiagEntry) {
-        let log_line = (entry.status >= 400
-            || entry.error.is_some()
-            || entry.diag_note.is_some()
-            || (entry.thinking_chars == 0
-                && entry.content_chars == 0
-                && entry.tool_call_count == 0))
-            .then(|| {
-                let mut parts = vec![
-                    format!("HTTP {}", entry.status),
-                    format!("{}ms", entry.latency_ms),
-                    if entry.stream { "SSE" } else { "JSON" }.to_string(),
-                    format!(
-                        "think={}/content={}/tools={}({})",
-                        entry.thinking_chars,
-                        entry.content_chars,
-                        entry.tool_call_count,
-                        entry.tool_call_chars
-                    ),
-                ];
-                if let Some(ttft) = entry.first_byte_ms {
-                    parts.push(format!("ttft={ttft}ms"));
-                }
-                if entry.frame_count > 0 {
-                    parts.push(format!("frames={}", entry.frame_count));
-                }
-                if let Some(ref fr) = entry.finish_reason {
-                    parts.push(format!("finish={fr}"));
-                }
-                if let Some(ref note) = entry.diag_note {
-                    parts.push(format!("note={note}"));
-                }
-                if let Some(ref err) = entry.error {
-                    parts.push(format!("err={err}"));
-                }
-                (entry.model.clone(), redact_secrets(&parts.join(" · ")))
-            });
-
-        {
-            let mut inner = lock(&self.inner);
-            entry.id = inner.next_diag_id;
-            inner.next_diag_id += 1;
-            if inner.diagnostics.len() >= MAX_DIAG_ENTRIES {
-                inner.diagnostics.pop_front();
-            }
-            inner.diagnostics.push_back(entry);
-        }
-        if let Some((model, msg)) = log_line {
-            tokenscope_core::diaglog::write_keyed("gateway", &model, &msg);
-        }
-    }
-
-    pub fn live_channels(&self) -> Vec<Published> {
-        let channels = lock(&self.inner).settings.channels.clone();
-        let vault = match lock(&self.store).vault_list() {
-            Ok(v) => v,
-            Err(_) => return vec![],
-        };
-        channels
-            .into_iter()
-            .filter(|c| {
-                (c.no_upstream_key && c.kind() == GatewaySourceKind::OpenAiCompat)
-                    // 上游请求按 vault_id 实时读密钥箱最新凭据；更新密钥后异步刷模型期间
-                    // 不得把渠道从 /v1/models 里临时抹掉（否则外部客户端拉到空模型列表）。
-                    || vault.iter().any(|v| v.id == c.vault_id)
-            })
-            .collect()
-    }
-}
-
+use tokenscope_core::gateway::http::{dedupe_nonempty,fetch_channel_models,fetch_configured_models,now_unix,run_test_chat};
+pub use tokenscope_core::gateway::{all_channel_models,effective_models,lock,model_id,Gateway,Published};
+use tokenscope_core::gateway::http::GatewayDiagEntry;
+use serde::Deserialize;
+use serde_json::{json,Value};
+use std::{collections::BTreeMap,net::{IpAddr,Ipv4Addr}};
+use tauri::{Manager,Emitter};
+use tokenscope_core::{gateway_proto::{error::redact_secrets,normalize_alias,sources::{host_of_url,resolve_source_defaults,AGENT_PLATFORM_DEFAULT_BASE_URL,AGENT_PLATFORM_PRESET_MODELS,OPENAI_PRESETS},GatewaySourceKind,OpenAiWire,ThinkingMode,ThoughtRequestPolicy},secrets};
+const SECRET_KEY:&str=tokenscope_core::gateway::SECRET_KEY;
 pub fn token() -> Result<String, String> {
     let mut b = [0u8; 32];
     getrandom::getrandom(&mut b).map_err(|e| e.to_string())?;
@@ -330,64 +33,6 @@ fn secret() -> Result<String, String> {
             secrets::set(SECRET_KEY, &s)?;
             Ok(s)
         }
-    }
-}
-
-pub fn authorized(headers: &HeaderMap, settings: &Settings) -> bool {
-    if headers.contains_key(header::ORIGIN) {
-        return false;
-    }
-    if !settings.auth && !settings.lan {
-        let Some(h) = headers.get(header::HOST).and_then(|v| v.to_str().ok()) else {
-            return false;
-        };
-        let host = if let Some(rest) = h.strip_prefix('[') {
-            rest.split(']').next().unwrap_or("")
-        } else {
-            h.rsplit_once(':').map(|(a, _)| a).unwrap_or(h)
-        };
-        return matches!(host, "127.0.0.1" | "localhost" | "::1");
-    }
-    let provided = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| {
-            let trimmed = s.trim();
-            let (scheme, token) = trimmed.split_once(' ')?;
-            if scheme.eq_ignore_ascii_case("bearer") {
-                Some(token.trim())
-            } else {
-                None
-            }
-        })
-        .or_else(|| {
-            headers
-                .get("x-api-key")
-                .and_then(|v| v.to_str().ok())
-                .map(str::trim)
-        })
-        .unwrap_or("");
-    let expected = match secrets::get(SECRET_KEY) {
-        Ok(Some(s)) => s,
-        _ => return false,
-    };
-    if provided.len() != expected.len() || provided.is_empty() {
-        return false;
-    }
-    provided
-        .bytes()
-        .zip(expected.bytes())
-        .fold(0u8, |a, (x, y)| a | (x ^ y))
-        == 0
-}
-
-pub fn peer_allowed(peer: SocketAddr, settings: &Settings) -> bool {
-    let allow_v4 = |ip: Ipv4Addr| {
-        ip.is_loopback() || (settings.lan && (ip.is_private() || ip.is_link_local()))
-    };
-    match peer.ip() {
-        IpAddr::V4(ip) => allow_v4(ip),
-        IpAddr::V6(ip) => ip.is_loopback() || ip.to_ipv4_mapped().is_some_and(allow_v4),
     }
 }
 
@@ -445,92 +90,31 @@ async fn read_key_for_channel(
     Ok(Some(k))
 }
 
-async fn refresh_single_channel(g: &Gateway, mut c: Published) -> Published {
-    let item = if !c.no_upstream_key {
-        lock(&g.store).vault_get(&c.vault_id).ok().flatten()
-    } else {
-        None
-    };
-    let kind = c.kind();
-    let key_res = read_key_for_channel(kind, &c.vault_id, c.no_upstream_key).await;
-    let client_res = g.clients.client(c.system_proxy);
-    let now = now_unix();
-    match (key_res, client_res) {
-        (Ok(key), Ok(client)) => {
-            match fetch_configured_models(&client, &c, key.as_deref()).await {
-                Ok(res) => {
-                    c.models = res.fetched;
-                    if !res.host.is_empty() {
-                        c.host = res.host;
-                    }
-                    let all = all_channel_models(&c);
-                    if let Some(ref mut allowed) = c.allowed_models {
-                        allowed.retain(|m| all.contains(m));
-                    }
-                    c.last_status = "ok".into();
-                    c.last_error = res.probe_note;
-                }
-                Err(e) => {
-                    c.last_status = "error".into();
-                    c.last_error = Some(redact_secrets(&e));
-                }
-            }
-        }
-        (Err(e), _) | (_, Err(e)) => {
-            c.last_status = "error".into();
-            c.last_error = Some(redact_secrets(&e));
-        }
-    }
-    c.last_checked_at = Some(now);
-    if let Some(v) = item {
-        c.updated_at = v.updated_at;
-    } else if c.no_upstream_key {
-        c.updated_at = now;
-    }
-    c
+fn get_gateway(app: &tauri::AppHandle) -> Result<tauri::State<'_, Gateway>, String> {
+    app.try_state::<Gateway>().ok_or_else(|| "本地网关未初始化，请检查启动错误并恢复配置后重启".into())
 }
 
-/// 当密钥箱或渠道监控页面更新凭据后，自动同步所有关联该 `vault_id` 的网关渠道。
-pub async fn sync_vault_channels(app: tauri::AppHandle, vault_id: String) {
-    let g = app.state::<Gateway>();
-    let targets: Vec<Published> = {
-        let inner = lock(&g.inner);
-        inner
-            .settings
-            .channels
-            .iter()
-            .filter(|c| !c.no_upstream_key && c.vault_id == vault_id)
-            .cloned()
-            .collect()
-    };
-    if targets.is_empty() {
-        return;
-    }
-    let mut updated_map: BTreeMap<String, Published> = BTreeMap::new();
-    for ch in targets {
-        let cid = ch.channel_id.clone();
-        let next = refresh_single_channel(&g, ch).await;
-        updated_map.insert(cid, next);
-    }
-    let mut inner = lock(&g.inner);
-    let mut next_settings = inner.settings.clone();
-    for ch in next_settings.channels.iter_mut() {
-        if let Some(u) = updated_map.remove(&ch.channel_id) {
-            *ch = u;
-        }
-    }
-    if g.save(&next_settings).is_ok() {
-        inner.settings = next_settings;
+pub fn report_sync_error(app: &tauri::AppHandle, error: String) {
+    if let Some(g) = app.try_state::<Gateway>() {
+        let revision = g.begin_sync("import");
+        let state = g.finish_sync(revision, Err(error));
+        let _ = app.emit("gateway-sync-status", state);
+    } else {
+        let _ = app.emit("gateway-sync-status", tokenscope_core::gateway::SyncState { pending:false, error:Some(redact_secrets(&error)), revision:0 });
     }
 }
 
 pub fn spawn_vault_sync(app: &tauri::AppHandle, vault_id: String) {
-    if vault_id.trim().is_empty() {
-        return;
-    }
+    if vault_id.trim().is_empty() { return; }
+    let Some(g) = app.try_state::<Gateway>() else { return; };
+    let g = g.inner().clone();
+    let revision = g.begin_sync(&vault_id);
+    let _ = app.emit("gateway-sync-status", lock(&g.inner).sync_state.clone());
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
-        sync_vault_channels(handle, vault_id).await;
+        let result = g.sync_vault(&vault_id).await;
+        let state = g.finish_sync(revision, result);
+        let _ = handle.emit("gateway-sync-status", state);
     });
 }
 
@@ -613,23 +197,23 @@ pub struct TestChatInput {
 
 #[tauri::command]
 pub async fn gateway_status(app: tauri::AppHandle) -> Result<Value, String> {
-    let g = app.state::<Gateway>();
+    let g = get_gateway(&app)?;
     let vault = lock(&g.store).vault_list()?;
-    let (settings, running, startup_error, diag_count) = {
+    let (settings, running, startup_error, diag_count, sync_state) = {
         let mut inner = lock(&g.inner);
         let mut next = inner.settings.clone();
         let before = next.channels.len();
         next.channels
             .retain(|c| c.no_upstream_key || vault.iter().any(|v| v.id == c.vault_id));
         if next.channels.len() != before {
-            g.save(&next)?;
-            inner.settings = next;
+            g.commit_settings(&mut inner, next)?;
         }
         (
             inner.settings.clone(),
             inner.shutdown.is_some(),
             inner.startup_error.clone(),
             inner.diagnostics.len(),
+            inner.sync_state.clone(),
         )
     };
     let channels: Vec<Value> = settings
@@ -691,95 +275,33 @@ pub async fn gateway_status(app: tauri::AppHandle) -> Result<Value, String> {
         "channels": channels,
         "vault": vault,
         "diagCount": diag_count,
+        "syncState": sync_state,
     }))
 }
 
 pub async fn autostart(app: tauri::AppHandle) {
-    let settings = lock(&app.state::<Gateway>().inner).settings.clone();
+    let Some(g) = app.try_state::<Gateway>() else { return; };
+    let settings = lock(&g.inner).settings.clone();
     if let Err(e) = gateway_start(app.clone(), settings.port, settings.lan, settings.auth).await {
-        lock(&app.state::<Gateway>().inner).startup_error = Some(e);
+        lock(&g.inner).startup_error = Some(e);
     }
 }
 
 #[tauri::command]
-pub async fn gateway_start(
-    app: tauri::AppHandle,
-    port: u16,
-    lan: bool,
-    auth: bool,
-) -> Result<Value, String> {
-    let g = app.state::<Gateway>();
-    let _guard = g.lifecycle.lock().await;
-    if port == 0 {
-        return Err("端口必须在 1 到 65535 之间".into());
-    }
-    if lan && !auth {
-        return Err("局域网访问必须启用网关密钥".into());
-    }
-    if lock(&g.inner).shutdown.is_some() {
-        return Err("网关正在运行，请使用应用并重启或先停止网关".into());
-    }
-    if auth {
-        secret()?;
-    }
-    let addr = SocketAddr::new(
-        IpAddr::V4(if lan {
-            Ipv4Addr::UNSPECIFIED
-        } else {
-            Ipv4Addr::LOCALHOST
-        }),
-        port,
-    );
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(|e| format!("无法监听端口 {port}: {e}"))?;
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    {
-        let mut inner = lock(&g.inner);
-        let mut next = inner.settings.clone();
-        next.port = port;
-        next.lan = lan;
-        next.auth = auth;
-        g.save(&next)?;
-        inner.settings = next;
-        inner.shutdown = Some(tx);
-        inner.startup_error = None;
-    }
-    let router = build_router(g.inner().clone());
-    tauri::async_runtime::spawn(async move {
-        let _ = axum::serve(
-            listener,
-            router.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .with_graceful_shutdown(async {
-            let _ = rx.await;
-        })
-        .await;
-    });
-    drop(_guard);
+pub async fn gateway_start(app: tauri::AppHandle, port:u16, lan:bool, auth:bool) -> Result<Value,String> {
+    get_gateway(&app)?.start(port, lan, auth).await?;
     gateway_status(app).await
 }
 
 #[tauri::command]
-pub async fn gateway_stop(app: tauri::AppHandle) -> Result<(), String> {
-    let g = app.state::<Gateway>();
-    let _guard = g.lifecycle.lock().await;
-    if let Some(tx) = lock(&g.inner).shutdown.take() {
-        let _ = tx.send(());
-    }
-    Ok(())
+pub async fn gateway_stop(app: tauri::AppHandle) -> Result<(),String> {
+    get_gateway(&app)?.stop().await
 }
 
 #[tauri::command]
-pub async fn gateway_restart(
-    app: tauri::AppHandle,
-    port: u16,
-    lan: bool,
-    auth: bool,
-) -> Result<Value, String> {
-    gateway_stop(app.clone()).await?;
-    tokio::time::sleep(Duration::from_millis(120)).await;
-    gateway_start(app, port, lan, auth).await
+pub async fn gateway_restart(app: tauri::AppHandle, port:u16, lan:bool, auth:bool) -> Result<Value,String> {
+    get_gateway(&app)?.restart(port, lan, auth).await?;
+    gateway_status(app).await
 }
 
 #[tauri::command]
@@ -798,19 +320,18 @@ pub async fn gateway_publish(
     app: tauri::AppHandle,
     input: PublishChannelInput,
 ) -> Result<Value, String> {
-    let g = app.state::<Gateway>();
+    let g = get_gateway(&app)?;
     let alias = normalize_alias(&input.alias)?;
     let no_upstream_key = input.no_upstream_key.unwrap_or(false);
     let channel_id = match input.channel_id.filter(|s| !s.trim().is_empty()) {
         Some(id) => id,
         None => new_channel_id()?,
     };
-    let existing = lock(&g.inner)
-        .settings
-        .channels
-        .iter()
-        .find(|c| c.channel_id == channel_id)
-        .cloned();
+    let (existing, revision) = {
+        let inner = lock(&g.inner);
+        let existing = inner.settings.channels.iter().find(|c| c.channel_id == channel_id).cloned();
+        (existing, inner.config_revision)
+    };
     let wire = input.wire.or_else(|| existing.as_ref().map(|c| c.wire)).unwrap_or_default();
     let (kind, template, base_url) = resolve_source_defaults(
         &input.source,
@@ -852,19 +373,19 @@ pub async fn gateway_publish(
         .or_else(|| existing.as_ref().map(|c| c.manual_models.clone()))
         .unwrap_or_default();
 
+    // 先捕获版本，再在锁外读凭据；最终提交复核版本，探测失败不写端点。
+    let vault_updated_at = if no_upstream_key { None } else {
+        Some(lock(&g.store).vault_get(&input.vault_id)?.ok_or("密钥箱条目不存在")?.updated_at)
+    };
     let key = read_key_for_channel(kind, &input.vault_id, no_upstream_key).await?;
-    let mut updated_at = now_unix();
-    if !no_upstream_key {
-        let mut item = lock(&g.store)
-            .vault_get(&input.vault_id)?
-            .ok_or("密钥箱条目不存在")?;
-        if input.save_endpoint_to_vault.unwrap_or(false) && kind == GatewaySourceKind::OpenAiCompat {
-            item.api_endpoint = base_url.clone();
-            item.updated_at = now_unix();
-            lock(&g.store).vault_upsert(&item)?;
-        }
-        updated_at = item.updated_at;
-    }
+    let save_endpoint = input.save_endpoint_to_vault.unwrap_or(false)
+        && kind == GatewaySourceKind::OpenAiCompat && !no_upstream_key;
+    let endpoint_update = if save_endpoint {
+        vault_updated_at.map(|old| (base_url.clone(), now_unix().max(old.saturating_add(1))))
+    } else { None };
+    let updated_at = endpoint_update.as_ref().map(|(_, at)| *at)
+        .or(vault_updated_at).unwrap_or_else(now_unix);
+    let vault_id = input.vault_id.clone();
 
     let mut channel = Published {
         channel_id: channel_id.clone(),
@@ -912,11 +433,14 @@ pub async fn gateway_publish(
 
     {
         let mut inner = lock(&g.inner);
+        if inner.config_revision != revision { return Err("渠道配置已变化，请重新上架".into()); }
         let mut next = inner.settings.clone();
+        check_alias_unique(&next.channels, &channel_id, &channel.alias)?;
         next.channels.retain(|c| c.channel_id != channel_id);
         next.channels.push(channel);
-        g.save(&next)?;
-        inner.settings = next;
+        g.commit_publish(&mut inner, revision, next,
+            vault_updated_at.map(|at| (vault_id.as_str(), at)),
+            endpoint_update.as_ref().map(|(url, at)| (url.as_str(), *at)))?;
     }
     gateway_status(app).await
 }
@@ -926,14 +450,13 @@ pub async fn gateway_update_channel(
     app: tauri::AppHandle,
     input: UpdateChannelInput,
 ) -> Result<Value, String> {
-    let g = app.state::<Gateway>();
-    let mut channel = lock(&g.inner)
-        .settings
-        .channels
-        .iter()
-        .find(|c| c.channel_id == input.channel_id)
-        .cloned()
-        .ok_or("渠道不存在或已下架")?;
+    let g = get_gateway(&app)?;
+    let (mut channel, revision) = {
+        let inner = lock(&g.inner);
+        let channel = inner.settings.channels.iter().find(|c| c.channel_id == input.channel_id)
+            .cloned().ok_or("渠道不存在或已下架")?;
+        (channel, inner.config_revision)
+    };
 
     if let Some(ref alias_raw) = input.alias {
         let alias = normalize_alias(alias_raw)?;
@@ -980,12 +503,6 @@ pub async fn gateway_update_channel(
     if let Some(manual) = input.manual_models {
         channel.manual_models = dedupe_nonempty(manual);
     }
-    if channel.wire == OpenAiWire::Responses && !channel.manual_models.is_empty() {
-        channel.models.clear();
-        if let Some(allowed) = channel.allowed_models.as_mut() {
-            allowed.retain(|m| channel.manual_models.contains(m));
-        }
-    }
     if let Some(hdrs) = input.custom_headers {
         channel.custom_headers = hdrs;
     }
@@ -995,38 +512,40 @@ pub async fn gateway_update_channel(
     if let Some(ref pol) = input.thought_policy {
         channel.thought_policy = ThoughtRequestPolicy::parse(pol);
     }
-    if let Some(opt_allowed) = input.allowed_models {
-        let avail = all_channel_models(&channel);
-        if let Some(ref list) = opt_allowed {
-            if list.iter().any(|m| !avail.contains(m)) {
-                return Err("存在不在可用模型列表中的勾选模型，请刷新后重试".into());
-            }
-        }
-        channel.allowed_models = opt_allowed;
-    }
-
-    if channel.wire == OpenAiWire::Responses && all_channel_models(&channel).is_empty() {
-        channel.allowed_models = None;
-        channel = refresh_single_channel(&g, channel).await;
-        if channel.models.is_empty() {
-            let reason = channel.last_error.as_deref().unwrap_or("上游模型列表为空");
-            return Err(format!("{reason}。Responses 渠道可填写手动模型"));
-        }
-    } else if input.refresh_models.unwrap_or(false) {
-        channel = refresh_single_channel(&g, channel).await;
-    }
-
+    let need_refresh;
     {
         let mut inner = lock(&g.inner);
+        if inner.config_revision != revision { return Err("渠道配置已变化，请重新保存".into()); }
         let mut next = inner.settings.clone();
         check_alias_unique(&next.channels, &channel.channel_id, &channel.alias)?;
-        if let Some(slot) = next.channels.iter_mut().find(|c| c.channel_id == channel.channel_id) {
-            *slot = channel;
-        } else {
-            return Err("渠道已被移除".into());
+        let slot = next.channels.iter_mut().find(|c| c.channel_id == channel.channel_id)
+            .ok_or("渠道已被移除")?;
+        // 刷新不改用户配置修订号；保留同锁读取的最新派生结果，而非保存早前 clone。
+        channel.merge_current_probe(slot);
+        if channel.wire == OpenAiWire::Responses && !channel.manual_models.is_empty() {
+            channel.models.clear();
+            if let Some(allowed) = channel.allowed_models.as_mut() {
+                allowed.retain(|m| channel.manual_models.contains(m));
+            }
         }
-        g.save(&next)?;
-        inner.settings = next;
+        if let Some(opt_allowed) = input.allowed_models {
+            let avail = all_channel_models(&channel);
+            if let Some(ref list) = opt_allowed {
+                if list.iter().any(|m| !avail.contains(m)) {
+                    return Err("存在不在可用模型列表中的勾选模型，请刷新后重试".into());
+                }
+            }
+            channel.allowed_models = opt_allowed;
+        }
+        need_refresh = input.refresh_models.unwrap_or(false)
+            || (channel.wire == OpenAiWire::Responses && all_channel_models(&channel).is_empty());
+        *slot = channel;
+        g.commit_settings(&mut inner, next)?;
+    }
+    if need_refresh {
+        if let Err(error) = g.refresh_channel(&input.channel_id).await {
+            report_sync_error(&app, format!("渠道设置已保存，但模型同步失败：{error}"));
+        }
     }
     gateway_status(app).await
 }
@@ -1036,24 +555,8 @@ pub async fn gateway_refresh_channel(
     app: tauri::AppHandle,
     channel_id: String,
 ) -> Result<Value, String> {
-    let g = app.state::<Gateway>();
-    let target = lock(&g.inner)
-        .settings
-        .channels
-        .iter()
-        .find(|c| c.channel_id == channel_id || c.vault_id == channel_id)
-        .cloned()
-        .ok_or("渠道不存在")?;
-    let updated = refresh_single_channel(&g, target).await;
-    {
-        let mut inner = lock(&g.inner);
-        let mut next = inner.settings.clone();
-        if let Some(slot) = next.channels.iter_mut().find(|c| c.channel_id == updated.channel_id) {
-            *slot = updated;
-        }
-        g.save(&next)?;
-        inner.settings = next;
-    }
+    let g = get_gateway(&app)?;
+    if !g.refresh_channel(&channel_id).await? { return Err("渠道配置已变化，请重新刷新".into()); }
     gateway_status(app).await
 }
 
@@ -1062,13 +565,12 @@ pub async fn gateway_unpublish(
     app: tauri::AppHandle,
     channel_id: String,
 ) -> Result<(), String> {
-    let g = app.state::<Gateway>();
+    let g = get_gateway(&app)?;
     let mut inner = lock(&g.inner);
     let mut next = inner.settings.clone();
     next.channels
         .retain(|c| c.channel_id != channel_id && c.vault_id != channel_id);
-    g.save(&next)?;
-    inner.settings = next;
+    g.commit_settings(&mut inner, next)?;
     Ok(())
 }
 
@@ -1077,7 +579,7 @@ pub async fn gateway_test_channel(
     app: tauri::AppHandle,
     channel_id: String,
 ) -> Result<Value, String> {
-    let g = app.state::<Gateway>();
+    let g = get_gateway(&app)?;
     let channel = lock(&g.inner)
         .settings
         .channels
@@ -1147,7 +649,7 @@ pub async fn gateway_test_chat(
     app: tauri::AppHandle,
     input: TestChatInput,
 ) -> Result<Value, String> {
-    let g = app.state::<Gateway>();
+    let g = get_gateway(&app)?;
     let channel = lock(&g.inner)
         .settings
         .channels
@@ -1210,7 +712,7 @@ pub async fn gateway_test_chat(
 
 #[tauri::command]
 pub async fn gateway_cancel_test_chat(app: tauri::AppHandle) -> Result<bool, String> {
-    let g = app.state::<Gateway>();
+    let g = get_gateway(&app)?;
     let prev = lock(&g.inner).test_chat_abort.take();
     if let Some((_, abort)) = prev {
         abort.abort();
@@ -1221,14 +723,14 @@ pub async fn gateway_cancel_test_chat(app: tauri::AppHandle) -> Result<bool, Str
 
 #[tauri::command]
 pub async fn gateway_diagnostics(app: tauri::AppHandle) -> Result<Vec<GatewayDiagEntry>, String> {
-    let g = app.state::<Gateway>();
+    let g = get_gateway(&app)?;
     let inner = lock(&g.inner);
     Ok(inner.diagnostics.iter().rev().cloned().collect())
 }
 
 #[tauri::command]
 pub async fn gateway_clear_diagnostics(app: tauri::AppHandle) -> Result<(), String> {
-    let g = app.state::<Gateway>();
+    let g = get_gateway(&app)?;
     lock(&g.inner).diagnostics.clear();
     Ok(())
 }
@@ -1236,107 +738,6 @@ pub async fn gateway_clear_diagnostics(app: tauri::AppHandle) -> Result<(), Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-    mod http_bridge;
-
-    #[test]
-    fn legacy_groups_keep_system_proxy_and_migrate_sources() {
-        let legacy = r#"{"vaultId":"v","source":"gemini","alias":"a","host":"h","models":[],"updatedAt":1}"#;
-        let mut group: Published = serde_json::from_str(legacy).unwrap();
-        assert!(group.system_proxy);
-        assert!(group.normalize_in_place("legacy_0"));
-        assert_eq!(group.channel_id, "v");
-        assert_eq!(group.source, "gemini_aistudio");
-        assert!(group
-            .base_url
-            .contains("generativelanguage.googleapis.com/v1beta/openai"));
-
-        group.system_proxy = false;
-        let restored: Published =
-            serde_json::from_str(&serde_json::to_string(&group).unwrap()).unwrap();
-        assert!(!restored.system_proxy);
-    }
-
-    #[test]
-    fn local_no_auth_rejects_browser_origin() {
-        let mut s = Settings::default();
-        s.auth = false;
-        s.lan = false;
-        let mut h = HeaderMap::new();
-        assert!(!authorized(&h, &s));
-        h.insert(header::HOST, "127.0.0.1:18771".parse().unwrap());
-        assert!(authorized(&h, &s));
-        *h.get_mut(header::HOST).unwrap() = "attacker.example:18771".parse().unwrap();
-        assert!(!authorized(&h, &s));
-        *h.get_mut(header::HOST).unwrap() = "localhost:18771".parse().unwrap();
-        assert!(authorized(&h, &s));
-        h.insert(header::ORIGIN, "https://example.com".parse().unwrap());
-        assert!(!authorized(&h, &s));
-        s.lan = true;
-        assert!(!authorized(&HeaderMap::new(), &s));
-    }
-
-    #[test]
-    fn only_local_or_private_networks_are_allowed() {
-        let mut s = Settings::default();
-        s.lan = false;
-        assert!(peer_allowed("127.0.0.1:1234".parse().unwrap(), &s));
-        assert!(peer_allowed("[::1]:1234".parse().unwrap(), &s));
-        assert!(peer_allowed("[::ffff:127.0.0.1]:1234".parse().unwrap(), &s));
-        assert!(!peer_allowed("192.168.1.10:1234".parse().unwrap(), &s));
-        assert!(!peer_allowed("[::ffff:192.168.1.10]:1234".parse().unwrap(), &s));
-        s.lan = true;
-        assert!(peer_allowed("192.168.1.10:1234".parse().unwrap(), &s));
-        assert!(peer_allowed("[::ffff:192.168.1.10]:1234".parse().unwrap(), &s));
-        assert!(!peer_allowed("8.8.8.8:1234".parse().unwrap(), &s));
-    }
-
-    #[test]
-    fn live_channels_survive_vault_timestamp_bump_until_deleted() {
-        let file = std::env::temp_dir().join(format!("gw-live-{}.db", token().unwrap()));
-        let store = Arc::new(Mutex::new(Store::open(&file).unwrap()));
-        lock(&store)
-            .vault_upsert(&tokenscope_core::store::VaultItem {
-                id: "v_1".into(),
-                platform: "openai".into(),
-                label: "k1".into(),
-                hint: "sk-***".into(),
-                note: String::new(),
-                api_endpoint: "https://api.example.com/v1".into(),
-                website: String::new(),
-                created_at: 10,
-                updated_at: 20, // 已更新，比已发布渠道的 updated_at=10 更新
-            })
-            .unwrap();
-        let g = Gateway::new(store.clone()).unwrap();
-        lock(&g.inner).settings.channels.push(Published {
-            channel_id: "ch_1".into(),
-            vault_id: "v_1".into(),
-            no_upstream_key: false,
-            source: "openai_compat".into(),
-            wire: OpenAiWire::default(),
-            template: "custom".into(),
-            base_url: "https://api.example.com/v1".into(),
-            alias: "demo".into(),
-            host: "api.example.com".into(),
-            models: vec!["gpt-4o".into()],
-            manual_models: vec![],
-            updated_at: 10,
-            allowed_models: None,
-            system_proxy: true,
-            custom_headers: BTreeMap::new(),
-            thinking_mode: ThinkingMode::Auto,
-            thought_policy: ThoughtRequestPolicy::FollowClient,
-            last_status: "ok".into(),
-            last_error: None,
-            last_checked_at: Some(10),
-        });
-        assert_eq!(g.live_channels().len(), 1);
-        lock(&store).vault_delete("v_1").unwrap();
-        assert!(g.live_channels().is_empty());
-        drop(store);
-        let _ = std::fs::remove_file(file);
-    }
-
     #[test]
     fn advertised_lan_addresses_are_accepted_private_ipv4() {
         assert!(advertised_lan_ip("192.168.1.10".parse().unwrap()));
