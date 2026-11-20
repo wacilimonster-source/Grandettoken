@@ -330,6 +330,15 @@ const HARNESS = `
         ck("账户早于积分包时卡片显示账户到期 " + layout,
           !!withLaterPack && (layout === 'thumbnail' ? /账户额度到期/.test(withLaterPack.querySelector('.thumb-status').textContent) :
             /账户额度/.test(withLaterPack.querySelector('.r2').textContent)), withLaterPack && withLaterPack.textContent);
+        const exhausted = { ...CHANNELS[0], accountExpiry: { state: "exhausted", at: null }, expiryComplete: true };
+        CHANNELS = [exhausted]; render({});
+        ck("Qoder 账户额度已用完时只有逐笔积分的到期提示 " + layout,
+          !/账户额度到期/.test(document.querySelector('#list .row[data-id="qoder-cn"]').textContent) &&
+          document.querySelector('#sum [data-act="expiry-filter"]').disabled &&
+          !document.querySelector('#sum [data-act="jump"]'));
+        const exhaustedDetail = renderDetail(exhausted);
+        ck("Qoder 详情移除已用完的账户到期卡并保留积分包",
+          !/账户额度到期/.test(exhaustedDetail) && /25 积分将到期/.test(exhaustedDetail));
         CHANNELS = [q];
       }
       const wb = { ...q, id: "wb-expiry", name: "WorkBuddy", accountExpiry: null, expiryComplete: true,

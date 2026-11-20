@@ -661,6 +661,32 @@ mod tests {
         assert_ne!(Region::Global.data_dir(), Region::Cn.data_dir());
     }
 
+    #[test]
+    fn exhausted_plan_quota_does_not_expire_addon_credits() {
+        use crate::providers::{extract_qoder, AccountExpiryState};
+        use serde_json::json;
+
+        let mut body = json!({
+            "userQuota": { "total": 300, "used": 300, "remaining": 0 },
+            "addOnQuota": { "total": 1400, "used": 2, "remaining": 1398 },
+            "isQuotaExceeded": false,
+            "expiresAt": 1795278695000_i64
+        });
+        let result = extract_qoder(&body);
+        assert!(result.valid);
+        assert_eq!(result.remaining, Some(1398.0));
+        assert_eq!(result.account_expiry.unwrap().state, AccountExpiryState::Exhausted);
+        assert!(result.extra.iter().all(|(key, _)| key != "账户额度到期"));
+        assert_eq!(serde_json::to_value(result).unwrap()["accountExpiry"],
+            json!({ "state": "exhausted", "at": null }));
+
+        for remaining in [json!(1), json!(null)] {
+            body["userQuota"]["remaining"] = remaining;
+            let result = extract_qoder(&body);
+            assert_eq!(result.account_expiry.unwrap().state, AccountExpiryState::Dated);
+        }
+    }
+
     /// **真机全链路**:读 Local State → DPAPI 解密钥 → v10 解密 → 解析 token →
     /// 真打一次额度接口与签到接口。
     ///

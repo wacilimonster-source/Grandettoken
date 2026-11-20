@@ -33,7 +33,7 @@ pub struct Expiring {
     pub label: String,
 }
 
-/// 账户级有效期的三态。**不能把「未知」并进「不过期」**:Qoder 只有账户
+/// 账户级有效期。**不能把「未知」并进「不过期」**:Qoder 的账户
 /// 到期时间,逐笔积分有效期是另一回事(见 design-pc-polish-v2 §9.3)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -42,6 +42,8 @@ pub enum AccountExpiryState {
     Dated,
     /// 上游明确表示不过期(哨兵日期)
     Never,
+    /// Qoder 的套餐额度已用尽，无需提醒该额度到期。
+    Exhausted,
     /// 字段存在但无法解释
     Unknown,
 }
@@ -929,7 +931,13 @@ pub fn extract_qoder(body: &Value) -> FetchResult {
                 at: None,
             }),
         };
-        if let Some(acc) = parsed {
+        if let Some(mut acc) = parsed {
+            // 附加积分有余额时，套餐额度也可能已用尽。
+            if acc.state == AccountExpiryState::Dated
+                && num_of(user_q, "remaining").is_some_and(|n| n <= 0.0)
+            {
+                acc = AccountExpiry { state: AccountExpiryState::Exhausted, at: None };
+            }
             match acc.state {
                 AccountExpiryState::Never => {
                     extra.push(("账户额度到期".into(), "不过期".into()))
@@ -946,7 +954,7 @@ pub fn extract_qoder(body: &Value) -> FetchResult {
                         }
                     }
                 }
-                AccountExpiryState::Unknown => {}
+                AccountExpiryState::Unknown | AccountExpiryState::Exhausted => {}
             }
             account_expiry = Some(acc);
         }
@@ -1964,6 +1972,10 @@ mod tests {
             "userQuota": { "remaining": 10.0 },
             "expiresAt": 1793951075000_i64
         }));
+        // 前端契约:字段名 accountExpiry,state 小写,at 为 Unix 秒
+        let j = serde_json::to_value(&r).unwrap();
+        assert_eq!(j["accountExpiry"]["state"], "dated");
+        assert_eq!(j["accountExpiry"]["at"], 1_793_951_075);
         let acc = r.account_expiry.expect("dated");
         assert_eq!(acc.state, AccountExpiryState::Dated);
         assert_eq!(acc.at, Some(1_793_951_075));
@@ -1985,15 +1997,6 @@ mod tests {
 
         let r = extract_qoder(&json!({ "userQuota": { "remaining": 10.0 } }));
         assert!(r.account_expiry.is_none(), "缺失字段保持 None,不编造未知/不过期");
-
-        // 前端契约:字段名 accountExpiry,state 小写,at 为 Unix 秒
-        let r = extract_qoder(&json!({
-            "userQuota": { "remaining": 10.0 },
-            "expiresAt": 1793951075000_i64
-        }));
-        let j = serde_json::to_value(&r).unwrap();
-        assert_eq!(j["accountExpiry"]["state"], "dated");
-        assert_eq!(j["accountExpiry"]["at"], 1_793_951_075);
     }
 
     /// 两个块都有量时要**相加**(套餐额度 + 加量包),不是取其中一个。

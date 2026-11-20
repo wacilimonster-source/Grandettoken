@@ -1145,6 +1145,7 @@ function accountExpiryOf(c) {
 /** 账户额度到期卡(Qoder):账户级时间与逐笔积分到期严格分开展示。 */
 function accountExpiryHtml(c) {
   const acc = accountExpiryOf(c);
+  if (acc?.state === "exhausted") return "";
   if (!acc) {
     return `<div class="expiry-summary">
       <div class="expiry-kicker"><svg aria-hidden="true"><use href="#i-clock"/></svg>账户额度到期</div>
