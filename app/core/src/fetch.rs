@@ -143,6 +143,8 @@ pub(crate) const DESKTOP_UA: &str = "CLI/2.63.2 CodeBuddy/2.63.2";
 pub struct ChannelView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub google_cloud: Option<crate::google_cloud::CreditView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quota_plan_scope: Option<String>,
     pub id: String,
     pub name: String,
     pub short: String,
@@ -2093,6 +2095,7 @@ pub(crate) fn build_view(
     ChannelView {
         id: def.id.into(),
         google_cloud: None,
+        quota_plan_scope: cred.filter(|_| matches!(def.id, "opencode-go" | "codex")).map(credential_scope),
         name: def.name.into(),
         short: def.short.into(),
         color: def.color.into(),
@@ -2189,6 +2192,7 @@ fn gap_of_day(d: &crate::store::DayCoverage, now: i64) -> bool {
 pub(crate) fn placeholder(def: &providers::ProviderDef) -> ChannelView {
     ChannelView {
         google_cloud: None,
+        quota_plan_scope: None,
         id: def.id.into(),
         name: def.name.into(),
         short: def.short.into(),
@@ -2315,6 +2319,7 @@ fn build_custom_view(
     ChannelView {
         id: ch.id.clone(),
         google_cloud: None,
+        quota_plan_scope: None,
         name,
         short,
         color,
@@ -2380,6 +2385,7 @@ fn custom_placeholder(
     let (name, short, color) = custom_identity(ch);
     ChannelView {
         google_cloud: None,
+        quota_plan_scope: None,
         id: ch.id.clone(),
         name,
         short,

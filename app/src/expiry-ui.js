@@ -57,7 +57,7 @@
     return entries.length ? { type: "points", at: Number(entries[0].at), entry: entries[0] } : null;
   }
 
-  function summary(channels, days, now = Date.now()) {
+  function summary(channels, days, now = Date.now(), packages = []) {
     const visible = channels.filter(eligible);
     const unknown = visible.filter(channel => (channel.expiryComplete !== true || channel.stale || channel.expiryStale) && Number(channel.remaining || 0) > 0);
     const entries = visible.flatMap(channel => entriesWithin(channel, days, now)
@@ -67,12 +67,36 @@
       return at === null ? [] : [{ channel, entry: { at }, type: "account" }];
     });
     entries.sort((a, b) => Number(a.entry.at) - Number(b.entry.at));
-    const first = [...entries, ...accounts].sort((a, b) => Number(a.entry.at) - Number(b.entry.at))[0] || null;
+    const first = [...entries, ...accounts, ...packages].sort((a, b) => Number(a.entry.at) - Number(b.entry.at))[0] || null;
     return {
       total: Math.round(entries.reduce((sum, item) => sum + Number(item.entry.amount), 0) * 100) / 100,
       channels: new Set(entries.map(item => item.channel.id)).size,
-      entries, accounts, unknown, first,
-      hasConfirmed: entries.length > 0 || accounts.length > 0,
+      entries, accounts, packages, unknown, first,
+      hasConfirmed: entries.length > 0 || accounts.length > 0 || packages.length > 0,
+    };
+  }
+
+  function summaryText(summary, filtered, count, days) {
+    const hasPoints = summary.entries.length > 0;
+    const accounts = summary.accounts.length;
+    const packages = summary.packages.length;
+    const unknown = summary.unknown.length;
+    const parts = [];
+    if (hasPoints) parts.push(`${summary.channels} 积分渠道`);
+    if (accounts) parts.push(`${accounts} 账户`);
+    if (packages) parts.push(`${packages} 套餐`);
+    if (unknown) parts.push(`${unknown} 未知`);
+    return {
+      label: summary.hasConfirmed && (unknown || accounts || packages) ? "已确认临期" : "临期积分",
+      value: packages ? "套餐临期" : accounts ? "账户到期" : unknown ? "已知 0" : count ? "暂无" : "——",
+      sub: filtered ? "点击恢复全部渠道" : summary.hasConfirmed
+        ? packages || (hasPoints && accounts) ? parts.join(" · ")
+          : accounts ? `${accounts} 个账户到期 · 筛选`
+          : unknown ? `${summary.channels} 渠道 · ${unknown} 未知` : `${summary.channels} 个渠道 · 筛选`
+        : unknown ? "部分渠道到期信息未知" : count ? `${days} 天内暂无到期` : "等待数据",
+      title: filtered ? "已筛选临期渠道，点击恢复全部渠道" : summary.hasConfirmed
+        ? `今天起 ${days} 个自然日内的临期事项${packages ? "及需提前使用的套餐" : ""} · 点击筛选 · ${parts.join(" · ")}${accounts || packages ? " · 账户及套餐额度不计入积分合计" : ""}`
+        : unknown ? "有积分渠道未提供逐笔到期信息" : `${days} 天内没有可确认的到期记录`,
     };
   }
 
@@ -95,5 +119,5 @@
       fresh: false, button: cached ? "重新登录" : "登录网页版" };
   }
 
-  window.ExpiryUI = { entriesWithin, accountWithin, nearest, nextEvent, summary, dayIndex, qoderNotice };
+  window.ExpiryUI = { entriesWithin, accountWithin, nearest, nextEvent, summary, summaryText, dayIndex, qoderNotice };
 })();

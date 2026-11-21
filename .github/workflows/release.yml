@@ -95,6 +95,7 @@ jobs:
           Invoke-Gate 'ipc-contract'      { node build/check-ipc-contract.js }
           Invoke-Gate 'expiry-summary'    { node build/verify-expiry.js }
           Invoke-Gate 'qoder-expiry-self' { node build/verify-qoder-expiry.js --self-test }
+          Invoke-Gate 'quota-usage-plan'  { node build/verify-quota-plan.js }
           Invoke-Gate 'silent-self'       { node build/check-silent-failures.js --self-test }
           Invoke-Gate 'silent-failures'   { node build/check-silent-failures.js }
           Invoke-Gate 'size-self'         { node build/check-file-size.js --self-test }
@@ -103,6 +104,9 @@ jobs:
           Invoke-Gate 'css-forms'         { node build/check-css-forms.js }
           Invoke-Gate 'syntax'            { node --check app/src/app.js }
           Invoke-Gate 'syntax-expiry'     { node --check app/src/expiry-ui.js }
+          Invoke-Gate 'syntax-quota-plan' { node --check app/src/quota-plan.js }
+          Invoke-Gate 'syntax-quota-data' { node --check app/src/quota-plan-data.js }
+          Invoke-Gate 'syntax-quota-ui'   { node --check app/src/quota-plan-ui.js }
           Invoke-Gate 'syntax-vault'      { node --check app/src/vault-view.js }
           Invoke-Gate 'syntax-reset'      { node --check app/src/codex-reset.js }
           Invoke-Gate 'syntax-google'     { node --check app/src/google-cloud.js }

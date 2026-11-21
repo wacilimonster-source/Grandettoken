@@ -856,6 +856,7 @@ mod tests {
     fn dummy() -> ChannelView {
         ChannelView {
             google_cloud: None,
+            quota_plan_scope: None,
             id: String::new(),
             name: String::new(),
             short: String::new(),

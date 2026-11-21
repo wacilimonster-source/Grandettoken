@@ -94,6 +94,7 @@ node build/check-file-size.js --self-test && node build/check-file-size.js
 node build/check-css-forms.js --self-test && node build/check-css-forms.js
 node build/verify-expiry.js
 node build/verify-qoder-expiry.js --self-test
+node build/verify-quota-plan.js
 for f in app/src/*.js app/src-tauri/src/google_cloud_capture.js; do node --check "$f" || echo "FAIL $f"; done
 
 # 界面冒烟:需 jsdom(npm install jsdom --no-save --no-audit --no-fund)
@@ -138,6 +139,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build/scan-secrets.ps1
 | 2026-11-18 | Antigravity 账号卡隐藏 | **隐藏账号卡并冻结记录,保留当前会话识别;隐藏整个分组才停止 CLI**(账号卡级例外,仍遵守单飞/冷却/退避) |
 | 2026-11-18 | 网关 Responses 协议 | **Responses 只作上游选项**,客户端继续调用 Chat Completions,详见 §8.6 |
 | 2026-11-20 | Qoder 临期 | **账户额度用完后停提醒**,逐笔照常,见 §8.9 |
+| 2026-11-21 | 套餐临期计划 | **每天最多在线 10 小时，各 Agent 渠道可并行，每池每天最多安排两个 5 小时窗**。提前提示何时用、今天用多少。 |
 
 ---
 
@@ -155,6 +157,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build/scan-secrets.ps1
 顶栏按钮曾只断言存在不测顺序(后补 `compareDocumentPosition`),`loadCheckin` 曾因并发旧快照覆盖新结论。**加入口须问:顺序变了/并发到达会不会坏?**
 - 2026-11-14(v0.3.48):声明时立即启动的 async 块即使外层依次 await 仍会并发,冒烟须等初始化后按组调用。
 - 2026-11-14 时钟夹具:涉及缓存/需求时效的前端冒烟,固定日期数据必须配同一固定时钟(v0.3.45 曾因真实时钟跨 12h 边界连续失败)。
+- 2026-11-21 套餐分钟重排:渲染收尾会调倒计时刷新,在它里面触发套餐重绘会重入。套餐重排从外层分钟定时器触发,冒烟覆盖同分钟和换日。
 
 ### 6.4 「验证脚本腐烂与前置口径不一致」
 - `verify-codex-layout.js` 曾长期引用已删的 `.quota-number` 必抛 TypeError;改 DOM/CSS 后须复核所有 `build/verify-*.js`。

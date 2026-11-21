@@ -1,0 +1,51 @@
+.qp-nudges {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: calc(4px * var(--u));
+}
+body.form-compact .qp-nudges,
+body.form-pill .qp-nudges {
+  display: none;
+}
+.qp-nudge {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: calc(4px * var(--u)) calc(10px * var(--u));
+  width: 100%;
+  text-align: left;
+}
+.qp-nudge b { color: var(--warn); }
+.qp-nudge b, .qp-nudge span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.qp-detail h3 { margin: 0 0 0.35em; }
+.qp-detail form, .qp-days {
+  display: grid;
+  gap: 0.35em;
+  margin: 0.6em 0 0;
+}
+.qp-days {
+  padding: 0;
+  list-style: none;
+}
+.qp-days li span { display: block; color: var(--tx3); }
+.qp-hours, .qp-detail label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4em;
+}
+.qp-detail input:not([type="checkbox"]) {
+  color: var(--tx);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.18em 0.3em;
+  font: inherit;
+}
+.qp-detail input[type="number"] { width: 7em; }
+.qp-detail form button { justify-self: start; }
+.qp-error:empty { display: none; }

@@ -748,7 +748,8 @@
     try {
       const patch = value ? { subEndAt: state.subEndAt } : { clearSubEnd: true };
       patch.scope = state.scope;
-      await invoke("codex_reset_profile_set", { id: "codex", profile: patch });
+      const profile = await invoke("codex_reset_profile_set", { id: "codex", profile: patch });
+      if (profile?.scope === patch.scope) window.QuotaPlanUI?.setCodexProfile(profile);
       state.profileError = "";
       state.profileLoaded = true;
       await loadAdvice(c, true);

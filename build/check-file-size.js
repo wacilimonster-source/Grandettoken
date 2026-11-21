@@ -30,10 +30,10 @@ const SOFT_LIMIT = 1500;
 //     第 6 个渠道豆包(WebSession 表项 + 逐动作 body + Cookie 分支),
 //     渠道表与统一取数/签到管线是这些文件的本职,不许再从这里长功能以外的行。
 const BUDGETS = {
-  "app/src/app.js": 9050, // 临期计算拆入 expiry-ui.js，收回大文件预算。
+  "app/src/app.js": 9014, // 临期文案与套餐计划集中在各自模块。
   "app/core/src/inject.rs": 7320,
   "app/src-tauri/src/lib.rs": 6272, // 网关共享实现与凭据补偿拆入 core，收回接线预算。
-  "app/core/src/fetch.rs": 5258, // Qoder 缓存与错误文案统一到 qoderweb.rs。
+  "app/core/src/fetch.rs": 5264, // 临期计划只接入已有凭据范围，计算留在独立模块。
   "app/core/src/store.rs": 3000,
   "app/core/src/workbuddy.rs": 2420,
   "app/core/src/checkin.rs": 2242,

@@ -119,6 +119,9 @@ jobs:
         run: |
           node --check app/src/app.js
           node --check app/src/expiry-ui.js
+          node --check app/src/quota-plan.js
+          node --check app/src/quota-plan-data.js
+          node --check app/src/quota-plan-ui.js
           node --check app/src/vault-view.js
           node --check app/src/codex-reset.js
           node --check app/src/google-cloud.js
@@ -149,6 +152,10 @@ jobs:
       - name: Qoder expiry verifier self-test
         shell: pwsh
         run: node build/verify-qoder-expiry.js --self-test
+
+      - name: Subscription usage plan and regression sentinels
+        shell: pwsh
+        run: node build/verify-quota-plan.js
 
       # 以前 jsdom 冒烟只在某台装了 jsdom 的机器上手工跑,文档却写「182/182 通过」——
       # 换个 clone 目录连脚本都起不来(它曾写死 G:/game/...)。这里把开发期依赖装上再跑,

@@ -277,7 +277,8 @@ function schedulePeakTicks() {
   clearTimeout(peakTickTimer);
   const delay = 60_000 - (Date.now() % 60_000) + 20;
   peakTickTimer = setTimeout(() => {
-    tickPeakCountdowns();
+    if (WINDOW_VISIBLE && window.QuotaPlanUI?.needsTick(Date.now())) render({});
+    else tickPeakCountdowns();
     schedulePeakTicks();
   }, delay);
 }
@@ -469,7 +470,8 @@ function expiringWithin(c, days) {
 const SUMMARY_EXPIRY_DAYS = 7;
 
 function expirySummary() {
-  return window.ExpiryUI.summary(CHANNELS, SUMMARY_EXPIRY_DAYS);
+  const now = Date.now();
+  return window.ExpiryUI.summary(CHANNELS, SUMMARY_EXPIRY_DAYS, now, window.QuotaPlanUI?.events(CHANNELS, SUMMARY_EXPIRY_DAYS, now));
 }
 
 let EXPIRY_FILTER = false;
@@ -477,7 +479,8 @@ function hasConfirmedExpiry(c) {
   return nearestExpiryAt(c) !== null;
 }
 function nearestExpiryAt(c) {
-  return window.ExpiryUI.nearest(c, SUMMARY_EXPIRY_DAYS);
+  return window.ExpiryUI.nearest(c, SUMMARY_EXPIRY_DAYS) ??
+    window.QuotaPlanUI?.events(CHANNELS, SUMMARY_EXPIRY_DAYS, Date.now()).find(item => item.channel.id === c.id)?.entry.at ?? null;
 }
 
 function toneOf(c) {
@@ -1612,7 +1615,7 @@ function renderDetail(c, inDialog = false) {
   if (!inDialog) actions.push(manageLink);
 
   // 类名用 rb-dim 不用 dim:全局已有 .dim{color:var(--tx3)},撞名会把整张卡的数值再染一层灰
-  return `<div class="rbody-in${dim ? " rb-dim" : ""}">${core}${qoderLoginBar(c)}${spend}${coreCodexResets(c)}${kvHtml}${ledger}${ckHtml}<div class="foot-det">${notesHtml}${failFull}<div class="fn-act">${actions.join(
+  return `<div class="rbody-in${dim ? " rb-dim" : ""}">${core}${window.QuotaPlanUI?.detail(c) || ""}${qoderLoginBar(c)}${spend}${coreCodexResets(c)}${kvHtml}${ledger}${ckHtml}<div class="foot-det">${notesHtml}${failFull}<div class="fn-act">${actions.join(
     ""
   )}</div></div></div>`;
 }
@@ -1694,6 +1697,7 @@ function renderDetailSheet() {
   ].filter(Boolean).join(" · ");
   const resetOpen = c.id === "codex" && window.CodexResetUI && window.CodexResetUI.isOpen();
   if (resetOpen && window.CodexResetUI.isEditing()) return;
+  if (window.QuotaPlanUI?.isEditing(c)) return;
   body.innerHTML = resetOpen
     ? window.CodexResetUI.renderDetail(c)
     : detailHeroHtml(c) +
@@ -2068,36 +2072,8 @@ function renderRiskBand() {
   // 如果一轮新数据已没有可确认的临期事项,退出旧筛选避免渠道列表空白。
   if (EXPIRY_FILTER && !hasConfirmed) EXPIRY_FILTER = false;
 
-  const riskLabel = hasConfirmed
-    ? summary.unknown.length || summary.accounts.length ? "已确认临期" : "临期积分"
-    : "临期积分";
-  const riskValue = hasConfirmed
-    ? hasPoints ? points(summary.total) : "账户到期"
-    : summary.unknown.length
-      ? "已知 0"
-      : CHANNELS.length ? "暂无" : "——";
-  const riskSub = hasConfirmed
-    ? EXPIRY_FILTER
-      ? "点击恢复全部渠道"
-      : summary.accounts.length
-        ? hasPoints ? `${summary.channels} 积分渠道 · ${summary.accounts.length} 账户` : `${summary.accounts.length} 个账户到期 · 筛选`
-      : summary.unknown.length
-        ? `${summary.channels} 渠道 · ${summary.unknown.length} 未知`
-        : `${summary.channels} 个渠道 · 筛选`
-    : summary.unknown.length
-      ? "部分渠道到期信息未知"
-      : CHANNELS.length ? `${SUMMARY_EXPIRY_DAYS} 天内暂无到期` : "等待数据";
-  const riskTitle = EXPIRY_FILTER
-    ? "当前只显示临期积分或账户额度到期的渠道;账户额度不计入积分合计;点击恢复全部渠道"
-    : hasConfirmed
-      ? `今天起 ${SUMMARY_EXPIRY_DAYS} 个自然日内可确认的逐笔积分合计 · 点击筛选临期渠道${
-          summary.accounts.length ? `;${summary.accounts.length} 个账户额度到期,不计入积分合计` : ""
-        }${
-          summary.unknown.length ? `;另有 ${summary.unknown.length} 个渠道到期明细未知` : ""
-        }`
-      : summary.unknown.length
-        ? "有积分渠道未提供逐笔到期信息,无法确认是否临期"
-        : `未来 ${SUMMARY_EXPIRY_DAYS} 天没有可确认的积分到期记录`;
+  const { label: riskLabel, value: riskValue, sub: riskSub, title: riskTitle } =
+    window.ExpiryUI.summaryText(summary, EXPIRY_FILTER, CHANNELS.length, SUMMARY_EXPIRY_DAYS);
   const riskCount = hasPoints ? `${points(summary.total)} 分` : "";
   const cell1 = `<button type="button" class="cell metric risk-cell${EXPIRY_FILTER ? " on" : ""}${hasConfirmed ? " has-risk" : ""}"
       data-act="expiry-filter" aria-pressed="${EXPIRY_FILTER}" title="${esc(riskCount ? riskCount + " · " + riskTitle : riskTitle)}"${hasConfirmed ? "" : " disabled"}>
@@ -2116,7 +2092,7 @@ function renderRiskBand() {
     const days = window.ExpiryUI.dayIndex(Number(first.entry.at));
     const when = days <= 0 ? "今天" : days === 1 ? "明天" : `剩 ${days} 天`;
     const dueColor = days <= 7 ? "var(--warn)" : "var(--tx)";
-    const description = first.type === "account" ? "账户额度到期" : `${points(first.entry.amount)} 分`;
+    const description = first.type === "package" ? "套餐截止" : first.type === "account" ? "账户额度到期" : `${points(first.entry.amount)} 分`;
     const title = `打开 ${first.channel.name} 的到期明细 · ${fmtDay(first.entry.at)} · ${description}`;
     cell2 = `<button type="button" class="cell metric" data-act="jump" data-id="${esc(first.channel.id)}" title="${esc(title)}">
       <div class="metric-label lb">${summary.unknown.length ? "最早可确认" : "最先到期"}</div>
@@ -2156,6 +2132,7 @@ function renderRiskBand() {
     { key: "first", html: cell2 },
     { key: "checkin", html: cell3 },
   ]);
+  return summary;
 }
 
 /** 状态红晕的代次:快速连续刷新时,旧定时器不许清掉新一轮刚挂上的动画。 */
@@ -2180,7 +2157,7 @@ function renderInner(opts) {
   // 标题栏挤了 6 个按钮,计数用短写法,完整说法放 tooltip
   // 标题栏改文字按钮后不再放计数(放不下),底栏已有「N 正常 · M 预警」
 
-  renderRiskBand(); // 顶部摘要常驻:临期积分 / 最先到期 / 签到
+  const expiry = renderRiskBand(); // 顶部摘要常驻:临期积分 / 最先到期 / 签到
   const expiryOnly = EXPIRY_FILTER && currentForm() === "panel";
   // 排序只听设置里的「渠道排序」(2026-11-03 用户裁决):
   // 限流 / 失效不再被强制排到前排,排序口径只有一个来源。
@@ -2221,6 +2198,8 @@ function renderInner(opts) {
   const banner = failBannerHtml();
   const ckStrip = ckPendingStrip();
   if (banner) items.push({ key: "fstrip", html: banner });
+  const quotaBanner = window.QuotaPlanUI?.banner(expiry?.packages || []);
+  if (quotaBanner) items.push({ key: "quota-plan", html: quotaBanner });
   if (ckStrip) items.push({ key: "ckstrip", html: ckStrip });
   if (configured) {
     shown.forEach((c, i) => items.push({ key: "row:" + c.id, html: renderRow(c, i) }));

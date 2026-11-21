@@ -88,11 +88,13 @@ if (process.env.CHECKIN_SENTINEL === "1") {
 const vaultJs = fs.readFileSync(path.join(SRC, "vault-view.js"), "utf8");
 let expiryJs = fs.readFileSync(path.join(SRC, "expiry-ui.js"), "utf8");
 if (process.env.EXPIRY_UI_SENTINEL === "1") {
-  const marker = "const first = [...entries, ...accounts].sort";
+  const marker = "const first = [...entries, ...accounts, ...packages].sort";
   if (expiryJs.split(marker).length !== 2) throw new Error("临期哨兵未命中账户摘要入口");
-  expiryJs = expiryJs.replace(marker, "accounts.length = 0; const first = [...entries, ...accounts].sort");
+  expiryJs = expiryJs.replace(marker, "accounts.length = 0; " + marker);
 }
 const layoutJs = fs.readFileSync(path.join(SRC, "panel-layout.js"), "utf8");
+const quotaJs = ["quota-plan.js", "quota-plan-data.js", "quota-plan-ui.js"]
+  .map(name => fs.readFileSync(path.join(SRC, name), "utf8")).join("\n;\n");
 const cloudJs = fs.readFileSync(path.join(SRC, "google-cloud.js"), "utf8");
 let antigravityJs = fs.readFileSync(path.join(SRC, "antigravity.js"), "utf8");
 if (process.env.AG_LAYOUT_SENTINEL === "1") {
@@ -108,6 +110,7 @@ if (!checkinIds.length) throw new Error("未提取到后端签到渠道");
 const dom = new JSDOM(html, { runScripts: "outside-only", pretendToBeVisual: true, url: "http://localhost/" });
 const w = dom.window;
 w.__CHECKIN_IDS = checkinIds;
+w.__QUOTA_CSS = fs.readFileSync(path.join(SRC, "quota-plan.css"), "utf8");
 
 const CALLS = Object.create(null);
 w.__CALLS = CALLS;
@@ -133,6 +136,7 @@ w.__TAURI__ = {
       if (w.__QUIT_INVOKE && cmd === "window_cmd") return w.__QUIT_INVOKE(args);
       if (cmd === "get_config") return JSON.parse(JSON.stringify(DATA.CFG));
       if (cmd === "get_channels") return JSON.parse(JSON.stringify(DATA.CHANNELS));
+      if (cmd === "codex_reset_profile_get" && w.__QUOTA_PROFILE) return w.__QUOTA_PROFILE;
       if (cmd === "home_view") return JSON.parse(JSON.stringify(DATA.HOME));
       if (cmd === "checkin_state") return w.__CK_ST || [];
       if (cmd === "checkin_history") return w.__CK_H || null;
@@ -193,7 +197,7 @@ const NOW = Math.floor(Date.now() / 1000);
 const DATA = buildData(NOW);
 
 const HARNESS = `
-;(function () {
+;await (async function () {
   const R = (window.__R = []);
   const ck = (name, cond, extra) => R.push({ name, ok: !!cond, extra: cond ? "" : String(extra || "") });
   const L = () => document.getElementById("list").innerHTML;
@@ -373,6 +377,99 @@ const HARNESS = `
     finally {
       window.Date = RealDate; EXPIRY_FILTER = false; CHANNELS = data.CHANNELS;
       CFG.panelLayout = oldLayout; window.PanelLayoutUI.update(oldLayout); render({});
+    }
+  }
+
+  // 套餐用量计划经过真实首页筛选、详情和设置表单。
+  {
+    const RealDate = window.Date;
+    const now = new RealDate(2026, 10, 21, 9);
+    const deadline = new RealDate(2026, 10, 22, 19);
+    let clock = now.getTime();
+    class PlanDate extends RealDate {
+      constructor(...args) { super(...(args.length ? args : [clock])); }
+      static now() { return clock; }
+    }
+    const key = "quota_usage_plan_v1";
+    const scope = "d".repeat(24);
+    const old = localStorage.getItem(key);
+    window.Date = PlanDate;
+    const styleEl = document.createElement("style");
+    styleEl.textContent = window.__QUOTA_CSS || "";
+    document.head.appendChild(styleEl);
+    const bodyClass = document.body.className;
+    try {
+      const w = (key, remainPercent, at) => ({ key, label: key, remainPercent, resetsAt: at?.toISOString() });
+      const common = { kind: "percent", valid: true, hasKey: true, color: "#88aaff", remaining: 100, updatedAt: now / 1000 };
+      const weekReset = new RealDate(2026, 10, 23, 10);
+      const go = { ...common, id: "opencode-go", name: "OpenCode Go", short: "OG", quotaPlanScope: scope,
+        windows: [w("monthly", 50, deadline), w("weekly", 100, weekReset), w("rolling", 100)] };
+      const codex = { ...common, id: "codex", name: "Codex", short: "CX", quotaPlanScope: scope,
+        extra: [["套餐", "plus"]], windows: [w("weekly", 100, weekReset), w("5h", 100)] };
+      const gemini = { ...common, id: "antigravity:" + scope, name: "Antigravity QA", short: "AG",
+        windows: [w("gemini-weekly", 100, weekReset), w("gemini-5h", 100)] };
+      const noRateId = "antigravity:" + "e".repeat(24);
+      const accounts = { ["opencode-go:" + scope]: { rate: 8 }, ["codex:" + scope]: { rate: 8, shortCapacity: 30 },
+        [gemini.id]: { end: deadline.getTime(), rate: 8, shortCapacity: 30 }, [noRateId]: { end: deadline.getTime() } };
+      localStorage.setItem(key, JSON.stringify({ hours: { start: "09:00", end: "19:00" }, accounts }));
+      CHANNELS = [go, codex, gemini, ...data.CHANNELS.filter(c => c.kind !== "points" || !c.expiring?.length).slice(0, 1)];
+      window.__QUOTA_PROFILE = { scope, subEndAt: deadline / 1000 };
+      render({});
+      await new Promise(resolve => setTimeout(resolve, 0));
+      const summary = expirySummary();
+      ck("套餐计划分钟重排不在当前渲染中递归", !window.QuotaPlanUI.needsTick(Date.now()) &&
+        window.QuotaPlanUI.needsTick(Date.now() + 60000));
+      const nudges = document.querySelectorAll("#list [data-quota-open]");
+      const nudgeBox = document.querySelector("#list .qp-nudges");
+      document.body.classList.remove("form-panel");
+      document.body.classList.add("form-compact");
+      const compactHidden = !!nudgeBox && getComputedStyle(nudgeBox).display === "none";
+      document.body.classList.remove("form-compact");
+      document.body.classList.add("form-pill");
+      const pillHidden = !!nudgeBox && getComputedStyle(nudgeBox).display === "none";
+      document.body.className = bodyClass;
+      ck("紧凑条与胶囊形态隐藏套餐今天该用提示条", compactHidden && pillHidden);
+      ck("套餐进入已确认临期且能同时提醒三个渠道", summary.packages.length === 3 && summary.total === 0
+        && nudges.length === 3 && [...nudges].every(node => /09:00/.test(node.textContent)));
+      const filter = document.querySelector('#sum [data-act="expiry-filter"]');
+      filter.click();
+      ck("已确认临期可筛选三个套餐", EXPIRY_FILTER && document.querySelectorAll("#list .row").length === 3);
+      document.querySelector('[data-quota-open="codex"]')?.click();
+      const form = document.querySelector("#detailBody [data-quota-settings]");
+      ck("Codex 首页动作打开含两段时段和每日目标的真实详情", !!form
+        && /60%周额度/.test(document.querySelector("#detailBody .qp-days")?.textContent)
+        && /14:00/.test(document.querySelector("#detailBody .qp-days")?.textContent));
+      if (form) {
+        const input = form.elements.rate;
+        input.value = "9";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        render({});
+        ck("套餐计划编辑保留草稿节点", document.querySelector("#detailBody [data-quota-settings]") === form && input.value === "9");
+        const write = Storage.prototype.setItem;
+        try {
+          Storage.prototype.setItem = () => { throw new Error("模拟设置写入失败"); };
+          form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+          ck("套餐计划设置写入失败可重试", /保存失败/.test(form.querySelector(".qp-error").textContent) && input.value === "9"
+            && JSON.parse(localStorage.getItem(key)).accounts["codex:" + scope].rate === 8);
+        } finally { Storage.prototype.setItem = write; }
+        form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+        ck("套餐计划重试保存后立即重排", JSON.parse(localStorage.getItem(key)).accounts["codex:" + scope].rate === 9);
+      }
+      clock = deadline.getTime();
+      render({});
+      ck("跨日到套餐截止时清除过期安排", expirySummary().packages.length === 0 && !EXPIRY_FILTER &&
+        !document.querySelector("#list [data-quota-open]"));
+      clock = now.getTime();
+      CHANNELS = [{ ...gemini, id: noRateId }];
+      render({});
+      ck("未设速度且未到期时不触发分钟重排", !window.QuotaPlanUI.needsTick(Date.now() + 60000));
+    } catch (e) { ck("套餐临期真实界面交互", false, e.stack); }
+    finally {
+      styleEl.remove(); document.body.className = bodyClass;
+      closeDetail(false); window.Date = RealDate; EXPIRY_FILTER = false; CHANNELS = data.CHANNELS;
+      delete window.__QUOTA_PROFILE;
+      if (old === null) localStorage.removeItem(key); else localStorage.setItem(key, old);
+      render({});
     }
   }
 
@@ -1341,7 +1438,7 @@ w.__DATA = DATA;
   try {
     const initMarker = "(async function init() {";
     if (js.split(initMarker).length !== 2) throw new Error("初始化入口必须唯一");
-    w.eval(vaultJs + "\n;\n" + expiryJs + "\n;\n" + layoutJs + "\n;\n" + js.replace(initMarker, "window.__INIT = " + initMarker)
+    w.eval(vaultJs + "\n;\n" + expiryJs + "\n;\n" + layoutJs + "\n;\n" + quotaJs + "\n;\n" + js.replace(initMarker, "window.__INIT = " + initMarker)
       + "\n;\n" + antigravityJs
       + "\n;\n" + cloudJs
       + "\n;window.__RUN_HARNESS = async () => { await window.__INIT;\n" + HARNESS + "\n};");
