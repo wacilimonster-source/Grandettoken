@@ -5555,3 +5555,8 @@ src-tauri `cargo check --all-targets --locked` exit 0;
 - 详细方案见 `docs/product/product-quota-usage-plan-2026-11-21.md`。OpenCode Go、Codex、Antigravity 各自在可重叠的本地在线时段内安排用量。每天最多十小时，每个适用配额池最多安排两个 5 小时窗。
 - 首页「今天该用」给出目标和开工时刻，详情显示按天拆分的用量、最晚开工和需补数据。OpenCode Go 取本期月窗，Codex 复用按账号保存的订阅日期，Antigravity 按 Google 账号手填截止并计算 Gemini 配额。用量样本和手填设置按账号隔离。
 - 复测补充：在 `quota-plan.css` 为紧凑条与胶囊形态隐藏 `.qp-nudges` 避免撑破横向条；收窄 `needsTick` 仅在存在排程或刚跨过截止时触发重绘；移除 `schedule()` 冗余 `exhausted` 字段。串行通过全部静态门禁、jsdom 与各专项界面冒烟、core 单测、两 crate 全目标检查及凭据扫描。未做原生窗口和真实账号用量核验。
+
+## 2026-11-21 v0.3.70 发布结果
+
+- tag `v0.3.70` 指向 `d6819ca`，发版提交先推到 `main`。main CI `44899888473` 和桌面发版流水线 `44899893638` 均成功。北京时间 20:01:28（`2026-11-21T12:01:28Z`）公开发布。
+- 三件套齐全：安装包 `Grandettoken_0.3.70_x64-setup.exe`（6,051,534 字节，SHA-256 `ed1069bd07919543a7228185372c8748d0a251558d468040b50ddbc0e8563d97`）、签名 `.sig`（444 字符）和 `latest.json`（1,263 字节，notes 233 字符 / 133 中文字符 / 0 替换字符）。固定更新端点返回 `0.3.70`，`verify-release.js` 核验通过（本地无产物两项按既有口径 SKIP）。
