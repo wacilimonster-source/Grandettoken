@@ -1,0 +1,31 @@
+# 文本编码门:受版本控制的文本文件必须是合法 UTF-8,且不含 U+FFFD 替换字符。
+#
+# 为什么单独一条 workflow:ci.yml 对 `**.md` / `docs/**` 设了 paths-ignore,纯文档提交不跑 CI ——
+# 而 2026-11-19 PROGRESS.md 的 46 处 GBK 往返损坏恰恰来自纯文档提交,到 11-22 才被人工发现。
+# 这一步只依赖 git 和 runner 自带的 node,不装任何东西,也不设路径过滤。
+# 发版前的同一道门在 release.yml 的 Pre-release gates 里(encoding-self / text-encoding)。
+name: text-encoding
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: text-encoding-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  encoding:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      # --self-test 先证明门禁自己会变红(含与 PROGRESS.md 同形的损坏样本),再正式扫描。
+      - name: text encoding gate
+        run: |
+          node build/check-encoding.js --self-test
+          node build/check-encoding.js

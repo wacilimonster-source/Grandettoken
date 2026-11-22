@@ -3949,7 +3949,7 @@ mod tests {
                 assert_eq!(
                     crate::errcodes::action(ec),
                     crate::errcodes::Action::Wait,
-                    "{code} ���服务端/限流问题,不该要用户动手"
+                    "{code} 是服务端/限流问题,不该要用户动手"
                 );
             }
         }

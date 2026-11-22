@@ -102,6 +102,8 @@ jobs:
           Invoke-Gate 'file-size'         { node build/check-file-size.js }
           Invoke-Gate 'css-self'          { node build/check-css-forms.js --self-test }
           Invoke-Gate 'css-forms'         { node build/check-css-forms.js }
+          Invoke-Gate 'encoding-self'     { node build/check-encoding.js --self-test }
+          Invoke-Gate 'text-encoding'     { node build/check-encoding.js }
           Invoke-Gate 'syntax'            { node --check app/src/app.js }
           Invoke-Gate 'syntax-expiry'     { node --check app/src/expiry-ui.js }
           Invoke-Gate 'syntax-quota-plan' { node --check app/src/quota-plan.js }
