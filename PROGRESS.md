@@ -676,3 +676,15 @@
 - 新增棘轮门禁 `build/check-lock-unwrap.js`（带 `--self-test`）并接入 `ci.yml`、`release.yml` 与 `AGENTS.md` §4.1：剥离 Rust 注释/字符串及单个 `#[cfg(test)]` 修饰项后扫描 `app/core/src` 与 `app/src-tauri/src` 全部生产源码中的 `.lock()/.read()/.write()` 后接 `.unwrap()/.expect()`，要求为 0（79 个生产源码文件 0 处违规，5 个自检样本含 `#[cfg(test)]` 辅助函数之后的生产代码违规全部按预期判红/判绿）。
 - 在 `app/core/src/fetch_tests.rs` 新增 `poisoned_recovery_progress_and_cache_locks_recover_and_log_throttled_diag`：在子线程持锁 panic 使 `recovery`、`progress`、`cache` 三把锁中毒后，验证 `failed`、`fetch_retries`、`publish`、`cached` 不 panic 且状态正常推进，同时断言诊断日志环形缓冲恰好按锁类型各记 1 条 `lock-poisoned` 节流记录。
 - 验证：静态门禁、`app/core` 单线程全量测试（652 passed / 10 ignored + `sync_fixtures` 6 passed）、两 crate `cargo check --all-targets --locked`、`scan-secrets.ps1` 全部通过。
+
+## 2026-11-22 T-A5 `app/core/src/inject.rs` 生产代码按客户端拆分子模块
+
+- 按设计文档 §2 A5，将 `app/core/src/inject.rs`（5,055 行）中的 5 个独立区段通过 `#[path]` 子模块与 `pub use` 重新导出外移（对外 `crate::inject::*` 路径零变化，`src-tauri` 无需任何改动）：
+  - `inject_io.rs`（626 行）：JSON 文件读写、Windows DPAPI 加密备份快照与回滚、`commit` / `commit_layered`；
+  - `inject_workbuddy.rs`（300 行）：WorkBuddy / WorkBuddy AI 写入、校验与前缀学习；
+  - `inject_zcode.rs`（247 行）：ZCode 写入与 UUID 生成；
+  - `inject_trae.rs`（342 行）：Trae（SQLite `state.vscdb`）单事务写入与模型 ID 解析；
+  - `inject_dsh.rs`（1,298 行）：DeepSeek Harness 目录路由、YAML/JSON 补丁写入与移除；
+  - `inject.rs` 降至 2,276 行（同步将 `build/check-file-size.js` 中 `inject.rs` 的预算从 5,055 下调至 2,276；全部 5 个新子模块均 ≤ 1,500 行软上限）。
+- 纯搬家等价性校验：剥离新增的 `use super::*;`、子模块声明及 `pub(super)` 可见性修饰后，6 个文件还原出的 5,055 行与拆分前 `inject.rs` 逐行 100% 一致；核对 `README.md`「已知边界」中改写其它客户端配置与 DPAPI 备份快照的披露完整准确，无需更新。
+- 验证：静态门禁、`app/core` `inject::` 全部 60 个单测（58 passed / 2 ignored）、两 crate `cargo check --all-targets --locked`、`jsdom-smoke.js`（294/294 含模型页用例）、`scan-secrets.ps1` 全部通过。
