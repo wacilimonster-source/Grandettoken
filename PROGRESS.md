@@ -773,3 +773,25 @@
   - 更新 `RELEASE.md`（桌面发版第 2 步提醒与第 6 步一键原生窗口回归说明）及 `docs/report/acceptance-backlog.md`（标注 `B1`、`B9`、`B10` 已纳入一键脚本，仍待用户关闭运行实例后实跑）。
 - **验证**：纯 ASCII 检查（16,593 字节中非 ASCII 为 0）、`build/run-native-checks.ps1 -SelfTest`（4 项自检全绿）、`check-encoding.js`（含 `--self-test`，469 文件 PASS）、`check-silent-failures.js`（25 文件/121 catch PASS）、`scan-secrets.ps1`（562 文件 CLEAN）。
 - **未跑项**：本机有运行中的 `Grandettoken` 实例且按规则不杀用户进程，真实原生窗口 CDP 全套回归（`B1`–`B10`）待用户在关闭应用后运行 `powershell -NoProfile -ExecutionPolicy Bypass -File build/run-native-checks.ps1`。
+
+
+## 2026-11-23 v0.3.71 发版前代码审查与实际程序测试
+
+- **范围**:`v0.3.70..HEAD` 共 22 个提交(T-00、T-A1、T-A2a/b、T-A3、T-A4、T-A5、T-B1–B4、T-B5 测量、T-B6a/b、T-C1、T-C2、T-D1–D3)。
+- **搬家等价性**(一次性脚本,放系统临时目录,未入库):
+  - T-A2b:14 个 `app-*.js` 按 `index.html` 顺序拼接后与原 `app.js` 逐字节相同;
+  - T-A1 / T-A5:改动文件的行多重集合(去缩进、忽略 `use`/`mod`/`#[path]`/可见性)零差异;
+  - T-A4:只多出 `pub use` 重导出清单;T-A3:只差 `generate_handler!` 模块前缀与两个元组字段的 `pub(crate)`;
+  - `#[test]` 计数 core 从 658 到 663(新增 5 个均为本轮新测试),src-tauri 的测试数加命令数不变。
+- **行为改动审查**(无阻断问题):
+  - T-C1 `lockx::lock`:diaglog 内部全用 `if let Ok` / `unwrap_or_else`,记日志路径不会二次 panic;
+  - T-C2:Job Object 杀进程树,读线程改为带期限的 channel;正常退出时释放 Job 也会杀掉残留孙进程,对 `--version` 探测可接受;
+  - T-B1:pending 时保持 5 s,空闲按到期时刻睡眠、上限 60 s;`notify_one` 留许可,不丢唤醒;两处 `continue` 都在状态已变之后,不会空转;
+  - T-B2:刷新保留旧结果;profile 在保存、切账号、读失败、`scope_mismatch` 后重读;
+  - T-B3:隐藏时由 `window-shown` 补 render + tick;`renderDetail` 末尾的 microtask tick 覆盖 `app-manage.js` 直接写 innerHTML 的路径;新建占位节点 `before` 为空,不会触发 `expCrossed → render` 重入;
+  - T-B4:缓存键含字号与 body 类名,溢出兜底保留;T-B6a:checkpoint 每日一次加退出前一次;`integrity_check` 暂无生产调用方(只在单测里用,按 T-B6b 结论保留为手动排查入口)。
+- **门禁**(按 AGENTS.md §4.1 串行跑,两轮):全部静态门含 `--self-test`、`node --check`、jsdom 冒烟 297/297、vault / codex-reset / google-cloud / antigravity-capture / gateway 冒烟、core `cargo test --locked`(653 passed / 10 ignored;fixtures 6 passed)+ `cargo check --all-targets --locked`、src-tauri `cargo check --all-targets --locked`(零警告)、`scan-secrets.ps1` CLEAN、`verify-signature.js --self-test` PASS、`run-native-checks.ps1 -SelfTest` PASS。
+- **原生 WebView2 回归**(经用户同意关闭运行中实例;`build/build.ps1 build` 重新编出 release,`run-native-checks.ps1 -Port 9241 -Exe <新 exe>`;用户数据 3 个文件每轮都按 SHA-256 备份、恢复并校验):通过 `verify-settings-entry`、`verify-checkin-center`、`verify-resize`、`verify-qoder-expiry`、`verify-focus-ring`,日志零加载期 JS 报错。`verify-ui-0923`、`verify-form` 失败;用本机旧二进制(约 v0.3.36)单独复跑,U2 文案、U6 紧凑条字母、compact 尺寸三项同样失败,判定为脚本断言过时、不是本版回归,已记 `acceptance-backlog.md` B11。
+- **一键脚本问题**(记 B12):默认端口 9222 被本机 Chrome 占用;`launch-debug.ps1` 不构建、只挑最新的 exe(首次跑到 11-20 的旧二进制);`-Filter` 不支持 `|`,全部 SKIP 仍退出 0;子脚本日志 GBK 往返后乱码。
+- **发版**:三处版本号同步到 0.3.71,`Cargo.lock` 只变本包版本行,`cargo fetch --locked` 复核通过。只发桌面,Android 本轮零改动不打 tag。
+- **未跑**:安装版自动更新(B7)、真实账号相关项(C/D 区)、紧凑条与模型页 / 同步页 / 密钥箱的手动打开(B10 剩余部分)。
