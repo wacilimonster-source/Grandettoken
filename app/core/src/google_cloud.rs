@@ -322,6 +322,108 @@ pub async fn wait_for_window_release(
     Ok(())
 }
 
+pub const GC_IDLE_SLEEP_CAP_SEC: u64 = 60;
+pub const GC_PENDING_SLEEP_SEC: u64 = 5;
+pub const GC_TIMEOUT_SEC: i64 = 90;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GcAction {
+    DestroyHidden,
+    MarkClosed,
+    Timeout,
+    Open,
+    Idle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GcTick {
+    pub action: GcAction,
+    pub next_check_in: std::time::Duration,
+}
+
+fn gc_tick_with_pending_sleep(
+    now: i64,
+    hidden: bool,
+    pending: bool,
+    window_open: bool,
+    interactive: bool,
+    started: i64,
+    updated: i64,
+    interval: i64,
+    has_account: bool,
+    pending_sleep_sec: u64,
+) -> GcTick {
+    use std::time::Duration;
+    let interval = interval.max(60);
+    let cap = Duration::from_secs(GC_IDLE_SLEEP_CAP_SEC);
+    let pending_sleep = Duration::from_secs(pending_sleep_sec);
+
+    let action = if hidden {
+        GcAction::DestroyHidden
+    } else if pending && !window_open {
+        GcAction::MarkClosed
+    } else if pending && !interactive && now - started >= GC_TIMEOUT_SEC {
+        GcAction::Timeout
+    } else if !pending && has_account && now - updated.max(started) >= interval {
+        GcAction::Open
+    } else {
+        GcAction::Idle
+    };
+
+    let next_check_in = if hidden {
+        cap
+    } else if pending {
+        match action {
+            GcAction::MarkClosed | GcAction::Timeout => {
+                if has_account {
+                    let due_in = updated.max(started) + interval - now;
+                    Duration::from_secs(due_in.clamp(1, GC_IDLE_SLEEP_CAP_SEC as i64) as u64)
+                } else {
+                    cap
+                }
+            }
+            _ => pending_sleep,
+        }
+    } else if !has_account {
+        cap
+    } else if matches!(action, GcAction::Open) {
+        pending_sleep
+    } else {
+        let due_in = updated.max(started) + interval - now;
+        Duration::from_secs(due_in.clamp(1, GC_IDLE_SLEEP_CAP_SEC as i64) as u64)
+    };
+
+    GcTick {
+        action,
+        next_check_in,
+    }
+}
+
+pub fn gc_tick(
+    now: i64,
+    hidden: bool,
+    pending: bool,
+    window_open: bool,
+    interactive: bool,
+    started: i64,
+    updated: i64,
+    interval: i64,
+    has_account: bool,
+) -> GcTick {
+    gc_tick_with_pending_sleep(
+        now,
+        hidden,
+        pending,
+        window_open,
+        interactive,
+        started,
+        updated,
+        interval,
+        has_account,
+        GC_PENDING_SLEEP_SEC,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,5 +578,165 @@ mod tests {
                 .await
                 .unwrap();
         });
+    }
+
+    #[test]
+    fn gc_tick_table_driven_branches_and_boundaries() {
+        use std::time::Duration;
+        let cap = Duration::from_secs(GC_IDLE_SLEEP_CAP_SEC);
+        let p5 = Duration::from_secs(GC_PENDING_SLEEP_SEC);
+
+        // 1. hidden 优先销毁并睡 CAP
+        assert_eq!(
+            gc_tick(100, true, true, true, false, 10, 10, 60, true),
+            GcTick {
+                action: GcAction::DestroyHidden,
+                next_check_in: cap,
+            }
+        );
+
+        // 2. pending 且窗口已关闭 -> MarkClosed，下次按剩余刷新间隔睡眠
+        assert_eq!(
+            gc_tick(50, false, true, false, false, 30, 10, 60, true),
+            GcTick {
+                action: GcAction::MarkClosed,
+                next_check_in: Duration::from_secs(40), // started(30) + 60 - 50 = 40
+            }
+        );
+
+        // 3. pending 且非交互满 90s(恰好到期边界) -> Timeout
+        assert_eq!(
+            gc_tick(120, false, true, true, false, 30, 10, 120, true),
+            GcTick {
+                action: GcAction::Timeout,
+                next_check_in: Duration::from_secs(30), // started(30) + 120 - 120 = 30
+            }
+        );
+        // 交互式会话满 90s 不超时，继续 5s 轮询
+        assert_eq!(
+            gc_tick(120, false, true, true, true, 30, 10, 120, true),
+            GcTick {
+                action: GcAction::Idle,
+                next_check_in: p5,
+            }
+        );
+
+        // 4. 无 pending、有账号、恰好到期 -> Open，且下一次进入 5s 轮询
+        assert_eq!(
+            gc_tick(160, false, false, false, false, 40, 100, 60, true),
+            GcTick {
+                action: GcAction::Open,
+                next_check_in: p5,
+            }
+        );
+
+        // 5. started > updated 边界 + interval < 60 被抬到 60
+        assert_eq!(
+            gc_tick(140, false, false, false, false, 100, 50, 15, true),
+            GcTick {
+                action: GcAction::Idle,
+                next_check_in: Duration::from_secs(20), // max(100,50) + max(15,60) - 140 = 20
+            }
+        );
+        assert_eq!(
+            gc_tick(160, false, false, false, false, 100, 50, 15, true),
+            GcTick {
+                action: GcAction::Open,
+                next_check_in: p5,
+            }
+        );
+
+        // 6. 无结算账号 -> Idle + CAP
+        assert_eq!(
+            gc_tick(500, false, false, false, false, 0, 0, 60, false),
+            GcTick {
+                action: GcAction::Idle,
+                next_check_in: cap,
+            }
+        );
+    }
+
+    fn simulate_schedule(pending_sleep_sec: u64, fixed_step_sec: Option<i64>) -> Vec<(i64, GcAction)> {
+        let mut t = 0i64;
+        let interval = 120i64;
+        let updated = 10i64;
+        let mut started = 0i64;
+        let mut pending = false;
+        let mut events = Vec::new();
+        // set_config 切换 hidden 的时刻会触发 GC_WAKE.notify_one()
+        let config_wakes = [500i64, 520i64];
+
+        while t <= 600 {
+            let hidden = (500..520).contains(&t);
+            // 第 2 次打开窗口(约 t=250)后，模拟用户在 t=267 关掉窗口
+            let window_open = pending && !(267..350).contains(&t);
+            let tick = gc_tick_with_pending_sleep(
+                t,
+                hidden,
+                pending,
+                window_open,
+                false,
+                started,
+                updated,
+                interval,
+                true,
+                pending_sleep_sec,
+            );
+            match tick.action {
+                GcAction::DestroyHidden => {
+                    if pending || window_open {
+                        events.push((t, tick.action));
+                    }
+                    pending = false;
+                    started = 0;
+                }
+                GcAction::MarkClosed | GcAction::Timeout => {
+                    events.push((t, tick.action));
+                    pending = false;
+                }
+                GcAction::Open => {
+                    events.push((t, tick.action));
+                    pending = true;
+                    started = t;
+                }
+                GcAction::Idle => {}
+            }
+            let step = fixed_step_sec.unwrap_or(tick.next_check_in.as_secs() as i64).max(1);
+            let next_t = t + step;
+            if fixed_step_sec.is_none() {
+                if let Some(&wake_t) = config_wakes.iter().find(|&&w| w > t && w < next_t) {
+                    t = wake_t;
+                    continue;
+                }
+            }
+            t = next_t;
+        }
+        events
+    }
+
+    fn schedules_equivalent(old: &[(i64, GcAction)], new: &[(i64, GcAction)]) -> bool {
+        if old.len() != new.len() {
+            return false;
+        }
+        old.iter()
+            .zip(new.iter())
+            .all(|((t1, a1), (t2, a2))| a1 == a2 && (t1 - t2).abs() <= 5)
+    }
+
+    #[test]
+    fn gc_tick_matches_legacy_5s_loop_on_600s_grid_and_rejects_bad_pending_cap() {
+        let legacy = simulate_schedule(GC_PENDING_SLEEP_SEC, Some(5));
+        let precise = simulate_schedule(GC_PENDING_SLEEP_SEC, None);
+        assert!(
+            !legacy.is_empty() && schedules_equivalent(&legacy, &precise),
+            "精确睡眠与旧 5s 轮询触发动作序列必须一致且时间差 <= 5s:\nlegacy={legacy:?}\nprecise={precise:?}"
+        );
+
+        // 反向样本:把 pending 分支的 5s 改成 CAP(60s),等价性断言必须变红
+        let bad_pending = simulate_schedule(GC_IDLE_SLEEP_CAP_SEC, None);
+        assert!(
+            !schedules_equivalent(&legacy, &bad_pending),
+            "pending 分支改用 CAP 时等价性测试必须变红:\nlegacy={legacy:?}\nbad={bad_pending:?}"
+        );
     }
 }

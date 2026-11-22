@@ -364,6 +364,7 @@ async fn set_config(app: tauri::AppHandle, state: State<'_, AppState>, config: C
     // 配置变了(隐藏渠道 / 间隔 / 阈值…)就作废"5 秒内复用上次结果"的窗口 ——
     // 否则保存后立刻取数会拿到旧视图,界面看起来像"点了没反应"(用户实测:隐藏渠道恢复)。
     state.fetcher.invalidate();
+    google_cloud_web::wake();
     Ok(())
 }
 

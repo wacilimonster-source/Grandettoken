@@ -20,6 +20,11 @@ struct Session {
 }
 static SESSION: LazyLock<Mutex<Session>> = LazyLock::new(|| Mutex::new(Session::default()));
 static OPEN_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static GC_WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+pub fn wake() {
+    GC_WAKE.notify_one();
+}
 
 fn url(account: Option<&str>) -> Result<tauri::Url, String> {
     let path = match account {
@@ -45,6 +50,7 @@ fn begin(account: Option<String>, interactive: bool) -> Result<String, String> {
         complete: false,
         started: now_ts(),
     };
+    wake();
     Ok(nonce)
 }
 
@@ -93,6 +99,7 @@ fn receive(app: &tauri::AppHandle, target: &tauri::Url) {
             let interactive = session.interactive;
             let completed_nonce = session.nonce.clone();
             drop(session);
+            wake();
             st.fetcher.invalidate();
             let handle = app.clone();
             crate::on_main(app, move || {
@@ -123,6 +130,7 @@ fn receive(app: &tauri::AppHandle, target: &tauri::Url) {
                 }
             }
             drop(session);
+            wake();
             st.fetcher.invalidate();
             notify(app, &e);
             let handle = app.clone();
@@ -196,6 +204,8 @@ async fn open(
         if session.nonce == nonce {
             session.complete = true;
         }
+        drop(session);
+        wake();
         return Err(error);
     }
     Ok(())
@@ -203,7 +213,9 @@ async fn open(
 
 #[tauri::command]
 pub async fn google_cloud_login(app: tauri::AppHandle) -> Result<(), String> {
-    open(&app, None, true).await
+    let r = open(&app, None, true).await;
+    wake();
+    r
 }
 
 #[tauri::command]
@@ -219,7 +231,9 @@ pub async fn google_cloud_refresh(app: tauri::AppHandle) -> Result<(), String> {
     let account = gc::load(&lock_rw(&st.store))?
         .selected
         .ok_or("请先连接 Google Cloud 结算账号")?;
-    open(&app, Some(account), false).await
+    let r = open(&app, Some(account), false).await;
+    wake();
+    r
 }
 
 #[tauri::command]
@@ -231,6 +245,7 @@ pub async fn google_cloud_expiry_set(
 ) -> Result<(), String> {
     let st = app.state::<AppState>();
     gc::set_expiry(&lock_rw(&st.store), &account, &credit, at)?;
+    wake();
     st.fetcher.invalidate();
     crate::refresh_now(&app).await;
     Ok(())
@@ -249,6 +264,7 @@ pub async fn google_cloud_disconnect(app: tauri::AppHandle) -> Result<(), String
         w.destroy()
             .map_err(|e| format!("已停止连接，关闭结算窗口失败: {e}"))?;
     }
+    wake();
     st.fetcher.invalidate();
     crate::refresh_now(&app).await;
     Ok(())
@@ -292,51 +308,72 @@ pub fn start(app: tauri::AppHandle) {
                     s.interactive,
                 )
             };
-            if hidden {
-                let _gate = OPEN_GATE.lock().await;
-                if !lock_rw(&app.state::<AppState>().config)
-                    .hidden_channels
-                    .iter()
-                    .any(|id| id == gc::ID)
-                {
-                    continue;
-                }
-                // 隐藏中使迟到的页面结果失效，并终止网页网络活动。
-                *lock_rw(&SESSION) = Session::default();
-                if let Some(w) = app.get_webview_window(LABEL) {
-                    let _ = w.destroy();
-                }
-            } else if pending && app.get_webview_window(LABEL).is_none() {
-                let mut current = lock_rw(&SESSION);
-                if current.nonce == nonce {
-                    current.complete = true;
-                }
-            } else if pending && !interactive && now_ts() - started >= 90 {
-                {
-                    let mut current = lock_rw(&SESSION);
-                    if current.nonce != nonce || current.complete {
+            let window_open = app.get_webview_window(LABEL).is_some();
+            let tick = gc::gc_tick(
+                now_ts(),
+                hidden,
+                pending,
+                window_open,
+                interactive,
+                started,
+                updated,
+                interval,
+                account.is_some(),
+            );
+            match tick.action {
+                gc::GcAction::DestroyHidden => {
+                    let _gate = OPEN_GATE.lock().await;
+                    if !lock_rw(&app.state::<AppState>().config)
+                        .hidden_channels
+                        .iter()
+                        .any(|id| id == gc::ID)
+                    {
                         continue;
                     }
-                    current.complete = true;
+                    // 隐藏中使迟到的页面结果失效，并终止网页网络活动。
+                    *lock_rw(&SESSION) = Session::default();
+                    if let Some(w) = app.get_webview_window(LABEL) {
+                        let _ = w.destroy();
+                    }
                 }
-                if let Some(ref id) = account {
-                    let st = app.state::<AppState>();
-                    if let Err(e) = gc::set_error(&lock_rw(&st.store), id) {
+                gc::GcAction::MarkClosed => {
+                    let mut current = lock_rw(&SESSION);
+                    if current.nonce == nonce {
+                        current.complete = true;
+                    }
+                }
+                gc::GcAction::Timeout => {
+                    {
+                        let mut current = lock_rw(&SESSION);
+                        if current.nonce != nonce || current.complete {
+                            continue;
+                        }
+                        current.complete = true;
+                    }
+                    if let Some(ref id) = account {
+                        let st = app.state::<AppState>();
+                        if let Err(e) = gc::set_error(&lock_rw(&st.store), id) {
+                            notify(&app, &e);
+                        }
+                        st.fetcher.invalidate();
+                        crate::refresh_now(&app).await;
+                    }
+                    notify(
+                        &app,
+                        "赠金表格尚未读取成功，请检查登录、清除表格过滤条件并显示全部记录",
+                    );
+                }
+                gc::GcAction::Open => {
+                    if let Err(e) = open(&app, account, false).await {
                         notify(&app, &e);
                     }
-                    st.fetcher.invalidate();
-                    crate::refresh_now(&app).await;
                 }
-                notify(
-                    &app,
-                    "赠金表格尚未读取成功，请检查登录、清除表格过滤条件并显示全部记录",
-                );
-            } else if !pending && account.is_some() && now_ts() - updated.max(started) >= interval {
-                if let Err(e) = open(&app, account, false).await {
-                    notify(&app, &e);
-                }
+                gc::GcAction::Idle => {}
             }
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            tokio::select! {
+                _ = tokio::time::sleep(tick.next_check_in) => {},
+                _ = GC_WAKE.notified() => {},
+            }
         }
     });
 }

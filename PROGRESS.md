@@ -640,3 +640,12 @@
   2) `state.profileLoaded` 为真时跳过 `codex_reset_profile_get`，每分钟定时器的 IPC 从 2 次降为 1 次；同时抽离 `refreshNeedFreshness()` 在跳过读取时仍按当前时钟校验 `soon`（今天要用）跨本地 0 点与 12 小时新鲜度；在保存或清空订阅日期（`saveDate`）、切换账号指纹（`quotaPlanScope` 变化或 `scope_mismatch`）、以及上次读取失败（`catch` 中保持 `state.profileLoaded = false`）三种场景下重新读取 profile。
 - **双向验证（`build/verify-codex-reset.js`）**：改用固定本地时钟（`2026-11-14 15:30:00`），覆盖推进 1 分钟不重读 profile、建议只算 1 次、刷新期间 DOM 不出现 `.cr-loading` /「正在计算」、保存/清空订阅日期重读 profile、切换账号指纹重读 profile、读取失败后下次刷新重试，以及 `soon` 跨本地 0 点自动复位为 `patient` 重算；新增反向哨兵 `CODEX_ADVICE_FLICKER_SENTINEL=1`（恢复刷新时置空 `state.advice = null`）按预期触发闪烁断言变红。
 - **第二步耗时采样**：在本机真实 `tokenscope.db` 副本上对 `Snapshot::stored_scope` + `local_today_end` + `codex_reset::advise`（含 3 张重置卡与事件模拟）连续采样 20 次，实测微秒耗时为 `[1914, 169, 107, 85, 70, 65, 63, 66, 82, 68, 64, 61, 61, 75, 67, 74, 99, 78, 65, 63]` µs（首次冷读 1.91 ms，稳态 61–169 µs，20 次均值 169.8 µs ≈ 0.17 ms），远低于设计文档 §3 B2 的 2 ms 阈值，按方案保留每分钟重算。
+
+## 2026-11-22 T-B1 Google Cloud 后台任务精确睡眠
+
+- 将 Google Cloud 后台 loop 的调度决策抽为 `app/core/src/google_cloud.rs` 的纯函数 `gc_tick(now, hidden, pending, window_open, interactive, started, updated, interval, has_account) -> GcTick { action, next_check_in }`：
+  - 有 `pending` 会话时保持 5 秒轮询（监测用户关闭窗口与 90 秒超时）；
+  - 隐藏或未选结算账号时睡 `CAP`（60 秒兜底）；
+  - 已选结算账号且无 pending 时按 `clamp(updated.max(started) + interval.max(60) - now, 1s, 60s)` 精确睡眠；触发 `Open` 时立即切入 5 秒轮询。
+- `app/src-tauri/src/google_cloud_web.rs` 按 `gc_tick` 执行动作后通过 `tokio::select!` 同时等待 `sleep(tick.next_check_in)` 与 `GC_WAKE.notified()`；在 `set_config`（`lib.rs`）、登录/手动刷新/断开连接/手填到期日、会话开始与完成/失败处调用 `wake()`（`notify_one()`）。
+- 双向验证：`google_cloud::tests::gc_tick_table_driven_branches_and_boundaries` 覆盖 5 种动作与边界（恰好到期、`started > updated`、`interval < 60` 抬升、无账号、交互会话不超时）；`gc_tick_matches_legacy_5s_loop_on_600s_grid_and_rejects_bad_pending_cap` 在 0–600 s 网格上对比旧 5s 轮询与精确睡眠，断言动作序列一致且时刻差 ≤ 5s，同时注入把 `pending` 分支改为 `CAP`（60s）的反向样本并断言等价性失败。`docs/report/acceptance-backlog.md` 新增 C6 三项原生验收。
