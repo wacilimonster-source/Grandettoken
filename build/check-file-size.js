@@ -31,7 +31,6 @@ const SOFT_LIMIT = 1500;
 //     渠道表与统一取数/签到管线是这些文件的本职,不许再从这里长功能以外的行。
 const BUDGETS = {
   "app/core/src/inject.rs": 2276, // T-A5 生产代码按客户端拆入 inject_{io,workbuddy,zcode,trae,dsh}.rs。
-  "app/src-tauri/src/lib.rs": 6272, // 网关共享实现与凭据补偿拆入 core，收回接线预算。
   "app/core/src/store.rs": 1952, // T-A1 测试模块外移至 store_tests.rs。
   "app/core/src/workbuddy.rs": 1776, // T-A1 测试模块外移至 workbuddy_tests.rs。
   "app/core/src/checkin.rs": 1518, // T-A1 测试模块外移至 checkin_tests.rs。

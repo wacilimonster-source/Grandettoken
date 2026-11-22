@@ -698,3 +698,23 @@
   - `fetch.rs` 降至 1,438 行（4 个文件全部 ≤ 1,500 行软上限；按 §2 A6 规则将 `app/core/src/fetch.rs` 从 `build/check-file-size.js` 的超限预算表移除，改由 1,500 行软上限直接约束）。
 - 纯搬家等价性校验：剥离新增的 `use super::*;`、子模块声明及 `pub(super)` 可见性修饰后，4 个文件按原区段顺序还原出的 3,704 行与拆分前 `fetch.rs` 逐行 100% 一致。
 - 验证：静态门禁、`app/core` `fetch::` 全部 54 个单测（54 passed / 0 failed）、两 crate `cargo check --all-targets --locked`、`scan-secrets.ps1` 全部通过。
+
+## 2026-11-22 T-A3 `app/src-tauri/src/lib.rs` 拆分为 13 个平铺模块
+
+- 按设计文档 §2 A3，将 `app/src-tauri/src/lib.rs`（6,272 行）按职责切分为平铺于 `app/src-tauri/src/` 下的 13 个同层模块（保证 `build/check-ipc-contract.js` 单层目录扫描完整覆盖），并在 `tauri::generate_handler!` 中改为模块前缀引用（对外前端 IPC 命令名零变化）：
+  - `config_cmds.rs`（330 行）：`get_channels`、`home_view`、`get_config`、`set_config`、`key_hint`、`set_key`、`delete_key` 及热键/凭据清理辅助；
+  - `key_ref_cmds.rs`（136 行）：`key_source`、`set_key_ref`、`clear_key_ref`、`vault_ref_map`；
+  - `weblogin_cmds.rs`（640 行）：WorkBuddy / Qoder / 豆包网页登录窗口与登录观察器；
+  - `window_cmds.rs`（340 行）：`channel_changes`、`mod autostart`、托盘图标/提示、`window_cmd`、`set_pin`、`save_window_pos`、`clamp_to_monitors`；
+  - `notify.rs`（217 行）：跌破红线系统通知 `maybe_notify_crit`；
+  - `diag_cmds.rs`（357 行）：渠道体检 `probe_channel`、`run_diagnostic` 与系统代理探测；
+  - `custom_cmds.rs`（145 行）：`custom_test`、`custom_add`、`custom_remove`；
+  - `poll.rs`（161 行）：`poll_loop`、`refresh_if_stale`、`quit_when_idle`、`refresh_now`；
+  - `update_cmds.rs`（241 行）：`check_update`、`install_update`、`skip_update_version`、`app_version`、`take_startup_error`；
+  - `vault_cmds.rs`（332 行）：本地密钥箱 5 个命令与引用索引重建；
+  - `checkin_cmds.rs`（835 行）：签到状态/历史/立即领取命令、`checkin_credentials`、`checkin_state_of`、`run_checkin`、`credit_grants`；
+  - `checkin_activity.rs`（756 行）：Qoder 与标准渠道活动记录、`monitor_*`、`record_observed_already`、`settle_arrivals`、`record_checkin_skip`、`spawn_checkin_ticker` / `checkin_tick_once`；
+  - `model_cmds.rs`（1,121 行）：4SAPI 模型目录、客户端一键写入/移除/回滚、推广源与诊断日志命令；
+  - `lib.rs` 降至 727 行（保留 `AppState`、`home_view_of`、`emit_channels`、`save_config_off_main`、`lock_rw`、`note`、`run()` 及内联单测；全部 14 个文件均 ≤ 1,500 行软上限，按 §2 A6 规则将 `app/src-tauri/src/lib.rs` 从 `build/check-file-size.js` 的超限预算表移除）。
+- 纯搬家等价性校验：剥离新增的 `mod`/`use`、`pub(crate)` 可见性修饰与 `generate_handler!` 模块前缀后，`lib.rs` + 13 个新模块的非空行多重集合与原 6,272 行 `lib.rs` 100% 一致（0 差异）。
+- 验证：`check-ipc-contract.js`（前端 133 处 invoke / 104 个唯一命令；Rust 104 个定义 / 104 个注册项）、`check-file-size.js`、`check-lock-unwrap.js`（100 个生产源码文件 0 处违规）、`check-encoding.js`、`app/src-tauri` `cargo check --all-targets --locked`（0 warning）、`scan-secrets.ps1` 全部通过。
