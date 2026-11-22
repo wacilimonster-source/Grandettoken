@@ -657,3 +657,12 @@
   - 迁移 9 个直接读 `app.js` 源码文本的脚本：`jsdom-smoke.js`（哨兵替换全改 `replaceOnce`，各模块逐文件 `loadInto` 加载，并修复哨兵子进程串扰 `CHECKIN_SENTINEL` 的问题）、`probe-frontend.js`、`verify-codex-reset.js`、`verify-google-cloud.js`、`verify-tray.js`、`verify-refresh-stability.js`、`verify-vault.js`、`test-sync-persistence.py`、`verify-thumbnail-layout.py`。
   - `.github/workflows/ci.yml` 与 `release.yml` 的 `node --check app/src/app.js` 改为对 `app/src/app*.js` 的循环检查；`build/check-file-size.js` 新增 `GROUP_BUDGETS`（`app/src/app*.js` 合计 ≤ 9,014 行）及「分组预算合计超标被判红」自检样本。
 - 验证：静态门禁、`replaceOnce` 缺失/重复抛错自检、`jsdom-smoke.js`（6 个哨兵单独变红 + 294/294 PASS）、`probe-frontend.js`、`verify-vault.js`、`verify-codex-reset.js`、`verify-google-cloud.js`、`verify-antigravity-capture.js`、`verify-gateway.js`、无头 Edge `verify-refresh-stability.js` 及 `scan-secrets.ps1` 全部通过。
+
+## 2026-11-22 T-A2b `app.js` 拆分阶段 1b：按原顺序切分为 14 个 `app-*.js` 脚本与完整性门禁
+
+- 按 `docs/research/appjs-split-plan-2026-11-22.md` §3.1 与 §5 阶段 1b，按 13 个唯一锚点将 `app/src/app.js`（9,014 行）原样切分为 14 个普通脚本并按原顺序写入 `app/src/index.html`：
+  - `app-core.js`（658 行）、`app-rows.js`（964 行）、`app-view.js`（904 行）、`app-tray.js`（521 行）、`app-channel-cards.js`（579 行）、`app-window.js`（510 行）、`app-manage.js`（475 行）、`app-sync.js`（703 行）、`app-settings.js`（1,058 行）、`app-update.js`（596 行）、`app-vault.js`（141 行）、`app-checkin.js`（866 行）、`app-models.js`（717 行）、`app-boot.js`（322 行）；
+  - 删除 `app/src/app.js` 及 `build/check-file-size.js` 中的单文件条目，由 `GROUP_BUDGETS`（`app/src/app*.js` 合计 ≤ 9,014 行）与单文件 1,500 行软上限共同约束；
+  - 逐字节校验：14 个文件按序拼接后的 SHA-256 与原 `app.js` 完全一致（`b837feedc66ba1003e7ce6a690f7e7594963197ad0c0eba5c5dcbfa3f7a1fbb5`）。
+- 新增门禁 `build/check-app-split.js`（带 `--self-test`）并接入 `ci.yml`、`release.yml` 与 `AGENTS.md` §4.1：校验 `index.html` 标签清单与磁盘 `app-*.js` 一致且首尾为 `app-core.js` / `app-boot.js`、单文件独立编译、436 个顶层声明跨文件无重名、逐文件加载期执行零异常；`--self-test` 覆盖少标签、多孤儿文件、`app-boot.js` 不在最后、函数截断、跨文件顶层重名、加载期前向调用 6 类坏样本全部判红。
+- 同步更新 `app/README.md` 目录树并在 `docs/report/acceptance-backlog.md` 新增 B10 原生窗口验收项（后续由 T-D1 统一实跑）。

@@ -162,7 +162,7 @@ app/
   src/                    前端(纯静态,无打包器)
     index.html
     styles.css
-    app.js
+    app-core.js … app-boot.js  主应用按加载序拆分的 14 个普通脚本(由 build/check-app-split.js 守护)
     vault-view.js / vault-view.css  密钥箱紧凑列表、详情与明文显示状态
     logos/                渠道官方图标(来源与版权见该目录 README)
   src-tauri/

@@ -30,7 +30,6 @@ const SOFT_LIMIT = 1500;
 //     第 6 个渠道豆包(WebSession 表项 + 逐动作 body + Cookie 分支),
 //     渠道表与统一取数/签到管线是这些文件的本职,不许再从这里长功能以外的行。
 const BUDGETS = {
-  "app/src/app.js": 9014, // 临期文案与套餐计划集中在各自模块。
   "app/core/src/inject.rs": 5055, // T-A1 测试模块外移至 inject_tests*.rs。
   "app/src-tauri/src/lib.rs": 6272, // 网关共享实现与凭据补偿拆入 core，收回接线预算。
   "app/core/src/fetch.rs": 3710, // T-A1 测试模块外移至 fetch_tests*.rs。

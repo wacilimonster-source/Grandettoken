@@ -140,6 +140,13 @@ jobs:
           node --check build/check-ipc-contract.js
           node --check build/check-silent-failures.js
           node --check build/check-file-size.js
+          node --check build/check-app-split.js
+
+      - name: app-*.js split integrity gate
+        shell: pwsh
+        run: |
+          node build/check-app-split.js --self-test
+          node build/check-app-split.js
 
       # 前端 invoke() 的桩在 jsdom 冒烟里对未知命令一律返回 null —— 命令名拼错、
       # 定义漏注册都能「全绿」。这道门从源码实时比对「调用 / 定义 / 注册」三方,
