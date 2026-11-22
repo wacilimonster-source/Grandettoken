@@ -46,6 +46,7 @@
     tab: "advice",
     advice: null,
     loading: false,
+    refreshing: false,
     error: "",
     key: "",
     seq: 0,
@@ -57,6 +58,7 @@
     amount: null,
     speed: null,
     scope: null,
+    channelScope: null,
     saving: false,
   };
 
@@ -556,6 +558,16 @@
     ].join("|");
   }
 
+  function refreshNeedFreshness() {
+    const sameDay = state.need !== "soon" || (state.needAt && new Date(state.needAt * 1000).toDateString()
+      === new Date(nowSec() * 1000).toDateString());
+    if (!state.need || !state.needAt || nowSec() - state.needAt > 12 * 3600 || !sameDay) {
+      state.need = "patient";
+      state.needAt = null;
+      state.amount = null;
+    }
+  }
+
   function applyProfile(p) {
     const profile = p || {};
     state.scope = profile.scope || null;
@@ -564,15 +576,8 @@
     state.needAt = need.at || null;
     const amt = Number(need.amountPercent);
     state.amount = Number.isFinite(amt) && amt > 0 ? Math.min(100, amt) : null;
-    const sameDay = need.kind !== "soon" || new Date(need.at * 1000).toDateString()
-      === new Date(nowSec() * 1000).toDateString();
-    if (need.kind && need.at && nowSec() - need.at <= 12 * 3600 && sameDay) {
-      state.need = need.kind;
-    } else {
-      state.need = "patient";
-      state.needAt = null;
-      state.amount = null;
-    }
+    state.need = need.kind || "patient";
+    refreshNeedFreshness();
   }
 
   function isEditingDate() {
@@ -604,41 +609,58 @@
       paint();
       return;
     }
+    const chScope = c.quotaPlanScope || null;
+    if (chScope && state.channelScope && chScope !== state.channelScope) {
+      state.profileLoaded = false;
+      state.advice = null;
+    }
+    if (chScope) state.channelScope = chScope;
     const key = inputKey(c);
-    if (!force && state.key === key && (state.advice || state.loading)) return;
+    if (!force && state.key === key && (state.advice || state.loading || state.refreshing)) return;
     state.key = key;
-    state.loading = true;
-    state.advice = null;
+    const hasAdvice = !!state.advice;
+    state.loading = !hasAdvice;
+    state.refreshing = hasAdvice;
     state.error = "";
     const seq = ++state.seq;
     paint();
     try {
-      {
+      if (!state.profileLoaded) {
         try {
           const profile = await invoke("codex_reset_profile_get", { id: "codex" });
           if (seq !== state.seq) return;
           applyProfile(profile);
+          if (profile && profile.scope) state.channelScope = profile.scope;
           state.profileLoaded = true;
           state.profileError = "";
           state.key = inputKey(c);
         } catch (e) {
           if (seq !== state.seq) return;
           applyProfile(null);
-          // 读设置失败不阻断即时建议：用默认「能等」先算，计划区会标不可用。
-          state.profileLoaded = true;
+          // 读设置失败不阻断即时建议：用默认「能等」先算，下次重算时重新读取。
+          state.profileLoaded = false;
           state.profileError = "读取本地订阅设置失败:" + e;
         }
+      } else {
+        refreshNeedFreshness();
+        state.key = inputKey(c);
       }
       const advice = await invoke("codex_reset_advice", {
         id: "codex",
         input: buildInput(c),
       });
       if (seq !== state.seq) return;
+      if (advice && Array.isArray(advice.warnings) && advice.warnings.includes("scope_mismatch")) {
+        state.profileLoaded = false;
+      }
       state.advice = advice;
       state.loading = false;
+      state.refreshing = false;
     } catch (e) {
       if (seq !== state.seq) return;
       state.loading = false;
+      state.refreshing = false;
+      if (/账号已变化/.test(String(e || ""))) state.profileLoaded = false;
       state.error = String(e || "读取建议失败");
     }
     paint();
@@ -646,7 +668,7 @@
 
   function ensureAdvice(c, force) {
     const key = inputKey(c);
-    if (!force && state.key === key && (state.advice || state.loading)) return;
+    if (!force && state.key === key && (state.advice || state.loading || state.refreshing)) return;
     loadAdvice(c, force);
   }
 
@@ -751,7 +773,7 @@
       const profile = await invoke("codex_reset_profile_set", { id: "codex", profile: patch });
       if (profile?.scope === patch.scope) window.QuotaPlanUI?.setCodexProfile(profile);
       state.profileError = "";
-      state.profileLoaded = true;
+      state.profileLoaded = false;
       await loadAdvice(c, true);
     } catch (e) {
       state.subEndAt = prev;

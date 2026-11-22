@@ -14,6 +14,10 @@ if (process.env.CODEX_RESET_SENTINEL === "1") {
   const marker = 'return state.open && !state.saving && document.activeElement?.id === "codexResetSubEnd";';
   if (moduleJs.split(marker).length !== 2) throw new Error("日期保护哨兵必须命中唯一入口");
   moduleJs = moduleJs.replace(marker, "return false;");
+} else if (process.env.CODEX_ADVICE_FLICKER_SENTINEL === "1") {
+  const marker = "const hasAdvice = !!state.advice;";
+  if (moduleJs.split(marker).length !== 2) throw new Error("闪烁哨兵必须命中唯一入口");
+  moduleJs = moduleJs.replace(marker, "state.advice = null; const hasAdvice = false;");
 } else {
   const { spawnSync } = require("child_process");
   const probe = spawnSync(process.execPath, [__filename], {
@@ -30,6 +34,13 @@ if (process.env.CODEX_RESET_SENTINEL === "1") {
     throw new Error("日期保护自检失败，移除保护后必须被回归断言拦截");
   }
   console.log("  ok   移除日期编辑保护时冒烟变红");
+  const flickerProbe = spawnSync(process.execPath, [__filename], {
+    env: { ...process.env, CODEX_ADVICE_FLICKER_SENTINEL: "1" }, encoding: "utf8", timeout: 15000,
+  });
+  if (flickerProbe.status !== 1 || !flickerProbe.stderr.includes("FAIL: 推进 1 分钟刷新期间保留旧结果且不闪加载中")) {
+    throw new Error("闪烁哨兵自检失败，清空旧结果后必须被加载中闪烁断言拦截");
+  }
+  console.log("  ok   刷新清空旧结果时闪烁哨兵变红");
 }
 
 const dom = new JSDOM(html, {
@@ -43,9 +54,9 @@ doc.getElementById("detailShade").hidden = false;
 const calls = [];
 let profileNeed = "patient";
 let profileAmount = null;
-// 夹具时间一律相对本机时钟:需求新鲜度(12h)/过期标记/重置点都按真实 now 推,
-// 钉死绝对时间戳会在跨天/12h 后把 NOW 误降级成 WAIT(2026-11-14 实测)
-const FIXTURE_NOW = Math.floor(Date.now() / 1000);
+let profileScope = "a".repeat(24);
+// 固定时钟(AGENTS.md §6.3 / §8.1):钉在本地 2026-11-14 15:30:00,避免跨午夜/12h 边界漂移
+const FIXTURE_NOW = Math.floor(new Date(2026, 10, 14, 15, 30, 0).getTime() / 1000);
 let profileNeedAt = FIXTURE_NOW;
 let uiNow = FIXTURE_NOW;
 w.Date.now = () => uiNow * 1000;
@@ -60,6 +71,7 @@ w.showToast = (msg, bad) => toasts.push({ msg, bad });
 w.CHANNELS = [{
   id: "codex",
   kind: "codex",
+  quotaPlanScope: profileScope,
   extra: [["套餐", "plus"]],
   windows: [
     { key: "weekly", label: "周额度", percent: 100, remainPercent: 0, status: "rate-limited",
@@ -140,7 +152,7 @@ w.__TAURI__ = {
       calls.push({ cmd, args });
       if (cmd === "codex_reset_profile_get") {
         if (failRead) throw new Error("read fixture");
-        return { subEndAt: profileSubEnd, need: { kind: profileNeed, amountPercent: profileAmount, at: profileNeedAt }, updatedAt: FIXTURE_NOW - 60 };
+        return { scope: profileScope, subEndAt: profileSubEnd, need: { kind: profileNeed, amountPercent: profileAmount, at: profileNeedAt }, updatedAt: FIXTURE_NOW - 60 };
       }
       if (cmd === "codex_reset_profile_set") {
         if (failSave) throw new Error("write fixture");
@@ -152,7 +164,7 @@ w.__TAURI__ = {
         }
         if (p.subEndAt) profileSubEnd = p.subEndAt;
         if (p.clearSubEnd) profileSubEnd = null;
-        return { subEndAt: profileSubEnd, need: { kind: profileNeed, amountPercent: profileAmount, at: profileNeedAt }, updatedAt: FIXTURE_NOW - 60 };
+        return { scope: profileScope, subEndAt: profileSubEnd, need: { kind: profileNeed, amountPercent: profileAmount, at: profileNeedAt }, updatedAt: FIXTURE_NOW - 60 };
       }
       if (cmd === "codex_reset_advice") {
         const kind = (args && args.input && args.input.need && args.input.need.kind) || "patient";
@@ -218,6 +230,21 @@ const assert = (ok, msg) => {
   tick();
   await wait(40);
 
+  // T-B2: 推进 1 分钟、数据不变 —— profile_get 调用次数不变、advice 最多 1 次、期间 DOM 不闪加载中
+  const profileReadsBeforeMin = calls.filter((c) => c.cmd === "codex_reset_profile_get").length;
+  const adviceCallsBeforeMin = calls.filter((c) => c.cmd === "codex_reset_advice").length;
+  uiNow += 60;
+  tick();
+  assert(!q(".cr-loading") && !host.textContent.includes("正在计算")
+    && q(".cr-verdict-badge")?.textContent === "WAIT",
+    "推进 1 分钟刷新期间保留旧结果且不闪加载中");
+  await wait(40);
+  const profileReadsAfterMin = calls.filter((c) => c.cmd === "codex_reset_profile_get").length;
+  const adviceCallsAfterMin = calls.filter((c) => c.cmd === "codex_reset_advice").length;
+  assert(profileReadsAfterMin === profileReadsBeforeMin
+    && adviceCallsAfterMin - adviceCallsBeforeMin === 1,
+    "推进 1 分钟不再重复读取 profile 且只重算 1 次建议");
+
   q('[data-codex-need="urgent"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
   await wait(40);
   assert(q(".cr-verdict-badge").textContent === "NOW", "选「现在就要」翻成 NOW");
@@ -282,10 +309,13 @@ const assert = (ok, msg) => {
   await wait(40);
   assert(q("#codexResetSubEnd") === date && doc.activeElement === date
     && date.value === "2026-11-30", "日期编辑期间时钟刷新保留输入节点、焦点和草稿");
+  const readsBeforeSaveDate = calls.filter((c) => c.cmd === "codex_reset_profile_get").length;
   date.value = "2026-11-30";
   date.dispatchEvent(new w.Event("change", { bubbles: true }));
   await wait(40);
   assert(calls.some((c) => c.cmd === "codex_reset_profile_set" && c.args.profile.subEndAt), "日期变更写 profile");
+  assert(calls.filter((c) => c.cmd === "codex_reset_profile_get").length > readsBeforeSaveDate,
+    "保存订阅日期后重新读取 profile");
   assert(toasts.length === 0, "保存成功不弹错误 toast");
   assert(!!q("[data-codex-clear-date]"), "已填写日期提供明确清空入口");
 
@@ -302,6 +332,7 @@ const assert = (ok, msg) => {
   assert(q("#codexResetSubEnd").value === savedDate && profileSubEnd != null,
     "清空保存失败恢复日期并保留已保存值");
   failSave = false;
+  const readsBeforeClear = calls.filter((c) => c.cmd === "codex_reset_profile_get").length;
   q("[data-codex-clear-date]").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
   await wait(40);
   assert(calls.some((c) => c.cmd === "codex_reset_profile_set" && c.args.profile.clearSubEnd === true),
@@ -317,14 +348,17 @@ const assert = (ok, msg) => {
     "空日期按卡到期时间展示计划及时间轴");
   assert(q(".cr-tl-legend").textContent.includes("最后一张卡到期"), "时间轴标明卡有效期截止");
 
-  const readsBeforeReopen = calls.filter((c) => c.cmd === "codex_reset_profile_get").length;
+  const readsBeforeScopeSwitch = calls.filter((c) => c.cmd === "codex_reset_profile_get").length;
   w.CodexResetUI.onDetailClosed();
+  profileScope = "b".repeat(24);
+  w.CHANNELS[0].quotaPlanScope = profileScope;
   w.CHANNELS[0].updatedAt += 1;
   host.innerHTML = w.CodexResetUI.render(w.CHANNELS[0]);
   await wait(40);
   q("[data-codex-reset-root]").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
   await wait(20);
-  assert(calls.filter((c) => c.cmd === "codex_reset_profile_get").length > readsBeforeReopen
+  assert(calls.filter((c) => c.cmd === "codex_reset_profile_get").length > readsBeforeScopeSwitch
+    && calls.filter((c) => c.cmd === "codex_reset_profile_get").length > readsBeforeClear
     && q("#codexResetSubEnd").value === "", "重新读取设置后日期仍为空");
   q("#codexResetSubEnd").value = savedDate;
   q("#codexResetSubEnd").dispatchEvent(new w.Event("change", { bubbles: true }));
@@ -359,6 +393,8 @@ const assert = (ok, msg) => {
   assert(!q(".cr-timeline"), "卡读取失败不沿用旧有效期计划");
   w.CHANNELS[0].resetCredits.error = null;
   failRead = true;
+  profileScope = "c".repeat(24);
+  w.CHANNELS[0].quotaPlanScope = profileScope;
   const retry = doc.querySelector('[data-codex-tab="plan"]');
   retry.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
   q("#codexResetSpeed").dispatchEvent(new w.Event("change", { bubbles: true }));
@@ -366,6 +402,27 @@ const assert = (ok, msg) => {
   const fallback = calls.filter((c) => c.cmd === "codex_reset_advice").pop();
   assert(fallback.args.input.subEndAt === null && fallback.args.input.need.kind === "patient"
     && fallback.args.input.need.amountPercent === null, "读取失败清掉旧设置并降级为能等");
+  failRead = false;
+  const readsBeforeRetry = calls.filter((c) => c.cmd === "codex_reset_profile_get").length;
+  uiNow += 60;
+  tick();
+  await wait(40);
+  assert(calls.filter((c) => c.cmd === "codex_reset_profile_get").length > readsBeforeRetry,
+    "上次读取失败之后下次刷新重新读取 profile");
+
+  // 跨本地 0 点与跨重置时刻:「今天要用」(soon) 跨过午夜自动复位为 patient 并重算
+  q('[data-codex-tab="advice"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await wait(20);
+  q('[data-codex-need="soon"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await wait(40);
+  assert(calls.filter((c) => c.cmd === "codex_reset_advice").pop().args.input.need.kind === "soon",
+    "跨日前保持今天要用需求");
+  uiNow = Math.floor(new Date(2026, 10, 15, 0, 5, 0).getTime() / 1000);
+  tick();
+  await wait(40);
+  const afterMidnight = calls.filter((c) => c.cmd === "codex_reset_advice").pop();
+  assert(afterMidnight.args.input.need.kind === "patient" && q(".cr-verdict-badge")?.textContent === "WAIT",
+    "跨本地 0 点与跨重置时刻自动重算且结论正确");
   assert(typeof tick === "function", "注册每分钟重新计算的时钟");
 
   assert(!calls.some((c) => /redeem|reset_credit/i.test(c.cmd)), "全程没有兑换或读卡命令");

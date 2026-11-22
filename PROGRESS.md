@@ -632,3 +632,11 @@
   1) Windows 下将子进程加入 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 Job Object（`KillOnDropJob`），超时或等待出错时先释放 Job 句柄终止整棵进程树；
   2) `spawn_capped_reader` 改为通过 `mpsc::channel` 回传结果并配合共享缓冲，主线程按剩余预算 `recv_timeout` 等待，超时则 detach 读线程并返回已收集字节（标记 `truncated = true`）。
 - 验证：修复后 `timeout_with_grandchild_holding_stdout_returns_within_budget` 耗时 0.51 s 通过（同时断言正常退出 `cmd /C echo 1.5.9` 完整读回且 `truncated == false`）；静态门禁、`app/core` 单线程全量测试（649 passed / 10 ignored + `sync_fixtures` 6 passed）、两 crate `cargo check --all-targets --locked`、`scan-secrets.ps1` 全部通过。
+
+## 2026-11-22 T-B2 Codex 重置顾问：刷新保留旧结果、profile 只读一次与后端耗时采样
+
+- **第一步（`app/src/codex-reset.js`）**：
+  1) 刷新重算时保留已有的 `state.advice`，仅设 `state.refreshing = true`（首次尚无结果时仍设 `state.loading = true` 显示加载中），消除每分钟重算时的「正在计算建议…」界面闪烁；
+  2) `state.profileLoaded` 为真时跳过 `codex_reset_profile_get`，每分钟定时器的 IPC 从 2 次降为 1 次；同时抽离 `refreshNeedFreshness()` 在跳过读取时仍按当前时钟校验 `soon`（今天要用）跨本地 0 点与 12 小时新鲜度；在保存或清空订阅日期（`saveDate`）、切换账号指纹（`quotaPlanScope` 变化或 `scope_mismatch`）、以及上次读取失败（`catch` 中保持 `state.profileLoaded = false`）三种场景下重新读取 profile。
+- **双向验证（`build/verify-codex-reset.js`）**：改用固定本地时钟（`2026-11-14 15:30:00`），覆盖推进 1 分钟不重读 profile、建议只算 1 次、刷新期间 DOM 不出现 `.cr-loading` /「正在计算」、保存/清空订阅日期重读 profile、切换账号指纹重读 profile、读取失败后下次刷新重试，以及 `soon` 跨本地 0 点自动复位为 `patient` 重算；新增反向哨兵 `CODEX_ADVICE_FLICKER_SENTINEL=1`（恢复刷新时置空 `state.advice = null`）按预期触发闪烁断言变红。
+- **第二步耗时采样**：在本机真实 `tokenscope.db` 副本上对 `Snapshot::stored_scope` + `local_today_end` + `codex_reset::advise`（含 3 张重置卡与事件模拟）连续采样 20 次，实测微秒耗时为 `[1914, 169, 107, 85, 70, 65, 63, 66, 82, 68, 64, 61, 61, 75, 67, 74, 99, 78, 65, 63]` µs（首次冷读 1.91 ms，稳态 61–169 µs，20 次均值 169.8 µs ≈ 0.17 ms），远低于设计文档 §3 B2 的 2 ms 阈值，按方案保留每分钟重算。
