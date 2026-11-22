@@ -735,3 +735,13 @@
 - **改动**：`app/src/app-tray.js` 为 `fitPill()` 增加 `PILL_MEASURE_KEY` / `PILL_MEASURE_W` 缓存（键为 `文本|字号档|fontFamily|clientWidth`），命中时不创建离屏 `<span>`、不读 `offsetWidth`；将字体样式复制收敛为循环，保持 `app*.js` 总行数仍在 `9011/9011` 预算内。
 - **验证补强**：`build/jsdom-smoke.js` 新增 3 项 `fitPill` 测量缓存断言及 `FIT_PILL_SENTINEL=1` 双向哨兵。
 - **验证**：`check-file-size.js`、`check-silent-failures.js`、`check-app-split.js`、`check-encoding.js`（均含 `--self-test`）、`check-ipc-contract.js`、`check-css-forms.js`、`node --check app/src/app-tray.js`、`jsdom-smoke.js`（297/297）、`FIT_PILL_SENTINEL=1`（3 项 `fitPill` FAIL，退出码 1）、`verify-vault.js`、`verify-codex-reset.js`、`verify-google-cloud.js`、`verify-gateway.js`、`scan-secrets.ps1` 全部通过。
+
+
+## 2026-11-22 T-B5 SQLite 单轮逐条提交 vs 单事务实测结论（放弃）
+
+- **实测数据**（临时磁盘库 `Store::open`、WAL + `synchronous=NORMAL`，连续 20 轮 × 28 次写入/轮 ≈ 12 渠道全量 `record_fp` + `quota_snapshot_v1` `set_setting` + 2 渠道 `insert_grant`/`prune_grants`）：
+  - 逐条自动提交：总计 `43.360 ms`，均值 **`2.168 ms/轮`**；
+  - 单事务 `unchecked_transaction()`：总计 `10.319 ms`，均值 **`0.516 ms/轮`**；
+  - 差值仅 **`1.652 ms/轮`**（实测耗时可忽略，远低于引入事务批处理的风险阈值；临时基准测试已删除）。
+- **结论**：按既定决策**放弃**（不引入跨渠道写合并与借用生命周期改造，保留逐条立即落盘）。
+- **验证**：`check-encoding.js`、`cargo test --locked -- --test-threads=1`、`scan-secrets.ps1` 通过。
