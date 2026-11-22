@@ -540,13 +540,13 @@ async function syncAuthCancel(silent = false) {
   if (SYNC_AUTH) clearTimeout(SYNC_AUTH.timer);
   SYNC_AUTH = null;
   $("syncAuth").hidden = true;
-  try { await invoke("sync_oauth_cancel"); } catch { /* 已经取消 */ }
+  try { await invoke("sync_oauth_cancel"); } catch { /* silent: 后台授权会话已结束或已取消 */ }
   if (!silent) showToast("已取消 GitHub 授权");
 }
 
 async function syncAuthCopyOpen() {
   if (!SYNC_AUTH) return;
-  try { await invoke("copy_text", { text: SYNC_AUTH.userCode }); } catch { /* 手动抄写 */ }
+  try { await invoke("copy_text", { text: SYNC_AUTH.userCode }); } catch { /* silent: 剪贴板写入失败时页面已展示授权码可手动抄写 */ }
   try {
     await invoke("open_url", { url: SYNC_AUTH.verificationUri });
     $("syncAuthStatus").textContent = "已复制授权码。请在 GitHub 页面输入它,并确认只授予 gist 权限。";

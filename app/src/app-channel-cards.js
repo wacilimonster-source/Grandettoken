@@ -352,7 +352,7 @@ function renderChCards() {
     if (el && chBox.contains(el)) {
       el.focus({ preventScroll: true });
       if (focusSel && el.setSelectionRange) {
-        try { el.setSelectionRange(focusSel.start, focusSel.end); } catch (_) {}
+        try { el.setSelectionRange(focusSel.start, focusSel.end); } catch (_) { /* silent: 非文本控件不支持选区恢复可忽略 */ }
       }
     }
   }
@@ -448,7 +448,7 @@ async function doRefreshKeyMeta(force) {
   // 「或从密钥箱选一把」要用到箱子列表;用户可能没打开过密钥箱页签,这里按需补一次。
   if (wantedSources.length) {
     if (!VAULT.length) {
-      try { VAULT = await invoke("vault_list"); } catch { /* 读不出来就不显示下拉 */ }
+      try { VAULT = await invoke("vault_list"); } catch { /* silent: 读不出来就不显示下拉 */ }
     }
     await loadVaultRefs();
   }
