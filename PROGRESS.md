@@ -614,3 +614,8 @@
   - `workbuddy.rs`（2,392 → 1,776 行，保留末尾 `app_roots_for` 测试注入钩子）→ `workbuddy_tests.rs`（616 行）。
 - 词法状态机去缩进：对处于多行字符串 / 原始字符串字面量（如 `DSH_PATCH` YAML 夹具）内部的续行保留原字节不剥离前导空白，其余代码行去掉一层 4 空格缩进；所有新文件均 ≤ 1,500 行软上限，同步下调 `build/check-file-size.js` 对应预算。
 - 验证：`cargo test --locked -- --list` 与 `-- --ignored --list` 归一化模块前缀后与外移前基线 100% 一致；`app/core` `cargo test --locked -- --test-threads=1`（648 passed / 10 ignored + `sync_fixtures` 6 passed）、两 crate `cargo check --all-targets --locked`、`check-file-size.js`（含 `--self-test`）、`check-encoding.js`（含 `--self-test`）、`jsdom-smoke.js`（294/294，含读取 `checkin.rs` / `providers.rs` 源码文本的 `thumbnail-regression.js`）、各专项冒烟与 `scan-secrets.ps1`（514 文件 CLEAN）全部串行通过。
+
+## 2026-11-22 T-D3 待验收清单纳入发版流程
+
+- 在 `RELEASE.md`「每次发版」第 2 步（发版提交前）与新增第 6 步（同步待验收清单）明确写入：发版提交前将本版新增待验收项记入 `docs/report/acceptance-backlog.md`，发版安装后完成验收并更新状态与日期；同时注明 `build/verify-release.js` 仅检查线上产物，不检查该清单。
+- 验证：静态门禁（`check-encoding.js` 含 `--self-test`、`check-ipc-contract.js`、`check-silent-failures.js`、`check-file-size.js`、`check-css-forms.js`）与 `scan-secrets.ps1` 串行通过（本卡仅改动 `RELEASE.md` 与 `PROGRESS.md`，未改动代码）。

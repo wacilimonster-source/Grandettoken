@@ -74,6 +74,9 @@ CI 的 `Resolve tag and version` 会断言 tag 与版本号一致,不一致直�
 
 ### 2. 提交并推 main
 
+发版提交前,先把本版新增的待验收项(需安装版原生窗口、真实账号或外部环境验证的条目)写进
+[`docs/report/acceptance-backlog.md`](docs/report/acceptance-backlog.md)。
+
 ```bash
 git add -A && git commit -m "release: vX.Y.Z - 一句话亮点" \
   -m "- 本版变更一" -m "- 本版变更二"
@@ -140,6 +143,12 @@ CI 里也会跑同一个脚本,所以本地这步是**二次确认**,不是唯�
 
 > Node 24 的 `fetch` 默认不读 `HTTPS_PROXY`;本机设了代理时必须加 `--use-env-proxy`,
 > 否则会看到 `fetch failed`(2026-11-12 v0.3.36 踩过)。
+
+### 6. 同步待验收清单
+
+- **发版提交前**:把本版新增的待验收项写进 [`docs/report/acceptance-backlog.md`](docs/report/acceptance-backlog.md);
+- **发版并安装后**:逐项完成真机 / 原生窗口 / 真实账号验收,在 `docs/report/acceptance-backlog.md` 里更新对应项的状态和完成日期。
+- `build/verify-release.js` 只核验线上发布产物,不检查本地待验收清单文档。
 
 ## Android 发版（CI，独立 tag）
 
