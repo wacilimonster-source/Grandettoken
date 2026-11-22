@@ -688,3 +688,13 @@
   - `inject.rs` 降至 2,276 行（同步将 `build/check-file-size.js` 中 `inject.rs` 的预算从 5,055 下调至 2,276；全部 5 个新子模块均 ≤ 1,500 行软上限）。
 - 纯搬家等价性校验：剥离新增的 `use super::*;`、子模块声明及 `pub(super)` 可见性修饰后，6 个文件还原出的 5,055 行与拆分前 `inject.rs` 逐行 100% 一致；核对 `README.md`「已知边界」中改写其它客户端配置与 DPAPI 备份快照的披露完整准确，无需更新。
 - 验证：静态门禁、`app/core` `inject::` 全部 60 个单测（58 passed / 2 ignored）、两 crate `cargo check --all-targets --locked`、`jsdom-smoke.js`（294/294 含模型页用例）、`scan-secrets.ps1` 全部通过。
+
+## 2026-11-22 T-A4 `app/core/src/fetch.rs` 生产代码拆分子模块
+
+- 按设计文档 §2 A4，将 `app/core/src/fetch.rs`（3,703 行）中的凭据分段、单次请求与视图组装拆入 3 个 `#[path]` 子模块并通过 `pub use` / `pub(crate) use` 重新导出（对外 `crate::fetch::*` 路径零变化，`src-tauri` 无需任何改动）：
+  - `fetch_creds.rs`（373 行）：密钥与账号指纹（`current_key_fp`、`key_fp`、`credential_scope`）、Qoder 凭据换号记录、`demote_rejected` 降权、`read_desktop_tokens_region`、`credentials` 与认证指引文案；
+  - `fetch_once.rs`（789 行）：`FailKind` 与重试判定、`fetch_once` / `fetch_once_inner`、L2 诊断日志与响应截断、`fetch_channel`、`fetch_codex_reset_credits`、自定义渠道并发抓取 `fetch_custom_all_observed`；
+  - `fetch_view.rs`（1,138 行）：周期学习与套餐月费折算、`claim_state`、本地日历边界、批量窗口统计 `AmountAnchors` / `AmountStats`、`build_view`、缺口判定、`placeholder` 与自定义渠道视图组装；
+  - `fetch.rs` 降至 1,438 行（4 个文件全部 ≤ 1,500 行软上限；按 §2 A6 规则将 `app/core/src/fetch.rs` 从 `build/check-file-size.js` 的超限预算表移除，改由 1,500 行软上限直接约束）。
+- 纯搬家等价性校验：剥离新增的 `use super::*;`、子模块声明及 `pub(super)` 可见性修饰后，4 个文件按原区段顺序还原出的 3,704 行与拆分前 `fetch.rs` 逐行 100% 一致。
+- 验证：静态门禁、`app/core` `fetch::` 全部 54 个单测（54 passed / 0 failed）、两 crate `cargo check --all-targets --locked`、`scan-secrets.ps1` 全部通过。
