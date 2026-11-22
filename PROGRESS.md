@@ -619,3 +619,8 @@
 
 - 在 `RELEASE.md`「每次发版」第 2 步（发版提交前）与新增第 6 步（同步待验收清单）明确写入：发版提交前将本版新增待验收项记入 `docs/report/acceptance-backlog.md`，发版安装后完成验收并更新状态与日期；同时注明 `build/verify-release.js` 仅检查线上产物，不检查该清单。
 - 验证：静态门禁（`check-encoding.js` 含 `--self-test`、`check-ipc-contract.js`、`check-silent-failures.js`、`check-file-size.js`、`check-css-forms.js`）与 `scan-secrets.ps1` 串行通过（本卡仅改动 `RELEASE.md` 与 `PROGRESS.md`，未改动代码）。
+
+## 2026-11-22 T-D2 本地文件验签入口
+
+- `build/verify-signature.js` 新增 `--local <文件> --sig <签名文件> [--pubkey <公钥文件或base64>]` 模式与 `--self-test` 自检：跳过线上下载，直接复用 minisign 校验器与公钥解析逻辑验证本地文件；`RELEASE.md`「Android 发版 → 6. 签名材料备份与恢复演练」第 3 步同步改为调用该入口，`docs/report/acceptance-backlog.md` 的 A2 更新为通过。
+- 双向验证：`node build/verify-signature.js --self-test` 使用 `cargo tauri signer generate --ci` 生成临时测试密钥对并签临时文件，验证：①临时公钥验签通过；②篡改一个字节后验签判红；③用 `tauri.conf.json` 正式公钥验证临时签名判红；④`finally` 彻底清理临时密钥与文件（全程不接触正式私钥）。静态门禁与 `scan-secrets.ps1` 串行通过。

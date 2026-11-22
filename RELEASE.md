@@ -270,8 +270,13 @@ python build/verify-android-release.py \
    脚本签名前会从 PEM 推出公钥、与 `--public-key` 逐字节比对,不一致直接退出
    (`private key does not match manifest-public.txt`);能输出 `signed ...` 即通过;
 3. 桌面私钥:`cargo tauri signer sign -f <备份的 tokenscope.key> -p "" <任意测试文件>` 能出 `.sig`,
-   再用 `tauri.conf.json` 的 pubkey 验签。⚠ 仓库里还**没有本地文件的验签入口**
-   (`build/verify-signature.js` 只验线上 release),这一步目前要手工参照它的 minisign 校验方式;
+   再用 `tauri.conf.json` 的 pubkey 本地验签 ——
+
+   ```powershell
+   node build/verify-signature.js --local <测试文件> --sig <测试文件>.sig
+   ```
+
+   输出 `RESULT: PASS` 即通过(脚本内置 `node build/verify-signature.js --self-test` 可随时自检正反样本);
 4. 结果记入 `docs/report/acceptance-backlog.md`:日期、通过与否、指纹前 8 位。**不记任何口令**。
 
 > 演练不需要也不应该轮换任何一把 key。演练机上的材料用完即删。

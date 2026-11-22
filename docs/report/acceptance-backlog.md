@@ -18,7 +18,7 @@
 | ID | 待验收项 | 首次出现 | 需要的环境 | 状态 |
 |---|---|---|---|---|
 | A1 | Android keystore、更新清单私钥、桌面 `tokenscope.key` 的离线备份,以及只用备份的恢复演练(步骤见 `RELEASE.md`「Android 发版 → 6.」) | 2026-11-22 | 另一台机器或 Windows Sandbox + 备份介质;需本人操作 | 待验收(需用户执行) |
-| A2 | 桌面私钥演练缺少本地文件验签入口(`verify-signature.js` 只验线上 release),A1 第 3 步目前需手工 | 2026-11-22 | 补一个 `--local <file> <sig>` 模式或独立脚本 | 待处理 |
+| A2 | 桌面私钥演练缺少本地文件验签入口(`verify-signature.js` 只验线上 release),A1 第 3 步目前需手工 | 2026-11-22 | 补一个 `--local <file> <sig>` 模式或独立脚本 | 通过 2026-11-22(`node build/verify-signature.js --local <文件> --sig <签名文件>` 与 `--self-test`) |
 
 ## B. 桌面安装版 · 原生窗口
 
