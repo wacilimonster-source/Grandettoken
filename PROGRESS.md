@@ -593,3 +593,12 @@
 - 新增 `docs/design/optimization-design-2026-11-22.md`,供其它 agent 领取执行:19 项问题(结构 A1–A6、性能 B1–B6、稳定性 C1–C2、验收与流程 D1–D4)的现状证据、方案、技术路线、20 张任务卡、分层测试路径、并行波次与文件独占规则,以及 8 项待用户拍板事项。
 - 写文档前重新核对了源码,更正会话开头排查的三处结论:推送合批与隐藏态降载已在 v0.3.59 落地;`fetch.rs` 的 `.lock().unwrap()` 是生产 43 处 + 测试 7 处;Rust 大文件里测试代码占比很高(`fetch.rs` ~1562 行、`inject.rs` ~2199 行、`store.rs` ~1047 行),所以把测试模块按 `codex_reset.rs` 的 `#[path]` 先例外移(A1)排在所有拆分之前。
 - 本条只新增文档,未改产品代码;文档内行号为当天快照,执行时须重新定位。
+
+## 2026-11-22 T-00 验证并提交 2026-11-22 既有改动
+
+- 按 `docs/design/optimization-design-2026-11-22.md` §6 T-00 核对工作区改动（经用户确认将 `README.md` 的 1 行归档指引一并纳入第 2 个提交），在本机串行跑完 `AGENTS.md` §4.1 全部门禁：
+  - 零依赖静态门：`check-encoding.js --self-test`（8 项自检通过）与全仓扫描 PASS、`check-ipc-contract.js`（133 处 invoke / 104 命令）、`check-silent-failures.js`（含 `--self-test`，12 脚本 80 处 catch）、`check-file-size.js`（含 `--self-test`）、`check-css-forms.js`（含 `--self-test`，8 样式文件 1397 条规则）、`verify-expiry.js`、`verify-qoder-expiry.js --self-test`、`verify-quota-plan.js`、13 个 JS 文件 `node --check` 全部 PASS；
+  - 界面冒烟（`NO_PROXY=127.0.0.1,localhost,::1`）：`jsdom-smoke.js`（首轮冷启动下哨兵子进程触发 20s `spawnSync` 超时，单独复跑 294/294 PASS）、`verify-vault.js`、`verify-codex-reset.js`、`verify-google-cloud.js`、`verify-antigravity-capture.js`、`verify-gateway.js` 全部 PASS；
+  - Rust 与安全扫描：`app/core` `cargo test --locked -- --test-threads=1`（648 passed / 10 ignored + `sync_fixtures` 6 passed）与 `cargo check --all-targets --locked`、`app/src-tauri` `cargo check --all-targets --locked`、`scan-secrets.ps1`（507 文件 CLEAN）全部通过。
+- 分 3 个提交落库：①编码修复 + `check-encoding.js` + `text-encoding.yml`；②`RELEASE.md` + `acceptance-backlog.md` + `PROGRESS.md` 归档与 `README.md`；③`AGENTS.md` 精简 + `DESIGN.md` §16 + 两份方案文档。
+- 未跑：依赖原生窗口 CDP 的检查（归入后续 T-D1）及需真实账号的 10 项 ignored 用例。
