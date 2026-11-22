@@ -2626,21 +2626,21 @@ impl Default for Fetcher {
 
 impl Fetcher {
     pub fn set_progress_sink(&self, sink: Arc<dyn Fn(Vec<ChannelView>) + Send + Sync>) {
-        *self.progress_sink.lock().unwrap() = Some(sink);
+        *crate::lockx::lock(&self.progress_sink) = Some(sink);
     }
 
     fn publish(&self, v: ChannelView) {
-        let views = self.progress.lock().unwrap().update(v);
+        let views = crate::lockx::lock(&self.progress).update(v);
         self.emit_progress(views);
     }
 
     fn emit_progress(&self, views: Option<Vec<ChannelView>>) {
-        let sink = self.progress_sink.lock().unwrap().clone();
+        let sink = crate::lockx::lock(&self.progress_sink).clone();
         if let (Some(sink), Some(views)) = (sink, views) { sink(views); }
     }
 
     fn failed(&self, id: &str, kind: Option<FailKind>) -> RecoveryView {
-        let mut states = self.recovery.lock().unwrap();
+        let mut states = crate::lockx::lock(&self.recovery);
         let mut next = Recovery::failed(states.get(id), now_ts(), kind);
         // Stable one-second spread between channels, without random dependencies.
         next.next += id.bytes().map(u64::from).sum::<u64>() as i64 % 2;
@@ -2650,24 +2650,24 @@ impl Fetcher {
     }
 
     fn cached(&self, store: &Arc<Mutex<Store>>, id: &str, scope: &str) -> Option<(FetchResult, i64)> {
-        if scope.is_empty() { return self.cache.lock().unwrap().get(id).cloned(); }
-        let same = self.scopes.lock().unwrap().get(id).map_or(false, |old| old == scope);
+        if scope.is_empty() { return crate::lockx::lock(&self.cache).get(id).cloned(); }
+        let same = crate::lockx::lock(&self.scopes).get(id).map_or(false, |old| old == scope);
         if same {
-            if let Some(cached) = self.cache.lock().unwrap().get(id).cloned() { return Some(cached); }
+            if let Some(cached) = crate::lockx::lock(&self.cache).get(id).cloned() { return Some(cached); }
         }
         if !same {
-            self.cache.lock().unwrap().remove(id);
-            self.recovery.lock().unwrap().remove(id);
-            self.scopes.lock().unwrap().insert(id.into(), scope.into());
+            crate::lockx::lock(&self.cache).remove(id);
+            crate::lockx::lock(&self.recovery).remove(id);
+            crate::lockx::lock(&self.scopes).insert(id.into(), scope.into());
         }
-        Snapshot::load(&store.lock().unwrap(), id, scope).map(|s| {
-            self.cache.lock().unwrap().insert(id.into(), (s.result.clone(), s.ts));
+        Snapshot::load(&crate::lockx::lock(store), id, scope).map(|s| {
+            crate::lockx::lock(&self.cache).insert(id.into(), (s.result.clone(), s.ts));
             (s.result, s.ts)
         })
     }
 
     async fn quota_attempt(&self, def: &providers::ProviderDef, cred: &appauth::Credential, memo: Option<&str>) -> (FetchResult, Option<String>, Option<FailKind>) {
-        let attempt = self.recovery.lock().unwrap().get(def.id).map_or(0, |r| r.attempts);
+        let attempt = crate::lockx::lock(&self.recovery).get(def.id).map_or(0, |r| r.attempts);
         let order = attempt_order(def.url, def.fallback_urls, memo);
         let url = &order[attempt as usize % order.len()];
         let (r, kind) = fetch_once_scoped(&self.http, def, url, &cred.token, cred.account_id.as_deref()).await;
@@ -2683,19 +2683,19 @@ impl Fetcher {
     /// 只读、不改任何状态:触发条件仍是 `r.next <= now_ts()`,精度仍按秒
     /// (调用方最小睡 1 秒),所以重试时机与原来等价。
     pub fn next_retry_at(&self) -> Option<i64> {
-        let states = self.recovery.lock().unwrap_or_else(|p| p.into_inner());
+        let states = crate::lockx::lock(&self.recovery);
         states.values().map(|r| r.next).min()
     }
 
     /// Called by the shell ticker. Only failed, due channels are queried.
     pub async fn fetch_retries(&self, store: &Arc<Mutex<Store>>) -> Option<Vec<ChannelView>> {
-        if !self.recovery.lock().unwrap().values().any(|r| r.next <= now_ts()) { return None; }
+        if !crate::lockx::lock(&self.recovery).values().any(|r| r.next <= now_ts()) { return None; }
         let _guard = self.gate.lock().await;
-        let due: HashSet<String> = self.recovery.lock().unwrap().iter()
+        let due: HashSet<String> = crate::lockx::lock(&self.recovery).iter()
             .filter(|(_, r)| r.next <= now_ts()).map(|(id, _)| id.clone()).collect();
         if due.is_empty() { return None; }
         let views = self.fetch_selected(store, Some(&due)).await;
-        *self.last_run.lock().unwrap() = Some((now_ts(), views.clone()));
+        *crate::lockx::lock(&self.last_run) = Some((now_ts(), views.clone()));
         Some(views)
     }
 
@@ -2704,12 +2704,12 @@ impl Fetcher {
     }
 
     pub fn forget_channel(&self, store: &Store, id: &str) {
-        self.cache.lock().unwrap().remove(id);
-        self.scopes.lock().unwrap().remove(id);
-        self.recovery.lock().unwrap().remove(id);
-        self.progress.lock().unwrap().rows.retain(|v| v.id != id);
-        self.qoder_packs.lock().unwrap().remove(id);
-        self.qoder_memos.lock().unwrap().remove(id);
+        crate::lockx::lock(&self.cache).remove(id);
+        crate::lockx::lock(&self.scopes).remove(id);
+        crate::lockx::lock(&self.recovery).remove(id);
+        crate::lockx::lock(&self.progress).rows.retain(|v| v.id != id);
+        crate::lockx::lock(&self.qoder_packs).remove(id);
+        crate::lockx::lock(&self.qoder_memos).remove(id);
         let _ = store.delete_setting(&format!("quota_snapshot_v1:{id}"));
         let _ = store.delete_setting(&format!("{QODER_SCOPE_KEY}:{id}"));
         let _ = store.delete_setting(&format!("{QODER_CHANGED_KEY}:{id}"));
@@ -2721,7 +2721,7 @@ impl Fetcher {
     /// 只清内存,不动余额快照与会话时刻:会话时刻由外壳在登录收尾时写,
     /// 这里要是顺手删了,"换号后是否陈旧"的判据就断了。
     pub fn forget_qoder_web(&self, id: &str) {
-        self.qoder_packs.lock().unwrap().remove(id);
+        crate::lockx::lock(&self.qoder_packs).remove(id);
         self.invalidate();
     }
 
@@ -2731,7 +2731,7 @@ impl Fetcher {
                 .timeout(std::time::Duration::from_secs(20))
                 .user_agent("TokenScope/0.1")
                 .build()
-                .expect("HTTP 客户端初始化失败"),
+                .expect("HTTP 客户端初始化失败"), // 常量超时与 ASCII User-Agent,仅进程级 TLS 栈损坏时失败
             cache: Mutex::new(HashMap::new()),
             scopes: Mutex::new(HashMap::new()),
             recovery: Mutex::new(HashMap::new()),
@@ -2756,17 +2756,14 @@ impl Fetcher {
         &self,
         f: Box<dyn Fn(&str) -> Option<String> + Send + Sync>,
     ) {
-        *self
-            .web_cred_src
-            .lock()
-            .unwrap_or_else(|p| p.into_inner()) = Some(Arc::from(f));
+        *crate::lockx::lock(&self.web_cred_src) = Some(Arc::from(f));
     }
 
     /// 作废"5 秒内复用上次结果"的窗口。登录刚完成 / 密钥刚改过时必须调一次,
     /// 否则那一次刷新会拿旧结果回给界面,用户看到的是"已经登录了但还没有数"。
     pub fn invalidate(&self) {
-        *self.last_run.lock().unwrap_or_else(|p| p.into_inner()) = None;
-        self.recovery.lock().unwrap().retain(|_, r| matches!(r.kind, Some(FailKind::RateLimited(_))) && r.next > now_ts());
+        *crate::lockx::lock(&self.last_run) = None;
+        crate::lockx::lock(&self.recovery).retain(|_, r| matches!(r.kind, Some(FailKind::RateLimited(_))) && r.next > now_ts());
     }
 
     /// 用一份**还没生效**的凭据试打一次:网页登录抓到会话之后,先证明这份会话真能取数,
@@ -2966,10 +2963,10 @@ impl Fetcher {
     }
 
     async fn fetch_selected(&self, store: &Arc<Mutex<Store>>, selected: Option<&HashSet<String>>) -> Vec<ChannelView> {
-        let previous = self.progress.lock().unwrap().rows.clone();
-        self.progress.lock().unwrap().begin();
+        let previous = crate::lockx::lock(&self.progress).rows.clone();
+        crate::lockx::lock(&self.progress).begin();
         let should_fetch = |id: &str| selected.map_or_else(
-            || self.recovery.lock().unwrap().get(id).map_or(true, |r| r.next <= now_ts()),
+            || crate::lockx::lock(&self.recovery).get(id).map_or(true, |r| r.next <= now_ts()),
             |ids| ids.contains(id));
         let n = providers::PROVIDERS.len();
         let mut out: Vec<Option<ChannelView>> = (0..n).map(|_| None).collect();
@@ -3119,8 +3116,8 @@ impl Fetcher {
                             prev.valid = false;
                             prev.limited = false;
                             prev.error = Some(reason);
-                            let mut v = build_view(def, prev.clone(), true, prev_ts, &store.lock().unwrap(), &cfg, None, &fp, 1);
-                            v.recovery = self.recovery.lock().unwrap().get(def.id).map(|r| r.view(now_ts()));
+                            let mut v = build_view(def, prev.clone(), true, prev_ts, &crate::lockx::lock(store), &cfg, None, &fp, 1);
+                            v.recovery = crate::lockx::lock(&self.recovery).get(def.id).map(|r| r.view(now_ts()));
                             self.publish(v);
                             return FetchedOne {
                                 i,
@@ -3210,8 +3207,8 @@ impl Fetcher {
                         break;
                     }
                     if result.valid {
-                        self.recovery.lock().unwrap().remove(def.id);
-                        let cred = chosen.as_ref().unwrap();
+                        crate::lockx::lock(&self.recovery).remove(def.id);
+                        let cred = chosen.as_ref().unwrap(); // result.valid 默认 false,仅上方循环设置 chosen = Some 时为真
                         if def.id == "codex" {
                             result.reset_credits = Some(match fetch_codex_reset_credits(&self.http, &cred.token, cred.account_id.as_deref(), crate::codex::RESET_CREDITS_URL).await {
                                 Ok(cards) => cards,
@@ -3259,7 +3256,7 @@ impl Fetcher {
                     // 逐包网页会话独立于余额及签到，并按区域隔离。
                     if matches!(def.id, "qoder" | "qoder-cn") && result.valid {
                         let site = crate::weblogin::qoder_site(def.id)
-                            .expect("上面已限定 qoder | qoder-cn,站点配置必然存在");
+                            .expect("上面已限定 qoder | qoder-cn,站点配置必然存在"); // matches! 已穷举 qoder_site 支持的两个 ID
                         // 余额凭据换了(换账号 / 换令牌),浏览器里的网页会话不会跟着换:
                         // 2026-11-09 真机就是"余额已经是新账号的 100,逐包明细还是旧账号的
                         // 18 个每日 100 分包"。先判断这本账换没换,再决定要不要用网页会话。
@@ -3400,10 +3397,10 @@ impl Fetcher {
                     // "未检测到登录信息",与真正的失败原因(token 过期)自相矛盾
                     let shown_cred = chosen.or_else(|| last_cred.clone());
                     let fetched = if result.valid {
-                        let cred = shown_cred.as_ref().unwrap();
+                        let cred = shown_cred.as_ref().unwrap(); // creds 非空且 result.valid 为真时 chosen/last_cred 必为 Some
                         let actual_scope = credential_scope(cred);
-                        self.scopes.lock().unwrap().insert(def.id.into(), actual_scope.clone());
-                        if let Err(e) = Snapshot::new(actual_scope, ts, result.clone()).save(&store.lock().unwrap(), def.id) {
+                        crate::lockx::lock(&self.scopes).insert(def.id.into(), actual_scope.clone());
+                        if let Err(e) = Snapshot::new(actual_scope, ts, result.clone()).save(&crate::lockx::lock(store), def.id) {
                             eprintln!("保存额度快照失败 {}: {e}", def.id);
                         }
                         FetchedOne {
@@ -3442,8 +3439,8 @@ impl Fetcher {
                         }
                     };
                     if let Some((r, stale, ts, cred)) = &fetched.pending {
-                        let mut v = build_view(def, r.clone(), *stale, *ts, &store.lock().unwrap(), &cfg, cred.as_ref(), &fetched.fp, 1);
-                        v.recovery = self.recovery.lock().unwrap().get(def.id).map(|r| r.view(now_ts()));
+                        let mut v = build_view(def, r.clone(), *stale, *ts, &crate::lockx::lock(store), &cfg, cred.as_ref(), &fetched.fp, 1);
+                        v.recovery = crate::lockx::lock(&self.recovery).get(def.id).map(|r| r.view(now_ts()));
                         self.publish(v);
                     }
                     fetched
@@ -3462,11 +3459,11 @@ impl Fetcher {
             // fetch_custom 总会返回一个结果(成功或失败),所以每个请求必有后续的
             // Some 发布,这里提前返回不会让渠道停在旧状态上。
             let Some(r) = r else { return };
-            let cached = Snapshot::load(&store.lock().unwrap(), &ch.id, &custom_scope(ch, fp));
-            let mut v = build_custom_view(ch, r, &store.lock().unwrap(), fp, 1);
+            let cached = Snapshot::load(&crate::lockx::lock(store), &ch.id, &custom_scope(ch, fp));
+            let mut v = build_custom_view(ch, r, &crate::lockx::lock(store), fp, 1);
             if !v.valid {
                 if let Some(c) = cached { v.remaining = c.result.remaining; v.updated_at = c.ts; v.stale = true; }
-                v.recovery = Some(Recovery::failed(self.recovery.lock().unwrap().get(&ch.id), now_ts(), r.failure_kind).view(now_ts()));
+                v.recovery = Some(Recovery::failed(crate::lockx::lock(&self.recovery).get(&ch.id), now_ts(), r.failure_kind).view(now_ts()));
             }
             self.publish(v);
         };
@@ -3478,7 +3475,7 @@ impl Fetcher {
             Some(&custom_observer),
         );
         let (fetched, custom_results) = crate::progress::drive(async { futures::join!(builtin, custom) }, || {
-            let views = self.progress.lock().unwrap().flush();
+            let views = crate::lockx::lock(&self.progress).flush();
             self.emit_progress(views);
         }).await;
 
@@ -3621,7 +3618,7 @@ impl Fetcher {
                     continue;
                 };
                 let Some(r) = res else {
-                    self.recovery.lock().unwrap().remove(&ch.id);
+                    crate::lockx::lock(&self.recovery).remove(&ch.id);
                     custom_views.push(custom_placeholder(ch, false, None));
                     continue;
                 };
@@ -3667,7 +3664,7 @@ impl Fetcher {
                 let cached = Snapshot::load(&s, &ch.id, &scope);
                 let mut v = build_custom_view(ch, r, &s, fp, accounts);
                 if r.valid {
-                    self.recovery.lock().unwrap().remove(&ch.id);
+                    crate::lockx::lock(&self.recovery).remove(&ch.id);
                     if !r.probe_only {
                         let result = FetchResult { valid: true, remaining: r.remaining, unit: v.unit.clone(), ..Default::default() };
                         if let Err(e) = Snapshot::new(scope, v.updated_at, result).save(&s, &ch.id) { eprintln!("保存额度快照失败: {e}"); }
@@ -3682,20 +3679,18 @@ impl Fetcher {
         }
 
         for (id, result, ts) in cache_updates {
-            if let Ok(mut c) = self.cache.lock() {
-                c.insert(id, (result, ts));
-            }
+            crate::lockx::lock(&self.cache).insert(id, (result, ts));
         }
 
         // 内置渠道在前、自定义渠道在后(顺序由前端的排序/自定义排序再排一次)
         let mut all: Vec<ChannelView> = out.into_iter().flatten().collect();
-        all = crate::antigravity_accounts::expand_all(all, &store.lock().unwrap_or_else(|p| p.into_inner()), &cfg);
+        all = crate::antigravity_accounts::expand_all(all, &crate::lockx::lock(store), &cfg);
         all.extend(custom_views);
-        all.push(crate::google_cloud::channel(&store.lock().unwrap(), &cfg, now_ts()));
+        all.push(crate::google_cloud::channel(&crate::lockx::lock(store), &cfg, now_ts()));
         for v in &mut all {
-            v.recovery = self.recovery.lock().unwrap().get(&v.id).map(|r| r.view(now_ts()));
+            v.recovery = crate::lockx::lock(&self.recovery).get(&v.id).map(|r| r.view(now_ts()));
         }
-        self.progress.lock().unwrap().finish(all.clone());
+        crate::lockx::lock(&self.progress).finish(all.clone());
         all
     }
 }

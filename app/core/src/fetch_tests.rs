@@ -1121,3 +1121,102 @@ fn body_cap_is_enforced_while_collecting_chunks() {
     assert!(push_chunk(&mut first, &vec![0u8; 11], 10).is_err());
     assert!(first.is_empty());
 }
+
+/// T-C1: recovery / progress / cache 三把互斥锁在持锁线程 panic 中毒后,
+/// 后续调用 failed / fetch_retries / publish / cached 不得连锁 panic,
+/// 且按锁类型在诊断日志环形缓冲里各记一条节流记录。
+#[tokio::test]
+async fn poisoned_recovery_progress_and_cache_locks_recover_and_log_throttled_diag() {
+    let fetcher = Arc::new(Fetcher::new());
+    let store = Arc::new(Mutex::new(Store::open_memory().unwrap()));
+
+    // 1. 让 recovery 锁在子线程持锁期间 panic 中毒
+    {
+        let f = fetcher.clone();
+        let _ = std::thread::spawn(move || {
+            let _g = f.recovery.lock().unwrap();
+            panic!("inject recovery poison");
+        })
+        .join();
+    }
+    assert!(fetcher.recovery.is_poisoned());
+
+    // 2. 让 progress 锁在子线程持锁期间 panic 中毒
+    {
+        let f = fetcher.clone();
+        let _ = std::thread::spawn(move || {
+            let mut g = f.progress.lock().unwrap();
+            g.begin();
+            panic!("inject progress poison");
+        })
+        .join();
+    }
+    assert!(fetcher.progress.is_poisoned());
+
+    // 3. 让 cache 锁在子线程写入一条快照后 panic 中毒
+    {
+        let f = fetcher.clone();
+        let _ = std::thread::spawn(move || {
+            let mut g = f.cache.lock().unwrap();
+            g.insert(
+                "deepseek".to_string(),
+                (
+                    FetchResult {
+                        valid: true,
+                        remaining: Some(88.5),
+                        unit: "CNY".to_string(),
+                        ..Default::default()
+                    },
+                    1_700_000_000,
+                ),
+            );
+            panic!("inject cache poison");
+        })
+        .join();
+    }
+    assert!(fetcher.cache.is_poisoned());
+
+    let before_lines = crate::diaglog::recent(200);
+
+    // 验证 recovery 中毒恢复:failed() 与 fetch_retries() 均正常执行且不 panic
+    let rv1 = fetcher.failed("deepseek", Some(FailKind::Transport));
+    assert!(rv1.next_retry_at > 0);
+    assert_eq!(rv1.attempts, 1);
+    let rv2 = fetcher.failed("deepseek", Some(FailKind::Transport));
+    assert_eq!(rv2.attempts, 2);
+    // 下次重试尚未到期,fetch_retries 应安全返回 None
+    assert!(fetcher.fetch_retries(&store).await.is_none());
+
+    // 验证 progress 中毒恢复:publish() 正常推送首个渠道进度
+    let pushed = Arc::new(Mutex::new(Vec::new()));
+    let pushed_sink = pushed.clone();
+    fetcher.set_progress_sink(Arc::new(move |views| {
+        pushed_sink.lock().unwrap().push(views.len());
+    }));
+    fetcher.publish(placeholder(&providers::PROVIDERS[0]));
+    assert_eq!(*pushed.lock().unwrap(), vec![1]);
+
+    // 验证 cache 中毒恢复:cached() 正常读出中毒前写入的快照
+    let hit = fetcher.cached(&store, "deepseek", "").expect("应读出中毒前缓存");
+    assert_eq!(hit.0.remaining, Some(88.5));
+    assert_eq!(hit.1, 1_700_000_000);
+    // 再读一次验证同签名节流
+    assert!(fetcher.cached(&store, "deepseek", "").is_some());
+
+    let after_lines = crate::diaglog::recent(200);
+    let added: Vec<&String> = after_lines
+        .iter()
+        .skip(before_lines.len())
+        .filter(|l| l.contains("lock-poisoned"))
+        .collect();
+    // 三把不同类型锁各写一条诊断日志,同锁重复调用被 write_keyed 节流
+    assert_eq!(
+        added.len(),
+        3,
+        "三把中毒锁应各记一条节流诊断日志,实际: {added:?}"
+    );
+    assert!(added.iter().any(|l| l.contains("Recovery")));
+    assert!(added.iter().any(|l| l.contains("Progress")));
+    assert!(added.iter().any(|l| l.contains("FetchResult")));
+}
+

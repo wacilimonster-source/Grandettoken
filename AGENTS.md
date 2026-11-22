@@ -95,6 +95,7 @@ node build/check-file-size.js --self-test && node build/check-file-size.js
 node build/check-css-forms.js --self-test && node build/check-css-forms.js
 node build/check-encoding.js --self-test && node build/check-encoding.js
 node build/check-app-split.js --self-test && node build/check-app-split.js
+node build/check-lock-unwrap.js --self-test && node build/check-lock-unwrap.js
 node build/verify-expiry.js
 node build/verify-qoder-expiry.js --self-test
 node build/verify-quota-plan.js

@@ -106,6 +106,8 @@ jobs:
           Invoke-Gate 'text-encoding'     { node build/check-encoding.js }
           Invoke-Gate 'app-split-self'    { node build/check-app-split.js --self-test }
           Invoke-Gate 'app-split'         { node build/check-app-split.js }
+          Invoke-Gate 'lock-unwrap-self'  { node build/check-lock-unwrap.js --self-test }
+          Invoke-Gate 'lock-unwrap'       { node build/check-lock-unwrap.js }
           Invoke-Gate 'syntax'            {
             Get-ChildItem app/src/app*.js | ForEach-Object {
               node --check $_.FullName

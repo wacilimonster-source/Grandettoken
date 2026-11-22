@@ -28,6 +28,7 @@ pub mod gateway_proto;
 pub mod grants;
 pub mod google_cloud;
 pub mod inject;
+pub(crate) mod lockx;
 pub mod minimax;
 pub mod models;
 pub mod peak;
