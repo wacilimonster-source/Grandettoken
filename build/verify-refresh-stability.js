@@ -537,6 +537,7 @@ function qaDriver() {
         const tpl = document.createElement("template");
         tpl.innerHTML = renderRow(c, 0).trim();
         const exp = tpl.content.firstElementChild;
+        tickPeakCountdowns(exp);
         // 一次性状态红晕 / 数值翻页是临时动画 class,不算展示内容
         const clean = (s) => s
           .replace(/\s(?:roll-in|breath1|ico-in)(?=[\s"])/g, "")
@@ -767,6 +768,69 @@ function qaDriver() {
     }
     out.extra.matrix = matrix;
 
+    // 时钟推进 1 分钟(数据不变):行 HTML 签名不含墙钟文字，#list 不应有 childList 变更，
+    // 仅允许原地 characterData 更新(快照年龄 / 峰谷倒计时 / 到期相对时间)
+    stage("clockTick");
+    {
+      const origNow = Date.now;
+      let clockNow = Date.UTC(2026, 10, 14, 7, 30, 0);
+      Date.now = () => clockNow;
+      try {
+        const d = base();
+        const nowSec = Math.floor(clockNow / 1000);
+        const fIso = (delta) => new Date((nowSec + delta) * 1000).toISOString();
+        pick(d, "pctC").windows[0].resetsAt = fIso(10 * 86400);
+        const cx = pick(d, "codex");
+        cx.windows[0].resetsAt = fIso(9 * 86400);
+        cx.windows[1].resetsAt = fIso(2 * 3600);
+        cx.windows[2].resetsAt = fIso(4 * 86400);
+        pick(d, "sapi").claim.lastClaimAt = nowSec - 20 * 86400;
+        const failedCh = pick(d, "amtA");
+        failedCh.valid = false;
+        failedCh.error = "HTTP 502";
+        failedCh.updatedAt = nowSec - 12 * 60;
+        Object.assign(hv(d, "amtA"), { state: "error", qualifier: "取数失败", tone: "off" });
+        pick(d, "amtB").peak = { peak: true, weekend: false, holiday: false, nextChangeAt: nowSec + 3600 };
+        pick(d, "pts").expiring = [{ at: nowSec + 20 * 60, amount: 3000 }];
+        d.home.now = nowSec;
+        apply(d, false);
+        await frame();
+        const beforeSnap = (document.querySelector('#list .row[data-id="amtA"] .val .p') || {}).textContent || "";
+        const peakBefore = (document.querySelector('#list .row[data-id="amtB"] .val .p') || {}).textContent || "";
+        const expBefore = (document.querySelector('#list .row[data-id="pts"] .r2 .end') || {}).textContent || "";
+
+        let childListCount = 0;
+        let characterDataCount = 0;
+        const countRecs = (recs) => {
+          for (const r of recs) {
+            if (r.type === "childList") childListCount++;
+            else if (r.type === "characterData") characterDataCount++;
+          }
+        };
+        const obs = new MutationObserver(countRecs);
+        obs.observe(document.getElementById("list"), {
+          subtree: true, childList: true, attributes: true, characterData: true,
+        });
+
+        clockNow += 60_000;
+        apply(d, false);
+        tickPeakCountdowns();
+        await frame();
+        countRecs(obs.takeRecords());
+        obs.disconnect();
+
+        const afterSnap = (document.querySelector('#list .row[data-id="amtA"] .val .p') || {}).textContent || "";
+        const peakAfter = (document.querySelector('#list .row[data-id="amtB"] .val .p') || {}).textContent || "";
+        const expAfter = (document.querySelector('#list .row[data-id="pts"] .r2 .end') || {}).textContent || "";
+        out.extra.clockTick = {
+          beforeSnap, afterSnap, peakBefore, peakAfter, expBefore, expAfter,
+          childListCount, characterDataCount,
+        };
+      } finally {
+        Date.now = origNow;
+      }
+    }
+
     // 紧凑条 / 胶囊 / 减少动态效果
     stage("compact");
     {
@@ -817,8 +881,12 @@ function buildHarness() {
   const names = appFileNames(SRC);
   const firstTag = `<script src="${names[0]}"></script>`;
   const lastTag = `<script src="${names[names.length - 1]}"></script>`;
-  const withStubs = replaceOnce(withBase, firstTag, inject + firstTag);
-  return replaceOnce(withStubs, lastTag, lastTag + "\n" + driver);
+  let resultHtml = replaceOnce(withBase, firstTag, inject + firstTag);
+  if (process.env.ROW_SIG_SENTINEL === "1") {
+    const sentinel = `<script>snapAgeSpan = (ts) => '<span class="tdyn" data-tdyn="snap" data-at="' + Number(ts) + '" data-sentinel-age="' + snapAge(Number(ts)) + '"></span>';</script>\n`;
+    resultHtml = replaceOnce(resultHtml, firstTag, firstTag + "\n" + sentinel);
+  }
+  return replaceOnce(resultHtml, lastTag, lastTag + "\n" + driver);
 }
 
 const edge = argOf("--edge", EDGE_CANDIDATES.find((p) => fs.existsSync(p)) || EDGE_CANDIDATES[0]);
@@ -877,4 +945,30 @@ for (const s of result.scenarios) {
     String(d.sweepPeak).padEnd(6),
     d.allNodesKept ? "全部保留" : "有重建"
   );
+}
+
+if (argv.includes("--assert")) {
+  const ct = (result.extra && result.extra.clockTick) || {};
+  const fid = (result.extra && result.extra.fidelity) || {};
+  const checks = [
+    ["浏览器控制台无 JS 异常", !(result.jsErrors && result.jsErrors.length), JSON.stringify(result.jsErrors)],
+    ["组合更新保真 fidelity.allOk", fid.allOk === true, JSON.stringify(fid.checks)],
+    ["初始快照年龄显示「12 分钟前快照」", String(ct.beforeSnap || "").includes("12 分钟前快照"), ct.beforeSnap],
+    ["推进 1 分钟后显示「13 分钟前快照」", String(ct.afterSnap || "").includes("13 分钟前快照"), ct.afterSnap],
+    ["推进 1 分钟峰谷倒计时原地更新", ct.peakBefore !== ct.peakAfter && String(ct.peakAfter || "").includes("59 分"), `${ct.peakBefore} -> ${ct.peakAfter}`],
+    ["推进 1 分钟到期倒计时原地更新", ct.expBefore !== ct.expAfter && String(ct.expAfter || "").includes("19 分钟"), `${ct.expBefore} -> ${ct.expAfter}`],
+    ["推进 1 分钟 #list 无 childList 节点更换", ct.childListCount === 0, `childListCount=${ct.childListCount}`],
+    ["推进 1 分钟 #list 有 characterData 原地更新", Number(ct.characterDataCount) > 0, `characterDataCount=${ct.characterDataCount}`],
+  ];
+  let fail = 0;
+  console.log("\n── refresh-stability --assert ──");
+  for (const [label, ok, detail] of checks) {
+    if (ok) {
+      console.log(`  PASS ${label}`);
+    } else {
+      console.error(`  FAIL ${label}${detail ? " (" + detail + ")" : ""}`);
+      fail++;
+    }
+  }
+  if (fail > 0) process.exit(1);
 }

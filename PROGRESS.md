@@ -718,3 +718,14 @@
   - `lib.rs` 降至 727 行（保留 `AppState`、`home_view_of`、`emit_channels`、`save_config_off_main`、`lock_rw`、`note`、`run()` 及内联单测；全部 14 个文件均 ≤ 1,500 行软上限，按 §2 A6 规则将 `app/src-tauri/src/lib.rs` 从 `build/check-file-size.js` 的超限预算表移除）。
 - 纯搬家等价性校验：剥离新增的 `mod`/`use`、`pub(crate)` 可见性修饰与 `generate_handler!` 模块前缀后，`lib.rs` + 13 个新模块的非空行多重集合与原 6,272 行 `lib.rs` 100% 一致（0 差异）。
 - 验证：`check-ipc-contract.js`（前端 133 处 invoke / 104 个唯一命令；Rust 104 个定义 / 104 个注册项）、`check-file-size.js`、`check-lock-unwrap.js`（100 个生产源码文件 0 处违规）、`check-encoding.js`、`app/src-tauri` `cargo check --all-targets --locked`（0 warning）、`scan-secrets.ps1` 全部通过。
+
+## 2026-11-22 T-B3 渠道行签名去除墙钟文字（原地更新时间文案）
+
+- `app/src/app-core.js` 与 `app/src/app-rows.js`：
+  - 将 `renderRow` 中的快照年龄（`snapAgeSpan` → `<span class="tdyn" data-tdyn="snap" data-at="..."></span>`）、峰谷倒计时（`<span class="tdyn" data-tdyn="peak" data-peakcd='...'></span>`）与到期相对时间（`expiryRelativeSpan` → `<span class="tdyn" data-tdyn="exp" data-exp-at="..."></span>`）统一改为仅含绝对时间戳/载荷的空占位节点；同步把 `.r2[role="note"]` 的 `aria-label` 与 `.rt` / `.end` 的 `title` 移出 HTML 模板，交由 `tickPeakCountdowns(root = document)` 原地同步（仅在值变化时写 DOM）；
+  - `setTextIfChanged` 在目标已有单个 `Text` 子节点时直接改 `firstChild.nodeValue`，确保分钟级更新只触发 `characterData` 而非 `childList` 重建；`renderDetail` 末尾通过 `queueMicrotask(() => tickPeakCountdowns())` 保证弹层打开时相对到期文案即时填充；
+  - `build/check-file-size.js` 将 `app/src/app*.js` 分组上限从 `9,014` 下调至 `9,011`。
+- 双向验证：
+  - `build/verify-refresh-stability.js` 新增 `clockTick` 场景与 `--assert` 判定：固定时钟 `2026-11-14 15:30` 下，数据不变仅推进 1 分钟，`#list` 上 `MutationObserver` 测得 `childListCount === 0` 且 `characterDataCount > 0`，快照年龄从「12 分钟前快照」更新为「13 分钟前快照」，峰谷与到期倒计时同步原地更新；
+  - 反向哨兵 `ROW_SIG_SENTINEL=1`（将 `snapAge` 写回占位属性使 `QSIG` 失配）实测触发 `FAIL 推进 1 分钟 #list 无 childList 节点更换 (childListCount=2)` 并以退出码 1 拦截。
+- 验证：静态门禁（IPC、`silent-failures`、`file-size`、`css-forms`、`encoding`、`app-split`、`node --check`）、`jsdom-smoke.js`（294/294）、`verify-vault.js`、`verify-codex-reset.js`、`verify-google-cloud.js`、`verify-gateway.js`、无头 Edge `verify-refresh-stability.js --assert`、`scan-secrets.ps1` 全部通过。

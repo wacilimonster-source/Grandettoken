@@ -597,6 +597,7 @@ const HARNESS = `
     const readRow = () => {
       const el = document.createElement("div");
       el.innerHTML = renderRow(cx);
+      tickPeakCountdowns(el);
       return el;
     };
     CFG.showUsed = false;
@@ -1602,8 +1603,12 @@ w.__DATA = DATA;
     R.push({ name: "Antigravity 短窗耗尽和越过重置点等待刷新", ok:
       w.renderRow(exhausted, 0).includes("Gemini 5 小时剩余 0.0% · 已耗尽") &&
       w.coreWindows(exhausted).includes("已到重置时间,待刷新") });
+    const staleEl = w.document.createElement("div");
+    staleEl.innerHTML = w.renderRow({ ...agChannel, stale: true, updatedAt: NOW - 600 }, 0);
+    w.tickPeakCountdowns(staleEl);
     R.push({ name: "Antigravity 陈旧与失败状态保留快照提示", ok:
-      w.renderRow({ ...agChannel, stale: true, updatedAt: NOW - 600 }, 0).includes("快照") &&
+      !!staleEl.querySelector('[data-tdyn="snap"]') &&
+      staleEl.textContent.includes("快照") &&
       !w.renderRow({ ...agChannel, valid: false, error: "测试取数失败" }, 0).includes("Gemini 5 小时剩余 32.1%") });
     w.__TEST.patchCfg({ showUsed: true });
     R.push({ name: "Antigravity 已用模式的标签和百分比一致", ok:

@@ -156,9 +156,9 @@ function renderRow(c, i) {
   let subVal;
   if (noKey)
     subVal = c.authSource === "app" ? "需打开应用" : c.authSource === "web" ? "待登录" : "待配置";
-  else if (failed) subVal = c.updatedAt ? snapAge(c.updatedAt) : "未连上";
+  else if (failed) subVal = c.updatedAt ? snapAgeSpan(c.updatedAt) : "未连上";
   // 陈旧(取数成功但过期):年龄比"剩多少 / 哪个窗"更重要 —— 数字再准也是旧的
-  else if (isStale) subVal = c.updatedAt ? snapAge(c.updatedAt) : "上次快照";
+  else if (isStale) subVal = c.updatedAt ? snapAgeSpan(c.updatedAt) : "上次快照";
   else if (mw) {
     // 重置时间未知时不再写一个悬空的「—」:写「周期窗 · —」比只写「周期窗」更难读
     const ms = resetMs(mw);
@@ -169,11 +169,9 @@ function renderRow(c, i) {
     // 右侧限定语不再重复一次,把空间留给大数字。
     subVal = "";
   }
-  // 峰谷倒计时交给 1 秒一跳的 ticker 填,不用等下一轮取数
+  // 峰谷倒计时由 ticker 原地填充，不把墙钟文字写进行签名
   else if (c.peak)
-    subVal = `<span data-peakcd='${JSON.stringify(c.peak)}'>${esc(
-      peakCountdown(c.peak, Date.now())
-    )}</span>`;
+    subVal = `<span class="tdyn" data-tdyn="peak" data-peakcd='${JSON.stringify(c.peak)}'></span>`;
   else if (pct !== null) subVal = `剩 ${pct}%`;
   else subVal = "";
 
@@ -181,7 +179,7 @@ function renderRow(c, i) {
     const shortValue = dispPct(Math.max(0, Math.min(100, fiveHour.remainPercent)));
     subVal = `<span class="quota-secondary"><span>5 小时${CFG.showUsed ? "已用" : "剩余"}</span><b style="color:${toneFgSoft(quotaTone(c, fiveHour))}">${shortValue.toFixed(1)}%</b></span>`;
     // 两项额度占右侧两行,旧数据的年龄移到左侧,仍然显式可见。
-    if (isOld) sub = `${c.updatedAt ? snapAge(c.updatedAt) : "上次快照"}${sub ? " · " + sub : ""}`;
+    if (isOld) sub = `${c.updatedAt ? snapAgeSpan(c.updatedAt) : "上次快照"}${sub ? " · " + sub : ""}`;
   }
   if (ag && mw && !noKey && !isOld) subVal = esc(mw.label) + (CFG.showUsed ? "已用" : "剩余");
   // 失联 / 旧快照:数值降为 text-3 并加 ~,不让"上次成功值"看起来像当前值。
@@ -356,13 +354,10 @@ function renderRow(c, i) {
         </div>
         <div class="caret">&#9654;</div>
       </div>
-      <div class="r2"${railLeft || railRight ? ` role="note" aria-label="${esc(plainText(railLeft) + (railRight ? " · " + plainText(railRight) : ""))}"` : ""}>${
+      <div class="r2"${railLeft || railRight ? ' role="note"' : ""}>${
         railLeft || railRight
-          ? `<svg aria-hidden="true"><use href="${railIcon}"/></svg><span class="rt" title="${esc(plainText(railLeft))}">${railLeft}</span>${
-              railRight ? `<span class="end" title="${esc(plainText(railRight))}">${railRight}</span>` : ""
-            }`
-          : // 状态轨空态常驻一行不可见占位:既避开 .r2:empty{display:none},
-            // 又有和"有文案"完全相同的行高,状态切换不再推动列表
+          ? `<svg aria-hidden="true"><use href="${railIcon}"/></svg><span class="rt">${railLeft}</span>${railRight ? `<span class="end">${railRight}</span>` : ""}`
+          : // 状态轨空态常驻一行不可见占位:既避开 .r2:empty{display:none},又有相同行高
             `<span class="rt rail-hold" aria-hidden="true">&nbsp;</span>`
       }</div>
       ${bar}
@@ -939,9 +934,7 @@ function renderDetail(c, inDialog = false) {
   }
 
   // ⑤ 页脚:说明在上、动作在下(右对齐)
-  const notesHtml = notes
-    .map(([t, cls]) => `<div class="fn-note${cls ? " " + cls : ""}">${esc(t)}</div>`)
-    .join("");
+  const notesHtml = notes.map(([t, cls]) => `<div class="fn-note${cls ? " " + cls : ""}">${esc(t)}</div>`).join("");
   const actions = [];
   if (MODEL_SOURCES.has(c.id) && !noKey) {
     const v = MDL.views[c.id];
@@ -957,8 +950,7 @@ function renderDetail(c, inDialog = false) {
   if (!inDialog) actions.push(manageLink);
 
   // 类名用 rb-dim 不用 dim:全局已有 .dim{color:var(--tx3)},撞名会把整张卡的数值再染一层灰
-  return `<div class="rbody-in${dim ? " rb-dim" : ""}">${core}${window.QuotaPlanUI?.detail(c) || ""}${qoderLoginBar(c)}${spend}${coreCodexResets(c)}${kvHtml}${ledger}${ckHtml}<div class="foot-det">${notesHtml}${failFull}<div class="fn-act">${actions.join(
-    ""
-  )}</div></div></div>`;
+  queueMicrotask(() => tickPeakCountdowns());
+  return `<div class="rbody-in${dim ? " rb-dim" : ""}">${core}${window.QuotaPlanUI?.detail(c) || ""}${qoderLoginBar(c)}${spend}${coreCodexResets(c)}${kvHtml}${ledger}${ckHtml}<div class="foot-det">${notesHtml}${failFull}<div class="fn-act">${actions.join("")}</div></div></div>`;
 }
 

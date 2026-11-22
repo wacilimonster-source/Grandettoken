@@ -10,7 +10,14 @@ const $ = (id) => document.getElementById(id);
  *  一遍 textContent,会让「相同数据刷新」凭空产生 DOM 变更(也打断节点复用)。 */
 function setTextIfChanged(el, text) {
   const s = text === null || text === undefined ? "" : String(text);
-  if (el && el.textContent !== s) el.textContent = s;
+  if (!el || el.textContent === s) return;
+  if (s && el.firstChild && el.firstChild === el.lastChild && el.firstChild.nodeType === 3) el.firstChild.nodeValue = s;
+  else el.textContent = s;
+}
+function setAttrIfChanged(el, name, val) {
+  if (!el) return;
+  if (val) { if (el.getAttribute(name) !== val) el.setAttribute(name, val); }
+  else if (el.hasAttribute(name)) el.removeAttribute(name);
 }
 
 let CHANNELS = [];
@@ -116,10 +123,8 @@ function expiryRelative(ts) {
   return `${days} 天后到期`;
 }
 
-/** 可被 60 秒 ticker 原地更新的相对时间(不重建整页)。 */
-function expiryRelativeSpan(ts) {
-  return `<span data-exp-at="${Number(ts)}">${expiryRelative(Number(ts))}</span>`;
-}
+/** 可被 60 秒 ticker 原地更新的相对时间(占位符,不把墙钟文字写进行签名)。 */
+const expiryRelativeSpan = (ts) => `<span class="tdyn" data-tdyn="exp" data-exp-at="${Number(ts)}"></span>`;
 
 /** 到期日期/时间拆分(绝对日期 + 本地时钟)。 */
 function expiryParts(ts) {
@@ -181,6 +186,9 @@ function snapAge(ts) {
   const r = relTime(ts);
   return r === "刚刚" ? "刚刚的快照" : r + "快照";
 }
+function snapAgeSpan(ts) {
+  return `<span class="tdyn" data-tdyn="snap" data-at="${Number(ts)}"></span>`;
+}
 
 /** 同一本地日?(跨零点的聚合区间要分开写日期) */
 function sameLocalDay(a, b) {
@@ -227,49 +235,46 @@ function peakCountdown(p, nowMs) {
 }
 
 /**
- * 峰谷倒计时:只改文案,不重绘整行。
- *
- * 显示精度是**分钟**,所以对齐到分钟边界跑一次即可 —— 以前 1 秒一次,每小时
- * 3600 次回调、每次都扫全文档。定时器误差可能落在边界前几毫秒,统一 +20ms 起跳。
+ * 时间驱动文案(快照年龄/峰谷倒计时/重置/到期)原地更新:不改行签名、不重建整行。
+ * 对齐分钟边界跑;传 `root` 时仅填充该子树(供测试与模板保真校验)。
  */
-function tickPeakCountdowns() {
-  if (!WINDOW_VISIBLE) return;
-  if (window.PanelLayoutUI) window.PanelLayoutUI.tick();
-  if (window.AntigravityUI) window.AntigravityUI.tick();
+function tickPeakCountdowns(root = document) {
+  const full = root === document;
+  if (full && !WINDOW_VISIBLE) return;
+  if (full && window.PanelLayoutUI) window.PanelLayoutUI.tick();
+  if (full && window.AntigravityUI) window.AntigravityUI.tick();
   const nowMs = Date.now();
-  document.querySelectorAll("[data-peakcd]").forEach((el) => {
-    let p = null;
-    try {
-      p = JSON.parse(el.dataset.peakcd);
-    } catch (e) {
-      return;
-    }
-    setTextIfChanged(el, peakCountdown(p, nowMs));
+  root.querySelectorAll('[data-tdyn="snap"]').forEach((el) => {
+    const at = Number(el.dataset.at);
+    if (Number.isFinite(at)) setTextIfChanged(el, snapAge(at));
   });
-  document.querySelectorAll("[data-reset-at]").forEach((el) => {
-    setTextIfChanged(el, quotaResetCountdown(Number(el.dataset.resetAt)));
+  root.querySelectorAll("[data-peakcd]").forEach((el) => {
+    try { setTextIfChanged(el, peakCountdown(JSON.parse(el.dataset.peakcd), nowMs)); } catch (e) { /* silent: 无效峰谷属性跳过 */ }
   });
+  root.querySelectorAll("[data-reset-at]").forEach((el) => setTextIfChanged(el, quotaResetCountdown(Number(el.dataset.resetAt))));
   // Codex 数值标签里的极简倒计时:按同一份降级档位重算,别把 fit 收窄的那一档冲掉
-  document.querySelectorAll("[data-reset-tight]").forEach((el) => {
-    const ms = Number(el.dataset.resetTight);
-    const mode = el.dataset.tightMode || "full";
-    setTextIfChanged(el,
-      mode === "off" ? "" : "·" + (mode === "short" ? fmtResetTightShort(ms, nowMs) : fmtResetTight(ms, nowMs)));
+  root.querySelectorAll("[data-reset-tight]").forEach((el) => {
+    const ms = Number(el.dataset.resetTight), mode = el.dataset.tightMode || "full";
+    setTextIfChanged(el, mode === "off" ? "" : "·" + (mode === "short" ? fmtResetTightShort(ms, nowMs) : fmtResetTight(ms, nowMs)));
   });
   // 到期相对时间:每分钟原地更新,跨过到期时刻立刻变成「已到期,待刷新」
   let expCrossed = false;
-  document.querySelectorAll("[data-exp-at]").forEach((el) => {
+  root.querySelectorAll("[data-exp-at]").forEach((el) => {
     const at = Number(el.dataset.expAt);
     if (!Number.isFinite(at)) return;
-    const before = el.textContent;
-    const after = expiryRelative(at);
-    if (before && before !== after && before !== "已到期,待刷新" && after === "已到期,待刷新") {
-      expCrossed = true;
-    }
+    const before = el.textContent, after = expiryRelative(at);
+    if (before && before !== after && before !== "已到期,待刷新" && after === "已到期,待刷新") expCrossed = true;
     setTextIfChanged(el, after);
   });
-  if (expCrossed) render({});
-  updateHeaderLive();
+  root.querySelectorAll('.r2[role="note"]').forEach((r2) => {
+    const rt = r2.querySelector(".rt"), end = r2.querySelector(".end");
+    const lt = rt ? rt.textContent.replace(/\s+/g, " ").trim() : "";
+    const et = end ? end.textContent.replace(/\s+/g, " ").trim() : "";
+    setAttrIfChanged(rt, "title", lt);
+    setAttrIfChanged(end, "title", et);
+    setAttrIfChanged(r2, "aria-label", lt + (et ? " · " + et : ""));
+  });
+  if (full) { if (expCrossed) render({}); updateHeaderLive(); }
 }
 
 let peakTickTimer = null;
