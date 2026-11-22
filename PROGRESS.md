@@ -602,3 +602,15 @@
   - Rust 与安全扫描：`app/core` `cargo test --locked -- --test-threads=1`（648 passed / 10 ignored + `sync_fixtures` 6 passed）与 `cargo check --all-targets --locked`、`app/src-tauri` `cargo check --all-targets --locked`、`scan-secrets.ps1`（507 文件 CLEAN）全部通过。
 - 分 3 个提交落库：①编码修复 + `check-encoding.js` + `text-encoding.yml`；②`RELEASE.md` + `acceptance-backlog.md` + `PROGRESS.md` 归档与 `README.md`；③`AGENTS.md` 精简 + `DESIGN.md` §16 + 两份方案文档。
 - 未跑：依赖原生窗口 CDP 的检查（归入后续 T-D1）及需真实账号的 10 项 ignored 用例。
+
+## 2026-11-22 T-A1 Rust 测试模块外移
+
+- 按 `#[path = "..."]` 先例将 6 个 core 大文件的 `#[cfg(test)] mod tests` 原样外移，生产文件不再计入约 6,700 行测试代码：
+  - `fetch.rs`（5,264 → 3,708 行）→ `fetch_tests.rs`（1,123 行）+ `fetch_tests_view.rs`（437 行）；
+  - `inject.rs`（7,248 → 5,055 行）→ `inject_tests.rs`（950 行，4 个共用辅助函数标 `pub(super)`）+ `inject_tests_trae_dsh.rs`（1,248 行）；
+  - `store.rs`（2,996 → 1,952 行，保留 CRLF）→ `store_tests.rs`（1,044 行）；
+  - `checkin.rs`（2,220 → 1,518 行）→ `checkin_tests.rs`（702 行）；
+  - `providers.rs`（2,094 → 1,505 行）→ `providers_tests.rs`（589 行）；
+  - `workbuddy.rs`（2,392 → 1,776 行，保留末尾 `app_roots_for` 测试注入钩子）→ `workbuddy_tests.rs`（616 行）。
+- 词法状态机去缩进：对处于多行字符串 / 原始字符串字面量（如 `DSH_PATCH` YAML 夹具）内部的续行保留原字节不剥离前导空白，其余代码行去掉一层 4 空格缩进；所有新文件均 ≤ 1,500 行软上限，同步下调 `build/check-file-size.js` 对应预算。
+- 验证：`cargo test --locked -- --list` 与 `-- --ignored --list` 归一化模块前缀后与外移前基线 100% 一致；`app/core` `cargo test --locked -- --test-threads=1`（648 passed / 10 ignored + `sync_fixtures` 6 passed）、两 crate `cargo check --all-targets --locked`、`check-file-size.js`（含 `--self-test`）、`check-encoding.js`（含 `--self-test`）、`jsdom-smoke.js`（294/294，含读取 `checkin.rs` / `providers.rs` 源码文本的 `thumbnail-regression.js`）、各专项冒烟与 `scan-secrets.ps1`（514 文件 CLEAN）全部串行通过。

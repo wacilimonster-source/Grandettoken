@@ -31,16 +31,16 @@ const SOFT_LIMIT = 1500;
 //     渠道表与统一取数/签到管线是这些文件的本职,不许再从这里长功能以外的行。
 const BUDGETS = {
   "app/src/app.js": 9014, // 临期文案与套餐计划集中在各自模块。
-  "app/core/src/inject.rs": 7320,
+  "app/core/src/inject.rs": 5055, // T-A1 测试模块外移至 inject_tests*.rs。
   "app/src-tauri/src/lib.rs": 6272, // 网关共享实现与凭据补偿拆入 core，收回接线预算。
-  "app/core/src/fetch.rs": 5264, // 临期计划只接入已有凭据范围，计算留在独立模块。
-  "app/core/src/store.rs": 3000,
-  "app/core/src/workbuddy.rs": 2420,
-  "app/core/src/checkin.rs": 2242,
-  "app/core/src/providers.rs": 2095,
+  "app/core/src/fetch.rs": 3710, // T-A1 测试模块外移至 fetch_tests*.rs。
+  "app/core/src/store.rs": 1952, // T-A1 测试模块外移至 store_tests.rs。
+  "app/core/src/workbuddy.rs": 1776, // T-A1 测试模块外移至 workbuddy_tests.rs。
+  "app/core/src/checkin.rs": 1518, // T-A1 测试模块外移至 checkin_tests.rs。
+  "app/core/src/providers.rs": 1505, // T-A1 测试模块外移至 providers_tests.rs。
   "app/core/src/diaglog.rs": 1740,
   "app/src/index.html": 698,
-  "app/src/styles.css": 1754,
+  "app/src/styles.css": 1737,
 };
 
 // 不参与判定的路径:构建产物、依赖、测试夹具
