@@ -82,6 +82,9 @@ pub(crate) async fn poll_loop(app: tauri::AppHandle) {    let mut failures = 0u3
             if let Err(e) = s.prune(now_ts() - 90 * 86_400, tokenscope_core::fetch::local_tz_offset()) {
                 eprintln!("定期清理快照失败: {e}");
             }
+            if let Err(e) = s.wal_checkpoint() {
+                eprintln!("定期 WAL checkpoint 失败: {e}");
+            }
         }
 
         // 走 fetch_shared:用户点「立即刷新」撞上轮询时排队等结果,
@@ -128,6 +131,15 @@ pub(crate) fn refresh_if_stale(app: &tauri::AppHandle, max_age_sec: i64) {
 /// 退出:正在写客户端配置时先等它写完(最多 10 秒)再退。
 /// 立即退出会停在"文件已改、台账还没落"的那一瞬间,重启后没有任何记录能回滚它(P1-15)。
 /// 交给后台任务等,按钮立刻有反应,不会让人以为点了没动。
+fn checkpoint_wal(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
+        let s = lock_rw(&state.store);
+        if let Err(e) = s.wal_checkpoint() {
+            eprintln!("退出前 WAL checkpoint 失败: {e}");
+        }
+    }
+}
+
 pub(crate) fn quit_when_idle(app: &tauri::AppHandle) {
     if INJECTING.load(std::sync::atomic::Ordering::Relaxed) {
         let h = app.clone();
@@ -138,9 +150,11 @@ pub(crate) fn quit_when_idle(app: &tauri::AppHandle) {
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             }
+            checkpoint_wal(&h);
             h.exit(0);
         });
     } else {
+        checkpoint_wal(app);
         app.exit(0);
     }
 }

@@ -745,3 +745,12 @@
   - 差值仅 **`1.652 ms/轮`**（实测耗时可忽略，远低于引入事务批处理的风险阈值；临时基准测试已删除）。
 - **结论**：按既定决策**放弃**（不引入跨渠道写合并与借用生命周期改造，保留逐条立即落盘）。
 - **验证**：`check-encoding.js`、`cargo test --locked -- --test-threads=1`、`scan-secrets.ps1` 通过。
+
+
+## 2026-11-23 T-B6a WAL checkpoint 与完整性校验入口
+
+- **改动**：
+  - `app/core/src/store.rs`：抽取 `row_to_checkin`、`row_to_vault` 消除行映射重复（`store.rs` 降至 `1949/1952` 行）；新增 `Store::wal_checkpoint()`（`PRAGMA wal_checkpoint(TRUNCATE)`）与 `Store::integrity_check()`（`PRAGMA integrity_check`）。
+  - `app/src-tauri/src/poll.rs`：每日定期 `s.prune(...)` 后及 `quit_when_idle` 退出前调用 `wal_checkpoint()` 将 `-wal` 刷回主库并截断。
+  - `app/core/src/store_tests.rs`：新增 `wal_checkpoint_truncates_wal_and_passes_integrity_check` 验证磁盘库写入后 `-wal` 非空、checkpoint 后归零且 `integrity_check() == "ok"`。
+- **验证**：`check-file-size.js`、`check-lock-unwrap.js`、`check-encoding.js`（均含 `--self-test`）、`app/core` `cargo test --locked -- --test-threads=1`（653 passed, 10 ignored; `sync_fixtures` 6 passed）+ `cargo check --all-targets --locked`、`app/src-tauri` `cargo check --all-targets --locked`（零警告）、`scan-secrets.ps1` 全部通过。

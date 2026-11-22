@@ -1042,3 +1042,33 @@ fn recent_checkins_respects_limit() {
     // 新的在前
     assert_eq!(s.recent_checkins("trae", 0, 1).unwrap()[0].attempts, 9);
 }
+
+#[test]
+fn wal_checkpoint_truncates_wal_and_passes_integrity_check() {
+    let dir = std::env::temp_dir().join(format!("gt-b6a-wal-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let db_path = dir.join("wal_test.db");
+    let wal_path = dir.join("wal_test.db-wal");
+
+    let s = Store::open(&db_path).unwrap();
+    for i in 0..100i64 {
+        s.record_fp("codex", "fp1", 1_795_000_000 + i * 60, Some(100.0 - i as f64 * 0.5), None, Some(100.0), "balance")
+            .unwrap();
+        s.set_setting(&format!("k_{i}"), "val_0123456789_abcdef").unwrap();
+    }
+    let wal_before = std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+    assert!(wal_before > 0, "写入 200 条记录后 -wal 应非空: {wal_before}");
+
+    let (busy, log, checkpointed) = s.wal_checkpoint().unwrap();
+    assert_eq!(busy, 0, "独占连接 checkpoint 不应被占用阻塞");
+    assert_eq!(log, checkpointed, "应将 WAL 中的全部帧刷回主库");
+
+    let wal_after = std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+    assert_eq!(wal_after, 0, "TRUNCATE checkpoint 后 -wal 应截断为 0 字节");
+    assert_eq!(s.integrity_check().unwrap(), "ok");
+    assert_eq!(s.get_setting("k_99").unwrap().as_deref(), Some("val_0123456789_abcdef"));
+
+    drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
+}

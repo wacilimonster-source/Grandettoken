@@ -1441,16 +1441,7 @@ impl Store {
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map(params![channel, since_ts, limit as i64], |r| {
-                Ok(CheckinRow {
-                    ts: r.get(0)?,
-                    day: r.get(1)?,
-                    outcome: r.get(2)?,
-                    credits: r.get(3)?,
-                    attempts: r.get(4)?,
-                    detail: r.get(5)?,
-                })
-            })
+            .query_map(params![channel, since_ts, limit as i64], row_to_checkin)
             .map_err(|e| e.to_string())?;
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
@@ -1508,16 +1499,7 @@ impl Store {
             )
             .map_err(|e| e.to_string())?;
         let mut rows = stmt
-            .query_map(params![channel, day], |r| {
-                Ok(CheckinRow {
-                    ts: r.get(0)?,
-                    day: r.get(1)?,
-                    outcome: r.get(2)?,
-                    credits: r.get(3)?,
-                    attempts: r.get(4)?,
-                    detail: r.get(5)?,
-                })
-            })
+            .query_map(params![channel, day], row_to_checkin)
             .map_err(|e| e.to_string())?;
         Ok(rows.next().and_then(|r| r.ok()))
     }
@@ -1535,6 +1517,17 @@ impl Store {
             .map_err(|e| e.to_string())?;
         Ok(v.unwrap_or(0.0))
     }
+}
+
+fn row_to_checkin(r: &rusqlite::Row<'_>) -> rusqlite::Result<CheckinRow> {
+    Ok(CheckinRow {
+        ts: r.get(0)?,
+        day: r.get(1)?,
+        outcome: r.get(2)?,
+        credits: r.get(3)?,
+        attempts: r.get(4)?,
+        detail: r.get(5)?,
+    })
 }
 
 /// 密钥箱的一条**索引**(不含密钥)。
@@ -1565,19 +1558,7 @@ impl Store {
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map([], |r| {
-                Ok(VaultItem {
-                    id: r.get(0)?,
-                    platform: r.get(1)?,
-                    label: r.get(2)?,
-                    hint: r.get(3)?,
-                    note: r.get(4)?,
-                    created_at: r.get(5)?,
-                    updated_at: r.get(6)?,
-                    api_endpoint: r.get(7)?,
-                    website: r.get(8)?,
-                })
-            })
+            .query_map([], row_to_vault)
             .map_err(|e| e.to_string())?;
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
@@ -1735,22 +1716,38 @@ impl Store {
             )
             .map_err(|e| e.to_string())?;
         let mut rows = stmt
-            .query_map(params![id], |r| {
-                Ok(VaultItem {
-                    id: r.get(0)?,
-                    platform: r.get(1)?,
-                    label: r.get(2)?,
-                    hint: r.get(3)?,
-                    note: r.get(4)?,
-                    created_at: r.get(5)?,
-                    updated_at: r.get(6)?,
-                    api_endpoint: r.get(7)?,
-                    website: r.get(8)?,
-                })
-            })
+            .query_map(params![id], row_to_vault)
             .map_err(|e| e.to_string())?;
         Ok(rows.next().and_then(|r| r.ok()))
     }
+
+    /// 把 WAL 日志刷回主库并截断到 0 字节，防止 `-wal` 长期膨胀。
+    pub fn wal_checkpoint(&self) -> Result<(i64, i64, i64), String> {
+        self.conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map_err(|e| format!("WAL checkpoint 失败: {e}"))
+    }
+
+    /// 校验数据库页与索引完整性（正常返回 `"ok"`）。
+    pub fn integrity_check(&self) -> Result<String, String> {
+        self.conn
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+            .map_err(|e| format!("数据库完整性检查失败: {e}"))
+    }
+}
+
+fn row_to_vault(r: &rusqlite::Row<'_>) -> rusqlite::Result<VaultItem> {
+    Ok(VaultItem {
+        id: r.get(0)?,
+        platform: r.get(1)?,
+        label: r.get(2)?,
+        hint: r.get(3)?,
+        note: r.get(4)?,
+        created_at: r.get(5)?,
+        updated_at: r.get(6)?,
+        api_endpoint: r.get(7)?,
+        website: r.get(8)?,
+    })
 }
 
 // ───────────── 批量历史(P1)的纯函数 ─────────────
