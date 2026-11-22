@@ -171,31 +171,103 @@ struct StreamCapture {
     truncated: bool,
 }
 
-fn spawn_capped_reader<R: Read + Send + 'static>(
-    mut reader: R,
-    cap: usize,
-) -> std::thread::JoinHandle<StreamCapture> {
+struct CappedReader {
+    rx: std::sync::mpsc::Receiver<StreamCapture>,
+    partial: std::sync::Arc<Mutex<Vec<u8>>>,
+}
+
+impl CappedReader {
+    fn collect(self, budget: Duration) -> StreamCapture {
+        match self.rx.recv_timeout(budget) {
+            Ok(cap) => cap,
+            Err(_) => {
+                let bytes = self
+                    .partial
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .clone();
+                StreamCapture {
+                    bytes,
+                    truncated: true,
+                }
+            }
+        }
+    }
+}
+
+fn spawn_capped_reader<R: Read + Send + 'static>(mut reader: R, cap: usize) -> CappedReader {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let partial = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let partial_w = std::sync::Arc::clone(&partial);
     std::thread::spawn(move || {
-        let mut out = Vec::new();
         let mut buf = [0u8; 8192];
         let mut truncated = false;
         loop {
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if out.len() + n > cap {
+                    let mut guard = partial_w.lock().unwrap_or_else(|p| p.into_inner());
+                    if guard.len() + n > cap {
                         truncated = true;
                         break;
                     }
-                    out.extend_from_slice(&buf[..n]);
+                    guard.extend_from_slice(&buf[..n]);
                 }
             }
         }
-        StreamCapture {
-            bytes: out,
-            truncated,
+        let bytes = std::mem::take(&mut *partial_w.lock().unwrap_or_else(|p| p.into_inner()));
+        let _ = tx.send(StreamCapture { bytes, truncated });
+    });
+    CappedReader { rx, partial }
+}
+
+#[cfg(windows)]
+struct KillOnDropJob(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl KillOnDropJob {
+    fn attach(child: &std::process::Child) -> Option<Self> {
+        use std::os::windows::io::AsRawHandle;
+        use std::ptr::null;
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+            SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        };
+        unsafe {
+            let job = CreateJobObjectW(null(), null());
+            if job.is_null() {
+                return None;
+            }
+            let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &limits as *const _ as _,
+                std::mem::size_of_val(&limits) as u32,
+            ) == 0
+            {
+                CloseHandle(job);
+                return None;
+            }
+            if AssignProcessToJobObject(job, child.as_raw_handle() as _) == 0 {
+                CloseHandle(job);
+                return None;
+            }
+            Some(Self(job))
         }
-    })
+    }
+}
+
+#[cfg(windows)]
+impl Drop for KillOnDropJob {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
 }
 
 fn run_command_capped(
@@ -210,6 +282,8 @@ fn run_command_capped(
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("无法启动 agy CLI: {e}"))?;
+    #[cfg(windows)]
+    let mut job = KillOnDropJob::attach(&child);
     let stdout_h = child
         .stdout
         .take()
@@ -225,6 +299,8 @@ fn run_command_capped(
             Ok(Some(st)) => break Some(st.code()),
             Ok(None) => {
                 if Instant::now() >= deadline {
+                    #[cfg(windows)]
+                    let _ = job.take();
                     let _ = child.kill();
                     let _ = child.wait();
                     break None;
@@ -232,6 +308,8 @@ fn run_command_capped(
                 std::thread::sleep(Duration::from_millis(40));
             }
             Err(e) => {
+                #[cfg(windows)]
+                let _ = job.take();
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(format!("等待 agy CLI 退出失败: {e}"));
@@ -239,14 +317,23 @@ fn run_command_capped(
         }
     };
 
+    let reader_budget = || {
+        if status.is_some() {
+            deadline
+                .saturating_duration_since(Instant::now())
+                .max(Duration::from_millis(50))
+        } else {
+            Duration::from_millis(50)
+        }
+    };
     let out = stdout_h
-        .and_then(|h| h.join().ok())
+        .map(|h| h.collect(reader_budget()))
         .unwrap_or(StreamCapture {
             bytes: Vec::new(),
             truncated: false,
         });
     let err = stderr_h
-        .and_then(|h| h.join().ok())
+        .map(|h| h.collect(reader_budget()))
         .unwrap_or(StreamCapture {
             bytes: Vec::new(),
             truncated: false,
@@ -903,5 +990,33 @@ mod tests {
 
         let found = resolve_agy_path_with(None, Some(&tmp.0.join("local")), None, None).unwrap();
         assert_eq!(found, auto_bin);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn timeout_with_grandchild_holding_stdout_returns_within_budget() {
+        let (code, out, _) = run_command_capped(
+            Path::new("cmd"),
+            &["/C", "echo 1.5.9"],
+            Duration::from_secs(5),
+        )
+        .expect("正常退出应成功读回输出");
+        assert_eq!(code, Some(0));
+        assert!(!out.truncated);
+        assert_eq!(String::from_utf8_lossy(&out.bytes).trim(), "1.5.9");
+
+        let timeout = Duration::from_millis(400);
+        let started = Instant::now();
+        let res = run_command_capped(
+            Path::new("cmd"),
+            &["/C", "ping -n 6 127.0.0.1"],
+            timeout,
+        );
+        let elapsed = started.elapsed();
+        assert!(res.is_err(), "子进程未按时退出时必须返回超时错误");
+        assert!(
+            elapsed < timeout + Duration::from_secs(1),
+            "孙进程继承标准输出管道时 run_command_capped 应在 超时+1s 内返回，实际耗时 {elapsed:?}"
+        );
     }
 }

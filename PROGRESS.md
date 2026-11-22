@@ -624,3 +624,11 @@
 
 - `build/verify-signature.js` 新增 `--local <文件> --sig <签名文件> [--pubkey <公钥文件或base64>]` 模式与 `--self-test` 自检：跳过线上下载，直接复用 minisign 校验器与公钥解析逻辑验证本地文件；`RELEASE.md`「Android 发版 → 6. 签名材料备份与恢复演练」第 3 步同步改为调用该入口，`docs/report/acceptance-backlog.md` 的 A2 更新为通过。
 - 双向验证：`node build/verify-signature.js --self-test` 使用 `cargo tauri signer generate --ci` 生成临时测试密钥对并签临时文件，验证：①临时公钥验签通过；②篡改一个字节后验签判红；③用 `tauri.conf.json` 正式公钥验证临时签名判红；④`finally` 彻底清理临时密钥与文件（全程不接触正式私钥）。静态门禁与 `scan-secrets.ps1` 串行通过。
+
+## 2026-11-22 T-C2 Antigravity `--version` 探测超时复现与修复
+
+- 先在 `app/core/src/antigravity.rs` 新增 Windows 复现单测 `timeout_with_grandchild_holding_stdout_returns_within_budget`（用 `cmd /C ping -n 6 127.0.0.1` 构造继承标准输出管道写端的孙进程）：旧实现在 400 ms 超时杀掉 `cmd.exe` 后被 `stdout_h.join()` 阻塞到孙进程自然退出，实测耗时 5.11 s 触发断言变红。
+- 修复 `run_command_capped`：
+  1) Windows 下将子进程加入 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 Job Object（`KillOnDropJob`），超时或等待出错时先释放 Job 句柄终止整棵进程树；
+  2) `spawn_capped_reader` 改为通过 `mpsc::channel` 回传结果并配合共享缓冲，主线程按剩余预算 `recv_timeout` 等待，超时则 detach 读线程并返回已收集字节（标记 `truncated = true`）。
+- 验证：修复后 `timeout_with_grandchild_holding_stdout_returns_within_budget` 耗时 0.51 s 通过（同时断言正常退出 `cmd /C echo 1.5.9` 完整读回且 `truncated == false`）；静态门禁、`app/core` 单线程全量测试（649 passed / 10 ignored + `sync_fixtures` 6 passed）、两 crate `cargo check --all-targets --locked`、`scan-secrets.ps1` 全部通过。
