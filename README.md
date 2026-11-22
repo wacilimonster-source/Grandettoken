@@ -198,7 +198,7 @@ CI 在每次 push 上跑 core 的 `cargo test` 与 `cargo check --all-targets`;
 | 文档 | 内容 |
 |---|---|
 | [DESIGN.md](DESIGN.md) | 产品设计:定位、渠道模型、形态系统、信息架构、已开发功能清单 |
-| [PROGRESS.md](PROGRESS.md) | 开发进展与踩坑记录(按版本倒序,含全量体检的问题清单与修法) |
+| [PROGRESS.md](PROGRESS.md) | 开发进展与踩坑记录(新条目追加在文末;v0.3.50 之前的条目已原样归档到 `docs/report/progress-archive-2026-11-22.md`) |
 | [app/README.md](app/README.md) | 开发者向:模块划分、加新渠道 / 新客户端的步骤、内部口径 |
 | [RELEASE.md](RELEASE.md) | 发版流程、签名私钥、更新链路硬依赖、回滚预案 |
 | [docs/design/](docs/design/) | 21 份设计稿(交互可点的 HTML,含每项的裁决记录) |

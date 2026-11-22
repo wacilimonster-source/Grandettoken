@@ -20,7 +20,7 @@ v0.1.x 时代 CI 发一次要 22 分钟 —— 其中 12 分钟花在 `cargo ins
 |---|---|
 | tauri-cli 编译可缓存 | `actions/cache` 只存 `~/.cargo/bin/cargo-tauri.exe`,key 与项目依赖锁**解耦**(`cargo-tauri-Windows-v2`);命中后该步 0 秒,冷启动约 11 分钟 |
 | Rust 依赖可缓存 | `Swatinem/rust-cache`,`workspaces: app/src-tauri -> target`;命中后 Build 约 2 分钟 |
-| 发版前要有闸 | `release.yml` 的 `Pre-release gates`:四道零依赖静态门 + jsdom 冒烟,失败就不打包 |
+| 发版前要有闸 | `release.yml` 的 `Pre-release gates`:零依赖静态门(含文本编码门) + jsdom 冒烟,失败就不打包 |
 
 冷缓存全流程约 25 分钟,热缓存约 8-10 分钟。job 有 `timeout-minutes: 60`,
 防止签名步骤在非交互环境等密码而永久挂住(见「应急:本地打包」里的空密码警告)。
@@ -36,7 +36,8 @@ v0.1.x 时代 CI 发一次要 22 分钟 —— 其中 12 分钟花在 `cargo ins
 | 本机 Rust 工具链 | 仅本地打包/调试需要 | `stable-x86_64-pc-windows-gnu` + MinGW(`~/mingw64/bin`) |
 
 **私钥必须备份到密码管理器。** 它和公钥是配对的:换了密钥对,老版本装的用户
-会因为签名校验失败而永远收不到更新,只能手动重装。
+会因为签名校验失败而永远收不到更新,只能手动重装。Actions secret **只能写不能读**,不算备份。
+备份与恢复演练和 Android 签名材料一起做,见「Android 发版 → 6. 签名材料备份与恢复演练」。
 
 secret 轮换:
 
@@ -58,8 +59,16 @@ gh secret list          # 确认两项都在、更新时间是刚改的
   的 cargo 调用都会报 `cannot update the lock file`
 
 ```bash
-cd app/src-tauri && cargo fetch --locked && cd ../..
+cd app/src-tauri && cargo fetch --offline && cd ../..   # 改完版本号先刷新 lock(依赖已在本机缓存时不联网)
+git diff app/src-tauri/Cargo.lock                        # 正常只应看到本包 tokenscope 的 version 行
+cd app/src-tauri && cargo fetch --locked && cd ../..     # 复核:lock 已同步,与 CI 同口径
 ```
+
+> **第一步为什么不能直接 `--locked`**(v0.3.68 实测):`--locked` 的意思是「不许改 lock」,
+> 而刚改完 Cargo.toml 的版本号时 lock 必须改一行,于是必然报 `cannot update the lock file`。
+> `--offline` 只用本机已缓存的依赖完成这次更新;若报缺依赖,去掉 `--offline` 联网再跑一次。
+> `git diff` 里若出现本包版本行以外的变化(依赖升级、新增条目),先查明来源再提交 ——
+> v0.3.68 那次多出的是 core 新接入的 axum 条目,属预期内。CI 全程 `--locked`,只核验不更新。
 
 CI 的 `Resolve tag and version` 会断言 tag 与版本号一致,不一致直接红在第一步。
 
@@ -90,7 +99,7 @@ git push origin refs/tags/vX.Y.Z
 推送后自动开始:
 
 ```
-checkout(tag) → 门禁(ipc / silent / size / css / jsdom) → GNU 工具链
+checkout(tag) → 门禁(ipc / silent / size / css / encoding / jsdom) → GNU 工具链
   → cargo-tauri(缓存) → MinGW → core 单测 → cargo fetch
   → bundle + 签名 → latest.json → 建 Release → 三件套补传 → verify-release.js
 ```
@@ -214,6 +223,49 @@ python build/verify-android-release.py \
 签名（本地默认走 DPAPI；CI 用 `--private-key-pem`），再手工上传
 `android-vX.Y.Z` 和 `android-stable` 两个 release。上传后必须用上面的
 `verify-android-release.py` 复核。
+
+### 6. 签名材料备份与恢复演练
+
+**为什么必须做**:Actions secrets **只能写不能读**,不是备份;本机 `~/.android/Grandettoken`
+里的部分材料(如 `manifest-private.dpapi`)由当前 Windows 用户的 DPAPI 加密,换机、重装系统
+或换 Windows 账户后**解不开**。两边同时没了,下面任何一样都无法补救:
+
+| 材料 | 丢了的后果 |
+|---|---|
+| `release.p12` keystore + 口令 + 别名 `grandettoken` | 新 APK 证书变了,已装用户无法覆盖升级,只能卸载重装(本机同步组随之清空) |
+| 更新清单 Ed25519 私钥(PEM) | 已装 App 以 `UPDATE_KEY_UNKNOWN` 拒收所有新清单 |
+| 桌面 `tokenscope.key`(见「一次性准备」) | 已装桌面用户收不到更新 |
+
+对照用的公开值已在仓库:`android/release-public/certificate-sha256.txt`、
+`android/release-public/manifest-public.txt`、`tauri.conf.json` 的 `plugins.updater.pubkey`。
+
+**备份**:三样私密材料存进密码管理器或离线加密介质,**不经 DPAPI**;
+口令、私钥、PEM 一律不进仓库、日志、聊天或 issue。
+
+**恢复演练**(换机前、改签名流程后至少做一次;在另一台机器或 Windows Sandbox 里,**只用备份**):
+
+1. APK 证书:
+
+   ```powershell
+   keytool -list -v -keystore release.p12 -storetype PKCS12 -alias grandettoken
+   ```
+
+   SHA-256 指纹(去掉冒号、转小写)必须与 `android/release-public/certificate-sha256.txt` 一致;
+2. 清单私钥:给任意测试 payload 签名,并用仓库里的公钥校验 ——
+
+   ```powershell
+   python build/sign-android-manifest.py --payload test-payload.json --out test-signed.json `
+     --private-key-pem <备份的 PEM> --public-key android/release-public/manifest-public.txt
+   ```
+
+   脚本签名前会从 PEM 推出公钥、与 `--public-key` 逐字节比对,不一致直接退出
+   (`private key does not match manifest-public.txt`);能输出 `signed ...` 即通过;
+3. 桌面私钥:`cargo tauri signer sign -f <备份的 tokenscope.key> -p "" <任意测试文件>` 能出 `.sig`,
+   再用 `tauri.conf.json` 的 pubkey 验签。⚠ 仓库里还**没有本地文件的验签入口**
+   (`build/verify-signature.js` 只验线上 release),这一步目前要手工参照它的 minisign 校验方式;
+4. 结果记入 `docs/report/acceptance-backlog.md`:日期、通过与否、指纹前 8 位。**不记任何口令**。
+
+> 演练不需要也不应该轮换任何一把 key。演练机上的材料用完即删。
 
 ## 应急：本地打包
 

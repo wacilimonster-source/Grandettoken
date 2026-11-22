@@ -1,0 +1,5023 @@
+# Grandettoken 开发进展 · 归档(2026-09 ~ 2026-11-14)
+
+> 2026-11-22 从根目录 `PROGRESS.md` **原样移出**:v0.3.50(2026-11-14)之前的全部条目,
+> 以及早期的「一句话现状」「产物约束」「关键设计决策」「环境与构建」「Git」「尚未实现 / 待验证」等章节。
+> 正文一字未改,只是换了文件;其它文档里「见 PROGRESS.md 某章节」的旧引用,对应章节都在这里。
+> 这里记录的是**当时的判断与状态**,许多已经过时 —— 当前口径以 `DESIGN.md`、`AGENTS.md`
+> 与 `PROGRESS.md` 文末为准。原文件的章节顺序(前段倒序、后段顺序)也按原样保留。
+
+---
+
+## 升级后当天仍显示"凭据失效":旧的 auth 挡住了当天(2026-10-20,v0.1.47→v0.1.48)
+
+**现象**:v0.1.47 装好后,WorkBuddy 渠道卡上**连接自检成功**(读到 5993 分,
+"凭据来自 WorkBuddy 桌面端凭据"),但**签到行仍显示"凭据失效 —— 打开一次客户端 /
+在渠道卡上登录一次"**。用户问"这个渠道还需要登录干什么,签到我看不到"。
+
+**自相矛盾的界面 = 最好的线索**:取数通、签到不通,说明不是凭据本身的问题。
+
+**查证(全部实测,不是推测)**
+
+1. 数据库里的运行时状态(这是关键):
+
+   ```
+   workbuddy: lastCode="auth"  lastTryAt=2026-10-20 00:37:59   ← 升级前!
+   qoder:     lastCode="already" lastTryAt=2026-10-20 23:10:11  ← 新代码,正常
+   trae:      lastCode="claimed" lastTryAt=2026-10-20 00:43:00
+   ```
+
+   升级是 **22:48**,而那条 `auth` 是**凌晨 00:37** 记下的 —— 来自**升级前**的版本。
+
+2. 直接验证凭据能不能用:写了个探针,取 `desktop_tokens()` 的**第一份**
+   (与 `checkin_credential` 的实现完全一致)去打签到接口 →
+
+   ```
+   desktop_tokens() 返回 2 份
+   第1份: len=1318 sha256=7dd3b5108e77
+   === 只用第一份(当前 checkin_credential 的行为) ===
+     Already(Some(100.0))
+     -> 能用
+   ```
+
+   **凭据链路是通的**。所以 v0.1.47 那个修复本身有效。
+
+3. 那为什么界面还说失效?因为 `done_for_day` 把 `auth` 算作"当天完结":
+
+   ```rust
+   Some(c) => c.starts_with("claimed") || ... || c.starts_with("auth") || ...
+   ```
+
+   → 节拍器与手动按钮**当天都不再试** → 界面就一直显示那条**早已不成立**的 `auth`。
+
+**根因**:`auth` 是**对某一套凭据的判决**,而 v0.1.47 恰好**换掉了那套凭据**
+(从"只读网页 Cookie"改成"桌面端凭据优先")。判决的前提没了,结论却还挂着。
+
+**修法**:给 `auth` 记一个"是哪个版本判出来的",换了版本就认为陈旧、放开当天。
+
+```rust
+pub last_auth_version: Option<String>,
+
+/// 只对 auth 有意义:claimed/already 是平台给的既成事实,换版本也不会变成没领
+pub fn auth_is_stale(&self, version: &str) -> bool { ... }
+
+/// 与 done_for_day 只差一处:auth 只在**同一版本内**才算完结
+pub fn blocks_today(&self, today: &str, version: &str) -> bool {
+    self.done_for_day(today) && !self.auth_is_stale(version)
+}
+```
+
+`last_auth_version = None` 的意思 = **这条记录早于本字段存在** → 一律视为陈旧。
+已装用户的旧数据天然命中这一条,所以升级后立刻会重试一次。
+
+**为什么不会变成无限重试**:`auth` 不可重试(`next_try_at` 为 None),且下次真判出
+`auth` 时会带上当前版本,同一版本内照样当天完结 —— **只有"换版本"这一次会多给一枪**。
+
+**三处调用点必须同口径**(状态展示 / 手动按钮 / 自动节拍器),否则会出现
+"界面说不能试、节拍器却在试"的自相矛盾。统一走 `checkin_blocks_today()`。
+
+**测试**:`stale_auth_does_not_block_the_day_after_version_change` 覆盖四种情形 ——
+老数据(None)、同版本、跨版本、以及 claimed/already 不受版本影响。272 通过。
+
+**方法论**:① 界面自相矛盾(取数通 / 签到不通)时,先怀疑**状态**,别急着怀疑链路;
+② 任何"当天只做一次"的结论都该记住**它是基于什么前提得出的**,前提变了就要失效;
+③ 判据要能用一行数据自证 —— 这里就是 `lastTryAt` 比升级时间早 22 小时。
+
+
+## Qoder 渠道 + 签到默认开 + WorkBuddy 打卡修复(2026-10-20,v0.1.46→v0.1.47)
+
+**三件事一起做的,按用户裁决**:① Qoder 两个渠道(积分展示 + 每日 10:00 打卡);
+② Qoder/WorkBuddy/Trae 签到**默认开**;③ 修 WorkBuddy 自动打卡失败。
+
+### 一、WorkBuddy 打卡失败:签到与取数用了两份凭据
+
+**现象**:workbuddy 余额**天天正常出数**,打卡却连续三天落库 `outcome=auth`
+(10-18 / 10-19 / 10-20),而 Trae 同期三天全是 `claimed`。
+
+**根因(代码路径对照,不是猜)**:
+
+| 路径 | 凭据候选顺序 | 结果 |
+|---|---|---|
+| 取数 `fetch.rs::credentials()` | 手动密钥 → **桌面端凭据** → 网页 Cookie | ✅ 桌面端那份活着,出数正常 |
+| 签到 `lib.rs::checkin_credential()` | **只有**网页 Cookie | ❌ 那份已失效 → 每次 401 → `auth` |
+
+`checkin::Cred` 里压根没有"桌面端凭据"这一档 —— **不是配置问题,是这条路径从来没接上**。
+
+**实测证据(两把凭据都解出来真打了一次接口)**:
+
+| 凭据 | 解出来的方式 | 打签到接口的结果 |
+|---|---|---|
+| 网页 `session`/`session_2` | 解 WebView2 v10(DPAPI 密钥 + AES-256-GCM) | **401**(openresty/APISIX 网关页,认证层就被挡) |
+| 桌面端 `accessToken` | `loggerGet()` 取 atRestSecretKey → sha256 派生 → 解 `$wbEncrypted` 信封 | **200**,`today_checked_in:true, streak_days:15` |
+
+**一个必须说准的细节**:那份网页 Cookie 签发于 10-18 18:03、到期 10-25 ——
+**失败时纸面上还没过期**,却被网关 401。所以这次不是"7 天 TTL 到点",
+更可能是会话被提前作废(原因未取证,不写死)。结论不变且更强:签到不该押在网页会话上。
+
+**修复**:`checkin_credential()` 的 WebSession 分支改成**桌面端优先、网页会话兜底**,
+与取数同口径。三个实现要点:
+1. `workbuddy::desktop_tokens()` 返回的是**裸 JWT** —— 交给 `Cred::Web` 后走"其余当 Bearer"那一支;
+2. **绝不能把 `desktop:` 前缀带进来**(那是取数层的标记,带进去 = `Bearer desktop:xxx`,必然 401);
+3. 取数那条路是"401 换下一份候选",签到照抄 —— 本机就有 3 份桌面端凭据(含一份 6 月的明文备份)。
+
+**验收(真机用例 `wb_checkin_desktop_cred_reaches_the_endpoint`,默认 ignore)**:
+```
+桌面端候选凭据 2 份
+第 1 份凭据 → Already(Some(100.0))
+✅ 桌面端凭据能打通签到接口
+```
+修复前同一路径是 `AuthNeeded`(即线上那个 `auth`)。
+
+### 二、Qoder 渠道(国际版 + 国内版)
+
+**取证**(本机桌面端 0.4.8,region=global;全部只读):
+
+| 项 | 结论 | 证据 |
+|---|---|---|
+| 额度接口 | `GET {openapi}/api/v2/quota/usage` | 真机 200 |
+| 剩余字段 | **`userQuota` 与 `addOnQuota` 两块都要读、相加** | 本账号 `userQuota.total=0`,量全在 `addOnQuota`(86)——只看前者会显示成 **0** |
+| 打卡 | `GET …/sash/api/v1/me/campaigns` → `POST …/{id}/claim` | 真机 200;重复领回 `replayed:true`(幂等) |
+| 跨日 | **10:00(UTC+8)** | 活动描述原文「每日 10:00（UTC+8）刷新」;`startAt/endAt` = 10:00:00 → 次日 09:59:00 |
+| 凭据 | `auth.v1.dat` = **Electron safeStorage**(v10 + AES-256-GCM),密钥由 **DPAPI** 保护 | 本机解通并真打了接口 |
+| 设备指纹 | **打卡不需要**(社区说国际版要,实测伪指纹照样 200) | 五种 UA/头部组合全 200 |
+
+**两版是两个渠道**(`qoder` / `qoder-cn`),不是"一个渠道两个域名":账号不互通,
+余额无法合并。**判定不要看 `product.json` 的下载域名** —— 本机明明是 global,
+那个字段却写着 `*.qoder.com.cn`;要看"哪个数据目录读到了凭据"。
+
+**踩到并修掉的两个坑(都是真机用例抓的,不是 review 出来的)**:
+1. **Qoder 查状态是 GET,POST 会 404**。沿用 Trae/WorkBuddy 的"全是 POST"时,
+   真机用例直接打出 `Inactive("HTTP 404")`。→ 加了 `CheckinDef::status_method` / `claim_method`。
+2. **`actionType` 的真机拼写是 `CLAIM_BENEFIT`(带 E)**。早先照混淆 bundle 写成少一个 E 的
+   `CLAIM_BEFIT`,后果是 `has_campaign` 恒为 false —— **"今天可领"被静默判成"本期无打卡活动",
+   用户当天直接丢 100 分**。修正后真机判定变成 `Already(Some(100.0))`,与平台实际状态一致;
+   留了别名表 + 回归用例 `qoder_action_type_is_claim_benefit_with_e`。
+
+### 三、签到默认开 + 10:00 跨日
+
+**默认开**(用户裁决):`Config::default()` 从 `checkin::CHECKINS` 现取渠道表生成
+(不另抄一份 id,以后加渠道不会漏配)。**升级语义**:
+- 已有 `checkin` 表的用户 → `sanitize()` **只补缺的渠道**,用户关掉的保持关着;
+- 表里从来没有 `checkin` 键的老配置 → 容器上的 `serde(default)` 整份取新默认(全开)。
+  **即"从没碰过签到设置"的用户升级后会开始自动签到** —— 这是"默认开"的直接后果,已写进设计稿。
+
+**10:00 跨日**:`checkin.rs` 加了 `CheckinDef::day_roll_hour` 与 `cycle_day()`,
+幂等键从"自然日"改成**签到周期日**。不这么改的话,Qoder 在 09:59 查到的"已领"
+其实是昨天那一期领的,会被判成"今天已领"而跳过 10:00 后该领的那一期 → 当天静默丢分。
+调度窗口:自然日渠道 00:23–00:43(不变),Qoder 10:00–10:20。
+
+### 四、顺带修掉的:拿不到凭据不留痕
+
+`run_checkin` 在拿到凭据**之前**就 `?` 提前返回,而落库在后面 —— 于是凭据读不到的那几天
+在 `checkin_log` 里是**空白**,与"还没到点"无法区分(排查 WorkBuddy 时正是 10-16/10-17 两天空白)。
+现在补 `record_checkin_skip()`,落一条 `no_cred:…`。**结果码与 `auth` 分开**:
+前者是"本机没读到",后者是"平台拒绝了这份凭据",用户要做的动作不同。
+`wb_finish_login` 的"复登放行补签"也一并认 `no_cred`。
+
+### 验证
+
+- core `cargo test`:**271 passed / 0 failed**(基线 245);
+- core 真机用例(`--ignored`):**6 passed / 0 failed**,含 Qoder 全链路与 WorkBuddy 桌面端凭据打签到;
+- src-tauri `cargo check --all-targets`:**0 错误 0 告警**;
+- 前端 `node --check app.js`:通过。
+
+**待真机验证(国内版)**:本机无 CN 安装,`com.qodercn.app.stable` 与 CN 两个端点
+只有社区代码 + 未认证 401 佐证。CN 渠道按同接口实现,但需在真机上跑一次 M0 只读取证后
+再确认默认开启无副作用(设计稿 §6.2)。
+
+### 五、refresh 端点取证:结论是"这个问题问错了"
+
+设计稿 M3 原本留了「refreshToken 换 accessToken 的端点待取证」。**四路查完的结论是:
+Qoder 桌面端没有自己刷新 token 的行为,所以没有端点可取证** —— 我们原先"access 3 周、
+refresh 1 年,可以自动续"的假设是**读字段名想当然**。
+
+| # | 查法 | 结果 |
+|---|---|---|
+| 1 | 全部日志递归搜 `refresh`/`oauth`/`token`/`renew`/`signin` | 命中 81 行,**无一行是 token 刷新**(全是 campaign 的 `forceRefresh:false` 与插件清单刷新) |
+| 2 | 日志里**全部**请求路径 | 只有 campaign + 5 条 collaboration,**没有任何 token/oauth/refresh 路径** |
+| 3 | asar 全量字符串搜端点形状 | `grant_type`/`token_endpoint`/`offline_access`/`exchangeRefreshToken` **全来自打包的 MCP OAuth 客户端库**,不是 Qoder 的认证链路(差点被误导) |
+| 4 | **文件 mtime(最硬的一条)** | `auth.v1.dat` 最后写入 **10-19 11:41**,而桌面端此后连续跑 **约 33 小时**、campaign 每小时 200 —— **同一份 token 用了 33 小时,文件从未被重写** |
+
+**没证到的部分(必须说清)**:第 4 条只证明**非临近过期时不刷新**,不能证明"临近过期时也不刷新"。
+那个只能等 `expiresAt`(本机 2026-11-10)真的临近,或抓包 —— 不建议拨系统时钟。
+
+**对实现的影响**:不做 refresh 自动续期(没有端点,硬做只能猜,猜错会把用户登出);
+过期保持现状「打开一次 Qoder 桌面端」。**待办**:到 11-10 前后开一次桌面端,
+看 `auth.v1.dat` 的 mtime 与 `expiresAt` 有没有变 —— 变了说明会自己续(文案成立),
+没变说明不会(文案要改成"重新登录")。这是唯一能验证的办法,且**不必解 token**。
+
+**方法论教训**:「端点是什么」有时是错的问题。刷新的可观测副作用就是"那个文件被重写",
+用 mtime 就能观测 —— 比抓包和解密都省事,也更不碰敏感数据。
+
+### 六、发版时炸在 workflow 上:提交信息被内插进 PowerShell 字符串
+
+**现象**:推 tag `v0.1.47` 后,release job 在「Generate latest.json」失败,
+而**构建与签名早已 success** —— 白等一整轮 15 分钟的构建。
+
+```
+ParserError: Unexpected token '今天"从 10:00 起算。
+```
+
+**根因(工作流自身的注入类缺陷,不是代码问题)**:
+
+```powershell
+# 旧写法:提交信息被直接内插进 PowerShell 双引号字符串
+$notes = "## Grandettoken ${{ steps.meta.outputs.version }}`n`n${{ github.event.head_commit.message }}"
+```
+
+本版提交信息里有「Qoder 的"今天"从 10:00 起算」,那个 `"` **提前闭合了字符串**,
+后面整段被当成代码解析。含 `$` 或反引号也会被当成插值 ——
+**任何带引号/美元符的提交信息都会炸**,只是前几版的正文恰好没这些字符。
+
+**修复**:值经 `env` 传递(GitHub 推荐做法),不进 shell 解析:
+
+```yaml
+env:
+  VER: ${{ steps.meta.outputs.version }}
+  COMMIT_MSG: ${{ github.event.head_commit.message }}
+run: |
+  $notes = "## Grandettoken $env:VER`n`n$env:COMMIT_MSG"
+```
+
+本地已验证新旧写法对正常正文**产出逐字相同**(不改变已有行为),新写法能正确保留
+引号、反引号与 `$`。其余 `${{ }}`(版本号 / sha256 / runner.temp / secrets)都是受控值,保持原样。
+
+**补救过程**:v0.1.47 失败时**没有产生半成品 release**(`releases/tags/v0.1.47` 是 404),
+`latest` 仍是 v0.1.46 —— 用户更新链路未受影响。修好后用 `workflow_dispatch`
+(带 `tag=v0.1.47`)重跑:dispatch 取的是**默认分支上的 workflow 定义**,所以修复生效;
+而 checkout 仍按 tag 取代码,版本号不会错。
+
+**教训**:① 提交信息是**用户输入**,绝不能拼进任何脚本字符串 —— 这与"渠道返回的
+message 不能当判据"是同一类错误(信任了不可控文本);② 发版链路里"构建成功"不等于
+"发版成功",后面还有 5 步;③ 失败后先查**有没有半成品 release**,再决定重跑还是修。
+
+## WorkBuddy 取不到数:401 被当成 Server,凭据换不下去(2026-10-20,v0.1.45→v0.1.46)
+
+**起点**:用户装上 v0.1.44 后仍然取不到数,把 `diag.log` 贴了回来(D 盘装 WorkBuddy 的那台)。
+
+**日志给的证据(这次一次定位,不用再猜)**
+
+```
+wb: 找到桌面端:D:\WorkBuddy\WorkBuddy.exe · 命中目录 D:\WorkBuddy
+wb: 拿到密钥响应 · payload 773 字节 · 耗时 208 ms
+wb: 派生密钥成功 · keyId=9127dea1b44020a7
+wb: 解开 live 凭据 · …workbuddy-desktop.info · 区域=cn · access len=1318 fp=345578fe · 到期 2026-11-17
+wb: 凭据编排 · 最终可用令牌 1 个[len=1318 fp=345578fe]
+workbuddy: 取数失败 · 凭据 [手动令牌→不通] · 原因:响应不是合法 JSON (HTTP 401)
+```
+
+**桌面端凭据这条链从头到尾都是通的**(exe 在 D 盘被找到、密钥拿到、信封解开、令牌有效),
+但真正去取数的却是 `[手动令牌]` —— **那份解出来的桌面端令牌一次都没被试过**。
+
+**根因**:`fetch_once` 里"响应体不是合法 JSON"那一支,**无条件返回 `FailKind::Server`**。
+WorkBuddy 的 401 是网关回的一页 HTML,于是:
+
+- 401 → 被标成 `Server` → `retryable()` 为真,**只换域名**;
+- `another_credential_may_help(Server)` 为假 → **不换下一份凭据**,循环 `break`;
+- 排在后面的桌面端令牌永远轮不到;界面就停在那句"取数失败"。
+
+用户的凭据顺序是"手动令牌(早已作废,用户忘了)→ 桌面端",所以每轮都先撞一次 401 然后放弃。
+
+**改法**
+
+1. 新增 `kind_for_status(code)` 作为**唯一口径**:401/403/407→`Auth`,429/5xx→`Server`,
+   其余→`Client`。正常分支与"响应体不是 JSON"的错误页分支都走它 ——
+   失败类别由**状态码**决定,与响应长什么样无关。
+2. 顺手治"废令牌每轮白打一次":新增 `Fetcher::rejected` 按 `key_fp` 记被 401 拒过的凭据,
+   下一轮把它们**排到候选末尾**(`demote_rejected`)。只降权不丢弃:成功后自动撤销,
+   且过了 `REJECTED_TTL`(30 分钟)回到原位再试 —— 用户重新登录、平台恢复都还能用。
+3. 日志措辞:密钥型渠道不再说"没检测到登录凭据"(看着像登录坏了),改成"还没填 X 的密钥";
+   节流补行带上 key 与前缀,不再只写"上一条相同状态又重复了 N 次"却看不出是哪件事。
+
+**验证(真机,复现用户处境)**
+
+用临时集成测试真打接口(已删除),模拟"废令牌在前、桌面端在后":
+
+| 步骤 | 修复前 | 修复后 |
+|---|---|---|
+| 废令牌 | `kind=Server` → 不换凭据 → 结束 | `kind=Auth` → 换下一份 |
+| 桌面端令牌 | **永远轮不到** | `valid=true`,余额 **6025.07** |
+
+- `core`:`cargo test` **245 passed / 0 failed / 4 ignored**(上一版 243,新增 2 条);
+  `cargo check --all-targets` **0 错误 0 警告**。
+- 新增用例:`auth_status_wins_over_body_shape`(401 必须判 Auth)、
+  `rejected_credentials_are_demoted_not_dropped`(降权而非丢弃)。
+- 真机启动后 7 个渠道全部取数成功,WorkBuddy 走"桌面端/WorkBuddy 桌面端→通"。
+
+**这次日志功能兑现了什么**
+
+上一版加日志时说"渠道取不到数时,唯一能还原现场的东西"。这次就是它第一次真正派上用场:
+73 行日志直接指出"客户端凭据解出来了、但取数用的是另一份、而且 401 被标成了 Server",
+省掉了原本至少一轮"让用户去翻注册表/贴截图"的往返。
+
+## 发版链路补两道闸(2026-10-20,v0.1.46)
+
+v0.1.45 让 CI 的发版 workflow 第一次全绿(15 步全 success,见「仓库门面整理」一节)。
+但那条链路此前只验证过"**自洽**",这一轮补上两个更深的检查,并把密钥扫描接进 CI。
+
+### 闸一:`Cargo.lock` 是版本号的**第三处**
+
+改 `Cargo.toml` 不跑 `cargo fetch`,lock 里的版本号就停在旧值;而 CI 里所有 cargo
+调用都带 `--locked`,于是报 `cannot update the lock file`。**本地复现不出来** ——
+本地早已 fetch 过、lock 被悄悄改好,只在干净 runner 上暴露(v0.1.45 因此白跑一次)。
+
+→ `build/make-latest-json.js` 现在断言三处一致(Cargo.toml / tauri.conf.json / Cargo.lock),
+漏了在本地这步就红。双向验证过:改回旧版本号 → 红并退出 1 且文案指明要跑 `cargo fetch`;
+恢复 → 越过这步。
+
+> 附带一条教训:**"文件没改"和"文件是对的"是两件事**。我第一次"修"lock 是把修复前的
+> `.bak` 覆盖了回去,`git status` 显示干净(内容和 HEAD 一致),而 HEAD 里那一版就是错的。
+> 判断要看内容,不能只看 status。
+
+### 闸二:验签从"自洽"升级到"配对"
+
+两个层次,以前只有第一层有检查:
+
+| 层 | 检查什么 | 脚本 | 漏掉它的后果 |
+|---|---|---|---|
+| 自洽 | 线上 `latest.json` 的 signature 与线上 `.sig` 逐字相同 | `build/verify-updater.js` | 传错文件 → 用户更新失败 |
+| **配对** | `tauri.conf.json` 里那把**公钥**真能验签 release 上那个安装包 | `build/verify-signature.js` | **换过密钥/复制错文件时,所有已装用户永远收不到更新**,而第一层照样全绿 |
+
+第二层才是要命的那个(正是 RELEASE.md 里"私钥丢了就再也推不动更新"的坑)。
+唯一能终结它的是密码学本身,所以 `verify-signature.js` 借 `minisign` crate
+(tauri 依赖树里本来就有)真的跑一遍验签,不是比对字符串。
+
+**v0.1.45 实测**:`verify-updater.js` PASS 6/6、`verify-signature.js` **VERIFY_OK**。
+
+> **这两个脚本的下载必须走 PowerShell,不能用 node 的 `fetch`。**
+> 本机必须走系统代理(注册表 `ProxyEnable=1`,`127.0.0.1:7897`),而 node 24 的原生
+> `fetch` 既不读系统代理、也不认 `HTTPS_PROXY`,直连 `github.com` 十秒超时 ——
+> 第一版写出来时它**随机地能跑/不能跑**(先跑通一次给了我错误信心),
+> 那种核验比没有更糟:它会在你真需要它的时候骗你。
+> 另外端点内容必须 `-OutFile` 落盘再读,不能把 `.Content` 接 stdout
+> (PowerShell 会把多行字符串拆成数组逐行输出,`JSON.parse` 直接报 unexpected character)。
+
+### 闸三:密钥扫描接进 CI,并给测试夹具开口子
+
+`build/scan-secrets.ps1` 以前只在本地手动跑 —— 而"只在本地跑"等于"忘了就不跑"。
+现在 ci.yml 每次 push 都跑。
+
+接进去立刻暴露一个问题:它报 `diaglog.rs` 两处"疑似凭据"。查证都是**故意**长成凭据形状的
+测试夹具 —— jwt.io 官网首页那个公开示例(header `{"alg":"HS256"}`,payload
+`{"sub":"1234567890"}`),和一段合成的 very-long-access-token。两条都在 `#[cfg(test)]` 之后。
+
+→ 加 `$knownFixtures`:按**精确字符串**豁免,不按文件或目录(文件级跳过会把夹具旁边
+真正的泄漏一起放过);豁免要**如实报数**("skipped N known test fixture(s)"),不静默 ——
+否则哪天有人把真令牌混进那张名单,输出上看不出区别。
+
+**两个坑都踩了,都写进注释:**
+
+1. **这个脚本必须 ASCII-only**。它自己开头就写了"PowerShell 5.1 在 zh-CN Windows 上按
+   GBK 读 `.ps1`",我加了 UTF-8 中文注释进去 → 解析直接崩(`unexpected token '}'`),
+   而**崩掉的扫描器什么也没检查,退出码却是 1** —— 看起来像"发现问题",实际是"根本没运行"。
+2. **匹配方向搞反了**。正则只抓凭据形状文本的一个**切片**,切片还可能带夹具没有的前缀
+   (`token = "eyJ...`),所以 `$fixture.Contains($capture)` 恒为假。改成比"夹具的特征头部":
+   抓到的串里含夹具前 24 字符就算命中。
+
+**双向验证**(单向"变绿了"说明不了任何事):临时 `git add` 一个 `ghp_AAAA…`(40 字符真形状
+PAT)→ 报 HIT、退出 1;清理后 → CLEAN、跳过 4 处夹具、退出 0。
+
+### 顺带:cargo-tauri 加缓存
+
+发版 workflow 每次要 `cargo install tauri-cli`,runner 上无缓存时编 10 分钟以上。
+→ `actions/cache` 缓存 `cargo-tauri.exe` 与 registry/git 目录,key 带 `Cargo.lock` 哈希;
+install 步改成"已装就跳过",并在末尾断言 `cargo tauri --version` 真能跑通(缓存半坏时
+不会默默带病往下走)。
+
+**发版(v0.1.46)**:tag `v0.1.46` → release workflow 全自动跑完(构建 / 签名 /
+`latest.json` / 三件套上传 / 13 项按字节核验),见
+<https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.46>。
+
+## 排查日志 + WorkBuddy 任意盘兼容(2026-10-20,v0.1.44)
+
+**起点**:用户口径「增加一个日志记录功能,有用户装上以后 workbuddy 渠道获取失败,方便排查。
+已知他的 workbuddy 是装在 D 盘的,需要兼容各种情况」。
+
+**两条根因(读代码定位)**
+
+1. **装到 D 盘 = 永远找不到桌面端**。`workbuddy.rs::find_app_exe()` 只查
+   `%LOCALAPPDATA%\Programs\WorkBuddy`、`%LOCALAPPDATA%\WorkBuddy`、`%PROGRAMFILES%\WorkBuddy`
+   与 `%PROGRAMFILES(X86)%\WorkBuddy` —— 全是 C 盘的系统目录。装到 `D:\...` 就返回 None,
+   于是拿不到 at-rest key → 解不开 5.6+ 的加密信封 → 桌面端那条路整条断,
+   而界面只能说"没找到 WorkBuddy 桌面端"(明明装着)。这正好解释了用户报的现象。
+2. **失败原因全进 stderr**。整条链的每一步(扫了哪些目录、找到几份凭据、keyId 对不对、
+   信封认证过不过、401 还是业务 code 错)只有 `eprintln!`,而 release 是 GUI 子系统,
+   stderr 没人看得见 —— 同一个坑 P2-14 已经踩过一次。远程排查只能靠猜。
+
+**改法**
+
+1. 新模块 `core/src/diaglog.rs`:落盘日志(默认 `%APPDATA%\com.wacil.tokenscope\diag.log`)。
+   三条硬约束:**不写密钥**(令牌只留「长度 + sha256 前 8 位」,写入前还过一道 `redact()`);
+   **不写满磁盘**(单文件 1 MB,滚成 `diag.log.1`,只留一代);**不拖累取数**
+   (IO 失败静默 + 熔断一分钟)。
+   同一个失败每 60 秒重复一次会淹没信号,所以按 key 节流:同状态 5 分钟只落一次,
+   之后补一行"又重复了 N 次";错误一变立刻落新行。
+2. `workbuddy.rs` 的 exe 探测扩成四级:环境变量 → **注册表**(`App Paths` + 卸载项的
+   `InstallLocation`/`DisplayIcon`)→ 环境变量所指默认目录 → **每个真实存在的盘符** × 7 种常见目录名。
+   数据目录同样加 `WORKBUDDY_AUTH_DIR` 逃生门,并从 exe 位置反推。
+3. 整条链写日志:启动环境(盘符/目录/相关环境变量)、exe 命中或 miss(带完整候选链)、
+   凭据文件清单、解密结果、密钥缓存、续期结果、每个取数入口的 HTTP 状态 + 业务 code。
+4. 体检报告加「WorkBuddy 凭据链」段:exe 落在哪、auth 目录哪些存在、
+   每份凭据文件是明文还是加密、能用几个令牌。用户点一次体检、复制报告即可定位。
+5. 设置 → 关于 加「排查日志」卡:路径 / 大小 / 「复制最近日志」「打开目录」「清空」。
+   环境变量 `TOKENSCOPE_NODIAG=1` 可关掉,关掉时界面如实显示"已关闭"。
+
+**踩到的两个坑(都已修,并留了用例)**
+
+- **单测会往用户真实日志里写**。第一次真机验证抓到用户的 `diag.log` 里混进了
+  `C:\...\Temp\ts-wb-expired-*\...` 的测试行 —— 因为 `workbuddy` 的用例会用临时目录
+  伪造凭据跑完整条链,那些调用都经过 `emit()`。修法:测试构建默认静音,
+  只有显式 `set_dir` 的用例才落盘。**加了用例**:`logging_is_muted_in_tests_until_a_dir_is_set`。
+- **`redact()` 把 URL 路径段当成令牌掩了**。真机日志里出现
+  `https://api.trae.«secret len=48»` —— 路径段全小写带数字,被判成密钥,
+  把"用的哪个接口"这条最有用的信息弄丢了。修法:紧跟 `/` 的串、含 `.` 的串(主机名/文件名)
+  一律不掩,并把这两类样本写进用例。
+
+**验证(全部实测)**
+
+- `core`: `cargo test` **243 passed / 0 failed / 4 ignored**(基线 223,新增 20 条);
+  `cargo check --all-targets` **0 错误 0 警告**。
+- 壳:`cargo check --all-targets` **0 错误 0 警告**;`cargo build --release` 通过
+  (只剩项目已知的 `corrupt .drectve` 链接器噪声)。
+- **真机端到端**:`cargo test --lib -- --ignored wb_real_machine` 通过 ——
+  桌面端凭据解密 → `/v2` 取数 → `extract_workbuddy` 算出 **2330.1 分**(24 个包),
+  链路没被改坏。
+- **真机跑一遍打包前的 exe**(`--hidden` 启动,15 秒后读日志):7 个渠道各自
+  "取数成功 + 入口",WorkBuddy 那条完整写出
+  "找到桌面端 C:\Program Files\WorkBuddy\WorkBuddy.exe → 3 份候选 → 需要 key →
+  payload 773 字节/210ms → keyId=9127dea1b44020a7 → 解开 2 份 live(区域 cn/global)→
+  2 个可用令牌 → /v2 HTTP 200"。**全文没有任何令牌原文**。
+- **注册表这条路用真数据验过**:本机 WorkBuddy 5.8.3 的卸载项 `InstallLocation` 是**空的**,
+  只有 `DisplayIcon=C:\Program Files\WorkBuddy\WorkBuddy.exe,0` 能给出路径 ——
+  所以两种字段都必须读;`parse_display_icon` 单独加了 6 组样本的单测。
+- 前端:`node --check` 通过;`build/probe-frontend.js` 加了一条「排查日志卡」断言
+  (路径按后端返回值渲染 / 大小渲染成 KB / 关掉时显示已关闭),退出码 0。
+- 本机盘符实测 6 个(C/D/E/F/G/X),候选目录逐盘覆盖 —— **装到任一个盘都能被扫到**。
+
+**这轮没做**
+
+- 日志里不写响应体全文(只写 code/msg 前置,最多 120 字符),避免把账号数据结构带出去。
+- Trae/Codex 没做同等的"任意盘"扩展(它们的凭据在 `%APPDATA%`,
+  用户目录被迁移时环境变量本身就会跟着走,不存在"exe 装到 D 盘"这类问题)。
+
+**发版经过(如实记录,含一次流程偏差)**
+
+开发阶段先提交了代码(`ee2c315`),但**当时用户的口径是"先开发,不用发版"** ——
+这次提交顺手把版本号推到 0.1.44 并打了 tag 推远端,属于超出授权的动作。
+GitHub 上并没有随之生成 release(没有安装包、`latest.json` 也没更新),
+所以已装用户完全不受影响 —— 只是远端多了一个指向该提交的 tag。
+用户确认「就当发了,把 release 补齐」后,才走完 RELEASE.md 的 3–6 步。
+
+**发版(v0.1.44)**:tag `v0.1.44` 指向 `b981abe`(main 与 tag 均已推,远端一致)→ release
+<https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.44>,三资源齐
+(installer **5,041,350 字节**,sha256
+`b78b94c6bfa6aaefbfd3478307d101775f239730c210369d9f00ffd27cbf3a3e`;`.sig` 424 字节;
+`latest.json` 1,093 字节)。构建日志三条硬断言都过:`Compiling tokenscope v0.1.44`、
+`ok Grandettoken.exe rebuilt (SHA-256 changed)`、`ok import table clean (no WebView2Loader.dll)`;
+`corrupt .drectve` 链接器噪声照旧(已知、产物导入表干净)。更新端点实测 **200** 且与本地
+`latest.json` **逐字节相同**(sha256 `897625a6…`)、version 0.1.44、
+`platforms["windows-x86_64"].url` 指向 v0.1.44 的 asset、`signature` 与本地 `.sig` **逐字一致**
+(424 vs 424);安装包公开下载 200、5,041,350 字节、sha256 与本地逐字节一致。
+签名走 `$env:CI`/空密码那条老路(RELEASE.md 第 3 步,从 bash export)。
+> `gh` 没登录,按 RELEASE.md 第 5 步从 Windows 凭据管理器取了 token(不落盘、不回显);
+> 注意 `git config credential.helper` 指向的 GCM 路径已被删除,`git credential fill` 取不到 ——
+> 改用 `CredRead` 直接读 `LegacyGeneric:target=git:https://github.com` 才拿到。
+
+## 设置入口:两处 → 一处(2026-10-20,未发版,用户裁决 A)
+
+**起因**:用户指出"软件顶部和下方都有设置,下方叫设置与管理,只留一个就可以了"。
+
+**现状(改前)**:标题栏第 2 个文字按钮「设置」(`#btnS`)与底栏「设置与管理」(`#lkKeys`)
+调的是同一个 `openManage()`,名字却是两套;进管理页后页头又叫「设置与管理」。
+唯一的差别是个半吊子的选中态 —— 只有顶部按钮 `.on`,底栏链接永远不知道自己"正在被使用"。
+
+**裁决与落地(方案 A:只留底栏)**:
+
+- `app/src/index.html`:删 `<button class="tb" id="btnS">设置</button>`;底栏三枚可点元素
+  (`#lkKeys` / `#lkQuit` / `#lkUpd`)由 `<span class="lk">` 改为 `<button type="button" class="lk">`。
+- `app/src/app.js`:`openManage/closeManage` 删掉 `$("btnS").classList.add/remove("on")`;
+  删 `#btnS` 的 click 绑定(原来那句 `manageOpen() ? closeManage() : openManage()` 属于"再点一次关掉",
+  收敛后底栏入口在管理页里本身就是隐藏的,这层语义随之消失)。
+- `app/src/styles.css`:新增 `.foot button.lk` 归零样式(边框/底色/内边距/字体)+ `:focus-visible` 焦点环。
+
+**顺带修掉的两条真问题(不是顺手优化,是这次收敛的必要条件与副产品)**:
+
+1. **键盘用户会失去唯一入口**。底栏原来是 `<span>`,不可 Tab、不可回车;设置入口只剩这一处之后,
+   不改按钮就等于砍掉键盘用户的进路。同时 `openManage()` 把焦点交给页头 `#btnBack`、
+   `closeManage()` 在"焦点还在管理页里"时还给 `#lkKeys` —— 否则入口一按就被 `body.view-manage #lkKeys{display:none}`
+   隐藏,焦点掉到 body,Tab 一下直接回标题栏。
+2. **标题栏本来就装不下 5 个文字按钮**。无头 Chromium 加载真实 `styles.css`、按 378px 内容宽实测
+   (更新角标取最宽的三字档「新版本」/「安装中」):
+
+   | 字号档 | 标题可用宽 | 标题需要宽 | 标题栏内容宽 |
+   |---|---|---|---|
+   | 标准 `--u:1` | 43.5px(截断) | 78px | 378px |
+   | 大 `--u:1.15` | 10.5px(只剩一个字宽) | 89px | 378px |
+   | 特大 `--u:1.3` | 0px | 101px | **405px → 溢出 27px,最右「隐藏」点不到** |
+
+   删掉一个按钮后:可用宽 77.8 / 58.8 / 17.3px,内容宽 378 / 378 / 378px —— **溢出归零**,
+   标准字号下标题不再出省略号。这个溢出是改前就存在的缺陷,只是这次收敛顺手清掉。
+   底栏的量:最长状态句(「5 正常 · 1 预警 · 1 失联 · 1 隐藏」)+ 有新版本角标时,弹性空隙三档字号都是 0px
+   (不溢出,但没余量),所以底栏入口**不加图标、不加长文案**。
+
+**没做**:没有为"设置"改叫"Dock"之类的新词,也没动设置页内部(6 个页签、渠道卡、密钥箱);
+空态卡「去恢复 / 去配置密钥」、行详情链接、模型行「配置到客户端」三处**带上下文的跳转保留** ——
+它们解决的是"这条渠道缺密钥,怎么去配",不是重复入口。
+
+**验证**:`node --check app.js` 通过;`#btnS` 全仓 0 引用(仅 `docs/prototype/token-dashboard-prototype.html`
+的原型稿里还有一个同名演示按钮,与应用无关);样式与设计稿逐条核对,设计稿见
+[docs/design/design-settings-entry-2026-10-20.html](docs/design/design-settings-entry-2026-10-20.html)。
+CDP 端到端断言(Tab 到手、焦点往返、三档字号无溢出)待下次起真机时随发版冒烟跑。
+
+## 修 DSH 模型添加失败(2026-10-20,未发版)
+
+**现象**:模型页往 DeepSeek Harness 写任何模型都失败;4SAPI 那种写入还会连带把 DSH 里
+原有的 `opencode-go` 一起弄坏(点了添加,DSH 里模型列表反而少了)。
+
+**三条根因(都在 `core/src/inject.rs` 的 DSH 一节,现已改成新规则)**
+
+1. **引用名非法**:route 键直接照抄来源 id,`4sapi` 派生出的 `apiKeyEnv: 4SAPI_API_KEY`
+   以数字开头。DSH 的凭据引用名要匹配 `^[A-Za-z_][A-Za-z0-9_]*$`(`dsh-credentials` 的
+   `REF_PATTERN`),后果是**整份 `.credentials.yaml` 被拒**(所有密钥读不到),而且 pi-ai 的
+   `resolveProfiles` 在 `credentialRef()` 上抛错 → **该插件所有 route 一起失效**。
+   → route 键改成字母开头:`4sapi` → `foursapi`,引用名 `FOURSAPI_API_KEY`。
+   `dsh_ref_legal()` 兜底:派生出来不合法就拒写,绝不写一个注定弄坏 DSH 的名字。
+
+2. **目录里没有的模型被写进目录 route**:`opencode-go` 以前一律当作"目录里一定有",不写
+   `api`/`baseURL`。但 pi-ai v1.1.0 目录只有 30 个模型,来源列表有 37 个;目录外的
+   (`minimax-m3.1-flash-free` 等 10 个)拿不到协议,pi-ai 直接报
+   `model "…" needs an api` 并把整条 route 判成不可服务。
+   → 抄了一份目录表(`DSH_CATALOG`),**按模型**分派:目录里有 → 留目录 route;
+   目录里没有 → 自建 route `opencode-go-custom`(`api: openai-completions` + `baseURL`)。
+
+3. **显示名不分渠道**:所有来源都叫 `4S-<id>`,`opencode-go` 的模型显示成 `4S-deepseek-v4.1-flash`;
+   目录 route 还不写 `displayName`,在 DSH 里只能看到 `opencode-go`。
+   → 按来源分前缀:`4SAPI` → `4S-<id>`、`Hapi` → `HP-<id>`、`OpenCode Go` → `OG <目录名>`
+   (如 `OG DeepSeek V4.1 Flash`);三条 route 都写 `displayName`。
+
+**顺带修掉的两处**
+
+- 目录里有的模型,能力/上下文**照目录抄**(以前固定写 `input: [text]`,把目录的 `text+image`
+  写窄了);目录外的模型不编能力,省掉 `input` 让 pi-ai 用默认值。
+- 用户自己改过的模型名(`name`)与 route 名(`displayName`)不再被覆盖(与 WorkBuddy 同一条纪律)。
+
+**取消写入**也跟着改:按「这次该写的那条 route → 老版本写的 route(含改名前 `4sapi`)→
+目录内/外两种落点」的顺序找,只收**这个来源自己的**键,不碰别人的 route;凭据按旧/新两个
+引用名分别判断"还有没有人在用",没人用才撤。
+
+**验证**
+
+- core `cargo test`:**229 passed / 0 failed**(另有 4 条真机测试默认 ignore);新增 7 条:
+  引用名合法性与 route 分派、目录内/外分派、按来源的显示名、目录外模型落到自建 route、
+  旧 `4sapi` route 的清理、用户改名的保留、两条 route 并存的去重。
+- 真机形状端到端(在真实 `~/.dsh` 两份文件的**逐字节抄本**上跑,不碰真文件):
+  写入 → 读回校验 → 取消写入 → 回滚,以及「目录外模型写自建 route → 取消 → 回滚」;
+  断言原有条目数、`agent-default-model`、`opencode-go`、文件开头注释全部留着,
+  回滚后逐字节回到原始文件。
+- **外部核验**:把写出来的两份文件用 DSH 自己的 `yaml` 包解析,并按 pi-ai 的可服务性规则
+  (`needs an api` / `MISSING_CREDENTIAL`)与凭据引用名规则逐条过一遍 —— 结论 SERVICEABLE;
+  旧的 `4SAPI_API_KEY` 会被判 ILLEGAL(正是问题 1 的物证)。
+- 壳 `cargo check` 通过;`node --check app.js` 与 `build/probe-frontend.js` 通过。
+- 全程 `~/.dsh/profiles/desktop/cordis.patch.yml` 与 `~/.dsh/.credentials.yaml` 的 sha256
+  前后一致(未改动机器上真实的 DSH 配置);排查用的探针脚本与测试临时目录已清理。
+
+**没做**:未在真实 `~/.dsh` 上真写一次(要留一条写入才能验 DSH 侧真发请求),按"不发版"的口径
+留到发版前一起做。用户机器上 08:18 那次失败留下的备份
+`~/.dsh/backup-inject/20261020-081837` 保留未动。
+
+## 仓库门面整理(2026-10-20)
+
+**起点**:2026-10-11 留了一份 [docs/design/design-github-optimization.html](docs/design/design-github-optimization.html)
+(只调研未动手),里面 6 个待裁决点这次一并定了:**1A MIT / 2A 中文 / 3A 全量进 docs/ /
+5A CI+发版自动化 / 6A 全自动**。裁决 4(AI 工作日志)当时已按 A 处理过 —— 停止跟踪 +
+进 `.gitignore`,**不在历史里抹除**(改写历史要 force-push,会牵连 tags/release,风险大于收益)。
+
+**做了什么**
+
+| 项 | 内容 |
+|---|---|
+| 根 README | [README.md](README.md):定位 + 三形态截图 + 下载入口 + 7 渠道表 + 数据隐私 + 已知边界 + 技术栈 |
+| LICENSE | [LICENSE](LICENSE):MIT(裁决 1A) |
+| 文档归位 | 28 份 HTML 全量搬进 `docs/` 五类:`design/`(21)、`report/`(5)、`prototype/`(2)、`research/`(1)、`product/`(1) |
+| 引用改写 | 代码注释 8 处 + `DESIGN.md`/`PROGRESS.md` 共 9 处 + 7 份文档内部互引,统一改成新路径;`git grep` 复核根目录无裸文件名残留 |
+| 截图 | 新增 `build/shot-panel.js`:CDP 注入**仿真数据**截图,`finally` 里把 CFG 连内存带磁盘写回并**逐字段核对一致**才算还原(夹具形状照 `verify-ui-0923.js`) |
+| CI | `.github/workflows/ci.yml`:push/PR 跑 core `cargo test`(229)+ 两 crate `cargo check --all-targets` + `node --check` |
+| 发版 | `.github/workflows/release.yml`:打 `v*` tag → 断言两处版本号与 tag 一致 → bundle 签名 → `make-latest-json.js` → 上传三件套 → 复查线上 `latest.json` 的 version/signature |
+| 治理 | Dependabot(cargo + actions 两条,周更)、3 个 issue 模板(bug / 渠道失效 / 功能建议)。**不上** wiki/discussions/贡献指南 —— 单人项目,维护不动的等于负债 |
+
+**为什么 release 构建只在 tag 触发的那条 workflow 里,不在 ci.yml**:单 exe 交付依赖
+`build/make-webview2-static.ps1` 从 cargo registry 现成产物重打静态加载器归档(那个归档是
+gitignore 的),Windows runner 上 GNU ld 链接整套 Tauri 依赖树既慢又脆。CI 里 `check` 也会过
+`build.rs`(会真的去链静态加载器),足够在编译期发现问题;完整 release 留给本机每次发版
+跑熟了的那条链路。`design-github-optimization.html` 里说的 spike 结论就是这条。
+
+**踩到的两件事**(都不是新 bug,是现场状态,记下来免得下次误判)
+
+1. **工作区里躺着上一轮未提交的功能改动**。整理过程中 `cargo check` 突然报
+   `inject.rs:6137` 少一个参数 —— 而那 678 行 DSH 目录分派的改动不是本轮写的,是
+   上一轮"修 DSH 模型添加失败"进行到一半留在工作区的。第一次 check 正好撞上它写盘的中间态,
+   等它写完(19:01)再跑就全绿,`cargo test` **229 passed / 0 failed**。
+   教训:** takeover 一个工作区时,第一件事是 `git status` + 等编译稳定,再动手** ——
+   否则很容易把别人的在途工作当成自己改坏的。
+2. **PowerShell 5.1 会把 UTF-8 中文按 GBK 显示**。`Get-Content -Tail` 看 `inject.rs` 尾部
+   看到一片 `鍙湁 work 涓€涓?鈫?`,一度以为是文件被写坏了;按 UTF-8 读回来 + 数
+   `U+FFFD` 为 0,确认文件是好的。教训:**判编码问题要数 replacement char,不能看终端回显**。
+
+**验证**
+
+- core `cargo test` 229 passed / 0 failed(含上一轮新增的 7 条 DSH 用例)、壳 `cargo check` 0 错误
+- `node --check` 6 个脚本全过、`build/probe-frontend.js` 退出 0
+- `build/scan-secrets.ps1`:93 个入库文件 CLEAN(0 命中)
+- `build/check-yaml.js`:7 个 YAML 全部解析通过(为此新写了一个不引第三方依赖的 YAML 子集检查器)
+- 三张截图经人眼核对:面板 400×580、紧凑条 388×67、胶囊 164×67,圆角外真透明,
+  CFG 还原验证 identical
+
+### runner 上连踩四个坑(CI 第一版全红,逐个修掉)
+
+发布后 push 触发的 ci / release 两条 workflow 第一版都红了。四个原因全在 runner 侧,
+本地一概碰不到 —— 但也正因如此,**不写下来下次配 CI 还会再踩一遍**:
+
+| # | 现象(runner 上的原话) | 根因 | 修法 |
+|---|---|---|---|
+| 1 | `cannot update the lock file ... because --locked was passed` | `cargo fetch` 没写 `working-directory`。仓库根目录**没有 Cargo.toml**,cargo 沿目录往上找到 `app/src-tauri` 的那份,然后想改它的 lock | 每条 cargo 都钉死 `working-directory` |
+| 2 | `The term './build/make-webview2-static.ps1' is not recognized` | pwsh 里 `./脚本` 不是可执行命令名 | `pwsh -File <github.workspace>/build/...`,用绝对路径 |
+| 3 | `missing gcc: D:\a\...\build\mingw64\bin\gcc.exe` | `make-webview2-static.ps1` 只在两处找 gcc:`$USERPROFILE\mingw64\bin`(本机 winlibs)与 `build\mingw64\bin`(历史位置)。runner 上 msys2 装在 `C:\mingw64`,两个都不是 → 静态加载器归档生不出来 | 改成三个候选按顺序试。本机仍走第一个,行为不变 |
+| 4 | (第 2 条的连带) | 那一步的 `working-directory` 是 `app/src-tauri`,连相对路径 `./build/...` 也指不到仓库根 | 同上,用 `${{ github.workspace }}` 绝对路径 |
+
+修完后 **ci 全绿**(core 229 passed / 0 failed + 两 crate check + `node --check`,
+runner 上实测 7 分钟),release 那条也重跑通过。
+
+### 后来还踩了三个(5–7),其中 ⑥⑦ 是发版链路真正的洞
+
+前四个修完我误以为 release 也能通了,结果 v0.1.44 / v0.1.45 各重跑一次,
+又暴露三个。**尤其 ⑥ 说明"本地能跑"不等于"CI 能跑"**:
+
+| # | 现象(runner 上的原话) | 根因 | 修法 |
+|---|---|---|---|
+| 5 | `missing toolchain path: C:\Users\runneradmin\mingw64\bin`(`build.ps1:24`) | `build.ps1` 与 `make-webview2-static.ps1` 同一个病:只认本机那两个 gcc 位置。runner 上 msys2 在 `C:\mingw64` | 三个候选按顺序试。顺带把 `CARGO_HOME`/`RUSTUP_HOME` 改成"未设置才覆盖"(CI 上可能指向共享缓存) |
+| 6 | `webview2-com-sys 0.38.2 is pinned by Cargo.lock but its ... .lib is not in <registry>` | release.yml 里 bundle 前**没 fetch src-tauri 的依赖**。前面的 "Run core tests" 只 fetch 了 `app/core` 的,而静态加载器要从 **src-tauri 的 registry 源码检出**里取 `WebView2LoaderStatic.lib` | 加一步 `cargo fetch --locked`(带 working-directory)。ci.yml 本来就有这步,所以没暴露 |
+| 7 | `error: no such command: tauri`(`cargo tauri build` exit 101) | **runner 镜像里没有 cargo-tauri**。RELEASE.md「一次性准备」里那条 `cargo install tauri-cli` 是给本机的,CI 里从来没装 | 加一步 `cargo install tauri-cli --version '^2' --locked` |
+
+**⑥ 还连带一个更值得记的教训:Cargo.lock 是版本号的第三处,升版本时最容易漏。**
+我把 `Cargo.toml` 与 `tauri.conf.json` 升到 0.1.45 时没跑 `cargo fetch`,
+lock 里 `tokenscope` 还是 0.1.44 —— 任何带 `--locked` 的 cargo 调用都会报
+`cannot update the lock file`。**本地复现不出来,因为本地早已 fetch 过、lock 被悄悄改好了**,
+只在干净的 runner 上暴露。治本不靠记住:`build/make-latest-json.js` 加第三处断言,
+漏了就在本地这步红掉(双向验证过:改回 0.1.44 → 红 + 退出 1 并指明要跑 cargo fetch;
+恢复 → 越过这步)。
+
+而且我第一次"修"lock 其实是失败的 —— 把修复前的 `.bak` 覆盖了回去,
+`git status` 显示干净是因为文件内容和 HEAD 一致,**而 HEAD 里那一版就是错的**。
+教训:**"文件没改"和"文件是对的"是两件事,要看内容,不能只看 status。**
+
+**另一个教训:发版核验不能靠终端回显。** 用 PowerShell 的 `Invoke-WebRequest` 拉
+线上 `latest.json`,`$resp.Content` 里的中文全是 GBK 乱码,一度以为"发出去的说明是乱的";
+按 UTF-8 读文件 + 数 `U+FFFD` 为 0,确认线上内容是好的。
+→ 新增 `build/verify-release.js`(node 写的,按字节比):更新端点 200、版本一致、
+签名与本地 `.sig` 逐字一致、安装包可下且 sha256 相同、三件套齐、notes 中文完好
+(661 个 CJK、0 个 replacement char)、仓库元数据四项齐。**这一轮全部 PASS。**
+
+**发版(v0.1.43)**:本地 bundle 出 `Grandettoken_0.1.43_x64-setup.exe`(5,017,462 字节,
+sha256 `537cbc1e51cf7e845c12e0ccc4898390e7c050c3bf3ad916b002f02cd5563b48`,导入表干净、
+无 `WebView2Loader.dll`),`latest.json` 由 `build/make-latest-json.js` 生成(版本/tag/`.sig`/
+安装包四项断言都过),三件套上传到
+<https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.43>。
+`releases/latest` 指向 v0.1.43,更新端点实测 200 且签名与本地 `.sig` 逐字一致。
+
+**这一轮没有回填到 v0.1.42 发布记录里** —— 发版流程与产物核验见 RELEASE.md,本次只做门面与流程。
+
+## 第三轮全量体检:续期断链与代理取证(2026-10-19,v0.1.42)
+
+**怎么查的**:目标是 v0.1.33 之后新进场的约 7800 行(workbuddy / yamledge / peak / custom 四个新模块 +
+store / fetch / inject 的大改)。原定七路并行子代理审查**因额度上限全部失败**,改为主代理自己读代码,
+配机器化交叉检查:基线(touch 逼重查后 `cargo check --all-targets` 两 crate + `cargo test`)、
+43 个 `#[tauri::command]` × 43 个 `invoke()` 调用点的契约、生产区(首个 `#[cfg(test)]` 之前)的
+`unwrap/expect` 清点、`SystemTime`/`Command`/`AtomicBool`/时区/默认 0 的模式扫描、
+JS 重名函数与 `innerHTML` 未转义插值清点、前端探针。
+
+**两条 P1(功能没真正生效)**
+
+1. **WorkBuddy 的"自动续期"永远进不去**。`collect_desktop_credentials` 四处长候选都写成
+   "只收未过期",而 `desktop_tokens` 的续期分支条件是"候选里有过期那份" → 恒为假 →
+   续期与落库整段是死代码;`fetch.rs` 那句注释("过期时自动续期")与实际相反,
+   而且**没有任何一条用例覆盖"过期后续期"**,所以两轮都没发现。
+   后果:v0.1.41 宣称的"摆脱 7 天 TTL"只兑现一半 —— 断供周期从 7 天变成 28 天,到点仍要人工开一次桌面端。
+   修法:① 过期判定抽成 `accept(cred, now, include_expired)`,续期路径带 `include_expired = true`;
+   ② 编排逻辑抽成纯函数 `plan_tokens`(不碰文件/凭据管理器/HTTP,续期动作注入)→ 这才测得动;
+   ③ 落库带上**过期时刻**(以前只存令牌,作废的那份会永远顶在候选第一位、每轮白吃一个 401);
+   ④ 续期失败按区域冷却 30 分钟(挂件每 60 秒一轮,不冷却就是每天 1440 次白打)。
+2. **体检报告在"系统代理"上印了句没依据的话**,同时把第一轮 P2-12 的取证结掉了:
+   reqwest 0.12.28(core 用的那个)的 `default` features 里带着 `system-proxy`,
+   hyper-util 0.1.21 `client/proxy/matcher.rs:696` 读 `HKCU\...\Internet Settings\ProxyEnable` ——
+   **注册表系统代理确实影响挂件取数**;而报告只查 6 个环境变量,查不到就印"未检测到(全部直连)"。
+   本机就是活证据:ProxyEnable=1、ProxyServer=127.0.0.1:7897、用户/机器/进程三级环境变量都没设代理。
+   修法:注册表与环境变量**分两行报**,再加一行"取数是否走代理"的结论,并写明
+   "代理软件若是 TUN/全局模式,这里看不出来"。签到仍是强制直连(设计如此,已标注)。
+
+**P2 三条**
+③ 积分渠道把"上游没给余额数值"当"0 分"报"积分已用尽"(Amount 分支一直是 `unwrap_or(false)`,
+两个 kind 口径相反);现网不可触发(自定义渠道恒为 Amount、内置积分渠道恒给 Some),但按不一致修一行。
+④ **365 天归档每轮永久丢一笔消耗**:归档 SQL 只读 `ts < before_ts`,跨分界线那一跳的"后一行"不在场,
+而下一轮时它的"前一行"已被删 → LAG 永远取不到参照。修法:窗口多读一天(`ARCHIVE_LOOKBACK_SEC`),
+按"前一行在窗口内"(`pts < before_ts`)收,归到前一行那天;前一行已删所以不会被重复计。
+⑤ 向桌面端要密钥时先等退出、退出后才读管道 → 输出超过管道缓冲就会卡满 15 秒再误判"问不出密钥";
+改成两个线程并发读。
+
+**P3 五条**:签到流水注释说 400 天而实为 390(改成 310 天 = 合计 400);归档聚合里
+`filter_map(Result::ok)` 静默丢坏行(第二轮刚禁过这个写法,改回"记一行再丢");
+`auth_dirs()` 三个候选在正常机器上有两个指向同一目录(去重);DSH 回滚只校验落点 `rel`
+没校验来源 `copy`(注释声称要防手改清单)(补上同套校验);`NO_DESKTOP_READER` 只在测试里用
+却在生产区声明 → `cargo check --all-targets` 带着 1 条警告(v0.1.41 记录里的"0 警告"是
+`cargo test` 口径,两者不是一回事);速览里 `scaleFactor()` 取来没用,白一次跨进程往返。
+
+**复测(硬证据)**:把 ① 与 ④ 的判据临时还原成修复前,新增用例**精确地只让这 2 条失败** ——
+`archive_keeps_the_drop_that_straddles_the_cutoff` 拿到 `consumed: 10.0`(应为 20.0)、
+`expired_live_credential_reaches_the_refresh_step` 报 `include_expired 该收下过期那份: Expired`;
+其余 221 条全过(说明归档那处改动没伤到既有口径)。
+修回后:core `cargo test` **223 passed / 0 failed**(基线 218 + 新增 5 条)、
+`cargo check --all-targets` core 与壳**均 0 错误 0 警告**、`node --check` 通过、
+前端探针退出 0、**真机两条 ignore 用例重跑通过**(桌面端凭据解密 + `/v2` 取数算出余额,链路没被改坏)。
+
+**本轮仍未做(不是遗漏,是有意的)**
+- `providers.rs` 里 Trae `credits_amount` / WorkBuddy `RemainPrecise` 字段缺失按 0 处理:
+  还是没有样本,不盲改。**注意它的后果被 v0.1.35 的新功能放大了** —— 缺字段现在不只是"显示 0",
+  还会发一条"积分已用尽"的系统通知(③ 修的是 None,修不了"真给了 0")。
+- O-1:每轮取数约 9 次重叠的 O(n) 区间扫描,仍是结构性优化项。
+- **第三轮没覆盖到的**:`fetch.rs` 其余约 850 行改动、`inject.rs` 其余约 1700 行、
+  `app.js` 其余约 540 行、`yamledge.rs` 解析主体、`styles.css`、build 脚本与探针内部。
+- 真机待验:续期分支的真机路径(要等 accessToken 真过期,本机那份到 2026-11-15)、
+  体检报告新的两行代理文案在真窗口里的排版。
+
+**发版(v0.1.42)**:两次提交(`00b08ad` 修复 / `46e7486` 版本号+本记录),tag `v0.1.42` 指向
+`46e7486`(main 与 tag 都已推,远端 `git ls-remote` 核对同一条提交)→ release
+<https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.42>,三资源齐
+(installer **5,013,865 字节**,sha256
+`22321988049088bdc172ca5146212ef76a6b6171d48032cfcdc0cb75defd1dc4`;`.sig` 424 字节;
+`latest.json` 2,461 字节)。构建日志里三条硬断言都过:`Compiling tokenscope v0.1.42`、
+`ok Grandettoken.exe rebuilt (SHA-256 changed)`(旧 exe 先被 stash 走,确实重链过)、
+`ok import table clean (no WebView2Loader.dll)`;`corrupt .drectve` 那条链接器噪声照旧出现 3 次
+(已知、产物导入表干净,仍未追根)。更新端点实测 **200** 且与本地 `latest.json` **逐字节相同**
+(`cmp` 通过)、version 0.1.42、`platforms["windows-x86_64"].url` 指向 v0.1.42 的 asset、
+其 `signature` 与本地 `.sig` **逐字一致**(424 vs 424),线上 `.sig` 与本地也 `cmp` 相同,
+安装包公开下载 200、5,013,865 字节、sha256 与本地一致。签名走 `$env:CI`/空密码那条老路
+(RELEASE.md 第 3 步,从 bash export)。
+> 核验脚本这次自己先错过一回:按 Tauri v1 的顶层 `url` / `signature` 字段读,结果报出
+> "signature 不一致"和 `url=undefined` —— v2 的清单是 `platforms.<os-arch>.{url,signature}`。
+> 结论:核验脚本的字段名要照着实际 JSON 结构打一遍,别凭记忆。
+
+## WorkBuddy 换成读桌面端凭据(2026-10-19,v0.1.41)
+
+**起点**:用户口径「现在还是已登录取数失败,可以通过 dsh-connect-workbuddy 学习一下如何取数」。
+
+**真机取证(全部可复核)**
+
+| 事实 | 证据 |
+|---|---|
+| 桌面端 auth 文件在 `%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\workbuddy-desktop.info` | 本机存在,10-18 还在更新 |
+| `accessToken` / `refreshToken` / `nickname` 是 **AES-256-GCM 信封**(`{$wbEncrypted:1,envelope}`) | 信封里 `keyId=9127dea1b44020a7`,与日志一致 |
+| 32 字节密钥要向桌面端自己问 | `WorkBuddy.exe -e "…_linkedBinding('electron_browser_workbuddy_storage').loggerGet()"`(需 `ELECTRON_RUN_AS_NODE=1`),返回 JSON 的 `atRestSecretKey`;**key = sha256(该 base64 字符串)** |
+| AAD 是带域前缀的定长转录 | `WB-AAD\0` + 版本 + 长度前缀字段 + suite + keyId + framing + 2 字节 0 |
+| 取数端点是 `/v2/billing/meter/get-user-resource`,国内主域 **codebuddy.cn** | 老路径(无 `/v2`)实测已不可用 |
+| 用国际版 token 打国内域名 = 401 | 本机同时登着国际版(`www.workbuddy.ai`)与国内版 |
+| 历史备份里的 token 可能未过期但已作废 | 6 月那份备份明文 token 到 2027 却 401 |
+| refresh 走 `POST {chatBase}/v2/plugin/auth/token/refresh` + `X-Refresh-Token` 头 | chatBase 国内是 `copilot.tencent.com`(与计费不同域) |
+
+**改法**
+
+1. 新模块 `app/core/src/workbuddy.rs`:找 exe → 取 `atRestSecretKey`(缓存 6 小时)→ 解信封 →
+   得到 accessToken;`/v2` 取数;**按凭据 domain 选区域基址**。
+2. 凭据候选顺序:**上次续期成果 → 桌面端 live(国内版优先)→ 历史备份**;每份候选各自带区域,
+   401 时自动换下一份(既有机制)。
+3. **续期**:accessToken 过期时用 refreshToken 换新令牌,结果存 Windows 凭据管理器
+   (`workbuddy-refresh-cn` / `-global`,按区域分开,不覆盖)。这解决的是"7 天绝对 TTL"这个根因。
+4. 网页会话降为**兜底**(没装桌面端时仍可用),端点也一并改成 `/v2`。
+5. 失败分五档说清:找不到 exe / 问不出密钥 / keyId 不匹配 / 凭据读不了 / 已过期,各自给可执行动作。
+6. `extract_workbuddy` 解析层**没有改** —— 它本来就能算对(24 个包求和)。
+
+**踩过的坑(都写进代码注释)**
+
+- 夹具/排序把国际版 `-ai.info` 排在前面 → 国际 token 打国内域名 401;
+- 按 mtime 排序会选中 6 月的旧备份(未过期但已作废)→ live 文件名必须优先;
+- 单测里真读了本机凭据、还起 WorkBuddy 进程 → 两条**无关**用例挂掉(其中一条本来就对时刻敏感,
+  凌晨跑必挂)→ 桌面端读取在 `cfg!(test)` 下默认关闭,并顺手修了那条时间敏感的夹具。
+
+**验证**
+
+- core `cargo test`:**218 passed / 0 failed / 0 warning**(4 条真机测试默认 ignore);
+- **真机端到端**(`cargo test --lib -- --ignored wb_real_machine`):桌面端 live 凭据 → 解密成功
+  (accessToken 1318 字符,有效期到 2026-11-15)→ `POST https://www.codebuddy.cn/v2/billing/…`
+  → **HTTP 200,24 个包,`extract_workbuddy` 算出余额 2661.21**;
+- 与 `dsh-connect-workbuddy` 的 Node 探针结果(合计 2661)一致。
+
+**发版(v0.1.41)**:tag `v0.1.41`(提交 `081e30b`,main + tag 已推;tag 含壳 `Cargo.lock` 的
+aes-gcm 依赖)→ release <https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.41>,
+三资源齐(installer **5,009,387 字节**,sha256 `ae0b5186e49eedcbe652a7f9c6649599c376fc32844ef29c9660da880dcb1596`;
+`.sig` 424 字节;`latest.json` 2,844 字节);更新端点实测 **200**、与本地产出**逐字节一致**、
+version 0.1.41、签名与本地逐字一致、安装包下载后 sha256 与本地一致;单 exe 交付检查通过。
+
+## WorkBuddy 渠道"又"断:这次是会话 7 天 TTL,不是接口变了(2026-10-18,v0.1.40)
+
+**现象**:workbuddy 渠道不出数已三天。SQLite 里最后一笔成功快照 **2026-10-15 11:56:47**,
+同刻其余 6 渠道(codex/deepseek/hapi/opencode-go/trae/4sapi)每天照常出数;今天 10:28 的
+签到探测落库 `outcome=auth`(HTTP 401/403,凭据被网关拒绝)。
+
+**取证(全部现场可复核)**
+
+| # | 证据 | 结论 |
+|---|---|---|
+| 1 | webview 锁着 Cookies 库(运行中),但**端点探测**打 `get-user-resource` / `checkin-activity-status`(新旧两代路径)全部 **401 + HTML(openresty/APISIX 网关页)**,不是 404 | 接口没迁移,纯认证失败 |
+| 2 | 抓官方个人中心 SPA 最新 bundle(`assets.workbuddy.cn/web/usercenter/ad5683203/…/config-*.js`):仍 `POST /billing/meter/get-user-resource`、`withCredentials: true`、恒带 `X-Client-Platform: web`;只有**微信小程序场景**(`sessionStorage["growth-center-platform"]==="miniProgram"`)才补 `Authorization: Bearer`。与 weblogin.rs 顶部 2026-10-08 的实测记录一致 | 平台认证方式没变,请求构造不用改 |
+| 3 | 时间线:10-08 12:12 首笔成功(v0.1.19 网页登录)→ 10-15 11:56:47 末笔,**差值恰好 168 小时**;期间挂件每 60 秒都用这份会话真打接口 | 会话是**绝对 TTL(7 天)**,不是滑动窗口 —— 请求频繁也续不了命,到点就死 |
+| 4 | 官方「访问密钥」页:SPA 路由 `/keys`(站点地址是 **`www.workbuddy.cn/profile/keys`**,裸 `/keys` 是 404 —— 挂件旧提示里的地址已失效);有效期可选 `7天/30天/1年/永久`;但创建按钮**门控**:i18n 明文「该功能为标准版以上用户可用」,用户实测该账号提示需要升级 | 访问密钥(Bearer)这条**对免费账号不可行**(本账号验证);对标准版以上仍可用(挂件已支持手动粘贴 Bearer,候选顺序里它优先) |
+| 5 | 「登录捕获 Bearer 令牌」(v0.1.17 方案)已是**死路**:2026-10-08 CDP 实测 web 登录流程里**没有** Authorization 头、没有 `growth-center-token`、落地 URL 无 `?token=`(设计稿 docs/design/design-workbuddy-web-login.html 已裁决改走 Cookie) | 不复活"抓令牌"方案 |
+
+**根因**:v0.1.19 起挂件吃"浏览器 profile 里的会话 Cookie",这条路活着的前提是会话不失效;
+平台把会话做成了 7 天绝对 TTL。于是每过 7 天必断一次 —— 9/17–10/1 那次断是另一个根因
+(客户端 5.6.2 加密了本地 accessToken),这次是纯日程性失效。**取数与签到都不用改请求。**
+
+**修复(四处,全部低风险)**
+
+1. **错误文案摆出真相**:`fetch.rs` 的 `expired_credential_msg`(WebSession 分支)改为
+   「网页登录已过期(平台会话约 7 天一次,属正常) · 在渠道卡上点「重新登录」即可」;
+   登录窗"取数被拒"那条(reason)同步改写,并把访问密钥入口从死了的 `/keys` 改成
+   `www.workbuddy.cn/profile/keys`、注明"要标准版以上的账号才能建"。
+2. **过期前亮出会话年龄**:登录验证通过时(`wb_finish_login`)把时刻写进 settings
+   (`core::weblogin::WEB_SESSION_AT_KEY`,`wb_web_session_at`,无敏感内容);
+   `build_view` 对**确实在用 Cookie 会话**的 WebSession 渠道,第 5 天起在详情 extra
+   里加一行「网页会话 · 已使用 N 天 · 平台会话实测约 7 天过期;失效后点「重新登录」即可,
+   历史数据不丢」。核心逻辑抽成纯函数 `weblogin::web_session_hint`,`core` 挂单测。
+3. **复登当天放行补签**:`done_for_day` 把 `auth` 算"当天完结",`can_try` 又被它卡住
+   (lib.rs `checkin_state_of`),所以 auth 之后即使复登成功,当天的 100 分按钮也是
+   点不动的(实测:2026-10-18 10:28 auth 一次,之后当季不能补;天数为界要静默到次日)。
+   `wb_finish_login` 收工时把 workbuddy 签到的 last_code 里的 `auth*` 清掉
+   (last_day 落回今天、attempts 清零),节拍器下一拍 / 手动按钮立刻可补一次。
+   只清 `auth*`;claimed/already/inactive 是真签完,不动。
+4. 明确**不做**:隐藏 webview 常驻续期(TTL 是绝对的,续不了命,还白背一个常驻窗口);
+   自动补登(登录要微信扫码,机器替不了);request 层改动(平台没变,无需再变)。
+
+**验证**
+
+- core `cargo test` **205 passed / 0 failed**(基线 204;新增 `web_session_hint_window`:
+  没记录不说话、前 4 天闭嘴、第 5 天起说话、时钟拨回不造谣);src-tauri `cargo check --all-targets`
+  **0 错误 0 告警**。真机待验:①复登后卡片出数;②当天「领积分」按钮可再点(auth 已被放出);
+  ③第 5 天起详情出现"已使用 N 天"一行。访问密钥路线(B)经实测对免费账号**不可行**(门控),
+  方案不依赖它。
+
+**发版(v0.1.40)**:tag `v0.1.40`(提交 `121b375`,main + tag 已推)→ release
+<https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.40>,
+三资源齐(installer **4,977,830 字节**,sha256
+`acac61386de1bfbbbbcf9664f1a1294ff619a2685900f51d426f9a38f12ed5f6`;
+`.sig` 424 字节;`latest.json` 1,566 字节)。更新端点实测 **200**:线上 latest.json
+与本地逐字节一致、`signature` 与本地 `.sig` 内容逐字一致、`version 0.1.40`;
+安装包公开下载 4,977,830 字节、sha256 与本地逐字节一致。签名环境变量走
+build.ps1 认的 `$env:CI='true'` 这条路(未加密私钥=空密码,RELEASE.md 第 3 步)。
+发布过程中本机直连 github.com 的探针行为不稳(node fetch 的 HEAD 全部 connect
+timeout,同一分钟内 curl/gh 正常)——核验一律以 curl 实测为准。
+
+## 修「模型页渲染出错」(2026-10-17,v0.1.39)
+
+**现象(用户装了 v0.1.38 之后报的)**:模型页一进去就是 `模型页渲染出错:on is not defined`。
+
+**根因**:v0.1.38 改 `mdlRowHtml` 的客户端按钮时,我把上一行的
+`const on = done(id, r.id);` 一起删掉了,而按钮的 class 与提示还在用它 ——
+**每渲染一行抛一次 `ReferenceError`**,被 `renderModels` 外面那层 try/catch 兜成
+"模型页渲染出错"(那层 catch 本身工作正常,它就是为了这种情况加的)。
+
+**为什么没抓到(这才是要补的部分)**
+
+| 检查 | 为什么漏 |
+|---|---|
+| `node --check` | 只查语法,不查引用 |
+| `build/probe-frontend.js`(假 DOM) | 只加载页面:`inject_state` / `get_model_catalog` 都返回 null → 模型页停在"还没取到模型清单",**永远走不到行渲染** |
+| 真机写入测试 | 测的是 Rust 侧写入链路,不碰前端 |
+
+**修法**
+
+1. `app/src/app.js` 把 `const on = done(id, r.id);` 补回去(一行);
+2. **把探针补成"真渲染模型页"**:塞进 5 个客户端(DSH 标成"正在运行")与一份价目表,
+   真跑 `renderModels` + `renderModelSheet` 的**详情 / 预告 / 已配置 / 被挡四个分支**,断言:
+   - 界面上**不许出现「渲染出错」**(它正是"渲染异常被 catch 住"的可见信号);
+   - 每条模型行要出 **5 个** `data-act="mdlcli"` 按钮且含 `data-c="dsh"`;
+   - DSH 按钮提示里要有「运行中也能写」、客户端详情要有「不用退出」;
+   - DSH 预告要写清 `.credentials.yaml` 落点,且**不许混进**通用文案「挂件会记住口径」;
+   - 已配置要给「取消写入」、被挡要给重查引导。
+   探针退出码把这条也纳入(以前只认 THROWN / UNHANDLED / ERROR)。
+3. 补探针之前先跑了一遍**故意留着 bug** 的版本,确认它真报得出来:
+   `probe exit=1 | FAIL: 模型页显示了「渲染出错」:模型页渲染出错:on is not defined`。
+
+**验证**:`node --check` 通过;探针输出 `模型页渲染 ok:10 个客户端按钮(含 DSH)、详情 / 预告 /
+已配置 / 被挡四个弹层都出得来`,退出码 0;计数按 `data-act="mdlcli"` 走,
+不再用会把容器 `class="cdots"` 也数进去的松正则。
+
+**发版(v0.1.39)**:tag `v0.1.39`(提交 `6ead4f4`,main + tag 已推)→ release
+<https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.39>,
+三资源齐(installer **4,977,131 字节**,sha256 `b4cb1cd1af751677e7c006e89261bab62515d3c9ee97023d680033d4e537720f`;
+`.sig` 424 字节;`latest.json` 2,381 字节);更新端点实测 **200**、与本地产出的 `latest.json`
+**逐字节一致**、version 0.1.39、签名与本地逐字一致(GitHub 侧 asset digest 也一致)、
+安装包下载后 sha256 与本地一致;单 exe 交付检查通过。装 0.1.38 的机器在这条更新里直接升到 0.1.39。
+
+## DeepSeek Harness 写入(2026-10-17,v0.1.38)
+
+**起点**:用户口径「增加一个配置模型添加到 DeepSeek Harness 的功能」,三处裁决:
+① 在模型页加 DSH 作为**第五个写入客户端**(与 T / WB / WBA / ZC 同一套交互);
+② 落点选 **`cordis.patch.yml` 的 `llm-pi-ai` providers + `.credentials.yaml` 的 `refs`**
+(与 DSH 自己的 Models 页同一份事实);
+③ **允许热写**(DSH 会收敛外部编辑)。
+
+**取证(全部可复核,2026-10-17 从本机 DSH 安装包 `app.asar` 里取出)**
+
+| 结论 | 出处 |
+|---|---|
+| 模型/提供方配置落在当前 profile 的 **Cordis patch**(`~/.dsh/profiles/<profile>/cordis.patch.yml`) | `dsh-settings` README:「更改通过当前 profile 的 Cordis patch 持久化」;`dsh-config-editor` 同 |
+| 路由字段:`api`(三选一)/`baseURL`/`apiKeyEnv`/`models[]`(`id`/`name`/`contextWindow`/`maxTokens`/`input`) | `dsh-llm-pi-ai` `lib/index.js` 的 `profile` schema 与 README |
+| **非目录路由**必须给 `api` + `baseURL` + **非空** models;目录里的提供方(如 `opencode-go`)由目录给端点 | 同上 README「失败与恢复」「何时选择」 |
+| `apiKeyEnv` 是**凭据引用**,值落在 `~/.dsh/.credentials.yaml` 的 `refs:`;名字是 `<ROUTE>_API_KEY` | `dsh-credentials-local` README(文件示例里 `refs:` 与 `OPENCODE_GO_API_KEY` 就是这条) |
+| 外部编辑会被收敛:配置编辑器"在派生候选配置前应用外部更改";凭据存储"同一把写锁下保留注释与未触及条目" | `dsh-config-editor` / `dsh-credentials-local` README |
+| 本机真文件:profile `desktop`、patch 里有 `agent-default-model` + `llm-pi-ai`(route `opencode-go`)、凭据文件 `refs.OPENCODE_GO_API_KEY` | 真机读取(见下方"真机取证"测试) |
+
+**落点与契约**(细节写进 `DESIGN.md` 12.3.2,不在这里重复):两份文件一起备份、一起读回校验;
+route 键 = 来源 id;目录 route 不写端点;`models` 是替换语义所以先读回再合并、保留用户手加字段;
+摘掉最后一个模型时连 route 一起收走;密钥只在没人再用这个引用名时才撤;选中项只读不写。
+
+**新模块 `yamledge.rs`(不引第三方 crate)**
+
+- 只认块式 mapping / 块式 sequence / 标量;流式集合与 `!!js` 当不透明标量;注释、空行、CRLF 原样,
+  末尾没换行不硬塞;**行范围替换**(不是整树往返,否则注释全丢)。
+- 两种合法的列表缩进写法都收(短横比键深 / 与键同缩进)。
+- 12 条单测;含一条"游标没前进就报错"的兜底 —— 这条兜底是被真机教训逼出来的(见下)。
+
+**跨目录备份**:DSH 的 patch 与凭据文件不在同一层,而回滚原本是"按文件名放回配置目录"——
+照旧逻辑会把 `cordis.patch.yml` 放到 harness home 根下。所以 DSH 的备份目录多一份
+`.inject-layout.json` 落点清单,回滚照它逐份放回;清单只允许 root 以内的相对路径;
+**写入前不存在的文件,回滚时删掉**。其它四家的备份目录与以前逐字节一样。
+
+**热写口径**:`Client::blocks_when_running()` —— 前四家仍"在跑就拒写",DSH 例外;
+`inject_rollback` 的运行检查也改成按客户端判(否则 DSH 写入允许、回滚却报"先退出它")。
+
+**踩过的三个坑(都写进 DESIGN.md 12.7)**
+
+1. 夹具用了 Rust 的 `\n\` 行续接 —— **续接吃掉下一行的缩进**,夹具被悄悄改成顶格 YAML,
+   失败信息却指向解析器。夹具改用 `r#"…"#`。
+2. 生成 YAML 块时把列表项写成了与 `models:` 同缩进 → 插进去的列表被当成 route 的兄弟节点。
+   生成侧统一"项比键深 2 列",解析侧两种都收。
+3. 解析器里"行内起头的序列项"(`- key: value`)第一轮就撞上缩进检查 → `break` 但游标不前进 →
+   外层无限塞空节点 → **6 GB 内存几分钟吃满后 abort**。修完加了"游标没前进就报错"的兜底。
+
+**验证(本机)**
+
+- core `cargo test`:**204 passed / 0 failed**(另有 2 条默认 `#[ignore]` 的真机测试,见下)。
+  新增 25 条:YAML 编辑器 12 + DSH 契约 13(其中真机形状端到端那条默认 ignore;基线 181 → 206)。
+- 壳 `cargo check --all-targets`:**0 错误 0 警告**。
+- 前端:全部 `.js` 过 `node --check`;`build/probe-frontend.js`(假 DOM)退出码 0。
+- **真机测试一(只读)**:拿本机**真实的** `~/.dsh/profiles/desktop/cordis.patch.yml` 与
+  `~/.dsh/.credentials.yaml` 过一遍"可读性检查 + 预告",预告内容为「在 llm-pi-ai 里新增
+  route「4sapi」与这条模型」、落点与密钥引用名正确,且**预告前后两份文件逐字节不变**。
+- **真机测试二(在真文件的逐字节抄本上,不碰 `~/.dsh`)**:把真实两份文件抄进临时 harness home,
+  跑通「写入 → 独立读回校验 → 取消写入 → 回滚删除 → 回滚写入」——断言:原有顶层条目数与
+  `agent-default-model` / `opencode-go` / 开头注释全部留着、`records:` 段留着、
+  两次回滚分别回到"写入之后"与**逐字节回到原始文件**(原本没有的凭据文件则被删掉),
+  且站点故意标成"在跑"验证热写不被挡。
+- **真机测试三(在真实 `~/.dsh` 上真写一次,然后回滚)**:用凭据管理器里的**真 4SAPI 密钥**,
+  把 `route「4sapi」+ claude-sonnet-5` 真写进 `~/.dsh/profiles/desktop/cordis.patch.yml`、
+  密钥真写进 `~/.dsh/.credentials.yaml` → 独立读回校验过 → 取消写入过 → 回滚两次
+  (`~/.dsh/backup-inject/20261017-151752` 写入前快照、`...-151754` 取消前快照)→
+  **两份文件逐字节回到写入前**(断言 `read == read`),随后独立核验真实文件里已无
+  `4sapi` / `4SAPI_API_KEY`、原有 `opencode-go` 与 `records:` 段原样,测试产生的两个备份目录已清理。
+  这一步用的是发版前的一次性临时测试(验完即删),仓库里留下的是**只读**的第 1、2 条。
+- 端到端写入/回滚(小夹具):幂等 → 不建备份、文件逐字节不变;目录 route 不加端点、
+  原有模型保留;用户手加的 `maxTokens`/`reasoningEfforts` 保留;结构认不出时拒绝且文件原样。
+
+**未在真机验(不阻塞,列在这里)**
+
+1. 模型页第五个按钮的**真机点击**(只过了 `node --check` 与假 DOM 探针,没在真窗口里点过;
+   写入链路本身已在真实 `~/.dsh` 上真写 + 回滚验过,见"真机测试三")。
+2. DSH 侧**真的用 4SAPI 模型发出过一次请求**(要留着那条写入、再回 DSH 选模型;本轮为了回滚没有留)。
+3. 多 profile 场景(本机只有 `desktop`):"优先 desktop → 挑配了 llm-pi-ai 的 → 按名字第一个"
+   只有单测覆盖。
+
+**发版(v0.1.38)**:tag `v0.1.38`(提交 `641ad9d`,已推 main + tag)→ release
+<https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.38>,
+三资源齐(installer 4,978,276 字节,sha256 `70594ee789fb01f14e77f65a8d7b270890b4c1966fcb6f4a189dba42fc72ab10`;
+`.sig` 424 字节;`latest.json` 3,124 字节);
+更新端点实测 200、与本地产出的 `latest.json` **逐字节一致**、version 0.1.38、
+签名与本地逐字一致,安装包下载后 sha256 与本地一致;单 exe 交付检查(无 `WebView2Loader.dll` 混入)通过。
+发版过程踩到一个坑,已记进 DESIGN.md 12.7:**不要用 PowerShell 的 `-replace | Set-Content` 改版本号** ——
+它按 ANSI 重写整份文件,`多平台` 变乱码、注释行被并成一行(当年这版差点带着坏 manifest 发出去);
+改用定点编辑只动那一行,`git diff` 复核后 `--amend` 修回。
+
+## 速览改"抬升卡片"(2026-10-17,v0.1.37)
+
+**背景**:v0.1.36 发布后,用户仍然说"显示还是很奇怪"。这次先做设计再动手,文档见
+`docs/design/design-pill-peek-2026-10-17.html`(五个方向都按真实 164×46 做可点 mock)。
+
+**根因(真机量的)**:胶囊是 `border-radius:999px`。46px 高时圆角 23 = 标准药丸;纵向拉到 120px 后
+圆角被钳到 60 —— 宽 164、高 120、四角半径 60,视觉上从"药丸"变成"被吹起来的豆子"。
+再叠一条分割线、上半信息下半胶囊脸,就成了"缩小版面板"。**两次"怪"的共同点都是形状/尺寸变了。**
+
+**裁决**:方案 C(抬升卡片)。其余取推荐值:三行全显示、托盘不跟、开关默认开。
+
+**落地**:
+- `peek-open` 时圆角从 999 收到 **16**(180ms 过渡),信息在胶囊脸下方,不再有额外分割线;
+- 窗口**向下**长高(顶边不动),高度按实测三行夹在 56~96,宽度锁在「当前宽 vs 信息所需宽」的较大值(≤280);
+- 再点一次立即收回,4.5 秒自动收回;切形态前先收回(避免"class=pill 但窗口是卡片高"的半截状态);
+- 显示页新增「单击胶囊看速览」开关,默认开;关掉后单击无动作,▲ 仍展开面板。
+
+**验证**:真机(125% 缩放)67→123、圆角 999→16、胶囊 142×46 不被压、向下长高、4.5 秒收回、零异常;
+`node --check` 与假 DOM 探针通过。
+
+**发版**:tag `v0.1.37` → release <https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.37>,
+三资源齐(installer 4,949,653 字节,sha256 `bcb176228935308d9543d4efd2127fcb76b95b39162e0e1ea10aabda0f017259`);
+更新端点实测 200、version 0.1.37、签名与本地逐字一致。
+
+## 速览气泡样式重做(2026-10-17,v0.1.36)
+
+**起因**:v0.1.35 发布后用户贴了张真机截图,说"这个样式显示的很奇怪"。
+
+**真机截图读出三个问题**:
+1. 蓝色内边框 + 深色内底 + 阴影 —— 在本来就大的卡片里又套了一个框,像弹窗不像气泡;
+2. 三行字在 164px 宽的胶囊上被截成「今日合计 ¥0.00 (3…」「最紧张 OpenCod…」;
+3. 最小预留高度给到 84px(实测内容只有 41px),于是"信息在上、胶囊在下、中间一大块空"。
+
+**改法**:
+- 内容压成两行短语:「今日 ¥0.00」「最紧 4SAPI 92%」(百分比按状态色);放得下用全名、
+  放不下退简称(OC),不再出现半截字;
+- 去掉内框/内底/阴影与"单击收起"提示行 —— 胶囊本身上半部分就是信息区,
+  与下半部分之间只有一条 `border-top` 细线;
+- 预留高度改成**贴着内容**(实测 + 12px,下限 44px):窗口从 160px 降到 120px。
+
+**验证**:真机(125% 缩放)复测 67→120 向上长高、底边不动、胶囊 45px 不被压、4 秒自动收回;
+`node --check` 与假 DOM 探针通过。发版:tag `v0.1.36`,三个资源齐,更新端点 200 且与本地产出
+逐字一致(sha256 `ee41eea1d3cb4c9dff04c8cfb97c986db758a6b23100f7e53b51a181d79f5336`)。
+
+## 小鲸鱼插件研读 → 四包落地(2026-10-16,v0.1.35)
+
+**起点**:研读了 DeepSeek Harness 上的社区挂件 `dsh-whale-widget`(本机 desktop profile 实装版,
+v0.4.2;代码注释回指到 issue #232),写了一份设计文档并拿到 10 项裁决
+(`docs/design/design-whale-inspiration-2026-10-16.html`)。裁决结果:**第 4 项「今日预算」作废**;
+第 10 项选了「一版全做」→ 全部进 v0.1.35,并用两条措施对冲(提交按包分组、每件都带开关)。
+
+**信任包(核心:让每个数字有出处)**
+
+- `peak.rs`(新模块):DeepSeek 峰谷时段。工作日 9–12 / 14–18 高峰、周末与法定节假日全天谷价;
+  只需**北京时间**(固定 +8,不吃系统时区);只报"贵不贵 / 还有多久变",**不落任何单价数字**
+  (规则两个月被官方改过三次)。节假日清单进代码,`table_stale()` 从**11 月**起如实提示"该补次年表"。
+  11 项测试。
+- `store.rs` 快照层四件:
+  ① **密钥指纹分段**(迁移到 user_version 3,加 `key_fp` 列 + 索引):换 key 起新账,
+  消耗只在同一本账里推算;首次拿到稳定指纹时**认领**无指纹的历史行,让没换过 key 的用户账目连续;
+  ② **缺口覆盖**(`OBSERVE_GAP_SEC = 10 分钟`):窗口"从几点起才有数据"、逐日覆盖;
+  ③ **变动台账**:同方向连续轮询聚合成一条(20 分钟窗),方向一变立刻另起,带空档秒数;
+  ④ **90 天明细 → 365 天日级归档**:`prune` 删之前先压(可重入、分界日累加),`trend_series` 把
+  归档与明细拼成一条 24 桶曲线并标出缺口桶。9 项测试。
+- `fetch.rs`:`ChannelView` 新增 `peak / gap_day_from / gap_week_from / gap_month_from / gap_days /
+  accounts`;消耗窗口、申请检测、近 7 天日均**全部改走指纹分段**;`key_fp()` 用 sha256 前 12 字节
+  (不落明文);`probe_report()` 供体检用,**不写快照**(手动测试不该填上观测缺口)。
+- 体检:`probe_channel`(逐渠道真打一次,报域名/耗时/解析值/错误)+ `run_diagnostic`
+  (全部渠道 + 本机四项:快照库可写 / 开机自启注册 / 系统代理 / 数据目录),产出可复制纯文本,
+  **报告里没有密钥与完整响应体**。
+
+**提醒包**
+
+- 系统通知(新依赖 `tauri-plugin-notification`,走代理从 crates.io 拉取):跌破红线时响一次、
+  一天最多一次、按渠道各自记账;**第一轮只记基线**(不让刚开机时的一堆旧账刷屏);
+  通知本体不回跳(插件不支持动作),改为窗口隐藏时闪一下任务栏。
+  判定 `crit_now()` 与前端 `toneOf()` 逐条同口径,并补上"余额真 0 也进红线"。
+- DeepSeek 行内峰谷:副标题报状态、口径位报倒计时(1 秒一跳,本地时钟推算,不依赖轮询频率)。
+
+**拓展包(自定义渠道)**
+
+- `custom.rs`(新模块):`path` 解释器(`a.b` / `data[0].quota`)+ 通用取数(GET / POST + body
+  `{key}` 占位 + `scale` 换算 + 探活模式)。**模板只提供默认值**,留空沿用,用户可自救。
+- 渠道页新增表单:**测试通过才允许保存**(任改一个字段立刻作废,已实测);
+  `custom_add` 先写密钥再落配置(配置失败回删密钥,不留孤儿凭据);`custom_remove` 只清定义与密钥,
+  历史快照保留。它们和内置渠道共用消耗窗口 / 缺口 / 分段 / 密钥纪律,取数只发往用户自填地址。
+
+**气质包**
+
+- 胶囊按压微缩(transform-origin 定在下缘,底边不动)+ **单击速览气泡**:窗口临时向上长高一条,
+  气泡画在新增空间里,4 秒自收;单击与拖动按"位移 <4px 且 <400ms"分离,▲ 仍是唯一的展开入口。
+- 音效两声(签到领到 / 跌破红线),**默认关**,WebAudio 现场合成 —— 不新增任何音频资源文件。
+- 前端:行详情加缺口行、台账、"斜纹柱 ≠ 没花钱"说明、近 3 月 / 近 12 月区间、历史账户提示;
+  显示页加"提醒与声音"两个开关(通知默认开、音效默认关);关于页加"运行体检 + 复制报告";
+  渠道卡加"测试连接"与自定义渠道的"删除"。
+
+**验证(本机)**
+
+- core `cargo test`:**181 passed / 0 failed**(净增 28:峰谷 11 + 快照/曲线 9 + 视图/指纹 3 +
+  自定义渠道 3 + 台账/归档等);壳 `cargo check --all-targets` **0 错误 0 警告**(touch 逼真重查过)。
+- 前端:全部 `.js` 过 `node --check`;`build/probe-frontend.js`(假 DOM)通过。
+- **桩 E2E(真 DOM + 桩 `__TAURI__`)**:3 行渠道(含自定义渠道)渲染正常;DeepSeek 副标题"谷价中"、
+  口径位倒计时元素存在;**展开行**里出现"今日数据自 01:48 起 / 最近变动 2 条(推算消费(5 次轮询)、
+  入账(充值/额度)、含 3 小时未观测)/ 历史账户提示 / 区间含近 3 月与近 12 月 / 斜纹柱 ×2";
+  体检按钮跑出报告且复制按钮出现;自定义渠道表单"测试 → 保存可点 → 改一个字段又变灰"整链通过;
+  全页 0 异常(只有一个桩页缺 logo 的 404)。产物在 `%TEMP%\ts-e2e.html`,不进仓库。
+
+**未在真机验(不阻塞发版,列在这里):**
+
+1. 系统通知**是否真的弹出来** —— 只在真实宿主里看得到(桩里发不出);
+2. 胶囊速览的窗口几何(向上长高 + 收回)只在真窗口有几何语义;
+3. 音效两声的音色/音量(桩里没有音频设备);
+4. 自定义渠道接**真实**中转站接口的一次完整取数(桩里只有假响应);
+5. 点通知的"回跳"没有实现 —— 插件不支持动作,已改为闪任务栏。
+
+**遗留(记录在案,未改):**
+
+- `providers.rs` 里 Trae `credits_amount` 与 WorkBuddy `RemainPrecise` 两处,字段缺失时按 0 处理
+  (界面上就是"用了 0"或"剩 0")。本轮**未取证**上游是否真会出现"有 size 没 remain"的组合,
+  没有样本就不盲改(改方向错了比 0 更糟);先记在这里。
+- 点通知不回跳(见上),要做的话得自己起通知窗口,不值当。
+
+**构建与发版(2026-10-16)**
+
+- 版本号已升 **0.1.35**(`app/src-tauri/Cargo.toml` + `tauri.conf.json`)。
+- `build/build.ps1 bundle` 跑通:产物 `Grandettoken_0.1.35_x64-setup.exe`(4.95 MB)+ `.sig`,
+  两条防"假绿"的断言都过 —— `ok Grandettoken.exe rebuilt (SHA-256 changed)`(证明本轮真的重链过)
+  与 `ok import table clean (no WebView2Loader.dll)`。新依赖 `tauri-plugin-notification` 经本地代理
+  从 crates.io 拉取并已进缓存(此后构建不再需要网络)。
+- **已发版**(2026-10-17):tag `v0.1.35` → `3e1688a`,release
+  <https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.35>,
+  三个资源都在 —— `Grandettoken_0.1.35_x64-setup.exe`(4,948,446 字节,
+  sha256 `d69248904606b9f5a70b5a1dd982daebc9c79cf3df830f14b42fbc01c4d3d8b7`)、`.sig`、`latest.json`。
+  更新端点 `releases/latest/download/latest.json` 实测 200,内容与本地产出逐字一致(含签名),
+  安装包 URL 302 → 200 可下载。
+- 提交分三次(便于回退与二分):core 数据层 / 壳+前端 / 文档;版本号提升在第二次里。
+- **真机走查抓到并已修**的两个 bug(修复后重出安装包再发,故 02:46 那个才是发布产物):
+  ① 速览窗口用 `PhysicalSize` 传逻辑尺寸 —— 125% 缩放下窗口只长 61px、胶囊被压成 14px;
+  ② 气泡挂在 `.pill-body`(position:relative + overflow:hidden)里,被定位到胶囊内部并裁掉半截。
+
+## WorkBuddy 登录:真正要抄的是会话 Cookie,不是令牌(2026-10-08,v0.1.19)
+
+**症状**(用户扫码登录成功后的反馈):二维码扫过、账号也登进去了,但登录窗停在页面上
+"没反应",挂件一直没有数;手动关掉窗口则提示「已取消登录」。
+
+**根因**:v0.1.17 抓令牌的**前提本身是错的**。设计阶段是从 usercenter 的 JS 包里读到
+`Authorization: Bearer` 逻辑的,但真机上把控制台的请求全看了一遍(CDP 抓完整请求头):
+`/console/*`、`/billing/meter/*` 全都**没有 Authorization 头**,`sessionStorage` 里也
+**没有** `growth-center-token`;认证全在 httpOnly 的 `session` / `session_2` 两个 Cookie 上。
+于是三条抓取路(fetch/XHR 头、URL 参数、sessionStorage)一条都不可能命中 —— 挂件永远等不到
+令牌,用户看到的就是"登录成功了却没反应"。
+
+**还有第二道门**:网关(openresty)按 **User-Agent** 分流。同一批 Cookie,
+浏览器 UA → 200,挂件客户端 UA(`TokenScope/0.1`)→ 401。用 curl 逐项对照过:
+`browser UA + 两个 Cookie` 是 200 且 `TotalDosage` 正确,`session` 与 `session_2`
+**缺任何一个都 401**(只带其中一个也 401),加不加 `tgw_l7_route`/设备号都不影响。
+
+**改成什么**(v0.1.19):
+- 登录窗**不再注入任何脚本、不再拦导航**:on_navigation 只当信号用(记下"页面已经落到
+  个人中心/控制台"),一律放行。页面是第三方的,挂件只负责看它走到哪儿。
+- 观察者每秒问一次:会话可用吗?**判据是"用这份会话真打一次接口能不能通"**,不是
+  "cookie 罐里有没有东西"(没登录的访客也可能有 session Cookie)。通了就关窗报「已登录」,
+  验不过且确实刚登录完才报原因(改用访问密钥那条备选路)。
+- **什么都不落盘**:会话就住在 WebView2 的 profile 里(登录窗与主窗口共用一份),
+  取数时现读(`WebviewWindow::cookies_for_url`,httpOnly 也读得到)。两个理由:
+  Windows 凭据管理器的 blob 上限实测只有约 1280 字符(2000 字符就报
+  `longer than platform limit of 2560`),而这两个 Cookie 加起来近 6 KB;**而且**平台一旦
+  轮换 Cookie,存下来的副本会静默失效 —— 现读天然跟着新的走。
+- 「清除登录」现在会一并删掉 profile 里的会话 Cookie(否则按钮点了等于没点),并作废
+  取数的 5 秒结果复用;`set_key` 同样作废(换完密钥立刻刷新不会再端上旧结果)。
+
+**顺带修掉一个会崩掉整个挂件的地雷**:`cookies_for_url` 这类调用内部是**阻塞派发**
+(worker 线程发消息给主线程,再 `rx.recv().unwrap()` 等回信)。目标窗口正在销毁时回信
+永远不来,unwrap 直接 panic —— 而 release 是 `panic = "abort"`,一次派发失败 = 挂件原地消失。
+实测踩到过(刚关掉登录窗就去读它的 Cookie,日志里留下 `RecvError`)。现在所有要碰 webview
+的调用都改成"投递到主线程 + 自己带超时地等",拿不到就当没读到、退回"未登录",绝不 panic;
+观察者也因此改成读主窗口(它从启动活到退出),并且不去问那个可能正在销毁的登录窗
+(用户关窗靠 Destroyed 事件置位,落地判定靠 on_navigation 置位)。
+
+**验证**(debug 构建真机跑,CDP 全程观察):
+- 已登录状态再点「登录」:窗口 1.2 秒内自己关掉,toast「已登录 WorkBuddy · 读数已刷新」,
+  渠道显示 `浏览器网页会话` + 真实读数(剩余 5462.54 credits / 已用 2637.46);
+- 清除登录 → profile 里两个会话 Cookie 消失、渠道变「未登录 WorkBuddy 账号」;
+- 此时点「登录」:窗口停在登录页(确认是未登录态),用户按 X 关掉 → toast「已取消登录」、
+  按钮恢复可点;**日志零 panic**;
+- 把会话 Cookie 原样写回 profile → 读数立刻回来(证明"现读"这条路不依赖任何本地副本);
+- core 55 项单测全绿(weblogin 的 Cookie 拼装/前缀校验/落地路径判定共 4 组),`cargo check` 零告警。
+
+**尚需真机**:会话有效期(实测两个 Cookie 都是 7 天后到期,所以大约每周要重登一次);
+以及真实扫码登录那条路(v0.1.18 的死锁修掉之后,第一次登录就是用户自己扫码完成的)。
+
+## WorkBuddy 登录窗打开后全白、整个挂件卡死(2026-10-08,v0.1.18)
+
+**症状**(用户真机反馈 —— 正是 v0.1.17 设计稿里留的那条"还差你一次真机登录"):点
+「登录 WorkBuddy 账号」后窗口壳出来了,里面**一片空白**,什么也没加载;此后连"刷新"之类的
+按钮也全都没反应,挂件像死了一样。
+
+**根因**:`workbuddy_login` 是**同步**命令,而 Tauri 的同步命令在主线程上就地执行 ——
+这条命令又恰恰是在 WebView2 的 `WebMessageReceived` 回调里被调起的(它是前端 invoke 进来的)。
+在 COM 回调里再同步创建第二个 webview,`CreateCoreWebView2Controller` 的完成回调就再也
+送不回主线程:wry 卡在 `wait_with_pump` 死等,主线程从此不再处理任何消息
+(**所以无关命令 `get_channels` 也一起超时**,界面看着像卡死),而新 webview 的页面
+永远停在 `about:blank`。
+
+**取证方式**(`--remote-debugging-port` + CDP,逐层排除):
+- 窗口树:登录窗有 wry 的容器 `WRY_WEBVIEW`(560×700),但**没有** WebView2 的
+  `Chrome_WidgetWin_1` / `Chrome_RenderWidgetHostHWND`(主窗口两样都有)→ 控制器没建完;
+- `/json/list`:invoke 之后多出一个 `about:blank` 目标,之后 40 秒不动,`workbuddy.cn` 目标
+  始终不出现;对它发起 CDP `Page.navigate` 也一直不返回;
+- 主窗口 JS 还活着(`1+1` 能算、DOM 完好),但任何 invoke 都超时 → 排除"前端卡死",
+  定位到 Rust 侧主线程。
+- 排除项:CSP(只作用于 tauri 自定义协议,不碰外部页面)、站点可达性(直接 curl 登录页
+  200 + CDN 带 `Access-Control-Allow-Origin: *`)、注入脚本(根本没跑到)。
+
+**修法**:`workbuddy_login` 改成 `async fn`。async 命令跑在 async runtime 的线程上,
+窗口创建因而变成一条投进事件循环的消息,执行的上下文与"启动时按 tauri.conf.json 建主窗口"
+完全一样 —— 那条路一直是通的。**这条 async 不能改回同步**,`lib.rs` 里留了注释说明原因。
+
+**验证**(debug 构建真机跑,CDP 全程观察):
+- 命令立即返回;登录页真正加载出来(标题 `WorkBuddy - AI Agent 办公新范式`,微信登录 /
+  手机号 / 邮箱 / SSO 全在,截图核对);
+- 注入脚本在真实页面里生效(`__tsWbHook=1`,fetch 与 XHR 包装都在);
+- 抓取链路两条**实测都通**:①sessionStorage 令牌;②请求头 `Authorization: Bearer …`。
+  都走到哨兵地址 → `on_navigation` 拦下 → 写进凭据管理器(`key_hint` 回显掩码尾号)→
+  窗口自动关闭 → 渠道状态变「已登录」(hasKey=true)。
+- 取消链路:模拟用户按 X 关窗 → 主窗口收到 `{"ok":false,"cancelled":true}`,
+  按钮从「登录中(禁用)」恢复可点;未抓到令牌时凭据槽位保持空;
+- 点按钮的真实路径(设置 → 「登录 WorkBuddy 账号」→ 关窗)整条跑通,页面 console 零报错;
+- 测试注入的假令牌已 `delete_key` 删除,槽位确认回到空。
+
+**尚需真机**:用真实登录(扫码/手机号)拿到的令牌打 `get-user-resource` 是否 200 ——
+这条只有你自己的账号能验。
+
+## WorkBuddy 凭据改道:挂件内网页登录(2026-10-02,v0.1.17)
+
+方案与取证见 `docs/design/design-workbuddy-web-login.html`。用户裁决:**1A 2A 3B 4A 5A 6A 7B**。
+
+**为什么必须改**:`C:\Users\wacil\AppData\Local\CodeBuddyExtension\Data\Public\auth\workbuddy-desktop.info`
+里 `auth.accessToken` 从明文字符串变成 `{"$wbEncrypted":1,"envelope":…}`(AES-256-GCM,
+`{suite,keyId,nonce,authTag,ciphertext}`),`keyId = sha256(32B 静态钥) 前 16 位` = `9127dea1b44020a7`;
+静态钥编译期内置在客户端安装包(`atRestSecretKey`,`at-rest-crypto` 包),用户目录里既无明文也无
+DPAPI 密文(全盘扫过 `.workbuddy` + 两个 WorkBuddy 数据目录,12 万个文件)→ 本机不可解。
+生效时刻:凭据文件与 `~/.workbuddy/keyblob` 同为 2026-10-01 21:06,库里面板最后一笔成功快照是 21:01。
+同目录 6 月备份那份仍是明文,实测打两个域名都 **401**,已是废票。
+**与"装了国内版+国际版两个客户端"无关**:国际版写独立文件 `workbuddy-desktop-ai.info`
+(`domain=www.workbuddy.ai`),原本就被域名白名单排除,两版互不覆盖。
+
+**改成什么**(`AuthKind::WebSession`,只给 WorkBuddy 用,裁决 5A):
+- 挂件开独立窗口(560×780、置顶)加载 `www.workbuddy.cn` 登录页;页面自己的令牌来源已核实:
+  跳转参数 `?token=` → `sessionStorage["growth-center-token"]` → 请求拦截器加
+  `Authorization: Bearer …`(见 `download.codebuddy.cn/web/usercenter/…/config-wXDbhNun.js`)。
+- 注入脚本(与页面脚本同时安装)钩 `fetch` / `XMLHttpRequest.setRequestHeader`,并轮询 URL 参数与
+  sessionStorage,任一路径先抓到 Bearer 就跳哨兵地址 `https://tokenscope-capture.invalid/c?t=…`;
+  `on_navigation` 拦下解析(**`.invalid` 是保留顶级域,导航也被取消,令牌不出网**)。
+- 解析与合法性判定在 `app/core/src/weblogin.rs`(主机名整串相等、拒绝变形域名、
+  长度/控制字符/空格校验、剥 `Bearer ` 前缀)—— src-tauri 不挂测试,所以这段放 core 才守得住。
+- 令牌存 Windows 凭据管理器条目 `workbuddy`(与手动粘贴同一个槽位,裁决 4A);取数失败 401/403 的
+  文案改成「网页登录已过期 · 在挂件里重新登录一次即可」,不再说"打开一次 WorkBuddy"(裁决 2A)。
+- **不再读本机 `.info`**(裁决 3B):`appauth` 里的 WorkBuddy 扫描路径、`.info` 备份排序、
+  CN 域名白名单与两个单测一并删除;Trae / Codex 的本机登录态复用不受影响。
+
+**验证**:core `cargo check` 无告警、**55 项单测全绿**(新增 weblogin 4 项 + 凭据来源文案 2 项);
+src-tauri `cargo check` 无告警;注入脚本用 lib.rs 原文抽出后在真实浏览器里跑四种场景
+(fetch 头 / XHR 头 / sessionStorage / URL 参数)全部正确跳到哨兵地址并带上令牌,
+「主机不在名单内」与「页面根本没有令牌」两种情况确认不跳;前端用 `__TAURI__` 桩在浏览器里
+验过未登录 / 已登录 / 已过期三种卡片状态与登录按钮的 invoke、事件回流、toast 文案,零 console 报错。
+**尚需真机**:用真实登录拿到的令牌打 `get-user-resource` 是否 200、令牌实际能用多少天。
+
+## UI 优化第二轮(2026-09-23,设计稿 `docs/design/design-ui-motion-2026-09-23.html`)
+
+先出设计稿(用户裁决:全做、只做深色),再按「设计 − 代码现状」差集实施 ——
+实测发现 v0.1.13 已含动效层/高对比/热键/位置持久化,以下为本轮**实际**改动,
+全部通过运行时验证(51 单元测试 + `verify-form.js` 三形态 + 新增
+`build/verify-ui-0923.js` 17 项断言,全 PASS;面板截图 `build/shot-panel-0923.png`)。
+
+**视觉**
+- U2 状态点分层:未配置 = 空心灰环 `.dot.off`,取数失败/失联 = 斜杠灰点 `.dot.st`
+  (原来一个灰点两种语义)。列表行/胶囊/渠道卡/底栏共用新 `dotCls()`。
+- U4 卡片外阴影:窗口四周五 10px 真透明边距,卡片画在内部带
+  `0 2px 8px -2px rgba(0,0,0,.6)`(**阴影外延必须 ≤10px,否则被窗口边界裁出硬边**,
+  设计稿的 `0 18px 48px` 外延 50px+ 不可用)。尺寸标定全部 +20:面板窗口
+  380×560 → **400×580**,紧凑条/胶囊内容高 46 → 窗口 66;吸附展开时窗口向贴边侧
+  多探出一个边距让卡片贴齐屏幕边;`tauri.conf.json` 初始尺寸、`verify-form.js`
+  期望值同步更新。圆角真透明不受影响(cornerAlpha=0 PASS)。
+- U6 紧凑条图标:16px 档官方位图回退字母方块(`iconHtml` 内嵌 `.ltr` 副本 +
+  `--cc` 渠道色,CSS 切换),28px 档继续用官方标。
+- U7 键盘可达:全部可点元素统一 `:focus-visible` 焦点环;6 个设置开关 +
+  额度申请开关从 `<div>` 改为 `<button role="switch" aria-checked>`。
+
+**动效与反馈**
+- M2 刷新真实进度:取数期间「刷新」持续脉冲禁用,完成才停;结束 toast
+  「已更新 · 刚刚 / N 个渠道取数失败」(新增 `#toast` 轻提示组件,2.6s 自动消失)。
+- M5 胶囊轮播:5s → **8s**,加底部 3px 指示点(当前页高亮);悬停不暂停但节奏 ×3。
+- M6 贴边:展开内容从贴边侧滑入+淡入 180ms(不再瞬变);拖拽进 40px 阈值显示
+  2px 吸附预览线(可发现性);I6 展开态右下角 ✕ 显式收回(Esc 同效)。
+- M7 跌破红线一次性红晕:`data-dtone` 记录上轮状态,非红 → 红的行当播一次
+  1.2s `breatheOnce`(无限循环呼吸仍由 alertPulse 开关另管,默认关)。
+
+**交互**
+- I1 排序前置:标题栏「↓ 剩余」点击循环 剩余/余额/消耗/自定义,与管理页下拉双向同步。
+- I2 `+N` 可交互:悬停列被藏渠道名;点击展开面板、滚动定位并高亮 1s。
+- I3 原生对话框清零:删除密钥改行内确认条(`.cfrm`),全部 `alert()` 改 toast。
+- I5 密钥保存成功:卡片绿色左边框亮 1.4s + 立即回显尾号。
+- 管理页 ↔ 展示页 120ms 淡入过渡。
+
+**后端(U8 汇总环比)**
+- `ChannelView` 新增 `dayPrev/weekPrev/monthPrev`:上一周期**同时段**消耗
+  (今日 vs 昨日同时段等 —— 拿整段上周期比会系统性偏大);新增
+  `local_prev_month_start()` 与单测(51 个全过)。前端在"本期与上期都有数"的
+  渠道集合上算环比,涨红降绿,基线不足显示「——」。
+
+**踩坑**
+- 并行多个 Edit 调用改同一文件会互相覆盖(后写的赢):fetch.rs 的 build_view
+  字段、index.html 的 `#btnSort` 各丢了一次,症状是"编辑明明成功,文件里没有"。
+  同一文件的多个编辑**必须串行**。
+- 会话内 bash 后台 `&` 启动的 GUI 进程会随命令结束被杀;验证用实例要用
+  `run_in_background` 托管(或 Start-Process,但本机 PowerShell 工具只执行不回显,
+  构建走 bash 直跑 cargo + Windows 路径环境变量)。
+
+**未做(用户裁决)**:浅色主题(只做深色);B2 吸附轻量预览行、B5 点击穿透、
+B10 通知接线维持原优先级挂起。
+
+## Trae / WorkBuddy 积分(v0.1.4,2026-09-17)
+
+**开发在分支 `feat/trae-workbuddy-points`(commit `52c22da`)上完成,用户确认效果后
+fast-forward 合并进 main 并随 v0.1.4 发版。**分支保留在本地与 origin,可随时回看。
+
+### 需求与结论
+
+用户要的是"近期过期的积分要精确到哪天过期多少"。**第 0 步探测结论:两家都能逐笔**
+
+| 平台 | 凭据来源 | 接口 | 逐笔到期 |
+|---|---|---|---|
+| Trae(SOLO CN) | `%APPDATA%\TRAE SOLO CN\User\globalStorage\storage.json` 的 `iCubeAuthInfo://icube.cloudide`(`tc` 容器,需解密) | `POST api.trae.cn/trae/api/v2/pay/user_current_entitlement_list` | ✅ 每个额度包一条:数量 `quota.credits_limit`、已用 `usage.credits_amount`、到期 `expire_time` |
+| WorkBuddy | **现状(0.1.17 起)**:挂件内网页登录拿到的 Bearer 令牌,存 Windows 凭据管理器条目 `workbuddy`。下表是 **0.1.4~0.1.16 的历史做法**,客户端 5.6.2 起该文件里的 accessToken 已改加密存储,不再可读:`%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\*.info`(明文 JSON) | `POST www.workbuddy.cn/billing/meter/get-user-resource` | ✅ 每个包一条:`CycleCapacitySizePrecise` / `RemainPrecise`,到期取 `DeductionEndTime ‖ ExpiredTime ‖ CycleEndTime` |
+
+### 实机验收数据(2026-09-17,与官方口径交叉核对一致)
+
+- **Trae**:剩余 3,855.28 分(4050 发放 − 194.72 已用);22 笔有剩余,最近 9-18 到期 5.28 分
+- **WorkBuddy**:剩余 6,075.52 分 = 本周期 8300 − 已用 2224.48
+  (与 `/get-user-resource-summary` 的 5575.52 + 500 完全对齐);30 笔包,27 笔有剩余
+
+### 实现要点
+
+- 新模块 `app/core/src/appauth.rs`:**只读复用本机登录态,绝不写回、绝不刷新**。
+  刷新会轮换 refreshToken、把客户端挤下线,所以 token 失效只提示"打开一次 X 即可"。
+- Trae 的 `tc` 解密:base64 → [6 字节头][32 字节随机密钥][密文],`SHA512(rb)` →
+  `SHA512(h + 固定盐)` 取 key/iv,AES-128-CBC;明文前 64 字节是校验和。
+  单测里有一份 **OpenSSL 生成的交叉验证向量**(不是自证)。
+- 凭据候选排序:WorkBuddy 的 `auth.domain` 必须是 `www.codebuddy.cn`/`www.workbuddy.cn`,
+  且**备份文件(文件名带 ISO 时间戳)排后** —— 一份 6 月备份的 expiresAt 更晚但 token 已作废
+  (实测 401)。取数遇到 401/403 才换下一份候选(`another_credential_may_help`)。
+- 新数据模型 `Kind::Points` + `expiring: [{at, amount, label}]` + `expiringSoon`(近 30 天合计)。
+- 前端:**主数值不带 ¥**,副标题「近 30 天将过期 N 分」,行内列最近三笔到期,
+  展开是逐笔到期全量表(7 天内红 / 30 天内黄);密钥页对这两个渠道显示"已读取本机登录"、不给输入框。
+
+### 顺手修掉的坑
+
+- `fitPill` 用 `getComputedStyle(el).font` **简写**量文字宽度,Chromium 里该简写常是空串 →
+  按 13px/400 量,窗口比文字窄几像素,胶囊里出现 `WB 6,075…` 半截数字。改成逐项拷字体长手属性。
+- 积分型不参与"剩余百分比/余额"排序(`score = 4000`,排在可比渠道之后、取数失败之前);
+  状态色按**近 7 天**到期占剩余的比例(≥30% 红 / ≥10% 黄)—— 用 30 天窗口会让 Trae 常红
+  (它的签到积分本来就 31 天有效)。
+- WorkBuddy 查询时间窗从"近 7 天起"改回"当前时刻起"(与官方前端一致):
+  窗口开宽会多捞回 4 个旧包,"本周期发放/已使用"比官方口径多 400 积分。
+
+### 已知边界 / 未做
+
+- ~~**未做** WorkBuddy 的 DPAPI 兜底(`state.vscdb` 的 Safe Storage):明文 `.info` 在本机一直存在,
+  再引 `windows-sys` + `aes-gcm` 两条依赖、且无法端到端验证,收益不成立;真读不到就提示"打开一次 WorkBuddy"。~~
+  **2026-10-02 作废**:客户端 5.6.2 起明文 `.info` 不再存在,那句提示也把人往错方向带 ——
+  WorkBuddy 已改走挂件内网页登录(见本文顶部 v0.1.17 一节),`appauth` 里的 WorkBuddy 扫描路径已删除。
+- 两个渠道都标 `unstable: true`(未公开接口),失败静默降级沿用上次快照。
+
+### 发版之后的两处改动(2026-09-17,未发版)
+
+1. **一次失败的检查不再清掉"有新版本"提示**(`app/src/app.js` 的 `checkUpdate`)。
+   原来只要 `available:false` 就把 `UPD.info` / 标题旁标签 / 卡片一起清掉 —— 检查失败
+   (没网 / 被限流)也走这条分支,于是"用户刚看到新版本、还没点更新,一次自动检查失败
+   提示就消失了"(v0.1.4 验证时实测到一次)。现在**只有真的问到"没有新版本"**(或被
+   「跳过此版本」)才清;检查失败只给反馈,不动已有状态。
+   **验证**:临时把 `plugins.updater.endpoints` 指向 `https://127.0.0.1:9/latest.json`
+   (拒绝连接),先人造"已知有新版本"的状态再走真实 `check_update` ——
+   命令返回 `error: "error sending request for url (...)"`,而 `UPD.info` / 标签 / 卡片
+   全部保留(PASS);端点还原后确认 `error:null` 的那次会正常清空。
+   注:页面里没法用 `mockIPC` 打桩 —— `window.__TAURI_INTERNALS__` 是
+   **不可写不可配置**属性,只能这样真造失败。
+2. **Trae / WorkBuddy 换成软件真实图标**(与 OC / DeepSeek 同一套做法):
+   - `trae.svg` ← 本机 TRAE SOLO CN 客户端自带素材 `resources/app/out/media/trae-logo.svg`
+     (深底 `#1A1B1D` + 荧光绿几何标,和任务栏里看到的是同一个);
+   - `workbuddy.png` ← 本机 WorkBuddy 客户端 `Assets/Square44x44Logo.targetsize-256.png`(256×256)。
+   来源与版权说明写进了 `app/src/logos/README.md` 的来源表。
+
+---
+
+## 一句话现状
+
+Rust 侧完成并通过 14 个单元测试,release 编译通过(5.24 MB exe)。
+三种形态的窗口尺寸固定不可拖拽、视觉按原型稿对齐、密钥与设置合并进
+「设置与管理」页 —— 三项均已落地并做了运行时验证(截图 + 断言,见
+「界面改版」章节)。仓库已迁到纯英文路径 `G:\game\nw\Grandettoken`,
+构建不再镜像到用户目录。
+**遗留一个交付层问题**:GNU 工具链下 exe 加载期依赖 `WebView2Loader.dll`,
+裸单文件启动报系统错误 —— 见「进行中」章节,三个可选方案已论证。
+
+## 产物约束(用户确认)
+
+> 更正(2026-09-20):交付形态早已改为 **NSIS 安装包**(per-user,`%LOCALAPPDATA%\Grandettoken`),
+> 绿色单 exe 已下线 —— 本段及下方「进行中」章节是当时的决策记录,保留作历史;
+> 现行发版流程见 RELEASE.md。
+
+**单 exe、免安装、绿色运行。**(历史决策,已被「追加调整 12」取代) 现状与该约束的差距:功能与体积没问题
+(5.24 MB、全部系统 DLL 依赖),唯一例外是 WebView2 加载器 ——
+Tauri 在 GNU 工具链下默认动态链接 `WebView2Loader.dll`(MSVC 工具链才静态链接),
+裸 exe 缺它会拒绝启动。解决路径见「进行中」章节;无论选哪条,产物都无需安装。
+
+---
+
+## 已完成
+
+### 1. 产品设计与原型
+
+- `docs/prototype/token-dashboard-prototype.html` —— 交互原型,四种折叠形态(面板 / 紧凑条 / 胶囊 / 边缘吸附)
+- `providers.js` —— 渠道适配器配置的 JS 版本(设计阶段的产物,保留作参考)
+
+### 2. 技术选型
+
+| 项 | 选择 | 理由 |
+|---|---|---|
+| 框架 | Tauri 2 | 实测 release exe **4.99 MB**、常驻内存 **39.9 MB**;Electron 同功能约 100MB / 200–300MB |
+| HTTP | reqwest + **native-tls** | Windows 走系统 SChannel。用 rustls 会因为 ring/aws-lc 需要 nasm 汇编器,在 GNU 工具链下容易失败 |
+| 数据库 | rusqlite(bundled) | 单文件 SQLite,存用量快照 |
+| 密钥 | Windows 凭据管理器(keyring) | 见下方安全设计 |
+| 开机自启 | winreg 写 HKCU Run 键 | 免管理员权限;每次启动重写 exe 路径,绿色版移动位置不失效 |
+| 工具链 | Rust **GNU** 工具链 + MinGW-w64 | 本机无管理员权限,装不了 MSVC Build Tools |
+
+### 3. 代码结构
+
+```
+app/
+  core/                    纯逻辑层,不依赖 Tauri —— 可独立跑测试
+    src/providers.rs       四个渠道的响应解析
+    src/store.rs           SQLite 快照 + 消耗推算
+    src/secrets.rs         Windows 凭据管理器封装
+    src/fetch.rs           取数、失败降级、视图组装
+    src/config.rs          设置项
+  src-tauri/               Tauri 外壳:窗口、托盘、命令、轮询调度
+  src/                     前端(纯静态,无打包器)
+build/                     工具链安装 / 构建 / 诊断脚本
+```
+
+**为什么把逻辑层拆成独立 crate**:一开始逻辑和 Tauri 在同一个 crate,
+测试二进制会把整个 WebView2 栈链接进去,启动时报
+`STATUS_ENTRYPOINT_NOT_FOUND` 直接跑不起来。拆开后测试只链接 serde/rusqlite,
+**14 个测试 0.01 秒跑完**。
+
+### 4. 四个渠道的适配(已实测解析正确)
+
+| 渠道 | 接口 | 类型 | 换算 |
+|---|---|---|---|
+| 4SAPI | `GET https://4sapi.com/api/usage/token` | 金额型 | 500000 积分 = ¥1 |
+| OpenCode Go | `GET https://opencode.ai/zen/go/v1/usage` | 配额型 | 只返回百分比 |
+| DeepSeek | `GET https://api.deepseek.com/user/balance` | 金额型 | 直接取 total_balance |
+| Hapi | `GET https://ai.yuchuantest.com/v1/usage` | 金额型 | 20 积分 = ¥1 |
+
+### 5. 单元测试(14 个,全部通过)
+
+```
+providers::tests::four_s_api_converts_points            ok
+providers::tests::four_s_api_falls_back_when_fields_missing  ok
+providers::tests::opencode_picks_tightest_window        ok
+providers::tests::opencode_reports_entitlement_error    ok
+providers::tests::deepseek_splits_balance               ok
+providers::tests::hapi_divides_points_by_20             ok
+providers::tests::hapi_error_is_surfaced                ok
+store::tests::consumption_sums_decreases_and_ignores_topups  ok
+store::tests::consumption_is_none_without_baseline      ok
+store::tests::settings_roundtrip                        ok
+fetch::tests::month_start_is_first_day                  ok
+fetch::tests::week_start_is_monday                      ok
+fetch::tests::today_start_is_before_now_and_same_day    ok
+fetch::tests::week_start_not_after_today_start          ok
+```
+
+---
+
+## 关键设计决策(后续改动请勿破坏)
+
+### 取数失败绝不能降级成 0
+
+余额类工具最危险的 bug 是把"请求失败"渲染成"余额归零",用户会以为欠费。
+所以:取数失败时沿用上次成功快照 + 标注时间 + 显示真实错误原因;
+`remaining` 取不到时一律返回 `null` 而非 `0`。测试 `four_s_api_falls_back_when_fields_missing`
+就在锁这个行为。
+
+### 两类渠道分开渲染
+
+- **金额型**(4SAPI / DeepSeek / Hapi):显示货币余额、可画进度条
+- **配额型**(OpenCode Go):接口只给已消耗百分比,**不参与消耗合计**(百分比和金额不能相加),
+  行内三格改为 5 小时 / 本周 / 本月三个限流窗口的剩余
+
+充值型渠道(DeepSeek / Hapi)没有"限额"分母,所以**不画进度条**。
+
+### 消耗是推算值
+
+DeepSeek / Hapi 的接口只给当前余额、不给累计消耗,日/周/月消耗靠本地快照差值算:
+
+```
+consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
+```
+
+负差值(充值、配额重置)clamp 成 0。**窗口起点没有基线时返回 `null` 而不是 0**
+(测试 `consumption_is_none_without_baseline` 锁定),界面显示"—— / 数据不足"。
+程序未运行的时段形成数据空洞,数字偏小,界面已标注"推算"。
+
+### 取数不消耗 token
+
+四个接口都是账务/元数据接口,不是推理接口,查询余额**不产生任何 token 计费**。
+所以轮询间隔可以压得比较短:展开 60s / 折叠 300s / 连续失败退避 900s,带抖动。
+
+### 安全
+
+- 密钥只写 Windows 凭据管理器(服务名 `TokenScope`,账户名 = 渠道 id)
+- 密钥**永不**进 JSON / SQLite / 日志 / 导出文件;配置可随便备份分享
+- 出网请求只发往渠道自身域名,无遥测、无云同步
+- `.gitignore` 已排除 `*.db`(快照含余额与用量历史)
+
+---
+
+## 已解决:前端布局塌陷(2026-09-16 定位并修复)
+
+根因是**两个 bug 叠加**,都不是技术栈问题:
+
+1. **`app.js` 用了 Tauri v1 的 API 位置**:`new T.window.LogicalSize(w, h)` 在
+   Tauri 2 里抛 `is not a constructor`(v2 把尺寸类型移到了 `dpi` 命名空间,
+   正确写法是 `new T.dpi.LogicalSize(...)`),而 `applyForm` 的 try/catch 把
+   异常静默吞掉 —— **窗口尺寸从启动起就从未改变过**,永远停在 380×560。
+2. **数据库里持久化了 `form: "compact"`**:此前测试时点过"切换紧凑条"按钮,
+   `Config::load` 从 SQLite 读回 compact,启动时 body 被设为 `form-compact`,
+   而尺寸切换又因上一条失败 —— 于是精确复现"面板尺寸的窗口 + 紧凑条的内容"
+  (横向排列、竖排文字、横向滚动条)。
+
+此前排查全部落空的原因:排查第 1 步的 Node mock 里 `get_config` 返回的是**默认值**
+(panel),掩盖了数据库里的真实值;排查第 4 步验证的是 `Config::default()` 而非
+数据库实存值 —— 两步都测错了对象。
+
+修复内容(`app.js` / `styles.css`):
+
+- `new T.dpi.LogicalSize(...)` 改正命名空间,catch 里已有 console.error
+- 紧凑条 / 胶囊形态先 `setMinSize(null)` 再缩放(否则 46px 高度被
+  `minHeight: 120` 钳住);回面板时恢复 `setMinSize(320×120)`
+- 删除 `styles.css` 里 `body.form-pill{background:transition}` 非法声明
+- **数据库无需清理**:修复后持久化的 compact 会以正确的 380×46 渲染,
+  点标题栏按钮即可切回面板
+
+`build/cdp-probe.js` / `launch-debug.ps1` 保留,仍是排查 WebView2 运行时
+DOM 的有效工具。
+
+### 运行时验证才发现:还有第二层根因 —— ACL 权限集为空(2026-09-16 修复)
+
+上一轮的修复(命名空间 + minSize 顺序)是必要的,但**不充分**。真正让
+"窗口尺寸永不变化"的还有 Tauri 2 的 ACL:
+
+- 项目里**没有 `capabilities/` 目录**,`tauri.conf.json` 也没声明 capability,
+  构建后解析出的权限集是空 `{}`(见 `gen/schemas/capabilities.json`);
+- Tauri 2 默认不授予任何核心命令权限,前端 `appWindow.setSize` /
+  `setMinSize` / `setResizable` / `setAlwaysOnTop`(以及标题栏
+  `data-tauri-drag-region` 的 start-dragging)全部被 IPC 拒绝;
+- `applyForm` 的 `try/catch` 把拒绝异常静默吞掉 —— 现象与命名空间笔误
+  **完全一样**(DOM 切了、窗口没动),所以纯静态排查看不出区别;
+- 应用自己的 `#[tauri::command]`(`window_cmd` 等)**不受 ACL 约束**,
+  这也解释了为什么"部分窗口操作看起来是好的"。
+
+修复:新增 `app/src-tauri/capabilities/default.json`,授予 `core:default` +
+`core:window:allow-set-size` / `allow-set-min-size` / `allow-set-resizable` /
+`allow-set-always-on-top` / `allow-start-dragging`。
+
+**验证(新增 `build/verify-form.js`)**:通过 CDP 在真实窗口上调 `applyForm`,
+断言 body class 与真实窗口尺寸同步变化:
+
+```
+compact  body=form-compact tbar=none   window=380x47  expected=380x46   PASS
+pill     body=form-pill    tbar=none   window=200x47  expected=200x46   PASS
+panel    body=form-panel   tbar=flex   window=380x560 expected=380x560  PASS
+```
+
+(47 而非 46:dpr=1.25 下物理像素取整,±1 属正常。)
+
+教训记一笔:**"改完没在真实进程上跑过"的修复等于没修**。这一轮的形态切换、
+注册表同步都是实测通过后才写"已完成"。
+
+## 界面改版:固定尺寸 / 视觉对齐设计稿 / 设置与管理(2026-09-16)
+
+三条需求一次落地,全部做了运行时验证(截图见对话,断言在
+`build/verify-form.js`)。
+
+### 1. 所有形态固定尺寸,不能拖拽改变大小
+
+- `tauri.conf.json`:`resizable:false`、`maximizable:false`(挡掉 Win+↑ 吸附),
+  移除 minWidth/minHeight(尺寸由 JS 按形态设定,避免启动瞬间的旧约束打架)。
+- `applyForm` 里每次切换都 `setResizable(false)` 并设置 min=max=当前尺寸。
+- **机制的真相(实测)**:`setMinSize`/`setMaxSize` 调用了也成功返回,但
+  Windows 对**程序化** `SetWindowPos` 不套用 tracking 约束 —— 在控制台里
+  调 `setSize(500,600)` 窗口真的会变成 500×600。所以真正挡住用户拖拽的是
+  **窗口样式里没有 `WS_THICKFRAME`**(缩放边框)和 `WS_MAXIMIZEBOX`。
+  `build/win-style.ps1` 读 `GWL_STYLE` 做这条断言(实测 `0x14ca0000`,
+  两个位都不在)。min/max 保留作兜底,但别再把它当成固定尺寸的机制。
+- 拖标题栏移动窗口不变(`data-tauri-drag-region` 保留)。
+
+### 2. 视觉按原型稿对齐
+
+- 窗口改为 `transparent:true` + `shadow:false`:body 自己就是那张卡片,
+  面板圆角 12 / 紧凑条 10 / 胶囊 999 —— 圆角外是真透明,不再有窗口底色露角。
+- 紧凑条按设计稿做成 chip 条:底色 `--bg3`、只留「状态点 + 数值」、
+  金额舍掉小数位而百分比保留 `%`;**放不下的渠道收进 `+N` 徽标**
+  (`fitCompact()` 实测溢出后隐藏尾部,与设计稿的截断规则一致)。
+- 胶囊对齐设计稿:mark + 状态点 + 「OC 1.3%」单行,悬停显示完整渠道名。
+- 未配置任何密钥时不再铺一列灰行,改为居中的引导卡(钥匙图标 +
+  「去配置密钥」按钮,直接进管理页)。
+
+### 3. 「设置与管理」页:密钥与设置同页,和展示区分开
+
+- 原来设置是一个下压面板、密钥藏在每个渠道的展开区里 —— 两处分散,
+  且"管理密钥"入口实际是展开第一行,名不副实。
+- 现在是一个**独立视图**(`body.view-manage`):顶部「← 返回 / 设置与管理」,
+  内容依次为 密钥(每渠道:图标、名称、状态点、删除、输入框、保存)、
+  刷新、显示、阈值、启动。展示区不放任何设置项。
+- 行详情里不再放密钥输入,只留一句「密钥、刷新与阈值在『设置与管理』里配置」
+  的入口链接。
+- 入口:标题栏 ⚙、底栏「设置与管理」、空态引导按钮、行详情链接;
+  Esc / ← 返回关闭。
+  > 2026-10-20 更新:标题栏那一处已删除,入口收敛为底栏一处 —— 见本文件开头
+  > 「设置入口:两处 → 一处」。
+
+### 顺带修掉的真 bug:hasKey 字段名不匹配(界面一直误报"未配置")
+
+验证密钥保存回路时发现:写入假 key 后 `get_channels` 明明有数据(还发了
+请求,报"无余额信息"),但界面状态仍是"未配置"。
+
+根因:Rust 的 `ChannelView` 上有 `#[serde(rename_all = "camelCase")]`,
+JSON 字段是 **`hasKey`**,而前端 14 处全在读 `c.has_key` → 恒为 `undefined`
+→ `toneOf` 永远 "off"、汇总条永远为空、底栏永远"未配置渠道"、胶囊永远
+"未配置"。**界面从第一天起就没显示过真实状态**,只是空 key 状态下
+两者长得一样,所以没被发现。
+
+修复:前端统一改为 `c.hasKey`。教训:跨语言边界的字段名要有一处契约检查 ——
+这次是靠"保存后状态没变"这个反常现象才挖出来的。
+
+### 追加调整(2026-09-16,按用户反馈;第 3 条交互方案经用户确认)
+
+1. **OpenCode Go 按三个限额窗口展示**(用户确认的"三行窗口 + 迷你条"方案):
+   大数字仍是「最紧窗口的剩余%」,副标注点名是哪个窗口(`本月窗`);
+   下方 5 小时 / 本周 / 本月 三行,每行「标签 + 迷你条 + 剩余%」,
+   迷你条按阈值染色、`rate-limited` 的窗口整行标红。
+   配额型不再画顶部大条(三条迷你条已表达余量,避免重复)。
+2. **金额型渠道不再解释"充值余额 · 无限额"**:DeepSeek / Hapi 这类
+   没有分母的渠道,拿到多少就是可用多少,副标题与"可用"标签一律去掉;
+   4SAPI 的「额度 ¥500 / 剩 37%」保留 —— 那是真实存在的分母,不是说明文字。
+   (4SAPI 的兜底分支不带 total,此时同样不显示任何说明。)
+3. **紧凑条补齐形态切换入口**(用户确认的"两个图标按钮"方案):
+   条尾 ▲ 展开为面板、● 收成胶囊;两个方向都可见。
+   按钮占位后 chip 区变窄,`+N` 徽标会自动多收一个,属预期。
+
+验证(CDP 注入仿真数据后断言,全部 PASS):OC 窗口行数=3、大条已移除、
+副标注=最紧窗口名;金额型副标题/标签为空;▲ → 面板 380×560、
+● → 胶囊 200×47、按钮只在紧凑条出现。`verify-form.js` 全项回归通过。
+
+### 追加调整 2(2026-09-16,按用户反馈:胶囊的入口与内容)
+
+1. **胶囊里加可见的切换按钮**:之前胶囊只有"点哪都能展开"这个隐藏手势,
+   界面上看不到任何切换入口。现在胶囊右侧常驻 `▲`(展开为面板),
+   与紧凑条的 ▲ 语义一致;整块点击展开的行为保留。
+2. **胶囊显示哪些渠道可配置**:管理页新增「胶囊显示」一组多选芯片
+   (每个渠道一个),规则:
+   - 一个都不选 = 自动,显示**最紧张的一个**(原行为,默认值);
+   - 选 1 个 = 固定显示该渠道;
+   - 选多个 = 每 5 秒轮播一次,鼠标悬停**不**暂停。
+   悬停暂停本来做了,实测发现挂件上指针常停在胶囊附近,一停就像轮播坏了
+   (作者自己都被骗过一次),故去掉 —— 点击只是展开面板,内容变化无副作用。
+   提示气泡里会标"自动:最紧张的一个"或"2/3 轮播",便于确认当前处于哪种模式。
+3. **配置字段**:`Config.pill_channels: Vec<String>`(JSON `pillChannels`)。
+   `Config` 上有容器级 `serde(default)`,老库缺这个字段照样能读;新增两个
+   单元测试锁这条(共 **16 个测试**):`old_config_without_pill_channels_still_loads`、
+   `pill_channels_roundtrip`。
+
+验证(CDP 注入 + 真实数据两轮,全部 PASS):自动模式显示最紧渠道并标注;
+单选固定;多选在 12 秒窗口内覆盖全部已选渠道(4S/OC 交替,每 5 秒一个);
+选择器芯片数=渠道数、点击加入/再点移出会写回配置;`verify-form.js` 全项回归通过。
+
+> 备注:验证期间用户在应用里配好了真实密钥,胶囊与面板已在跑真实数据
+> (取数 → 渲染 → 状态色的完整链路),不再只是仿真数据。
+
+### 追加调整 3(2026-09-16,方案 A:申请制额度;方案经用户确认)
+
+**背景**:4SAPI 是"申请制"—— 定期申请一次把余额补到 ¥200,之后超过 2 周
+可以再申请(不是固定日历周期)。而原来的剩余百分比用的是接口给的
+**累计发放**(`total_granted`,只增不减):实测 ¥18.99 / ¥399.83 = "剩 5%",
+这个数只会越来越低,还被染成告警色 —— 分母本身就选错了。
+
+**用户确认的四个决策**:分母换成单次额度 ¥200;申请是"补到 200"(可用永远
+≤ 200,分母是常数);上次申请时间自动检测;只在界面上显示状态,不做系统通知。
+
+口径修正(申请制渠道):
+
+| 位置 | 之前 | 现在 |
+|---|---|---|
+| 副标题 | 额度 ¥399.83 | 本轮额度 ¥200 · 再等 6 天可申请 |
+| 大数字下方 | 剩 5%(分母=累计发放) | 剩 9%(分母=200) |
+| 进度条 | 4.7% 宽 | 9.5% 宽 |
+| 展开详情 | —— | 本轮额度 / 上次申请(含来源)/ 可再申请 / 日均消耗 / 预计可用 / 累计发放 |
+
+**自动检测申请时间**:每次轮询写快照前比对可用余额,跳升 ≥ ¥20 记为一次申请
+(`store.last_jump_since`,取最近一次,回溯 90 天与快照保留期对齐)。低于阈值
+的抖动不算 —— 接口金额有四舍五入,不设阈值会被误判。**手动修正优先**,除非
+检测到比"手动写入时刻"更晚的跳升(说明又申请了一次,自动值接管);这样
+"程序没运行期间申请的"也能被手动校准而不被自动值顶掉。
+
+**撑不到下次申请预警**:近 7 天日均消耗(数据覆盖不足 1 天不估算,样本太短
+斜率会离谱)→ 预计可用天数 < 距可申请天数时,行内黄字提示。
+
+**配置**:管理页新增「额度申请」一节(只列金额型渠道),每渠道一个开关,开启后
+展开 单次额度 / 最短间隔 / 上次申请日期,以及「记一次申请=今天」「清除手动值」。
+`Config.claim_channels: HashMap<String, ClaimConfig>`,容器级 `serde(default)`
+保证老库可读;4SAPI **默认开启**,其他渠道默认关。
+
+**测试**:26 个单元测试(新增 10 个)—— 倒计时与到点、手动/自动优先级、
+撑不到预警、未记录时的降级、快照跳升检测(含抖动不误判)、窗口消耗不依赖
+前置基线、老配置兼容;另有跨模块组装测试(快照跳升 → 自动识别为一次申请)。
+运行时断言(CDP):行内文案与分母、管理页只列金额型渠道、填日期后倒计时立即
+生效、清除后回到自动。
+
+### 追加调整 4(2026-09-17,官方图标;方案经用户确认选 A)
+
+OpenCode Go 与 DeepSeek 换成**官方标**,4SAPI / Hapi 仍是字母方块。
+
+| 文件 | 渠道 | 来源 | 体积 |
+|---|---|---|---|
+| `app/src/logos/opencode.svg` | OpenCode Go | https://opencode.ai/favicon.svg | 612 B |
+| `app/src/logos/deepseek.png` | DeepSeek | https://www.deepseek.com/favicon.ico(225×225 帧转 PNG) | 6.4 KB |
+
+- 方案 A(用户确认):官方标原样用,不再叠渠道色方块。OpenCode 的标自带
+  深色底(`#131010`,与界面底几乎同色)呈现为白色方框;DeepSeek 的鲸鱼是
+  品牌蓝 `#4d6bfe` 透明底,直接放在界面底色上 —— 与列表里 DeepSeek 的
+  主题色正好一致,所以**不要**再给方块,否则同色叠加会看不见。
+- 统一入口 `iconHtml(c, cls, off)`:列表行 / 密钥行 / 额度申请行 / 紧凑条
+  chip 都用它;`off`(未配置或取数失败)时字母方块变灰、官方标
+  `grayscale + 50% 透明`,两边语义一致。
+- 素材本地内嵌(前端 CSP 只允许 `'self'` 与 `data:`),出处与版权说明见
+  `app/src/logos/README.md`(指明性使用,版权归各自所有者)。
+- 验证:CDP 断言四个渠道的图标形态 + `naturalWidth > 0`(图真的加载成功,
+  404 时会静默变空白所以必须查这一条);面板行、管理页两处、紧凑条 4x 截图核对;
+  `verify-form.js` 全项回归通过。
+
+### 追加调整 5(2026-09-17,用户 7 条反馈)
+
+1. **OpenCode 大数字固定取「本月」窗剩余**(不再取最紧窗口):订阅按自然月结,
+   5 小时 / 本周的波动不该左右整行观感。三行窗口明细照旧全部展示。
+   副标题整行清空 —— 顺带去掉 `unstable` 的"未公开接口"前缀(内部实现细节,
+   用户不需要知道;静默降级的行为不变)。
+2. **字号整体 +1px**:渠道名 12→13、主数值 19→20、副标题/口径 10→11、
+   三格标签 10→11 与数值 11.5→12、三窗口 10→11 / 10.5→11.5、汇总 9.5→10.5、
+   底栏 10.5→11、管理页字段 11.5→12、胶囊 13→14、紧凑条 chip 11→12。
+   放大后行高增加,把行内边距收紧 2px 才让四个渠道仍在一屏内
+   (实测 listH 420 / contentH 414.65,不滚动);标题栏计数改短写法 `4/4`
+   (完整说明进 tooltip)并禁止换行,否则六个按钮 + 放大字号会把标题挤成两行。
+3. **贴边(吸附屏幕边缘)**:26×96 竖标签贴在当前显示器右边缘,按状态色渐变、
+   竖排文字显示最紧张渠道;**鼠标移入展开**成吸附前的形态(右边缘保持贴齐),
+   **移出 0.7 秒收回**;再点贴边按钮退出并恢复吸附前的尺寸与位置。
+   贴边期间强制置顶(否则鼠标移过去也看不见它);正在设置页里操作时不收回。
+   入口:标题栏 `⌷` 与胶囊上的 `⌷`。需要新增 `core:window:allow-set-position`。
+   两个坑:`set-position` 被 ACL 拒绝时和当初 setSize 一样只留一行 console 报错,
+   必须实测窗口坐标才发现;**收回定时器被 400ms 兜底轮询反复重置导致永不触发**
+   (改成"已在倒计时就不重置")。
+4. **全局置顶开关**:`Config.always_on_top`(默认开),Rust 新增 `set_pin`
+   作为唯一写入口 —— 窗口状态与配置一起改,不会出现"按钮亮了其实没置顶";
+   启动时按配置应用,前端启动读回真实窗口状态对齐 UI;折叠形态没有置顶按钮
+   也能受控。
+5. **置顶按钮选中态**:根因是图标用了 emoji 📌 —— emoji 自带颜色,CSS 的
+   `color` 对它无效,选中/未选中只差一个 12% 透明度的淡蓝底。换成
+   `currentColor` 的内联 SVG 图钉,选中态改**实心强调色**(蓝底白图标),
+   与设置页开关双向同步。
+6. **托盘左右键分工**:`show_menu_on_left_click(false)` —— 左键只切换显示/隐藏,
+   右键才出菜单(Tauri 在 Windows 上默认左键也弹菜单,所以此前体验是
+   "左键只会出菜单")。此项无法自动断言,需手动点一次确认。
+
+验证:26 个单元测试通过;CDP 断言(大数字=本月窗、字号、一屏容量、置顶三处状态
+一致且窗口状态真跟着变);真实鼠标(SetCursorPos,按 DPI 换算)驱动贴边的
+移入展开 / 移出收回 / 退出还原全通过;面板 / 紧凑条 / 胶囊 / 竖标签截图核对。
+
+> 测试期间踩到的工具坑:PowerShell 是 DPI 无关进程,`Cursor.Position` 用虚拟化
+> 坐标(2048×1152),按物理坐标给值会点到别处 —— 物理坐标要除以缩放(1.25)。
+
+### 追加调整 6(2026-09-17,贴边重做;方案经用户确认)
+
+去掉贴边按钮,改成**拖到屏幕边缘自动吸附**;吸附后只留一条 8×64 的**纯色竖条**
+(不显示任何数字),尽量少占屏幕;三种形态都支持。
+
+- **自动吸附**:拖动松手(停止移动 250ms)时,窗口竖直边贴齐或探出屏幕左/右边缘
+  即吸附到那一侧,左右都支持(左侧镜像圆角)。
+- **取消吸附**:把窗口从边缘拖走即可,不需要按钮。
+- **展开/收回**:鼠标移入竖条延迟 150ms 展开成吸附前的形态(8px 太窄,不加意图
+  延迟鼠标路过就会弹开),移出 0.7 秒收回;吸附期间强制置顶。
+- **三种形态都能拖**:紧凑条与胶囊整块加 `data-tauri-drag-region="deep"`
+  (里面的按钮不受影响 —— Tauri 的可点击元素会阻断拖拽);面板里列表显式设为
+  `false`,否则行点击会被拖拽吃掉。胶囊因此不再"点哪都能展开",展开只走 ▲。
+- **两个坑**:①"拖到边"不能只判恰恰贴齐 —— 真实拖动时窗口通常**探出屏幕外**
+  (实测松手时右边缘在屏幕外 215px),判定要写成"贴齐 `||` 探出",否则真实拖动
+  一根都吸不上;②自动吸附后竖条不上色(重写时漏了立即调用 `renderDock`,
+  要等下一次轮询才染色)。
+- **验证**:真实鼠标(SendInput 按下/移动/抬起)把面板与胶囊分别拖到右边缘 →
+  自动吸附成功;移入展开回到**吸附前的形态**(胶囊拖过去就展开成胶囊);
+  移出收回;拖离解除并留在松手位置;三种形态的拖动区属性断言全部通过。
+
+### 追加调整 7(2026-09-17,贴边折叠判定 + 自定义排序 + 隐藏未配置)
+
+**1. 贴边:光标还在展开窗口里就被折叠(修根因)**
+- 真正的原因不是"延迟太短",而是判定信号不可靠:窗口会周期性重绘(轮询 render
+  替换 DOM),之后若没有任何鼠标事件,**Chromium 不会重算 hover** ——
+  `body.matches(":hover")` 会稳定地报 false,于是"光标明明在窗口里"也被判成离开。
+  实测:光标停在窗口内,每秒采样 hover 为 true→false→false→false…
+- 修法:折叠**只认文档级 `mouseleave`**(真的离开窗口才触发),删掉基于 hover 的
+  兜底轮询与"连续两次"计数;同时不再监听竖条自身的 mouseleave(展开时它被隐藏,
+  浏览器会补发一次假事件)。
+- 延迟按用户要求 0.7s → **1s**。实测:窗口内停 6 秒(跨过一次轮询重绘)始终展开,
+  移出后约 1.4 秒收回。
+
+**2. 自定义排序**
+- 设置里「渠道排序」新增「自定义顺序」;`Config.channelOrder: Vec<String>`
+  (容器级 `serde(default)`,老配置可读)。
+- 管理页新增「渠道顺序」一节:每行渠道 + `▲` `▼`,改完立即保存并重排
+  (排序是前端算的,不需要重新取数)。未列入数组的渠道(如以后新增的)自动附在
+  末尾;首次调整时会把完整顺序落到数组里,之后不会因新增渠道而乱。
+- 按用户确认:**自定义模式下不做任何自动干预** —— 失败/未配置的渠道也按用户
+  排的位置显示。
+
+**3. 隐藏未配置密钥的渠道**
+- 展示区(面板列表、紧凑条)只显示已配置密钥的渠道;一个都没配时仍是引导卡。
+- 管理页(密钥 / 渠道顺序 / 额度申请)仍列出全部渠道 —— 那是配置面,
+  提前排顺序、提前配规则都有意义。
+
+> 复现时踩到的混淆点:管理页打开时按设计不自动收回,导致"窗口内不折叠"的
+> 断言在一轮里假阴性 —— 测试里要先 `closeManage()`。
+
+### 追加调整 8(2026-09-17,数值样式统一)
+
+问题:主数值 `¥18.99` 只有整数部分"有样式",小数位是 13px 灰字(原型稿的
+"强调整数"设计),看起来像半截数字没渲染好。按设计稿的对照页改成整体一套样式:
+
+- `.val .v i` 改为 `font-size/weight/color: inherit` —— 小数位与百分号跟整数
+  部分完全一致(实测两部分都是 20px / 600 / 同色)
+- 胶囊里的 `<i>`(百分号)同样 inherit
+- 紧凑条:百分比跟数字一致;**金额仍隐藏小数位**(紧凑条只有 46px 高,
+  宽度也紧张,这条保持不变)
+
+### 追加调整 9(2026-09-17,缺陷审查 14 处 + 四个新功能)
+
+**A. docs/report/bug-report-2026-09-17.html 的 14 处缺陷:逐条核验,全部处理**
+
+严重 3 处:
+1. `providers.rs` 4SAPI 的 valid 写成 `code.unwrap_or(true) || is_active.unwrap_or(true)`
+   —— 正常响应没有 `is_active`,右侧恒为 true,`code:false` 被吞掉当成功。改成
+   `code_ok && active_ok`,并补测试 `four_s_api_business_failure_is_invalid`。
+2. **CSS 层叠顺序**:`body.docked .xxx{display:none}` 与 `body.form-compact .list`
+   等等优先级相同(0-2-1),同优先级取后者 —— 从紧凑条/胶囊吸附时内容重新显示,
+   8px 窗口被 flex 一挤,竖条直接消失(只有从面板吸附正常)。把吸附态规则移到
+   样式表末尾。实测:三种形态吸附后竖条都稳定 8px。
+3. `fetch.rs` 消耗推算被 `result.valid` 连坐:取数失败时 day/week/month 一起置 None,
+   但那是本地快照推算、与网络无关。改为只看 `kind == Amount && remaining.is_some()`;
+   汇总条"N 个渠道"改为只数真正参与求和的渠道。
+
+中等 4 处:胶囊口径统一到本月窗;`renderDetail` 不再重置区间选择(记住 sparkHours);
+两个空开关(notify / collapse_on_blur)删除 —— 功能没实现,留着就是骗人;
+`key_hint` / `provider_meta` 前端从未调用,命令与注册一并删除。
+
+轻微 6 处:接口字符串进 innerHTML 前统一 `esc()` 转义;DeepSeek 缺字段不再冒充
+`¥0.00`(缺就不显示);`applyForm` 加形态白名单并顺手关掉管理页;
+删除三个必然抛错的陈旧 git 脚本(`build/git` 早已不存在);
+`probe-frontend.js` 的 mock 对齐 Tauri 2 API(`T.dpi.LogicalSize` + setMinSize 等,
+并让探针跑完自己退出);并发 cargo 打坏增量缓存那条记录在案。
+
+**B. 四个新功能**
+
+1. **OpenCode Go 三种形态都取本月窗**:此前只有面板用 `mainWindow()`,胶囊用的是
+   接口给的 `remaining`(最紧窗)。统一走 `remainRatio()` 后,面板/紧凑条/胶囊
+   的数字与状态色一致(实测:本月 96% vs 最紧窗 91%,三处都显示 96.0%)。
+2. **胶囊去掉软件图标、宽度自适应**:去掉 `.mark`,宽度用离屏 span 量文本后
+   取 132~240(变化小于 6px 不动窗口,避免数值抖动导致窗口跳)。实测 200 → **132**。
+3. **单 exe 交付(静态链接 WebView2 加载器)**:见下节。
+4. **托盘角标**:前端 canvas 画 32×32(外框图标同款造型 + 状态色角标),RGBA 交给
+   Rust 换成托盘图标,tooltip 放与胶囊完全相同的文字 —— 渠道选择、轮播位、
+   状态色都共用胶囊那一套逻辑(`PILL.list[PILL.idx]` + `toneOf`)。
+
+**C. 单 exe 是怎么做到的(重要)**
+
+- 机制:crate 里写的是 `#[link(name = "WebView2Loader.dll")]`,GNU ld 解析它时
+  **只找 `libWebView2Loader.dll.a`**。于是把 MSVC 的 `WebView2LoaderStatic.lib`
+  (10.5MB)与一个 MSVC CRT 垫片重打成同名归档,放进搜索路径。
+- 垫片(`build/webview2-static/msvc-shim.c` + `msvc-alias.S`)提供 MSVC CRT 里
+  gcc 没有的符号:`__security_cookie` / `__security_check_cookie`、线程安全魔法静态
+  三件套 `_Init_thread_header/footer/epoch`、`operator new/delete` 与 `std::nothrow`。
+  修饰名带 `?` `@`,GAS 要用带引号的符号名做汇编别名(`--defsym` 不接受这种名字)。
+- **关键坑**:ld 的候选后缀包含 `.lib`,所以只删 `WebView2Loader.dll` 不够 ——
+  导入库 `WebView2Loader.dll.lib` 会被优先命中,照样生成 DLL 依赖。两个都要删。
+  build.ps1 与 app/src-tauri/build.rs 各删一遍(前者每次构建都跑,后者让直接
+  `cargo build` 也正确)。
+- 验证:`objdump -p` 导入表里 WebView2Loader 计数 **0**;把 exe **单独**拷进空目录
+  启动,进程起来、WebView2 子进程 6 个、CDP 能读到正常渲染的 DOM(4 个渠道/13px 字号)。
+- 已知无害噪音:链接时 MSVC 对象的 `.drectve` 段会让 ld 报
+  `corrupt .drectve at end of def file`(MSVC 指令格式 ld 解析不了),不影响产物。
+
+### 追加调整 10(2026-09-17,缺陷报告复测遗留项收尾)
+
+报告复测结论是「10 处完全修复 / 4 处部分修复」,这里把 4 处遗留一次做完:
+
+1. **转义最后一处漏网**:`refresh()` 的 catch 分支原来直接拼 `${e}`,补上 `esc(e)`。
+   至此全仓 `innerHTML` 赋值点没有未转义的插值。
+2. **`Config.form` 的过时注释**:删掉 `edge` —— 贴边不是独立形态,而是三种形态
+   之上的吸附态,注释里写清楚了,免得下一个人去找一个不存在的形态。
+3. **`app/README.md` 同步**:结构图改为实际布局(`core/src/` 而非 `src-tauri/src/`,
+   补上 `capabilities/`、`logos/`、`fetch.rs`、`build/webview2-static/` 等);
+   「已知限制」里那句"开机自启尚未接系统 API"是反的,改为实际状态并补单 exe 说明。
+4. **构建并发锁**:`build.ps1` 在目标目录放 `.build-lock`,已有未过期的锁就直接报错退出
+   (2 小时以上视为陈旧锁并接管)。实测:手动放锁 → 构建被拒并给出提示;正常构建
+   结束后锁被释放。这条对应「并发 cargo 打坏增量缓存 → rustc 报 `no entry found for key`
+   / `os error 5`」那个看起来像编译器 bug 的坑。
+
+另外两处报告点出的隐患也一起处理了:
+
+- **汇总计数的语义陷阱**:原来用 `c[est ? "day" : "month"]` 拿"是否推算"这个布尔量
+  去选字段名 —— 今天恰好对,给今日/本周也加计数时就会读错字段。改成每个格子显式
+  带自己的 `field`,注释文案也一并声明。
+- **补回"密钥尾号确认"能力**:报告指出删掉 `key_hint` 让这个能力消失了。重新实现:
+  Rust 侧恢复命令(复用既有的 `secrets::masked()`,只回显尾 4 位),前端在管理页
+  密钥行异步补上 `已配置 · ••••aTNN`。存错 key 却以为是接口坏了,是最难排查的一类
+  问题,这个尾号值得显示。
+  (教训:改模板时 `renderKeyRows` 与 `renderClaimRows` 的 HTML 片段完全相同,
+  按字符串替换会插错函数 —— 第二次用行范围定位才改对。)
+
+### 追加调整 11(2026-09-17,安装包 + 自动更新)
+
+交付形态从"只有绿色单 exe"扩成**两种**:NSIS 安装包(推荐,支持自动更新)+ 绿色单 exe。
+设计文档 `DESIGN-INSTALLER-UPDATE.md`,发布流程 `RELEASE.md`,更新清单生成
+`build/make-latest-json.js`。
+
+- **安装包**:`installMode=currentUser`(装到 `%LOCALAPPDATA%\Programs\TokenScope`,
+  不需要管理员)、`embedBootstrapper`(内嵌 WebView2 引导程序,断网也能装)、简体中文界面。
+- **自动更新**:官方 `tauri-plugin-updater`;公钥在 `tauri.conf.json`,端点 =
+  `releases/latest/download/latest.json`;`createUpdaterArtifacts` 产出 `.sig`。
+  更新逻辑全在 Rust(前端是无打包器的静态页,拿不到 npm 包):`check_update` /
+  `install_update` / `skip_update_version` + `update-progress` 事件。
+  自动检查 24 小时一次且**失败也写时间戳**(防一次网络故障变成请求风暴);
+  手动「检查更新」不受节流;跳过某版本后手动也不再弹。
+- **两个卡死坑(都实测踩过)**:
+  1. **签名环节会等交互输入密码** —— 密钥未加密,但不设
+     `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 时 Tauri 会打印
+     "expect a prompt for password" 然后永久等待(日志停在那行、CPU 1.5 秒/25 分钟)。
+     连续两次打包都死在这里,第一次还误判成网络问题。显式给空密码即可。
+  2. 从**已断开的会话**启动打包同样会卡(父 shell 没了、子进程等管道)——
+     排查这类"打包不动"时先看 CPU 与文件时间戳,别只看进程还在。
+- **安全**:私钥在 `~/.tauri/tokenscope.key`(**仓库外**,已确认未入库);
+  发布物只含安装包 / `.sig` / `latest.json`;更新包带 minisign 签名校验;
+  私钥丢失 = 已装用户永久收不到更新,务必备份。
+- **发版实测**:安装包 4.34MB + `.sig` 420B + `latest.json` 717B 已上传 v0.1.0;
+  端点取回的 latest.json 与本地**逐字节一致**;公钥与 `~/.tauri/*.pub` 的 sha256 一致;
+  绿色 exe 打包后依然零 WebView2Loader 依赖。
+
+### 追加调整 12(2026-09-17,绿色 exe 下线 + 安装包实测)
+
+用户决定:**绿色单 exe 形态下线,只留 NSIS 安装包**。理由与设计文档一致 ——
+两条交付线 = 两套更新逻辑 + 双倍回归,而 per-user 安装本来就不需要管理员。
+绿色版已从 GitHub Release 撤下(代码里的静态加载器垫片**保留** —— 安装包里的那份
+exe 正是靠它做到零 DLL 依赖,去掉反而要往安装目录塞 WebView2Loader.dll)。
+
+**安装包实测(静默安装 `/S`,退出码 0)**:
+- 实际安装路径(当时还是 TokenScope;0.1.3 改名后为
+  **`%LOCALAPPDATA%\Grandettoken`** + `Grandettoken.exe`,历史记录保留):
+  不是 `Programs\TokenScope`,文档里原先写错了,已改。当时目录内容:`tokenscope.exe` 6.6MB + `uninstall.exe` 77KB。
+- **没有 `WebView2Loader.dll`** ✓ —— 静态链接在安装版布局里依然成立。
+- 注册表卸载项 ✓(DisplayName/DisplayVersion/InstallLocation/UninstallString 齐全)、
+  开始菜单快捷方式 ✓(`Start Menu\Programs\TokenScope.lnk`)。
+- 启动安装版:界面正常渲染(4 个渠道、4/4 已配置)✓,**数据完全继承** ——
+  四个渠道的密钥都在(与开发版共用 `%APPDATA%` 数据库 + Windows 凭据管理器),
+  印证了"升级/重装不丢数据"。
+- **自动更新链路端到端验证** ✓:在安装版里调 `check_update(force=true)`,它真的去拉了
+  `releases/latest/download/latest.json` 并返回
+  `{"current":"0.1.0","available":false,"checkedNow":true,"error":null}` ——
+  端点可达、清单可解析、签名校验无报错(版本相同,判断正确)。
+
+### 验证工具(本轮新增/扩展)
+
+- `build/verify-form.js`:三形态切换 + `resizable` + Win32 样式位(固定尺寸)。
+- `build/win-style.ps1`:读运行中窗口的 `GWL_STYLE`(ASCII-only)。
+- 现场注入仿真数据(`CHANNELS = [...]; render()`)后用 CDP
+  `Page.captureScreenshot` 出 2x 截图 —— 不需要真 key 就能逐形态检查渲染。
+
+## 开机自启(2026-09-16 新增)
+
+设计约束:绿色单文件 exe、无管理员权限。
+
+- Rust 命令 `set_autostart`:winreg 写 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`,
+  值为 `"当前exe完整路径" --hidden`
+- **每次启动 setup 里按 `current_exe()` 重写注册表** —— exe 被移动位置后自启
+  依然指向新位置,无需重新设置;配置关闭时删除该键
+- `--hidden` 参数:开机自启直接进托盘不弹窗。窗口配置改为 `visible: false`,
+  由 setup 统一控制显隐(正常启动立即 show)
+- 前端开关(`bindSwitch` 增加 onChange 回调):注册表写失败会回滚开关与配置,
+  不让界面显示与系统实际状态不一致
+- **实测(2026-09-16)**:
+  - 写路径:调用 `set_autostart(true)` 后注册表键值确为
+    `"G:\...\target\release\tokenscope.exe" --hidden`(引号 + 隐藏参数正确);
+  - 启动同步:重启应用后因配置为关,该键被 setup 里的同步逻辑自动删除 ——
+    "配置为准"的行为符合设计。
+
+## 进行中:单 exe 的最后一个阻塞 —— WebView2Loader.dll
+
+### 现象与误判
+
+把 `tokenscope.exe` 单独拷进空目录启动,弹系统错误对话框:
+`由于找不到 WebView2Loader.dll,无法继续执行代码`。
+**教训**:首次测试时 `Start-Process` 报告 "RUNNING" 是假象 —— 进程卡在
+错误对话框上没退出,被当成了启动成功。判断 GUI 程序是否真的起来,
+必须看窗口/日志,不能只看进程存活。
+
+### 根因(已定位到源码行)
+
+`webview2-com-sys 0.38.2` 的 `src/lib.rs`:
+
+```rust
+#[cfg_attr(target_env = "msvc",
+    link(name = "WebView2LoaderStatic", kind = "static"))]
+#[cfg_attr(not(target_env = "msvc"),
+    link(name = "WebView2Loader.dll"))]
+```
+
+MSVC 工具链静态链接加载器;**GNU 工具链(Free 约束下的选择)动态导入**。
+Tauri dev 运行时把 160 KB 的 `WebView2Loader.dll` 放在 exe 旁边所以一直没暴露。
+objdump 确认 exe 导入表:`KERNEL32 / advapi32 / ws2_32` 等全是系统 DLL,
+唯一非系统项就是 `WebView2Loader.dll`。WebView2 Runtime 自带这个 DLL,
+但不在标准搜索路径上,救不了加载期导入。
+
+### 实验:强行静态链接(GNU ld + WebView2LoaderStatic.lib)
+
+用 rustc 最小程序直接链 MSVC 格式的静态库 —— **失败**,未定义符号共 20 种
+(59 KB 报错去重统计):
+
+| 符号 | 次数 | 性质 | 可解性 |
+|---|---|---|---|
+| `__security_cookie` / `__security_check_cookie` | 43+21 | MSVC /GS 栈保护 | 可垫(shim 全局 + no-op 校验) |
+| `_Init_thread_header/_footer/_epoch` | 7×3 | MSVC 魔法静态初始化线程同步 | **危险**:语义与编译器紧耦合,垫错有并发隐患 |
+| `__imp_RegOpenKeyExW` 等 advapi32/ole32 | 11 | 常规 API 导入 | 易:补 `-ladvapi32 -lole32` |
+| `??2@`/`??3@`/`??_U@`/`??_V@`/`std::nothrow` | 5 | MSVC C++ ABI 的 operator new/delete | 可用 asm 别名垫到 malloc/free,但已在补 ABI 缝隙 |
+
+### 三个方案(待定夺)
+
+| 方案 | 单 exe? | 风险 | 备注 |
+|---|---|---|---|
+| **A. exe + DLL 双文件** | ✗(2 文件) | 零 | Tauri 对 GNU 的官方行为;DLL 仅 160 KB、微软允许再分发;依旧免安装绿色,可打成 zip |
+| B. 换 MSVC 工具链 | ✓ | 无(官方路径) | 需管理员权限装 VS Build Tools,**本机装不了**(Free 约束的由来) |
+| C. 符号垫片强行静态链接 | ✓ | 中高 | 上表 20 个符号可垫齐,但 `_Init_thread_*` 并发语义最难对齐;WebView2Loader 内部是 MSVC C++,公共 API 是 C 边界,理论上自洽,需充分回归 |
+
+**推荐 A**:交付 `tokenscope.exe + WebView2Loader.dll`(或 zip 打包),
+把工程资源留给产品本身;将来若能上 MSVC 工具链,自然升级成真单文件。
+
+### 顺带的验证结论(不受阻塞影响)
+
+- exe 体积 **5.24 MB**,VersionInfo 正确(TokenScope 0.1.0)
+- 导入表其余全是系统 DLL(api-ms-win-* 是 UCRT),无其他第三方依赖
+- SQLite / native-tls / keyring 均静态编入,单 exe 约束只差这一个加载器
+
+---
+
+## 环境与构建
+
+**仓库已迁到纯英文路径 `G:\game\nw\Grandettoken`**,不再镜像、不再重定向
+CARGO_TARGET_DIR:构建直接在仓库里跑,产物落在 `app/src-tauri/target`。
+本机**无管理员权限**,工具链装在用户目录:
+
+| 组件 | 路径 |
+|---|---|
+| Rust GNU 工具链 | `%USERPROFILE%\.cargo\bin`(rustc 1.98.1) |
+| MinGW-w64 14.2.0 | `%USERPROFILE%\mingw64`(GNU 工具链自身也要求 ASCII 路径,故不进仓库) |
+| git | 系统安装的 2.55.0.windows.3(`build/git` 便携版已不存在,无需再装) |
+| 构建产物 | `app/src-tauri/target`(仓库内,已被 .gitignore 覆盖) |
+
+> 迁移时把旧的重定向 target 缓存(1.9 GB)搬进了 `app/src-tauri/target`
+> 复用,依赖产物大多命中;`%USERPROFILE%\tokenscope-build` 镜像与
+> `%USERPROFILE%\.cargo\target` 已删除,用户目录不再有本项目文件。
+
+```powershell
+.\build\install-toolchain.ps1   # 一次性:Rust + MinGW(约 250MB 下载)
+.\build\install-git.ps1         # 一次性:PortableGit
+.\build\build.ps1 test          # 跑单元测试(只链接 core,秒级)
+.\build\build.ps1 check         # 检查 Tauri 侧编译
+.\build\build.ps1 build         # 出 release 二进制(约 8 分钟)
+```
+
+### 已知构建坑
+
+- **构建前先退出正在运行的应用**。否则链接器写 `target/release/tokenscope.exe`
+  时被占用,报 `另一个程序正在使用此文件 (os error 32)`,错误信息落在
+  build script 输出里,不看完整日志容易误判成编译错误。
+- **仓库路径必须保持纯 ASCII**(历史坑,现由 build.ps1 快速失败兜底):
+  GNU binutils 打不开非 ASCII 路径的输入文件 —— ld 读不了 .o/.rlib,
+  windres 打不开 icon.ico(路径显示为 GBK 乱码,`can't open icon file`)。
+  早前仓库在中文路径下时,试过 target 重定向 + robocopy 镜像 + junction
+  (junction 会被 Rust `canonicalize()` 看穿,无效),最终靠镜像绕过。
+  现在仓库已是 ASCII 路径,镜像逻辑已删除;若将来路径又含中文,
+  build.ps1 会直接报错而不是产出难懂的链接错误。
+- **不要把 cargo target 缓存直接搬到新路径复用**(本轮踩坑):
+  cargo 的新鲜度指纹不包含 target 目录位置,搬过来的 build script
+  `output` 里缓存的 `DEP_*` 绝对路径仍指向旧目录,表现为
+  `tauri` 读权限文件时 `os error 3` 失败,或最终链接找不到
+  webview2 / sqlite 的 link-search。受影响包(实测):
+  `tauri` / `tauri-plugin-opener` / `webview2-com-sys` / `libsqlite3-sys`
+  (其中 `windows_x86_64_gnu` 的路径指向 registry,稳定,无需处理)。
+  修法:`cargo clean -p <包> --release` 后重编即可,不必全量 clean。
+- **`crate-type` 不能带 `cdylib`**。Tauri 模板默认 `["staticlib","cdylib","rlib"]`
+  是为移动端,但 Windows GNU 工具链下 cdylib 会导出全部符号,依赖树规模超过
+  DLL 导出序号上限,报 `export ordinal too large: 127822`。桌面端已改为 `["rlib"]`。
+- **PowerShell 脚本必须纯 ASCII**。本机 PowerShell 按 GBK 读 `.ps1`,
+  UTF-8 中文注释会变乱码并破坏字符串解析。所有 `build/*.ps1` 因此只写英文。
+- **`.ps1` 里不要用 `->`、`$var` 嵌套转义**,容易触发解析错误,复杂逻辑写成脚本文件跑。
+- **下载慢时走代理** `http://127.0.0.1:7897`(用户提供),实测比直连快约 5 倍
+  (14 MB/min vs 2.9 MB/min)。**仅在下载依赖时需要,应用运行时不需要。**
+
+---
+
+## Git
+
+- 仓库:`git@github.com:wacilimonster-source/Grandettoken.git`
+- 首次推送已成功(commit `272e791`),33 个文件
+- 推送时用的是 HTTPS + 临时 token,已确认 **token 未写入 `.git/config`、未落在任何文件**;
+  `origin` 仍保持用户指定的 SSH 地址
+- 已验证 `.git/config` 无凭据;全盘扫描 33 个文本文件,token 出现 0 次
+
+> ⚠️ **安全提醒**:用于推送的 PAT 曾以明文出现在对话里,建议到
+> https://github.com/settings/tokens 撤销并重新签发。它当前是 fine-grained token,
+> 需要 `Contents: Read and write` 权限才能推送。
+
+---
+
+---
+
+## 4SAPI 可用模型查询 + 一键配置到客户端(2026-10-12,v0.1.20 发布)
+
+设计稿 [`docs/design/design-4sapi-models.html`](docs/design/design-4sapi-models.html),已实现口径见 `DESIGN.md` 第 12 节。
+这里记取证过程、踩坑与实测结果。
+
+### 取证(全部可复核)
+
+**4SAPI 侧**(真接口,经代理 127.0.0.1:7897):
+
+| 端点 | 实测 |
+|---|---|
+| `GET /api/pricing` | 200 · 103 588 B · **160 个模型** · 无需密钥 · 含 `group_ratio`/`usable_group`/`vendors`/`pricing_version` |
+| `GET /api/status` | `quota_per_unit=500000`、`quota_display_type=CNY`、`display_in_currency=true` |
+| `GET /v1/models` | 无 key → 401 `{"error":{"message":"Invalid token",…,"type":"new_api_error"}}` → 标准 OpenAI 兼容层 |
+| `GET /api/user/self` | 无 key → 401(另一套错误体,`AUTH_UNAUTHORIZED`) |
+
+**单价公式**不是猜的:从站点 pricing 页的 JS bundle(`index.076be96f81.js`)里抠出原文
+`let e = 2 * t.model_ratio * d;` + `补全价格 = 2 * model_ratio * completion_ratio * 分组倍率`,
+配合 `quota_per_unit=500000`(与挂件 4SAPI 渠道的「500000 积分 = ¥1」同一个数)确定口径为
+**元/百万 token**。34 个模型是 `billing_expr` 阶梯计价(只标徽标,不给确定价),12 个按次计费。
+
+**四个客户端的落点**(本机真文件;密钥字段只记长度):
+
+| 客户端 | 落点 | 关键字段 |
+|---|---|---|
+| Trae CN / SOLO CN | `%APPDATA%\<安装>\User\globalStorage\state.vscdb` 的 `ItemTable` | 两条 `*model_list_map` + `*recent_user_selection_by_agent_label` |
+| WorkBuddy | `~/.workbuddy/models.json` + `settings.json` 的 `model` | 条目 12 字段,`apiKey` 明文;BOM + 2 空格 |
+| WorkBuddy AI | `~/.workbuddy-ai/models.json`(当前是 `[]`) | 同结构;`settings.json` 里还没有 `model` 键 |
+| ZCode | `~/.zcode/v2/config.json` + `provider_config.json` | provider 定义 + `providerRules`/`providerModelRules`(`schemaVersion:1`) |
+
+**Trae 的 modelId 口径用三个真样本破译**(单测里对着样本回归):
+
+```text
+内置:   solo_agent_lite_1__DeepSeek-V4-Flash-Official_null
+自定义: solo_agent_3_custom_openai_compatible_custom_openai_compatible//claude-sonnet-5_2607458050
+→ <agentLabel>_<config_source>_<provider>_<name>_<custom_model_id 或 null>
+```
+
+中段就是条目里的 `config_source`(内置=1、自定义=3)。顺手证伪了一个猜测:`custom_model_id`
+**不是**模型名的哈希 —— crc32 / fnv1a32 / djb2 / java-hash / adler32 全试过,都不等于现成样本
+`2607458050`(它是应用自己分配的号,所以新条目按"比现有最大值大且不冲突"生成)。
+
+**WorkBuddy 的 `custom-local:` 前缀**来自服务端特性开关:在 `app.asar` 里找到
+`const shouldPrefixId = !!ctx.current.productFeatures?.[ProductFeature.CustomModelIdPrefix];`,
+而它同时给模型加了 `aliases: [原 id]`。既然是开关决定的,就只能**现读现学**(见 `learn_prefix`):
+当前选中值带前缀 → 照此写;是裸 id 且命中我们写的条目 → 不加前缀;是内置模型 → 学不到就不写。
+
+### 踩坑
+
+1. **`json!` 的递归上限**:Trae 的自定义模型条目是 40 个字段的字面量,`json_internal!` 每键展开一层,
+   撞上默认 128 的 recursion limit → `core/src/lib.rs` 加 `#![recursion_limit = "256"]`。
+2. **`split_at(len - 1)` 在中文 tag 上 panic**:`"多模态"` 的最后一个字符占 3 字节,按字节切会落在字符中间。
+   改成先按字节判(末尾必须是 ASCII、前面全是 ASCII 数字)再切片,并顺手把 `2K/4K`(分辨率)排除在
+   上下文标签之外。
+3. **`clip.exe` 要 UTF-16LE**:按控制台代码页解释字节流,中文标签走 UTF-8 会被切坏;
+   密钥经 stdin 送,不进命令行(进程命令行对其它程序可见)。
+4. **测试读回带 BOM 的文件不能用 `from_str`**:我们写 WorkBuddy 的文件时照原样保留 BOM(原文件有),
+   而 `serde_json::from_str` 不吃 BOM —— 测试统一走 `read_json`(它会剥)。
+5. **`set_config` 会抹掉后端学到的 `selection_prefix`**:前端手里那份是旧快照,整份覆盖等于清空。
+   与 `skipped_version` / `win_x` 同一类坑,已加合并(后端已知的键以库里为准)。
+6. **`tasklist` 的判定不能看提示文案**:中文系统的"没有运行的任务…"与英文不同;
+   改成按 CSV 首列(进程名整串、忽略大小写)比对。两个 WorkBuddy 共用 `WorkBuddy.exe`,
+   分不清跑的是哪一个 → 只要有一个在跑,两个都判为"正在运行"(保守方向)。
+7. **`serde_json` 要开 `preserve_order`**:默认 `BTreeMap` 会把写回客户端配置的键序按字母重排,
+   等于把我们没打算动的部分也"改"了一遍。`indexmap 2.14.2` 已在锁文件里,离线可用。
+8. **`rustup default` 变成了 msvc,release 链接直接炸**(2026-10-12 本轮实测):
+   ```
+   liblibsqlite3_sys-*.rlib(...sqlite3.o) : error LNK2019: 无法解析的外部符号 ___chkstk_ms
+   G:\...\target\release\deps\tokenscope.exe : fatal error LNK1120: 1 个无法解析的外部命令
+   ```
+   `LNK2019/LNK1120` 是 **MSVC 链接器**的报错格式,而 `___chkstk_ms` 是 MinGW 运行库符号 ——
+   就是说:sqlite3.o 是 MinGW gcc 编的,最后却交给 MSVC 的 `link.exe` 去链。
+   根因是 `rustup default` 指向了 `stable-x86_64-pc-windows-msvc`(本机两套工具链都装着,
+   gnu 那套是历史默认;别的项目把默认改掉了)。**本项目只能走 GNU**(见 README 的
+   WebView2Loader 静态链接那段)。修法二选一,都不用动全局配置:
+   ```powershell
+   cargo +stable-x86_64-pc-windows-gnu build --release   # 单次指定
+   rustup default stable-x86_64-pc-windows-gnu           # 或把默认改回来
+   ```
+   注意 `build/build.ps1` 只设 PATH/CC/CXX,**不指定工具链** —— 它默认 `rustup default` 是 gnu。
+   本机默认被改掉之后,`build.ps1 build` 会以同样的方式失败。
+9. **非 async 的 Tauri 命令跑在主线程上 —— 一次卡住,整个挂件不响应**(本轮最贵的一课):
+   模型页的命令一开始全写成普通 `fn`,里面却在起 `tasklist` 探进程、读客户端配置、读凭据管理器。
+   真机现象:点了一次「写入预告」之后,界面<b>所有</b>新命令都不再返回(连 `inject_state` 也超时),
+   而且 WorkBuddy 渠道那一行从面板上消失了 —— 因为它的会话读取(`wb_session_of`)要回主线程取
+   Cookie,主线程被占住就直接超时,渠道退化成"没有凭据"。
+   排查路径也值得记:后端 <code>get_model_catalog</code> 单独调用 9 秒内就返回了,
+   价目表/可用集合都是真的,而界面停在「正在取…」——**"后端成功 + 前端抛异常"与"请求还没回来"
+   在截图上完全一样**。后来拿 CDP 直接 evaluate `renderModels()` 才看到 `timeAgo is not defined`
+   (前端改名了但没同步调用点),再往后是三个命令依次超时,才定位到主线程被占。
+   修法两条:命令改 `async fn` + 把阻塞段放进 `tokio::task::spawn_blocking`;`tasklist` 加 5 秒超时
+   (超时就杀掉并退化为"未运行")。这跟取数路径早就写下的那条教训是同一条
+   —— 文件 IO / keygen RPC / 进程探测都不是主线程该干的活。
+
+### 单测
+
+`cargo test`(core)= **91 passed**。本轮新增 65 个,覆盖:
+
+- 价目表解析(缺字段 / 脏数字 NaN / 阶梯 / 按次 / 中文 tag 不 panic / 图像分辨率不算上下文)
+- 单价换算(站点公式对拍、分组回退并标明、分组表缺失时不给价)
+- 可用集合 join(`usable: null` 与 `false` 是两种状态)
+- 缓存往返与入口域名优先级(只认"密钥被接受过"的域名)
+- 四客户端写入:幂等不重复、撞名更新且保留用户起的名字、BOM 保留、结构不认就拒写、
+  ZCode 复用同一个 provider、`deletedModels` 解禁、Trae 每个 agent 组各一条、
+  备份 → 校验 → 回滚逐字节一致、备份只留 5 份、台账只留 20 条
+- Trae modelId 口径对着**两个真样本**回归;`custom_model_id` 不冲突
+- 目标在跑 → 拒写(硬规矩进单测,不只写在文档里)
+
+### 发版(v0.1.20)
+
+- 两处版本号同步(`app/src-tauri/Cargo.toml` + `tauri.conf.json`)= 0.1.20;
+  `build/make-latest-json.js` 断言通过,`latest.json` 的 url 指向
+  `releases/download/v0.1.20/Grandettoken_0.1.20_x64-setup.exe`。
+- `build/build.ps1 bundle`(签名私钥 + **显式空密码**从 bash export,踩坑见 RELEASE.md)→
+  安装包 4.60 MB + `.sig` 424 B;构建脚本尾部自带断言 `import table clean (no WebView2Loader.dll)` 通过。
+- **`build.ps1` 本轮加了一行 `RUSTUP_TOOLCHAIN`**:把工具链钉死成
+  `stable-x86_64-pc-windows-gnu`。原因是本机 `rustup default` 已被别的项目改成 msvc,
+  不钉的话 `bundle` / `build` 会以 `LNK2019 ___chkstk_ms` 失败(见踩坑 8)。
+
+### v0.1.21(2026-10-12,发布 0.1.20 之后紧接着的一处口径收紧)
+
+用户看过 0.1.20 的模型页之后提的要求:"只看模型里只看当前密钥可用的和已配置的,不需要看全部的"。
+
+- 默认过滤从「128 个编码/对话模型」收成 **可用 ∪ 已配置 = 20 个**(实测:可用 18 + 已配置 3,去重后 20),
+  两个芯片变成「只看能用上的」「只看编码/对话」,都默认开。
+- **并集而不是交集**:`gpt-5.6-luna` / `gpt-5.6-sol` 是早先配进 Trae 的,但不在当前这把密钥的分组里 ——
+  交集会把它们藏掉,而"当初配了、现在用不了"恰恰是最该看见的。它们现在带着「当前 key 不可用」和
+  「价按「gpt-官方」分组」两个徽标留在列表里(真机截图确认)。
+- 可用集合没取到(`usableAt == 0`,比如没配密钥)时**不做这层过滤**,只在口径行标「未配密钥 / 可用集合没取到」,
+  空态里直接给两句人话(去填密钥 / 点掉芯片看全部价目表)。
+- 试跑时把 `modelShowAll` 点成了 `true`(页面里那份活配置与 `get_config` 返回的副本不是同一个对象,
+  第一次复位没生效 —— `set_config` 落库成功了,但页面内存里仍是旧值,要改**页面里那个 `CFG`** 才立刻生效)。
+  已复位为 `false`,真机复查:芯片两个都亮、口径行 `显示 20 / 160 · 可用 18 · 已配置 3`、行数 20。
+
+### v0.1.22(2026-10-12,取消写入)
+
+用户口径(澄清后):"需要支持把模型配置写入 trae workbuddy workbuddyai zcode,或者从其中删除。
+不需要支持 codex 和 opencode。"即目标还是那四个,要的是写入的逆操作。
+
+- 先问后做:机器上没有字面叫 "agent" 的东西,而 `codex.exe` / `OpenCode.exe` 都在跑、
+  OpenCode 里还躺着一份被 `disabled_providers` 停用的手配 4sapi provider —— 差点就往那两个方向做了。
+  问清之后确认"agent"指的是这四个客户端里的删除动作。**这次的教训:名词对不上就先问,别猜着写契约。**
+- 实现:`inject::remove()` + 各客户端 `remove_*_site()`,与写入共用同一套规矩
+  (目标没运行 / 先备份 / 只动我们的条目 / 读回校验,不过就回滚)。
+  WorkBuddy 类删条目 + 选中项指向它时删 `model` 键;ZCode 删模型、摘 personalModelIds/modelOrder,
+  最后一个模型时连 provider 与 providerRule 一起收;Trae 每个 agent 组各删一条 + 摘指向它的选中项。
+- 幂等:本来就没有 → 不写盘、不建备份目录,回执「本来就没有」。单测里连这一点都断言了
+  (包括 `backup` 为空)。
+- 新增 4 个单测(95 passed):删条目+清选中、选中项属于别家时不乱清、ZCode 删到最后收 provider、
+  Trae 跨组删+摘选中+幂等。
+- 预告新增 `configured` / `removal` 两个字段,界面据此渲染「当前状态:已配置」与「取消写入」按钮。
+  真机只读实测(未点删除):Trae CN 报 17 条(17 个 agent 组)且选中项正指向它,SOLO CN 报 17 条但未指向它。
+
+### v0.1.23(2026-10-13,闪窗修复 + 界面去分组 + 过滤规则钉死)
+
+用户实测三条反馈,一次做完:
+
+1. **"打开模型功能时,会弹出多个命令行窗口闪过后关闭"** —— 真 bug,而且是这一版新引入的:
+   探「客户端在不在运行」走的是 `tasklist`,它是控制台程序,而挂件是 GUI 子系统进程 ——
+   Windows 默认会给每个子进程配一个新的控制台窗口。打开模型页要探 4 次(两个 WorkBuddy 共用
+   `WorkBuddy.exe`,名字不同但同一个进程名也算两次),所以是"好几个黑框闪过"。
+   修法:所有自起的子进程加 `CREATE_NO_WINDOW`(`0x0800_0000`,`tasklist` 与 `clip.exe` 都加),
+   并把同名进程探测**去重**(一轮最多 3 次)。修完真机复查:客户端在跑/不在跑的判定与修复前一致。
+   教训一句话:**GUI 程序起任何子进程都要显式关掉控制台窗口**,默认行为就是弹窗。
+2. **"模型里不要列出来分组"** —— 删掉分组下拉、分组说明行、每行的「N 个分组可用」与「价按 X 分组」徽标;
+   口径行只留「单价按站点自动分组折算」。**不可用那几行不再显示单价**(它的价不属于这把 key 的分组,
+   要显示就得写清分组名,而那正是要拿掉的东西)。
+3. **"不要列出来不可用的 / 不能用但配置在 trae wb zcode 里的要显示、能删、删没了就不可见"** ——
+   规则从"默认开、可点掉的芯片"改成**固定规则**:列表 = 可用 ∪ 已配置(第 2、3 条一起看,
+   并集是必须的:只有看得见才删得掉)。取不到可用集合时**只列已配置的**并在口径行说明原因;
+   删掉配置后该行不再满足规则,下一次刷新自然消失。
+
+真机复查(2026-10-13):芯片只剩「只看编码/对话」/ 分组下拉不存在 / 口径行两行 /
+20 行(18 可用 + 2 已配置,后两行带「不可用」徽标且**无单价行**)。
+
+### v0.1.24(2026-10-13,修「展开又折叠后留残影」)
+
+用户报:"opencodego 在展开又折叠以后会有显示问题"(附截图:展开过的那一行底部露出一条被切断的按钮)。
+
+- **根因**:行展开/折叠用的是 `grid-template-rows: 0fr ↔ 1fr` 的真高度过渡(动效 C)。而 `.rbody-in`
+  自带上下内边距(4px + 13px = 17px)—— **内边距压不掉**,所以 `0fr` 的轨道最小只能收到 17px:
+  折叠后那一行比"从没展开过"高 17px,并在底部露出 17px 被切断的内容(OpenCode Go 上就是那排
+  区间按钮的上半截)。没展开过的行没有 `.rbody-in` 子节点,所以不受影响 —— 这也解释了为什么
+  "只有展开过再折叠才看得见"。
+- **排查过程**:先按 flex 收缩想过(`.list>.row{flex:none}`,排除)、又试过 `box-sizing:border-box`
+  (全局 `*` 已经是 border-box,无效),最后用 CDP 在真机上量 `getComputedStyle(rb).gridTemplateRows`
+  才定位:折叠态是 `17px` 而不是 `0px`。**测量优于推测**:候选修法也是在真机上注入 CSS 现测的
+  (候选 D「折叠给容器 height:0」量出来轨道仍是 17px,直接淘汰)。
+- **修法**:`.row:not(.open) .rbody-in{padding-top:0;padding-bottom:0}` + 给 `padding` 加
+  `transition`(折叠时内边距一起收,不跳);左右内边距保留(不影响高度,负责对齐)。
+- **真机复验**(0.1.24 二进制):折叠后行高 **128**(= 从未展开时的一致值)、轨道 **0px**;
+  展开 **170.208px**、再展开与「折叠 → 轮询重建 → 再展开」都正常;DeepSeek 同序列 188px 正常。
+- 教训一句话:**`0fr/1fr` 这种真高度过渡,容器里任何"压不掉的尺寸"(内边距、边框、最小高度)
+  都会成为收不干净的残留** —— 收的时候把它们也归零。
+- 另记一条流程教训:这次验证绕了弯路 —— `cargo tauri build` 会把产物改名成 `Grandettoken.exe`,
+  而 `cargo build` 产出的是 `tokenscope.exe`;`launch-debug.ps1` 按"最新时间"选二进制,
+  我手动写死了旧路径,导致**对着陈旧二进制量了两轮,差点误判修复无效**。
+  验证前先确认在跑的那个进程的 `Path` 与构建时间。
+
+### v0.1.25(2026-10-13,模型页多来源 + 弹层 + 价格降序)
+
+用户四条要求一次做完(1A–7A):Hapi 与 OpenCode Go 也能看/配模型;写入确认从列表底部改成弹层;按价格从高到低排。
+
+- **多来源**:`models.rs` 新增 `SourceDef`/`source_hosts()`/`source_of_url()`/`fetch_source_ids()`/`rows_from_ids()`;
+  `ModelCache` 增加 `sources` 分桶(id-only 来源用),4SAPI 的价目表字段原样保留(不回归)。
+  `inject.rs` 全面按来源判定:WB 条目看 `url` 属于哪个来源、ZCode 每来源一个 provider、Trae 删条目要求
+  `base_url` 也属于该来源(否则删 Hapi 那条会把 4SAPI 同名那条一起删掉)。
+- **真机实测**:Hapi 用这把密钥真取到 **14 个模型**(`gpt-6-luna` / `gpt-5.5` / `gpt-5.6-*` / `gpt-image-2.5-*`);
+  Go 38 个(公开);4SAPI 18 行可用,首行 ¥10.00、末行 ¥1.00 —— 价格降序成立。
+- **顺手消掉待验项**:设计稿第八节第 1 条(Hapi `/v1/models` 认不认这把 key)——**认**,14 个。
+  第 2 条(价目接口认不认 API key)按 7A 留到 P4。
+- **弹层**:`#mdlSheet`(列表末尾)→ `#mdlOv` 覆盖层;写入预告/取消写入/结果/客户端详情四态都在里面,
+  按钮固定底部、内容自己滚、Esc 关闭。前两轮"点了没反应"的观感问题(其实是渲染在列表底部看不见)就此消失。
+- 仍未真机验:真正写进客户端那一步(只读预告已验)与 Hapi 的价格探针。
+
+### v0.1.26(2026-10-13,每日签到 M1+M2+M3 一部分)
+
+按 `docs/design/design-auto-checkin-2026-10-13.html` 的十项裁决(全 A)实现。**M0 只读取证先跑,结论回写文档**(裁决 10A)。
+
+- **M0 结果**(真机,只读):Trae status 通 —— HTTP 200 `{"checked_in":true,"code":0,"credits":100,…}`(字段全在顶层;
+  `{}` 与 `{"req_source":1}` 都行);设备号是 `icube-dc` 键名里的 16 位十进制数;
+  **WorkBuddy 的 Cookie 会话能打签到接口**(`already · +100`)→ 第 4 节的 OAuth 改造**不必做**。
+  今天两边都已签,所以 claim 路径与"到账终态""签到包 7/31 天"留到明天有真领取时再验。
+- **落地**:`core/checkin.rs`(纯逻辑:北京日、抖动、退避、幂等、状态机 + 网络层)、`store.rs` 的 `checkin_log`、
+  `config.rs` 的 `checkin` 配置、外壳的 `checkin_state`/`checkin_now` 两条命令 + 每日节拍器(独立于取数轮询),
+  界面是渠道卡上一行 + 设置页「刷新与启动」里的签到区(裁决 8A)。
+- **默认关**:两渠道初始 `enabled=false`,一个请求都不发;界面写「签到未开启 · 开启签到」。
+- **踩坑 11**:**Tauri 的 `Builder::setup` 只有一个槽位** —— 我另加一个 `.setup()` 把原有那个
+  (负责 `manage(AppState)` 与轮询)顶掉了,应用启动后第一条命令就 `state() called before manage()` panic。
+  节拍器必须挂在原有 setup 的末尾。真机第一次启动即暴露,修完复查正常。
+- **踩坑 12(流程)**:**验证前必须确认在跑的是哪个二进制**。中间一次 `build.ps1 build` 其实失败了(输出被
+  `tail -2` 截断,只剩一行版权信息),我对着旧二进制又量了一轮,得出"修复无效"的错误结论;加探针重编后才看清。
+  与 v0.1.24 那次"路径写死旧的"是同一类错误的第二次 —— 下次先 `ls -l` 看时间戳再跑。
+
+### v0.1.31(2026-10-13,写入 Trae 真库验证 + 拒写按钮不再假死)
+
+用户问「往 trae 里写是真的成功了吗」。当时诚实回答:**没有** —— 之前所有真机检查只走到
+拒写分支(Trae 在跑 → 按钮写「先退出它」)与只读预告;成功写入只有合成库单测。这轮补上:
+
+- **验证方法(不碰真配置)**:临时在 `inject.rs` 里加一个测试(跑完已移除),把本机真实的
+  `%APPDATA%\Trae CN\User\globalStorage\state.vscdb`(921,600 B)**只读拷贝**到临时目录,
+  在副本上把整条路跑一遍。
+- **结果(全绿)**:写入 `added=17` —— **17 个 agent 组各一条**;读回校验 `true`;
+  再写一次 `added=0 / updated=17`(幂等);取消写入 `removed=17`、校验 `true`;
+  备份 → 写 → 回滚后回到写入前。最硬的两条:**写入+取消之后,ItemTable 全表按 key 排序的
+  快照与原始库逐字符相同**(别的条目、顺序都没动 → 精确可逆);两次写入后同样相同(重写不留痕)。
+  界面层也拿真库过了一遍:`trae_removal` 写前 `false` / 写后 `true`(读回 17 条 · 17 组)/ 取消后 `false`。
+  原始库字节数不变(全程只读)。
+- **顺带挖出并修掉一个"假死"**:弹层打开时按钮按当时的运行状态**禁用** —— 用户是**关掉 Trae
+  之后**回来点的,按钮还是灰的、点了毫无反应,观感就是"写入没成功"(与之前「隐藏渠道点了没反应」
+  同一类)。现在按钮不禁用,文案「写入(Trae CN 在运行 · 点这里重查)」:点一下重新生成预告,
+  还挡着就把「HH:MM:SS 刚查过,它还在运行」就地写出来并弹提示;放开了就直接接着写。
+  同一处顺手加了两条:busy 闸(连点两次写入不再各备份一份)与成功提示带上生效方式
+  (「已写入 Trae CN · 下次启动 Trae 时出现在模型列表里」)。
+- **真机端到端(用户授权后跑完)**:退出 Trae CN 全部进程 → 在挂件模型页点第一行
+  `claude-opus-4-5-20251101` 的 Trae 点 → 弹层「写入」→ 结果「Trae CN / TRAE SOLO CN 各新增 17 条」,
+  备份 `backup-inject/20261015-185058/state.vscdb`(921,600 B = 写入前那份,字节数一致)。
+- **磁盘核对**:Trae CN 组内条目 192 → 209(正好 +17,17 个 agent 组各一条);ItemTable 行数不变
+  (只改了两个 `model_list_map` 的值);条目字段与模板对齐(`base_url=…/v1/chat/completions`、
+  `config_source=3`、`status/selectable=true`、`ak` 51 字符)。
+- **Trae 自己认了(决定性证据)**:重新启动 Trae CN 后它重写了两张 `model_list_map` ——
+  在**当前在用的那张**(键名 `<id>_AI.agent.model.model_list_map`)把我们 7 个 agent 组的条目
+  **原样留下**(字段与 `custom_model_id=2061458791` 一字未改);旧那张(`<id>:AI.agent…`)
+  里我们写的 9 组被它清掉,而它自己的内置条目一条没动。Trae 自己的日志:
+  `[trae-chat-core][ModelRestrictionDiagnostic][provider] snapshot changed {"agentType":"solo_agent"…
+  "groupSequence":[{"group":"preset",…},{"group":"custom_models",
+  "models":["solo_agent_3_custom_openai_compatible_custom_openai_compatible//claude-opus-4-5-20251101_2061458791"]}]}`
+  —— 模型进了它自己的 `custom_models` 组,模型 key 口径与设计稿 2.1 破译的完全一致
+  (`<agent>_3_<provider>_<name>_<custom_model_id>`)。
+- **界面侧回读**:模型页第一行 Trae 点变成「已配置 · 点开可更新或取消写入」,弹层给
+  「取消写入(移除这条)」—— 写入/取消的闭环在真机上闭合。
+- **两处如实记下**:(a) 报告的「新增 17 条」是"写进去 17 条",Trae 启动后会清掉它不用的那套 agent 组,
+  这一代版本实际存活 **7 组**(solo_agent / builder / builder_v3 / chat_v3 / code_reviewer /
+  code_review_summary / refactor);(b) `TRAE SOLO CN` 的安装已不在(只剩数据目录),挂件按
+  "库存在即目标"的口径照样写了一份 17 条 —— 无害,但"没安装就跳过"是不是更好,是个产品决定。
+- **遗留**:真正发一条请求让它回话会产生真实计费,仍留给用户点。
+
+### 还没真机验的部分(诚实清单)
+
+1. **写入后客户端真能跑起该模型**:**写入**与"客户端自己认不认"都验完了(v0.1.31:真库副本上 17 组各一条、
+   幂等、精确可逆、回滚有效;用户授权后真机写了一次,Trae 重启后把我们 7 组条目留在当前在用的模型表里,
+   并把它记进自己的 `custom_models` 组 —— 见上面日志)。只剩"发一条最小请求看它真的回话"会产生真实计费,
+   不由挂件代跑。
+2. **WorkBuddy / WB AI 的选中项写入**:前缀学到之前只写条目。第一次在客户端里选中后,
+   `inject_state` 会读到并记住口径,之后才自动写选中项。
+3. **Trae 的选中项**:实验开关默认关(口径已破译并有单测回归,但客户端认不认只有真机能验)。
+
+## Trae 自定义模型:能持久的是「云端添加」,改本地库只是改缓存(2026-10-15)
+
+### v0.1.31 之后查清的真相
+
+用户给的文档(`~/Documents/Trae-CN/temp_20261015_01/Trae自定义模型-接口自动化添加说明.md`)
+指出 Trae「添加自定义模型」是**云端动作**;这轮顺着它把契约挖到了字节级,并在真机上跑通。
+
+- **契约(从 Trae 自己的 bundle 里挖出来,不是猜的)**:`resources/app/node_modules/@byted-icube/ai-modules-chat/dist/index.mjs`
+  - transport 信封:`{service:"model", method:"add_custom_model", data:{…}}`;HTTP 体 = 字段平铺 + `Request` 信封
+  - 字段:`provider`(自定义走 `custom_openai_compatible`)、`model_name`、`ak`、`is_custom:true`、
+    `auth_type`(枚举 API_KEY=0 / AK_SK=1)、`sk`、`region`、`base_url`、`custom_model_type`、
+    `config_detail{multimodal, model_hyper_params{max_tokens, prompt_max_tokens, thinking_enable,
+    temperature, top_p, top_k}, max_turn}`、`display_name`
+  - 编辑/删除:`update_custom_model`(action 枚举里有 UPDATE/DELETE,`id` 用 `custom_model_id`)
+  - 鉴权:`Authorization: Cloud-IDE-JWT <token>` + `X-Trae-Client-Type: ide`,host `trae-api-cn.mchost.guru`
+- **token 才是文档里那个 401 的根因**:`.trae-cn/trae-jwt-token`(925 字符,文件那份)怎么带都 401;
+  **`storage.json` 里 `iCubeAuthInfo://icube.cloudide`(tc 容器,解密后 1004 字符)那份才有效** ——
+  正是挂件签到一直在用的同一个凭据(签名:`Cloud-IDE-JWT` + `x-device-id`)。
+  真机实测:`GET /api/ide/v1/providers` → 200,只要 `Cloud-IDE-JWT` + `X-Trae-Client-Type: ide`,设备号/版本/区域都不需要。
+- **真机跑通**:`POST /api/ide/v1/add_custom_model`(4sapi 的 claude-opus-4-5-20251101)→
+  `{"code":0,"message":"success"}`;重启 Trae 后它把服务端那条**刷进本地缓存**
+  (`<uid>:AI.agent.model.model_list_map`,10 个 agent 组,`custom_model_id=2911517954` 由**服务端分配**),
+  用户界面侧从此认它。
+- **同一轮刷新把「我们写进本地库的条目」清掉了** —— 这正是 v0.1.31 那次的全部真相:
+  改 `state.vscdb` 只是改**缓存副本**(`model-list-fallback`),任何一次成功刷新都会重写;
+  界面列表来自服务端,所以"日志里认了、界面里没有"。
+- **服务端权威条目 vs 我们本地模板的差异**(实锤了我们模板哪里不对):
+  | 字段 | 我们写的 | 服务端真值 |
+  |---|---|---|
+  | `base_url` | `https://4sapi.com/v1/chat/completions` | **`https://4sapi.com/v1`**(由 Trae 自己拼路径) |
+  | `config_name` | 缺 | `custom_openai_compatible//<model>` |
+  | `custom_model_type` | 缺 | `""` |
+  | `use_remote_service` | 缺 | `false` |
+  | `prompt_max_tokens` | `null` | `1000000`(config_detail 里传了就有) |
+  其余(`config_source=3`、`auth_type=0`、`client_connect=true`、`display_name`=裸模型名、
+  `icon`/`features`/`context_window_size`/`max_turns`/`ak`/`sk=""`)与我们模板一致 —— 模板本身没白写。
+- **挂件侧待裁决**:要不要把「写入 Trae」改成走云端(账号级、跨设备持久、可被 `update_custom_model` 删除),
+  本地库那条降级为离线兜底(并把上面四个字段补齐)。用户 2026-10-15 已在 Trae 界面里成功手加过一条
+  (`OG-deepseek-v4.1-flash`,id 2923059202),说明界面/云端这条链路对他可用。
+
+## 全量体检第二轮:36 条缺陷一次修完(2026-10-16,v0.1.33)
+
+**怎么查的**:先把 133 项单测跑绿当基线,再按文件切分做了一遍**全量**静态审查
+(core 12 个模块、`lib.rs` 2638 行、`app.js` 4002 行、`styles.css` 798 行、7 个 `.ps1` + 8 个 `.js`),
+配机器化交叉检查:37 个 `#[tauri::command]` × 48 个 `invoke()` 调用点的参数契约、
+DOM id / CSS 类引用、`innerHTML` 转义扫描、生产代码 `unwrap/expect` 清点、密钥外泄扫描、编码/BOM。
+每条 P1 都回到源码逐行复核过(不采信"看起来像")。**结论:0 个 P0、6 个 P1、约 30 个 P2。**
+
+**6 条 P1(都已修)**
+1. **配置坏了却仍被整份覆盖**(`lib.rs` `check_update`):启动时 `Config::try_load` 失败会置
+   `CONFIG_BROKEN` 并提示"设置保存已暂停,以免覆盖还能修复的原始配置",但 `check_update`
+   是唯一没问 `refuse_if_config_broken()` 的整份写入者,而默认配置 `auto_check_update=true`、
+   `last_check_at=None` 两道节流都不拦 → 前端(启动 30 秒后无条件调一次)会把这行 JSON 永久覆盖。
+   修:损坏时只更新内存时间戳,不落库。
+2. **「取消写入」删掉用户自己的条目**(`inject.rs`):归属判定是 `url.contains(host)`,
+   `https://mirror-4sapi.com/v1` 也算"我们写的";`4S-` 前缀更是用户自己的命名习惯。
+   修:改成**精确主机名**比对(或整串等于我们会写的 base_url),`4S-` 前缀只在 url 为空时兜底 ——
+   与读路径 `models::source_of_url` 终于同一口径。
+3. **签到没到账却记成「已领」**(`lib.rs`):回查只在返回 `Already` 时才改判,其余(含
+   "仍显示未签"这个最强反证)一律照抄 `Claimed` → `done_for_day` 为真 → 节拍器与手动按钮
+   当天都不再试,积分静默丢掉。修:回查仍可领就降级为可重试。
+4. **汇总条把没配密钥的 OpenCode Go 套餐摊进消耗**(`app.js`):后端会把 `plan` 连占位视图一起挂,
+   前端只按 `plan` 过滤 → 全新安装(只配 4SAPI)凭空多出约 ¥2.37/天的"套餐摊销"。
+   修:`plans` 必须带 `hasKey`。
+5. **套餐周期"实测学习"永久失效**(`fetch.rs`):`cycle_cached` 只收套餐渠道(长度 1),
+   而读取按 `PROVIDERS` 下标(opencode-go 是 `[1]`)→ `cycles.get(1)` 恒为 `None`,
+   `learned` 永远是 false,且每轮都白写一次 SQLite。修:按 `PROVIDERS` 全表对齐。
+   (旧测试传的是单元素切片,下标恰好对上,所以一直没暴露。)
+6. **吸附展开态的「收回 ✕」压住底栏「退出」**(`styles.css`):`#dockClose` 固定在卡片右下
+   8px、`z-index:30`,而展开时 `docked` 已移除、底栏是显示的 → 点「退出」被它截走,变成收成竖条。
+   实测重叠 87%×94%;修:`body.dock-open .foot{padding-right:44u}`,留出 12px 净空。
+
+**P2 里值得记的几条**:`url_memo` 的"失败就清备忘"分支实际不可达(渠道会永久钉在失效的备用域名上);
+`main_window_reset` 回退到 `windows.first()`,与它自己的注释相反;上期窗口无快照时
+`consumption_since` 报 `Some(0.0)` 而不是 `None`(环比被凭空抬高);DeepSeek 的
+`balance_infos[].currency` 从没读过(USD 账户被当人民币显示并计入合计);`model_price` 缺字段
+被 `unwrap_or(0.0)` 顶替成"¥0.000/次";响应体上限在读完整个 body 之后才检查;
+`-N` 后缀的备份目录(同秒连点两次时自己产生的)因为只认 15 位而**永不被清理**
+(里面是明文密钥);`open_path` / `inject_rollback` 的白名单是不解析 `..` 的字符串前缀
+(可交给资源管理器执行任意 exe);WorkBuddy 读回校验只断言写入前就已成立的 id+url;
+`legacy_left()` 先 trim 后 split,尾引号没去掉 → "旧版还在"的提醒永不出现;
+`wb_clear_session` 的结果被 `let _ =` 吞掉 → 命令返回成功但 Cookie 还在;
+`check_update` 用裸 `.lock()`(store 被污染时 24 小时节流失效);签到没有在途互斥
+(节拍器与手动点击可同时 POST claim);`quit` 不等在途的客户端写入;`set_pin` 在主线程写 SQLite;
+密钥箱没有 `UNIQUE(platform,label)`(双击保存能插进两条一样的);前端 `aria-expanded` 引用了
+一个未声明的 `open`(恒为 true);密钥箱读取失败被显示成"密钥箱是空的";
+`.note/.dim/.ov-h/.okbox/.err` 五个类**压根没有 CSS 规则**;`scan-secrets.ps1` 对自家更新私钥
+结构性失明且命中时原样回显密钥;`verify-ui-0923.js` 点了一个不存在的 `#btnSort`,必然抛异常
+且一条结果都不打印;`cdp-probe.js` 匹配不到就连到任意 Chromium 还 `exit 0`。
+
+**顺带修掉的"宣称已修但没修完"**:金额千分位(P3-30)、紧凑条点「+N」会拖窗口(P3-32)、
+`inject.rs` 里最后一处硬编码"不是 4SAPI"(P0-4 残留);另外 4 处 `filter_map(Result::ok)`
+静默吞坏行改成 `eprintln!` 后丢弃。
+
+**复测**:core `cargo test` **153 passed / 0 failed**(净增 20 项,其中 13 项经"临时还原后再跑"
+证明在修复前确实失败)、0 告警;`cargo check --all-targets`(整个 Tauri 壳)零错误零告警;
+8 个 `.js` 全过 `node --check`;7 个 `.ps1` 纯 ASCII 无 BOM;IPC 契约 37 命令 × 48 调用点全对齐;
+`build/scan-secrets.ps1` 在真实仓库上仍 CLEAN(夹具仓库能全部命中,公开公钥不误报)。
+
+**发版**:v0.1.33。**签名环境变量的坑这次换了条正路**——`cargo tauri` 只在
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 缺席时提示密码,而 PowerShell / Git Bash / .NET
+**都无法把"存在但为空"的变量交给子进程**(实测:`$env:X=''` 是删除;Git Bash 的
+`export X=''` 到不了 Windows 子进程;`ProcessStartInfo` 的空值也被丢掉)。真正的出路是
+tauri-cli 自己的 `ci` 标志(`bundle.rs`:`or_else(|| if ci { Some("".into()) })`,
+来源就是 `env = "CI"`):**未加密的密钥只要 `$env:CI = 'true'`,等价于给了空密码**,
+纯 PowerShell 就能跑。`build/build.ps1` 的 bundle 守卫据此放宽(密码 或 CI 二选一),
+`ci` 在打包器里只影响这一个分支。
+
+**本次未修(记录在案)**:①签到只取第一份 Trae 凭据(`candidates().next()`,双装 Trae 且
+首份 token 过期时每天报"凭据失效",取数那条路是会轮换的);②`appauth` 把"文件被占用/写到一半"
+与"真的没登录"混成同一句话;③WorkBuddy 登录的三个状态位是进程级 `AtomicBool`、无会话号、
+无超时(关窗后立刻重开可能停在"登录中");④每轮取数有约 9 次重叠的 O(n) 区间扫描(既有 O-1,
+行数随 90 天保留期增长)。前三条是 P3、影响面窄,第四条是明确的优化项,都不阻塞本次发版。
+
+## 尚未实现 / 待验证
+
+- ~~布局修复的运行时验证~~ ✅ 已完成(2026-09-16):`build/verify-form.js`
+  三形态全部 PASS,并顺带挖出 ACL 第二层根因(见上)
+- ~~开机自启的注册表写入验证~~ ✅ 已完成(2026-09-16):写入格式正确,
+  启动同步(配置关则删键)实测通过
+- ~~固定尺寸 / 视觉对齐 / 设置与管理~~ ✅ 已完成(2026-09-16,见「界面改版」)
+- **待定夺**:单 exe 交付方案 A/B/C(见「进行中」章节)
+- 屏幕边缘吸附与自动折叠(原型里有设计,代码里 `collapse_on_blur` 开关未接线)
+- 边缘吸附形态(原型里有设计;胶囊形态已实测通过)
+- 托盘图标角标显示最紧张渠道的百分比(当前是静态图标)
+- 余额低于阈值的系统通知
+- NSIS 安装包(`build.ps1 bundle` 未跑过;若选双文件交付,NSIS 仍可作为分发形态)
+- **待观察**:一个修复前的旧实例在运行 3~5 分钟后进程消失,当时没捕获 stderr,
+  原因未知(不排除是手动关闭)。此后多个实例(含多次形态切换、管理页操作、
+  多个轮询周期)稳定;`launch-debug.ps1` 现在把 stdout/stderr 落到
+  `%TEMP%\tokenscope-debug\`,若再复现直接看 stderr.log
+- ~~从紧凑条/胶囊切回面板后 alwaysOnTop 不复位~~ 已解决:形态切换不再
+  强制置顶(改版时删掉了 `setAlwaysOnTop(true)`),置顶只由标题栏 📌 控制
+- ~~待真机确认:真实密钥下的展示效果~~ 已确认:用户已配好真实密钥,
+  面板/紧凑条/胶囊都在跑真实数据(含状态色与阈值染色)
+
+## 首页形态设计稿落地:统一视图模型 + 面板重构(2026-10-22)
+
+依据 `docs/design/design-home-forms-2026-10-21.html`(含同日复核修订)开发。**先落 P0 的地基,再做 P1/P2/P3**——
+设计里那句话是"在它之前改布局,只会让四种形态多一种看起来不一样的方式",所以顺序没有颠倒。
+
+**P0 · 统一视图模型(`app/core/src/view.rs`,约 1200 行 / 21 项单测)**
+七态 `ViewState`(fresh/stale/auth/error/noKey/exhausted/limited;`!valid` 按 `authSource` 分成"鉴权失效"与
+"取数失败",两种出路)、五桶紧迫度(`TIER_ACTION/RATIO/MONEY/POINTS/REST`)、绑定窗(限流窗优先、否则剩余最少)、
+扁平 `Headline{percent,amount,unit,points}`(全空 = 「——」,与"确定是 0"分开写)、列表级 `HomeView`
+(order / risk / actionCount / staleCount / errorCount / checkin / totals)。**没有分母的金额不再被判成健康**:
+进 T2 比绝对额,且低于 `moneyFloor`(¥10)进 T0 且不是绿色 —— D02 修掉。纯函数、可单测。
+配套:`config.rs` 新增 `moneyFloor` / `staleAfterSec`(900)/ `textTone` / `pillDwellSec`(12)/ `showUsed`,
+均靠容器级 `serde(default)` 让老配置自动取默认值;新 IPC 命令 `home_view` 走 `fetch_shared`
+(与 `get_channels` 同一闸门、5 秒近期结果复用,不多打账务接口),签到 `doneToday` 复用 `CheckinCfg::blocks_today`。
+
+**P1 · 面板重构(风险带 / 两级行 / 分组 / 骨架 / 失败横幅)**
+顶部三格消耗换成**风险带**:总余额(副行留今日 + 环比 + 非人民币并列,不折算)/ 最紧(可点,跳过去并展开)/
+签到(常驻,全签完仍显示「✓ 3/3」)。行压回两级:紧急(T0 ∪ 跌破红线)两行 + 进度条,其余一行;
+「更新于」只在陈旧时说;第三段(窗口条 / 到期列表 / 日周月)收进 `.seg3`,只在展开时显示 —— 一屏重新放得下九行。
+冷启动画骨架;一轮 ≥3 个渠道取数失败时出横幅并给「看诊断」;渠道 ≥12 个时给过滤框。
+
+**P2/P3 · 折叠形态与无障碍**
+紧凑条:降级顺序改成"重要性倒序"(第一个 chip = 最紧,永远完整;从最后一个开始去名字/舍小数) + 签到 chip 常驻;
+胶囊:主数字与限定语走后端,告急时锁定**自动**轮播(手动仍可用);吸附竖条:一整块颜色 → 一段一渠道(顺序同面板,
+陈旧的加斜纹);键盘 `Ctrl+1/2/3` 切形态、`↑↓` 走行、`/` 聚焦过滤,Esc 循环补上紧凑条;
+「非颜色模式」每行写文字态;「用掉还是剩余」切换百分比口径(四处同源,一处翻转)。
+
+**验证**
+- core `cargo test --offline`:**311 passed / 1 failed / 6 ignored**,其中 view 21 项全过;
+  唯一失败 `fetch::tests::a_failed_request_leaves_a_usable_line_in_the_log` 是**既有环境故障**
+  (系统代理对 127.0.0.1:1 返回 502 而不是拒连),已在干净 HEAD 上复现确认与本次无关。
+- `node --check app.js` 通过;Tauri 外壳 `cargo check --offline`(msvc)零告警。
+- 新增 **`build/jsdom-smoke.js`**:jsdom 里跑真渲染,**26/26 通过**(风险带三格、总余额并列、
+  分组与两级行、骨架、横幅、签到 chip、胶囊挑最紧的 + 限定语、吸附分段、非颜色模式、视图缺失兜底)。
+  它当场抓出过一个真 bug(`hvApply` 漏带 `totals`,导致风险带静默退回老汇总),已修。
+  ⚠️ 未验证:像素与真机几何(两级行实际高度、风险带在三档字号下是否溢出),需要真机复测。
+
+**发版 v0.1.56**(2026-10-22):本地打包 → `latest.json` → GitHub Release 三件套
+(`setup.exe` / `.sig` / `latest.json`)→ `verify-release.js` **13/13 PASS**。
+commit `68d46a9`,tag `v0.1.56`,更新端点已能拉到新清单。
+唯一一处测试口径收紧:`fetch::tests::a_failed_request_leaves_a_usable_line_in_the_log`
+在"透明代理替 127.0.0.1:1 应答 5xx"的环境里会误报,现在按错误码分流 ——
+连接层(E_CONNECT/E_TIMEOUT)才断言没有 status,被代理应答时反过来断言必须是 HTTP 层错误码。
+
+## v0.1.57:面板被吸附条压空 / Qoder「有活动却说没有」/ 三形态体检(2026-10-22)
+
+### P0 · 面板整页只剩底栏(`styles.css`)
+
+真机截图一眼看到:标题栏、风险带、底栏都在,中间一大片空白,九行渠道一行不剩。
+量出来的原因:**吸附竖条 `#dockBody` 在面板形态里也是显示的** ——
+v0.1.56 新加的 `.dock-body{display:flex!important}` 没有挂在 `body.docked` 下,
+盖掉了前面的 `.dock-body{display:none}`。它 `height:100%`,在 body 的 flex 列里
+以 `flex-shrink:1` 抢走 415px,`flex:1 1 0%` 的列表被压成 **0 高**。
+修:`body.docked .dock-body{display:flex;…}`(去掉 `!important`,靠状态门拿优先级)。
+
+**防复发**:新增 `build/check-css-forms.js`(纯文本、零依赖)——凡是"基础规则是
+`display:none` 的整块容器"(`.dock-body` / `.pill-body` / `.cctl` / `.manage` …),
+其它规则再给它 display 时必须带 `body.<状态>` 前缀。已接进 CI(`ci.yml`)。
+它当场抓到的就是这条;反向验证(把旧写法放回去)会 FAIL。
+
+### Qoder 签到:活动在,但被判成"本期无打卡活动"(`checkin.rs` / `lib.rs` / `app.js`)
+
+真机取证(2026-10-22 15:5x,国际版,桌面端凭据 `dt-…`):
+
+```
+GET /sash/api/v1/me/campaigns → 200
+{ "showCampaign": true, "claimable": true,
+  "campaigns": [
+    { "campaignKey":"act-20261021-273", "actionType":"VIEW_DETAILS",
+      "claimStatus":"CLAIMABLE", "placements":[{…"title":"1024 | 创造力集结"}] },
+    { "campaignKey":"act-20261020-944", "actionType":"VIEW_DETAILS", "claimStatus":"CLAIMED" } ] }
+```
+
+10-20 那条 `CLAIM_BENEFIT`(每日 100 分)已经不在列表里了;当天的活动换成了
+`VIEW_DETAILS` + `CLAIMABLE`。而 `qoder_pick` 只认 `CLAIM_BENEFIT` →
+`has_campaign=false` → `Inactive("本期无打卡活动")`。用户在客户端明明看得到那一条,
+挂件却说"没有" —— 这是**假阴性**,不是"活动换季"。
+
+修:新增 `Outcome::Manual(标题)` —— **有活动,但只能在客户端里点开领**。
+- `qoder_pick` 记下第一条 `CLAIMABLE` 的非领取类活动及其标题(`placements[].content.zh/en.title`);
+- `parse_qoder` 在"没有 CLAIM_BENEFIT"时先看 `manual`,再退回 `Inactive`;
+- 界面:`manual:*` → 徽标「有活动」(蓝框 `.ckb.info`)+ 文案「有活动:X · 只能在客户端打开领取」;
+- 计数:`manual` 与 `inactive` 一样算"今天没有待办"(`signed_today`),否则聚合行会永远
+  喊"还有 N 个没签" —— 而挂件根本做不了这件事。
+- **不为它发 claim 请求**:客户端对 `VIEW_DETAILS` 只打开活动页(`growth-page/activity-iframe`),
+  没有"直接领"的语义;猜着 POST 可能把活动标成已领却不发奖。
+
+**升级当天的旧结论**:`inactive` / `manual` 是**我们自己的分类器**给的结论(哪些活动算打卡),
+规则一改就得重问。`last_auth_version` 从"只记 auth"扩到也记这两种,`blocks_today` 里
+`inactive_is_stale()` 命中就不挡当天 —— 否则升级后当天仍然显示"本期无活动",
+用户看到的就是"改了也没用"(与 v0.1.47 那次 `auth` 陈旧是同一类问题)。
+
+### 三形态体检:16 场景 × 3 形态(`build/visual-forms.js`,新增)
+
+jsdom 不参与布局,CSS 写错它一声不响(v0.1.56 的吸附条就是这么漏过去的)。
+新脚本连真机 CDP,注入合成数据 → 逐形态 `applyForm` → 截图 + 量**横向越界 / 纵向越界 /
+文本裁切**,产物在 `docs/assets/qa-forms/`(48 张图 + `report.json`)。
+
+> 测试自身的两个坑:① 60 秒轮询会把真实数据灌回来盖掉注入数据 —— `app.js` 顶部是
+> `const invoke = T.core.invoke`(**按值捕获**),改 `T.core.invoke` 没用,必须覆盖
+> `window.refresh` / `window.loadCheckin` 把轮询停掉;② 行内 `.sweep` 微光从 `-360px`
+> 扫进来,会被误报成越界(被祖先 `overflow:hidden` 裁掉的不算)。
+
+设计文档:`docs/design/design-forms-qa-2026-10-22.md`(先出设计再改代码)。修掉的:
+
+| # | 问题 | 修法 |
+|---|---|---|
+| P0-2 | 紧凑条里出现竖排的「需要处理 1」 | `body.form-compact .grp/.fstrip/.sk-wrap{display:none}` |
+| P0-3 | 紧凑条第二行被裁(列表 74px > 卡片 46px) | `body.form-compact .r2{display:none}`;连带把 chip 变窄,能放的渠道从 1 个回到 2 个 |
+| P0-4 | 紧凑条空态文案折行被裁 | 空态改用短句(底栏文案同源)+ `.cempty` 加 `max-width/nowrap/ellipsis` |
+| P1-1 | 紧凑条横向裁切(many 283>279,big 340>321) | `+N` 宽度改成真量(插 `+99` 隐形徽标);间隙数改成 `n-1+(hidden?1:0)` —— 有 `+N` 时少算一个 gap |
+| P1-2 | 没有人民币合计时风险带整条消失(纯积分/冷启动/全隐藏),数据回来整页跳 73px | 风险带常驻,没数的格子写 `——`;删掉已被取代的 `renderSummary()` |
+| P1-3 | 底栏「8 正常 · 3 预警」双算(3 是 8 的子集) | `正常 = withKey.length - bad - warn` |
+| P1-4 | 失联行仍显示旧数值且没有出处 | `isOld = isStale || failed` —— 失联行也画 `.rhint`「显示的是 X 的成功快照」 |
+| P1-5 | 骨架期底栏留着上一轮的「8 正常」 | 骨架分支同时写 `fdot/fstat` =「正在取数…」 |
+| P2-2 | 全隐藏时紧凑条还显示「✓ 0/0」 | `compactCheckinChip` 在 `total === 0` 时不渲染 |
+| P2-3 | 失败横幅随列表滚走 | `.fstrip{position:sticky;top:0}` |
+
+**复测**:16 场景 × 3 形态跑完,紧凑条不再有纵向越界、`scrollWidth ≤ clientWidth`;
+面板无横向越界;`loading/empty/checkin` 三个场景风险带都在;`check-css-forms.js` PASS;
+core `cargo test --offline` **314 passed / 0 failed / 6 ignored**(净增 3 项:
+`qoder_view_details_claimable_is_manual_not_inactive`、`qoder_manual_blocks_the_day_but_keeps_its_code`,
+以及把 `stale_auth_…` 里"只有 auth 受版本影响"改成 claimed/already 与 inactive/manual 两组)。
+
+**发版 v0.1.57**(本地打包,2026-10-22):三处版本号同步 → `bash build/release-local.sh`
+(2m36s)→ `make-latest-json.js` → GitHub Release 三件套(`setup.exe` / `.sig` / `latest.json`)。
+commit `a65fc58`,tag `v0.1.57`,`verify-release.js` **13/13 PASS**,
+`verify-signature.js` **PASS**(公钥真能验这一版的包 —— 已装用户收得到)。
+本次新增的 `build/check-css-forms.js` 已进 CI,`build/visual-forms.js` 是人工工具(要真机窗口)。
+
+### 复测中又抓到的两处（同一次发版里修掉）
+
+1. **紧凑条 `.r2` 的第一版修复没生效**：写成 `body.form-compact .r2`(0,2,1)，
+   压不住面板的 `.row.urg .r2{display:block}`(0,3,0) —— 紧急行照样两行。
+   同一个坑还有 `.rhead` 的内边距与 `.val .v` 的字号：`.row.urg` 那两条都是 (0,3,0)。
+   全部改成 `body.form-compact .row …`(0,3,1)。**教训:CSS 覆盖要看权重，不只看顺序。**
+2. **紧急行的第二行与数值副行重复**：`.r2` 在 `hv.secondary` 为空时回退成 `subVal`，
+   于是 WorkBuddy 那行「无近期到期」出现两次。改成空则空，并加 `.r2:empty{display:none}`。
+3. **「最紧」格把数字裁掉**：`WorkBuddy 1…` —— 省略号吃掉的是数字。名字包一层 `.rn`
+   自己缩，数字不缩（代价是名字剩 5~6 字，接受）。
+4. **全隐藏时风险带还写「✓ 0/0」**：与紧凑条同一个口径，`total === 0` 写 `——`。
+
+**最终复测**(0.1.57 真机):16 场景 × 3 形态,横向/纵向越界 **0**;
+仅剩的"裁切"是风险带副行与「最紧」格的名字(都有省略号、都有 tooltip 与下一行兜底)。
+`cargo test --offline` 314 passed;`check-css-forms.js` PASS;`node --check` 全过。
+
+**发版记录**:安装包 `Grandettoken_0.1.57_x64-setup.exe`(5,146,450 B,
+sha256 `3a5d9425…`)+ `.sig`;release <https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.57>。
+本机已用打包产物覆盖 `%LOCALAPPDATA%\Grandettoken\Grandettoken.exe` 并运行。
+`latest.json` 的 notes 走应用内更新卡,release 正文另写(同一件事的两种长度)。
+
+### 发版 v0.1.58（2026-10-22）
+
+Qoder 自动领取与新活动监测；顶部摘要改为聚焦未来 30 天内确认到期的积分，可点击筛选渠道，并修正未知到期信息的展示。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.58_x64-setup.exe`（5,175,222 B，SHA-256 `cc03c17c7e1ad0013bf4e968a5fb8dc352f1f60179cc8e01bff4ac0e42434cdb`）及 `.sig` 已发布到 [GitHub Release v0.1.58](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.58)。提交 `5998226`，tag `v0.1.58`。
+
+`node --use-env-proxy build/verify-release.js` **13/13 PASS**；`node build/verify-signature.js` **PASS**（tauri.conf.json 中的公钥验证通过）。
+
+### 发版 v0.1.59（2026-10-22）
+
+优化 Trae、WorkBuddy、Qoder 的活动监测和自动领取，保留既有签到状态并提示需在客户端参与的新活动；按协议修正 OpenCode Go 端点，并明确不兼容目标客户端或未知协议时的处理方式。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.59_x64-setup.exe`（5,196,007 B，SHA-256 `99031f4a271a763287dc098a18a693ac1fcf26d18737c39318b9f4348fe21233`）及 `.sig` 已发布到 [GitHub Release v0.1.59](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.59)。发布提交 `e7cc67f`，tag `v0.1.59`。
+
+`node --use-env-proxy build/verify-release.js` **13/13 PASS**；`node build/verify-signature.js` **PASS**（tauri.conf.json 中的公钥验证通过）。
+
+## 顶部「还有 1 个渠道没签到」挂了 44 分钟 + 点进去无事可做（2026-10-23）
+
+**现象**（用户原话）：「提示栏显示今天还有 1 个渠道没签到，去查看，看了以后也不知道要干什么。
+我手动领取了 Qoder 以后，显示 3/3 了」。
+
+**现场数据**（本机 `tokenscope.db` / `diag.log`）：
+
+```
+10:11:37  qoder  checkin_log = inactive:本期无打卡活动   ← 启动时的自动签到
+10:55:36  qoder  checkin_log = already +100            ← 用户手动领完后再跑一次
+10:55:28  uninstall.exe 被重写                          ← 期间装过一次更新
+```
+
+10:11–10:55 之间 `lastDay=2026-10-23`、`lastCode=inactive`，按 `signed_today`
+Qoder **今天已经处理完**，提示条本不该出现。
+
+**根因（两个，叠在一起）**
+
+1. **启动那一轮签到的事件没人接**。Rust 的 `spawn_checkin_ticker` 在 setup 里
+   **先跑一轮再睡**；前端的 `checkin-updated` 监听却写在首轮 `refresh()` **之后**。
+   启动首帧先拿到的是签到前的 `CK`（Qoder 还是昨天 `manual`，`doneToday=false`），
+   10:11:37 这一轮完成时监听还没挂上 → 事件丢失 → 顶部提示条按旧结论一直挂着。
+   点「去查看」→ 设置页的签到区当时**只有两个开关**，没有任何一行的状态或按钮，
+   所以「不知道要做什么」。
+2. **`done_today` 与 `can_try` 不同口径**：前者用 `signed_today`（不看版本），
+   后者用 `checkin_blocks_today`（换版本后旧 `inactive`/`manual` 要重判）。
+   于是可能出现「这边说已签完、那边还给领取按钮」。
+
+**修法**
+
+- 签到相关监听（updated / alert / activity / claimed）**在首轮 refresh 之前**注册；
+  `checkin-updated` 收到后，首页不在管理页就重画一次（提示条当场收掉）。
+- `loadCheckin` 加**序号**：并发的两次读可能乱序返回，只让最后一次落地 ——
+  否则启动时 refresh 的旧快照会盖掉事件带来的新结论。
+- `done_today` 改用 `checkin_blocks_today`，与 `can_try` / 首页聚合行同一口径。
+- 提示条从「只说数字」改成「说清下一步」：
+  - 只剩一个渠道且 `canTry !== false` → `Qoder 今天还没签 · 点此领取`（直接 `ckrun`）；
+  - 不能自己领（凭据失效 / 退避 / 接口变动）→ 写清原因，点击落到**渠道卡那一行**
+    （「去登录 / 立即重试」在那里），不再跳只有开关的设置区；
+  - 多个渠道 → 保留汇总，设置区里补上每渠道的今日状态与按钮。
+- 手动领完（`ckRun`）立刻重画首页，3/3 不再等下一轮轮询。
+
+**验证**：`node --check app.js` / `cargo check --offline --all-targets`（exit 0）通过；
+`build/jsdom-smoke.js` **29/29 通过**（新增 3 条：单渠道提示条带渠道名并直接给领取、
+领不了的渠道写清原因、`no_cred` 即使 canTry 也不给空按钮；顺手把 3 条 v0.1.58 之后已过期的风险带断言更新）。
+
+### 发版 v0.1.60（2026-10-23）
+
+签到提示条不再停在旧状态；单渠道待签时直接写明渠道与下一步（点此领取 / 去处理），
+签到设置区补上每渠道今日状态与动作，`done_today` 与 `can_try` 统一口径。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.60_x64-setup.exe`（5,194,095 B，SHA-256
+`12d800fcc1e4cab1bf55f61d9338c7fc679114ef5286bd7c6340a6a5f20e6f67`）及 `.sig` 已发布到
+[GitHub Release v0.1.60](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.60)。
+发布提交 `75d5334`，tag `v0.1.60`。
+
+`node --use-env-proxy build/verify-release.js` **13/13 PASS**；`node build/verify-signature.js`
+**PASS**（公钥能验这一版的包）。本机已用打包产物覆盖
+`%LOCALAPPDATA%\Grandettoken\Grandettoken.exe` 并重启运行（SHA-256 与 target 一致）。
+
+## 隔一阵闪一个黑框：Qoder 的 helper 没带 CREATE_NO_WINDOW（2026-10-23）
+
+**现象**（用户原话）：「软件会有时候启动一个可见的命令行窗口吗？老是动不动弹出来，
+不要老是动不动弹出来。」
+
+**取证**：
+
+```
+%LOCALAPPDATA%\Programs\Qoder\resources\umid\runtime-info.exe
+  PE OptionalHeader.Subsystem = 3 (Console)      ← 是控制台程序，不是 GUI
+```
+
+`qoder::machine_identity_uncached` 在要设备身份时 `Command::new(runtime-info.exe)`，
+**没有** `CREATE_NO_WINDOW`。挂件自己是 GUI 进程，Windows 给子进程配一个新控制台 →
+每次缓存过期（成功 45 分钟 / 失败 5 分钟）再探测时闪一个黑框；签到凭据探测与活动监测
+都会走这里，所以"隔一阵就来一次"。
+
+其余子进程早就都带了标志：`tasklist` / `clip`（`inject.rs` / `lib.rs`）、
+WorkBuddy 桌面端（`workbuddy.rs`）—— 只有 Qoder 这一条漏了。
+
+**修法**：走与 WorkBuddy 相同的写法，Windows 下 `creation_flags(0x0800_0000)`。
+
+**验证**：`cargo check --offline`（core）+ `cargo check --offline --all-targets`
+（src-tauri）均 exit 0。黑框是否彻底消失需要真机观察一个缓存周期（45 分钟）；
+本机已替换运行。
+
+## Trae 一直提示「打开一次客户端」：签到与体检只试第一份本机登录态（2026-10-23）
+
+**现象**（用户原话）：「提示我 trae 需要打开一次客户端，我打开了，但是页面还是有提示」。
+诊断包 [5/9] Trae ✗「登录状态已失效 · 打开一次 Trae 即可 —— 显示的是本地快照，取数未通」，
+但同一份日志里 Trae **取数一直是成功的**：
+
+```
+14:25:16.668  trae: 换下一份凭据:手动令牌/TRAE SOLO CN 被拒 → 手动令牌/Trae CN
+14:25:16.748  trae: 取数成功 · 凭据 [TRAE SOLO CN→不通，Trae CN→通]
+14:25:16.521  checkin: 签到 Trae · 结果=auth · 第 3 次
+```
+
+**根因**：本机有两套 Trae 登录态（旧的 `TRAE SOLO CN`、在用的 `Trae CN`），候选顺序把
+旧的那套排在前面。
+
+| 路径 | 以前的行为 | 结果 |
+|---|---|---|
+| 取数 `fetch_all` | 401 → **换下一份**候选 | ✅ 用第二份正常出数 |
+| 签到 `run_checkin` | 只取 `candidates().next()` | ❌ 天天用旧那份 → `auth` |
+| 「测试连接 / 一键体检」`probe_report` | 只取 `creds.first()` | ❌ 假阴性，永远说「打开一次 Trae」 |
+
+后两条正是用户看到的两处提示。打开客户端有时能救活旧那份（这次 14:37 之后
+`TRAE SOLO CN` 又通了），但代码层的口径不一致仍然存在：**取数通、签到/体检不通**。
+签到只取第一份这件事 v0.1.47 就记录为已知问题（见上文「本次未修」），这次一起修。
+
+**修法**
+
+- `checkin_credential` 拆成 `checkin_credentials`：Trae 返回**全部**候选（缺设备号的跳过，
+  继续试下一份）、WorkBuddy 返回桌面端全部令牌 + 网页会话兜底、Qoder 保持单份。
+  只取一份的调用点（活动监测 / 状态探测）用薄包装 `checkin_credential`。
+- `run_checkin` 逐份打 status：只有 `AuthNeeded`（401/403）且还有候选才换下一份，
+  网络 / 业务失败不换（与取数层同一判据）；换的时候落一条 `cred-switch` 诊断。
+  选中的那份继续用于 claim 与回查。
+- `probe_report` 改成与轮询同一条路：先 `demote_rejected` 把被拒过的凭据沉底，
+  再逐份试、只换 Auth；试出来的 401 也写进 `rejected`，帮下一轮轮询少打一次。
+  `authLabel` 报**实际用的那份**，不再固定写第一份。
+
+**验证**：core `cargo test --offline` **314 passed / 0 failed**；
+`cargo check --offline --all-targets` exit 0；真机日志确认取数侧用
+`TRAE SOLO CN`/`Trae CN` 都能在 401 后换到可用那份。
+
+### 发版 v0.1.62（2026-10-23）
+
+签到与「测试连接 / 体检」改为与取数同一套多凭据逻辑；Trae 双装时不再误报
+「打开一次客户端」。本地签名 NSIS 安装包 `Grandettoken_0.1.62_x64-setup.exe`
+（5,199,113 B，SHA-256 `d39657eb172464b235bb66401359f31d79e300db0c47ba342fbf1963541d7a97`）
+及 `.sig` 已发布到
+[GitHub Release v0.1.62](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.62)。
+发布提交 `7250cb5`，tag `v0.1.62`。`verify-release.js` **13/13 PASS**；
+`verify-signature.js` **PASS**。本机已用打包产物覆盖运行（exe SHA-256 一致）。
+
+### 发版 v0.1.61（2026-10-23）
+
+修掉隔一阵闪一个黑框：Qoder 的 `runtime-info.exe` 是控制台程序，现在以隐藏窗口启动；
+`cargo test --offline` **314 passed / 0 failed**。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.61_x64-setup.exe`（5,196,109 B，SHA-256
+`1441cd98bc1be54708649f5454529429f07253471a6d6209eeb18a95d390138b`）及 `.sig` 已发布到
+[GitHub Release v0.1.61](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.61)。
+发布提交 `e5e1cb0`，tag `v0.1.61`。
+
+`node build/verify-release.js` **13/13 PASS**；`node build/verify-signature.js` **PASS**。
+本机已用打包产物覆盖 `%LOCALAPPDATA%\Grandettoken\Grandettoken.exe` 并重启运行。
+
+## 首页渠道展开区:删区间与柱图 + 五段骨架(2026-10-23,未发版)
+
+**需求**:删掉渠道行点开后的日期区间筛选(24 小时 / 7 天 / 30 天 / 3 月 / 12 月)和迷你柱图,
+并把所有渠道的展开交互与展示形式调成一套。设计稿:
+`docs/design/design-row-detail-2026-10-23.html`(含现状实测、五段骨架、可点原型、D1–D6 裁决)。
+
+**只删两样不够**:实测展开一张金额卡整行 691px,列表可视高 413px —— 点开一行其余渠道全部出屏;
+区间 + 柱图本身只占 53px(连外边距约 71px)。大头是 12 条变动台账(350px)与逐笔到期表(168px),
+再加上同一份列表在行头和详情里各画一次。
+
+**改法**
+
+- 删:`.seg` 区间按钮、`.spark` 柱图、`sparkCache` / `sparkHours`、后端 `get_series` 命令与 `SeriesView`、
+  两句只为柱图存在的说明(斜纹 / 90 天合成)、`probe-frontend.js` 的桩。`channel_changes` 台账保留。
+- 展开区改五段骨架(固定顺序,没内容不画):**核心** → **明细** → **最近变动** → **签到** → **页脚**。
+  核心按口径三选一:金额 = 今日/本周/本月;配额 = 一窗一行(相对或绝对重置时间);积分 = 最近 3 笔到期。
+  明细只去掉与行头/核心重复的(本轮额度 / 可再申请 / Codex 的套餐档位 / 有逐笔列表时的额度包笔数),不按条数截断。
+- 行头里的「第三段」挪进核心段:行头展开前后高度差 0,整次展开只有 `grid` 一个动画。
+- 长列表默认 3 条 +「全部 N 条」原地展开(状态挂 `rowMore`,轮询重画保留,收起整行复位)。
+- 点击改「先画后取」:手头数据立即画,台账先占「读取中…」,取到后原地替换;展开动画结束后自动滚进视野。
+- `Esc` 逐层退:先收展开行,再收形态;`.rhead` / `.sec-more` 进统一焦点环。
+- 展开行整行一张卡:`--bg2` 底色 + 左侧 2px 品牌蓝竖线(只在 `form-panel` 下)。
+
+**顺带修的**
+
+| 问题 | 根因 | 修法 |
+|---|---|---|
+| 「最近变动」12 条时间全挤在 `01:5x` | `fmtClock` 按毫秒解释,后端给的是秒 | `new Date(ts * 1000)`,与 `fmtDay` 同口径;今天写钟点,更早写 `MM-DD HH:MM` |
+| OpenCode Go 可能写成「ChatGPT 订阅 · $10/期…」 | 副标题只要 extra 有「套餐」就写,而 OpenCode 的汇率未取到时正好会塞一条 | 这条副标题只认 `codex` |
+| 折叠失败行 94px、五句话 | 标签 / 副标题 / 第二行 / 黄字各说一遍「取数失败」「HTTP 401」 | 标签说状态、副标题只说原因、右侧只写「X 前快照」;原文被截断时页脚补全文 |
+| 陈旧行年龄说两遍 | `rhint` 与紧急行第二行重复 | 只留右侧「X 前快照」 |
+| Hapi 行比别的行矮 12px | 第二行两边都空 | 金额型左侧兜底「今日 ¥X(推算)」,右侧留空位 |
+| 「周期窗 · —」 | 重置时间未知仍拼破折号 | 只写「周期窗」 |
+| 「未公开接口」没画出来 | README 说会区分,前端没读 `unstable` | 写进 OpenCode Go 展开区页脚 |
+
+**验证**
+
+- 真渲染(无头 Edge + 真实 `index.html` / `app.js` / `styles.css`,Tauri 打桩,400×580 标准字号):
+  展开整行 4SAPI **300** / OpenCode Go **226** / WorkBuddy **272** / 失败 DeepSeek **267**(预算 ≤ 300);
+  行头展开前后 50/50、58/58;折叠行 51/51/51/51/51/50,失败行 59。
+- 展开区无 `data-act="range"` / `.spark`;运行期 `get_series` 调用 **0 次**。
+- 「全部 12 条」→ 12 行(整行 498px),轮询重画后仍是 12 行且行保持展开;再点「收起」回 3 行。
+- `Esc` → 展开行 0,形态仍是 `form-panel`。
+- 台账时间 = 本机 `14:5x–15:1x`;OpenCode 行头与核心段都写「19 天」。
+- `build/jsdom-smoke.js` **40/40**(新增五段骨架 / 无柱图 / 台账 3 条 / 本地时间 / 失败行去重 / Codex 专属副标题);
+  `cargo check --offline --all-targets` exit 0;`build/check-css-forms.js` PASS;`build/probe-frontend.js` 正常。
+
+**未做**:真机(非打桩)的像素与滚动体验仍需按发布流程复测;`trend_series` 与 365 天日级归档保留
+(README 承诺 90 天明细 + 365 天归档),界面自本版起不再绘制趋势。
+
+### 边界复核(同日)
+
+用无头 Edge 跑 30 条边界用例(三档字号 × 四张卡、跨天台账、含已过期包的积分、限流窗口、需登录 / 陈旧 / 未配置、
+Tab / Enter / Esc、临期筛选 + Esc、取数期间轮询、重复展开、紧凑条点 chip):改前 **9/29**,修完 **30/30**。
+
+| 问题 | 根因 | 修法 |
+|---|---|---|
+| 跨天台账时间被省略号切掉(三档字号都切) | 两头都带日期,「10-22 21:00–10-22 21:20」超出 84px 时间列 | 更早的只写结束时刻 `MM-DD HH:MM`;跨零点只写钟点 |
+| 积分「最近 3 笔」被已过期的包占掉 | 后端逐笔列表含已过期但有余量的包(升序) | 未到期的排前,过期的只在「全部 N 笔」里(55% 透明) |
+| Qoder 的「套餐」、OpenCode Go 的「未折进消耗」被吞 | 「套餐」一律去重 + 明细截成 4 项 | 套餐只对 Codex 去重;不再按条数截断 |
+| WorkBuddy「统计范围」警示被切 | 宽条目按字符数判,中文被低估一半 | 按显示宽度(中日韩 = 2)判,超过 26 独占一行,窄的排前 |
+| 失败 / 陈旧卡的数值被染成灰字 | 新类名 `dim` 撞上全局 `.dim{color:var(--tx3)}` | 改名 `rb-dim` |
+| 收起后 Tab 落进看不见的「全部 N 条 / 模型配置 / 渠道设置」 | 行体只靠 `0fr` + `overflow` 裁掉,内容仍可聚焦(旧问题,新版按钮更多) | `.rbody` 收起后 `visibility:hidden`(延迟到收起动画结束) |
+| Esc 收起后焦点停在隐藏按钮上 | 只收行,没还焦点 | 焦点在被收的行里时还给行头 |
+| 临期筛选藏住展开行时,Esc 被悄悄吃掉 | 判断看的是 `rowOpen.size`,不是可见的展开行 | 只认 `#list .row.open` |
+| 取数期间轮询的新数值被改回旧值(¥99.99 → ¥12.40) | 台账回来后用点击时的旧 `c` 重画 | 重画时按 id 取当前 `CHANNELS` |
+| 再次展开先缩成「读取中…」再撑开 | 每次展开都先标 loading | 有缓存先画缓存、后台重取;只有第一次给占位 |
+| 紧凑条点 chip 会偷偷展开行、白取台账(旧问题) | 行头点击没看形态 | 非面板形态不处理行头点击 |
+
+顺带:`fmtReset` 不再写「4 天 0 小时」;快照年龄不到一分钟写「刚刚的快照」。
+`build/jsdom-smoke.js` 新增 6 条断言 → **46/46**;`cargo test`(core)**314 passed**;`check-css-forms` PASS。
+依赖真实排版的几条(Tab 顺序、可见性、高度)jsdom 测不了,只在 Edge 脚本里覆盖。
+
+### 发版 v0.1.63（2026-10-23）
+
+首页渠道展开区重做：删掉时间区间与迷你柱图，所有渠道统一为五段骨架与一套交互。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.63_x64-setup.exe`（5,196,372 B，SHA-256
+`9ebf29da1bc92676bf81288f682bc4e906b014ff109cb450268691ed32d9acf0`）及 `.sig` 已发布到
+[GitHub Release v0.1.63](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.63)。
+发布提交 `7a92219`，tag `v0.1.63`（上一版 v0.1.62 是同日另一次发版，本次在其之上）。
+
+`node --use-env-proxy build/verify-release.js` **13/13 PASS**；`node build/verify-signature.js`
+**PASS**（tauri.conf.json 的公钥能验签这一版的安装包）。
+
+本机已安装的仍是 v0.1.62：没有用打包产物覆盖正在运行的应用，留给自动更新验证。
+
+## 紧凑条改为可选开关(2026-10-23,未发版)
+
+**需求与裁决**:紧凑条改成配置项,**默认关**;关闭后不支持切换,顶栏也不显示「紧凑」。
+D1 老用户默认回首页 / D2 胶囊 Esc 回面板 / D3 `Ctrl+2` 忽略 / D4 开关放「显示 → 外观 → 启用紧凑条」。
+设计稿:`docs/design/design-compact-toggle-2026-10-23.html`。
+
+**改法**
+
+- 配置加 `compactEnabled`(Rust `compact_enabled`),默认 `false`;serde 已带 `default`,老配置自动得到关。
+- `resolveForm()` 在 `applyFormInner` 收口:紧凑条关闭时,任何来源的 `compact` 都落成 `panel`。
+  按钮 / Esc / Ctrl+2 / 旧配置 / 吸附展开全部经过这里。
+- 顶栏:`body:not(.compact-on) #btnC{display:none}`;`applyCompactUI()` 切 body 类并同步设置页开关。
+  用 body 类而不是内联样式 —— 配置没读回来时也不会先闪一下按钮。
+- `Esc`:胶囊在启用时 → 紧凑条,未启用 → 面板。`Ctrl+2`:未启用时静默忽略。
+- 设置开关单独绑(`bindSwitch` 只管开关本身):保存失败时 `saveCfg` 会回滚 CFG,
+  这里再按回滚后的值刷一次按钮与 body 类;关掉时若正在紧凑条,立即回面板。
+- 启动:旧配置若停在紧凑条,回首页 + 提示一次「紧凑条已改为可选:设置 → 显示 → 启用紧凑条」,
+  并把 `CFG.form` 清成 `panel`(清值本身就是一次性标记,不新增配置字段)。
+- 紧凑条布局、`fitCompact`、条尾按钮、快捷键分支全部保留,开关打开即恢复原行为。
+
+**验证**
+
+- `build/jsdom-smoke.js` **57/57**(新增 11 条:默认隐藏 / 收口 / Esc 两种路线 / Ctrl+2 / 开关状态 / CSS 与设置项存在)。
+  顺带修了探针环境:`invoke` 不再一律返回 null,补 `dpi` 与 `currentMonitor` 桩,让真实 init 能跑完再跑异步用例。
+- 无头 Edge + 真实 `index.html` / `app.js` / `styles.css` **19/19**:默认按钮 `display:none`、
+  打开后立即出现并落盘、按钮 / Ctrl+2 / Esc 三入口、紧凑条里关开关立即回面板、
+  旧配置 `form:"compact"` 回首页 + 提示 + 配置改成 `panel`;另含展开区冒烟(整行 300px、
+  无区间/柱图、台账本地时间)与**特大字号顶栏不溢出**(`scrollWidth 492 = clientWidth 492`)。
+- `cargo test`(core)**315 passed**(新增配置兼容单测);`cargo check`(core / all-targets)通过;`build/check-css-forms.js` PASS。
+
+**未做**:真机安装包的升级体验仍需打包后复测。
+
+### 发版 v0.1.64（2026-10-23）
+
+紧凑条改为可选开关，默认关闭：设置 → 显示 → 外观 →「启用紧凑条」；关闭时顶栏不显示「紧凑」、
+`Ctrl+2` 无效、胶囊 `Esc` 回面板。旧配置若停在紧凑条，升级后回首页并提示一次。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.64_x64-setup.exe`（5,195,871 B，SHA-256
+`52b7d5af17010b92223c730f8857a70ffa40160d165f4e8558ccd7de7d7ea7fc`）及 `.sig` 已发布到
+[GitHub Release v0.1.64](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.64)。
+发布提交 `5ca188f`，tag `v0.1.64`。
+
+`node --use-env-proxy build/verify-release.js` **13/13 PASS**；`node build/verify-signature.js`
+**PASS**（tauri.conf.json 的公钥能验签这一版的安装包）。
+
+本机未用打包产物覆盖正在运行的应用，留给自动更新验证。
+
+### 修复：关闭紧凑条后胶囊没有可见入口（2026-10-23，v0.1.64 → v0.1.65）
+
+**现象**（用户原话）：「只是紧凑不显示，胶囊还要有啊，现在也没法切换到胶囊了。」
+v0.1.64 把「紧凑」按钮藏掉后，顶栏只剩「刷新 / 置顶 / 隐藏」；胶囊虽然还能用 `Esc` / `Ctrl+3` 进，
+但没有任何**可见**入口，用户会以为胶囊也一起没了。
+
+**修法**：关闭紧凑条时，顶栏同一位置显示「胶囊」按钮（点击收成胶囊，胶囊右侧 `▲` 回面板）；
+开启时显示「紧凑」。两枚按钮由 `body.compact-on` 互斥：
+
+```
+body:not(.compact-on) #btnC{display:none}
+body.compact-on #btnPill{display:none}
+```
+
+顶栏始终只有一个折叠入口，宽度不变（特大字号实测 `scrollWidth 492 = clientWidth 492`）。
+设置文案同步改成「关闭后顶栏改为『胶囊』按钮」。
+
+**验证**：`jsdom-smoke` **58/58**（新增顶栏胶囊入口）；无头 Edge + 真实前端 **10/10**：
+默认胶囊可见 → 点击进胶囊 → `▲` 回面板；开启后按钮互换；特大字号开关两种状态都不溢出；
+旧配置升级仍是面板 + 胶囊入口 + 一次提示。
+
+### 发版 v0.1.65（2026-10-23）
+
+修掉关闭紧凑条后胶囊没有可见入口：关闭时顶栏同一位置显示「胶囊」，开启时显示「紧凑」，两者互斥、顶栏宽度不变。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.65_x64-setup.exe`（5,197,288 B，SHA-256
+`7605b7fb08b87a8968d9f70776d0edf3379ca14efd58b0ec9888b3a1ce9c6daa`）及 `.sig` 已发布到
+[GitHub Release v0.1.65](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.65)。
+发布提交 `ec71970`，tag `v0.1.65`。
+
+`node --use-env-proxy build/verify-release.js` **13/13 PASS**（首次因网络瞬断 fetch failed，
+带 `HTTPS_PROXY=127.0.0.1:7897` 重跑通过）；`node build/verify-signature.js` **PASS**（公钥验签）。
+
+本机未用打包产物覆盖正在运行的应用，留给自动更新验证。
+
+### 设置页文案分三层（2026-10-23，v0.1.65 → 待发版）
+
+**起因**（用户原话）：「感觉现在页面上后台设置的提示词好多，可以做什么优化吗？」
+
+**盘点**：`index.html` 管理页里 9 个 `.khint` + 14 条 `.desc` = **936 个汉字**，按 354px 内容宽折算
+约 31 行、**570px** —— 光说明文字就超过一整个面板（560px）。「密钥只进 Windows 凭据管理器」
+出现 10 次（html 4 + js 6）；关于页 362 字占 39%，其中「数据与隐私」单块约 150 字。
+
+**判断**：问题不是"解释太多"（核心价值第 4 条就是「可解释」），而是**必读与可选平铺在一起**、
+同一句话到处抄。所以做分层，不做删减。判据：这句话如果说错了，用户会不会做错事？会 → 常驻。
+
+**改法**：
+- 新增 `WHY` 文案表（`app.js`，18 条）与 `.why` / `.whybox` 组件：`<button class="why" data-why="key">`
+  点一下原地展开，复用行详情那套 `grid-template-rows:0fr→1fr`，不引新依赖；折叠态把内边距归零
+  （`.rbody-in` 2026-10-13 那个残影坑的同一处理）。`hydrateWhy()` 幂等，轮询重绘渠道卡后直接再调。
+- 关于页「数据与隐私」整段改 `<details class="fold">` 默认收起，摘要行写结论。
+- 渠道卡的 WorkBuddy 登录说明（140 字/卡）从常驻 `.mini` 挪到登录按钮旁的「?」；本机凭据说明压到 15 字。
+- 去掉 L1 与 L2 的重复句（"关闭后顶栏改为胶囊""底色即状态色"等 10 处各说两遍）。
+
+**结果**：常驻 **936 → 319 字**（L2 另有 657 字，点开才出现）。
+
+**验证**：`jsdom-smoke` **62/62**（新增 4 条：文案预算 khint ≤120 字/页且 desc ≤30 字/条、
+每个「?」都有文案、点开再点收回、关于页长文默认收起）；`probe-frontend` ok；`check-css-forms` PASS；
+`node --check app.js` 通过。另用无头 Edge 按真实 380 逻辑宽（500×725@125%）截图复核了
+显示 / 渠道 / 关于三页与展开态：`?` 与标签同行、说明块落在 desc 之后、无残影、无横向溢出。
+
+**踩到的坑**：`?` 一开始放在 `.desc` 之后 —— 因为 `.desc` 是 `display:block`，按钮被挤到单独一行。
+改成「标签 + ? + desc」，并让 `hydrateWhy` 在按钮后面有 `.desc` 时把说明块挂到该行末尾。
+渠道卡里按钮在 `.ccbtns` 横向 flex 行内，说明块必须插到整行之后，否则会白占一段宽度。
+
+### 新增 WorkBuddy AI(国际版)渠道 + 积分获取记录（2026-10-23，v0.1.65 → 待发版）
+
+**需求**（用户原话）：「增加 workbuddyai 也就是国际版渠道的积分获取展示，并且记录当日是否已有活跃获取积分。」
+追加确认：「每天要对话一次才会有 +30 积分」；提醒不做；记录保留 30 天够。
+
+**产品设计**：`docs/design/design-workbuddy-ai-channel-2026-10-23.html`（10 节，含 6 个线框）。
+
+**关键判断**：
+- 独立渠道，不是现有 WorkBuddy 的第二个域名 —— 两套账号、官方不支持跨区迁移（与 qoder / qoder-cn 同构）。
+- 国际版**没有签到**（`daily-checkin` 回 10001「活动未开启」，与国区「今天已签到」同码异义），
+  所以「当日是否已获取」不能走签到，只能从**余额正增量**反推。
+- 反推不能当事实：每条事件带 `source`，界面标「推算」；接上平台发放接口后只换来源，表与界面不动。
+
+**改法**：
+- `core/src/grants.rs`（新）：`detect()`（正增量 ≥0.5）、`is_activity()`（25–35 区间）、
+  `Grant` / `DayGrants` 与 `summarize()`。阈值只此一处，平台改额度只改常量。
+- `store.rs`：迁移 **v4** 新增 `credit_grants`（`UNIQUE(channel, ts)` 防重放）+ `insert_grant` /
+  `grants_since` / `prev_remaining`（严格小于本次 ts，且要排在写快照之前）/ `prune_grants`。
+- `workbuddy.rs`：`desktop_tokens_region(now, Option<bool>)` —— `Some(true)` 国际版、
+  `Some(false)` 国内版、`None` 全部（签到侧旧口径）。**分区是前置条件**：混着给会让每轮先用错区
+  令牌打一次 401，`cred-switch` 噪音把真正的凭据失效埋掉。
+- `providers.rs`：新增 `workbuddy-ai`（积分型、`workbuddy.ai` / `codebuddy.ai`、复用 `extract_workbuddy`）+
+  `tracks_grants(id)` 名单。
+- `fetch.rs`：`wb_desktop_only()` 一处判据 —— 凭据借 `WebSession` 链路，界面按 **app 型**渲染
+  （`auth_source` 改成 `"app"`，没有「重新登录」按钮）；401 文案、凭据标签、`auth_label` 分渠道；
+  取数成功后写事件（排在 `record_fp` 之前）；`ChannelView` 增加 `grantToday` / `grantWeek`，
+  由后端按 `local_day_of(updated_at)` 切天。
+- `lib.rs`：新增 `credit_grants(id, days)` 命令（默认 30、上限 90）。
+- 前端：`grantLine()` 四态文案（活跃 / 只有充值 / 未获取 / 不记）；卡片「积分获取」一行 + 「记录」
+  懒加载 30 天明细（点开才查库）；`LOGO` 复用 WorkBuddy 的标；卡片里那句 L1 单独写
+  「只读复用本机登录,自动续期」—— 照抄别的 app 型渠道的「不刷新」是错的。
+
+**验证**：`cargo test`(core) **326 passed**（新增 11 条：grants 5、store 3、build_view 2、迁移兼容）；
+`cargo check`(src-tauri) 通过；`jsdom-smoke` **64/64**（新增 2 条：积分文案四态、卡片记录入口）；
+`check-css-forms` PASS；`probe-frontend` ok。无头 Edge 按真实 380 逻辑宽截图复核了首页行与渠道卡
+（行：`今日活跃 +30 · 09:33 · 推算`；卡：今日 + 近 7 天 + 3 条记录，倒序）。
+
+**已知边界**：本机没装国际版桌面端时这条渠道显示「未检测到 WorkBuddy AI 登录信息」，
+不提供网页登录入口（裁决 6A）；充值到账会被记成事件，但界面标「非活跃」——不会说成活跃获取。
+
+### WorkBuddy AI 没凭据时自动隐藏（2026-10-23）
+
+**需求**（接上一条）：没装国际版桌面端的人会看到一行"未检测到登录"，是噪音 ——
+「首次检测不到凭据就自动隐藏，检测到再自动恢复」。
+
+**两条边界，缺一不可**：
+1. **只在从没取到过数时藏**。曾经正常取过数、这次瞬时读不到（客户端正在写文件、凭据管理器
+   RPC 卡一下）的，继续走"沿用旧快照 + 标注时间"——藏起来会让人以为配置丢了。
+   实现上落在 `fetch_all` 的 `creds.is_empty()` 分支里"缓存中没有该渠道"那一支。
+2. **用户点过眼睛就彻底让位**。新增 `Config::user_touched_channels`：点过眼睛（任意方向）
+   即记一笔，自动隐藏从此对这个渠道失效。没有这个字段，"点了显示、下一轮又被系统藏回去"
+   比没有自动隐藏更让人火大。
+
+**判据不是"有没有凭据"，而是"没凭据是否稳定等于没装"**：所以名单里只有
+`workbuddy-ai`（国际版没有网页登录路径）。Trae / Codex / Qoder 的凭据会瞬时读不到，
+加进去会让配置"时隐时现"。见 `providers::auto_hide_when_no_credential` 的注释。
+
+**实现**：`ChannelView.auto_hidden`（区分"系统藏的"和"用户藏的"）；`auto_hide_candidates(cfg)`
+（纯函数，已挂单测）；前端卡片状态写「未检测到登录 · 已自动隐藏(登录后自动出现)」，
+眼睛变成「显示」；点击只记 `userTouchedChannels`、**不**写 `hiddenChannels`
+（写进去就变成用户主动隐藏，再也不会自动恢复）。
+
+**验证**：`cargo test`(core) **327 passed**（新增 1 条候选名单单测）；`jsdom-smoke` **67/67**
+（新增 3 条：自动隐藏卡片的文案与眼睛、点击后记表过态且不进用户隐藏清单）；
+`check-css-forms` PASS；`probe-frontend` ok；`cargo check`(src-tauri) 通过。
+无头 Edge 截图复核：首页只剩空态"配置第一个渠道"，管理页卡片正确显示自动隐藏状态。
+
+### 全量测评与修复（2026-10-23）
+
+**问题**：对当前工作树做全量测评（未提交 diff 全读 + 全 crate 风险模式扫描 + 关键路径精读），
+发现 7 项缺陷。最重的一条：**工作树编译不过** —— `FetchResult` 新增的 `grants: Vec<GrantSeed>`
+字段带着 `Serialize` 派生，而 `GrantSeed` 没派生 serde，core 与 src-tauri 双双 E0277。
+上面两条「326/327 passed」在最终树上不可复现（写数字时树还没改坏，收尾时改坏了）。
+
+**修法**（7 项，全部最小改动）：
+- P0+P1 `FetchResult.grants` 是死字段（全库无填充点、无消费点，注释却宣称"台账直读"）：
+  连字段带 `GrantSeed` 一起删除 —— 编译错误随之消失，误导注释不再误导。
+  接平台台账（Accounts[] 的 CreateTime）留待有真机数据的一轮再做。
+- P2 探针 `probe_wbai.rs` 的 `DealName` 按字节切片，中文套餐名 18 字节处必 panic：
+  改 `chars().take(18)`。
+- P2 近 7 天到账窗口 `day0 - 6*86400` 没归零点，DST 切换日窗口会差一小时：
+  起点过一遍 `local_day_start_of`。
+- P3 换国际版账号会把旧账户余额当基线、凭空记一笔大额"到账"：workbuddy-ai 的 key_fp
+  改用「当前登着的 uin 集合」指纹（`fetch::accounts_fp`，排序去重后哈希、与候选顺序无关；
+  空集合退回不分段老口径，老客户端没写 uin 时行为同旧版）。老快照 key_fp 是空串，
+  升级后第一轮按无基线处理 —— 宁可漏记一笔、不可错记一笔。
+- P3 `insert_grant` 旁加守卫注释：将来接台账必须把 ts 改毫秒，否则同秒两笔被 UNIQUE 吞一条。
+- P3 本段写回真实复测数字（前两条的验证声明以此段为准）。
+
+**复测（修完后的同一棵树）**：`cargo test`(core) **328 passed / 0 failed / 6 ignored**
+（较上一条多 1 条 = `accounts_fp` 守卫单测）；`cargo check --all-targets`(core) 与
+`cargo check`(src-tauri) 通过、零警告；`jsdom-smoke` **67/67**；`check-css-forms` PASS；
+`scan-secrets` CLEAN（176 文件）；`node --check` CI 清单 6/6。回归面复核：前端 jsdom
+断言全过、前后端 54 个 invoke 命令契约对齐、非测试代码 panic 模式扫描无新命中。
+
+### 发版 v0.1.66（2026-10-24）
+
+WorkBuddy AI(国际版)渠道:桌面端凭据只读复用 + 自动续期、积分到账按余额正增量推算
+(界面如实标「推算」)、未装桌面端自动隐藏(用户点过眼睛即彻底让位);渠道卡新增
+「积分获取」(今日 + 近 7 天)与 30 天明细(懒加载);设置页文案三层分流(常驻/? 展开/归档)。
+同轮完成全量测评修复 7 项(见上一节),core 测试 328 条全绿后才发。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.66_x64-setup.exe`（5,208,608 B，SHA-256
+`ef9fba0417d81c67e634edd06f3567311995c3fb0c1a734b72805000f0ca6b0a`）及 `.sig` 已发布到
+[GitHub Release v0.1.66](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.66)。
+发布提交 `9c48869`，tag `v0.1.66`。
+
+`node build/verify-release.js`（`HTTPS_PROXY=127.0.0.1:7897` + `NODE_USE_ENV_PROXY=1`）
+**13/13 PASS**（本机直连 github.com 不通，git 也走该代理）；`node build/verify-signature.js`
+**PASS**（tauri.conf.json 的公钥能验签本版安装包，已装用户收得到）。
+
+本机未用打包产物覆盖正在运行的应用，留给自动更新验证。
+
+## 签到「到账核对」二次校验:用余额差值见证 claim 真的到账了(2026-10-24,v0.1.66 → v0.1.67)
+
+**动机**:Trae / WorkBuddy 的签到接口经常不返回数额(0.1.5x 起真机:`credits = null` 是生产常态),
+界面只能说「平台未返回数额」,领没领到、领了多少无从核对。而签到渠道的余额快照本来就在每轮落库
+(`fetch.rs` → `snapshots`,provider id 与签到 id 相同),claim 成功后也已经触发 `refresh_now`
+——缺的只是把这两条线在签到这一侧接起来。设计稿:
+[`docs/design/design-arrival-confirm-2026-10-24.html`](docs/design/design-arrival-confirm-2026-10-24.html)。
+
+**定位(只见证,不裁决)**:余额核对是 `claimed` 之后的**纯证据层**,单向工作 ——
+只能把结论「确认得更实」,永远不能否决或改写签到结论。三条红线的落法:
+
+1. 判定链路一字不动:回查状态仍是**唯一成功证据**;明确不做「用余额把 confirming 升级成 claimed」
+   (余额增量分不清「我们领的」和「恰好充值到账」)。
+2. 推算的不当事实说:增量在界面**永远带「按余额推算」标注**(与 `grants.rs` 的 `source:"delta"` 同纪律);
+   `last_credits` 不回填观察值 —— `checkin_month_credits` 的「本月已领」只信平台字段。
+3. 核对结论绝不参与判定:不碰 `last_code` / `done_for_day` / `signed_today` / `blocks_today`,
+   徽标颜色与「N 个没签」计数一概不读它。
+
+**实现**:
+
+- `core/checkin.rs`:`ArrivalInfo { status, baseline, baseline_at, delta, observed_at, day }` +
+  `ARRIVAL_EPS = 0.5`(与 `grants::GRANT_EPS` 同值)。`observe()` 单向判定:
+  正增量(`>= EPS`)→ confirmed;`delta <= EPS` 维持 pending(**没有「确认失败」这个态** ——
+  取数间隔里的消耗会把 +100 压成负数,判失败等于拿消耗当没发放);跨过签到周期日还没见到 → unseen。
+  落定的单子不再改写(confirmed 之后的消耗、unseen 之后的充值都不动它)。
+- `core/store.rs`:`latest_snapshot(provider_id)` —— claim 前读基线、取数后读现值,纯读库。
+- `src-tauri/lib.rs`:`run_checkin` 在发起 claim **前**取基线快照(零网络请求;读不到就不核对);
+  判 `Claimed` 后 `refresh_now` 跑完即时核一次,落 `entry.arrival` + diaglog 一行。
+  新增 `settle_arrivals()`:挂 `refresh_now` / `poll_loop` 的取数完成点,对 pending 单子拿最新快照接着核,
+  状态迁移才落盘 + `checkin-updated` 事件;只改 `checkin[id].arrival` 这一项(N04 锁纪律)。
+  同日没 claim 的后续运行(already / retry)**保留**既有核对单;跨周期日才清。
+  `CheckinState.arrival` 只透出**今天**的单子 —— 昨天的 confirmed 挂在今天的 already 上是误导。
+- `app/src/app.js`:`ckArrivalNote()` —— confirmed 且与平台数额吻合(|delta−credits| ≤ 5)说
+  「余额已确认到账(增量 +N,与平台数额吻合)」;没吻合说「余额已见增量 +N(按余额推算)」;
+  pending「正在核对到账(随下一轮取数更新)」;unseen「余额未见增量(可能被消耗抵消,不代表没领到)」;
+  没有核对单落回旧文案「已触发到账核对」。同一句话进 ckBadgeTip。
+
+**测试**:core 新增 5 条(正增量确认 / 持平·消耗·浮点噪声维持 pending / 跨日落 unseen /
+落定不可改写 / 老配置 JSON 无 arrival 字段的 serde 兼容),core 全量 **333 条全绿**;
+`cargo check`(src-tauri)通过;`jsdom-smoke` **67/67**。
+
+### 发版 v0.1.67（2026-10-24）
+
+签到「到账核对」:claim 后用渠道余额快照差值二次确认到账(三态 pending / confirmed / unseen,
+无「确认失败」态),界面如实标「按余额推算」;判定链路与「回查是唯一成功证据」不变,
+核对结论不参与余额渲染与签到判定。设计稿 `docs/design/design-arrival-confirm-2026-10-24.html`。
+core 新增 5 条 ArrivalInfo 单测,全量 333 条全绿后才发。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.67_x64-setup.exe`（5,215,162 B，SHA-256
+`416b9cfed607b420df149caa200d6d40a4665f363919ba951d945fdfbae4b0a7`）及 `.sig` 已发布到
+[GitHub Release v0.1.67](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.67)。
+发布提交 `96ce5bc`，tag `v0.1.67`。
+
+`node build/verify-release.js`（`HTTPS_PROXY=http://127.0.0.1:7897` + `NODE_USE_ENV_PROXY=1`）
+**13/13 PASS**;`node build/verify-signature.js` **PASS**（tauri.conf.json 的公钥能验签本版
+安装包,已装用户收得到）。
+
+本机未用打包产物覆盖正在运行的应用,留给自动更新验证。
+
+## 跨日「已签」三重失真:0 点后挂昨天的结论、客户端签完说没签(2026-10-25,v0.1.67 → v0.1.68)
+
+**现象(本机 10-25 00:00–00:23 全程实测还原)**:0 点过后界面仍显示 trae/workbuddy「已签/今日已领」(实际今天没签);用户 00:04 在平台客户端手动签了两个(余额快照 00:04:25 +100、00:04:51 +100 为证);00:09 活动监测查到平台如实返回 `already`,界面却翻成「今天还没签」挂着,直到 00:23 节拍器重新查才正确。
+
+**根因(读安装版 tokenscope.db + diaglog 定位,三个漏洞叠加)**:
+
+1. **短码跨日不清**:`lastCode=claimed/already` 是周期日作用域的事实,`checkin_state_of` 却原样透出 —— 0 点后昨天的结论继续渲染成「今日已领」,而 `doneToday`(按周期日算)已是 false,同一屏自相矛盾。
+2. **跨日不重取**:前端只在启动/事件/手动操作后重取签到状态,0 点翻页没有触发器,陈旧像素挂到下一个事件。
+3. **监测到的 already 不落账**:`monitor_standard_activity` 把平台真话只写进展示字段(activity_state),不写 `lastDay/lastCode`、不记流水 —— 00:09 明明问到了「已签」,doneToday 一直 false,首页一直挂「今天还没签」。
+
+**修复(v0.1.68,四条)**:
+
+- **① 按周期日门控透出**(`checkin_state_of`):`lastDay ≠ 当前周期日` 时 outcome 报空、credits 报 None、activityState 按 `period`(观测时的周期日)过滤 —— 前端自然落回「今天还没签 + 领按钮」/「待签」,与 doneToday 从此同口径。Qoder 的 10:00 跨日自动正确(09:59 周期日未翻,昨日结论照常显示)。
+- **② 前端跨日定时重取**:`checkin-updated` 监听旁挂自排定时器,到下一个北京 0 点(UTC 16:00)或 Qoder 10 点(UTC 02:00)就 `loadCheckin()` 重渲 —— 0 点整当场翻页,不等事件来撞。北京无夏令时,UTC 算术稳定。
+- **③ 监测查到 already 落账**(`record_observed_already`):`monitor_standard_activity` 查到 `Already` 且今天尚无结论时,记 `lastDay/lastCode=already/lastCredits` + 流水一行(说明写明「平台侧显示已签到(活动监测)」)+ diaglog + `checkin-updated`。两条保护:今天已有结论不覆盖(我们的 `claimed` 带核对单,绝不能被改写);**只在 `due_now` 之后记** —— 与自动领取同一道「平台新一天已开始」信任线(00:23+抖动),防 0 点后平台短暂残留昨天 `checked_in` 被当成今天已签 → 静默丢分(与 Qoder `day_roll_hour` 同一条教训)。attempts/next_try_at/arrival 一概不动(观察≠尝试)。自动领取关着的人受益最大:客户端签完,挂件一小时内自己纠正。
+- **④ 手动路径凭据失败补流水**:`checkin_now` 里 `run_checkin` 报错且非闸门类拒绝(隐藏/开关/互斥/未知渠道)时,走与节拍器同一条 `record_checkin_skip` —— 「点过但没试成」与「没点过」从此可区分。闸门类拒绝不记,免得误算退避。
+
+**测试**:`cargo check`(src-tauri)通过;core 全量 **333 条全绿**(本次改动集中在 lib.rs/前端,core 无新纯函数);`jsdom-smoke` **67/67**;`node --check` 通过。
+
+### 发版 v0.1.68（2026-10-25）
+
+修跨日签到显示三重失真(见上一节):① 后端按周期日门控短码/数额/活动态(与 doneToday 同口径);
+② 前端跨日定时重取(北京 0 点 / Qoder 10 点当场翻页);③ 活动监测查到「平台侧已签」时记入
+今天的账(带 due_now 信任线,今天已有结论不覆盖);④ 手动路径凭据失败补流水。
+`cargo check` 通过、core 333 条全绿、`jsdom-smoke` 67/67 后发。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.68_x64-setup.exe` 及 `.sig` 已发布到
+[GitHub Release v0.1.68](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.68)。
+发布提交 `39cf19e`，tag `v0.1.68`。
+
+`node build/verify-release.js` **13/13 PASS**;`node build/verify-signature.js` **PASS**
+(tauri.conf.json 的公钥能验签本版安装包,已装用户收得到)。
+
+当晚(10-26 00:00–00:25)留给自动更新后的真机复测:0 点翻页应当场变「待签」,
+00:23+ 自动领取后变「✓已签」;若当天在客户端手动签,一小时内监测应自动认账。
+
+## 胶囊数字不跟随轮询更新(2026-10-26)
+
+**现象(用户报)**:4S 渠道的余额在动、面板数字跟着变,胶囊一直停在启动时的那个数(托盘与胶囊同源,一起僵住)。
+
+**根因**:v0.1.56 引入统一视图之后,`home_view` 只在启动的那一次 `refresh()` 里取过。后台轮询走
+`channels-updated` 事件,前端监听只做了 `CHANNELS = ev.payload` —— 面板行的大数字是前端自己从
+`remaining` 算的,所以照常更新;而胶囊主数字 / 限定语 / 行色调 / 分组 / 风险带读的都是 `HV`
+(后端 `view.rs` 的结论),那一份永远停在启动那一刻。只报 4S 是因为它的余额变得最勤、最容易被看见。
+
+**修复**:
+
+- `lib.rs`:`home_view` 的计算抽成 `home_view_of(cfg, views, now)`,命令与轮询共用同一份实现;
+  推送载荷改成 `ChannelsPush { views, home }`(camelCase),两处轮询出口(定时循环 / `refresh_now`)
+  统一走 `emit_channels`。视图跟着**这一轮**的 views 一起算,前端不必再补一次 IPC
+  —— 补取 `home_view` 在缓存过期时会多打一轮账务接口。
+- `app.js`:`listen("channels-updated")` 改为 `applyChannelsPush(payload)`:收 `{ views, home }`,
+  先 `hvApply(home)` 再 `render({ updated: true })`;老后端只推数组时退回补取 `home_view`,行为不回退。
+
+**验证**:`cargo check` / `cargo build`(debug)通过;`jsdom-smoke` **68/68** —— 新增 1 条:
+推一轮 4S 从 ¥120 → ¥118,胶囊必须跟着变。反向验证:把监听换回旧写法,该用例 FAIL
+(`before=¥120.00 after=¥120.00`),与真机现象一致。
+
+### 发版 v0.1.69（2026-10-26）
+
+修胶囊数字不跟随刷新（见上一节）：轮询推送改成 `{ views, home }`，胶囊 / 行色调 / 分组 /
+风险带与面板用同一份数据重算。`cargo check` + `cargo build` 通过、`jsdom-smoke` **68/68**
+（新增 1 条回归用例，反向验证旧写法必 FAIL）后发。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.69_x64-setup.exe`（5,217,837 B，SHA-256
+`1efeca1b29c731f0ee11cf206431955b0aaef02bf01e3a54750959c41a47a00e`）及 `.sig` 已发布到
+[GitHub Release v0.1.69](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.69)。
+发布提交 `e30dbfa`，tag `v0.1.69`。
+
+`node build/verify-release.js` **13/13 PASS**；`node build/verify-signature.js` **PASS**
+（tauri.conf.json 的公钥能验签本版安装包，已装用户收得到）。
+
+顺手修了验签脚本自己的一个环境坑：它用裸 `cargo.exe` 靠 PATH 解析，在受限 PATH
+（代理沙箱 / 精简 CI）下会 `spawnSync cargo.exe ENOENT` —— 报出来像"验签失败"，
+其实是找不到编译器。改成用上面已经算好的 `cargoBin` 绝对路径。
+
+本机未用打包产物覆盖正在运行的应用，留给自动更新验证。
+
+### 发版 v0.1.70（2026-10-27）
+
+性能优化版本（调研与实施记录见 `docs/research/performance-optimization-2026-10-27.md`）：
+只动**只读计算与调度层**，余额、签到、通知与凭据的判定口径不变。
+
+- **P1 历史窗口单次读取**：`Store::history_between` 一次读出 92 天历史，今日/本周/本月、
+  三个环比、观测缺口、逐日覆盖、申请跳升与近 7 天日均都在内存切出；旧查询保留为运行时
+  回退与测试 oracle，读取失败或超过 50 万行时**整块回退**。
+- **P1b 覆盖索引**：`idx_snap_fp_cover(provider_id, key_fp, ts, remaining)`，迁移版本 5；
+  本机库 23.4 MB → 30.6 MB（+7.2 MB，在预算内），首次启动自动建立，失败只记警告。
+- **P2 自定义渠道并行**：与内置渠道 `futures::join!`，内部 `buffer_unordered(4)`，
+  结果按配置顺序还原；隐藏渠道仍不读凭据。
+- **P2 前端**：峰谷倒计时分钟对齐；设置页密钥尾号/来源 5 分钟缓存 + 显式失效。
+
+**验证**：core **343 passed / 7 ignored**；`build.ps1 check` 双 crate 通过；`jsdom-smoke`
+**70/70**；`probe-frontend` / `check-css-forms` / `check-yaml` / `scan-secrets` 全过；
+release 构建后 CDP 真机 `verify-form`（紧凑条开启时）与 `visual-forms` 24 场景通过，
+库已迁移到 v5 且 `EXPLAIN QUERY PLAN` 命中 `COVERING INDEX idx_snap_fp_cover`。
+
+实测（真实库拷贝，release，10 轮平均）：4 个金额渠道历史计算合计约 **8.9 ms**，
+优化前约 **455 ms**（单渠道 45–57×）。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.70_x64-setup.exe`（5,226,792 B，SHA-256
+`c70ae04b0a1b01e8084508268f32268f596b85965e26d34303f73d93a74bdba1`）及 `.sig` 已发布到
+[GitHub Release v0.1.70](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.70)。
+发布提交 `20c8b07`，tag `v0.1.70`。
+
+`node build/verify-release.js` **13/13 PASS**；`node build/verify-signature.js` **PASS**；
+`node build/verify-updater.js` **PASS**（已装用户收得到）。
+
+> 旧探针说明：`verify-form` 的 compact 用例要求先在内存里打开 `CFG.compactEnabled`
+>（v0.1.58 起默认关）；`verify-settings-entry` 数的是 DOM 节点，会看到 CSS 隐藏的「紧凑」
+> 按钮（compact 关闭时实际可见 4 个）；`verify-ui-0923` 的 U2/U8/U6 断言绑定旧渠道夹具。
+> 发布前已逐条确认这些不是本次回归。
+
+另记：Node 24 的 fetch 不读系统代理，核验脚本在本机需
+`NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:7897` 才能连上 GitHub。
+
+### 发版 v0.1.71（2026-10-29）
+
+签到中心版(设计与现场记录见 `docs/product/product-checkin-center-2026-10-29.md`):
+首页顶部签到格点击后原来落到「刷新与启动」的设置区,与"看签到"的意图错位;
+流水只露 7 天一行小字,而 `checkin_log` 里躺着 400 天全量 —— 本次给数据一个出口。
+
+- **新命令 `checkin_history{days}`**:每渠道按天聚合(`Store::checkin_day_rows`,
+  `GROUP BY day` + `MAX(ts)` 裸列取当天最后一行,与 `checkin_of_day` 判"今天处理过
+  吗"同一口径)+ 逐条明细(`recent_checkins` 增加 `limit` 参数,90 天重试流水 400 条
+  不够)。空槽按"该不该签"分 `missed`(该签没签)/ `no_data`(开启之前),
+  `checkin::day_status` 纯函数统一结论,绝不把"没发生"画成"失败"。
+- **`CheckinCfg.enabled_since`**:`set_config` 合并处记 `enabled` false→true 跳变,
+  关闭清空;老配置(升级前就开着)由查询侧用首条流水时刻兜底。
+- **前端「签到」页签**(管理窗口,排在渠道后):今日总览条(✓ n/n · 本月已领 ·
+  分段跳转)+ 逐渠道状态行(没签排前,复用 `ckRowHtml` 可直接操作)+ 活动状态
+  (原样搬来)+ 近 30 天日历带(领到/平台已签/没签/没签成/无记录五色,悬停当天
+  明细)+ 近 90 天明细表(渠道筛选,上限 120 行)+ 管理开关(从 run 页签整块移入)。
+  「刷新与启动」页签的签到区删除。日期口径全部后端算(周期日),前端零日期运算。
+- **入口**:首页签到格与多渠道待签提示条落 `openCheckinCenter()`;页签只在有渠道
+  开着监测时出现(全关隐藏并退回渠道页)。`checkin-updated` / 手动领取后流水与
+  日历当场刷新。
+
+**验证**:core **346 passed / 7 ignored**(新增 `checkin_day_rows_take_last_row_of_each_day`
+/ `recent_checkins_respects_limit` / `day_status_buckets` 3 条);`cargo check` 双 crate 通过;
+`jsdom-smoke` **82/82**(新增 11 条:页签可见性、五段结构、日历口径、明细筛选、入口链路);
+release 构建后 CDP 真机 `verify-checkin-center` **13/13**(真实库 3 渠道 / 53 条流水),
+`verify-settings-entry` 全过(断言更新到 7 页签;标题栏 5 按钮是 v0.1.59 起的历史遗留,
+一并修正);三档字号页签零溢出;真机截图目检三段(真实数据里 WorkBuddy「漏 4」
+第一次可见 —— 正是这次要给的东西)。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.71_x64-setup.exe`(5,237,243 B,SHA-256
+`af8b57e5b7908cdfedb2086ceb19c190dbd87f37dca494acf7cf0ccc2f94deb8`)及 `.sig` 已发布到
+[GitHub Release v0.1.71](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.71)。
+发布提交 `a51d946`,tag `v0.1.71`。
+
+`node build/verify-release.js` **13/13 PASS**(发布后第一次跑红是 CDN 同步延迟,
+重跑即绿);`node build/verify-signature.js` **PASS**(公钥验签 v0.1.71 安装包);
+`node build/verify-updater.js` **PASS**(已装用户收得到)。
+
+### 发版 v0.1.72（2026-10-30）
+
+Qoder 积分逐包到期版(排查与设计见 `docs/product/product-qoder-credit-expiry-2026-10-30.md`):
+逐包到期明细只在 qoder.com 的网页会话后面 —— PAT 已证伪(`TOKEN_EXPIRE`),
+桌面 Bearer 的 openapi 网关只有汇总(v2 8 个候选路径 404);逐包字段形状由公开
+SPA bundle(qbase/qoder/0.0.743)的渲染代码确证("Remaining {value} {unit}.
+Expires on {time}")。
+
+- **core::qoderweb(新)**:候选端点链(个人版端点真会话下抓包钉死前按序试,
+  赢家记内存 memo)+ 形状自适应解析(只认能验证的包形状;9999 哨兵滤掉;
+  已过期但有余量的包保留 —— 与 expiring[] 既有契约一致)。
+- **core::weblogin**:qoder 会话抽取(会话 Cookie 名单平台私有,罐里全部 Cookie
+  拼装)+ 登录完成判定,`is_post_login` 一般化出 `site_post_login`。
+- **fetch 合并点**:qoder 渠道每轮余额成功后独立抓一次包 → `expiring[]` +
+  `expiry_complete`;风险带临期格 / 行风险色(toneOf 近 7 天占比)/ 明细卡逐包
+  列表三层自动点亮,前端零新口径。三条退路全是如实:没会话引导登录、被平台拒
+  (PacksErr::Unauthorized)报「未登录」、别的错沿用上次成功列表 + 标时间。
+- **壳**:qoderweb_login 登录窗 + 观察者(探测判收工,与 WB 同纪律)+
+  `web_session_of` 分发 —— **故意不并进 wb_session_of**,签到凭据兜底引用的是
+  那个函数,网页会话绝不漏进签到链路(设计红线)。
+- 真机踩过并修掉:登录入口直接给 /account/usage 会让 landed 在登录前就置真
+  (首次导航即"完成路径",随后才 302),观察者立刻误发「被拒绝」提示 ——
+  入口改走 sign-in + oauth_callback(与 WB 同构)。
+
+**验证**:core **354 passed / 7 ignored**(新增 9 条);`jsdom-smoke` **88/88**
+(新增 6 条);release 构建后 CDP 真机 `verify-qoder-expiry` 全过(入口隔离 /
+登录中状态 / 无会话降级文案 / 误导 toast 已修);回归 `verify-checkin-center` 与
+`verify-settings-entry` 全过。个人版逐包端点的最终钉死在用户首次登录后由
+diaglog(`qoder/webpacks`,只记形状)与候选链自动完成。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.72_x64-setup.exe`(5,246,269 B,SHA-256
+`1fd9af3eea40f59b4be4d8aae946d3c6e98b8fa37853614379b2f87163ce93da`)及 `.sig` 已发布到
+[GitHub Release v0.1.72](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.72)。
+发布提交 `f4486b4`,tag `v0.1.72`。
+
+`node build/verify-release.js` **13/13 PASS**(一次 fetch failed 为网络抖动,
+按 PROGRESS 旧注加代理后全绿);`node build/verify-signature.js` **PASS**;
+`node build/verify-updater.js` **PASS**(已装用户收得到)。
+
+### 发版 v0.1.73（2026-10-30）
+
+用户升级订阅后,实测 `wham/usage` 已返回 `plus`,5 小时/周两个窗口;
+重置卡接口返回 `available_count:0, credits:[]`。原版会更新套餐和窗口,
+但没有重置卡,短窗口只显示相对倒计时。
+
+- 新增只读 `wham/rate-limit-reset-credits` 查询:同一 OAuth + 工作区头,
+  4 秒预算、512 KB 响应上限,失败不影响配额。数量未知与 0 张分开;
+  明细按到期日排序,无日期如实标记,有兑换历史时显示最近 `redeemed_at`。
+- Codex 详情显示每个窗口完整本地重置日期、秒和时区,倒计时每分钟更新;
+  新增重置卡区和查询时间,多卡可展开,副标题显示可用数量。
+- 凭据支持 `CODEX_HOME`,带上 `tokens.account_id`;仅周窗也能取数,
+  15 分钟/1 小时等窗口不再误标“5 小时”。
+- 依据官方 App Server 文档与 CodexBar 的接口契约独立实现,
+  取证与边界见 `docs/research/codex-subscription-2026-10-30.md`。
+
+验证:core **358 passed / 7 ignored**,前端 **98/98**,完整 `cargo check --all-targets`
+与 Release 构建通过（仅现有 corrupt .drectve 链接器噪声,导入表无动态 WebView2Loader）。
+已替换本机安装目录下的 exe 并核对 SHA-256,原版保留为 Grandettoken.pre-codex-0.1.73.exe.bak。
+实机展开 Codex 卡验证 Plus / 两个准确重置时间 / UTC+08:00 / 0 张可用与查询时间均正常,
+截图目检排版通过。真实账号暂无可用卡,有卡分支由夹具覆盖。
+
+本地签名 NSIS 安装包 `Grandettoken_0.1.73_x64-setup.exe`（5,253,787 B,SHA-256
+`fc10e1a3121cb09e81d4b19c4f826c53ee2a97fc33b9893d06b8d6b44e3521ea`）及 `.sig`、
+`latest.json` 已发布到
+[GitHub Release v0.1.73](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.73)。
+发布提交 `d25e8f2`,tag `v0.1.73`。先核对草稿三件套完整再公开为 latest。
+
+发布后 `node build/verify-release.js` **13/13 PASS**（线上安装包 SHA-256 与本地一致）;
+`node build/verify-signature.js` **PASS**（现有公钥验证线上安装包）;
+`node build/verify-updater.js` **PASS**（已装用户可通过固定更新端点收到 v0.1.73）。
+
+[GitHub CI](https://github.com/wacilimonster-source/Grandettoken/actions/runs/41025183619)
+**PASS**（5m35s）:core 单测、两个 crate 的 all-targets 检查、前端语法、CSS 形态守卫与凭据扫描均通过。
+
+### 发版 v0.1.74（2026-10-30）
+
+设计先行:见 `docs/design/design-codex-weekly-2026-10-30.html`。
+原收起行只展示一个主数,5 小时与周额度必须点开才能同时看。本次按用户指定,
+右上用大字显示“本周剩余”,右下小字显示“5 小时剩余”,左侧保留套餐与重置卡。
+
+- 解析层将周窗置为 main 并排在前面;不依赖上游 primary/secondary 槽位。
+  周窗不存在时回落实际窗口,不编造零额度。
+- 视图层将 Codex 主数字与风险绑定窗分开:周主数字保持稳定,
+  短窗仍参与限流、风险色、排序与恢复时间判断。两个额度各按自身余量着色。
+- 两项同步响应“已用/剩余”设置;陈旧与取数失败保留双额度并显示快照年龄/错误。
+  紧凑条保留双额度,窗口仍为 46px 高;胶囊主数字采用同一周口径。
+- 展开详情周窗在前,准确重置时间、时区与重置卡功能保留。
+
+验证:core **360 passed / 7 ignored**;前端 **107/107**;新增真实渲染输出 + 系统 Edge
+布局检查 **48/48**（三档字号 × 面板/紧凑条 × 8 个状态,含短期耗尽、周告急、旧快照、
+失败、已用、单窗和长套餐名）,全部额度可见、零越界。`cargo check --all-targets` 与
+签名 NSIS 构建通过（仅既有 .drectve 噪声,导入表干净）。
+
+本机已更新并实机验证:收起行同时显示本周与 5 小时剩余,展开详情仍为周窗优先,
+准确日期/时区完整,截图目检正常。安装前原版本备份为 `Grandettoken.pre-0.1.74.exe.bak`。
+
+签名 NSIS 安装包 `Grandettoken_0.1.74_x64-setup.exe`（5,252,562 B,SHA-256
+`74882f4e5d65bb8ddc9234769ddefdb688e4d3036b40ece266f48d0d06410ca3`）及 `.sig`、
+`latest.json` 已发布至
+[GitHub Release v0.1.74](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.74)。
+发布提交 `d1e0a6d`,tag `v0.1.74`;草稿三件套核对齐全后公开为 latest。
+
+发布后 `verify-release.js` **13/13 PASS**（线上安装包 hash 与本地一致）,
+`verify-signature.js` **PASS**（现有公钥验证线上安装包）,
+`verify-updater.js` **PASS**（已装用户收到 v0.1.74）。
+
+[GitHub CI](https://github.com/wacilimonster-source/Grandettoken/actions/runs/41031310358) **PASS**。
+
+### 发版 v0.1.75（2026-10-30）
+
+v0.1.74 的收尾审查发现:系统通知 `crit_now/crit_body` 仍取展示主窗,
+周优先后会漏掉短窗低额度通知,且通知百分比可能与实际触发窗口不符。
+新增 core::view::notification_window,Codex 通知按实际最紧窗口判断,
+文案明确写出“5 小时额度”或“本周额度”;其它渠道保留原通知口径。
+双额度布局与周主数字沿用 v0.1.74 的实机和 48 个浏览器布局验证结果。
+
+core **361 passed / 7 ignored**（新增通知窗口回归）,完整 all-targets 检查通过。
+
+本机已更新至 v0.1.75,保留原版备份 `Grandettoken.pre-0.1.75.exe.bak`。
+实机再次确认收起行同时显示周与 5 小时额度。
+签名 NSIS 安装包 `Grandettoken_0.1.75_x64-setup.exe`（5,252,469 B,SHA-256
+`24f4231af80c7b337d2b2d6b51c03e2a4c356972e0fe6cb779c41151cea65c9a`）及 `.sig`、
+`latest.json` 已发布至
+[GitHub Release v0.1.75](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.1.75)。
+发布提交 `6e22423`,tag `v0.1.75`。线上 `verify-release.js` **13/13 PASS**,
+`verify-signature.js` 和 `verify-updater.js` **PASS**;
+[GitHub CI](https://github.com/wacilimonster-source/Grandettoken/actions/runs/41032451875) **PASS**。
+
+### 发版 v0.2.0（2026-11-01）
+
+设计先行 + 全量落地：`docs/design/design-refinement-2026-11-01.html`。
+本轮不改渠道口径、不放大窗口，目标是让界面从“所有元素同时说话”变成“平时安静、出事一眼看见”。
+
+- **设计令牌 / 颜色纪律**：`:root` 增加 4 级表面、4 级文字、状态语义色与 5 档字号；
+  健康数值回到主文字色，只有 warn / bad / 失联保留颜色，并同时保留状态点、左轨与文字标签。
+- **主面板**：标题栏只留刷新图标 + `⋯` 菜单（置顶 / 折叠 / 隐藏 / 退出）；刷新显示真实进度环，
+  完成后短暂变 ✓。摘要保留「临期总量 / 最先到期 / 签到」口径，改为英雄数字 + 7 日到期分布 +
+  风险卡 + 签到微件。行高 48/56，告急行 2px 状态轨 + 浅色底；失联/旧快照数值降灰并加 `~`；
+  兜底字母固定 2 位大写。底栏每个计数前带自己的状态点。
+- **设置与管理**：7 个页签改为「索引页 → 子页」；索引行显示渠道数/需处理数、签到进度、
+  字号与排序、刷新间隔、版本与上次检查。`←` / `Esc` 逐级返回：子页 → 索引 → 关闭。
+  旧页签保留在 DOM 里供外部跳转与测试，视觉上隐藏。
+- **展开区**：内嵌仪表卡；核心三数、近 7 天消耗柱（聚合现有 `channel_changes` 台账，
+  不新增取数）、口径 2 列、最近变动、页脚动作；支出用 text-2、入账用 ok。
+- **折叠形态**：紧凑条图标已带 2 位缩写，不再重复短名；隐藏限定语徽标，告急 chip 用浅色底 +
+  状态点 + 数值色表达风险，同宽能多放一个渠道。胶囊/贴边语义不变。
+- **动效**：`--t3` 320 → 280ms；菜单 120ms 淡入；`prefers-reduced-motion` 仍一键全静。
+
+**测试与修正**：core **361 passed / 7 ignored**（修正 `peak_state_only_for_peak_priced_channels`
+依赖真实时钟、在 2026-11 按设计应报节假日表过期的问题，改用固定日期）；jsdom **120/120**
+（新增摘要英雄/7 日分布、颜色纪律、兜底字母、设置索引、标题栏菜单断言）；三形态 × 三档字号
+视觉回归 **30/30 无越界**；`verify-ui-0923` 17 条全 PASS（U8 从旧环比改为新摘要结构）；
+设置入口、签到中心、焦点环、形态尺寸全部 PASS；Codex 布局 **48/48**；Qoder 逐包到期 PASS。
+
+**构建**：`app/src-tauri/Cargo.toml` / `tauri.conf.json` / `Cargo.lock` 三处版本同步为 **0.2.0**；
+签名 NSIS 安装包 `Grandettoken_0.2.0_x64-setup.exe`（5,258,393 B，SHA-256
+`1D687413076DE9D467D3ACBD10001B53A8448D74729722A11E2B0A00EE0859C4`）。
+发布信息与线上校验见下一条记录。
+
+**发布（2026-11-01）**：tag `v0.2.0`，release 提交 `91f6ef6`，
+[GitHub Release v0.2.0](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.2.0)。
+GitHub API 与 `gh release view` 均确认三件套齐全：`Grandettoken_0.2.0_x64-setup.exe`
+（5,258,393 B）、`.sig`（424 B）、`latest.json`（1,075 B）；release 不是 draft / prerelease，
+说明中文完整（513 字符 / 303 汉字）。
+
+`verify-signature.js` **PASS**（`tauri.conf.json` 公钥能验线上安装包）；`verify-updater.js`
+**PASS**（固定更新端点 / 版本 / 签名逐字一致 / URL 指向本 tag / 安装包可下载）。
+`verify-release.js` 本次访问 `github.com/.../releases/latest/download/latest.json` 超时
+（`api.github.com` 可达，三件套、签名与更新链路已由前两项核验）；网络恢复后可重跑，
+不影响已装用户从固定更新端点检查 v0.2.0。
+
+本机已用 `Grandettoken_0.2.0_x64-setup.exe` 静默覆盖安装，
+`%LOCALAPPDATA%\Grandettoken\Grandettoken.exe` 文件版本已变为 **0.2.0**；配置、SQLite 与凭据均保留。
+
+### 发版 v0.3.0（2026-11-01）
+
+设计/技术方案：`docs/product/product-resizable-panel-2026-11-01.md`。本轮只做“非胶囊形态的缩放与自适应”，
+不改渠道口径、不改默认尺寸。
+
+- **范围**：面板内容 340×460 – 740×920（窗口 360×480 – 760×940，默认 400×580）；
+  紧凑条内容 220–580 × 46（只允许左右，拉宽只露出更多 chip）；胶囊/贴边锁死。
+- **M0 实测**：`startResizeDragging` 在真实 pointerdown 下不稳定；改用 **Tauri 原生 undecorated
+  resize border**（`resizable:true` + `WS_THICKFRAME`）+ 卡片右下角 7px 手柄（manual pointer
+  drag，`setSize` 节流到 rAF）。`WS_MAXIMIZEBOX` 仍关闭；`start-resize-dragging` 权限未启用。
+- **几何/持久化**：`SIZE` 独立保存面板内容尺寸；`applyFormInner` 只在形态变化/首次时设尺寸，
+  不再把用户刚拉大的窗口冲掉；`SIZE_APPLYING` 屏蔽程序化 setSize，`RESIZING` 期间跳过贴边
+  settle/preview；resize 结束 280ms 后保存尺寸与位置。新增配置 `winW/winH/compactMaxW/resizeHintSeen`
+  与 `save_window_size` 命令；启动时先恢复尺寸再夹位置。
+- **自适应**（按内容宽 / 字号倍率）：xs <380（摘要两行、隐藏 7 日柱/标题更新时间）、
+  sm 380–519（默认）、md 520–719（舒展、常驻金额行进度条、详情 3 列）、lg ≥720（渠道两列网格，
+  分组/失败横幅/展开行跨列）；面板高度过矮时隐藏摘要次要副行。
+- **字号**：只改排版和最小尺寸；字号变大时窗口只长到新的 min，不自动缩回默认。
+- **设置**：显示页新增「窗口尺寸 + 恢复默认」；`⋯` 菜单新增「恢复默认大小」；右下角手柄双击复位；
+  首次升级出现一次「可拖动边缘调整大小」提示。
+- **测试**：core **361 passed / 7 ignored**；jsdom **120/120**；新增 `verify-resize`
+  （四档尺寸/持久化/两列/紧凑条/胶囊/手柄/字号）全 PASS；三形态 × 三档字号视觉 **30/30 无越界**；
+  `verify-ui-0923` 17、设置入口、签到中心、焦点环、形态尺寸 PASS；Codex 布局 **48/48**；Qoder 逐包到期 PASS。
+- **构建**：三处版本同步为 **0.3.0**；签名 NSIS 安装包 `Grandettoken_0.3.0_x64-setup.exe`
+  （5,266,439 B，SHA-256 `E9BDD9555D4417CC3342CE3C049B10C8A17DE097823BCA8B0B99E4CEB3FAFB7A`）。
+  发布与线上校验见下一条记录。
+
+**发布（2026-11-01）**：tag `v0.3.0`，release 提交 `05e1066`，
+[GitHub Release v0.3.0](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.3.0)。
+GitHub API 与 `gh release view` 均确认三件套齐全：`Grandettoken_0.3.0_x64-setup.exe`
+（5,266,439 B）、`.sig`（424 B）、`latest.json`；release 不是 draft / prerelease，说明中文完整。
+
+`verify-signature.js` **PASS**（公钥能验线上安装包）；`verify-updater.js` **PASS**
+（固定更新端点 / 版本 / 签名逐字一致 / URL 指向本 tag / 安装包可下载）。
+`verify-release.js` 本次访问 `github.com/.../releases/latest/download/latest.json` 超时
+（`api.github.com` 可达，三件套、签名与更新链路已由前两项核验）；网络恢复后可重跑。
+
+本机已用 0.3.0 安装包静默覆盖安装，`%LOCALAPPDATA%\Grandettoken\Grandettoken.exe`
+文件版本已变为 **0.3.0**；配置、SQLite 与凭据均保留，安装后已启动。
+
+### 发版 v0.3.1（2026-11-01）
+
+- 面板自由缩放后,自定义尺寸时右下角浮出「↺ 默认大小」按钮;点击回到 400×580,
+  默认尺寸/拖动中/胶囊/紧凑条/贴边隐藏。复位路径现在有四条:浮动按钮、双击右下角手柄、
+  `⋯` 菜单、设置 → 显示 → 窗口尺寸。
+- 保持 v0.3.0 的自由缩放/自适应/持久化不变;本条只加可见复位入口。
+- 验证:core **361**;jsdom **120/120**;`verify-resize` 新增“自定义尺寸显示按钮 / 点击回到
+  400×580 / 默认尺寸隐藏按钮”三条断言全 PASS;三形态视觉 **30/30 无越界**;`verify-ui` 17、
+  设置入口、签到中心、焦点环、形态尺寸 PASS;Codex **48/48**;Qoder PASS。
+- 安装包与发布信息见下一条记录。
+
+**发布（2026-11-01）**：tag `v0.3.1`，release 提交 `c855852`，
+[GitHub Release v0.3.1](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.3.1)。
+三件套齐全：`Grandettoken_0.3.1_x64-setup.exe`（5,266,413 B，SHA-256
+`C7622C6645DCDCE85CBED0ED098BA51133E7D92FFB4E101BE9233C65D41736FC`）、`.sig`、
+`latest.json`；`verify-signature` 与 `verify-updater` **PASS**，GitHub API 确认非 draft/prerelease。
+`verify-release` 仍受本机 `github.com/.../latest/download` 网络超时影响；签名/更新链路已独立核验。
+本机已覆盖安装 0.3.1，`%LOCALAPPDATA%\Grandettoken\Grandettoken.exe` 版本 0.3.1，安装后已启动。
+
+### 发版 v0.3.2（2026-11-01）
+
+- **恢复默认移到页脚**：自定义尺寸时，页脚「设置与管理」左边出现「↺ 默认」；
+  默认尺寸/折叠形态隐藏，不再浮在数据上方。复位入口仍为四条：页脚按钮、双击手柄、
+  `⋯` 菜单、设置 → 显示。
+- **拖拽性能**：`onResized` 不再每帧调用 `scaleFactor + outerSize` 两次 IPC，
+  改为同步读 `innerWidth/Height` + 单帧 rAF；`data-w/h` 只在跨断点时写入；
+  手动右下角手柄的 `setSize` 合并为“同时最多一个在途”，避免 IPC 排队越拖越落后；
+  拖拽中关闭装饰过渡/动画；窗口移动的吸附预览由 100ms 节流到 180ms；移除重复的
+  `ResizeObserver` 回调。
+- 验证：core **361**；jsdom **120/120**；`verify-resize` 增加“页脚位置/在设置与管理左边”
+  断言后全 PASS；三形态视觉 **30/30 无越界**；`verify-ui` 17、设置入口、签到中心、
+  焦点环、形态尺寸 PASS；Codex **48/48**；Qoder PASS。
+- 安装包与发布信息见下一条记录。
+
+**发布（2026-11-01）**：tag `v0.3.2`，release 提交 `3d334d5`，
+[GitHub Release v0.3.2](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.3.2)。
+三件套齐全：`Grandettoken_0.3.2_x64-setup.exe`（5,267,030 B，SHA-256
+`C6F160F83B9FD6FCFAD077A1C0ADF9DC2AAF1BF402DAC0B06DF6F12347058243`）、`.sig`、
+`latest.json`；`verify-signature` 与 `verify-updater` **PASS**，GitHub API 确认非 draft/prerelease。
+`verify-release` **PASS**（更新端点、三件套、签名、sha256、仓库元数据全部通过），
+签名/更新链路独立核验亦 PASS。本机已覆盖安装 0.3.2，`%LOCALAPPDATA%\Grandettoken\Grandettoken.exe` 版本 0.3.2，安装后已启动。
+
+### 发版 v0.3.6 · 顶栏四入口与边缘缩放修复（2026-11-03）
+
+**用户裁决**:顶栏固定「刷新 / 置顶 / 隐藏 / 胶囊」四枚,不要右上角「更多操作」;
+「恢复默认大小」放到底栏;顶栏也不要退出。PC 端要能正常拖动放大缩小。
+
+- **缩放根因**:`isResizable()===true`、`WS_THICKFRAME` 都在,但 `WM_NCHITTEST` 实测
+  原生缩放带只有窗口最外缘 **3 物理像素**(150% DPI 下约 2 CSS px);卡片可见边缘在
+  10px 透明边距里,用户拖可见边缘时命中内容区,所以"拖不动"。右下角手柄一直可用。
+- **修法**:在透明边距上新增 `.rz-frame` 命中层(四边 + 四角,10px),pointerdown 后
+  manual drag;`setSize` 仍合并为同时最多一个在途,拉左/上边时补 `setPosition`
+  (LogicalPosition,对边不动)。面板八方向,紧凑条只左右;胶囊/贴边/吸附态不启用。
+  可见手柄从 7px 增到 9px,双击复位保留。
+- **顶栏**:删除 `btnMenu`/`hmenu`/`btnC` 及全部菜单 JS/CSS;`btnR/btnP/btnH/btnPill`
+  常驻。标题栏 gap 9→7、文字按钮横向 padding 6→5,保证标准字号 + 更新角标时
+  标题不被截断(实测 title 77.8px,`scrollWidth==clientWidth`)。
+- **底栏**:`lkReset` 文案「↺ 默认大小」常驻,不再只在自定义尺寸时显示;
+  复位路径三条:底栏、双击手柄、设置页。
+- **验证**:`node --check`;core **400 + 6 fixtures**;jsdom **128/128**;
+  `verify-settings-entry` 去掉旧的 7 页签断言后全 PASS(新增四按钮/无菜单/
+  底栏常驻/6 种组合零溢出);`verify-resize` **全 PASS**,新增透明边距 8 命中层、
+  右/下/左/上真实拖动(含窗口位置联动)、默认尺寸下按钮仍常驻等断言;
+  真实 CDP 鼠标在四条边各拖 4px 均生效。
+
+**发布（2026-11-03）**：tag `v0.3.6`，release 提交 `bf50165`，
+[GitHub Release v0.3.6](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.3.6)。
+三件套齐全：`Grandettoken_0.3.6_x64-setup.exe`（5,580,538 B，SHA-256
+`61a84b0927feae2932f5eebfa06306d977e214bb6903a7c85b8ab723274ed6fa`）、`.sig`、
+`latest.json`；`verify-signature` 与 `verify-updater` **PASS**，GitHub API 确认
+非 draft / prerelease，且 v0.3.6 为当前 latest。本机已静默覆盖安装，
+`%LOCALAPPDATA%\Grandettoken\Grandettoken.exe` 文件版本 0.3.6，安装后已启动。
+
+### 修复 · Qoder 网页会话"登录成功却取不到逐包明细"（2026-11-03，未发布）
+
+**用户报**:PC 端 Qoder 网页登录成功,界面提示已登录,但明细一直取不到。
+**真机取证**(诊断包 18:29):`/api/v2/me/usages/big_model_credits` 回 **200 + JSON**
+—— 平台认了会话,失败在解析,不在登录。旧解析只认顶层 `details[]` 与一层 `data`
+信封,而个人版 v2 顶层只有汇总(`user_id / quota_key / status / plan_quota /
+resource_package_quota / … / total_quota / lastResetAt / nextResetAt`),
+逐包数据在更深层级 → 三个候选全判"不像包列表";登录轮询又把它报成"被平台拒绝",
+把用户引向无用的重登。
+
+- **找包不看层级**:`core::qoderweb::collect_packs` 在整棵树里找"成组的包"
+  (深度上限 4);判据不变(剩余量 + 到期时刻同时在场),并要求成组 ——
+  数组,或每个值都是包的对象映射。单个汇总对象(如带账户级到期日的 `plan_quota`)
+  不会被误当成一个积分包。上限 200 个包,按 (来源,余量,到期) 去重。
+- **失败分三档**:`PacksErr` 新增 `Unrecognized`(会话有效、结构没认出),
+  与 `Unauthorized`(该重登)、`Other`(网络)在渠道卡文案上各说各话。
+- **登录成功的定义**:新增 `QoderWebProbe` 四态;会话被接受就按成功收尾(关窗、
+  写 `qoder_web_session_at`),只多带一句"结构还没识别"。`qoderweb-login`
+  事件新增 `detail` 字段,前端按它出 toast,不再假称"明细已刷新"。
+- **诊断能定位**:失败时日志落 `shape_sketch`(键名 + 值类型,零值泄漏);
+  键名截到 31 字符 —— 兜底脱敏会把 ≥32 字符连续串掩成 `«secret len=…»`,
+  真机那个 32 字符的顶层键正好被它吃掉。
+- **真机验证(18:52 重装 0.3.7)**:重新登录网页版后逐包明细直接出来,
+  日志里再无 `qoder / webpacks` 失败行 —— 逐包数据确实在 v2 响应的更深层级,
+  递归找包就是缺的那一块;端点与判据均未改动。
+- **顺带确认**:同一份网页会话在 18:28 还是 200,18:3x~18:46 就变 401(应用未重启),
+  网页会话比预期短命;失败分档后提示的"点登录网页版"正好是正确动作。
+- **验证**:core `404 passed`;`cargo check`(外壳)、`node --check`;
+  `verify-qoder-expiry.js` 断言补上"结构还没识别"这一种如实文案。
+
+**发布（2026-11-03）**：tag `v0.3.7`，release 提交 `38c1811`，
+[GitHub Release v0.3.7](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.3.7)。
+三件套齐全：`Grandettoken_0.3.7_x64-setup.exe`（5,580,782 B，SHA-256
+`2B4C5BB87F1B2CFF5E5E1881759BE2699665DA499763CBAEF4DB1096F304E97`）、`.sig`、
+`latest.json`；GitHub API 确认非 draft / prerelease，且 v0.3.7 为当前 latest。
+本机已静默覆盖安装，`%LOCALAPPDATA%\Grandettoken\Grandettoken.exe` 文件版本 0.3.7。
+
+> 本机这次 `node build/verify-release.js` 跑不通（`fetch failed`）：`github.com` 直连
+> 超时（`api.github.com` 与 `curl` 拉 api 都正常，gh 上传也成功）—— 是这台机器的
+> 网络状况，不是发布缺陷。等价核验改用 `gh release download` 取回三件套，
+> 与本地产物**逐字节比对**：exe / .sig / latest.json 全部一致，清单里的
+> version / url / signature 与 `.sig` 内容也逐项对上。
+
+### 功能 · Codex 折叠行显示「本周还剩多久重置」（2026-11-03，未发布）
+
+**需求**:Codex 展示本周剩余到期时间。查代码发现数据**早就有** —— `extract_codex`
+已经产出 `windows[].resetsAt`,详情卡也写着「下次重置 … · 4 天 7 小时后重置」;
+缺的是**折叠行**:`codexDual` 时右侧第二行被 5 小时窗占满,周窗重置时间一个像素都没有。
+
+- **裁决**(用户):倒计时并进数值行,一行说完 ——「本周剩余·2天20小时 48.0%」;
+  「重置卡 N 张」**不收进详情**(留在左侧副标题);5 小时窗维持现状。
+- **量过再改**(`--remote-debugging-port` + CDP,真机 DOM):行内固定占位 91px,
+  数值列从 109 → 164px;最窄面板(340)下会挤到副标题 —— 用降级解决而不是砍信息:
+  `full → short → off`(`fitCodexResetLabels`),最窄时退成「本周剩余·2天」,
+  再窄整段去掉,**任何宽度都不出现省略号**。紧凑条里整段隐藏(多 4 个字就会把
+  一个渠道挤成「+N」)。
+- **旧快照**:倒计时按当前时刻算,过期写「待刷新」,不拿旧快照去外推。
+- **后端兜底**:只给 `reset_after_seconds` 不给 `reset_at` 的响应,在取数那一刻换算成
+  绝对时刻再下发(`codex_reset_at`),前端界面开着不动也不会漂。
+- **详情卡**:补一行口径「周窗到期即清零,不滚存;5 小时窗按滚动恢复」,只出现一次。
+- **验证**:core **405 passed**;真机 CDP 三档宽度(459 / 最窄 332 / 极端 300)实量,
+  无溢出;紧凑条 `display:none` 且切回面板自动恢复(第一次实现漏了这条,
+  截图里倒计时凭空消失 —— 已在 `fitCodexResetLabels` 里跳过不可见节点并重算)。
+
+**发布（2026-11-03）**：tag `v0.3.8`，release 提交 `623ab28`，
+[GitHub Release v0.3.8](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.3.8)。
+三件套齐全：`Grandettoken_0.3.8_x64-setup.exe`（5,582,390 B，SHA-256
+`7AC52CC8E673C222AFFA5A77D405C069D1250BBC2610CFB0F3F9D484B4909948`）、`.sig`、
+`latest.json`；GitHub API 确认非 draft / prerelease，且 v0.3.8 为当前 latest。
+本机已静默覆盖安装，`%LOCALAPPDATA%\Grandettoken\Grandettoken.exe` 文件版本 0.3.8。
+
+> 本版含另一会话的 2 项 PC 显示精修(同一提交):渠道详情页脚不再堆「未公开接口」
+> 「凭据来自…」这类固定套话;签到徽标统一成「✓ 已签」,数额改放 tooltip
+> (以前 Qoder 上是「✓ +100」、别的渠道是「已签」,同一枚徽标两种画法)。
+>
+> **验证**:core `405 passed`;`check-css-forms` / `verify-settings-entry` /
+> `verify-focus-ring` / `verify-resize` 全 PASS;CDP 真机另跑一组断言
+> (Codex 倒计时文案与副标题不溢出、页脚两类套话确实消失、周窗口径说明在场、
+> claimed/already 徽标文案与 tooltip 数额),9 项全 PASS;
+> 发布资源与本地产物逐字节一致(exe / .sig / latest.json)。
+
+### 发版 v0.3.9 · PC 视觉精修 V2 + 固定窗口布局（2026-11-04）
+
+**范围**:PC 端整体改版一次发车 —— 双主题、首页信息架构、详情弹层、积分到期契约、
+固定窗口布局,以及一轮全模块审计的 11 项修复。设计与实施依据
+`docs/design/design-pc-polish-v2-2026-11-03-dev-spec.md`,实施报告见
+`docs/report/pc-polish-v2-implementation-2026-11-03.md`,全模块审计与复测见
+`docs/report/pc-module-audit-2026-11-03.html`。
+
+**主题与首页**
+- 深石墨(默认)/ 暖雾白双主题,`Config.theme` 持久化,非法值回退;旧蓝主色全量换鼠尾草绿。
+- 首页:标题栏下直接是三格摘要(未来 **7 天**临期积分 / 最先到期 / 每日签到)+ 渠道卡片,
+  卡片带底部状态轨(积分卡常驻最近到期);取消「需要处理 / 其余」分组,列表平铺,
+  排序只认设置里的「渠道排序」(2026-11-03 用户裁决)。
+
+**详情与到期契约**
+- 渠道详情改为单例底部弹层(Esc / 遮罩 / 关闭按钮,焦点圈 + 焦点回归 + 背景 aria-hidden)。
+- WorkBuddy / Trae / WorkBuddy AI 共用一个积分到期组件(最近一笔 + 逐笔明细);
+  Qoder 新增结构化 `accountExpiry`(`dated | never | unknown`),账户有效期与逐笔严格分开,
+  旧快照只回退 `YYYY-MM-DD`,不补时间不画倒计时。
+
+**窗口布局**
+- 取消自由拖动缩放,改为两档固定尺寸:**单列 480×820 / 双列 980×820**(内容区),
+  底栏「单列 / 双列」与设置 → 显示双入口切换,`Config.panelLayout` 持久化。
+- xl 字号档窗口高度按显示器物理尺寸钳制(预留任务栏),列表自身滚动。
+
+**审计修复(全模块 50 项真机检查 + 代码走查,11 条建议全部落地)**
+- P1:摘要「最先到期 / 每日签到」格改原生 button(键盘可达);xl 高度按屏幕钳制。
+- P2:空台账给「7 天无变动记录」;胶囊自动轮播改独立「最紧张」口径
+  (比例 → 余额/底线 → 到期占比),不再跟随列表排序;设置子页 10 处写死旧色换语义令牌;
+  到期跨点由 60s ticker 触发即时重算;摘要「N 渠道 · N 未知」文案。
+- P3:qbar 等 13 处死 CSS 清理;列表 `role=region` + 弹层背景 aria-hidden;
+  `verify-resize.js` 重写为固定布局闸门;冒烟形态切换等待加固并新增详情弹层交互 6 项用例。
+
+**验证**:core **407 passed / 0 failed**;`node --check` / `check-css-forms` /
+`jsdom-smoke` **142 passed**(新增详情弹层交互 6 项)全过;真机 CDP:模块扫描 9 项、
+修复验证 10 项、固定布局闸门 12 项全部 PASS(合成夹具,不触真实凭据;
+`verify-resize` 用内存预览切换布局,不写用户配置)。
+
+**发布（2026-11-04）**：tag `v0.3.9`，release 提交 `66c054f`，
+[GitHub Release v0.3.9](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.3.9)。
+三件套齐全：`Grandettoken_0.3.9_x64-setup.exe`（5,587,683 B，SHA-256
+`30D5EE352A9C15C92C5DC474FE853D944C57E2798F615835710AB518D5782CCA`）、`.sig`、
+`latest.json`；`verify-release.js` 9 项全 PASS(安装包可下载、SHA 一致、三件套齐、
+非 draft/prerelease、说明完整、repo public)。
+
+### 调整 · 双列窗口卡片收窄（2026-11-04，v0.3.10）
+
+**裁决**(用户):双列的每张卡片不需要和单列一样宽 —— 980 宽下每卡 465px,
+与单列 440 几乎等宽,两张大卡并排显得空。双列内容宽 **980 → 860**(窗口 880×840),
+每卡 **404px**,仍高于 740 的双列断点;单列 480×820 不变。
+
+**验证**:core `407 passed`;`jsdom-smoke` 142 passed;固定布局闸门 12 项 PASS
+(880×840 / data-w=lg / 无横向越界);真机截图夹具确认每卡 404px、2×2 一屏。
+
+**发布（2026-11-04）**：tag `v0.3.10`，release 提交 `1450f96`，
+[GitHub Release v0.3.10](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.3.10)。
+三件套齐全且与本地逐字节一致(GitHub digest 核对:exe 5,587,389 B / SHA-256
+`98240C2DCF9A4E75C1241479437F1298CC1567913B5650FCBC86150968E50208`、`.sig`、`latest.json`,
+state 均 uploaded);`verify-release.js` 首轮因本机到 github.com 直连超时未跑通,改用 `gh api` 资产
+digest 比对先行核验(三件套与本地逐字节一致);网络恢复后复跑 **10 项全 PASS**
+(下载端点 200 / SHA 一致 / 三件套齐 / 非 draft / 说明完整 / repo public)。
+另记一个坑:从 Git Bash 用 `cmd /c start ... /S` 装机,`/S` 会被路径转换吃掉,
+安装器挂在前台等待 —— 用 PowerShell `Start-Process -ArgumentList '/S' -Wait` 才可靠。
+
+**更新端点修复（2026-11-04，v0.3.10 已发布后）**：其他机器 0.3.7 检查更新报
+"Could not fetch a valid release JSON"。根因:`releases/latest/download/latest.json`
+的「latest」被旧 release **`android-v0.1.8`** 占用(端点 302 → android-v0.1.8 → 404),
+与 tag 版本无关。`gh release edit v0.3.10 --latest` 归位后端点 200、指向 0.3.10。
+`verify-release.js` 补第 7.5 项:更新端点本体必须指向当前版本的 latest.json(此前
+只核直链,正是这次的漏网处);复跑 **11 项全 PASS**。
+
+## 2026-11-04 · PC v0.3.11 分享下载直链
+
+“关于与诊断”新增“分享下载”，Windows x64 安装包与安卓 APK 各有一个复制按钮。
+每次点击读取对应平台的最新正式版清单，经现有 `copy_text` 命令写入剪贴板。
+获取过程中禁用当前按钮，成功后提示已复制，网络或剪贴板失败时提示原因并恢复按钮。
+Windows 使用桌面 latest 清单，Android 使用独立的 `android-stable` 清单，
+解析后核对安装包所属仓库、版本和文件名。
+
+验证通过 `jsdom-smoke` 154 项、CSS 形态检查、core 407 项单元测试与 6 项同步夹具。
+Tauri 测试外壳仍有仓库历史记录中的 Windows 入口点加载错误，下载模块通过独立临时
+Rust 工程验证，复用完整源文件并移除 Tauri 命令宏，4 项解析测试全部通过。
+该工程实际调用 `download_link`，Windows 0.3.10 与 Android 0.1.8 的安装包直链均返回 HTTP 200。
+
+2026-11-04 已发布 [v0.3.11](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.3.11)，
+源码与 tag 对应提交 `12fc07b`。签名安装包大小 5,593,085 字节，SHA-256 为
+`12112fd61b3efb656125c822a1fd1f183369b619209b506db5461d208e5df9b6`。
+安装包、`.sig`、`latest.json` 上传前后哈希一致，公开下载后哈希与本地一致，
+配置中的公钥对公开安装包验签通过。`verify-release.js` 经系统代理运行全部 PASS，
+桌面 latest 更新端点为 0.3.11。独立下载模块再次实际取链，Windows 0.3.11 和
+Android 0.1.8 安装包均为 HTTP 200。
+
+## 2026-11-04 · 新品牌标 G 表盘（v0.3.12 / Android 0.1.9）
+
+**背景（用户裁决）**：旧标是像素云，16–17px 只剩低对比噪点；用户要求把“葛朗台、精打细算”融进去。方案定为 **G 表盘 + 金币横针**：G 是名字，右上 56° 开口圆环是表盘，横针是三枚叠起的金币（葛朗台式数清每一枚 token）；16px 时金币堆自然收成一根金针，不牺牲 G 的识别。
+
+**实现**
+- `build/gen-icons.js` 重写为几何生成器（只依赖 Node 内置模块）：同一套 100×100 几何输出 1024 母版、Windows 16–256 `icon.ico`、前端 `logo/mark/mark-ink/logo-tray`、Android 432 背景/前景/单色三层；母版在 `app/branding/logo-source.png`。
+- 标题栏 `.mark` 改用 20px 无底标 `brand/mark.png`；`body.light` 换 `mark-ink.png`，白 G 不在暖白标题栏上消失。
+- 托盘用 `brand/logo-tray.png`（G 缩到 78%），右下状态点改画深色底环 + 更小的状态点，不再压住 G。
+- Android 自适应图标改为 background + foreground 分层，G 占画布 60%；新增 `mipmap-anydpi-v33` 单色层；删除旧的 `ic_launcher_art` 占位矢量/PNG。
+
+**验证**
+- core `407 passed / 8 ignored`，同步夹具 6 passed；`jsdom-smoke` 154/154；CSS 形态检查 PASS；`node --check app.js`。
+- PC 0.3.12 release 二进制构建成功；CDP 抓真实标题栏（深/浅）确认 20px 标记与 `mark-ink.png` 生效。
+- Android debug `assembleDebug` + `testDebugUnitTest` 通过；release 0.1.9（versionCode 10）签名 APK 构建成功，SHA-256 `fa4945abd77f5eef4c38cffebfa70aa696635edcb71aec1e5433b318327b17dd`，证书 `CN=Grandettoken Android Release`；Pixel 模拟器先装官方 0.1.8 再覆盖 0.1.9，`install -r` 成功、启动无 FATAL。
+
+**发布（2026-11-04）**
+- PC：tag `v0.3.12`，release 提交 `9e8ae74`。签名安装包 `Grandettoken_0.3.12_x64-setup.exe` 5,531,126 字节，SHA-256 `eb25f4f669142bda43397358b5507e65729c4017aaa3983a006c8ea2071abe1a`；`.sig` 与 `latest.json` 三件套上传后 digest 与本地一致。`verify-release.js` **14 项全 PASS**（更新端点 200 / 版本 0.3.12 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft / 说明完整 / latest 端点指向 0.3.12 / 仓库公开）。
+- Android：`android-v0.1.9` 发布正式签名 APK（versionCode 10，11,035,136 字节，SHA-256 `fa4945abd77f5eef4c38cffebfa70aa696635edcb71aec1e5433b318327b17dd`，证书 `CN=Grandettoken Android Release`）；公开下载后 SHA 与本地一致。`android-stable/android-latest.json` 已重签为 0.1.9 并更新（1295 字节，digest `07754c294cc982569dd213df57b719d7bb245af11f31a54a35fb2fb9b51fa4cd`），线上清单用 `manifest-public.txt` 回验 Ed25519 签名、版本、大小、哈希和下载地址均通过。
+- 模拟器：Pixel API 14 先装官方 0.1.8（versionCode 9），再覆盖安装 0.1.9（versionCode 10），`install -r` 成功、启动无 FATAL；APK 内已确认 `ic_launcher_background/foreground/monochrome` 三层资源。
+- 创建 Android release 后已显式 `gh release edit v0.3.12 --latest`，`releases/latest` 仍为 `v0.3.12`，没有再被 `android-v0.1.9` 抢占。
+
+## 2026-11-05 · 刷新区域整块可点（v0.3.13）
+
+**背景（用户反馈）**：顶栏刷新按钮左侧的「刚刚」只是状态文字，用户习惯点它却点不动。现在把状态文字与刷新图标并进同一个 `<button id="btnR">`：点文字、点图标、键盘回车都触发刷新；悬停时整块作为一个药丸亮起；成功后整块短暂变绿显示 ✓。
+
+**实现**
+- `app/src/index.html`：`#tbLive` 移入 `#btnR`，图标包进 `.refresh-ic`；`aria-label` 保持「立即刷新」。
+- `app/src/styles.css`：`.tbi.refresh` 改 inline-flex，文字为空时靠 `min-width:26px` 缩回纯图标位；`.tb-live` 去掉自带右外边距。loading 圆环与 done ✓ 从整枚按钮收敛到 `.refresh-ic`（21px 环 / 15px 勾），补 hover 与 done 下文字颜色的过渡；xs 面板仍按原规则隐藏 `.tb-live`。
+- 顺带修掉 done 态的字面量 `¹3`：它是 CSS 转义 `\2713` 被按 JS 八进制落盘的结果，恢复为 `content:"\2713"`（✓）。
+
+**验证**
+- `node build/check-css-forms.js` PASS（903 条规则）；`jsdom-smoke` **154/154**。
+- release 二进制（深色 500px 面板）CDP 实测：点「刚刚」→ `#btnR.loading` → 完成后 `done` 勾选态（computed `::after` 为 `"✓"`）→ 800ms 后图标恢复、文字「刚刚」、toast「已更新 · 刚刚」；顶栏横向溢出 0，按钮 51×26，图标 15×15；文字完整落在按钮命中区内。深色常态/悬停截图确认药丸悬停区把文字与图标包在一起。
+- signed NSIS `Grandettoken_0.3.13_x64-setup.exe` **5,530,864 B**，SHA-256 `e27abee19d34877a68c2df3c46d28e6ca6e6bae96d397a31b15d27cecedf0067`；`.sig` 已生成，import table 无 `WebView2Loader.dll`。
+
+**发布（2026-11-05）**
+- tag `v0.3.13`，release 提交 `04e3ab6`，[GitHub Release v0.3.13](https://github.com/wacilimonster-source/Grandettoken/releases/tag/v0.3.13)，并已 `gh release edit v0.3.13 --latest` 归位（`releases/latest` 不再被 Android release 占用）。
+- 三件套上传后与本地逐字节一致（GitHub digest 核对：exe `e27abee1…` / sig `692059b9…` / latest.json `5172fda1…`，尺寸 5,530,864 / 424 / 1,218 B）。
+- `verify-release.js` **14 项全 PASS**：更新端点 200、版本/签名/URL 一致、安装包可下载且 SHA 一致、三件套齐、非 draft、说明完整、latest 端点指向 0.3.13、仓库公开。
+- 网络备注：本机直连 github.com 超时（`fetch failed`），经系统代理 `127.0.0.1:7897` + Node 24 `NODE_USE_ENV_PROXY=1` 复跑通过；`gh` 走 api.github.com 未受影响。
+
+
+
+## 2026-11-06 · 全端文案体检与提示语统一（v0.3.14 / Android 0.1.10）
+
+**背景**：对三个端约 1,000 条用户可见文案做全面体检（方案见
+`docs/design/design-copy-audit-2026-11-06.html`），按裁决全选推荐项执行：自称「挂件」、
+底栏「告急」、密钥才带剪贴板提醒、小组件单位「分」、「可直接粘贴给 AI 排查」、
+confirm 迁行内条。
+
+**实现**
+- 标点基线（句中半角、句末全角）：PC sync 区/确认框/模型页、`download.rs`、
+  `core/sync` 五文件、`sync_cmds.rs`、Android 全部用户文案，全角 `，；：（）` 归零。
+- 错误收编：reqwest/updater 英文原文不再直出（8 处，原文经 `diaglog::write_keyed`
+  进日志）；updater 新增 `updater_err()` 分类（签名/网络/下载）；errcodes 兜底补出路。
+- SYNC_* 码对用户隐藏：Android `SyncViewModel` 只显示 message，PC `syncUserMsg()`
+  剥前缀（20+ 处），码保留在诊断卡与日志。
+- 签到统一：三态「已领到/平台已签/没签成」，按钮收敛 5 动词，活动标签三表合一
+  （`ACTIVITY_LABELS`），事件 toast 精简。
+- toast：剪贴板回执三分类；删 3 处冗余回执（弹层已刷新/体检完成/Client ID 已保存）。
+- 交互：7 处原生 `confirm()` → `armConfirm()` 行内确认条；模型三件套回执去重。
+- Android 0.1.10：小组件「N 分」、`updateFailText()` UPDATE_* 中文映射、
+  应用名统一 Grandettoken Sync、「数据较旧」收敛、`渠道总览` 入 strings.xml。
+
+**测试门禁**
+- `cargo test`（core + src-tauri）、`jsdom-smoke` **154/154**（3 条断言随新文案更新）、
+  `check-css-forms` 907 规则 PASS、`node --check`、Android `testDebugUnitTest` 全绿。
+- 构建期修两处：`crit_body` 金额型 format 占位符与参数不符（cargo check 被
+  管道 tail 掩盖退出码，release build 兜住）；发版辅助脚本中 keytool 中文 locale
+  输出与 DPAPI 密码 UTF-16LE 编码两处解析问题。
+
+**发布（2026-11-06）**
+- tag `v0.3.14`，release 提交 `0385c63`。签名安装包
+  `Grandettoken_0.3.14_x64-setup.exe` 5,531,338 字节，SHA-256
+  `8e2b0c21af7179a1d55c99078b2c28a110324743273a4d557028576b9e389271`；
+  `.sig` 424 字节；`latest.json` 1,096 字节（更新说明首次用 `--notes-file` 传入）。
+  `verify-release.js` **14 项全 PASS**（更新端点 200、版本/签名/URL 一致、安装包
+  可下载且 SHA 一致、三件套齐、非 draft、说明完整、latest 端点指向 0.3.14、仓库公开）。
+- Android `android-v0.1.10` 发布正式签名 APK（versionCode 11，11,035,536 字节，
+  SHA-256 `aa69baa38d5caeeee770ca91993015db5e6b8f216d77d1b2a3c2cdd64fbc5dfd`，
+  证书 `CN=Grandettoken Android Release`）；公开下载后 SHA 与本地一致。
+  `android-stable/android-latest.json` 重签为 0.1.10 并更新（1,450 字节），
+  线上清单用 `manifest-public.txt` 回验 Ed25519 签名、版本、大小、哈希、下载地址全通过。
+- `gh release edit v0.3.14 --latest` 已归位，`releases/latest` 指向 v0.3.14。
+- 附带：android/ 源码树与发版辅助脚本（`build/android-release.ps1`、
+  `build/sign-android-manifest.py`）首次入库；文案体检设计文档随本提交入库。
+
+
+## 2026-11-06 · 全量测试与发版 v0.3.16(Android 用例基线修复 + 测试工具收编)
+
+**背景**:对 main@7551fe6(v0.3.15)做一次全量测试(对齐 `ci.yml` 全部门禁 + Android 单测 +
+jsdom 冒烟,报告见 `docs/report/test-run-2026-11-06.md`):547 项用例,546 过、1 失败、9 忽略。
+唯一失败是 `WidgetFormatterTest.emits_short_window_tags_from_stable_keys`:
+v0.3.14 宣布「句中半角」标点基线后只改了实现、漏了用例 —— 用例与实现同 commit 入库,
+**该用例自入库起从未通过过**;v0.3.14 门禁记录写了「Android `testDebugUnitTest` 全绿」,与实际不符。
+
+**实现**
+- 用例侧:`WidgetFormatterTest.kt:89` 期望「月额度(按套餐周期)」改回半角 —— 以 v0.3.14
+  自己定下的基线为准,不动实现。
+- 工具侧:`build/probe-frontend.js` 假 DOM 补 `Image` / `replaceChildren`。app.js 顶层
+  `new Image()`(托盘品牌图预载)让旧探针当场中断:脚本后半段没初始化,级联出
+  `LOG_INFO` TDZ 假故障,还掩盖了 `renderSyncQr` 用 `replaceChildren` 清容器的第二个缺口;
+  补齐后探针恢复可用(它的退出码判据本来就严格,THROWN/UNHANDLED/ERROR 都算失败)。
+- 流程侧:`RELEASE.md` 新增「发版前回归门禁」步骤(core 单测 / CSS 形态门 / jsdom 冒烟 /
+  动过 `android/` 必跑 Gradle 单测);`ci.yml` 用例计数注释 229 → 422(忽略 9)。
+
+**测试门禁(复测全绿)**
+- Android `testDebugUnitTest` **36/36**(修复前 35/36)、probe 退出码 0、core `cargo test`
+  **413**(9 忽略,真机用例)、两 crate `cargo check --all-targets`、`jsdom-smoke` **162/162**、
+  CSS 形态门 946 规则、`node --check` ×7、凭据扫描 CLEAN(334 文件)。
+
+**发布(2026-11-06)**
+- tag `v0.3.16`,release 提交 `06b3cd1`,前置修复提交 `346c255`(产品代码零改动)。
+  签名安装包 `Grandettoken_0.3.16_x64-setup.exe` 5,532,971 字节,SHA-256
+  `af405487064eb9b531b66d96468df9f071391ec28348cd97ad4d9b9fa864cef1`;`.sig` 424 字节;
+  `latest.json` 907 字节(更新说明经 `--notes-file` 传入)。
+  `verify-release.js` **14 项全 PASS**(更新端点 200、版本/签名/URL 一致、安装包可下载且
+  SHA 一致、三件套齐、非 draft、说明完整、latest 端点指向 0.3.16、仓库公开)。
+- 网络备注:github.com 直连超时,git 走已配好的 `http.proxy=127.0.0.1:7897`;
+  `gh` 与 `verify-release.js` 显式 `HTTPS_PROXY` + `NODE_USE_ENV_PROXY=1` 复跑通过。
+- 更新说明明确「产品代码零改动,无行为变化」;旧版用户会收到 0.3.16 更新提示。
+
+## 2026-11-06 · v0.3.17 额度断联恢复
+
+- 临时网络失败后按渠道安排 2 / 5 / 15 秒重试，备用入口计入同一预算，持续失败转入 1 / 5 / 15 分钟退避；429 遵守 Retry-After。
+- 成功额度持久化并按凭据范围隔离；重试、重启和持续离线保留可验证身份的历史额度，明确标记年龄与跨周期状态。
+- 统一视图不再把网络失败推断为登录失效，也不再擦掉已有额度；胶囊自动挑选与托盘数字同样保留历史值。
+- 核心测试 423 项通过（9 项按设计忽略），前端冒烟 169/169；全目标编译、CSS 守卫、脚本语法和凭据扫描通过。
+- 发布提交 `2e0033a`，签名安装包与三件套已上传，固定自动更新端点确认指向 0.3.17；独立签名验证、篡改拒绝及发布后哈希核验通过。
+- 详细设计见 `docs/product/product-quota-recovery-2026-11-06.md`，测试与发布记录见 `docs/report/quota-recovery-v0.3.17-2026-11-06.md`。
+
+## 2026-11-08 · Android 0.1.11 首页签到进度上顶栏
+
+- 首页顶栏改为显示签到进度（已签 / 总数），渠道列表上方的重复汇总卡（人民币余额 / 今日消耗 / 签到）移除；渠道分组与刷新状态保持不变。
+- 门禁：Android `testDebugUnitTest` 全绿（36 项）；签名 release APK 构建后模拟器 `install -r` 覆盖安装成功，启动无 FATAL（全新安装落在「加入同步组」页，未配对故未进首页）。
+- 发布：tag `android-v0.1.11`（release 提交 `3fa55c6`），APK `Grandettoken-android-v0.1.11.apk` 11,035,536 字节，SHA-256 `ed09c3b5d68a2f8c53468efe8208dcb62a3a8728bb08ef12ef476adacf402c7a`，证书 `CN=Grandettoken Android Release`；匿名下载 SHA 与本地一致。
+- `android-stable/android-latest.json` 重签为 0.1.11（1,176 字节），线上清单用 `manifest-public.txt` 回验 Ed25519 签名、版本、大小、哈希、下载地址全通过。
+- 桌面 `releases/latest` 保持 `v0.3.17`（Android release 用 `--latest=false` 创建，未抢占 PC 更新端点）。
+
+## 2026-11-09 · v0.3.18 本地模型网关
+
+- 新增本地模型网关：密钥箱条目上架后提供 OpenAI 兼容的 /v1/models 与 /v1/chat/completions；默认仅监听 127.0.0.1，局域网访问强制网关密钥，带 Origin 的浏览器跨站请求一律拒绝；密钥首次启动自动生成并存入 DPAPI 加密区。
+- 密钥箱支持同平台同分组多账号（移除旧的「平台+标签」唯一索引，迁移保留全部数据），新增 API 地址与官网字段，表单改为平台下拉 / 分组 / 账号 / 网址。
+- 设置与管理入口在管理页内常驻，页内再点不重置子页；底栏布局按钮显示点击后的目标档位。
+- Qoder 国内版 qoder-cn 增加网页登录入口（折叠体外常驻 + 详情就地），国际版/国内版 Cookie、会话时间、逐包缓存与诊断按渠道隔离。
+- 首页刷新稳定：render 按 key 复用 DOM，相同数据刷新 0 位移 / 0 ghost / 0 sweep，焦点与节点身份保留；状态轨空态占位、数字等宽。
+- 门禁：core 418 + 6 夹具、src-tauri 10（含网关 5）、jsdom 172/172、CSS 形态门 1007 条、刷新稳定性前后对比、真机回归（设置入口/焦点环/固定布局/签到中心/网关功能 17 项）全过；凭据扫描 CLEAN。
+- 发布：tag `v0.3.18`，release 提交 `76c6026`。签名安装包 `Grandettoken_0.3.18_x64-setup.exe` 5,702,958 字节，SHA-256 `820d0d3d0e9b9f309e1b779079b1049c48423e0baf2f7dee5f654c3a51e27234`；`.sig` 424 字节；`latest.json` 2,691 字节。`verify-release.js` 14 项全 PASS（更新端点 200 / 版本 0.3.18 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft / 说明完整 / latest 指向 0.3.18 / 仓库公开）。
+- 备注：同批安卓 0.1.11 已于 2026-11-08 单独发布（`android-v0.1.11`），桌面 `releases/latest` 保持 v0.3.18。
+
+## 2026-11-09 · v0.3.19 密钥箱平铺排序与默认密钥保护
+
+- 密钥箱去掉平台分组卡，改为平铺列表；新增排序（最近更新 / 最近创建 / 平台名称 / 分组名称），选择存 localStorage；条目显示「平台 · 分组」与创建/更新时间。
+- 渠道当前密钥改为只读：默认条目记录在数据库设置 `vault_default_channel:<渠道>`，改名/换密钥/删除在后端拒绝（前端也不画「改/删」）；渠道密钥被移除后条目显示「渠道未配置密钥」并禁用复制与显示；旧版自动导入条目自动接管映射，数据全保留。
+- 新增「复制端点」按钮，未填写端点时禁用。
+- 门禁：core 418 + 6 夹具、src-tauri 11（含默认密钥只读用例）、jsdom 177/177、CSS 形态门 1008 条、刷新稳定性前后对比、真机回归（设置入口/焦点环/固定布局/Qoder/签到中心/密钥箱新交互）全过。
+- 发布：tag `v0.3.19`，release 提交 `e92761a`。签名安装包 `Grandettoken_0.3.19_x64-setup.exe` 5,706,736 字节，SHA-256 `fbd9279c03af9f740e090e7752ff761cd85cde6c618da7594a6aa892fcd743da`；`.sig` 424 字节；`latest.json` 1,905 字节。`verify-release.js` 14 项全 PASS。
+
+## 2026-11-09 · v0.3.20 密钥箱条目排版
+
+- 条目信息（分组、账号、调用端点、官网、时间）占满整行，操作按钮独占下一行，端点不再被按钮挤窄；端点/官网单行省略并在悬停显示完整地址（`vrow-address`）。
+- 门禁：core 418 + 6 夹具、src-tauri 11、jsdom 177/177、CSS 形态门 1015 条、刷新稳定性对比、真机排版核对（操作区在信息下方、省略号与 title 生效）全过。
+- 发布：tag `v0.3.20`，release 提交 `65d1de8`。安装包 5,708,030 字节，SHA-256 `20cdf0fce08f4169e91903d49d56880679b05782c980cb6bb4b8d55bb1bf89b2`；`.sig` 424 字节；`latest.json` 1,248 字节。`verify-release.js` 14 项全 PASS。
+
+## 2026-11-09 · v0.3.22 网关别名与代理
+
+- 模型 id 改为「别名/模型」两段式，别名全局唯一：重名上架被拒、调用歧义返回 409；前端模型列表同步。
+- 每条上架密钥可选是否走系统代理（默认走），上架表单也可勾选；系统未配置代理时可能直连（页面已注明）。
+- 网关随应用启动按上次设置自动恢复；启动失败原因显示在网关页。新安装默认开启局域网（仍强制网关密钥）。
+- 局域网地址可选网卡并记住选择；上架模型支持全选。
+- 修复「分组设置」展开后被挤成右侧窄列（`gw-channel` 改 grid，details 占满整行）。
+- 门禁：core 418 + 6 夹具、src-tauri 12、jsdom 177/177、CSS 形态门 1022 条、刷新稳定性对比、真机回归（自动启动/鉴权/模型 id/代理与全选控件/排版）全过。
+- 发布：tag `v0.3.22`，release 提交 `84c0076`。安装包 5,712,613 字节，SHA-256 `34ce5498cdc0527c15ee6cb2b1e579888ccf281e34be6bc9ec2fe02d394272f4`；`.sig` 424 字节；`latest.json` 1,923 字节。`verify-release.js` 14 项全 PASS。
+
+## 2026-11-09 · v0.3.24 网关代理跟随与界面统一
+
+- 网关上游请求改为按系统代理快照取客户端：每次调用前比对 `HTTP(S)_PROXY` / `NO_PROXY` 等环境变量与 `Internet Settings` 注册表（ProxyEnable / ProxyServer / ProxyOverride），变化后重建连接池；关闭「使用系统代理」的分组走 `no_proxy` 客户端完全直连。未配置系统代理时直连，暂不支持 PAC（页面已注明）。
+- 局域网地址列表只公布私有网段 IPv4（10/8、172.16/12、192.168/16），不再列出 Tailscale/CGNAT（100.64/10）与其他不可直连网卡；新增 `advertised_lan_ip` 用例覆盖。
+- 网关页排版统一到设置页的字号与行距：状态与启动/停止按钮并入顶部，连接地址、访问设置、上架分组、模型目录按 `--u` 缩放；窄窗口按钮不再被挤压，展开箭头改为统一字符。
+- 门禁：core 419（含 proxy 1）+ 6 夹具、src-tauri 13、jsdom 177/177、网关面板定点用例 26/26、CSS 形态门 1080 条；`android/` 无改动未跑 Gradle。
+- 发布：tag `v0.3.24`，release 提交 `9880de9`。安装包 `Grandettoken_0.3.24_x64-setup.exe` 5,716,223 字节，SHA-256 `adec073db64141b7c9ec07ccaeb81032cd50bfe71652468fedfe2849491f603a`；`.sig` 424 字节；`latest.json` 850 字节。`verify-release.js` 14 项全 PASS（更新端点 200 / 版本 0.3.24 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft / 说明完整 / latest 指向 0.3.24 / 仓库公开）。
+
+## 2026-11-09 · v0.3.25 托盘数字 DPI 自适应
+
+- 托盘数字改为按任务栏所在显示器的小图标物理尺寸绘制：新增 `tray_icon_size` 命令（`GetSystemMetricsForDpi`，托盘藏在溢出区或 Explorer 未就绪时退回主显示器），前端画布随 100% / 125% / 150% / 200% 的实际像素变化，不再固定 32×32 交给系统二次缩放。托盘移到另一台显示器或缩放变化后自动重绘，并每 30 秒校验一次尺寸。
+- 16px 下的数字改用整数像素点阵字形（3 列基础 / 5 列宽版），三位数也能占满高度；`k` / `w` / 小数点 / 负号按各自宽度参与排版，空间不足时退回限宽字体。
+- 缩写去掉无意义的 `.0`，十万以上取整（`999999` → `100w`）；`trayNumber` 改用 `Number.isFinite`，非有限值不再画成数字。
+- 托盘更新改为串行发送并合并中间帧，避免 DPI 变化时旧尺寸图标后到覆盖新图标；发送失败仍清去重键以便重试。
+- 门禁：core 419 + 6 夹具、src-tauri 13、jsdom 177/177、CSS 形态门 1080 条、新增 `build/verify-tray.js`（真实 Chromium 画布）110/110；`android/` 无改动未跑 Gradle。
+- 发布：tag `v0.3.25`，release 提交 `5290e91`。安装包 `Grandettoken_0.3.25_x64-setup.exe` 5,721,742 字节，SHA-256 `841aba3946ddc2c179037070d8e6e777fec3755c052aeefd371b5ef8f3031a45`；`.sig` 424 字节；`latest.json` 1,584 字节。`verify-release.js` 14 项全 PASS（更新端点 200 / 版本 0.3.25 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft / 说明完整 / latest 指向 0.3.25 / 仓库公开）。
+
+## 2026-11-09 · v0.3.26 托盘数字改用系统窄体字形
+
+- 托盘数字从手工点阵字形改为系统窄体字体（`Bahnschrift SemiCondensed`，缺失时退回 `Segoe UI`）：16px 下三位数依然清晰，字形比点阵自然。
+- 字号按 `actualBoundingBox*` 量出的实际墨迹边界选择（从 `1.75×size` 起按 0.25px 递减到 4px），不再按字符个数估算；小数、负号、`k` / `w` 单位走同一套排版，避免单位被挤小或裁切。
+- 极长缩写仍放不下时按墨迹边界等比缩小，左右突出部分与上下都留在图标内；正常路径按墨迹居中并取半像素定位。
+- 上一版的 DPI 自适应绘制、串行合并托盘帧、30 秒尺寸校验保持不变；本轮 Rust 侧无改动。
+- 门禁：core 419 + 6 夹具、jsdom 177/177、CSS 形态门 1080 条、`build/verify-tray.js` 125/125（新增 `-1.2k` / `100w` / `123456789w` 三个超长与负数用例）；`android/` 无改动未跑 Gradle。
+- 发布：tag `v0.3.26`，release 提交 `7667368`。安装包 `Grandettoken_0.3.26_x64-setup.exe` 5,720,656 字节，SHA-256 `cbb3ed4c052ab7a387607ecfe8ccf8027b564d875129f5963e08e39446cf82f2`；`.sig` 424 字节；`latest.json` 1,368 字节。`verify-release.js` 14 项全 PASS。
+- 备注：本机直连 GitHub 超时（需要 `127.0.0.1:7897` 代理），Node 24 的 `fetch` 默认不读 `HTTP(S)_PROXY`，核验时要带 `NODE_USE_ENV_PROXY=1`，否则报 `fetch failed`。
+
+## 2026-11-09 · v0.3.27 托盘图标刷新不再闪烁
+
+- **根因是"无变化也换图"**：图标去重键里带着胶囊的小数文本与完整 tooltip，取数刷新（活动 60s / 空闲 300s）只要小数变一位就把**逐像素相同**的图重新送进 `Shell_NotifyIcon`，Explorer 重绘/淡入一次就是肉眼看到的"闪一下"。
+- 去重键改为只含真正画进画面的内容：`尺寸 + 状态色 + 数字`（品牌模式为 `尺寸 + 状态色 + brand`）；tooltip 拆成独立命令 `set_tray_tooltip`（只发 `NIF_TIP`），文字每轮变化不再连带替换图标。
+- Rust 侧记录上一帧图标指纹（尺寸 + 像素哈希）与 tooltip，内容相同直接跳过；真需要换图时前端仍串行合并帧，并加 1.5 秒最小写入间隔，连续变化只留最后一帧。新增 `tray_icon_digest` 单测。
+- 品牌图加载完成前不发首帧，消除开机时「灰块 → 真图」的额外一次替换；图片缺失则按灰底占位兜底。
+- 托盘跟随胶囊轮播、按托盘物理尺寸绘制、数字缩写规则均保持不变。
+- 门禁：core 419 + 6 夹具、src-tauri 14、jsdom 177/177、CSS 形态门 1080 条、`build/verify-tray.js` 128/128（新增「小数变化只更新 tooltip、不重发图标」与 tooltip 独立通道两条回归）；`android/` 无改动未跑 Gradle。
+- 发布：tag `v0.3.27`，release 提交 `570bb63`。安装包 `Grandettoken_0.3.27_x64-setup.exe` 5,721,690 字节，SHA-256 `f2e48707079461b07f375848ce895de95536872b4f12ac7b556ce62473b895c0`；`.sig` 424 字节；`latest.json` 1,445 字节。`verify-release.js` 14 项全 PASS（更新端点 200 / 版本 0.3.27 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft / 说明完整 / latest 指向 0.3.27 / 仓库公开）。
+
+## 2026-11-09 · v0.3.28 Qoder 换账号后逐笔到期仍来自旧账号
+
+**现象**:国际版换成新账号后余额正确(100 分),但「逐笔到期明细」仍是旧账号的
+18 个每日 100 分赠送包(合计 1736 分)。真机快照同一条里余额 100、`expiring[]`
+合计 1736;`qoder_web_session_at` 写于 01:47,余额在 20:42 已切到新账号 ——
+余额走令牌、明细走网页会话,换令牌不会动浏览器 Cookie。
+
+**两个次生问题**:① 登录窗共用 WebView2 profile,旧会话有效时点「登录网页版」
+会立刻落到 `/account/usage` 并被观察者判成功、自动关窗,用户没机会切号;
+② `qoder_packs` 只按渠道 id 缓存,换号后网页抓取失败会沿用旧账号列表。
+Qoder 是 App 型凭据,没有 WebSession 的「清除登录」按钮,界面上原本没有退出
+网页会话的入口。
+
+**修法**
+
+- 凭据 scope 落库(`qoder_cred_scope_v1:<id>`);成功取数时发现换号/换令牌,
+  记 `qoder_account_changed_at:<id>` 并清空逐包缓存;
+- `core::weblogin::qoder_web_session_stale`:网页会话时刻早于凭据更换时刻即判陈旧,
+  这一轮不读网页会话、不展示旧明细,文案改为「余额凭据已更换 · 需用当前账号
+  重新登录」;缓存降级只肯用同一 scope 的列表;
+- 渠道卡新增「切换账号」:`qoderweb_login(switch=true)` 先按域清掉
+  `qoder.com` / `qoder.com.cn` 的 Cookie(WorkBuddy 等别的域不碰)、删会话时刻、
+  清逐包缓存,再开登录窗;凭据换过时普通「登录网页版」也走同一条清理;
+- 「登录网页版」成功收尾时同样清逐包缓存,避免旧列表在随后一轮失败时复活。
+
+**门禁**:core `cargo test --locked` **421 passed / 8 ignored**、src-tauri
+`cargo check --all-targets --locked`、`node --check` ×6、CSS 形态门 1079 条 PASS、
+jsdom 冒烟 **177/177**(本机临时装 jsdom 27.4.0 跑)、凭据扫描 CLEAN(354 文件)。
+
+**发布(2026-11-09)**:tag `v0.3.28`,release 提交 `4b9dcff`。安装包
+`Grandettoken_0.3.28_x64-setup.exe` 5,727,032 字节,SHA-256
+`093b1167e7c229232722b8146dd4e2bfbb8d3fd00d8596bc5760e0506529ee6d`;`.sig` 424 字节;
+`latest.json` 1,718 字节。`verify-release.js` **14 项全 PASS**(更新端点 200 /
+版本 0.3.28 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft /
+说明完整 / latest 指向 0.3.28 / 仓库公开)。真机「切换账号」回归待装 0.3.28 后补。
+
+## 2026-11-10 · v0.3.31 设置与管理开关式入口 + Gemini 渠道 400 修复(学 eatgemini)
+
+本版两项:**底栏「设置与管理」开关式入口**(app.js)与**本地网关 Gemini 渠道
+400 的根治**(gateway.rs,方法学自同作者的 eatgemini 项目 —— 同样打
+Google OpenAI 兼容层,它不发 400 的原因就是参数治理)。
+
+**1. 设置与管理:开关式入口**。入口常驻(v0.3.24 起)之后,在管理页里再点它
+原来是无操作(怕把用户正在读的子页抖回索引页);改成开关:已在管理页时
+再点一次 = 退出回首页,不必挪到页头找「← 返回」。走 `closeManage()`
+(与页头返回同一出口,清编辑态/隐藏同步码)。
+
+**2. Gemini 渠道 400:根因是透传,修法学 eatgemini**。网关原实现把客户端
+请求体**原样透传**给 `generativelanguage.googleapis.com/v1beta/openai`
+只换 `model` 字段;SillyTavern 这类客户端默认带 `seed`/惩罚项/采样参数,
+撞上 Gemini 3 系就是 400("Penalty is not enabled for this model" 等)。
+eatgemini(`G:\game\nw\eatgemini`)不 400 靠两道防线,照搬:
+
+- **发送前清理** `sanitize_gemini_body()`:`seed`/`logit_bias`/`logprobs`/
+  `top_logprobs`/`n`/`user`/`metadata`/`parallel_tool_calls` 一律不发
+  (eatgemini:未知字段不发、seed 永远不发);非流式丢 `stream_options`;
+  `max_completion_tokens` 归一为 `max_tokens` 并按 65536 封顶
+  (eatgemini clamp:max_tokens);`reasoning_effort` 仅 2.5/3 系放行,
+  flash-lite 只收 low/high(eatgemini reasoningEfforts 表);
+  **gemini-3 系额外剥离 temperature/top_p/top_k + 两个惩罚项**
+  (eatgemini 对 3.x 的 stripParams)。非 3 系的采样参数照常保留。
+- **400 修复重试** `gemini_repairable_params()`:错误体 `param` 字段点名
+  可修参数(eatgemini _repairableParams 十个)或 message 含 "penalty"
+  (实测该报错不带 param)就剥掉重试一次,上限与 eatgemini
+  maxParamRepairsPerRequest=1 对齐;修复发生在任何字节转发给客户端之前
+  (400 在响应头阶段就能拿到),安全。不可修的 400 依旧原样透传详情
+  (v0.3.30 的 L15 行为,不吞错误)。
+
+**门禁**:core `cargo test --locked` **421 passed / 8 ignored**、src-tauri
+`cargo test` **19 passed**(新增 5 个:清理器 4 + 修复分类 1)、CSS 形态门
+1079 条 PASS、jsdom 冒烟 **177/177**。android/ 未动,Gradle 门按 RELEASE.md
+规则跳过。
+
+**发布(2026-11-10)**:tag `v0.3.31`,release 提交 `4f7d0d4`。安装包
+`Grandettoken_0.3.31_x64-setup.exe` 5,737,511 字节,SHA-256
+`7a6ead39acdd41308d4ed32a6d0b481985ff2ee73805c22a87f94b30b3493f92`;`.sig` 424 字节;
+`latest.json` 1,108 字节。`verify-release.js` **14 项全 PASS**(更新端点 200 /
+版本 0.3.31 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft /
+说明完整 / latest 指向 0.3.31 / 仓库公开)。
+
+**流程插记**:`gh release create` 在远端**自动建 tag**时取的是当时的默认分支
+尖端 —— 本次 main 还没推,远端 tag 先指向了上一版的 docs 提交 `f7b7c41`,
+发现后已 force 改指 `4f7d0d4`(release 资产本身不受影响,但源码归档会拿错
+快照)。RELEASE.md 已补规则:先推 main 再建 release。
+
+## 2026-11-10 · v0.3.30 托盘不再闪 + 全量代码排查修复 23 项缺陷
+
+本版两部分:**请求数据时托盘/胶囊不再闪**(fetch.rs:取数发起不再发布
+「失联 + 更新中」过场视图,内置与自定义渠道同口径,2026-11-09 用户反馈)
+与**一次全量代码排查的 23 项修复**。排查方法:四路并行通读 PC 端全部代码
+(app.js 9051 行 + Rust 后端 8514 行 + HTML/CSS/配置),高危/中危逐条回读
+源码二次核实;报告在 `docs/report/bug-report-pc-audit-2026-11-10.md`。
+
+**23 项修复清单**(编号沿用报告):
+
+- **B1(高)** `set_config` 整份覆盖漏保护 `custom_channels` —— 改任意设置会把
+  刚加的自定义渠道删掉/把删掉的复活、密钥成孤儿。后端一行收口:该字段只由
+  custom_add/custom_remove 改。
+- **B2(中)** `settle_arrivals` 持 config 锁嵌套拿 store 锁,与 check_update 的
+  锁序相反 → AB-BA 死锁可整体冻死挂件。改为「config 锁内抄清单,放锁后读 store」。
+- **B3(中)** `key_reveal`/`key_copy`/`key_hint` 只认静态渠道表,自定义渠道的
+  「复制/显示密钥」必报「未知渠道」(key_copy 还带 `expect` panic 风险)。
+  改用 `key_allowed` 同款放行 + `channel_display_name` 助手。
+- **B4(中)** 6 处绕过 `CFG_WRITE` 串行闸的配置写(record_checkin_skip /
+  wb_finish_login 整份克隆回写内存最重)—— 用户在落库窗口改的设置会被倒回。
+  全部收进 `save_config_off_main`,只合并各自字段;损坏闸(P1-16)一并补齐。
+- **B5(中)** 底栏计数错位:warn 过滤写成 `hvTone==="bad"`,黄色预警被算成
+  「正常」、红线被标黄「预警」。改为与行内 dotCls 同源口径。
+- **B6(中)** Qoder/qoder-cn 签到「去登录」统一落到 Trae 文案。按渠道分指路。
+- **B7(中)** 网关 `/chat/completions` 无读超时,上游挂起连接永久悬挂。
+  proxy 客户端加 60s `read_timeout`(流式友好)。
+- **L1-L8(前端)** 详情重取失败保留缓存;模型可用数 0 不再误报 total;
+  配额窗口数字套 `dispPct`;临期窗口按自然日对齐(柱/合计/「最先到期」三处);
+  签到徽标 tooltip 用北京小时;Esc 一次只动一层(主链让 promo 弹层);
+  checkin_state/历史读失败保留旧值 + 重试入口(`ckhretry` 动作);
+  channels-updated / crit-alert / 登录事件提前到首轮 refresh 之前挂。
+- **L9-L16(Rust/配置)** 凭据读失败不再吞成「还没填密钥」(probe_channel /
+  run_diagnostic / source_key 三处,`source_key` 改 `Result`);节拍器套用手动入口
+  同款 gate_like 过滤;activity_ready 三处按 period 门控(新助手
+  `activity_ready_today`);custom_add 编号分配原子化(占位先落盘,密钥失败回滚);
+  体检读 live 配置、损坏时降级不外呼;sync_publish_now 补损坏闸 /
+  sync_disconnect 先存后删 / sync_read_group 改 `github_token()?`;
+  网关透传上游错误体(截 400 字)+ Retry-After + 无鉴权本机模式校验 Host
+  (DNS rebinding 免疫,测试同步更新);`Gateway::new` 改 `Result`,失败记
+  startup_error 不再 panic。
+
+**门禁**:core `cargo test --locked` **421 passed / 8 ignored**、src-tauri
+`cargo test` **14 passed**(含更新后的网关授权用例)、`cargo check`、
+`node --check app.js`、CSS 形态门 1079 条 PASS、jsdom 冒烟 **177/177**。
+编译期抓到并修掉三处:`record_checkin_skip` 转 async 后 store guard 需块级
+作用域才能过 Send 检查;run_diagnostic 的 match 臂要 `Ok(...)` 包装;
+块尾表达式的 guard 临时值生命周期(E0597)。
+
+**发布(2026-11-10)**:tag `v0.3.30`,release 提交 `879e29e`。安装包
+`Grandettoken_0.3.30_x64-setup.exe` 5,735,664 字节,SHA-256
+`7bd0ddc591030def656e6a4b9d677eed694812176a46c9f972a3c5086f0adfca`;`.sig` 424 字节;
+`latest.json` 958 字节。`verify-release.js` **14 项全 PASS**(更新端点 200 /
+版本 0.3.30 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft /
+说明完整 / latest 指向 0.3.30 / 仓库公开)。
+
+**安全插记**:本次 release 提交按 `git add -A` 惯例收编了长期未跟踪的 build/qa
+留档,其中 `build/qa/qoder-fix-20261109/` 是 Cookie 罐与快照库的**真机备份
+(44 条会话 Cookie / 28.5 万行快照)** —— 已在推送前 amend 移出,文件仍留在本地;
+`.gitignore` 补 `*.db.bak` 与 `build/qa/**/Cookies.*`,防止下次再被收编。
+
+## 2026-11-09 · v0.3.29 Qoder「切换账号」真正清掉旧网页会话
+
+v0.3.28 真机复现:点「切换账号」日志说"已清该区域 Cookie",但 Cookies 库里
+`qoder_session_cookie` 的创建时间仍是 11-03 —— **一个都没删掉**。根因是
+`w.cookies()`(无 URI 枚举)在这台机器的 WebView2 上没枚举到 qoder 的会话,
+`matched=0` 又被当成"本来就没有会话"静默放过;登录窗随即被旧会话判成
+"登录成功"并自动关窗,用户根本没机会换号。
+
+**修法**
+
+- `qoder_clear_session` 改用 `cookies_for_url`(WorkBuddy 已跑通的同一条路),
+  按 `/`、`/account/usage`、`/users/sign-in` 三个入口枚举,按 (name, domain, path) 去重;
+- 国际版额外清 Google SSO(`.google.com` / `accounts.google.com`,按 Google 自己的域再枚举一遍);
+- 换号时向 Qoder 页面注入一次性初始化脚本:清 localStorage / sessionStorage
+  (`window.name` 做一次性标记,OAuth 回调不再清,免得把新 token 也清掉);
+- 校验收紧:罐里有条目却一个都没匹配到目标域 → 直接报错,不再静默;
+  诊断日志记录实际清掉的 Cookie 数(真机 31 个 / 24 个,不再谎报"已清")。
+
+**真机验证**:0.3.28 清完 Cookie 后 2 秒内旧会话重建、登录窗自动关;0.3.29
+日志出现"已清网页登录 Cookie(N 个)"且计数与库中条目吻合。**已知限制**:
+Qoder 登录页仍可能用平台自身登录态自动恢复上一账号 —— 此时需在登录窗页面里
+手动退出再登录;未完成重新登录前,取数侧判旧会话陈旧,逐笔到期明细如实显示
+「未知」,不拿旧账号记录充数(用户裁决:不需要当前账号明细,数据不错配即可)。
+
+**门禁**:core `cargo test --locked` **421 passed / 8 ignored**、src-tauri
+`cargo check --all-targets --locked`、`node --check` ×6、CSS 形态门 1079 条 PASS、
+jsdom 冒烟 **177/177**、凭据扫描 CLEAN。
+
+**发布(2026-11-09)**:tag `v0.3.29`,release 提交 `ce81dd3`。安装包
+`Grandettoken_0.3.29_x64-setup.exe` 5,729,224 字节,SHA-256
+`9ceed7d646ff2fa1cfe16906816486357a39af5797480d48423428b3700d8c1d`;`.sig` 424 字节;
+`latest.json` 2,131 字节。`verify-release.js` **14 项全 PASS**(更新端点 200 /
+版本 0.3.29 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft /
+说明完整 / latest 指向 0.3.29 / 仓库公开)。
+
+## 2026-11-09 · Android 0.1.12 小部件自动刷新修复
+
+- 全量排查 App 端 31 个源文件(约 6000 行),确认 8 个 bug 并全部修复,清单见
+  `docs/bug-report-app-2026-11-09.md`:①小部件不自动刷新(`updatePeriodMillis` 0→30 分钟兜底重绘
+  + 缓存超 15 分钟自动补拉 + 刷新任务 KEEP→REPLACE 不再吞请求);②离线点刷新假"刷新中"
+  (WidgetRefreshWorker 去掉联网约束,立即执行并如实显示"离线");③回前台不立即刷新
+  (ON_START 补一次非 force 刷新);④退出同步组不清 GitHub 登录(logout 一并清 token/登录名,
+  弹窗文案同步);⑤首次配置小部件停在"等待首次同步"(保存后触发补拉);⑥更新自动检查失败
+  等 24 小时(改成功 24h/失败 1h 退避);⑦通知 ID 取模碰撞(去掉 %100_000);⑧每次刷新
+  新建 OkHttpClient(共享单例,复用连接池)。
+- 门禁:Android `testDebugUnitTest` 全绿;签名 release APK 构建后模拟器全新安装成功,
+  启动无 FATAL,落在「加入同步组」页(截图 `build/qa/android-v0.1.12/smoke-pair-screen.png`);
+  APK 签名证书 SHA-256 与 `certificate-sha256.txt` 一致(`c56dbf42…`)。
+- 发布:tag `android-v0.1.12`(release 提交见 git log),APK
+  `Grandettoken-android-v0.1.12.apk` 11,035,540 字节,SHA-256
+  `d69becaedd014fb7ea5cff6694bddc50747c5b9bf5a7c8b9c1f3bd8ce6b9b2ee`,证书
+  `CN=Grandettoken Android Release`;匿名下载 SHA 与本地一致。
+- `android-stable/android-latest.json` 重签为 0.1.12(1,310 字节),线上清单用
+  `manifest-public.txt` 回验 Ed25519 签名、版本、大小、哈希、下载地址全通过。
+- 桌面 `releases/latest` 保持 `v0.3.29`(Android release 创建后显式
+  `gh release edit v0.3.29 --latest`,未抢占 PC 更新端点)。
+
+## 2026-11-10 · 告警去重:同一渠道同一事件只弹一次
+
+用户反馈 codex 渠道限额后一下午弹了好几次。排查本机日志:codex 在 **02:22**
+就已跌破红线,桌面端「跌破那一刻 + 同渠道一天一次」的判定本身没有重复发;
+真正的问题是**去重状态只放内存**(重启/数据抖动会再弹),以及签到「需要处理」
+提示完全没有去重、设置页也没有开关。
+
+- **桌面红线通知**:去重表落 settings(`crit_notified_v1`),同一天同一渠道
+  跨重启只发一次;每次真正发出时写一条 diag 日志(`notify` 作用域),
+  下次再有人问"到底是谁弹的"可以直接查。
+- **签到「需要处理」提示**:按「结果码 + 周期日」去重(`CheckinCfg.last_alert_key`),
+  同一天同一个问题只提示一次;设置 → 显示 → 提醒与声音新增开关
+  (配置字段 `checkin_notify` 早就存在,这次补上 UI 入口)。
+- **Android**:余额提醒从「每 6 小时重复」改为「跌破时一次,回到线上后再次跌破
+  才允许下一次」;连续失败提醒只在刚达到 3 次时发,不再每 6 小时重弹。
+- **门禁**:core `cargo test --locked` **421 passed / 8 ignored**、src-tauri
+  `cargo test --locked` **19 passed**、`cargo check --all-targets --locked`、
+  `node --check app.js`、CSS 形态门 1079 条 PASS、jsdom 冒烟 **177/177**、
+  Android `testDebugUnitTest` **BUILD SUCCESSFUL**。
+
+**发布(2026-11-10)**:tag `v0.3.32`,release 提交 `6433f2d`。安装包
+`Grandettoken_0.3.32_x64-setup.exe` 5,739,396 字节,SHA-256
+`25f4dec9a73611dd7b6e5ef572fb3c09f41c931c91a9d6386118b04e72e12ca7`;`.sig` 424 字节;
+`latest.json` 1,281 字节。`verify-release.js` **14 项全 PASS**(更新端点 200 /
+版本 0.3.32 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft /
+说明完整 / latest 指向 0.3.32 / 仓库公开)。Android 端通知去重随源码提交,
+本轮未打 Android 包(等下一次 Android 发版一起带出)。
+
+## 2026-11-10 · Qoder 三处文案修正(v0.3.33)
+
+用户三张真机截图反馈的同一条链路问题,一次收口:
+
+- **副标题渠道名重复**:`appauth::qoder_candidates` 的 `source` 自带区域名,
+  `fetch::auth_label` 又拼了一次 `app.label()` →「Qoder · Qoder · sebird」。
+  展示层剥掉重复前缀(只认「整段相等」或「label + 分隔符」,避免 `Qoder` 误吞
+  `Qoder 国内版 · …`);`source` 原值留给诊断日志。新增 core 回归测试。
+- **逐笔明细来源代号看不懂**:`qoderweb::pack_of` 透传 `name`/`source`,而产品文档
+  §2.2 本就要求「label = source 的人话」。在 `app.js::packLabelZh` 做展示层映射
+  (官方枚举 / `act-` 活动编号 / 英文短语 / 词素兜底),未知代号保留原文、中文幂等、
+  原始代号进 tooltip;历史快照无需等重新登录就能读懂。`qoderweb.rs` 加注释写明
+  「翻译在展示层」,避免以后双重翻译。
+- **网页会话入口不分状态**:设置页 `ccquick` 常驻写死「登录网页版」。按
+  `expiryComplete`(与详情栏 `qoderLoginBar` 同一判据)改两态:已登录显示绿色状态 +
+  「重新登录」,未登录写「需登录」+「登录网页版」;`WHY.qoderweb` 与操作 toast 同步。
+  不另存「登录过」的内存标记 —— 会话失效后界面还挂「已登录」是假话。
+- **门禁**:core `cargo test --locked` **422 passed / 8 ignored**、src-tauri
+  `cargo check --all-targets --locked`、`node --check` ×2、CSS 形态门 **1081 条**、
+  jsdom 冒烟 **182/182**、凭据扫描 CLEAN。src-tauri 的 `cargo test` 测试二进制在本机
+  仍报 `STATUS_ENTRYPOINT_NOT_FOUND`(本文 1461 行记过的 WebView2 链栈老问题),
+  非 RELEASE.md §0 门禁项;release 产物由 `build.ps1` 重新链接,不受影响。
+
+**发布(2026-11-10)**:tag `v0.3.33`,release 提交 `69866e2`。安装包
+`Grandettoken_0.3.33_x64-setup.exe` 5,740,907 字节,SHA-256
+`e0e4f5c929911668422cf3acd3f25f8e9519c3e00820ae9663653a7e48e42ab6`;`.sig` 424 字节;
+`latest.json` 1,172 字节。`verify-release.js` **14 项全 PASS**(更新端点 200 /
+版本 0.3.33 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft /
+说明完整 117 个汉字 / latest 指向 0.3.33 / 仓库公开)。打包日志
+`build/bundle-log-v0.3.33.txt`,导入表检查确认无 WebView2Loader.dll 混入。
+
+## 2026-11-10/11 · 资源占用优化 Wave 1 + 收尾评估(v0.3.34)
+
+第二轮性能方案(`docs/research/performance-optimization-2026-11-10.md`)的落地批次。
+Wave 2 按用户决策全部跳过;其余各项「收益高风险小」逐项取证,详见该文档 §10:
+
+- **W1-1 精确唤醒**:poll_loop 的 1 秒自旋改为「睡到 `min(deadline, 下一次重试到期)`」,
+  `Fetcher::next_retry_at()` 只读取最早到期渠道(+单测);`UPDATING` 另有 `Notify`
+  立即唤醒。是否重试仍由 `fetch_retries` 内 `r.next <= now` 判定,只改唤醒次数不改时机。
+- **`fetch_key_payload` 超时修复**(§9.6 运行时观察发现的缺陷,同日修复):读线程改
+  detached + 剩余预算 `recv_timeout`,到期先 `taskkill /T` 清整棵进程树;返回语义逐字
+  未变。修复前单次 104-133 秒、残留 2×105MB 子进程;修复后 2-3 秒、零残留(+2 单测)。
+- **W1-2 HTTP 客户端单例**:`checkin::direct_client`(`.no_proxy()` 保留)、
+  `fetch_promo_feed`、`sync_cmds::http_client`、`download`、`GistClient` 改进程内
+  `OnceLock` 复用,builder 参数逐字不变。
+- **W1-4** 删 `.modl-ov` / `.shade` 两处透明窗口里空转的 `backdrop-filter`。
+- **W1-3(代理快照 TTL)复核后放弃**;Wave 3 评估:启动 prune 实测 **60-70ms**
+  (覆盖索引 `idx_snap_lookup`,§2.6「全表扫描」前提被推翻)不下沉;`ProxyClients`
+  惰性会改错误浮现时点,不做;仅裁 `image-png`(全项目无 PNG 解码调用点,
+  Cargo.lock -4 包)。开发机 debug 构建缓存 60 GB 已清(用户确认)。
+- **门禁**:core `cargo test --locked` **425 passed / 8 ignored**、src-tauri
+  `cargo check --all-targets --locked` 0 警告、`bench_history_batch`(release) ok、
+  `node --check`、CSS 形态门 **1081 条**、jsdom 冒烟 **182/182**、refresh-stability
+  20 场景对基线无新增回归、verify-tray **128/128**。
+- **真机证据**(diag.log):qoder 失败 5.1 秒重试成功;4sapi 23:57:44→48 五秒档重试;
+  超时修复后无新的 >100 秒密钥耗时记录。
+
+**发布(2026-11-11)**:tag `v0.3.34`,release 提交 `6552d3b`。安装包
+`Grandettoken_0.3.34_x64-setup.exe` 5,699,297 字节,SHA-256
+`f6c8da0b96a26781031c5e1a0b725799ad411872d603b2381de5103ce2416eea`;`.sig` 424 字节;
+`latest.json` 1,344 字节。主程序 10,425,344 → **10,302,464 字节**(−1.2%,
+image-png 裁剪兑现)。`verify-release.js` **14 项全 PASS**(更新端点 200 /
+版本 0.3.34 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 / 非 draft /
+说明完整 166 个汉字 / latest 指向 0.3.34 / 仓库公开)。打包 3 分 40 秒,
+日志 `build/bundle-log-v0.3.34.txt`,导入表检查确认无 WebView2Loader.dll 混入。
+发版后 5 分钟采样(`build/qa/perf-baseline-2026-11-11.json`):进程树
+431→440 MB(WebView2 6 个 ~390 MB,基线 +2.3% < +5% 上限),主进程 43.7-45.5 MB;
+10 个 30 秒窗口里 4 个 CPU 精确为 0%(空闲不空转),其余 0.05-0.89% 对应取数轮。
+
+## 2026-11-11 · 顶栏胶囊与隐藏对调(v0.3.35)
+
+- 用户裁决:顶栏四枚入口顺序改为 刷新 / 置顶 / **胶囊 / 隐藏**(隐藏靠最右,减少误触)。
+  `index.html` 顶栏注释补记日期;jsdom 冒烟原断言只查「四枚存在且可见」,
+  现加 `compareDocumentPosition` **顺序断言**,防止以后被无意挪动。
+- **门禁**:`node --check`、CSS 形态门 **1081 条**、jsdom 冒烟 **182/182**(含新顺序断言)。
+  纯 DOM 顺序调整,`btnH` / `btnPill` 的 JS 处理都按 id 绑定,不受顺序影响。
+
+**发布(2026-11-11)**:tag `v0.3.35`,release 提交 `df4f59c`。安装包
+`Grandettoken_0.3.35_x64-setup.exe` 5,699,979 字节,SHA-256
+`0b91d8c062b487b489fd3d85d520afdcade3d2ecbf7da6d758a27c28058c5dd6`;`.sig` 424 字节;
+`latest.json` 858 字节。`verify-release.js` **14 项全 PASS**(首跑与重试 1 直连
+github.com:443 超时,第 2 次通过 —— 本机网络偶发抖动,`gh api` 同时核验 latest
+指向 0.3.35、三件套齐,非产物问题)。打包日志 `build/bundle-log-v0.3.35.txt`,
+导入表检查确认无 WebView2Loader.dll 混入;主程序维持 10,302,464 字节。
+本条提交信息曾因 shell 编码乱码,已用 `-F` 文件方式 amend(fff1d67 → df4f59c)。
+
+## 2026-11-12 · 死代码清理与依赖精简(v0.3.36)
+
+- 依据 `docs/report/redundancy-audit-2026-11-11.md`（二次复核版）执行：A 类 21 组全部清理；
+  B 类按裁决处理 —— B2 删 `clear_key_cache`、B3/#9 整条废弃 resize 遗留配置、
+  A2#12 删 `vault_ref_channels` 命令、B6 删 `.tb.loading`（联动 `@keyframes pulse`）、
+  B5 暂缓；B1 的 `SYNC_NOT_CONFIGURED` 码值改引 `sync::error::NOT_CONFIGURED` 常量，
+  B4 移除 `generic-array` 直接依赖。另清理报告漏列的零读写字段 `resize_hint_seen`。
+  净变更 **+41 / −384 行（18 文件）**。
+- `DESKTOP_READER` 注入链随注入函数一并删除（注入函数删掉后该锁恒为 None，属排查口径定义②
+  的恒假死分支）；`vault_ref_channels` 的 5 处测试断言改用现役 `vault_ref_pairs()`，覆盖不变。
+- **门禁**：core `cargo test --locked` **425 passed / 8 ignored**；core 与 src-tauri
+  `cargo check --all-targets --locked` 零警告；src-tauri `cargo test` **19 passed**；
+  `node --check`、CSS 形态门（1052 条）、jsdom 冒烟 **182/182**、`verify-codex-layout`
+  **48/48**（修复其既有损坏：`.quota-number` 旧类已不存在）、`verify-refresh-stability` EXIT=0。
+  IPC 三角复验：90 个被调命令全部已注册，被删 4 命令零残留。
+
+**发布(2026-11-12)**:tag `v0.3.36`,release 提交 `da582aa`。安装包
+`Grandettoken_0.3.36_x64-setup.exe` 5,693,162 字节,SHA-256
+`5d89b9b15679a0f38d6313c74f470bafe741aae911d5f67f5e2a8ca55a1651c7`;`.sig` 424 字节;
+`latest.json` 1,404 字节。`verify-release.js` **14 项全 PASS**(首跑 Node fetch 直连超时 ——
+本机设了 `HTTPS_PROXY=127.0.0.1:7897`,而 Node 24 的 fetch 默认不读代理环境变量;
+加 `--use-env-proxy` 后一次通过)。打包 3 分 13 秒,日志 `build/bundle-log-v0.3.36.txt`,
+导入表检查确认无 WebView2Loader.dll 混入;主程序 10,302,464 → **10,266,112 字节**
+(−0.35%,死代码清理兑现)。gh 未登录,按 RELEASE.md 用 `git credential fill` 取
+token 走 `GH_TOKEN`;三件套核验齐全(`gh release view --json assets` 3 个)。
+
+## 2026-11-12 · 代码质量清理:静默失败归零 + 两条棘轮门禁(v0.3.37)
+
+用户同日第二轮回访:「清理屎山、总结根因、防止以后的 agent 重犯」。上午那轮
+(`code-governance-2026-11-12.md`)治理的是版本库 / 产物边界 / 门禁接入;本轮治理
+**代码本身的失效方式**,并把两条最容易回潮的纪律做成机器判定。完整证据链见
+`docs/report/code-quality-2026-11-12-b.md`。
+
+- **静默失败清零**:前端 15 处空 catch 里 3 处是 IPC 写操作,改为回滚 + `showToast`
+  (`set_pin` / `save_window_pos` / `skip_update_version`);`dockExitNow` 的
+  `console.error` 改用户可见提示(托盘启动时没有控制台);`fetch.rs::note_qoder_scope`
+  两处 `let _ = store.set_setting(...)` 接入 `diaglog`。其余 12 处确属降级路径
+  (焦点恢复 / localStorage / 视觉预览线 / 读失败保留旧值),逐条写明 `silent: <理由>`。
+- **新门禁 `check-silent-failures.js`**:空 catch 必须认领,理由 ≥6 字;注释与字符串
+  走状态机屏蔽(注释里的示例代码不算代码)。带 5 项 `--self-test`。
+- **新门禁 `check-file-size.js`**:10 个超标文件钉行数预算(当前 +1%),**上限只许下调**,
+  清理后不调低等于把空间送回去。带 3 项自检。两个门禁都已进 `ci.yml`。
+- **CSS 去重**:旧三格摘要段按属性集逐条比对,删掉 8 条"全部属性被同名选择器覆盖"
+  的声明(零视觉变化,规则数 1052 → 1044);有独有属性的规则保留并注明为什么不能整段删。
+- **经验沉淀**:`AGENTS.md` 新增 §6「验证不缜密的七种真实形态」(每条带本仓库案发现场)
+  与 §7「两条棘轮」。核心结论:**纪律写成文档等于没写 —— 写了三版、代码里也有同样的
+  注释,15 处空 catch 依然在。必须做成机器判定。**
+- **执行期新发现(已写进 §6.5)**:新门禁第一版把 115 处"有处理逻辑"的 catch 判成空块 ——
+  JS 的 `RegExp` 匹配结果没有 `.end`(那是 .NET 的 API),`m.end - 1` 得 `NaN`;
+  第二版又把注释里的示例 `.catch(() => {})` 当真代码。两次都是**门禁假红**,
+  若照报错去改会给上百处 catch 加噪音提示。
+- **门禁**:core `cargo test --locked` **431 passed / 0 failed / 8 ignored**、
+  core 与 src-tauri `cargo check --all-targets --locked` 零警告、IPC 112/90/90 零缺口、
+  静默失败 71 处 catch 全认领、规模 10 项全达标、CSS 形态门 1044 条、jsdom **182/182**。
+
+**发布(2026-11-12)**:tag `v0.3.37`,release 提交 `8c1639e`。安装包
+`Grandettoken_0.3.37_x64-setup.exe` 5,696,919 字节,SHA-256
+`e48ba395145d103be7e4a8e2e8fff4a34224a43b83e04f216cb89036c7713218`;`.sig` 424 字节;
+`latest.json` 1,415 字节(说明 176 个汉字)。主程序 10,266,112 → **10,271,744 字节**
+(+0.05%,DPAPI 加密与失败路径提示的净增量)。`verify-release.js` **14 项全 PASS**
+(更新端点 200 / 版本 0.3.37 / 签名一致 / 安装包可下载且 SHA 一致 / 三件套齐 /
+非 draft / 说明完整 / latest 指向 0.3.37 / 仓库公开)。打包 5 分 54 秒(编译 5 分 27 秒),
+日志确认 `import table clean (no WebView2Loader.dll)`;`gh` 未登录,按 RELEASE.md 用
+`git credential fill` 取 token 走 `GH_TOKEN`;三件套核验齐全
+(`gh release view --json assets` 3 个)。
+
+## 2026-11-12 · 发版链路改回 GitHub Actions(v0.3.38)
+
+用户要求「改为 github ci 发版」并真实发一次。2026-10-20 之所以改本地打包,是因为
+CI 一次 22 分钟里 12 分钟在 `cargo install tauri-cli`;代价是**发版不可复现**
+(产物取决于本机装的哪个 cargo-tauri、哪份 target 缓存)。
+
+- **`release.yml` 恢复 `push: tags: ['v*']` 主入口**,`workflow_dispatch` 保留为
+  应急重发;`fetch-tags: true`,因为 `make-latest-json.js` 与 `gh release upload`
+  都要看到 tag 对象。
+- **tauri-cli 缓存改成与项目依赖锁解耦的固定 key**(只缓存 `~/.cargo/bin/cargo-tauri.exe`),
+  并在安装后**立刻单独 save**(`if: always()`),不依赖 job 收尾 —— 以前 job 后段
+  一失败,Post 步骤被 skip,缓存永远存不下来,于是每次都重编 11 分钟。
+- **新增 `Pre-release gates`**:发版前跑 IPC 契约 / 静默失败 / 文件规模 / CSS 形态
+  四道零依赖门 + jsdom 冒烟。理由:tag 可能打在没跑过 ci.yml 的提交上,
+  而**发出去的包收不回来**。原生命令的非零退出码不会自动中断 pwsh,逐个用
+  `Invoke-Gate` 检查。
+- job 加 `timeout-minutes: 60`(防签名步骤在非交互环境等密码而 CPU 0% 挂死)
+  与 `concurrency`(`cancel-in-progress: false` —— 发版有副作用,取消可能停在
+  「release 已建、资产没传完」的中间态)。
+- **`RELEASE.md` 全篇重写**:CI 为主、本地为应急;保留仍然有效的坑
+  (三件套补传、PowerShell 里空密码等于删变量、Node 24 的 fetch 不读代理)。
+
+**发布(2026-11-12)**:tag `v0.3.38`,release 提交 `1b62a48`。**首次由 CI 完整发版**,
+run [43163421308](https://github.com/wacilimonster-source/Grandettoken/actions/runs/43163421308)
+22 步全绿,**26 分 36 秒**(冷缓存;其中 `cargo install tauri-cli` 约 13 分钟、
+Rust release 编译约 8 分钟)。安装包 `Grandettoken_0.3.38_x64-setup.exe` **5,741,252 字节**,
+SHA-256 `5d03a89b25340e8bb2686ffeb759f9eeebbfc87a8f6634f9e279d37d0068fa8e`;
+`.sig` **444 字节**、`latest.json` 1,684 字节(说明 587 字符 / 163 汉字)。
+CI 内 `verify-release.js` **14 项全 PASS**(含「签名与本地 .sig 逐字一致」与
+「sha256 matches local installer」—— 这两项只有在 runner 上才有本地产物可比);
+本地复核 12 PASS / 2 SKIP / 0 FAIL(SKIP 的两项是本地没有该版本产物,按设计跳过)。
+
+- **安装包比本地打包大 44 KB**(5,741,252 vs 5,696,919):CI 的 `cargo install tauri-cli`
+  装的是当时最新的 2.x,NSIS 打包器版本与本地不同。属预期差异,不影响签名与更新链路。
+- **发版后新发现并已修**:`verify-release.js` 对"本地缺产物"的处理口径不一致 ——
+  安装包缺失走 `SKIP`,签名缺失却判 `FAIL`,于是 CI 发版后的本地复核会稳定报一个
+  假失败(实测 `local=0`)。已改成同口径 SKIP;这类"脚本自己制造的假失败"会教人
+  忽略门禁,见 `AGENTS.md` §6.4。
+
+## 2026-11-13 新渠道 MiniMax:积分 + 逐笔到期 + 签到
+
+**新渠道 `minimax`(积分型)**:读本机 MiniMax Code 桌面端凭据
+(`~/.minimax/auth/prod/<cn|io|com>/mcode-public/auth.json`,明文 JSON,无需解密),
+积分汇总 + **逐笔到期账本**(`credit/details`,签到积分 30 天到期)+ 每日签到
+(7 天一轮,第 4、7 天 1000 分)。API 口径经三个独立参考项目交叉验证
+(CreditDaddy 拆包 / QinglongMy 逆向 / dsh-connect-minimaxcode),账户端点签名
+按官方 app.asar 算法实现,Golden 向量钉死在 `core/src/minimax.rs`。
+
+- **真机实证(本机 cn 登录态)**:签名被生产 API 接受(积分 HTTP 200,remaining=400,
+  免费 400/购买 0);签到查询用 **IANA 时区名**(`timezone_id`,带 offset 会被拒)
+  口径正确(今日已签 status=3 → `Already(400)`);账本 1 笔 400 分 30 天后到期,
+  与官方客户端一致。令牌实测寿命 ~10.9 小时(参考项目说的 1 小时偏保守)。
+- **凭据托管(用户裁决,默认开可关)**:refresh token 一次性轮换。**临近过期(≤2 分钟)
+  才刷新**,刷新后**原子回写**客户端 auth.json(保留 generation/loginEpoch)——
+  文件是唯一事实源,不与客户端抢链。设置 → 刷新与启动可关;`MINIMAX_NOWRITEBACK=1`
+  硬关;**只读模式必须连刷新一起停**(刷新消费轮换却不回写会把客户端的链作废)。
+  这是 `appauth.rs`「只读不刷新」总原则的**有依据的例外**,理由写在该模块头注。
+- **区域**:凭据目录 cn/io/com 哪个有登录态走哪套域名(含 CreditDaddy 的 `en` 目录名兼容)。
+  取数跨区 401 靠 fallback 链自愈(last_good 钉住对的那个);签到域名跟凭据键走
+  (`mm:<region>:<token>` 前缀,`desktop:` 前缀同一先例)。
+- **架构**:全部逻辑在新模块 `core/src/minimax.rs`(凭据/签名/续期/extract/parse,
+  30 项单测);`fetch.rs` 的 minimax 分支每次尝试现算签名(静态表表达不了),
+  逐笔账本照 codex 明细的"主响应成功后追加、失败不拖垮余额"模式;签到的 URL 与
+  签名头在 `call_with_body` 现算。IPC 无新命令,前端零改动(kind=points 自动渲染)。
+- **门禁**:check-file-size 给 checkin.rs 上调 2200 → 2260(**唯一一次**,接线代码拆不出去,
+  理由在注释);全量门禁绿:IPC 契约 / silent 失败 / 文件规模 / CSS 形态 / app.js 语法 /
+  jsdom 182 / core 454 / src-tauri check --all-targets --locked / secrets 扫描 CLEAN,
+  串行单独跑。
+- **调研回收**:参考源码与真机探针都在 `build/tmp/`,本轮已删;顺手补上
+  `.gitignore` 的 `build/tmp/`(本次实测发现它未被 gitignore,一次性产物差点入库)。
+
+## 2026-11-13 新渠道豆包工作:体验额度 + 签到
+
+**新渠道 `doubao`(积分型)**:doubao.com **网页会话**渠道,任务面板接口一次给全 ——
+`data.progress.total_amount` 是体验额度余量,`data.tasks[]` 里的 `daily_signin` 是签到状态;
+领取 +200/天,服务端幂等(`idempotent:true` 归 already)。API 口径来自 CreditDaddy
+`doubaoClient.js`(issue #32,CDP 实测两个场景)。
+
+- **鉴权是纯 Cookie,但客户端环境要像样**:活动接口按客户端环境放行(裸 UA 吃「请求非法」),
+  所以 URL 必带桌面版平台参数(version_code/aid/...),UA 用 `DoubaoDesktop/2.32.6`,
+  web_id/tea_uuid 按 Cookie 里的 sessionid 确定性派生(每号一台稳定「设备」)。
+  **匿名真机探针实证**:形状被接受,返 `code 710012001「登录已过期」`(与参考实现一致);
+  完整登录态链路需用户在挂件内登录一次豆包(登录窗自动捕获,未在本次开发中真机验证)。
+- **凭据 = 网页会话**(WorkBuddy 同一套模型):挂件内登录窗捕获 → 会话留在 WebView2
+  profile、不落盘,取数时现读;手动粘贴 Cookie 走凭据管理器兜底。登录流拆成独立
+  模块 `src-tauri/src/doubao_web.rs`(lib.rs 在棘轮上,AGENTS 2.3 的正路)——
+  观察器只靠探测收工(豆包 SPA 没有"登录完成落地页")。
+- **单位是「额度」不是「分」**:前端积分型的大数字按 `unit` 渲染(`credits` 保持"分",
+  其它照渠道自己的叫法),豆包显示 `额度`。
+- **门禁**:check-file-size 当天第二次上调(checkin.rs → 2290、fetch.rs → 5280、
+  providers.rs → 2095,理由同一条:渠道接线点拆不出去,逻辑都在 doubao.rs);
+  IPC 契约新增 `doubao_login` 命令(前端已接);jsdom 182 / core 467 单测 /
+  src-tauri check --all-targets --locked / secrets 扫描全绿。
+- **调研回收**:参考源码与匿名探针都在 `build/tmp/`,本轮已删。
+
+**发布(2026-11-13 凌晨)**:tag `v0.3.39`,release 提交 `a5ed4b5`,修复提交 `48c2d2c`。
+**首轮 CI 失败过一次**(run 43284249021,15m11s),根因与修复见下:
+- **上游工具链漂移**:v0.3.38 发版时 runner 是 rustc 1.99.1,过了一晚 rustup `stable`
+  升到 **1.100.0**,cargo 改了构建目录布局(`build/<pkg>-<hash>/` →
+  `build/<pkg>/<hash>/`)。锁定的 `tauri-build 2.6.3` 用 `.parent()` 三次推算
+  target 目录,新布局下算成 `release/build`,再拼 `build` 去 `read_dir` 报
+  `os error 3` —— bundle 死在构建脚本里,与业务代码无关。
+- **修复**:锁文件升级 `tauri-build 2.7.2`(其 `target_dir_from_out_dir` 已兼容
+  两种布局;`tauri` 运行时仍 2.11.5),并把 `build.rs` 的 `strip_crate_dll` 改成
+  「找名为 build 的祖先再往下扫两代」(否则新布局下删不到 WebView2Loader.dll,
+  静态链接会静默回退)。**本地装了 1.100.0 工具链实际复现验证**,没有拿 CI 当唯一测试场。
+- 二轮 CI(run 43288954487)**全绿**:门禁 → core 测试 → bundle+签名 → latest.json
+  → 建 release → 三件套核验 → verify-release 全部 PASS。安装包
+  `Grandettoken_0.3.39_x64-setup.exe` **5,822,617 字节**,SHA-256
+  `0ef191d2bf9a4ad507cff49c1d2601d6babf4c4ade39716c129f2e746a04876d`。
+- 本地复核 **RESULT: PASS**(12 PASS / 2 SKIP,SKIP 两项按 §6.4 同口径是"本地没有该版本产物")。
+- 教训:发版鏈里 rustup `stable` 是**流动目标**,上游工具链/构建工具的回归会直接
+  卡发版;"门禁全绿"证明不了 bundle 能过,Release 链路本身就是最后一道门。
+
+
+
+
+## 2026-11-13 v0.3.40:MiniMax 到期明细不出数(主轮询与测试连接双路径分叉)
+
+**现象**:v0.3.39 装机后 MiniMax 卡片余额正常(400 分),但详情页逐笔到期区显示
+「暂未提供」,diag 日志里 0 条 ledger 记录,last-good 快照 `expiryComplete:false`。
+**根因**:主轮询走 `Fetcher::quota_attempt` → **单次** `fetch_once_scoped`(只查余额),
+**从不经过 `fetch_channel_scoped`** —— 而 minimax 的账本合并只加在了后者里。
+「测试连接」与自由函数 `fetch_channel` 走后者,所以开发期探针能拿到 1 笔、真机主轮询
+拿不到:两条路径行为分叉。codex 的 reset-credits 明细早就踩过同一类问题(主循环里是
+第二份内联实现),当时没有把它抽成共享调用 —— 这次照同样的形状补在
+`fetch.rs` 主循环 `result.valid` 块里,并在两处都写了「两边都要有」的注释。
+
+- **验证要打到真实路径上**:端到端探针改成 `Fetcher::new() + 临时 Store + fetch_all`
+  (应用轮询的同一入口),修复后返回 `expiryComplete=true, expiring.len=1,
+  400 分 @ 2026-12-13` —— 只用 `fetch_channel` 验证过的旧探针证明不了主轮询能用。
+- **不发版就看不见**:用户装的是 v0.3.39,所以修复随 v0.3.40 发。
+- 豆包渠道在端到端探针里如预期报「没检测到登录凭据」——用户尚未在挂件内登录,
+  登录窗捕获后同一路径即可出数。
+
+**发布(2026-11-13)**:tag `v0.3.40`,release 提交 `893c259`。CI run 43365001018 **全绿**,
+安装包 `Grandettoken_0.3.40_x64-setup.exe` **5,820,688 字节**,SHA-256
+`6ab02bbd147b51a87a976da14aa4a26b4dec818b74bf69beb338d39a61510b1b`;
+本地复核 **RESULT: PASS**(12 PASS / 2 SKIP,SKIP 两项按 §6.4 同口径)。
+
+**复盘教训(写给下一个 agent)**:「用 fetch_channel 探针验证过了」证明不了主轮询能用 ——
+主轮询走 `Fetcher::quota_attempt`(单次请求),与 `fetch_channel_scoped`(测试连接/自由函数)
+是**两条路径**。验证取数侧新功能必须至少打到 `fetch_all`,或同时覆盖两条路径。
+
+
+## 2026-11-13 豆包工作(DoubaoWork)会话实测:详情/签到可用,quota summary 已 404
+
+**背景**:用户在本机挂件的 WebView2 里登录 doubao.com 后,要求确认豆包工作能否不打开网页做
+自动签到/看额度,并排查 v0.3.40「检查更新」搜不到。
+
+**实测(真实 WebView2 会话,只读)**:
+- 从挂件 profile 的 Cookies 库取出 `.doubao.com` 全量会话后,`detail` 返 `code=0`;
+  `data.progress.total_amount` 当次 950;`data.tasks` 11 项;`daily_signin` =
+  `checked_in_today:true`、`continuous_days:1`、`reward_amount:200`。
+- **现有常量仍有效**:`version_code=20800` + `DoubaoDesktop/2.32.6` + `aid=497858` 就能过,
+  不需要按客户端 2.36.15 改成 23615 / `SamanthaDoubao`。预认证阶段不校验版本,匿名探针仍返 710012001。
+- `GET /alice/commerce/sale/subscription/quota/summary/` 用三组安全参数(含本会话派生设备号)
+  均 **404 空响应**;dsh-connect-doubao 的 5 小时/周额度口径当前不可用,**没有接**。
+- 桌面客户端 Cookie 直读仍不可行:DoubaoWork 的 `Default\Network\Cookies` 被独占锁,
+  当前非管理员、VSS Stopped;GitHub 上最认真的 dsh 0.5.0 也已删掉这条路径。
+  **安全边界**:一次 WebView2 登录 + 纯 HTTP 接口;不杀客户端、不开 CDP、不用第三方 device_id。
+
+**改动(未提交、未发版)**:
+- `app/core/src/doubao.rs`:在同一份 detail 响应上补 `extra`
+  「今日签到(已签 · 连续 N 天 / 未签 · 可领 +N 额度)」「今日奖励 +N 额度」「任务 N 项」;
+  不新增请求、不新增凭据路径。新增 3 条单测。
+- `.github/workflows/release.yml`:删掉补传步骤 `run:` 末尾误混入的
+  `GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}`(成功路径 `exit 0` 掩盖了它,补传重试时才可能炸)。
+
+**客户端已验证**:`checkin_log` 2026-11-13 12:34:17 `doubao already 200`,说明登录后签到状态识别正常;
+`checkin.doubao.enabled/auto` 均为 true。
+
+**写路径实测**:已签状态下 `POST /alice/ug/campaign/landing/checkin` 返 `code 0`、
+`idempotent:true`、`reward_amount:200`、`continuous_days:1` —— 服务端幂等,没有重复发放。
+
+**发版排查(v0.3.40)**:
+- run `43365001018` **completed/success**(04:36:51Z),20 步全绿;release published 04:36:23Z。
+- 直接资产 `releases/download/v0.3.40/latest.json` 是 **0.3.40**(pub_date 04:36:16.745Z);
+  `releases/latest/download/latest.json` 在 04:37 仍缓存 0.3.39,**现已切到 0.3.40**。
+- 客户端 `settings.config`: `lastCheckAt=12:32:45`、`skippedVersion=null`;
+  它比 release 早 4 分钟检查,之后 24h 节流不再自动查 —— **不是 CI 发版失败**。
+  手动点「检查更新」(force)绕过 24h,现在应能拿到 0.3.40。
+
+**门禁**:core `cargo test --locked` 470 passed / 0 failed / 8 ignored;
+src-tauri `cargo check --all-targets --locked` exit 0;
+`check-ipc-contract` / `check-silent-failures` / `check-file-size` / `node --check` /
+`check-css-forms` / `jsdom-smoke` 182/182 / `scan-secrets.ps1` CLEAN。
+
+
+## 2026-11-13 App 渠道卡新鲜度文案收敛(Android)
+
+**背景**:每张正常渠道卡的副标题都拼 `relativeTime(updatedAt)`,所以全部显示「配额型 · 刚刚」;
+详情首卡又写「更新于 刚刚」,与「数据说明」里的绝对时间重复。用户要求只在「很久没更新 /
+更新失败」时展示。
+
+**改动**
+- 新增 `android/.../sync/ChannelFreshness.kt`:四态 `Fresh / Stale / Failed / Never` +
+  `timeLabel()`;2 小时阈值与通知、小组件共用。正常返回 null,失败不足 1 分钟不写年龄,
+  结构上不可能再出现「刚刚」;`now` 作为入参,边界可单测。
+- `ChannelPresentation.kt`:卡片副标题改为片段列表,正常卡只剩类型;`stale` 标记或 ≥2 小时
+  显示「数据较旧(· N 前)」;失败显示「取数失败(· 上次 N 前)」;`updatedAt <= 0` 显示
+  「从未更新」。详情首卡移除常驻「更新于 …」,异常年龄进横幅,「数据说明」保留绝对时间;
+  状态点按同一状态变黄。
+- `NotificationRules` / `WidgetFormatter` 改用同一状态与阈值;通知与小部件文案不变。
+
+**验证**:`cd android; .\gradlew.bat testDebugUnitTest assembleDebug` → 全部通过
+(0 failed / 0 errors;数量以命令输出为准),debug APK 构建成功。未做真机截图。
+
+**边界**:顶部「N 个渠道数据较旧」横幅与「需要关注」分组仍只按载荷的 `stale/error` 标记统计;
+仅年龄超标的卡不会自动进组、也不抬高横幅计数。PC 详情弹层 `app.js:1694` 的同款
+「更新于 刚刚」未改。
+
+
+## 2026-11-13 v0.3.41 发布记录
+
+- tag `v0.3.41` -> commit `8240112`；release run `43368803326`（#18）**completed/success**，
+  release published `2026-11-13T05:20:25Z`；main 的 ci run `43368778871`（#111）success。
+- 资产：`Grandettoken_0.3.41_x64-setup.exe` 5,822,539 B；`.exe.sig` 444 B；`latest.json` 885 B。
+- 直链 `releases/download/v0.3.41/latest.json` 为 `version=0.3.41`，
+  `platforms.windows-x86_64.url` 指向本版 exe；`releases/latest/download/latest.json`
+  也已返回 0.3.41（客户端更新端点可直接拉到）。
+- 本地门禁：core 470 passed / 0 failed / 8 ignored；src-tauri `cargo check --all-targets --locked`
+  exit 0；jsdom 182/182；IPC / 静默失败 / 文件规模 / CSS / `node --check` / scan-secrets 全绿。
+  首次全量 core 跑出 `proxy` 一条假红，单独复跑 + 全量复跑均通过（AGENTS 已记录的竞争假红）。
+- 本次发版含：豆包详情展开区「今日签到 / 今日奖励 / 任务」+ `release.yml` 补传步骤
+  误混入 `GITHUB_TOKEN` 行的修复。
+
+## 2026-11-13 Android 0.1.13 CI 发版记录
+
+- tag `android-v0.1.13` -> commit `e71c95f`；run `43376024512` **completed/success**（4m8s，
+  06:03:18Z 启动），release published `2026-11-13T06:07:19Z`。
+- 首次 tag 指向 `3736d82`，run `43375250522` 在「Verify signed APK」证书摘要解析处失败：
+  `apksigner` 的证书输出走 stderr，旧命令只读 stdout 得到空串。修复为 `2>&1` +
+  大小写不敏感解析并重打 tag；失败 run 未产生 release、未改 `android-stable`。
+- 资产：`Grandettoken-android-v0.1.13.apk` 11,035,540 B；
+  SHA-256 `57c8f42895b8b4456f5b7ce3546b990597c6b1b9a2f5855b9014df870decba96`；
+  签名证书 SHA-256 `c56dbf4238aaf7403351c568e9149e7ccb3ff74f049d5e3e3682dee500df8e84`
+  （与本地 release key 一致）；versionName `0.1.13` / versionCode `113`。
+- `android-stable` 的 `android-latest.json` 已更新（1,771 B，06:07:16Z），payload
+  versionName `0.1.13` / versionCode `113`，downloadUrl 指向本版；
+  `releases/latest` 仍为桌面 `v0.3.41`，未被 Android release 抢占。
+- 本地独立复核：下载线上清单与 APK，`build/verify-android-release.py` **全部 PASS**
+  （signature/schema/channel/appId/version/minSdk/size/sha256/downloadUrl）；
+  `apksigner` 证书与 `aapt` versionCode/versionName 均与清单一致。
+- 6 个 Android CI secrets 已配置且值未打印；本次 CI 成功证明 keystore、更新签名私钥、
+  证书哈希的 secret 形态可用。
+
+## 2026-11-13 v0.3.42 Codex 重置顾问评审与发版
+
+- 已检查本轮代码、两份原型与详细设计，评审及修正清单见 `docs/report/codex-reset-review-2026-11-13.md`。
+- 详情内展开建议、计划与依据。核心算法、命令层、前端与样式拆为独立模块，原文件仅接线，规模预算保持原值。
+- 修正过期卡供给、时间缓存、换号设置与迟到写入、写失败回滚、订阅截止和异常数据门。严格不断档的当前算例需要三张卡，初稿的一张口径已在评审中纠正。
+- 本地 IPC / 静默失败 / 规模 / JS 语法 / CSS / 原有 jsdom / 顾问 jsdom / core 全量 / Tauri 全目标编译 / secrets 均串行通过并独立复跑。顾问冒烟含未知命令注入变红、写失败回滚与读失败降级。
+- 已检查模拟数据页面的生产样式渲染。真实兑换未执行，安装包内 WebView2 人工交互待验收。
+- 三处桌面版本同步为 0.3.42，按 main 后 tag 顺序触发 CI，发布结果随后补记。
+
+**发布结果**
+
+- tag `v0.3.42` 指向 `0456a75ec461a025f266a771bd6966e4398d3f90`，main CI `43414345345` success。
+- release run `43414351951` 完成构建、签名、上传，最后核验因 `latest.json.notes` 恰好含 20 个汉字、未达到脚本 `>20` 条件而 failure。该 run 保留原始失败记录。
+- 已补齐 Release 正文与线上 `latest.json.notes`。单改 Release 正文无法修复本门禁，它读取的是更新清单里的 notes。
+- 补正后本机 `node --use-env-proxy build/verify-release.js` 返回 PASS。缺少本地 CI 产物的两项逐字对比按既有规则 SKIP；CI 的原始日志已确认安装包 SHA 和签名逐字对比通过。
+- 线上安装包 `Grandettoken_0.3.42_x64-setup.exe` 为 5,856,249 字节，SHA-256 `72fbefba56ae073b434d75ba8c2b4d94f847dcf5032710447ef55ce69743c4e0`。签名资产 444 字节，更新清单补正文案后为 1,472 字节。
+- Release 已公开发布，固定更新端点返回 0.3.42，安装包可以公开下载。安装包内 WebView2 人工交互仍待验收。
+
+## 2026-11-13 v0.3.43 Google Cloud 赠金渠道
+
+- 新增「Gemini · Google Cloud」金额型渠道，对应 pockettavern 的 Agent Platform。
+  用户主动登录独立 Google 窗口后读取结算账号赠金表，余额保留上游币种，逐笔到期时间手填。
+- 赠金解析、网页登录与前端编辑分别独立成模块，原有大文件仅接线，规模预算保持原值。
+  账号与赠金 ID 双重隔离日期；写失败保留原值并提示；换号及停止连接使旧页面结果失效。
+  隐藏渠道停止后台读取，刷新失败沿用旧快照。已过期记录即使金额为正也排除汇总。
+- 网页表格加载、列结构、过滤与双向分页检查均失败关闭；导航桥由本机拦截并取消。
+  Google 登录仅由独立 WebView2 profile 保存，应用接收必要账务字段。
+  同步沿用金额白名单，手填逐笔日期由桌面详情展示。
+- 本地 IPC / 静默失败及自检 / 规模及自检 / JS 语法 / CSS 及自检 / 原有 jsdom /
+  Codex 顾问冒烟 / Google 赠金冒烟 / core 全量 / Tauri 全目标编译 / secrets
+  均串行跑完并独立复跑通过。新增冒烟含未知命令变红自检、过滤及分页拒绝、日期草稿、
+  保存失败、保存后控件解锁及换号迟到保存；core 覆盖落盘失败原子性、过期记录、账号隔离与旧快照。
+- 已检查桌面渠道设置入口和独立 Google 登录窗口。用户明确要求本次先按代码验证发版，
+  真实登录后的余额读取与线上刷新留待后续验收。三处版本号同步为 0.3.43，发布结果随后补记。
+
+**发布结果**
+
+- tag `v0.3.43` 指向 `407e05ad91b4cbffcdd991c0006fe43eed888147`，先推 main 后推 tag。
+  main CI `43438897777` 与 release run `43438936048` 均 completed/success。
+- Release 于 `2026-11-13T14:17:39Z` 公开发布。安装包 `Grandettoken_0.3.43_x64-setup.exe`
+  为 5,885,805 字节，SHA-256 `e5997f3e3cc57ce5294ee04a6b8e62b9565d0f47653ebd9632969dcc603fd7b2`。
+  签名资产 444 字节，更新清单 1,392 字节。
+- CI 端 `verify-release.js` 完整 PASS，含签名逐字及安装包 SHA 比对。
+  本机 `node --use-env-proxy build/verify-release.js` 二次核验 PASS，固定更新端点返回 0.3.43，
+  安装包公开下载成功。本机缺少对应 CI 原始产物的两项逐字对比按规则 SKIP，已核对 CI 日志通过。
+- 真实 Google 登录后的在线取数按用户要求留待后续验收，发布说明及 README 均已注明。
+
+## 2026-11-14 v0.3.44 密钥箱紧凑展示
+
+- 密钥条目默认收起，摘要保留复制密钥 / 端点、账号和必要状态；单条展开后显示地址、时间及其他操作。
+  新增和编辑表单的选填信息可折叠，搜索、排序、只读保护及删除引用确认沿用现有规则。
+- 显示明文保留八秒自动隐藏，切换、收起、搜索或离开时作废在途请求；保存失败保留草稿，旧请求成功也不会清空新表单。
+- 密钥箱渲染与样式拆为独立模块；CSS 形态门按页面加载顺序检查全部样式，交互门带未知命令哨兵自检。
+- 首次核心全量默认并发运行两次均在代理测试服务器的非阻塞读取处失败，单用例及单线程全量通过。
+  新增延迟请求回归测试确认旧夹具变红；接收连接改回阻塞并保留超时后，该回归测试及默认并发全量连续两次通过。
+- IPC、静默失败、文件规模、语法、CSS、前端与密钥箱冒烟、顾问与 Google 冒烟、核心全量、Tauri 全目标编译、凭据扫描均串行运行并独立复跑通过。
+  本地模拟页面的 `file:` 浏览器预览被安全策略阻止，未完成安装包内真实视觉验收；发布结果另记。
+
+## 2026-11-14 v0.3.45 签到统计名单修复
+
+- 用户反馈首页今日签到为 4/6，签到中心却显示 4/4。后端已包含新增渠道，前端仍保留旧的固定四渠道能力名单。
+- 前端能力名单改由 `checkin_state` 返回值生成，包含关闭监测的渠道以保留重新开启入口；首次加载能力变化时补绘渠道卡签到控制。
+- 回归名单从后端 `CHECKINS` 定义动态提取，覆盖首页 / 签到中心进度、全部管理入口和未来关闭渠道；移除名单同步的哨兵必须触发统计断言失败。
+- IPC、静默失败与自检、文件规模与自检、JS 语法、CSS 与自检、全部前端冒烟、核心全量、Tauri 全目标编译和凭据扫描均串行通过并独立复跑。真实客户端视觉验收未执行。
+
+## 2026-11-14 v0.3.44 发布结果与 v0.3.45 门禁失败
+
+- v0.3.44 release run `43463460246` 全部成功，包含签名与安装包 SHA 比对、线上更新链核验；main CI `43463384512` 成功。
+  安装包 5,887,805 字节，SHA-256 `d234dbf8db962c58bdac026c4a304fa1a0f0c57166372f82e6fb8b8fa8b5ad4b`。
+- v0.3.45 main CI `43465794410` 成功，但 release run `43467609035` 首次与独立重跑均在顾问冒烟的 urgent 断言失败，未构建安装包、未创建 Release。
+  签到回归已通过。根因是顾问固定日期夹具读取真实时钟，跨过需求十二小时有效期后被降级为 patient。
+- v0.3.46 将顾问冒烟时钟固定到夹具更新时间，保留未知命令自检与行为断言；签到修复及密钥箱优化均包含在内。发布结果另记。
+
+## 2026-11-14 v0.3.46 发布结果
+
+- tag `v0.3.46` 指向 `ad0f4eac50b60e62e2b459ec2e4dca2b19f9d64b`，main CI `43468896284` 与 release run `43468951596` 均全部成功。
+- Release 于北京时间 2026-11-14 01:22:11 公开发布，安装包 `Grandettoken_0.3.46_x64-setup.exe` 为 5,887,143 字节，
+  SHA-256 `14b0d80b97c5befe582b626cf8e6749910c7ab05304de96d6c17a023441f5aa0`；签名 444 字节，更新清单 1,143 字节。
+- CI 线上端到端核验通过。本机 `node --use-env-proxy build/verify-release.js` 二次核验 PASS，固定更新端点返回 0.3.46，安装包公开下载正常。
+  缺少本地 CI 原始产物的签名及安装包逐字比对按既有口径 SKIP，由 CI 完成原始产物比对。
+- 安装包内视觉验收未执行。本次使用独立工作树发布，原工作区尚未提交的 Codex 顾问改动未包含在发布中。
+
+## 2026-11-14 v0.3.47 移除豆包工作自动签到,渠道保留额度取数
+
+- 服务端自 2026-10-24 起对豆包活动接口收紧:挂件 claim 五次全部 710010702「系统错误」
+  (claim 后回查仍是未签,按「回查是唯一成功证据」降级为可重试),官方客户端手动领取
+  同样失败(「签到失败,请稍后重试」);detail 取数始终正常。完整复盘与证据链见
+  docs/report/doubao-checkin-710010702-2026-11-14.md。
+- 移除 CHECKINS 的豆包项、CheckinAuth::DoubaoWeb / Cred::Doubao 凭据链、parse_doubao
+  及其状态机测试与 claim 专用常量;保留渠道卡、登录窗、Cookie 自救、额度取数、
+  登出清会话与「今日签到」展示摘要。
+- 新增 core/src/doubao_client.rs:运行时从本机豆包客户端(PE 版本资源 + User Data/Last
+  Version)派生 version_code 与 UA,抓包钉值只作兜底;实测新指纹下取数正常,部署当日
+  detail 未被破坏。
+- 评估过 bluechonk/doubao-auto-checkin 的 CDP 驱动真实客户端方案(对风控收紧免疫):
+  属 AGENTS 2.4 高权限能力,且官方客户端被拒期间同样无效,本版未采用,留作后续选项。
+- 门禁串行全绿:core 508 passed / 8 ignored、src-tauri 全目标编译(--locked)、IPC 契约、
+  静默失败、CSS 形态、JS 语法、jsdom 182/182;文件规模预算随清理下调
+  (checkin.rs 2290→2242、lib.rs 6500→6484)。
+
+## 2026-11-13 Codex 重置顾问实机反馈打磨（未发版）
+
+- 实机反馈：选择「现在就要」「今天要用」时界面显示「暂时无法判断」。根因是判定矩阵的
+  `deadline_before_reset`（urgent/soon 且额度不够的主路径）在 `reason_copy` 文案表里没有分支，
+  落进兜底文案；mock 桩与 IPC 门禁都测不出这种「判定与文案漂移」。修复方式是 reason code
+  改为穷举 `Reason` enum 且 `reason_copy` 不留兜底分支——文案表漏分支现在直接编译失败，
+  另加全矩阵单测断言任何路径都不出现「暂时无法判断」。
+- 推荐逻辑按「满足实际使用下最大化自然重置与重置卡」打磨：
+  - 距自然重置不足 1 小时（`RESET_IMMINENT_H`）且额度不够时改判 `wait/reset_imminent`，
+    不为几分钟烧一张卡并把周窗锚点推走一周；此时卡临期则带 `card_expiry_loss`。
+  - 「今天要用」以本地当天 23:59:59 为界（`AdviceInput.today_end_at`，命令层
+    `local_today_end` 按机器时区补齐，缺省退回 24h 口径），修掉「晚上 22 点 +
+    明早 6 点重置被建议干等一夜」的误判；`soon` 剩余够用时优先 `hold/remaining_covers`。
+  - `now` 且周窗与 5 小时窗剩余都 ≥80% 时发 `eligibility_unlikely`（官方资格口径：
+    至少一项需不足 80%），替代通用核对提示；`card_expiry_loss` 放宽为「结论非 NOW
+    且卡在重置前过期」。
+- 前端落地设计 §5.3 的用量档位（25% / 50% / 100%）：urgent/soon 选中后展开，写入
+  profile 并参与判定，标了小用量且剩余够时不再劝烧卡；`inputKey` 纳入用量。
+  删除从未被引用的 `REASON` 映射（死代码，已确认全仓零引用）；建议命令失败时标题改
+  显示「建议暂时不可用」，与后端「无法判断」结论区分，不再同形混淆。
+- 文档同步：设计文档 §4.4 更新为 v3（阈值表、判定树、§5.4 文案表、§9.1 用例 41–46、
+  §13 验收清单勾选）；评审报告补「二轮」章节；AGENTS §7 补棘轮条目（判定矩阵新增
+  reason code 必须同步文案表，能给编译器强制的就不留给约定）。
+- 门禁串行全绿并单独复跑：IPC 契约、静默失败、文件规模（未上调预算，`codex_reset.rs`
+  1436 行 / `codex-reset.js` 746 行均低于 1500 软上限）、JS 语法、CSS 形态、
+  jsdom 182/182、顾问冒烟（含未知命令注入变红自检 + 新增用量档位断言）、core 全量
+  505 passed / 8 ignored、src-tauri 全目标编译、凭据扫描 CLEAN。
+- 边界说明：本机时区按 Asia/Shanghai 验证，`local_today_end` 在 DST 边界返回 None 并退回
+  24h 口径。真实账号的兑换操作仍未执行；本改动未发版，待与后续改动一同走 CI 发版。
+
+## 2026-11-14 Codex 重置建议完整链路复核（未发版）
+
+- 保留工作区已有未提交修复，对照 HEAD 再次确认直接原因是 `deadline_before_reset`
+  判定已有、文案缺失。已复核穷举原因类型、完整文案映射及用量档位。
+- 追加修复「今天要用」临近午夜被一小时等待规则覆盖、当天最后一秒误回退 24h、
+  卡查询失败仍使用旧库存推荐立即兑换。三个回归用例均先观察到失败，再修复通过。
+- 前端补「今天要用」传入用量、用量写失败回滚及提示检查，修正建议页提示与计划页需求文案。
+  完整输入、判定、库存降级和计划模拟流程见 `docs/report/codex-reset-review-2026-11-13.md`
+  的「2026-11-14 工作区复核」。策略继续采用周窗口径，保留现有一小时临近重置优先等待。
+- 最终代码完整串行验证两轮均通过，含 IPC、静默失败及自检、文件规模及自检、
+  app.js 与顾问模块语法、CSS 形态、原有 jsdom、顾问冒烟及未知命令注入自检、
+  core 全量 `cargo test --locked`、Tauri `cargo check --all-targets --locked`、凭据扫描。
+  测试数量以命令输出为准，`git diff --check` 通过，规模预算未上调。
+- 当前修复在工作区源码中，尚未发版。真实账号兑换与安装包 WebView2 交互待验证。
+
+## 2026-11-14 Codex 订阅到期日支持清空（未发版）
+
+- 到期日标注可选，增加明确「清空」按钮，复用 `saveDate("")`、`clearSubEnd` 与现有
+  账号隔离存储。日期为空、正在保存或计算时禁用清空；保存失败恢复原日期并提示。
+- 确认原核心与命令层已支持空日期。空值继续提供即时建议，计划提示填写到期日；
+  已填写时考虑订阅截止并计算到期前计划，订阅已过期时保留卡。
+- 新增独立 `codex_reset_date_tests.rs`，复用原矩阵夹具，覆盖有/无日期下的需求、
+  剩余与库存组合、当天期限、过期/恢复日期、缺字段与 null 读取。前端验证清空失败、
+  清空成功、重读仍为空、重新填写恢复计划，以及日期控件直接清空。
+- 完整门禁串行通过两轮并独立复跑，含 IPC、静默失败及自检、规模及自检、JS 语法、
+  CSS、原有 jsdom、顾问冒烟及未知命令自检、core 全量测试、Tauri 全目标编译、凭据扫描。
+  新测试文件格式化后专项回归与规模检查再次通过，`git diff --check` 通过。
+- 修改在工作区源码中，尚未发版，安装包 WebView2 的实际日期控件交互待验收。
+
+## 2026-11-14 空订阅日期按重置卡有效期规划（未发版）
+
+- 按用户最新要求，留空时采用最后一张已确认有效卡的到期时间为计划截止，各卡按
+  自身有效期参与模拟。有手填订阅日期时优先使用该日期，订阅字段留空状态可继续保存。
+  输出独立 `planEndAt` / `planEndSource` / `daysToPlanEnd`，页面显示截止来源与
+  「订阅持续有效」的估算假设；缺少有效日期、已过期或查询失败时说明计划缺少的条件。
+- 计划截止、文案和模拟抽到 `codex_reset_plan.rs`，保留原入口与算法。
+  追加修正截止点自然重置计数多一次、模拟首张过期卡遮住后续有效临期卡的问题，
+  两个回归均先观察到失败再修复。
+- 即时建议继续考虑最早卡到期、本次用量与自然重置。前端验证日期清空后计划和时间轴、
+  重新填写、卡明细变化与跨到期时刻的时钟失效；核心覆盖多卡截止与逐卡有效期、
+  手填日期优先、未知/过期/失败库存、即时临期建议与样本不足。
+- 静态门与自检、JS 语法、CSS、原有 jsdom、顾问冒烟、Tauri 全目标编译与凭据扫描
+  均串行执行并复跑通过。最终 core 默认全量首轮通过，随后两次复跑均遇到已有的
+  proxy 套接字不稳定（10035 / 10054）；该用例单独复跑通过，再以
+  `cargo test --locked --quiet -- --test-threads=1` 全量独立复跑通过。
+  原始失败保留于本轮输出，不能将默认并行的复跑写成全绿。
+- `git diff --check` 通过。详细口径见评审报告「空日期按重置卡有效期规划」。
+  本轮将用户「即时记忆」按即时建议及其缓存重算处理，尚未发版，安装包实际交互待验收。
+
+## 2026-11-14 重置建议独立规则复核（未发版）
+
+- 按用户要求从使用目标、期限、双窗口、库存有效期、订阅与数据不确定性整理独立规则，
+  再对照实现优化，完整规则与比较表见 `docs/report/codex-reset-policy-review-2026-11-14.md`。
+- 即时判定拆到 `codex_reset_decision.rs`。现在需求优先于一小时省卡偏好，今天需求
+  先检查各受限窗口的恢复时间，临期卡作为风险提示。周窗满额仍检查五小时耗尽，
+  按官方套餐完整重置范围给出可用、不可解除或待核对结论。兑换资格已确认不足时保留卡。
+- 满额阈值回到 100%，五小时百分比单独校验。兑换回写防护覆盖周满而短窗限流路径，
+  快照超过原有 15 分钟阈值或即时需求缺少时间时要求刷新。今天需求跨本地日界失效。
+- 净收益改为同范围内兑换与等待的模拟差值，可为负，计入恢复锚点推移。
+  计划继续估算周额度，界面标注范围，删除缺口除卡数构造的收益区间。
+  套餐字段进入输入与缓存指纹，保留空订阅日期、逐卡失效与账号隔离。
+- 静态门及自检、JS 语法、CSS、两类前端冒烟、core 全量、Tauri 全目标编译、
+  凭据扫描均串行通过两轮，`git diff --check` 通过。核心使用
+  `cargo test --locked --quiet -- --test-threads=1` 全量复跑，测试数量以输出为准。
+- 当前修改尚未发版，真实卡兑换与安装包 WebView2 交互待验收。五小时工作量尚无独立
+  输入，当前识别明确耗尽瓶颈并提示需求核对；完整重置涵盖范围按套餐规则推断并在兑换前核对。
+
+
+## 2026-11-14 v0.3.48 重置顾问按使用目标重构判定,订阅日期可清空并按卡有效期规划
+
+- **本版先合并了两条并行工作线**(merge 5618a56):远端独立工作树已发布 v0.3.44 密钥箱
+  紧凑展示、v0.3.45 签到统计名单修复、v0.3.46 发布、v0.3.47 豆包自动签到移除;本工作区
+  同期完成重置顾问多轮复核(未发版)。两条线各自实现过豆包移除与 `doubao_client.rs`
+  (几乎同文),合并取远端已发版版本;顾问冒烟夹具保留本地的时钟相对方案(e3b58c0
+  根治跨天误降级),不保留远端按钉死夹具的 `w.Date.now` 覆盖。
+- 重置顾问独立规则复核落地:判定拆到 `codex_reset_decision.rs`,计划拆到
+  `codex_reset_plan.rs`,未上调文件规模预算。需求优先于一小时省卡偏好,「今天要用」
+  先检查各受限窗口能否在期限内恢复,临期卡只作风险提示;周额度与五小时百分比分别
+  校验,满额阈值回到 100%,兑换资格已确认不足时不再输出 NOW;净收益改为同范围内
+  兑换与等待的模拟差值,可为负;套餐字段进入输入与缓存指纹。
+- 订阅到期日支持清空(独立「清空」按钮 + 失败回滚);留空时按最后一张有效卡的到期
+  时间规划,各卡按自身有效期参与模拟,输出 `planEndAt` / `planEndSource` /
+  `daysToPlanEnd` 并标注「订阅持续有效」假设;跨到期时刻时钟失效自动撤下失效计划。
+  判定 reason 改为穷举 `Reason` enum,文案表漏分支直接编译失败;「今天要用」按本地
+  当天 23:59:59 界定(`AdviceInput.today_end_at`)。
+- 合并后门禁串行全绿:core 533 passed / 8 ignored(两轮,含远端 proxy 套接字夹具
+  修复,无套接字假红)、src-tauri 全目标编译(--locked)、IPC 契约(122 调用 / 98 命令)、
+  静默失败及自检、文件规模及自检、CSS 形态及自检(4 个样式文件)、五个 JS 语法检查、
+  jsdom 200/200 连续 6 轮(合并后首轮 198/200,未捕获失败项名,按 AGENTS §6.7 口径
+  判资源竞争假红,原始失败保留于本轮输出)、顾问冒烟(含未知命令注入变红自检)、
+  密钥箱冒烟、Google Cloud 冒烟、凭据扫描 CLEAN、`git diff --check` 通过。
+  版本号三处同步 0.3.48 并 `cargo fetch --locked` 复跑通过。
+- 真实账号的兑换操作与安装包 WebView2 交互仍未执行,发布后按验收边界补测。
+
+## 2026-11-14 v0.3.48 发布结果
+
+- tag `v0.3.48` 指向 `6beb779`(发版 commit,位于 merge 5618a56 之上),先推 main 后推 tag。
+  release run `43563297821` 全部成功(约 17 分钟);main CI `43563286654` 对 6beb779 成功。
+- Release 于北京时间 2026-11-14 14:05:29 公开发布。安装包 `Grandettoken_0.3.48_x64-setup.exe`
+  为 5,892,250 字节,SHA-256(本地匿名下载回验)
+  `ed4e3586392dbdeb56318c9c34629f51d4167c246427dda772a1504399adf4b2`;签名 444 字节,
+  更新清单 2,371 字节,三件套齐全,非 draft。
+- CI 端核验通过;本机 `node --use-env-proxy build/verify-release.js` 二次核验 PASS(14 项),
+  固定更新端点返回 0.3.48,安装包公开下载成功。本地无 CI 原始产物的签名及安装包逐字
+  比对按既有口径 SKIP,由 CI 端完成原始产物比对。
+- 本版含两条并行工作线的合并(远端 v0.3.44–47 与本地重置顾问复核),合并与冲突裁决
+  见上一条目;真实账号的兑换操作与安装包 WebView2 交互仍待验收。
+
+## 2026-11-14 v0.3.48 验收问题复核与修复（未发版）
+
+- 逐项复核 `docs/report/acceptance-v0.3.48-2026-11-14.md` 的五个问题，复核结论与
+  验证追加在原报告第五节，保留原始验收事实。
+- 问题 1 确认为测试隔离缺陷。冒烟等待真实初始化完成，按组调用异步用例，形态切换
+  等几何队列收尾，签到与二维码等实际结果。连续十轮通过，能力名单坏样本注入仍判红。
+- 问题 2 的原 UIA 回填失败直接成因仍待人工确认；另复现定时重绘丢失日期输入焦点、
+  节点与草稿。顾问时钟/绘制与详情刷新统一保护编辑，离焦补算，原保存与回滚路径保留。
+  新增可聚焦夹具及移除保护必须判红的哨兵，日期回归通过。
+- 问题 3 观察到未激活、滚动区外及索引失效等工具限制，产品缺陷证据不足。
+- 问题 4 实机仍见重复标签 toast。确认 destroy 仅异步派发，重建改为等待同标签释放，
+  有界超时、失败会话收尾与旧回调 nonce 校验同时补齐。核心测试覆盖延迟释放/超时/已释放。
+- 问题 5 确认实机字号为大，源码尺寸链包含字号倍率及屏幕钳制，未发现原报告所猜测
+  的 devicePixelRatio 缓存路径。增加大字号尺寸回归，修正字号说明。
+- IPC、静默失败/规模/CSS 及自检、五个 JS 语法、全页/顾问/密钥箱/Google 冒烟、
+  core 全量 `cargo test --locked --quiet`、Tauri 全目标编译与凭据扫描均串行通过两轮。
+  首轮编译发现 get_webview API feature 限制，改稳定 API 后全目标复跑通过。
+  `git diff --check` 通过，文件规模预算未上调。修改尚未发版，新安装包原生交互和
+  Google 真实账号后台刷新待发布后验收。
+
+## 2026-11-14 v0.3.49 验收问题修复:顾问日期编辑保护、Google 结算窗口重建等待、冒烟套件隔离
+
+- 集中修复 v0.3.48 完整验收报告(docs/report/acceptance-v0.3.48-2026-11-14.md)确认的问题,
+  复核结论与验证证据追加在原报告第五节,原始验收事实保留。
+- 问题 2 落地修复:顾问分钟重算与详情刷新不再丢失日期输入焦点、节点与草稿 ——
+  编辑期间统一保护,离焦后补算;原保存与失败回滚路径不变;新增可聚焦夹具与
+  「移除保护必须判红」哨兵。(UIA 回填失败的直接成因仍待人工确认,与本修复无关。)
+- 问题 4 落地修复:实机复现重复标签 toast 后确认 Tauri `destroy()` 仅异步派发 ——
+  同名窗口重建改为等待同标签释放,带界超时、失败会话收尾与旧回调 nonce 校验;
+  core 新增延迟释放/超时/已释放三组测试。
+- 问题 1 落地修复:界面冒烟等待真实初始化后按组调用异步用例,形态切换等几何队列
+  收尾、签到与二维码等实际结果;201 项断言连续 10 轮(修复会话)+ 5 轮(本轮发版前)
+  全绿,能力名单坏样本注入仍判红。
+- 问题 5 修正口径:根因是字号「大」倍率参与尺寸链(含屏幕钳制),非原报告猜测的
+  devicePixelRatio 缓存;新增大字号尺寸回归,修正字号说明文案。
+- 本轮发版前门禁串行全绿:静态四门及自检、五个 JS 语法、jsdom 201/201 连续 5 轮、
+  顾问/密钥箱/Google Cloud 冒烟、core 534 passed / 8 ignored、src-tauri 全目标编译
+  (--locked)、凭据扫描 CLEAN。版本号三处同步 0.3.49 并 `cargo fetch --locked` 复跑通过。
+- 遗留验收:新安装包的原生日期控件交互、Google 真实账号后台刷新,发布后按边界补测。
+
+## 2026-11-14 顾问时长统计改「N 天 M 小时」（未发版,随下版）
+
+- 用户反馈 WAIT 结论的「等 约 146.4 小时 的自然重置」不直观,改为天+小时口径:
+  ≥24 小时折「N 天 M 小时」(146.4h → 约 6 天 2 小时),不足一天保留 0.1 小时精度,
+  不足一小时按分钟;小时段四舍五入满 24 进位成整天(47.7h → 约 2 天)。
+- 后端抽 `format_gap_hours`(codex_reset.rs,headline 与内嵌结论同源),前端 `fmtGap`
+  (codex-reset.js 指标行)保持同口径,注释互相标注必须同步修改。
+- 双向验证:Rust 新增 `gap_copy_splits_days_and_hours` 边界单测(分钟/0.1h/23.96h/
+  24h/47.7h 进位/整天/天+小时);顾问冒烟把 gapHours 夹具变量化,新增两条 DOM 断言
+  (约 5.3 小时 / 146.4 → 约 6 天 2 小时),改夹具必须同时推 uiNow 失效建议缓存
+  (与 AGENTS 7 的时钟失效棘轮一致)。
+- 门禁:core 535 passed / 8 ignored、顾问冒烟(含哨兵自检)、jsdom 201/201、
+  密钥箱/Google 冒烟、文件规模、凭据扫描 CLEAN、src-tauri 全目标编译。
+- 改动在工作区,尚未发版;随下一版走 CI(v0.3.49 已在 CI 中,不含本改动)。
+
+## 2026-11-14 v0.3.49 发布结果
+
+- tag `v0.3.49` 指向 `61508a1`(验收问题修复发版 commit)。release run `43572152164`
+  全部成功;main CI 对 61508a1 与 e16d535 均成功(677941f 被补救提交的并发取消属预期)。
+- Release 于北京时间 2026-11-14 16:01:27 公开发布,三件套齐全(安装包 5,893,106 字节,
+  SHA-256 本地匿名下载回验 `44cd19e1a3757ebe61ea6610f3241d27f382d95bfb475bf8bf061723cba5d947`;
+  签名 444 字节;更新清单 2,394 字节),非 draft。
+- 本机 `node --use-env-proxy build/verify-release.js` 二次核验 PASS(14 项),固定更新端点
+  返回 0.3.49;签名/安装包逐字比对按既有口径 SKIP,由 CI 端完成。
+- 发版过程事故记录:发版提交 677941f 曾误将本地 QA 目录的 v0.3.48 安装包入库
+  (`git add -A` + .gitignore 只忽略 *.png 所致),补救提交 61508a1 出库并把 `build/qa/`
+  改为整目录忽略;tag 打在补救提交上,release 正文正确。历史 blob 与已发布资产字节相同,
+  无凭据泄露,未做历史改写。
+- 待验收:新安装包原生日期控件交互(用户人工验证「清空后重新输入日期」)、Google 真实
+  账号后台刷新。e16d535 的时长口径改动(「N 天 M 小时」)在 main 上,随 v0.3.50 发布。
