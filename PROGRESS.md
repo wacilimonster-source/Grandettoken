@@ -754,3 +754,13 @@
   - `app/src-tauri/src/poll.rs`：每日定期 `s.prune(...)` 后及 `quit_when_idle` 退出前调用 `wal_checkpoint()` 将 `-wal` 刷回主库并截断。
   - `app/core/src/store_tests.rs`：新增 `wal_checkpoint_truncates_wal_and_passes_integrity_check` 验证磁盘库写入后 `-wal` 非空、checkpoint 后归零且 `integrity_check() == "ok"`。
 - **验证**：`check-file-size.js`、`check-lock-unwrap.js`、`check-encoding.js`（均含 `--self-test`）、`app/core` `cargo test --locked -- --test-threads=1`（653 passed, 10 ignored; `sync_fixtures` 6 passed）+ `cargo check --all-targets --locked`、`app/src-tauri` `cargo check --all-targets --locked`（零警告）、`scan-secrets.ps1` 全部通过。
+
+
+## 2026-11-23 T-B6b `%TEMP%` 副本数据库体积与碎片率只读实测
+
+- **实测结果**（详见 [`docs/report/db-growth-measurement-2026-11-22.md`](docs/report/db-growth-measurement-2026-11-22.md)，全程仅读取 `%TEMP%` 副本，未停应用且未改写原库）：
+  - 原文件体积：`tokenscope.db` `80.84 MB` + `-wal` `3.98 MB` + `-shm` `0.03 MB` = `84.85 MB`，副本 `PRAGMA integrity_check` 为 `ok`；
+  - `page_size=4096`、`page_count=20,702`、`freelist_count=8`，**空闲页碎片率仅 `0.04%`（`32 KB`）**（库龄 68 天，尚未触发 90 天 `prune`）；副本 `VACUUM` 可收紧 `12.33 MB`（`15.25%`，属时序 B-tree 页内空洞）；
+  - `snapshots` 表共 `475,144` 行（`25.11 MB`）加三张索引 `55.47 MB` 合占主库 **`99.6%`**，近 10 天均写入 `~15,476` 行/天（约 `+2.6 MB/天`）。
+- **结论**：按 `< 10%` 阈值裁决**不做自动 `VACUUM`**，`T-B6a` 的 WAL checkpoint 已足够；临时测试与 `%TEMP%` 副本已删净。
+- **验证**：`check-encoding.js`、`scan-secrets.ps1`、`git diff app/core/src/store_tests.rs` 为空，全部通过。
