@@ -729,3 +729,9 @@
   - `build/verify-refresh-stability.js` 新增 `clockTick` 场景与 `--assert` 判定：固定时钟 `2026-11-14 15:30` 下，数据不变仅推进 1 分钟，`#list` 上 `MutationObserver` 测得 `childListCount === 0` 且 `characterDataCount > 0`，快照年龄从「12 分钟前快照」更新为「13 分钟前快照」，峰谷与到期倒计时同步原地更新；
   - 反向哨兵 `ROW_SIG_SENTINEL=1`（将 `snapAge` 写回占位属性使 `QSIG` 失配）实测触发 `FAIL 推进 1 分钟 #list 无 childList 节点更换 (childListCount=2)` 并以退出码 1 拦截。
 - 验证：静态门禁（IPC、`silent-failures`、`file-size`、`css-forms`、`encoding`、`app-split`、`node --check`）、`jsdom-smoke.js`（294/294）、`verify-vault.js`、`verify-codex-reset.js`、`verify-google-cloud.js`、`verify-gateway.js`、无头 Edge `verify-refresh-stability.js --assert`、`scan-secrets.ps1` 全部通过。
+
+## 2026-11-22 T-B4 `fitPill` 按文本/字体/宽度缓存测量结果
+
+- **改动**：`app/src/app-tray.js` 为 `fitPill()` 增加 `PILL_MEASURE_KEY` / `PILL_MEASURE_W` 缓存（键为 `文本|字号档|fontFamily|clientWidth`），命中时不创建离屏 `<span>`、不读 `offsetWidth`；将字体样式复制收敛为循环，保持 `app*.js` 总行数仍在 `9011/9011` 预算内。
+- **验证补强**：`build/jsdom-smoke.js` 新增 3 项 `fitPill` 测量缓存断言及 `FIT_PILL_SENTINEL=1` 双向哨兵。
+- **验证**：`check-file-size.js`、`check-silent-failures.js`、`check-app-split.js`、`check-encoding.js`（均含 `--self-test`）、`check-ipc-contract.js`、`check-css-forms.js`、`node --check app/src/app-tray.js`、`jsdom-smoke.js`（297/297）、`FIT_PILL_SENTINEL=1`（3 项 `fitPill` FAIL，退出码 1）、`verify-vault.js`、`verify-codex-reset.js`、`verify-google-cloud.js`、`verify-gateway.js`、`scan-secrets.ps1` 全部通过。

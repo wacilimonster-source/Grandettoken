@@ -44,6 +44,9 @@ if (process.env.WORK_AREA_SENTINEL === "1") {
 if (process.env.CHECKIN_SENTINEL === "1") {
   replaceOnce(appList, "CHECKIN_ON.add(x.id);", "");
 }
+if (process.env.FIT_PILL_SENTINEL === "1") {
+  replaceOnce(appList, "if (key !== PILL_MEASURE_KEY) {", "if (true) {");
+}
 const ANY_SENTINEL = [
   "CHECKIN_SENTINEL",
   "AG_LAYOUT_SENTINEL",
@@ -51,6 +54,7 @@ const ANY_SENTINEL = [
   "ANTIGRAVITY_ACCOUNT_SENTINEL",
   "WORK_AREA_SENTINEL",
   "EXPIRY_UI_SENTINEL",
+  "FIT_PILL_SENTINEL",
 ].some((k) => process.env[k] === "1");
 if (!ANY_SENTINEL) {
   let threwMissing = false;
@@ -98,6 +102,12 @@ if (!ANY_SENTINEL) {
   });
   if (expiryProbe.status !== 1 || !/FAIL 账户到期单独出现时仍可筛选/.test(expiryProbe.stdout)) {
     throw new Error("临期哨兵自检失败：漏掉账户到期必须被实际界面断言拦截");
+  }
+  const fitPillProbe = spawnSync(process.execPath, [__filename], {
+    env: { ...process.env, FIT_PILL_SENTINEL: "1" }, encoding: "utf8", timeout: 30000,
+  });
+  if (fitPillProbe.status !== 1 || !/FAIL fitPill 相同文本与环境复用测量缓存/.test(fitPillProbe.stdout)) {
+    throw new Error("fitPill 哨兵自检失败：移除测量缓存后必须被探针计数断言拦截");
   }
 }
 const vaultJs = fs.readFileSync(path.join(SRC, "vault-view.js"), "utf8");
@@ -1445,6 +1455,46 @@ const HARNESS = `
     closeManage();
   } catch (e) {
     ck("设置索引 / 顶栏入口", false, e.message);
+  }
+
+  // ── fitPill 离屏探针测量缓存(T-B4)──
+  try {
+    const savedCfgScale = CFG.fontScale;
+    const savedBodyClass = document.body.className;
+    const pillEl = document.getElementById("pillV");
+    const savedPillHtml = pillEl.innerHTML;
+    document.body.className = "form-panel";
+    CFG.fontScale = "md";
+    pillEl.textContent = "__fit_reset__";
+    fitPill();
+    const origCreate = document.createElement.bind(document);
+    let spanCreates = 0;
+    document.createElement = function (tag, opts) {
+      if (String(tag).toLowerCase() === "span") spanCreates++;
+      return origCreate(tag, opts);
+    };
+    try {
+      pillEl.textContent = "¥888.88";
+      fitPill();
+      const afterFirst = spanCreates;
+      fitPill();
+      ck("fitPill 相同文本与环境复用测量缓存", afterFirst === 1 && spanCreates === 1,
+        "afterFirst=" + afterFirst + " spanCreates=" + spanCreates);
+      pillEl.textContent = "¥999.99";
+      fitPill();
+      ck("fitPill 文本变化后重新测量", spanCreates === 2, "spanCreates=" + spanCreates);
+      CFG.fontScale = "lg";
+      fitPill();
+      ck("fitPill 字号档位变化后重新测量", spanCreates === 3, "spanCreates=" + spanCreates);
+    } finally {
+      document.createElement = origCreate;
+      CFG.fontScale = savedCfgScale;
+      document.body.className = savedBodyClass;
+      pillEl.innerHTML = savedPillHtml;
+      fitPill();
+    }
+  } catch (e) {
+    ck("fitPill 测量缓存", false, e.message);
   }
 
 })();

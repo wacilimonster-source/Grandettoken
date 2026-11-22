@@ -253,30 +253,30 @@ function renderPillFace() {
  * 宽度缩小的变化 <6px 不动窗口(数值抖动不牵窗);增大只要 ≥1px 就立刻动 ——
  * 宁可宽 1px,不能窄 1px(窄了就是截图里 "91…" 那种半截数字)。
  */
+let PILL_MEASURE_KEY = "", PILL_MEASURE_W = 0;
+
 function fitPill() {
   const el = $("pillV");
   if (!el) return;
-  const probe = document.createElement("span");
-  probe.style.cssText =
-    "position:absolute;left:-9999px;top:-9999px;white-space:nowrap;visibility:hidden";
-  // 逐项拷字体,不要用 `font` 简写 —— 在 Chromium 里 getComputedStyle().font
-  // 经常是空串,量出来的就是默认 13px/400 的宽度,窗口会比文字窄几个像素,
-  // 胶囊里出现 "WB 6,075…" 这种半截数字(实测踩过)。
-  const cs = getComputedStyle(el);
-  probe.style.fontFamily = cs.fontFamily;
-  probe.style.fontSize = cs.fontSize;
-  probe.style.fontWeight = cs.fontWeight;
-  probe.style.fontStyle = cs.fontStyle;
-  probe.style.letterSpacing = cs.letterSpacing;
-  // .t 开着 tabular-nums(等宽数字比比例数字宽 ~5%)。漏拷这项探针会少测,
-  // 窗口天生比文字窄一截,"91.5%" 被省略号吃成 "91…"(实测踩过,勿再删)
-  probe.style.fontVariantNumeric = cs.fontVariantNumeric;
-  probe.textContent = el.textContent || "";
-  document.body.appendChild(probe);
-  const textW = probe.getBoundingClientRect().width;
-  probe.remove();
-  // 圆点 6 + 图标 26 + 间距 8×4 + 展开按钮 22 + 内边距 16 + 边框/缓冲 ≈ 104
+  const text = el.textContent || "";
   const u = fsU();
+  const key = text + "|" + u + "|" + document.body.className;
+  let textW = PILL_MEASURE_W;
+  if (key !== PILL_MEASURE_KEY) {
+    const probe = document.createElement("span");
+    probe.style.cssText = "position:absolute;left:-9999px;top:-9999px;white-space:nowrap;visibility:hidden";
+    // 逐项拷字体,不要用 `font` 简写 —— 在 Chromium 里 getComputedStyle().font 经常是空串;
+    // fontVariantNumeric 决定 tabular-nums 等宽数字宽度(实测漏拷会导致 "91.5%" 被裁成 "91…")。
+    const cs = getComputedStyle(el);
+    for (const k of ["fontFamily", "fontSize", "fontWeight", "fontStyle", "letterSpacing", "fontVariantNumeric"]) probe.style[k] = cs[k];
+    probe.textContent = text;
+    document.body.appendChild(probe);
+    textW = probe.getBoundingClientRect().width;
+    probe.remove();
+    PILL_MEASURE_KEY = key;
+    PILL_MEASURE_W = textW;
+  }
+  // 圆点 6 + 图标 26 + 间距 8×4 + 展开按钮 22 + 内边距 16 + 边框/缓冲 ≈ 104
   const cap = Math.round(280 * u);
   let w = Math.max(Math.round(104 * u), Math.min(cap, Math.ceil(textW) + Math.round(104 * u)));
   // 兜底:探针估算若被真实字体/DPI 打脸(当前窗口正把文字裁掉),按实测差额补够。
