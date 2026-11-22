@@ -764,3 +764,12 @@
   - `snapshots` 表共 `475,144` 行（`25.11 MB`）加三张索引 `55.47 MB` 合占主库 **`99.6%`**，近 10 天均写入 `~15,476` 行/天（约 `+2.6 MB/天`）。
 - **结论**：按 `< 10%` 阈值裁决**不做自动 `VACUUM`**，`T-B6a` 的 WAL checkpoint 已足够；临时测试与 `%TEMP%` 副本已删净。
 - **验证**：`check-encoding.js`、`scan-secrets.ps1`、`git diff app/core/src/store_tests.rs` 为空，全部通过。
+
+
+## 2026-11-23 T-D1 原生窗口 CDP 一键回归脚本
+
+- **改动**：
+  - 新增纯 ASCII 脚本 `build/run-native-checks.ps1`：启动前校验若 `Grandettoken` / `tokenscope` 已在运行则直接拒绝（不杀用户实例）；将 `%APPDATA%\com.wacil.tokenscope` 下 `*.db*` / `*.json` 按 SHA-256 备份到临时目录并在 `finally` 等待进程退出后清删多余文件并按 SHA-256 逐字节还原；拉起 `launch-debug.ps1` 并等待 CDP 端口就绪后串行执行 7 项 CDP 验证（`verify-settings-entry.js`、`verify-checkin-center.js`、`verify-resize.js`、`verify-qoder-expiry.js`、`verify-ui-0923.js`、`verify-focus-ring.js`、`verify-form.js`），日志与汇总表写入 `build/qa/native-<YYYY-MM-DD>/`，任一失败返回退出码 1；内置 `-SelfTest` 离线自检。
+  - 更新 `RELEASE.md`（桌面发版第 2 步提醒与第 6 步一键原生窗口回归说明）及 `docs/report/acceptance-backlog.md`（标注 `B1`、`B9`、`B10` 已纳入一键脚本，仍待用户关闭运行实例后实跑）。
+- **验证**：纯 ASCII 检查（16,593 字节中非 ASCII 为 0）、`build/run-native-checks.ps1 -SelfTest`（4 项自检全绿）、`check-encoding.js`（含 `--self-test`，469 文件 PASS）、`check-silent-failures.js`（25 文件/121 catch PASS）、`scan-secrets.ps1`（562 文件 CLEAN）。
+- **未跑项**：本机有运行中的 `Grandettoken` 实例且按规则不杀用户进程，真实原生窗口 CDP 全套回归（`B1`–`B10`）待用户在关闭应用后运行 `powershell -NoProfile -ExecutionPolicy Bypass -File build/run-native-checks.ps1`。

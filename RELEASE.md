@@ -92,6 +92,8 @@ git push origin main
 > tag 就指到上一版的提交,源码归档(zip/tar.gz)拿错快照。走 CI 同样成立:
 > tag 指向的 commit 必须在 main 上,否则 GitHub 生成的源码归档与代码不一致。
 
+发版提交前若有桌面界面 / 窗口几何改动，建议先关停运行中的实例并跑一遍 `build/run-native-checks.ps1`，同时核对 [`docs/report/acceptance-backlog.md`](docs/report/acceptance-backlog.md) 中的待验收项（见下文第 6 步）。
+
 ### 3. 打 tag 并推送(这一步触发发版)
 
 ```bash
@@ -144,11 +146,14 @@ CI 里也会跑同一个脚本,所以本地这步是**二次确认**,不是唯�
 > Node 24 的 `fetch` 默认不读 `HTTPS_PROXY`;本机设了代理时必须加 `--use-env-proxy`,
 > 否则会看到 `fetch failed`(2026-11-12 v0.3.36 踩过)。
 
-### 6. 同步待验收清单
+### 6. 同步待验收清单与原生窗口一键回归
 
-- **发版提交前**:把本版新增的待验收项写进 [`docs/report/acceptance-backlog.md`](docs/report/acceptance-backlog.md);
-- **发版并安装后**:逐项完成真机 / 原生窗口 / 真实账号验收,在 `docs/report/acceptance-backlog.md` 里更新对应项的状态和完成日期。
-- `build/verify-release.js` 只核验线上发布产物,不检查本地待验收清单文档。
+- **发版提交前**：把本版新增的待验收项写进 [`docs/report/acceptance-backlog.md`](docs/report/acceptance-backlog.md)；涉及桌面界面 / 窗口几何 / WebView2 行为的改动，先关闭运行中的 `Grandettoken`，再执行一键原生 CDP 回归（脚本会自动拒绝并发实例、按 SHA-256 备份并恢复 `%APPDATA%\com.wacil.tokenscope` 下 `*.db*`/`*.json`、串行跑完 7 项 CDP 验证并输出日志到 `build/qa/native-<YYYY-MM-DD>/`）：
+  ```powershell
+  powershell -NoProfile -ExecutionPolicy Bypass -File build/run-native-checks.ps1
+  ```
+- **发版并安装后**：逐项完成真机 / 原生窗口 / 真实账号验收，在 [`docs/report/acceptance-backlog.md`](docs/report/acceptance-backlog.md) 里更新对应项的状态和完成日期。
+- `build/verify-release.js` 只核验线上发布产物，不检查本地待验收清单文档。
 
 ## Android 发版（CI，独立 tag）
 
