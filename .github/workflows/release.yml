@@ -104,7 +104,12 @@ jobs:
           Invoke-Gate 'css-forms'         { node build/check-css-forms.js }
           Invoke-Gate 'encoding-self'     { node build/check-encoding.js --self-test }
           Invoke-Gate 'text-encoding'     { node build/check-encoding.js }
-          Invoke-Gate 'syntax'            { node --check app/src/app.js }
+          Invoke-Gate 'syntax'            {
+            Get-ChildItem app/src/app*.js | ForEach-Object {
+              node --check $_.FullName
+              if ($LASTEXITCODE -ne 0) { throw "node --check failed: $($_.FullName)" }
+            }
+          }
           Invoke-Gate 'syntax-expiry'     { node --check app/src/expiry-ui.js }
           Invoke-Gate 'syntax-quota-plan' { node --check app/src/quota-plan.js }
           Invoke-Gate 'syntax-quota-data' { node --check app/src/quota-plan-data.js }

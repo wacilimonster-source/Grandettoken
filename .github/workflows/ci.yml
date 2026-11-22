@@ -117,7 +117,10 @@ jobs:
       - name: node --check (front-end scripts)
         shell: pwsh
         run: |
-          node --check app/src/app.js
+          Get-ChildItem app/src/app*.js | ForEach-Object {
+            node --check $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "node --check failed: $($_.FullName)" }
+          }
           node --check app/src/expiry-ui.js
           node --check app/src/quota-plan.js
           node --check app/src/quota-plan-data.js

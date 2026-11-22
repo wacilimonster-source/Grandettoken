@@ -24,62 +24,77 @@ try {
 // 必须从脚本位置推导仓库根:以前写死 "G:/game/nw/Grandettoken/app/src",
 // 换一台机器 / 换个 clone 目录就静默读不到文件,而门禁脚本可能仍然报绿。
 const SRC = path.resolve(__dirname, "..", "app", "src");
+const { appFiles, appSource, replaceOnce, loadInto } = require("./lib/app-sources");
 const html = fs.readFileSync(path.join(SRC, "index.html"), "utf8");
-let js = fs.readFileSync(path.join(SRC, "app.js"), "utf8");
+const appList = appFiles(SRC);
 if (process.env.ANTIGRAVITY_ACCOUNT_SENTINEL === "1") {
-  const marker = "window.AntigravityUI.managementList(ordered)";
-  if (!js.includes(marker)) throw new Error("Antigravity 管理分组哨兵未命中");
-  js = js.replace(marker, "ordered");
+  replaceOnce(appList, "window.AntigravityUI.managementList(ordered)", "ordered");
 }
 if (process.env.PERFORMANCE_SENTINEL === "1") {
-  js = js.replace('if (!WINDOW_VISIBLE) {', 'if (false && !WINDOW_VISIBLE) {');
-  js = js.replace('function qReconcile(box, items) {', 'function qReconcile(box, items) { if (box && ["cfgPill", "mIndexList"].includes(box.id)) box.innerHTML = "";');
+  replaceOnce(appList, "if (!WINDOW_VISIBLE) {", "if (false && !WINDOW_VISIBLE) {");
+  replaceOnce(
+    appList,
+    "function qReconcile(box, items) {",
+    'function qReconcile(box, items) { if (box && ["cfgPill", "mIndexList"].includes(box.id)) box.innerHTML = "";'
+  );
 }
 if (process.env.WORK_AREA_SENTINEL === "1") {
-  const marker = "const { position, size } = mon.workArea || mon;";
-  if (js.split(marker).length !== 2) throw new Error("工作区哨兵未命中显示器坐标入口");
-  js = js.replace(marker, "const { position, size } = mon;");
+  replaceOnce(appList, "const { position, size } = mon.workArea || mon;", "const { position, size } = mon;");
 }
 if (process.env.CHECKIN_SENTINEL === "1") {
-  const marker = "CHECKIN_ON.add(x.id);";
-  if (js.split(marker).length !== 2) throw new Error("签到哨兵未命中唯一能力同步入口");
-  js = js.replace(marker, "");
-} else {
+  replaceOnce(appList, "CHECKIN_ON.add(x.id);", "");
+}
+const ANY_SENTINEL = [
+  "CHECKIN_SENTINEL",
+  "AG_LAYOUT_SENTINEL",
+  "PERFORMANCE_SENTINEL",
+  "ANTIGRAVITY_ACCOUNT_SENTINEL",
+  "WORK_AREA_SENTINEL",
+  "EXPIRY_UI_SENTINEL",
+].some((k) => process.env[k] === "1");
+if (!ANY_SENTINEL) {
+  let threwMissing = false;
+  let threwDup = false;
+  try { replaceOnce("abc", "missing", "x"); } catch { threwMissing = true; }
+  try { replaceOnce("dup dup", "dup", "x"); } catch { threwDup = true; }
+  if (!threwMissing || !threwDup) {
+    throw new Error("replaceOnce 自检失败：标记不存在或重复出现时必须抛错");
+  }
   const { spawnSync } = require("node:child_process");
   const probe = spawnSync(process.execPath, [__filename], {
-    env: { ...process.env, CHECKIN_SENTINEL: "1" }, encoding: "utf8", timeout: 20000,
+    env: { ...process.env, CHECKIN_SENTINEL: "1" }, encoding: "utf8", timeout: 30000,
   });
   if (probe.status !== 1 || !/FAIL 首页与签到中心使用全部后端签到渠道/.test(probe.stdout)) {
     throw new Error("签到哨兵自检失败：移除能力名单同步后必须被统计回归断言拦截");
   }
   const agProbe = spawnSync(process.execPath, [__filename], {
-    env: { ...process.env, CHECKIN_SENTINEL: "1", AG_LAYOUT_SENTINEL: "1" }, encoding: "utf8", timeout: 20000,
+    env: { ...process.env, AG_LAYOUT_SENTINEL: "1" }, encoding: "utf8", timeout: 30000,
   });
   if (agProbe.status !== 1 || !/FAIL Antigravity Gemini 周窗优先且其他组默认折叠/.test(agProbe.stdout)) {
     throw new Error("Antigravity 哨兵自检失败：移除周窗主数字样式必须被断言拦截");
   }
   const perfProbe = spawnSync(process.execPath, [__filename], {
-    env: { ...process.env, CHECKIN_SENTINEL: "1", PERFORMANCE_SENTINEL: "1" }, encoding: "utf8", timeout: 20000,
+    env: { ...process.env, PERFORMANCE_SENTINEL: "1" }, encoding: "utf8", timeout: 30000,
   });
   if (perfProbe.status !== 1 || !/FAIL 隐藏窗口保留列表且继续更新托盘来源/.test(perfProbe.stdout)
       || !/FAIL 设置选择与索引复用按钮/.test(perfProbe.stdout)) {
     throw new Error("性能哨兵自检失败：隐藏门控和按钮复用退化必须被断言拦截");
   }
   const accountProbe = spawnSync(process.execPath, [__filename], {
-    env: { ...process.env, CHECKIN_SENTINEL: "1", ANTIGRAVITY_ACCOUNT_SENTINEL: "1" }, encoding: "utf8", timeout: 20000,
+    env: { ...process.env, ANTIGRAVITY_ACCOUNT_SENTINEL: "1" }, encoding: "utf8", timeout: 30000,
   });
   if (accountProbe.status !== 1 || !/FAIL Antigravity 多账号 管理页只有一个分组且列出全部账号/.test(accountProbe.stdout)) {
     throw new Error("Antigravity 多账号哨兵自检失败：分组退化必须由账号分组断言拦截");
   }
   const workAreaProbe = spawnSync(process.execPath, [__filename], {
-    env: { ...process.env, CHECKIN_SENTINEL: "1", WORK_AREA_SENTINEL: "1" }, encoding: "utf8", timeout: 20000,
+    env: { ...process.env, WORK_AREA_SENTINEL: "1" }, encoding: "utf8", timeout: 30000,
   });
   if (workAreaProbe.status !== 1 || !/FAIL 125% 大字号普通面板完整落在工作区/.test(workAreaProbe.stdout)
       || !/FAIL 125% 贴边展开与解除贴边使用相同的工作区高度/.test(workAreaProbe.stdout)) {
     throw new Error("工作区哨兵自检失败：使用整屏边界必须触发普通面板与贴边回归");
   }
   const expiryProbe = spawnSync(process.execPath, [__filename], {
-    env: { ...process.env, CHECKIN_SENTINEL: "1", EXPIRY_UI_SENTINEL: "1" }, encoding: "utf8", timeout: 20000,
+    env: { ...process.env, EXPIRY_UI_SENTINEL: "1" }, encoding: "utf8", timeout: 30000,
   });
   if (expiryProbe.status !== 1 || !/FAIL 账户到期单独出现时仍可筛选/.test(expiryProbe.stdout)) {
     throw new Error("临期哨兵自检失败：漏掉账户到期必须被实际界面断言拦截");
@@ -89,19 +104,20 @@ const vaultJs = fs.readFileSync(path.join(SRC, "vault-view.js"), "utf8");
 let expiryJs = fs.readFileSync(path.join(SRC, "expiry-ui.js"), "utf8");
 if (process.env.EXPIRY_UI_SENTINEL === "1") {
   const marker = "const first = [...entries, ...accounts, ...packages].sort";
-  if (expiryJs.split(marker).length !== 2) throw new Error("临期哨兵未命中账户摘要入口");
-  expiryJs = expiryJs.replace(marker, "accounts.length = 0; " + marker);
+  expiryJs = replaceOnce(expiryJs, marker, "accounts.length = 0; " + marker);
 }
 const layoutJs = fs.readFileSync(path.join(SRC, "panel-layout.js"), "utf8");
-const quotaJs = ["quota-plan.js", "quota-plan-data.js", "quota-plan-ui.js"]
-  .map(name => fs.readFileSync(path.join(SRC, name), "utf8")).join("\n;\n");
+const quotaFiles = ["quota-plan.js", "quota-plan-data.js", "quota-plan-ui.js"].map((name) => ({
+  name,
+  code: fs.readFileSync(path.join(SRC, name), "utf8"),
+}));
 const cloudJs = fs.readFileSync(path.join(SRC, "google-cloud.js"), "utf8");
 let antigravityJs = fs.readFileSync(path.join(SRC, "antigravity.js"), "utf8");
 if (process.env.AG_LAYOUT_SENTINEL === "1") {
   const marker = 'windowHtml(c, w, w.key === "gemini-weekly")';
-  if (!antigravityJs.includes(marker)) throw new Error("Antigravity 哨兵未命中周窗选择");
-  antigravityJs = antigravityJs.replace(marker, 'windowHtml(c, w, false)');
+  antigravityJs = replaceOnce(antigravityJs, marker, "windowHtml(c, w, false)");
 }
+const js = appSource(appList);
 const checkinSource = fs.readFileSync(path.join(SRC, "../core/src/checkin.rs"), "utf8");
 const checkinDefs = checkinSource.slice(checkinSource.indexOf("pub const CHECKINS:"), checkinSource.indexOf("pub fn find("));
 const checkinIds = [...checkinDefs.matchAll(/\bid:\s*"([^"]+)"/g)].map((match) => match[1]);
@@ -1437,11 +1453,17 @@ w.__DATA = DATA;
 (async () => {
   try {
     const initMarker = "(async function init() {";
-    if (js.split(initMarker).length !== 2) throw new Error("初始化入口必须唯一");
-    w.eval(vaultJs + "\n;\n" + expiryJs + "\n;\n" + layoutJs + "\n;\n" + quotaJs + "\n;\n" + js.replace(initMarker, "window.__INIT = " + initMarker)
-      + "\n;\n" + antigravityJs
-      + "\n;\n" + cloudJs
-      + "\n;window.__RUN_HARNESS = async () => { await window.__INIT;\n" + HARNESS + "\n};");
+    replaceOnce(appList, initMarker, "window.__INIT = " + initMarker);
+    loadInto(dom.getInternalVMContext(), [
+      { name: "vault-view.js", code: vaultJs },
+      { name: "expiry-ui.js", code: expiryJs },
+      { name: "panel-layout.js", code: layoutJs },
+      ...quotaFiles,
+      ...appList,
+      { name: "antigravity.js", code: antigravityJs },
+      { name: "google-cloud.js", code: cloudJs },
+      { name: "jsdom-harness.js", code: "window.__RUN_HARNESS = async () => { await window.__INIT;\n" + HARNESS + "\n};" },
+    ]);
     await w.__RUN_HARNESS();
     if (process.env.EXPIRY_LAYOUT_FIXTURES) fs.writeFileSync(process.env.EXPIRY_LAYOUT_FIXTURES, JSON.stringify(w.__EXPIRY_LAYOUTS));
   } catch (e) {

@@ -3,8 +3,8 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const { appFiles, loadInto } = require('./lib/app-sources');
 
-const src = fs.readFileSync(path.join(__dirname, '..', 'app', 'src', 'app.js'), 'utf8');
 const vaultSrc = fs.readFileSync(path.join(__dirname, '..', 'app', 'src', 'vault-view.js'), 'utf8');
 
 const logs = [];
@@ -358,7 +358,7 @@ try {
   vm.runInContext(vaultSrc, ctx, { filename: 'vault-view.js' });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../app/src/expiry-ui.js'), 'utf8'), ctx, { filename: 'expiry-ui.js' });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../app/src/panel-layout.js'), 'utf8'), ctx, { filename: 'panel-layout.js' });
-  vm.runInContext(src, ctx, { filename: 'app.js' });
+  loadInto(ctx, appFiles());
 } catch (e) {
   logs.push(['THROWN', String(e && e.stack || e)]);
 }

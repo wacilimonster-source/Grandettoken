@@ -6,13 +6,15 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 import json
 import os
-import re
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.app_sources import app_source, strip_app_script_tags
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "app" / "src"
-html = (SRC / "index.html").read_text(encoding="utf-8")
-html = re.sub(r'<script\s+src="app\.js"\s*></script>', "", html)
-script = (SRC / "app.js").read_text(encoding="utf-8")
+html = strip_app_script_tags((SRC / "index.html").read_text(encoding="utf-8"))
+script = app_source(SRC)
 start = script.index("function syncSummary()")
 end = script.index("bindSyncUI();", start) + len("bindSyncUI();")
 

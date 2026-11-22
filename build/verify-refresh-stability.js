@@ -804,6 +804,7 @@ function qaDriver() {
 }
 
 // ───────────────────────── 组装 + 运行 ─────────────────────────
+const { appFileNames, replaceOnce } = require("./lib/app-sources");
 function buildHarness() {
   const html = fs.readFileSync(path.join(SRC, "index.html"), "utf8");
   const base = path.resolve(SRC).replace(/\\/g, "/");
@@ -813,8 +814,11 @@ function buildHarness() {
     `<script>window.__QA_DATA = JSON.parse(document.getElementById('__QA_DATA').textContent);</script>\n` +
     `<script>(${qaStubs.toString()})();</script>\n`;
   const driver = `<script>(${qaDriver.toString()})();</script>\n`;
-  return withBase
-    .replace('<script src="app.js"></script>', inject + '<script src="app.js"></script>\n' + driver);
+  const names = appFileNames(SRC);
+  const firstTag = `<script src="${names[0]}"></script>`;
+  const lastTag = `<script src="${names[names.length - 1]}"></script>`;
+  const withStubs = replaceOnce(withBase, firstTag, inject + firstTag);
+  return replaceOnce(withStubs, lastTag, lastTag + "\n" + driver);
 }
 
 const edge = argOf("--edge", EDGE_CANDIDATES.find((p) => fs.existsSync(p)) || EDGE_CANDIDATES[0]);

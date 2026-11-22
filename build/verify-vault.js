@@ -6,10 +6,12 @@ const { spawnSync } = require("node:child_process");
 const { JSDOM } = require("jsdom");
 
 const root = path.resolve(__dirname, "..");
+const { appFileNames } = require("./lib/app-sources");
 const html = fs.readFileSync(path.join(root, "app/src/index.html"), "utf8");
 let source = fs.readFileSync(path.join(root, "app/src/vault-view.js"), "utf8");
+const firstAppScript = `src="${appFileNames()[0]}"`;
 assert.match(html, /href="vault-view\.css"/);
-assert.ok(html.indexOf('src="vault-view.js"') >= 0 && html.indexOf('src="vault-view.js"') < html.indexOf('src="app.js"'));
+assert.ok(html.indexOf('src="vault-view.js"') >= 0 && html.indexOf('src="vault-view.js"') < html.indexOf(firstAppScript));
 
 if (process.env.VAULT_SENTINEL === "1") {
   const token = 'invoke("vault_reveal"';

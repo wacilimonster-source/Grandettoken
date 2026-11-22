@@ -48,9 +48,10 @@ for (const options of [{ missing: true }, { loading: true }, { filtered: true },
 }
 const html = fs.readFileSync(path.join(root, "app/src/index.html"), "utf8");
 assert.match(html, /src="google-cloud.js"/);
-const appSource = fs.readFileSync(path.join(root, "app/src/app.js"), "utf8");
-assert.match(appSource, /GoogleCloudUI.detail\(c\)/);
-assert.match(appSource, /GoogleCloudUI.records\(c\)/);
+const { appSource } = require("./lib/app-sources");
+const appJs = appSource();
+assert.match(appJs, /GoogleCloudUI.detail\(c\)/);
+assert.match(appJs, /GoogleCloudUI.records\(c\)/);
 const dom = new JSDOM('<div id="root"></div>', { runScripts: "outside-only" });
 const w = dom.window;
 const toasts = [];

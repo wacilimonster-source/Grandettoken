@@ -43,6 +43,16 @@ const BUDGETS = {
   "app/src/styles.css": 1737,
 };
 
+// 分组预算:拆分后单文件受 SOFT_LIMIT 约束,同时整组总行数仍受原上限约束(只许下调)。
+const GROUP_BUDGETS = [
+  {
+    label: "app/src/app*.js",
+    dir: "app/src",
+    pattern: /^app(?:-.+)?\.js$/,
+    limit: 9014,
+  },
+];
+
 // 不参与判定的路径:构建产物、依赖、测试夹具
 const SKIP_DIRS = new Set(["node_modules", "target", "build", "dist", ".git", "docs", "android"]);
 
@@ -68,7 +78,8 @@ function walk(dir, out) {
 
 function selfTest() {
   const tmp = path.join(ROOT, "build", "__size_probe__.js");
-  const limit = BUDGETS["app/src/app.js"];
+  const tmp2 = path.join(ROOT, "build", "__size_probe_2__.js");
+  const limit = GROUP_BUDGETS[0].limit;
   const cases = [
     { name: "超预算文件被判红", lines: limit + 1, budget: limit, wantBad: true },
     { name: "正好等于上限不判红", lines: limit, budget: limit, wantBad: false },
@@ -85,7 +96,19 @@ function selfTest() {
       console.log(`  ✓ ${c.name}`);
     }
   }
+  const part1 = Math.floor(limit / 2) + 1;
+  const part2 = limit - part1 + 1;
+  fs.writeFileSync(tmp, "// x\n".repeat(part1), "utf8");
+  fs.writeFileSync(tmp2, "// x\n".repeat(part2), "utf8");
+  const groupSum = countLines(tmp) + countLines(tmp2);
+  if (!(groupSum > limit)) {
+    console.error("  ✗ 自检失败:分组预算合计超标被判红");
+    fail++;
+  } else {
+    console.log("  ✓ 分组预算合计超标被判红");
+  }
   try { fs.unlinkSync(tmp); } catch {}
+  try { fs.unlinkSync(tmp2); } catch {}
   return fail === 0;
 }
 
@@ -109,6 +132,26 @@ function main() {
       bad.push(`${rel}  ${n} 行 > 上限 ${limit}（${pct}%）`);
     } else {
       notes.push(`${rel}  ${n}/${limit}（${pct}%）`);
+    }
+  }
+
+  for (const g of GROUP_BUDGETS) {
+    const absDir = path.join(ROOT, g.dir);
+    if (!fs.existsSync(absDir)) {
+      bad.push(`${g.label}  分组目录不存在`);
+      continue;
+    }
+    const matched = fs.readdirSync(absDir).filter((name) => g.pattern.test(name)).sort();
+    if (!matched.length) {
+      bad.push(`${g.label}  未匹配到任何文件`);
+      continue;
+    }
+    const sum = matched.reduce((acc, name) => acc + countLines(path.join(absDir, name)), 0);
+    const pct = ((sum / g.limit) * 100).toFixed(1);
+    if (sum > g.limit) {
+      bad.push(`${g.label}（${matched.length} 个文件合计）  ${sum} 行 > 上限 ${g.limit}（${pct}%）`);
+    } else {
+      notes.push(`${g.label}（${matched.length} 个文件合计）  ${sum}/${g.limit}（${pct}%）`);
     }
   }
 

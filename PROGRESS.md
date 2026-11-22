@@ -649,3 +649,11 @@
   - 已选结算账号且无 pending 时按 `clamp(updated.max(started) + interval.max(60) - now, 1s, 60s)` 精确睡眠；触发 `Open` 时立即切入 5 秒轮询。
 - `app/src-tauri/src/google_cloud_web.rs` 按 `gc_tick` 执行动作后通过 `tokio::select!` 同时等待 `sleep(tick.next_check_in)` 与 `GC_WAKE.notified()`；在 `set_config`（`lib.rs`）、登录/手动刷新/断开连接/手填到期日、会话开始与完成/失败处调用 `wake()`（`notify_one()`）。
 - 双向验证：`google_cloud::tests::gc_tick_table_driven_branches_and_boundaries` 覆盖 5 种动作与边界（恰好到期、`started > updated`、`interval < 60` 抬升、无账号、交互会话不超时）；`gc_tick_matches_legacy_5s_loop_on_600s_grid_and_rejects_bad_pending_cap` 在 0–600 s 网格上对比旧 5s 轮询与精确睡眠，断言动作序列一致且时刻差 ≤ 5s，同时注入把 `pending` 分支改为 `CAP`（60s）的反向样本并断言等价性失败。`docs/report/acceptance-backlog.md` 新增 C6 三项原生验收。
+
+## 2026-11-22 T-A2a `app.js` 拆分阶段 1a：测试脚本读法改造与分组预算
+
+- 按 `docs/research/appjs-split-plan-2026-11-22.md` §5 阶段 1a，在不改动 `app/src/app.js` 单文件的前提下统一测试与门禁对 `app*.js` 的读取方式：
+  - 新增零依赖 `build/lib/app-sources.js`（`appFileNames`、`appFiles`、`appSource`、`replaceOnce`、`loadInto`）与 `build/lib/app_sources.py`（`app_file_names`、`app_files`、`app_source`、`strip_app_script_tags`），按 `index.html` 中 `<script>` 出现顺序读取；`replaceOnce` 要求标记恰好唯一命中 1 处，否则抛错；`loadInto` 逐文件执行 `new vm.Script(code, { filename }).runInContext(...)`。
+  - 迁移 9 个直接读 `app.js` 源码文本的脚本：`jsdom-smoke.js`（哨兵替换全改 `replaceOnce`，各模块逐文件 `loadInto` 加载，并修复哨兵子进程串扰 `CHECKIN_SENTINEL` 的问题）、`probe-frontend.js`、`verify-codex-reset.js`、`verify-google-cloud.js`、`verify-tray.js`、`verify-refresh-stability.js`、`verify-vault.js`、`test-sync-persistence.py`、`verify-thumbnail-layout.py`。
+  - `.github/workflows/ci.yml` 与 `release.yml` 的 `node --check app/src/app.js` 改为对 `app/src/app*.js` 的循环检查；`build/check-file-size.js` 新增 `GROUP_BUDGETS`（`app/src/app*.js` 合计 ≤ 9,014 行）及「分组预算合计超标被判红」自检样本。
+- 验证：静态门禁、`replaceOnce` 缺失/重复抛错自检、`jsdom-smoke.js`（6 个哨兵单独变红 + 294/294 PASS）、`probe-frontend.js`、`verify-vault.js`、`verify-codex-reset.js`、`verify-google-cloud.js`、`verify-antigravity-capture.js`、`verify-gateway.js`、无头 Edge `verify-refresh-stability.js` 及 `scan-secrets.ps1` 全部通过。

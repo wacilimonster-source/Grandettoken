@@ -5,8 +5,9 @@ const path = require("path");
 const { JSDOM } = require("jsdom");
 
 const root = path.resolve(__dirname, "..");
+const { appSource } = require("./lib/app-sources");
 const html = fs.readFileSync(path.join(root, "app/src/index.html"), "utf8");
-const appJs = fs.readFileSync(path.join(root, "app/src/app.js"), "utf8");
+const appJs = appSource();
 let moduleJs = fs.readFileSync(path.join(root, "app/src/codex-reset.js"), "utf8");
 if (process.env.CODEX_RESET_SENTINEL === "1") {
   moduleJs = moduleJs.replace('invoke("codex_reset_advice"', 'invoke("__missing_reset_advice__"');

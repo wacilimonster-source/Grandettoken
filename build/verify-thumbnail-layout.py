@@ -7,9 +7,13 @@
 import argparse
 import json
 import re
+import sys
 import tempfile
 from pathlib import Path
 from playwright.sync_api import sync_playwright
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.app_sources import app_source as read_app_source
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,7 +63,7 @@ def main():
     parser.add_argument("--screenshot", type=Path)
     args = parser.parse_args()
     data = json.loads(args.fixture.read_text(encoding="utf-8"))
-    app_source = (SOURCE / "app.js").read_text(encoding="utf-8")
+    app_source = read_app_source(SOURCE)
     date_helpers = "\n".join(re.findall(r"^function (?:fmtDay|fmtClock)\(ts\) \{.*?^\}", app_source, re.M | re.S))
     assert date_helpers, "日期格式依赖必须从 app.js 读取"
     escape_helper = re.search(r"^const esc =.*?^  \);", app_source, re.M | re.S)

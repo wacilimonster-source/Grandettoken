@@ -5,8 +5,9 @@ const path = require("path");
 const os = require("os");
 const assert = require("assert");
 const { chromium } = require("playwright-core");
+const { appSource } = require("./lib/app-sources");
 
-const app = fs.readFileSync(path.join(__dirname, "../app/src/app.js"), "utf8");
+const app = appSource();
 const start = app.indexOf("/** 托盘缩写:");
 const end = app.indexOf("/** 设置页「渠道」页签:", start);
 assert(start >= 0 && end > start, "找不到托盘实现");
