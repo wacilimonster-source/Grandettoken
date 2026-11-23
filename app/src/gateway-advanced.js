@@ -25,6 +25,7 @@
     usageLoading: false,
     usageTicket: 0,
     clientsData: null,
+    drift: [],
     clientsError: null,
     clientsLoading: false,
     clientsTicket: 0,
@@ -262,6 +263,7 @@
       <td>${escHtml(fmtTs(r.ts))}</td>
       <td><code>${escHtml(r.model)}</code>${r.routeGroup ? ` <small>(${escHtml(r.routeGroup)})</small>` : ""}</td>
       <td>${escHtml(r.channelAlias)}</td>
+      <td>${r.agent ? escHtml(r.agent) : "—"}</td>
       <td><span class="gw-badge ${r.status >= 400 ? "is-err" : ""}">${escHtml(r.status)}</span></td>
       <td>${escHtml(r.latencyMs)}ms${r.firstByteMs != null ? ` / ${escHtml(r.firstByteMs)}ms` : ""}</td>
       <td>${escHtml(fmtTok(r.cachedPromptTokens))}/${escHtml(fmtTok(r.promptTokens))}/${escHtml(fmtTok(r.completionTokens))}</td>
@@ -300,7 +302,7 @@
         </section>
         <section class="gw-card-box">
           <div class="gw-section-head"><b>最近请求流水（不含 Prompt/密钥正文）</b></div>
-          <div class="gw-adv-table-wrap"><table class="gw-adv-table"><thead><tr><th>时间</th><th>模型</th><th>上游</th><th>状态</th><th>耗时/TTFT</th><th>缓存/输入/输出</th><th>标记</th></tr></thead><tbody>${recentRows || `<tr><td colspan="7" class="gw-empty-note">暂无记录</td></tr>`}</tbody></table></div>
+          <div class="gw-adv-table-wrap"><table class="gw-adv-table"><thead><tr><th>时间</th><th>模型</th><th>上游</th><th>Agent</th><th>状态</th><th>耗时/TTFT</th><th>缓存/输入/输出</th><th>标记</th></tr></thead><tbody>${recentRows || `<tr><td colspan="8" class="gw-empty-note">暂无记录</td></tr>`}</tbody></table></div>
         </section>
       ` : ""}`;
   }
@@ -341,6 +343,7 @@
               <b>${escHtml(c.label)}</b>
               <span class="gw-badge ${c.installed ? "is-gemini" : ""}">${c.installed ? "已检测到" : "未检测到"}</span>
               ${c.running ? `<span class="gw-badge is-err">运行中（${escHtml(c.process)}）</span>` : ""}
+              ${(state.drift || []).filter((d) => d.client === c.client).map((d) => `<span class="gw-badge is-err">配置被外部改写</span><small class="gw-adv-client-note">${escHtml(d.message)}（点「预览接入」后确认写入可修复）</small>`).join("")}
               ${gwModels.length ? `<span class="gw-badge is-agent">已接入：${escHtml(gwModels.map((m) => m.id).join(", "))}</span>` : ""}
               ${c.note ? `<small class="gw-adv-client-note">${escHtml(c.note)}</small>` : ""}
             </div>
@@ -359,7 +362,9 @@
           ${(prev.items || []).map((item) => `
             <div class="gw-adv-preview-item">
               <div><b>${escHtml(item.label)}</b> · ${escHtml(item.action)}</div>
+              ${item.source ? `<small>它现在跑在：${escHtml(item.source)}</small>` : ""}
               ${item.files?.length ? `<small>目标文件：<code>${escHtml(item.files.join(", "))}</code></small>` : ""}
+              ${item.runningWarning ? `<small class="gw-adv-client-note">${escHtml(item.runningWarning)} 仍可写入，点确认时会再问一次。</small>` : ""}
               ${item.blocked ? `<p class="gw-error">阻止写入：${escHtml(item.blocked)}</p>` : ""}
               ${(item.notes || []).map((n) => `<small class="gw-adv-client-note">${escHtml(n)}</small>`).join("")}
             </div>
@@ -376,6 +381,7 @@
           <div class="${r.error ? "gw-error" : "gw-diag-row"}">
             <b>${escHtml(r.label)}</b>：${r.error ? escHtml(r.error) : `新增 ${r.added} / 更新 ${r.updated} / 移除 ${r.removed} · ${escHtml(r.effect)}`}
             ${r.backup ? `<small>（备份：${escHtml(r.backup)}）</small>` : ""}
+            ${(r.notes || []).map((n) => `<small class="gw-adv-client-note">${escHtml(n)}</small>`).join("")}
           </div>`).join("")}</div>`
       : "";
 
@@ -485,9 +491,13 @@ ANTHROPIC_MODEL=${escHtml((gw.groupModels || [])[0] || "alias/model")}</pre>
     state.clientsError = null;
     if (state.latestGw) renderConnectPane(box, state.latestGw);
     try {
-      const data = await invoke("gateway_inject_clients");
+      const [data, drift] = await Promise.all([
+        invoke("gateway_inject_clients"),
+        invoke("gateway_inject_drift").catch(() => []),
+      ]);
       if (ticket !== state.clientsTicket) return;
       state.clientsData = data;
+      state.drift = drift || [];
     } catch (err) {
       if (ticket !== state.clientsTicket) return;
       state.clientsError = String(err);
@@ -646,6 +656,9 @@ ANTHROPIC_MODEL=${escHtml((gw.groupModels || [])[0] || "alias/model")}</pre>
         if (act === "apply-inject" || act === "remove-inject") {
           if (!state.preview) throw new Error("请先点击预览接入查看改动详情");
           const { client, modelId, isGroup } = state.preview;
+          // 3C：在跑不拒写，但写入前二次确认（magpie 口径 + 我们的确认门）
+          const warn = (state.preview.items || []).map((i) => i.runningWarning).find(Boolean);
+          if (act === "apply-inject" && warn && !confirm(warn + "\n仍要写入吗？写入后需重启该工具或开新会话生效。")) return;
           const reports = await lastHelpers.writeGateway(() =>
             act === "apply-inject"
               ? invoke("gateway_inject_apply", { client, modelId, isGroup })

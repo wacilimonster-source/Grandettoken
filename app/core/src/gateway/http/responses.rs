@@ -69,6 +69,9 @@ pub(super) fn refusal_chars(value: &Value) -> usize {
 pub(super) struct DiagnosticGuard {
     g: Gateway,
     channel: Published,
+    /// 入站 UA 归因在**建 guard 时**取好：流式响应的 body 由连接任务轮询，
+    /// 那时 middleware 的 task-local 作用域已经退出，取不到 agent。
+    agent: Option<String>,
     model: String,
     upstream_model: Option<String>,
     route_group: Option<String>,
@@ -86,7 +89,8 @@ impl DiagnosticGuard {
     pub fn new(g: &Gateway, channel: &Published, model: &str, stream: bool, started: Instant) -> Self {
         let mut channel = channel.clone();
         channel.custom_headers.clear();
-        Self { g: g.clone(), channel, model: model.into(), upstream_model: None, route_group: None,
+        Self { g: g.clone(), agent: super::REQ_AGENT.try_with(|a| *a).ok().flatten().map(String::from),
+            channel, model: model.into(), upstream_model: None, route_group: None,
             failover_count: 0, masked_count: 0, protocol: "openai_chat".into(),
             stream, started, transforms: vec![], first_byte_ms: None,
             stats: StreamStats::default(), recorded: false }
@@ -123,7 +127,7 @@ impl DiagnosticGuard {
     pub fn finish_stream(&mut self, stats: &StreamStats, error: Option<String>) {
         if self.recorded { return; }
         super::record_stream_diag_with_ctx(
-            &self.g, &self.channel, &self.model, self.upstream_model.clone(),
+            &self.g, self.agent.clone(), &self.channel, &self.model, self.upstream_model.clone(),
             self.route_group.clone(), self.failover_count, self.masked_count, &self.protocol,
             &self.transforms, self.started, self.first_byte_ms, stats, error,
         );
@@ -136,7 +140,8 @@ impl Drop for DiagnosticGuard {
         self.recorded = true;
         let stats = &self.stats;
         self.g.record_diag(super::GatewayDiagEntry {
-            id: 0, timestamp: super::now_unix(), channel_id: self.channel.channel_id.clone(),
+            id: 0,
+            agent: self.agent.clone(), timestamp: super::now_unix(), channel_id: self.channel.channel_id.clone(),
             channel_alias: self.channel.alias.clone(), source: self.channel.kind().as_str().into(),
             model: self.model.clone(), upstream_model: self.upstream_model.clone(),
             route_group: self.route_group.clone(), failover_count: self.failover_count,

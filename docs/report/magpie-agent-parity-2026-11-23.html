@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>网关接入各类 Agent · 与 magpie 源码逐点对比（2026-11-23）</title>
+<style>
+:root{--bg:#0f1216;--bg2:#161b22;--bg3:#1d242e;--line:#2a3340;--tx:#e6edf3;--tx2:#b6c2cf;--tx3:#8b98a5;--ac:#7ee787;--warn:#f0883e;--bad:#ff7b72;--ok:#7ee787}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.65 "Segoe UI","Microsoft YaHei",sans-serif;padding:24px}
+.wrap{max-width:1080px;margin:0 auto}
+h1{font-size:22px;margin:0 0 6px}
+h2{font-size:17px;margin:34px 0 10px;border-left:3px solid var(--ac);padding-left:10px}
+h3{font-size:15px;margin:18px 0 6px}
+.sub{color:var(--tx3);margin:0 0 18px}
+.handoff{border:1px solid var(--ac);background:var(--bg2);border-radius:10px;padding:14px 16px;margin:16px 0}
+.handoff b{color:var(--ac)}
+code{background:var(--bg3);border:1px solid var(--line);border-radius:4px;padding:1px 5px;font:12px/1.5 Consolas,monospace;color:var(--tx2)}
+table{border-collapse:collapse;width:100%;margin:10px 0;font-size:13px}
+th,td{border:1px solid var(--line);padding:7px 9px;text-align:left;vertical-align:top}
+th{background:var(--bg3);color:var(--tx2);font-weight:600}
+td.m{color:var(--tx2)}
+.tag{display:inline-block;border-radius:4px;padding:1px 7px;font-size:12px;border:1px solid var(--line);color:var(--tx2);margin-right:4px}
+.tag.follow{border-color:var(--ac);color:var(--ac)}
+.tag.parse{border-color:#79c0ff;color:#79c0ff}
+.tag.drop{border-color:var(--bad);color:var(--bad)}
+.tag.keep{border-color:var(--warn);color:var(--warn)}
+.tag.no{border-color:var(--tx3);color:var(--tx3)}
+.card{border:1px solid var(--line);background:var(--bg2);border-radius:10px;padding:14px 16px;margin:12px 0}
+.card h3{margin:0 0 8px}
+.opt{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:6px 0;background:var(--bg)}
+.opt.rec{border-color:var(--ac)}
+.opt b{color:var(--tx)}
+.opt .cost{color:var(--tx3);font-size:12.5px}
+.veto{color:var(--tx3);font-size:12.5px;margin-top:6px}
+.bar{position:sticky;top:0;background:var(--bg);padding:10px 0;z-index:5;border-bottom:1px solid var(--line);margin-bottom:8px}
+.bar button{background:var(--bg3);color:var(--tx2);border:1px solid var(--line);border-radius:6px;padding:5px 12px;margin-right:6px;cursor:pointer;font-size:13px}
+.bar button.on{border-color:var(--ac);color:var(--ac)}
+ul{margin:6px 0;padding-left:22px}
+li{margin:3px 0}
+.ev{font-size:12.5px;color:var(--tx3)}
+.hide{display:none}
+p{margin:8px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>网关接入各类 Agent · 与 magpie 源码逐点对比</h1>
+<p class="sub">2026-11-23 · 只读调研，本轮未改任何代码 · magpie 快照 <code>yetone/magpie@30762eab</code>（2026-11-23）· 对照本项目 v0.3.73（<code>a0f9d3c</code>）</p>
+
+<div class="handoff">
+<b>交接框 · 停在哪 / 哪句话解锁下一步</b>
+<ul>
+<li>已完成：magpie 源码拉取 + <code>internal/agent</code>（约 100 个 agent 定义）、<code>internal/edit</code>、<code>internal/agent/stash.go</code>、<code>connectinfo.go</code> 与本项目 <code>inject_cli.rs / inject_gateway.rs / inject.rs / gateway</code> 的逐点对比。</li>
+<li>未做：任何代码改动、任何方案文档落库外的实现。</li>
+<li>解锁句示例：<code>1A2A3A4A5A6A7C8A9A10保留</code>（按编号裁决后我才写方案并实现）；或 <code>先只做 1、2</code>（缩小范围）；或 <code>3 保持现状，其余跟随</code>。</li>
+<li>第 3 项（在跑拒写 vs 写后提示重启）会改动已披露的安全前提（README 与 design F5 四条前提之一），无论选哪个都要同步改文档，请单独过目。</li>
+</ul>
+</div>
+
+<h2>0. 说人话的结论</h2>
+<ul>
+<li><b>粒度不同，目标相同。</b>magpie 把每个 agent 拆成一组可读写「字段」（model / small / effort…），<b>置空 = 断开</b>；我们是「整块写入 + 取消写入」。两者都保注释、都原子写、都读回校验、都要预览确认 —— 这几条我们已经和它一致。</li>
+<li><b>三处实质差异，且 magpie 明确踩过坑：</b>
+  ① 我们给 Claude Code 写 <code>env.ANTHROPIC_MODEL</code>，它会<b>压掉用户在 /model 里的选择</b>（magpie 注释：旧版这么写，选择只活一个会话，已移除）；magpie 改写顶层 <code>model</code> + 分层 env。
+  ② Codex 登录 ChatGPT 时 magpie <b>只改 <code>openai_base_url</code></b>、保留内置 provider 与登录态；我们一律换 <code>model_provider</code>，会弄丢它自己的模型、线程与 /model 选择器。
+  ③ magpie <b>不因「agent 在跑」拒写</b>（Windows 上它认为问不到进程，索性总答「在跑」），改为写后提示「重启 / 开新会话」；我们是在跑拒写。</li>
+<li><b>还原语义差一层。</b>magpie 双层保护：首写前整文件拷贝（<code>beforeMagpie</code>）+ <b>值级 stash.json</b>（断开时把用户原来的 endpoint / provider / model 还回去）。我们只有整文件 DPAPI 快照；断开时<b>不还原用户原 model / provider</b>（Claude 的 ANTHROPIC_MODEL、Codex 的 model_provider/model、OpenCode 的 model 都是直接删/重置）。</li>
+<li><b>发现与拼写我们写死了。</b>magpie 认 <code>OPENCODE_CONFIG_DIR</code>/<code>XDG_CONFIG_HOME</code>、<code>config.json</code> 兜底、OpenCode 2 的 <code>providers</code> 拼写、<code>CLAUDE_CONFIG_DIR</code>、同名二进制甄别（<code>binNot</code>/<code>goProgram</code>）；我们路径固定、只认 OpenCode 1 的 <code>provider</code>。</li>
+<li><b>自愈与归因我们完全没有。</b>magpie 有 <code>Check</code>（配置被别处改写时发现）+ <code>Sync</code>（把 magpie 块补回 / 模型目录同步）、按<b>入站 User-Agent</b> 区分是哪个 agent、按 agent 勾选可见模型、接入前告诉用户「它现在跑在什么上」（订阅/ChatGPT/自己的 key/N 个 provider）、卸载清残留。我们都没有。</li>
+<li><b>已经一致的：</b><code>group/</code> 路由组前缀、单一网关密钥（magpie 也靠 UA 而非多密钥区分 agent）、保注释局部编辑、原子写 + 失败回滚、预览后才允许确认写入。</li>
+</ul>
+
+<div class="bar">
+<button class="on" data-f="all">全部</button>
+<button data-f="follow">加跟随</button>
+<button data-f="parse">补解析</button>
+<button data-f="drop">删独有</button>
+<button data-f="keep">待确认保留</button>
+<button data-f="no">明确不做</button>
+</div>
+
+<h2>1. 逐点对比总表</h2>
+<table id="tbl">
+<tr><th style="width:19%">接入点</th><th style="width:34%">magpie 的做法（证据见 §4）</th><th style="width:30%">我们 v0.3.73 现状</th><th style="width:17%">判定</th></tr>
+<tr data-g="drop"><td>Claude Code 模型写在哪</td><td class="m">不写 <code>ANTHROPIC_MODEL</code>（压掉 /model）；写顶层 <code>model</code> + <code>ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU,FABLE}_MODEL</code>、<code>SMALL_FAST</code>、<code>SUBAGENT</code>；接入期间移除用户的 ANTHROPIC_MODEL、断开还回</td><td class="m">写 <code>env.ANTHROPIC_BASE_URL/AUTH_TOKEN/MODEL</code> 三键（inject_cli.rs:198）</td><td><span class="tag drop">删独有</span>改跟随 → 裁决 1</td></tr>
+<tr data-g="parse"><td>Claude 分层「关于」env 与云开关</td><td class="m">每层 <code>_NAME/_DESCRIPTION/_SUPPORTED_CAPABILITIES</code> 随模型走；检测 <code>CLAUDE_CODE_USE_BEDROCK/VERTEX/…</code>（这些开关会让 BASE_URL 被忽略）</td><td class="m">无</td><td><span class="tag parse">补解析</span>→ 裁决 1/4</td></tr>
+<tr data-g="follow"><td>Codex 登录态双模式</td><td class="m">ChatGPT 登录 → 只写 <code>openai_base_url</code>，保留内置 provider/登录/线程；未登录或 API key → <code>[model_providers.magpie]</code> + <code>model_provider</code> + /model 目录文件</td><td class="m">一律 <code>model_provider="grandettoken"</code> + 托管表（inject_cli.rs:509/514）</td><td><span class="tag follow">加跟随</span>→ 裁决 2</td></tr>
+<tr data-g="follow"><td>Codex provider 表保留</td><td class="m">表一旦写过就<b>保留</b>（旧线程靠它打开）；绝不写 <code>model_provider</code> 而无表；退出 provider 角色时摘 <code>model_provider</code>；Sync 把被别处删的表补回</td><td class="m">取消写入时整段摘除（inject_cli.rs:533/570）</td><td><span class="tag follow">加跟随</span>→ 裁决 2</td></tr>
+<tr data-g="parse"><td>Codex 未知模型 stand-in</td><td class="m">Codex 会要 <code>codex-auto-review</code> 等 magpie 不服务的名字；magpie 用当轮模型顶替而非 404</td><td class="m">未知模型 404</td><td><span class="tag parse">补解析</span>→ 裁决 2</td></tr>
+<tr data-g="parse"><td>OpenCode 目录/文件/拼写</td><td class="m"><code>OPENCODE_CONFIG_DIR</code> → <code>XDG_CONFIG_HOME/opencode</code>；文件 <code>jsonc→json→config.json</code>；OpenCode 2 用 <code>providers</code>、1 用 <code>provider</code>，按版本读</td><td class="m"><code>~/.config/opencode</code> → <code>%APPDATA%/opencode</code>；<code>jsonc→json</code>；只写 <code>provider</code>（inject_cli.rs:986）</td><td><span class="tag parse">补解析</span>→ 裁决 4</td></tr>
+<tr data-g="parse"><td>OpenCode small_model</td><td class="m">独立字段 <code>small_model</code>（标题/摘要等小活）</td><td class="m">只写 <code>model</code></td><td><span class="tag parse">补解析</span>→ 裁决 4</td></tr>
+<tr data-g="follow"><td>断开还原用户原值</td><td class="m">值级 <code>stash.json</code>：记下接入前的 endpoint/provider/model，断开还原；另有首写前整文件拷贝 <code>beforeMagpie</code></td><td class="m">整文件 DPAPI 快照可回滚；但「取消写入」不还原用户原 model/provider，直接删/重置</td><td><span class="tag follow">加跟随</span>→ 裁决 5</td></tr>
+<tr data-g="keep"><td>首写保护机制</td><td class="m"><code>edit.Atomically</code>：操作前内存快照全部目标文件（含权限），失败逐文件还原/删除新建</td><td class="m">DPAPI 加密备份落盘 + 读回校验 + 回滚（已披露的安全能力）</td><td><span class="tag keep">待确认保留</span>→ 裁决 5</td></tr>
+<tr data-g="keep"><td>agent 在跑时写不写</td><td class="m"><b>不拦写</b>；<code>Running()</code> 只用于「改后提示重启/新会话」；Windows 恒答在跑</td><td class="m">在跑拒写（inject.rs:777，调用点 1187/1415/1666）</td><td><span class="tag keep">待确认保留</span>→ 裁决 3</td></tr>
+<tr data-g="follow"><td>漂移检测与自愈</td><td class="m"><code>Check</code>：model 还是 magpie 的但 wiring 被别处改写 → 报漂移；<code>Sync/ListOnly</code>：把 magpie provider 块/模型目录按当前目录补回，只在已接入时动</td><td class="m">无；配置被别处改后界面仍显示「已接入」</td><td><span class="tag follow">加跟随</span>→ 裁决 6</td></tr>
+<tr data-g="follow"><td>入站 UA 归因</td><td class="m">网关按请求 User-Agent 前缀认出是哪个 agent（同密钥多 agent 靠它区分），台账/诊断按 agent 归因</td><td class="m">只设置<b>出站</b> UA（sources.rs:266），不读入站 UA；台账只有渠道/模型</td><td><span class="tag follow">加跟随</span>→ 裁决 7</td></tr>
+<tr data-g="follow"><td>每 agent 模型可见性</td><td class="m"><code>settings.HiddenModels/PickedModels</code> 按 agent 勾选可见模型；picker 与 /v1/models 按 agent 过滤</td><td class="m">只有渠道级 <code>allowed_models</code>，无 agent 级</td><td><span class="tag follow">加跟随</span>→ 裁决 7</td></tr>
+<tr data-g="follow"><td>接入前「它现在跑在什么上」</td><td class="m"><code>Source()</code>：sub / chatgpt / key / providers:N，接入开关旁显示，让用户知道动了什么</td><td class="m">预览只列目标文件与动作，不显示当前运行来源</td><td><span class="tag follow">加跟随</span>→ 裁决 8</td></tr>
+<tr data-g="follow"><td>改后重启提示</td><td class="m"><code>Notice()</code>：读配置只在启动时的 agent，改后提示重启/新会话；Live 字段不提示</td><td class="m">无（因为在跑拒写，变相回避了这个问题）</td><td><span class="tag follow">加跟随</span>→ 裁决 3/8</td></tr>
+<tr data-g="follow"><td>卸载清残留</td><td class="m"><code>TakeLeftovers</code>：卸载时摘掉「指向 magpie 网关但标记已丢」的配置（手删目录/新装旁旧配置）</td><td class="m">卸载不清外部客户端里我们写过的网关地址</td><td><span class="tag follow">加跟随</span>→ 裁决 9</td></tr>
+<tr data-g="no"><td>WSL / env-only 启动器 / import-link / plugin agents / telemetry / advisor / 80+ CLI</td><td class="m">WSL 发行版内 agent、<code>Launch/Typed/Start</code> 给只认环境变量的 agent、import-link 应用、插件新增 agent、关 telemetry、advisor 字段、上百 CLI</td><td class="m">无（design §1 明确不做盲目扩展；Windows 轻桌面挂件 + 8 客户端）</td><td><span class="tag no">明确不做</span>→ 裁决 10</td></tr>
+<tr data-g="keep"><td>命名与品牌</td><td class="m">provider id <code>magpie</code>、模型拼写 <code>magpie/&lt;provider&gt;/&lt;model&gt;</code>、<code>Spell()</code> 按 agent 归一</td><td class="m">provider id <code>grandettoken</code>、显示前缀 <code>GW-</code>、模型 <code>alias/model</code> 与 <code>group/&lt;id&gt;</code></td><td><span class="tag keep">待确认保留</span>（品牌不跟 magpie）→ 裁决 10</td></tr>
+</table>
+
+<h2>2. 分组清单</h2>
+<h3><span class="tag follow">加跟随</span>（magpie 有、我们缺，且与现有裁决不冲突）</h3>
+<ul>
+<li>Codex 登录态双模式 + provider 表保留 + 未知模型 stand-in（裁决 2）</li>
+<li>值级 stash：断开还原用户原 endpoint/provider/model（裁决 5）</li>
+<li>Check 漂移检测 + Sync 自愈（裁决 6）</li>
+<li>入站 UA 归因；每 agent 模型可见性（裁决 7）</li>
+<li>Source 展示 + 改后重启 Notice（裁决 8）</li>
+<li>卸载 leftovers 清理（裁决 9）</li>
+</ul>
+<h3><span class="tag parse">补解析</span>（发现/拼写/字段补齐，低风险）</h3>
+<ul>
+<li>OpenCode：<code>OPENCODE_CONFIG_DIR</code>/<code>XDG_CONFIG_HOME</code>、<code>config.json</code> 兜底、v2 <code>providers</code> 拼写、<code>small_model</code>（裁决 4）</li>
+<li>Claude：<code>CLAUDE_CONFIG_DIR</code>、云开关检测、分层 about-env（裁决 1/4）</li>
+<li>Codex：<code>auth.json</code> 登录态读取（裁决 2 的前置）</li>
+</ul>
+<h3><span class="tag drop">删独有</span>（我们有、magpie 明确认定是坑而移除的）</h3>
+<ul>
+<li>Claude Code 的 <code>env.ANTHROPIC_MODEL</code> 写入（裁决 1）</li>
+<li>Codex「取消写入即整段摘表」（旧线程会打不开）（裁决 2）</li>
+</ul>
+<h3><span class="tag keep">待确认保留</span>（与 magpie 不同，但可能是我们自己的产品/安全决定）</h3>
+<ul>
+<li>在跑拒写（magpie 不拦）—— 涉及已披露安全前提（裁决 3）</li>
+<li>DPAPI 整文件快照（magpie 用内存快照 + 首写拷贝）—— 已披露能力，建议保留作兜底（裁决 5）</li>
+<li>品牌命名 grandettoken / GW-（不跟 magpie）（裁决 10）</li>
+</ul>
+<h3><span class="tag no">明确不做</span>（design §1 定位之外）</h3>
+<ul>
+<li>WSL 发行版内 agent、env-only 启动器/shell 函数、import-link 应用、插件新增 agent、telemetry/advisor/auto-mode 字段、上百 CLI 扩展（裁决 10）</li>
+</ul>
+
+<h2>3. 编号裁决项（每项给替代改法与代价）</h2>
+
+<div class="card" data-g="drop">
+<h3>1 · Claude Code 模型写入口径</h3>
+<p>现状：写 <code>env.ANTHROPIC_MODEL</code>（inject_cli.rs:198/207）。magpie：该键压掉 /model 选择，已移除；改写顶层 <code>model</code> + 分层 env，接入期间暂存用户原值、断开还回（claude.go:31-74）。</p>
+<div class="opt rec"><b>A 跟随 magpie（推荐）</b>：写顶层 <code>model</code> + <code>DEFAULT_{OPUS,SONNET,HAIKU}_MODEL</code> + <code>SMALL_FAST</code> + <code>SUBAGENT</code>；不写 ANTHROPIC_MODEL，若用户原有则暂存并在断开还原。<span class="cost">代价：写入键从 3 个变 7+ 个，预览/回滚/单测都要扩；分层模型选同一个还是按层选需再定（默认全同）。</span></div>
+<div class="opt"><b>B 保持现状</b>：继续三键。<span class="cost">代价：用户在 Claude Code 里 /model 换模型只活一个会话，与 magpie 踩过的坑相同。</span></div>
+<div class="opt"><b>C 折中</b>：顶层 <code>model</code> + 仅 <code>SMALL_FAST</code>/<code>SUBAGENT</code>，不动 OPUS/SONNET/HAIKU 分层。<span class="cost">代价：/model 的 tier 切换仍不跟随网关模型，但主模型选择不再被压。</span></div>
+<p class="veto">一句话否决：回「1B」即保留三键写法，本项不做。</p>
+</div>
+
+<div class="card" data-g="follow">
+<h3>2 · Codex 登录态双模式 + provider 表保留 + stand-in</h3>
+<p>现状：一律换 <code>model_provider</code> + 托管表，取消即摘表（inject_cli.rs:509/533）。magpie：ChatGPT 登录只改 <code>openai_base_url</code>；表写过就保留；未知模型用当轮模型顶替（codex.go:39-90）。</p>
+<div class="opt rec"><b>A 跟随 magpie（推荐）</b>：读 <code>~/.codex/auth.json</code> 判登录态选模式；表保留、只摘 <code>model_provider</code>；网关对 <code>codex-auto-review</code> 等名字用当轮模型顶替。<span class="cost">代价：要新增登录态读取（涉及读登录文件，按 §2.4 需披露）；网关模型解析加 stand-in 分支；取消写入语义改变需同步 README/design。</span></div>
+<div class="opt"><b>B 保持现状</b>：一律 provider 表。<span class="cost">代价：ChatGPT 登录用户丢失自己的模型/线程/选择器；旧线程在取消后打不开。</span></div>
+<div class="opt"><b>C 折中</b>：仍一律 provider 表，但表保留不摘 + stand-in；不做登录态双模式。<span class="cost">代价：ChatGPT 自己的模型仍不可用，但线程与 review 不再坏。</span></div>
+<p class="veto">一句话否决：回「2B」即不动 Codex 写入语义。</p>
+</div>
+
+<div class="card" data-g="keep">
+<h3>3 · agent 在跑时写不写（安全前提变更，单独过目）</h3>
+<p>现状：在跑拒写（inject.rs:777）。magpie：不拦写，<code>Running()</code> 只产出「重启/新会话」提示；Windows 恒答在跑（agent.go:415-435）。</p>
+<div class="opt"><b>A 跟随 magpie</b>：去掉拒写，改后按 agent 给重启/新会话提示。<span class="cost">代价：推翻 design F5 前提①与 README 披露；边跑边写可能被 agent 退出时覆盖（magpie 靠提示让用户重启规避）；需同步改文档与门禁哨兵。</span></div>
+<div class="opt"><b>B 保持现状（安全优先）</b>：在跑拒写。<span class="cost">代价：与 magpie 方式不一致；用户必须先关工具才能接入（本次实机即如此）。</span></div>
+<div class="opt rec"><b>C 折中（推荐）</b>：在跑仍允许写，但强制「预览 + 二次确认 + 写后重启提示」，并保留 DPAPI 快照兜底；未跑时流程不变。<span class="cost">代价：多一次确认交互；文档把前提①改述为「在跑需二次确认」。</span></div>
+<p class="veto">一句话否决：回「3B」即保留在跑拒写，本项不做。</p>
+</div>
+
+<div class="card" data-g="parse">
+<h3>4 · 配置发现与拼写补齐</h3>
+<p>现状：路径写死、只认 OpenCode 1 <code>provider</code>、文件只到 jsonc/json。magpie：env 目录优先、config.json 兜底、v2 <code>providers</code>、CLAUDE_CONFIG_DIR、同名二进制甄别（agents.go:1455-1467、agent.go:408-434）。</p>
+<div class="opt rec"><b>A 全补（推荐）</b>：env 目录 + config.json 兜底 + v1/v2 拼写按文件实际形状读 + CLAUDE_CONFIG_DIR + 同名甄别（binNot 思路：校验二进制归属）。<span class="cost">代价：发现逻辑变复杂，需为每种形状补坏样本单测。</span></div>
+<div class="opt"><b>B 只补目录与兜底</b>：env 目录 + config.json，不动拼写与甄别。<span class="cost">代价：OpenCode 2 用户仍写错位置（写进 v1 的 provider 而它读 providers）。</span></div>
+<div class="opt"><b>C 保持现状</b>。<span class="cost">代价：自定义目录/OpenCode 2/同名工具场景接入失败或误判。</span></div>
+<p class="veto">一句话否决：回「4C」即不动发现逻辑。</p>
+</div>
+
+<div class="card" data-g="follow">
+<h3>5 · 断开还原语义（值级 stash）与首写保护</h3>
+<p>现状：整文件 DPAPI 快照；取消写入不还原用户原 model/provider。magpie：stash.json 值级原值 + beforeMagpie 首写拷贝 + edit.Atomically 内存快照（stash.go:17-30、agents.go:1543-1577、edit/file.go:332）。</p>
+<div class="opt"><b>A 纯 magpie</b>：改用内存快照 + 值级 stash，去掉 DPAPI 落盘快照。<span class="cost">代价：失去已披露的「加密备份可一键回滚」能力，跨会话/崩溃后不可回滚；不建议。</span></div>
+<div class="opt rec"><b>C 双层并存（推荐，= magpie 语义 + 我们的兜底）</b>：新增值级 stash（记接入前 endpoint/provider/model 及各 env 原值），断开优先还原原值；DPAPI 整文件快照保留作崩溃/误操作兜底。<span class="cost">代价：stash 需加密或至少不写明文密钥（只存 endpoint/model/provider 名，不存 key）；两套还原路径都要单测。</span></div>
+<div class="opt"><b>B 保持现状</b>：只有整文件回滚。<span class="cost">代价：断开后用户原来的模型选择丢失（magpie 明确要还回去）。</span></div>
+<p class="veto">一句话否决：回「5B」即不加 stash。</p>
+</div>
+
+<div class="card" data-g="follow">
+<h3>6 · 漂移检测 Check + 自愈 Sync</h3>
+<p>现状：无。magpie：model 仍是 magpie 的但 wiring 被改 → 报漂移；Sync 只在已接入时把 magpie 块/目录补回（agent.go:271-279、agents.go:1300-1310）。</p>
+<div class="opt rec"><b>A 补 Check+Sync（推荐）</b>：界面显示「配置被外部改动」并给一键修复；Sync 只补我们写过的块，不碰用户其它内容。<span class="cost">代价：每次打开面板多读几个文件；需坏样本（手改配置）单测。</span></div>
+<div class="opt"><b>B 只 Check 不自愈</b>：提示漂移，修复靠重新写入。<span class="cost">代价：用户多一步操作，但不会自动改文件。</span></div>
+<div class="opt"><b>C 不做</b>。<span class="cost">代价：配置被别处改写后界面仍说「已接入」，请求实际绕开网关。</span></div>
+<p class="veto">一句话否决：回「6C」即不做漂移检测。</p>
+</div>
+
+<div class="card" data-g="follow">
+<h3>7 · 入站 UA 归因 + 每 agent 模型可见性</h3>
+<p>现状：台账只有渠道/模型；可见性只到渠道级。magpie：入站 UA 前缀认 agent；HiddenModels/PickedModels 按 agent 过滤（settings.go:1146-1158）。</p>
+<div class="opt"><b>A 两者都补</b>：台账加 agent 列（按 UA）；接入面板加「该 agent 可见模型」勾选。<span class="cost">代价：台账 schema 再迁移一次（v7→v8）；UA 可伪造，归因仅作展示不作鉴权。</span></div>
+<div class="opt rec"><b>C 先只补 UA 归因（推荐）</b>：台账/诊断加 agent 归属；可见性后议。<span class="cost">代价：仍需一次 schema 迁移；可见性差异保留。</span></div>
+<div class="opt"><b>B 都不补</b>。<span class="cost">代价：多 agent 共用网关时分不清谁在花钱、谁绕开了网关。</span></div>
+<p class="veto">一句话否决：回「7B」即不做归因与可见性。</p>
+</div>
+
+<div class="card" data-g="follow">
+<h3>8 · 接入前 Source 展示 + 改后重启 Notice</h3>
+<p>现状：预览只列文件与动作；无重启提示。magpie：Source() 显示 sub/chatgpt/key/providers:N；Notice() 按 agent 给重启建议（connectinfo.go:20-33、agent.go:141-143）。</p>
+<div class="opt rec"><b>A 补两者（推荐）</b>：预览顶部加「它现在跑在：…」；写入成功后按 agent 显示「重启 X / 开新会话生效」。<span class="cost">代价：读登录态文件（与裁决 2 同源，需一并披露）；提示文案要按 8 客户端维护。</span></div>
+<div class="opt"><b>B 只补 Notice</b>：不读登录态，只给重启提示。<span class="cost">代价：用户仍不知道接入会顶掉什么。</span></div>
+<div class="opt"><b>C 都不补</b>。<span class="cost">代价：改完没提示，用户以为没生效（magpie 注释里 Windows 静默丢提示踩过的坑）。</span></div>
+<p class="veto">一句话否决：回「8C」即不加展示与提示。</p>
+</div>
+
+<div class="card" data-g="follow">
+<h3>9 · 卸载清残留</h3>
+<p>现状：卸载不清外部客户端里我们写过的网关地址。magpie：TakeLeftovers 在卸载时摘掉「指向已消失网关」的配置（agent.go:254-260）。</p>
+<div class="opt rec"><b>A 补（推荐）</b>：卸载流程里对 8 客户端摘除我们写过的托管块/键（保留用户其它内容），失败不阻断卸载。<span class="cost">代价：卸载器要能调 Rust 清理逻辑或 NSIS 脚本调 exe 子命令；需单测 + 真机卸载验收。</span></div>
+<div class="opt"><b>B 只提示不自动清</b>：卸载完成页列出「这些工具里还留着网关地址，手动移除方法」。<span class="cost">代价：残留仍在，agent 会对着死网关重试。</span></div>
+<div class="opt"><b>C 不做</b>。<span class="cost">代价：卸载后外部 agent 持续报错重试。</span></div>
+<p class="veto">一句话否决：回「9C」即不清残留。</p>
+</div>
+
+<div class="card" data-g="no">
+<h3>10 · 明确不做组 + 品牌命名保留</h3>
+<p>magpie 的 WSL 发行版内 agent、env-only 启动器/shell 函数、import-link 应用、插件新增 agent、telemetry/advisor/auto-mode 字段、上百 CLI 扩展，与 design §1「Windows 轻桌面挂件 + 现有 5 IDE + 3 大编码 CLI」定位冲突。</p>
+<div class="opt rec"><b>A 确认不做 + 保留自有品牌（推荐）</b>：provider id 继续 <code>grandettoken</code>、显示前缀 <code>GW-</code>、模型 <code>alias/model</code> 与 <code>group/&lt;id&gt;</code>（group/ 前缀本就与 magpie 一致）。<span class="cost">代价：与 magpie 配置不互通（用户从 magpie 迁过来需重接），属预期。</span></div>
+<div class="opt"><b>B 部分跟随</b>：只补 env-only 启动器（给只认环境变量的 CLI 一条启动命令），其余不做。<span class="cost">代价：新增一类接入面，需披露与维护。</span></div>
+<div class="opt"><b>C 品牌也跟 magpie</b>：provider id 改 <code>magpie</code>。<span class="cost">代价：与上游产品撞名、已写入用户配置的 id 需迁移；强烈不建议。</span></div>
+<p class="veto">一句话否决：回「10B」即只补启动器。</p>
+</div>
+
+<h2>3b. 实现偏差清单（2026-11-23 开发轮，相对 magpie 与裁决卡）</h2>
+<p>用户裁决：<code>1A2A3C4A5C6A7C8A9A10A</code>，并补充「<b>不做反代，只做把支持 API 的接入各类 agent</b>」（已记 DESIGN §16）。以下偏差均经该裁决或更高优先级裁决确认：</p>
+<ul>
+<li><b>2A 的 ChatGPT 登录态中继不做</b>（用户裁决 + design §1「订阅逆向明确不做」）。Codex 保持 provider 表模式；<code>auth.json</code> 登录态只用于预览的 Source 展示，不用于 base_url-only 中继。后果：ChatGPT 登录的 Codex 自有模型名不会透传回 OpenAI，走 stand-in。</li>
+<li><b>stand-in 取接入时记下的 wired model</b>（<code>inject-stash.json</code> 的 <code>__wired_*</code>），magpie 读实时配置。用户在 Codex 内自行改模型后 stand-in 可能滞后一次接入周期。</li>
+<li><b>4A 的同名二进制甄别（binNot/goProgram）不做</b>：Windows 上无可靠跨厂商归属信号；进程名已具体到 <code>opencode-cli.exe</code>。env 目录、config.json 兜底、v1/v2 拼写、CLAUDE_CONFIG_DIR 已补。</li>
+<li><b>Claude 分层 about-env（_NAME/_DESCRIPTION/_SUPPORTED_CAPABILITIES）不做</b>：我们无目录级 name/description/capabilities 数据源；分层模型 env 已写。</li>
+<li><b>9A 卸载清理覆盖 3 个现代 CLI</b>；旧五家（Trae/WorkBuddy/WorkBuddy AI/ZCode/DSH）条目按 id/前缀匹配、无统一托管块，需卸载前界面「取消写入」（记 B18）。</li>
+<li><b>7C 只补 UA 归因</b>（裁决选 C）；每 agent 模型可见性不做（记 B20）。UA 仅展示、不作鉴权。</li>
+<li><b>3C 保留 DPAPI 整文件快照</b>作兜底（magpie 用内存快照 + beforeMagpie）；值级 stash 只存非密钥值，与快照并存（裁决 5C）。</li>
+<li><b>实机复核 9 项全过</b>（新二进制）：在跑二次确认门（取消不写）、Source 展示、Trae 写入→取消→逻辑还原、UA 进台账、零 JS 异常。Trae 为 SQLite，还原按 ItemTable 逻辑内容比对（插入+删除无法逐字节还原）。本机另装有运行中的 magpie，会并发改写 Codex config.toml；复核后仅摘我们的托管块。</li>
+</ul>
+
+<h2>4. 证据索引</h2>
+<p class="ev">magpie（<code>yetone/magpie@30762eab</code>，本机临时克隆，未入库）：</p>
+<ul class="ev">
+<li><code>internal/agent/agent.go:98-125</code> Field 契约（置空=断开、Own/Quiet/Live/Follows）；<code>:141-143</code> Notice；<code>:181-190</code> Unwire/Restore；<code>:254-260</code> TakeLeftovers；<code>:271-283</code> Check/LastUsed/Reached；<code>:415-435</code> Running 在 Windows 恒真、只作提示；<code>:833-855</code> atomic 包装。</li>
+<li><code>internal/agent/claude.go:26-74</code> 不写 ANTHROPIC_MODEL 的原因与 claudeOwnEnv 暂存；<code>:98-111</code> 云开关使 BASE_URL 被忽略。</li>
+<li><code>internal/agent/codex.go:39-90</code> 登录态双模式、表保留、stand-in。</li>
+<li><code>internal/agent/agents.go:1257-1330</code> openCodeLike（文件优先级、small_model、Sync/ListOnly、Check）；<code>:1455-1467</code> OPENCODE_CONFIG_DIR/XDG；<code>:1543-1577</code> beforeMagpie。</li>
+<li><code>internal/agent/stash.go:17-30</code> 值级 stash 语义；<code>internal/edit/file.go:332-372</code> Atomically 快照回滚。</li>
+<li><code>internal/agent/connectinfo.go:20-60</code> Source()；<code>internal/settings/settings.go:1146-1158</code> HiddenModels/PickedModels；<code>internal/provider/group.go:39</code> GroupPrefix="group/"。</li>
+</ul>
+<p class="ev">本项目 v0.3.73：</p>
+<ul class="ev">
+<li><code>app/core/src/inject_cli.rs:198/207</code> Claude 三键；<code>:342-343/509/514/533/570</code> Codex 托管块与摘除；<code>:952/986/995/1057</code> OpenCode provider 写入/移除。</li>
+<li><code>app/core/src/inject.rs:431</code> process_running；<code>:777</code> blocked_by_running；<code>:1187/1415/1666</code> 拒写调用点。</li>
+<li><code>app/core/src/gateway_proto/sources.rs:266-271</code> 仅出站 UA；<code>app/core/src/store_gateway.rs</code> 台账无 agent 列。</li>
+</ul>
+
+</div>
+<script>
+const btns=document.querySelectorAll('.bar button');
+btns.forEach(b=>b.onclick=()=>{
+  btns.forEach(x=>x.classList.toggle('on',x===b));
+  const f=b.dataset.f;
+  document.querySelectorAll('#tbl tr[data-g]').forEach(r=>r.classList.toggle('hide',f!=='all'&&r.dataset.g!==f));
+  document.querySelectorAll('.card[data-g]').forEach(c=>c.classList.toggle('hide',f!=='all'&&c.dataset.g!==f));
+});
+</script>
+</body>
+</html>

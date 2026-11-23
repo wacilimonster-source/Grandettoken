@@ -33,6 +33,21 @@ const sentinels = {
     'invoke("__missing_gateway_save_group__"',
     "保存路由组调用正式命令",
   ],
+  running_confirm: [
+    'if (act === "apply-inject" && warn && !confirm(',
+    'if (false && act === "apply-inject" && warn && !confirm(',
+    "在跑客户端写入前二次确认，取消则不写",
+  ],
+  source_line: [
+    '${item.source ? `<small>它现在跑在：${escHtml(item.source)}</small>` : ""}',
+    '',
+    "接入预览显示它现在跑在什么上",
+  ],
+  drift_badge: [
+    '(state.drift || []).filter((d) => d.client === c.client)',
+    '(state.drift || []).filter(() => false)',
+    "漂移徽章提示配置被外部改写",
+  ],
 };
 
 function mutate(source, before, after, name) {
@@ -155,7 +170,7 @@ let usageState = {
     { key: "group/coding", label: "group/coding", requests: 10, errors: 1, promptTokens: 1000, cachedPromptTokens: 800, cacheCreationTokens: 100, completionTokens: 250, reasoningTokens: 60, estimatedCostCny: 0.1234, pricedRequests: 6 },
   ],
   recent: [
-    { id: 1, ts: 1795000000, channelId: "ch_existing", channelAlias: "ds", routeGroup: "group/coding", model: "group/coding", protocol: "anthropic_messages", stream: true, status: 200, latencyMs: 520, firstByteMs: 110, promptTokens: 100, cachedPromptTokens: 80, completionTokens: 25, reasoningTokens: 5, failoverCount: 1, maskedCount: 2, estimatedCostCny: 0.012, errorCode: null },
+    { id: 1, ts: 1795000000, channelId: "ch_existing", channelAlias: "ds", routeGroup: "group/coding", model: "group/coding", protocol: "anthropic_messages", stream: true, status: 200, latencyMs: 520, firstByteMs: 110, promptTokens: 100, cachedPromptTokens: 80, completionTokens: 25, reasoningTokens: 5, failoverCount: 1, maskedCount: 2, estimatedCostCny: 0.012, errorCode: null, agent: "codex" },
   ],
 };
 
@@ -178,7 +193,7 @@ const eightClients = [
   short: id.toUpperCase().slice(0, 2),
   label: id === "claude-code" ? "Claude Code" : id === "codex" ? "Codex" : id === "opencode" ? "OpenCode" : id,
   installed: true,
-  running: false,
+  running: id === "codex",
   process: `${id}.exe`,
   roots: [`~/${id}`],
   files: [`~/${id}/config`],
@@ -258,8 +273,12 @@ function installWindow() {
           configured: false,
           removal: null,
           blocked: null,
+          runningWarning: args.client === "codex" ? "Codex 正在运行 —— 它的配置是内存态落盘,边跑边写会在退出时被覆盖。先退出它再点写入。" : null,
+          source: args.client === "codex" ? "ChatGPT 登录" : "",
           notes: ["本地网关接入：真实上游密钥留在 Windows 凭据管理器", "DPAPI 备份"],
         }];
+      case "gateway_inject_drift":
+        return [{ client: "opencode", label: "OpenCode", message: "选中项仍指向网关 provider，但 provider 块被外部删除；重新写入可修复" }];
       case "gateway_inject_apply":
         logState = [{
           stamp: "20261123",
@@ -409,6 +428,32 @@ async function run() {
   await settle();
   ck("一键回滚调用 inject_rollback",
     calls.some((c) => c.cmd === "inject_rollback"));
+
+  // 3C/8A/6A/7C：在跑二次确认、Source 展示、漂移徽章、账本 Agent 归因
+  doc.querySelector('[data-gw-adv="preview-inject"][data-client="codex"]').click();
+  await settle();
+  ck("接入预览显示它现在跑在什么上",
+    doc.querySelector('[data-gw-pane="connect"]').textContent.includes("它现在跑在：ChatGPT 登录"));
+  ck("漂移徽章提示配置被外部改写",
+    doc.querySelector('[data-gw-pane="connect"]').textContent.includes("配置被外部改写"));
+  let confirmSeen = 0;
+  w.confirm = () => { confirmSeen += 1; return false; };
+  doc.querySelector('[data-gw-adv="apply-inject"]').click();
+  await settle();
+  ck("在跑客户端写入前二次确认，取消则不写",
+    confirmSeen === 1 && !calls.some((c) => c.cmd === "gateway_inject_apply" && c.args.client === "codex"));
+  w.confirm = () => true;
+  doc.querySelector('[data-gw-adv="apply-inject"]').click();
+  await settle();
+  ck("二次确认同意后在跑客户端仍可写入",
+    calls.some((c) => c.cmd === "gateway_inject_apply" && c.args.client === "codex"));
+  doc.querySelector('[data-gw-tab="usage"]').click();
+  await settle();
+  ck("账本流水带 Agent 归因列",
+    doc.querySelector('[data-gw-pane="usage"]').textContent.includes("Agent") &&
+    doc.querySelector('[data-gw-pane="usage"]').textContent.includes("codex"));
+  doc.querySelector('[data-gw-tab="connect"]').click();
+  await settle();
 
   // Delete route group
   doc.querySelector('[data-gw-tab="groups"]').click();

@@ -1265,6 +1265,7 @@ core **361**;jsdom **120/120**;`verify-resize` 尺寸/持久化/两列/手柄/�
 | 2026-11-18 | 网关 Responses 协议 | **Responses 只作上游选项**,客户端继续调用 Chat Completions,详见 `AGENTS.md` §8.6 |
 | 2026-11-20 | Qoder 临期 | **账户额度用完后停提醒**,逐笔照常,见 `AGENTS.md` §8.9 |
 | 2026-11-21 | 套餐临期计划 | **每天最多在线 10 小时，各 Agent 渠道可并行，每池每天最多安排两个 5 小时窗**。提前提示何时用、今天用多少。 |
+| 2026-11-23 | 网关接入 agent 的范围 | **不做订阅反代/中继**（不逆向 ChatGPT/claude.ai 登录态转上游）；只接入支持 API 配置（base_url / key / provider）的 agent。Codex 保持 provider 表模式，不做 ChatGPT 登录态 base_url-only 中继。对齐 magpie 时取其配置语义，不取其中继 |
 
 ## 11. 待定夺
 

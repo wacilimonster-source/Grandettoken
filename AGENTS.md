@@ -215,6 +215,9 @@ jsdom 桩曾对未登记 invoke `return null`,命令漏注册也全绿。**mock 
 - 协议:真实实现与回环测试在 `app/core/src/gateway/`,禁止另造成功宿主桩。错误先脱敏再截断;逐候选验完成,末帧先处理正文再结束,拒绝是有效输出;缓冲超限明确失败;重启等监听释放而非固定等待,失败恢复旧服务。
 - 回归核对裸模型、call ID、流式索引/用量、断流/取消、共用鉴权和失败落盘。
 - 2026-11-23 OpenCode 桌面版进程名是 `opencode-cli.exe`(辅助进程 `opencode-pty.exe`),只查 `opencode.exe` 会漏判「在跑」而边跑边写;判在跑按 `Client::processes()` 全名任一命中,界面徽章显示实际命中的名字。
+- 2026-11-23 接入语义对齐 magpie:在跑**不拒写**改「预览+二次确认+写后重启提示」;Claude Code 写顶层 model+分层 env、**不写 ANTHROPIC_MODEL**(它压掉 /model);Codex 托管表写过就保留(旧线程靠它打开),断开只摘 model_provider;断开/卸载按值级 stash 还原用户原值(`inject-stash.json` **只存非密钥值**);卸载钩子 NSIS PREUNINSTALL 调 `--cleanup-inject`。改这些先跑 inject 单测与 `verify-gateway-magpie.js` 哨兵。
+- 2026-11-23 **不做订阅反代/中继**(DESIGN §16):只接支持 API 配置(base_url/key/provider)的 agent;Codex 不做 ChatGPT 登录态 base_url-only 中继。台账 agent 列按入站 UA 归因,**仅展示不作鉴权**。
+- 2026-11-23 入站 UA 归因必须在**建 `DiagnosticGuard` 时**取好:流式响应的 body 由连接任务轮询,middleware 的 `task_local` 作用域已退出,`record_diag` 里再取只会拿到 `None`(agent 列对 SSE 全空)。`record_diag` 只在 `agent` 为空时回填 task-local;新增流式路径要传 agent 进 guard。
 
 ### 8.7 Windows WebView2 网页会话
 - Wry 同步 Cookie 读取会在 UI 线程开嵌套消息循环,重入导航回调导致卡死(2026-11-19)。读写清理统一走 `app/src-tauri/src/webview_cookies.rs`:UI 线程注册回调即返回,工作线程等结果;**读回确认删除后才算成功**。

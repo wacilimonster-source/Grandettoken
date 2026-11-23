@@ -846,3 +846,38 @@
 - **收尾**:测试用的渠道/路由组/台账/脱敏开关随用户库还原清除(还原后 port 18771、lan true、原 3 渠道、0 路由组);用户安装版(v0.3.71)已重新拉起;三个 CLI 配置哈希与测前一致。
 - **待验收**:B15 三个 CLI 真实写入/回滚(需用户关闭对应 CLI)、B16 真实渠道鉴权链路、B17 冷却徽章自动刷新与预览加载态(待产品裁决)、B11 过时断言改写。
 - **发版**:三处版本号同步 0.3.73,`Cargo.lock` 仅本包版本行,`cargo fetch --locked` 复核通过;只发桌面,Android 本轮零改动不打 tag。
+
+
+## 2026-11-23 对标 magpie 的 agent 接入语义升级（开发完成，待实机复核/待发版）
+
+- **裁决**:`1A2A3C4A5C6A7C8A9A10A`(见 `docs/report/magpie-agent-parity-2026-11-23.html`),并补充「**不做反代,只做把支持 API 的接入各类 agent**」→ DESIGN §16 新增行。magpie 快照 `yetone/magpie@30762eab`。
+- **改动**:
+  - 1A Claude Code:写顶层 `model` + `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`/`SMALL_FAST`/`SUBAGENT`,**不写 `ANTHROPIC_MODEL`**;检测 `CLAUDE_CODE_USE_BEDROCK/VERTEX/…` 云开关时拒绝接入。
+  - 2A(除中继)Codex:托管表写过就保留、断开只摘 `model_provider` 并按 stash 还原原值(行内注释保留);网关对 `codex-auto-review` 用接入时记下的 wired model 顶替(不 404)。**不做 ChatGPT 登录态中继**。
+  - 3C 在跑不拒写:预览带 `runningWarning`,界面二次确认(取消不写),写后回执带重启/新会话提示;DPAPI 快照保留兜底。
+  - 4A 发现:`CLAUDE_CONFIG_DIR`/`CODEX_HOME`/`OPENCODE_CONFIG_DIR`/`XDG_CONFIG_HOME`、OpenCode 文件 `jsonc→json→config.json`、v1 `provider`/v2 `providers` 按文件形状认、`small_model` 一并写。
+  - 5C 值级 stash(`inject-stash.json`,**只存非密钥值**,`Null`=原来没有):断开还原用户原 model/provider/env;与 DPAPI 整文件快照并存。
+  - 6A 漂移 `Check`(`inject_drift.rs`)+ 界面徽章;修复走既有预览→确认写入(Sync 只补托管块)。
+  - 7C 入站 UA 归因:axum middleware + tokio task-local → 台账 v8 加 `agent` 列(WANT 7→8),界面流水加 Agent 列;**仅展示不作鉴权**。
+  - 8A 预览显示「它现在跑在什么上」(`inject_source.rs`,只读登录态存在性/账号标识,不读令牌值)。
+  - 9A 卸载清理:`--cleanup-inject` 子命令 + NSIS `PREUNINSTALL` 钩子,摘 3 个现代 CLI 托管块并还原 stash;旧五家需卸载前界面取消写入(B18)。
+  - 拆模块守棘轮:`inject_stash/inject_discover/inject_source/inject_drift/inject_codex`、`gateway/http/agent_ua`;`inject_cli.rs` 1576→1263、`gateway/http.rs` 1513→<1500。
+- **偏差清单**(相对 magpie/裁决卡,详见报告 §3b):不做订阅中继(用户裁决);stand-in 用 wired model 而非实时配置;同名二进制甄别不做;Claude about-env 不做;卸载清理只覆盖 3 现代 CLI;每 agent 可见性不做(B20)。
+- **验证**:core `cargo test --locked -- --test-threads=1` **678 passed / 0 failed / 10 ignored** + fixtures 6;jsdom **312/312**;`verify-gateway-magpie.js` **7 个哨兵**(新增 running_confirm/source_line/drift_badge)全触发指定 FAIL;静态门含 --self-test 全 PASS;core 与 src-tauri `cargo check --all-targets --locked` 零警告;`scan-secrets.ps1` CLEAN(两个合成测试夹具按惯例登记进 knownFixtures)。
+- **实机复核(新二进制,9 项全过)**:在跑 Codex 预览显示「它现在跑在:ChatGPT 登录」+在跑提示;二次确认取消→配置哈希不变;Trae(未跑)完整写入(25+17 条)→取消→ItemTable 逻辑全量还原;入站 UA `codex/0.133.0` 进台账 agent 列;走查零 JS 异常。测后用户库 SHA-256 还原 MATCH、Trae 逻辑还原、Codex 仅摘我们的托管块。
+- **实机观察**:本机同时装着并运行 magpie,它会并发改写 `~/.codex/config.toml`(mtime 变化不可归因于我们);复核后已只摘我们的托管块、保留 magpie 块与用户 `model_provider="custom"`。 Trae 是 SQLite,插入+删除不可能逐字节还原,还原断言按 ItemTable 逻辑内容比对。
+- **未跑**:安装版卸载钩子真机卸载(B18);本轮**不发版**,等用户指令。
+
+
+## 2026-11-23 v0.3.74 对标 magpie 的复测（只比对源码，不跑实际程序）
+
+- **范围**:`a0f9d3c..HEAD` 未提交的 agent 接入语义升级（裁决 `1A2A3C4A5C6A7C8A9A10A`）。按用户要求**不启动实际程序**，只拿本机 magpie 快照 `yetone/magpie@30762eab`（`internal/agent/{claude,codex,stash,connectinfo,agent,agents}.go`、`internal/usage/usage.go`）逐项对照本仓实现。
+- **比对结论**:10 项裁决均已落地（Claude 顶层 model + 分层 env 且不写 `ANTHROPIC_MODEL`、Codex 托管表保留 + 只摘 `model_provider` + stand-in、在跑不拒写改二次确认、env 目录/`config.json`/v1-v2 拼写、值级 stash、漂移徽章、UA 归因、Source + 重启提示、卸载清理、不做中继）。**另有 4 处语义偏差/风险，已修**：
+  1. **流式请求的 agent 归因全丢**（7C 的核心场景）：`task_local` 作用域在 handler 返回时结束，SSE 的 body 由连接任务轮询，`record_diag` 再取只能拿到 `None`。改为在 `DiagnosticGuard::new` 时取好并显式传入，`record_diag` 只在为空时回填。新增回环 SSE 测试 `streamed_request_records_inbound_user_agent_in_ledger`；临时把 guard 的 agent 改回 `None` 即精确红（`agent: None`），还原后绿。
+  2. **Claude 断开不还原用户原 endpoint**：magpie 的 `claudeOwnEnv` 含 `ANTHROPIC_BASE_URL`（它踩过「连 BASE_URL 一起带走」的坑），我们只 stash 了 model 与分层 env。已把 `env.ANTHROPIC_BASE_URL` 纳入值级 stash（仍**不存** AUTH_TOKEN，按 5C 只存非密钥值），断开后的读回断言改为「不再是我们写的那个地址」。
+  3. **卸载清理会误删别人的本地网关配置**：`cleanup_leftovers` 对 Claude 传的是假地址 + `source="gateway"`，命中「任意 `127.0.0.1` 都算我们的」这条宽松分支 —— 本机同时装着 magpie 时，卸载会把 magpie 的 Claude 配置当我们的摘掉。改为**只读**打开库取已保存端口、只认精确地址；取不到就跳过。新增 `claude_cleanup_leaves_other_local_gateways_alone`（别的端口时文件逐字节不变）。
+  4. **Codex 断开在「无事可做」时丢原值**：先 `take` stash 再判断有没有要改的，`removed == 0` 直接返回，原 model/provider 就再也还原不了。改为 `peek` 读、写成功后才 `take`。
+- **顺带修正**:`claude_env_same` 只比 OPUS 分层（分层被外部改写时预览会误判「已一致」而跳过写入）→ 改为全键比较；云开关检测补全局 `.claude.json` 的 `env`（magpie `claudeGlobal` 同口径，那个 env 也会覆盖到进程环境）；删掉 `inject_drift` 测试里未使用的 import（`cargo check --all-targets` 零警告）。
+- **验证**（串行）:core `cargo test --locked -- --test-threads=1` **680 passed / 0 failed / 10 ignored** + `sync_fixtures` 6 passed；core 与 src-tauri `cargo check --all-targets --locked` 零警告（实际重编）；jsdom **312/312**；静态门（ipc / silent / size / css / encoding / app-split / lock-unwrap / expiry / qoder / quota）含 `--self-test` 全 PASS；`verify-vault`、`verify-codex-reset`、`verify-google-cloud`、`verify-antigravity-capture`、`verify-gateway`、`verify-gateway-magpie`（7 个哨兵）PASS；`scan-secrets.ps1` CLEAN（580 文件）。
+- **未跑**:实际程序与原生窗口回归（用户要求本轮不跑）；`verify-gateway-layout` 属 CDP 原生项，未跑。B18（真机卸载）、B19（值级 stash 真机还原）仍待验收。
+- **发版**:三处版本号同步 0.3.74，`Cargo.lock` 仅本包版本行，`cargo fetch --locked` 复核；只发桌面，Android 零改动不打 tag。

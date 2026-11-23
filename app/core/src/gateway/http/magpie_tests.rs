@@ -738,3 +738,50 @@ async fn sticky_prompt_masking_default_off_enabled_sticky_and_cross_chunk_sse_un
     let ledger_dump = serde_json::to_string(&summary).unwrap();
     assert!(!ledger_dump.contains(MASK_SECRET));
 }
+
+/// 7C：入站 User-Agent 归因必须落到**流式**请求的台账行上。
+/// 流式 body 由连接任务轮询，middleware 的 task-local 作用域已退出，
+/// 所以 agent 只能在建 guard 时取好；这里用真实 SSE 请求验证。
+#[tokio::test]
+async fn streamed_request_records_inbound_user_agent_in_ledger() {
+    let f = MultiUpstreamFixture::new(
+        UpstreamBehavior::AnthropicSseRich,
+        UpstreamBehavior::AnthropicSseRich,
+        order_group("ua"),
+        true,
+        MaskingSettings::default(),
+    )
+    .await;
+
+    let resp = f
+        .client
+        .post(format!("{}/v1/messages", f.base_url))
+        .header("x-api-key", GATEWAY_TOKEN)
+        .header("user-agent", "codex/0.133.0")
+        .json(&json!({
+            "model": "primary/m-a",
+            "max_tokens": 128,
+            "stream": true,
+            "messages": [{"role": "user", "content": "attribute me"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.text().await.unwrap();
+    assert!(body.contains("event: message_stop"), "{body}");
+
+    let summary = crate::gateway::lock(&f.g.store)
+        .gateway_usage_summary(0, 20)
+        .unwrap();
+    let row = summary
+        .recent
+        .iter()
+        .find(|r| r.stream && r.status == 200)
+        .expect("streamed request should be in the ledger");
+    assert_eq!(
+        row.agent.as_deref(),
+        Some("codex"),
+        "streamed request lost its inbound UA attribution: {row:?}"
+    );
+}

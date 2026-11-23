@@ -11,6 +11,7 @@ use axum::{
 mod anthropic;
 mod dispatch;
 mod responses;
+mod agent_ua;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -44,6 +45,8 @@ use crate::gateway::{
 const MAX_GEMINI_MODEL_PAGES: usize = 5;
 const MODELS_TIMEOUT_SECS: u64 = 25;
 const CHAT_TIMEOUT_SECS: u64 = 300;
+
+pub(crate) use self::agent_ua::REQ_AGENT;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -96,6 +99,9 @@ pub struct GatewayDiagEntry {
     #[serde(default)]
     pub diag_note: Option<String>,
     pub error: Option<String>,
+    /// 入站 User-Agent 归因（仅展示，不作鉴权；UA 可伪造）
+    #[serde(default)]
+    pub agent: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -144,6 +150,7 @@ pub fn build_router(g: Gateway) -> Router {
         .route("/messages", post(anthropic::messages))
         .route("/messages/count_tokens", post(anthropic::count_tokens))
         .layer(DefaultBodyLimit::max(8 * 1024 * 1024))
+        .layer(axum::middleware::from_fn(self::agent_ua::agent_layer))
         .with_state(g)
 }
 
@@ -328,6 +335,9 @@ fn resolve_channel_and_model(
     let first = match matches.next() {
         Some(v) => v,
         None => {
+            if let Some(stand) = crate::inject::agent_stand_in(requested_model) {
+                return resolve_channel_and_model(g, &stand);
+            }
             return Err(json_error(
                 StatusCode::NOT_FOUND,
                 "模型不存在、已下架或密钥已更新，请刷新模型列表",
@@ -582,6 +592,7 @@ pub(super) fn record_error_diag_ctx(
 ) {
     g.record_diag(GatewayDiagEntry {
         id: 0,
+        agent: None,
         timestamp: now_unix(),
         channel_id: channel.channel_id.clone(),
         channel_alias: channel.alias.clone(),
@@ -798,6 +809,7 @@ fn build_sse_response(
 
 pub(super) fn record_stream_diag_with_ctx(
     g: &Gateway,
+    agent: Option<String>,
     channel: &Published,
     requested_model: &str,
     upstream_model: Option<String>,
@@ -826,6 +838,7 @@ pub(super) fn record_stream_diag_with_ctx(
     );
     g.record_diag(GatewayDiagEntry {
         id: 0,
+        agent,
         timestamp: now_unix(),
         channel_id: channel.channel_id.clone(),
         channel_alias: channel.alias.clone(),
@@ -909,6 +922,7 @@ async fn build_json_response(
 
     g.record_diag(GatewayDiagEntry {
         id: 0,
+        agent: None,
         timestamp: now_unix(),
         channel_id: channel.channel_id.clone(),
         channel_alias: channel.alias.clone(),
@@ -1196,6 +1210,7 @@ pub async fn run_test_chat(
                 );
                 g.record_diag(GatewayDiagEntry {
                     id: 0,
+                    agent: None,
                     timestamp: now_unix(),
                     channel_id: channel.channel_id.clone(),
                     channel_alias: channel.alias.clone(),
@@ -1466,3 +1481,4 @@ fn classify_upstream_send_error(is_timeout: bool, err: &str) -> (StatusCode, &'s
 mod tests;
 #[cfg(test)]
 mod magpie_tests;
+

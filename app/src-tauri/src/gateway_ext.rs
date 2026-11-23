@@ -341,3 +341,17 @@ pub(crate) async fn gateway_inject_remove(
     .await
     .map_err(|e| format!("移除本地网关配置失败: {e}"))?
 }
+
+#[tauri::command]
+pub(crate) async fn gateway_inject_drift() -> Result<Vec<Value>, String> {
+    tokio::task::spawn_blocking(|| {
+        tokenscope_core::inject::drift_all()
+            .into_iter()
+            .map(|(client, label, message)| {
+                serde_json::json!({"client": client, "label": label, "message": message})
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .map_err(|e| format!("读取接入漂移失败: {e}"))
+}

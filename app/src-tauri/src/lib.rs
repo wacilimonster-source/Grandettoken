@@ -654,6 +654,7 @@ pub fn run() {
             gateway_ext::gateway_usage_summary,
             gateway_ext::gateway_clear_usage,
             gateway_ext::gateway_inject_clients,
+            gateway_ext::gateway_inject_drift,
             gateway_ext::gateway_inject_preview,
             gateway_ext::gateway_inject_apply,
             gateway_ext::gateway_inject_remove,

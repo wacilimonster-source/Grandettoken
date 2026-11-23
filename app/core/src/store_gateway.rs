@@ -32,6 +32,7 @@ pub struct GatewayUsageRow {
     pub masked_count: usize,
     pub estimated_cost_cny: Option<f64>,
     pub error_code: Option<String>,
+    pub agent: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -72,6 +73,7 @@ pub struct GatewayUsageRecent {
     pub masked_count: usize,
     pub estimated_cost_cny: Option<f64>,
     pub error_code: Option<String>,
+    pub agent: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -179,7 +181,8 @@ impl Store {
                     failover_count INTEGER NOT NULL DEFAULT 0,
                     masked_count INTEGER NOT NULL DEFAULT 0,
                     estimated_cost_cny REAL,
-                    error_code TEXT
+                    error_code TEXT,
+                    agent TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_gw_usage_ts ON gateway_usage_log (ts DESC);
                 CREATE INDEX IF NOT EXISTS idx_gw_usage_day_ch ON gateway_usage_log (day, channel_id);",
@@ -196,8 +199,8 @@ impl Store {
                     stream, status, latency_ms, first_byte_ms,
                     prompt_tokens, cached_prompt_tokens, cache_creation_tokens,
                     completion_tokens, reasoning_tokens,
-                    failover_count, masked_count, estimated_cost_cny, error_code
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+                    failover_count, masked_count, estimated_cost_cny, error_code, agent
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
                 params![
                     row.ts,
                     day,
@@ -219,6 +222,7 @@ impl Store {
                     row.masked_count as i64,
                     row.estimated_cost_cny,
                     row.error_code,
+                    row.agent,
                 ],
             )
             .map_err(|e| format!("写入网关台账失败: {e}"))?;
@@ -250,7 +254,7 @@ impl Store {
                         stream, status, latency_ms, first_byte_ms,
                         prompt_tokens, cached_prompt_tokens, cache_creation_tokens,
                         completion_tokens, reasoning_tokens,
-                        failover_count, masked_count, estimated_cost_cny, error_code
+                        failover_count, masked_count, estimated_cost_cny, error_code, agent
                  FROM gateway_usage_log
                  WHERE ts >= ?1
                  ORDER BY ts DESC, id DESC",
@@ -280,6 +284,7 @@ impl Store {
                     masked_count: r.get::<_, i64>(17)?.max(0) as usize,
                     estimated_cost_cny: r.get(18)?,
                     error_code: r.get(19)?,
+                    agent: r.get(20)?,
                 })
             })
             .map_err(|e| format!("查询网关台账失败: {e}"))?;
@@ -363,6 +368,7 @@ impl Store {
                     masked_count: r.masked_count,
                     estimated_cost_cny: r.estimated_cost_cny,
                     error_code: r.error_code,
+                    agent: r.agent,
                 });
             }
         }
@@ -412,6 +418,7 @@ struct GatewayUsageRowWithId {
     masked_count: usize,
     estimated_cost_cny: Option<f64>,
     error_code: Option<String>,
+    agent: Option<String>,
 }
 
 fn accumulate_bucket(
@@ -462,12 +469,13 @@ mod tests {
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(ver, 7);
+        assert_eq!(ver, 8);
 
         let base_ts = 1_795_000_000;
         store
             .gateway_usage_insert(&GatewayUsageRow {
                 ts: base_ts - 10 * 86_400,
+                agent: None,
                 channel_id: "ch_old".into(),
                 channel_alias: "old".into(),
                 route_group: None,
@@ -501,6 +509,7 @@ mod tests {
             store
                 .gateway_usage_insert(&GatewayUsageRow {
                     ts: base_ts + i as i64,
+                    agent: if i == 2 { Some("codex".into()) } else { None },
                     channel_id: if i == 2 { "ch_b".into() } else { "ch_a".into() },
                     channel_alias: if i == 2 { "b".into() } else { "a".into() },
                     route_group: Some("group/coding".into()),
@@ -525,6 +534,10 @@ mod tests {
 
         let summary = store.gateway_usage_summary(base_ts, 2).unwrap();
         assert_eq!(summary.total_requests, 4);
+        assert!(
+            summary.recent.iter().any(|r| r.agent.as_deref() == Some("codex")),
+            "agent 归因列要能写能读"
+        );
         assert_eq!(summary.ok_requests, 3);
         assert_eq!(summary.error_requests, 1);
         assert_eq!(summary.failover_requests, 2);

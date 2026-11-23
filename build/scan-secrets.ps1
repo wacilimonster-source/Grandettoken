@@ -126,7 +126,11 @@ $knownFixtures = @(
   # Kotlin: `storePassword = System.getenv("GRANDETTOKEN_ANDROID_STORE_PASSWORD")`.
   # The unquoted-password rule captures `System.getenv` and mistakes the env lookup
   # for a literal value. Nothing secret is stored in the file.
-  'System.getenv'
+  'System.getenv',
+  # magpie_tests.rs MASK_SECRET: invented masking-test secret, never sent anywhere.
+  'sk-proj-secret1234567890abcdef',
+  # masking.rs test prompt: invented password assignment used to assert masking.
+  'password=mysecretpass'
 )
 
 # Skip a hit when it is part of one of the known fixtures. Reported, not silent.

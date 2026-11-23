@@ -132,8 +132,8 @@ impl Store {
         // 2 = vault_items 按 (platform,label) 去重 + 唯一索引(下面那段),老库也补跑
         // 3 = snapshots 加 key_fp(密钥指纹分段,换 key 后两本账不互相推算消耗)
         // 4 = credit_grants(积分到账事件,WorkBuddy AI 的每日活跃 +30 等)
-        // 5 = snapshots 的覆盖索引 idx_snap_fp_cover(P1b:批量历史读取不回表); 7 = gateway_usage_log
-        const WANT: i64 = 7;
+        // 5 = snapshots 的覆盖索引 idx_snap_fp_cover(P1b:批量历史读取不回表); 7 = gateway_usage_log; 8 = 台账 agent 列
+        const WANT: i64 = 8;
         let cur: i64 = self
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -215,6 +215,7 @@ impl Store {
             )
             .map_err(|e| format!("建立积分到账事件表失败: {e}"))?;
         self.migrate_gateway_ledger()?;
+        self.add_column_if_missing("gateway_usage_log", "agent", "TEXT")?;
         self.conn
             .execute_batch(&format!("PRAGMA user_version = {WANT};"))
             .map_err(|e| format!("写数据库版本号失败: {e}"))?;

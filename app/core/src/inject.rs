@@ -397,7 +397,7 @@ pub fn sites() -> Vec<Site> {
         }
     }
 
-    out.extend(inject_cli::detect_cli_sites(&mut probed, &is_running));
+    out.extend(inject_discover::detect_cli_sites(&mut probed, &is_running));
 
     out
 }
@@ -661,6 +661,10 @@ pub struct Preview {
     pub removal: Option<Removal>,
     /// 非空 = 不能写,界面把确认按钮禁掉并显示这条
     pub blocked: Option<String>,
+    /// 在跑提示(3C:不拒写,界面二次确认+写后重启提示)
+    pub running_warning: Option<String>,
+    /// 接入前它现在跑在什么上(订阅/登录/key/provider 数)
+    pub source: String,
     /// 附注(更新时会列出差异、以及生效方式)
     pub notes: Vec<String>,
 }
@@ -770,8 +774,8 @@ pub struct ClientState {
     pub note: Option<String>,
 }
 
-/// 备用配置的「在不在跑」。拿不到进程表时返回 false 而不是报错 ——
-/// 真正的保护是备份 + 读回校验,进程检查只是第一道。
+/// 「在不在跑」的提示文案(3C/magpie 口径:不拒写,由界面二次确认 + 写后重启提示承担)。
+/// 拿不到进程表时返回 false 而不是报错 —— 真正的保护是备份 + 读回校验。
 /// DSH 是唯一例外:它收敛外部编辑、profile 按请求解析,所以边跑边写是它认的用法
 /// (见 `Client::blocks_when_running`)。
 pub fn blocked_by_running(site: &Site) -> Option<String> {
@@ -807,6 +811,23 @@ use inject_trae::*;
 mod inject_dsh;
 pub use inject_dsh::CatalogRoute;
 use inject_dsh::*;
+
+#[path = "inject_stash.rs"]
+mod inject_stash;
+pub(crate) use inject_stash::agent_stand_in;
+
+#[path = "inject_discover.rs"]
+mod inject_discover;
+
+#[path = "inject_source.rs"]
+mod inject_source;
+
+#[path = "inject_drift.rs"]
+mod inject_drift;
+pub use inject_drift::drift_all;
+
+#[path = "inject_codex.rs"]
+mod inject_codex;
 
 #[path = "inject_cli.rs"]
 mod inject_cli;
@@ -1182,11 +1203,9 @@ pub fn remove(client: Client, spec: &ModelSpec) -> Result<Vec<Report>, String> {
         let stamp0 = stamp_now();
         let (cid, lbl) = (client.id().to_string(), site.label.clone());
         let mut local: Vec<Report> = Vec::new();
+        let running_warn = blocked_by_running(&site);
         // 与 apply 同口径(报告 P1-6):一套安装失败不该把已删成的另一家一起丢成"没记录"
         let res: Result<(), String> = (|| {
-            if let Some(msg) = blocked_by_running(&site) {
-                return Err(msg);
-            }
             site_readable(&site).map_err(|e| format!("{}: {e}", site.label))?;
             let stamp = stamp0.clone();
             let (client_id, label) = (cid.clone(), lbl.clone());
@@ -1257,7 +1276,17 @@ pub fn remove(client: Client, spec: &ModelSpec) -> Result<Vec<Report>, String> {
             Ok(())
         })();
         match res {
-            Ok(()) => out.extend(local),
+            Ok(()) => {
+                for r in &mut local {
+                    if let Some(w) = &running_warn {
+                        r.notes.push(w.clone());
+                    }
+                    if matches!(client, Client::ClaudeCode | Client::Codex | Client::OpenCode) {
+                        r.notes.push(inject_source::notice(client).into());
+                    }
+                }
+                out.extend(local)
+            }
             Err(e) => out.push(Report {
                 client: cid,
                 label: lbl,
@@ -1412,10 +1441,8 @@ pub fn preview(client: Client, spec: &ModelSpec, opts: &Opts) -> Vec<Preview> {
                 writes_secret: true,
                 ..Default::default()
             };
-            if let Some(msg) = blocked_by_running(&site) {
-                p.blocked = Some(msg);
-                return p;
-            }
+            p.running_warning = blocked_by_running(&site);
+            p.source = inject_source::source(client, &site);
             if let Some(msg) = protocol_blocked(client, spec) {
                 p.blocked = Some(msg);
                 return p;
@@ -1661,11 +1688,9 @@ pub fn apply(client: Client, spec: &ModelSpec, opts: &Opts) -> Result<Vec<Report
         // 跳出整个循环:① 界面只看到一句错误,不知道另一家其实已经写进去了;
         // ② 壳层的 push_log 拿不到任何报告,于是那次已落盘的写入连台账都没有,
         //   也就再没有回滚入口(报告 P1-6)。
+        let running_warn = blocked_by_running(&site);
         let res: Result<(), String> = (|| {
-            // 预告与执行之间目标可能被启动:这里再判一次,不做「按预告执行」的假设
-            if let Some(msg) = blocked_by_running(&site) {
-                return Err(msg);
-            }
+            // 3C:在跑不拒写(magpie 口径),提示交给界面二次确认与写后重启提示
             site_readable(&site).map_err(|e| format!("{}: {e}", site.label))?;
 
             let stamp = stamp0.clone();
@@ -1812,7 +1837,17 @@ pub fn apply(client: Client, spec: &ModelSpec, opts: &Opts) -> Result<Vec<Report
             Ok(())
         })();
         match res {
-            Ok(()) => out.extend(local),
+            Ok(()) => {
+                for r in &mut local {
+                    if let Some(w) = &running_warn {
+                        r.notes.push(w.clone());
+                    }
+                    if matches!(client, Client::ClaudeCode | Client::Codex | Client::OpenCode) {
+                        r.notes.push(inject_source::notice(client).into());
+                    }
+                }
+                out.extend(local)
+            }
             Err(e) => out.push(Report {
                 client: cid,
                 label: lbl,
@@ -2073,3 +2108,72 @@ mod tests;
 #[cfg(test)]
 #[path = "inject_tests_trae_dsh.rs"]
 mod tests_trae_dsh;
+
+/// 卸载清理用的网关地址：从已保存的网关设置里读端口。
+/// 读不到（库损坏/被占用）就返回 None —— 宁可不清理，也不拿「任意 127.0.0.1」去匹配，
+/// 那会把别人（如 magpie）的本地网关配置当我们的删掉。
+/// 只读打开：卸载时不该顺手建库或跑迁移。
+fn saved_gateway_root() -> Option<String> {
+    let db = appdata()?.join("com.wacil.tokenscope").join("tokenscope.db");
+    if !db.is_file() {
+        return None;
+    }
+    let conn = rusqlite::Connection::open_with_flags(
+        &db,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .ok()?;
+    let raw: String = conn
+        .query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            rusqlite::params![crate::gateway::CONFIG_KEY],
+            |r| r.get(0),
+        )
+        .ok()?;
+    let v: Value = serde_json::from_str(&raw).ok()?;
+    let port = v.get("port").and_then(Value::as_u64)?;
+    Some(format!("http://127.0.0.1:{port}"))
+}
+
+/// 卸载时摘掉指向已消失网关的托管配置（对齐 magpie `TakeLeftovers`）。
+/// 只动我们写过的块/键并还原 stash；失败只记日志，不阻断卸载。
+/// 旧五家（Trae/WorkBuddy/ZCode/DSH）的条目请在卸载前用界面「取消写入」移除。
+pub fn cleanup_leftovers() -> usize {
+    let mut probed: HashMap<String, bool> = HashMap::new();
+    let is_running = |p: &str, probed: &mut HashMap<String, bool>| {
+        *probed.entry(p.to_string()).or_insert_with(|| process_running(p))
+    };
+    let sites = inject_discover::detect_cli_sites(&mut probed, &is_running);
+    let gw_root = saved_gateway_root();
+    let mut n = 0usize;
+    for site in sites {
+        // source 置空 = 关掉「任意本地网关地址都算我们的」那条宽松匹配，
+        // 只认存下来的那个端口。
+        let cfg = CliTargetConfig {
+            model: String::new(),
+            display_name: String::new(),
+            base_url: String::new(),
+            anthropic_base_url: gw_root.clone().unwrap_or_default(),
+            api_key: String::new(),
+            source: String::new(),
+        };
+        let res: Result<bool, String> = match site.client {
+            Client::ClaudeCode => {
+                if gw_root.is_none() {
+                    Ok(false)
+                } else {
+                    remove_claude_code_site(&site, &cfg).map(|o| o.removed > 0)
+                }
+            }
+            Client::Codex => cleanup_codex_site(&site),
+            Client::OpenCode => cleanup_opencode_site(&site),
+            _ => Ok(false),
+        };
+        match res {
+            Ok(true) => n += 1,
+            Ok(false) => {}
+            Err(e) => crate::diaglog::write_keyed("inject", "cleanup", &e),
+        }
+    }
+    n
+}

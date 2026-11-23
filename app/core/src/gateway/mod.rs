@@ -9,7 +9,7 @@ mod refresh;
 pub mod routing;
 #[cfg(test)]
 mod tests;
-const CONFIG_KEY:&str="local_gateway_v1";
+pub(crate) const CONFIG_KEY:&str="local_gateway_v1";
 pub const SECRET_KEY:&str="local-gateway-access";
 const MAX_DIAG_ENTRIES:usize=50;
 fn default_system_proxy() -> bool {
@@ -315,6 +315,11 @@ impl Gateway {
     }
 
     pub fn record_diag(&self, mut entry: GatewayDiagEntry) {
+        // 流式响应在 body 轮询时已离开 middleware 的 task-local 作用域，
+        // 由 guard 建时取好并显式传入；这里只补没给的那些。
+        if entry.agent.is_none() {
+            entry.agent = self::http::REQ_AGENT.try_with(|a| *a).ok().flatten().map(String::from);
+        }
         let log_line = (entry.status >= 400
             || entry.error.is_some()
             || entry.diag_note.is_some()
@@ -402,6 +407,7 @@ impl Gateway {
             masked_count: entry.masked_count,
             estimated_cost_cny: entry.estimated_cost_cny,
             error_code: (entry.status >= 400).then(|| format!("http_{}", entry.status)),
+            agent: entry.agent.clone(),
         };
 
         let should_prune = {

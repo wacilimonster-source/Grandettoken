@@ -411,6 +411,7 @@ pub(super) async fn execute_dispatched(
                         );
                         g.record_diag(super::GatewayDiagEntry {
                             id: 0,
+                            agent: None,
                             timestamp: now_unix(),
                             channel_id: cand.channel.channel_id.clone(),
                             channel_alias: cand.channel.alias.clone(),
