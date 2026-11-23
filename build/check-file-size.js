@@ -46,7 +46,7 @@ const GROUP_BUDGETS = [
     label: "app/src/app*.js",
     dir: "app/src",
     pattern: /^app(?:-.+)?\.js$/,
-    limit: 9011,
+    limit: 9007,
   },
 ];
 

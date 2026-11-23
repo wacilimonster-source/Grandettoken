@@ -240,12 +240,12 @@ function applyChannelsPush(payload) {
   setInterval(() => checkUpdate(false), 10 * 60 * 1000);
 })();
 
-/* AI 优惠：RSS 摘要与本机已读状态。 */
+/* AI 优惠：列表摘要与本机已读状态。 */
 (() => {
   const key = "promo-feed-v1";
   let state = { items: [], seen: [], updated: 0, initialized: false };
   try { state = { ...state, ...JSON.parse(localStorage.getItem(key) || "{}") }; } catch (_) { /* silent: 本地已读状态损坏就当作全新会话 */ }
-  let busy = false, failed = false, query = "", scroll = 0;
+  let busy = false, failed = "", query = "", scroll = 0;
   const expanded = new Set();
   const save = () => { try { localStorage.setItem(key, JSON.stringify(state)); } catch (_) { /* silent: 已读标记存不下只影响下次的"新条目"计数 */ } };
   const unread = item => !state.seen.includes(item.id);
@@ -269,7 +269,7 @@ function applyChannelsPush(payload) {
     $("promoRefresh").disabled = busy;
     $("promoRefresh").textContent = busy ? "更新中…" : "刷新";
     const list = state.items.filter(x => (x.title + " " + x.description).toLowerCase().includes(query.toLowerCase()));
-    content.innerHTML = `<div class="promo-tools"><input id="promoSearch" type="search" placeholder="搜索优惠或工具名称" value="${esc(query)}" aria-label="搜索优惠"></div>${failed ? `<p class="promo-meta">更新失败${state.updated ? " · 上次更新 " + esc(date(state.updated)) : "，请检查网络后重试"}</p>` : ""}<div class="promo-list">${list.map(x => `<article class="promo-item" data-id="${esc(x.id)}"><button class="promo-title" data-open="${esc(x.id)}">${esc(x.title)} ↗</button><p class="promo-text${expanded.has(x.id) ? " expanded" : ""}">${esc(x.description)}</p><button class="promo-toggle" data-toggle="${esc(x.id)}" aria-expanded="${expanded.has(x.id)}" hidden>${expanded.has(x.id) ? "收起" : "展开"}</button><small class="promo-date">发布于 ${esc(date(x.date)) || "时间未知"}</small></article>`).join("") || `<p class="promo-empty">${busy && !state.items.length ? "正在加载优惠…" : "没有匹配的优惠"}</p>`}</div>`;
+    content.innerHTML = `<div class="promo-tools"><input id="promoSearch" type="search" placeholder="搜索优惠或工具名称" value="${esc(query)}" aria-label="搜索优惠"></div>${failed ? `<p class="promo-meta">更新失败 · ${esc(failed)}${state.updated ? " · 上次更新 " + esc(date(state.updated)) : ""}</p>` : ""}<div class="promo-list">${list.map(x => `<article class="promo-item" data-id="${esc(x.id)}"><button class="promo-title" data-open="${esc(x.id)}">${esc(x.title)} ↗</button><p class="promo-text${expanded.has(x.id) ? " expanded" : ""}">${esc(x.description)}</p><button class="promo-toggle" data-toggle="${esc(x.id)}" aria-expanded="${expanded.has(x.id)}" hidden>${expanded.has(x.id) ? "收起" : "展开"}</button>${x.date ? `<small class="promo-date">发布于 ${esc(date(x.date))}</small>` : ""}</article>`).join("") || `<p class="promo-empty">${busy && !state.items.length ? "正在加载优惠…" : "没有匹配的优惠"}</p>`}</div>`;
     content.querySelectorAll(".promo-item").forEach(row => {
       const text = row.querySelector(".promo-text"), toggle = row.querySelector(".promo-toggle");
       const isExpanded = text.classList.contains("expanded");
@@ -298,16 +298,12 @@ function applyChannelsPush(payload) {
     if (busy) return;
     busy = true; render();
     try {
-      const xml = new DOMParser().parseFromString(await invoke("fetch_promo_feed"), "application/xml");
-      if (xml.querySelector("parsererror") || !xml.querySelector("channel")) throw Error("invalid feed");
-      const field = (node, name) => node.querySelector(name)?.textContent?.trim() || "";
-      const items = Array.from(xml.querySelectorAll("channel > item")).map(n => ({ title: field(n, "title"), description: field(n, "description"), link: field(n, "link"), id: field(n, "guid") || field(n, "link"), date: field(n, "pubDate") })).filter(x => x.id && x.title && x.link);
-      if (!items.length) throw Error("empty feed");
-      if (!state.initialized) state.seen = items.map(x => x.id);
-      state.items = items.sort((a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0));
-      state.seen = state.seen.filter(id => items.some(x => x.id === id));
-      state.initialized = true; state.updated = Date.now(); failed = false; save();
-    } catch (_) { failed = true; }
+      const items = parsePromoPage(await invoke("fetch_promo_page"));
+      const previous = new Map(state.items.map(item => [item.link, item]));
+      state.seen = items.filter(item => !state.initialized || state.seen.includes(previous.get(item.link)?.id)).map(item => item.id);
+      state.items = items.map(item => ({ ...item, date: previous.get(item.link)?.date }));
+      state.initialized = true; state.updated = Date.now(); failed = ""; save();
+    } catch (error) { failed = typeof error === "string" ? error : "优惠来源返回的列表格式异常"; }
     busy = false; render();
   }
   $("promoEntry").onclick = () => { $("promoOverlay").hidden = false; render(); if (!state.updated || Date.now() - state.updated > 1800000) refresh(); };

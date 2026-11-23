@@ -795,3 +795,18 @@
 - **一键脚本问题**(记 B12):默认端口 9222 被本机 Chrome 占用;`launch-debug.ps1` 不构建、只挑最新的 exe(首次跑到 11-20 的旧二进制);`-Filter` 不支持 `|`,全部 SKIP 仍退出 0;子脚本日志 GBK 往返后乱码。
 - **发版**:三处版本号同步到 0.3.71,`Cargo.lock` 只变本包版本行,`cargo fetch --locked` 复核通过。只发桌面,Android 本轮零改动不打 tag。
 - **未跑**:安装版自动更新(B7)、真实账号相关项(C/D 区)、紧凑条与模型页 / 同步页 / 密钥箱的手动打开(B10 剩余部分)。
+
+
+## 2026-11-23 v0.3.72 AI 优惠改读官网公开列表
+
+- **背景**:上游 `https://www.aipromonow.com/rss.xml` 已返回 HTTP 410,优惠页取不到数据;旧版把请求失败与解析失败一律显示「更新失败」,看不出原因。
+- **改动**:
+  - `app/src-tauri/src/model_cmds.rs`:`fetch_promo_feed` → `fetch_promo_page`,改取官网 `/deals`;不跟随重定向,非 2xx 报具体 HTTP 状态,分块读取按 2 MB 上限判定过大,UTF-8 非法单独报错;`PROMO_HTTP` / `promo_client` 收窄为模块私有(全仓确认零外部引用)。
+  - `app/src/promo-page.js`(新增):用惰性 `template` 解析官网 JSON-LD `ItemList`,校验来源域名、`/promos/` 路径、条数与 `numberOfItems` 一致、条目去重后输出 `{id,link,title,description}`;摘要取卡片 `#promo-<slug>` 首个 `<p>` 的纯文本。
+  - `app/src/app-boot.js`:已读状态与历史发布日期按详情链接迁移(换 id 口径不整页变「新」);失败提示改为具体原因(HTTP 状态 / 列表格式异常),失败时保留上次列表与更新时间;新列表无发布日期,不再显示「时间未知」占位。
+  - `build/check-file-size.js`:`app/src/app*.js` 分组预算 9011 → 9007(棘轮只下调)。
+  - 文档:`AGENTS.md` §8.10、`docs/report/promo-rss-retired-2026-11-23.md`、`acceptance-backlog.md` 新增 B13/B14。
+- **验证**(按 AGENTS.md §4.1 串行):静态门 16 项(带 `--self-test` 的先证红)全 PASS;`node --check` 覆盖 `app/src/*.js` 与 `google_cloud_capture.js`;jsdom 冒烟 **303/303**(新增 6 项优惠用例),vault / codex-reset / google-cloud / antigravity-capture / gateway 冒烟 PASS;`app/core` `cargo test --locked -- --test-threads=1` **653 passed / 0 failed / 10 ignored**、`sync_fixtures` 6 passed;core 与 src-tauri `cargo check --all-targets --locked` 零警告(src-tauri 实际重编,非缓存);`scan-secrets.ps1` CLEAN。
+- **双向验证**:临时删掉解析器的「条数 ≠ `numberOfItems`」校验后,jsdom 冒烟退出 1 并精确命中 `FAIL 优惠刷新保留缓存及失败提示：列表被截断`(外部链接项为级联失败);按 SHA-256 还原原文件后复跑 303/303。
+- **实网复核**:`/deals` 直连与经本地代理均直接返回 200(无跳转),`rss.xml` 仍 410;用应用同款解析器读实际页面得 24 条、全部带摘要、链接全部落在 `open_promo_url` 的官网 `/promos/` 白名单内,首条详情 200。官网列表分页(共 411 条 18 页),`numberOfItems` 等于当页条数,首页按发布时间倒序 —— 只取首页等于只展示最近几天新增,取舍已记 B14。
+- **未跑**:安装版真机优惠页(B13/B14)。本轮无窗口几何 / WebView2 改动,未跑 `run-native-checks.ps1`(本机有运行中的实例,按规则不杀用户进程)。

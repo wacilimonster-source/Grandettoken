@@ -915,36 +915,47 @@ pub(crate) async fn open_url(app: tauri::AppHandle, url: String) -> Result<(), S
     .map_err(|e| format!("打开失败: {e}"))?
 }
 
-/// 优惠订阅的 HTTP 客户端:进程内复用一份(前端每 30 分钟问一次)。
-/// builder 参数逐字不变,只是不再每次新建连接池与 TLS 上下文。
-/// 缓存 `Result` 而不是 `Client`:构造失败时保持原来的错误返回,不用 expect 把
-/// 一次网络初始化失败升级成 panic。
-pub(crate) static PROMO_HTTP: std::sync::OnceLock<Result<reqwest::Client, String>> =
+/// 优惠列表每半小时刷新，复用连接池并把客户端初始化错误交给界面。
+static PROMO_HTTP: std::sync::OnceLock<Result<reqwest::Client, String>> =
     std::sync::OnceLock::new();
 
-pub(crate) fn promo_client() -> Result<&'static reqwest::Client, String> {
+fn promo_client() -> Result<&'static reqwest::Client, String> {
     PROMO_HTTP
         .get_or_init(|| {
             reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(15))
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
-                .map_err(|e| e.to_string())
+                .map_err(|_| "优惠网络客户端初始化失败".into())
         })
         .as_ref()
         .map_err(|e| e.clone())
 }
 
-/// 固定来源的优惠订阅，避免前端跨域请求。
+/// 官网公开优惠列表首页，由后端读取固定地址。
 #[tauri::command]
-pub(crate) async fn fetch_promo_feed() -> Result<String, String> {
+pub(crate) async fn fetch_promo_page() -> Result<String, String> {
+    const MAX_BYTES: usize = 2_000_000;
     let client = promo_client()?;
-    let response = client.get("https://www.aipromonow.com/rss.xml")
-        .send().await.map_err(|e| e.to_string())?
-        .error_for_status().map_err(|e| e.to_string())?;
-    if response.content_length().unwrap_or(0) > 2_000_000 { return Err("订阅内容过大".into()); }
-    let text = response.text().await.map_err(|e| e.to_string())?;
-    if text.len() > 2_000_000 { return Err("订阅内容过大".into()); }
-    Ok(text)
+    let mut response = client
+        .get("https://www.aipromonow.com/deals")
+        .send()
+        .await
+        .map_err(|e| if e.is_timeout() { "连接优惠来源超时" } else { "无法连接优惠来源" })?;
+    if !response.status().is_success() {
+        return Err(format!("优惠来源返回 HTTP {}", response.status().as_u16()));
+    }
+    if response.content_length().unwrap_or(0) > MAX_BYTES as u64 {
+        return Err("优惠页面内容过大".into());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| "读取优惠页面失败")? {
+        if chunk.len() > MAX_BYTES - bytes.len() {
+            return Err("优惠页面内容过大".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    String::from_utf8(bytes).map_err(|_| "优惠页面编码无效".into())
 }
 
 #[tauri::command]

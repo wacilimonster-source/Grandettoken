@@ -160,6 +160,10 @@ w.__TAURI__ = {
         return w.__SET_CONFIG_INVOKE(args);
       }
       if (w.__QUIT_INVOKE && cmd === "window_cmd") return w.__QUIT_INVOKE(args);
+      if (cmd === "fetch_promo_page" || cmd === "open_promo_url") {
+        if (!w.__PROMO_INVOKE) throw new Error("优惠用例未设置 IPC 响应");
+        return w.__PROMO_INVOKE(cmd, args);
+      }
       if (cmd === "get_config") return JSON.parse(JSON.stringify(DATA.CFG));
       if (cmd === "get_channels") return JSON.parse(JSON.stringify(DATA.CHANNELS));
       if (cmd === "codex_reset_profile_get" && w.__QUOTA_PROFILE) return w.__QUOTA_PROFILE;
@@ -1501,6 +1505,13 @@ const HARNESS = `
 `;
 
 w.__DATA = DATA;
+const promoCacheKey = "promo-feed-v1";
+const promoOrigin = "https://www.aipromonow.com";
+const oldPromo = { id: "rss-guid", link: promoOrigin + "/promos/existing", title: "原有优惠",
+  description: "", date: "2026-11-20T00:00:00Z" };
+w.localStorage.setItem(promoCacheKey, JSON.stringify({
+  items: [oldPromo], seen: [oldPromo.id], updated: Date.now(), initialized: true,
+}));
 (async () => {
   try {
     const initMarker = "(async function init() {";
@@ -1510,6 +1521,7 @@ w.__DATA = DATA;
       { name: "expiry-ui.js", code: expiryJs },
       { name: "panel-layout.js", code: layoutJs },
       ...quotaFiles,
+      { name: "promo-page.js", code: fs.readFileSync(path.join(SRC, "promo-page.js"), "utf8") },
       ...appList,
       { name: "antigravity.js", code: antigravityJs },
       { name: "google-cloud.js", code: cloudJs },
@@ -1527,6 +1539,52 @@ w.__DATA = DATA;
   if (w.__ASYNC3) await w.__ASYNC3();
 
   const R = w.__R || [];
+  const newLink = promoOrigin + "/promos/new-deal";
+  const promoPage = (urls, count = urls.length) =>
+    '<script type="application/ld+json">' + JSON.stringify([{ "@type": "ItemList",
+      url: promoOrigin + "/deals", numberOfItems: count,
+      itemListElement: urls.map((url, i) => ({ url, name: i === 0 ? "新优惠" : "原有优惠" })),
+    }]) + '</script><div id="promo-new-deal"><p>优惠摘要 &amp; 条件</p></div>';
+  const promoEntry = w.document.getElementById("promoEntry");
+  const promoRefresh = w.document.getElementById("promoRefresh");
+  const promoContent = w.document.getElementById("promoContent");
+  let openedPromo;
+  w.__PROMO_INVOKE = async (cmd, args) => {
+    if (cmd === "open_promo_url") { openedPromo = args.url; return; }
+    return promoPage([newLink, oldPromo.link]);
+  };
+  await promoRefresh.onclick();
+  const snapshot = w.localStorage.getItem(promoCacheKey);
+  const savedPromo = JSON.parse(snapshot);
+  R.push({ name: "优惠页面刷新保留官网顺序并迁移旧已读与日期",
+    ok: promoEntry.textContent.includes("1 条新") && savedPromo.seen.join() === oldPromo.link &&
+      savedPromo.items[0]?.id === newLink && savedPromo.items[1]?.date === oldPromo.date });
+  promoEntry.click();
+  const cachedSnapshot = w.localStorage.getItem(promoCacheKey);
+  const firstPromo = promoContent.querySelector(".promo-item");
+  await firstPromo?.querySelector(".promo-title").onclick();
+  R.push({ name: "优惠摘要以文本显示并能打开官网详情",
+    ok: firstPromo?.querySelector(".promo-text").textContent === "优惠摘要 & 条件" &&
+      !firstPromo.querySelector(".promo-date") && openedPromo === newLink });
+  for (const [label, response, message] of [
+    ["上游 410", () => { throw "优惠来源返回 HTTP 410"; }, "HTTP 410"],
+    ["列表被截断", () => promoPage([newLink], 2), "列表格式异常"],
+    ["外部链接", () => promoPage(["https://example.org/promos/new-deal"]), "列表格式异常"],
+  ]) {
+    w.__PROMO_INVOKE = response;
+    await promoRefresh.onclick();
+    R.push({ name: "优惠刷新保留缓存及失败提示：" + label,
+      ok: promoContent.querySelector(".promo-meta")?.textContent.includes(message) &&
+        promoContent.querySelectorAll(".promo-item").length === 2 &&
+        w.localStorage.getItem(promoCacheKey) === cachedSnapshot && !promoRefresh.disabled });
+  }
+  w.__PROMO_INVOKE = async () => promoPage([newLink]);
+  await promoRefresh.onclick();
+  R.push({ name: "优惠刷新重试成功后清除失败状态",
+    ok: !promoContent.querySelector(".promo-meta") && promoContent.querySelectorAll(".promo-item").length === 1 });
+  delete w.__PROMO_INVOKE;
+  w.document.getElementById("promoBack").click();
+
   const keysBtn = w.document.getElementById("lkKeys");
   const quit = w.document.getElementById("lkQuit");
   R.push({ name: "退出直接显示在设置旁",

@@ -618,7 +618,7 @@ pub fn run() {
             download::download_link,
             model_cmds::open_path,
             model_cmds::open_url,
-            model_cmds::fetch_promo_feed,
+            model_cmds::fetch_promo_page,
             model_cmds::open_promo_url,
             model_cmds::diag_log_info,
             model_cmds::diag_log_tail,
