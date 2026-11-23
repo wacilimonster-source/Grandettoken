@@ -57,6 +57,7 @@ pub fn name_prefix(source: &str) -> &'static str {
         "4sapi" => OUR_NAME_PREFIX,
         "hapi" => "HP-",
         "opencode-go" => "OG ",
+        "gateway" => "GW-",
         _ => OUR_NAME_PREFIX,
     }
 }
@@ -79,50 +80,6 @@ pub fn display_name_of(source: &str, id: &str) -> String {
     }
 }
 
-/// 目录里那个模型的人话名字(`deepseek-v4.1-flash` → `DeepSeek V4.1 Flash`)。
-/// 单独列一份:目录 json 里的 `name` 字段不能拿来算,只能照抄(见 `DSH_CATALOG`)。
-fn catalog_display(id: &str) -> String {
-    CATALOG_DISPLAY
-        .iter()
-        .find(|(k, _)| *k == id)
-        .map(|(_, v)| (*v).to_string())
-        .unwrap_or_else(|| id.to_string())
-}
-
-/// pi-ai 目录里的模型显示名(`name` 字段),照抄。
-const CATALOG_DISPLAY: &[(&str, &str)] = &[
-    ("claude-haiku-5-5", "Claude Haiku 5.5"),
-    ("minimax-m3", "MiniMax-M3"),
-    ("qwen3.7-plus", "Qwen3.7 Plus"),
-    ("qwen3.8-flash", "Qwen3.8 Flash"),
-    ("qwen3.8-max", "Qwen3.8 Max"),
-    ("deepseek-v4-flash", "DeepSeek V4 Flash"),
-    ("deepseek-v4-flash-vision-exp", "DeepSeek V4 Flash Vision Exp"),
-    ("deepseek-v4-pro", "DeepSeek V4 Pro (New)"),
-    ("deepseek-v4.1-flash", "DeepSeek V4.1 Flash"),
-    ("glm-5.2", "GLM-5.2"),
-    ("glm-5.3", "GLM-5.3"),
-    ("glm-5.3-flash", "GLM-5.3-Flash"),
-    ("hy3", "Hy3"),
-    ("hy4-preview", "Hy4 preview"),
-    ("kimi-k2.7-code", "Kimi K2.7 Code"),
-    ("kimi-k3", "Kimi K3"),
-    ("longcat-2.0", "LongCat-2.0"),
-    ("longcat-2.5-preview-free", "LongCat 2.5 Preview Free"),
-    ("mimo-v2.5", "MiMo V2.5"),
-    ("mimo-v2.5-pro", "MiMo V2.5 Pro"),
-    ("mimo-v2.6-flash", "MiMo-V2.6-Flash"),
-    ("mimo-v2.6-pro", "MiMo-V2.6-Pro"),
-    ("minimax-m2.7", "MiniMax-M2.7"),
-    ("space-bunny", "Space Bunny"),
-    ("gpt-5.6-luna", "GPT-5.6 Luna"),
-    ("gpt-6-luna", "GPT-6 Luna"),
-    ("grok-4.6", "Grok 4.6"),
-    ("grok-4.7", "Grok 4.7"),
-    ("muse-spark-1.2-contributor", "Muse Spark 1.2 Contributor"),
-    ("muse-spark-1.3-contributor", "Muse Spark 1.3 Contributor"),
-];
-
 /// WorkBuddy settings.json 里选中项的键名(两版客户端一致)。
 const WB_SELECTION_KEY: &str = "model";
 
@@ -136,15 +93,21 @@ pub enum Client {
     WorkbuddyAi,
     Zcode,
     Dsh,
+    ClaudeCode,
+    Codex,
+    OpenCode,
 }
 
 impl Client {
-    pub const ALL: [Client; 5] = [
+    pub const ALL: [Client; 8] = [
         Client::Trae,
         Client::Workbuddy,
         Client::WorkbuddyAi,
         Client::Zcode,
         Client::Dsh,
+        Client::ClaudeCode,
+        Client::Codex,
+        Client::OpenCode,
     ];
 
     /// 界面上的短标签(模型行里那几个小按钮)。
@@ -155,6 +118,9 @@ impl Client {
             Client::WorkbuddyAi => "WBA",
             Client::Zcode => "ZC",
             Client::Dsh => "DSH",
+            Client::ClaudeCode => "CC",
+            Client::Codex => "CX",
+            Client::OpenCode => "OC",
         }
     }
 
@@ -165,6 +131,9 @@ impl Client {
             Client::WorkbuddyAi => "WorkBuddy AI",
             Client::Zcode => "ZCode",
             Client::Dsh => "DeepSeek Harness",
+            Client::ClaudeCode => "Claude Code",
+            Client::Codex => "Codex",
+            Client::OpenCode => "OpenCode",
         }
     }
 
@@ -175,6 +144,9 @@ impl Client {
             Client::WorkbuddyAi => "workbuddy-ai",
             Client::Zcode => "zcode",
             Client::Dsh => "dsh",
+            Client::ClaudeCode => "claude-code",
+            Client::Codex => "codex",
+            Client::OpenCode => "opencode",
         }
     }
 
@@ -185,21 +157,24 @@ impl Client {
     /// 进程名。两个 WorkBuddy 共用 `WorkBuddy.exe`,所以判「在跑」时**互相牵连**:
     /// 分不清跑的是哪一个,就一律按「有一个在跑」处理(保守方向)。
     pub fn process(self) -> &'static str {
+        self.processes()[0]
+    }
+
+    /// 判「在跑」要查的全部进程名,任一命中即算在跑。
+    /// OpenCode 桌面版把 CLI 装成 `opencode-cli.exe`,只查 `opencode.exe` 会漏判。
+    pub fn processes(self) -> &'static [&'static str] {
         match self {
-            Client::Trae => "Trae CN.exe",
-            Client::Workbuddy | Client::WorkbuddyAi => "WorkBuddy.exe",
-            Client::Zcode => "ZCode.exe",
-            Client::Dsh => "DeepSeek Harness.exe",
+            Client::Trae => &["Trae CN.exe"],
+            Client::Workbuddy | Client::WorkbuddyAi => &["WorkBuddy.exe"],
+            Client::Zcode => &["ZCode.exe"],
+            Client::Dsh => &["DeepSeek Harness.exe"],
+            Client::ClaudeCode => &["claude.exe"],
+            Client::Codex => &["codex.exe"],
+            Client::OpenCode => &["opencode.exe", "opencode-cli.exe"],
         }
     }
 
     /// 「目标在跑就不能写」这条规矩适不适用。
-    ///
-    /// 前四家是内存态落盘:边跑边写会在它们退出时被覆盖,所以一律拒写。
-    /// DSH 不一样 —— 它的 profile 按请求解析,配置改动在下一个请求生效;
-    /// 它自己的 settings / credentials 两层都**收敛外部编辑**(配置编辑器在派生候选前
-    /// 先采纳外部改动,凭据存储在同一把写锁下合并行编辑),所以边跑边写是它认的用法,
-    /// 挂件也照这个口径走(见 DESIGN.md 第 12 节「DSH 契约」)。
     pub fn blocks_when_running(self) -> bool {
         !matches!(self, Client::Dsh)
     }
@@ -422,6 +397,8 @@ pub fn sites() -> Vec<Site> {
         }
     }
 
+    out.extend(inject_cli::detect_cli_sites(&mut probed, &is_running));
+
     out
 }
 
@@ -620,6 +597,7 @@ fn protocol_blocked(client: Client, spec: &ModelSpec) -> Option<String> {
     }
     match spec.api_protocol {
         Some(crate::models::ApiProtocol::OpenAiChatCompletions) => None,
+        Some(crate::models::ApiProtocol::AnthropicMessages) if client == Client::ClaudeCode => None,
         Some(protocol) if client == Client::Dsh && protocol.dsh_api().is_some() => None,
         Some(protocol) if client == Client::Dsh => Some(format!(
             "{} 使用 {}，DeepSeek Harness 的自定义接入不支持该协议；本次未写入。",
@@ -830,6 +808,14 @@ mod inject_dsh;
 pub use inject_dsh::CatalogRoute;
 use inject_dsh::*;
 
+#[path = "inject_cli.rs"]
+mod inject_cli;
+use inject_cli::*;
+
+#[path = "inject_gateway.rs"]
+mod inject_gateway;
+pub use inject_gateway::{apply_gateway, preview_gateway, remove_gateway, GatewayInjectSpec};
+
 // ───────────────────────── 取消写入 ─────────────────────────
 
 /// 「取消写入」的预告:要移除哪一条、会不会顺带清掉客户端的选中项。
@@ -945,109 +931,6 @@ fn zcode_removal(site: &Site, spec: &ModelSpec) -> (bool, Option<Removal>) {
             count: 1,
         }),
     )
-}
-
-/// Trae:每个 agent 组各有一条,数一数;顺带看选中项指不指向它。
-fn trae_removal(db: &Path, spec: &ModelSpec) -> (bool, Option<Removal>) {
-    let Ok(conn) = rusqlite::Connection::open_with_flags(
-        db,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    ) else {
-        return (false, None);
-    };
-    let mut keys: Vec<String> = Vec::new();
-    if let Ok(mut stmt) =
-        conn.prepare("SELECT key FROM ItemTable WHERE key LIKE '%AI.agent.model.model_list_map'")
-    {
-        if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
-            keys = rows.flatten().collect();
-        }
-    }
-    let hosts = spec.hosts();
-    let mut count = 0usize;
-    let mut groups = 0usize;
-    for k in &keys {
-        let Ok(raw) = conn.query_row("SELECT value FROM ItemTable WHERE key = ?1", [k], |r| {
-            r.get::<_, String>(0)
-        }) else {
-            continue;
-        };
-        let Ok(v) = serde_json::from_str::<Value>(&raw) else {
-            continue;
-        };
-        if let Some(obj) = v.as_object() {
-            for arr in obj.values() {
-                if let Some(list) = arr.as_array() {
-                    let n = list
-                        .iter()
-                        .filter(|e| trae_is_ours(e, &spec.id, &hosts, &spec.base_url))
-                        .count();
-                    if n > 0 {
-                        count += n;
-                        groups += 1;
-                    }
-                }
-            }
-        }
-    }
-    if count == 0 {
-        return (false, None);
-    }
-    let mut clears = false;
-    if let Some((mk, raw)) = selection_row(&conn) {
-        let _ = mk;
-        if let Ok(sel) = serde_json::from_str::<Value>(&raw) {
-            if let Some(obj) = sel.as_object() {
-                clears = obj.values().any(|e| {
-                    e.get("modelId")
-                        .and_then(|m| m.as_str())
-                        .map(|m| m.contains(&format!("custom_openai_compatible//{}_", spec.id)))
-                        .unwrap_or(false)
-                });
-            }
-        }
-    }
-    (
-        true,
-        Some(Removal {
-            what: format!("{count} 条自定义模型条目(分属 {groups} 个 agent 组)"),
-            clears_selection: clears,
-            count,
-        }),
-    )
-}
-
-/// 一条 Trae 条目是不是我们要找的那条自定义模型。
-///
-/// **还要看它的 base_url 属于哪个来源**:同名模型可能来自不同来源(4SAPI / Hapi / Go),
-/// 删 Hapi 那条时不能把 4SAPI 那条一起删掉。来源判据与 [`wb_is_ours`] 共用
-/// [`url_is_ours`](精确主机名,或整串等于我们会写的那个地址)。
-/// `hosts` 与 `base_url` 都为空 = 不过滤来源(兼容旧调用)。
-fn trae_is_ours(e: &Value, model: &str, hosts: &[String], base_url: &str) -> bool {
-    if e.get("provider").and_then(|p| p.as_str()) != Some("custom_openai_compatible") {
-        return false;
-    }
-    if e.get("display_name").and_then(|d| d.as_str()) != Some(model) {
-        return false;
-    }
-    if hosts.is_empty() && base_url.is_empty() {
-        return true;
-    }
-    let url = e.get("base_url").and_then(|u| u.as_str()).unwrap_or("");
-    url_is_ours(url, hosts, base_url)
-}
-
-/// Trae 的选中项那一行(键名 + 值)。
-fn selection_row(conn: &rusqlite::Connection) -> Option<(String, String)> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT key, value FROM ItemTable \
-             WHERE key LIKE '%recent_user_selection_by_agent_label'",
-        )
-        .ok()?;
-    let mut rows = stmt.query([]).ok()?;
-    let row = rows.next().ok()??;
-    Some((row.get(0).ok()?, row.get(1).ok()?))
 }
 
 fn remove_workbuddy_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, String> {
@@ -1287,166 +1170,6 @@ fn remove_zcode_site(site: &Site, spec: &ModelSpec) -> Result<SiteOutcome, Strin
     Ok(outcome)
 }
 
-fn remove_trae_site(db: &Path, spec: &ModelSpec) -> Result<SiteOutcome, String> {
-    let hosts2 = spec.hosts();
-    let mut conn = rusqlite::Connection::open(db)
-        .map_err(|e| format!("打开 {} 失败(Trae 可能正在运行?): {e}", pretty(db)))?;
-    let keys: Vec<String> = {
-        let mut stmt = conn
-            .prepare(
-                // SQLite 的 LIKE 里 `_` 是单字符通配符,命中范围比看上去宽 ——
-                // 取回后再按字面量复核一遍(报告 P2-9)
-                "SELECT key FROM ItemTable WHERE key LIKE '%AI.agent.model.model_list_map'",
-            )
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map([], |r| r.get::<_, String>(0))
-            .map_err(|e| e.to_string())?;
-        let found: Vec<String> = rows.filter_map(|r| r.ok()).collect();
-        // SQLite 的 LIKE 把 `_` 当单字符通配符,命中范围比意图宽;取回后按字面量再筛一次
-        // (报告 P2-9:模型表被认错时,一次写入能改到不该改的行)
-        found
-            .into_iter()
-            .filter(|k| k.ends_with("AI.agent.model.model_list_map"))
-            .collect()
-    };
-    if keys.is_empty() {
-        return Err("没找到 Trae 的模型表(版本可能变了),本次不写".into());
-    }
-    // 与写入同理:摘条目 + 摘选中项必须一起成事或一起不作废
-    let tx = conn
-        .transaction()
-        .map_err(|e| format!("{} 开启事务失败(Trae 可能正在运行?): {e}", pretty(db)))?;
-
-    let mut outcome = SiteOutcome::default();
-    for k in &keys {
-        let raw: String = tx
-            .query_row("SELECT value FROM ItemTable WHERE key = ?1", [k], |r| {
-                r.get(0)
-            })
-            .map_err(|e| format!("读 {k} 失败: {e}"))?;
-        let mut v: Value = serde_json::from_str(&raw)
-            .map_err(|e| format!("解析 {k} 失败(结构可能已变,本次不写): {e}"))?;
-        let mut changed = false;
-        if let Some(obj) = v.as_object_mut() {
-            for arr in obj.values_mut() {
-                if let Some(list) = arr.as_array_mut() {
-                    let before = list.len();
-                    list.retain(|e| !trae_is_ours(e, &spec.id, &hosts2, &spec.base_url));
-                    let removed = before - list.len();
-                    if removed > 0 {
-                        outcome.removed += removed;
-                        changed = true;
-                    }
-                }
-            }
-        }
-        if changed {
-            let text = serde_json::to_string(&v).map_err(|e| e.to_string())?;
-            tx.execute(
-                "UPDATE ItemTable SET value = ?1 WHERE key = ?2",
-                rusqlite::params![text, k.as_str()],
-            )
-            .map_err(|e| format!("写 {k} 失败: {e}"))?;
-        }
-    }
-
-    // 选中项正指向这条模型就把它摘掉(那个 agent 回到"没选"的状态)
-    if let Some((k, raw)) = selection_row(&tx) {
-        if let Ok(mut sel) = serde_json::from_str::<Value>(&raw) {
-            let mut changed = false;
-            if let Some(obj) = sel.as_object_mut() {
-                let hit: Vec<String> = obj
-                    .iter()
-                    .filter(|(_, e)| {
-                        e.get("modelId")
-                            .and_then(|m| m.as_str())
-                            .map(|m| m.contains(&format!("custom_openai_compatible//{}_", spec.id)))
-                            .unwrap_or(false)
-                    })
-                    .map(|(a, _)| a.clone())
-                    .collect();
-                for a in hit {
-                    obj.remove(&a);
-                    changed = true;
-                    outcome.clears_selection = true;
-                }
-            }
-            if changed {
-                let text = serde_json::to_string(&sel).map_err(|e| e.to_string())?;
-                tx.execute(
-                    "UPDATE ItemTable SET value = ?1 WHERE key = ?2",
-                    rusqlite::params![text, k.as_str()],
-                )
-                .map_err(|e| format!("写选中项失败: {e}"))?;
-            }
-        }
-    }
-
-    tx.commit()
-        .map_err(|e| format!("提交事务失败(本次改动已回滚): {e}"))?;
-    Ok(outcome)
-}
-
-/// 从盘上读回 Trae 的模型表,统计「数组组数」与「其中有我们这条的组数」。
-/// 打不开库 / 解不出 JSON 一律 None(让调用方判失败),结构不是对象的行按写入侧同样的口径跳过。
-fn trae_read_back(db: &Path, spec: &ModelSpec) -> Option<(usize, usize)> {
-    let hosts = spec.hosts();
-    let conn = rusqlite::Connection::open(db).ok()?;
-    let keys: Vec<String> = {
-        let mut stmt = conn
-            .prepare(
-                // SQLite 的 LIKE 里 `_` 是单字符通配符,命中范围比看上去宽 ——
-                // 取回后再按字面量复核一遍(报告 P2-9)
-                "SELECT key FROM ItemTable WHERE key LIKE '%AI.agent.model.model_list_map'",
-            )
-            .ok()?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0)).ok()?;
-        let found: Vec<String> = rows.filter_map(|r| r.ok()).collect();
-        // SQLite 的 LIKE 把 `_` 当单字符通配符,命中范围比意图宽;取回后按字面量再筛一次
-        // (报告 P2-9:模型表被认错时,一次写入能改到不该改的行)
-        found
-            .into_iter()
-            .filter(|k| k.ends_with("AI.agent.model.model_list_map"))
-            .collect()
-    };
-    let (mut arrays, mut ours) = (0usize, 0usize);
-    for k in &keys {
-        let Ok(raw) = conn.query_row("SELECT value FROM ItemTable WHERE key = ?1", [k], |r| {
-            r.get::<_, String>(0)
-        }) else {
-            return None;
-        };
-        let Ok(v) = serde_json::from_str::<Value>(&raw) else {
-            continue;
-        };
-        let Some(groups) = v.as_object() else { continue };
-        for arr in groups.values() {
-            let Some(list) = arr.as_array() else { continue };
-            arrays += 1;
-            if list.iter().any(|e| trae_is_ours(e, &spec.id, &hosts, &spec.base_url)) {
-                ours += 1;
-            }
-        }
-    }
-    Some((arrays, ours))
-}
-
-/// 写入后的读回校验(共同前提第④条):每个 agent 组都必须有我们这条。
-fn trae_verify_written(db: &Path, spec: &ModelSpec) -> bool {
-    matches!(trae_read_back(db, spec), Some((a, o)) if a > 0 && o == a)
-}
-
-/// 移除后的读回校验:任何组里都不该再留着我们这条。
-fn trae_verify_removed(db: &Path, spec: &ModelSpec) -> bool {
-    matches!(trae_read_back(db, spec), Some((_, 0)))
-}
-
-/// 盘上到底有没有我们这条 —— 用来守住「本来就没有就别写盘、也别建备份目录」。
-fn trae_has_ours(db: &Path, spec: &ModelSpec) -> bool {
-    matches!(trae_read_back(db, spec), Some((_, o)) if o > 0)
-}
-
 /// 取消写入:把这条模型从客户端里删掉。规矩与写入完全一样
 /// (目标没运行 / 先备份 / 只动我们的条目 / 写完读回校验,不过就回滚)。
 pub fn remove(client: Client, spec: &ModelSpec) -> Result<Vec<Report>, String> {
@@ -1467,6 +1190,7 @@ pub fn remove(client: Client, spec: &ModelSpec) -> Result<Vec<Report>, String> {
             site_readable(&site).map_err(|e| format!("{}: {e}", site.label))?;
             let stamp = stamp0.clone();
             let (client_id, label) = (cid.clone(), lbl.clone());
+            let cli_cfg = CliTargetConfig::from_model_spec(spec);
             let o = match client {
             Client::Workbuddy | Client::WorkbuddyAi => remove_workbuddy_site(&site, spec)?,
             Client::Zcode => remove_zcode_site(&site, spec)?,
@@ -1497,6 +1221,9 @@ pub fn remove(client: Client, spec: &ModelSpec) -> Result<Vec<Report>, String> {
                 }
             }
             Client::Dsh => remove_dsh_site(&site, spec)?,
+            Client::ClaudeCode => remove_claude_code_site(&site, &cli_cfg)?,
+            Client::Codex => remove_codex_site(&site)?,
+            Client::OpenCode => remove_opencode_site(&site, &cli_cfg)?,
         };
             local.push(Report {
                 client: client_id,
@@ -1510,6 +1237,8 @@ pub fn remove(client: Client, spec: &ModelSpec) -> Result<Vec<Report>, String> {
             selected: false,
             effect: if client == Client::Dsh {
                 "DSH 下一个请求就不在列表里了(不用重启)".to_string()
+            } else if matches!(client, Client::ClaudeCode | Client::Codex | Client::OpenCode) {
+                format!("下一个 {} 会话生效", site.label)
             } else {
                 format!("重启 {} 后这条模型不再出现在列表里", site.label)
             },
@@ -1612,6 +1341,16 @@ fn site_readable(site: &Site) -> Result<(), String> {
             }
             Ok(())
         }
+        Client::ClaudeCode => claude_site_readable(site),
+        Client::Codex => {
+            let cfg_toml = site.root.join("config.toml");
+            if cfg_toml.exists() {
+                std::fs::read_to_string(&cfg_toml)
+                    .map_err(|e| format!("读 {} 失败: {e}", pretty(&cfg_toml)))?;
+            }
+            Ok(())
+        }
+        Client::OpenCode => opencode_site_readable(site),
     }
 }
 
@@ -1626,7 +1365,11 @@ fn wb_read(site: &Site) -> (Vec<ConfiguredModel>, Option<String>) {
                 .filter_map(|e| {
                     let url = e.get("url").and_then(|u| u.as_str()).unwrap_or("");
                     // 来源由地址决定;认不出地址的条目靠名字前缀仍算我们写的,但来源留空
-                    let src = crate::models::source_of_url(url).map(String::from);
+                    let src = if is_local_gateway_url(url) {
+                        Some("gateway".to_string())
+                    } else {
+                        crate::models::source_of_url(url).map(String::from)
+                    };
                     let named = e
                         .get("name")
                         .and_then(|n| n.as_str())
@@ -1882,6 +1625,18 @@ pub fn preview(client: Client, spec: &ModelSpec, opts: &Opts) -> Vec<Preview> {
                         );
                     }
                 }
+                Client::ClaudeCode => {
+                    let cli_cfg = CliTargetConfig::from_model_spec(spec);
+                    claude_preview(&site, &cli_cfg, &mut p);
+                }
+                Client::Codex => {
+                    let cli_cfg = CliTargetConfig::from_model_spec(spec);
+                    codex_preview(&site, &cli_cfg, &mut p);
+                }
+                Client::OpenCode => {
+                    let cli_cfg = CliTargetConfig::from_model_spec(spec);
+                    opencode_preview(&site, &cli_cfg, &mut p);
+                }
             }
             p
         })
@@ -2024,6 +1779,35 @@ pub fn apply(client: Client, spec: &ModelSpec, opts: &Opts) -> Result<Vec<Report
                     error: None,
                 });
             }
+            Client::ClaudeCode | Client::Codex | Client::OpenCode => {
+                let cli_cfg = CliTargetConfig::from_model_spec(spec);
+                let o = match client {
+                    Client::ClaudeCode => write_claude_code_site(&site, &cli_cfg)?,
+                    Client::Codex => write_codex_site(&site, &cli_cfg)?,
+                    Client::OpenCode => write_opencode_site(&site, &cli_cfg)?,
+                    _ => unreachable!(),
+                };
+                local.push(Report {
+                    client: client_id,
+                    label,
+                    stamp,
+                    backup: pretty(&o.backup),
+                    backup_path: o.backup.to_string_lossy().to_string(),
+                    added: o.added,
+                    updated: o.updated,
+                    removed: 0,
+                    selected: o.selected,
+                    effect: format!("打开或重启 {} 后立即生效", site.label),
+                    notes: {
+                        let mut n = o.notes;
+                        if o.same {
+                            n.push("内容和盘上一致,这次没有改动文件。".into());
+                        }
+                        n
+                    },
+                    error: None,
+                });
+            }
             }
             Ok(())
         })();
@@ -2076,6 +1860,9 @@ pub fn state(learned: &HashMap<String, String>) -> Vec<ClientState> {
             }
             st.installed = true;
             st.running = mine.iter().any(|s| s.running);
+            if let Some(s) = mine.iter().find(|s| s.running) {
+                st.process = s.process.clone();
+            }
             st.roots = mine.iter().map(|s| pretty(&s.root)).collect();
             st.files = mine
                 .iter()
@@ -2137,10 +1924,14 @@ pub fn state(learned: &HashMap<String, String>) -> Vec<ClientState> {
                                     .filter_map(|(_, v)| {
                                         // provider 名 = 来源名,据此反查来源
                                         let name = v.get("name").and_then(|n| n.as_str())?;
-                                        let src = crate::models::SOURCES
-                                            .iter()
-                                            .find(|d| d.name == name)
-                                            .map(|d| d.id.to_string())?;
+                                        let src = if name == "Grandettoken 本地网关" {
+                                            "gateway".to_string()
+                                        } else {
+                                            crate::models::SOURCES
+                                                .iter()
+                                                .find(|d| d.name == name)
+                                                .map(|d| d.id.to_string())?
+                                        };
                                         let ids: Vec<String> = v
                                             .get("models")
                                             .and_then(|x| x.as_object())
@@ -2218,9 +2009,13 @@ pub fn state(learned: &HashMap<String, String>) -> Vec<ClientState> {
                                                         .get("base_url")
                                                         .and_then(|u| u.as_str())
                                                         .unwrap_or("");
-                                                    let src = crate::models::source_of_url(url)
-                                                        .unwrap_or("")
-                                                        .to_string();
+                                                    let src = if is_local_gateway_url(url) {
+                                                        "gateway".to_string()
+                                                    } else {
+                                                        crate::models::source_of_url(url)
+                                                            .unwrap_or("")
+                                                            .to_string()
+                                                    };
                                                     if !st.models
                                                         .iter()
                                                         .any(|x| x.id == d && x.source == src)
@@ -2261,6 +2056,10 @@ pub fn state(learned: &HashMap<String, String>) -> Vec<ClientState> {
                     st.note = Some(
                         "边跑边写:DSH 的 profile 按请求解析,不用退出它。默认模型只读不写".into(),
                     );
+                }
+                Client::ClaudeCode | Client::Codex | Client::OpenCode => {
+                    cli_read_state(c, &mine, &mut st);
+                    st.models.sort_by(|a, b| a.id.cmp(&b.id));
                 }
             }
             st

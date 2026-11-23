@@ -624,3 +624,48 @@ where
     Ok(dir)
 }
 
+/// 目录里那个模型的人话名字(`deepseek-v4.1-flash` → `DeepSeek V4.1 Flash`)。
+/// 单独列一份:目录 json 里的 `name` 字段不能拿来算,只能照抄(见 `DSH_CATALOG`)。
+pub(super) fn catalog_display(id: &str) -> String {
+    CATALOG_DISPLAY
+        .iter()
+        .find(|(k, _)| *k == id)
+        .map(|(_, v)| (*v).to_string())
+        .unwrap_or_else(|| id.to_string())
+}
+
+/// pi-ai 目录里的模型显示名(`name` 字段),照抄。
+const CATALOG_DISPLAY: &[(&str, &str)] = &[
+    ("claude-haiku-5-5", "Claude Haiku 5.5"),
+    ("minimax-m3", "MiniMax-M3"),
+    ("qwen3.7-plus", "Qwen3.7 Plus"),
+    ("qwen3.8-flash", "Qwen3.8 Flash"),
+    ("qwen3.8-max", "Qwen3.8 Max"),
+    ("deepseek-v4-flash", "DeepSeek V4 Flash"),
+    ("deepseek-v4-flash-vision-exp", "DeepSeek V4 Flash Vision Exp"),
+    ("deepseek-v4-pro", "DeepSeek V4 Pro (New)"),
+    ("deepseek-v4.1-flash", "DeepSeek V4.1 Flash"),
+    ("glm-5.2", "GLM-5.2"),
+    ("glm-5.3", "GLM-5.3"),
+    ("glm-5.3-flash", "GLM-5.3-Flash"),
+    ("hy3", "Hy3"),
+    ("hy4-preview", "Hy4 preview"),
+    ("kimi-k2.7-code", "Kimi K2.7 Code"),
+    ("kimi-k3", "Kimi K3"),
+    ("longcat-2.0", "LongCat-2.0"),
+    ("longcat-2.5-preview-free", "LongCat 2.5 Preview Free"),
+    ("mimo-v2.5", "MiMo V2.5"),
+    ("mimo-v2.5-pro", "MiMo V2.5 Pro"),
+    ("mimo-v2.6-flash", "MiMo-V2.6-Flash"),
+    ("mimo-v2.6-pro", "MiMo-V2.6-Pro"),
+    ("minimax-m2.7", "MiniMax-M2.7"),
+    ("space-bunny", "Space Bunny"),
+    ("gpt-5.6-luna", "GPT-5.6 Luna"),
+    ("gpt-6-luna", "GPT-6 Luna"),
+    ("grok-4.6", "Grok 4.6"),
+    ("grok-4.7", "Grok 4.7"),
+    ("muse-spark-1.2-contributor", "Muse Spark 1.2 Contributor"),
+    ("muse-spark-1.3-contributor", "Muse Spark 1.3 Contributor"),
+];
+
+

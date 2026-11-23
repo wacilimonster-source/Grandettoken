@@ -9,7 +9,8 @@
 #gatewayBox .gw-nav-tab small{padding:0 calc(5px*var(--u));border-radius:999px;background:var(--bg3);color:var(--tx3);font-size:max(11px,calc(11px*var(--u)))}
 #gatewayBox .gw-nav-tab.is-active{background:color-mix(in srgb,var(--ac) 16%,var(--bg3));color:var(--tx);font-weight:600}
 #gatewayBox .gw-nav-tab.is-active small{color:var(--ac)}
-#gatewayBox .gw-tab-pane{display:grid;gap:calc(12px*var(--u));min-width:0}
+/* 隐式 auto 轨道会被账本表格的 nowrap 最小内容撑宽整个 pane，必须钉死单列 */
+#gatewayBox .gw-tab-pane{display:grid;grid-template-columns:minmax(0,1fr);gap:calc(12px*var(--u));min-width:0}
 #gatewayBox .gw-tab-pane[hidden]{display:none}
 #gatewayBox .gw-overview,#gatewayBox .gw-section{min-width:0}
 #gatewayBox .gw-overview-head{display:flex;align-items:center;justify-content:space-between;gap:calc(10px*var(--u));padding-bottom:calc(10px*var(--u))}
@@ -143,4 +144,37 @@
 #gatewayBox .gw-adv-checks{display:flex;flex-wrap:wrap;gap:calc(10px*var(--u))}
 #gatewayBox .gw-empty-note{color:var(--tx3);font-size:max(12px,calc(12px*var(--u)))}
 #gatewayBox summary:focus-visible{outline:2px solid var(--ac);outline-offset:2px;border-radius:calc(4px*var(--u))}
-@media(max-width:480px){#gatewayBox .gw-kind-tabs,#gatewayBox .gw-add,#gatewayBox .gw-edit-grid,#gatewayBox .gw-model-checklist,#gatewayBox .gw-vault-picker-row{grid-template-columns:minmax(0,1fr)}}
+#gatewayBox .gw-adv-group-card{display:grid;gap:calc(8px*var(--u))}
+#gatewayBox .gw-adv-card-head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:calc(8px*var(--u))}
+#gatewayBox .gw-adv-card-head>div{display:flex;align-items:center;flex-wrap:wrap;gap:calc(6px*var(--u));min-width:0}
+#gatewayBox .gw-adv-chips{display:flex;flex-wrap:wrap;gap:calc(6px*var(--u))}
+#gatewayBox .gw-target-pill{padding:calc(2px*var(--u)) calc(8px*var(--u));border-radius:calc(6px*var(--u));border:1px solid var(--line);background:var(--bg);color:var(--tx2);font-size:max(11.5px,calc(11.5px*var(--u)))}
+#gatewayBox .gw-target-pill.is-cooling{border-color:var(--bad);color:var(--bad)}
+#gatewayBox .gw-adv-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:calc(8px*var(--u))}
+#gatewayBox .gw-adv-grid>label{display:grid;gap:calc(4px*var(--u));color:var(--tx2);font-size:max(12px,calc(12px*var(--u)));min-width:0}
+#gatewayBox .gw-adv-check{display:flex;align-items:center;gap:calc(7px*var(--u));color:var(--tx2);font-size:max(12px,calc(12px*var(--u)));cursor:pointer}
+#gatewayBox .gw-adv-targets{display:grid;gap:calc(6px*var(--u));margin-top:calc(10px*var(--u));padding-top:calc(8px*var(--u));border-top:1px solid var(--line)}
+#gatewayBox .gw-adv-target-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:calc(8px*var(--u));padding:calc(5px*var(--u)) calc(8px*var(--u));border:1px solid var(--line);border-radius:calc(6px*var(--u));background:var(--bg)}
+#gatewayBox .gw-adv-idx{color:var(--tx3);font-size:max(11.5px,calc(11.5px*var(--u)))}
+#gatewayBox .gw-adv-add-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:calc(8px*var(--u));align-items:center;margin-top:calc(4px*var(--u))}
+#gatewayBox .gw-adv-actions{display:flex;justify-content:flex-end;gap:calc(8px*var(--u));margin-top:calc(10px*var(--u))}
+#gatewayBox .gw-adv-kpi-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:calc(8px*var(--u))}
+#gatewayBox .gw-adv-kpi{padding:calc(8px*var(--u)) calc(10px*var(--u));border:1px solid var(--line);border-radius:calc(8px*var(--u));background:var(--bg);display:grid;gap:calc(3px*var(--u))}
+#gatewayBox .gw-adv-kpi span,#gatewayBox .gw-adv-kpi small{color:var(--tx3);font-size:max(11.5px,calc(11.5px*var(--u)))}
+#gatewayBox .gw-adv-kpi b{color:var(--tx);font-size:max(14px,calc(14px*var(--u)))}
+#gatewayBox .gw-adv-table-wrap{overflow:auto;max-height:calc(220px*var(--u))}
+#gatewayBox .gw-adv-table{width:100%;border-collapse:collapse;font-size:max(11.5px,calc(11.5px*var(--u)))}
+#gatewayBox .gw-adv-table th,#gatewayBox .gw-adv-table td{padding:calc(5px*var(--u)) calc(6px*var(--u));border-bottom:1px solid var(--line);text-align:left;color:var(--tx2);white-space:nowrap}
+#gatewayBox .gw-adv-table th{color:var(--tx3);font-weight:500}
+#gatewayBox .gw-adv-client-list{display:grid;gap:calc(6px*var(--u));margin-top:calc(8px*var(--u))}
+#gatewayBox .gw-adv-client-row{display:flex;align-items:center;justify-content:space-between;gap:calc(8px*var(--u));padding:calc(7px*var(--u)) calc(9px*var(--u));border:1px solid var(--line);border-radius:calc(8px*var(--u));background:var(--bg)}
+#gatewayBox .gw-adv-client-info{display:flex;align-items:center;flex-wrap:wrap;gap:calc(6px*var(--u));min-width:0}
+#gatewayBox .gw-adv-client-note{display:block;width:100%;color:var(--tx3);font-size:max(11px,calc(11px*var(--u)))}
+#gatewayBox .gw-adv-preview-box,#gatewayBox .gw-adv-report-box{margin-top:calc(10px*var(--u));padding:calc(9px*var(--u));border:1px solid var(--ac);border-radius:calc(8px*var(--u));background:var(--bg);display:grid;gap:calc(6px*var(--u))}
+#gatewayBox .gw-adv-preview-item{display:grid;gap:calc(3px*var(--u));padding-bottom:calc(6px*var(--u));border-bottom:1px dashed var(--line)}
+#gatewayBox .gw-adv-log-list{display:grid;gap:calc(5px*var(--u));margin-top:calc(8px*var(--u))}
+#gatewayBox .gw-adv-log-row{display:flex;align-items:center;justify-content:space-between;gap:calc(8px*var(--u));font-size:max(11.5px,calc(11.5px*var(--u)));color:var(--tx2)}
+#gatewayBox .gw-adv-checks-col{display:grid;gap:calc(6px*var(--u));margin-top:calc(8px*var(--u))}
+#gatewayBox .gw-adv-checks-col>label:last-child{display:grid;gap:calc(4px*var(--u));color:var(--tx2);font-size:max(12px,calc(12px*var(--u)))}
+#gatewayBox .gw-badge.is-err{border-color:var(--bad);color:var(--bad)}
+@media(max-width:480px){#gatewayBox .gw-kind-tabs,#gatewayBox .gw-add,#gatewayBox .gw-edit-grid,#gatewayBox .gw-model-checklist,#gatewayBox .gw-vault-picker-row,#gatewayBox .gw-adv-grid,#gatewayBox .gw-adv-kpi-grid{grid-template-columns:minmax(0,1fr)}}

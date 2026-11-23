@@ -1,17 +1,23 @@
+#[cfg(test)]
+use axum::body::Body;
 use axum::{
-    body::{Body, Bytes},
+    body::Bytes,
     extract::{ConnectInfo, DefaultBodyLimit, Path, State},
     http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
+mod anthropic;
+mod dispatch;
 mod responses;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+#[cfg(test)]
+use std::collections::VecDeque;
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet},
     net::SocketAddr,
     str::FromStr,
     time::{Duration, Instant},
@@ -24,18 +30,22 @@ use crate::gateway_proto::{
         GEMINI_AISTUDIO_MODELS_URL,
     },
     responses::from_chat_request,
-    stream::StreamStats,
+    stream::{extract_usage_details, StreamStats},
     thinking::{normalize_non_stream_response, summarize_non_stream_tools},
     GatewaySourceKind, OpenAiWire,
 };
 
-use crate::gateway::{authorized_with, effective_models, lock, model_id, peer_allowed, Gateway, Published};
+use crate::gateway::{
+    authorized_with, effective_models, lock, model_id, peer_allowed,
+    routing::{group_is_live, group_model_id},
+    Gateway, Published,
+};
 
 const MAX_GEMINI_MODEL_PAGES: usize = 5;
 const MODELS_TIMEOUT_SECS: u64 = 25;
 const CHAT_TIMEOUT_SECS: u64 = 300;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GatewayDiagEntry {
     pub id: u64,
@@ -44,6 +54,16 @@ pub struct GatewayDiagEntry {
     pub channel_alias: String,
     pub source: String,
     pub model: String,
+    #[serde(default)]
+    pub upstream_model: Option<String>,
+    #[serde(default)]
+    pub route_group: Option<String>,
+    #[serde(default)]
+    pub failover_count: u8,
+    #[serde(default)]
+    pub masked_count: usize,
+    #[serde(default)]
+    pub protocol: String,
     pub stream: bool,
     pub status: u16,
     pub latency_ms: u64,
@@ -64,7 +84,15 @@ pub struct GatewayDiagEntry {
     #[serde(default)]
     pub prompt_tokens: Option<u64>,
     #[serde(default)]
+    pub cached_prompt_tokens: Option<u64>,
+    #[serde(default)]
+    pub cache_creation_tokens: Option<u64>,
+    #[serde(default)]
     pub completion_tokens: Option<u64>,
+    #[serde(default)]
+    pub reasoning_tokens: Option<u64>,
+    #[serde(default)]
+    pub estimated_cost_cny: Option<f64>,
     #[serde(default)]
     pub diag_note: Option<String>,
     pub error: Option<String>,
@@ -107,10 +135,14 @@ pub fn build_router(g: Gateway) -> Router {
         .route("/v1/models", get(list_models))
         .route("/v1/models/{*id}", get(get_model))
         .route("/v1/chat/completions", post(chat))
+        .route("/v1/messages", post(anthropic::messages))
+        .route("/v1/messages/count_tokens", post(anthropic::count_tokens))
         // 兼容未在 custom_url 末尾填写 `/v1` 的客户端（例如直接填 http://host:18771）
         .route("/models", get(list_models))
         .route("/models/{*id}", get(get_model))
         .route("/chat/completions", post(chat))
+        .route("/messages", post(anthropic::messages))
+        .route("/messages/count_tokens", post(anthropic::count_tokens))
         .layer(DefaultBodyLimit::max(8 * 1024 * 1024))
         .with_state(g)
 }
@@ -161,15 +193,28 @@ async fn list_models(
     }
     let mut seen = BTreeSet::new();
     let mut data: Vec<Value> = Vec::new();
-    for c in g.live_channels() {
+    let live = g.live_channels();
+    for c in &live {
         let kind = c.kind();
-        for id in effective_models(&c) {
-            let full = model_id(&c, &id);
+        for id in effective_models(c) {
+            let full = model_id(c, &id);
             if seen.insert(full.clone()) {
                 data.push(json!({
                     "id": full,
                     "object": "model",
                     "owned_by": kind.as_str(),
+                }));
+            }
+        }
+    }
+    for gr in &settings.groups {
+        if group_is_live(gr, &live) {
+            let full = group_model_id(&gr.id);
+            if seen.insert(full.clone()) {
+                data.push(json!({
+                    "id": full,
+                    "object": "model",
+                    "owned_by": "routing_group",
                 }));
             }
         }
@@ -190,9 +235,10 @@ async fn get_model(
     if !authorized_with(&headers, &settings, g.access.as_ref()) {
         return json_error(StatusCode::UNAUTHORIZED, "网关密钥无效", "gateway_error", None, None);
     }
-    for c in g.live_channels() {
-        for id in effective_models(&c) {
-            let full = model_id(&c, &id);
+    let live = g.live_channels();
+    for c in &live {
+        for id in effective_models(c) {
+            let full = model_id(c, &id);
             if full == target {
                 return Json(json!({
                     "id": full,
@@ -201,6 +247,16 @@ async fn get_model(
                 }))
                 .into_response();
             }
+        }
+    }
+    for gr in &settings.groups {
+        if group_is_live(gr, &live) && group_model_id(&gr.id) == target {
+            return Json(json!({
+                "id": target,
+                "object": "model",
+                "owned_by": "routing_group",
+            }))
+            .into_response();
         }
     }
     json_error(
@@ -256,12 +312,7 @@ async fn chat(
         }
     };
 
-    let resolved = match resolve_channel_and_model(&g, &requested_model) {
-        Ok(pair) => pair,
-        Err(resp) => return resp,
-    };
-
-    execute_inference_http(&g, resolved.0, &requested_model, &resolved.1, data).await
+    dispatch::handle_openai_chat(&g, &headers, data, &requested_model).await
 }
 
 fn resolve_channel_and_model(
@@ -514,10 +565,15 @@ fn infer_zero_output_note(
     None
 }
 
-fn record_error_diag(
+pub(super) fn record_error_diag_ctx(
     g: &Gateway,
     channel: &Published,
     requested_model: &str,
+    upstream_model: Option<String>,
+    route_group: Option<String>,
+    failover_count: u8,
+    masked_count: usize,
+    protocol: &str,
     stream: bool,
     status: u16,
     started: Instant,
@@ -531,6 +587,11 @@ fn record_error_diag(
         channel_alias: channel.alias.clone(),
         source: channel.kind().as_str().to_string(),
         model: requested_model.to_string(),
+        upstream_model,
+        route_group,
+        failover_count,
+        masked_count,
+        protocol: protocol.to_string(),
         stream,
         status,
         latency_ms: started.elapsed().as_millis() as u64,
@@ -544,12 +605,44 @@ fn record_error_diag(
         tool_call_chars: 0,
         finish_reason: None,
         prompt_tokens: None,
+        cached_prompt_tokens: None,
+        cache_creation_tokens: None,
         completion_tokens: None,
+        reasoning_tokens: None,
+        estimated_cost_cny: None,
         diag_note: None,
         error: Some(redact_secrets(message)),
     });
 }
 
+fn record_error_diag(
+    g: &Gateway,
+    channel: &Published,
+    requested_model: &str,
+    stream: bool,
+    status: u16,
+    started: Instant,
+    transforms: Vec<String>,
+    message: &str,
+) {
+    record_error_diag_ctx(
+        g,
+        channel,
+        requested_model,
+        None,
+        None,
+        0,
+        0,
+        "openai_chat",
+        stream,
+        status,
+        started,
+        transforms,
+        message,
+    );
+}
+
+#[cfg(test)]
 async fn execute_inference_http(
     g: &Gateway,
     channel: Published,
@@ -627,6 +720,7 @@ async fn execute_inference_http(
     }
 }
 
+#[cfg(test)]
 fn build_sse_response(
     channel: Published,
     requested_model: String,
@@ -702,10 +796,15 @@ fn build_sse_response(
     response
 }
 
-fn record_stream_diag(
+pub(super) fn record_stream_diag_with_ctx(
     g: &Gateway,
     channel: &Published,
     requested_model: &str,
+    upstream_model: Option<String>,
+    route_group: Option<String>,
+    failover_count: u8,
+    masked_count: usize,
+    protocol: &str,
     transforms: &[String],
     started: Instant,
     first_byte_ms: Option<u64>,
@@ -732,6 +831,11 @@ fn record_stream_diag(
         channel_alias: channel.alias.clone(),
         source: channel.kind().as_str().to_string(),
         model: requested_model.to_string(),
+        upstream_model,
+        route_group,
+        failover_count,
+        masked_count,
+        protocol: protocol.to_string(),
         stream: true,
         status,
         latency_ms: started.elapsed().as_millis() as u64,
@@ -745,12 +849,17 @@ fn record_stream_diag(
         tool_call_chars: stats.tool_call_chars,
         finish_reason: stats.finish_reason.clone(),
         prompt_tokens: stats.prompt_tokens,
+        cached_prompt_tokens: stats.cached_prompt_tokens,
+        cache_creation_tokens: stats.cache_creation_tokens,
         completion_tokens: stats.completion_tokens,
+        reasoning_tokens: stats.reasoning_tokens,
+        estimated_cost_cny: None,
         diag_note,
         error,
     });
 }
 
+#[cfg(test)]
 async fn build_json_response(
     g: &Gateway,
     channel: &Published,
@@ -780,8 +889,7 @@ async fn build_json_response(
         .and_then(|c| c.get("finish_reason"))
         .and_then(Value::as_str)
         .map(str::to_string);
-    let prompt_tokens = val.pointer("/usage/prompt_tokens").and_then(Value::as_u64);
-    let completion_tokens = val.pointer("/usage/completion_tokens").and_then(Value::as_u64);
+    let usage = extract_usage_details(&val["usage"]);
     let frame_count = val
         .get("choices")
         .and_then(Value::as_array)
@@ -806,6 +914,7 @@ async fn build_json_response(
         channel_alias: channel.alias.clone(),
         source: channel.kind().as_str().to_string(),
         model: requested_model.to_string(),
+        protocol: "openai_chat".into(),
         stream: false,
         status: status.as_u16(),
         latency_ms: started.elapsed().as_millis() as u64,
@@ -818,10 +927,14 @@ async fn build_json_response(
         tool_call_count,
         tool_call_chars,
         finish_reason,
-        prompt_tokens,
-        completion_tokens,
+        prompt_tokens: usage.prompt_tokens,
+        cached_prompt_tokens: usage.cached_prompt_tokens,
+        cache_creation_tokens: usage.cache_creation_tokens,
+        completion_tokens: usage.completion_tokens,
+        reasoning_tokens: usage.reasoning_tokens,
         diag_note,
         error: None,
+        ..Default::default()
     });
 
     (status, Json(val)).into_response()
@@ -1062,8 +1175,9 @@ pub async fn run_test_chat(
                     .pointer("/choices/0/finish_reason")
                     .and_then(Value::as_str)
                     .map(str::to_string);
-                let prompt_tokens = val.pointer("/usage/prompt_tokens").and_then(Value::as_u64);
-                let completion_tokens = val.pointer("/usage/completion_tokens").and_then(Value::as_u64);
+                let usage = extract_usage_details(&val["usage"]);
+                let prompt_tokens = usage.prompt_tokens;
+                let completion_tokens = usage.completion_tokens;
                 let frame_count = val
                     .get("choices")
                     .and_then(Value::as_array)
@@ -1087,6 +1201,8 @@ pub async fn run_test_chat(
                     channel_alias: channel.alias.clone(),
                     source: channel.kind().as_str().to_string(),
                     model: requested_model.clone(),
+                    upstream_model: Some(upstream_model.clone()),
+                    protocol: "openai_chat".into(),
                     stream: false,
                     status,
                     latency_ms: started.elapsed().as_millis() as u64,
@@ -1100,9 +1216,13 @@ pub async fn run_test_chat(
                     tool_call_chars,
                     finish_reason: finish_reason.clone(),
                     prompt_tokens,
+                    cached_prompt_tokens: usage.cached_prompt_tokens,
+                    cache_creation_tokens: usage.cache_creation_tokens,
                     completion_tokens,
+                    reasoning_tokens: usage.reasoning_tokens,
                     diag_note: diag_note.clone(),
                     error: None,
+                    ..Default::default()
                 });
                 guard.disarm();
                 ChatTestResult {
@@ -1344,3 +1464,5 @@ fn classify_upstream_send_error(is_timeout: bool, err: &str) -> (StatusCode, &'s
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod magpie_tests;

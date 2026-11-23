@@ -40,6 +40,7 @@ pub mod qoderweb;
 pub mod recovery;
 pub mod secrets;
 pub mod store;
+pub mod store_gateway;
 pub mod sync;
 pub mod vault;
 pub mod view;

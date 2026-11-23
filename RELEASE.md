@@ -148,7 +148,7 @@ CI 里也会跑同一个脚本,所以本地这步是**二次确认**,不是唯�
 
 ### 6. 同步待验收清单与原生窗口一键回归
 
-- **发版提交前**：把本版新增的待验收项写进 [`docs/report/acceptance-backlog.md`](docs/report/acceptance-backlog.md)；涉及桌面界面 / 窗口几何 / WebView2 行为的改动，先关闭运行中的 `Grandettoken`，再执行一键原生 CDP 回归（脚本会自动拒绝并发实例、按 SHA-256 备份并恢复 `%APPDATA%\com.wacil.tokenscope` 下 `*.db*`/`*.json`、串行跑完 7 项 CDP 验证并输出日志到 `build/qa/native-<YYYY-MM-DD>/`）：
+- **发版提交前**：把本版新增的待验收项写进 [`docs/report/acceptance-backlog.md`](docs/report/acceptance-backlog.md)；涉及桌面界面 / 窗口几何 / WebView2 行为的改动，先关闭运行中的 `Grandettoken`，再执行一键原生 CDP 回归（脚本会自动拒绝并发实例、按 SHA-256 备份并恢复 `%APPDATA%\com.wacil.tokenscope` 下 `*.db*`/`*.json`、串行跑完 8 项 CDP 验证并输出日志到 `build/qa/native-<YYYY-MM-DD>/`）：
   ```powershell
   powershell -NoProfile -ExecutionPolicy Bypass -File build/run-native-checks.ps1
   ```

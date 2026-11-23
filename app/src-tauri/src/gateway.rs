@@ -25,7 +25,7 @@ fn new_channel_id() -> Result<String, String> {
     ))
 }
 
-fn secret() -> Result<String, String> {
+pub(crate) fn secret() -> Result<String, String> {
     match secrets::get(SECRET_KEY)? {
         Some(v) if !v.is_empty() => Ok(v),
         _ => {
@@ -90,7 +90,7 @@ async fn read_key_for_channel(
     Ok(Some(k))
 }
 
-fn get_gateway(app: &tauri::AppHandle) -> Result<tauri::State<'_, Gateway>, String> {
+pub(crate) fn get_gateway(app: &tauri::AppHandle) -> Result<tauri::State<'_, Gateway>, String> {
     app.try_state::<Gateway>().ok_or_else(|| "本地网关未初始化，请检查启动错误并恢复配置后重启".into())
 }
 
@@ -260,6 +260,13 @@ pub async fn gateway_status(app: tauri::AppHandle) -> Result<Value, String> {
             })
         })
         .collect();
+    let now = now_unix();
+    let cooldowns = g.cooldown_snapshots(now);
+    let group_models: Vec<String> = settings
+        .groups
+        .iter()
+        .map(|gr| format!("group/{}", gr.id))
+        .collect();
     Ok(json!({
         "port": settings.port,
         "lan": settings.lan,
@@ -276,6 +283,14 @@ pub async fn gateway_status(app: tauri::AppHandle) -> Result<Value, String> {
         "vault": vault,
         "diagCount": diag_count,
         "syncState": sync_state,
+        "groups": settings.groups,
+        "masking": settings.masking,
+        "cooldowns": cooldowns,
+        "endpoints": {
+            "openaiBaseUrl": format!("http://127.0.0.1:{}/v1", settings.port),
+            "anthropicBaseUrl": format!("http://127.0.0.1:{}", settings.port),
+        },
+        "groupModels": group_models,
     }))
 }
 
@@ -322,6 +337,9 @@ pub async fn gateway_publish(
 ) -> Result<Value, String> {
     let g = get_gateway(&app)?;
     let alias = normalize_alias(&input.alias)?;
+    if alias.eq_ignore_ascii_case("group") {
+        return Err("别名 group 为虚拟路由组保留关键字，请换一个别名".into());
+    }
     let no_upstream_key = input.no_upstream_key.unwrap_or(false);
     let channel_id = match input.channel_id.filter(|s| !s.trim().is_empty()) {
         Some(id) => id,
@@ -460,6 +478,9 @@ pub async fn gateway_update_channel(
 
     if let Some(ref alias_raw) = input.alias {
         let alias = normalize_alias(alias_raw)?;
+        if alias.eq_ignore_ascii_case("group") {
+            return Err("别名 group 为虚拟路由组保留关键字，请换一个别名".into());
+        }
         let inner = lock(&g.inner);
         check_alias_unique(&inner.settings.channels, &channel.channel_id, &alias)?;
         channel.alias = alias;

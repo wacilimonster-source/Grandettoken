@@ -1540,9 +1540,9 @@ w.localStorage.setItem(promoCacheKey, JSON.stringify({
 
   const R = w.__R || [];
   const newLink = promoOrigin + "/promos/new-deal";
-  const promoPage = (urls, count = urls.length) =>
+  const promoPage = (urls, count = urls.length, page = 1) =>
     '<script type="application/ld+json">' + JSON.stringify([{ "@type": "ItemList",
-      url: promoOrigin + "/deals", numberOfItems: count,
+      url: promoOrigin + "/deals" + (page > 1 ? "?page=" + page : ""), numberOfItems: count,
       itemListElement: urls.map((url, i) => ({ url, name: i === 0 ? "新优惠" : "原有优惠" })),
     }]) + '</script><div id="promo-new-deal"><p>优惠摘要 &amp; 条件</p></div>';
   const promoEntry = w.document.getElementById("promoEntry");
@@ -1582,6 +1582,87 @@ w.localStorage.setItem(promoCacheKey, JSON.stringify({
   await promoRefresh.onclick();
   R.push({ name: "优惠刷新重试成功后清除失败状态",
     ok: !promoContent.querySelector(".promo-meta") && promoContent.querySelectorAll(".promo-item").length === 1 });
+
+  // 多页取数:官网首页给出分页链接,末页之后 404,所以只按链接决定取到第几页。
+  const promoPagination = max => Array.from({ length: max - 1 }, (_, i) => `<a href="/deals?page=${i + 2}">${i + 2}</a>`).join("");
+  const brandNewPromo = promoOrigin + "/promos/brand-new";
+  const promoPageUrls = p => Array.from({ length: 10 }, (_, i) => promoOrigin + "/promos/p" + p + "-deal-" + i);
+  const promoRequested = [];
+  const promoSite = ({ max = 18, failPage = 0, dupPage = 0 } = {}) => async (cmd, args) => {
+    if (cmd === "open_promo_url") return;
+    const p = args.page;
+    promoRequested.push(p);
+    if (p === failPage) throw "优惠来源返回 HTTP 500";
+    let urls = promoPageUrls(p);
+    if (p === 1) urls = [brandNewPromo, newLink, ...urls.slice(2)];
+    if (p === dupPage) urls = [promoPageUrls(1)[9], ...urls.slice(1)];
+    return promoPage(urls, urls.length, p) + (max > 1 ? promoPagination(max) : "");
+  };
+  w.document.getElementById("promoBack").click();
+  w.__PROMO_INVOKE = promoSite();
+  promoRequested.length = 0;
+  await promoRefresh.onclick();
+  const pagedSnapshot = w.localStorage.getItem(promoCacheKey);
+  const pagedPromo = JSON.parse(pagedSnapshot);
+  R.push({ name: "优惠取前 3 页:补进的历史优惠不算新,真正的新优惠仍算新",
+    ok: promoRequested.join() === "1,2,3" && pagedPromo.items.length === 30 &&
+      pagedPromo.seen.length === 29 && !pagedPromo.seen.includes(brandNewPromo) &&
+      promoEntry.textContent.includes("1 条新") });
+  promoEntry.click();
+  R.push({ name: "优惠首屏只显示 24 条并给出加载更多",
+    ok: promoContent.querySelectorAll(".promo-item").length === 24 &&
+      promoContent.querySelector(".promo-more")?.textContent.includes("还有 6 条") });
+  promoContent.querySelector(".promo-more").onclick();
+  R.push({ name: "加载更多就地展开剩余优惠且不额外请求上游",
+    ok: promoContent.querySelectorAll(".promo-item").length === 30 &&
+      !promoContent.querySelector(".promo-more") && promoRequested.join() === "1,2,3" });
+  const expandedSnapshot = w.localStorage.getItem(promoCacheKey);
+  w.__PROMO_INVOKE = promoSite({ failPage: 2 });
+  await promoRefresh.onclick();
+  R.push({ name: "优惠后续页失败时整体保留上次完整列表",
+    ok: promoContent.querySelector(".promo-meta")?.textContent.includes("HTTP 500") &&
+      JSON.parse(w.localStorage.getItem(promoCacheKey)).items.length === 30 &&
+      w.localStorage.getItem(promoCacheKey) === expandedSnapshot && !promoRefresh.disabled });
+  w.__PROMO_INVOKE = promoSite({ max: 1 });
+  promoRequested.length = 0;
+  await promoRefresh.onclick();
+  R.push({ name: "官网只有一页时不去请求不存在的页",
+    ok: promoRequested.join() === "1" && !promoContent.querySelector(".promo-meta") &&
+      JSON.parse(w.localStorage.getItem(promoCacheKey)).items.length === 10 });
+  w.__PROMO_INVOKE = promoSite({ dupPage: 2 });
+  await promoRefresh.onclick();
+  const dupPromo = JSON.parse(w.localStorage.getItem(promoCacheKey));
+  R.push({ name: "翻页期间上游新发布造成的跨页重复按首次出现保留",
+    ok: !promoContent.querySelector(".promo-meta") && dupPromo.items.length === 29 &&
+      new Set(dupPromo.items.map(x => x.id)).size === 29 });
+  // 官网中文标题的 slug 是百分号编码、卡片 id 是解码字面(v0.3.73 实机抓出整页刷新失败)
+  const cnSlug = "0-元-开通试用-gemini-ultra-x20";
+  const cnLink = promoOrigin + "/promos/" + encodeURIComponent(cnSlug);
+  const cnPage = '<script type="application/ld+json">' + JSON.stringify([{ "@type": "ItemList",
+    url: promoOrigin + "/deals", numberOfItems: 1,
+    itemListElement: [{ url: cnLink, name: "0 元 开通试用 Gemini Ultra X20" }] }]) +
+    '</script><div id="promo-' + cnSlug + '"><p>中文摘要</p></div>';
+  w.__PROMO_INVOKE = async (cmd, args) => {
+    if (cmd === "open_promo_url") { openedPromo = args.url; return; }
+    return cnPage;
+  };
+  await promoRefresh.onclick();
+  const cnSnapshot = JSON.parse(w.localStorage.getItem(promoCacheKey));
+  promoEntry.click();
+  const cnItem = promoContent.querySelector(".promo-item");
+  R.push({ name: "优惠中文百分号编码 slug 可解析且摘要按解码卡片 id 取到",
+    ok: !promoContent.querySelector(".promo-meta") && cnSnapshot.items.length === 1 &&
+      cnSnapshot.items[0].id === cnLink && cnItem?.querySelector(".promo-text").textContent === "中文摘要" });
+  await cnItem?.querySelector(".promo-title").onclick();
+  R.push({ name: "优惠中文 slug 详情仍打开编码后的官网原链接", ok: openedPromo === cnLink });
+  const cnBefore = w.localStorage.getItem(promoCacheKey);
+  w.__PROMO_INVOKE = async () => '<script type="application/ld+json">' + JSON.stringify([{ "@type": "ItemList",
+    url: promoOrigin + "/deals", numberOfItems: 1,
+    itemListElement: [{ url: promoOrigin + "/promos/" + encodeURIComponent("../evil"), name: "x" }] }]) + '</script>';
+  await promoRefresh.onclick();
+  R.push({ name: "优惠解码后路径穿越仍被拒并保留缓存",
+    ok: promoContent.querySelector(".promo-meta")?.textContent.includes("列表格式异常") &&
+      w.localStorage.getItem(promoCacheKey) === cnBefore });
   delete w.__PROMO_INVOKE;
   w.document.getElementById("promoBack").click();
 

@@ -94,6 +94,16 @@
     if (d.promptTokens != null || d.completionTokens != null) {
       parts.push(`tok ${d.promptTokens ?? "?"}/${d.completionTokens ?? "?"}`);
     }
+    if ((d.cachedPromptTokens || 0) > 0 && (d.promptTokens || 0) > 0) {
+      const pct = Math.round((d.cachedPromptTokens / Math.max(d.promptTokens, d.cachedPromptTokens)) * 100);
+      parts.push(`缓存命中 ${pct}%`);
+    }
+    if ((d.failoverCount || 0) > 0) {
+      parts.push(`切备 ${d.failoverCount}`);
+    }
+    if ((d.maskedCount || 0) > 0) {
+      parts.push(`脱敏 ${d.maskedCount}`);
+    }
     return parts.join(" · ");
   }
 
@@ -614,7 +624,10 @@
     const channels = GW.channels || [];
     const vault = GW.vault || [];
     const baseLocalUrl = `http://127.0.0.1:${GW.port}/v1`;
-    const allLiveModels = channels.filter((c) => !c.stale).flatMap((c) => c.models || []);
+    const allLiveModels = [
+      ...channels.filter((c) => !c.stale).flatMap((c) => c.models || []),
+      ...(GW.groupModels || []),
+    ];
     const catFilter = GW_CATALOG_FILTER.trim().toLowerCase();
     const visibleCatalog = allLiveModels.filter((id) => !catFilter || id.toLowerCase().includes(catFilter));
     const sampleModel = exampleModel();
@@ -636,6 +649,9 @@
         <button type="button" class="gw-nav-tab ${GW_TAB === "channels" ? "is-active" : ""}" data-gw-tab="channels">渠道与接入 <small>${channels.length}</small></button>
         <button type="button" class="gw-nav-tab ${GW_TAB === "tools" ? "is-active" : ""}" data-gw-tab="tools">模型与联调 <small>${allLiveModels.length}</small></button>
         <button type="button" class="gw-nav-tab ${GW_TAB === "network" ? "is-active" : ""}" data-gw-tab="network">网络与示例</button>
+        <button type="button" class="gw-nav-tab ${GW_TAB === "groups" ? "is-active" : ""}" data-gw-tab="groups">路由组 <small>${(GW.groups || []).length}</small></button>
+        <button type="button" class="gw-nav-tab ${GW_TAB === "usage" ? "is-active" : ""}" data-gw-tab="usage">用量账本</button>
+        <button type="button" class="gw-nav-tab ${GW_TAB === "connect" ? "is-active" : ""}" data-gw-tab="connect">接入与安全</button>
       </div>
 
       <div class="gw-tab-pane" data-gw-pane="channels" ${GW_TAB === "channels" ? "" : "hidden"}>
@@ -740,6 +756,10 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
           </div>
         </section>
       </div>
+
+      <div class="gw-tab-pane" data-gw-pane="groups" ${GW_TAB === "groups" ? "" : "hidden"}></div>
+      <div class="gw-tab-pane" data-gw-pane="usage" ${GW_TAB === "usage" ? "" : "hidden"}></div>
+      <div class="gw-tab-pane" data-gw-pane="connect" ${GW_TAB === "connect" ? "" : "hidden"}></div>
     </div>`;
 
     UI.bind(box);
@@ -748,6 +768,25 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
     syncGatewayButtons(box);
     wireRenderedEvents(box, channels, vault);
     renderSyncStatus();
+    window.GatewayAdvanced?.render(box, GW, gwAdvHelpers());
+  }
+
+  function gwAdvHelpers() {
+    return {
+      esc: escHtml,
+      notify,
+      byId,
+      writeGateway,
+      applyStatus(status) {
+        if (!status) return;
+        GW = status;
+        UI.sync(status.syncState);
+        const box = byId("gatewayBox");
+        if (box) renderGateway(snapshotOpenState(box), captureAddDraft());
+      },
+      refreshGateway: (opts) => refreshGatewayData(opts),
+      ui: UI,
+    };
   }
 
   function wireRenderedEvents(box, channels, vault) {
@@ -926,6 +965,7 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
         box.querySelectorAll("[data-gw-pane]").forEach((pane) => {
           pane.hidden = pane.dataset.gwPane !== GW_TAB;
         });
+        window.GatewayAdvanced?.onTabShown(GW_TAB, box, GW, gwAdvHelpers());
         return;
       }
 

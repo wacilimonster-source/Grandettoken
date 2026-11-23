@@ -892,7 +892,7 @@ fn covering_index_is_built_after_key_fp_column_on_old_db() {
         .conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(v, 6, "迁移版本号要推进,否则每次启动都重跑补列");
+    assert_eq!(v, 7, "迁移版本号要推进,否则每次启动都重跑补列");
 }
 
 /// 手动性能基准(不进常规测试):

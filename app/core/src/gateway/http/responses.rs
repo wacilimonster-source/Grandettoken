@@ -70,6 +70,11 @@ pub(super) struct DiagnosticGuard {
     g: Gateway,
     channel: Published,
     model: String,
+    upstream_model: Option<String>,
+    route_group: Option<String>,
+    failover_count: u8,
+    masked_count: usize,
+    protocol: String,
     stream: bool,
     started: Instant,
     transforms: Vec<String>,
@@ -81,8 +86,28 @@ impl DiagnosticGuard {
     pub fn new(g: &Gateway, channel: &Published, model: &str, stream: bool, started: Instant) -> Self {
         let mut channel = channel.clone();
         channel.custom_headers.clear();
-        Self { g: g.clone(), channel, model: model.into(), stream, started,
-            transforms: vec![], first_byte_ms: None, stats: StreamStats::default(), recorded: false }
+        Self { g: g.clone(), channel, model: model.into(), upstream_model: None, route_group: None,
+            failover_count: 0, masked_count: 0, protocol: "openai_chat".into(),
+            stream, started, transforms: vec![], first_byte_ms: None,
+            stats: StreamStats::default(), recorded: false }
+    }
+    pub fn set_context(
+        &mut self,
+        channel: &Published,
+        upstream_model: &str,
+        route_group: Option<String>,
+        failover_count: u8,
+        masked_count: usize,
+        protocol: &str,
+    ) {
+        let mut clean = channel.clone();
+        clean.custom_headers.clear();
+        self.channel = clean;
+        self.upstream_model = Some(upstream_model.to_string());
+        self.route_group = route_group;
+        self.failover_count = failover_count;
+        self.masked_count = masked_count;
+        self.protocol = protocol.to_string();
     }
     pub fn update(&mut self, transforms: &[String], stream: bool) {
         self.transforms = transforms.to_vec();
@@ -97,8 +122,11 @@ impl DiagnosticGuard {
     pub fn disarm(&mut self) { self.recorded = true; }
     pub fn finish_stream(&mut self, stats: &StreamStats, error: Option<String>) {
         if self.recorded { return; }
-        super::record_stream_diag(&self.g, &self.channel, &self.model, &self.transforms,
-            self.started, self.first_byte_ms, stats, error);
+        super::record_stream_diag_with_ctx(
+            &self.g, &self.channel, &self.model, self.upstream_model.clone(),
+            self.route_group.clone(), self.failover_count, self.masked_count, &self.protocol,
+            &self.transforms, self.started, self.first_byte_ms, stats, error,
+        );
         self.disarm();
     }
 }
@@ -110,13 +138,19 @@ impl Drop for DiagnosticGuard {
         self.g.record_diag(super::GatewayDiagEntry {
             id: 0, timestamp: super::now_unix(), channel_id: self.channel.channel_id.clone(),
             channel_alias: self.channel.alias.clone(), source: self.channel.kind().as_str().into(),
-            model: self.model.clone(), stream: self.stream, status: 499,
+            model: self.model.clone(), upstream_model: self.upstream_model.clone(),
+            route_group: self.route_group.clone(), failover_count: self.failover_count,
+            masked_count: self.masked_count, protocol: self.protocol.clone(),
+            stream: self.stream, status: 499,
             latency_ms: self.started.elapsed().as_millis() as u64, first_byte_ms: self.first_byte_ms,
             frame_count: stats.frame_count, transforms: self.transforms.clone(),
             thinking_chars: stats.thinking_chars, content_chars: stats.content_chars, refusal_chars: stats.refusal_chars,
             tool_call_count: stats.tool_call_count, tool_call_chars: stats.tool_call_chars,
             finish_reason: stats.finish_reason.clone(), prompt_tokens: stats.prompt_tokens,
-            completion_tokens: stats.completion_tokens, diag_note: None, error: Some("请求已取消或客户端已断开".into()),
+            cached_prompt_tokens: stats.cached_prompt_tokens, cache_creation_tokens: stats.cache_creation_tokens,
+            completion_tokens: stats.completion_tokens, reasoning_tokens: stats.reasoning_tokens,
+            estimated_cost_cny: None,
+            diag_note: None, error: Some("请求已取消或客户端已断开".into()),
         });
     }
 }

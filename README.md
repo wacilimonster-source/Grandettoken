@@ -126,6 +126,12 @@ consumption(t0,t1) = Σ max(0, remaining[i-1] - remaining[i])
 停止网关可关闭监听，启用局域网时必须使用网关密钥。联调面板显示首字耗时、帧数、工具调用与 token 用量，
 上游返回空流或零输出时给出诊断说明；请求进行中可随时取消。
 
+进阶能力（对标 Magpie 本地网关最佳实践）：
+- **虚拟路由组与预首字切备（`group/<id>`）**：支持 `order`（顺序优先）、`rotate`（轮询）、`expiring`（优先消耗 7 天内临期积分与 DeepSeek 北京时间谷时渠道）与 `pace`（优先剩余额度比例最高渠道），同一会话按 SHA-256 摘要（仅驻留内存，不留明文）保持 Sticky 上游命中与 Prompt Cache 前缀稳定；上游在首字节前返回 429/5xx/超时时按 `Retry-After`（上限 600s、无头默认按组冷却）自动冷却并无缝切换到下一候选。
+- **Anthropic Messages 双协议入口**：同步暴露 `/v1/messages` 与 `/v1/messages/count_tokens`，可将 Claude Code 等客户端请求双向转译至 OpenAI Chat / Responses 渠道或虚拟路由组。
+- **本地 SQLite 用量与缓存账本（`gateway_usage_log`）**：统计 1/7/30 天请求数、缓存命中率、P50/P95 首字耗时、切备次数与按 4SAPI 公开价目表估算费用（保留 90 天，仅记元数据、绝不落库 Prompt/响应/密钥正文，可一键清空）。
+- **客户端「通过本地网关接入」与可选 Prompt 脱敏**：模型页与网关「接入与安全」支持向 `Trae` / `WorkBuddy` / `WorkBuddy AI` / `ZCode` / `DeepSeek Harness` / `Claude Code` / `Codex` / `OpenCode` 仅写入 `127.0.0.1` 回环地址与本地网关令牌，真实上游 API Key 始终留在 Windows 凭据管理器中；请求前 Sticky Prompt 脱敏**默认关闭**。
+
 ## 安全与隐私
 
 ### Google Cloud 赠金渠道
@@ -154,6 +160,8 @@ Google 登录会话由本机 `google-cloud-profile` 浏览器配置保存；应�
 | 体检报告 | 逐渠道真打一次接口 + 本机四项检查,结果可复制的纯文本 —— 里面只有域名、状态与数值,**没有任何密钥** |
 | MiniMax 凭据 | 读本机 MiniMax Code 客户端的**明文**登录文件(`~/.minimax/auth/prod/<区域>/mcode-public/auth.json`,与其它客户端登录态同一信任级别)。**令牌托管默认开**:MiniMax 的 access token 只有约 1 小时寿命,临近过期时挂件自动续期,并把轮换后的新令牌**原子回写**进同一份文件(保留 `generation` 字段,不会让客户端误判"在别处登录过")。设置 → 刷新与启动 → 「MiniMax 凭据」可关;关掉即**只读模式**(不刷新也不回写,令牌过期后渠道显示"需重新登录")。也可用环境变量 `MINIMAX_NOWRITEBACK=1` 硬关。令牌只进内存与该文件本身,不进日志(排查日志只记长度 + 指纹前 8 位) |
 | Antigravity CLI | 启用渠道后，以 Windows 隐式 ConPTY 临时会话调用本机官方 `agy`，通过单次 `--settings` 配置官方 `statusLine` 回调，取得同一会话的账号身份与配额；过程保持空输入。回调用系统 PowerShell 在内存解析白名单，仅保存邮箱指纹、额度和采集时间。带 `AGY_CLI_DISABLE_AUTO_UPDATE=true`、`BROWSER=NUL` 与独立空临时目录，完成或超时后通过 Job Object 清理整棵子进程树。成功、失败和手动刷新共用至少 120 秒启动冷却。CLI 路径支持自动探测及手填。历史账号显示最后快照。隐藏账号卡冻结其记录并保留当前会话识别，隐藏整个 Antigravity 分组后停止 CLI 采集。第三方查询受 [Google 服务条款](https://antigravity.google/terms) 约束，账号风控风险仍存在 |
+| Claude Code / Codex / OpenCode 配置写入 | 与既有客户端注入同一安全边界（`app/core/src/inject_cli.rs`）：必须用户主动点击预览确认才写入，先做目标进程未运行检查与 **Windows DPAPI 加密备份**（新建文件记录 `existed=false`，回滚时自动删掉），保注释局部合并 `~/.claude/settings.json`、`~/.codex/config.toml`、`~/.config/opencode/opencode.jsonc|.json` 后再原子替换与读回校验；选「通过本地网关接入」时外部文件只写入 `127.0.0.1` 地址与网关访问令牌，**绝不写入真实上游 API Key** |
+| Sticky Prompt 脱敏与网关台账 | Request 级 Prompt 脱敏**默认关闭**（`MaskingSettings.enabled = false`）；仅当用户在「网关 → 接入与安全」显式开启时，才在内存中按会话做占位符映射并在响应 JSON / 跨分片 SSE 流还原，映射表随 TTL 清理，**绝不写入数据库或排查日志**。本地 SQLite 表 `gateway_usage_log` 仅保存时间戳、渠道/模型名、状态码、耗时、Token 数（含缓存命中/思考 Token）与估算费用，保留 90 天并支持一键清空 |
 
 ## 已知边界(不是 bug,是设计或上游限制)
 

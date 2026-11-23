@@ -132,8 +132,8 @@ impl Store {
         // 2 = vault_items 按 (platform,label) 去重 + 唯一索引(下面那段),老库也补跑
         // 3 = snapshots 加 key_fp(密钥指纹分段,换 key 后两本账不互相推算消耗)
         // 4 = credit_grants(积分到账事件,WorkBuddy AI 的每日活跃 +30 等)
-        // 5 = snapshots 的覆盖索引 idx_snap_fp_cover(P1b:批量历史读取不回表)
-        const WANT: i64 = 6;
+        // 5 = snapshots 的覆盖索引 idx_snap_fp_cover(P1b:批量历史读取不回表); 7 = gateway_usage_log
+        const WANT: i64 = 7;
         let cur: i64 = self
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -214,6 +214,7 @@ impl Store {
                     ON credit_grants (channel, day);",
             )
             .map_err(|e| format!("建立积分到账事件表失败: {e}"))?;
+        self.migrate_gateway_ledger()?;
         self.conn
             .execute_batch(&format!("PRAGMA user_version = {WANT};"))
             .map_err(|e| format!("写数据库版本号失败: {e}"))?;
@@ -1734,6 +1735,7 @@ impl Store {
             .query_row("PRAGMA integrity_check", [], |r| r.get(0))
             .map_err(|e| format!("数据库完整性检查失败: {e}"))
     }
+    pub(crate) fn conn(&self) -> &Connection { &self.conn }
 }
 
 fn row_to_vault(r: &rusqlite::Row<'_>) -> rusqlite::Result<VaultItem> {

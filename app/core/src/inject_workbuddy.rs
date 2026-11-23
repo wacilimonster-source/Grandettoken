@@ -83,7 +83,7 @@ pub(super) fn url_is_ours(url: &str, hosts: &[String], base_url: &str) -> bool {
 /// 这个名字像不像我们起的(三家前缀任意一个)。只在**地址认不出来时**作旁证用 ——
 /// 地址能认出来就一律以地址为准。
 pub fn name_is_ours(name: &str) -> bool {
-    ["4S-", "HP-", "OG "].iter().any(|p| name.starts_with(p))
+    ["4S-", "HP-", "OG ", "GW-"].iter().any(|p| name.starts_with(p))
 }
 
 /// 一条 models.json 条目是不是「我们(4SAPI)写的」。判据:[`url_is_ours`] ——

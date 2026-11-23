@@ -124,6 +124,7 @@ jobs:
           Invoke-Gate 'syntax-antigravity'{ node --check app/src/antigravity.js }
           Invoke-Gate 'syntax-panel-layout'{ node --check app/src/panel-layout.js }
           Invoke-Gate 'syntax-gateway'     { node --check app/src/gateway-view.js }
+          Invoke-Gate 'syntax-gateway-adv' { node --check app/src/gateway-advanced.js }
           Invoke-Gate 'syntax-google-capture' { node --check app/src-tauri/src/google_cloud_capture.js }
           npm install jsdom --no-save --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { throw "npm install jsdom failed" }
@@ -133,6 +134,7 @@ jobs:
           Invoke-Gate 'google-cloud'      { node build/verify-google-cloud.js }
           Invoke-Gate 'antigravity'       { node build/verify-antigravity-capture.js }
           Invoke-Gate 'gateway-view'      { node build/verify-gateway.js }
+          Invoke-Gate 'gateway-magpie'    { node build/verify-gateway-magpie.js }
 
       - name: Install GNU toolchain + target
         shell: pwsh

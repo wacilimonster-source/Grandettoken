@@ -108,6 +108,7 @@ node build/verify-codex-reset.js
 node build/verify-google-cloud.js
 node build/verify-antigravity-capture.js
 node build/verify-gateway.js
+node build/verify-gateway-magpie.js
 
 # Rust(用例数看输出,不写死)
 (cd app/core && cargo test --locked && cargo check --all-targets --locked)
@@ -201,6 +202,7 @@ jsdom 桩曾对未登记 invoke `return null`,命令漏注册也全绿。**mock 
 - Tauri `destroy()` 异步派发:同名窗口重建须等标签释放,并使旧 session 回调失效。
 - 缩略专用名称/状态只在缩略布局生成;卡片容量按真实列表高度扣除横幅、签到条、间距计算,坏样本覆盖漏行/单列/异常卡高。
 - 尺寸与落点以 Tauri 显示器**工作区**为准;普通打开/贴边展开/解除贴边共用计算,同 DPI 跨屏停稳后复算。核验记录工作区与整屏物理矩形、窗口边界、实际 `scaleFactor`、字号倍率及底栏/列表几何位置,勿假定缩放;坏样本用整屏替代工作区。
+- 2026-11-23 网关 `.gw-tab-pane` 是 grid:隐式 auto 轨道会被账本表格的 nowrap 最小内容撑宽整个 pane(513px 容器出现 713px 卡片),单列必须钉 `minmax(0,1fr)`;横向越界用 `build/verify-gateway-layout.js` 在真机三种布局量,含超宽卡片坏样本自检。
 
 ### 8.5 Antigravity
 - 缩略卡只用 Gemini 周窗与 5h 窗,不混入 Claude/GPT 限流。
@@ -212,6 +214,7 @@ jsdom 桩曾对未登记 invoke `return null`,命令漏注册也全绿。**mock 
 - 操作状态:忙碌仅持有者释放;筛选只隐藏完整节点、诊断局部更新、重绘保留脏字段/焦点,状态与诊断分别验代际;后端刷新仅合并探测字段并核对配置/凭据版本;凭据失败要补偿,端点与配置同事务,多目标同步须汇总未完成与失败。
 - 协议:真实实现与回环测试在 `app/core/src/gateway/`,禁止另造成功宿主桩。错误先脱敏再截断;逐候选验完成,末帧先处理正文再结束,拒绝是有效输出;缓冲超限明确失败;重启等监听释放而非固定等待,失败恢复旧服务。
 - 回归核对裸模型、call ID、流式索引/用量、断流/取消、共用鉴权和失败落盘。
+- 2026-11-23 OpenCode 桌面版进程名是 `opencode-cli.exe`(辅助进程 `opencode-pty.exe`),只查 `opencode.exe` 会漏判「在跑」而边跑边写;判在跑按 `Client::processes()` 全名任一命中,界面徽章显示实际命中的名字。
 
 ### 8.7 Windows WebView2 网页会话
 - Wry 同步 Cookie 读取会在 UI 线程开嵌套消息循环,重入导航回调导致卡死(2026-11-19)。读写清理统一走 `app/src-tauri/src/webview_cookies.rs`:UI 线程注册回调即返回,工作线程等结果;**读回确认删除后才算成功**。
@@ -229,3 +232,4 @@ jsdom 桩曾对未登记 invoke `return null`,命令漏注册也全绿。**mock 
 
 ### 8.10 AI 优惠
 - 2026-11-23 校验官网公开列表的结构化条目后再替换缓存,并按详情链接迁移已读状态。旧 RSS 已返回 HTTP 410,上游变动时须保留上次快照。见 `docs/report/promo-rss-retired-2026-11-23.md`。
+- 2026-11-23 官网中文标题的 slug 是百分号编码、卡片 id 是解码字面:校验与查摘要按 `decodeURIComponent(pathname)`(解码失败按坏条目拒),id/链接保留编码原样;解码后仍须拒路径穿越/查询/外链。多页取数任一页坏即整体保留旧快照。

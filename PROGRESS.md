@@ -1,7 +1,7 @@
 # Grandettoken 开发进展
 
-> 最后更新:2026-11-22
-> 状态:**桌面 v0.3.70、Android 0.1.14 已发布**(以文末最新条目与 `git log` 为准)。
+> 最后更新:2026-11-23
+> 状态:**桌面 v0.3.73、Android 0.1.14 已发布**(以文末最新条目与 `git log` 为准)。
 > 2026-11-12 做过两轮**代码治理**:产物出库 / 门禁补强 / 静默失败归零 / 经验沉淀,
 > 见 `docs/report/code-governance-2026-11-12.md`、`docs/report/code-quality-2026-11-12-b.md`
 > 与根目录 `AGENTS.md`。
@@ -810,3 +810,39 @@
 - **双向验证**:临时删掉解析器的「条数 ≠ `numberOfItems`」校验后,jsdom 冒烟退出 1 并精确命中 `FAIL 优惠刷新保留缓存及失败提示：列表被截断`(外部链接项为级联失败);按 SHA-256 还原原文件后复跑 303/303。
 - **实网复核**:`/deals` 直连与经本地代理均直接返回 200(无跳转),`rss.xml` 仍 410;用应用同款解析器读实际页面得 24 条、全部带摘要、链接全部落在 `open_promo_url` 的官网 `/promos/` 白名单内,首条详情 200。官网列表分页(共 411 条 18 页),`numberOfItems` 等于当页条数,首页按发布时间倒序 —— 只取首页等于只展示最近几天新增,取舍已记 B14。
 - **未跑**:安装版真机优惠页(B13/B14)。本轮无窗口几何 / WebView2 改动,未跑 `run-native-checks.ps1`(本机有运行中的实例,按规则不杀用户进程)。
+
+
+## 2026-11-23 对标 Magpie 的本地网关升级与现代编码 CLI 接入
+
+- **设计稿**: [`docs/design/design-gateway-magpie-upgrade-2026-11-23.md`](docs/design/design-gateway-magpie-upgrade-2026-11-23.md)。
+- **改动**:
+  - **F1 虚拟路由组与预首字切备**（`app/core/src/gateway/routing.rs`、`dispatch.rs`）：新增 `group/<id>` 命名空间与 `order` / `rotate` / `expiring`（7 天临期积分 + `peak::info_at` DeepSeek 谷时优先）/ `pace` 策略；主窗口 `emit_channels` 同步推送只读 `ChannelSignal`；首字节前遇 429/5xx/超时按 `Retry-After` `[5, 600]` 秒自动冷却并切换下一候选（4xx 请求错误不切备）；保留 `alias == "group"` 关键字校验。
+  - **F2 Sticky 会话与 Prompt Cache 解析**（`app/core/src/gateway/routing.rs`、`app/core/src/gateway_proto/stream.rs`）：支持显式会话头与系统提示+首轮消息 SHA-256 摘要映射（纯内存，不落明文），修复 Sticky 命中与 `Rotate` 策略混用时消费游标的缺陷；`UsageDetails` 与 `StreamStats` 提取 `cached_prompt_tokens`、`cache_creation_tokens`、`reasoning_tokens`。
+  - **F3 SQLite 持久化网关台账**（`app/core/src/store.rs` `WANT=7`、`store_gateway.rs`）：新增只记元数据的 `gateway_usage_log` 表（90 天自动清理），支持 1/7/30 天统计（命中率、TTFT P50/P95、4SAPI 目录单价费用估算、按渠道/模型分组、一键清空）。
+  - **F4 Anthropic `/v1/messages` + `/v1/messages/count_tokens` 入口与可选 Sticky Prompt 脱敏**（`app/core/src/gateway_proto/anthropic.rs`、`gateway/http/anthropic.rs`、`gateway_proto/masking.rs`）：支持 Anthropic ↔ OpenAI 双向 JSON / SSE 与工具调用转换及 `x-api-key` 校验；脱敏默认关闭（`enabled = false`），开启时驻留内存并配 `SseFrameUnmasker` 处理跨分片 `[MASKED_` / `KEY_01]` 还原。
+  - **F5 「通过本地网关接入」与现代编码 CLI 配置**（`app/core/src/inject_cli.rs`、`inject_gateway.rs`、`inject.rs`、`inject_trae.rs`、`inject_io.rs`、`inject_workbuddy.rs`、`inject_dsh.rs`）：扩展 `Client` 至 8 家（新增 `Claude Code`、`Codex`、`OpenCode`），遵循进程未运行检查、`backup_layered` DPAPI 加密备份（含新建文件标记，回滚时自动删掉）、保注释局部修改与读回校验；外部文件仅写入回环网关地址与网关访问令牌，上游密钥留在 Windows 凭据管理器；同步将 `CATALOG_DISPLAY` 与 Trae 删除/校验辅助函数迁出 `inject.rs` 守住文件规模棘轮（`2066/2276`）。
+  - **壳层与前端界面**（`app/src-tauri/src/gateway_ext.rs`、`gateway.rs`、`lib.rs`、`app/src/gateway-advanced.js`、`gateway-view.js`、`gateway-view.css`、`app-models.js`、`index.html`、`README.md`）：新增「路由组」「用量账本」「接入与安全」三个面板及 9 个 Tauri 命令，`app-models.js` 更新 8 客户端显示名并压紧行数保 `app*.js <= 9007`。
+- **验证**:
+  - `app/core`: 回环集成测试 `magpie_tests` 5/5、`inject_cli` 3/3、`inject_gateway` 1/1、全套 `cargo test --locked -- --test-threads=1` 与 `cargo check --all-targets --locked` 零警告通过；`app/src-tauri` `cargo check --all-targets --locked` 零警告通过。
+  - 前端与双向门禁：新增 `build/verify-gateway-magpie.js`（含 4 项坏样本哨兵自检，验证脱敏默认关、失败回滚 DOM+Toast、未预览禁止接入写入与非法 IPC 命令必变红），协同全量 §4.1 静态门、jsdom 冒烟与凭据扫描串行验证通过。
+- **未跑项**: 本机无真实 Claude Code / Codex / OpenCode 在途会话与真实安装包真机 UI 巡检，待手工验收。
+
+
+## 2026-11-23 v0.3.73 对标 Magpie 网关升级的实机验收与三处实机修复
+
+- **实机方法**:`build.ps1 build` 出新 exe → `launch-debug.ps1 -Port 9241` → CDP 驱动**真实应用进程**;上游用回环本地假上游(按模型名返回 429+`Retry-After`/503/400/正常 JSON/SSE/reasoning),不耗真实额度、不动真实密钥;用户数据先 SHA-256 备份、测完还原并校验。
+- **实机断言合计 134 项全过**:网关功能 68 + UI 走查 39 + UI 深查 17 + rotate/pace/删组 10。
+  - 429 首字节前切备:上游先收 429 再收正常请求,下游 200,响应头 `group/<id>` 与上游别名;冷却剩余秒数等于 `Retry-After`;Sticky 同会话第二轮只打一次上游;400 原样返回且不偷切。
+  - Anthropic `/v1/messages` 非流式与 SSE 状态闭环;`thinking` 预算 4096→`medium`、1024→`low`;上游吐 `reasoning_content` 时块序列 `start:thinking,stop,start:text,stop`;`count_tokens` 不打上游。
+  - 脱敏默认关;开启后出站无密钥/邮箱原文、同会话占位符一致、跨 SSE 分片完整还原;分类开关单独生效;关回后原文直传。
+  - 台账:本轮 11 笔逐笔入账,命中率 0.6、TTFT P50/P95、容灾与脱敏笔数齐全;未知单价 `pricedRequests=0` 且费用 `null`;表 21 列全元数据、无正文/密钥;真实 85MB 库 v6→v7 迁移后 **481,689 快照无损**、`integrity_check=ok`。
+  - CLI:8 客户端;Codex/OpenCode 在跑被拒,`~/.codex/config.toml` 与 `~/.config/opencode/opencode.jsonc` **逐字节未变**;预览只含回环地址与网关令牌、`writesSecret=false`;未预览时确认写入按钮不存在。
+- **实机抓出并修复 3 个缺陷**(均双向证红):
+  1. OpenCode 桌面版进程名是 `opencode-cli.exe`,守卫只查 `opencode.exe` 会漏判「在跑」而边跑边写。改 `Client::processes()` 全名任一命中、徽章显示实际命中名;新增单测,撤掉修复即红(exit 101)。
+  2. 用量账本面板横向越界:`.gw-tab-pane` 的隐式 auto grid 轨道被表格 nowrap 最小内容撑到 713px(容器 513px)。钉 `minmax(0,1fr)`;新增 `build/verify-gateway-layout.js`(单列/双列/缩略 × 三面板,含超宽卡片坏样本自检)并纳入 `run-native-checks.ps1`(7→8 项);未修二进制上 exit 1、修后 9/9 PASS。
+  3. 优惠官网中文标题 slug 是百分号编码、卡片 id 是解码字面,ASCII 正则拒绝导致**整页刷新永久失败**(真机第 2 页第 7 条命中)。校验与查摘要改按 `decodeURIComponent(pathname)`,id/链接保留编码原样,解码后仍拒路径穿越;jsdom 309→312,撤掉修复精确红 2 项;真机刷新取前 3 页 72 条、编码条目带摘要。
+- **原生 8 项回归**:6 PASS / 2 FAIL;失败项与 `acceptance-backlog.md` B11 记录的过时断言逐字相同(U2 文案、U6 官方标 4 vs 2、U6 紧凑条字母、compact 尺寸、`win-style.ps1` 按标题找窗),**非本版回归**;用户数据每轮 SHA-256 备份还原校验。
+- **门禁(串行,修后复跑)**:静态门含 `--self-test` 全 PASS;jsdom **312/312**;vault / codex-reset / google-cloud / antigravity-capture / gateway / gateway-magpie 全 PASS;core `cargo test --locked -- --test-threads=1` **673 passed / 0 failed / 10 ignored** + `sync_fixtures` 6 passed;core 与 src-tauri `cargo check --all-targets --locked` 零警告(实际重编);`scan-secrets.ps1` CLEAN。
+- **收尾**:测试用的渠道/路由组/台账/脱敏开关随用户库还原清除(还原后 port 18771、lan true、原 3 渠道、0 路由组);用户安装版(v0.3.71)已重新拉起;三个 CLI 配置哈希与测前一致。
+- **待验收**:B15 三个 CLI 真实写入/回滚(需用户关闭对应 CLI)、B16 真实渠道鉴权链路、B17 冷却徽章自动刷新与预览加载态(待产品裁决)、B11 过时断言改写。
+- **发版**:三处版本号同步 0.3.73,`Cargo.lock` 仅本包版本行,`cargo fetch --locked` 复核通过;只发桌面,Android 本轮零改动不打 tag。

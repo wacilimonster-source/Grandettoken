@@ -336,6 +336,9 @@ pub(super) fn dsh_route_source(route: &str) -> Option<String> {
     if route == "4sapi" {
         return Some("4sapi".to_string());
     }
+    if route == "gateway" || route == "gateway-custom" {
+        return Some("gateway".to_string());
+    }
     crate::models::SOURCES
         .iter()
         .find(|d| {

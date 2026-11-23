@@ -27,7 +27,8 @@ $defaultScripts = @(
   'verify-qoder-expiry.js',
   'verify-ui-0923.js',
   'verify-focus-ring.js',
-  'verify-form.js'
+  'verify-form.js',
+  'verify-gateway-layout.js'
 )
 
 function Write-Utf8NoBom {

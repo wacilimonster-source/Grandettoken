@@ -8,7 +8,9 @@
 //!   OpenAI `reasoning_content`，支持 `<think>` 增量切分与 `extra_content.google.thought` 剥离）；
 //! - 密钥脱敏与标准化错误信封。
 
+pub mod anthropic;
 pub mod error;
+pub mod masking;
 pub mod request;
 pub mod responses;
 pub mod sources;

@@ -340,3 +340,243 @@ pub(super) fn find_our_custom_id(maps: &[(String, Value)], model: &str) -> Optio
     None
 }
 
+/// Trae:每个 agent 组各有一条,数一数;顺带看选中项指不指向它。
+pub(super) fn trae_removal(db: &Path, spec: &ModelSpec) -> (bool, Option<Removal>) {
+    let Ok(conn) = rusqlite::Connection::open_with_flags(
+        db,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) else {
+        return (false, None);
+    };
+    let mut keys: Vec<String> = Vec::new();
+    if let Ok(mut stmt) =
+        conn.prepare("SELECT key FROM ItemTable WHERE key LIKE '%AI.agent.model.model_list_map'")
+    {
+        if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
+            keys = rows.flatten().collect();
+        }
+    }
+    let hosts = spec.hosts();
+    let mut count = 0usize;
+    let mut groups = 0usize;
+    for k in &keys {
+        let Ok(raw) = conn.query_row("SELECT value FROM ItemTable WHERE key = ?1", [k], |r| {
+            r.get::<_, String>(0)
+        }) else {
+            continue;
+        };
+        let Ok(v) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        if let Some(obj) = v.as_object() {
+            for arr in obj.values() {
+                if let Some(list) = arr.as_array() {
+                    let n = list
+                        .iter()
+                        .filter(|e| trae_is_ours(e, &spec.id, &hosts, &spec.base_url))
+                        .count();
+                    if n > 0 {
+                        count += n;
+                        groups += 1;
+                    }
+                }
+            }
+        }
+    }
+    if count == 0 {
+        return (false, None);
+    }
+    let mut clears = false;
+    if let Some((mk, raw)) = selection_row(&conn) {
+        let _ = mk;
+        if let Ok(sel) = serde_json::from_str::<Value>(&raw) {
+            if let Some(obj) = sel.as_object() {
+                clears = obj.values().any(|e| {
+                    e.get("modelId")
+                        .and_then(|m| m.as_str())
+                        .map(|m| m.contains(&format!("custom_openai_compatible//{}_", spec.id)))
+                        .unwrap_or(false)
+                });
+            }
+        }
+    }
+    (
+        true,
+        Some(Removal {
+            what: format!("{count} 条自定义模型条目(分属 {groups} 个 agent 组)"),
+            clears_selection: clears,
+            count,
+        }),
+    )
+}
+
+/// 一条 Trae 条目是不是我们要找的那条自定义模型。
+pub(super) fn trae_is_ours(e: &Value, model: &str, hosts: &[String], base_url: &str) -> bool {
+    if e.get("provider").and_then(|p| p.as_str()) != Some("custom_openai_compatible") {
+        return false;
+    }
+    if e.get("display_name").and_then(|d| d.as_str()) != Some(model) {
+        return false;
+    }
+    if hosts.is_empty() && base_url.is_empty() {
+        return true;
+    }
+    let url = e.get("base_url").and_then(|u| u.as_str()).unwrap_or("");
+    url_is_ours(url, hosts, base_url)
+}
+
+/// Trae 的选中项那一行(键名 + 值)。
+pub(super) fn selection_row(conn: &rusqlite::Connection) -> Option<(String, String)> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT key, value FROM ItemTable \
+             WHERE key LIKE '%recent_user_selection_by_agent_label'",
+        )
+        .ok()?;
+    let mut rows = stmt.query([]).ok()?;
+    let row = rows.next().ok()??;
+    Some((row.get(0).ok()?, row.get(1).ok()?))
+}
+
+pub(super) fn remove_trae_site(db: &Path, spec: &ModelSpec) -> Result<SiteOutcome, String> {
+    let hosts2 = spec.hosts();
+    let mut conn = rusqlite::Connection::open(db)
+        .map_err(|e| format!("打开 {} 失败(Trae 可能正在运行?): {e}", pretty(db)))?;
+    let keys: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT key FROM ItemTable WHERE key LIKE '%AI.agent.model.model_list_map'")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        let found: Vec<String> = rows.filter_map(|r| r.ok()).collect();
+        found
+            .into_iter()
+            .filter(|k| k.ends_with("AI.agent.model.model_list_map"))
+            .collect()
+    };
+    if keys.is_empty() {
+        return Err("没找到 Trae 的模型表(版本可能变了),本次不写".into());
+    }
+    let tx = conn
+        .transaction()
+        .map_err(|e| format!("{} 开启事务失败(Trae 可能正在运行?): {e}", pretty(db)))?;
+
+    let mut outcome = SiteOutcome::default();
+    for k in &keys {
+        let raw: String = tx
+            .query_row("SELECT value FROM ItemTable WHERE key = ?1", [k], |r| {
+                r.get(0)
+            })
+            .map_err(|e| format!("读 {k} 失败: {e}"))?;
+        let mut v: Value = serde_json::from_str(&raw)
+            .map_err(|e| format!("解析 {k} 失败(结构可能已变,本次不写): {e}"))?;
+        let mut changed = false;
+        if let Some(obj) = v.as_object_mut() {
+            for arr in obj.values_mut() {
+                if let Some(list) = arr.as_array_mut() {
+                    let before = list.len();
+                    list.retain(|e| !trae_is_ours(e, &spec.id, &hosts2, &spec.base_url));
+                    let removed = before - list.len();
+                    if removed > 0 {
+                        outcome.removed += removed;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if changed {
+            let text = serde_json::to_string(&v).map_err(|e| e.to_string())?;
+            tx.execute(
+                "UPDATE ItemTable SET value = ?1 WHERE key = ?2",
+                rusqlite::params![text, k.as_str()],
+            )
+            .map_err(|e| format!("写 {k} 失败: {e}"))?;
+        }
+    }
+
+    if let Some((k, raw)) = selection_row(&tx) {
+        if let Ok(mut sel) = serde_json::from_str::<Value>(&raw) {
+            let mut changed = false;
+            if let Some(obj) = sel.as_object_mut() {
+                let hit: Vec<String> = obj
+                    .iter()
+                    .filter(|(_, e)| {
+                        e.get("modelId")
+                            .and_then(|m| m.as_str())
+                            .map(|m| m.contains(&format!("custom_openai_compatible//{}_", spec.id)))
+                            .unwrap_or(false)
+                    })
+                    .map(|(a, _)| a.clone())
+                    .collect();
+                for a in hit {
+                    obj.remove(&a);
+                    changed = true;
+                    outcome.clears_selection = true;
+                }
+            }
+            if changed {
+                let text = serde_json::to_string(&sel).map_err(|e| e.to_string())?;
+                tx.execute(
+                    "UPDATE ItemTable SET value = ?1 WHERE key = ?2",
+                    rusqlite::params![text, k.as_str()],
+                )
+                .map_err(|e| format!("写选中项失败: {e}"))?;
+            }
+        }
+    }
+
+    tx.commit()
+        .map_err(|e| format!("提交事务失败(本次改动已回滚): {e}"))?;
+    Ok(outcome)
+}
+
+pub(super) fn trae_read_back(db: &Path, spec: &ModelSpec) -> Option<(usize, usize)> {
+    let hosts = spec.hosts();
+    let conn = rusqlite::Connection::open(db).ok()?;
+    let keys: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT key FROM ItemTable WHERE key LIKE '%AI.agent.model.model_list_map'")
+            .ok()?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0)).ok()?;
+        let found: Vec<String> = rows.filter_map(|r| r.ok()).collect();
+        found
+            .into_iter()
+            .filter(|k| k.ends_with("AI.agent.model.model_list_map"))
+            .collect()
+    };
+    let (mut arrays, mut ours) = (0usize, 0usize);
+    for k in &keys {
+        let Ok(raw) = conn.query_row("SELECT value FROM ItemTable WHERE key = ?1", [k], |r| {
+            r.get::<_, String>(0)
+        }) else {
+            return None;
+        };
+        let Ok(v) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        let Some(groups) = v.as_object() else { continue };
+        for arr in groups.values() {
+            let Some(list) = arr.as_array() else { continue };
+            arrays += 1;
+            if list.iter().any(|e| trae_is_ours(e, &spec.id, &hosts, &spec.base_url)) {
+                ours += 1;
+            }
+        }
+    }
+    Some((arrays, ours))
+}
+
+pub(super) fn trae_verify_written(db: &Path, spec: &ModelSpec) -> bool {
+    matches!(trae_read_back(db, spec), Some((a, o)) if a > 0 && o == a)
+}
+
+pub(super) fn trae_verify_removed(db: &Path, spec: &ModelSpec) -> bool {
+    matches!(trae_read_back(db, spec), Some((_, 0)))
+}
+
+pub(super) fn trae_has_ours(db: &Path, spec: &ModelSpec) -> bool {
+    matches!(trae_read_back(db, spec), Some((_, o)) if o > 0)
+}
+
+

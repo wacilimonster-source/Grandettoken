@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 /// 单行、单事件与协议适配器保留缓冲的共同字节预算；不是整条流的总量限制。
 pub const MAX_SSE_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 
-/// 流式归一化统计（供请求诊断日志记录）。
+/// 流式归一化统计（供请求诊断日志与使用台账记录）。
 #[derive(Debug, Clone, Default)]
 pub struct StreamStats {
     pub frame_count: usize,
@@ -28,10 +28,72 @@ pub struct StreamStats {
     pub tool_call_chars: usize,
     pub finish_reason: Option<String>,
     pub prompt_tokens: Option<u64>,
+    pub cached_prompt_tokens: Option<u64>,
+    pub cache_creation_tokens: Option<u64>,
     pub completion_tokens: Option<u64>,
+    pub reasoning_tokens: Option<u64>,
     pub saw_error: bool,
     pub completed_cleanly: bool,
     pub diagnostic_note: Option<String>,
+}
+
+/// 从 OpenAI / Anthropic / Gemini 兼容 `usage` 对象提取分项 token。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UsageDetails {
+    pub prompt_tokens: Option<u64>,
+    pub cached_prompt_tokens: Option<u64>,
+    pub cache_creation_tokens: Option<u64>,
+    pub completion_tokens: Option<u64>,
+    pub reasoning_tokens: Option<u64>,
+}
+
+pub fn extract_usage_details(usage: &Value) -> UsageDetails {
+    let Some(obj) = usage.as_object() else {
+        return UsageDetails::default();
+    };
+    let cached_prompt_tokens = obj
+        .get("prompt_tokens_details")
+        .and_then(|d| d.get("cached_tokens"))
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            obj.get("input_tokens_details")
+                .and_then(|d| d.get("cached_tokens"))
+                .and_then(Value::as_u64)
+        })
+        .or_else(|| obj.get("cache_read_input_tokens").and_then(Value::as_u64))
+        .or_else(|| obj.get("cached_content_token_count").and_then(Value::as_u64));
+    let cache_creation_tokens = obj
+        .get("cache_creation_input_tokens")
+        .and_then(Value::as_u64);
+    let raw_prompt = obj
+        .get("prompt_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            obj.get("input_tokens").and_then(Value::as_u64).map(|inp| {
+                inp.saturating_add(cached_prompt_tokens.unwrap_or(0))
+                    .saturating_add(cache_creation_tokens.unwrap_or(0))
+            })
+        });
+    let completion_tokens = obj
+        .get("completion_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| obj.get("output_tokens").and_then(Value::as_u64));
+    let reasoning_tokens = obj
+        .get("completion_tokens_details")
+        .and_then(|d| d.get("reasoning_tokens"))
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            obj.get("output_tokens_details")
+                .and_then(|d| d.get("reasoning_tokens"))
+                .and_then(Value::as_u64)
+        });
+    UsageDetails {
+        prompt_tokens: raw_prompt,
+        cached_prompt_tokens,
+        cache_creation_tokens,
+        completion_tokens,
+        reasoning_tokens,
+    }
 }
 
 /// 跨分片 UTF-8 与 SSE 行读取器（支持 `\n`、`\r\n` 与单独 `\r`）。
@@ -483,12 +545,22 @@ impl SseStreamNormalizer {
         }
         root.insert("model".into(), Value::String(self.requested_model.clone()));
 
-        if let Some(usage) = root.get("usage").and_then(Value::as_object) {
-            if let Some(p) = usage.get("prompt_tokens").and_then(Value::as_u64) {
+        if let Some(usage) = root.get("usage") {
+            let d = extract_usage_details(usage);
+            if let Some(p) = d.prompt_tokens {
                 self.stats.prompt_tokens = Some(p);
             }
-            if let Some(c) = usage.get("completion_tokens").and_then(Value::as_u64) {
+            if let Some(cp) = d.cached_prompt_tokens {
+                self.stats.cached_prompt_tokens = Some(cp);
+            }
+            if let Some(cc) = d.cache_creation_tokens {
+                self.stats.cache_creation_tokens = Some(cc);
+            }
+            if let Some(c) = d.completion_tokens {
                 self.stats.completion_tokens = Some(c);
+            }
+            if let Some(r) = d.reasoning_tokens {
+                self.stats.reasoning_tokens = Some(r);
             }
         }
 
@@ -902,5 +974,27 @@ mod tests {
         assert!(!norm.stats.completed_cleanly);
         assert!(out.contains("incomplete_stream"));
         assert!(out.contains("data: [DONE]"));
+    }
+
+    #[test]
+    fn normalizer_extracts_cached_and_reasoning_token_details() {
+        let mut norm = SseStreamNormalizer::new("m", ThinkingMode::Auto);
+        norm.push_value(json!({"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}));
+        norm.push_value(json!({
+            "choices":[],
+            "usage":{
+                "prompt_tokens":1200,
+                "completion_tokens":300,
+                "prompt_tokens_details":{"cached_tokens":900},
+                "cache_creation_input_tokens":50,
+                "completion_tokens_details":{"reasoning_tokens":180}
+            }
+        }));
+        norm.finish();
+        assert_eq!(norm.stats.prompt_tokens, Some(1200));
+        assert_eq!(norm.stats.cached_prompt_tokens, Some(900));
+        assert_eq!(norm.stats.cache_creation_tokens, Some(50));
+        assert_eq!(norm.stats.completion_tokens, Some(300));
+        assert_eq!(norm.stats.reasoning_tokens, Some(180));
     }
 }

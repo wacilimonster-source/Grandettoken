@@ -18,11 +18,9 @@ const MDL = {
 /// 既能当余额渠道、又能当模型来源的三个渠道(id 与来源 id 一致)。
 const MODEL_SOURCES = new Set(["4sapi", "hapi", "opencode-go"]);
 const CLIENT_NAME = {
-  trae: "Trae",
-  workbuddy: "WorkBuddy",
-  "workbuddy-ai": "WorkBuddy AI",
-  zcode: "ZCode",
-  dsh: "DeepSeek Harness",
+  trae: "Trae", workbuddy: "WorkBuddy", "workbuddy-ai": "WorkBuddy AI",
+  zcode: "ZCode", dsh: "DeepSeek Harness",
+  "claude-code": "Claude Code", codex: "Codex", opencode: "OpenCode",
 };
 /// 唯一「边跑边写」的客户端:DSH 的 profile 按请求解析,它自己的设置层与凭据层都会
 /// 收敛外部编辑 —— 所以运行中不是「先退出」,而是「下一个请求生效」。

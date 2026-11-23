@@ -932,13 +932,21 @@ fn promo_client() -> Result<&'static reqwest::Client, String> {
         .map_err(|e| e.clone())
 }
 
-/// 官网公开优惠列表首页，由后端读取固定地址。
+/// 官网公开优惠列表的某一页，由后端拼固定地址。页码只用于取更早的优惠。
 #[tauri::command]
-pub(crate) async fn fetch_promo_page() -> Result<String, String> {
+pub(crate) async fn fetch_promo_page(page: u32) -> Result<String, String> {
     const MAX_BYTES: usize = 2_000_000;
+    if !(1..=100).contains(&page) {
+        return Err("优惠页码超出范围".into());
+    }
+    let url = if page == 1 {
+        "https://www.aipromonow.com/deals".to_string()
+    } else {
+        format!("https://www.aipromonow.com/deals?page={page}")
+    };
     let client = promo_client()?;
     let mut response = client
-        .get("https://www.aipromonow.com/deals")
+        .get(&url)
         .send()
         .await
         .map_err(|e| if e.is_timeout() { "连接优惠来源超时" } else { "无法连接优惠来源" })?;

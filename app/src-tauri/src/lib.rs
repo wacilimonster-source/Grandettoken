@@ -15,6 +15,7 @@ use tokenscope_core::{appauth, checkin, inject, models, providers, secrets, stor
 mod sync_cmds;
 mod download;
 mod gateway;
+mod gateway_ext;
 mod vault_sync;
 use vault_sync::{
     ensure_vault_mutable, sync_channel_to_gateway, vault_default_channel,
@@ -107,6 +108,7 @@ pub(crate) struct ChannelsPush {
 
 /// 推送一轮取数结果。两处轮询出口(定时循环 / 手动刷新)都走它,免得再漏掉视图。
 pub(crate) fn emit_channels(app: &tauri::AppHandle, views: &[ChannelView]) {
+    let now = now_ts();
     let cfg = {
         let state = app.state::<AppState>();
         // 先落到局部变量:直接 return 这个表达式的话,MutexGuard 的临时值
@@ -114,7 +116,46 @@ pub(crate) fn emit_channels(app: &tauri::AppHandle, views: &[ChannelView]) {
         let c = lock_rw(&state.config).clone();
         c
     };
-    let home = home_view_of(&cfg, views, now_ts());
+    if let Some(gw) = app.try_state::<gateway::Gateway>() {
+        let mut signals = std::collections::BTreeMap::new();
+        for v in views {
+            let remaining_ratio = if v.limited {
+                Some(0.0)
+            } else if let (Some(r), Some(t)) = (v.remaining, v.total) {
+                if t > 0.0 {
+                    Some((r / t).clamp(0.0, 1.0))
+                } else {
+                    None
+                }
+            } else {
+                v.windows
+                    .iter()
+                    .find(|w| w.main)
+                    .or_else(|| v.windows.first())
+                    .map(|w| (w.remain_percent / 100.0).clamp(0.0, 1.0))
+            };
+            let soonest_expiry_ts = v
+                .expiring
+                .iter()
+                .filter(|e| e.amount > 0.0 && e.at > now)
+                .map(|e| e.at)
+                .min();
+            let has_expiring_7d = soonest_expiry_ts.is_some_and(|at| at <= now + 7 * 86_400);
+            signals.insert(
+                v.id.to_ascii_lowercase(),
+                tokenscope_core::gateway::routing::ChannelSignal {
+                    provider_id: v.id.clone(),
+                    remaining_ratio,
+                    has_expiring_7d,
+                    soonest_expiry_ts,
+                    is_deepseek: v.id.eq_ignore_ascii_case("deepseek"),
+                    updated_at: now,
+                },
+            );
+        }
+        gw.update_channel_signals(signals);
+    }
+    let home = home_view_of(&cfg, views, now);
     let _ = app.emit(
         "channels-updated",
         ChannelsPush { views: views.to_vec(), home },
@@ -607,6 +648,15 @@ pub fn run() {
             gateway::gateway_cancel_test_chat,
             gateway::gateway_diagnostics,
             gateway::gateway_clear_diagnostics,
+            gateway_ext::gateway_save_group,
+            gateway_ext::gateway_delete_group,
+            gateway_ext::gateway_set_masking,
+            gateway_ext::gateway_usage_summary,
+            gateway_ext::gateway_clear_usage,
+            gateway_ext::gateway_inject_clients,
+            gateway_ext::gateway_inject_preview,
+            gateway_ext::gateway_inject_apply,
+            gateway_ext::gateway_inject_remove,
             model_cmds::inject_preview,
             model_cmds::inject_apply,
             model_cmds::inject_remove,

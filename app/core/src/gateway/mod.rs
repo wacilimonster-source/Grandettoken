@@ -1,11 +1,12 @@
 use axum::http::{header,HeaderMap};
 use serde::{Deserialize,Serialize};
 use std::{collections::{BTreeMap,VecDeque},net::{IpAddr,Ipv4Addr,SocketAddr},sync::{Arc,Mutex}};
-use crate::{gateway_proto::{error::redact_secrets,sources::{host_of_url,resolve_source_defaults},GatewaySourceKind,OpenAiWire,ThinkingMode,ThoughtRequestPolicy},proxy::ProxyClients,secrets,store::Store};
-use self::http::{dedupe_nonempty,GatewayDiagEntry};
+use crate::{gateway_proto::{error::redact_secrets,masking::{MaskingSettings,StickyMaskStore},sources::{host_of_url,resolve_source_defaults},GatewaySourceKind,OpenAiWire,ThinkingMode,ThoughtRequestPolicy},proxy::ProxyClients,secrets,store::Store,store_gateway::{estimate_channel_cost_cny,GatewayUsageRow,GATEWAY_LEDGER_KEEP_DAYS}};
+use self::http::{dedupe_nonempty,now_unix,GatewayDiagEntry};
 pub mod http;
 pub mod lifecycle;
 mod refresh;
+pub mod routing;
 #[cfg(test)]
 mod tests;
 const CONFIG_KEY:&str="local_gateway_v1";
@@ -138,6 +139,10 @@ pub struct Settings {
     pub lan: bool,
     pub auth: bool,
     pub channels: Vec<Published>,
+    #[serde(default)]
+    pub groups: Vec<routing::RouteGroup>,
+    #[serde(default)]
+    pub masking: MaskingSettings,
 }
 
 impl Default for Settings {
@@ -147,6 +152,8 @@ impl Default for Settings {
             lan: true,
             auth: true,
             channels: vec![],
+            groups: vec![],
+            masking: MaskingSettings::default(),
         }
     }
 }
@@ -181,6 +188,9 @@ pub struct Inner {
     pub sync_state: SyncState,
     pub sync_tasks: BTreeMap<String, (u64, bool, Option<String>)>,
     pub next_sync_id: u64,
+    pub routing: routing::RoutingRuntime,
+    pub mask_store: StickyMaskStore,
+    pub ledger_writes: u64,
 }
 
 #[derive(Clone)]
@@ -231,6 +241,9 @@ impl Gateway {
                 sync_state: SyncState::default(),
                 sync_tasks: BTreeMap::new(),
                 next_sync_id: 1,
+                routing: routing::RoutingRuntime::default(),
+                mask_store: StickyMaskStore::default(),
+                ledger_writes: 0,
             })),
             clients: Arc::new(clients),
             lifecycle: Arc::new(tokio::sync::Mutex::new(())),
@@ -340,7 +353,58 @@ impl Gateway {
                 (entry.model.clone(), redact_secrets(&parts.join(" · ")))
             });
 
-        {
+        let (template, base_url, upstream_model_name) = {
+            let inner = lock(&self.inner);
+            let ch = inner.settings.channels.iter().find(|c| c.channel_id == entry.channel_id);
+            let tpl = ch.map(|c| c.template.clone()).unwrap_or_default();
+            let url = ch.map(|c| c.base_url.clone()).unwrap_or_default();
+            let um = entry
+                .upstream_model
+                .clone()
+                .unwrap_or_else(|| {
+                    entry
+                        .model
+                        .split_once('/')
+                        .map(|(_, m)| m.to_string())
+                        .unwrap_or_else(|| entry.model.clone())
+                });
+            (tpl, url, um)
+        };
+        if entry.estimated_cost_cny.is_none() && entry.status < 400 {
+            let store = lock(&self.store);
+            entry.estimated_cost_cny = estimate_channel_cost_cny(
+                &store,
+                &template,
+                &base_url,
+                &upstream_model_name,
+                entry.prompt_tokens,
+                entry.cached_prompt_tokens,
+                entry.completion_tokens,
+            );
+        }
+        let ledger_row = GatewayUsageRow {
+            ts: entry.timestamp,
+            channel_id: entry.channel_id.clone(),
+            channel_alias: entry.channel_alias.clone(),
+            route_group: entry.route_group.clone(),
+            model: entry.model.clone(),
+            protocol: if entry.protocol.is_empty() { "openai_chat".into() } else { entry.protocol.clone() },
+            stream: entry.stream,
+            status: entry.status,
+            latency_ms: entry.latency_ms,
+            first_byte_ms: entry.first_byte_ms,
+            prompt_tokens: entry.prompt_tokens,
+            cached_prompt_tokens: entry.cached_prompt_tokens,
+            cache_creation_tokens: entry.cache_creation_tokens,
+            completion_tokens: entry.completion_tokens,
+            reasoning_tokens: entry.reasoning_tokens,
+            failover_count: entry.failover_count,
+            masked_count: entry.masked_count,
+            estimated_cost_cny: entry.estimated_cost_cny,
+            error_code: (entry.status >= 400).then(|| format!("http_{}", entry.status)),
+        };
+
+        let should_prune = {
             let mut inner = lock(&self.inner);
             entry.id = inner.next_diag_id;
             inner.next_diag_id += 1;
@@ -348,10 +412,34 @@ impl Gateway {
                 inner.diagnostics.pop_front();
             }
             inner.diagnostics.push_back(entry);
+            inner.ledger_writes = inner.ledger_writes.wrapping_add(1);
+            inner.ledger_writes % 100 == 0
+        };
+        {
+            let store = lock(&self.store);
+            if let Err(e) = store.gateway_usage_insert(&ledger_row) {
+                crate::diaglog::write_keyed("gateway", "ledger", &e);
+            }
+            if should_prune {
+                let cutoff = now_unix() - GATEWAY_LEDGER_KEEP_DAYS * 86_400;
+                if let Err(e) = store.gateway_usage_prune(cutoff) {
+                    crate::diaglog::write_keyed("gateway", "ledger-prune", &e);
+                }
+            }
         }
         if let Some((model, msg)) = log_line {
             crate::diaglog::write_keyed("gateway", &model, &msg);
         }
+    }
+
+    pub fn update_channel_signals(&self, signals: BTreeMap<String, routing::ChannelSignal>) {
+        lock(&self.inner).routing.signals = signals;
+    }
+
+    pub fn cooldown_snapshots(&self, now: i64) -> Vec<routing::CooldownSnapshot> {
+        let mut inner = lock(&self.inner);
+        inner.routing.clear_expired(now);
+        inner.routing.snapshots(now)
     }
 
     pub fn live_channels(&self) -> Vec<Published> {
