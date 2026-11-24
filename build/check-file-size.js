@@ -34,7 +34,7 @@ const BUDGETS = {
   "app/core/src/store.rs": 1952, // T-A1 测试模块外移至 store_tests.rs。
   "app/core/src/workbuddy.rs": 1776, // T-A1 测试模块外移至 workbuddy_tests.rs。
   "app/core/src/checkin.rs": 1518, // T-A1 测试模块外移至 checkin_tests.rs。
-  "app/core/src/providers.rs": 1505, // T-A1 测试模块外移至 providers_tests.rs。
+  "app/core/src/providers.rs": 1504, // T-A1 测试模块外移至 providers_tests.rs。v0.3.75 豆包注释改写后收紧。
   "app/core/src/diaglog.rs": 1740,
   "app/src/index.html": 698,
   "app/src/styles.css": 1737,

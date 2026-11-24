@@ -7,7 +7,6 @@
 //! - 支持可选自定义 CLI 路径；未找到 / 未登录时如实报错，绝不把未知数值伪装为 `0%`。
 
 use crate::appauth::Credential;
-#[cfg(test)]
 use crate::errcodes;
 use crate::providers::{num, round1, FetchResult, Kind, Window};
 use serde_json::Value;
@@ -420,7 +419,32 @@ pub async fn fetch_usage(cli_path: &str) -> AgyOutcome {
     crate::antigravity_accounts::probe_usage(cli_path).await
 }
 
-#[cfg(test)]
+/// 官方 headless `/usage` 兜底：statusLine 采集失败时走这里，结果不写账号账本。
+///
+/// statusLine 是唯一能同时拿到「账号身份 + 配额」的官方入口；headless 输出没有
+/// 邮箱，不能安全归属到多账号卡，所以不拿它冒充某个账号的数据。它的价值是：
+/// statusLine 超时/回调缺失时，仍能判断 CLI 是否登录、`/usage` 是否可用——
+/// 单账号场景顺带拿到一份不归属账号的余量读数。
+///
+/// `num_turns` 必须为 0（或缺失）——否则说明 `/usage` 被当成普通提示词执行，
+/// 会消耗额度并产生会话，直接拒绝。
+pub(crate) fn probe_headless_usage(path: &Path) -> AgyOutcome {
+    match run_command_capped(
+        path,
+        &["-p", "/usage", "--output-format", "json"],
+        Duration::from_secs(35),
+    ) {
+        Ok((code, out, err)) => parse_cli_output(code, &out.bytes, &err.bytes),
+        Err(error) => fail_outcome(
+            &format!("agy headless /usage 执行失败: {error}"),
+            "business",
+            errcodes::BODY_SHAPE,
+            0,
+            "headless".into(),
+        ),
+    }
+}
+
 fn fail_outcome(
     msg: &str,
     kind: &'static str,
@@ -443,7 +467,6 @@ fn fail_outcome(
     }
 }
 
-#[cfg(test)]
 fn looks_like_auth_error(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     [
@@ -462,7 +485,6 @@ fn looks_like_auth_error(text: &str) -> bool {
     .any(|kw| lower.contains(kw))
 }
 
-#[cfg(test)]
 fn safe_hint(raw: &[u8]) -> String {
     let txt = String::from_utf8_lossy(&raw[..raw.len().min(300)]);
     let clean: String = txt
@@ -473,14 +495,25 @@ fn safe_hint(raw: &[u8]) -> String {
     clean.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-#[cfg(test)]
-fn parse_cli_output(exit_code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> AgyOutcome {
+pub(crate) fn parse_cli_output(exit_code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> AgyOutcome {
     let bytes = stdout.len();
     if let Ok(body) = serde_json::from_slice::<Value>(stdout) {
         let shape = body
             .as_object()
             .map(|o| o.keys().take(12).cloned().collect::<Vec<_>>().join(","))
             .unwrap_or_default();
+
+        // headless 兜底只接受真正的只读命令。num_turns>0 说明 /usage 被当成
+        // 普通提示词交给了模型,会消耗额度并留下会话 —— 这种输出一律不用。
+        if body.get("num_turns").and_then(Value::as_u64).is_some_and(|n| n > 0) {
+            return fail_outcome(
+                "agy /usage 产生了模型回合，已停止解析（本次查询可能消耗额度）",
+                "business",
+                errcodes::BODY_SHAPE,
+                bytes,
+                shape,
+            );
+        }
 
         if let Some(st) = body.get("status").and_then(|v| v.as_str()) {
             if !st.eq_ignore_ascii_case("SUCCESS") {
@@ -945,6 +978,18 @@ mod tests {
         assert!(!empty.valid);
         assert!(empty.remaining.is_none());
         assert!(empty.error.is_some());
+    }
+
+    #[test]
+    fn headless_output_with_model_turns_is_rejected() {
+        let turn = parse_cli_output(
+            Some(0),
+            br#"{"status":"SUCCESS","num_turns":1,"command":{"name":"usage","data":{"groups":[]}}}"#,
+            b"",
+        );
+        assert!(!turn.result.valid);
+        assert_eq!(turn.fail_kind, Some("business"));
+        assert!(turn.result.error.unwrap().contains("模型回合"));
     }
 
     #[test]

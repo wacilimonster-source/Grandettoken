@@ -38,8 +38,8 @@ Qoder 账户额度到期单独进入筛选而不折算积分；旧逐笔快照�
 | Qoder | `GET https://openapi.qoder.sh/api/v2/quota/usage` | 积分型 | 国际版;读桌面端 `auth.v1.dat`(Electron safeStorage) |
 | Qoder 国内版 | `GET https://openapi.qoder.com.cn/api/v2/quota/usage` | 积分型 | 国内版;**与上一行是两套账号**,不互通 |
 | MiniMax | `POST https://agent.minimax.cn/matrix/api/v1/commerce/get_membership_info` + `GET …/credit/details` | 积分型 | 读 MiniMax Code 桌面端凭据(`~/.minimax` 明文 OAuth,区域 cn/io/com 跟凭据目录走);**账户端点要官方客户端签名**(x-signature/yy,见 `core/src/minimax.rs`);逐笔账本 + 每日签到 |
-| 豆包工作 | `POST https://www.doubao.com/alice/ug/campaign/v3/detail/` | 积分型 | doubao.com **网页会话**(挂件内登录窗捕获,不落盘;手动粘贴 Cookie 兜底);体验额度读数(自动签到已于 v0.3.47 移除,见 `docs/report/doubao-checkin-710010702-2026-11-14.md`);活动接口按客户端环境放行,URL 要带桌面版平台参数与派生设备号(`core/src/doubao.rs`) |
-| Antigravity | 本机官方 `agy` 的 `statusLine` 回调 (`core/src/antigravity_console.rs` / `antigravity_accounts.rs`) | 配额型 | 当前登录账号逐次采集，账号独立成卡与保留快照；隐藏账号卡冻结记录并保留会话识别，隐藏整个分组停止 CLI；共享单飞、成功/失败 ≥120s 冷却、35s 超时与 Job Object 进程树清理；主窗锁定 `gemini-weekly`，Android 账号与窗口分别选卡 |
+| 豆包工作 | `POST https://www.doubao.com/alice/commerce/sale/subscription/quota/summary/` | 积分型 | doubao.com **网页会话**(挂件内登录窗捕获,不落盘;手动粘贴 Cookie 兜底);官方客户端启动时自调的**订阅额度汇总**(`window_type 4` 套餐 / `3` 活动赠送 / `1·2` 旧版短窗),旧任务面板响应仍兼容解析(自动签到已于 v0.3.47 移除,见 `docs/report/doubao-checkin-710010702-2026-11-14.md`);登录窗与取数用同一份桌面版 UA,网页 Cookie 配另一套身份是 710022004 风控的典型触发;收到 710022004 停止自动重试 30 分钟,由用户在官方客户端完成验证(`core/src/doubao.rs`) |
+| Antigravity | 本机官方 `agy` 的 `statusLine` 回调 (`core/src/antigravity_console.rs` / `antigravity_accounts.rs`) | 配额型 | 当前登录账号逐次采集，账号独立成卡与保留快照；隐藏账号卡冻结记录并保留会话识别，隐藏整个分组停止 CLI；共享单飞、成功/失败 ≥120s 冷却、35s 超时与 Job Object 进程树清理；statusLine 失败时用官方 headless `agy -p "/usage"`（只读、`num_turns=0` 才采用）兜底判登录态，结果不写账号账本；重置时间优先 `reset_time`、缺失时按 `reset_in_seconds` 换算；主窗锁定 `gemini-weekly`，Android 账号与窗口分别选卡 |
 
 > Qoder 两版是**两个独立渠道**,不是"一个渠道两个域名":账号体系不互通
 > (官方明确不支持跨区迁移),余额无法合并。判定**不要**看 `product.json` 的下载域名 ——

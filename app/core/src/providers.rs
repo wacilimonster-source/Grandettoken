@@ -1401,17 +1401,16 @@ pub const PROVIDERS: &[ProviderDef] = &[
         peak_pricing: false,
         extract: crate::minimax::extract_membership,
     },
-    // 豆包工作(积分型):doubao.com 网页会话,体验额度读数在任务面板接口里,
-    // 每日签到 +200。接口按客户端环境放行 —— 查询串(平台参数 + 派生设备号)在
-    // fetch_once_inner 的 doubao 分支现拼,Referer/Origin 静态携带;UA 发送前被
-    // 运行时探测值替换(core::doubao_client,钉死版本已腐烂)。
-    // 单位是「额度」不是「分」,前端按 unit 渲染。
+    // 豆包工作(积分型):doubao.com 网页会话,读官方客户端启动时自调的订阅额度
+    // 汇总接口,旧任务面板响应仍兼容解析;查询串(平台参数 + 派生设备号)在
+    // fetch_once_inner 的 doubao 分支现拼;UA 运行时替换(core::doubao_client),
+    // 登录窗同用一份 —— 网页 Cookie 配另一套身份即 710022004。前端按 unit 渲染。
     ProviderDef {
         id: "doubao",
         name: "豆包工作",
         short: "豆包",
         color: "#cae4ff",
-        url: "https://www.doubao.com/alice/ug/campaign/v3/detail/",
+        url: "https://www.doubao.com/alice/commerce/sale/subscription/quota/summary/",
         fallback_urls: &[],
         extra_headers: &[
             ("Referer", "https://www.doubao.com/pc/agent-explore"),
@@ -1420,7 +1419,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         ],
         auth: AuthKind::WebSession,
         auth_prefix: "",
-        method: Method::PostJson(|| crate::doubao::DETAIL_BODY.to_string()),
+        method: Method::PostJson(|| crate::doubao::QUOTA_BODY.to_string()),
         unstable: true,
         default_kind: Kind::Points,
         peak_pricing: false,

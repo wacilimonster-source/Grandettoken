@@ -161,7 +161,18 @@ fn parse(body: &Value, at: i64) -> Result<Observation, String> {
             .get("reset_time")
             .and_then(Value::as_str)
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            .map(|d| d.to_rfc3339());
+            .map(|d| d.to_rfc3339())
+            .or_else(|| {
+                // 官方 statusLine 契约同时给 reset_in_seconds;reset_time 缺失或
+                // 格式变化时用它按采集时刻换算,避免整张卡显示「到期未知」。
+                bucket
+                    .get("reset_in_seconds")
+                    .and_then(Value::as_i64)
+                    .filter(|seconds| (0..=31_536_000).contains(seconds))
+                    .and_then(|seconds| at.checked_add(seconds))
+                    .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
+                    .map(|d| d.to_rfc3339())
+            });
         groups.push(json!({"name": group, "buckets": [{"id": key, "name": key,
             "window": if key.ends_with("weekly") { "weekly" } else if key.ends_with("5h") { "5h" } else { "" },
             "remaining_fraction": fraction, "reset_time": reset}]}));
@@ -225,12 +236,8 @@ pub(crate) async fn probe_usage(cli_path: &str) -> antigravity::AgyOutcome {
         .get_or_init(|| tokio::sync::Mutex::new(()))
         .lock()
         .await;
-    match observe(
-        std::path::PathBuf::from(cli_path),
-        Config::default().backoff_interval_sec,
-    )
-    .await
-    {
+    let path = std::path::PathBuf::from(cli_path);
+    match observe(path.clone(), Config::default().backoff_interval_sec).await {
         Ok(observation) => antigravity::AgyOutcome {
             result: observation.result,
             fail_kind: None,
@@ -238,18 +245,26 @@ pub(crate) async fn probe_usage(cli_path: &str) -> antigravity::AgyOutcome {
             bytes: 0,
             shape: "account,quota".into(),
         },
-        Err(error) => antigravity::AgyOutcome {
-            result: FetchResult {
-                error: Some(error),
-                kind: providers::Kind::Percent,
-                unit: "%".into(),
-                ..Default::default()
-            },
-            fail_kind: Some("business"),
-            err_code: Some(crate::errcodes::BODY_SHAPE),
-            bytes: 0,
-            shape: String::new(),
-        },
+        Err(error) => {
+            // 只用于「测试连接」的诊断兜底:statusLine 失败时，官方 headless
+            // `/usage` 仍能证明 CLI 是否登录。它没有账号邮箱，绝不能写进多账号账本。
+            let headless = antigravity::probe_headless_usage(&path);
+            if headless.result.valid || headless.fail_kind == Some("auth") {
+                return headless;
+            }
+            antigravity::AgyOutcome {
+                result: FetchResult {
+                    error: Some(error),
+                    kind: providers::Kind::Percent,
+                    unit: "%".into(),
+                    ..Default::default()
+                },
+                fail_kind: Some("business"),
+                err_code: Some(crate::errcodes::BODY_SHAPE),
+                bytes: 0,
+                shape: String::new(),
+            }
+        }
     }
 }
 
@@ -458,6 +473,30 @@ mod tests {
         assert_eq!(ledger.records[0].result.remaining, Some(70.0));
         ledger.accept(&observed(b, 99.0, 200));
         assert_eq!(ledger.current.as_deref(), Some(a));
+    }
+
+    #[test]
+    fn reset_in_seconds_is_used_when_reset_time_is_absent() {
+        let at = 1_700_000_000i64;
+        let o = parse(
+            &json!({
+                "account": "aaaaaaaaaaaaaaaaaaaaaaaa",
+                "quota": {
+                    "gemini-weekly": {
+                        "remaining_fraction": 0.8,
+                        "reset_in_seconds": 3600
+                    }
+                }
+            }),
+            at,
+        )
+        .unwrap();
+        assert_eq!(
+            o.result.windows[0].resets_at.as_deref(),
+            chrono::DateTime::from_timestamp(at + 3600, 0)
+                .map(|d| d.to_rfc3339())
+                .as_deref()
+        );
     }
 
     #[test]

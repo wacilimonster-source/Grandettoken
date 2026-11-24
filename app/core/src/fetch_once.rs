@@ -165,6 +165,13 @@ pub(super) async fn fetch_once_inner(
     if def.id == "antigravity" {
         return antigravity_attempt(crate::antigravity::fetch_usage(key).await, info);
     }
+    // 豆包风控码的本地静默期:冷却期内连请求都不发,避免重试加深标记。
+    if def.id == "doubao" {
+        if let Some(msg) = crate::doubao::risk_cooldown_message() {
+            let (r, k) = err_result(def, msg, Some(FailKind::Business));
+            return (r, k, info);
+        }
+    }
     // MiniMax:账户端点要官方客户端签名(x-signature/yy),查询串参与签名且绑定
     // URL 与时间戳 —— 每次尝试都要现算,静态 extra_headers 表达不了(见 core::minimax)。
     // 凭据键形如 mm:<region>:<token>,Authorization 必须用解出来的裸令牌,不能带前缀。
@@ -372,6 +379,10 @@ pub(super) async fn fetch_once_inner(
         }
     };
 
+    // 风控码只记业务码与静默期,不保存响应正文;冷却期内后续轮询不再发请求。
+    if def.id == "doubao" {
+        crate::doubao::note_risk_if_present(&body);
+    }
     let mut result = (def.extract)(&body);
 
     // 非 2xx 却解析成功,说明接口用 HTTP 状态码表达业务错误 —— 以状态码为准。

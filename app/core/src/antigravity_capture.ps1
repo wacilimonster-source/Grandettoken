@@ -20,7 +20,14 @@ try {
         $reset = $null
         $parsed = [DateTimeOffset]::MinValue
         if ([DateTimeOffset]::TryParse([string]$value.reset_time, [ref]$parsed)) { $reset = $parsed.ToUniversalTime().ToString('o') }
-        $quota[$entry.Name] = @{ remaining_fraction = $fraction; reset_time = $reset }
+        $resetSeconds = $null
+        if ($null -ne $value.reset_in_seconds) {
+            $seconds = 0.0
+            if ([double]::TryParse([string]$value.reset_in_seconds, [ref]$seconds) -and -not [double]::IsNaN($seconds) -and -not [double]::IsInfinity($seconds) -and $seconds -ge 0 -and $seconds -le 31536000) {
+                $resetSeconds = [int64][Math]::Round($seconds)
+            }
+        }
+        $quota[$entry.Name] = @{ remaining_fraction = $fraction; reset_time = $reset; reset_in_seconds = $resetSeconds }
     }
     if ($quota.Count -eq 0) { exit 0 }
     $json = @{ account = $identity; quota = $quota } | ConvertTo-Json -Depth 5 -Compress

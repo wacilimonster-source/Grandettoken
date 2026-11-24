@@ -881,3 +881,19 @@
 - **验证**（串行）:core `cargo test --locked -- --test-threads=1` **680 passed / 0 failed / 10 ignored** + `sync_fixtures` 6 passed；core 与 src-tauri `cargo check --all-targets --locked` 零警告（实际重编）；jsdom **312/312**；静态门（ipc / silent / size / css / encoding / app-split / lock-unwrap / expiry / qoder / quota）含 `--self-test` 全 PASS；`verify-vault`、`verify-codex-reset`、`verify-google-cloud`、`verify-antigravity-capture`、`verify-gateway`、`verify-gateway-magpie`（7 个哨兵）PASS；`scan-secrets.ps1` CLEAN（580 文件）。
 - **未跑**:实际程序与原生窗口回归（用户要求本轮不跑）；`verify-gateway-layout` 属 CDP 原生项，未跑。B18（真机卸载）、B19（值级 stash 真机还原）仍待验收。
 - **发版**:三处版本号同步 0.3.74，`Cargo.lock` 仅本包版本行，`cargo fetch --locked` 复核；只发桌面，Android 零改动不打 tag。
+
+
+## 2026-11-24 v0.3.75 豆包订阅额度接口替换与 Antigravity headless 兜底（安全取数优化）
+
+- **动机**:市面方案调研结论(docs/report 之外,本轮对话留存):Antigravity 官方条款第 6 条禁止第三方工具访问、豆包协议禁止未授权自动化 —— 任何自动读取都有条款灰度,能做的是把风险从「读凭据/伪造客户端/扫调试端口」收敛到「官方 CLI + 用户自己的只读会话」。明确**不做**:OAuth Token 读取、`cloudcode-pa` 私有 API、客户端 Cookie 解密、CDP/调试端口、language server CSRF 探测、自建 OAuth 客户端、自动签到/领取。
+- **豆包改动**(`core/src/doubao.rs` / `providers.rs` / `fetch_once.rs` / `src-tauri/src/doubao_web.rs`):
+  - 主取数从任务面板 `campaign/v3/detail`(只有体验额度)换成官方客户端启动时自调的 `subscription/quota/summary`(body `{"product_line":"membership"}`),旧任务面板响应降级为兼容解析分支(`extract_campaign`);窗口按接口实际返回渲染(`window_type` 4 套餐 / 3 活动赠送 / 1·2 旧版短窗),不再写死 5 小时/周窗口径;套餐与活动赠送分开展示,不同 feature group 不相加。
+  - **身份对齐**:登录窗 UA 改用与取数完全相同的 `doubao::app_ua()`(网页 Cookie + 另一套 UA 是 710022004 的典型触发)。
+  - **风控冷却**:响应顶层业务码 710022004 → 本地静默期 30 分钟,期间连请求都不发并提示用户在官方客户端完成验证;不解析/不保存响应正文,绝不自动过验证。
+  - 字段白名单解析:`total_amount/used_amount` 支持带逗号格式化字符串;窗口完全没有可换算数值时丢弃该窗口(不把「字段缺失」画成 0%/已耗尽),整包无数值才报「没有可识别的额度窗口」。
+- **Antigravity 改动**(`core/src/antigravity.rs` / `antigravity_accounts.rs` / `antigravity_capture.ps1`):
+  - statusLine 采集失败时兜底跑官方 headless `agy -p "/usage" --output-format json`(35s 超时):能判登录态(auth/business 分流),单账号场景顺带拿一份不归属账号的余量读数;`num_turns>0`(被当提示词执行、会耗额度)一律拒绝;结果**不写多账号账本**(headless 无邮箱,不冒充账号数据)。
+  - statusLine 重置时间补 `reset_in_seconds`:`reset_time` 缺失/格式变化时按采集时刻换算(0..31536000s 白名单),不再整卡「到期未知」;ps1 采集端同步透传该字段。`remaining_amount` 因缺总量字段无法安全换算成 fraction,按「不猜字段名」纪律本轮不接。
+- **前端**:零改动(豆包新 extra 键「套餐/订阅状态/活动赠送额度」走 `app-rows.js` 通用明细渲染,Codex 的「套餐」去重规则只认 `c.id==="codex"`,不误伤)。
+- **验证**(串行):core `cargo test --locked` **686 passed / 0 failed / 10 ignored**(新增:headless num_turns 拒绝、reset_in_seconds 换算、风控冷却置位/过期、summary 三窗口 golden、legacy percent、无数值双场景);core 与 src-tauri `cargo check --all-targets --locked` 通过;全量门禁与 jsdom 见门禁节。
+- **未尽事项**(记 `acceptance-backlog.md` B21):真实豆包账号实测 summary 接口返回形状(当前按 dsh-connect-doubao 实现反推 + 字段白名单,窗口 label 可能与实际展示有出入);单渠道独立轮询间隔(现走全局 active/idle/backoff 三档);界面「数据来源/非官方接口」标注。

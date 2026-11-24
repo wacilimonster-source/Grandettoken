@@ -32,8 +32,8 @@ function run(state) {
 try {
   const email = "Fixture@Example.Invalid";
   const state = { email, transcript_path: "fixture-private-path", extra: "fixture-sensitive-field", quota: {
-    "gemini-weekly": { remaining_fraction: 0.68, reset_time: "2026-12-01T00:00:00Z", extra: "fixture-sensitive-field" },
-    "3p-5h": { remaining_fraction: 0, reset_time: "unparseable" },
+    "gemini-weekly": { remaining_fraction: 0.68, reset_time: "2026-12-01T00:00:00Z", reset_in_seconds: 3600, extra: "fixture-sensitive-field" },
+    "3p-5h": { remaining_fraction: 0, reset_time: "unparseable", reset_in_seconds: -5 },
     "disabled-weekly": { remaining_fraction: 1, disabled: true },
     "invalid-weekly": { remaining_fraction: 1.5 },
   } };
@@ -42,10 +42,12 @@ try {
     assert.deepEqual(Object.keys(value).sort(), ["account", "quota"]);
     assert.equal(value.account, crypto.createHash("sha256").update(email.toLowerCase()).digest("hex").slice(0, 24));
     assert.deepEqual(Object.keys(value.quota).sort(), ["3p-5h", "gemini-weekly"]);
-    assert.deepEqual(Object.keys(value.quota["gemini-weekly"]).sort(), ["remaining_fraction", "reset_time"]);
+    assert.deepEqual(Object.keys(value.quota["gemini-weekly"]).sort(), ["remaining_fraction", "reset_in_seconds", "reset_time"]);
     assert.equal(value.quota["gemini-weekly"].remaining_fraction, 0.68);
+    assert.equal(value.quota["gemini-weekly"].reset_in_seconds, 3600);
     assert.equal(value.quota["3p-5h"].remaining_fraction, 0);
     assert.equal(value.quota["3p-5h"].reset_time, null);
+    assert.equal(value.quota["3p-5h"].reset_in_seconds, null, "越界 reset_in_seconds 必须丢弃而不是透传");
     assert(!JSON.stringify(value).includes("fixture-"));
     assert(!JSON.stringify(value).includes("@"));
   };

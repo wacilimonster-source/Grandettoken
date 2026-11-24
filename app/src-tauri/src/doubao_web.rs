@@ -40,7 +40,10 @@ pub async fn login(app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| format!("登录地址有问题: {e}"))?;
     // 不注入任何脚本、不拦任何导航:登录页是第三方的,挂件只负责观察与探测
     tauri::WebviewWindowBuilder::new(&app, LOGIN_LABEL, tauri::WebviewUrl::External(url))
-        .title("登录豆包账号（体验额度签到用）")
+        .title("登录豆包账号（额度读取用）")
+        // 登录与取数必须保持同一套身份:网页 Cookie 配桌面端 UA 是 710022004
+        // 的典型触发条件。这里用的 UA 与 core::doubao 取数时发送的完全一致。
+        .user_agent(tokenscope_core::doubao::app_ua())
         .inner_size(560.0, 780.0)
         .min_inner_size(420.0, 560.0)
         .resizable(true)
