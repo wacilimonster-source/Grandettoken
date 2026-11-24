@@ -18,7 +18,7 @@
 
 Google Cloud 赠金渠道另由 `core/src/google_cloud.rs`、`src-tauri/src/google_cloud_web.rs`、
 `src-tauri/src/google_cloud_capture.js` 与 `src/google-cloud.js` 接入。用户主动连接后读取独立网页窗口的
-赠金表，按结算账号与赠金 ID 保存余额、手填到期时间。测试入口为 `node build/verify-google-cloud.js`，
+赠金表，按结算账号保存每笔赠金余额及自动提取的结束日期，并在状态轨绑定最早到期批次金额展示。测试入口为 `node build/verify-google-cloud.js`，
 需通过 `npm install jsdom --no-save` 安装开发依赖；真实 Google 登录与页面读取需另做在线验证。
 
 首页临期筛选由 `src/expiry-ui.js` 统一判断：今天起七个本地自然日内的逐笔积分计入金额，
@@ -31,7 +31,7 @@ Qoder 账户额度到期单独进入筛选而不折算积分；旧逐笔快照�
 | OpenCode Go | `GET https://opencode.ai/zen/go/v1/usage` | 配额型 | **未公开接口**,只返回百分比 |
 | DeepSeek | `GET https://api.deepseek.com/user/balance` | 金额型 | 充值型,无月限额 |
 | Hapi | `GET https://ai.yuchuantest.com/v1/usage` | 金额型 | 积分制,20 积分 = ¥1 |
-| Gemini · Google Cloud | Google Cloud 控制台赠金表格 | 金额型 | 独立网页登录，余额按结算账号读取，逐笔到期时间手填；在线取数待验收 |
+| Gemini · Google Cloud | Google Cloud 控制台赠金表格 | 金额型 | 独立网页登录，按结算账号自动读取逐笔余额与结束日期，首页按最早到期批次展示 |
 | Trae | `POST https://api.trae.cn/.../user_current_entitlement_list` | 积分型 | 读本机登录态;两端点互为备份 |
 | WorkBuddy | `POST https://www.codebuddy.cn/v2/billing/meter/get-user-resource` | 积分型 | 读桌面端凭据,accessToken 到期自动 refresh |
 | Codex | `GET https://chatgpt.com/backend-api/wham/usage` + `rate-limit-reset-credits` | 配额型 | 读本机 Codex 登录态;按服务端时长显示窗口、准确重置时间、重置卡数量与到期日 |

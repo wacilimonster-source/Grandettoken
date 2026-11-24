@@ -21,8 +21,10 @@ module.exports = async function ({ w, R, data, src }) {
       remaining: kind === "Percent" ? 97 : 7742.08, unit: kind === "Points" ? "credits" : "CNY", valid: true, stale: false, hidden: false,
       expiring: kind === "Points" ? [{ at: now + 3 * 86400, amount: 174.96 }] : [],
       windows: kind === "Percent" ? [{ label: "周期", main: true, remainPercent: 97, status: "ok", resetsAt: new Date((now + 28 * 86400) * 1000).toISOString() }] : [], claim: null }));
+    const futureDate = new Date((now + 89 * 86400) * 1000);
+    const futureYmd = `${futureDate.getFullYear()}-${String(futureDate.getMonth() + 1).padStart(2, "0")}-${String(futureDate.getDate()).padStart(2, "0")}`;
     channels.push({ ...base, id: "google-cloud", name: "Gemini · Google Cloud", remaining: 299.72, unit: "USD", valid: true,
-      googleCloud: { account: "layout-fixture", credits: [{ id: "fixture-credit", remaining: 299.72, expiresAt: now + 89 * 86400 }] } });
+      googleCloud: { account: "layout-fixture", credits: [{ id: "fixture-credit", remaining: 299.72, unit: "USD", expiresDate: futureYmd }] } });
     const codex = channels.find(c => c.id === "codex");
     Object.assign(codex, { kind: "percent", remaining: 67, resetCredits: { availableCount: 3 }, windows: [
       { key: "weekly", label: "本周", main: true, remainPercent: 67, status: "ok", resetsAt: new Date(w.Date.now() + 5 * 86400000).toISOString() },
@@ -91,8 +93,39 @@ module.exports = async function ({ w, R, data, src }) {
       const el = row("google-cloud").querySelector(".thumb-name");
       assert.equal(el.textContent, "Gemini · GCP");
       assert.equal(el.title, "Gemini · Google Cloud");
-      assert.equal(row("google-cloud").querySelector(".thumb-status-main").textContent, "手填到期日");
+      assert.equal(row("google-cloud").querySelector(".thumb-status-main").textContent, "USD 299.72 将到期");
       assert.match(row("google-cloud").querySelector(".thumb-status-end").textContent, /^\d{4}-\d{2}-\d{2}$/);
+    });
+    check("Google Cloud 单渠道在三种布局跨年后自动更新同一批次", () => {
+      const RealDate = w.Date;
+      let time;
+      w.Date = class extends RealDate {
+        constructor(...args) { super(...(args.length ? args : [time])); }
+        static now() { return time; }
+      };
+      const google = channels.find(c => c.id === "google-cloud");
+      const c = { ...google, remaining: 285.62, googleCloud: { ...google.googleCloud, credits: [
+        { id: "earlier", remaining: 275.62, unit: "USD", expiresDate: "2026-12-31" },
+        { id: "later", remaining: 10, unit: "USD", expiresDate: "2027-01-08" },
+      ] } };
+      try {
+        w.__TEST.setChannels([c]);
+        for (const layout of ["single", "double", "thumbnail"]) {
+          time = new RealDate(2026, 11, 31, 23, 59).getTime();
+          w.__TEST.patchCfg({ panelLayout: layout }); w.__TEST.updateLayout(); w.render({});
+          w.PanelLayoutUI.tick();
+          const status = () => row(c.id).querySelector(layout === "thumbnail" ? ".thumb-status" : ".r2").textContent;
+          assert.match(status(), layout === "thumbnail" ? /275\.62 将到期/ : /今日到期 · USD 275\.62/);
+          time = new RealDate(2027, 0, 1, 0, 1).getTime();
+          w.PanelLayoutUI.tick();
+          assert.match(status(), layout === "thumbnail" ? /275\.62 已到期/ : /2026-12-31 已到期 · USD 275\.62/);
+          assert.match(row(c.id).querySelector(".v").textContent, /285\.62/);
+        }
+      } finally {
+        w.Date = RealDate;
+        w.__TEST.patchCfg({ panelLayout: "thumbnail" }); w.__TEST.updateLayout();
+        w.__TEST.setChannels(channels); w.render({});
+      }
     });
     check("刷新保留卡片节点与焦点", () => {
       const el = row(codex.id).querySelector(".rhead"); el.focus(); w.render({});

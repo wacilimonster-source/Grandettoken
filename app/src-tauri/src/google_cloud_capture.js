@@ -16,14 +16,27 @@
     const paging = [...document.querySelectorAll('button[aria-label]')].find(b =>
       /next page|previous page/i.test(b.getAttribute("aria-label")) && !b.disabled && b.getAttribute("aria-disabled") !== "true");
     if (paging) return null;
-    const headers = [...table.querySelectorAll('thead th')].map(c => c.getAttribute("data-column-id"));
+    const headerEls = [...table.querySelectorAll('thead th')];
+    const headers = headerEls.map(c => c.getAttribute("data-column-id"));
     const required = ["creditId", "creditName", "status", "remainingValue", "scope"];
     if (required.some(k => !headers.includes(k))) return null;
+    const endDateIds = ["endDate", "expirationDate", "expiryDate", "endTime", "validUntil"];
+    let endDateIndex = headers.findIndex(id => endDateIds.includes(id));
+    if (endDateIndex < 0) {
+      endDateIndex = headers.findIndex(id => typeof id === "string" && /^(credit)?(end|expir\w*)(date|time)$/i.test(id));
+    }
+    if (endDateIndex < 0) {
+      endDateIndex = headerEls.findIndex(th => {
+        const text = (th.innerText || th.textContent || "").replace(/\s+/g, " ").trim();
+        return /^(end\s*date|expiration\s*date|expires?(\s+on)?|结束日期|到期日期)(\b|$)/i.test(text);
+      });
+    }
     const rows = [...table.querySelectorAll('tbody tr[role="row"]')].map(row => {
       const cells = [...row.querySelectorAll('td')];
       const read = key => (cells[headers.indexOf(key)]?.innerText || "").trim();
+      const endDate = endDateIndex >= 0 ? (cells[endDateIndex]?.innerText || "").trim() : "";
       return { id: read("creditId"), name: read("creditName"), status: read("status"),
-        amount: read("remainingValue"), scope: read("scope") };
+        amount: read("remainingValue"), scope: read("scope"), endDate };
     });
     if (!rows.length || rows.some(r => !r.id || !r.status)) return null;
     const count = Number(table.getAttribute("aria-rowcount"));

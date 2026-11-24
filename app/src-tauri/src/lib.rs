@@ -724,7 +724,6 @@ pub fn run() {
             codex_reset_cmd::codex_reset_profile_set,
             google_cloud_web::google_cloud_login,
             google_cloud_web::google_cloud_refresh,
-            google_cloud_web::google_cloud_expiry_set,
             google_cloud_web::google_cloud_disconnect,
         ])
         .run(tauri::generate_context!())

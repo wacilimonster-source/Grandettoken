@@ -897,3 +897,11 @@
 - **前端**:零改动(豆包新 extra 键「套餐/订阅状态/活动赠送额度」走 `app-rows.js` 通用明细渲染,Codex 的「套餐」去重规则只认 `c.id==="codex"`,不误伤)。
 - **验证**(串行):core `cargo test --locked` **686 passed / 0 failed / 10 ignored**(新增:headless num_turns 拒绝、reset_in_seconds 换算、风控冷却置位/过期、summary 三窗口 golden、legacy percent、无数值双场景);core 与 src-tauri `cargo check --all-targets --locked` 通过;全量门禁与 jsdom 见门禁节。
 - **未尽事项**(记 `acceptance-backlog.md` B21):真实豆包账号实测 summary 接口返回形状(当前按 dsh-connect-doubao 实现反推 + 字段白名单,窗口 label 可能与实际展示有出入);单渠道独立轮询间隔(现走全局 active/idle/backoff 三档);界面「数据来源/非官方接口」标注。
+
+
+## 2026-11-24 v0.3.76 Google Cloud 赠金自动读取结束日期
+
+- 登录后从赠金表的「结束日期」列读取自然日，首页显示最早到期日和该日到期的批次金额。缺列时照常更新余额，日期显示未提供。旧账本余额可继续读取，旧手填日期由网页数据接替。
+- 复测修正了连接成功提示，避免在缺列时误报已读到日期，并提示用户在网页显示结束日期列。新增跨年午夜回归，单列、双列和缩略均更新到期提示并保留已上报余额。移除 Google Cloud 的跨日刷新条件时，该回归能报红。
+- 本地串行跑完 §4.1 静态门及坏样本、JS 专项与 313 项 jsdom 冒烟、core 单测与同步夹具、core 和 Tauri 全目标编译检查、凭据扫描及签名自检。用 Edge 和合成渠道复核缩略布局的主题、字号、越界与裁剪。
+- 本机安装版处于运行状态，完整原生 WebView2 回归未跑。真实 Google 登录及赠金表核验见 `docs/report/acceptance-backlog.md` C7。本次发版仅桌面。

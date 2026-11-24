@@ -55,6 +55,7 @@ const ANY_SENTINEL = [
   "WORK_AREA_SENTINEL",
   "EXPIRY_UI_SENTINEL",
   "FIT_PILL_SENTINEL",
+  "GOOGLE_CLOUD_CALENDAR_SENTINEL",
 ].some((k) => process.env[k] === "1");
 if (!ANY_SENTINEL) {
   let threwMissing = false;
@@ -109,6 +110,12 @@ if (!ANY_SENTINEL) {
   if (fitPillProbe.status !== 1 || !/FAIL fitPill 相同文本与环境复用测量缓存/.test(fitPillProbe.stdout)) {
     throw new Error("fitPill 哨兵自检失败：移除测量缓存后必须被探针计数断言拦截");
   }
+  const cloudCalendarProbe = spawnSync(process.execPath, [__filename], {
+    env: { ...process.env, GOOGLE_CLOUD_CALENDAR_SENTINEL: "1" }, encoding: "utf8", timeout: 30000,
+  });
+  if (cloudCalendarProbe.status !== 1 || !/FAIL 缩略模式 Google Cloud 单渠道在三种布局跨年后自动更新同一批次/.test(cloudCalendarProbe.stdout)) {
+    throw new Error("Google Cloud 哨兵自检失败：漏刷跨日的赠金卡必须被界面断言拦截");
+  }
 }
 const vaultJs = fs.readFileSync(path.join(SRC, "vault-view.js"), "utf8");
 let expiryJs = fs.readFileSync(path.join(SRC, "expiry-ui.js"), "utf8");
@@ -116,7 +123,10 @@ if (process.env.EXPIRY_UI_SENTINEL === "1") {
   const marker = "const first = [...entries, ...accounts, ...packages].sort";
   expiryJs = replaceOnce(expiryJs, marker, "accounts.length = 0; " + marker);
 }
-const layoutJs = fs.readFileSync(path.join(SRC, "panel-layout.js"), "utf8");
+let layoutJs = fs.readFileSync(path.join(SRC, "panel-layout.js"), "utf8");
+if (process.env.GOOGLE_CLOUD_CALENDAR_SENTINEL === "1") {
+  layoutJs = replaceOnce(layoutJs, ', [data-id="google-cloud"]', "");
+}
 const quotaFiles = ["quota-plan.js", "quota-plan-data.js", "quota-plan-ui.js"].map((name) => ({
   name,
   code: fs.readFileSync(path.join(SRC, name), "utf8"),

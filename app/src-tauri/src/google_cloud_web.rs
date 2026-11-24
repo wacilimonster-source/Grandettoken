@@ -237,21 +237,6 @@ pub async fn google_cloud_refresh(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn google_cloud_expiry_set(
-    app: tauri::AppHandle,
-    account: String,
-    credit: String,
-    at: Option<i64>,
-) -> Result<(), String> {
-    let st = app.state::<AppState>();
-    gc::set_expiry(&lock_rw(&st.store), &account, &credit, at)?;
-    wake();
-    st.fetcher.invalidate();
-    crate::refresh_now(&app).await;
-    Ok(())
-}
-
-#[tauri::command]
 pub async fn google_cloud_disconnect(app: tauri::AppHandle) -> Result<(), String> {
     let _gate = OPEN_GATE.lock().await;
     let st = app.state::<AppState>();

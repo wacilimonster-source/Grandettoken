@@ -232,7 +232,7 @@
     const key = [now.getFullYear(), now.getMonth(), now.getDate(), now.getTimezoneOffset()].join("/");
     const changed = calendarKey !== null && calendarKey !== key;
     calendarKey = key;
-    if (changed && document.querySelector("[data-points-expiry], [data-weekly-reset]")) render({});
+    if (changed && document.querySelector('[data-points-expiry], [data-weekly-reset], [data-id="google-cloud"]')) render({});
   }
 
   document.getElementById("lkLayout").addEventListener("click", event => {

@@ -1,7 +1,8 @@
-//! Google Cloud 赠金账本。只接收登录页上的结构化金额，账号和日期一起原子保存。
+//! Google Cloud 赠金账本。只接收登录页上的结构化金额与结束日期，按结算账号原子保存。
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 
 use crate::{config::Config, fetch::ChannelView, providers::Kind, store::Store};
@@ -49,7 +50,8 @@ pub struct Credit {
     pub remaining: f64,
     pub unit: String,
     pub scope: String,
-    pub expires_at: Option<i64>,
+    #[serde(default)]
+    pub expires_date: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -83,6 +85,8 @@ pub struct CaptureRow {
     pub status: String,
     pub amount: String,
     pub scope: String,
+    #[serde(default)]
+    pub end_date: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -156,6 +160,113 @@ fn money(text: &str) -> Result<(f64, String), String> {
     Ok((amount, unit.to_string()))
 }
 
+fn valid_date(y: i32, m: u32, d: u32) -> Option<String> {
+    if !(2000..=2100).contains(&y) {
+        return None;
+    }
+    NaiveDate::from_ymd_opt(y, m, d).map(|dt| format!("{:04}-{:02}-{:02}", dt.year(), dt.month(), dt.day()))
+}
+
+fn month_num(token: &str) -> Option<u32> {
+    match token.trim_end_matches('.').to_ascii_lowercase().as_str() {
+        "jan" | "january" => Some(1),
+        "feb" | "february" => Some(2),
+        "mar" | "march" => Some(3),
+        "apr" | "april" => Some(4),
+        "may" => Some(5),
+        "jun" | "june" => Some(6),
+        "jul" | "july" => Some(7),
+        "aug" | "august" => Some(8),
+        "sep" | "sept" | "september" => Some(9),
+        "oct" | "october" => Some(10),
+        "nov" | "november" => Some(11),
+        "dec" | "december" => Some(12),
+        _ => None,
+    }
+}
+
+/// 解析 Google Cloud 赠金表「结束日期」列的纯日期文本为 `YYYY-MM-DD`。
+fn parse_end_date(raw: &str) -> Option<String> {
+    let norm = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    let s = norm.trim();
+    if s.is_empty()
+        || matches!(
+            s.to_ascii_lowercase().as_str(),
+            "-" | "—" | "–" | "n/a" | "none" | "never" | "no expiration" | "无" | "永不过期"
+        )
+    {
+        return None;
+    }
+
+    // 1. ISO / 斜杠: YYYY-MM-DD 或 YYYY/M/D
+    for sep in ['-', '/'] {
+        let parts: Vec<_> = s.split(sep).collect();
+        if parts.len() == 3 && parts[0].len() == 4 {
+            if let (Ok(y), Ok(m), Ok(d)) = (
+                parts[0].parse::<i32>(),
+                parts[1].parse::<u32>(),
+                parts[2].parse::<u32>(),
+            ) {
+                return valid_date(y, m, d);
+            }
+        }
+    }
+
+    // 2. 中文: YYYY年M月D日（单元格窄时可能折行成 "2027年2月12\n日"）
+    let compact: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+    if let Some((y_str, rest)) = compact.split_once('年') {
+        if let Some((m_str, d_rest)) = rest.split_once('月') {
+            if let Some(d_str) = d_rest.strip_suffix('日') {
+                if y_str.len() == 4 {
+                    if let (Ok(y), Ok(m), Ok(d)) = (
+                        y_str.parse::<i32>(),
+                        m_str.parse::<u32>(),
+                        d_str.parse::<u32>(),
+                    ) {
+                        return valid_date(y, m, d);
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. 英文（hl=en 默认）: "Feb 12, 2027" / "February 12, 2027" / "12 Feb 2027"
+    let tokens: Vec<_> = s
+        .split([' ', ','])
+        .filter(|t| !t.is_empty())
+        .collect();
+    if tokens.len() == 3 {
+        if let Some(m) = month_num(tokens[0]) {
+            if tokens[2].len() == 4 {
+                if let (Ok(d), Ok(y)) = (tokens[1].parse::<u32>(), tokens[2].parse::<i32>()) {
+                    return valid_date(y, m, d);
+                }
+            }
+        }
+        if let Some(m) = month_num(tokens[1]) {
+            if tokens[2].len() == 4 {
+                if let (Ok(d), Ok(y)) = (tokens[0].parse::<u32>(), tokens[2].parse::<i32>()) {
+                    return valid_date(y, m, d);
+                }
+            }
+        }
+    }
+
+    // 4. 美式数字斜杠（hl=en）: M/D/YYYY
+    let slash_parts: Vec<_> = s.split('/').collect();
+    if slash_parts.len() == 3 && slash_parts[2].len() == 4 {
+        if let (Ok(m), Ok(d), Ok(y)) = (
+            slash_parts[0].parse::<u32>(),
+            slash_parts[1].parse::<u32>(),
+            slash_parts[2].parse::<i32>(),
+        ) {
+            return valid_date(y, m, d);
+        }
+    }
+
+    None
+}
+
 pub fn capture(
     store: &Store,
     data: Capture,
@@ -169,7 +280,6 @@ pub fn capture(
         return Err("赠金表格尚未加载或记录过多".into());
     }
     let mut ledger = load(store)?;
-    let old = ledger.accounts.get(&data.account);
     let mut credits = Vec::new();
     let mut ids = std::collections::HashSet::new();
     for row in data.rows {
@@ -177,6 +287,7 @@ pub fn capture(
             || row.id.len() > 512
             || row.name.len() > 256
             || row.scope.len() > 2048
+            || row.end_date.as_deref().map_or(0, str::len) > 128
             || !ids.insert(row.id.clone())
         {
             return Err("赠金记录标识无效或重复".into());
@@ -187,16 +298,14 @@ pub fn capture(
             _ => return Err("赠金状态无法识别，已保留上次余额".into()),
         }
         let (remaining, unit) = money(&row.amount)?;
-        let expires_at = old
-            .and_then(|a| a.credits.iter().find(|c| c.id == row.id))
-            .and_then(|c| c.expires_at);
+        let expires_date = row.end_date.as_deref().and_then(parse_end_date);
         credits.push(Credit {
             id: row.id,
             name: row.name,
             remaining,
             unit,
             scope: row.scope,
-            expires_at,
+            expires_date,
         });
     }
     if let Some(first) = credits.first() {
@@ -226,28 +335,6 @@ pub fn set_error(store: &Store, account: &str) -> Result<(), String> {
         save(store, &ledger)?;
     }
     Ok(())
-}
-
-pub fn set_expiry(
-    store: &Store,
-    account: &str,
-    credit: &str,
-    at: Option<i64>,
-) -> Result<(), String> {
-    if at.is_some_and(|t| !(1..=253402300799).contains(&t)) {
-        return Err("到期时间无效".into());
-    }
-    let mut ledger = load(store)?;
-    if ledger.selected.as_deref() != Some(account) {
-        return Err("结算账号已变化，请刷新后重试".into());
-    }
-    let c = ledger
-        .accounts
-        .get_mut(account)
-        .and_then(|a| a.credits.iter_mut().find(|c| c.id == credit))
-        .ok_or("这笔赠金已变化，请刷新后重试")?;
-    c.expires_at = at;
-    save(store, &ledger)
 }
 
 pub fn disconnect(store: &Store) -> Result<(), String> {
@@ -429,8 +516,8 @@ mod tests {
     use super::*;
     fn sample(account: &str) -> Capture {
         serde_json::from_value(serde_json::json!({"account":account,"rows":[
-            {"id":"live","name":"Free Trial","status":"Available","amount":"$300.00","scope":"Eligible usage"},
-            {"id":"expired","name":"Free Trial","status":"Expired","amount":"$300.00","scope":"Eligible usage"}
+            {"id":"live","name":"Free Trial","status":"Available","amount":"$300.00","scope":"Eligible usage","endDate":"Feb 12, 2027"},
+            {"id":"expired","name":"Free Trial","status":"Expired","amount":"$300.00","scope":"Eligible usage","endDate":"Nov 13, 2026"}
         ]})).unwrap()
     }
     const A: &str = "AAAAAA-BBBBBB-CCCCCC";
@@ -476,29 +563,64 @@ mod tests {
         assert_eq!(v.remaining, Some(300.0));
     }
     #[test]
-    fn expiry_is_scoped_and_survives_refresh() {
+    fn parse_end_date_handles_supported_formats_and_rejects_invalid() {
+        assert_eq!(parse_end_date("Feb 12, 2027").as_deref(), Some("2027-02-12"));
+        assert_eq!(parse_end_date("February 12, 2027").as_deref(), Some("2027-02-12"));
+        assert_eq!(parse_end_date("Sept. 5, 2027").as_deref(), Some("2027-09-05"));
+        assert_eq!(parse_end_date("12 Feb 2027").as_deref(), Some("2027-02-12"));
+        assert_eq!(parse_end_date("24 November 2027").as_deref(), Some("2027-11-24"));
+        assert_eq!(parse_end_date("2027-02-12").as_deref(), Some("2027-02-12"));
+        assert_eq!(parse_end_date("2027/2/12").as_deref(), Some("2027-02-12"));
+        assert_eq!(parse_end_date("2/12/2027").as_deref(), Some("2027-02-12"));
+        assert_eq!(parse_end_date("2027年2月12\n日").as_deref(), Some("2027-02-12"));
+        for empty in ["", "  ", "-", "—", "N/A", "No expiration", "永不过期"] {
+            assert_eq!(parse_end_date(empty), None, "{empty}");
+        }
+        for bad in ["2027-02-30", "Feb 30, 2027", "invalid", "1999-12-31"] {
+            assert_eq!(parse_end_date(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn expiry_is_captured_scoped_and_legacy_db_loads() {
         let s = Store::open_memory().unwrap();
         capture(&s, sample(A), None, 1000).unwrap();
-        set_expiry(&s, A, "live", Some(2000)).unwrap();
-        capture(&s, sample(A), Some(A), 1010).unwrap();
         assert_eq!(
-            load(&s).unwrap().accounts[A].credits[0].expires_at,
-            Some(2000)
+            load(&s).unwrap().accounts[A].credits[0].expires_date.as_deref(),
+            Some("2027-02-12")
         );
-        capture(&s, sample(B), None, 1020).unwrap();
-        assert!(set_expiry(&s, A, "live", Some(3000)).is_err());
+        let mut updated = sample(A);
+        updated.rows[0].end_date = Some("2027-03-01".into());
+        capture(&s, updated, Some(A), 1010).unwrap();
+        assert_eq!(
+            load(&s).unwrap().accounts[A].credits[0].expires_date.as_deref(),
+            Some("2027-03-01")
+        );
+        let mut b = sample(B);
+        b.rows[0].end_date = None;
+        capture(&s, b, None, 1020).unwrap();
         assert!(capture(&s, sample(A), Some(B), 1030).is_err());
-        assert_eq!(load(&s).unwrap().accounts[B].credits[0].expires_at, None);
+        assert_eq!(load(&s).unwrap().accounts[B].credits[0].expires_date, None);
+        // 旧版含 expiresAt 字段的账本 JSON 必须无损反序列化。
+        s.set_setting(
+            KEY,
+            r#"{"selected":"AAAAAA-BBBBBB-CCCCCC","accounts":{"AAAAAA-BBBBBB-CCCCCC":{"credits":[{"id":"live","name":"Welcome credit","remaining":275.62,"unit":"USD","scope":"Free trial","expiresAt":1802357880}],"updatedAt":1000,"error":null}}}"#,
+        )
+        .unwrap();
+        let legacy = load(&s).unwrap();
+        assert_eq!(legacy.accounts[A].credits[0].expires_date, None);
+        assert_eq!(legacy.accounts[A].credits[0].remaining, 275.62);
         disconnect(&s).unwrap();
         assert!(!channel(&s, &Config::default(), 1040).has_key);
     }
     #[test]
     fn clock_expiry_does_not_rewrite_reported_balance() {
         let s = Store::open_memory().unwrap();
-        capture(&s, sample(A), None, 1000).unwrap();
-        set_expiry(&s, A, "live", Some(1005)).unwrap();
+        let mut data = sample(A);
+        data.rows[0].end_date = Some("2026-01-01".into());
+        capture(&s, data, None, 1000).unwrap();
         assert_eq!(channel(&s, &Config::default(), 1010).remaining, Some(300.0));
-        assert!(channel(&s, &Config::default(), 999999).stale);
+        assert!(channel(&s, &Config::default(), 1_900_000_000).stale);
     }
     #[test]
     fn malformed_money_and_mixed_currencies_fail_closed() {
@@ -515,7 +637,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_writes_leave_balance_and_manual_date_unchanged() {
+    fn failed_writes_leave_balance_and_captured_date_unchanged() {
         let name = crate::sync::crypto::random_source().unwrap();
         let path = std::env::temp_dir().join(format!("grandettoken-google-{name}.db"));
         let s = Store::open(&path).unwrap();
@@ -528,12 +650,12 @@ mod tests {
              BEGIN SELECT RAISE(ABORT, 'test write failure'); END;",
             )
             .unwrap();
-        assert!(set_expiry(&s, A, "live", Some(2000)).is_err());
         let mut data = sample(A);
         data.rows[0].amount = "$250.00".into();
+        data.rows[0].end_date = Some("2028-01-01".into());
         assert!(capture(&s, data, Some(A), 1010).is_err());
         let ledger = load(&s).unwrap();
-        assert_eq!(ledger.accounts[A].credits[0].expires_at, None);
+        assert_eq!(ledger.accounts[A].credits[0].expires_date.as_deref(), Some("2027-02-12"));
         assert_eq!(ledger.accounts[A].credits[0].remaining, 300.0);
         assert_eq!(ledger.accounts[A].updated_at, 1000);
         drop(connection);
