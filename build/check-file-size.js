@@ -30,14 +30,7 @@ const SOFT_LIMIT = 1500;
 //     第 6 个渠道豆包(WebSession 表项 + 逐动作 body + Cookie 分支),
 //     渠道表与统一取数/签到管线是这些文件的本职,不许再从这里长功能以外的行。
 const BUDGETS = {
-  "app/core/src/inject.rs": 2276, // T-A5 生产代码按客户端拆入 inject_{io,workbuddy,zcode,trae,dsh}.rs。
-  "app/core/src/store.rs": 1952, // T-A1 测试模块外移至 store_tests.rs。
-  "app/core/src/workbuddy.rs": 1776, // T-A1 测试模块外移至 workbuddy_tests.rs。
-  "app/core/src/checkin.rs": 1518, // T-A1 测试模块外移至 checkin_tests.rs。
-  "app/core/src/providers.rs": 1504, // T-A1 测试模块外移至 providers_tests.rs。v0.3.75 豆包注释改写后收紧。
-  "app/core/src/diaglog.rs": 1740,
   "app/src/index.html": 698,
-  "app/src/styles.css": 1737,
 };
 
 // 分组预算:拆分后单文件受 SOFT_LIMIT 约束,同时整组总行数仍受原上限约束(只许下调)。
@@ -46,7 +39,7 @@ const GROUP_BUDGETS = [
     label: "app/src/app*.js",
     dir: "app/src",
     pattern: /^app(?:-.+)?\.js$/,
-    limit: 9007,
+    limit: 8780,
   },
 ];
 

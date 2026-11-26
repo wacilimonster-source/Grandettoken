@@ -104,6 +104,7 @@ pub(super) fn extra_set(extra: &mut Vec<(String, String)>, key: &str, val: &str)
     }
 }
 
+#[cfg(test)]
 pub(super) async fn fetch_once(
     client: &reqwest::Client,
     def: &providers::ProviderDef,
@@ -623,6 +624,51 @@ pub async fn fetch_channel(
     fetch_channel_scoped(client, def, key, last_good, None).await
 }
 
+pub(super) async fn enrich_fetched_result(
+    client: &reqwest::Client,
+    def: &providers::ProviderDef,
+    key: &str,
+    used_url: &str,
+    account_id: Option<&str>,
+    result: &mut FetchResult,
+) {
+    if !result.valid { return; }
+    match def.id {
+        "codex" => {
+            let url = reqwest::Url::parse(crate::codex::RESET_CREDITS_URL).and_then(|endpoint| {
+                reqwest::Url::parse(used_url)?.join(endpoint.path())
+            });
+            if let Ok(url) = url {
+                enrich_codex(client, key, account_id, url.as_str(), result).await;
+            }
+        }
+        "minimax" => crate::minimax::merge_expiry(client, key, used_url, account_id, result).await,
+        _ => {}
+    }
+}
+
+pub(super) async fn fetch_enriched_attempt(
+    client: &reqwest::Client,
+    def: &providers::ProviderDef,
+    url: &str,
+    key: &str,
+    account_id: Option<&str>,
+) -> (FetchResult, Option<FailKind>) {
+    let (mut result, kind) = fetch_once_scoped(client, def, url, key, account_id).await;
+    enrich_fetched_result(client, def, key, url, account_id, &mut result).await;
+    (result, kind)
+}
+
+pub(super) async fn enrich_codex(
+    client: &reqwest::Client, key: &str, account_id: Option<&str>,
+    reset_url: &str, result: &mut FetchResult,
+) {
+    result.reset_credits = Some(match fetch_codex_reset_credits(client, key, account_id, reset_url).await {
+        Ok(cards) => cards,
+        Err(message) => crate::codex::unavailable(result.reset_credits.take(), message),
+    });
+}
+
 pub(super) async fn fetch_channel_scoped(
     client: &reqwest::Client,
     def: &providers::ProviderDef,
@@ -635,24 +681,7 @@ pub(super) async fn fetch_channel_scoped(
     let mut last_kind: Option<FailKind> = None;
 
     for (i, url) in order.iter().enumerate() {
-        let (mut result, kind) = if account_id.is_some() {
-            fetch_once_scoped(client, def, url, key, account_id).await
-        } else {
-            fetch_once(client, def, url, key).await
-        };
-        if def.id == "codex" && result.valid {
-            // 可选明细失败不改变配额的有效性。数量可沿用同轮 usage 摘要,
-            // 但不带入上轮/另一账号的卡片,更不能拿空数组伪装成 0 张。
-            result.reset_credits = Some(match fetch_codex_reset_credits(client, key, account_id, crate::codex::RESET_CREDITS_URL).await {
-                Ok(cards) => cards,
-                Err(message) => crate::codex::unavailable(result.reset_credits.take(), message),
-            });
-        }
-        if def.id == "minimax" && result.valid {
-            // 逐笔积分账本:独立端点、尽力而为 —— 账本失败不拖垮余额
-            // (口径同上面的 codex 明细:expiry_complete=false 表示"空 ≠ 没有到期")
-            crate::minimax::merge_expiry(client, key, url, account_id, &mut result).await;
-        }
+        let (result, kind) = fetch_enriched_attempt(client, def, url, key, account_id).await;
         // 成功,或者失败类型不值得换域名(密钥错/业务失败)—— 就此打住
         let stop = match kind {
             None => true,

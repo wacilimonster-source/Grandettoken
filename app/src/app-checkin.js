@@ -12,7 +12,7 @@ let QODER_LOGGING = false; // 「登录网页版」正在跑(逐包到期会话,
  */
 async function qoderWebLogin(id, switchAccount = false) {
   try {
-    await invoke("qoderweb_login", { id, switch: !!switchAccount });
+    await window.GT_API.channels.qoderwebLogin({ id, switch: !!switchAccount });
     QODER_LOGGING = true;
     renderChCards();
     if (DETAIL_ID) renderDetailSheet();
@@ -417,7 +417,7 @@ function ckRowHtml(id) {
  */
 async function loadHomeView() {
   try {
-    hvApply(await invoke("home_view"));
+    hvApply(await window.GT_API.channels.homeView());
   } catch (e) {
     // silent: 视图拿不到不该让首页变空白,四个渲染器各自退回 toneOf / sortChannels。
   }
@@ -433,7 +433,7 @@ async function loadCheckin() {
   const seq = ++CK_SEQ;
   let list = null;
   try {
-    list = await invoke("checkin_state");
+    list = await window.GT_API.channels.checkinState();
   } catch {
     // silent: 读失败 ≠ 签到状态是空的(报告 L7,loadVault F3 同一条纪律):保留上次读到的那份,
     // 宁可旧一点也不把徽标 / 待签提示条整体抹掉,装作"没有待签"。
@@ -604,7 +604,7 @@ async function loadCheckinHistory() {
   const seq = ++CKH_SEQ;
   let h = null;
   try {
-    h = await invoke("checkin_history", { days: CKH_DAYS });
+    h = await window.GT_API.channels.checkinHistory({ days: CKH_DAYS });
     CKH_ERR = false;
   } catch (e) {
     // 读失败如实说 + 给重试(报告 L7,F3 纪律):以前吞掉后 CKH 停在 null,
@@ -829,7 +829,7 @@ function renderCkManage() {
 async function ckRun(id) {
   CK_LOG = true;
   try {
-    const st = await invoke("checkin_now", { id });
+    const st = await window.GT_API.channels.checkinNow({ id });
     CK[st.id] = st;
     const t = ckText(st);
     if (st.outcome && st.outcome.startsWith("claimed")) showToast("已领到" + (st.credits ? " +" + st.credits + " 分" : ""));

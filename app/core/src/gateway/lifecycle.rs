@@ -1,4 +1,4 @@
-use super::{http::build_router, lock, Gateway, SECRET_KEY};
+use super::{http::build_router, lock, Gateway};
 use axum::serve::{Listener, ListenerExt};
 use std::{io, net::{Ipv4Addr, SocketAddr}};
 use tokio::{net::{TcpListener, TcpStream}, sync::oneshot};
@@ -55,7 +55,22 @@ impl Gateway {
     }
     pub async fn stop(&self) -> Result<(), String> {
         let _guard = self.lifecycle.lock().await;
-        self.stop_locked().await
+        self.stop_locked().await?;
+        self.flush_ledger().await
+    }
+
+    pub async fn shutdown(&self) -> Result<(), String> {
+        let _guard = self.lifecycle.lock().await;
+        let stop = self.stop_locked().await;
+        let runs = std::mem::take(&mut *lock(&self.draining_runs));
+        let drained = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            for run in runs {
+                run.await.map_err(|_| "网关连接任务提前退出".to_string())?;
+            }
+            Ok(())
+        }).await.unwrap_or_else(|_| Err("退出前仍有网关连接未结束".into()));
+        let flush = self.flush_ledger().await;
+        stop.and(drained).and(flush)
     }
     pub async fn restart(&self, port: u16, lan: bool, auth: bool) -> Result<(), String> {
         validate(port, lan, auth)?;
@@ -94,17 +109,8 @@ impl Gateway {
     }
     async fn prepare_access(&self, auth: bool) -> Result<(), String> {
         if !auth { return Ok(()); }
-        let access = self.access.clone();
         // Credential RPC finishes before locking or stopping the currently running service.
-        tokio::task::spawn_blocking(move || {
-            if access.get(SECRET_KEY)?.map_or(true, |s| s.is_empty()) {
-                let mut bytes = [0u8; 32];
-                getrandom::getrandom(&mut bytes).map_err(|e| e.to_string())?;
-                let token = format!("gw_{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>());
-                access.set(SECRET_KEY, &token)?;
-            }
-            Ok(())
-        }).await.map_err(|e| format!("网关访问密钥准备失败: {e}"))?
+        self.access_secret(false).await.map(|_| ())
     }
     async fn start_locked(&self, port: u16, lan: bool, auth: bool, persist: bool) -> Result<(), String> {
         let addr = SocketAddr::from((if lan { Ipv4Addr::UNSPECIFIED } else { Ipv4Addr::LOCALHOST }, port));
@@ -127,10 +133,20 @@ impl Gateway {
         };
         let gateway = self.clone();
         let listener = ReleasingListener { socket: Some(socket), released: Some(released) }.tap_io(|_| {});
+        let (finished, run_finished) = oneshot::channel();
+        {
+            let mut runs = lock(&self.draining_runs);
+            runs.retain_mut(|run| matches!(run.try_recv(), Err(oneshot::error::TryRecvError::Empty)));
+            runs.push(run_finished);
+        }
         tokio::spawn(async move {
             let result = axum::serve(listener, build_router(gateway.clone()).into_make_service_with_connect_info::<SocketAddr>())
                 .with_graceful_shutdown(async { let _ = rx.await; }).await;
             finish_run(&gateway, run_id, result);
+            if let Err(e) = gateway.flush_ledger().await {
+                crate::diaglog::write_keyed("gateway", "ledger-shutdown", &e);
+            }
+            let _ = finished.send(());
         });
         Ok(())
     }
@@ -139,6 +155,7 @@ impl Gateway {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::SECRET_KEY;
     use crate::{store::Store, vault::transaction::CredentialStore};
     use std::sync::{Arc, Mutex, atomic::{AtomicBool, AtomicUsize, Ordering}};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -174,6 +191,29 @@ mod tests {
         let mut status = [0u8; 12];
         tokio::time::timeout(std::time::Duration::from_secs(5), stream.read_exact(&mut status)).await.unwrap().unwrap();
         assert_eq!(&status, b"HTTP/1.1 200");
+    }
+
+    #[tokio::test]
+    async fn ten_requests_reuse_access_digest_and_rotation_rejects_the_previous_token() {
+        let access = Arc::new(MemoryAccess::default());
+        let g = with_access(Store::open_memory().unwrap(), access.clone());
+        let port = free_port();
+        g.start(port, false, true).await.unwrap();
+        let original = lock(&access.value).clone().unwrap();
+        let client = crate::http_pool::shared_direct().unwrap();
+        let url = format!("http://127.0.0.1:{port}/v1/models");
+        for _ in 0..10 {
+            assert!(client.get(&url).bearer_auth(&original).send().await.unwrap().status().is_success());
+        }
+        assert_eq!(access.reads.load(Ordering::SeqCst), 1);
+        let rotated = g.access_secret(true).await.unwrap();
+        assert_eq!(client.get(&url).bearer_auth(&original).send().await.unwrap().status(), 401);
+        assert!(client.get(&url).bearer_auth(&rotated).send().await.unwrap().status().is_success());
+        assert_eq!(access.reads.load(Ordering::SeqCst), 1);
+        g.invalidate_access_token();
+        assert!(client.get(&url).bearer_auth(&rotated).send().await.unwrap().status().is_success());
+        assert_eq!(access.reads.load(Ordering::SeqCst), 2);
+        g.stop().await.unwrap();
     }
     #[tokio::test]
     async fn immediate_stop_rebind_and_concurrent_restarts() {

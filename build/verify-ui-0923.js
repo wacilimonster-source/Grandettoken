@@ -200,7 +200,7 @@ const CH = [
         if (snap) {
           await evalJs(`(async () => {
             CFG = ${snap};
-            await invoke('set_config', { config: CFG });
+            await window.GT_API.config.setConfig( { config: CFG });
             applyConfigToUI();
             await applyForm(CFG.form || 'panel', false);
             await refresh();
@@ -208,7 +208,7 @@ const CH = [
         } else {
           // 没能拿到快照(启动未完成):退回到"重新读一遍真实配置与数据"
           await evalJs(`(async () => {
-            CFG = await invoke('get_config');
+            CFG = await window.GT_API.config.getConfig();
             applyConfigToUI();
             await applyForm(CFG.form || 'panel', false);
             await refresh();

@@ -316,7 +316,7 @@ pub fn now_ts() -> i64 {
 /// 存在的时刻);0 点根本不存在的区(哈瓦那等)退回**请求的那一天**的 UTC 零点 ——
 /// 兜成 now_ts 会把窗口塌成零长度、再被 -86400 容差放大成"近 24 小时",数字静默偏大
 /// (扫描报告 P2-9);而以前直接拿"今天"的 UTC 零点顶替,会把周一/月初/上月初全部算错。
-pub(super) fn local_date_start(y: i32, m: u32, d: u32) -> i64 {
+pub(crate) fn local_date_start(y: i32, m: u32, d: u32) -> i64 {
     resolve_midnight(Local.with_ymd_and_hms(y, m, d, 0, 0, 0), y, m, d)
 }
 

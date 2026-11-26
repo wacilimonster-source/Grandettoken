@@ -75,6 +75,8 @@ pub struct Config {
     /// 空串 = 不注册。老配置缺字段时兜成空,不会抢占别人的热键。
     pub hotkey: String,
     pub autostart: bool,
+    #[serde(default)]
+    pub hibernate_webview_on_hide: bool,
     /// 置顶(全局开关)。折叠形态没有置顶按钮,所以置顶状态要能持久化;
     /// 面板的 📌 按钮与设置项共用这一个值,避免两处状态打架。
     pub always_on_top: bool,
@@ -122,7 +124,7 @@ pub struct Config {
     /// 是否自动检查更新。关掉后只能靠管理页里的「检查更新」按钮手动触发。
     pub auto_check_update: bool,
     /// 托盘图标直接画余额概览数(74 / 1.2k / 82,底色=状态色)。
-    /// 默认开 —— 扫一眼托盘就是它的主要用途;关掉回到品牌角点样式。
+    /// 默认开，关闭后显示品牌图标。
     pub tray_show_number: bool,
     /// 红色告急的状态点做 2s 一次的红晕呼吸 —— 全产品唯一允许的自我循环动画,
     /// 挂件 7×24 常开,循环即噪点,所以**默认关**,由设置里显式打开。
@@ -257,6 +259,7 @@ impl Default for Config {
             stale_after_sec: crate::view::DEFAULT_STALE_SEC,
             hotkey: String::new(),
             autostart: false,
+            hibernate_webview_on_hide: false,
             always_on_top: true,
             form: "panel".into(),
             compact_enabled: false,
@@ -457,6 +460,7 @@ mod tests {
             "collapseOnBlur":false,"form":"compact","sort":"percent"}"#;
         let c: Config = serde_json::from_str(old).unwrap();
         assert!(c.pill_channels.is_empty());
+        assert!(!c.hibernate_webview_on_hide);
         assert_eq!(c.form, "compact");
         // 老配置同样没有 fontScale:必须兜成「标准」,不能报错也不能变空串
         assert_eq!(c.font_scale, "md");

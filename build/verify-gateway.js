@@ -9,6 +9,7 @@ const { JSDOM } = require("jsdom");
 const root = path.resolve(__dirname, "..");
 const html = fs.readFileSync(path.join(root, "app/src/index.html"), "utf8");
 let gatewayJs = fs.readFileSync(path.join(root, "app/src/gateway-view.js"), "utf8");
+let api = require("./lib/app-sources").apiSource();
 const statePath = path.join(root, "app/src/gateway-ui-state.js");
 let gatewayStateJs = fs.existsSync(statePath) ? fs.readFileSync(statePath, "utf8") : "";
 const sentinel = process.env.GATEWAY_SENTINEL;
@@ -37,7 +38,7 @@ if (newSentinels[sentinel]) {
   if (sentinel === "writes") gatewayStateJs = mutate(gatewayStateJs,
     "return ticket === generations[kind] && writes === 0;", "return ticket === generations[kind];", sentinel);
 } else if (process.env.GATEWAY_SENTINEL === "cmd") {
-  gatewayJs = mutate(gatewayJs, 'invoke("gateway_publish"', 'invoke("__missing_gateway_publish__"', "cmd");
+  api = mutate(api, 'invoke("gateway_publish"', 'invoke("__missing_gateway_publish__"', "cmd");
 } else if (process.env.GATEWAY_SENTINEL === "proxy") {
   const marker = "const defaultProxyChecked = draft ? draft.proxy : true;";
   gatewayJs = mutate(gatewayJs, marker, "const defaultProxyChecked = draft ? draft.proxy : false;", "proxy");
@@ -388,6 +389,8 @@ w.invoke = async (cmd, args = {}) => {
 const baseStatus = clone(statusState);
 const baseDiagnostics = clone(diagnosticsState);
 installWindow();
+w.__TAURI__ = { ...w.__TAURI__, core: { invoke: w.invoke } };
+w.eval(api);
 if (gatewayStateJs) w.eval(gatewayStateJs);
 w.eval(gatewayJs);
 
@@ -410,6 +413,8 @@ async function resetScenario() {
   w = new JSDOM(html, { runScripts: "outside-only", pretendToBeVisual: true, url: "http://localhost/" }).window;
   doc = w.document;
   installWindow();
+  w.__TAURI__ = { ...w.__TAURI__, core: { invoke: w.invoke } };
+  w.eval(api);
   if (gatewayStateJs) w.eval(gatewayStateJs);
   w.eval(gatewayJs);
   const box = doc.getElementById("gatewayBox");

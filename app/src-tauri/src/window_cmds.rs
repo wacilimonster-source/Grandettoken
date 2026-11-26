@@ -11,7 +11,7 @@ pub(crate) async fn channel_changes(
     let days = days.clamp(1, 90);
     let store = {
         let st = app.state::<AppState>();
-        st.store.clone()
+        st.read_store.clone()
     };
     let id2 = id.clone();
     tokio::task::spawn_blocking(move || {
@@ -152,8 +152,7 @@ pub(crate) async fn set_autostart(enabled: bool) -> Result<(), String> {
 /// 查托盘所在显示器的实际小图标尺寸,而不是用主窗口所在显示器的 DPI。
 /// 托盘隐藏在溢出区、Explorer 尚未就绪时,退回主显示器的缩放比例。
 /// 这是异步命令:tray.rect() 要在主线程执行,不能在主线程等待自己。
-#[tauri::command]
-pub(crate) async fn tray_icon_size(app: tauri::AppHandle) -> u32 {
+pub(crate) fn tray_icon_size(app: &tauri::AppHandle) -> u32 {
     #[cfg(windows)]
     {
         use windows_sys::Win32::UI::{
@@ -183,10 +182,10 @@ pub(crate) async fn tray_icon_size(app: tauri::AppHandle) -> u32 {
             GetSystemMetricsForDpi(SM_CXSMICON, dpi)
                 .min(GetSystemMetricsForDpi(SM_CYSMICON, dpi))
         };
-        if (8..=64).contains(&size) {
+        if (16..=64).contains(&size) {
             size as u32
         } else {
-            (16.0 * scale).round().clamp(8.0, 64.0) as u32
+            (16.0 * scale).round().clamp(16.0, 64.0) as u32
         }
     }
     #[cfg(not(windows))]
@@ -195,14 +194,6 @@ pub(crate) async fn tray_icon_size(app: tauri::AppHandle) -> u32 {
         32
     }
 }
-
-/// 上一帧托盘图标的指纹(尺寸 + 像素哈希)。
-/// 前端取数刷新、30 秒 DPI 校验都可能送来**逐像素相同**的图;每调一次
-/// Shell_NotifyIcon,Explorer 就会重绘/淡入一次,看起来就是托盘"闪一下"。
-/// 内容相同直接返回,不碰托盘。
-pub(crate) static LAST_TRAY_ICON: std::sync::Mutex<Option<(u32, u64)>> = std::sync::Mutex::new(None);
-/// 上一版 tooltip。文字每轮都可能变,但走 NIF_TIP 更新不会重画图标。
-pub(crate) static LAST_TRAY_TOOLTIP: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 /// 托盘图像指纹:同尺寸、逐像素相同 → 同值。
 pub(crate) fn tray_icon_digest(size: u32, rgba: &[u8]) -> u64 {
@@ -213,59 +204,13 @@ pub(crate) fn tray_icon_digest(size: u32, rgba: &[u8]) -> u64 {
     h.finish()
 }
 
-/// 前端按托盘尺寸画好 RGBA,这里更新图标。
-/// 图标和胶囊共用同一套渠道与轮播逻辑;tooltip 由 `set_tray_tooltip` 单独更新,
-/// 避免"文字变了"也触发一次图标替换。
-///
-/// 像素走 base64 而不是 `Vec<u8>`:避免 RGBA 字节数组在 JSON 里膨胀(报告 O-9)。
-/// 尺寸不符直接报错:图标画错时宁可保留上一帧,也不要把花屏贴到托盘上。
 #[tauri::command]
-pub(crate) fn set_tray_icon(app: tauri::AppHandle, rgba_b64: String, size: u32) -> Result<(), String> {
-    use base64::Engine as _;
-    // 尺寸先夹住再乘:极端值下 size*size*4 会在 u32 里回绕,回绕"恰好对上"时
-    // 畸形尺寸就被交给 Shell_NotifyIcon(图标一块花,P3-24)
-    if !(8..=64).contains(&size) {
-        return Err(format!("托盘图标尺寸只能是 8~64 像素,收到 {size}"));
-    }
-    let rgba = base64::engine::general_purpose::STANDARD
-        .decode(rgba_b64.as_bytes())
-        .map_err(|e| format!("托盘图标 base64 解码失败: {e}"))?;
-    let want = (size as usize) * (size as usize) * 4;
-    if rgba.len() != want {
-        return Err(format!("托盘图标尺寸不符: {size}x{size} 需要 {want} 字节,收到 {}", rgba.len()));
-    }
-    let digest = tray_icon_digest(size, &rgba);
-    if *lock_rw(&LAST_TRAY_ICON) == Some((size, digest)) {
-        return Ok(());
-    }
-    let tray = app.tray_by_id("main").ok_or("托盘不存在")?;
-    let img = tauri::image::Image::new_owned(rgba, size, size);
-    tray.set_icon(Some(img)).map_err(|e| e.to_string())?;
-    *lock_rw(&LAST_TRAY_ICON) = Some((size, digest));
-    Ok(())
-}
-
-/// 只更新 tooltip(NIF_TIP),不重画图标。文字没变时连托盘都不碰。
-#[tauri::command]
-pub(crate) fn set_tray_tooltip(app: tauri::AppHandle, tooltip: String) -> Result<(), String> {
-    if lock_rw(&LAST_TRAY_TOOLTIP).as_deref() == Some(tooltip.as_str()) {
-        return Ok(());
-    }
-    let tray = app.tray_by_id("main").ok_or("托盘不存在")?;
-    tray.set_tooltip(Some(&tooltip)).map_err(|e| e.to_string())?;
-    *lock_rw(&LAST_TRAY_TOOLTIP) = Some(tooltip);
-    Ok(())
-}
-
-#[tauri::command]
-pub(crate) fn window_cmd(app: tauri::AppHandle, action: String) -> Result<(), String> {
-    let win = app.get_webview_window("main").ok_or("窗口不存在")?;
+pub(crate) fn window_cmd(app: tauri::AppHandle, action: String, presentation: Option<hibernate::Presentation>) -> Result<(), String> {
+    let window = || app.get_webview_window("main").ok_or("窗口不存在");
     match action.as_str() {
-        "hide" => {
-            win.hide().map_err(|e| e.to_string())?;
-            let _ = app.emit("window-hidden", ());
-        }
-        "minimize" => win.minimize().map_err(|e| e.to_string())?,
+        "hide" => hibernate::hide_main_window(&app, &window()?).map_err(|e| e.to_string())?,
+        "minimize" => window()?.minimize().map_err(|e| e.to_string())?,
+        "presentation" => hibernate::presentation_of(&app, presentation.ok_or("缺少窗口形态")?),
         "quit" => {
             // 正在写客户端配置时立刻退出,进程会停在"已落盘、还没记账"的瞬间,
             // 重启后没有任何台账能回滚它(P1-15 那条窗口期)。走同一个等待逻辑。

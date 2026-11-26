@@ -8,12 +8,13 @@ fn next_retry_at_is_the_earliest_due_channel() {
     let f = Fetcher::new();
     assert_eq!(f.next_retry_at(), None, "没有失败渠道时必须允许一次睡到本轮结束");
     {
-        let mut states = f.recovery.lock().unwrap();
+        let mut state = f.state.lock().unwrap();
+        let states = &mut state.recovery;
         states.insert("mid".into(), Recovery { attempts: 1, started: 0, next: 300, kind: None });
         states.insert("slow".into(), Recovery { attempts: 2, started: 0, next: 900, kind: None });
     }
     assert_eq!(f.next_retry_at(), Some(300));
-    f.recovery.lock().unwrap().insert(
+    f.state.lock().unwrap().recovery.insert(
         "due".into(),
         Recovery { attempts: 1, started: 0, next: 60, kind: None },
     );
@@ -34,7 +35,7 @@ fn restart_cache_is_scoped_and_explicit_forget_removes_history() {
     fetcher.cached(&store, "new", "a");
     fetcher.failed("new", Some(FailKind::Transport));
     assert!(fetcher.cached(&store, "new", "a").is_none());
-    assert!(fetcher.recovery.lock().unwrap().contains_key("new"), "首次获取没有快照也必须继续重试");
+    assert!(fetcher.state.lock().unwrap().recovery.contains_key("new"), "首次获取没有快照也必须继续重试");
 }
 
 /// 换账号/换令牌后,旧网页会话必须被判定为陈旧;没换过时不能误杀。
@@ -79,8 +80,8 @@ fn credential_rotation_uses_explicit_account_and_manual_refresh_respects_429() {
     f.failed("network", Some(FailKind::Transport));
     f.failed("limited", Some(FailKind::RateLimited(300)));
     f.request_refresh();
-    assert!(!f.recovery.lock().unwrap().contains_key("network"));
-    assert!(f.recovery.lock().unwrap().contains_key("limited"));
+    assert!(!f.state.lock().unwrap().recovery.contains_key("network"));
+    assert!(f.state.lock().unwrap().recovery.contains_key("limited"));
 }
 
 #[test]
@@ -152,17 +153,123 @@ fn codex_reset_credit_read_is_scoped_and_optional_errors_stay_unknown() {
     });
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-    let empty = rt.block_on(fetch_codex_reset_credits(&client, "test-access", Some("workspace-test"), &url)).unwrap();
-    assert_eq!(empty.available_count, Some(0));
-    let failure = rt.block_on(fetch_codex_reset_credits(&client, "test-access", Some("workspace-test"), &url)).unwrap_err();
-    assert!(failure.contains("403"));
-    assert!(crate::codex::unavailable(None, failure).available_count.is_none());
+    let mut first = FetchResult { valid: true, ..Default::default() };
+    rt.block_on(enrich_codex(&client, "test-access", Some("workspace-test"), &url, &mut first));
+    assert_eq!(first.reset_credits.unwrap().available_count, Some(0));
+    let mut failure = FetchResult { valid: true, ..Default::default() };
+    rt.block_on(enrich_codex(&client, "test-access", Some("workspace-test"), &url, &mut failure));
+    assert!(failure.valid);
+    let cards = failure.reset_credits.unwrap();
+    assert!(cards.available_count.is_none());
+    assert!(cards.credits.is_none());
+    assert!(cards.error.as_deref().unwrap_or("").contains("403"));
     for req in worker.join().unwrap() {
         assert!(req.starts_with("get /reset-credits"));
         assert!(req.contains("authorization: bearer test-access"));
         assert!(req.contains("chatgpt-account-id: workspace-test"));
         assert!(!req.contains("cookie:"));
     }
+}
+
+#[tokio::test]
+async fn polling_and_probe_return_the_same_codex_and_minimax_enrichment() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let expiring_at = now_ts() + 3600;
+    let upstream = tokio::spawn(async move {
+        let mut requests = std::collections::BTreeMap::<String, usize>::new();
+        for _ in 0..8 {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = tokio::io::BufReader::new(stream);
+            let mut line = String::new();
+            stream.read_line(&mut line).await.unwrap();
+            let target = line.split_whitespace().nth(1).unwrap().split('?').next().unwrap().to_string();
+            let mut headers = String::new();
+            loop {
+                line.clear();
+                assert!(stream.read_line(&mut line).await.unwrap() > 0);
+                if line == "\r\n" { break; }
+                headers.push_str(&line.to_ascii_lowercase());
+            }
+            assert!(headers.contains("authorization: bearer fixture-token"));
+            *requests.entry(target.clone()).or_default() += 1;
+            let body = match target.as_str() {
+                "/codex-usage" => serde_json::json!({"rate_limit": {"primary_window": {"used_percent": 25, "limit_window_seconds": 604800}}}),
+                "/backend-api/wham/rate-limit-reset-credits" => {
+                    assert!(headers.contains("chatgpt-account-id: fixture-account"));
+                    serde_json::json!({"available_count": 2, "credits": []})
+                }
+                "/minimax-membership" => serde_json::json!({"base_resp": {"status_code": 0}, "op_credit_summary": {"total_remaining_amount": 21}}),
+                "/minimax-cloud/api/v1/credit/details" => serde_json::json!({"total_count": 1, "details": [{"remaining_amount": 15, "expire_at_ms": expiring_at * 1000}]}),
+                _ => panic!("unexpected fixture URL {target}"),
+            }.to_string();
+            stream.get_mut().write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+        }
+        requests
+    });
+
+    let mut fetcher = Fetcher::new();
+    fetcher.http = reqwest::Client::builder().no_proxy().timeout(std::time::Duration::from_secs(3)).build().unwrap();
+    for (id, path, token) in [
+        ("codex", "codex-usage", "fixture-token"),
+        ("minimax", "minimax-membership", "mm:cn:fixture-token"),
+    ] {
+        let upstream_url = format!("{base}/{path}");
+        let def = providers::ProviderDef { url: Box::leak(upstream_url.into_boxed_str()), fallback_urls: &[], ..*providers::find(id).unwrap() };
+        let cred = appauth::Credential {
+            token: token.into(), source: String::new(), account_id: Some("fixture-account".into()), device_id: None,
+        };
+        let (mut polled, poll_url, poll_error) = fetcher.quota_attempt(&def, &cred, None).await;
+        let (mut probed, probe_url, probe_error) = fetch_channel_scoped(&fetcher.http, &def, token, None, cred.account_id.as_deref()).await;
+        assert!(polled.valid && probed.valid, "{id}: {poll_error:?}, {probe_error:?}");
+        assert_eq!(poll_url, probe_url);
+        if id == "codex" {
+            assert_eq!(polled.reset_credits.as_ref().and_then(|r| r.available_count), Some(2));
+            // 观察时刻由各入口单独记录，即使请求跨秒，额度和明细也应一致。
+            for result in [&mut polled, &mut probed] {
+                let credits = result.reset_credits.as_mut().unwrap();
+                assert!(credits.updated_at > 0);
+                credits.updated_at = 0;
+            }
+        } else {
+            assert!(polled.expiry_complete);
+            assert_eq!((polled.expiring[0].amount, polled.expiring[0].at), (15.0, expiring_at));
+        }
+        assert_eq!(serde_json::to_value(polled).unwrap(), serde_json::to_value(probed).unwrap());
+    }
+    let requests = tokio::time::timeout(std::time::Duration::from_secs(4), upstream).await.unwrap().unwrap();
+    assert_eq!(requests.len(), 4);
+    assert!(requests.values().all(|count| *count == 2));
+}
+
+#[test]
+fn force_refresh_retains_wake_snapshot_but_credential_invalidation_drops_it() {
+    let fetcher = Fetcher::new();
+    *crate::lockx::lock(&fetcher.last_run) = Some((now_ts(), vec![ChannelView {
+        id: "fixture".into(), remaining: Some(21.0), ..Default::default()
+    }]));
+    fetcher.request_refresh();
+    assert_eq!(fetcher.last_views().unwrap()[0].remaining, Some(21.0));
+    assert_eq!(crate::lockx::lock(&fetcher.last_run).as_ref().unwrap().0, i64::MIN);
+    fetcher.invalidate();
+    assert!(fetcher.last_views().is_none());
+}
+
+#[tokio::test]
+async fn optional_enrichment_preserves_balance_when_details_are_unavailable() {
+    let client = crate::http_pool::shared_direct().unwrap();
+    let codex = providers::find("codex").unwrap();
+    let mut no_balance = FetchResult::default();
+    enrich_fetched_result(client, codex, "", codex.url, None, &mut no_balance).await;
+    assert!(no_balance.reset_credits.is_none());
+    let minimax = providers::find("minimax").unwrap();
+    let mut balance = FetchResult { valid: true, remaining: Some(21.0), expiry_complete: true, ..Default::default() };
+    enrich_fetched_result(client, minimax, "fixture-without-region", minimax.url, None, &mut balance).await;
+    assert!(balance.valid);
+    assert_eq!(balance.remaining, Some(21.0));
+    assert!(!balance.expiry_complete);
 }
 
 /// 2026-10-21:端到端验一次"取数失败 → 日志里有一行可用的现场"。
@@ -1130,35 +1237,13 @@ async fn poisoned_recovery_progress_and_cache_locks_recover_and_log_throttled_di
     let fetcher = Arc::new(Fetcher::new());
     let store = Arc::new(Mutex::new(Store::open_memory().unwrap()));
 
-    // 1. 让 recovery 锁在子线程持锁期间 panic 中毒
+    // 渠道状态包含重试与余额缓存。让它在写入缓存后中毒。
+    // 让状态锁在子线程写入一条快照后 panic 中毒
     {
         let f = fetcher.clone();
         let _ = std::thread::spawn(move || {
-            let _g = f.recovery.lock().unwrap();
-            panic!("inject recovery poison");
-        })
-        .join();
-    }
-    assert!(fetcher.recovery.is_poisoned());
-
-    // 2. 让 progress 锁在子线程持锁期间 panic 中毒
-    {
-        let f = fetcher.clone();
-        let _ = std::thread::spawn(move || {
-            let mut g = f.progress.lock().unwrap();
-            g.begin();
-            panic!("inject progress poison");
-        })
-        .join();
-    }
-    assert!(fetcher.progress.is_poisoned());
-
-    // 3. 让 cache 锁在子线程写入一条快照后 panic 中毒
-    {
-        let f = fetcher.clone();
-        let _ = std::thread::spawn(move || {
-            let mut g = f.cache.lock().unwrap();
-            g.insert(
+            let mut g = f.state.lock().unwrap();
+            g.cache.insert(
                 "deepseek".to_string(),
                 (
                     FetchResult {
@@ -1174,7 +1259,19 @@ async fn poisoned_recovery_progress_and_cache_locks_recover_and_log_throttled_di
         })
         .join();
     }
-    assert!(fetcher.cache.is_poisoned());
+    assert!(fetcher.state.is_poisoned());
+
+    // 2. 让 progress 锁在子线程持锁期间 panic 中毒
+    {
+        let f = fetcher.clone();
+        let _ = std::thread::spawn(move || {
+            let mut g = f.progress.lock().unwrap();
+            g.begin();
+            panic!("inject progress poison");
+        })
+        .join();
+    }
+    assert!(fetcher.progress.is_poisoned());
 
     let before_lines = crate::diaglog::recent(200);
 
@@ -1209,14 +1306,13 @@ async fn poisoned_recovery_progress_and_cache_locks_recover_and_log_throttled_di
         .skip(before_lines.len())
         .filter(|l| l.contains("lock-poisoned"))
         .collect();
-    // 三把不同类型锁各写一条诊断日志,同锁重复调用被 write_keyed 节流
+    // 两组锁各写一条诊断日志，多次恢复同组时按锁类型节流。
     assert_eq!(
         added.len(),
-        3,
-        "三把中毒锁应各记一条节流诊断日志,实际: {added:?}"
+        2,
+        "两组中毒锁应各记一条节流诊断日志，实际: {added:?}"
     );
-    assert!(added.iter().any(|l| l.contains("Recovery")));
+    assert!(added.iter().any(|l| l.contains("ChannelState")));
     assert!(added.iter().any(|l| l.contains("Progress")));
-    assert!(added.iter().any(|l| l.contains("FetchResult")));
 }
 

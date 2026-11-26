@@ -448,7 +448,7 @@ async function doRefreshKeyMeta(force) {
   // 「或从密钥箱选一把」要用到箱子列表;用户可能没打开过密钥箱页签,这里按需补一次。
   if (wantedSources.length) {
     if (!VAULT.length) {
-      try { VAULT = await invoke("vault_list"); } catch { /* silent: 读不出来就不显示下拉 */ }
+      try { VAULT = await window.GT_API.vault.list(); } catch { /* silent: 读不出来就不显示下拉 */ }
     }
     await loadVaultRefs();
   }
@@ -458,7 +458,7 @@ async function doRefreshKeyMeta(force) {
     ...wantedHints.map(async (c) => {
       const m = KEY_META[c.id] || (KEY_META[c.id] = {});
       try {
-        m.hint = await invoke("key_hint", { id: c.id });
+        m.hint = await window.GT_API.config.keyHint({ id: c.id });
         m.hintErr = null;
       } catch (e) {
         // 凭据管理器坏了 ≠ 没配密钥:把故障如实写出来,否则用户会反复重填
@@ -470,7 +470,7 @@ async function doRefreshKeyMeta(force) {
     ...wantedSources.map(async (c) => {
       const m = KEY_META[c.id] || (KEY_META[c.id] = {});
       try {
-        m.source = await invoke("key_source", { id: c.id });
+        m.source = await window.GT_API.config.keySource({ id: c.id });
       } catch (e) {
         // 读不到来源时退回"直接填"的样子 —— 不显示未经验证的引用状态
         m.source = { mode: "inline" };
@@ -500,7 +500,7 @@ function refreshKeyMeta(force = false) {
 
 /** 一次问出全部引用关系(箱子列表要标"正被谁用")。 */
 async function loadVaultRefs() {
-  try { VAULTREF = await invoke("vault_ref_map"); } catch { VAULTREF = []; }
+  try { VAULTREF = await window.GT_API.vault.refMap(); } catch { VAULTREF = []; }
 }
 
 /**

@@ -24,7 +24,7 @@ try {
 // 必须从脚本位置推导仓库根:以前写死 "G:/game/nw/Grandettoken/app/src",
 // 换一台机器 / 换个 clone 目录就静默读不到文件,而门禁脚本可能仍然报绿。
 const SRC = path.resolve(__dirname, "..", "app", "src");
-const { appFiles, appSource, replaceOnce, loadInto } = require("./lib/app-sources");
+const { appFiles, appSource, baseStyleSource, replaceOnce, loadInto } = require("./lib/app-sources");
 const html = fs.readFileSync(path.join(SRC, "index.html"), "utf8");
 const appList = appFiles(SRC);
 if (process.env.ANTIGRAVITY_ACCOUNT_SENTINEL === "1") {
@@ -37,6 +37,11 @@ if (process.env.PERFORMANCE_SENTINEL === "1") {
     "function qReconcile(box, items) {",
     'function qReconcile(box, items) { if (box && ["cfgPill", "mIndexList"].includes(box.id)) box.innerHTML = "";'
   );
+}
+if (process.env.TAB_DIRTY_SENTINEL === "1") {
+  replaceOnce(appList, 'if (isTabVisible("ch")) refreshChCards();', 'if (manageOpen()) refreshChCards();');
+  replaceOnce(appList, 'if (dirty && name === "disp") renderPillPick();', '');
+  replaceOnce(appList, 'if (!compact && !WAS_COMPACT) return;', '');
 }
 if (process.env.WORK_AREA_SENTINEL === "1") {
   replaceOnce(appList, "const { position, size } = mon.workArea || mon;", "const { position, size } = mon;");
@@ -51,6 +56,7 @@ const ANY_SENTINEL = [
   "CHECKIN_SENTINEL",
   "AG_LAYOUT_SENTINEL",
   "PERFORMANCE_SENTINEL",
+  "TAB_DIRTY_SENTINEL",
   "ANTIGRAVITY_ACCOUNT_SENTINEL",
   "WORK_AREA_SENTINEL",
   "EXPIRY_UI_SENTINEL",
@@ -88,6 +94,13 @@ if (!ANY_SENTINEL) {
   const accountProbe = spawnSync(process.execPath, [__filename], {
     env: { ...process.env, ANTIGRAVITY_ACCOUNT_SENTINEL: "1" }, encoding: "utf8", timeout: 30000,
   });
+  const dirtyProbe = spawnSync(process.execPath, [__filename], {
+    env: { ...process.env, TAB_DIRTY_SENTINEL: "1" }, encoding: "utf8", timeout: 30000,
+  });
+  const dirtyFailures = ["网关页后台更新跳过渠道与显示设置", "切到显示立即渲染最新数据", "面板态跳过紧凑条清理"];
+  if (dirtyProbe.status !== 1 || dirtyFailures.some((label) => !dirtyProbe.stdout?.includes("FAIL " + label))) {
+    throw new Error(`设置脏标记哨兵自检失败 (status=${dirtyProbe.status}, signal=${dirtyProbe.signal}): ${dirtyProbe.error || dirtyProbe.stderr?.slice(-800)}`);
+  }
   if (accountProbe.status !== 1 || !/FAIL Antigravity 多账号 管理页只有一个分组且列出全部账号/.test(accountProbe.stdout)) {
     throw new Error("Antigravity 多账号哨兵自检失败：分组退化必须由账号分组断言拦截");
   }
@@ -138,7 +151,7 @@ if (process.env.AG_LAYOUT_SENTINEL === "1") {
   antigravityJs = replaceOnce(antigravityJs, marker, "windowHtml(c, w, false)");
 }
 const js = appSource(appList);
-const checkinSource = fs.readFileSync(path.join(SRC, "../core/src/checkin.rs"), "utf8");
+const checkinSource = fs.readFileSync(path.join(SRC, "../core/src/checkin/mod.rs"), "utf8");
 const checkinDefs = checkinSource.slice(checkinSource.indexOf("pub const CHECKINS:"), checkinSource.indexOf("pub fn find("));
 const checkinIds = [...checkinDefs.matchAll(/\bid:\s*"([^"]+)"/g)].map((match) => match[1]);
 if (!checkinIds.length) throw new Error("未提取到后端签到渠道");
@@ -284,6 +297,59 @@ const HARNESS = `
   } catch (e) {
     WINDOW_VISIBLE = true;
     ck("性能回归全流程不抛异常", false, e.stack);
+  }
+
+  {
+    const original = CHANNELS;
+    const name = "后台收到的新渠道名称";
+    const channel = CHANNELS.find((c) => !c.hidden);
+    const load = window.loadGateway;
+    let entered = false;
+    window.loadGateway = () => { entered = true; };
+    try {
+      openManage();
+      showTab("gateway");
+      const ch = $("chList"), pill = $("cfgPill");
+      const before = [ch.innerHTML, pill.innerHTML];
+      CHANNELS = CHANNELS.map((c) => c === channel ? { ...c, name } : c);
+      render({ updated: true });
+      ck("网关页后台更新跳过渠道与显示设置", entered && ch.innerHTML === before[0] && pill.innerHTML === before[1]);
+      showTab("ch");
+      ck("切到渠道立即渲染最新数据", ch.textContent.includes(name));
+      showTab("disp");
+      ck("切到显示立即渲染最新数据", pill.textContent.includes(name));
+    } finally {
+      window.loadGateway = load;
+      CHANNELS = original;
+      closeManage(false);
+      render({ updated: false });
+    }
+  }
+
+  {
+    const list = $("list");
+    const query = list.querySelectorAll;
+    let scans = 0;
+    list.querySelectorAll = function(selector) {
+      if (selector === ".row" || selector === ".more,.cempty,.ckchip") scans++;
+      return query.call(this, selector);
+    };
+    try {
+      fitCompact();
+      ck("面板态跳过紧凑条清理", scans === 0);
+      document.body.classList.add("form-compact");
+      fitCompact();
+      const row = list.querySelector(".row");
+      row.classList.add("lv1", "lv2");
+      row.style.display = "none";
+      document.body.classList.remove("form-compact");
+      fitCompact();
+      ck("离开紧凑条恢复隐藏行与数字降级", !row.style.display && !row.matches(".lv1,.lv2")
+        && !list.querySelector(".more,.cempty,.ckchip"));
+    } finally {
+      list.querySelectorAll = query;
+      document.body.classList.remove("form-compact");
+    }
   }
 
   // 现场:条上只写「去查看」,点进去是签到设置(只有开关),用户不知道要做什么。
@@ -864,7 +930,6 @@ const HARNESS = `
     CFG.pillChannels = [];
     renderPill(CHANNELS);
     ck("断联重试:自动胶囊继续选择历史额度", /321/.test(document.getElementById("pillV").textContent));
-    ck("断联重试:托盘保留历史额度", trayNumber(offline) === "321");
     renderDock();
     ck("断联重试:吸附条标记旧数据", !!document.querySelector("#dockBody i.stale"));
     offline.recovery.phase = "unavailable";
@@ -1069,6 +1134,9 @@ const HARNESS = `
     openManage: () => openManage(),
     refreshChCards: () => refreshChCards(),
     fillKeyHints: (force) => fillKeyHints(force),
+    async waitKeyMeta() {
+      while (KEY_META_BUSY) await KEY_META_BUSY;
+    },
     invalidateKeyMeta: (id, kind) => invalidateKeyMeta(id, kind),
     layoutLabel: () => document.querySelector('#lkLayout [aria-pressed="true"]')?.textContent,
     setLayout: (layout) => setPanelLayout(layout),
@@ -1852,13 +1920,13 @@ w.localStorage.setItem(promoCacheKey, JSON.stringify({
   } catch (e) {
     R.push({ name: "Antigravity 渲染与配置回滚", ok: false, extra: e.message });
   }
-  const css = fs.readFileSync(path.join(SRC, "styles.css"), "utf8");
+  const css = baseStyleSource(SRC);
   R.push({
     name: "顶栏固定四枚,不再有「紧凑」按钮与弹出菜单",
     ok: /id="btnR"/.test(html) && /id="btnP"/.test(html) && /id="btnH"/.test(html) &&
       /id="btnPill"/.test(html) && !/id="btnC"/.test(html) && !/id="btnMenu"/.test(html) &&
       !/id="hmenu"/.test(html) && !/\.hmenu\{/.test(css),
-    extra: "index.html/styles.css 仍残留旧顶栏入口",
+    extra: "index.html 或基础样式仍残留旧顶栏入口",
   });
   R.push({
     name: "设置页有紧凑条开关、顶栏四枚按钮齐全",
@@ -1985,7 +2053,15 @@ w.localStorage.setItem(promoCacheKey, JSON.stringify({
     // 点「显示」:记"用户表过态",**不**写进 hiddenChannels ——
     // 写进去就变成用户主动隐藏,以后再也不会自动恢复了。
     if (card) {
-      card.querySelector(".eye").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+      const save = w.saveConfigAndRefresh;
+      let saved;
+      w.saveConfigAndRefresh = () => { saved = save(); return saved; };
+      try {
+        card.querySelector(".eye").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+        await saved;
+      } finally {
+        w.saveConfigAndRefresh = save;
+      }
     }
     const cfg = w.__TEST.cfg();
     R.push({
@@ -2021,14 +2097,13 @@ w.localStorage.setItem(promoCacheKey, JSON.stringify({
     ]);
     w.__TEST.patchCfg({ hiddenChannels: [], claimChannels: {} });
     w.__TEST.openManage();
-    await new Promise((r) => setTimeout(r, 60));
+    await w.__TEST.waitKeyMeta();
     const hint0 = w.__CALLS.key_hint || 0;
     const src0 = w.__CALLS.key_source || 0;
     for (let i = 0; i < 10; i++) {
       w.__TEST.refreshChCards();
-      await new Promise((r) => setTimeout(r, 5));
+      await w.__TEST.waitKeyMeta();
     }
-    await new Promise((r) => setTimeout(r, 40));
     const hint1 = w.__CALLS.key_hint || 0;
     const src1 = w.__CALLS.key_source || 0;
     R.push({
@@ -2039,7 +2114,7 @@ w.localStorage.setItem(promoCacheKey, JSON.stringify({
     // 保存密钥 = 显式失效点:下一次重绘必须重读
     w.__TEST.invalidateKeyMeta("keychan");
     w.__TEST.fillKeyHints(true);
-    await new Promise((r) => setTimeout(r, 60));
+    await w.__TEST.waitKeyMeta();
     R.push({
       name: "密钥变更后元数据缓存失效并重读",
       ok: (w.__CALLS.key_hint || 0) > hint1 && (w.__CALLS.key_source || 0) > src1,

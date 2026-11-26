@@ -3,7 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <title>Grandettoken</title>
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles-tokens.css">
+<link rel="stylesheet" href="styles-panel.css">
+<link rel="stylesheet" href="styles-manage.css">
 <link rel="stylesheet" href="vault-view.css">
 <link rel="stylesheet" href="codex-reset.css">
 <link rel="stylesheet" href="quota-plan.css">
@@ -269,6 +271,8 @@
       <h4>开机与更新</h4>
       <div class="field"><span>开机自启(静默进托盘)</span>
         <button class="sw" id="cfgAutostart" role="switch" aria-checked="false" aria-label="开机自启"></button></div>
+      <div class="field"><span>托盘省内存模式<span class="desc">隐藏 5 分钟后释放界面，网页会话取数期间暂缓释放</span></span>
+        <button class="sw" id="cfgHibernateWebview" role="switch" aria-checked="false" aria-label="托盘省内存模式"></button></div>
       <div class="field"><span>自动检查更新<span class="desc">每 24 小时最多问一次服务器</span></span>
         <button class="sw" id="cfgAutoUpdate" role="switch" aria-checked="true" aria-label="自动检查更新"></button></div>
       <h4>显示</h4>
@@ -562,6 +566,9 @@
     </div>
   </div>
 
+  <script src="gt-api.js"></script>
+  <script src="gt-store.js"></script>
+  <script src="gt-window-state.js"></script>
   <script src="vault-view.js"></script>
   <script src="expiry-ui.js"></script>
   <script src="quota-plan.js"></script>

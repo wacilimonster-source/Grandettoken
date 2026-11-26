@@ -10,6 +10,7 @@ const html = fs.readFileSync(path.join(root, "app/src/index.html"), "utf8");
 let gatewayJs = fs.readFileSync(path.join(root, "app/src/gateway-view.js"), "utf8");
 const gatewayStateJs = fs.readFileSync(path.join(root, "app/src/gateway-ui-state.js"), "utf8");
 let gatewayAdvJs = fs.readFileSync(path.join(root, "app/src/gateway-advanced.js"), "utf8");
+let api = require("./lib/app-sources").apiSource();
 
 const sentinel = process.env.MAGPIE_SENTINEL;
 const sentinels = {
@@ -61,7 +62,8 @@ function mutate(source, before, after, name) {
 
 if (sentinels[sentinel]) {
   const [before, after] = sentinels[sentinel];
-  gatewayAdvJs = mutate(gatewayAdvJs, before, after, sentinel);
+  if (sentinel === "cmd") api = mutate(api, before, after, sentinel);
+  else gatewayAdvJs = mutate(gatewayAdvJs, before, after, sentinel);
 } else if (sentinel) {
   throw new Error(`未知 Magpie 网关哨兵：${sentinel}`);
 } else if (!process.argv.includes("--behavior-only")) {
@@ -335,6 +337,8 @@ function ck(name, ok, extra = "") {
 
 async function run() {
   installWindow();
+  w.__TAURI__ = { ...w.__TAURI__, core: { invoke: w.invoke } };
+  w.eval(api);
   w.eval(`${gatewayStateJs}\n//# sourceURL=gateway-ui-state.js`);
   w.eval(`${gatewayJs}\n//# sourceURL=gateway-view.js`);
   w.eval(`${gatewayAdvJs}\n//# sourceURL=gateway-advanced.js`);

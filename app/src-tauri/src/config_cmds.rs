@@ -1,12 +1,20 @@
 use super::*;
 
 #[tauri::command]
+pub(crate) fn get_cached_channels(state: State<'_, AppState>) -> Option<ChannelsPush> {
+    let views = state.fetcher.last_views()?;
+    let home = home_view_of(&lock_rw(&state.config), &views, now_ts());
+    Some(ChannelsPush { views, home })
+}
+
+#[tauri::command]
 pub(crate) async fn get_channels(state: State<'_, AppState>, force: Option<bool>) -> Result<Vec<ChannelView>, String> {
     let store = state.store.clone();
+    let reader = state.read_store.clone();
     let fetcher = state.fetcher.clone();
     // fetch_shared:与轮询/托盘刷新共用闸门,手动刷新不再叠加出一份并发请求(报告 O-4)
     if force.unwrap_or(false) { fetcher.request_refresh(); }
-    Ok(fetcher.fetch_shared(&store).await)
+    Ok(fetcher.fetch_shared_using(&store, &reader).await)
 }
 
 /// 首页四种形态的**统一视图**:一行一个 `FormRow`,加一份排好的顺序与几个计数。
@@ -19,8 +27,9 @@ pub(crate) async fn get_channels(state: State<'_, AppState>, force: Option<bool>
 #[tauri::command]
 pub(crate) async fn home_view(state: State<'_, AppState>) -> Result<view::HomeView, String> {
     let store = state.store.clone();
+    let reader = state.read_store.clone();
     let fetcher = state.fetcher.clone();
-    let views = fetcher.fetch_shared(&store).await;
+    let views = fetcher.fetch_shared_using(&store, &reader).await;
 
     let cfg = lock_rw(&state.config).clone();
     Ok(home_view_of(&cfg, &views, now_ts()))
@@ -65,6 +74,7 @@ pub(crate) fn apply_hotkey(app: &tauri::AppHandle, state: &AppState, want: &str)
 #[tauri::command]
 pub(crate) async fn set_config(app: tauri::AppHandle, state: State<'_, AppState>, config: Config) -> Result<(), String> {
     refuse_if_config_broken()?;
+    let hibernate_changed = lock_rw(&state.config).hibernate_webview_on_hide != config.hibernate_webview_on_hide;
     // 前端提交的是它启动时那份配置的快照。更新流程(跳过版本/上次检查时间)和
     // 窗口位置是后端单方面往前推的字段 —— 前端拿不到最新值,整份覆盖会把它们
     // 抹回 None(报告 P1-3:跳过某版本后,下次保存设置让该版本又重新弹窗)。
@@ -150,6 +160,10 @@ pub(crate) async fn set_config(app: tauri::AppHandle, state: State<'_, AppState>
     // 配置变了(隐藏渠道 / 间隔 / 阈值…)就作废"5 秒内复用上次结果"的窗口 ——
     // 否则保存后立刻取数会拿到旧视图,界面看起来像"点了没反应"(用户实测:隐藏渠道恢复)。
     state.fetcher.invalidate();
+    tray::wake(&app);
+    if hibernate_changed {
+        hibernate::config_changed(&app);
+    }
     google_cloud_web::wake();
     Ok(())
 }

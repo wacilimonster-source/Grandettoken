@@ -489,12 +489,9 @@ pub fn group_is_live(group: &RouteGroup, live_channels: &[Published]) -> bool {
 }
 
 pub fn snapshot_vault_platforms(g: &Gateway) -> BTreeMap<String, String> {
-    super::lock(&g.store)
-        .vault_list()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|v| (v.id, v.platform))
-        .collect()
+    g.vault_index().map_or_else(|_| BTreeMap::new(), |vault| {
+        vault.values().map(|v| (v.id.clone(), v.platform.clone())).collect()
+    })
 }
 
 #[cfg(test)]

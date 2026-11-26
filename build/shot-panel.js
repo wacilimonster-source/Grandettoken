@@ -142,7 +142,7 @@ const CH = [
     try {
       const back = await evalJs(`(async () => {
         CFG = ${cfgSnap};
-        await invoke('set_config', { config: CFG });
+        await window.GT_API.config.setConfig( { config: CFG });
         applyConfigToUI();
         await applyForm(CFG.form || 'panel', false);
         return JSON.stringify(CFG);

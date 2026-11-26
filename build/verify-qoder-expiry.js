@@ -79,7 +79,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     // 引导行只在**桌面凭据有效**的 Qoder 区上写(fetch.rs:valid 才进逐包链),
     // 本机哪个区有效就断言哪个区 —— 两个区都是合法现场(2026-11-08 起国内版同链)。
     const extra = JSON.parse(await evalJs(`(async () => {
-      const vs = await invoke("get_channels");
+      const vs = await window.GT_API.channels.getChannels();
       const qs = vs.filter((c) => c.id === "qoder" || c.id === "qoder-cn");
       const q = qs.find((c) => c.valid) || qs[0] || {};
       return JSON.stringify({ which: q.id, valid: q.valid,

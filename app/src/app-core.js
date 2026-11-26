@@ -1,6 +1,5 @@
 /* TokenScope 前端。经 window.__TAURI__ 调 Rust 命令(withGlobalTauri)。 */
 const T = window.__TAURI__;
-const invoke = T.core.invoke;
 const listen = T.event.listen;
 const appWindow = T.window.getCurrentWindow();
 
@@ -20,9 +19,6 @@ function setAttrIfChanged(el, name, val) {
   else if (el.hasAttribute(name)) el.removeAttribute(name);
 }
 
-let CHANNELS = [];
-let WINDOW_VISIBLE = true;
-let CFG = null;
 let VER = "";          // app_version 命令回来的版本号,关于页在首检之前也有的显示
 let SYNC_STATUS = null; // 同步状态缓存(sync_status 命令),设置索引与同步子页共用
 let SYNC_STATUS_ERROR = null;
@@ -59,7 +55,7 @@ function applyFontScale() {
   document.documentElement.style.setProperty("--u", String(fsU()));
 }
 
-/** 主题:深石墨(默认)/ 暖雾白。变量与组件样式在 styles.css 末尾的 V2 段。 */
+/** 主题令牌在 styles-tokens.css，组件样式跟随当前主题类。 */
 function applyTheme() {
   const light = !!(CFG && CFG.theme === "light");
   document.body.classList.toggle("light", light);
@@ -236,7 +232,7 @@ function peakCountdown(p, nowMs) {
 
 /**
  * 时间驱动文案(快照年龄/峰谷倒计时/重置/到期)原地更新:不改行签名、不重建整行。
- * 对齐分钟边界跑;传 `root` 时仅填充该子树(供测试与模板保真校验)。
+ * 对齐分钟边界跑，传 `root` 时仅填充该子树。
  */
 function tickPeakCountdowns(root = document) {
   const full = root === document;
@@ -244,29 +240,31 @@ function tickPeakCountdowns(root = document) {
   if (full && window.PanelLayoutUI) window.PanelLayoutUI.tick();
   if (full && window.AntigravityUI) window.AntigravityUI.tick();
   const nowMs = Date.now();
-  root.querySelectorAll('[data-tdyn="snap"]').forEach((el) => {
+  const roots = full ? [$("list"), DETAIL_ID && $("detailBody")].filter(Boolean) : [root];
+  const nodes = (selector) => roots.flatMap((item) => [...item.querySelectorAll(selector)]);
+  nodes('[data-tdyn="snap"]').forEach((el) => {
     const at = Number(el.dataset.at);
     if (Number.isFinite(at)) setTextIfChanged(el, snapAge(at));
   });
-  root.querySelectorAll("[data-peakcd]").forEach((el) => {
+  nodes("[data-peakcd]").forEach((el) => {
     try { setTextIfChanged(el, peakCountdown(JSON.parse(el.dataset.peakcd), nowMs)); } catch (e) { /* silent: 无效峰谷属性跳过 */ }
   });
-  root.querySelectorAll("[data-reset-at]").forEach((el) => setTextIfChanged(el, quotaResetCountdown(Number(el.dataset.resetAt))));
+  nodes("[data-reset-at]").forEach((el) => setTextIfChanged(el, quotaResetCountdown(Number(el.dataset.resetAt))));
   // Codex 数值标签里的极简倒计时:按同一份降级档位重算,别把 fit 收窄的那一档冲掉
-  root.querySelectorAll("[data-reset-tight]").forEach((el) => {
+  nodes("[data-reset-tight]").forEach((el) => {
     const ms = Number(el.dataset.resetTight), mode = el.dataset.tightMode || "full";
     setTextIfChanged(el, mode === "off" ? "" : "·" + (mode === "short" ? fmtResetTightShort(ms, nowMs) : fmtResetTight(ms, nowMs)));
   });
   // 到期相对时间:每分钟原地更新,跨过到期时刻立刻变成「已到期,待刷新」
   let expCrossed = false;
-  root.querySelectorAll("[data-exp-at]").forEach((el) => {
+  nodes("[data-exp-at]").forEach((el) => {
     const at = Number(el.dataset.expAt);
     if (!Number.isFinite(at)) return;
     const before = el.textContent, after = expiryRelative(at);
     if (before && before !== after && before !== "已到期,待刷新" && after === "已到期,待刷新") expCrossed = true;
     setTextIfChanged(el, after);
   });
-  root.querySelectorAll('.r2[role="note"]').forEach((r2) => {
+  nodes('.r2[role="note"]').forEach((r2) => {
     const rt = r2.querySelector(".rt"), end = r2.querySelector(".end");
     const lt = rt ? rt.textContent.replace(/\s+/g, " ").trim() : "";
     const et = end ? end.textContent.replace(/\s+/g, " ").trim() : "";
@@ -635,7 +633,6 @@ function sortChannels(list, prevOrder) {
 // (设计稿 D01/D02/D03)。判定现在收在后端 `view.rs` 里,前端只保留一份结果:
 // 排序、色调、主数字、陈旧标记都从它读。取不到(旧版后端 / IPC 失败)时,
 // 下面的每个读取口都会退回原来的本地判断,行为不回退。
-let HV = { byId: {}, order: [], checkin: null, actionCount: 0, staleCount: 0, errorCount: 0 };
 
 /** 收下一份后端视图。失败时保留上一份 —— 界面退回旧判断,而不是变空白。 */
 function hvApply(v) {

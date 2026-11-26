@@ -1,4 +1,5 @@
 use super::*;
+use axum::http::header;
 use std::time::Duration;
 use crate::gateway_proto::{ThinkingMode,ThoughtRequestPolicy,OpenAiWire};
 use serde_json::{json,Value};

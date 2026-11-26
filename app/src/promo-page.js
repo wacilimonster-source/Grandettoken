@@ -46,9 +46,9 @@ function promoPageCount(html) {
 }
 // 任一页失败就整体抛出，调用方保留上次完整快照。翻页期间上游新发布造成的重复条目按首次出现保留。
 async function loadPromoList() {
-  const first = await invoke("fetch_promo_page", { page: 1 });
+  const first = await window.GT_API.promos.fetchPromoPage({ page: 1 });
   const pages = Math.min(PROMO_PAGES, promoPageCount(first));
-  const rest = await Promise.all(Array.from({ length: pages - 1 }, (_, i) => invoke("fetch_promo_page", { page: i + 2 })));
+  const rest = await Promise.all(Array.from({ length: pages - 1 }, (_, i) => window.GT_API.promos.fetchPromoPage({ page: i + 2 })));
   const ids = new Set();
   return [first, ...rest].flatMap((html, i) => parsePromoPage(html, i + 1)).filter(item => {
     if (ids.has(item.id)) return false;

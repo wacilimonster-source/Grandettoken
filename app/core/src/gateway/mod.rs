@@ -1,9 +1,14 @@
-use axum::http::{header,HeaderMap};
+use axum::http::HeaderMap;
 use serde::{Deserialize,Serialize};
 use std::{collections::{BTreeMap,VecDeque},net::{IpAddr,Ipv4Addr,SocketAddr},sync::{Arc,Mutex}};
-use crate::{gateway_proto::{error::redact_secrets,masking::{MaskingSettings,StickyMaskStore},sources::{host_of_url,resolve_source_defaults},GatewaySourceKind,OpenAiWire,ThinkingMode,ThoughtRequestPolicy},proxy::ProxyClients,secrets,store::Store,store_gateway::{estimate_channel_cost_cny,GatewayUsageRow,GATEWAY_LEDGER_KEEP_DAYS}};
-use self::http::{dedupe_nonempty,now_unix,GatewayDiagEntry};
+use crate::{gateway_proto::{error::redact_secrets,masking::{MaskingSettings,StickyMaskStore},sources::{host_of_url,resolve_source_defaults},GatewaySourceKind,OpenAiWire,ThinkingMode,ThoughtRequestPolicy},proxy::ProxyClients,secrets,store::Store,store_gateway::GatewayUsageRow};
+use self::http::{dedupe_nonempty,GatewayDiagEntry};
 pub mod http;
+mod access;
+pub use access::authorized_with;
+mod projection;
+pub use projection::VaultMeta;
+mod ledger;
 pub mod lifecycle;
 mod refresh;
 pub mod routing;
@@ -190,7 +195,6 @@ pub struct Inner {
     pub next_sync_id: u64,
     pub routing: routing::RoutingRuntime,
     pub mask_store: StickyMaskStore,
-    pub ledger_writes: u64,
 }
 
 #[derive(Clone)]
@@ -201,6 +205,10 @@ pub struct Gateway {
     pub lifecycle: Arc<tokio::sync::Mutex<()>>,
     pub credentials: Arc<dyn crate::vault::transaction::CredentialStore>,
     pub access: Arc<dyn crate::vault::transaction::CredentialStore>,
+    access_token_sha256: Arc<Mutex<Option<[u8; 32]>>>,
+    projections: Arc<projection::Projections>,
+    ledger: Arc<ledger::Ledger>,
+    draining_runs: Arc<Mutex<Vec<tokio::sync::oneshot::Receiver<()>>>>,
 }
 
 pub fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -224,6 +232,7 @@ impl Gateway {
             }
         }
         let clients = ProxyClients::new()?;
+        let projections = Arc::new(projection::Projections::new(&lock(&store)));
         let gw = Self {
             store,
             inner: Arc::new(Mutex::new(Inner {
@@ -243,12 +252,15 @@ impl Gateway {
                 next_sync_id: 1,
                 routing: routing::RoutingRuntime::default(),
                 mask_store: StickyMaskStore::default(),
-                ledger_writes: 0,
             })),
             clients: Arc::new(clients),
             lifecycle: Arc::new(tokio::sync::Mutex::new(())),
             credentials,
             access,
+            access_token_sha256: Arc::new(Mutex::new(None)),
+            projections,
+            ledger: Arc::default(),
+            draining_runs: Arc::default(),
         };
         if migrated {
             let current = lock(&gw.inner).settings.clone();
@@ -376,9 +388,7 @@ impl Gateway {
             (tpl, url, um)
         };
         if entry.estimated_cost_cny.is_none() && entry.status < 400 {
-            let store = lock(&self.store);
-            entry.estimated_cost_cny = estimate_channel_cost_cny(
-                &store,
+            entry.estimated_cost_cny = self.channel_cost(
                 &template,
                 &base_url,
                 &upstream_model_name,
@@ -410,7 +420,7 @@ impl Gateway {
             agent: entry.agent.clone(),
         };
 
-        let should_prune = {
+        {
             let mut inner = lock(&self.inner);
             entry.id = inner.next_diag_id;
             inner.next_diag_id += 1;
@@ -418,21 +428,8 @@ impl Gateway {
                 inner.diagnostics.pop_front();
             }
             inner.diagnostics.push_back(entry);
-            inner.ledger_writes = inner.ledger_writes.wrapping_add(1);
-            inner.ledger_writes % 100 == 0
-        };
-        {
-            let store = lock(&self.store);
-            if let Err(e) = store.gateway_usage_insert(&ledger_row) {
-                crate::diaglog::write_keyed("gateway", "ledger", &e);
-            }
-            if should_prune {
-                let cutoff = now_unix() - GATEWAY_LEDGER_KEEP_DAYS * 86_400;
-                if let Err(e) = store.gateway_usage_prune(cutoff) {
-                    crate::diaglog::write_keyed("gateway", "ledger-prune", &e);
-                }
-            }
         }
+        self.ledger.push(&self.store, ledger_row);
         if let Some((model, msg)) = log_line {
             crate::diaglog::write_keyed("gateway", &model, &msg);
         }
@@ -450,7 +447,7 @@ impl Gateway {
 
     pub fn live_channels(&self) -> Vec<Published> {
         let channels = lock(&self.inner).settings.channels.clone();
-        let vault = match lock(&self.store).vault_list() {
+        let vault = match self.vault_index() {
             Ok(v) => v,
             Err(_) => return vec![],
         };
@@ -460,7 +457,7 @@ impl Gateway {
                 (c.no_upstream_key && c.kind() == GatewaySourceKind::OpenAiCompat)
                     // 上游请求按 vault_id 实时读密钥箱最新凭据；更新密钥后异步刷模型期间
                     // 不得把渠道从 /v1/models 里临时抹掉（否则外部客户端拉到空模型列表）。
-                    || vault.iter().any(|v| v.id == c.vault_id)
+                    || vault.contains_key(&c.vault_id)
             })
             .collect()
     }
@@ -477,53 +474,6 @@ pub fn authorized(headers: &HeaderMap, settings: &Settings) -> bool {
     authorized_with(headers, settings, &NativeAccess)
 }
 
-pub fn authorized_with(headers: &HeaderMap, settings: &Settings, access: &dyn crate::vault::transaction::CredentialStore) -> bool {
-    if headers.contains_key(header::ORIGIN) {
-        return false;
-    }
-    if !settings.auth && !settings.lan {
-        let Some(h) = headers.get(header::HOST).and_then(|v| v.to_str().ok()) else {
-            return false;
-        };
-        let host = if let Some(rest) = h.strip_prefix('[') {
-            rest.split(']').next().unwrap_or("")
-        } else {
-            h.rsplit_once(':').map(|(a, _)| a).unwrap_or(h)
-        };
-        return matches!(host, "127.0.0.1" | "localhost" | "::1");
-    }
-    let provided = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| {
-            let trimmed = s.trim();
-            let (scheme, token) = trimmed.split_once(' ')?;
-            if scheme.eq_ignore_ascii_case("bearer") {
-                Some(token.trim())
-            } else {
-                None
-            }
-        })
-        .or_else(|| {
-            headers
-                .get("x-api-key")
-                .and_then(|v| v.to_str().ok())
-                .map(str::trim)
-        })
-        .unwrap_or("");
-    let expected = match access.get(SECRET_KEY) {
-        Ok(Some(s)) => s,
-        _ => return false,
-    };
-    if provided.len() != expected.len() || provided.is_empty() {
-        return false;
-    }
-    provided
-        .bytes()
-        .zip(expected.bytes())
-        .fold(0u8, |a, (x, y)| a | (x ^ y))
-        == 0
-}
 
 pub fn peer_allowed(peer: SocketAddr, settings: &Settings) -> bool {
     let allow_v4 = |ip: Ipv4Addr| {

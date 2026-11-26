@@ -7,7 +7,7 @@ use tokenscope_core::{fetch::now_ts, google_cloud as gc};
 
 use crate::{lock_rw, AppState};
 
-const LABEL: &str = "google-cloud-credits";
+pub(crate) const LABEL: &str = "google-cloud-credits";
 const SCRIPT: &str = include_str!("google_cloud_capture.js");
 
 #[derive(Default)]
@@ -108,8 +108,14 @@ fn receive(app: &tauri::AppHandle, target: &tauri::Url) {
                     return;
                 }
                 if let Some(w) = handle.get_webview_window(LABEL) {
-                    if let Err(e) = w.hide() {
-                        notify(&handle, &format!("余额已保存，隐藏结算窗口失败: {e}"));
+                    // A background capture has no user to dismiss it; keeping the
+                    // window alive leaves a whole WebView2 runtime resident and
+                    // blocks省内存模式. The persistent profile keeps the session for
+                    // the next on-demand capture, so destroy instead of hiding.
+                    let result = if interactive { w.hide() } else { w.destroy() };
+                    if let Err(e) = result {
+                        let action = if interactive { "隐藏" } else { "关闭" };
+                        notify(&handle, &format!("余额已保存，{action}结算窗口失败: {e}"));
                     }
                 }
             });
@@ -124,6 +130,8 @@ fn receive(app: &tauri::AppHandle, target: &tauri::Url) {
         }
         Err(e) => {
             session.complete = true;
+            let interactive = session.interactive;
+            let completed_nonce = session.nonce.clone();
             if let Some(ref account) = session.expected {
                 if let Err(write_error) = gc::set_error(&lock_rw(&st.store), account) {
                     notify(app, &write_error);
@@ -133,6 +141,20 @@ fn receive(app: &tauri::AppHandle, target: &tauri::Url) {
             wake();
             st.fetcher.invalidate();
             notify(app, &e);
+            let handle = app.clone();
+            crate::on_main(app, move || {
+                let current = lock_rw(&SESSION);
+                if current.nonce != completed_nonce || !current.complete {
+                    return;
+                }
+                if let Some(w) = handle.get_webview_window(LABEL) {
+                    let result = if interactive { w.hide() } else { w.destroy() };
+                    if let Err(e) = result {
+                        let action = if interactive { "隐藏" } else { "关闭" };
+                        notify(&handle, &format!("取数失败，{action}结算窗口失败: {e}"));
+                    }
+                }
+            });
             let handle = app.clone();
             tauri::async_runtime::spawn(async move {
                 crate::refresh_now(&handle).await;

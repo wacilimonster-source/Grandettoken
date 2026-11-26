@@ -13,7 +13,7 @@ execFileSync(process.execPath, [path.join(__dirname, "jsdom-smoke.js")], {
   cwd: root, env: { ...process.env, CODEX_LAYOUT_FIXTURES: fixturePath }, stdio: "pipe",
 });
 const fixtures = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
-const css = fs.readFileSync(path.join(root, "app/src/styles.css"), "utf8");
+const css = require("./lib/app-sources").baseStyleSource();
 const icon = "data:image/svg+xml;base64," + fs.readFileSync(path.join(root, "app/src/logos/chatgpt.svg")).toString("base64");
 (async () => {
   const browser = await chromium.launch({ executablePath: process.env.EDGE_BIN || path.join(process.env["ProgramFiles(x86)"], "Microsoft/Edge/Application/msedge.exe"), headless: true });

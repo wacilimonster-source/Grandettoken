@@ -470,7 +470,7 @@ ANTHROPIC_MODEL=${escHtml((gw.groupModels || [])[0] || "alias/model")}</pre>
     state.usageError = null;
     renderUsagePane(box);
     try {
-      const summary = await invoke("gateway_usage_summary", { days: state.usageDays, recentLimit: 40 });
+      const summary = await window.GT_API.gateway.usageSummary({ days: state.usageDays, recentLimit: 40 });
       if (ticket !== state.usageTicket) return;
       state.usageSummary = summary;
     } catch (err) {
@@ -492,8 +492,8 @@ ANTHROPIC_MODEL=${escHtml((gw.groupModels || [])[0] || "alias/model")}</pre>
     if (state.latestGw) renderConnectPane(box, state.latestGw);
     try {
       const [data, drift] = await Promise.all([
-        invoke("gateway_inject_clients"),
-        invoke("gateway_inject_drift").catch(() => []),
+        window.GT_API.gateway.injectClients(),
+        window.GT_API.gateway.injectDrift().catch(() => []),
       ]);
       if (ticket !== state.clientsTicket) return;
       state.clientsData = data;
@@ -523,20 +523,20 @@ ANTHROPIC_MODEL=${escHtml((gw.groupModels || [])[0] || "alias/model")}</pre>
       try {
         if (act === "copy-group") {
           const gid = btn.dataset.groupId || "";
-          await invoke("copy_text", { text: `group/${gid}` });
+          await window.GT_API.desktop.copyText({ text: `group/${gid}` });
           notify(`已复制：group/${gid}`);
           return;
         }
         if (act === "copy-val") {
-          await invoke("copy_text", { text: btn.dataset.val || "" });
+          await window.GT_API.desktop.copyText({ text: btn.dataset.val || "" });
           notify("已复制到剪贴板");
           return;
         }
         if (act === "copy-claude-env") {
-          const key = await invoke("gateway_secret", { rotate: false });
+          const key = await window.GT_API.gateway.secret({ rotate: false });
           const anth = gw.endpoints?.anthropicBaseUrl || `http://127.0.0.1:${gw.port}`;
           const model = (gw.groupModels || [])[0] || (gw.channels || []).find((c) => !c.stale && c.models?.length)?.models?.[0] || "alias/model";
-          await invoke("copy_text", {
+          await window.GT_API.desktop.copyText({
             text: `ANTHROPIC_BASE_URL=${anth}\nANTHROPIC_AUTH_TOKEN=${key}\nANTHROPIC_MODEL=${model}`,
           });
           notify("Claude Code 环境变量已复制");
@@ -597,7 +597,7 @@ ANTHROPIC_MODEL=${escHtml((gw.groupModels || [])[0] || "alias/model")}</pre>
             cooldownSecs: Number(d.cooldownSecs) || 60,
             targets: d.targets,
           };
-          const next = await lastHelpers.writeGateway(() => invoke("gateway_save_group", { input }));
+          const next = await lastHelpers.writeGateway(() => window.GT_API.gateway.saveGroup({ input }));
           state.groupDraft = defaultGroupDraft(next);
           lastHelpers.applyStatus(next);
           notify(`路由组 group/${input.id} 已保存`);
@@ -606,7 +606,7 @@ ANTHROPIC_MODEL=${escHtml((gw.groupModels || [])[0] || "alias/model")}</pre>
         if (act === "delete-group") {
           const gid = btn.dataset.groupId || "";
           if (!confirm(`确定删除虚拟路由组 group/${gid} 吗？`)) return;
-          const next = await lastHelpers.writeGateway(() => invoke("gateway_delete_group", { id: gid }));
+          const next = await lastHelpers.writeGateway(() => window.GT_API.gateway.deleteGroup({ id: gid }));
           if (state.groupDraft?.editingId === gid) state.groupDraft = null;
           lastHelpers.applyStatus(next);
           notify(`路由组 group/${gid} 已删除`);
@@ -623,7 +623,7 @@ ANTHROPIC_MODEL=${escHtml((gw.groupModels || [])[0] || "alias/model")}</pre>
         }
         if (act === "clear-usage") {
           if (!confirm("确定清空所有本地网关用量账本记录吗？此操作不可撤销。")) return;
-          await invoke("gateway_clear_usage");
+          await window.GT_API.gateway.clearUsage();
           state.usageSummary = null;
           await loadUsage(box);
           notify("网关用量账本已清空");
@@ -642,7 +642,7 @@ ANTHROPIC_MODEL=${escHtml((gw.groupModels || [])[0] || "alias/model")}</pre>
           const rawModel = targetVal.slice(sep + 2);
           const isGroup = kind === "group";
           const modelId = isGroup ? `group/${rawModel}` : rawModel;
-          const items = await invoke("gateway_inject_preview", { client, modelId, isGroup });
+          const items = await window.GT_API.gateway.injectPreview({ client, modelId, isGroup });
           state.preview = { client, modelId, isGroup, targetValue: targetVal, items };
           state.reports = [];
           renderConnectPane(box, gw);
@@ -661,8 +661,8 @@ ANTHROPIC_MODEL=${escHtml((gw.groupModels || [])[0] || "alias/model")}</pre>
           if (act === "apply-inject" && warn && !confirm(warn + "\n仍要写入吗？写入后需重启该工具或开新会话生效。")) return;
           const reports = await lastHelpers.writeGateway(() =>
             act === "apply-inject"
-              ? invoke("gateway_inject_apply", { client, modelId, isGroup })
-              : invoke("gateway_inject_remove", { client, modelId, isGroup }),
+              ? window.GT_API.gateway.injectApply({ client, modelId, isGroup })
+              : window.GT_API.gateway.injectRemove({ client, modelId, isGroup }),
           );
           state.reports = reports || [];
           state.preview = null;
@@ -673,7 +673,7 @@ ANTHROPIC_MODEL=${escHtml((gw.groupModels || [])[0] || "alias/model")}</pre>
         if (act === "rollback-inject") {
           const backup = btn.dataset.backup || "";
           if (!backup) return;
-          const msg = await invoke("inject_rollback", { backup });
+          const msg = await window.GT_API.inject.rollback({ backup });
           notify(msg || "已从备份还原");
           await loadClients(box);
           return;
@@ -693,7 +693,7 @@ ANTHROPIC_MODEL=${escHtml((gw.groupModels || [])[0] || "alias/model")}</pre>
               .filter((s) => s.length >= 3),
           };
           try {
-            const next = await lastHelpers.writeGateway(() => invoke("gateway_set_masking", { input: nextMask }));
+            const next = await lastHelpers.writeGateway(() => window.GT_API.gateway.setMasking({ input: nextMask }));
             lastHelpers.applyStatus(next);
             notify(nextMask.enabled ? "已开启请求前 Sticky Prompt 脱敏" : "Prompt 脱敏已关闭");
           } catch (err) {

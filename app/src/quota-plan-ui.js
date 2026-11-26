@@ -49,7 +49,7 @@
     if (!scope || profile?.scope === scope || request?.scope === scope && request.at === c.updatedAt) return;
     const current = { scope, at: c.updatedAt, revision: ++revision };
     request = current;
-    invoke("codex_reset_profile_get", { id: "codex" }).then(value => {
+    window.GT_API.codexReset.profileGet({ id: "codex" }).then(value => {
       if (current.revision !== revision) return;
       if (value?.scope === scope && CHANNELS.some(c => c.id === "codex" && c.quotaPlanScope === scope)) setCodexProfile(value);
       else if (!CHANNELS.some(c => c.id === "codex" && c.quotaPlanScope === scope)) request = null;

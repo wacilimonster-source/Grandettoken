@@ -42,9 +42,9 @@ pub(crate) async fn poll_loop(app: tauri::AppHandle) {    let mut failures = 0u3
         loop {
             if tokio::time::Instant::now() >= deadline { break; }
             if UPDATING.load(std::sync::atomic::Ordering::Relaxed) { break; }
-            let (store, fetcher) = {
+            let (store, reader, fetcher) = {
                 let state = app.state::<AppState>();
-                (state.store.clone(), state.fetcher.clone())
+                (state.store.clone(), state.read_store.clone(), state.fetcher.clone())
             };
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             // .max(1):next 在过去时也至少睡 1 秒,避免"到期 → 重算 → 又到期"的空转
@@ -62,7 +62,7 @@ pub(crate) async fn poll_loop(app: tauri::AppHandle) {    let mut failures = 0u3
                 _ = UPDATING_NOTIFY.notified() => {}
             }
             if UPDATING.load(std::sync::atomic::Ordering::Relaxed) { break; }
-            if let Some(views) = fetcher.fetch_retries(&store).await {
+            if let Some(views) = fetcher.fetch_retries_using(&store, &reader).await {
                 emit_channels(&app, &views);
                 maybe_notify_crit(&app, &views);
                 settle_arrivals(&app).await;
@@ -71,25 +71,19 @@ pub(crate) async fn poll_loop(app: tauri::AppHandle) {    let mut failures = 0u3
         if UPDATING.load(std::sync::atomic::Ordering::Relaxed) { continue; }
 
         // 先把 Arc 取出来,避免 State 借用跨越 await
-        let (store, fetcher) = {
+        let (store, reader, fetcher) = {
             let state = app.state::<AppState>();
-            (state.store.clone(), state.fetcher.clone())
+            (state.store.clone(), state.read_store.clone(), state.fetcher.clone())
         };
 
         if now_ts() - last_prune >= 86_400 {
             last_prune = now_ts();
-            let s = lock_rw(&store);
-            if let Err(e) = s.prune(now_ts() - 90 * 86_400, tokenscope_core::fetch::local_tz_offset()) {
-                eprintln!("定期清理快照失败: {e}");
-            }
-            if let Err(e) = s.wal_checkpoint() {
-                eprintln!("定期 WAL checkpoint 失败: {e}");
-            }
+            prune_snapshots(store.clone()).await;
         }
 
         // 走 fetch_shared:用户点「立即刷新」撞上轮询时排队等结果,
         // 而不是对同一批账务接口发出双份请求(报告 O-4)
-        let views = fetcher.fetch_shared(&store).await;
+        let views = fetcher.fetch_shared_using(&store, &reader).await;
 
         if views.iter().any(|v| v.valid) {
             failures = 0;
@@ -140,32 +134,49 @@ fn checkpoint_wal(app: &tauri::AppHandle) {
     }
 }
 
-pub(crate) fn quit_when_idle(app: &tauri::AppHandle) {
-    if INJECTING.load(std::sync::atomic::Ordering::Relaxed) {
-        let h = app.clone();
-        tauri::async_runtime::spawn(async move {
-            for _ in 0..50 {
-                if !INJECTING.load(std::sync::atomic::Ordering::Relaxed) {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            }
-            checkpoint_wal(&h);
-            h.exit(0);
-        });
-    } else {
-        checkpoint_wal(app);
-        app.exit(0);
+pub(crate) async fn prune_snapshots(store: Arc<Mutex<Store>>) {
+    if let Err(e) = tokio::task::spawn_blocking(move || {
+        let s = lock_rw(&store);
+        if let Err(e) = s.prune(now_ts() - 90 * 86_400, tokenscope_core::fetch::local_tz_offset()) {
+            tokenscope_core::diaglog::write_keyed("store", "prune", &e);
+        }
+        if let Err(e) = s.wal_checkpoint() {
+            tokenscope_core::diaglog::write_keyed("store", "checkpoint", &e);
+        }
+    }).await {
+        tokenscope_core::diaglog::write_keyed("store", "prune-task", &e.to_string());
     }
 }
 
+pub(crate) fn quit_when_idle(app: &tauri::AppHandle) {
+    let h = app.clone();
+    tauri::async_runtime::spawn(async move {
+        for _ in 0..50 {
+            if !INJECTING.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+        if let Some(g) = h.try_state::<gateway::Gateway>() {
+            if let Err(e) = g.shutdown().await {
+                tokenscope_core::diaglog::write_keyed("gateway", "shutdown", &e);
+            }
+        }
+        let checkpoint_app = h.clone();
+        if let Err(e) = tokio::task::spawn_blocking(move || checkpoint_wal(&checkpoint_app)).await {
+            tokenscope_core::diaglog::write_keyed("store", "shutdown", &e.to_string());
+        }
+        h.exit(0);
+    });
+}
+
 pub(crate) async fn refresh_now(app: &tauri::AppHandle) {
-    let (store, fetcher) = {
+    let (store, reader, fetcher) = {
         let state = app.state::<AppState>();
-        (state.store.clone(), state.fetcher.clone())
+        (state.store.clone(), state.read_store.clone(), state.fetcher.clone())
     };
     fetcher.request_refresh();
-    let views = fetcher.fetch_shared(&store).await;
+    let views = fetcher.fetch_shared_using(&store, &reader).await;
     LAST_REFRESH.store(now_ts(), std::sync::atomic::Ordering::Relaxed);
     emit_channels(app, &views);
     // 快照已落库:顺手核一轮待落定的到账核对单(零网络请求,读库比增量)

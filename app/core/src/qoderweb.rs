@@ -81,6 +81,42 @@ pub struct PacksMemo {
     idx: std::sync::Mutex<Option<usize>>,
 }
 
+#[derive(Default)]
+pub(crate) struct QoderWebState {
+    packs: std::collections::HashMap<String, CachedPacks>,
+    memos: std::collections::HashMap<String, std::sync::Arc<PacksMemo>>,
+}
+
+struct CachedPacks {
+    scope: String,
+    ts: i64,
+    packs: Vec<Expiring>,
+}
+
+impl QoderWebState {
+    pub(crate) fn memo(&mut self, id: &str) -> std::sync::Arc<PacksMemo> {
+        self.memos.entry(id.to_owned()).or_default().clone()
+    }
+
+    pub(crate) fn remember_packs(&mut self, id: &str, scope: &str, ts: i64, packs: Vec<Expiring>) {
+        self.packs.insert(id.to_owned(), CachedPacks { scope: scope.to_owned(), ts, packs });
+    }
+
+    pub(crate) fn cached_packs(&self, id: &str, scope: &str) -> Option<(i64, Vec<Expiring>)> {
+        self.packs.get(id).filter(|cached| cached.scope == scope)
+            .map(|cached| (cached.ts, cached.packs.clone()))
+    }
+
+    pub(crate) fn forget_packs(&mut self, id: &str) {
+        self.packs.remove(id);
+    }
+
+    pub(crate) fn forget(&mut self, id: &str) {
+        self.forget_packs(id);
+        self.memos.remove(id);
+    }
+}
+
 impl PacksMemo {
     pub fn winner(&self) -> Option<usize> {
         *self.idx.lock().unwrap_or_else(|p| p.into_inner())

@@ -14,7 +14,7 @@
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
-const { DEFAULT_SRC, appFileNames } = require("./lib/app-sources");
+const { DEFAULT_SRC, appFileNames, bootstrapFiles } = require("./lib/app-sources");
 
 function extractTopLevelNames(code) {
   // Strip comments and string literals while tracking brace depth so we only inspect depth === 0
@@ -191,7 +191,7 @@ function makeLoadSandbox() {
   return vm.createContext(ctx);
 }
 
-function checkSplit({ htmlNames, diskNames, files }) {
+function checkSplit({ htmlNames, diskNames, files, bootstrap = bootstrapFiles() }) {
   const errors = [];
 
   // 1. 清单一致与首尾约束
@@ -215,7 +215,7 @@ function checkSplit({ htmlNames, diskNames, files }) {
 
   // 2. 单文件独立编译
   const compiled = [];
-  for (const f of files) {
+  for (const f of [...bootstrap, ...files]) {
     try {
       compiled.push({ name: f.name, script: new vm.Script(f.code, { filename: f.name }) });
     } catch (e) {
@@ -225,7 +225,7 @@ function checkSplit({ htmlNames, diskNames, files }) {
 
   // 3. 跨文件顶层声明唯一
   const seen = new Map();
-  for (const f of files) {
+  for (const f of [...bootstrap, ...files]) {
     for (const item of extractTopLevelNames(f.code)) {
       const prev = seen.get(item.name);
       if (prev) {
@@ -237,7 +237,7 @@ function checkSplit({ htmlNames, diskNames, files }) {
   }
 
   // 4. 逐文件按序加载执行(拦截加载期前向调用后面文件的函数)
-  if (compiled.length === files.length && errors.length === 0) {
+  if (compiled.length === bootstrap.length + files.length && errors.length === 0) {
     const ctx = makeLoadSandbox();
     for (const c of compiled) {
       try {
@@ -266,6 +266,7 @@ function loadCurrentState(srcDir = DEFAULT_SRC) {
 function selfTest() {
   console.log("app-*.js 拆分完整性门禁 自检:");
   const base = loadCurrentState();
+  if (!checkSplit(base).ok) throw new Error("正常样本必须先通过: " + checkSplit(base).errors.join(" | "));
   const cloneFiles = () => base.files.map((f) => ({ ...f }));
   const cases = [
     {
@@ -307,7 +308,7 @@ function selfTest() {
       name: "跨文件顶层重名被判红",
       run: () => {
         const files = cloneFiles();
-        files[1].code = "let CFG = null;\n" + files[1].code;
+        files[1].code = "let T = null;\n" + files[1].code;
         return checkSplit({ htmlNames: base.htmlNames, diskNames: base.diskNames, files });
       },
     },

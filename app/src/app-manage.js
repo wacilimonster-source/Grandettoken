@@ -1,15 +1,13 @@
 // ───────────── 设置与管理(四页签;渠道卡渲染见 renderChCards)─────────────
 const manageOpen = () => document.body.classList.contains("view-manage");
+const isTabVisible = (tab) => manageOpen() && currentTab === tab && !document.body.classList.contains("manage-index");
 
 function openManage() {
   // 详情弹层在最上层:任何入口进设置页都先把弹层收掉,不能让它盖着设置页
   if (DETAIL_ID) closeDetail(false);
-  // 先挂上 view-manage:下面的 fillKeyHints 会检查 manageOpen(),
-  // 类晚加一步就会让这一次读取被当成"页面没打开"而跳过。
+  // 凭据读取依赖 view-manage，先让设置页进入打开态。
   document.body.classList.add("view-manage");
-  // 这些块只在管理页里出现,轮询 render 会因为"页面没打开"跳过它们,
-  // 所以打开时主动建一次,不然第一次进来会是空的
-  // 打开设置页 = 缓存失效点:用户可能刚从密钥箱/别的程序改了凭据,重读一次
+  // 用户可能刚在别处改了凭据，打开设置时刷新缓存。
   invalidateKeyMeta();
   renderChCards();
   fillKeyHints(true);
@@ -262,7 +260,7 @@ $("list").addEventListener("click", async (e) => {
     if (!hadCache) changesState[id] = "loading";
     renderDetailSheet();
     try {
-      changesCache[id] = await invoke("channel_changes", { id, days: 7 });
+      changesCache[id] = await window.GT_API.channels.channelChanges({ id, days: 7 });
       changesState[id] = "done";
     } catch {
       // 重取失败不清掉已有缓存(报告 L1):失败路径推翻"先画缓存"的设计意图,
@@ -433,6 +431,7 @@ function showTab(name) {
   const btns = [...$("mTabs").children];
   const b = btns.find((x) => x.dataset.p === name);
   if (name !== "index" && !b) return;
+  currentTab = name;
   for (const x of btns) x.classList.toggle("on", x === b);
   document
     .querySelectorAll("#manage .panel")
@@ -442,13 +441,14 @@ function showTab(name) {
   if (mt) mt.textContent = TAB_TITLES[name] || "设置与管理";
   const back = $("btnBack");
   if (back) back.title = name === "index" ? "关闭设置" : "返回设置索引";
+  const dirty = window.GT_STORE.setTabDirty(name, false);
   if (name === "index") {
     renderManageIndex();
     return;
   }
-  // 页签的「进入时读一次」集中在这里:索引页(mIndexList)与旧页签栏都走 showTab。
-  // 以前这些只挂在 mTabs 的 click 上,而旧页签栏被 CSS 隐藏 —— 从索引点进密钥箱
-  // 时列表根本没读过,画面上没有条目也没有「新增」,像坏了。
+  if (dirty && name === "ch") refreshChCards();
+  if (dirty && name === "disp") renderPillPick();
+  // 索引与页签栏共用进入时的数据读取。
   // 签到中心:每次切进来都重读一次流水(本地 SQLite,便宜;后台可能刚签完)
   if (name === "ck") loadCheckinHistory();
   // 模型页签才去取清单:没打开就不打扰接口(价目表一天一次的手动/自动刷新)

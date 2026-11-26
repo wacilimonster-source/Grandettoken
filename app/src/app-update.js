@@ -8,7 +8,7 @@ async function saveHotkey(acc) {
   CFG.hotkey = acc;
   $("cfgHotkey").value = hkLabel(acc) || "未设置";
   try {
-    await invoke("set_config", { config: CFG });
+    await window.GT_API.config.setConfig({ config: CFG });
   } catch (err) {
     // 注册失败(多半被别的程序占用):回滚界面,别让用户以为设上了
     CFG.hotkey = old;
@@ -54,6 +54,7 @@ function syncStaticControls() {
   const hk = $("cfgHotkey");
   if (hk) hk.value = hkLabel(CFG.hotkey) || "未设置";
   setSwitch("cfgAutostart", CFG.autostart);
+  setSwitch("cfgHibernateWebview", CFG.hibernateWebviewOnHide);
   setSwitch("cfgAutoUpdate", CFG.autoCheckUpdate !== false);
   setSwitch("cfgTrayNum", CFG.trayShowNumber !== false);
   setSwitch("cfgPulse", CFG.alertPulse);
@@ -212,7 +213,7 @@ function hideCard() {
 async function checkUpdate(force) {
   try {
     if (force) setMsg("正在检查…");
-    const st = await invoke("check_update", { force });
+    const st = await window.GT_API.updates.checkUpdate({ force });
     UPD.last = st;
     if (st.checkedNow) CFG.lastCheckAt = Math.floor(Date.now() / 1000);
     renderAbout(st);
@@ -283,8 +284,8 @@ for (const [id, platform, label] of [
     btn.disabled = true;
     btn.textContent = "正在获取…";
     try {
-      const text = await invoke("download_link", { platform });
-      await invoke("copy_text", { text });
+      const text = await window.GT_API.desktop.downloadLink({ platform });
+      await window.GT_API.desktop.copyText({ text });
       showToast(label + "下载直链已复制");
     } catch (e) {
       showToast("复制下载直链失败: " + e, true);
@@ -313,7 +314,7 @@ function fmtBytes(n) {
 /** 刷新日志卡(路径 / 大小 / 是否被环境变量关掉 / 详细日志开关 / 会话 id)。 */
 async function refreshLogCard() {
   try {
-    const info = await invoke("diag_log_info");
+    const info = await window.GT_API.diagLog.info();
     LOG_INFO = info;
     const el = $("logPath");
     if (el) el.textContent = info.path || info.dir || "—";
@@ -341,8 +342,8 @@ if ($("btnLogCopy")) {
     const btn = $("btnLogCopy");
     btn.disabled = true;
     try {
-      const text = await invoke("diag_log_tail", { lines: 600 });
-      await invoke("copy_text", { text });
+      const text = await window.GT_API.diagLog.tail({ lines: 600 });
+      await window.GT_API.desktop.copyText({ text });
       showToast("最近日志已复制 · 可直接粘贴给 AI 排查");
     } catch (e) {
       showToast("复制日志失败:" + e, true);
@@ -352,7 +353,7 @@ if ($("btnLogCopy")) {
   });
   $("btnLogOpen").addEventListener("click", async () => {
     try {
-      await invoke("open_log_dir");
+      await window.GT_API.desktop.openLogDir();
     } catch (e) {
       showToast("打开日志目录失败:" + e, true);
     }
@@ -361,7 +362,7 @@ if ($("btnLogCopy")) {
     // 清空不可逆,但代价很小(只是排查线索);行内确认说清「清掉就没了」(替代原生 confirm)
     armConfirm($("btnLogClear"), "清掉之后,下次出问题就没有这段记录了。", async () => {
       try {
-        await invoke("diag_log_clear");
+        await window.GT_API.diagLog.clear();
         await refreshLogCard();
         showToast("日志已清空");
       } catch (e) {
@@ -386,8 +387,8 @@ if ($("btnDiagExport")) {
     const old = btn.textContent;
     btn.textContent = "导出中…";
     try {
-      const text = await invoke("diag_export");
-      await invoke("copy_text", { text });
+      const text = await window.GT_API.desktop.diagExport();
+      await window.GT_API.desktop.copyText({ text });
       showToast("诊断包已复制 · 可直接粘贴给 AI 排查");
     } catch (e) {
       showToast("导出诊断包失败:" + e, true);
@@ -408,7 +409,7 @@ if ($("logVerbose")) {
   $("logVerbose").addEventListener("change", async (e) => {
     const on = e.target.checked;
     try {
-      await invoke("diag_log_verbose", { on });
+      await window.GT_API.diagLog.verbose({ on });
       showToast(on ? "详细日志已打开 · 成功的请求也会记录" : "详细日志已关闭");
     } catch (err) {
       e.target.checked = !on; // 没改成就弹回去,别让界面显示着一个没生效的状态
@@ -426,7 +427,7 @@ $("btnDiag").addEventListener("click", async () => {
   $("diagOut").style.display = "block";
   $("diagOut").textContent = "正在逐渠道测试连接…";
   try {
-    const report = await invoke("run_diagnostic");
+    const report = await window.GT_API.channels.runDiagnostic();
     $("diagOut").textContent = report;
     $("btnDiagCopy").style.display = "inline-block";
     // 体检把失败链也写进了日志,顺手刷新一下大小/路径。
@@ -442,7 +443,7 @@ $("btnDiag").addEventListener("click", async () => {
 });
 $("btnDiagCopy").addEventListener("click", async () => {
   try {
-    await invoke("copy_text", { text: $("diagOut").textContent });
+    await window.GT_API.desktop.copyText({ text: $("diagOut").textContent });
     showToast("报告已复制 · 可直接粘贴给 AI 排查");
   } catch (e) {
     showToast("复制失败:" + e, true);
@@ -470,7 +471,7 @@ async function startInstall() {
   renderUpdChip();
   if (ovOpen()) overlayUpdState(); // 按钮置灰、进度条出现
   try {
-    await invoke("install_update");
+    await window.GT_API.updates.installUpdate();
   } catch (e) {
     setMsg("更新失败:" + e, true);
     // 后端只在 promise 里报错、没有 failed 事件:这里自己落 phase,
@@ -491,7 +492,7 @@ $("btnUpdSkip").addEventListener("click", async () => {
   // 先等后端落盘再清界面。以前是"发出去就清":写失败时界面说"已跳过",
   // 重启后又弹同一个版本,而且没有任何提示 —— 用户只会认为"跳过按钮没用"。
   try {
-    await invoke("skip_update_version", { version: v });
+    await window.GT_API.updates.skipUpdateVersion({ version: v });
   } catch (e) {
     showToast("跳过该版本失败:" + e, true);
     return;

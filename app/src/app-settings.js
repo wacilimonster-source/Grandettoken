@@ -1,7 +1,7 @@
 // 置顶:窗口状态与配置一起改(见 Rust 的 set_pin),按钮与设置项共用同一个值
 async function setPin(enabled) {
   try {
-    await invoke("set_pin", { enabled });
+    await window.GT_API.config.setPin({ enabled });
     CFG.alwaysOnTop = enabled;
     applyPinUI();
   } catch (e) {
@@ -35,10 +35,10 @@ $("btnPill").addEventListener("click", () => {
 });
 // 失败必须说出来:invoke 被拒时以前没有 catch,"点了没反应"用户只会以为按钮坏了(F16)
 $("btnH").addEventListener("click", () =>
-  invoke("window_cmd", { action: "hide" }).catch((e) => showToast("隐藏失败:" + e, true))
+  window.GT_API.desktop.windowCmd({ action: "hide" }).catch((e) => showToast("隐藏失败:" + e, true))
 );
 $("lkQuit").addEventListener("click", () =>
-  invoke("window_cmd", { action: "quit" }).catch((e) => showToast("退出失败:" + e, true))
+  window.GT_API.desktop.windowCmd({ action: "quit" }).catch((e) => showToast("退出失败:" + e, true))
 );
 $("lkKeys").addEventListener("click", () => {
   // 入口常驻(2026-11-08):管理页里也固定显示,行为改成开关式 ——
@@ -115,8 +115,6 @@ $("dockClose").addEventListener("click", () => {
 // 胶囊轮播。不做"悬停暂停":挂件上的鼠标经常就停在胶囊附近,
 // 一暂停看起来就像轮播坏了(实测踩过);点击动作只是展开面板,内容变换无副作用。
 // 折中:悬停时节奏延长 3 倍(每 3 拍才进一步),既不"像坏了"也不打断阅读。
-// 也**不**在 document.hidden 时短路:窗口收进托盘时,这个轮播就是托盘数字的轮播
-// 驱动(报告 O-10 建议加可见性判断,加了会让托盘停在第一个渠道上不再轮换)。
 let pillHover = false, pillTick = 0;
 $("pill").addEventListener("mouseenter", () => (pillHover = true));
 $("pill").addEventListener("mouseleave", () => (pillHover = false));
@@ -130,7 +128,7 @@ let pillTimer = null;
 function pillSchedule() {
   clearTimeout(pillTimer);
   pillTimer = setTimeout(function pillTickOnce() {
-    if (PILL.list.length >= 2 && document.body.className.includes("form-pill")) {
+    if (WINDOW_VISIBLE && PILL.list.length >= 2 && document.body.className.includes("form-pill")) {
       pillTick++;
       // 悬停时节奏延长 3 倍:暂停曾被误认为轮播坏了(实测踩过),所以只放慢、不暂停
       const slowed = pillHover && pillTick % 3 !== 0;
@@ -158,7 +156,7 @@ async function saveCfg(what) {
   // 只存引用的话失败时"回滚"回去的还是改过的对象,等于没回滚。
   const backup = JSON.parse(JSON.stringify(CFG));
   try {
-    await invoke("set_config", { config: CFG });
+    await window.GT_API.config.setConfig({ config: CFG });
     return true;
   } catch (e) {
     showToast("保存" + (what || "设置") + "失败:" + e, true);
@@ -181,7 +179,7 @@ async function saveConfigAndRefresh() {
   // 整份深拷贝 CHANNELS 太重,这里只存真正会被调用方改的那一个字段。
   const hidBackup = CHANNELS.map((c) => ({ c, hidden: c.hidden }));
   try {
-    await invoke("set_config", { config: CFG });
+    await window.GT_API.config.setConfig({ config: CFG });
   } catch (e) {
     showToast("保存设置失败:" + e, true);
     CFG = cfgBackup;
@@ -331,9 +329,9 @@ $("manage").addEventListener("click", async (e) => {
     // 凭据失效的指路,各渠道各回各家(报告 B6):Qoder 的签到凭据来自 Qoder 桌面端,
     // 以前统一落到 Trae 文案 —— 打开 Trae 对 Qoder 毫无作用,4 个可签到渠道里 2 个被误导。
     if (id === "workbuddy") {
-      await invoke("workbuddy_login").catch((e) => showToast("打不开登录窗口:" + e, true));
+      await window.GT_API.channels.workbuddyLogin().catch((e) => showToast("打不开登录窗口:" + e, true));
     } else if (id === "doubao") {
-      await invoke("doubao_login").catch((e) => showToast("打不开登录窗口:" + e, true));
+      await window.GT_API.desktop.doubaoLogin().catch((e) => showToast("打不开登录窗口:" + e, true));
     } else if (CHECKIN_QODER.has(id)) {
       showToast("打开一次 Qoder 桌面端即可(它自己会续期)");
     } else {
@@ -357,7 +355,7 @@ $("manage").addEventListener("click", async (e) => {
       return;
     }
     try {
-      await invoke("copy_text", { text: v });
+      await window.GT_API.desktop.copyText({ text: v });
       showToast("已复制 " + id);
     } catch (e) {
       showToast("复制失败:" + e, true);
@@ -371,7 +369,7 @@ $("manage").addEventListener("click", async (e) => {
       .map((k) => k + ":" + f[k])
       .join("\n");
     try {
-      await invoke("copy_text", { text });
+      await window.GT_API.desktop.copyText({ text });
       showToast("已复制(不含密钥)");
     } catch (e) {
       showToast("复制失败:" + e, true);
@@ -381,7 +379,7 @@ $("manage").addEventListener("click", async (e) => {
   if (a === "infokeycopy") {
     const src = (MDL.sheet && MDL.sheet.source) || MDL.src;
     try {
-      const msg = await invoke("key_copy", { id: src });
+      const msg = await window.GT_API.desktop.keyCopy({ id: src });
       showToast(msg + " · 剪贴板对其他程序可见");
     } catch (e) {
       showToast("复制失败:" + e, true);
@@ -397,7 +395,7 @@ $("manage").addEventListener("click", async (e) => {
     }
     const src = (MDL.sheet && MDL.sheet.source) || MDL.src;
     try {
-      const key = await invoke("key_reveal", { id: src });
+      const key = await window.GT_API.desktop.keyReveal({ id: src });
       // 计时器归这个盒子自己:渠道卡那边的明文不受影响(F5)
       revealBoxShow(box, key);
     } catch (e) {
@@ -440,7 +438,7 @@ $("manage").addEventListener("click", async (e) => {
   }
   if (a === "mdlcopy") {
     try {
-      const msg = await invoke("copy_model_bundle", {
+      const msg = await window.GT_API.models.copyModelBundle({
         model: id,
         source: MDL.sheet && MDL.sheet.source,
       });
@@ -452,7 +450,7 @@ $("manage").addEventListener("click", async (e) => {
   }
   if (a === "mdlrollback") {
     try {
-      const msg = await invoke("inject_rollback", { backup: id });
+      const msg = await window.GT_API.inject.rollback({ backup: id });
       showToast(msg);
       MDL.sheet = null;
       loadInjects();
@@ -463,7 +461,7 @@ $("manage").addEventListener("click", async (e) => {
   }
   if (a === "openpath") {
     try {
-      await invoke("open_path", { path: id });
+      await window.GT_API.desktop.openPath({ path: id });
     } catch (err) {
       showToast("打开失败:" + err, true);
     }
@@ -515,7 +513,7 @@ $("manage").addEventListener("click", async (e) => {
     // 以前拦截在浏览器里靠索引:索引读失败就静默放行,索引不准就拦了个寂寞。
     const force = a === "vdel-force";
     try {
-      const r = await invoke("vault_delete", force ? { id, force: true } : { id });
+      const r = await window.GT_API.vault.delete(force ? { id, force: true } : { id });
       if (r && r.deleted === false) {
         const list = r.referrers || [];
         const names = list.map(channelName).join("、");
@@ -545,7 +543,7 @@ $("manage").addEventListener("click", async (e) => {
     }
   } else if (a === "vcopy") {
     try {
-      const msg = await invoke("vault_copy", { id });
+      const msg = await window.GT_API.vault.copy({ id });
       showToast(msg + " · 剪贴板对其他程序可见");
     } catch (e) {
       showToast("复制失败:" + e, true);
@@ -555,16 +553,16 @@ $("manage").addEventListener("click", async (e) => {
     const endpoint = item && (item.apiEndpoint || "").trim();
     if (!endpoint) { showToast("该密钥尚未填写调用端点", true); return; }
     try {
-      await invoke("copy_text", { text: endpoint });
+      await window.GT_API.desktop.copyText({ text: endpoint });
       showToast("调用端点已复制");
     } catch (e) {
       showToast("复制端点失败:" + e, true);
     }
   } else if (a === "vreveal") {
-    await window.VaultUI.reveal(id, invoke, renderVault, showToast);
+    await window.VaultUI.reveal(id, window.GT_API.vault.reveal, renderVault, showToast);
   } else if (a === "keycopy") {
     try {
-      const msg = await invoke("key_copy", { id });
+      const msg = await window.GT_API.desktop.keyCopy({ id });
       showToast(msg + " · 剪贴板对其他程序可见");
     } catch (e) {
       showToast("复制失败:" + e, true);
@@ -574,7 +572,7 @@ $("manage").addEventListener("click", async (e) => {
     const box = document.querySelector(`.prb[data-prb="${id}"]`);
     if (box) box.innerHTML = '<span class="mini">正在测试…</span>';
     try {
-      const r = await invoke("probe_channel", { id });
+      const r = await window.GT_API.channels.probeChannel({ id });
       if (!box) return;
       if (r.ok) {
         const val =
@@ -616,7 +614,7 @@ $("manage").addEventListener("click", async (e) => {
       return;
     }
     try {
-      const msg = await invoke("custom_remove", { id });
+      const msg = await window.GT_API.channels.customRemove({ id });
       showToast(msg);
       await refresh();
     } catch (e) {
@@ -631,7 +629,7 @@ $("manage").addEventListener("click", async (e) => {
       return;
     }
     try {
-      const key = await invoke("key_reveal", { id });
+      const key = await window.GT_API.desktop.keyReveal({ id });
       // 计时器归这个盒子自己:模型弹层那边的明文不受影响(F5)
       revealBoxShow(box, key);
     } catch (e) {
@@ -641,7 +639,6 @@ $("manage").addEventListener("click", async (e) => {
     CFG.hiddenChannels = [];
     for (const c of CHANNELS) c.hidden = false;
     render();
-    refreshChCards();
     await saveConfigAndRefresh();
   } else if (a === "chvis") {
     const hid = CFG.hiddenChannels || (CFG.hiddenChannels = []);
@@ -657,7 +654,6 @@ $("manage").addEventListener("click", async (e) => {
       cc.hidden = false;
       cc.autoHidden = false;
       render();
-      refreshChCards();
       await saveConfigAndRefresh();
       return;
     }
@@ -666,7 +662,6 @@ $("manage").addEventListener("click", async (e) => {
     // 卡片会原地不动 —— 那就是用户看到的"没反应"。这里先按意图画出结果,下一轮取数再对齐。
     if (cc) cc.hidden = at < 0;
     render();
-    refreshChCards();
     await saveConfigAndRefresh(); // 隐藏即停止取数:重取一轮,汇总/胶囊/底栏同步
   } else if (a === "qoderweblogin") {
     await qoderWebLogin(id, false);
@@ -678,7 +673,7 @@ $("manage").addEventListener("click", async (e) => {
     // 打开 WorkBuddy 网页登录窗。令牌由 Rust 侧从窗口导航里接住,前端只负责状态与提示,
     // 结果走 workbuddy-login 事件(成功/取消/失败都从那里回)。
     try {
-      await invoke("workbuddy_login");
+      await window.GT_API.channels.workbuddyLogin();
       WB_LOGGING = true;
       renderChCards();
       showToast("登录窗口已打开 · 完成登录后会自动关窗");
@@ -688,7 +683,7 @@ $("manage").addEventListener("click", async (e) => {
   } else if (a === "dblogin") {
     // 豆包登录窗:同一条纪律,结果走 doubao-login 事件
     try {
-      await invoke("doubao_login");
+      await window.GT_API.desktop.doubaoLogin();
       DB_LOGGING = true;
       renderChCards();
       showToast("登录窗口已打开 · 完成登录后会自动关窗");
@@ -700,7 +695,7 @@ $("manage").addEventListener("click", async (e) => {
     const val = input ? input.value.trim() : "";
     if (!val) return;
     try {
-      await invoke("set_key", { id, key: val });
+      await window.GT_API.config.setKey({ id, key: val });
       input.value = "";
       invalidateKeyMeta(id);
       await refresh();
@@ -723,7 +718,7 @@ $("manage").addEventListener("click", async (e) => {
     if (!vid) return;
     const it = VAULT.find((x) => x.id === vid);
     try {
-      await invoke("set_key_ref", { id, vaultId: vid });
+      await window.GT_API.config.setKeyRef({ id, vaultId: vid });
       invalidateKeyMeta(id);
       await refresh();
       renderChCards();
@@ -740,7 +735,7 @@ $("manage").addEventListener("click", async (e) => {
   } else if (a === "unvault") {
     // 取消引用,改回"直接填"。
     try {
-      await invoke("clear_key_ref", { id });
+      await window.GT_API.config.clearKeyRef({ id });
       invalidateKeyMeta(id);
       await refresh();
       renderChCards();
@@ -769,7 +764,7 @@ $("manage").addEventListener("click", async (e) => {
     try {
       // delete_key 现在回一句人话(删了什么 / 浏览器会话清没清干净):照它说的显示,
       // 后端更清楚这次到底动了哪些东西(F17)。老后端返回空时退回原来的文案。
-      const msg = await invoke("delete_key", { id });
+      const msg = await window.GT_API.desktop.deleteKey({ id });
       invalidateKeyMeta(id);
       await refresh();
       renderChCards();
@@ -800,7 +795,7 @@ $("manage").addEventListener("click", async (e) => {
     grantOpen.add(id);
     renderChCards();
     try {
-      GRANTS[id] = await invoke("credit_grants", { id, days: 30 });
+      GRANTS[id] = await window.GT_API.channels.creditGrants({ id, days: 30 });
     } catch (e) {
       GRANTS[id] = [];
       showToast("读取积分记录失败:" + e, true);
@@ -901,10 +896,11 @@ $("cfgLayout").addEventListener("click", (e) => {
   const btn = e.target.closest("button[data-layout]");
   if (btn) setPanelLayout(btn.dataset.layout);
 });
-bindSwitch("cfgAutostart", "autostart", (on) => invoke("set_autostart", { enabled: on }));
+bindSwitch("cfgAutostart", "autostart", (on) => window.GT_API.desktop.setAutostart({ enabled: on }));
+bindHibernateSwitch();
 bindSwitch("cfgAutoUpdate", "autoCheckUpdate");
-// 托盘余额数字:切换后强制重画(绕过 trayKey 缓存)
-bindSwitch("cfgTrayNum", "trayShowNumber", () => { trayKey = ""; drawTrayIcon(); });
+// 保存后由 Rust 更新托盘图标。
+bindSwitch("cfgTrayNum", "trayShowNumber");
 // 告急呼吸(动效 G):全应用唯一循环动画,默认关;开关只拨 body.pulse 这个总闸
 bindSwitch("cfgPulse", "alertPulse", (on) => document.body.classList.toggle("pulse", !!on));
 // 单击胶囊速览(方案 C):关掉后单击无动作,▲ 仍展开面板
@@ -981,7 +977,7 @@ bindSwitch("cfgSound", "soundOn", (on) => {
     F.test.disabled = true;
     try {
       // `|| {}`:命令返回 null(异常实现)时也不该把整段逻辑炸掉 —— 报"没通"就够了
-      const r = (await invoke("custom_test", { ch: draft(), key: F.key.value })) || {};
+      const r = (await window.GT_API.channels.customTest({ ch: draft(), key: F.key.value })) || {};
       passed = !!r.ok;
       F.save.disabled = !passed;
       F.save.textContent = passed ? "保存这个渠道" : "测试通过后保存";
@@ -1007,7 +1003,7 @@ bindSwitch("cfgSound", "soundOn", (on) => {
     if (!passed) return;
     F.save.disabled = true;
     try {
-      const id = await invoke("custom_add", { ch: draft(), key: F.key.value });
+      const id = await window.GT_API.channels.customAdd({ ch: draft(), key: F.key.value });
       showToast("已添加自定义渠道 " + id + ",下一次取数就会带上它");
       [F.name, F.short, F.color, F.url, F.path, F.scale, F.key].forEach((el) => (el.value = ""));
       F.probeOnly.classList.remove("on");
@@ -1038,7 +1034,7 @@ bindSwitch("cfgDock", "dockEnabled", async (on) => {
   if (!on && DOCK.on) await dockExit(true);
 });
 bindSwitch("cfgPin", "alwaysOnTop", async (on) => {
-  await invoke("set_pin", { enabled: on });
+  await window.GT_API.config.setPin({ enabled: on });
   applyPinUI();
 });
 // 紧凑条开关:关掉要立刻从紧凑条退回面板。不用 bindSwitch —— 保存失败时

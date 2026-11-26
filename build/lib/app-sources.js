@@ -3,6 +3,7 @@ const path = require("path");
 const vm = require("vm");
 
 const DEFAULT_SRC = path.resolve(__dirname, "../../app/src");
+const BOOTSTRAP_NAMES = ["gt-api.js", "gt-store.js", "gt-window-state.js"];
 
 function appFileNames(srcDir = DEFAULT_SRC) {
   const htmlPath = path.join(srcDir, "index.html");
@@ -22,8 +23,8 @@ function appFileNames(srcDir = DEFAULT_SRC) {
   return names;
 }
 
-function appFiles(srcDir = DEFAULT_SRC) {
-  return appFileNames(srcDir).map((name) => {
+function readScripts(srcDir, names) {
+  return names.map((name) => {
     const filePath = path.join(srcDir, name);
     return {
       name,
@@ -31,6 +32,33 @@ function appFiles(srcDir = DEFAULT_SRC) {
       code: fs.readFileSync(filePath, "utf8"),
     };
   });
+}
+
+function bootstrapFiles(srcDir = DEFAULT_SRC) {
+  const html = fs.readFileSync(path.join(srcDir, "index.html"), "utf8");
+  let previous = -1;
+  for (const name of BOOTSTRAP_NAMES) {
+    const tag = `src="${name}"`;
+    const index = html.indexOf(tag);
+    if (index <= previous || index >= html.indexOf('src="app-core.js"') || html.indexOf(tag, index + 1) !== -1) {
+      throw new Error(`前置脚本顺序错误或重复: ${name}`);
+    }
+    previous = index;
+  }
+  return readScripts(srcDir, BOOTSTRAP_NAMES);
+}
+
+function appFiles(srcDir = DEFAULT_SRC) {
+  return [...bootstrapFiles(srcDir), ...readScripts(srcDir, appFileNames(srcDir))];
+}
+
+function apiSource(srcDir = DEFAULT_SRC) {
+  return fs.readFileSync(path.join(srcDir, BOOTSTRAP_NAMES[0]), "utf8");
+}
+
+function baseStyleSource(srcDir = DEFAULT_SRC) {
+  return ["styles-tokens.css", "styles-panel.css", "styles-manage.css"]
+    .map((name) => fs.readFileSync(path.join(srcDir, name), "utf8")).join("\n");
 }
 
 function appSource(srcDirOrFiles = DEFAULT_SRC) {
@@ -83,6 +111,9 @@ module.exports = {
   appFileNames,
   appFiles,
   appSource,
+  bootstrapFiles,
+  apiSource,
+  baseStyleSource,
   replaceOnce,
   loadInto,
 };

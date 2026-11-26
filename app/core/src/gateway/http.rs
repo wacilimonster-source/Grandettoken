@@ -37,7 +37,7 @@ use crate::gateway_proto::{
 };
 
 use crate::gateway::{
-    authorized_with, effective_models, lock, model_id, peer_allowed,
+    effective_models, lock, model_id, peer_allowed,
     routing::{group_is_live, group_model_id},
     Gateway, Published,
 };
@@ -195,7 +195,7 @@ async fn list_models(
     if !peer_allowed(peer, &settings) {
         return json_error(StatusCode::FORBIDDEN, "仅允许本机或局域网访问", "gateway_error", None, None);
     }
-    if !authorized_with(&headers, &settings, g.access.as_ref()) {
+    if !g.is_authorized(&headers, &settings) {
         return json_error(StatusCode::UNAUTHORIZED, "网关密钥无效", "gateway_error", None, None);
     }
     let mut seen = BTreeSet::new();
@@ -239,7 +239,7 @@ async fn get_model(
     if !peer_allowed(peer, &settings) {
         return json_error(StatusCode::FORBIDDEN, "仅允许本机或局域网访问", "gateway_error", None, None);
     }
-    if !authorized_with(&headers, &settings, g.access.as_ref()) {
+    if !g.is_authorized(&headers, &settings) {
         return json_error(StatusCode::UNAUTHORIZED, "网关密钥无效", "gateway_error", None, None);
     }
     let live = g.live_channels();
@@ -285,7 +285,7 @@ async fn chat(
     if !peer_allowed(peer, &settings) {
         return json_error(StatusCode::FORBIDDEN, "仅允许本机或局域网访问", "gateway_error", None, None);
     }
-    if !authorized_with(&headers, &settings, g.access.as_ref()) {
+    if !g.is_authorized(&headers, &settings) {
         return json_error(StatusCode::UNAUTHORIZED, "网关密钥无效", "gateway_error", None, None);
     }
     let is_json = headers

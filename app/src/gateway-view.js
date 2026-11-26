@@ -181,7 +181,7 @@
   async function refreshDiagnostics() {
     const ticket = UI.read("diag");
     try {
-      const diags = await invoke("gateway_diagnostics");
+      const diags = await window.GT_API.gateway.diagnostics();
       if (!UI.current("diag", ticket)) return;
       GW_DIAGS = Array.isArray(diags) ? diags : [];
       renderDiagnostics(); // diagnostic-only
@@ -193,7 +193,7 @@
   async function clearDiagnostics() {
     UI.beginDiagWrite();
     try {
-      await invoke("gateway_clear_diagnostics");
+      await window.GT_API.gateway.clearDiagnostics();
       GW_DIAGS = [];
       renderDiagnostics();
     } finally {
@@ -207,7 +207,7 @@
     const ticket = UI.read("state");
     const diagnostics = refreshDiagnostics();
     try {
-      const status = await invoke("gateway_status");
+      const status = await window.GT_API.gateway.status();
       if (!UI.current("state", ticket)) return;
       GW = status;
       UI.sync(status.syncState);
@@ -934,7 +934,7 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
         UI.observe(box);
         const submitted = UI.submitted(box, cb.parentElement);
         try {
-          await writeGateway(() => invoke("gateway_update_channel", { input: { channelId: id, systemProxy: nextVal } }));
+          await writeGateway(() => window.GT_API.gateway.updateChannel({ input: { channelId: id, systemProxy: nextVal } }));
           UI.commit(box, submitted);
           notify(nextVal ? "已开启系统代理访问该渠道" : "已改为直连该渠道");
           await refreshGatewayData(true);
@@ -1007,27 +1007,27 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
         if (action === "copy-local" || action === "copy-lan") {
           const ip = action === "copy-local" ? "127.0.0.1" : byId("gwLanIp")?.value;
           if (!ip) throw new Error("未选择局域网网卡");
-          await invoke("copy_text", { text: `http://${ip}:${GW.port}/v1` });
+          await window.GT_API.desktop.copyText({ text: `http://${ip}:${GW.port}/v1` });
           notify("接入地址已复制（末尾无斜杠）");
           return;
         }
         if (action === "copy-model") {
-          await invoke("copy_text", { text: b.dataset.model || "" });
+          await window.GT_API.desktop.copyText({ text: b.dataset.model || "" });
           notify(`已复制模型：${b.dataset.model}`);
           return;
         }
         if (action === "copy-env-snippet") {
-          const key = await invoke("gateway_secret", { rotate: false });
+          const key = await window.GT_API.gateway.secret({ rotate: false });
           const sample = exampleModel();
           const txt = `OPENAI_BASE_URL=http://127.0.0.1:${GW.port}/v1\nOPENAI_API_KEY=${key}\n# 示例模型：${sample}`;
-          await invoke("copy_text", { text: txt });
+          await window.GT_API.desktop.copyText({ text: txt });
           notify("Agent 环境变量已复制");
           return;
         }
         if (action === "copy-secret" || action === "rotate-secret") {
           if (action === "rotate-secret" && !confirm("重新生成后旧网关密钥立即失效，继续吗？")) return;
-          const text = await invoke("gateway_secret", { rotate: action === "rotate-secret" });
-          await invoke("copy_text", { text });
+          const text = await window.GT_API.gateway.secret({ rotate: action === "rotate-secret" });
+          await window.GT_API.desktop.copyText({ text });
           notify(action === "rotate-secret" ? "新网关密钥已生成并复制" : "网关密钥已复制");
           return;
         }
@@ -1053,7 +1053,7 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
           GW_TEST_RUN_ID += 1;
           GW_TEST_BUSY = false;
           stopTestTimer(box);
-          await invoke("gateway_cancel_test_chat");
+          await window.GT_API.gateway.cancelTestChat();
           notify("已取消本次联调测试");
           return;
         }
@@ -1068,7 +1068,7 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
           GW_TEST_BUSY = true;
           startTestTimer(box);
           try {
-            const res = await invoke("gateway_test_chat", {
+            const res = await window.GT_API.gateway.testChat({
               input: {
                 channelId,
                 model,
@@ -1102,10 +1102,10 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
           const auth = lan || !!byId("gwAuth")?.checked;
           const submitted = UI.submitted(box, box.querySelector(".gw-settings-grid"));
           if (GW.running) {
-            await writeGateway(() => invoke("gateway_restart", { port, lan, auth }));
+            await writeGateway(() => window.GT_API.gateway.restart({ port, lan, auth }));
             notify("已应用设置并重启网关");
           } else {
-            await writeGateway(() => invoke("gateway_start", { port, lan, auth }));
+            await writeGateway(() => window.GT_API.gateway.start({ port, lan, auth }));
             notify("网关已启动");
           }
           UI.commit(box, submitted);
@@ -1113,7 +1113,7 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
           return;
         }
         if (action === "stop") {
-          await writeGateway(() => invoke("gateway_stop"));
+          await writeGateway(() => window.GT_API.gateway.stop());
           notify("网关已停止");
           await refreshGatewayData(true);
           return;
@@ -1121,19 +1121,19 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
         if (action === "remove") {
           const ch = (GW.channels || []).find((x) => (x.channelId || x.vaultId) === b.dataset.id);
           if (!confirm(`确定下架渠道「${ch?.alias || b.dataset.id}」？不会删除密钥箱中的密钥。`)) return;
-          await writeGateway(() => invoke("gateway_unpublish", { channelId: b.dataset.id }));
+          await writeGateway(() => window.GT_API.gateway.unpublish({ channelId: b.dataset.id }));
           notify("渠道已下架");
           await refreshGatewayData(true);
           return;
         }
         if (action === "refresh") {
-          await writeGateway(() => invoke("gateway_refresh_channel", { channelId: b.dataset.id }));
+          await writeGateway(() => window.GT_API.gateway.refreshChannel({ channelId: b.dataset.id }));
           notify("模型列表已刷新");
           await refreshGatewayData(true);
           return;
         }
         if (action === "test-channel") {
-          const res = await invoke("gateway_test_channel", { channelId: b.dataset.id });
+          const res = await window.GT_API.gateway.testChannel({ channelId: b.dataset.id });
           if (res.ok) notify(`连通正常 · ${res.latencyMs}ms${res.fetchedCount != null ? ` · ${res.fetchedCount} 个模型` : ""}`);
           else notify(`连通异常：${res.error || "未知错误"}`, true);
           return;
@@ -1168,7 +1168,7 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
           const vSel = card.querySelector("[data-gw-vault-edit]");
           if (vSel) payload.vaultId = vSel.value;
           const submitted = UI.submitted(box, card);
-          await writeGateway(() => invoke("gateway_update_channel", { input: payload }));
+          await writeGateway(() => window.GT_API.gateway.updateChannel({ input: payload }));
           UI.commit(box, submitted);
           notify("渠道配置已保存");
           await refreshGatewayData(true);
@@ -1196,7 +1196,7 @@ OPENAI_API_KEY=&lt;点击复制网关密钥&gt;
             thoughtPolicy: byId("gwNewThoughtPolicy")?.value || "follow_client",
           };
           const submitted = UI.submitted(box, box.querySelector('[data-gw-detail="add-channel"]'));
-          const published = await writeGateway(() => invoke("gateway_publish", { input }));
+          const published = await writeGateway(() => window.GT_API.gateway.publish({ input }));
           UI.commit(box, submitted);
           notify("渠道已上架");
           await refreshGatewayData({ clearAdd: true }); // canonical-publish

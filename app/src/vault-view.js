@@ -38,7 +38,7 @@ window.VaultUI = (() => {
     focusAction(id, "vfold");
   }
 
-  async function reveal(id, invoke, render, showToast) {
+  async function reveal(id, fetchSecret, render, showToast) {
     if (openId !== id) return;
     if (revealed && revealed.id === id) {
       hideReveal();
@@ -48,7 +48,7 @@ window.VaultUI = (() => {
     }
     const request = ++revealGeneration;
     try {
-      const value = await invoke("vault_reveal", { id });
+      const value = await fetchSecret({ id });
       if (request !== revealGeneration || openId !== id) return;
       revealed = { id, value };
       render();
@@ -59,7 +59,7 @@ window.VaultUI = (() => {
         render();
       }, 8000);
     } catch (err) {
-      if (request === revealGeneration && openId === id) showToast("取密钥失败:" + err, true);
+      if (request === revealGeneration && openId === id) showToast("取密钥失败:" + window.GT_API.errorText(err), true);
     }
   }
 

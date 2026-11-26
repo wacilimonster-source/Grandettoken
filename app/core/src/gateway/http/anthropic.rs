@@ -2,7 +2,7 @@
 
 use super::dispatch::{execute_dispatched, DispatchedSuccess};
 use super::responses::{ChatSse, DiagnosticGuard};
-use crate::gateway::{authorized_with, lock, peer_allowed, Gateway};
+use crate::gateway::{lock, peer_allowed, Gateway};
 use crate::gateway_proto::{
     anthropic::{
         anthropic_error_value, anthropic_to_openai_request, estimate_anthropic_input_tokens,
@@ -39,7 +39,7 @@ fn check_auth(
             "仅允许本机或局域网访问",
         ));
     }
-    if !authorized_with(headers, &settings, g.access.as_ref()) {
+    if !g.is_authorized(headers, &settings) {
         return Err(anthropic_json_error(
             StatusCode::UNAUTHORIZED,
             "authentication_error",

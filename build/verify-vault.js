@@ -6,17 +6,18 @@ const { spawnSync } = require("node:child_process");
 const { JSDOM } = require("jsdom");
 
 const root = path.resolve(__dirname, "..");
-const { appFileNames } = require("./lib/app-sources");
+const { appFileNames, apiSource } = require("./lib/app-sources");
 const html = fs.readFileSync(path.join(root, "app/src/index.html"), "utf8");
-let source = fs.readFileSync(path.join(root, "app/src/vault-view.js"), "utf8");
+const source = fs.readFileSync(path.join(root, "app/src/vault-view.js"), "utf8");
+let api = apiSource();
 const firstAppScript = `src="${appFileNames()[0]}"`;
 assert.match(html, /href="vault-view\.css"/);
 assert.ok(html.indexOf('src="vault-view.js"') >= 0 && html.indexOf('src="vault-view.js"') < html.indexOf(firstAppScript));
 
 if (process.env.VAULT_SENTINEL === "1") {
   const token = 'invoke("vault_reveal"';
-  assert.equal(source.split(token).length, 2, "哨兵必须命中唯一的显示命令");
-  source = source.replace(token, 'invoke("__unknown_vault_command__"');
+  assert.equal(api.split(token).length, 2, "哨兵必须命中唯一的显示命令");
+  api = api.replace(token, 'invoke("__unknown_vault_command__"');
 } else {
   const probe = spawnSync(process.execPath, [__filename], {
     env: { ...process.env, VAULT_SENTINEL: "1" }, encoding: "utf8", timeout: 15000,
@@ -50,6 +51,8 @@ const invoke = async (command) => {
   if (command !== "vault_reveal") throw new Error(`未知命令 ${command}`);
   return "示例明文";
 };
+w.__TAURI__ = { core: { invoke } };
+w.eval(api);
 
 async function run() {
   render();
@@ -66,7 +69,7 @@ async function run() {
   assert.equal(find("vfold", "one").getAttribute("aria-expanded"), "true");
   assert.equal(w.document.activeElement, find("vfold", "one"), "展开后保留键盘焦点");
   assert.match(w.document.querySelector(".vrow-address").textContent, /https:\/\/example.com\/v1/);
-  await ui.reveal("one", invoke, render, toast);
+  await ui.reveal("one", w.GT_API.vault.reveal, render, toast);
   assert.equal(w.document.querySelector(".vrow-reveal")?.textContent, "示例明文", "明文按需显示");
   assert.equal(w.document.activeElement, find("vreveal", "one"), "显示后保留键盘焦点");
   assert.equal(timers.size, 1);

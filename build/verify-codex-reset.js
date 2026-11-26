@@ -5,12 +5,13 @@ const path = require("path");
 const { JSDOM } = require("jsdom");
 
 const root = path.resolve(__dirname, "..");
-const { appSource } = require("./lib/app-sources");
+const { appSource, apiSource, replaceOnce } = require("./lib/app-sources");
 const html = fs.readFileSync(path.join(root, "app/src/index.html"), "utf8");
 const appJs = appSource();
 let moduleJs = fs.readFileSync(path.join(root, "app/src/codex-reset.js"), "utf8");
+let api = apiSource();
 if (process.env.CODEX_RESET_SENTINEL === "1") {
-  moduleJs = moduleJs.replace('invoke("codex_reset_advice"', 'invoke("__missing_reset_advice__"');
+  api = replaceOnce(api, 'invoke("codex_reset_advice"', 'invoke("__missing_reset_advice__"');
 } else if (process.env.CODEX_RESET_DATE_SENTINEL === "1") {
   const marker = 'return state.open && !state.saving && document.activeElement?.id === "codexResetSubEnd";';
   if (moduleJs.split(marker).length !== 2) throw new Error("日期保护哨兵必须命中唯一入口");
@@ -182,6 +183,7 @@ w.renderDetailSheet = () => {
   else host.innerHTML = w.CodexResetUI.render(w.CHANNELS[0]);
 };
 
+w.eval(api);
 w.eval(moduleJs);
 
 const wait = (ms = 20) => new Promise((r) => setTimeout(r, ms));

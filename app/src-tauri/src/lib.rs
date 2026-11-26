@@ -13,6 +13,8 @@ use tokenscope_core::fetch::{now_ts, ChannelView, Fetcher};
 use tokenscope_core::{appauth, checkin, inject, models, providers, secrets, store::Store, view, workbuddy};
 
 mod sync_cmds;
+mod sync_group_cmds;
+mod sync_oauth_cmds;
 mod download;
 mod gateway;
 mod gateway_ext;
@@ -26,15 +28,18 @@ mod codex_reset_cmd;
 mod google_cloud_web;
 mod webview_cookies;
 pub use sync_cmds::{
-    sync_create, sync_disconnect_github, sync_forget,
-    sync_join, sync_oauth_cancel, sync_oauth_poll, sync_oauth_start, sync_preview,
-    sync_publish_now, sync_qr_svg, sync_read_group, sync_recovery_candidates, sync_restore_group,
-    sync_rotate, sync_set_channels, sync_set_enabled,
-    sync_set_interval, sync_set_oauth_client_id, sync_set_platform_label, sync_status,
+    sync_preview, sync_publish_now, sync_qr_svg, sync_read_group,
+    sync_set_channels, sync_set_enabled, sync_set_interval, sync_set_platform_label, sync_status,
 };
+pub use sync_group_cmds::{
+    sync_create, sync_disconnect_github, sync_forget, sync_join, sync_recovery_candidates,
+    sync_restore_group, sync_rotate,
+};
+pub use sync_oauth_cmds::{sync_oauth_start, sync_oauth_poll, sync_oauth_cancel, sync_set_oauth_client_id};
 
 pub struct AppState {
     pub store: Arc<Mutex<Store>>,
+    pub read_store: Arc<Mutex<Store>>,
     pub config: Mutex<Config>,
     pub fetcher: Arc<Fetcher>,
     /// 当前已注册的全局快捷键(空 = 未注册)。换键时先注册新的、成功后再撤旧的。
@@ -51,6 +56,16 @@ mod custom_cmds;
 mod diag_cmds;
 mod key_ref_cmds;
 mod model_cmds;
+mod gateway_test_cmds;
+mod checkin_scheduler;
+mod checkin_history_cmd;
+mod diag_log_cmds;
+mod promo_cmds;
+mod os_cmds;
+mod inject_cmds;
+mod startup;
+mod hibernate;
+mod tray;
 mod notify;
 mod poll;
 mod update_cmds;
@@ -61,8 +76,10 @@ use checkin_activity::*;
 use checkin_cmds::*;
 use config_cmds::*;
 use diag_cmds::*;
-pub use model_cmds::DiagLogInfo;
-use model_cmds::*;
+pub use diag_log_cmds::DiagLogInfo;
+use os_cmds::copy_to_clipboard;
+use checkin_scheduler::*;
+use model_cmds::source_base;
 use notify::*;
 use poll::*;
 pub use update_cmds::UpdateState;
@@ -155,11 +172,13 @@ pub(crate) fn emit_channels(app: &tauri::AppHandle, views: &[ChannelView]) {
         }
         gw.update_channel_signals(signals);
     }
-    let home = home_view_of(&cfg, views, now);
-    let _ = app.emit(
-        "channels-updated",
-        ChannelsPush { views: views.to_vec(), home },
-    );
+    tray::publish(app, views);
+    if hibernate::has_live_webview(app) {
+        if let Some(window) = app.get_webview_window("main") {
+            let home = home_view_of(&cfg, views, now);
+            let _ = window.emit("channels-updated", ChannelsPush { views: views.to_vec(), home });
+        }
+    }
 }
 
 /// 配置那行 JSON 只是**格式坏了**、内容还可能手工救回来的时候,绝不能让任何一次保存把
@@ -176,19 +195,19 @@ pub(crate) async fn save_config_off_main(
     mutate: impl FnOnce(&mut Config),
 ) -> Result<(), String> {
     let _ser = CFG_WRITE.lock().await;
-    // 内存里改 + 序列化(快),落库(慢)交给阻塞任务。
-    let json = {
-        let mut cfg = lock_rw(&state.config);
-        mutate(&mut cfg);
-        serde_json::to_string(&*cfg).map_err(|e| format!("配置序列化失败: {e}"))?
-    };
+    // 落盘成功后才发布设置，避免保存失败时后台继续使用已回滚的开关。
+    let mut next = lock_rw(&state.config).clone();
+    mutate(&mut next);
+    let json = serde_json::to_string(&next).map_err(|e| format!("配置序列化失败: {e}"))?;
     let store = state.store.clone();
     tokio::task::spawn_blocking(move || {
         let s = lock_rw(&store);
         s.set_setting("config", &json)
     })
     .await
-    .map_err(|e| format!("保存设置失败: {e}"))?
+    .map_err(|e| format!("保存设置失败: {e}"))??;
+    *lock_rw(&state.config) = next;
+    Ok(())
 }
 
 /// 更新维护态与"客户端配置正在写"两个标志(报告 P1-15)。
@@ -307,16 +326,7 @@ pub fn run() {
         // 之前双开会出现两个托盘图标、两个轮询一起打账务接口,而且两套 SQLite
         // 连接写同一个库(报告 O-3)。
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            if let Some(w) = app.get_webview_window("main") {
-                let was = w.is_visible().unwrap_or(false);
-                let _ = w.show();
-                let _ = w.set_focus();
-                if !was {
-                    let _ = app.emit("window-shown", ());
-                }
-                // 第二实例把窗口唤回来时也补一轮,别让人看到半天前的数字(P3-37)
-                refresh_if_stale(app, 60);
-            }
+            hibernate::ensure_and_show_main_window(app);
         }))
         .plugin(tauri_plugin_opener::init())
         // 系统通知(裁决 3A)。前端没有打包器拿不到插件的 JS 包,所以通知**全在
@@ -330,249 +340,13 @@ pub fn run() {
                     if ev.state != ShortcutState::Pressed {
                         return;
                     }
-                    if let Some(w) = app.get_webview_window("main") {
-                        if w.is_visible().unwrap_or(false) {
-                            if w.hide().is_ok() { let _ = app.emit("window-hidden", ()); }
-                        } else {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                            // 真正「隐藏 → 显示」的那一刻告知前端(重放入场动画)。
-                            // 前端不能靠 focus 事件区分 alt-tab 与唤回(报告 B8)
-                            let _ = app.emit("window-shown", ());
-                            refresh_if_stale(app, 60);
-                        }
-                    }
+                    hibernate::toggle_main_window(app);
                 })
                 .build(),
         )
         // 公钥与端点都在 tauri.conf.json 的 plugins.updater 里,插件自己读配置
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .setup(|app| {
-            let dir = app.path().app_data_dir().map_err(|e| {
-                let m = format!("无法定位数据目录: {e}");
-                report_fatal("定位数据目录", &m)
-            })?;
-            let store = Store::open(&dir.join("tokenscope.db")).map_err(|e| {
-                let m = format!(
-                    "打开数据文件失败: {e}(路径 {});若还有 Grandettoken.exe 在运行,先结束它",
-                    dir.join("tokenscope.db").display()
-                );
-                report_fatal("打开数据库", &m)
-            })?;
-            // 配置坏了不能静默用默认值:那会把用户的隐藏渠道、快捷键、轮询间隔
-            // 全部悄悄还原(报告 P2-14)。取默认值继续启动,但把原因留给前端提示。
-            let (config, mut startup_error) = match Config::try_load(&store) {
-                Ok(c) => (c, None),
-                Err(e) => {
-                    // 用默认值继续启动是既定取舍(P2-14),但必须把后果说清、并且别再让
-                    // 一次随手保存把还能手工救回的那行 JSON 覆盖掉(报告 P1-16)。
-                    CONFIG_BROKEN.store(true, std::sync::atomic::Ordering::Relaxed);
-                    let msg = format!(
-                        "{e} —— 现已按默认设置运行:你之前隐藏的渠道恢复了取数。设置保存已暂停,以免覆盖还能修复的原始配置"
-                    );
-                    (Config::default(), Some(msg))
-                }
-            };
-
-            // 同步组使用独立记录，避免签到、窗口和其他设置的旧快照覆盖它。
-            // 配置损坏时不能用默认值迁移，保留原数据供恢复。
-            if !CONFIG_BROKEN.load(std::sync::atomic::Ordering::Relaxed) {
-                if let Err(e) = tokenscope_core::sync::profile::migrate(&store, &config) {
-                    startup_error = note(startup_error, format!("同步设置读取失败: {e}"));
-                }
-            }
-
-            // 注册表与配置对齐:开机自启以配置为准,并刷新为当前 exe 路径,
-            // 用户挪动 exe 后无需重新设置自启。构建目录里的开发版不写键,
-            // 旧版残留的自启项要让用户看得见(光靠新版删会被旧版开机时写回来)。
-            if let Some(msg) = autostart::sync(config.autostart) {
-                startup_error = note(startup_error, msg);
-            }
-
-            // 置顶 + 上次位置是持久化设置:启动时按配置应用,折叠形态没有置顶按钮也生效
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.set_always_on_top(config.always_on_top);
-                // 先恢复尺寸,再用**新尺寸**夹位置:否则宽窗口在屏幕边缘会被
-                // 按旧尺寸裁进屏幕,恢复位置后右/下边又探出去。
-                if config.form == "panel" {
-                    // 面板只有「单行窗 / 双行窗」两个固定尺寸,不再恢复用户拖动过的尺寸。
-                    let u = match config.font_scale.as_str() {
-                        "lg" => 1.15,
-                        "xl" => 1.3,
-                        _ => 1.0,
-                    };
-                    let (cw, ch) = if config.panel_layout == "double" {
-                        (860.0, 820.0)
-                    } else {
-                        (480.0, 820.0)
-                    };
-                    let _ = w.set_resizable(false);
-                    let _ = w.set_size(tauri::LogicalSize::new(
-                        cw * u + 20.0,
-                        ch * u + 20.0,
-                    ));
-                }
-                // 恢复窗口位置(报告 O-6)。多屏环境下副屏拔掉后旧坐标落在屏幕外,
-                // 窗口"消失"又无从找回 —— 所以按当前可用显示器裁一遍。
-                if let (Some(x), Some(y)) = (config.win_x, config.win_y) {
-                    if let Ok(size) = w.outer_size() {
-                        let (cx, cy) =
-                            clamp_to_monitors(app.handle(), x, y, size.width as i32, size.height as i32);
-                        if cx != x || cy != y {
-                            eprintln!("窗口位置 ({x},{y}) 不在任何显示器内,已修正为 ({cx},{cy})");
-                        }
-                        let _ = w.set_position(tauri::PhysicalPosition::new(cx, cy));
-                    }
-                }
-            }
-
-            let _ = store.prune(now_ts() - 90 * 86400, tokenscope_core::fetch::local_tz_offset());
-
-            // 排查用日志:目录与 SQLite 同一个文件夹(用户找得着、也跟着数据一起备份/清理)。
-            // **必须在 manage 与起轮询之前**:第一轮取数的失败链要能落进文件,否则
-            // "装上就取不到数"那种场景又只剩一句界面文案(2026-10-20 用户报的那类)。
-            tokenscope_core::diaglog::set_dir(dir.clone());
-            // 「详细日志」要在横幅**之前**生效:否则用户上次开着详细日志,
-            // 这一轮的启动事件就只记了"关着",横幅与实际对不上。
-            tokenscope_core::diaglog::set_verbose(config.diag_verbose);
-            tokenscope_core::diaglog::startup_banner(env!("CARGO_PKG_VERSION"));
-
-            app.manage(AppState {
-                store: Arc::new(Mutex::new(store)),
-                config: Mutex::new(config.clone()),
-                fetcher: Arc::new(Fetcher::new()),
-                hotkey: Mutex::new(None),
-                startup_error: Mutex::new(None),
-            });
-
-            match gateway::Gateway::new(app.state::<AppState>().store.clone()) {
-                Ok(gw) => {
-                    app.manage(gw);
-                    let gateway_app = app.handle().clone();
-                    tauri::async_runtime::spawn(async move { gateway::autostart(gateway_app).await; });
-                }
-                // TLS 后端初始化失败这类罕见故障:不再 panic 硬退(报告 L16)——
-                // 记进启动错误,余额监控与签到照常跑,只是本地网关这一项不可用。
-                Err(e) => {
-                    let msg = format!("本地网关初始化失败:{e}(余额监控不受影响,仅本地 API 网关不可用)");
-                    eprintln!("{msg}");
-                    startup_error = note(startup_error, msg);
-                }
-            }
-            // 后台一次性导入现有渠道密钥；不阻塞首屏，也不更改渠道引用。
-            let import_app = app.handle().clone();
-            let import_store = app.state::<AppState>().store.clone();
-            let import_cfg = config.clone();
-            tauri::async_runtime::spawn(async move {
-                let worker = import_app.clone();
-                if tokio::task::spawn_blocking(move || vault_sync::import_for_gateway(&worker, &import_store, &import_cfg)).await.is_err() {
-                    gateway::report_sync_error(&import_app, "导入渠道密钥任务失败".into());
-                }
-            });
-
-            // 网页登录型渠道的会话来源:每轮取数时现从 webview 的 Cookie 罐里读。
-            // 回调在取数路径的 spawn_blocking 里调用，避免主线程阻塞读 WebView。
-            let session_app = app.handle().clone();
-            app.state::<AppState>()
-                .fetcher
-                .set_web_credential_source(Box::new(move |id| web_session_of(&session_app, id)));
-
-            let progress_app = app.handle().clone();
-            google_cloud_web::start(app.handle().clone());
-            app.state::<AppState>().fetcher.set_progress_sink(Arc::new(move |views| {
-                emit_channels(&progress_app, &views);
-            }));
-
-            // 启动时注册已保存的全局快捷键;被占用不拦启动,但要把原因留给界面
-            // (之前只 eprintln,绿色版从托盘启动时没人看得到 stderr —— 报告 P2-14)
-            if !config.hotkey.is_empty() {
-                let st = app.state::<AppState>();
-                if let Err(e) = apply_hotkey(app.handle(), &st, &config.hotkey) {
-                    eprintln!("全局快捷键注册失败: {e}");
-                    startup_error = note(startup_error, e);
-                }
-            }
-            if let Some(msg) = startup_error {
-                *lock_rw(&app.state::<AppState>().startup_error) = Some(msg);
-            }
-
-            let refresh = MenuItem::with_id(app, "refresh", "刷新", true, None::<&str>)?;
-            let show = MenuItem::with_id(app, "show", "显示面板", true, None::<&str>)?;
-            let sep = PredefinedMenuItem::separator(app)?;
-            let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &refresh, &sep, &quit])?;
-
-            TrayIconBuilder::with_id("main")
-                .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("Grandettoken")
-                .menu(&menu)
-                // 左键只切换显示/隐藏(下面的事件处理),菜单留给右键。
-                // 不设这个开关时 Tauri 在 Windows 上左键也会弹菜单。
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, ev| match ev.id().as_ref() {
-                    // 正在写客户端配置时立刻退出会留下"改了没记账"的中间态,先等它写完(P1-15)
-                    "quit" => quit_when_idle(app),
-                    "show" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let was = w.is_visible().unwrap_or(false);
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                            if !was {
-                                let _ = app.emit("window-shown", ());
-                            }
-                            refresh_if_stale(app, 60);
-                        }
-                    }
-                    "refresh" => {
-                        let handle = app.clone();
-                        tauri::async_runtime::spawn(async move { refresh_now(&handle).await });
-                    }
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, ev| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = ev
-                    {
-                        let app = tray.app_handle();
-                        if let Some(w) = app.get_webview_window("main") {
-                            if w.is_visible().unwrap_or(false) {
-                                if w.hide().is_ok() { let _ = app.emit("window-hidden", ()); }
-                            } else {
-                                let _ = w.show();
-                                let _ = w.set_focus();
-                                let _ = app.emit("window-shown", ());
-                                refresh_if_stale(app, 60);
-                            }
-                        }
-                    }
-                })
-                .build(app)?;
-
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move { poll_loop(handle).await });
-            // 签到节拍器:独立于取数轮询(签到是写操作,节奏要分开)。
-            // **必须在原有 setup 里起** —— Tauri 的 Builder::setup 只有一个槽位,
-            // 再加一个会把 manage(AppState) 那套顶掉,应用会在第一条命令就 panic。
-            spawn_checkin_ticker(app.handle().clone());
-
-    // 引用索引对账(设计稿 product-vault-ref-reconcile-2026-10-21):
-    // 启动后台按真实指针重抄一遍索引 —— 无论上次是怎么走偏的,下次启动自己就好了。
-    spawn_vault_ref_rebuild(app.handle().clone());
-
-            // 窗口配置为 visible:false,这里统一控制显隐:
-            // 正常启动立即显示;开机自启带 --hidden,直接进托盘等用户点开
-            if !std::env::args().any(|a| a == "--hidden") {
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                }
-            }
-
-            Ok(())
-        })
+        .setup(startup::setup)
         // WorkBuddy 登录窗被用户自己关掉(没抓到会话)时,要让界面把「登录中」收回去,
         // 否则会一直卡在等令牌的样子。抓到会话那一次是我们主动关窗的,由 WB_LOGIN_DONE
         // 标位区分,不该再报一次"已取消"。观察者也靠 WB_LOGIN_CLOSED 收工 ——
@@ -612,6 +386,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             config_cmds::get_channels,
+            config_cmds::get_cached_channels,
             config_cmds::home_view,
             config_cmds::get_config,
             config_cmds::set_config,
@@ -622,9 +397,6 @@ pub fn run() {
             window_cmds::channel_changes,
             window_cmds::set_autostart,
             window_cmds::set_pin,
-            window_cmds::set_tray_icon,
-            window_cmds::set_tray_tooltip,
-            window_cmds::tray_icon_size,
             config_cmds::key_hint,
             window_cmds::window_cmd,
             update_cmds::check_update,
@@ -644,10 +416,10 @@ pub fn run() {
             gateway::gateway_refresh_channel,
             gateway::gateway_unpublish,
             gateway::gateway_test_channel,
-            gateway::gateway_test_chat,
-            gateway::gateway_cancel_test_chat,
-            gateway::gateway_diagnostics,
-            gateway::gateway_clear_diagnostics,
+            gateway_test_cmds::gateway_test_chat,
+            gateway_test_cmds::gateway_cancel_test_chat,
+            gateway_test_cmds::gateway_diagnostics,
+            gateway_test_cmds::gateway_clear_diagnostics,
             gateway_ext::gateway_save_group,
             gateway_ext::gateway_delete_group,
             gateway_ext::gateway_set_masking,
@@ -658,32 +430,32 @@ pub fn run() {
             gateway_ext::gateway_inject_preview,
             gateway_ext::gateway_inject_apply,
             gateway_ext::gateway_inject_remove,
-            model_cmds::inject_preview,
-            model_cmds::inject_apply,
-            model_cmds::inject_remove,
-            model_cmds::inject_state,
-            model_cmds::inject_rollback,
+            inject_cmds::inject_preview,
+            inject_cmds::inject_apply,
+            inject_cmds::inject_remove,
+            inject_cmds::inject_state,
+            inject_cmds::inject_rollback,
             model_cmds::copy_model_bundle,
             model_cmds::model_info,
-            model_cmds::copy_text,
+            os_cmds::copy_text,
             download::download_link,
-            model_cmds::open_path,
-            model_cmds::open_url,
-            model_cmds::fetch_promo_page,
-            model_cmds::open_promo_url,
-            model_cmds::diag_log_info,
-            model_cmds::diag_log_tail,
-            model_cmds::open_log_dir,
-            model_cmds::diag_log_clear,
-            model_cmds::diag_log_verbose,
-            model_cmds::diag_export,
+            os_cmds::open_path,
+            os_cmds::open_url,
+            promo_cmds::fetch_promo_page,
+            promo_cmds::open_promo_url,
+            diag_log_cmds::diag_log_info,
+            diag_log_cmds::diag_log_tail,
+            diag_log_cmds::open_log_dir,
+            diag_log_cmds::diag_log_clear,
+            diag_log_cmds::diag_log_verbose,
+            diag_log_cmds::diag_export,
             checkin_cmds::checkin_state,
             checkin_cmds::checkin_now,
-            checkin_cmds::checkin_history,
+            checkin_history_cmd::checkin_history,
             weblogin_cmds::qoderweb_login,
             checkin_cmds::credit_grants,
-            model_cmds::key_reveal,
-            model_cmds::key_copy,
+            os_cmds::key_reveal,
+            os_cmds::key_copy,
             vault_cmds::vault_list,
             vault_cmds::vault_save,
             vault_cmds::vault_delete,
@@ -726,12 +498,19 @@ pub fn run() {
             google_cloud_web::google_cloud_refresh,
             google_cloud_web::google_cloud_disconnect,
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .unwrap_or_else(|e| {
             // 以前是 expect:abort 之后连一行字都看不到(GUI 子系统 + panic=abort)
             let msg = report_fatal("运行期", &e.to_string());
             eprintln!("{msg}");
             std::process::exit(1);
+        })
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { code: None, api, .. } = event {
+                if !hibernate::has_live_webview(app) {
+                    api.prevent_exit();
+                }
+            }
         });
 }
 

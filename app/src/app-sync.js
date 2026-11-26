@@ -36,7 +36,7 @@ function hideSyncCode() {
 async function loadSyncStatus() {
   const revision = ++SYNC_STATUS_REV;
   try {
-    const status = await invoke("sync_status");
+    const status = await window.GT_API.sync.status();
     if (revision !== SYNC_STATUS_REV) return true;
     SYNC_STATUS = status;
     SYNC_STATUS_ERROR = null;
@@ -190,7 +190,7 @@ function renderSyncQr(s) {
   SYNC_QR_BUSY = code;
   box.dataset.code = "";
   box.innerHTML = '<span class="khint">正在生成二维码…</span>';
-  invoke("sync_qr_svg")
+  window.GT_API.sync.qrSvg()
     .then((svg) => {
       if (SYNC_QR_BUSY === code) SYNC_QR_BUSY = "";
       if (!SYNC_CODE_REVEALED || !SYNC_STATUS || SYNC_STATUS.codeText !== code) return;
@@ -232,7 +232,7 @@ async function syncCreate(force) {
   btn.disabled = true;
   try {
     try {
-      await invoke("sync_create", { allowExisting: force === true });
+      await window.GT_API.sync.create({ allowExisting: force === true });
     } catch (e) {
       if (force === true || !String(e).includes("SYNC_OLD_GROUP_FOUND")) throw e;
       // 行内确认:本机留有旧组,给「找回旧组」与「仍要新建」两条路(替代原生 confirm)
@@ -258,7 +258,7 @@ async function syncJoin() {
   const btn = $("syncJoinBtn");
   btn.disabled = true;
   try {
-    await invoke("sync_join", { code });
+    await window.GT_API.sync.join({ code });
     $("syncJoinCode").value = "";
     await loadSyncStatus();
     showToast("已加入同步组");
@@ -273,7 +273,7 @@ async function syncPublish() {
   const btn = $("syncPublishBtn");
   btn.disabled = true;
   try {
-    await invoke("sync_publish_now");
+    await window.GT_API.sync.publishNow();
     await loadSyncStatus();
     showToast("已发布");
   } catch (e) {
@@ -286,7 +286,7 @@ async function syncPublish() {
 async function syncPreview() {
   const out = $("syncPreviewOut");
   try {
-    const snap = await invoke("sync_preview");
+    const snap = await window.GT_API.sync.preview();
     out.textContent = JSON.stringify(snap, null, 2);
     showToast("这是本机将上传的明文快照");
   } catch (e) {
@@ -298,7 +298,7 @@ async function syncPreview() {
 async function syncGroup() {
   const out = $("syncPreviewOut");
   try {
-    const r = await invoke("sync_read_group");
+    const r = await window.GT_API.sync.readGroup();
     out.textContent = JSON.stringify(r, null, 2);
     if (r.kind === "loaded") showToast(`组内 ${r.merged.sources} 个来源`);
     else showToast("组未变化");
@@ -321,7 +321,7 @@ async function syncRotateGo() {
   const expectedRelayId = SYNC_STATUS.relayId;
   try {
     $("syncRotateBtn").disabled = true;
-    const r = await invoke("sync_rotate", { expectedRelayId });
+    const r = await window.GT_API.sync.rotate({ expectedRelayId });
     SYNC_CODE_REVEALED = true;
     $("syncCompareInput").value = "";
     $("syncCompareResult").textContent = "";
@@ -345,7 +345,7 @@ async function syncScanRecovery() {
   renderSync();
   list.textContent = "正在查找并验证本机旧同步组…";
   try {
-    const result = await invoke("sync_recovery_candidates");
+    const result = await window.GT_API.sync.recoveryCandidates();
     const rows = (result.candidates || []).map((c) =>
       `<div class="sync-recovery-row"><span>中继 ${esc(String(c.gistId).slice(0, 10))}…<br><span class="khint">${c.hasLocalSource ? "已验证 · 本机发布来源可恢复" : "已验证 · 本机发布来源未确认"}</span></span>
        <button class="btn" data-recover-id="${esc(c.gistId)}" data-epoch="${Number(c.keyEpoch) || 0}">恢复</button></div>`
@@ -384,7 +384,7 @@ async function syncRestoreGroupGo(gistId, code, keyEpoch) {
   SYNC_RECOVERY_BUSY = true;
   renderSync();
   try {
-    const result = await invoke("sync_restore_group", {
+    const result = await window.GT_API.sync.restoreGroup({
       gistId: gistId || null,
       code: code || null,
       keyEpoch: keyEpoch == null ? null : keyEpoch,
@@ -417,7 +417,7 @@ async function syncForgetGo() {
   if (!SYNC_STATUS || !SYNC_STATUS.relayId) return;
   const expectedRelayId = SYNC_STATUS.relayId;
   try {
-    await invoke("sync_forget", { expectedRelayId });
+    await window.GT_API.sync.forget({ expectedRelayId });
     await loadSyncStatus();
     showToast("已退出同步组");
   } catch (e) {
@@ -435,7 +435,7 @@ async function syncSetChannelsFromUI() {
     return;
   }
   try {
-    await invoke("sync_set_channels", { channels: ids });
+    await window.GT_API.sync.setChannels({ channels: ids });
     await loadSyncStatus();
   } catch (e) {
     showToast("保存发布渠道失败: " + syncUserMsg(e), true);
@@ -444,7 +444,7 @@ async function syncSetChannelsFromUI() {
 
 async function syncSetEnabledFromUI(on) {
   try {
-    await invoke("sync_set_enabled", { enabled: on });
+    await window.GT_API.sync.setEnabled({ enabled: on });
     await loadSyncStatus();
   } catch (e) {
     showToast("切换失败: " + syncUserMsg(e), true);
@@ -454,7 +454,7 @@ async function syncSetEnabledFromUI(on) {
 
 async function syncSetIntervalFromUI(sec) {
   try {
-    await invoke("sync_set_interval", { seconds: Number(sec) });
+    await window.GT_API.sync.setInterval({ seconds: Number(sec) });
     await loadSyncStatus();
   } catch (e) {
     showToast("保存间隔失败: " + syncUserMsg(e), true);
@@ -463,7 +463,7 @@ async function syncSetIntervalFromUI(sec) {
 
 async function syncSetLabel(id, label) {
   try {
-    await invoke("sync_set_platform_label", { channelId: id, label });
+    await window.GT_API.sync.setPlatformLabel({ channelId: id, label });
     await loadSyncStatus();
   } catch (e) {
     showToast("保存同步标签失败: " + syncUserMsg(e), true);
@@ -476,7 +476,7 @@ async function syncGithubConnect() {
   const btn = $("syncGithubConnect");
   btn.disabled = true;
   try {
-    const r = await invoke("sync_oauth_start");
+    const r = await window.GT_API.sync.oauthStart();
     SYNC_AUTH = {
       userCode: r.userCode,
       verificationUri: r.verificationUri,
@@ -509,7 +509,7 @@ async function syncAuthPoll() {
     return;
   }
   try {
-    const r = await invoke("sync_oauth_poll");
+    const r = await window.GT_API.sync.oauthPoll();
     if (!SYNC_AUTH) return; // 等待期间用户已取消/页面已关闭
     if (r.kind === "pending") {
       $("syncAuthStatus").textContent = "等待你在 GitHub 授权…";
@@ -540,15 +540,15 @@ async function syncAuthCancel(silent = false) {
   if (SYNC_AUTH) clearTimeout(SYNC_AUTH.timer);
   SYNC_AUTH = null;
   $("syncAuth").hidden = true;
-  try { await invoke("sync_oauth_cancel"); } catch { /* silent: 后台授权会话已结束或已取消 */ }
+  try { await window.GT_API.sync.oauthCancel(); } catch { /* silent: 后台授权会话已结束或已取消 */ }
   if (!silent) showToast("已取消 GitHub 授权");
 }
 
 async function syncAuthCopyOpen() {
   if (!SYNC_AUTH) return;
-  try { await invoke("copy_text", { text: SYNC_AUTH.userCode }); } catch { /* silent: 剪贴板写入失败时页面已展示授权码可手动抄写 */ }
+  try { await window.GT_API.desktop.copyText({ text: SYNC_AUTH.userCode }); } catch { /* silent: 剪贴板写入失败时页面已展示授权码可手动抄写 */ }
   try {
-    await invoke("open_url", { url: SYNC_AUTH.verificationUri });
+    await window.GT_API.desktop.openUrl({ url: SYNC_AUTH.verificationUri });
     $("syncAuthStatus").textContent = "已复制授权码。请在 GitHub 页面输入它,并确认只授予 gist 权限。";
   } catch (e) {
     showToast("打开浏览器失败:" + e, true);
@@ -558,7 +558,7 @@ async function syncAuthCopyOpen() {
 async function syncAuthOpenPage() {
   if (!SYNC_AUTH) return;
   try {
-    await invoke("open_url", { url: SYNC_AUTH.verificationUri });
+    await window.GT_API.desktop.openUrl({ url: SYNC_AUTH.verificationUri });
   } catch (e) {
     showToast("打开浏览器失败:" + e, true);
   }
@@ -574,7 +574,7 @@ async function syncGithubDisconnect() {
 async function syncGithubDisconnectGo() {
   if (!SYNC_STATUS || !SYNC_STATUS.hasGithub) return;
   try {
-    await invoke("sync_disconnect_github");
+    await window.GT_API.sync.disconnectGithub();
     await loadSyncStatus();
     showToast("已断开 GitHub 授权");
   } catch (e) {
@@ -586,7 +586,7 @@ async function syncSaveClientId() {
   const id = ($("syncClientId").value || "").trim();
   if (!id) return showToast("请填写 OAuth App Client ID", true);
   try {
-    await invoke("sync_set_oauth_client_id", { clientId: id });
+    await window.GT_API.sync.setOauthClientId({ clientId: id });
     $("syncClientId").value = "";
     await loadSyncStatus(); // 保存后 GitHub 卡从「OAuth App 未配置」切到「未连接」,同屏反馈足够
   } catch (e) {
@@ -596,7 +596,7 @@ async function syncSaveClientId() {
 
 async function syncOpenDevSettings() {
   try {
-    await invoke("open_url", { url: "https://github.com/settings/developers" });
+    await window.GT_API.desktop.openUrl({ url: "https://github.com/settings/developers" });
   } catch (e) {
     showToast("打开 GitHub 失败:" + e, true);
   }
@@ -674,7 +674,7 @@ function bindSyncUI() {
     const text = (SYNC_STATUS && SYNC_STATUS.codeText) || "";
     if (!text) return showToast("没有可复制的同步码", true);
     try {
-      await invoke("copy_text", { text });
+      await window.GT_API.desktop.copyText({ text });
       showToast("同步码已复制");
     } catch (e) {
       showToast("复制失败:" + e, true);

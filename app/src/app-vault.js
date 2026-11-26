@@ -20,7 +20,7 @@ const VAULT_PLATFORM_HINT = ["4SAPI", "Hapi", "OpenCode Go", "DeepSeek", "OpenAI
 
 async function loadVault() {
   try {
-    VAULT = await invoke("vault_list");
+    VAULT = await window.GT_API.vault.list();
     VAULT_ERR = "";
   } catch (e) {
     VAULT = [];
@@ -94,7 +94,7 @@ async function vaultSave() {
   const saveButton = document.querySelector('#vaultForm [data-act="vsave"]');
   if (saveButton) saveButton.disabled = true;
   try {
-    const saved = await invoke("vault_save", { item: payload });
+    const saved = await window.GT_API.vault.save({ item: payload });
     const sameForm = VAULT_EDIT === e;
     if (sameForm) {
       VAULT_EDIT = null;

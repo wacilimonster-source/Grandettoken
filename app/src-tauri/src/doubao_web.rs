@@ -68,11 +68,14 @@ pub fn on_login_window_destroyed(window: &tauri::Window) {
 
 /// 从 webview 的 Cookie 罐里取豆包会话(全量组装,规则在 core::weblogin)。
 ///
-/// **只读主窗口**:它从启动活到退出,登录窗随时可能被用户关掉;Cookie 按
-/// profile 存,主窗口与登录窗读到的是同一份(WorkBuddy 2026-10-08 实测同款结论)。
+/// 会话从主窗口读，登录窗随时可能被用户关闭。两个窗口共享同一份 profile。
 pub fn session_of(app: &tauri::AppHandle) -> Option<String> {
-    let jar = crate::webview_cookies::read(app, format!("https://{DOUBAO_HOST}/")).ok()?;
-    tokenscope_core::weblogin::doubao_cookie_credential(jar.iter().map(|x| (x.name.as_str(), x.value.as_str())))
+    read_session(app).ok().flatten()
+}
+
+pub(crate) fn read_session(app: &tauri::AppHandle) -> Result<Option<String>, String> {
+    let jar = crate::webview_cookies::read(app, format!("https://{DOUBAO_HOST}/"))?;
+    Ok(tokenscope_core::weblogin::doubao_cookie_credential(jar.iter().map(|x| (x.name.as_str(), x.value.as_str()))))
 }
 
 /// 会话可用吗:真打一次任务面板接口(走 fetcher.probe,与取数同一条链)。
@@ -141,6 +144,7 @@ fn spawn_watcher(app: tauri::AppHandle) {
 async fn finish_login(app: tauri::AppHandle) {
     // 先置位再关窗:Destroyed 监听靠这个标志区分"登录成功"与"用户自己关了"
     LOGIN_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
+    crate::hibernate::observe_session(&app, "doubao", Some(true));
     // 复登放行(与 wb_finish_login 同一条理由):复登成功 = 当天"凭据失效"的
     // 签到该放出补领了 —— done_for_day 把 auth 算成"今天完结",节拍器从此照章
     // 跳过,手动「领积分」也被 can_try 拦住;只清 auth/no_cred 之后的场次。

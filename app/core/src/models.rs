@@ -889,7 +889,9 @@ impl ModelCache {
 
     pub fn save(&self, store: &crate::store::Store) -> Result<(), String> {
         let json = serde_json::to_string(self).map_err(|e| e.to_string())?;
-        store.set_setting(CACHE_KEY, &json)
+        store.set_setting(CACHE_KEY, &json)?;
+        store.model_revision.fetch_add(1, std::sync::atomic::Ordering::Release);
+        Ok(())
     }
 
     pub fn catalog(&self) -> Result<Catalog, String> {

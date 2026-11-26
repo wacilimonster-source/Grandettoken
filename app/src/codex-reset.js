@@ -1,6 +1,5 @@
 /* Codex 重置顾问:在现有 Codex 详情弹层内展开，不新开弹窗、不执行兑换。 */
 (function () {
-  const invoke = window.__TAURI__ && window.__TAURI__.core ? window.__TAURI__.core.invoke : null;
   const SPEEDS = [10, 14.8, 16, 18, 20, 25, 30];
   const VERDICT = {
     wait: { en: "WAIT", zh: "等自然重置" },
@@ -604,7 +603,7 @@
   }
 
   async function loadAdvice(c, force) {
-    if (!invoke) {
+    if (typeof window.__TAURI__?.core?.invoke !== "function") {
       state.error = "当前环境没有 Tauri invoke";
       paint();
       return;
@@ -627,7 +626,7 @@
     try {
       if (!state.profileLoaded) {
         try {
-          const profile = await invoke("codex_reset_profile_get", { id: "codex" });
+          const profile = await window.GT_API.codexReset.profileGet({ id: "codex" });
           if (seq !== state.seq) return;
           applyProfile(profile);
           if (profile && profile.scope) state.channelScope = profile.scope;
@@ -645,7 +644,7 @@
         refreshNeedFreshness();
         state.key = inputKey(c);
       }
-      const advice = await invoke("codex_reset_advice", {
+      const advice = await window.GT_API.codexReset.advice({
         id: "codex",
         input: buildInput(c),
       });
@@ -716,7 +715,7 @@
       : null;
     paint();
     try {
-      await invoke("codex_reset_profile_set", {
+      await window.GT_API.codexReset.profileSet({
         id: "codex",
         profile: { scope: state.scope, need: { kind, amountPercent: state.amount, at: state.needAt } },
       });
@@ -770,7 +769,7 @@
     try {
       const patch = value ? { subEndAt: state.subEndAt } : { clearSubEnd: true };
       patch.scope = state.scope;
-      const profile = await invoke("codex_reset_profile_set", { id: "codex", profile: patch });
+      const profile = await window.GT_API.codexReset.profileSet({ id: "codex", profile: patch });
       if (profile?.scope === patch.scope) window.QuotaPlanUI?.setCodexProfile(profile);
       state.profileError = "";
       state.profileLoaded = false;

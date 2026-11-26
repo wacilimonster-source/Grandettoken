@@ -112,13 +112,13 @@
     button.disabled = true;
     try {
       if (action === "login") {
-        await invoke("google_cloud_login");
+        await window.GT_API.googleCloud.login();
         showToast("请打开 Google 赠金表，显示全部记录和「结束日期」列，并清除过滤条件");
       } else if (action === "refresh") {
-        await invoke("google_cloud_refresh");
+        await window.GT_API.googleCloud.refresh();
         showToast("正在读取 Google 赠金，完成后自动更新");
       } else if (action === "disconnect") {
-        await invoke("google_cloud_disconnect");
+        await window.GT_API.googleCloud.disconnect();
         await refresh();
         renderChCards();
       }

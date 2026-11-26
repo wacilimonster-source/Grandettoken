@@ -379,17 +379,8 @@ fn refresh_blocking(cred: &LocalCred) -> Result<Refreshed, String> {
     let Some(refresh_token) = cred.refresh.as_deref().filter(|s| !s.trim().is_empty()) else {
         return Err("凭据文件里没有 refreshToken".into());
     };
-    let http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(25))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let region = cred.region;
-    let refresh_token = refresh_token.to_string();
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| e.to_string())?;
-    rt.block_on(refresh_request(&http, region, &refresh_token))
+    let http = crate::http_pool::shared_default()?;
+    crate::http_pool::refresh_runtime()?.block_on(refresh_request(http, cred.region, refresh_token))
 }
 
 /// 把轮换后的新令牌对**原子回写**进客户端自己的凭据文件:
@@ -789,14 +780,16 @@ pub async fn merge_expiry(
         result.expiry_complete = false;
         return;
     };
-    let host = crate::providers::url_host(used_url).unwrap_or_else(|| region.agent_host().to_string());
+    let ledger_url = reqwest::Url::parse(used_url)
+        .and_then(|url| url.join("/minimax-cloud/api/v1/credit/details"))
+        .map(|url| url.to_string())
+        .unwrap_or_else(|_| format!("https://{}/minimax-cloud/api/v1/credit/details", region.agent_host()));
     let mut lots: Vec<Expiring> = Vec::new();
     let mut total: f64 = f64::INFINITY;
     let mut page = 1usize;
     while lots.len() < total as usize && page <= LEDGER_MAX_PAGES {
-        let url = format!("https://{host}/minimax-cloud/api/v1/credit/details");
         let signed = sign_request(SignParams {
-            url: &url,
+            url: &ledger_url,
             body: None,
             uid: account_id,
             offset_sec: Some(local_offset_sec()),

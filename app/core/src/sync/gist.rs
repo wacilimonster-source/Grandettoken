@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use reqwest::header::{HeaderMap, ACCEPT, IF_NONE_MATCH, USER_AGENT};
-use reqwest::StatusCode;
+use reqwest::{Method, RequestBuilder, StatusCode};
 
 use super::code::{is_source_file_name, valid_gist_id};
 use super::error::{
@@ -49,20 +49,8 @@ pub struct GistClient {
 
 impl GistClient {
     pub fn new(token: Option<String>) -> Result<Self, SyncError> {
-        // 一次同步会连开好几个 `GistClient`(读来源 / PATCH / 建中继),原来每个都新建
-        // 一套连接池与 TLS 上下文。参数、UA、超时与错误码逐字不变,只是进程内复用一份。
-        static HTTP: std::sync::OnceLock<Result<reqwest::Client, String>> =
-            std::sync::OnceLock::new();
-        let http = HTTP
-            .get_or_init(|| {
-                reqwest::Client::builder()
-                    .timeout(Duration::from_secs(20))
-                    .user_agent("Grandettoken-Sync/1")
-                    .build()
-                    .map_err(|e| format!("HTTP 客户端初始化失败: {e}"))
-            })
-            .as_ref()
-            .map_err(|e| SyncError::new(NETWORK, e.clone()))?
+        let http = crate::http_pool::shared_default()
+            .map_err(|e| SyncError::new(NETWORK, format!("HTTP 客户端初始化失败: {e}")))?
             .clone();
         Ok(Self {
             http,
@@ -70,19 +58,24 @@ impl GistClient {
         })
     }
 
+    fn request(&self, method: Method, url: &str) -> RequestBuilder {
+        let req = self.http.request(method, url)
+            .timeout(Duration::from_secs(20))
+            .header(ACCEPT, "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header(USER_AGENT, "Grandettoken-Sync/1");
+        match &self.token {
+            Some(token) => req.bearer_auth(token),
+            None => req,
+        }
+    }
+
     pub async fn get(&self, gist_id: &str, etag: Option<&str>) -> Result<GetOutcome, SyncError> {
         if !valid_gist_id(gist_id) {
             return Err(SyncError::new(GIST_ID_INVALID, "Gist ID 格式不正确"));
         }
         let url = format!("{GIST_API}/{gist_id}");
-        let mut req = self
-            .http
-            .get(url)
-            .header(ACCEPT, "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28");
-        if let Some(token) = &self.token {
-            req = req.bearer_auth(token);
-        }
+        let mut req = self.request(Method::GET, &url);
         if let Some(etag) = etag {
             req = req.header(IF_NONE_MATCH, etag);
         }
@@ -179,16 +172,7 @@ impl GistClient {
         let mut files = HashMap::new();
         files.insert(file_name, serde_json::json!({ "content": content }));
         let body = serde_json::json!({ "files": files });
-        let mut req = self
-            .http
-            .patch(url)
-            .header(ACCEPT, "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
-            .header(USER_AGENT, "Grandettoken-Sync/1")
-            .json(&body);
-        if let Some(token) = &self.token {
-            req = req.bearer_auth(token);
-        }
+        let req = self.request(Method::PATCH, &url).json(&body);
         let resp = req.send().await.map_err(map_reqwest)?;
         let meta = ResponseMeta::from_headers(resp.headers());
         let status = resp.status();
@@ -222,16 +206,7 @@ impl GistClient {
             "public": false,
             "files": files,
         });
-        let mut req = self
-            .http
-            .post(GIST_API)
-            .header(ACCEPT, "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
-            .header(USER_AGENT, "Grandettoken-Sync/1")
-            .json(&body);
-        if let Some(token) = &self.token {
-            req = req.bearer_auth(token);
-        }
+        let req = self.request(Method::POST, GIST_API).json(&body);
         let resp = req.send().await.map_err(map_reqwest)?;
         let meta = ResponseMeta::from_headers(resp.headers());
         let status = resp.status();
@@ -257,16 +232,7 @@ impl GistClient {
         let mut files = HashMap::new();
         files.insert(file_name, serde_json::Value::Null);
         let body = serde_json::json!({ "files": files });
-        let mut req = self
-            .http
-            .patch(url)
-            .header(ACCEPT, "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
-            .header(USER_AGENT, "Grandettoken-Sync/1")
-            .json(&body);
-        if let Some(token) = &self.token {
-            req = req.bearer_auth(token);
-        }
+        let req = self.request(Method::PATCH, &url).json(&body);
         let resp = req.send().await.map_err(map_reqwest)?;
         let meta = ResponseMeta::from_headers(resp.headers());
         let status = resp.status();
@@ -282,15 +248,7 @@ impl GistClient {
             return Err(SyncError::new(GIST_ID_INVALID, "Gist ID 格式不正确"));
         }
         let url = format!("{GIST_API}/{gist_id}");
-        let mut req = self
-            .http
-            .delete(url)
-            .header(ACCEPT, "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
-            .header(USER_AGENT, "Grandettoken-Sync/1");
-        if let Some(token) = &self.token {
-            req = req.bearer_auth(token);
-        }
+        let req = self.request(Method::DELETE, &url);
         let resp = req.send().await.map_err(map_reqwest)?;
         let meta = ResponseMeta::from_headers(resp.headers());
         let status = resp.status();
@@ -413,6 +371,19 @@ struct GistFileResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_pool_keeps_authorization_scoped_to_each_request() {
+        use reqwest::header::AUTHORIZATION;
+        let first = GistClient::new(Some("first-fixture".into())).unwrap();
+        let second = GistClient::new(Some("second-fixture".into())).unwrap();
+        let public = GistClient::new(None).unwrap();
+        let get = |client: &GistClient| client.request(Method::GET, GIST_API).build().unwrap();
+        assert_eq!(get(&first).headers()[AUTHORIZATION], "Bearer first-fixture");
+        assert_eq!(get(&second).headers()[AUTHORIZATION], "Bearer second-fixture");
+        assert!(!get(&public).headers().contains_key(AUTHORIZATION));
+        assert!(get(&first).headers()[AUTHORIZATION].is_sensitive());
+    }
 
     #[test]
     fn status_mapping() {

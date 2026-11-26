@@ -11,7 +11,7 @@ module.exports = async function ({ w, R, data, src }) {
     catch (error) { R.push({ name: "缩略模式 " + name, ok: false, extra: error.message }); }
   };
   try {
-    const source = fs.readFileSync(path.join(src, "../core/src/providers.rs"), "utf8");
+    const source = fs.readFileSync(path.join(src, "../core/src/providers/catalog.rs"), "utf8");
     const table = source.slice(source.indexOf("pub const PROVIDERS:"));
     const defs = [...table.matchAll(/id:\s*"([^"]+)",\s*name:\s*"([^"]+)"[\s\S]*?default_kind:\s*Kind::(\w+)/g)];
     assert(defs.length > 0, "必须从源码读到渠道表");

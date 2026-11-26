@@ -487,7 +487,7 @@ async function loadModels(force, source) {
   MDL.loading = true;
   if (!MDL.views[src]) renderModels();
   try {
-    const view = await invoke("get_model_catalog", { source: src, force: !!force });
+    const view = await window.GT_API.models.getModelCatalog({ source: src, force: !!force });
     MDL.views[src] = view;
     if (view.sources && view.sources.length) MDL.sources = view.sources;
     if (!MDL.src) MDL.src = view.source || src;
@@ -500,7 +500,7 @@ async function loadModels(force, source) {
 }
 async function loadInjects() {
   try {
-    const ov = await invoke("inject_state");
+    const ov = await window.GT_API.inject.state();
     MDL.clients = ov.clients || [];
     MDL.log = ov.log || [];
   } catch (e) {
@@ -586,7 +586,7 @@ async function openModelInfo(model, source) {
   renderModelSheet();
   let info, failure = "";
   try {
-    info = await invoke("model_info", { source: src, model });
+    info = await window.GT_API.models.modelInfo({ source: src, model });
   } catch (e) {
     failure = String(e);
   }
@@ -609,7 +609,7 @@ async function openModelSheet(client, model, source) {
   // 先把这个对象存进局部变量,回来时只对"还是当前弹层"的结果落账。
   let previews, failure = "";
   try {
-    previews = await invoke("inject_preview", { client, source: src, model });
+    previews = await window.GT_API.inject.preview({ client, source: src, model });
   } catch (e) {
     failure = String(e);
   }
@@ -633,7 +633,7 @@ async function mdlRecheck(s) {
   renderModelSheet();
   let fresh;
   try {
-    fresh = await invoke("inject_preview", { client: s.client, source: s.source, model: s.model });
+    fresh = await window.GT_API.inject.preview({ client: s.client, source: s.source, model: s.model });
   } catch (e) {
     if (MDL.sheet === s) {
       s.busy = false;
@@ -662,7 +662,7 @@ async function injectGo() {
   s.busy = true;
   renderModelSheet();
   try {
-    s.reports = await invoke("inject_apply", { client: s.client, source: s.source, model: s.model });
+    s.reports = await window.GT_API.inject.apply({ client: s.client, source: s.source, model: s.model });
     const ok = (s.reports || []).filter((r) => !r.error);
     // 只有一家、且写成了的时候才把"怎么生效"顺带说一句 —— 多家时详情在结果里
     showToast(
@@ -685,7 +685,7 @@ async function injectRemove() {
   s.busy = true;
   renderModelSheet();
   try {
-    s.reports = await invoke("inject_remove", { client: s.client, source: s.source, model: s.model });
+    s.reports = await window.GT_API.inject.remove({ client: s.client, source: s.source, model: s.model });
     const n = s.reports.reduce((a, r) => a + (r.removed || 0), 0);
     showToast(n ? "已从 " + (CLIENT_NAME[s.client] || s.client) + " 移除 " + n + " 条" : "本来就没有这条");
   } catch (e) {

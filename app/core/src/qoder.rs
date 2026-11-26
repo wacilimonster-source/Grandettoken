@@ -711,18 +711,12 @@ mod tests {
         // 真机上不该是过期状态(过期了说明桌面端太久没开,那是环境问题不是代码问题)
         assert!(!expired(&cred, now), "本机 Qoder 凭据已过期,先打开一次桌面端");
 
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(20))
-            .build()
-            .unwrap();
+        let rt = crate::http_pool::refresh_runtime().unwrap();
+        let http = crate::http_pool::shared_default().unwrap();
 
         // ① 额度接口
         let (out, body) = rt.block_on(crate::checkin::call_with_body(
-            &http,
+            http,
             crate::checkin::find("qoder").expect("qoder 签到定义在表里"),
             &crate::checkin::Cred::Qoder(cred.token.clone()),
             false,

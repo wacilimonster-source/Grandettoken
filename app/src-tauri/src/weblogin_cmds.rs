@@ -47,18 +47,30 @@ pub(crate) fn on_main(app: &tauri::AppHandle, f: impl FnOnce() + Send + 'static)
 
 /// 从 webview 的 Cookie 罐里取会话。
 ///
-/// **只读主窗口**:它从启动活到退出,而登录窗随时可能被用户关掉(读一个正在销毁的
+/// **只读主窗口**:登录窗随时可能被用户关掉(读一个正在销毁的
 /// 窗口会走到上面那个 panic 上去)。Cookie 是按 profile 存的,主窗口读到的和登录窗
 /// 读到的是同一份 —— 2026-10-08 实测(httpOnly 的 session / session_2 都读得到)。
 pub(crate) fn wb_session_of(app: &tauri::AppHandle, id: &str) -> Option<String> {
     if id != WB_CHANNEL_ID {
         return None; // 只有 WorkBuddy 走这条路
     }
+    read_wb_session(app).ok().flatten()
+}
+
+fn read_wb_session(app: &tauri::AppHandle) -> Result<Option<String>, String> {
     // 两个工作台域名都能完成登录，必须使用同一份站点名单查找会话。
-    tokenscope_core::weblogin::SITE_HOSTS.iter().find_map(|host| {
-        let jar = webview_cookies::read(app, format!("https://{host}/")).ok()?;
-        tokenscope_core::weblogin::cookie_credential(jar.iter().map(|x| (x.name.as_str(), x.value.as_str())))
-    })
+    let mut error = None;
+    for host in tokenscope_core::weblogin::SITE_HOSTS {
+        match webview_cookies::read(app, format!("https://{host}/")) {
+            Ok(jar) => {
+                if let Some(session) = tokenscope_core::weblogin::cookie_credential(jar.iter().map(|x| (x.name.as_str(), x.value.as_str()))) {
+                    return Ok(Some(session));
+                }
+            }
+            Err(e) => error = Some(e),
+        }
+    }
+    error.map_or(Ok(None), Err)
 }
 
 /// 清 WorkBuddy 的登录会话(「清除登录」用)。**返回结果不能丢**:以前调用方
@@ -89,6 +101,7 @@ pub(crate) async fn wb_session_works(app: &tauri::AppHandle, session: &str) -> b
 pub(crate) async fn wb_finish_login(app: &tauri::AppHandle) {
     // 先置位再关窗:Destroyed 监听靠这个标志区分"登录成功"与"用户自己关了"
     WB_LOGIN_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
+    hibernate::observe_session(app, WB_CHANNEL_ID, Some(true));
     // 记下"这份会话从现在起是新鲜的":平台会话是绝对 TTL(实测 7 天,证据链在
     // core::weblogin::web_session_hint 的注释),取数侧按这个年龄出提示。
     // 键的定义只留 core 一份(WEB_SESSION_AT_KEY);写失败只是少一条提示,
@@ -214,9 +227,13 @@ pub(crate) fn qoder_label_id(label: &str) -> Option<&'static str> {
 /// 国际版取 qoder.com,国内版取 qoder.com.cn:两套账号的 Cookie 罐必须按域分开,
 /// 否则会把国际版会话发给国内账务接口(必然 401,还会误导用户)。
 pub(crate) fn qoder_web_session_of(app: &tauri::AppHandle, id: &str) -> Option<String> {
-    let site = tokenscope_core::weblogin::qoder_site(id)?;
-    let jar = webview_cookies::read(app, format!("https://{}/", site.host)).ok()?;
-    tokenscope_core::weblogin::qoder_cookie_credential(jar.iter().map(|x| (x.name.as_str(), x.value.as_str())))
+    read_qoder_session(app, id).ok().flatten()
+}
+
+fn read_qoder_session(app: &tauri::AppHandle, id: &str) -> Result<Option<String>, String> {
+    let Some(site) = tokenscope_core::weblogin::qoder_site(id) else { return Ok(None) };
+    let jar = webview_cookies::read(app, format!("https://{}/", site.host))?;
+    Ok(tokenscope_core::weblogin::qoder_cookie_credential(jar.iter().map(|x| (x.name.as_str(), x.value.as_str()))))
 }
 
 /// 清掉某个 Qoder 区域的网页会话。**只清该区域站点 + 该区域登录页会用来免选账号的
@@ -263,13 +280,17 @@ pub(crate) fn qoder_clear_session(app: &tauri::AppHandle, id: &str) -> Result<us
 /// 取数管线的会话分发。**故意不并进 wb_session_of**:签到凭据兜底(checkin_credentials
 /// 的 WebSession 分支)引用的是那个函数 —— Qoder 的网页会话绝不能漏进签到链路(设计红线)。
 pub(crate) fn web_session_of(app: &tauri::AppHandle, id: &str) -> Option<String> {
-    match id {
-        WB_CHANNEL_ID => wb_session_of(app, id),
-        "qoder" | "qoder-cn" => qoder_web_session_of(app, id),
-        // 豆包:登录窗捕获的会话现读(全量 Cookie 组装,规则在 core::weblogin)
-        "doubao" => doubao_web::session_of(app),
-        _ => None,
+    if !hibernate::has_live_webview(app) {
+        return None;
     }
+    let session = match id {
+        WB_CHANNEL_ID => read_wb_session(app),
+        "qoder" | "qoder-cn" => read_qoder_session(app, id),
+        "doubao" => doubao_web::read_session(app),
+        _ => return None,
+    };
+    hibernate::observe_session(app, id, session.as_ref().map(Option::is_some).ok());
+    session.ok().flatten()
 }
 
 /// 收尾:关窗 → 通知界面 → 立刻刷一轮(与 wb_finish_login 同构,去掉签到那一段:
@@ -283,6 +304,7 @@ pub(crate) async fn qoderweb_finish_login(app: &tauri::AppHandle, id: &str, note
         .expect("调用方已限定 qoder | qoder-cn,站点配置必然存在");
     let (done, _, _) = qoder_login_flags(id);
     done.store(true, std::sync::atomic::Ordering::Relaxed);
+    hibernate::observe_session(app, id, Some(true));
     // "这份网页会话从现在起是新鲜的":取数侧按这个年龄出提示(qoder_web_session_hint)。
     // 写**本区自己的键** —— 共用会让一边登录替另一边刷新年龄(串号的隐性形态)。
     {

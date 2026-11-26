@@ -1,7 +1,6 @@
 // ───────────── 渠道详情弹层(单例) ─────────────
 // 同一份 renderDetail 既供弹层使用,也保留给测试与旧入口;DOM 里只有这一个弹层,
 // 轮询更新只换内容,不新开第二个 dialog。
-let DETAIL_ID = null;
 let DETAIL_FOCUS = null;
 let DETAIL_BUSY = false;
 
@@ -663,21 +662,21 @@ function renderInner(opts) {
 
   renderPill(sorted);
   renderDock();
-  renderPillPick();
+  if (isTabVisible("disp")) renderPillPick(); else window.GT_STORE.setTabDirty("disp", true);
   fitCompact();
-  refreshChCards();
+  if (isTabVisible("ch")) refreshChCards(); else window.GT_STORE.setTabDirty("ch", true);
   // 弹层开着时只换内容:保持滚动位置与展开状态,不新开第二个 dialog
   if (DETAIL_ID) renderDetailSheet();
   // 新建的 [data-peakcd] 先填一次文案,别等到下一个整分才出现
   tickPeakCountdowns();
   updateHeaderLive();
   if (manageOpen() && document.body.classList.contains("manage-index")) renderManageIndex();
+  else window.GT_STORE.setTabDirty("index", true);
 }
 
 // 紧凑条实测宽度(已是当前字号档的最终逻辑像素),fitCompact 维护、formSize 取用
 let compactW = 380;
-// 换形态/吸附展开后都要重量一次,但只有"最后一次"有意义:两处裸 setTimeout
-// 交叠时前一次会拿着半更新 DOM 算出个错宽度再盖上来(报告 O-10)
+// 等最后一次形态变化稳定再量宽，避免量到半更新的 DOM。
 let fitCompactTimer = null;
 function scheduleFitCompact() {
   clearTimeout(fitCompactTimer);
@@ -715,22 +714,22 @@ function compactCheckinChip(list) {
   return el;
 }
 
+let WAS_COMPACT = false;
 function fitCompact() {
+  const compact = document.body.classList.contains("form-compact");
+  if (!compact && !WAS_COMPACT) return;
+  WAS_COMPACT = compact;
   const list = $("list");
   const rows = [...list.querySelectorAll(".row")];
-  // 先整体还原:切回面板时必须把紧凑条里藏掉的行和降级类放出来。
-  // 面板形态下这些都是空操作 —— 只在真的带着降级态时才写,免得每轮刷新都
-  // 给每张卡片的 class/style 各来一次无意义的 DOM 写入(节点复用的前提)。
+  // 重新量宽前先还原，离开紧凑条时也要把降级的行恢复。
   rows.forEach((r) => {
     if (r.style.display) r.style.display = "";
     if (r.classList.contains("lv1")) r.classList.remove("lv1");
     if (r.classList.contains("lv2")) r.classList.remove("lv2");
   });
   list.querySelectorAll(".more,.cempty,.ckchip").forEach((el) => el.remove());
-  if (!document.body.classList.contains("form-compact")) return;
-  // 收起的 8px 竖条没法量;**展开态**(无论是否吸附)都要量 —— 之前整段跳过,
-  // 吸附展开后宽度冻结,数值变长被裁、变短则窗口偏宽(报告 B9)。
-  // 展开态量完的落点:setCompactW → applyForm → dockLayout(true),几何归吸附管。
+  if (!compact) return;
+  // 收起的 8px 竖条无法量宽。展开后由 setCompactW 交给吸附布局。
   if (DOCK.on && !DOCK.open) return;
 
   const u = fsU();

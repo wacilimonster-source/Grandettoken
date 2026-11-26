@@ -409,6 +409,7 @@ async fn group_pre_first_byte_failover_sets_cooldown_headers_and_ledger() {
     assert_eq!(f.backup_hits.load(Ordering::SeqCst), 2);
 
     // 4. Verify persistent SQLite ledger captured failover, cached tokens, and reasoning tokens
+    f.g.flush_ledger().await.unwrap();
     let summary = crate::gateway::lock(&f.g.store)
         .gateway_usage_summary(0, 20)
         .unwrap();
@@ -446,6 +447,7 @@ async fn group_400_bad_request_does_not_failover() {
     assert_eq!(f.primary_hits.load(Ordering::SeqCst), 1);
     assert_eq!(f.backup_hits.load(Ordering::SeqCst), 0);
 
+    f.g.flush_ledger().await.unwrap();
     let summary = crate::gateway::lock(&f.g.store)
         .gateway_usage_summary(0, 20)
         .unwrap();
@@ -730,6 +732,7 @@ async fn sticky_prompt_masking_default_off_enabled_sticky_and_cross_chunk_sse_un
     // Ensure neither diagnostics nor SQLite ledger retains plaintext MASK_SECRET
     let diag_dump = serde_json::to_string(&crate::gateway::lock(&f_on.g.inner).diagnostics).unwrap();
     assert!(!diag_dump.contains(MASK_SECRET));
+    f_on.g.flush_ledger().await.unwrap();
     let summary = crate::gateway::lock(&f_on.g.store)
         .gateway_usage_summary(0, 20)
         .unwrap();
@@ -771,6 +774,7 @@ async fn streamed_request_records_inbound_user_agent_in_ledger() {
     let body = resp.text().await.unwrap();
     assert!(body.contains("event: message_stop"), "{body}");
 
+    f.g.flush_ledger().await.unwrap();
     let summary = crate::gateway::lock(&f.g.store)
         .gateway_usage_summary(0, 20)
         .unwrap();

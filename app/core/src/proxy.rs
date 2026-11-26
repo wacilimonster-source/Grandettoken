@@ -3,7 +3,9 @@
 //! reqwest snapshots system proxy settings when the client is built. Reuse its
 //! connection pool until those settings change, then build a fresh client.
 
-use std::{ffi::OsString, sync::Mutex, time::Duration};
+use std::{ffi::OsString, sync::Mutex, time::{Duration, Instant}};
+
+const PROXY_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(PartialEq, Eq)]
 struct ProxySnapshot {
@@ -53,19 +55,26 @@ impl ProxySnapshot {
 struct ProxyClientCache {
     snapshot: ProxySnapshot,
     client: reqwest::Client,
+    checked_at: Option<Instant>,
 }
 
 impl ProxyClientCache {
     fn current_client(
         &mut self,
-        snapshot: ProxySnapshot,
+        now: Instant,
+        snapshot: impl FnOnce() -> ProxySnapshot,
         build: impl FnOnce() -> Result<reqwest::Client, String>,
     ) -> Result<reqwest::Client, String> {
+        if self.checked_at.is_some_and(|checked| now.saturating_duration_since(checked) < PROXY_CHECK_INTERVAL) {
+            return Ok(self.client.clone());
+        }
+        let snapshot = snapshot();
         if self.snapshot != snapshot {
             // Leave the old snapshot in place on failure so the next call retries.
             self.client = build()?;
             self.snapshot = snapshot;
         }
+        self.checked_at = Some(now);
         Ok(self.client.clone())
     }
 }
@@ -102,6 +111,7 @@ impl ProxyClients {
             system: Mutex::new(ProxyClientCache {
                 snapshot,
                 client: build_client(true)?,
+                checked_at: Some(Instant::now()),
             }),
             direct: build_client(false)?,
         })
@@ -113,10 +123,12 @@ impl ProxyClients {
         if !system_proxy {
             return Ok(self.direct.clone());
         }
-        self.system
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .current_client(ProxySnapshot::current(), || build_client(true))
+        crate::lockx::lock(&self.system)
+            .current_client(Instant::now(), ProxySnapshot::current, || build_client(true))
+    }
+
+    pub fn invalidate(&self) {
+        crate::lockx::lock(&self.system).checked_at = None;
     }
 }
 
@@ -128,7 +140,6 @@ mod tests {
         net::{SocketAddr, TcpListener, TcpStream},
         sync::mpsc,
         thread,
-        time::Instant,
     };
 
     fn snapshot(name: &str) -> ProxySnapshot {
@@ -218,12 +229,17 @@ mod tests {
         let mut cache = ProxyClientCache {
             snapshot: snapshot("first"),
             client: proxy_client(first_addr),
+            checked_at: None,
         };
+        let now = Instant::now();
         let first_client = cache
-            .current_client(snapshot("first"), || panic!("unchanged proxy rebuilt"))
+            .current_client(now, || snapshot("first"), || panic!("unchanged proxy rebuilt"))
+            .unwrap();
+        cache.current_client(now + Duration::from_secs(4),
+            || panic!("proxy settings checked before deadline"), || panic!("proxy rebuilt before deadline"))
             .unwrap();
         let second_client = cache
-            .current_client(snapshot("second"), || Ok(proxy_client(second_addr)))
+            .current_client(now + PROXY_CHECK_INTERVAL, || snapshot("second"), || Ok(proxy_client(second_addr)))
             .unwrap();
         // Install a fake system proxy so a mistaken proxy choice cannot pass
         // just because the real system bypasses localhost.
@@ -231,10 +247,13 @@ mod tests {
             system: Mutex::new(ProxyClientCache {
                 snapshot: ProxySnapshot::current(),
                 client: proxy_client(first_addr),
+                checked_at: Some(now),
             }),
             direct: build_client(false).unwrap(),
         };
         let direct_client = clients.client(false).unwrap();
+        clients.invalidate();
+        assert!(crate::lockx::lock(&clients.system).checked_at.is_none());
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

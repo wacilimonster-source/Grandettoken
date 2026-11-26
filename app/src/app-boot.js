@@ -3,7 +3,7 @@ async function refresh(force = false) {
   // render() 挪出 try:渲染抛错以前会被当成"取数失败"再 toast 一次,信息是错的(P2-33)
   let list;
   try {
-    list = await invoke("get_channels", { force });
+    list = await window.GT_API.channels.getChannels({ force });
   } catch (e) {
     // 以前这里直接覆写 #list 就完了:紧凑条形态下条里一片空白、窗口留着旧宽度,
     // 胶囊与托盘也停在旧值(报告 P2-14)。走同一条 render 收尾,只是把错误提示出来。
@@ -44,7 +44,7 @@ function applyChannelsPush(payload) {
 
 (async function init() {
   try {
-    CFG = await invoke("get_config");
+    CFG = await window.GT_API.config.getConfig();
   } catch {
     CFG = {
       activeIntervalSec: 60, idleIntervalSec: 300, backoffIntervalSec: 900,
@@ -63,7 +63,7 @@ function applyChannelsPush(payload) {
   // 静态模板里的「?」补出说明块(渠道卡里的是动态的,renderChCards 自己会补)
   hydrateWhy();
   // 版本号:等首检(最坏 30 秒)才显示,期间关于页是空的。直接问后端要(报告 P2-16)
-  invoke("app_version")
+  window.GT_API.desktop.appVersion()
     .then((v) => {
       VER = v;
       const el = $("uver");
@@ -73,7 +73,7 @@ function applyChannelsPush(payload) {
     .catch(() => {});
   // 启动期的非致命错误(配置坏了回落默认、快捷键被占用):后端只往 stderr 写过,
   // 而绿色版从托盘启动时没人看得到控制台 —— 取回来显示在关于页的状态行上
-  invoke("take_startup_error")
+  window.GT_API.desktop.takeStartupError()
     .then((msg) => {
       if (msg) setMsg(msg, true);
     })
@@ -160,16 +160,20 @@ function applyChannelsPush(payload) {
     showToast("紧凑条已改为可选:设置 → 显示 → 启用紧凑条");
   }
 
-  // 启动一律面板形态:安装后(以及每天开机)先看到完整信息,而不是上次留下的
-  // 紧凑条 / 胶囊。CFG.form 仍会记录用户的选择,只是不再用于启动恢复。
-  await applyForm("panel", false, true);
+  const resumed = window.__GT_RESUME_MAIN;
+  if (resumed) restoreWindowPresentation(resumed);
+  else await applyForm("panel", false, true);
   updateSizeClass();
 
   // ── 数据/结果事件:必须在首轮 refresh **之前**挂上(报告 L8,与上方 checkin-*
   // 同一条纪律)── 后端 setup 里就跑首轮取数与红线判定,慢网络下能持续数秒;以前
   // 这批监听挂在 refresh 之后,首检那一刻发出的 channels-updated / crit-alert 没人接,
   // 预警音与应用内提示会丢。全部 await,确保注册完成才放行首轮取数。
-  await listen("channels-updated", (ev) => applyChannelsPush(ev.payload));
+  let receivedPush = false;
+  await listen("channels-updated", (ev) => {
+    receivedPush = true;
+    applyChannelsPush(ev.payload);
+  });
 
   // 跌破红线(Rust 判定、一天一次):播一声预警音(开了才有)+ 应用内提示。
   // 判定不放前端 —— 界面与通知必须用同一个口径,否则会出现"红了但没响"。
@@ -230,7 +234,8 @@ function applyChannelsPush(payload) {
 
   // 监听都挂好了才做首轮取数(与上方 L8 注释同一理由);首帧入场随后放
   WINDOW_VISIBLE = await appWindow.isVisible();
-  await refresh();
+  if (resumed) await loadResumedChannels(() => receivedPush);
+  else await refresh();
   playEntrance(); // 启动首帧也来一次入场(上面 applyForm 没换形态,不会自动放)
 
   // 启动 30 秒后先自动检查一次;之后每 10 分钟再问一次 —— 是否真发请求由
@@ -282,7 +287,7 @@ function applyChannelsPush(payload) {
       const item = state.items.find(x => x.id === b.dataset.open);
       if (!item) return;
       try {
-        await invoke("open_promo_url", { url: item.link });
+        await window.GT_API.promos.openPromoUrl({ url: item.link });
         scroll = content.scrollTop;
         render();
       } catch (_) { showToast("无法打开详情，请重试", true); }

@@ -95,7 +95,6 @@ async function setPanelLayout(layout) {
 // DPI / 显示器缩放变化后按固定尺寸重新落一次;不再有用户拖拽 resize。
 if (typeof appWindow.onScaleChanged === "function") {
   appWindow.onScaleChanged(async () => {
-    refreshTraySize();
     if (SIZE_APPLYING) return;
     await applyForm(currentForm(), false, true);
   });
@@ -142,6 +141,7 @@ async function applyFormInner(form, remember = true, forceSize = false) {
   // 吸附期间窗口几何归吸附逻辑管:展开态换完形态重新量一次,收起态压根不碰尺寸
   if (DOCK.on) {
     if (DOCK.open) dockLayout(true);
+    else await publishWindowPresentation();
     return;
   }
   const [w, h] = formSize(form, form === "panel" ? await monitorInfo() : null);
@@ -193,6 +193,7 @@ async function applyFormInner(form, remember = true, forceSize = false) {
   // 完成,而 clampToMonitor 还在拿"上一环未落地时"的尺寸算坐标、并排到队尾之后才落地
   // —— 违反下面那条"一切改窗口几何的入口都排进同一条链"的纪律(报告 P2-30)。
   await clampToMonitor();
+  await publishWindowPresentation();
   // 掩护窗口要从**最后一次**几何 IPC 之后重新起算:不然尾部那次 setSize
   // 触发的 moved 会落在窗口之外,被当成"用户自己拖到屏幕边"→ 挂件自己吸成竖条(P3-29)。
   // 时长用形态切换那一档:上面整条链(~12 个 await)在慢机器上会超过 600ms(F14)。
@@ -330,6 +331,7 @@ async function dockLayoutNow(open) {
   document.body.classList.toggle("docked", !open);
   document.body.classList.toggle("dock-left", DOCK.side === "left");
   document.body.classList.toggle("dock-open", open);
+  await publishWindowPresentation();
   if (open) {
     // M6:展开内容从贴边侧滑入 + 淡入 180ms,不再瞬变"砸"出来
     document.body.classList.remove("dock-anim");
@@ -384,11 +386,12 @@ async function dockExitNow(keepPos) {
     SIZE_APPLYING = false;
   }
   try {
-    await invoke("set_pin", { enabled: !!(CFG && CFG.alwaysOnTop) });
+    await window.GT_API.config.setPin({ enabled: !!(CFG && CFG.alwaysOnTop) });
   } catch (e) {
     // 置顶是窗口层状态:写失败时按钮仍显示"已置顶",实际没置顶,重启才对上。
     showToast("恢复置顶失败:" + e, true);
   }
+  await publishWindowPresentation();
   render();
 }
 // 解除吸附也走几何队列(见 enqueueGeom)
@@ -433,7 +436,7 @@ function scheduleSettleCheck() {
         // 落盘失败必须回滚内存里的坐标:否则"这一秒记住了、磁盘上没有",
         // 下次启动跳回旧位置,用户只会觉得"软件记不住窗口位置",查无可查。
         // 一次会话只提示一次,免得每拖一次弹一次。
-        invoke("save_window_pos", { x: pos.x, y: pos.y }).catch((e) => {
+        window.GT_API.config.saveWindowPos({ x: pos.x, y: pos.y }).catch((e) => {
           CFG.winX = prevX;
           CFG.winY = prevY;
           if (!POS_SAVE_WARNED) {

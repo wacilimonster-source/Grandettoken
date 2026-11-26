@@ -30,6 +30,17 @@ pub struct BuildInput<'a> {
     pub app: &'a str,
 }
 
+pub fn build_preview(
+    cfg: &Config,
+    views: &[ChannelView],
+    store: &Store,
+    source: &str,
+    now: i64,
+    app: &str,
+) -> Result<SyncSnapshot, SyncError> {
+    build_snapshot(BuildInput { cfg, views, store, source, seq: 1, now, app })
+}
+
 pub fn build_snapshot(input: BuildInput<'_>) -> Result<SyncSnapshot, SyncError> {
     let source = crypto::normalize_source(input.source).ok_or_else(|| {
         SyncError::new(super::error::SOURCE_INVALID, "写入者 ID 格式不正确")

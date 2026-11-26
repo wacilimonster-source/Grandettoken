@@ -6,9 +6,11 @@ const vm = require("node:vm");
 const { spawnSync } = require("node:child_process");
 const { JSDOM } = require("jsdom");
 const root = path.resolve(__dirname, "..");
-let source = fs.readFileSync(path.join(root, "app/src/google-cloud.js"), "utf8");
+const { apiSource, replaceOnce } = require("./lib/app-sources");
+const source = fs.readFileSync(path.join(root, "app/src/google-cloud.js"), "utf8");
+let api = apiSource();
 if (process.env.GOOGLE_CLOUD_SENTINEL === "1") {
-  source = source.replace('invoke("google_cloud_refresh"', 'invoke("__missing_google_cloud__"');
+  api = replaceOnce(api, 'invoke("google_cloud_refresh"', 'invoke("__missing_google_cloud__"');
 } else {
   const bad = spawnSync(process.execPath, [__filename], {
     env: { ...process.env, GOOGLE_CLOUD_SENTINEL: "1" }, encoding: "utf8",
@@ -119,6 +121,8 @@ w.invoke = async (command, args) => {
   }
   calls.push({ command, args });
 };
+w.__TAURI__ = { ...w.__TAURI__, core: { invoke: w.invoke } };
+w.eval(api);
 w.eval(source);
 const box = w.document.getElementById("root");
 const render = () => { box.innerHTML = w.GoogleCloudUI.detail(channel); };

@@ -1,10 +1,10 @@
 //! 本地网关进阶能力 Tauri 命令（路由组、台账统计、Prompt 脱敏、CLI/客户端网关接入）。
 
-use crate::gateway::{get_gateway, secret};
+use crate::gateway::get_gateway;
 use crate::{lock_rw, model_cmds, refuse_if_config_broken, refuse_while_updating, AppState, FlagGuard, INJECTING};
 use serde::Deserialize;
 use serde_json::Value;
-use tauri::State;
+use tauri::{Manager, State};
 use tokenscope_core::fetch::now_ts;
 use tokenscope_core::gateway::routing::{RouteGroup, RouteTarget, RoutingStrategy};
 use tokenscope_core::gateway::{effective_models, lock};
@@ -162,7 +162,8 @@ pub async fn gateway_usage_summary(
     let d = days.unwrap_or(7).clamp(1, 90);
     let since_ts = tokenscope_core::gateway::http::now_unix() - d * 86_400;
     let limit = recent_limit.unwrap_or(40).clamp(1, 200);
-    let store = g.store.clone();
+    g.flush_ledger().await?;
+    let store = app.state::<AppState>().read_store.clone();
     tokio::task::spawn_blocking(move || lock(&store).gateway_usage_summary(since_ts, limit))
         .await
         .map_err(|e| format!("读取网关台账失败: {e}"))?
@@ -171,18 +172,13 @@ pub async fn gateway_usage_summary(
 #[tauri::command]
 pub async fn gateway_clear_usage(app: tauri::AppHandle) -> Result<(), String> {
     let g = get_gateway(&app)?;
-    let store = g.store.clone();
-    tokio::task::spawn_blocking(move || lock(&store).gateway_usage_clear())
-        .await
-        .map_err(|e| format!("清空网关台账失败: {e}"))??;
-    lock(&g.inner).ledger_writes = 0;
-    Ok(())
+    g.clear_ledger().await
 }
 
 #[tauri::command]
 pub(crate) async fn gateway_inject_clients(
     state: State<'_, AppState>,
-) -> Result<model_cmds::InjectOverview, String> {
+) -> Result<crate::inject_cmds::InjectOverview, String> {
     refuse_if_config_broken()?;
     let store = state.store.clone();
     let cfg = lock_rw(&state.config).clone();
@@ -192,7 +188,7 @@ pub(crate) async fn gateway_inject_clients(
             let s = lock_rw(&store);
             inject::load_log(&s)
         };
-        model_cmds::InjectOverview { clients, log }
+        crate::inject_cmds::InjectOverview { clients, log }
     })
     .await
     .map_err(|e| format!("读取客户端状态失败: {e}"))
@@ -209,9 +205,7 @@ async fn resolve_gateway_spec(
         return Err("请选择要接入网关的模型或虚拟路由组".into());
     }
     let port = lock(&g.inner).settings.port;
-    let token = tokio::task::spawn_blocking(secret)
-        .await
-        .map_err(|e| format!("读取本地网关令牌失败: {e}"))??;
+    let token = g.access_secret(false).await?;
     Ok(GatewayInjectSpec::new(port, &token, &clean_model, is_group))
 }
 
