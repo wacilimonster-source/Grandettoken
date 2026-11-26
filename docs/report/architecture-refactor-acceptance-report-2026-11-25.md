@@ -3,7 +3,7 @@
 - **验收结论**：`CONDITIONAL PASS`（阶段 A、B 全绿；阶段 C 原生回归、V1–V4、数据库迁移与数据还原均通过；未跑项仅受本机 DPI 环境、冷启动取数与托盘菜单交互限制，另 B11 为已知过时断言）
 - **基线对比**：`fc1c19d` (`v0.3.76`) → 当前工作区（任务卡 `R1-1` ~ `R4-2`）
 - **验收环境**：Windows 11 专业版；显示缩放 **125%**（首轮 2560×1440、工作区 2560×1380；2026-11-26 修复复验时为 1920×1080、工作区 1920×1020，窗口按新工作区夹取）；Rust 1.98.1 / cargo 1.98.1；Node v24.16.0；WebView2（`tokenscope.exe` Release）；Chrome 无头用于 `verify-refresh-stability`
-- **验收方式**：独立只读核验。未修改产品源码；所有门禁串行执行；临时探针仅在 `build/qa/refactor-acceptance-2026-11-25/` 与本机 `%TEMP%` 下使用，并在同一轮删除
+- **验收方式**：阶段 A–C 首轮为独立只读核验，未修改产品源码；R4-2/A-6 修复经用户明确授权后实施，并在最终构建上重跑受影响门禁与 V4；所有门禁串行执行；临时探针仅在 `build/qa/refactor-acceptance-2026-11-25/` 与本机 `%TEMP%` 下使用，并在同一轮删除
 - **原始证据**：`build/qa/refactor-acceptance-2026-11-25/`（已被 `.gitignore`，不入库）
 
 ## 1. 阶段 A 自动化门禁结果
@@ -51,7 +51,7 @@
 | R3-3 | `src-tauri/src` 单层平铺；壳层文件均 `<= 700` 行；Device Flow 状态机与恢复筛选在 `core/src/sync/` 有单测；IPC 语义无丢失 | 壳层最大 `weblogin_cmds.rs` 632 行；`session_and_poll_results_preserve_protocol_bounds`、`candidates_exclude_the_live_group_and_report_unverified_items` 通过；IPC 111/111 | PASS | 命令注册集仅按 R4-1 增减 |
 | R3-4 | `gt-api.js` 全部 `invoke` 为静态字符串；样式按 `styles-tokens → styles-panel → styles-manage → 功能 CSS` 加载；`check-css-forms` 覆盖 3 个拆分 CSS；`build/lib/app-sources.js` 完整加载新脚本 | 111 个 `invoke` 全为字面量；`index.html` 10 个样式链接顺序正确；`probe-frontend.js` exit 0；`check-app-split` 卡住加载顺序 | PASS | 实际为 14 个 `app-*.js` + 3 个引导脚本 + 13 个功能脚本，全部纳入门禁 |
 | R4-1 | `tray_icon.rs` 零外部图像依赖输出 RGBA；前端不再 Canvas→Base64→IPC；`tray.rs` 轮播、tooltip、`tray_show_number=false` 还原品牌图标 | `badge_sizes_colors_corners_and_glyphs` 覆盖 16/20/24/32/48/64 px 与 0/15/65/u32::MAX 拦截；`rotation_falls_back_from_hidden_and_badge_preserves_a_stale_value` 通过；真实 125% 下数字清晰、轮播与品牌图标切换实测通过 | PASS | 100%/150% DPI 未测，见 §5 |
-| R4-2 | `hibernate_webview_on_hide` 默认 `false`；隐藏满 300s 才释放主 WebView；存在网页登录会话时保留；唤回等旧标签释放后重建并恢复几何/置顶/缓存 | 源码核验通过；真实生命周期见 §4 V4 | PASS | 真机 300s 对照组与开启组均实测 |
+| R4-2 | `hibernate_webview_on_hide` 默认 `false`；隐藏满 300s 才释放主 WebView；存在网页登录会话时保留；唤回等旧标签释放后重建并恢复几何/置顶/缓存 | 源码核验通过；真实 300s 对照组与修复后的开启组均实测（见 §4 V4） | PASS | 修复 Google Cloud 后台窗口阻塞，详见 §4 C3 修复复核 |
 
 ## 3. 量化指标实测对比
 
