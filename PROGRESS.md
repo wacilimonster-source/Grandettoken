@@ -991,3 +991,9 @@
 - 发现并修复 R4-2：Google Cloud 后台抓取窗口在刷新完成后只隐藏不销毁，`needs_webview()` 永远为真，省内存模式对 Google Cloud 用户不释放。修复为后台抓取完成/失败后销毁该窗口、隐藏后台窗口不阻塞释放、释放主窗口前销毁；交互式登录窗口仍保留，调度器按需重建。
 - 修复后真实配置复验：隐藏 310 秒 → 0 个 WebView2、进程树 52.6 MiB，回环网关 200、托盘轮播继续、热键 637 ms 唤回并恢复缓存首屏；Google Cloud 取数仍写入 2 条赠金。core 单测与夹具、双向 0 warning、静态门/jsdom/专项/凭据扫描复跑全绿，用户数据三个文件 SHA-256 最终 MATCH。
 - 未跑：100%/150% DPI、V2 冷启动取数、V4 托盘菜单入口，已登记 `docs/report/acceptance-backlog.md` B22–B25；报告 `docs/report/architecture-refactor-acceptance-report-2026-11-25.md`。
+
+## 2026-11-26 v0.3.78 托盘数字改 GDI 字体渲染
+
+- 托盘徽标文字由自绘 5×7 点阵改为 GDI 字体排版：按字号从大到小寻找最大可容纳字体，读取实际 ink bounds 后居中裁剪；字体依次尝试 Bahnschrift SemiCondensed/Condensed、Segoe UI、Arial，并用 GetTextFaceW 校验实际字体；非 Windows 或取字失败回退点阵。
+- 审查：core 单测 702 + 同步夹具 6、双端全目标 0 warning、静态门/317 项 jsdom/6 项专项/刷新稳定性/凭据扫描全绿；125% 真机托盘 94/17 清晰居中、轮播与品牌图标还原正常，GDI 对象 21→21 无泄漏；用户数据三个文件 SHA-256 MATCH。报告 `docs/report/tray-gdi-render-review-2026-11-26.md`。
+- 观察（P3）：TextOutW 失败路径返回全零掩码而非落到点阵回退；16px 下 4 字符文本偏紧。均不阻断发版。
