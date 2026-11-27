@@ -26,7 +26,7 @@ function detailHeroHtml(c) {
   if (c.kind === "points") {
     return `<div class="detail-hero">${points(c.remaining)}<span class="unit">积分</span></div>`;
   }
-  const [int, dec] = money(c.remaining, c.unit).split(".");
+  const [int, dec] = money(c.remaining, c.unit).slice(curSign(c.unit).length).split(".");
   return `<div class="detail-hero"><span class="unit">${esc(curSign(c.unit).trim())}</span>${int}${
     dec ? `<span class="unit">.${dec}</span>` : ""
   }</div>`;
@@ -62,7 +62,8 @@ function renderDetailSheet() {
         active.dataset.sec ? `[data-sec="${active.dataset.sec}"]` : "",
       ].join("")
     : "";
-  $("detailHead").innerHTML = detailHeaderHtml(c);
+  const head = $("detailHead"), header = detailHeaderHtml(c);
+  if (QSIG.get(head) !== header) { head.innerHTML = header; QSIG.set(head, header); }
   const state = hvRow(c.id) || {};
   const stale = c.stale || state.state === "stale" || !c.valid;
   const caption = [
@@ -75,7 +76,7 @@ function renderDetailSheet() {
   const resetOpen = c.id === "codex" && window.CodexResetUI && window.CodexResetUI.isOpen();
   if (resetOpen && window.CodexResetUI.isEditing()) return;
   if (window.QuotaPlanUI?.isEditing(c)) return;
-  body.innerHTML = resetOpen
+  const html = resetOpen
     ? window.CodexResetUI.renderDetail(c)
     : detailHeroHtml(c) +
       `<div class="detail-caption">${esc(caption)}</div>` +
@@ -85,8 +86,13 @@ function renderDetailSheet() {
         DETAIL_BUSY ? " disabled" : ""
       }>${DETAIL_BUSY ? "刷新中…" : isAntigravity(c) ? "刷新当前登录账号" : c.valid ? "刷新数据" : "重试连接"}</button>
       <button type="button" class="btn p" data-act="detail-manage">设置与管理</button></div>`;
+  if (QSIG.get(body) === html) return;
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  qPatchChildren(body, template.content);
+  QSIG.set(body, html);
   body.scrollTop = keepTop;
-  if (focusSel) {
+  if (focusSel && !sheet.contains(document.activeElement)) {
     const el = sheet.querySelector(focusSel);
     if (el) el.focus({ preventScroll: true });
     else sheet.focus({ preventScroll: true });
@@ -142,8 +148,8 @@ function closeDetail(restoreFocus = true) {
   document.body.classList.remove("detail-open");
   const head = $("detailHead");
   const body = $("detailBody");
-  if (head) head.innerHTML = "";
-  if (body) body.innerHTML = "";
+  if (head) { head.innerHTML = ""; QSIG.delete(head); }
+  if (body) { body.innerHTML = ""; QSIG.delete(body); }
   if (!restoreFocus) return;
   // 焦点回到触发元素(卡片或"最先到期"格);元素消失时退回当前筛选芯片。
   const trigger = DETAIL_FOCUS;
@@ -339,8 +345,7 @@ function qChildKey(n) {
   if (n.nodeType === 3 || n.nodeType === 8) return "#text";
   if (n.nodeType !== 1) return "#" + n.nodeType;
   const first = (n.getAttribute("class") || "").trim().split(/\s+/)[0] || "";
-  const id = n.getAttribute("data-act") || n.getAttribute("data-body") ||
-    n.getAttribute("data-id") || n.getAttribute("data-sec") || "";
+  const id = n.id || [n.dataset.act, n.dataset.body, n.dataset.id, n.dataset.sec].filter(Boolean).join("|");
   return n.tagName.toLowerCase() + "|" + first + "|" + id;
 }
 
@@ -556,10 +561,7 @@ function renderInner(opts) {
       { key: "sk-foot", html: `<div class="sk-foot">正在取数 · 首次启动需要几秒</div>` },
     ]);
     LAST_RENDER_ORDER = [];
-    // 底栏也要跟着回到"还没数"的状态:以前这里直接 return,底栏留着**上一轮**
-    // 的「8 正常 · 3 预警」—— 刚启动就写着 8 个渠道,而列表里一个都还没有。
     $("fdot").className = "dot off";
-    $("fstat").innerHTML = '<span class="fb-dot off"></span>正在取数…';
     return;
   }
 
@@ -610,29 +612,13 @@ function renderInner(opts) {
   // 列表已经落到 DOM 里,现在才有真实宽度可量:把 Codex 的倒计时按当前面板宽度收一档
   if (configured) fitCodexResetLabels();
 
-  // 底栏状态(隐藏渠道不计入,只报个数)。口径与行内 dotCls 同源(报告 B5):
-  // 红线/限流=告急(红),阈值预警=预警(黄),失联沿用"告急"段(与旧行为一致)。
-  // 以前 warn 过滤写成 hvTone==="bad":黄色预警渠道不落在任何段里被算成"正常",
-  // 跌破红线的反而标成黄"预警" —— 颜色梯度倒挂,只看底栏会漏掉预警。
+  // 红线、限流与失联同属告急，隐藏渠道不参与底栏状态。
   const withKey = CHANNELS.filter((c) => c.hasKey && !c.hidden);
-  const bad = withKey.filter(
-    (c) =>
-      (!c.valid && !(c.recovery && c.recovery.phase === "retrying")) ||
-      (c.valid && (c.limited || hvTone(c) === "bad"))
-  ).length;
-  const warn = withKey.filter((c) => c.valid && !c.limited && hvTone(c) === "warn").length;
-  $("fdot").className =
-    "dot" + (bad ? " st" : warn ? " w" : withKey.length ? "" : " off");
-  // 三段必须**互斥**:正常 = 总数 - 告急 - 预警;每个数字前面带自己的状态点。
-  const normalN = withKey.length - bad - warn;
-  $("fstat").innerHTML = !withKey.length
-    ? `<span class="fb-dot off"></span>${hiddenN ? "渠道已全部隐藏" : "未配置渠道"}`
-    : [
-        normalN ? `<span class="fb-dot"></span>${normalN} 正常` : "",
-        warn ? `<span class="fb-dot warn"></span>${warn} 预警` : "",
-        bad ? `<span class="fb-dot bad"></span>${bad} 告急` : "",
-        hiddenN ? `<span class="fb-dot off"></span>${hiddenN} 隐藏` : "",
-      ].filter(Boolean).join('<span class="fb-sep">·</span>');
+  const bad = withKey.some(
+    (c) => (!c.valid && c.recovery?.phase !== "retrying") || (c.valid && (c.limited || hvTone(c) === "bad"))
+  );
+  const warn = withKey.some((c) => c.valid && !c.limited && hvTone(c) === "warn");
+  $("fdot").className = "dot" + (bad ? " st" : warn ? " w" : withKey.length ? "" : " off");
 
   // 首页刷新回执只剩「状态颜色变化 + 刚跌破红线的一次性红晕」:
   //   · 主数字由 qReconcile 原地改文本,不再翻页位移、不生成 ghost;
@@ -671,7 +657,6 @@ function renderInner(opts) {
   tickPeakCountdowns();
   updateHeaderLive();
   if (manageOpen() && document.body.classList.contains("manage-index")) renderManageIndex();
-  else window.GT_STORE.setTabDirty("index", true);
 }
 
 // 紧凑条实测宽度(已是当前字号档的最终逻辑像素),fitCompact 维护、formSize 取用
@@ -758,7 +743,8 @@ function fitCompact() {
     // 空态(没配置 / 全隐藏):一条最小 chip 贴到内容宽,不再空荡 380
     const ce = document.createElement("div");
     ce.className = "cempty";
-    ce.textContent = $("fstat").textContent || "暂无渠道";
+    ce.textContent = !CHANNELS.length ? "正在取数…"
+      : CHANNELS.some(c => c.hidden) ? "渠道已全部隐藏" : "未配置渠道";
     // 紧凑条整块是 data-tauri-drag-region="deep",新加的孩子默认也在里面:
     // 显式退出拖动区,不然按住它就成了拖窗口(F13)
     ce.setAttribute("data-tauri-drag-region", "false");

@@ -3,9 +3,66 @@
 //! 分工:密文在 `secrets::vault_*`(Windows 凭据管理器),索引在 `store`(`vault_items`,不含密钥),
 //! 这里只做判断与排序,便于挂单测。**这个模块永远不该出现"加密/解密"** —— 我们不自己造加密。
 
-use crate::store::VaultItem;
+use crate::store::{Store, VaultItem};
 
 pub mod transaction;
+
+pub fn vault_url(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() { return Ok(String::new()); }
+    let parsed = reqwest::Url::parse(value).map_err(|_| "请输入完整的网址（包含 http:// 或 https://）")?;
+    let has_secret_param = parsed.query_pairs().any(|(name, _)| {
+        let n = name.to_ascii_lowercase().replace('-', "_");
+        n == "key" || n.contains("api_key") || n.contains("token") || n.contains("secret") || n.contains("password") || n.contains("authorization")
+    });
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() || !parsed.username().is_empty() || parsed.password().is_some() || has_secret_param {
+        return Err("网址需为不含密钥或凭据的 HTTP(S) 地址".into());
+    }
+    Ok(value.to_string())
+}
+
+pub fn vault_default_channel(store: &Store, vault_id: &str) -> Result<Option<String>, String> {
+    for id in ["4sapi", "hapi", "opencode-go"] {
+        if store.get_setting(&format!("vault_default_channel:{id}"))?.as_deref() == Some(vault_id) {
+            return Ok(Some(id.to_string()));
+        }
+    }
+    Ok(None)
+}
+
+pub fn ensure_vault_mutable(store: &Store, vault_id: &str) -> Result<(), String> {
+    if vault_default_channel(store, vault_id)?.is_some() {
+        return Err("渠道默认密钥仅供查看，请在渠道管理中修改".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod vault_url_tests {
+    use super::vault_url;
+    #[test]
+    fn default_records_are_protected_without_blocking_other_keys() {
+        let path = std::env::temp_dir().join(format!("vault-default-test-{}.db", crate::vault::new_id()));
+        let store = crate::store::Store::open(&path).unwrap();
+        store.set_setting("vault_default_channel:4sapi", "default-1").unwrap();
+        assert_eq!(super::vault_default_channel(&store, "default-1").unwrap().as_deref(), Some("4sapi"));
+        assert!(super::ensure_vault_mutable(&store, "default-1").is_err());
+        assert!(super::ensure_vault_mutable(&store, "normal-key").is_ok());
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+    #[test]
+    fn accepts_plain_addresses_and_rejects_embedded_credentials() {
+        assert_eq!(vault_url(" https://example.com/v1 ").unwrap(), "https://example.com/v1");
+        assert_eq!(vault_url("").unwrap(), "");
+        assert_eq!(vault_url("https://example.com/v1?api-version=1").unwrap(), "https://example.com/v1?api-version=1");
+        assert!(vault_url("https://user:password@example.com/v1").is_err());
+        assert!(vault_url("https://example.com/v1?key=secret").is_err());
+        assert!(vault_url("javascript:alert(1)").is_err());
+    }
+}
+
+
 
 /// 平台名/标签的规矩:非空、去掉首尾空白、长度上限(界面里是单行输入)。
 const MAX_LEN: usize = 40;

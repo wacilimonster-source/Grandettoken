@@ -127,10 +127,10 @@ function qoderQuickHtml(c) {
       <button class="why" data-why="qoderweb" aria-expanded="false" aria-label="网页会话的说明"></button></div>`;
 }
 
-function renderChCards() {
+function renderChCards(incremental = false) {
   const chBox = $("chList");
   // 设置页真正的滚动容器是 #chList 所在的 .mbody(不是 #chList 自己)。
-  // 重绘会整块换掉 #chList 的子节点:滚动值、阅读锚点、输入焦点都要先记下来。
+  // 显隐或排序会改变滚动锚点，先记下第一张可见卡片。
   const scroller = chBox ? chBox.closest(".mbody") : null;
   const keepTop = scroller ? scroller.scrollTop : 0;
   let anchor = null;
@@ -170,8 +170,7 @@ function renderChCards() {
         hidNames.join("、")
       )})—— ${hiddenHint}</span><span class="btn s" data-act="chshowall">全部恢复</span></div>`
     : "";
-  $("chList").innerHTML = restoreBar + list
-    .map((c, i) => {
+  const cards = list.map((c, i) => {
       const isApp = c.authSource === "app";
       // web = 挂件内网页登录(WorkBuddy):桌面客户端把令牌加密了,只能登录网页账号拿
       const isWeb = c.authSource === "web";
@@ -264,8 +263,10 @@ function renderChCards() {
            ${grantOpen.has(c.id) ? grantListHtml(c.id) : ""}`
         : "";
 
-      return `<div class="ccard${c.hidden ? " off" : ""}${cardOpen.has(c.id) ? " open" : ""}" data-id="${c.id}">
-        <div class="cchead" data-act="chfold" data-id="${c.id}">
+      const html = `<div class="ccard${c.hidden ? " off" : ""}${cardOpen.has(c.id) ? " open" : ""}" data-id="${c.id}">
+        <div class="cchead">
+          <button type="button" class="ccfold" data-act="chfold" data-id="${esc(c.id)}"
+            aria-expanded="${cardOpen.has(c.id)}" aria-controls="ch-body-${esc(c.id)}" aria-label="${esc(c.name)}设置"></button>
           ${iconHtml(c, "ico", !c.hasKey || c.hidden)}
           <div class="ccmeta">
             <div class="ccname">${esc(c.name)}<span class="dot ${chDot(c)}"></span>${c.hidden ? '<span class="tagn">已隐藏</span>' : ""}</div>
@@ -279,7 +280,7 @@ function renderChCards() {
                   : "恢复显示(重新开始取数)"
                 : "隐藏(停止取数,历史快照保留)"
             }">${c.hidden ? (c.autoHidden ? "显示" : "恢复") : "👁"}</button>
-          <span class="ccaret">&#9654;</span>
+          <span class="ccaret" aria-hidden="true">&#9654;</span>
         </div>
         ${
           // 逐包到期明细的入口**必须放在折叠体外面**(2026-11-08 用户反馈):
@@ -287,7 +288,7 @@ function renderChCards() {
           // 国际版/国内版共用同一个入口,Cookie 与会话键在 Rust 侧按渠道隔离。
           qoderQuickHtml(c)
         }
-        <div class="ccbody">
+        <div class="ccbody" id="ch-body-${esc(c.id)}">
           ${keyBlock}
           ${
         c.hasKey && c.authSource === "keyring"
@@ -321,8 +322,11 @@ function renderChCards() {
           </div>`}
         </div>
       </div>`;
-    })
-    .join("");
+      return { key: c.id, html };
+    });
+  if (restoreBar) cards.unshift({ key: "__all", html: restoreBar });
+  if (!incremental) chBox.replaceChildren();
+  qReconcile(chBox, cards);
   // 卡片里的「?」是动态生成的,补出说明块(幂等;轮询重绘后也不会丢)
   hydrateWhy($("chList"));
   // 重绘把 .kh / .ksrc 清空了:有缓存就同步贴回去(不产生 RPC)
@@ -361,8 +365,8 @@ function renderChCards() {
 /** 轮询刷新时更新渠道卡;正在输入就不重建,免得把输入内容冲掉。 */function refreshChCards() {
   if (!manageOpen()) return;
   const ae = document.activeElement;
-  if (ae && ae.closest && ae.closest("#chList") && (ae.tagName === "INPUT" || ae.tagName === "SELECT")) return;
-  renderChCards();
+  if (ae?.closest("#chList") && ae.matches("input, select, textarea, [contenteditable=true]")) return;
+  renderChCards(true);
   fillKeyHints();
 }
 

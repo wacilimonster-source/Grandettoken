@@ -4,6 +4,7 @@ use crate::gateway_proto::{
     stream::{SseEventBuffer, SseLineReader, MAX_SSE_BUFFER_BYTES},
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 type Part = (u64, &'static str, u64);
@@ -22,7 +23,7 @@ pub struct ResponsesChatStream {
     include_usage: bool,
     started: bool,
     terminal: bool,
-    parts: BTreeMap<Part, usize>,
+    parts: BTreeMap<Part, (usize, Sha256)>,
     tools: BTreeMap<u64, ToolProgress>,
     tool_buffer_bytes: usize,
     sensitive_values: Vec<String>,
@@ -208,14 +209,14 @@ impl ResponsesChatStream {
             Some("message") => {
                 for (i, part) in item["content"].as_array().into_iter().flatten().enumerate() {
                     if let Some((field, text)) = message_part(part) {
-                        self.final_text((index, field, i as u64), text, out);
+                        self.final_text((index, field, i as u64), text, out)?;
                     }
                 }
             }
             Some("reasoning") => {
                 for (i, part) in item["summary"].as_array().into_iter().flatten().enumerate() {
                     if let Some(text) = part["text"].as_str() {
-                        self.final_text((index, "reasoning_content", i as u64), text, out);
+                        self.final_text((index, "reasoning_content", i as u64), text, out)?;
                     }
                 }
             }
@@ -224,14 +225,24 @@ impl ResponsesChatStream {
         Ok(())
     }
 
-    fn final_text(&mut self, part: Part, text: &str, out: &mut Vec<Value>) {
-        let sent = self.parts.get(&part).copied().unwrap_or_default();
-        self.emit_text(part, text.get(sent..).unwrap_or_default(), out);
+    fn final_text(&mut self, part: Part, text: &str, out: &mut Vec<Value>) -> Result<(), String> {
+        let mut suffix = text;
+        if let Some((len, digest)) = self.parts.get(&part) {
+            let (prefix, rest) = text.split_at_checked(*len).ok_or("上游最终文本与已发送内容不一致")?;
+            if Sha256::digest(prefix.as_bytes()) != digest.clone().finalize() {
+                return Err("上游改写了已经发送的文本".into());
+            }
+            suffix = rest;
+        }
+        self.emit_text(part, suffix, out);
+        Ok(())
     }
 
     fn emit_text(&mut self, part: Part, text: &str, out: &mut Vec<Value>) {
         if !text.is_empty() {
-            *self.parts.entry(part).or_default() += text.len();
+            let (len, digest) = self.parts.entry(part).or_default();
+            *len += text.len();
+            digest.update(text.as_bytes());
             self.delta(json!({(part.1):text}), out);
         }
     }

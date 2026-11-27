@@ -93,16 +93,7 @@ impl GistClient {
             return Err(status_error(status, &meta));
         }
 
-        let body = resp.bytes().await.map_err(map_reqwest)?;
-        if body.len() > MAX_RESPONSE_BYTES {
-            return Err(SyncError::new(
-                TOO_LARGE,
-                format!("Gist 响应 {} 字节,超过上限", body.len()),
-            ));
-        }
-        let parsed: GistResponse = serde_json::from_slice(&body).map_err(|e| {
-            SyncError::new(PAYLOAD_INVALID, format!("Gist 响应不是预期 JSON: {e}"))
-        })?;
+        let parsed = parse_response(resp).await?;
         if parsed.truncated {
             return Err(SyncError::new(TRUNCATED, "Gist 响应被 GitHub 截断"));
         }
@@ -213,7 +204,7 @@ impl GistClient {
         if !status.is_success() {
             return Err(status_error(status, &meta));
         }
-        let parsed: GistResponse = resp.json().await.map_err(map_reqwest)?;
+        let parsed = parse_response(resp).await?;
         if parsed.id.is_empty() || !valid_gist_id(&parsed.id) {
             return Err(SyncError::new(PAYLOAD_INVALID, "GitHub 返回的 Gist ID 不合法"));
         }
@@ -257,6 +248,15 @@ impl GistClient {
         }
         Err(status_error(status, &meta))
     }
+}
+
+async fn parse_response(resp: reqwest::Response) -> Result<GistResponse, SyncError> {
+    let body = crate::fetch::read_body_capped(resp, MAX_RESPONSE_BYTES).await
+        .map_err(|(message, kind)| match kind {
+            crate::fetch::FailKind::Server => SyncError::new(TOO_LARGE, "Gist 响应超过上限"),
+            _ => SyncError::new(NETWORK, message),
+        })?;
+    serde_json::from_slice(&body).map_err(|_| SyncError::new(PAYLOAD_INVALID, "Gist 响应不是预期 JSON"))
 }
 
 #[derive(Default, Clone)]
@@ -383,6 +383,30 @@ mod tests {
         assert_eq!(get(&second).headers()[AUTHORIZATION], "Bearer second-fixture");
         assert!(!get(&public).headers().contains_key(AUTHORIZATION));
         assert!(get(&first).headers()[AUTHORIZATION].is_sensitive());
+    }
+
+    #[tokio::test]
+    async fn parser_limits_a_chunked_response_and_accepts_normal_json() {
+        use axum::{body::{Body, Bytes}, routing::get, Router};
+        use std::convert::Infallible;
+        let router = Router::new()
+            .route("/ok", get(|| async { r#"{"id":"fixture","files":{}}"# }))
+            .route("/size", get(|| async {
+                let block = Bytes::from(vec![b' '; 1024 * 1024]);
+                let chunks = (0..=MAX_RESPONSE_BYTES.div_ceil(block.len())).map(move |_| Ok::<_, Infallible>(block.clone()));
+                Body::from_stream(futures::stream::iter(chunks))
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let http = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(5)).build().unwrap();
+        let normal = http.get(format!("http://{addr}/ok")).send().await.unwrap();
+        assert_eq!(parse_response(normal).await.unwrap().id, "fixture");
+        let large = http.get(format!("http://{addr}/size")).send().await.unwrap();
+        assert!(large.content_length().is_none());
+        let error = parse_response(large).await.err().expect("response limit");
+        assert_eq!(error.code, TOO_LARGE);
+        task.abort();
     }
 
     #[test]

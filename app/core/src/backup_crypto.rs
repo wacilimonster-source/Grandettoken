@@ -61,7 +61,7 @@ pub fn unseal(_raw: &[u8]) -> Result<Vec<u8>, String> {
 /// 读一份备份文件,返回**明文**。加密的新格式解密,旧的明文格式原样返回(兼容)。
 pub fn read_plain(path: &Path) -> Result<Vec<u8>, String> {
     let raw = std::fs::read(path).map_err(|e| format!("读备份文件失败: {e}"))?;
-    if is_sealed(&raw) {
+    if raw.starts_with(MAGIC) {
         unseal(&raw)
     } else {
         Ok(raw)
@@ -78,7 +78,8 @@ pub fn write_sealed(path: &Path, plain: &[u8]) -> Result<(), String> {
 /// 返回 `Ok(true)` = 确实改了,`Ok(false)` = 本来就是密文(跳过)。
 pub fn encrypt_in_place(path: &Path) -> Result<bool, String> {
     let raw = std::fs::read(path).map_err(|e| format!("读旧备份失败: {e}"))?;
-    if is_sealed(&raw) {
+    if raw.starts_with(MAGIC) {
+        if !is_sealed(&raw) { return Err("加密备份已截断".into()); }
         return Ok(false);
     }
     // 先算密文再落盘:seal 失败(例如换了账户)时原文件一个字节都不动。
@@ -211,6 +212,19 @@ mod tests {
         let d = std::env::temp_dir().join("gt-backup-crypto").join(name);
         std::fs::create_dir_all(&d).unwrap();
         d.join("snapshot.json")
+    }
+
+    #[test]
+    fn truncated_container_never_becomes_plaintext() {
+        let path = tmp("truncated");
+        for len in [MAGIC.len(), MAGIC.len() + 32] {
+            let mut bytes = MAGIC.to_vec();
+            bytes.resize(len, 0);
+            std::fs::write(&path, &bytes).unwrap();
+            assert!(read_plain(&path).is_err());
+            assert!(encrypt_in_place(&path).is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        }
     }
 
     #[test]

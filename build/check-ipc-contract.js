@@ -14,6 +14,7 @@
  *
  * 用法:node build/check-ipc-contract.js
  */
+const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 
@@ -37,11 +38,20 @@ for (const m of invokeAll) {
 
 // ── 2. Rust 命令定义(#Tauri 宏标注的 fn) ──
 const defined = new Map(); // name -> file
+const commandArgs = new Map(); // name -> Map(argument -> optional)
+const injected = /^(?:tauri::)?(?:AppHandle|State|Window|WebviewWindow)(?:<|$)/;
 const registered = new Map(); // name -> raw entry
 for (const f of fs.readdirSync(rustDir).filter((n) => n.endsWith(".rs"))) {
   const src = fs.readFileSync(path.join(rustDir, f), "utf8");
-  for (const m of src.matchAll(/#\[tauri::command\][\s\S]{0,300}?\b(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z0-9_]+)\s*\(/g)) {
-    defined.set(m[1], f);
+  for (const [, name, signature] of src.matchAll(/#\[tauri::command\]\s*(?:pub(?:\(crate\))?\s+)?(?:async\s+)?fn\s+(\w+)\s*\(([^)]*)\)/g)) {
+    defined.set(name, f);
+    const params = new Map();
+    for (const [, param, ty] of signature.matchAll(/(?:^|,)\s*(\w+)\s*:\s*([^,]+)/g)) {
+      if (injected.test(ty.trim())) continue;
+      const key = param.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+      params.set(key, ty.trim().startsWith("Option<"));
+    }
+    commandArgs.set(name, params);
   }
   const gh = /generate_handler!\s*\[([\s\S]*?)\]/.exec(src);
   if (!gh) continue;
@@ -77,22 +87,44 @@ function problemsFor(callSet) {
   return p;
 }
 
-// 双向验证:光「当前源码全绿」说明不了门禁是活的。塞一个必然不存在的命令,
-// 判定逻辑必须报错;否则说明规则被改坏(例如把缺项降级成警告),整道门禁就没有意义。
-// 这条纪律来自 PROGRESS.md 里 scan-secrets.ps1 的教训:单向「变绿了」不算验证。
-const sentinelProblems = problemsFor(new Set(["__contract_sentinel__"]));
-if (!sentinelProblems.some((p) => p.includes("__contract_sentinel__"))) {
-  console.error("IPC 契约自检 FAIL:注入未知命令却没被判为失败 —— 门禁已失效,请修判定逻辑");
-  process.exit(2);
+function assertInvokeArgs(command, args = {}) {
+  const expected = commandArgs.get(command);
+  if (!expected) throw new Error(`IPC 未注册命令 ${command}`);
+  const unknown = Object.keys(args).filter(key => !expected.has(key));
+  const missing = Array.from(expected).filter(([key, optional]) =>
+    !optional && (args[key] === undefined || args[key] === null)).map(([key]) => key);
+  if (unknown.length || missing.length) {
+    throw new Error(`IPC ${command} 参数不匹配，未知 [${unknown.join(", ")}]，缺失 [${missing.join(", ")}]`);
+  }
 }
 
-const problems = problemsFor(calls);
-const unused = [...registered.keys()].filter((r) => !calls.has(r)).sort();
-console.log(`IPC 契约:前端 ${invokeAll.length} 处 invoke / ${calls.size} 个唯一命令;Rust ${defined.size} 个定义 / ${registered.size} 个注册项`);
-console.log(`  调用未定义或未注册: ${[...calls].filter((c) => !defined.has(c) || !registered.has(c)).length}`);
-console.log(`  注册但前端未调用(仅提示,不算失败): ${unused.length}${unused.length ? " -> " + unused.join(", ") : ""}`);
-if (problems.length) {
-  console.error("IPC 契约 FAIL:\n  - " + problems.join("\n  - "));
-  process.exit(1);
+module.exports = { assertInvokeArgs };
+
+if (require.main === module) {
+  const save = [...commandArgs].find(([, params]) => [...params.values()].includes(false));
+  assert.ok(save, "未提取到任何带必填参数的命令");
+  const [name, params] = save;
+  const valid = Object.fromEntries([...params].filter(([, optional]) => !optional).map(([key]) => [key, {}]));
+  assert.doesNotThrow(() => assertInvokeArgs(name, valid));
+  assert.throws(() => assertInvokeArgs(name, {}), /缺失/);
+  assert.throws(() => assertInvokeArgs(name, { ...valid, __argument_sentinel__: true }), /__argument_sentinel__/);
+  // 双向验证:光「当前源码全绿」说明不了门禁是活的。塞一个必然不存在的命令,
+  // 判定逻辑必须报错;否则说明规则被改坏(例如把缺项降级成警告),整道门禁就没有意义。
+  // 这条纪律来自 PROGRESS.md 里 scan-secrets.ps1 的教训:单向「变绿了」不算验证。
+  const sentinelProblems = problemsFor(new Set(["__contract_sentinel__"]));
+  if (!sentinelProblems.some((p) => p.includes("__contract_sentinel__"))) {
+    console.error("IPC 契约自检 FAIL:注入未知命令却没被判为失败 —— 门禁已失效,请修判定逻辑");
+    process.exit(2);
+  }
+
+  const problems = problemsFor(calls);
+  const unused = [...registered.keys()].filter((r) => !calls.has(r)).sort();
+  console.log(`IPC 契约:前端 ${invokeAll.length} 处 invoke / ${calls.size} 个唯一命令;Rust ${defined.size} 个定义 / ${registered.size} 个注册项`);
+  console.log(`  调用未定义或未注册: ${[...calls].filter((c) => !defined.has(c) || !registered.has(c)).length}`);
+  console.log(`  注册但前端未调用(仅提示,不算失败): ${unused.length}${unused.length ? " -> " + unused.join(", ") : ""}`);
+  if (problems.length) {
+    console.error("IPC 契约 FAIL:\n  - " + problems.join("\n  - "));
+    process.exit(1);
+  }
+  console.log("IPC 契约 PASS");
 }
-console.log("IPC 契约 PASS");

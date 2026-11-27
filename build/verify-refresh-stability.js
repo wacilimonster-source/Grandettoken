@@ -16,7 +16,8 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
-const { execFileSync } = require("child_process");
+const { spawnSync } = require("child_process");
+const { pathToFileURL } = require("node:url");
 
 const ROOT = path.join(__dirname, "..");
 const argv = process.argv.slice(2);
@@ -26,10 +27,10 @@ const argOf = (k, d) => {
 };
 // --src 可以指向一份改动前的源码副本,用来跑同一套场景做前后对比
 const SRC = path.resolve(argOf("--src", path.join(ROOT, "app", "src")));
+const browserRoots = [...new Set([process.env.ProgramFiles, process.env["ProgramFiles(x86)"]].filter(Boolean))];
 const EDGE_CANDIDATES = [
-  "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
-  "C:/Program Files/Microsoft/Edge/Application/msedge.exe",
-  "C:/Program Files/Google/Chrome/Application/chrome.exe",
+  ...browserRoots.map(dir => path.join(dir, "Google", "Chrome", "Application", "chrome.exe")),
+  ...browserRoots.map(dir => path.join(dir, "Microsoft", "Edge", "Application", "msedge.exe")),
 ];
 
 if (argv.includes("--compare")) {
@@ -889,31 +890,45 @@ function buildHarness() {
   return replaceOnce(resultHtml, lastTag, lastTag + "\n" + driver);
 }
 
-const edge = argOf("--edge", EDGE_CANDIDATES.find((p) => fs.existsSync(p)) || EDGE_CANDIDATES[0]);
-const harnessPath = path.join(os.tmpdir(), "gt-refresh-qa.html");
-fs.writeFileSync(harnessPath, buildHarness(), "utf8");
-const url = "file:///" + harnessPath.replace(/\\/g, "/");
-const args = [
-  "--headless=new", "--disable-gpu", "--no-sandbox", "--disable-extensions",
-  "--no-first-run", "--disable-background-networking",
-  "--user-data-dir=" + path.join(os.tmpdir(), "gt-refresh-qa-profile-" + (argv.includes("--reduced") ? "rm" : "std")),
-  "--window-size=" + argOf("--window-size", "420,700"),
-  "--force-device-scale-factor=1",
-  "--virtual-time-budget=30000",
-];
-if (argv.includes("--reduced")) args.push("--force-prefers-reduced-motion=reduce");
-args.push("--dump-dom", url);
-
-let stdout;
-try {
-  stdout = execFileSync(edge, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] });
-} catch (e) {
-  console.error("无头浏览器执行失败:", e.message);
+const edge = argOf("--edge", EDGE_CANDIDATES.find(file => fs.existsSync(file)));
+if (!edge) {
+  console.error("没有找到可用的 Chromium 浏览器，请通过 --edge 传入浏览器路径");
   process.exit(1);
 }
+const prefix = "gt-refresh-qa-";
+const tmp = fs.realpathSync(os.tmpdir());
+const scratch = fs.mkdtempSync(path.join(tmp, prefix));
+const harnessPath = path.join(scratch, "refresh.html");
+let run;
+try {
+  fs.writeFileSync(harnessPath, buildHarness(), "utf8");
+  const args = [
+    "--headless=new", "--disable-gpu", "--no-sandbox", "--disable-extensions",
+    "--no-first-run", "--disable-background-networking",
+    "--user-data-dir=" + path.join(scratch, "profile"),
+    "--window-size=" + argOf("--window-size", "420,700"),
+    "--force-device-scale-factor=1", "--virtual-time-budget=30000",
+  ];
+  if (argv.includes("--reduced")) args.push("--force-prefers-reduced-motion=reduce");
+  args.push("--dump-dom", pathToFileURL(harnessPath).href);
+  run = spawnSync(edge, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 45_000 });
+} finally {
+  const real = fs.realpathSync(scratch);
+  if (path.dirname(real) !== tmp || !path.basename(real).startsWith(prefix)) throw new Error("浏览器临时目录超出预期范围");
+  try {
+    fs.rmSync(real, { recursive: true, force: true, maxRetries: 2 });
+  } catch (e) {
+    console.error("浏览器临时目录清理失败:", e.message);
+  }
+}
+if (run.error || run.status !== 0) {
+  console.error("无头浏览器执行失败:", run.status, run.signal, run.error?.message, run.stderr?.slice(-800));
+  process.exit(1);
+}
+const stdout = run.stdout;
 const m = /<script id="__QA_RESULT"[^>]*>([\s\S]*?)<\/script>/.exec(stdout);
 if (!m) {
-  console.error("没拿到结果节点。DOM 尾部:", stdout.slice(-1200));
+  console.error("没拿到结果节点。DOM 尾部:", stdout.slice(-1200), "stderr:", run.stderr?.slice(-800));
   process.exit(1);
 }
 const result = JSON.parse(m[1].replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">"));
@@ -926,7 +941,6 @@ if (result.fatal) {
 const outPath = argOf("--out", path.join(ROOT, "build", "qa", "refresh-snapshot.json"));
 fs.mkdirSync(path.dirname(outPath), { recursive: true });
 fs.writeFileSync(outPath, JSON.stringify(result, null, 2), "utf8");
-fs.unlinkSync(harnessPath);
 
 console.log(`快照已写入 ${outPath}`);
 console.log(`初始行数 ${result.meta.initialRows}, 视口 ${result.meta.viewport}, 减少动效=${result.meta.reduced}`);

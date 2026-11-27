@@ -265,3 +265,164 @@ fn upstream_send_timeout_maps_to_504_instead_of_unreachable() {
     assert_eq!(code, "upstream_unreachable");
     assert!(msg.contains("无法连接上游服务"));
 }
+
+#[tokio::test]
+async fn agent_platform_gemini_sends_safety_off_and_repairs_400_without_dropping_thinking() {
+    let captured: Arc<Mutex<Vec<(String, Option<String>, Value)>>> = Arc::new(Mutex::new(Vec::new()));
+    let captured_srv = captured.clone();
+    let router = Router::new().route(
+        "/chat/completions",
+        post(move |headers: HeaderMap, Json(body): Json<Value>| {
+            let captured_srv = captured_srv.clone();
+            async move {
+                let auth_present = headers.contains_key(header::AUTHORIZATION);
+                assert!(!auth_present, "AgentPlatform must not send Authorization header");
+                let goog_key = headers
+                    .get("x-goog-api-key")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string);
+                let model = body["model"].as_str().unwrap_or("").to_string();
+                captured_srv
+                    .lock()
+                    .unwrap()
+                    .push((model.clone(), goog_key, body.clone()));
+                if model == "google/gemini-4-hydrogen"
+                    && body.pointer("/extra_body/google/safety_settings").is_some()
+                {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({
+                            "error": {
+                                "message": "Invalid JSON payload received. Unknown name \"safety_settings\" at 'extra_body.google': Cannot find field."
+                            }
+                        })),
+                    )
+                        .into_response();
+                }
+                Json(json!({
+                    "object": "chat.completion",
+                    "model": model,
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}
+                }))
+                .into_response()
+            }
+        }),
+    );
+
+    let up_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let up_addr = up_listener.local_addr().unwrap();
+    let up_task = tokio::spawn(async move { axum::serve(up_listener, router).await.unwrap(); });
+
+    let store = Arc::new(Mutex::new(Store::open_memory().unwrap()));
+    lock(&store)
+        .vault_upsert(&VaultItem {
+            id: "v_ap_fixture".into(),
+            platform: "google".into(),
+            label: "ap-fixture".into(),
+            hint: "***".into(),
+            note: String::new(),
+            api_endpoint: format!("http://{up_addr}"),
+            website: String::new(),
+            created_at: 1,
+            updated_at: 1,
+        })
+        .unwrap();
+    let g = Gateway::with_credentials(store, Arc::new(FixtureCredentials), Arc::new(FixtureCredentials))
+        .unwrap();
+    let channel: Published = serde_json::from_value(json!({
+        "channelId": "ap_fixture",
+        "vaultId": "v_ap_fixture",
+        "source": "agent_platform",
+        "alias": "agent",
+        "baseUrl": format!("http://{up_addr}"),
+        "systemProxy": false,
+        "models": ["google/gemini-3.8-flash", "google/gemini-4-hydrogen"]
+    }))
+    .unwrap();
+    {
+        let mut inner = lock(&g.inner);
+        inner.settings.auth = false;
+        inner.settings.lan = false;
+        inner.settings.channels = vec![channel.clone()];
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let gw_router = build_router(g.clone());
+    let gw_task = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            gw_router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
+    let url = format!("http://{addr}/v1/chat/completions");
+
+    // 1. 正常 Gemini 请求应携带 x-goog-api-key 和 4 项 OFF 的 safety_settings
+    let resp1 = client
+        .post(&url)
+        .json(&json!({
+            "model": "agent/google/gemini-3.8-flash",
+            "messages": [{"role": "user", "content": "hi"}],
+            "reasoning_effort": "low"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp1.status(), StatusCode::OK);
+
+    // 2. 上游若对 safety_settings 报 400，应只剥离 safety_settings 并保留 thinking_config 重试成功
+    let resp2 = client
+        .post(&url)
+        .json(&json!({
+            "model": "agent/google/gemini-4-hydrogen",
+            "messages": [{"role": "user", "content": "think"}],
+            "reasoning_effort": "medium"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp2.status(), StatusCode::OK);
+    let body2: Value = resp2.json().await.unwrap();
+    assert_eq!(body2["choices"][0]["message"]["content"], "ok");
+
+    let recorded = captured.lock().unwrap().clone();
+    assert_eq!(recorded.len(), 3);
+
+    assert_eq!(recorded[0].0, "google/gemini-3.8-flash");
+    assert_eq!(recorded[0].1.as_deref(), Some(UPSTREAM_KEY));
+    let safety0 = recorded[0].2["extra_body"]["google"]["safety_settings"]
+        .as_array()
+        .unwrap();
+    assert_eq!(safety0.len(), 4);
+    assert!(safety0.iter().all(|s| s["threshold"] == "OFF"));
+    assert_eq!(
+        recorded[0].2["extra_body"]["google"]["thinking_config"]["thinking_level"],
+        "low"
+    );
+
+    // 第 2 次是首次 hydrogen 400，第 3 次是修复重试
+    assert_eq!(recorded[1].0, "google/gemini-4-hydrogen");
+    assert!(recorded[1].2.pointer("/extra_body/google/safety_settings").is_some());
+
+    assert_eq!(recorded[2].0, "google/gemini-4-hydrogen");
+    assert!(recorded[2].2.pointer("/extra_body/google/safety_settings").is_none());
+    assert_eq!(
+        recorded[2].2["extra_body"]["google"]["thinking_config"]["include_thoughts"],
+        true
+    );
+    assert_eq!(
+        recorded[2].2["extra_body"]["google"]["thinking_config"]["thinking_level"],
+        "medium"
+    );
+
+    gw_task.abort();
+    up_task.abort();
+}

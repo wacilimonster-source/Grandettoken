@@ -2,7 +2,7 @@
 
 use super::dispatch::{execute_dispatched, DispatchedSuccess};
 use super::responses::{ChatSse, DiagnosticGuard};
-use crate::gateway::{lock, peer_allowed, Gateway};
+use crate::gateway::{peer_allowed, Gateway};
 use crate::gateway_proto::{
     anthropic::{
         anthropic_error_value, anthropic_to_openai_request, estimate_anthropic_input_tokens,
@@ -26,12 +26,12 @@ fn anthropic_json_error(status: StatusCode, err_type: &str, message: &str) -> Re
     (status, Json(anthropic_error_value(err_type, message))).into_response()
 }
 
-fn check_auth(
+async fn check_auth(
     g: &Gateway,
     peer: SocketAddr,
     headers: &HeaderMap,
 ) -> Result<(), Response> {
-    let settings = lock(&g.inner).settings.clone();
+    let settings = g.access_settings();
     if !peer_allowed(peer, &settings) {
         return Err(anthropic_json_error(
             StatusCode::FORBIDDEN,
@@ -39,7 +39,7 @@ fn check_auth(
             "仅允许本机或局域网访问",
         ));
     }
-    if !g.is_authorized(headers, &settings) {
+    if !g.is_authorized(headers, &settings).await {
         return Err(anthropic_json_error(
             StatusCode::UNAUTHORIZED,
             "authentication_error",
@@ -92,7 +92,7 @@ pub(super) async fn count_tokens(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Err(resp) = check_auth(&g, peer, &headers) {
+    if let Err(resp) = check_auth(&g, peer, &headers).await {
         return resp;
     }
     let data = match parse_json_body(&headers, &body) {
@@ -109,7 +109,7 @@ pub(super) async fn messages(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Err(resp) = check_auth(&g, peer, &headers) {
+    if let Err(resp) = check_auth(&g, peer, &headers).await {
         return resp;
     }
     let data = match parse_json_body(&headers, &body) {

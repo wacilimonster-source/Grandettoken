@@ -68,7 +68,20 @@ pub struct Published {
     pub last_checked_at: Option<i64>,
 }
 
+fn sensitive_header(name: &str) -> bool {
+    let name = name.trim().to_ascii_lowercase().replace('_', "-");
+    matches!(name.as_str(), "authorization" | "proxy-authorization" | "cookie" | "set-cookie")
+        || ["api-key", "apikey", "token", "secret", "password"].iter().any(|suffix| name.ends_with(suffix))
+}
+
 impl Published {
+    pub fn check_custom_headers(&self) -> Result<(), String> {
+        if self.custom_headers.keys().any(|name| sensitive_header(name)) {
+            return Err("自定义请求头含认证信息，请改用密钥箱".into());
+        }
+        Ok(())
+    }
+
     pub fn merge_current_probe(&mut self, current: &Published) {
         self.models = current.models.clone();
         self.last_status = current.last_status.clone();
@@ -78,6 +91,10 @@ impl Published {
             self.updated_at = current.updated_at;
         }
         if self.base_url == current.base_url { self.host = current.host.clone(); }
+    }
+
+    fn live_with(&self, vault: &std::collections::HashMap<String, projection::VaultMeta>) -> bool {
+        (self.no_upstream_key && self.kind() == GatewaySourceKind::OpenAiCompat) || vault.contains_key(&self.vault_id)
     }
 
     pub fn kind(&self) -> GatewaySourceKind {
@@ -226,7 +243,13 @@ impl Gateway {
             None => Settings::default(),
         };
         let mut migrated = false;
+        let mut removed_headers = false;
         for (i, ch) in settings.channels.iter_mut().enumerate() {
+            if ch.check_custom_headers().is_err() {
+                ch.custom_headers.retain(|name, _| !sensitive_header(name));
+                removed_headers = true;
+                migrated = true;
+            }
             if ch.normalize_in_place(&format!("legacy_{i}")) {
                 migrated = true;
             }
@@ -240,7 +263,7 @@ impl Gateway {
                 shutdown: None,
                 listener_released: None,
                 run_id: 0,
-                startup_error: None,
+                startup_error: removed_headers.then(|| "已清理旧渠道的明文认证头，请在密钥箱配置上游密钥".into()),
                 diagnostics: VecDeque::with_capacity(MAX_DIAG_ENTRIES),
                 next_diag_id: 1,
                 test_chat_abort: None,
@@ -270,6 +293,7 @@ impl Gateway {
     }
 
     pub fn save(&self, settings: &Settings) -> Result<(), String> {
+        for channel in &settings.channels { channel.check_custom_headers()?; }
         lock(&self.store).set_setting(
             CONFIG_KEY,
             &serde_json::to_string(settings).map_err(|e| e.to_string())?,
@@ -278,6 +302,7 @@ impl Gateway {
 
     pub fn commit_publish(&self, inner: &mut Inner, expected_revision: u64, next: Settings, vault_version: Option<(&str, i64)>, endpoint: Option<(&str, i64)>) -> Result<(), String> {
         if inner.config_revision != expected_revision { return Err("渠道配置已变化，请重新上架".into()); }
+        for channel in &next.channels { channel.check_custom_headers()?; }
         lock(&self.store).vault_metadata_and_setting(CONFIG_KEY, &serde_json::to_string(&next).map_err(|e| e.to_string())?, vault_version, endpoint)?;
         inner.config_revision = inner.config_revision.wrapping_add(1);
         inner.settings = next;
@@ -445,22 +470,13 @@ impl Gateway {
         inner.routing.snapshots(now)
     }
 
-    pub fn live_channels(&self) -> Vec<Published> {
-        let channels = lock(&self.inner).settings.channels.clone();
-        let vault = match self.vault_index() {
-            Ok(v) => v,
-            Err(_) => return vec![],
-        };
-        channels
-            .into_iter()
-            .filter(|c| {
-                (c.no_upstream_key && c.kind() == GatewaySourceKind::OpenAiCompat)
-                    // 上游请求按 vault_id 实时读密钥箱最新凭据；更新密钥后异步刷模型期间
-                    // 不得把渠道从 /v1/models 里临时抹掉（否则外部客户端拉到空模型列表）。
-                    || vault.contains_key(&c.vault_id)
-            })
-            .collect()
+    pub fn live_channels(&self) -> Result<Vec<Published>, String> {
+        let vault = self.vault_index()?;
+        Ok(lock(&self.inner).settings.channels.iter()
+            .filter(|c| c.live_with(&vault))
+            .cloned().collect())
     }
+
 }
 
 struct NativeAccess;
@@ -474,6 +490,10 @@ pub fn authorized(headers: &HeaderMap, settings: &Settings) -> bool {
     authorized_with(headers, settings, &NativeAccess)
 }
 
+
+pub fn advertised_lan_ip(ip: Ipv4Addr) -> bool {
+    ip.is_private()
+}
 
 pub fn peer_allowed(peer: SocketAddr, settings: &Settings) -> bool {
     let allow_v4 = |ip: Ipv4Addr| {

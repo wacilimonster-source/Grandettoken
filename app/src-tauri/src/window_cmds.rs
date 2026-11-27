@@ -195,15 +195,6 @@ pub(crate) fn tray_icon_size(app: &tauri::AppHandle) -> u32 {
     }
 }
 
-/// 托盘图像指纹:同尺寸、逐像素相同 → 同值。
-pub(crate) fn tray_icon_digest(size: u32, rgba: &[u8]) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    size.hash(&mut h);
-    rgba.hash(&mut h);
-    h.finish()
-}
-
 #[tauri::command]
 pub(crate) fn window_cmd(app: tauri::AppHandle, action: String, presentation: Option<hibernate::Presentation>) -> Result<(), String> {
     let window = || app.get_webview_window("main").ok_or("窗口不存在");

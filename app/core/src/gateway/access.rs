@@ -11,14 +11,30 @@ fn digest(token: &str) -> TokenDigest {
 }
 
 impl Gateway {
-    pub fn is_authorized(&self, headers: &HeaderMap, settings: &Settings) -> bool {
-        check(headers, settings, || {
-            let mut cached = lock(&self.access_token_sha256);
+    pub(super) fn access_settings(&self) -> Settings {
+        let inner = lock(&self.inner);
+        Settings { lan: inner.settings.lan, auth: inner.settings.auth, ..Settings::default() }
+    }
+
+    pub async fn is_authorized(&self, headers: &HeaderMap, settings: &Settings) -> bool {
+        let mut needs_read = false;
+        let allowed = check(headers, settings, || {
+            let cached = self.access_token_sha256.try_lock().ok().and_then(|guard| *guard);
+            needs_read = cached.is_none();
+            cached
+        });
+        if !needs_read {
+            return allowed;
+        }
+        let gateway = self.clone();
+        let expected = tokio::task::spawn_blocking(move || {
+            let mut cached = lock(&gateway.access_token_sha256);
             if cached.is_none() {
-                *cached = read_digest(self.access.as_ref());
+                *cached = read_digest(gateway.access.as_ref());
             }
             *cached
-        })
+        }).await.ok().flatten();
+        check(headers, settings, || expected)
     }
 
     pub fn invalidate_access_token(&self) {

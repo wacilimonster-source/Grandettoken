@@ -119,6 +119,22 @@ pub fn save(store: &Store, profile: &SyncProfile) -> Result<(), String> {
     store.set_setting(PROFILE_KEY, &json)
 }
 
+pub fn github_needs_reauth(config: &Config) -> bool {
+    config.sync_last_error.as_deref().is_some_and(|error| {
+        error.split(':').next() == Some(super::error::AUTH)
+    })
+}
+
+pub fn automatic_publish_due(config: &Config, now: i64) -> bool {
+    config.sync_enabled
+        && config.sync_relay_id.is_some()
+        && config.sync_source.is_some()
+        && !github_needs_reauth(config)
+        && config.sync_next_allowed_at.is_none_or(|at| at <= now)
+        && now.saturating_sub(config.sync_last_upload_at.unwrap_or(0))
+            >= config.sync_publish_interval_sec as i64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,5 +177,36 @@ mod tests {
         incomplete.as_object_mut().unwrap().remove("relayId");
         store.set_setting(PROFILE_KEY, &incomplete.to_string()).unwrap();
         assert!(load(&store).is_err());
+    }
+
+    #[test]
+    fn expired_authorization_blocks_due_publish_after_restart() {
+        let store = Store::open_memory().unwrap();
+        let mut config = Config {
+            sync_enabled: true,
+            sync_relay_id: Some("00112233445566778899aabbccddeeff".into()),
+            sync_source: Some("s_00112233445566778899aabbccddeeff".into()),
+            sync_last_upload_at: Some(100),
+            sync_publish_interval_sec: 60,
+            sync_last_error: Some("SYNC_AUTH: previous credentials rejected".into()),
+            ..Config::default()
+        };
+        migrate(&store, &config).unwrap();
+        config = Config::default();
+        load(&store).unwrap().apply_to(&mut config);
+        assert!(github_needs_reauth(&config));
+        assert!(!automatic_publish_due(&config, 160));
+
+        config.sync_last_error = Some("SYNC_NETWORK: temporary failure".into());
+        assert!(!github_needs_reauth(&config));
+        assert!(automatic_publish_due(&config, 160));
+        config.sync_last_error = None;
+        assert!(automatic_publish_due(&config, 160));
+        assert!(!automatic_publish_due(&config, 159));
+        config.sync_next_allowed_at = Some(200);
+        assert!(!automatic_publish_due(&config, 199));
+        assert!(automatic_publish_due(&config, 200));
+        config.sync_enabled = false;
+        assert!(!automatic_publish_due(&config, 200));
     }
 }

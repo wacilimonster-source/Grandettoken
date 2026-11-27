@@ -39,6 +39,7 @@ pub mod proxy;
 pub mod qoder;
 pub mod qoderweb;
 pub mod recovery;
+pub mod release_links;
 pub mod secrets;
 pub mod store;
 pub use store::gateway as store_gateway;

@@ -37,6 +37,9 @@ function closeManage(restoreFocus = true) {
   const ae = document.activeElement;
   const mgr = $("manage");
   const fromManage = !ae || ae === document.body || (mgr && mgr.contains(ae));
+  document.querySelectorAll('#chList [id^="key-"]').forEach(el => { keyDraft[el.id.slice(4)] = el.value; });
+  document.querySelectorAll("#chList .reveal-box").forEach(revealBoxHide);
+  $("chList").replaceChildren();
   document.body.classList.remove("view-manage", "manage-index");
   // restoreFocus=false 给"切形态顺手关掉管理页"那条路:底栏只在面板形态存在,
   // 切紧凑条/胶囊时还给一个 display:none 的按钮,浏览器会立刻丢给 body,等于白聚焦。
@@ -401,6 +404,7 @@ function syncSummary() {
   const s = SYNC_STATUS;
   if (SYNC_STATUS_ERROR) return "同步设置读取失败 · 点击重试";
   if (!s) return "打开查看 · 手机只读";
+  if (s.githubNeedsReauth) return "GitHub 授权已失效 · 请重新授权";
   if (s.nextAllowedAt && s.nextAllowedAt > Date.now() / 1000) {
     return "限流中 · " + untilTime(s.nextAllowedAt) + "重试";
   }

@@ -109,6 +109,7 @@ pub(crate) fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Erro
 
     match gateway::Gateway::new(app.state::<AppState>().store.clone()) {
         Ok(gw) => {
+            if let Some(message) = lock_rw(&gw.inner).startup_error.clone() { startup_error = note(startup_error, message); }
             app.manage(gw);
             let gateway_app = app.handle().clone();
             tauri::async_runtime::spawn(async move { gateway::autostart(gateway_app).await; });
@@ -134,6 +135,8 @@ pub(crate) fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Erro
 
     // 网页登录型渠道的会话来源:每轮取数时现从 webview 的 Cookie 罐里读。
     // 回调在取数路径的 spawn_blocking 里调用，避免主线程阻塞读 WebView。
+    let phase_app = app.handle().clone();
+    app.state::<AppState>().fetcher.set_webview_release_probe(move || !hibernate::has_live_webview(&phase_app));
     let session_app = app.handle().clone();
     app.state::<AppState>()
         .fetcher

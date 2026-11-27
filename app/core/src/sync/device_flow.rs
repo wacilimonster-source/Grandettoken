@@ -8,6 +8,17 @@ const GITHUB_DEVICE_CODE: &str = "https://github.com/login/device/code";
 const GITHUB_TOKEN: &str = "https://github.com/login/oauth/access_token";
 const GITHUB_USER: &str = "https://api.github.com/user";
 const GITHUB_VERIFY: &str = "https://github.com/login/device";
+// Grandettoken Desktop 的公开标识。设备授权只需要 Client ID。
+const DESKTOP_CLIENT_ID: &str = "Ov23li34Fs1SlwlkggXJ";
+
+pub fn desktop_client_id<'a>(configured: Option<&'a str>, bundled: Option<&'a str>) -> &'a str {
+    [configured, bundled]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|id| !id.is_empty())
+        .unwrap_or(DESKTOP_CLIENT_ID)
+}
 
 #[derive(Clone)]
 pub struct DeviceSession {
@@ -243,6 +254,17 @@ pub async fn poll(session: &DeviceSession, client_id: &str) -> Result<TokenDecis
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn desktop_client_id_is_available_without_build_or_profile_configuration() {
+        assert_eq!(desktop_client_id(None, None), DESKTOP_CLIENT_ID);
+        assert_eq!(desktop_client_id(Some(" "), Some("\t")), DESKTOP_CLIENT_ID);
+        assert_eq!(desktop_client_id(None, Some(" build-fixture ")), "build-fixture");
+        assert_eq!(
+            desktop_client_id(Some(" profile-fixture "), Some("build-fixture")),
+            "profile-fixture"
+        );
+    }
 
     #[test]
     fn session_and_poll_results_preserve_protocol_bounds() {

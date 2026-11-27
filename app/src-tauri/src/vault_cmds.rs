@@ -24,19 +24,7 @@ pub(crate) struct VaultInput {
     pub(crate) key: String,
 }
 
-pub(crate) fn vault_url(value: &str) -> Result<String, String> {
-    let value = value.trim();
-    if value.is_empty() { return Ok(String::new()); }
-    let parsed = reqwest::Url::parse(value).map_err(|_| "请输入完整的网址（包含 http:// 或 https://）")?;
-    let has_secret_param = parsed.query_pairs().any(|(name, _)| {
-        let n = name.to_ascii_lowercase().replace('-', "_");
-        n == "key" || n.contains("api_key") || n.contains("token") || n.contains("secret") || n.contains("password") || n.contains("authorization")
-    });
-    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() || !parsed.username().is_empty() || parsed.password().is_some() || has_secret_param {
-        return Err("网址需为不含密钥或凭据的 HTTP(S) 地址".into());
-    }
-    Ok(value.to_string())
-}
+use tokenscope_core::vault::vault_url;
 
 // 渠道默认密钥导入与网关自动同步已拆至 vault_sync.rs。
 

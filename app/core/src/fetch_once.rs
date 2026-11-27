@@ -583,7 +583,7 @@ pub(crate) fn push_chunk(out: &mut Vec<u8>, c: &[u8], max: usize) -> Result<(), 
 
 /// 分块读响应体,超限**立刻停手** —— 不再把超大的包整个读进内存。
 /// 返回 (缓冲, 失败类别),失败类别沿用 fetch_once 的口径。
-pub(super) async fn read_body_capped(
+pub(crate) async fn read_body_capped(
     mut resp: reqwest::Response,
     max: usize,
 ) -> Result<Vec<u8>, (String, FailKind)> {

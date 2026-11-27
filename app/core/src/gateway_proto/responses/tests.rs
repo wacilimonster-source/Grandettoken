@@ -324,6 +324,26 @@ fn response_tool_limit_counts_final_tails_without_double_counting_snapshots() {
 }
 
 #[test]
+fn final_text_must_extend_the_streamed_prefix() {
+    for (final_text, suffix) in [("你好世界", Some("世界")), ("你", None), ("您好世界", None)] {
+        let mut bridge = ResponsesChatStream::new("fixture", false);
+        let delta = json!({"type":"response.output_text.delta","delta":"你好"});
+        bridge.push_bytes(format!("data: {delta}\n\n").as_bytes());
+        let final_frame = json!({"type":"response.completed","response":{"status":"completed","output":[{
+            "type":"message","content":[{"type":"output_text","text":final_text}]
+        }]}});
+        let frames = bridge.push_bytes(format!("data: {final_frame}\n\n").as_bytes());
+        if let Some(suffix) = suffix {
+            assert!(frames.iter().any(|v| v["choices"][0]["delta"]["content"] == suffix));
+            assert!(frames.iter().any(|v| v["choices"][0]["finish_reason"] == "stop"));
+        } else {
+            assert!(frames.iter().any(|v| v["error"]["code"] == "responses_stream_error"));
+            assert!(frames.iter().all(|v| v["choices"][0]["finish_reason"].is_null()));
+        }
+    }
+}
+
+#[test]
 fn response_completed_snapshot_cannot_emit_success_after_tool_limit_error() {
     let mut bridge = ResponsesChatStream::new("m", false);
     let almost = "x".repeat(8 * 1024 * 1024 - 1024);

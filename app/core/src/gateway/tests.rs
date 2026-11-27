@@ -239,11 +239,40 @@ fn publish_settings_failure_rolls_back_endpoint_and_retry_commits_only_metadata(
             last_error: None,
             last_checked_at: Some(10),
         });
-        assert_eq!(g.live_channels().len(), 1);
+        assert_eq!(g.live_channels().unwrap().len(), 1);
+        for name in ["Authorization", " COOKIE ", "Proxy-Authorization", "X-API-Key", "x-goog-api-key", "X-Auth-Token"] {
+            let mut settings = lock(&g.inner).settings.clone();
+            settings.channels[0].custom_headers.insert(name.into(), "fixture-value".into());
+            let error = g.save(&settings).unwrap_err();
+            assert!(!error.contains("fixture-value"));
+            assert!(!lock(&g.store).get_setting(CONFIG_KEY).unwrap().unwrap_or_default().contains("fixture-value"));
+        }
+        let mut legacy = lock(&g.inner).settings.clone();
+        legacy.channels[0].custom_headers = BTreeMap::from([
+            ("X-Api-Key".into(), "fixture-value".into()),
+            ("X-Trace".into(), "request-demo".into()),
+        ]);
+        lock(&store).set_setting(CONFIG_KEY, &serde_json::to_string(&legacy).unwrap()).unwrap();
+        let reopened = Gateway::new(store.clone()).unwrap();
+        let current = lock(&reopened.inner);
+        assert!(current.startup_error.is_some());
+        assert_eq!(current.settings.channels[0].custom_headers, BTreeMap::from([("X-Trace".into(), "request-demo".into())]));
+        assert!(!lock(&store).get_setting(CONFIG_KEY).unwrap().unwrap().contains("fixture-value"));
+        drop(current);
         lock(&store).vault_delete("v_1").unwrap();
-        assert!(g.live_channels().is_empty());
+        assert!(g.live_channels().unwrap().is_empty());
+        drop(reopened);
+        drop(g);
         drop(store);
-        let _ = std::fs::remove_file(file);
+        std::fs::remove_file(file).unwrap();
     }
 
 
+#[test]
+fn advertised_lan_addresses_are_accepted_private_ipv4() {
+    assert!(advertised_lan_ip("192.168.1.10".parse().unwrap()));
+    assert!(advertised_lan_ip("10.0.0.2".parse().unwrap()));
+    assert!(!advertised_lan_ip("100.69.220.4".parse().unwrap()));
+    assert!(!advertised_lan_ip("8.8.8.8".parse().unwrap()));
+    assert!(!advertised_lan_ip("127.0.0.1".parse().unwrap()));
+}

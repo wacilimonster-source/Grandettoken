@@ -266,6 +266,7 @@ pub(crate) fn consumption_since_rows(rows: &[HistoryRow], from_ts: i64, to_ts: i
 }
 
 /// [`Store::consumed_in_window`] 的纯函数版本:只累加窗口内相邻快照的下降。
+#[cfg(test)]
 pub(crate) fn consumed_in_window_rows(rows: &[HistoryRow], from_ts: i64, to_ts: i64) -> f64 {
     let mut sum = 0.0;
     let mut prev: Option<f64> = None;
@@ -300,6 +301,7 @@ pub(crate) fn window_coverage_rows(rows: &[HistoryRow], from_ts: i64, to_ts: i64
 
 /// [`Store::daily_coverage`] 的纯函数版本。分桶用调用方给的时区偏移,
 /// 与 SQL 的 `(ts + tz) / 86400` 同一个截断口径;行已按 ts 升序,桶天然有序。
+#[cfg(test)]
 pub(crate) fn daily_coverage_rows(
     rows: &[HistoryRow],
     from_ts: i64,
@@ -326,6 +328,7 @@ pub(crate) fn daily_coverage_rows(
 }
 
 /// [`Store::last_jump_since`] 的纯函数版本:顺序扫描,取最后一次"像申请的"跳升。
+#[cfg(test)]
 pub(crate) fn last_jump_rows(
     rows: &[HistoryRow],
     from_ts: i64,
@@ -355,6 +358,7 @@ pub(crate) fn last_jump_rows(
 }
 
 /// [`Store::first_ts_since`] 的纯函数版本(包含 `remaining IS NULL` 的行)。
+#[cfg(test)]
 pub(crate) fn first_ts_rows(rows: &[HistoryRow], from_ts: i64) -> Option<i64> {
     rows.iter()
         .filter(|r| r.ts >= from_ts)

@@ -179,8 +179,7 @@ async fn healthz(
     if headers.contains_key(header::ORIGIN) {
         return json_error(StatusCode::UNAUTHORIZED, "禁止浏览器跨域访问", "gateway_error", None, None);
     }
-    let settings = lock(&g.inner).settings.clone();
-    if !peer_allowed(peer, &settings) {
+    if !peer_allowed(peer, &lock(&g.inner).settings) {
         return json_error(StatusCode::FORBIDDEN, "仅允许本机或局域网访问", "gateway_error", None, None);
     }
     Json(json!({ "ok": true, "running": true })).into_response()
@@ -191,16 +190,19 @@ async fn list_models(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Response {
-    let settings = lock(&g.inner).settings.clone();
+    let settings = g.access_settings();
     if !peer_allowed(peer, &settings) {
         return json_error(StatusCode::FORBIDDEN, "仅允许本机或局域网访问", "gateway_error", None, None);
     }
-    if !g.is_authorized(&headers, &settings) {
+    if !g.is_authorized(&headers, &settings).await {
         return json_error(StatusCode::UNAUTHORIZED, "网关密钥无效", "gateway_error", None, None);
     }
     let mut seen = BTreeSet::new();
     let mut data: Vec<Value> = Vec::new();
-    let live = g.live_channels();
+    let live = match g.live_channels() {
+        Ok(v) => v,
+        Err(e) => return dispatch::DispatchError::vault(e).into_openai_response(),
+    };
     for c in &live {
         let kind = c.kind();
         for id in effective_models(c) {
@@ -214,7 +216,7 @@ async fn list_models(
             }
         }
     }
-    for gr in &settings.groups {
+    for gr in &lock(&g.inner).settings.groups {
         if group_is_live(gr, &live) {
             let full = group_model_id(&gr.id);
             if seen.insert(full.clone()) {
@@ -235,14 +237,17 @@ async fn get_model(
     headers: HeaderMap,
     Path(target): Path<String>,
 ) -> Response {
-    let settings = lock(&g.inner).settings.clone();
+    let settings = g.access_settings();
     if !peer_allowed(peer, &settings) {
         return json_error(StatusCode::FORBIDDEN, "仅允许本机或局域网访问", "gateway_error", None, None);
     }
-    if !g.is_authorized(&headers, &settings) {
+    if !g.is_authorized(&headers, &settings).await {
         return json_error(StatusCode::UNAUTHORIZED, "网关密钥无效", "gateway_error", None, None);
     }
-    let live = g.live_channels();
+    let live = match g.live_channels() {
+        Ok(v) => v,
+        Err(e) => return dispatch::DispatchError::vault(e).into_openai_response(),
+    };
     for c in &live {
         for id in effective_models(c) {
             let full = model_id(c, &id);
@@ -256,7 +261,7 @@ async fn get_model(
             }
         }
     }
-    for gr in &settings.groups {
+    for gr in &lock(&g.inner).settings.groups {
         if group_is_live(gr, &live) && group_model_id(&gr.id) == target {
             return Json(json!({
                 "id": target,
@@ -281,11 +286,11 @@ async fn chat(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let settings = lock(&g.inner).settings.clone();
+    let settings = g.access_settings();
     if !peer_allowed(peer, &settings) {
         return json_error(StatusCode::FORBIDDEN, "仅允许本机或局域网访问", "gateway_error", None, None);
     }
-    if !g.is_authorized(&headers, &settings) {
+    if !g.is_authorized(&headers, &settings).await {
         return json_error(StatusCode::UNAUTHORIZED, "网关密钥无效", "gateway_error", None, None);
     }
     let is_json = headers
@@ -320,43 +325,6 @@ async fn chat(
     };
 
     dispatch::handle_openai_chat(&g, &headers, data, &requested_model).await
-}
-
-fn resolve_channel_and_model(
-    g: &Gateway,
-    requested_model: &str,
-) -> Result<(Published, String), Response> {
-    let mut matches = g.live_channels().into_iter().filter_map(|c| {
-        effective_models(&c)
-            .into_iter()
-            .find(|id| model_id(&c, id) == requested_model)
-            .map(|id| (c, id))
-    });
-    let first = match matches.next() {
-        Some(v) => v,
-        None => {
-            if let Some(stand) = crate::inject::agent_stand_in(requested_model) {
-                return resolve_channel_and_model(g, &stand);
-            }
-            return Err(json_error(
-                StatusCode::NOT_FOUND,
-                "模型不存在、已下架或密钥已更新，请刷新模型列表",
-                "invalid_request_error",
-                Some("model_not_found"),
-                Some("model"),
-            ))
-        }
-    };
-    if matches.next().is_some() {
-        return Err(json_error(
-            StatusCode::CONFLICT,
-            "多个渠道的别名和模型相同，请修改其中一个别名或调整可见模型",
-            "invalid_request_error",
-            Some("duplicate_model"),
-            Some("model"),
-        ));
-    }
-    Ok(first)
 }
 
 async fn load_upstream_key(g: &Gateway, channel: &Published) -> Result<Option<String>, String> {
@@ -436,7 +404,7 @@ async fn send_upstream_with_repair(
             };
         }
     };
-    let client = match g.clients.client(channel.system_proxy) {
+    let client = match g.clients.client_async(channel.system_proxy).await {
         Ok(c) => c,
         Err(_) => {
             return UpstreamReady::Err {

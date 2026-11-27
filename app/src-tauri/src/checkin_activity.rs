@@ -327,11 +327,14 @@ pub(crate) async fn monitor_standard_activity(app: &tauri::AppHandle, id: &str) 
     let Ok(busy) = CheckinBusy::acquire(id) else {
         return;
     };
-    mark_qoder_activity_check(app, id, now).await;
-
     let Some(def) = checkin::find(id) else { return };
     let h = app.clone();
-    let cred = match tokio::task::spawn_blocking(move || checkin_credential(&h, def)).await {
+    let credential = tokio::task::spawn_blocking(move || checkin_credential(&h, def)).await;
+    if matches!(credential, Ok(Err(CheckinError::Paused))) {
+        return;
+    }
+    mark_qoder_activity_check(app, id, now).await;
+    let cred = match credential {
         Ok(Ok(cred)) => cred,
         Ok(Err(_)) | Err(_) => {
             let state = activity_state_from_outcome(id, &checkin::Outcome::AuthNeeded, None, now);

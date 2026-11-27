@@ -470,7 +470,7 @@ $("manage").addEventListener("click", async (e) => {
   if (a === "chfold") {
     // 就地开合,不整页重建 —— 展开区里可能正填着密钥
     const card = act.closest(".ccard");
-    card.classList.toggle("open");
+    act.setAttribute("aria-expanded", String(card.classList.toggle("open")));
     card.classList.contains("open") ? cardOpen.add(id) : cardOpen.delete(id);
   } else if (a === "vfold") {
     window.VaultUI.toggle(id, renderVault);

@@ -1,6 +1,8 @@
 use super::{params, Connection, Store};
 use std::path::Path;
 
+pub(super) const SCHEMA_VERSION: i64 = 10;
+
 impl Store {
     pub fn open(path: &Path) -> Result<Self, String> {
         if let Some(dir) = path.parent() {
@@ -49,12 +51,12 @@ impl Store {
         // 3 = snapshots 加 key_fp(密钥指纹分段,换 key 后两本账不互相推算消耗)
         // 4 = credit_grants(积分到账事件,WorkBuddy AI 的每日活跃 +30 等)
         // 5 = snapshots 的覆盖索引 idx_snap_fp_cover(P1b:批量历史读取不回表); 7 = gateway_usage_log; 8 = 台账 agent 列
-        const WANT: i64 = 9;
+        // 9 = 快照覆盖索引; 10 = 移除无查询使用的台账 (day, channel_id) 索引。
         let cur: i64 = self
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(|e| format!("读取数据库版本号失败: {e}"))?;
-        if cur >= WANT {
+        if cur >= SCHEMA_VERSION {
             return Ok(());
         }
         for (table, cols) in [
@@ -126,9 +128,10 @@ impl Store {
         tx.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_snap_fp_cover
                  ON snapshots (provider_id, key_fp, ts, remaining);
-             DROP INDEX IF EXISTS idx_snap_fp;",
+             DROP INDEX IF EXISTS idx_snap_fp;
+             DROP INDEX IF EXISTS idx_gw_usage_day_ch;",
         ).map_err(|e| format!("更新快照指纹索引失败: {e}"))?;
-        tx.pragma_update(None, "user_version", WANT)
+        tx.pragma_update(None, "user_version", SCHEMA_VERSION)
             .map_err(|e| format!("写数据库版本号失败: {e}"))?;
         tx.commit().map_err(|e| format!("提交快照索引迁移失败: {e}"))
     }

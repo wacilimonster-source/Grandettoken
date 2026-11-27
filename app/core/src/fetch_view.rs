@@ -157,7 +157,8 @@ pub(super) fn attach_plan_costs(
                 let fresh = learn_cycle(m, reset);
                 if Some(fresh) != m {
                     if let Err(e) = save_cycle(store, &v.id, &fresh) {
-                        eprintln!("写入周期记忆失败 {}: {e}", v.id);
+                        crate::diaglog::write_keyed(&v.id, "cycle", &e);
+                        v.extra.push(("套餐周期".into(), "本次学习结果未能保存，下轮将重试".into()));
                     }
                 }
                 Some(fresh)
@@ -296,14 +297,15 @@ pub(super) fn seven_day_burn(store: &Store, id: &str, key_fp: &str, now: i64) ->
 }
 
 /// 近 7 天日均的批量版本(同一份历史行):覆盖不足 1 天仍然返回 None。
+#[cfg(test)]
 pub(super) fn seven_day_burn_rows(rows: &[HistoryRow], now: i64) -> Option<f64> {
     let since = now - 7 * 86_400;
-    let first = first_ts_rows(rows, since)?;
+    let first = crate::store::first_ts_rows(rows, since)?;
     let covered = now - first;
     if covered < 86_400 {
         return None;
     }
-    let used = consumed_in_window_rows(rows, since, now);
+    let used = crate::store::consumed_in_window_rows(rows, since, now);
     Some(used / (covered as f64 / 86_400.0))
 }
 
@@ -453,34 +455,16 @@ pub(super) fn claim_for(
     // 只有"补到本轮额度线附近"的量级变化才算一次申请,并且相邻两条快照不能隔太久
     // (合盖多日后第一轮会把几天的差值合成一个"跳升")—— P2-1
     let fp = if key_fp.is_empty() { None } else { Some(key_fp) };
-    let auto_at = if let Some(fp) = fp {
-        store.last_jump_since_fp(
-            def.id,
-            fp,
-            now - CLAIM_LOOKBACK_SEC,
-            CLAIM_JUMP_MIN_DELTA,
-            ccfg.amount,
-            // 2 小时:既要挡住"合盖几天后第一跳把几天的差值合成一次跳升"(那是几小时~几天),
-            // 又不能紧到把正常补跑后的真申请也否掉(30 分钟太敏感)
-            2 * 3600,
-        )
-    } else {
-        store.last_jump_since(
-            def.id,
-            now - CLAIM_LOOKBACK_SEC,
-            CLAIM_JUMP_MIN_DELTA,
-            ccfg.amount,
-            2 * 3600,
-        )
-    }
-    .ok()
-    .flatten();
+    let auto_at = store.last_jump_between(
+        def.id, fp, now - CLAIM_LOOKBACK_SEC..=now, CLAIM_JUMP_MIN_DELTA, ccfg.amount, 2 * 3600,
+    ).ok().flatten();
     let burn = seven_day_burn(store, def.id, key_fp, now);
     claim_state(ccfg, auto_at, now, remaining, burn)
 }
 
-/// 申请制判断的批量版本:输入换成已经读出的历史行,不再逐窗口查库。
+/// 与 SQL 聚合对照的参考实现。
 /// `now` 由调用方传入 —— 与窗口/缺口共用同一个时刻,避免跨秒后边界测试不稳。
+#[cfg(test)]
 pub(super) fn claim_for_rows(
     def: &providers::ProviderDef,
     cfg: &Config,
@@ -492,7 +476,7 @@ pub(super) fn claim_for_rows(
     if !ccfg.enabled {
         return None;
     }
-    let auto_at = last_jump_rows(
+    let auto_at = crate::store::last_jump_rows(
         rows,
         now - CLAIM_LOOKBACK_SEC,
         CLAIM_JUMP_MIN_DELTA,
@@ -568,11 +552,9 @@ impl AmountAnchors {
         }
     }
 
-    /// 批量读取的起点:同时覆盖上月同期基线、92 天逐日覆盖与 90 天申请跳升。
+    /// 上月同期的前一天提供跨边界的消耗基线。
     pub(super) fn history_from(&self) -> i64 {
-        (self.prev0 - 86_400)
-            .min(self.now - 92 * 86_400)
-            .min(self.now - CLAIM_LOOKBACK_SEC)
+        self.prev0 - 86_400
     }
 
     /// 上月同期的终点:必须钳在上月之内(与 `amount_windows` 的原公式一致)。
@@ -598,8 +580,8 @@ pub(super) struct AmountStats {
 }
 
 impl AmountStats {
-    /// 批量路径:全部从同一次 `history_between` 的结果里切出来。
-    pub(super) fn from_rows(rows: &[HistoryRow], a: AmountAnchors) -> Self {
+    /// 消耗窗口从同一批历史切出，逐日覆盖由 SQLite 聚合。
+    pub(super) fn from_rows(rows: &[HistoryRow], a: AmountAnchors, gap_days: Vec<i64>) -> Self {
         Self {
             day: consumption_since_rows(rows, a.today0, a.now),
             week: consumption_since_rows(rows, a.week0, a.now),
@@ -610,11 +592,7 @@ impl AmountStats {
             gap_day_from: gap_from_rows(rows, a.today0, a.now),
             gap_week_from: gap_from_rows(rows, a.week0, a.now),
             gap_month_from: gap_from_rows(rows, a.month0, a.now),
-            gap_days: daily_coverage_rows(rows, a.now - 92 * 86_400, a.now, local_tz_offset())
-                .into_iter()
-                .filter(|d| gap_of_day(d, a.now))
-                .map(|d| d.day_start)
-                .collect(),
+            gap_days,
         }
     }
 
@@ -634,15 +612,14 @@ impl AmountStats {
             gap_day_from: gap_from(store, id, fp_opt, a.today0, a.now),
             gap_week_from: gap_from(store, id, fp_opt, a.week0, a.now),
             gap_month_from: gap_from(store, id, fp_opt, a.month0, a.now),
-            gap_days: store
-                .daily_coverage(id, fp_opt, a.now - 92 * 86_400, a.now, tz)
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|d| gap_of_day(d, a.now))
-                .map(|d| d.day_start)
-                .collect(),
+            gap_days: observed_gap_days(store, id, fp_opt, a.now, tz).unwrap_or_default(),
         }
     }
+}
+
+pub(super) fn observed_gap_days(store: &Store, id: &str, fp: Option<&str>, now: i64, tz: i64) -> Result<Vec<i64>, String> {
+    Ok(store.daily_coverage(id, fp, now - 92 * 86_400, now, tz)?.into_iter()
+        .filter(|d| gap_of_day(d, now)).map(|d| d.day_start).collect())
 }
 
 /// 加载一段历史:成功则把行交给 `from_rows`,失败(含超过 50 万行)整块退回
@@ -652,12 +629,14 @@ pub(super) fn with_amount_history<T>(
     id: &str,
     key_fp: &str,
     a: AmountAnchors,
-    from_rows: impl FnOnce(&[HistoryRow]) -> T,
+    from_rows: impl FnOnce(&[HistoryRow], Vec<i64>) -> T,
     legacy: impl FnOnce() -> T,
 ) -> T {
     let fp_opt = if key_fp.is_empty() { None } else { Some(key_fp) };
-    match store.history_between(id, fp_opt, a.history_from(), a.now) {
-        Ok(rows) => from_rows(&rows),
+    match store.history_between(id, fp_opt, a.history_from(), a.now).and_then(|rows| {
+        Ok((rows, observed_gap_days(store, id, fp_opt, a.now, local_tz_offset())?))
+    }) {
+        Ok((rows, days)) => from_rows(&rows, days),
         Err(e) => {
             eprintln!("批量读取历史失败 {id}: {e};本轮整块回退到逐窗口查询");
             legacy()
@@ -713,36 +692,20 @@ pub(crate) fn build_view(
     // 而测试可以传一个合成时刻,把"今天几点"钉住 —— 之前这里偷偷用真实时钟,
     // 导致缺口类测试在刚过午夜时必挂(2026-10-21 00:07 真机撞到)。
     let now2 = updated_at;
-    // P1:每个金额型渠道每轮只读一次历史,六个消耗窗口、三个缺口、逐日覆盖、
-    // 申请制跳升与近 7 天日均都从同一份行里切出来。读失败(或行数超限)时
-    // **整块**退回旧查询 —— 不允许一半窗口用新路径、一半用旧路径。
     let anchors = AmountAnchors::at(now2);
-    let (stats, claim) = if has_amount {
+    let stats = if has_amount {
         with_amount_history(
             store,
             def.id,
             key_fp,
             anchors,
-            |rows| {
-                (
-                    AmountStats::from_rows(rows, anchors),
-                    claim_for_rows(def, cfg, rows, result.remaining, now2),
-                )
-            },
-            || {
-                (
-                    AmountStats::legacy(store, def.id, key_fp, anchors),
-                    claim_for(def, cfg, store, result.remaining, key_fp, now2),
-                )
-            },
+            |rows, days| AmountStats::from_rows(rows, anchors, days),
+            || AmountStats::legacy(store, def.id, key_fp, anchors),
         )
     } else {
-        // 非金额型没有消耗窗口;申请制状态仍按旧路径查(与旧版本一致)。
-        (
-            AmountStats::default(),
-            claim_for(def, cfg, store, result.remaining, key_fp, now2),
-        )
+        AmountStats::default()
     };
+    let claim = claim_for(def, cfg, store, result.remaining, key_fp, now2);
     let AmountStats {
         day,
         week,
@@ -986,7 +949,7 @@ pub(super) fn build_custom_view(
             &ch.id,
             key_fp,
             anchors,
-            |rows| AmountStats::from_rows(rows, anchors),
+            |rows, days| AmountStats::from_rows(rows, anchors, days),
             || AmountStats::legacy(store, &ch.id, key_fp, anchors),
         )
     } else {

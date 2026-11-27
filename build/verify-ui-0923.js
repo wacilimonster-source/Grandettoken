@@ -86,7 +86,7 @@ const CH = [
     cfgSnap = await evalJs(`JSON.stringify(CFG)`);
 
     // 注入仿真数据(含未配置 / 失联 / 环比字段)
-    await evalJs(`CHANNELS = ${JSON.stringify(CH)}; CFG.hiddenChannels = []; render();`);
+    await evalJs(`CHANNELS = ${JSON.stringify(CH)}; CFG.hiddenChannels = []; hvApply(null); render();`);
     await sleep(300);
 
     const r1 = JSON.parse(await evalJs(`JSON.stringify((() => {
@@ -106,7 +106,8 @@ const CH = [
         dueName: !!document.querySelector('#sum .due-name'),
         dueDate: !!document.querySelector('#sum .due-date'),
         swButtons: [...document.querySelectorAll('.sw')].map((s) => s.tagName + ':' + (s.getAttribute('role') || '')),
-        ltrCount: document.querySelectorAll('.ico .ltr').length,
+        ltrCount: q('#list').querySelectorAll('.ico .ltr').length,
+        expectedLogos: rows.filter(row => LOGOS[row.dataset.id]).length,
         footDot: q('#fdot').className,
       };
     })())`));
@@ -116,11 +117,11 @@ const CH = [
     check('I1 排序控件存在且与配置一致', !!r1.sortCtl && r1.sortCtl === r1.sortCfg, r1.sortCtl + ' / ' + r1.sortCfg);
     check('U2 失联渠道状态点 = dot st(斜杠)', r1.dsDot === 'dot st', r1.dsDot);
     check('U2 行 data-dtone = st', r1.dsDtone === 'st', r1.dsDtone);
-    check('U2 失联副标题只说一次取数失败', /取数失败/.test(r1.dsSub), r1.dsSub);
+    check('U2 失联副标题保留旧额度说明', (r1.dsSub || '').split('暂时无法更新').length === 2 && /保留上次额度/.test(r1.dsSub), r1.dsSub);
     check('U8 摘要三格:英雄数字 / 最先到期 / 签到', r1.sumCells.length === 3 && r1.sumHero && r1.dueName && r1.dueDate, JSON.stringify({ n: r1.sumCells.length, hero: r1.sumHero, name: r1.dueName, date: r1.dueDate }));
     check('U8 摘要画出 7 日临期分布', r1.sumBars, String(r1.sumBars));
     check('U7 开关已是 button[role=switch]', r1.swButtons.length > 0 && r1.swButtons.every((s) => s === 'BUTTON:switch'), JSON.stringify(r1.swButtons));
-    check('U6 官方标内嵌字母副本(.ltr,2 个官方标渠道)', r1.ltrCount === 2, String(r1.ltrCount));
+    check('U6 官方标渠道均内嵌字母副本', r1.expectedLogos > 0 && r1.ltrCount === r1.expectedLogos, JSON.stringify([r1.ltrCount, r1.expectedLogos]));
     check('底栏状态点分层(有失联 → st)', r1.footDot === 'dot st', r1.footDot);
 
     // I1 排序:触发真实的 change 事件,验证 CFG.sort 跟着走(起点取决于真实配置);
@@ -158,7 +159,7 @@ const CH = [
     check('M5 胶囊 B 光环就位(轮播指示点已退役)', pill.dots === 0 && pill.aura.length === 1 && /%$/.test(pill.hair || ''), JSON.stringify(pill));
 
     // I2 紧凑条 +N:窄内容下塞 4 个渠道大概率触发;先回面板再切紧凑条
-    await evalJs(`applyForm('compact', false)`);
+    await evalJs(`CFG.compactEnabled = true; applyForm('compact', false)`, true);
     await sleep(900);
     const compact = JSON.parse(await evalJs(`JSON.stringify((() => {
       const more = document.querySelector('#list .more');

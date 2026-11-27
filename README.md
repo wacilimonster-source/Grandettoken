@@ -36,7 +36,9 @@
 - **跌破红线发系统通知**,只在跌破的那一刻响一次、一天最多一次
 - **取数失败绝不渲染成"余额归零"** —— 沿用上次成功快照 + 标注时间 + 真实错误原因
 - **密钥只进 Windows 凭据管理器**,不进配置文件、数据库、日志或导出文件
-- 无遥测；可选同步到手机（默认关闭，只写你自己的 GitHub secret gist，端到端加密）；出网请求只发往渠道自身域名与你自己的 GitHub
+- 无遥测；可选同步到手机（默认关闭，只写你自己的 GitHub secret gist，端到端加密）；除渠道接口、用户配置的端点和 GitHub 外，汇率换算会请求 open.er-api.com 或 api.frankfurter.dev，AI 优惠列表来自 www.aipromonow.com
+
+WorkBuddy 桌面凭据取数会以 `ELECTRON_RUN_AS_NODE=1` 启动本机已安装的客户端，读取其内部存储以解开登录凭据。超时时用系统 `taskkill /T /F` 终止本次启动的子进程树。Qoder 桌面凭据由当前 Windows 账户通过 DPAPI 解开 Electron safeStorage 密钥后读取。在渠道设置中隐藏对应渠道可停止该渠道的自动取数与签到。
 
 顺带两件事:**模型页**能把选中的模型一键写进本机的 Trae / WorkBuddy / WorkBuddy AI /
 ZCode / DeepSeek Harness(写入前备份、写完读回校验、失败自动回滚);
@@ -209,8 +211,8 @@ CI 在每次 push 上跑 core 的 `cargo test` 与 `cargo check --all-targets`;
 | [PROGRESS.md](PROGRESS.md) | 开发进展与踩坑记录(新条目追加在文末;v0.3.50 之前的条目已原样归档到 `docs/report/progress-archive-2026-11-22.md`) |
 | [app/README.md](app/README.md) | 开发者向:模块划分、加新渠道 / 新客户端的步骤、内部口径 |
 | [RELEASE.md](RELEASE.md) | 发版流程、签名私钥、更新链路硬依赖、回滚预案 |
-| [docs/design/](docs/design/) | 21 份设计稿(交互可点的 HTML,含每项的裁决记录) |
-| [docs/report/](docs/report/) | 5 份全量体检报告(每轮体检抓到的缺陷、根因、修法与复测证据) |
+| [docs/design/](docs/design/) | 设计稿(交互可点的 HTML,含每项的裁决记录) |
+| [docs/report/](docs/report/) | 体检报告(每轮体检抓到的缺陷、根因、修法与复测证据) |
 | [docs/prototype/](docs/prototype/) | 视觉原型稿与三形态按钮对照 |
 | [docs/research/](docs/research/) | 技术研究(Codex 渠道接入取证) |
 
@@ -221,7 +223,7 @@ CI 在每次 push 上跑 core 的 `cargo test` 与 `cargo check --all-targets`;
 
 | 项 | 选择 | 理由 |
 |---|---|---|
-| 框架 | Tauri 2 | release exe 约 8.5 MB、常驻内存约 40 MB;Electron 同功能约 100 MB / 200–300 MB |
+| 框架 | Tauri 2 | Windows 安装包大小见对应 Release；运行内存包含 WebView2 子进程 |
 | 逻辑层 | 独立 crate `tokenscope-core` | 不依赖 Tauri / WebView2,`cargo test` 秒级跑完 |
 | 前端 | 纯静态 HTML/CSS/JS | 无打包器、无 `node_modules`,CSP 只放行自身 |
 | HTTP | reqwest + native-tls | 走系统 SChannel;rustls 的 ring/aws-lc 在 GNU 工具链下要 nasm |

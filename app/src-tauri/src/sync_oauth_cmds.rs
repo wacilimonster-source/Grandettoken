@@ -1,5 +1,5 @@
 use crate::{
-    sync_cmds::{cfg_of, emit_status, oauth_client_id, save_sync_config},
+    sync_cmds::{cfg_of, emit_status, maybe_publish, oauth_client_id, save_sync_config, PUBLISH_LOCK},
     AppState,
 };
 use std::sync::Mutex;
@@ -7,7 +7,10 @@ use tauri::{AppHandle, Manager, State};
 use tokenscope_core::{
     fetch::now_ts,
     secrets,
-    sync::device_flow::{self, DeviceSession, OAuthPoll, OAuthStart, TokenDecision},
+    sync::{
+        device_flow::{self, DeviceSession, OAuthPoll, OAuthStart, TokenDecision},
+        profile, GetOutcome, GistClient, SyncError,
+    },
 };
 
 static OAUTH: Mutex<Option<DeviceSession>> = Mutex::new(None);
@@ -22,23 +25,33 @@ fn is_current(session: &DeviceSession) -> bool {
         .is_some_and(|active| active.same_attempt(session))
 }
 
-fn clear(session: &DeviceSession) {
+fn clear(session: &DeviceSession) -> bool {
     let mut active = flow();
     if active
         .as_ref()
         .is_some_and(|attempt| attempt.same_attempt(session))
     {
         *active = None;
+        return true;
+    }
+    false
+}
+
+async fn verify_owner(gist_id: &str, token: &str, user_id: i64) -> Result<(), SyncError> {
+    let client = GistClient::new(Some(token.to_owned()))?;
+    match client.get(gist_id, None).await? {
+        GetOutcome::Loaded(gist) if gist.owner_id == Some(user_id) => Ok(()),
+        _ => Err(SyncError::new(
+            "SYNC_ACCOUNT_MISMATCH",
+            "请使用创建该同步组的 GitHub 账号重新授权",
+        )),
     }
 }
 
 #[tauri::command]
 pub async fn sync_oauth_start(state: State<'_, AppState>) -> Result<OAuthStart, String> {
     let cfg = cfg_of(state.inner())?;
-    let client_id = oauth_client_id(&cfg).ok_or_else(|| {
-        "SYNC_NOT_CONFIGURED: 桌面 OAuth App 未配置 client_id,开发者需先在 GitHub 建桌面 OAuth App".to_string()
-    })?;
-    let (session, started) = device_flow::start(&client_id).await?;
+    let (session, started) = device_flow::start(oauth_client_id(&cfg)).await?;
     *flow() = Some(session);
     Ok(started)
 }
@@ -58,13 +71,7 @@ pub async fn sync_oauth_poll(app: AppHandle) -> Result<OAuthPoll, String> {
     }
 
     let cfg = cfg_of(app.state::<AppState>().inner())?;
-    let Some(client_id) = oauth_client_id(&cfg) else {
-        return Ok(OAuthPoll::Error {
-            code: tokenscope_core::sync::error::NOT_CONFIGURED.into(),
-            message: "桌面 OAuth App 未配置 client_id,请重新获取".into(),
-        });
-    };
-    let decision = device_flow::poll(&session, &client_id).await?;
+    let decision = device_flow::poll(&session, oauth_client_id(&cfg)).await?;
     if !is_current(&session) {
         return Ok(OAuthPoll::NoSession);
     }
@@ -104,19 +111,34 @@ pub async fn sync_oauth_poll(app: AppHandle) -> Result<OAuthPoll, String> {
             });
         }
     };
+    // 旧凭据的在途发布可能返回 401，必须先让它写完状态再替换凭据。
+    let publish_guard = PUBLISH_LOCK.lock().await;
     if !is_current(&session) {
         return Ok(OAuthPoll::NoSession);
     }
-    if let Err(message) = secrets::sync_set(secrets::SYNC_OAUTH_ACCOUNT, &access_token) {
-        clear(&session);
-        return Ok(OAuthPoll::Error {
-            code: "SYNC_STORE".into(),
-            message,
-        });
+    let state = app.state::<AppState>();
+    let config = cfg_of(state.inner())?;
+    if let Some(gist_id) = config.sync_relay_id.as_deref() {
+        if let Err(e) = verify_owner(gist_id, &access_token, user.id).await {
+            if !clear(&session) {
+                return Ok(OAuthPoll::NoSession);
+            }
+            return Ok(OAuthPoll::Error { code: e.code.into(), message: e.message });
+        }
     }
+    if !clear(&session) {
+        return Ok(OAuthPoll::NoSession);
+    }
+    let previous_token = secrets::sync_get(secrets::SYNC_OAUTH_ACCOUNT);
+    let previous_token = match previous_token.and_then(|previous| {
+        secrets::sync_set(secrets::SYNC_OAUTH_ACCOUNT, &access_token)?;
+        Ok(previous)
+    }) {
+        Ok(previous) => previous,
+        Err(message) => return Ok(OAuthPoll::Error { code: "SYNC_STORE".into(), message }),
+    };
     let login = user.login.clone();
     let user_id = user.id;
-    let state = app.state::<AppState>();
     if let Err(e) = save_sync_config(state.inner(), move |cfg| {
         cfg.sync_github_login = Some(login);
         cfg.sync_github_user_id = Some(user_id);
@@ -126,16 +148,25 @@ pub async fn sync_oauth_poll(app: AppHandle) -> Result<OAuthPoll, String> {
     })
     .await
     {
-        let _ = secrets::sync_delete(secrets::SYNC_OAUTH_ACCOUNT);
-        clear(&session);
+        let rollback = match previous_token.as_deref() {
+            Some(token) => secrets::sync_set(secrets::SYNC_OAUTH_ACCOUNT, token),
+            None => secrets::sync_delete(secrets::SYNC_OAUTH_ACCOUNT),
+        };
+        let mut message = format!("保存 GitHub 登录状态失败: {e}");
+        if let Err(rollback) = rollback {
+            message.push_str(&format!("，恢复原授权失败: {rollback}"));
+        }
         return Ok(OAuthPoll::Error {
             code: "SYNC_STORE".into(),
-            message: format!("保存 GitHub 登录状态失败: {e}"),
+            message,
         });
     }
 
-    clear(&session);
+    drop(publish_guard);
     emit_status(&app);
+    if profile::github_needs_reauth(&config) {
+        maybe_publish(&app, None);
+    }
     Ok(OAuthPoll::Authorized {
         login: user.login,
         user_id,
@@ -148,8 +179,7 @@ pub async fn sync_oauth_cancel() -> Result<(), String> {
     Ok(())
 }
 
-/// 开发用：把公开的桌面 OAuth App client_id 写进本机配置。
-/// 正式发布时应优先用编译期 `GRANDETTOKEN_DESKTOP_CLIENT_ID` 内置。
+/// 旧安装版可保存公开 Client ID，定制构建也可用本机配置覆盖默认值。
 #[tauri::command]
 pub async fn sync_set_oauth_client_id(
     app: AppHandle,

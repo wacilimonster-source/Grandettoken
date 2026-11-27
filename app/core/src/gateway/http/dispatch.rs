@@ -1,7 +1,7 @@
 //! 多候选路由调度、首字节前自动容灾、Sticky 粘性与脱敏/反脱敏管道。
 
 use super::{
-    infer_zero_output_note, json_error, now_unix, resolve_channel_and_model,
+    infer_zero_output_note, json_error, now_unix,
     responses::{self, ChatSse, DiagnosticGuard},
     send_upstream_with_repair, UpstreamReady,
 };
@@ -41,6 +41,12 @@ pub(super) struct DispatchError {
 }
 
 impl DispatchError {
+    pub(super) fn vault(detail: String) -> Self {
+        crate::diaglog::write_keyed("gateway", "vault-index", &detail);
+        Self { status: StatusCode::SERVICE_UNAVAILABLE, message: "密钥箱索引暂不可用".into(),
+            code: Some("vault_unavailable".into()), err_type: "gateway_error", param: None, retry_after: None }
+    }
+
     pub fn into_openai_response(self) -> Response {
         let mut resp = json_error(
             self.status,
@@ -123,7 +129,7 @@ fn resolve_candidates(
             param: Some("model"),
             retry_after: None,
         })?;
-        let live = g.live_channels();
+        let live = g.live_channels().map_err(DispatchError::vault)?;
         let vp = snapshot_vault_platforms(g);
         let candidates = {
             let mut inner = lock(&g.inner);
@@ -141,44 +147,37 @@ fn resolve_candidates(
         }
         Ok((Some(group), candidates))
     } else {
-        match resolve_channel_and_model(g, requested_model) {
-            Ok((channel, upstream_model)) => Ok((
-                None,
-                vec![ResolvedCandidate {
-                    channel,
-                    upstream_model,
-                    in_cooldown: false,
-                }],
-            )),
-            Err(_) => {
-                // 重新走原路径复用同一 404 / 409 错误口径
-                let matches = g.live_channels().into_iter().filter(|c| {
-                    crate::gateway::effective_models(c)
-                        .into_iter()
-                        .any(|id| crate::gateway::model_id(c, &id) == requested_model)
-                });
-                let count = matches.count();
-                if count > 1 {
-                    Err(DispatchError {
-                        status: StatusCode::CONFLICT,
-                        message: "多个渠道的别名和模型相同，请修改其中一个别名或调整可见模型".into(),
-                        code: Some("duplicate_model".into()),
-                        err_type: "invalid_request_error",
-                        param: Some("model"),
-                        retry_after: None,
-                    })
-                } else {
-                    Err(DispatchError {
-                        status: StatusCode::NOT_FOUND,
-                        message: "模型不存在、已下架或密钥已更新，请刷新模型列表".into(),
-                        code: Some("model_not_found".into()),
-                        err_type: "invalid_request_error",
-                        param: Some("model"),
-                        retry_after: None,
-                    })
+        let vault = g.vault_index().map_err(DispatchError::vault)?;
+        let lookup = |requested: &str| -> Result<Option<ResolvedCandidate>, DispatchError> {
+            let inner = lock(&g.inner);
+            let mut found = None;
+            for channel in &inner.settings.channels {
+                let Some(model) = requested.strip_prefix(&channel.alias).and_then(|s| s.strip_prefix('/')) else { continue };
+                if model.is_empty() || !channel.live_with(&vault)
+                    || !channel.models.iter().chain(&channel.manual_models).any(|m| m.trim() == model)
+                    || channel.allowed_models.as_ref().is_some_and(|allowed| !allowed.iter().any(|m| m == model)) {
+                    continue;
                 }
+                if found.is_some() {
+                    return Err(DispatchError {
+                        status: StatusCode::CONFLICT, message: "多个渠道的别名和模型相同，请调整渠道配置".into(),
+                        code: Some("duplicate_model".into()), err_type: "invalid_request_error", param: Some("model"), retry_after: None,
+                    });
+                }
+                found = Some(ResolvedCandidate { channel: channel.clone(), upstream_model: model.into(), in_cooldown: false });
+            }
+            Ok(found)
+        };
+        let mut candidate = lookup(requested_model)?;
+        if candidate.is_none() {
+            if let Some(stand) = crate::inject::agent_stand_in(requested_model) {
+                candidate = lookup(&stand)?;
             }
         }
+        candidate.map(|c| (None, vec![c])).ok_or_else(|| DispatchError {
+            status: StatusCode::NOT_FOUND, message: "模型不存在、已下架或密钥已更新，请刷新模型列表".into(),
+            code: Some("model_not_found".into()), err_type: "invalid_request_error", param: Some("model"), retry_after: None,
+        })
     }
 }
 

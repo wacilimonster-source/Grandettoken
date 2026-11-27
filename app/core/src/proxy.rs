@@ -127,6 +127,20 @@ impl ProxyClients {
             .current_client(Instant::now(), ProxySnapshot::current, || build_client(true))
     }
 
+    pub async fn client_async(self: &std::sync::Arc<Self>, system_proxy: bool) -> Result<reqwest::Client, String> {
+        if !system_proxy {
+            return Ok(self.direct.clone());
+        }
+        if let Ok(cache) = self.system.try_lock() {
+            if cache.checked_at.is_some_and(|at| at.elapsed() < PROXY_CHECK_INTERVAL) {
+                return Ok(cache.client.clone());
+            }
+        }
+        let clients = self.clone();
+        tokio::task::spawn_blocking(move || clients.client(true)).await
+            .map_err(|e| format!("代理配置读取任务失败: {e}"))?
+    }
+
     pub fn invalidate(&self) {
         crate::lockx::lock(&self.system).checked_at = None;
     }

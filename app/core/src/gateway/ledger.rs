@@ -23,6 +23,7 @@ enum Message {
 pub(super) struct Ledger {
     sender: Mutex<Option<mpsc::Sender<Message>>>,
     writes: Arc<AtomicU64>,
+    dropped: Arc<AtomicU64>,
 }
 
 impl Ledger {
@@ -32,7 +33,7 @@ impl Ledger {
             return open.clone();
         }
         let (tx, rx) = mpsc::channel(CAPACITY);
-        tokio::spawn(run(store.clone(), self.writes.clone(), rx));
+        tokio::spawn(run(store.clone(), self.writes.clone(), self.dropped.clone(), rx));
         *sender = Some(tx.clone());
         tx
     }
@@ -43,6 +44,7 @@ impl Ledger {
                 crate::diaglog::write_keyed("gateway", "ledger", &error);
             }
         } else if self.sender(store).try_send(Message::Row(row)).is_err() {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
             crate::diaglog::write_keyed(
                 "gateway",
                 "ledger-queue",
@@ -73,12 +75,18 @@ fn persist(db: &Store, writes: &AtomicU64, row: &GatewayUsageRow) -> Result<(), 
     Ok(())
 }
 
-async fn run(store: Arc<Mutex<Store>>, writes: Arc<AtomicU64>, mut rx: mpsc::Receiver<Message>) {
+async fn run(
+    store: Arc<Mutex<Store>>,
+    writes: Arc<AtomicU64>,
+    dropped: Arc<AtomicU64>,
+    mut rx: mpsc::Receiver<Message>,
+) {
     let mut pending = Vec::with_capacity(32);
     let mut last_error = None;
     while rx.recv_many(&mut pending, 32).await != 0 {
         let store = store.clone();
         let writes = writes.clone();
+        let dropped = dropped.clone();
         let mut batch = std::mem::take(&mut pending);
         let mut error = last_error.take();
         match tokio::task::spawn_blocking(move || {
@@ -100,6 +108,7 @@ async fn run(store: Arc<Mutex<Store>>, writes: Arc<AtomicU64>, mut rx: mpsc::Rec
                     Message::Clear(reply) => {
                         let result = db.gateway_usage_clear().map(|_| {
                             writes.store(0, Ordering::Relaxed);
+                            dropped.store(0, Ordering::Relaxed);
                             error = None;
                         });
                         if let Err(Err(e)) = reply.send(result) {
@@ -126,6 +135,10 @@ async fn run(store: Arc<Mutex<Store>>, writes: Arc<AtomicU64>, mut rx: mpsc::Rec
 }
 
 impl Gateway {
+    pub fn dropped_usage_records(&self) -> u64 {
+        self.ledger.dropped.load(Ordering::Relaxed)
+    }
+
     pub async fn flush_ledger(&self) -> Result<(), String> {
         let sender = lock(&self.ledger.sender).clone();
         match sender {
@@ -136,5 +149,31 @@ impl Gateway {
 
     pub async fn clear_ledger(&self) -> Result<(), String> {
         Ledger::barrier(self.ledger.sender(&self.store), Message::Clear).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn full_queue_reports_loss_until_clear() {
+        let store = Arc::new(Mutex::new(Store::open_memory().unwrap()));
+        let ledger = Ledger::default();
+        let row = GatewayUsageRow {
+            ts: now_unix(), channel_id: "c".into(), channel_alias: "fixture".into(),
+            route_group: None, model: "fixture".into(), protocol: "openai_chat".into(),
+            stream: false, status: 200, latency_ms: 1, first_byte_ms: None,
+            prompt_tokens: None, cached_prompt_tokens: None, cache_creation_tokens: None,
+            completion_tokens: None, reasoning_tokens: None, failover_count: 0, masked_count: 0,
+            estimated_cost_cny: None, error_code: None, agent: None,
+        };
+        // Current-thread runtime sees no yield until CAPACITY + 1 records are offered.
+        for _ in 0..=CAPACITY { ledger.push(&store, row.clone()); }
+        Ledger::barrier(ledger.sender(&store), Message::Flush).await.unwrap();
+        assert_eq!(ledger.dropped.load(Ordering::Relaxed), 1);
+        assert_eq!(lock(&store).gateway_usage_summary(0, 0).unwrap().total_requests, CAPACITY as u64);
+        Ledger::barrier(ledger.sender(&store), Message::Clear).await.unwrap();
+        assert_eq!(ledger.dropped.load(Ordering::Relaxed), 0);
     }
 }

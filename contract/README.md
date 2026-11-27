@@ -287,8 +287,8 @@ gt-relay-<随机>（Secret Gist）
 ### 9.1 桌面 GitHub Device Flow（不手填 PAT）
 
 - 独立桌面 OAuth App，启用 Device Flow，scope 仅 `gist`；程序只内置公开 `client_id`，
-  不含 `client_secret`。client_id 通过编译期 `GRANDETTOKEN_DESKTOP_CLIENT_ID`
-  或配置 `syncOauthClientId` 提供。
+  不含 `client_secret`。优先使用本机 `syncOauthClientId`，其次使用构建变量
+  `GRANDETTOKEN_DESKTOP_CLIENT_ID`，缺省使用内置的 Grandettoken Desktop Client ID。
 - `POST https://github.com/login/device/code`（form：`client_id`、`scope=gist`）返回
   `device_code`、`user_code`、`verification_uri`、`expires_in`、`interval`。
   `device_code` 只留 Rust 内存，前端只拿到 `user_code` 与 `verification_uri`。
@@ -394,8 +394,7 @@ Android 测试必须读取同一文件，至少验证：
 ## 14. R1 中尚未实现的部分
 
 - 手机 GitHub Device Flow 与 token 生命周期（Android v0.1 仅匿名）。
-- 桌面 Device Flow 的**真实 OAuth App 注册与线上实测**（代码与 UI 已实现；
-  client_id 未配置时界面明确显示“OAuth App 未配置”，不会假装已连接）。
+- 旧桌面安装版更新后重新授权及恢复发布的跨版本验收。
 - 被隐藏渠道的历史清理确认与旧缓存缺失提示。
 - 多账号签到的最终计数口径（当前每渠道 `:main` 一项）。
 - Gist `raw_url` 回退（当前遇到 `truncated` 直接报错，不回退）。

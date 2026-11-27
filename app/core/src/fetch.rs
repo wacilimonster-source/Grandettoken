@@ -11,8 +11,8 @@ use crate::peak;
 use crate::qoderweb;
 use crate::providers::{self, AuthKind, Expiring, FetchResult, Kind, Method};
 use crate::store::{
-    consumed_in_window_rows, consumption_since_rows, daily_coverage_rows, first_ts_rows,
-    last_jump_rows, window_coverage_rows, HistoryRow, Store,
+    consumption_since_rows,
+    window_coverage_rows, HistoryRow, Store,
 };
 use crate::secrets;
 use crate::recovery::{Recovery, RecoveryView, Snapshot};
@@ -225,7 +225,7 @@ mod fetch_once;
 pub use fetch_once::{
     another_credential_may_help, attempt_order, fetch_channel, unit_for, FailKind,
 };
-pub(crate) use fetch_once::{kind_for_status, push_chunk, retry_after_seconds};
+pub(crate) use fetch_once::{kind_for_status, push_chunk, read_body_capped, retry_after_seconds};
 use fetch_once::*;
 
 #[path = "fetch_view.rs"]
@@ -330,6 +330,8 @@ pub struct Fetcher {
     /// 一个是凭据管理器放不下(实测 blob 上限约 1280 字符,而两个会话 Cookie 近 6 KB),
     /// 另一个是平台一旦轮换 Cookie,存下来的副本会静默失效。
     web_cred_src: Arc<Mutex<Option<WebCredentialSource>>>,
+    webview_released: Arc<std::sync::OnceLock<Box<dyn Fn() -> bool + Send + Sync>>>,
+    fx_retry: Arc<Mutex<fx::Retry>>,
 
 }
 
@@ -409,7 +411,7 @@ impl Fetcher {
     /// 只读、不改任何状态:触发条件仍是 `r.next <= now_ts()`,精度仍按秒
     /// (调用方最小睡 1 秒),所以重试时机与原来等价。
     pub fn next_retry_at(&self) -> Option<i64> {
-        self.channel_state().recovery.values().map(|r| r.next).min()
+        self.channel_state().recovery.iter().filter(|(id, _)| !self.webview_deferred(id)).map(|(_, r)| r.next).min()
     }
 
     /// Called by the shell ticker. Only failed, due channels are queried.
@@ -418,10 +420,10 @@ impl Fetcher {
     }
 
     pub async fn fetch_retries_using(&self, store: &Arc<Mutex<Store>>, reader: &Arc<Mutex<Store>>) -> Option<Vec<ChannelView>> {
-        if !self.channel_state().recovery.values().any(|r| r.next <= now_ts()) { return None; }
+        if self.next_retry_at().is_none_or(|at| at > now_ts()) { return None; }
         let _guard = self.gate.lock().await;
         let due: HashSet<String> = self.channel_state().recovery.iter()
-            .filter(|(_, r)| r.next <= now_ts()).map(|(id, _)| id.clone()).collect();
+            .filter(|(id, r)| r.next <= now_ts() && !self.webview_deferred(id)).map(|(id, _)| id.clone()).collect();
         if due.is_empty() { return None; }
         let views = self.fetch_selected(store, reader, Some(&due)).await;
         *crate::lockx::lock(&self.last_run) = Some((now_ts(), views.clone()));
@@ -435,7 +437,7 @@ impl Fetcher {
         self.reset_retry_schedule();
     }
 
-    pub fn forget_channel(&self, store: &Store, id: &str) {
+    pub fn forget_channel(&self, store: &Store, id: &str) -> Result<(), String> {
         {
             let mut active = self.channel_state();
             active.cache.remove(id);
@@ -444,10 +446,12 @@ impl Fetcher {
         }
         crate::lockx::lock(&self.progress).rows.retain(|v| v.id != id);
         crate::lockx::lock(&self.qoder_web).forget(id);
-        let _ = store.delete_setting(&format!("quota_snapshot_v1:{id}"));
-        let _ = store.delete_setting(&format!("{QODER_SCOPE_KEY}:{id}"));
-        let _ = store.delete_setting(&format!("{QODER_CHANGED_KEY}:{id}"));
         self.invalidate();
+        let tx = store.conn().unchecked_transaction().map_err(|e| e.to_string())?;
+        for prefix in ["quota_snapshot_v1", QODER_SCOPE_KEY, QODER_CHANGED_KEY] {
+            store.delete_setting(&format!("{prefix}:{id}"))?;
+        }
+        tx.commit().map_err(|e| format!("清理旧账号缓存失败: {e}"))
     }
 
     /// 网页会话被用户主动换掉(退出网页登录 / 切换账号)时清掉逐包缓存。
@@ -474,7 +478,17 @@ impl Fetcher {
             gate: Arc::default(),
             last_run: Arc::default(),
             web_cred_src: Arc::default(),
+            webview_released: Arc::default(),
+            fx_retry: Arc::default(),
         }
+    }
+
+    pub fn set_webview_release_probe(&self, probe: impl Fn() -> bool + Send + Sync + 'static) {
+        let _ = self.webview_released.set(Box::new(probe));
+    }
+
+    fn webview_deferred(&self, id: &str) -> bool {
+        matches!(id, "workbuddy" | "doubao") && self.webview_released.get().is_some_and(|probe| probe())
     }
 
     /// 装上网页登录型渠道的会话来源(见字段注释)。**回调是阻塞的**(要同步问 webview 的
@@ -715,7 +729,15 @@ impl Fetcher {
         let hidden: Arc<Vec<String>> = Arc::new(cfg.hidden_channels.clone());
         let auto_hide: Arc<Vec<String>> = Arc::new(auto_hide_candidates(&cfg));
         let (fx_cached, cycle_cached) = { let s = store.lock().unwrap_or_else(|p| p.into_inner()); (fx::load(&s), load_cycles(&s)) };
-        let fx_now = fx::refresh(&self.http, fx_cached.clone(), now_ts()).await;
+        let wall = now_ts();
+        let deferred = crate::lockx::lock(&self.fx_retry).pending(wall, std::time::Instant::now());
+        let fx_now = if deferred {
+            fx_cached.clone()
+        } else {
+            let rate = fx::refresh(&self.http, fx_cached.clone(), wall).await;
+            crate::lockx::lock(&self.fx_retry).observe(rate.as_ref(), wall, std::time::Instant::now());
+            rate
+        };
         let web_src: Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>> = self.web_cred_src.lock().unwrap_or_else(|p| p.into_inner()).clone();
 
         let wb_cycle = Arc::new(crate::workbuddy_cycle::Credentials::default());
@@ -773,6 +795,7 @@ impl Fetcher {
                     let web_src = web_src.clone();
                     // 逐包到期需要独立的网页会话来源，避免被凭据闭包移走。
                     let qoder_web_src = web_src.clone();
+                    let deferred = self.webview_deferred(def.id);
                     let wb_reader = wb_cycle.clone();
                     let (creds, secret_err) =
                         tokio::task::spawn_blocking(move || credentials(def, web_src.as_deref(), Some(&wb_reader)))
@@ -808,6 +831,11 @@ impl Fetcher {
                     // "正在请求"当成了状态变化。现在请求期间四种形态都保持上一次
                     // 成功后的画面,数字与颜色只在这一轮真正取到数后更新;真正的
                     // 失败仍走下面 no-cred / pending 的发布口径,不受影响。
+                    if creds.is_empty() && (deferred || self.webview_deferred(def.id)) {
+                        let view = previous.iter().find(|v| v.id == def.id).cloned()
+                            .unwrap_or_else(|| placeholder(def));
+                        return FetchedOne { i, def, fp, view: Some(view), pending: None, success: None };
+                    }
                     let cached = self.cached(reader, def.id, &scope);
                     if creds.is_empty() {
                         if cached.is_some() || secret_err.is_some() { self.failed(def.id, None); }

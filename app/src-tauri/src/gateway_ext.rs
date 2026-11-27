@@ -164,9 +164,9 @@ pub async fn gateway_usage_summary(
     let limit = recent_limit.unwrap_or(40).clamp(1, 200);
     g.flush_ledger().await?;
     let store = app.state::<AppState>().read_store.clone();
-    tokio::task::spawn_blocking(move || lock(&store).gateway_usage_summary(since_ts, limit))
-        .await
-        .map_err(|e| format!("读取网关台账失败: {e}"))?
+    let mut summary = crate::with_store(store, move |db| db.gateway_usage_summary(since_ts, limit)).await?;
+    summary.dropped_records = g.dropped_usage_records();
+    Ok(summary)
 }
 
 #[tauri::command]

@@ -5,6 +5,10 @@ function syncUserMsg(e) {
   return String(e ?? "").replace(/^SYNC_[A-Z_]+\s*:\s*/, "");
 }
 
+function canUseSyncGithub(status) {
+  return !!status?.hasGithub && !status.githubNeedsReauth;
+}
+
 // 行内确认条(替代原生 confirm):与删密钥的 .cfrm 同一组件 —— 样式受控、按钮文案可控、
 // 不阻塞渲染进程。anchor 是触发按钮;条插在它所在 .acts 行(或所在行容器)之后。
 // alt = 可选的推荐动作(如「找回旧组」),排在危险主钮之前。
@@ -69,33 +73,38 @@ function renderSync() {
     renderSyncQr(null);
     return;
   }
-  const hasGithub = !!(s && s.hasGithub);
-  const configured = !!(s && s.relayId);
+  const needsReauth = !!s.githubNeedsReauth;
+  const hasGithub = canUseSyncGithub(s);
+  const showReauth = !!s.hasGithub || needsReauth;
+  const configured = !!s.relayId;
 
   // GitHub 连接卡在“未建组 / 已建组”两种状态下都要可见。
-  const githubReady = s && s.oauthClientConfigured;
-  $("syncGithubState").textContent = hasGithub
+  const githubReady = s.oauthClientConfigured;
+  $("syncGithubState").textContent = needsReauth ? "授权已失效" : hasGithub
     ? `已连接 @${s.githubLogin || "GitHub"}`
     : githubReady
       ? "未连接"
       : "OAuth App 未配置";
   $("syncGithubDot").className =
-    "dot " + (hasGithub ? "ok" : githubReady ? "warn" : "mut");
-  $("syncGithubMeta").textContent = hasGithub
+    "dot " + (hasGithub ? "ok" : needsReauth || githubReady ? "warn" : "mut");
+  $("syncGithubMeta").textContent = needsReauth ? "需要重新授权" : hasGithub
     ? "仅 gist 权限"
     : githubReady
       ? "未授权"
       : "缺少 client_id";
-  $("syncGithubHint").textContent = hasGithub
+  $("syncGithubHint").textContent = needsReauth
+    ? "请用创建此同步组的 GitHub 账号重新授权。手机可继续使用现有同步组。"
+    : hasGithub
     ? "每台电脑独立授权同一个 GitHub 账号;OAuth 令牌只存 Windows 凭据管理器,不进配置、日志或同步码。"
     : githubReady
       ? "通过 GitHub 官方浏览器页面授权,无需填写 PAT。授权前不会创建 Gist、不会上传数据。"
       : "在 GitHub → Settings → Developer settings 建 OAuth App(勾选 Device Flow),把公开 Client ID 填在下面,只需一次。";
   $("syncClientIdBox").hidden = !!githubReady;
   $("syncClientIdSaveRow").hidden = !!githubReady;
-  $("syncGithubConnect").hidden = hasGithub;
-  $("syncGithubReauth").hidden = !hasGithub;
-  $("syncGithubDisconnect").hidden = !hasGithub;
+  $("syncGithubConnect").hidden = showReauth;
+  $("syncGithubReauth").hidden = !showReauth;
+  $("syncGithubReauth").classList.toggle("p", needsReauth);
+  $("syncGithubDisconnect").hidden = !s.hasGithub;
   $("syncCreateBtn").disabled = !hasGithub;
   $("syncJoinBtn").disabled = !hasGithub;
   $("syncRotateBtn").disabled = !hasGithub;
@@ -118,28 +127,30 @@ function renderSync() {
     ? "本机同步密钥读取失败(" + s.keyError + ") · 可点「找回旧同步组」恢复"
     : !s.source
       ? "本机发布来源无法确认,自动发布不可用;同步码仍可用于读取,请从原电脑备份恢复发布状态。"
-      : s.lastError ? syncUserMsg(s.lastError) : "";
+      : needsReauth ? "请在 GitHub 连接中重新授权后再发布。" : syncUserMsg(s.lastError);
   $("syncDot").className =
-    "dot " + (!s.enabled ? "o" : s.lastError ? "b" : s.hasGithub && s.hasKey ? "" : "w");
-  $("syncState").textContent = !s.hasKey ? "同步码不可用" : !s.source ? "发布来源缺失" : !s.enabled ? "已暂停" : s.lastError ? "发布失败" : "已开启";
+    "dot " + (!s.enabled ? "o" : s.lastError ? "b" : hasGithub && s.hasKey ? "" : "w");
+  $("syncState").textContent = !s.hasKey ? "同步码不可用" : !s.source ? "发布来源缺失"
+    : !s.enabled ? "已暂停" : needsReauth ? "等待重新授权" : s.lastError ? "发布失败" : "已开启";
   const parts = [];
   if (s.lastUploadAt) parts.push("上次上传 " + relTime(s.lastUploadAt));
   parts.push(s.hasKey ? "主密钥在本机" : "主密钥缺失");
-  parts.push(s.hasGithub ? "GitHub 已授权" : "GitHub 未连接");
+  parts.push(needsReauth ? "GitHub 授权已失效" : hasGithub ? "GitHub 已授权" : "GitHub 未连接");
   if (s.pendingSeq) parts.push(`待重试(第 ${s.pendingSeq} 批)`);
   if (s.nextAllowedAt && s.nextAllowedAt > Date.now() / 1000) {
     parts.push("限流至 " + untilTime(s.nextAllowedAt));
   }
   $("syncMeta").textContent = parts.join(" · ");
   $("syncRelayHint").textContent = "中继 " + s.relayId.slice(0, 10) + "… · 可与手机设置中的中继辅助核对";
-  $("syncPublishBtn").disabled = !s.hasKey || !s.source || !s.hasGithub;
+  $("syncPublishBtn").disabled = !s.hasKey || !s.source || !hasGithub;
+  $("syncGroupBtn").disabled = !hasGithub;
 
   const interval = $("syncInterval");
   if (interval) interval.value = String(s.intervalSec || 60);
   const enabled = $("syncEnabled");
   if (enabled) {
     enabled.checked = !!s.enabled;
-    enabled.disabled = !s.enabled && (!s.hasKey || !s.source || !s.hasGithub);
+    enabled.disabled = !s.enabled && (!s.hasKey || !s.source || !hasGithub);
   }
 
   const box = $("syncChannels");
@@ -337,7 +348,7 @@ async function syncRotateGo() {
 async function syncScanRecovery() {
   if (SYNC_RECOVERY_BUSY) return;
   const list = $("syncRecoveryList");
-  if (!SYNC_STATUS || !SYNC_STATUS.hasGithub) {
+  if (!canUseSyncGithub(SYNC_STATUS)) {
     list.textContent = "请先连接创建旧组时使用的 GitHub 账号。";
     return;
   }
@@ -364,10 +375,10 @@ async function syncScanRecovery() {
 
 function syncOpenRecovery() {
   $("syncRecovery").hidden = false;
-  $("syncRecoveryList").textContent = SYNC_STATUS && SYNC_STATUS.hasGithub
-    ? "" : "请先连接创建旧组时使用的 GitHub 账号。";
+  const hasGithub = canUseSyncGithub(SYNC_STATUS);
+  $("syncRecoveryList").textContent = hasGithub ? "" : "请先连接创建旧组时使用的 GitHub 账号。";
   $("syncRecovery").scrollIntoView({ block: "nearest" });
-  if (SYNC_STATUS && SYNC_STATUS.hasGithub) syncScanRecovery();
+  if (hasGithub) syncScanRecovery();
 }
 
 async function syncRestoreGroup(gistId, code, keyEpoch, anchor) {
@@ -471,9 +482,8 @@ async function syncSetLabel(id, label) {
 }
 
 // ── 桌面 GitHub Device Flow(不手填 PAT) ───────────────────────────────
-async function syncGithubConnect() {
-  if (SYNC_AUTH) return;
-  const btn = $("syncGithubConnect");
+async function syncGithubConnect({ currentTarget: btn }) {
+  if (SYNC_AUTH || btn.disabled) return;
   btn.disabled = true;
   try {
     const r = await window.GT_API.sync.oauthStart();

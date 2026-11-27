@@ -22,6 +22,27 @@ fn next_retry_at_is_the_earliest_due_channel() {
 }
 
 #[test]
+fn released_webview_defers_only_web_account_retries_until_wake() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let f = Fetcher::new();
+    let released = Arc::new(AtomicBool::new(false));
+    let phase = released.clone();
+    f.set_webview_release_probe(move || phase.load(Ordering::Relaxed));
+    {
+        let mut state = f.channel_state();
+        for (id, next) in [("workbuddy", 10), ("doubao", 20), ("qoder", 30), ("codex", 40)] {
+            state.recovery.insert(id.into(), Recovery { attempts: 2, started: 0, next, kind: None });
+        }
+    }
+    assert_eq!(f.next_retry_at(), Some(10));
+    released.store(true, Ordering::Relaxed);
+    assert_eq!(f.next_retry_at(), Some(30));
+    assert_eq!(f.channel_state().recovery["workbuddy"].attempts, 2);
+    released.store(false, Ordering::Relaxed);
+    assert_eq!(f.next_retry_at(), Some(10));
+}
+
+#[test]
 fn restart_cache_is_scoped_and_explicit_forget_removes_history() {
     let store = Arc::new(Mutex::new(Store::open_memory().unwrap()));
     let fetcher = Fetcher::new();
@@ -29,13 +50,34 @@ fn restart_cache_is_scoped_and_explicit_forget_removes_history() {
     assert_eq!(fetcher.cached(&store, "t", "a").unwrap().1, 123);
     assert!(fetcher.cached(&store, "t", "b").is_none(), "换账户不得复用内存快照");
     assert_eq!(fetcher.cached(&store, "t", "a").unwrap().0.remaining, Some(42.0));
-    fetcher.forget_channel(&store.lock().unwrap(), "t");
+    fetcher.forget_channel(&store.lock().unwrap(), "t").unwrap();
     assert!(fetcher.cached(&store, "t", "a").is_none());
     assert!(fetcher.cached(&store, "t", "").is_none());
     fetcher.cached(&store, "new", "a");
     fetcher.failed("new", Some(FailKind::Transport));
     assert!(fetcher.cached(&store, "new", "a").is_none());
     assert!(fetcher.state.lock().unwrap().recovery.contains_key("new"), "首次获取没有快照也必须继续重试");
+}
+
+#[test]
+fn failed_scope_cleanup_keeps_related_keys_together() {
+    let store = Store::open_memory().unwrap();
+    let id = "fixture";
+    for prefix in ["quota_snapshot_v1", QODER_SCOPE_KEY, QODER_CHANGED_KEY] {
+        store.set_setting(&format!("{prefix}:{id}"), "fixture").unwrap();
+    }
+    store.conn().execute_batch(&format!(
+        "CREATE TRIGGER block_scope_cleanup BEFORE DELETE ON settings
+         WHEN old.key = '{QODER_SCOPE_KEY}:{id}' BEGIN SELECT RAISE(ABORT, 'test delete failure'); END",
+    )).unwrap();
+    let fetcher = Fetcher::new();
+    assert!(fetcher.forget_channel(&store, id).is_err());
+    assert!(store.get_setting(&format!("quota_snapshot_v1:{id}")).unwrap().is_some());
+    store.conn().execute_batch("DROP TRIGGER block_scope_cleanup").unwrap();
+    fetcher.forget_channel(&store, id).unwrap();
+    for prefix in ["quota_snapshot_v1", QODER_SCOPE_KEY, QODER_CHANGED_KEY] {
+        assert!(store.get_setting(&format!("{prefix}:{id}")).unwrap().is_none());
+    }
 }
 
 /// 换账号/换令牌后,旧网页会话必须被判定为陈旧;没换过时不能误杀。
@@ -733,6 +775,28 @@ fn learned_cycle_survives_across_rounds() {
     let p = plan_at(&second, "opencode-go").unwrap();
     assert!(p.learned);
     assert!((p.days - days).abs() < 1e-9);
+}
+
+#[test]
+fn finish_db_learns_cycle_with_query_only_reader() {
+    let path = std::env::temp_dir().join(format!("gt-cycle-{}.sqlite", crate::vault::new_id()));
+    let writer = Mutex::new(Store::open(&path).unwrap());
+    let reader = Mutex::new(Store::open_readonly(&path).unwrap());
+    let mut v = placeholder(providers::find("opencode-go").unwrap());
+    v.windows = vec![providers::Window {
+        key: "monthly".into(), label: "周期".into(), percent: 50., remain_percent: 50.,
+        status: "ok".into(), resets_at: Some("2026-12-03T00:00:00Z".into()), main: true,
+    }];
+    let batch = fetch_db::DbBatch {
+        cfg: Arc::new(Config::default()), out: aligned_views(v), fetched: vec![],
+        previous: vec![], custom_results: vec![], fx_cached: None, fx_now: Some(test_rate()),
+        cycle_cached: aligned_cycles(&[]),
+    };
+    Fetcher::new().finish_db(&writer, &reader, batch);
+    assert!(load_cycle(&reader.lock().unwrap(), "opencode-go").is_some());
+    drop(reader);
+    drop(writer);
+    std::fs::remove_file(path).unwrap();
 }
 
 /// WorkBuddy 改走网页登录(裁决 1A/3B)之后的界面口径:没登录时说"未登录 WorkBuddy

@@ -74,7 +74,7 @@ mod windows {
         Ok((Handle(read), Handle(write)))
     }
 
-    fn environment(powershell: &Path, cli: &Path, settings: &Path) -> Vec<u16> {
+    fn environment(powershell: &Path, cli: &Path, settings: &Path) -> Result<Vec<u16>, String> {
         let mut vars: Vec<_> = std::env::vars_os()
             .filter(|(key, _)| {
                 !key.eq_ignore_ascii_case("BROWSER")
@@ -84,7 +84,8 @@ mod windows {
                     && !key.eq_ignore_ascii_case("GRANDETTOKEN_AGY_SETTINGS")
             })
             .collect();
-        let mut paths = vec![powershell.parent().unwrap().to_path_buf()];
+        let system_dir = powershell.parent().ok_or("无法确定 PowerShell 的父目录")?;
+        let mut paths = vec![system_dir.to_path_buf()];
         paths.extend(std::env::split_paths(
             &std::env::var_os("PATH").unwrap_or_default(),
         ));
@@ -108,7 +109,7 @@ mod windows {
             block.push(0);
         }
         block.push(0);
-        block
+        Ok(block)
     }
 
     /// Windows CommandLineToArgvW quoting, including embedded JSON quotes and trailing slashes.
@@ -332,11 +333,9 @@ mod windows {
         drop(output_write);
         // 排空线程必须覆盖 ClosePseudoConsole，防止 ConPTY 退场写缓冲时阻塞。
         let reader = Reader::start(output_read, input_write);
-        let terminal = Terminal {
-            console: Some(console),
-            reader,
-        };
-        let mut attrs = Attributes::new(terminal.console.as_ref().unwrap().0)?;
+        let console_handle = console.0;
+        let terminal = Terminal { console: Some(console), reader };
+        let mut attrs = Attributes::new(console_handle)?;
         let mut startup: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
         startup.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
         startup.lpAttributeList = attrs.storage.as_mut_ptr().cast();
@@ -365,7 +364,7 @@ mod windows {
         let exe = wide(executable);
         let mut command = wide(arguments);
         let directory = wide(&folder.0);
-        let env = environment(&ps, cli, &settings_file);
+        let env = environment(&ps, cli, &settings_file)?;
         let job = Handle(unsafe { CreateJobObjectW(null(), null()) });
         if job.0.is_null() {
             return Err("无法创建 Antigravity 进程组".into());

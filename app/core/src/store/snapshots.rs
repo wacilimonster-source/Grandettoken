@@ -560,16 +560,27 @@ impl Store {
     ) -> Result<Vec<DayCoverage>, String> {
         let mut stmt = self
             .conn
-            .prepare(
+            .prepare_cached(if key_fp.is_some() {
                 "SELECT ((ts + ?4) / 86400) AS b, MIN(ts), MAX(ts), COUNT(*) FROM snapshots
-                  WHERE provider_id = ?1 AND ts >= ?2 AND ts <= ?3
-                    AND (?5 IS NULL OR key_fp = ?5)
-                  GROUP BY b ORDER BY b ASC",
-            )
+                 WHERE provider_id = ?1 AND ts >= ?2 AND ts <= ?3 AND key_fp = ?5
+                 GROUP BY b ORDER BY b ASC"
+            } else {
+                "SELECT ((ts + ?4) / 86400) AS b, MIN(ts), MAX(ts), COUNT(*) FROM snapshots
+                 WHERE provider_id = ?1 AND ts >= ?2 AND ts <= ?3
+                 GROUP BY b ORDER BY b ASC"
+            })
             .map_err(|e| format!("查询失败: {e}"))?;
         let rows = stmt
             .query_map(
-                params![provider_id, from_ts, to_ts, tz_offset, key_fp],
+                rusqlite::params_from_iter(
+                    [
+                        &provider_id as &dyn rusqlite::ToSql,
+                        &from_ts,
+                        &to_ts,
+                        &tz_offset,
+                        &key_fp,
+                    ].into_iter().take(if key_fp.is_some() { 5 } else { 4 }),
+                ),
                 |r| {
                     let b: i64 = r.get(0)?;
                     Ok(DayCoverage {
@@ -581,7 +592,7 @@ impl Store {
                 },
             )
             .map_err(|e| format!("读取快照失败: {e}"))?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
+        rows.collect::<rusqlite::Result<_>>().map_err(|e| format!("读取逐日覆盖失败: {e}"))
     }
 
     /// 余额变动台账(行详情里那张"最近变动")。
@@ -673,27 +684,45 @@ impl Store {
         target: f64,
         max_gap: i64,
     ) -> Result<Option<i64>, String> {
-        let rows = self.rows_between(provider_id, key_fp, from_ts, i64::MAX / 2)?;
+        self.last_jump_between(provider_id, key_fp, from_ts..=i64::MAX / 2, min_delta, target, max_gap)
+    }
 
-        // 顺序扫描,取最后一次**像申请的**跳升。
-        // 只看涨幅会把平台的预扣退还(一次能涨几十元)记成"用户申请过了",
-        // 于是申请倒计时被顶回去、用户白等(P2-1)。
-        let mut last = None;
-        for pair in rows.windows(2) {
-            if pair[1].1 - pair[0].1 < min_delta {
-                continue;
-            }
-            // 落在额度线附近才算申请到账(target<=0 = 调用方没给额度,退回旧口径)
-            if target > 0.0 && (pair[1].1 - target).abs() > target * 0.15 {
-                continue;
-            }
-            // 相邻两条隔太久(合盖多日后醒来第一轮)的差值不是一次跳升
-            if max_gap > 0 && pair[1].0 - pair[0].0 > max_gap {
-                continue;
-            }
-            last = Some(pair[1].0);
-        }
-        Ok(last)
+    pub(crate) fn last_jump_between(
+        &self,
+        provider_id: &str,
+        key_fp: Option<&str>,
+        range: std::ops::RangeInclusive<i64>,
+        min_delta: f64,
+        target: f64,
+        max_gap: i64,
+    ) -> Result<Option<i64>, String> {
+        // 与逐条账本相同的同秒排序；上界防止把校时前的未来记录当作本期到账。
+        let key_filter = if key_fp.is_some() { "AND key_fp = ?7" } else { "" };
+        let sql = format!("WITH changes AS (
+            SELECT ts, remaining, lag(ts) OVER w AS prev_ts, lag(remaining) OVER w AS prev_remaining
+            FROM snapshots WHERE provider_id = ?1 AND ts BETWEEN ?2 AND ?3
+              AND remaining IS NOT NULL {key_filter}
+            WINDOW w AS (ORDER BY ts, remaining, id)
+        ) SELECT max(ts) FROM changes
+          WHERE remaining - prev_remaining >= ?4
+            AND (?5 <= 0 OR abs(remaining - ?5) <= ?5 * 0.15)
+            AND (?6 <= 0 OR ts - prev_ts <= ?6)");
+        self.conn.prepare_cached(&sql)
+            .and_then(|mut stmt| stmt.query_row(
+                rusqlite::params_from_iter(
+                    [
+                        &provider_id as &dyn rusqlite::ToSql,
+                        range.start(),
+                        range.end(),
+                        &min_delta,
+                        &target,
+                        &max_gap,
+                        &key_fp,
+                    ].into_iter().take(if key_fp.is_some() { 7 } else { 6 }),
+                ),
+                |row| row.get(0),
+            ))
+            .map_err(|e| format!("查询最近到账失败: {e}"))
     }
 
     /// 用于展开区的迷你柱图。按小时分桶取窗口内最低余额,再转成差值曲线。

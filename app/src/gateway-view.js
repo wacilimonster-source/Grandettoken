@@ -136,7 +136,7 @@
       const t = line.trim();
       if (!t) continue;
       const idx = t.indexOf(":");
-      if (idx <= 0) throw new Error(`自定义请求头格式无效（应为 Name: Value）：${t}`);
+      if (idx <= 0) throw new Error("自定义请求头格式无效（应为 Name: Value）");
       const k = t.slice(0, idx).trim();
       const v = t.slice(idx + 1).trim();
       if (!k) continue;
@@ -384,7 +384,7 @@
                   <textarea class="inp gw-textarea" rows="2" data-gw-manual="${escHtml(id)}" placeholder="例如：google/gemini-3.8-flash">${escHtml((c.manualModels || []).join("\n"))}</textarea>
                 </label>
                 <label class="gw-add-field">
-                  <span>自定义请求头（每行 Header: Value）</span>
+                  <span>自定义请求头（每行 Header: Value，仅限非敏感信息，密钥请存入密钥箱）</span>
                   <textarea class="inp gw-textarea" rows="2" data-gw-headers="${escHtml(id)}" placeholder="例如：HTTP-Referer: https://example.com">${escHtml(headersToText(c.customHeaders))}</textarea>
                 </label>
               </div>

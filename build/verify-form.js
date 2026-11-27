@@ -110,102 +110,107 @@ async function cornerAlpha(send, evalJs) {
   const { ws, evalJs, send } = await connect();
   const rows = [];
   let ok = true;
-  for (const form of ['compact', 'pill', 'panel']) {
-    // remember=false: exercise the real switch without touching the persisted config
-    await evalJs(`(async()=>{
-      const compactEnabled=CFG.compactEnabled;
-      try { CFG.compactEnabled=true; await applyForm(${JSON.stringify(form)},false); }
-      finally { CFG.compactEnabled=compactEnabled; }
-    })()`, true);
-    await sleep(900);
-
-    const state = JSON.parse(await evalJs(`(async () => {
-      const rows = [...document.querySelectorAll('#list .row')];
-      const visible = rows.filter((r) => r.style.display !== 'none').length;
-      const badge = document.querySelector('#list .more');
-      const form = ${JSON.stringify(form)};
-      return JSON.stringify({
-        bodyClass: document.body.className,
-        w: window.innerWidth,
-        h: window.innerHeight,
-        want: formSize(form, form === 'panel' ? await monitorInfo() : null),
-        tbar: getComputedStyle(document.querySelector('.tbar')).display,
-        resizable: await appWindow.isResizable(),
-        rows: rows.length,
-        visible,
-        badge: badge ? badge.textContent : null
-      });
-    })()`, true));
-
-    const [ew, eh] = state.want;
-    const sizeOk = near(state.w, ew) && near(state.h, eh);
-    const classOk = state.bodyClass.includes('form-' + form);
-    // 行可见性:面板必须显示全部行(紧凑条藏起来的行要还原);
-    // 紧凑条若有隐藏行,数目必须和 "+N" 徽标对得上
-    let rowsOk = true;
-    if (state.rows > 0) {
-      const hidden = state.rows - state.visible;
-      if (form === 'panel') rowsOk = hidden === 0;
-      else rowsOk = hidden === 0 ? state.badge === null : state.badge === '+' + hidden;
-    }
-    // 胶囊形态额外验:圆角外真透明(见 cornerAlpha 的注释)
-    let corner = null;
-    let cornerOk = true;
-    if (form === 'pill') {
-      corner = await cornerAlpha(send, evalJs);
-      cornerOk = corner.cornerAlpha === 0 && corner.centerAlpha > 200;
-    }
-    const resizableOk = state.resizable === false;
-    const pass = sizeOk && classOk && resizableOk && rowsOk && cornerOk;
-    if (!pass) ok = false;
-    rows.push({ form, ...state, ew, eh, sizeOk, classOk, rowsOk, corner, cornerOk, pass });
-  }
-
-  // Read the same window as CDP, even when an installed copy is also running.
-  let style = null;
-  let styleErr = null;
+  const previous = JSON.parse(await evalJs(`JSON.stringify({ compact: CFG.compactEnabled, form: currentForm() })`));
   try {
-    const helper = require('path').join(__dirname, 'win-style.ps1');
-    const title = await evalJs(`appWindow.title()`, true);
-    const out = execFileSync('powershell',
-      ['-NoProfile', '-File', helper, '-WindowTitle', title], { encoding: 'utf8', timeout: 20000 }).trim();
-    if (!/^[0-9A-F]{8}$/i.test(out)) styleErr = `unexpected output: ${out}`;
-    else style = parseInt(out, 16);
-  } catch (e) {
-    styleErr = String(e.message).split('\n')[0];
-  }
+    await evalJs('CFG.compactEnabled = true');
+    for (const form of ['compact', 'pill', 'panel']) {
+        // Compact reflow may queue another form switch after this promise settles.
+        await evalJs(`applyForm(${JSON.stringify(form)}, false)`, true);
+        await sleep(900);
 
-  ws.close();
-  console.log('=== form verification ===');
-  for (const r of rows) {
-    console.log(
-      `  ${r.form.padEnd(8)} body=${r.bodyClass.padEnd(18)} tbar=${r.tbar.padEnd(6)} window=${r.w}x${r.h} expected=${r.ew}x${r.eh}  ` +
-      `switch=${r.sizeOk && r.classOk ? 'PASS' : 'FAIL'}  resizable=${r.resizable ? 'yes' : 'no'}  ` +
-      `rows=${r.visible}/${r.rows}${r.badge ? ' (' + r.badge + ')' : ''} ${r.rowsOk ? 'PASS' : 'FAIL(rows)'}`
-    );
-    if (r.corner) {
+        const state = JSON.parse(await evalJs(`(async () => {
+          const rows = [...document.querySelectorAll('#list .row')];
+          const visible = rows.filter((r) => r.style.display !== 'none').length;
+          const badge = document.querySelector('#list .more');
+          const form = ${JSON.stringify(form)};
+          return JSON.stringify({
+            bodyClass: document.body.className,
+            w: window.innerWidth,
+            h: window.innerHeight,
+            want: formSize(form, form === 'panel' ? await monitorInfo() : null),
+            tbar: getComputedStyle(document.querySelector('.tbar')).display,
+            resizable: await appWindow.isResizable(),
+            rows: rows.length,
+            visible,
+            badge: badge ? badge.textContent : null
+          });
+        })()`, true));
+
+        const [ew, eh] = state.want;
+        const sizeOk = near(state.w, ew) && near(state.h, eh);
+        const classOk = state.bodyClass.includes('form-' + form);
+        // 行可见性:面板必须显示全部行(紧凑条藏起来的行要还原);
+        // 紧凑条若有隐藏行,数目必须和 "+N" 徽标对得上
+        let rowsOk = true;
+        if (state.rows > 0) {
+          const hidden = state.rows - state.visible;
+          if (form === 'panel') rowsOk = hidden === 0;
+          else rowsOk = hidden === 0 ? state.badge === null : state.badge === '+' + hidden;
+        }
+        // 胶囊形态额外验:圆角外真透明(见 cornerAlpha 的注释)
+        let corner = null;
+        let cornerOk = true;
+        if (form === 'pill') {
+          corner = await cornerAlpha(send, evalJs);
+          cornerOk = corner.cornerAlpha === 0 && corner.centerAlpha > 200;
+        }
+        const resizableOk = state.resizable === false;
+        const pass = sizeOk && classOk && resizableOk && rowsOk && cornerOk;
+        if (!pass) ok = false;
+        rows.push({ form, ...state, ew, eh, sizeOk, classOk, rowsOk, corner, cornerOk, pass });
+    }
+
+    // Read the same window as CDP, even when an installed copy is also running.
+    let style = null;
+    let styleErr = null;
+    try {
+      const helper = require('path').join(__dirname, 'win-style.ps1');
+      const args = ['-NoProfile', '-File', helper];
+      if (process.env.CDP_APP_PID) args.push('-AppProcessId', process.env.CDP_APP_PID);
+      const out = execFileSync('powershell', args, { encoding: 'utf8', timeout: 20000 }).trim();
+      if (!/^[0-9A-F]{8}$/i.test(out)) styleErr = `unexpected output: ${out}`;
+      else style = parseInt(out, 16);
+    } catch (e) {
+      styleErr = String(e.message).split('\n')[0];
+    }
+
+    console.log('=== form verification ===');
+    for (const r of rows) {
       console.log(
-        `           corners alpha=${r.corner.cornerAlpha} center alpha=${r.corner.centerAlpha} ` +
-        `(${r.corner.w}x${r.corner.h})  ${r.cornerOk ? 'PASS 角上真透明' : 'FAIL 圆角被直角底色盖住'}`
+        `  ${r.form.padEnd(8)} body=${r.bodyClass.padEnd(18)} tbar=${r.tbar.padEnd(6)} window=${r.w}x${r.h} expected=${r.ew}x${r.eh}  ` +
+        `switch=${r.sizeOk && r.classOk ? 'PASS' : 'FAIL'}  resizable=${r.resizable ? 'yes' : 'no'}  ` +
+        `rows=${r.visible}/${r.rows}${r.badge ? ' (' + r.badge + ')' : ''} ${r.rowsOk ? 'PASS' : 'FAIL(rows)'}`
+      );
+      if (r.corner) {
+        console.log(
+          `           corners alpha=${r.corner.cornerAlpha} center alpha=${r.corner.centerAlpha} ` +
+          `(${r.corner.w}x${r.corner.h})  ${r.cornerOk ? 'PASS 角上真透明' : 'FAIL 圆角被直角底色盖住'}`
+        );
+      }
+    }
+
+    if (styleErr) {
+      ok = false;
+      console.log(`  win32 style          = UNKNOWN (${styleErr})`);
+    } else {
+      const thick = (style & WS_THICKFRAME) !== 0;
+      const maxbox = (style & WS_MAXIMIZEBOX) !== 0;
+      const styleOk = !thick && !maxbox;
+      if (!styleOk) ok = false;
+      console.log(
+        `  win32 style          0x${style.toString(16).padStart(8, '0')}  ` +
+        `WS_THICKFRAME(resize border)=${thick ? 'YES(BAD)' : 'no'}  ` +
+        `WS_MAXIMIZEBOX=${maxbox ? 'YES(BAD)' : 'no'}  panel-fixed=${styleOk ? 'PASS' : 'FAIL'}`
       );
     }
-  }
 
-  if (styleErr) {
-    ok = false;
-    console.log(`  win32 style          = UNKNOWN (${styleErr})`);
-  } else {
-    const thick = (style & WS_THICKFRAME) !== 0;
-    const maxbox = (style & WS_MAXIMIZEBOX) !== 0;
-    const styleOk = !thick && !maxbox;
-    if (!styleOk) ok = false;
-    console.log(
-      `  win32 style          0x${style.toString(16).padStart(8, '0')}  ` +
-      `WS_THICKFRAME(resize border)=${thick ? 'YES(BAD)' : 'no'}  ` +
-      `WS_MAXIMIZEBOX=${maxbox ? 'YES(BAD)' : 'no'}  panel-fixed=${styleOk ? 'PASS' : 'FAIL'}`
-    );
+  } finally {
+    try {
+      await evalJs(`CFG.compactEnabled = ${Boolean(previous.compact)}; applyForm(${JSON.stringify(previous.form)}, false)`, true);
+    } finally {
+      ws.close();
+    }
   }
-
   process.exit(ok ? 0 : 1);
 })().catch((e) => {
   console.error('verify failed:', e.message || e);

@@ -278,7 +278,7 @@ pub(crate) async fn delete_key(app: tauri::AppHandle, id: String) -> Result<Stri
     if providers::find(&id).is_none() {
         purge_channel_credentials(&app, &id).await?;
         let state = app.state::<AppState>();
-        state.fetcher.forget_channel(&lock_rw(&state.store), &id);
+        state.fetcher.forget_channel(&lock_rw(&state.store), &id)?;
         return Ok("已删除这个自定义渠道的密钥(渠道定义还在,换一把可继续用)".into());
     }
     let def = providers::find(&id).ok_or_else(|| format!("未知渠道: {id}"))?;
@@ -309,7 +309,7 @@ pub(crate) async fn delete_key(app: tauri::AppHandle, id: String) -> Result<Stri
     // 凭据刚变过:作废"5 秒内复用上次结果",否则紧接着的刷新还会把旧结果(带旧凭据
     // 取到的那份)端上来,用户看到"清掉了却还显示已登录"。
     let state = app.state::<AppState>();
-    state.fetcher.forget_channel(&lock_rw(&state.store), &id);
+    state.fetcher.forget_channel(&lock_rw(&state.store), &id)?;
     sync_channel_to_gateway(&app, &id);
     Ok(if is_web {
         format!("已清除 {} 的登录会话{warn}", def.name)

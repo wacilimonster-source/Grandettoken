@@ -12,8 +12,8 @@ use tokenscope_core::config::Config;
 use tokenscope_core::fetch::{now_ts, ChannelView};
 use tokenscope_core::secrets;
 use tokenscope_core::sync::{
-    self, code::SyncCode, crypto, gist::GistClient, model::SyncSnapshot, publish, FetchedSources,
-    PublishOutcome, ReadOutcome,
+    self, code::SyncCode, crypto, gist::GistClient, model::SyncSnapshot, profile, publish,
+    FetchedSources, PublishOutcome, ReadOutcome,
 };
 
 use crate::{lock_rw, AppState, APP_VERSION};
@@ -41,6 +41,7 @@ pub struct SyncStatus {
     pub next_allowed_at: Option<i64>,
     pub has_key: bool,
     pub has_github: bool,
+    pub github_needs_reauth: bool,
     pub github_login: Option<String>,
     pub github_user_id: Option<i64>,
     pub oauth_client_configured: bool,
@@ -130,20 +131,16 @@ fn github_token_opt() -> Option<String> {
         .filter(|s| !s.trim().is_empty())
 }
 
-/// 桌面 OAuth App 的公开 client_id：优先配置覆盖,其次编译期环境变量。
-pub(crate) fn oauth_client_id(cfg: &Config) -> Option<String> {
-    cfg.sync_oauth_client_id
-        .clone()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| {
-            option_env!("GRANDETTOKEN_DESKTOP_CLIENT_ID")
-                .map(|s| s.to_string())
-                .filter(|s| !s.trim().is_empty())
-        })
+pub(crate) fn oauth_client_id(cfg: &Config) -> &str {
+    sync::device_flow::desktop_client_id(
+        cfg.sync_oauth_client_id.as_deref(),
+        option_env!("GRANDETTOKEN_DESKTOP_CLIENT_ID"),
+    )
 }
 
 pub(crate) fn ensure_configured(cfg: &Config) -> Result<(), String> {
     master_of(cfg)?;
+    ensure_github_authorized(cfg)?;
     github_token()?;
     if cfg
         .sync_source
@@ -155,13 +152,21 @@ pub(crate) fn ensure_configured(cfg: &Config) -> Result<(), String> {
     Ok(())
 }
 
+fn ensure_github_authorized(cfg: &Config) -> Result<(), String> {
+    if profile::github_needs_reauth(cfg) {
+        return Err("SYNC_AUTH: GitHub 授权已失效，请重新授权".into());
+    }
+    Ok(())
+}
+
 fn status_of(state: &AppState) -> Result<SyncStatus, String> {
     let cfg = cfg_of(state)?;
     let key = cfg.sync_relay_id.as_ref().map(|_| master_of(&cfg));
     let has_key = key.as_ref().is_some_and(|r| r.is_ok());
     let key_error = key.as_ref().and_then(|r| r.as_ref().err()).cloned();
     let has_github = github_token_opt().is_some();
-    let oauth_client_configured = oauth_client_id(&cfg).is_some();
+    let github_needs_reauth = profile::github_needs_reauth(&cfg);
+    let oauth_client_configured = !oauth_client_id(&cfg).is_empty();
     let pending = cfg.sync_source.as_deref().and_then(|source| {
         let store = state.store.clone();
         let s = lock_rw(&store);
@@ -194,6 +199,7 @@ fn status_of(state: &AppState) -> Result<SyncStatus, String> {
         next_allowed_at: cfg.sync_next_allowed_at,
         has_key,
         has_github,
+        github_needs_reauth,
         github_login: cfg.sync_github_login,
         github_user_id: cfg.sync_github_user_id,
         oauth_client_configured,
@@ -253,6 +259,7 @@ pub async fn sync_publish_now(
     // 与自动发布(maybe_publish)同一条闸(报告 L14):配置损坏时手动发布会把默认
     // 配置的数据发出去,而 last_upload_at 又必然记不上 —— 下次还发,白烧 gist 写入。
     crate::refuse_if_config_broken()?;
+    ensure_github_authorized(&cfg_of(state.inner())?)?;
     let views = fetch_views(state.inner()).await;
     publish_views(&app, &views, false).await
 }
@@ -263,6 +270,7 @@ pub async fn sync_read_group(state: State<'_, AppState>) -> Result<ReadOutcome, 
     let (master, relay_id, gist_id) = master_of(&cfg)?;
     // 与同文件其它命令同口径(报告 L14):没连 GitHub 就明说,别拿匿名请求去换一个
     // 误导性的 404「Gist 不存在」。
+    ensure_github_authorized(&cfg)?;
     let client = GistClient::new(Some(github_token()?)).map_err(err_str)?;
     let fetched = sync::fetch_sources(
         &client,
@@ -388,41 +396,24 @@ pub async fn sync_set_platform_label(
     Ok(())
 }
 
-/// 轮询循环每轮调用：到点就后台发布,不阻塞取数。
-pub fn maybe_publish(app: &AppHandle, views: &[ChannelView]) {
+/// 轮询复用本轮结果；重新授权恢复发布时按需取数。
+pub(crate) fn maybe_publish(app: &AppHandle, views: Option<&[ChannelView]>) {
     if crate::refuse_if_config_broken().is_err() { return; }
     let state = app.state::<AppState>();
     let Ok(cfg) = cfg_of(state.inner()) else { return };
-    if !cfg.sync_enabled || cfg.sync_relay_id.is_none() || cfg.sync_source.is_none() {
-        return;
-    }
-    if github_token_opt().is_none() {
-        return;
-    }
-    // 401 之后不再自动重试,等用户重新授权(授权成功会清掉 last_error)。
-    if cfg
-        .sync_last_error
-        .as_deref()
-        .map_or(false, |e| e.starts_with("SYNC_AUTH"))
-    {
-        return;
-    }
-    if cfg
-        .sync_next_allowed_at
-        .map_or(false, |t| t > now_ts())
-    {
-        return;
-    }
-    let last = cfg.sync_last_upload_at.unwrap_or(0);
-    if now_ts() - last < cfg.sync_publish_interval_sec as i64 {
+    if !profile::automatic_publish_due(&cfg, now_ts()) || github_token_opt().is_none() {
         return;
     }
     if SYNC_SCHEDULED.swap(true, Ordering::SeqCst) {
         return;
     }
     let app = app.clone();
-    let views = views.to_vec();
+    let views = views.map(<[ChannelView]>::to_vec);
     tauri::async_runtime::spawn(async move {
+        let views = match views {
+            Some(views) => views,
+            None => fetch_views(app.state::<AppState>().inner()).await,
+        };
         let _ = publish_views(&app, &views, true).await;
         SYNC_SCHEDULED.store(false, Ordering::SeqCst);
     });
@@ -432,10 +423,11 @@ async fn publish_views(app: &AppHandle, views: &[ChannelView], automatic: bool) 
     let _guard = PUBLISH_LOCK.lock().await;
     let state = app.state::<AppState>();
     let cfg = cfg_of(state.inner())?;
-    // 排队期间用户可能暂停或恢复了另一个组,不能再自动发布。
-    if automatic && !cfg.sync_enabled {
-        return Err("自动发布已暂停".into());
+    // 排队期间可能已手动发布、暂停同步或收到授权错误。
+    if automatic && !profile::automatic_publish_due(&cfg, now_ts()) {
+        return Err("当前无需自动发布".into());
     }
+    ensure_github_authorized(&cfg)?;
     let (master, relay_id, gist_id) = master_of(&cfg)?;
     let token = github_token()?;
     let source = cfg
@@ -494,6 +486,7 @@ async fn record_publish_error(
     e: &sync::SyncError,
     now: i64,
 ) -> String {
+    tokenscope_core::diaglog::write_keyed("sync", "publish", e.code);
     let retry_at = e
         .reset_at
         .or_else(|| e.retry_after_sec.map(|s| now + s as i64));

@@ -84,7 +84,7 @@ impl Gateway {
             .map_err(|_| "读取网关刷新状态失败，请重试".to_string())?? else { return Ok(false); };
         let key = read_key(self, &ticket.channel).await;
         let result = match &key {
-            Ok(key) => match self.clients.client(ticket.channel.system_proxy) {
+            Ok(key) => match self.clients.client_async(ticket.channel.system_proxy).await {
                 Ok(client) => fetch_configured_models(&client, &ticket.channel, key.as_deref()).await,
                 Err(error) => Err(error),
             },

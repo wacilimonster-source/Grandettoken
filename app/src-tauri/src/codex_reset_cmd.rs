@@ -11,7 +11,7 @@ use tokenscope_core::fetch::now_ts;
 use tokenscope_core::recovery::Snapshot;
 use tokenscope_core::store::Store;
 
-use crate::{lock_rw, AppState};
+use crate::{with_store, AppState};
 
 const PROFILE_PREFIX: &str = "codex_reset_profile_v1";
 
@@ -52,68 +52,71 @@ fn save_profile(store: &Store, scope: &str, profile: &Profile) -> Result<(), Str
 }
 
 #[tauri::command]
-pub fn codex_reset_profile_get(
+pub async fn codex_reset_profile_get(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<Profile, String> {
     ensure_id(&id)?;
-    let store = lock_rw(&state.store);
-    let (profile, _scope) = load_profile(&store, &id)?;
-    Ok(profile)
+    with_store(state.read_store.clone(), move |store| {
+        let (profile, _scope) = load_profile(store, &id)?;
+        Ok(profile)
+    }).await
 }
 
 #[tauri::command]
-pub fn codex_reset_profile_set(
+pub async fn codex_reset_profile_set(
     state: State<'_, AppState>,
     id: String,
     profile: ProfilePatch,
 ) -> Result<Profile, String> {
     ensure_id(&id)?;
-    let store = lock_rw(&state.store);
-    let (mut current, scope) = load_profile(&store, &id)?;
-    let Some(scope) = scope else {
-        return Err("没找到 Codex 账号范围，订阅到期日只在本轮生效，未落盘".into());
-    };
-    if profile.scope.as_deref() != Some(scope.as_str()) {
-        return Err("Codex 账号已变化，请刷新后重新设置".into());
-    }
-    if profile.clear_sub_end {
-        current.sub_end_at = None;
-    } else if let Some(at) = profile.sub_end_at {
-        if at <= 0 {
-            return Err("订阅到期日必须是有效日期".into());
+    with_store(state.store.clone(), move |store| {
+        let (mut current, scope) = load_profile(store, &id)?;
+        let Some(scope) = scope else {
+            return Err("没找到 Codex 账号范围，订阅到期日只在本轮生效，未落盘".into());
+        };
+        if profile.scope.as_deref() != Some(scope.as_str()) {
+            return Err("Codex 账号已变化，请刷新后重新设置".into());
         }
-        current.sub_end_at = Some(at);
-    }
-    if let Some(need) = profile.need {
-        current.need = need;
-    }
-    current.updated_at = now_ts();
-    save_profile(&store, &scope, &current)?;
-    Ok(current)
+        if profile.clear_sub_end {
+            current.sub_end_at = None;
+        } else if let Some(at) = profile.sub_end_at {
+            if at <= 0 {
+                return Err("订阅到期日必须是有效日期".into());
+            }
+            current.sub_end_at = Some(at);
+        }
+        if let Some(need) = profile.need {
+            current.need = need;
+        }
+        current.updated_at = now_ts();
+        save_profile(store, &scope, &current)?;
+        Ok(current)
+    }).await
 }
 
 /// 给当前 Codex 详情卡算一次建议。
 ///
 /// `input` 由前端从同一份 ChannelView 构造；scope 指纹用于拒绝换号后迟到的请求。
 #[tauri::command]
-pub fn codex_reset_advice(
+pub async fn codex_reset_advice(
     state: State<'_, AppState>,
     id: String,
     input: AdviceInput,
 ) -> Result<Advice, String> {
     ensure_id(&id)?;
     let now = now_ts();
-    let store = lock_rw(&state.store);
-    let scope = scope_of(&store, &id);
-    if input.scope != scope {
-        return Err("Codex 账号已变化，请刷新后重新计算".into());
-    }
-    // 写操作和读判定分开：命令层不碰卡，也不改 profile；纯函数只读输入。
-    // 「今天要用」的当天边界由本机时区补齐；纯函数不读时钟以外的环境。
-    let mut input = input;
-    if input.today_end_at.is_none() {
-        input.today_end_at = local_today_end(now);
-    }
-    Ok(advise(&input, now))
+    with_store(state.read_store.clone(), move |store| {
+        let scope = scope_of(store, &id);
+        if input.scope != scope {
+            return Err("Codex 账号已变化，请刷新后重新计算".into());
+        }
+        // 写操作和读判定分开：命令层不碰卡，也不改 profile；纯函数只读输入。
+        // 「今天要用」的当天边界由本机时区补齐；纯函数不读时钟以外的环境。
+        let mut input = input;
+        if input.today_end_at.is_none() {
+            input.today_end_at = local_today_end(now);
+        }
+        Ok(advise(&input, now))
+    }).await
 }

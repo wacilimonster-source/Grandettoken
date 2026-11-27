@@ -100,7 +100,7 @@ pub(crate) async fn poll_loop(app: tauri::AppHandle) {    let mut failures = 0u3
         // 快照已落库:顺手核一轮待落定的到账核对单(零网络请求,读库比增量)
         settle_arrivals(&app).await;
         // 同步发布:到点才后台跑,不阻塞取数循环
-        sync_cmds::maybe_publish(&app, &views);
+        sync_cmds::maybe_publish(&app, Some(&views));
     }
 }
 
@@ -113,7 +113,7 @@ pub(crate) static LAST_REFRESH: std::sync::atomic::AtomicI64 = std::sync::atomic
 /// (fetch_shared 自己也会与在途的轮询合流,不会发出双份请求)。
 pub(crate) fn refresh_if_stale(app: &tauri::AppHandle, max_age_sec: i64) {
     let last = LAST_REFRESH.load(std::sync::atomic::Ordering::Relaxed);
-    if last != 0 && now_ts() - last < max_age_sec {
+    if last != 0 && (0..max_age_sec).contains(&now_ts().saturating_sub(last)) {
         return;
     }
     let h = app.clone();

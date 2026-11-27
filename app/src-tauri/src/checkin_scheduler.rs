@@ -67,10 +67,15 @@ pub(crate) fn spawn_checkin_ticker(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
             checkin_tick_once(&app).await;
-            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(300)) => {}
+                _ = CHECKIN_WAKE.notified() => {}
+            }
         }
     });
 }
+
+pub(crate) static CHECKIN_WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
 /// 走一轮:对每个"今天还没处理完"的渠道尝试签到。
 pub(crate) async fn checkin_tick_once(app: &tauri::AppHandle) {
@@ -114,21 +119,8 @@ pub(crate) async fn checkin_tick_once(app: &tauri::AppHandle) {
         if !checkin::due_now(now, &today, def.id, def.day_roll_hour) {
             continue;
         }
-        if let Err(e) = run_checkin(app, def.id, false).await {
-            eprintln!("签到 {} 跳过: {e}", def.name);
-            // 与手动入口(checkin_now)同一条过滤:互斥忙 / 开关类「本来就不该跑」的
-            // 拒绝不记流水也不推进退避 —— 否则手动签到进行中时节拍器会拿到
-            // 「正在签到」,把 attempts 双计、流水里留一行假"没签成"(报告 L10)。
-            let gate_like = ["已隐藏", "开关没开", "正在签到", "未知签到渠道"]
-                .iter()
-                .any(|k| e.contains(k));
-            if !gate_like {
-                // 拿不到凭据:记一句就走,别每 5 分钟刷屏。
-                // **但也要落一条流水** —— 以前这里只 eprintln,绿色版从托盘启动时
-                // 那行没人看得到,于是"没试"与"试了失败"在数据里无法区分
-                // (2026-10-20 排查:workbuddy 10-16/10-17 两天在 checkin_log 里是空白)。
-                record_checkin_skip(app, def.id, &today, now, &e).await;
-            }
+        if let Err(CheckinError::Credential(message)) = run_checkin(app, def.id, false).await {
+            record_checkin_skip(app, def.id, &today, now, &message).await;
         }
         // 两渠道之间串行 + 间隔(设计稿第 8 节)
         tokio::time::sleep(std::time::Duration::from_millis(800)).await;

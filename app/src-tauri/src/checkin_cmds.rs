@@ -75,7 +75,22 @@ pub(crate) struct CheckinState {
 /// 那是取数层的标记),交给 `Cred::Web` 后会走「其余当 Bearer 令牌」那一支,
 /// 正是签到接口要的形态。**绝不能把 `desktop:` 前缀带进来**,那会变成
 /// `Bearer desktop:xxx`,必然 401。
-pub(crate) fn checkin_credentials(app: &tauri::AppHandle, def: &checkin::CheckinDef) -> Result<Vec<checkin::Cred>, String> {
+pub(crate) enum CheckinError {
+    Paused,
+    Gate(String),
+    Credential(String),
+}
+
+impl std::fmt::Display for CheckinError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Paused => f.write_str("网页会话随主窗口休眠，唤回后重试"),
+            Self::Gate(message) | Self::Credential(message) => f.write_str(message),
+        }
+    }
+}
+
+pub(crate) fn checkin_credentials(app: &tauri::AppHandle, def: &checkin::CheckinDef) -> Result<Vec<checkin::Cred>, CheckinError> {
     match def.auth {
         checkin::CheckinAuth::TraeApp => {
             // 双装 Trae(SOLO CN + CN)时可能有两份登录态,其中一份早已作废。
@@ -94,11 +109,11 @@ pub(crate) fn checkin_credentials(app: &tauri::AppHandle, def: &checkin::Checkin
                 }
             }
             if out.is_empty() {
-                return Err(if missing_device {
+                return Err(CheckinError::Credential(if missing_device {
                     "Trae 的 storage.json 里没读到设备号(签到需要它)".into()
                 } else {
                     "没检测到 Trae 登录信息 · 打开一次 Trae 即可".into()
-                });
+                }));
             }
             Ok(out)
         }
@@ -111,14 +126,20 @@ pub(crate) fn checkin_credentials(app: &tauri::AppHandle, def: &checkin::Checkin
                 .map(checkin::Cred::Web)
                 .collect();
             // ② 兜底:网页会话(手动粘贴的密钥 / 挂件内登录抓到的 Cookie)
-            if let Some(session) = wb_session_of(app, def.id) {
-                out.push(checkin::Cred::Web(session));
+            let live = hibernate::has_live_webview(app);
+            if live {
+                if let Some(session) = wb_session_of(app, def.id) {
+                    out.push(checkin::Cred::Web(session));
+                }
             }
             if out.is_empty() {
-                return Err(format!(
+                if !live || !hibernate::has_live_webview(app) {
+                    return Err(CheckinError::Paused);
+                }
+                return Err(CheckinError::Credential(format!(
                     "未检测到 {} 登录 · 打开一次桌面端即可(或在本卡片点「重新登录」)",
                     def.name
-                ));
+                )));
             }
             Ok(out)
         }
@@ -132,7 +153,7 @@ pub(crate) fn checkin_credentials(app: &tauri::AppHandle, def: &checkin::Checkin
                 .into_iter()
                 .next()
                 .ok_or_else(|| {
-                    format!("没检测到 {} 登录信息 · 打开一次 Qoder 桌面端即可", def.name)
+                    CheckinError::Credential(format!("没检测到 {} 登录信息 · 打开一次 Qoder 桌面端即可", def.name))
                 })?;
             if def.id == "qoder" {
                 let account_id = c.account_id.as_deref().unwrap_or_default();
@@ -154,18 +175,16 @@ pub(crate) fn checkin_credentials(app: &tauri::AppHandle, def: &checkin::Checkin
                     key: tokenscope_core::minimax::encode_key(&c),
                     uid: c.uid,
                 }]),
-                None => Err("没检测到 MiniMax Code 登录 · 打开一次 MiniMax Code 即可".into()),
+                None => Err(CheckinError::Credential("没检测到 MiniMax Code 登录 · 打开一次 MiniMax Code 即可".into())),
             }
         }
     }
 }
 
 /// 只要一份凭据的调用点(活动监测 / 状态探测):取候选表的第一份。
-pub(crate) fn checkin_credential(app: &tauri::AppHandle, def: &checkin::CheckinDef) -> Result<checkin::Cred, String> {
-    checkin_credentials(app, def)?
-        .into_iter()
-        .next()
-        .ok_or_else(|| format!("{} 没有可用签到凭据", def.name))
+pub(crate) fn checkin_credential(app: &tauri::AppHandle, def: &checkin::CheckinDef) -> Result<checkin::Cred, CheckinError> {
+    checkin_credentials(app, def)?.into_iter().next()
+        .ok_or_else(|| CheckinError::Credential("没有可用的签到凭据".into()))
 }
 
 /// 该渠道的「签到周期日」——幂等键。
@@ -272,8 +291,8 @@ pub(crate) fn checkin_state_of(id: &str, cfg: &Config, store: &Store, note: Opti
 
 /// 跑一次签到:查状态 → 可领就领 → 领完回查一次 → 触发一次取数做到账核对。
 /// 手动点与自动节拍器共用这一条路。
-pub(crate) async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<checkin::Outcome, String> {
-    let def = checkin::find(id).ok_or_else(|| format!("未知签到渠道: {id}"))?;
+pub(crate) async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) -> Result<checkin::Outcome, CheckinError> {
+    let def = checkin::find(id).ok_or_else(|| CheckinError::Gate(format!("未知签到渠道: {id}")))?;
     // 两道闸门(报告 P0-6)。取数侧一直守着「隐藏 = 不发请求、不读本机登录凭据」
     // (fetch.rs 里那句注释),签到这条路以前谁也没判:渠道被隐藏后每天照样读
     // storage.json / Cookie 罐并对外 POST;手动点「领积分」连开关状态都不看。
@@ -281,15 +300,15 @@ pub(crate) async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) 
         let st = app.state::<AppState>();
         let cfg = lock_rw(&st.config).clone();
         if cfg.hidden_channels.iter().any(|h| h == id) {
-            return Err(format!("{} 已隐藏,签到已暂停(想领先在渠道卡上取消隐藏)", def.name));
+            return Err(CheckinError::Gate(format!("{} 已隐藏,签到已暂停(想领先在渠道卡上取消隐藏)", def.name)));
         }
         if !cfg.checkin.get(id).map(|c| c.enabled).unwrap_or(false) {
-            return Err(format!("{} 的签到开关没开", def.name));
+            return Err(CheckinError::Gate(format!("{} 的签到开关没开", def.name)));
         }
     }
     // 在途互斥:节拍器与手动点击不许同时跑同一条渠道(见 CHECKIN_BUSY 注释)。
     // 注意绑到具名变量:绑给 `_` 会立刻 Drop,闸门等于没上。
-    let _busy = CheckinBusy::acquire(id).map_err(|_| format!("{} 正在签到,等它跑完再点", def.name))?;
+    let _busy = CheckinBusy::acquire(id).map_err(|_| CheckinError::Gate(format!("{} 正在签到,等它跑完再点", def.name)))?;
     // 本机凭据要读文件 / 派发主线程,都是阻塞调用:下沉到 spawn_blocking,
     // 否则一个卡住的 Trae storage.json 会占住一个 tokio worker(P1-14 同族)。
     // **可能有多份**:Trae 双装 / WorkBuddy 多区域,旧那份可能早已作废。
@@ -297,7 +316,7 @@ pub(crate) async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) 
         let h = app.clone();
         tokio::task::spawn_blocking(move || checkin_credentials(&h, def))
             .await
-            .map_err(|e| format!("读取签到凭据失败: {e}"))??
+            .map_err(|e| CheckinError::Credential(format!("读取签到凭据失败: {e}")))??
     };
     let client = checkin::direct_client();
     let now = now_ts();
@@ -327,7 +346,7 @@ pub(crate) async fn run_checkin(app: &tauri::AppHandle, id: &str, manual: bool) 
             picked = Some((c.clone(), o, b));
             break;
         }
-        picked.expect("checkin_credentials 至少返回一份")
+        picked.ok_or_else(|| CheckinError::Credential("没有可用的签到凭据".into()))?
     };
     let mut credits: Option<f64> = out.credits();
     // 连续天数:只有 Qoder 的接口给,拿不到就是 None(不编)
@@ -633,7 +652,7 @@ pub(crate) async fn checkin_state(app: tauri::AppHandle, state: State<'_, AppSta
             let err = tokio::task::spawn_blocking(move || checkin_credential(&handle, def).err())
                 .await
                 .unwrap_or(None);
-            (i, err)
+            (i, err.map(|e| e.to_string()))
         }
     });
     for (i, err) in futures::future::join_all(probes).await {
@@ -678,14 +697,11 @@ pub(crate) async fn checkin_now(app: tauri::AppHandle, id: String) -> Result<Che
     let out = match run_checkin(&app, &id, true).await {
         Ok(o) => o,
         Err(e) => {
-            let gate_like = ["已隐藏", "开关没开", "正在签到", "未知签到渠道"]
-                .iter()
-                .any(|k| e.contains(k));
-            if !gate_like {
+            if let CheckinError::Credential(message) = &e {
                 let now = now_ts();
-                record_checkin_skip(&app, &id, &cycle_day_of(&id, now), now, &e).await;
+                record_checkin_skip(&app, &id, &cycle_day_of(&id, now), now, message).await;
             }
-            return Err(e);
+            return Err(e.to_string());
         }
     };
     let state = app.state::<AppState>();

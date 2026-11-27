@@ -282,6 +282,7 @@
         </div>
         ${state.usageLoading && !s ? `<p class="gw-empty-note">正在读取 SQLite 台账…</p>` : ""}
         ${state.usageError ? `<p class="gw-error">读取账本失败：${escHtml(state.usageError)}</p>` : ""}
+        ${s?.droppedRecords ? `<p class="gw-error">自启动或清空账本以来，队列未能写入 ${escHtml(s.droppedRecords)} 条记录</p>` : ""}
         ${s ? `
           <div class="gw-adv-kpi-grid">
             <div class="gw-adv-kpi"><span>请求总数</span><b>${escHtml(s.totalRequests)}</b><small>成功 ${escHtml(s.okRequests)} · 失败 ${escHtml(s.errorRequests)}</small></div>

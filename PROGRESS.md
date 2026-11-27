@@ -997,3 +997,17 @@
 - 托盘徽标文字由自绘 5×7 点阵改为 GDI 字体排版：按字号从大到小寻找最大可容纳字体，读取实际 ink bounds 后居中裁剪；字体依次尝试 Bahnschrift SemiCondensed/Condensed、Segoe UI、Arial，并用 GetTextFaceW 校验实际字体；非 Windows 或取字失败回退点阵。
 - 审查：core 单测 702 + 同步夹具 6、双端全目标 0 warning、静态门/317 项 jsdom/6 项专项/刷新稳定性/凭据扫描全绿；125% 真机托盘 94/17 清晰居中、轮播与品牌图标还原正常，GDI 对象 21→21 无泄漏；用户数据三个文件 SHA-256 MATCH。报告 `docs/report/tray-gdi-render-review-2026-11-26.md`。
 - 观察（P3）：TextOutW 失败路径返回全零掩码而非落到点阵回退；16px 下 4 字符文本偏紧。均不阻断发版。
+
+
+## 2026-11-26 代码审查本地修复
+
+- QA 截图和打包日志移出 Git 索引，CI 与发版启用产物门禁。旧标签、源码归档与缓存列入远端遗留。
+- 修复网页休眠误报、套餐周期写入、网关台账与凭据边界、前端展开和渲染、发版验签。按用户裁决保留逐次快照观测，历史查询缩短明细读取窗口。
+- 串行门禁、只读连接与失败事务夹具、无头 Chrome 正负样本及本地签名通过。原生 WebView2 复测和 GitHub Actions 发布流程待执行。逐项见 `docs/report/code-review-2026-11-26.md` §7。
+
+## 2026-11-27 v0.3.79 Agent Platform Gemini 安全校验默认关闭与同步/审查修复
+
+- **本地模型网关**：`AgentPlatform`（Vertex AI OpenAI 兼容端点）请求 Gemini 模型时，默认将 4 项可配置安全分类（`HARM_CATEGORY_HATE_SPEECH`、`HARM_CATEGORY_DANGEROUS_CONTENT`、`HARM_CATEGORY_HARASSMENT`、`HARM_CATEGORY_SEXUALLY_EXPLICIT`）的 `extra_body.google.safety_settings` 设为 `"OFF"`；不覆盖调用方显式传入的 `safety_settings` / `safetySettings`；遇到上游针对 `safety_settings` 的 400 时单次自动剥离该子字段并保留同层 `thinking_config`。
+- **PC 到手机同步**：修复 Gist 发布遇到 401 后的重新授权与同账号凭据替换流程（保留同步组与待发密文），并在桌面包内置公开 OAuth Client ID 默认值（见 `docs/report/desktop-sync-auth-2026-11-26.md`）。
+- **代码审查与质量门禁**：将 QA 截图与打包日志移出 Git 索引并启用 `check-tracked-artifacts` 门禁；合入网页休眠误报、套餐周期写入、网关台账与凭据边界、前端渲染及发版离线验签等修复。
+- 三处版本号同步至 `0.3.79`（`Cargo.toml` / `tauri.conf.json` / `Cargo.lock`），并发版前串行复跑全部门禁。

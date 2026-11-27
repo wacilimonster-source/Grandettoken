@@ -10,6 +10,7 @@
  * 说明:  它验证"代码能跑、结构在",不验证"像素好看";像素与真机几何仍需真机复测。
  */
 const fs = require("fs");
+const { assertInvokeArgs } = require("./check-ipc-contract");
 const path = require("path");
 // jsdom 是**开发期**依赖,不进产品依赖树。没装时给一条明确提示就退出:
 //   cd <node 工作区> && npm install jsdom
@@ -31,7 +32,8 @@ if (process.env.ANTIGRAVITY_ACCOUNT_SENTINEL === "1") {
   replaceOnce(appList, "window.AntigravityUI.managementList(ordered)", "ordered");
 }
 if (process.env.PERFORMANCE_SENTINEL === "1") {
-  replaceOnce(appList, "if (!WINDOW_VISIBLE) {", "if (false && !WINDOW_VISIBLE) {");
+  const renderFiles = appList.filter((file) => file.name === "app-view.js");
+  replaceOnce(renderFiles, "if (!WINDOW_VISIBLE) {", "if (false && !WINDOW_VISIBLE) {");
   replaceOnce(
     appList,
     "function qReconcile(box, items) {",
@@ -52,6 +54,9 @@ if (process.env.CHECKIN_SENTINEL === "1") {
 if (process.env.FIT_PILL_SENTINEL === "1") {
   replaceOnce(appList, "if (key !== PILL_MEASURE_KEY) {", "if (true) {");
 }
+if (process.env.SYNC_AUTH_SENTINEL === "1") {
+  replaceOnce(appList, "return !!status?.hasGithub && !status.githubNeedsReauth;", "return !!status?.hasGithub;");
+}
 const ANY_SENTINEL = [
   "CHECKIN_SENTINEL",
   "AG_LAYOUT_SENTINEL",
@@ -62,6 +67,7 @@ const ANY_SENTINEL = [
   "EXPIRY_UI_SENTINEL",
   "FIT_PILL_SENTINEL",
   "GOOGLE_CLOUD_CALENDAR_SENTINEL",
+  "SYNC_AUTH_SENTINEL",
 ].some((k) => process.env[k] === "1");
 if (!ANY_SENTINEL) {
   let threwMissing = false;
@@ -129,6 +135,12 @@ if (!ANY_SENTINEL) {
   if (cloudCalendarProbe.status !== 1 || !/FAIL 缩略模式 Google Cloud 单渠道在三种布局跨年后自动更新同一批次/.test(cloudCalendarProbe.stdout)) {
     throw new Error("Google Cloud 哨兵自检失败：漏刷跨日的赠金卡必须被界面断言拦截");
   }
+  const syncAuthProbe = spawnSync(process.execPath, [__filename], {
+    env: { ...process.env, SYNC_AUTH_SENTINEL: "1" }, encoding: "utf8", timeout: 30000,
+  });
+  if (syncAuthProbe.status !== 1 || !syncAuthProbe.stdout?.includes("FAIL 同步授权失效时保留配对并阻止发布")) {
+    throw new Error(`同步授权哨兵自检失败 (status=${syncAuthProbe.status}, signal=${syncAuthProbe.signal}): ${syncAuthProbe.error || syncAuthProbe.stderr?.slice(-800)}`);
+  }
 }
 const vaultJs = fs.readFileSync(path.join(SRC, "vault-view.js"), "utf8");
 let expiryJs = fs.readFileSync(path.join(SRC, "expiry-ui.js"), "utf8");
@@ -168,6 +180,7 @@ w.__TAURI__ = {
   // (以前同步断言在 init 恢复之前就退出了,没有暴露)。异步用例要等 init,所以喂真数据。
   core: {
     invoke: async (cmd, args) => {
+      assertInvokeArgs(cmd, args);
       CALLS[cmd] = (CALLS[cmd] || 0) + 1;
       if (w.__VAULT_COPY_INVOKE && ["vault_copy", "copy_text"].includes(cmd)) {
         return w.__VAULT_COPY_INVOKE(cmd, args);
@@ -256,6 +269,34 @@ const HARNESS = `
   const L = () => document.getElementById("list").innerHTML;
   const S = () => document.getElementById("sum").innerHTML;
   const data = window.__DATA;
+  {
+    const saved = window.GT_API.updates;
+    let calls = 0, fail;
+    window.GT_API.updates = { ...saved,
+      installUpdate: () => { calls++; return new Promise((_, reject) => { fail = reject; }); },
+      skipUpdateVersion: async () => { throw Error("fixture"); },
+    };
+    try {
+      await startInstall();
+      ck("缺少更新信息时不安装", calls === 0);
+      UPD.info = { version: "fixture" };
+      const install = startInstall();
+      await startInstall();
+      ck("安装中重复点击只下载一次", calls === 1 && updBusy());
+      fail(Error("fixture"));
+      await install;
+      ck("安装失败可重试", UPDC.phase === "failed" && !updBusy());
+      $("btnUpdSkip").click();
+      await Promise.resolve();
+      ck("跳过失败保留版本并提示", UPD.info?.version === "fixture" && $("toast").textContent.includes("跳过该版本失败"));
+      const retry = startInstall();
+      ck("重试重新调用安装", calls === 2);
+      fail(Error("fixture"));
+      await retry;
+    } finally {
+      UPD.info = null; UPDC.phase = null; window.GT_API.updates = saved; renderUpdChip();
+    }
+  }
   const waitFor = async (predicate) => {
     const deadline = Date.now() + 2000;
     while (!predicate()) {
@@ -399,8 +440,7 @@ const HARNESS = `
   ck("摘要英雄数字与单位分开", !!document.querySelector("#sum .hero-v") && !!document.querySelector("#sum .hero-unit"), S().slice(0, 300));
   ck("摘要画出 7 日临期分布", !!document.querySelector("#sum .expbars"), S().slice(0, 400));
   ck("最先到期分两行:渠道名 + 日期", !!document.querySelector("#sum .due-name") && !!document.querySelector("#sum .due-date"), S().slice(0, 400));
-  ck("底栏状态各自带状态点", document.querySelectorAll("#fstat .fb-dot").length >= 2,
-    document.getElementById("fstat").innerHTML);
+  ck("底栏状态点反映告急渠道", $("fdot").classList.contains("st"));
 
   // 账户级有效期与逐笔积分分开计数，但都能通过同一个入口筛选。
   {
@@ -1301,10 +1341,28 @@ const HARNESS = `
     const idxTitle = document.querySelector(".mhead .mt").textContent;
     ck("设置默认落在索引页(含网关，共 9 个分区)", idxOn && idxRows === 9 && !!document.querySelector('#mIndexList [data-p="gateway"]') && !!document.querySelector('#mIndexList [data-p="sync"]') && idxTitle === "设置与管理", idxOn + "/" + idxRows + "/" + idxTitle);
     const savedSyncStatus = SYNC_STATUS;
-    const testSync = { relayId: "test", hasGithub: true, hasKey: true, enabled: true, oauthClientConfigured: true, codeText: "GT1.test-secret", channels: [] };
+    const testSync = { relayId: "test", source: "test-source", hasGithub: true, hasKey: true, enabled: true, oauthClientConfigured: true, codeText: "GT1.test-secret", channels: [] };
+    SYNC_STATUS = {
+      ...testSync, githubNeedsReauth: true, lastError: "SYNC_AUTH: test", lastUploadAt: 100, pendingSeq: 2,
+    };
+    renderSync();
+    renderManageIndex();
+    ck("设置索引提示 GitHub 授权已失效",
+      document.querySelector('#mIndexList [data-p="sync"] .midx-ss').textContent.includes("重新授权"));
+    ck("同步授权失效时保留配对并阻止发布",
+      !$("syncCodeCard").hidden && $("syncEnabled").checked && $("syncPublishBtn").disabled &&
+      $("syncGroupBtn").disabled && !$("syncGithubReauth").hidden &&
+      $("syncGithubState").textContent === "授权已失效");
+    ck("同步授权失效时保留上次上传和待重试批次",
+      $("syncMeta").textContent.includes("上次上传") && $("syncMeta").textContent.includes("第 2 批"));
+    SYNC_STATUS = { ...testSync, lastError: "SYNC_NETWORK: test" };
+    renderSync();
+    ck("同步网络错误允许继续发布", !$("syncPublishBtn").disabled && $("syncState").textContent === "发布失败");
     SYNC_STATUS = testSync;
     SYNC_CODE_REVEALED = false;
     renderSync();
+    ck("同步重新授权后恢复发布入口", !$("syncPublishBtn").disabled &&
+      $("syncGithubState").textContent.includes("已连接") && $("syncState").textContent === "已开启");
     ck("点隐藏后不显示明文", !document.getElementById("syncCodeText").textContent.includes("test-secret"));
     SYNC_CODE_REVEALED = true;
     renderSync();
@@ -1535,6 +1593,7 @@ const HARNESS = `
       showTab("index");
     };
     closeManage();
+    ck("关闭设置释放动态渠道卡片", $("chList").children.length === 0);
   } catch (e) {
     ck("设置索引 / 顶栏入口", false, e.message);
   }
@@ -1891,6 +1950,17 @@ w.localStorage.setItem(promoCacheKey, JSON.stringify({
     }
     w.__TEST.patchCfg({ antigravityCliPath: null });
     w.renderChCards();
+    const header = w.document.querySelector('button.ccfold[data-act="chfold"]');
+    const initial = header?.getAttribute("aria-expanded");
+    header?.focus();
+    const focused = w.document.activeElement === header;
+    header?.click();
+    const expanded = header?.getAttribute("aria-expanded");
+    header?.click();
+    R.push({ name: "渠道卡有独立可聚焦的展开按钮，状态与展开区域关联", ok:
+      focused && expanded !== initial && header?.getAttribute("aria-expanded") === initial &&
+      !!w.document.getElementById(header?.getAttribute("aria-controls")) &&
+      !header.contains(header.closest(".cchead").querySelector(".eye")) });
     const agInp = w.document.querySelector('[data-ag-path]');
     agInp.value = "C:\\tools\\agy.exe";
     agInp.dispatchEvent(new w.Event("input", { bubbles: true }));

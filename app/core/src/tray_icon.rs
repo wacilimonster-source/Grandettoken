@@ -96,8 +96,8 @@ mod gdi {
             CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, GdiFlush,
             GetTextExtentPoint32W, GetTextFaceW, SelectObject, SetBkMode, SetTextColor, TextOutW,
             ANTIALIASED_QUALITY, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CLIP_DEFAULT_PRECIS,
-            DEFAULT_CHARSET, DEFAULT_PITCH, DIB_RGB_COLORS, FF_DONTCARE, FW_BOLD, HGDIOBJ, HDC,
-            OUT_TT_PRECIS, TRANSPARENT,
+            DEFAULT_CHARSET, DEFAULT_PITCH, DIB_RGB_COLORS, FF_DONTCARE, FW_NORMAL, FW_SEMIBOLD,
+            HDC, HGDIOBJ, OUT_TT_PRECIS, TRANSPARENT,
         },
     };
 
@@ -145,10 +145,12 @@ mod gdi {
         }
     }
 
-    struct FitResult {
-        mask: Vec<u8>,
-        ink_h: u32,
-        scaled: bool,
+    const SEMIBOLD_MIN_HEIGHT: i32 = 22;
+
+    #[derive(Clone, Copy)]
+    struct FontPair<'a> {
+        regular_face: &'a str,
+        semibold_face: &'a str,
     }
 
     fn create_dib(dc: HDC, width: i32, height: i32) -> Option<(ObjGuard, *mut u8)> {
@@ -186,14 +188,14 @@ mod gdi {
         Some((ObjGuard(bmp), bits.cast::<u8>()))
     }
 
-    fn create_font(height: i32, wide_face: &[u16]) -> Option<ObjGuard> {
+    fn create_font(height: i32, weight: i32, wide_face: &[u16]) -> Option<ObjGuard> {
         let font = unsafe {
             CreateFontW(
                 -height,
                 0,
                 0,
                 0,
-                FW_BOLD as i32,
+                weight,
                 0,
                 0,
                 0,
@@ -358,20 +360,20 @@ mod gdi {
         (mask, out_h)
     }
 
-    fn fit_with_face(
+    fn fit_with_pair(
         dc: HDC,
         size: u32,
         avail_w: u32,
         avail_h: u32,
         wide_text: &[u16],
-        face: &str,
-    ) -> Option<FitResult> {
-        let wide_face: Vec<u16> = face.encode_utf16().chain(Some(0)).collect();
+        pair: FontPair<'_>,
+    ) -> Option<Vec<u8>> {
+        let regular_wide: Vec<u16> = pair.regular_face.encode_utf16().chain(Some(0)).collect();
         let ref_h = (size as i32 * 2).max(32);
         let start_h = {
-            let font = create_font(ref_h, &wide_face)?;
+            let font = create_font(ref_h, FW_NORMAL as i32, &regular_wide)?;
             let _sel = SelectGuard::new(dc, font.0)?;
-            if !verify_font(dc, face) {
+            if !verify_font(dc, pair.regular_face) {
                 return None;
             }
             let ext = text_extent(dc, wide_text)?;
@@ -383,6 +385,19 @@ mod gdi {
                 .max(6)
         };
 
+        let semibold_wide: Option<Vec<u16>> = if pair.semibold_face == pair.regular_face {
+            Some(regular_wide.clone())
+        } else {
+            let wide: Vec<u16> = pair.semibold_face.encode_utf16().chain(Some(0)).collect();
+            let ok = if let Some(font) = create_font(ref_h, FW_SEMIBOLD as i32, &wide) {
+                SelectGuard::new(dc, font.0)
+                    .is_some_and(|_sel| verify_font(dc, pair.semibold_face))
+            } else {
+                false
+            };
+            ok.then_some(wide)
+        };
+
         let margin = 8_i32;
         let buf_w = ((avail_w * 3).max(size * 2).max(96) as i32) + margin * 2;
         let buf_h = (((start_h as u32) * 2).max(size * 2).max(96) as i32) + margin * 2;
@@ -390,39 +405,32 @@ mod gdi {
         let _dib_sel = SelectGuard::new(dc, dib.0)?;
 
         for h in (6..=start_h).rev() {
-            let font = create_font(h, &wide_face)?;
+            let (face_wide, weight) = match &semibold_wide {
+                Some(wide) if h >= SEMIBOLD_MIN_HEIGHT => (wide.as_slice(), FW_SEMIBOLD as i32),
+                _ => (regular_wide.as_slice(), FW_NORMAL as i32),
+            };
+            let font = create_font(h, weight, face_wide)?;
             let _font_sel = SelectGuard::new(dc, font.0)?;
             if let Some(ext) = text_extent(dc, wide_text) {
                 if ext.cx > (avail_w as i32) * 2 {
                     continue;
                 }
             }
-            let Some((min_x, max_x, min_y, max_y)) =
-                draw_and_measure(dc, bits, buf_w, buf_h, margin, wide_text)
-            else {
-                return Some(FitResult {
-                    mask: vec![0u8; (size * size) as usize],
-                    ink_h: 0,
-                    scaled: false,
-                });
-            };
+            let (min_x, max_x, min_y, max_y) =
+                draw_and_measure(dc, bits, buf_w, buf_h, margin, wide_text)?;
             let ink_w = (max_x - min_x + 1) as u32;
             let ink_h = (max_y - min_y + 1) as u32;
             if ink_w <= avail_w && ink_h <= avail_h {
                 let len = (buf_w as usize) * (buf_h as usize) * 4;
                 let buf = unsafe { std::slice::from_raw_parts(bits, len) };
-                return Some(FitResult {
-                    mask: copy_centered(size, buf, buf_w, (min_x, max_x, min_y, max_y)),
-                    ink_h,
-                    scaled: false,
-                });
+                return Some(copy_centered(size, buf, buf_w, (min_x, max_x, min_y, max_y)));
             }
         }
         drop(_dib_sel);
         drop(dib);
 
         let fallback_h = 20_i32;
-        let font = create_font(fallback_h, &wide_face)?;
+        let font = create_font(fallback_h, FW_NORMAL as i32, &regular_wide)?;
         let _font_sel = SelectGuard::new(dc, font.0)?;
         let ext = text_extent(dc, wide_text)?;
         let fb_w = ext.cx.max(32) + margin * 2;
@@ -432,12 +440,8 @@ mod gdi {
         let bounds = draw_and_measure(dc, fb_bits, fb_w, fb_h, margin, wide_text)?;
         let len = (fb_w as usize) * (fb_h as usize) * 4;
         let buf = unsafe { std::slice::from_raw_parts(fb_bits, len) };
-        let (mask, out_h) = downsample_centered(size, avail_w, avail_h, buf, fb_w, bounds);
-        Some(FitResult {
-            mask,
-            ink_h: out_h,
-            scaled: true,
-        })
+        let (mask, _out_h) = downsample_centered(size, avail_w, avail_h, buf, fb_w, bounds);
+        Some(mask)
     }
 
     pub(super) fn render_text_mask(size: u32, text: &str) -> Option<Vec<u8>> {
@@ -457,35 +461,23 @@ mod gdi {
         let avail_w = size.saturating_sub(pad_x * 2).max(1);
         let avail_h = size.saturating_sub(pad_y * 2).max(1);
 
-        if let Some(semi) = fit_with_face(
-            dc.0,
-            size,
-            avail_w,
-            avail_h,
-            &wide_text,
-            "Bahnschrift SemiCondensed",
-        ) {
-            if !semi.scaled && semi.ink_h >= avail_h {
-                return Some(semi.mask);
-            }
-            if let Some(cond) = fit_with_face(
-                dc.0,
-                size,
-                avail_w,
-                avail_h,
-                &wide_text,
-                "Bahnschrift Condensed",
-            ) {
-                if !cond.scaled && (semi.scaled || cond.ink_h > semi.ink_h) {
-                    return Some(cond.mask);
-                }
-            }
-            return Some(semi.mask);
-        }
-
-        for face in ["Bahnschrift Condensed", "Segoe UI", "Arial"] {
-            if let Some(fit) = fit_with_face(dc.0, size, avail_w, avail_h, &wide_text, face) {
-                return Some(fit.mask);
+        const PAIRS: [FontPair<'_>; 3] = [
+            FontPair {
+                regular_face: "Bahnschrift SemiCondensed",
+                semibold_face: "Bahnschrift SemiBold SemiCondensed",
+            },
+            FontPair {
+                regular_face: "Segoe UI",
+                semibold_face: "Segoe UI",
+            },
+            FontPair {
+                regular_face: "Arial",
+                semibold_face: "Arial",
+            },
+        ];
+        for pair in PAIRS {
+            if let Some(mask) = fit_with_pair(dc.0, size, avail_w, avail_h, &wide_text, pair) {
+                return Some(mask);
             }
         }
         None
@@ -773,6 +765,30 @@ pub fn face(
     face
 }
 
+/// 托盘图像指纹:同尺寸、逐像素相同 → 同值。
+pub fn tray_icon_digest(size: u32, rgba: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    size.hash(&mut h);
+    rgba.hash(&mut h);
+    h.finish()
+}
+
+#[cfg(test)]
+mod tray_digest_tests {
+    use super::tray_icon_digest;
+
+    /// 去重的前提:同尺寸、同像素必须得到同一个指纹;任一不同都必须变。
+    #[test]
+    fn digest_matches_only_identical_frames() {
+        let a = [1u8, 2, 3, 4];
+        assert_eq!(tray_icon_digest(8, &a), tray_icon_digest(8, &a));
+        assert_ne!(tray_icon_digest(8, &a), tray_icon_digest(16, &a));
+        assert_ne!(tray_icon_digest(8, &a), tray_icon_digest(8, &[1, 2, 3, 5]));
+        assert_ne!(tray_icon_digest(8, &a), tray_icon_digest(8, &[1, 2, 3]));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -830,13 +846,13 @@ mod tests {
         for size in [16u32, 20, 24, 32, 48, 64] {
             let (pad_x, pad_y) = badge_padding(size);
             for (text, min_pct) in [
-                ("74", 68),
-                ("0.4", 55),
+                ("74", 65),
+                ("0.4", 54),
                 ("100", 50),
-                ("1.2k", 45),
-                ("10w", 45),
-                ("-0.4", 40),
-                ("12.5", 45),
+                ("1.2k", if size >= 20 { 40 } else { 37 }),
+                ("10w", if size >= 20 { 40 } else { 37 }),
+                ("-0.4", 37),
+                ("12.5", 37),
             ] {
                 let pixels = render_badge_rgba(size, text, Tone::Ok);
                 let (min_x, max_x, min_y, max_y) =
@@ -883,6 +899,53 @@ mod tests {
         for tone in [Tone::Ok, Tone::Warn, Tone::Bad] {
             let px = render_badge_rgba(20, "74", tone);
             assert!(px.chunks_exact(4).any(|p| p[3] == 255 && p[0] < 90));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn badge_multi_digit_stays_open_without_stroke_clumping() {
+        let bg = [237i32, 193, 133];
+        let diff_at = |rgba: &[u8], size: u32, x: u32, y: u32| -> i32 {
+            let idx = ((y * size + x) * 4) as usize;
+            (0..3)
+                .map(|c| (i32::from(rgba[idx + c]) - bg[c]).abs())
+                .max()
+                .unwrap_or(0)
+        };
+        for size in [20u32, 24, 32] {
+            let pixels = render_badge_rgba(size, "100", Tone::Warn);
+            let (min_x, max_x, min_y, max_y) =
+                ink_bbox(size, &pixels, Tone::Warn).expect("non-empty ink for 100");
+            let mut heavy = 0u32;
+            let mut gaps = 0u32;
+            let mut in_gap = false;
+            for x in min_x..=max_x {
+                let mut col_has_heavy = false;
+                for y in min_y..=max_y {
+                    if diff_at(&pixels, size, x, y) >= 140 {
+                        heavy += 1;
+                        col_has_heavy = true;
+                    }
+                }
+                if !col_has_heavy {
+                    if !in_gap {
+                        gaps += 1;
+                        in_gap = true;
+                    }
+                } else {
+                    in_gap = false;
+                }
+            }
+            let area = (max_x - min_x + 1) * (max_y - min_y + 1);
+            assert!(
+                heavy * 100 < area * 60,
+                "heavy ink ratio too high at {size}px: {heavy}/{area}"
+            );
+            assert!(
+                gaps >= 2,
+                "expected at least 2 open gaps between '1','0','0' at {size}px, got {gaps}"
+            );
         }
     }
 

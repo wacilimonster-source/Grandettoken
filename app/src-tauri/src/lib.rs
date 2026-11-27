@@ -306,6 +306,14 @@ pub(crate) fn refuse_if_config_broken() -> Result<(), String> {
 /// 后者已把「config 内抄清单 / 放锁后读 store」拆开 —— 2026-11-10 报告 B2/B4。
 /// 新代码请优先走串行闸,实在要同时拿两把锁,顺序不得颠倒。)
 /// 锁一律走 `lock_rw` 毒化恢复:一次 panic 不该把后续所有命令永久卡死。
+pub(crate) async fn with_store<T: Send + 'static>(
+    store: Arc<Mutex<Store>>,
+    operation: impl FnOnce(&Store) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(move || operation(&lock_rw(&store)))
+        .await.map_err(|e| format!("数据库任务失败: {e}"))?
+}
+
 pub(crate) fn lock_rw<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
 }
@@ -512,44 +520,4 @@ pub fn run() {
                 }
             }
         });
-}
-
-#[cfg(test)]
-mod vault_url_tests {
-    use super::vault_url;
-    #[test]
-    fn default_records_are_protected_without_blocking_other_keys() {
-        let path = std::env::temp_dir().join(format!("vault-default-test-{}.db", tokenscope_core::vault::new_id()));
-        let store = tokenscope_core::store::Store::open(&path).unwrap();
-        store.set_setting("vault_default_channel:4sapi", "default-1").unwrap();
-        assert_eq!(super::vault_default_channel(&store, "default-1").unwrap().as_deref(), Some("4sapi"));
-        assert!(super::ensure_vault_mutable(&store, "default-1").is_err());
-        assert!(super::ensure_vault_mutable(&store, "normal-key").is_ok());
-        drop(store);
-        let _ = std::fs::remove_file(path);
-    }
-    #[test]
-    fn accepts_plain_addresses_and_rejects_embedded_credentials() {
-        assert_eq!(vault_url(" https://example.com/v1 ").unwrap(), "https://example.com/v1");
-        assert_eq!(vault_url("").unwrap(), "");
-        assert_eq!(vault_url("https://example.com/v1?api-version=1").unwrap(), "https://example.com/v1?api-version=1");
-        assert!(vault_url("https://user:password@example.com/v1").is_err());
-        assert!(vault_url("https://example.com/v1?key=secret").is_err());
-        assert!(vault_url("javascript:alert(1)").is_err());
-    }
-}
-
-#[cfg(test)]
-mod tray_digest_tests {
-    use super::tray_icon_digest;
-
-    /// 去重的前提:同尺寸、同像素必须得到同一个指纹;任一不同都必须变。
-    #[test]
-    fn digest_matches_only_identical_frames() {
-        let a = [1u8, 2, 3, 4];
-        assert_eq!(tray_icon_digest(8, &a), tray_icon_digest(8, &a));
-        assert_ne!(tray_icon_digest(8, &a), tray_icon_digest(16, &a));
-        assert_ne!(tray_icon_digest(8, &a), tray_icon_digest(8, &[1, 2, 3, 5]));
-        assert_ne!(tray_icon_digest(8, &a), tray_icon_digest(8, &[1, 2, 3]));
-    }
 }

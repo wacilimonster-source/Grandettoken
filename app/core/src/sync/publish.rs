@@ -214,19 +214,21 @@ pub fn commit_publish(
     prepared: &PreparedPublish,
     now: i64,
 ) -> Result<PublishOutcome, SyncError> {
+    let tx = store.conn().unchecked_transaction().map_err(|e| SyncError::new(STORE, format!("开始发布提交失败: {e}")))?;
     let mut state = load_state(store, &prepared.source)?;
     state.seq = prepared.pending.seq;
     state.last_at = Some(now);
     state.pending = None;
-    save_state(store, &state)?;
-    let _ = save_watermark(
+    save_watermark(
         store,
         &prepared.source,
         &Watermark {
             seq: prepared.pending.seq,
             hash: prepared.pending.hash.clone(),
         },
-    );
+    )?;
+    save_state(store, &state)?;
+    tx.commit().map_err(|e| SyncError::new(STORE, format!("提交发布状态失败: {e}")))?;
     Ok(PublishOutcome {
         seq: prepared.pending.seq,
         at: now,
@@ -593,6 +595,32 @@ pub fn local_recovery_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_publish_commit_preserves_pending_and_watermark() {
+        let store = Store::open_memory().unwrap();
+        let source = "s_00112233445566778899aabbccddeeff";
+        let pending = PendingPublish { seq: 2, envelope: "fixture".into(), hash: "fresh".into() };
+        let prepared = PreparedPublish { source: source.into(), pending: pending.clone(), reused: true };
+        let old = Watermark { seq: 1, hash: "old".into() };
+        save_watermark(&store, source, &old).unwrap();
+        save_state(&store, &PublishState {
+            source: source.into(), seq: 1, last_at: Some(10), pending: Some(pending),
+        }).unwrap();
+        store.conn().execute_batch(
+            "CREATE TRIGGER block_sync_state BEFORE INSERT ON settings
+             WHEN new.key LIKE 'sync:state:%' BEGIN SELECT RAISE(ABORT, 'test write failure'); END",
+        ).unwrap();
+        assert_eq!(commit_publish(&store, &prepared, 20).err().unwrap().code, STORE);
+        assert_eq!(load_watermark(&store, source).unwrap(), Some(old));
+        let state = load_state(&store, source).unwrap();
+        assert_eq!(state.seq, 1);
+        assert_eq!(state.pending.unwrap().seq, 2);
+        store.conn().execute_batch("DROP TRIGGER block_sync_state").unwrap();
+        assert_eq!(commit_publish(&store, &prepared, 20).unwrap().seq, 2);
+        assert!(load_state(&store, source).unwrap().pending.is_none());
+        assert_eq!(load_watermark(&store, source).unwrap().unwrap().seq, 2);
+    }
 
     #[test]
     fn seq_decisions() {

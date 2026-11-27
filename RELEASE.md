@@ -106,7 +106,7 @@ git push origin refs/tags/vX.Y.Z
 ```
 checkout(tag) → 门禁(ipc / silent / size / css / encoding / jsdom) → GNU 工具链
   → cargo-tauri(缓存) → MinGW → core 单测 → cargo fetch
-  → bundle + 签名 → latest.json → 建 Release → 三件套补传 → verify-release.js
+  → bundle + 签名 → latest.json → 用配置公钥验签 → 建草稿 → 三件套核对与补传 → 发布 → verify-release.js
 ```
 
 看进度:

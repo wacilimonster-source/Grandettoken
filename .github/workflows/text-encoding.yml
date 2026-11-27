@@ -24,6 +24,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Reject tracked QA artifacts
+        run: |
+          node build/check-tracked-artifacts.js --self-test
+          node build/check-tracked-artifacts.js
+
       # --self-test 先证明门禁自己会变红(含与 PROGRESS.md 同形的损坏样本),再正式扫描。
       - name: text encoding gate
         run: |

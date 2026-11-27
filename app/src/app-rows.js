@@ -83,8 +83,9 @@ function renderRow(c, i) {
   } else {
     // 金额型:统一走 money(千分位 + 币种,非 CNY 渠道照它自己的币种标,不换算);
     // 小数部分单独包一层 <i class="dec"> 缩一号
-    const [int, dec] = money(c.remaining, c.unit).split(".");
-    main = int + (dec ? '<i class="dec">.' + dec + "</i>" : "");
+    const prefix = curSign(c.unit);
+    const [int, dec] = money(c.remaining, c.unit).slice(prefix.length).split(".");
+    main = esc(prefix) + int + (dec ? '<i class="dec">.' + dec + "</i>" : "");
   }
 
   // 申请制额度(4SAPI):分母是本轮额度,副标题给周期状态

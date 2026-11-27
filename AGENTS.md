@@ -48,7 +48,7 @@
 
 ### 2.2 仓库与产物
 
-- 抓包 JSON、APK、安装包、截图归档、分享 zip **一律不入库**。
+- 2026-11-26 抓包 JSON、APK、安装包、截图归档、分享 zip **一律不入库**，QA 产物以 Git 索引门禁为准，因为 .gitignore 无法排除已跟踪文件。
 - 一次性探针/补丁脚本放 `build/tmp/` 并在同一轮删掉;禁止提交本机绝对路径、真实凭据、解密脚本。
 - 脚本禁止硬编码 `G:/...`、`C:/Users/...`,统一用 `path.resolve(__dirname, ...)` / `os.tmpdir()` / 环境变量。
 - 追加型日志文档定期同步头部;与 `git log` 冲突时以 `git log` 为准。
@@ -89,6 +89,7 @@
 
 ```bash
 # 零依赖静态门:带 --self-test 的先证红,再正式检查
+node build/check-tracked-artifacts.js --self-test && node build/check-tracked-artifacts.js
 node build/check-ipc-contract.js
 node build/check-silent-failures.js --self-test && node build/check-silent-failures.js
 node build/check-file-size.js --self-test && node build/check-file-size.js
@@ -124,6 +125,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build/scan-secrets.ps1
 ### 4.2 发版
 
 - **发版走 CI**(2026-11-12 起):三处版本号同步 → **先推 main** → 再推 `v*` tag。本地 `build/release-local.sh` 仅 Actions 不可用时使用;详见 `RELEASE.md`。tag 指向的 commit 不在 main 上会导致源码归档不一致。
+- 2026-11-26 新版本用配置公钥离线验签，草稿资产逐件比对摘要后再转正，避免签名错配或上传缺损被客户端拉取。
 - **发版说明**取自发版提交正文,提交必须带说明正文;`release.yml` 打包前按 `verify-release.js` 同一判据拦截。`notes intact` 读线上 `latest.json.notes`,**只改 Release 正文不改核验结果**;修正时同时更新 Release 正文和 `latest.json` 资产,并保留原始失败记录。
 
 ---
@@ -161,6 +163,7 @@ jsdom 桩曾对未登记 invoke `return null`,命令漏注册也全绿。**mock 
 - `proxy` 夹具的 accept 连接在 Windows 可能继承非阻塞:夹具须改回阻塞并设读超时。
 - 存在 `HTTP_PROXY` 时回环夹具(如 `custom_channels_fetch_in_parallel_keep_order_and_skip_hidden`)会被代理阻塞:验证进程设 `NO_PROXY=127.0.0.1,localhost,::1`。
 - 模块级静态缓存 / 全局计数 / 进程单例在并行测试下会被同模块用例推进:做成可注入口(如 `LedgerCache::get_at`),测试只驱动注入值。
+- 2026-11-26 无头浏览器回归每次建独立 profile 并设进程超时，共用目录会残留锁并导致空 DOM 或挂起。
 - `spawnSync` 超时是防挂死护栏不是断言;CI 冷启动 `powershell.exe` 可超 10s,超时留足余量,失败输出带 `status`/`signal`/`error`/截断 `stderr`。
 
 ---
@@ -221,6 +224,7 @@ jsdom 桩曾对未登记 invoke `return null`,命令漏注册也全绿。**mock 
 
 ### 8.7 Windows WebView2 网页会话
 - Wry 同步 Cookie 读取会在 UI 线程开嵌套消息循环,重入导航回调导致卡死(2026-11-19)。读写清理统一走 `app/src-tauri/src/webview_cookies.rs`:UI 线程注册回调即返回,工作线程等结果;**读回确认删除后才算成功**。
+- 2026-11-26 网页会话随主窗口释放而暂不可读时，跳过失败记账与退避，唤回补取；真实桌面凭据照常使用。
 - 原生回归用隔离 profile + 合成 Cookie,`--sync-sentinel` 须在时序断言失败;原生 example 须链入 Common Controls v6 manifest。
 
 ### 8.8 Google Cloud 赠金
@@ -236,3 +240,7 @@ jsdom 桩曾对未登记 invoke `return null`,命令漏注册也全绿。**mock 
 ### 8.10 AI 优惠
 - 2026-11-23 校验官网公开列表的结构化条目后再替换缓存,并按详情链接迁移已读状态。旧 RSS 已返回 HTTP 410,上游变动时须保留上次快照。见 `docs/report/promo-rss-retired-2026-11-23.md`。
 - 2026-11-23 官网中文标题的 slug 是百分号编码、卡片 id 是解码字面:校验与查摘要按 `decodeURIComponent(pathname)`(解码失败按坏条目拒),id/链接保留编码原样;解码后仍须拒路径穿越/查询/外链。多页取数任一页坏即整体保留旧快照。
+
+### 8.11 手机同步
+- 2026-11-26 Gist 发布遇到 401 后须提示重新授权并保留同步组和待发密文。同账号换证与发布共用锁，避免迟到的 401 再次暂停发布。见 `docs/report/desktop-sync-auth-2026-11-26.md`。
+- 2026-11-27 桌面包须内置公开 OAuth Client ID，避免缺少构建变量时已配对设备无法重新授权。

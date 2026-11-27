@@ -316,7 +316,7 @@ fn batched_amount_stats_match_legacy_queries() {
     let rows = store
         .history_between(def.id, Some("fpA"), anchors.history_from(), now)
         .unwrap();
-    let batched = AmountStats::from_rows(&rows, anchors);
+    let batched = AmountStats::from_rows(&rows, anchors, observed_gap_days(&store, def.id, Some("fpA"), now, local_tz_offset()).unwrap());
     let legacy = AmountStats::legacy(&store, def.id, "fpA", anchors);
 
     assert_eq!(batched.day, legacy.day);

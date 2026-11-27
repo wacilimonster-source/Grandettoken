@@ -9,21 +9,7 @@ pub fn vault_defaults_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-pub fn vault_default_channel(store: &Store, vault_id: &str) -> Result<Option<String>, String> {
-    for id in ["4sapi", "hapi", "opencode-go"] {
-        if store.get_setting(&format!("vault_default_channel:{id}"))?.as_deref() == Some(vault_id) {
-            return Ok(Some(id.to_string()));
-        }
-    }
-    Ok(None)
-}
-
-pub fn ensure_vault_mutable(store: &Store, vault_id: &str) -> Result<(), String> {
-    if vault_default_channel(store, vault_id)?.is_some() {
-        return Err("渠道默认密钥仅供查看，请在渠道管理中修改".into());
-    }
-    Ok(())
-}
+pub use tokenscope_core::vault::{ensure_vault_mutable, vault_default_channel};
 
 /// 复用旧版自动导入的默认条目；其他用户创建的条目不会被标记为只读。
 /// 返回本次发生密钥或调用端点变化的 `vault_id` 列表，供网关自动同步。

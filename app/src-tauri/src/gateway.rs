@@ -2,7 +2,7 @@ use tokenscope_core::gateway::http::{dedupe_nonempty,fetch_channel_models,fetch_
 pub use tokenscope_core::gateway::{all_channel_models,effective_models,lock,model_id,Gateway,Published};
 use serde::Deserialize;
 use serde_json::{json,Value};
-use std::{collections::BTreeMap,net::{IpAddr,Ipv4Addr}};
+use std::{collections::BTreeMap, net::IpAddr};
 use tauri::{Manager,Emitter};
 use tokenscope_core::{gateway_proto::{error::redact_secrets,normalize_alias,sources::{host_of_url,resolve_source_defaults,AGENT_PLATFORM_DEFAULT_BASE_URL,AGENT_PLATFORM_PRESET_MODELS,OPENAI_PRESETS},GatewaySourceKind,OpenAiWire,ThinkingMode,ThoughtRequestPolicy},secrets};
 
@@ -16,9 +16,7 @@ fn new_channel_id() -> Result<String, String> {
 }
 
 
-fn advertised_lan_ip(ip: Ipv4Addr) -> bool {
-    ip.is_private()
-}
+use tokenscope_core::gateway::advertised_lan_ip;
 
 fn local_ips() -> Vec<Value> {
     let mut ips: Vec<Value> = if_addrs::get_if_addrs()
@@ -163,7 +161,11 @@ pub struct UpdateChannelInput {
 
 #[tauri::command]
 pub async fn gateway_status(app: tauri::AppHandle) -> Result<Value, String> {
-    let g = get_gateway(&app)?;
+    tokio::task::spawn_blocking(move || gateway_status_snapshot(&app)).await.map_err(|e| e.to_string())?
+}
+
+fn gateway_status_snapshot(app: &tauri::AppHandle) -> Result<Value, String> {
+    let g = get_gateway(app)?;
     let vault = lock(&g.store).vault_list()?;
     let (settings, running, startup_error, diag_count, sync_state) = {
         let mut inner = lock(&g.inner);
@@ -387,7 +389,8 @@ pub async fn gateway_publish(
         last_error: None,
         last_checked_at: Some(now_unix()),
     };
-    let client = g.clients.client(use_proxy)?;
+    channel.check_custom_headers()?;
+    let client = g.clients.client_async(use_proxy).await?;
     match fetch_configured_models(&client, &channel, key.as_deref()).await {
         Ok(res) => {
             channel.models = res.fetched;
@@ -486,6 +489,7 @@ pub async fn gateway_update_channel(
     }
     if let Some(hdrs) = input.custom_headers {
         channel.custom_headers = hdrs;
+        channel.check_custom_headers()?;
     }
     if let Some(ref mode) = input.thinking_mode {
         channel.thinking_mode = ThinkingMode::parse(mode);
@@ -598,7 +602,7 @@ pub async fn gateway_test_channel(
     }
 
     let key = read_key_for_channel(channel.kind(), &channel.vault_id, channel.no_upstream_key).await?;
-    let client = g.clients.client(channel.system_proxy)?;
+    let client = g.clients.client_async(channel.system_proxy).await?;
     let res = fetch_channel_models(
         &client,
         channel.kind(),
@@ -622,18 +626,5 @@ pub async fn gateway_test_channel(
             "latencyMs": latency_ms,
             "error": redact_secrets(&e),
         })),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn advertised_lan_addresses_are_accepted_private_ipv4() {
-        assert!(advertised_lan_ip("192.168.1.10".parse().unwrap()));
-        assert!(advertised_lan_ip("10.0.0.2".parse().unwrap()));
-        assert!(!advertised_lan_ip("100.69.220.4".parse().unwrap()));
-        assert!(!advertised_lan_ip("8.8.8.8".parse().unwrap()));
-        assert!(!advertised_lan_ip("127.0.0.1".parse().unwrap()));
     }
 }

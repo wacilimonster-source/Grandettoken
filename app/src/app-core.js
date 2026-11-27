@@ -85,7 +85,7 @@ const esc = (v) =>
   );
 /** 币种前缀:CNY 是 ¥,其余(DeepSeek 的余额会带自己的币种代码)直接用代码本身 ——
     只做**标注**,不做任何换算。 */
-const curSign = (unit) => (!unit || unit === "CNY" ? "¥" : unit + " ");
+const curSign = (unit) => (!unit || unit === "CNY" ? "¥" : (/^[\p{L}\p{N}\p{Sc}% ._-]+$/u.test(unit) ? unit : "?") + " ");
 /** 金额的唯一口径:千分位 + 两位小数,币种按渠道自己的 unit(F11/F12)。
     null/undefined 一律「——」(0 与"没取到数"不能混);Number() 兜住字符串,
     输出永远是纯数字文本,进 innerHTML 也安全。 */
@@ -573,12 +573,13 @@ function shortLabel(c) {
 }
 
 function iconHtml(c, cls = "ico", off = false) {
+  const color = off || !/^#(?:[a-f0-9]{3}|[a-f0-9]{6})$/i.test(c.color) ? "#343d4f" : c.color;
   const src = LOGOS[isAntigravity(c) ? "antigravity" : c.id];
   const label = shortLabel(c);
   if (!src) {
-    return `<div class="${cls}" title="${esc(c.name)}" style="background:${off ? "#343d4f" : c.color}">${esc(label)}</div>`;
+    return `<div class="${cls}" title="${esc(c.name)}" style="background:${color}">${esc(label)}</div>`;
   }
-  return `<div class="${cls} logo${off ? " off" : ""}" style="--cc:${off ? "#343d4f" : c.color}"><img src="${src}" alt="${esc(label)}"><span class="ltr">${esc(label)}</span></div>`;
+  return `<div class="${cls} logo${off ? " off" : ""}" style="--cc:${color}"><img src="${src}" alt="${esc(label)}"><span class="ltr">${esc(label)}</span></div>`;
 }
 
 /** 自定义排序下的完整顺序:配置里列出的 + 未列入的(附在末尾,新增渠道不会丢)。 */

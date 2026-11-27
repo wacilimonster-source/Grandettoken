@@ -6,8 +6,7 @@
 // 不是一对(换过密钥、复制错文件),上面的检查照样全绿,而所有已装用户都会
 // 更新失败 —— 那正是 RELEASE.md 里写"私钥丢了/换了就再也推不动更新"的那个坑。
 //
-// 唯一能终结这个疑点的是密码学本身:用配置里的公钥去验签。这里借 minisign
-// crate(tauri 的依赖树里本来就有,不新增项目依赖)。
+// 用配置里的公钥与 Tauri updater 同版本的 minisign-verify 逐块验签。
 //
 // 用法(需要本机有 GNU 工具链,因为要编一个小 bin):
 //   node build/verify-signature.js
@@ -30,16 +29,29 @@ const tmp = path.join(os.tmpdir(), 'gt-sigverify');
 fs.mkdirSync(tmp, { recursive: true });
 
 const SRC = `
-use std::fs::File;
+use minisign_verify::{PublicKey, Signature};
+use std::{env, fs::{self, File}, io::Read};
+
+fn verify() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = env::args().collect();
+    let public_key = PublicKey::from_base64(args[1].trim())?;
+    let signature = Signature::decode(&fs::read_to_string(&args[2])?)?;
+    let mut verifier = public_key.verify_stream(&signature)?;
+    let mut file = File::open(&args[3])?;
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 { break; }
+        verifier.update(&buf[..n]);
+    }
+    verifier.finalize()?;
+    Ok(())
+}
+
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    let pk = minisign::PublicKey::from_base64(args[1].trim()).expect("bad pubkey");
-    let sig_box = minisign::SignatureBox::from_file(&args[2]).expect("bad sig file");
-    let mut f = File::open(&args[3]).expect("bad data file");
-    // quiet=true, output=false, allow_legacy=false
-    match minisign::verify(&pk, &sig_box, &mut f, true, false, false) {
-        Ok(_) => println!("VERIFY_OK"),
-        Err(e) => { println!("VERIFY_FAIL: {}", e); std::process::exit(1); }
+    match verify() {
+        Ok(()) => println!("VERIFY_OK"),
+        Err(e) => { eprintln!("VERIFY_FAIL: {e}"); std::process::exit(1); }
     }
 }
 `;
@@ -88,24 +100,34 @@ function decodeSigToFile(sigInputPath, sigBinOutPath) {
 
 function buildCargoEnv() {
   const env = { ...process.env };
-  const cargoBin = path.join(process.env.USERPROFILE, '.cargo', 'bin');
-  const mingwBin = path.join(process.env.USERPROFILE, 'mingw64', 'bin');
-  env.Path = `${cargoBin};${mingwBin};${env.Path || env.PATH || ''}`;
-  env.CARGO_HOME = cargoBin.replace(/bin$/, '');
-  env.RUSTUP_HOME = path.join(process.env.USERPROFILE, '.rustup');
-  env.RUSTUP_TOOLCHAIN = 'stable-x86_64-pc-windows-gnu';
-  env.CC = path.join(mingwBin, 'gcc.exe');
-  const cargoExe = process.platform === 'win32' ? path.join(cargoBin, 'cargo.exe') : 'cargo';
-  const cargoTauriExe = process.platform === 'win32' ? path.join(cargoBin, 'cargo-tauri.exe') : 'cargo-tauri';
-  return { env, cargoExe, cargoTauriExe };
+  const cargoBin = path.join(env.CARGO_HOME || path.join(os.homedir(), '.cargo'), 'bin');
+  const windows = process.platform === 'win32';
+  const pathKey = Object.keys(env).find(key => key.toUpperCase() === 'PATH') || 'PATH';
+  const mingwBin = path.join(os.homedir(), 'mingw64', 'bin');
+  env[pathKey] = [cargoBin, ...(windows ? [mingwBin] : []), env[pathKey]].filter(Boolean).join(path.delimiter);
+  if (windows) {
+    env.RUSTUP_TOOLCHAIN ||= 'stable-x86_64-pc-windows-gnu';
+    if (!env.CC && fs.existsSync(path.join(mingwBin, 'gcc.exe'))) env.CC = path.join(mingwBin, 'gcc.exe');
+  }
+  return { env, cargoExe: 'cargo', cargoTauriExe: 'cargo-tauri' };
 }
 
 function ensureVerifierProj() {
-  const proj = path.join(tmp, 'miniverify');
+  const lock = fs.readFileSync(path.join(root, 'app', 'src-tauri', 'Cargo.lock'), 'utf8');
+  const pinned = /^name = "minisign-verify"\s*\nversion = "([\d.]+)"/m.exec(lock)?.[1];
+  if (!pinned) throw new Error('在 Cargo.lock 里找不到 minisign-verify');
+  const proj = path.join(tmp, `miniverify-${pinned}`);
   fs.mkdirSync(path.join(proj, 'src'), { recursive: true });
   fs.writeFileSync(
     path.join(proj, 'Cargo.toml'),
-    '[package]\nname = "miniverify"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\nminisign = "0.7"\n'
+    `[package]
+name = "miniverify"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+minisign-verify = "=${pinned}"
+`
   );
   fs.writeFileSync(path.join(proj, 'src', 'main.rs'), SRC);
   return proj;
@@ -158,8 +180,8 @@ function runSelfTest() {
       [__filename, '--local', dataPath, '--sig', sigPath, '--pubkey', pubPath],
       { env, encoding: 'utf8' }
     );
-    if (tamperRes.status === 0) {
-      throw new Error('篡改文件一个字节后验签居然通过');
+    if (tamperRes.status !== 1 || !tamperRes.stderr?.includes('VERIFY_FAIL:')) {
+      throw new Error(`篡改样本没有在验签阶段判红（exit ${tamperRes.status}）`);
     }
     console.log('  ✓ 改动文件一个字节后本地验签被判红');
 
@@ -170,8 +192,8 @@ function runSelfTest() {
       [__filename, '--local', dataPath, '--sig', sigPath],
       { env, encoding: 'utf8' }
     );
-    if (wrongKeyRes.status === 0) {
-      throw new Error('用正式公钥验证临时密钥签名居然通过');
+    if (wrongKeyRes.status !== 1 || !wrongKeyRes.stderr?.includes('VERIFY_FAIL:')) {
+      throw new Error(`错误公钥样本没有在验签阶段判红（exit ${wrongKeyRes.status}）`);
     }
     console.log('  ✓ 用正式公钥验证临时签名被判红');
   } finally {
@@ -232,12 +254,12 @@ function runSelfTest() {
     targetFile = exePath;
   }
 
-  // 4. 编一个一次性小 bin 来验(用 registry 里已有的 minisign,不碰项目 Cargo.toml)
+  // 复用 Tauri 构建已拉取的校验库，发版验签无需另取依赖。
   const proj = ensureVerifierProj();
   const { env, cargoExe } = buildCargoEnv();
 
   console.log('...  compiling the one-off verifier (first run takes ~30s)');
-  execFileSync(cargoExe, ['run', '--quiet', '--', keyLine, sigBin, targetFile], {
+  execFileSync(cargoExe, ['run', '--offline', '--quiet', '--', keyLine, sigBin, targetFile], {
     cwd: proj,
     env,
     stdio: 'inherit',

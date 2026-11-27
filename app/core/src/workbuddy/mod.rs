@@ -459,7 +459,8 @@ fn run_child_with_timeout(
 fn kill_process_tree(pid: u32) {
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
-    let _ = Command::new("taskkill")
+    let Some(system) = std::env::var_os("SystemRoot") else { return };
+    let _ = Command::new(std::path::PathBuf::from(system).join("System32").join("taskkill.exe"))
         .args(["/T", "/F", "/PID", &pid.to_string()])
         .creation_flags(0x0800_0000) // 别给挂件弹控制台窗口
         .stdin(Stdio::null())

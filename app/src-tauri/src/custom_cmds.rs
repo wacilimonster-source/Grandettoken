@@ -105,7 +105,7 @@ pub(crate) async fn custom_add(
         let _ = save_config_off_main(&st, move |c| c.custom_channels.retain(|x| x.id != id2)).await;
         return Err(e);
     }
-    st.fetcher.forget_channel(&lock_rw(&st.store), &id);
+    st.fetcher.forget_channel(&lock_rw(&st.store), &id)?;
     Ok(id)
 }
 
@@ -130,7 +130,7 @@ pub(crate) async fn custom_remove(app: tauri::AppHandle, id: String) -> Result<S
     // ② 连删失败都被 let _ 吞了,凭据留在系统里没人知道(凭据纪律问题)。
     let cid = id.clone();
     let purge = purge_channel_credentials(&app, &cid).await;
-    st.fetcher.forget_channel(&lock_rw(&st.store), &id);
+    st.fetcher.forget_channel(&lock_rw(&st.store), &id)?;
     // 渠道定义已经删了,不该因为清凭据失败就把整个操作报成失败 ——
     // 但也不能静默:如实告诉用户"渠道删了,凭据没清干净"。
     let purge_note = match purge {

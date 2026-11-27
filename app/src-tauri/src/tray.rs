@@ -84,7 +84,7 @@ pub(crate) async fn run(app: AppHandle) {
             } else {
                 let (image, digest) = if let Some((size, text, tone)) = &frame {
                     let rgba = tray_icon::render_badge_rgba(*size, text, *tone);
-                    let digest = Some(window_cmds::tray_icon_digest(*size, &rgba));
+                    let digest = Some(tray_icon::tray_icon_digest(*size, &rgba));
                     (
                         Some(tauri::image::Image::new_owned(rgba, *size, *size)),
                         digest,

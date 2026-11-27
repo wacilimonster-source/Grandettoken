@@ -13,6 +13,14 @@ pub const GEMINI_OUTPUT_LIMIT: u64 = 65536;
 /// Vertex OpenAI 兼容端点（Agent Platform）实测允许传 penalty 的白名单模型。
 pub const VERTEX_PENALTY_ALLOWED_MODELS: &[&str] = &["google/gemini-3.1-flash-lite"];
 
+/// Vertex AI（Agent Platform）可配置安全分类（不含已废弃的 HARM_CATEGORY_CIVIC_INTEGRITY）。
+pub const VERTEX_SAFETY_CATEGORIES: &[&str] = &[
+    "HARM_CATEGORY_HATE_SPEECH",
+    "HARM_CATEGORY_DANGEROUS_CONTENT",
+    "HARM_CATEGORY_HARASSMENT",
+    "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+];
+
 const GOOGLE_REPAIRABLE_PARAMS: &[&str] = &[
     "temperature",
     "top_p",
@@ -138,6 +146,10 @@ fn sanitize_google_body(
         }
     }
 
+    if is_vertex && bare_model.starts_with("gemini") {
+        apply_vertex_safety_off(obj, out);
+    }
+
     // 思考参数校验与 thinking_config 映射
     let supports_thinking = bare_model.starts_with("gemini-2.5")
         || bare_model.starts_with("gemini-3")
@@ -227,13 +239,47 @@ fn sanitize_google_body(
     }
 }
 
+fn apply_vertex_safety_off(obj: &mut serde_json::Map<String, Value>, out: &mut PreparedRequest) {
+    if let Some(extra_val) = obj.get("extra_body") {
+        let Some(extra_obj) = extra_val.as_object() else {
+            return;
+        };
+        if let Some(google_val) = extra_obj.get("google") {
+            let Some(google_obj) = google_val.as_object() else {
+                return;
+            };
+            if google_obj.contains_key("safety_settings")
+                || google_obj.contains_key("safetySettings")
+            {
+                return;
+            }
+        }
+    }
+    let extra = obj
+        .entry("extra_body".to_string())
+        .or_insert_with(|| json!({}));
+    if let Some(extra_obj) = extra.as_object_mut() {
+        let google = extra_obj
+            .entry("google".to_string())
+            .or_insert_with(|| json!({}));
+        if let Some(google_obj) = google.as_object_mut() {
+            let settings: Vec<Value> = VERTEX_SAFETY_CATEGORIES
+                .iter()
+                .map(|cat| json!({ "category": cat, "threshold": "OFF" }))
+                .collect();
+            google_obj.insert("safety_settings".into(), Value::Array(settings));
+            out.transforms.push("set:safety_settings(off)".into());
+        }
+    }
+}
+
 /// 当上游返回 400 时，尝试识别并剥离导致 400 的参数以进行单次自动修复重试。
 pub fn repairable_params_on_400(kind: GatewaySourceKind, err_body: &str) -> Option<Vec<String>> {
     let v: Value = serde_json::from_str(err_body).ok()?;
     let err = v.get("error")?;
     let msg = err.get("message").and_then(Value::as_str).unwrap_or("").to_ascii_lowercase();
     // 值域和业务约束错误不能通过删掉客户端的预算/停止条件来修复。
-    let unsupported = ["not supported", "unsupported", "unrecognized", "unknown argument", "unknown parameter", "not enabled", "not allowed"].iter().any(|s| msg.contains(s));
+    let unsupported = ["not supported", "unsupported", "unrecognized", "unknown argument", "unknown parameter", "unknown name", "not enabled", "not allowed"].iter().any(|s| msg.contains(s));
     let invalid_value = ["invalid value", "must be", "out of range", "greater than", "less than", "maximum", "minimum"].iter().any(|s| msg.contains(s));
     if !unsupported || invalid_value { return None; }
 
@@ -241,7 +287,13 @@ pub fn repairable_params_on_400(kind: GatewaySourceKind, err_body: &str) -> Opti
         if GOOGLE_REPAIRABLE_PARAMS.contains(&p) {
             return Some(vec![p.to_string()]);
         }
-        if p == "extra_body" || p == "thinking_config" {
+        if p == "safety_settings" || p == "safetySettings" {
+            return Some(vec!["extra_body.google.safety_settings".to_string()]);
+        }
+        if p == "thinking_config" {
+            return Some(vec!["extra_body.google.thinking_config".to_string()]);
+        }
+        if p == "extra_body" {
             return Some(vec!["extra_body".to_string()]);
         }
     }
@@ -259,7 +311,13 @@ pub fn repairable_params_on_400(kind: GatewaySourceKind, err_body: &str) -> Opti
         kind,
         GatewaySourceKind::GeminiAiStudio | GatewaySourceKind::AgentPlatform
     ) {
-        if msg.contains("thinking_config") || msg.contains("extra_body") {
+        if msg.contains("safety_settings") || msg.contains("safetysettings") {
+            return Some(vec!["extra_body.google.safety_settings".to_string()]);
+        }
+        if msg.contains("thinking_config") {
+            return Some(vec!["extra_body.google.thinking_config".to_string()]);
+        }
+        if msg.contains("extra_body") {
             return Some(vec!["extra_body".to_string()]);
         }
         if msg.contains("reasoning_effort") {
@@ -272,6 +330,20 @@ pub fn repairable_params_on_400(kind: GatewaySourceKind, err_body: &str) -> Opti
     None
 }
 
+fn remove_json_path(obj: &mut serde_json::Map<String, Value>, path: &str) -> bool {
+    let Some((head, tail)) = path.split_once('.') else {
+        return obj.remove(path).is_some();
+    };
+    let Some(Value::Object(child)) = obj.get_mut(head) else {
+        return false;
+    };
+    let removed = remove_json_path(child, tail);
+    if removed && child.is_empty() {
+        obj.remove(head);
+    }
+    removed
+}
+
 /// 将可修复参数从请求体移除（返回实际移除的参数名）。
 pub fn apply_400_repairs(data: &mut Value, params: &[String]) -> Vec<String> {
     let Some(obj) = data.as_object_mut() else {
@@ -279,7 +351,7 @@ pub fn apply_400_repairs(data: &mut Value, params: &[String]) -> Vec<String> {
     };
     let mut removed = Vec::new();
     for p in params {
-        if obj.remove(p).is_some() {
+        if remove_json_path(obj, p) {
             removed.push(p.clone());
         }
     }
@@ -466,7 +538,12 @@ mod tests {
             ThoughtRequestPolicy::FollowClient,
             &mut off_req,
         );
-        assert!(off_req.get("extra_body").is_none());
+        assert!(off_req["extra_body"]["google"].get("thinking_config").is_none());
+        let off_safety = off_req["extra_body"]["google"]["safety_settings"]
+            .as_array()
+            .unwrap();
+        assert_eq!(off_safety.len(), 4);
+        assert!(off_safety.iter().all(|s| s["threshold"] == "OFF"));
 
         let mut none_req: Value =
             serde_json::from_str(r#"{"reasoning_effort":"none"}"#).unwrap();
@@ -478,6 +555,148 @@ mod tests {
             &mut none_req,
         );
         assert!(none_req.get("extra_body").is_none());
+    }
+
+    #[test]
+    fn agent_platform_sets_gemini_safety_settings_off_without_overriding_client() {
+        // 1. AgentPlatform + 支持 thinking 的 Gemini 模型：同时写入 safety_settings 与 thinking_config
+        let mut g38: Value = serde_json::from_str(r#"{"reasoning_effort":"high"}"#).unwrap();
+        let prep38 = prepare_upstream_body(
+            GatewaySourceKind::AgentPlatform,
+            "",
+            "google/gemini-3.8-flash",
+            ThoughtRequestPolicy::FollowClient,
+            &mut g38,
+        );
+        assert!(prep38.transforms.iter().any(|t| t == "set:safety_settings(off)"));
+        let safety = g38["extra_body"]["google"]["safety_settings"]
+            .as_array()
+            .unwrap();
+        assert_eq!(safety.len(), VERTEX_SAFETY_CATEGORIES.len());
+        for (item, cat) in safety.iter().zip(VERTEX_SAFETY_CATEGORIES.iter()) {
+            assert_eq!(item["category"], *cat);
+            assert_eq!(item["threshold"], "OFF");
+        }
+        assert_eq!(
+            g38["extra_body"]["google"]["thinking_config"]["thinking_level"],
+            "high"
+        );
+
+        // 2. AgentPlatform + 不支持 thinking 的 Gemini 2.0 模型：仍写入 safety_settings
+        let mut g20: Value = serde_json::from_str(r#"{"stream":true}"#).unwrap();
+        prepare_upstream_body(
+            GatewaySourceKind::AgentPlatform,
+            "",
+            "google/gemini-2.0-flash",
+            ThoughtRequestPolicy::FollowClient,
+            &mut g20,
+        );
+        assert_eq!(
+            g20["extra_body"]["google"]["safety_settings"]
+                .as_array()
+                .unwrap()
+                .len(),
+            4
+        );
+
+        // 3. 调用方已显式传入 safety_settings 或 safetySettings 时不覆盖
+        let mut explicit_snake: Value = serde_json::from_str(
+            r#"{"extra_body":{"google":{"safety_settings":[{"category":"HARM_CATEGORY_HATE_SPEECH","threshold":"BLOCK_LOW_AND_ABOVE"}]}}}"#,
+        )
+        .unwrap();
+        prepare_upstream_body(
+            GatewaySourceKind::AgentPlatform,
+            "",
+            "google/gemini-3.8-flash",
+            ThoughtRequestPolicy::FollowClient,
+            &mut explicit_snake,
+        );
+        assert_eq!(
+            explicit_snake["extra_body"]["google"]["safety_settings"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            explicit_snake["extra_body"]["google"]["safety_settings"][0]["threshold"],
+            "BLOCK_LOW_AND_ABOVE"
+        );
+
+        let mut explicit_camel: Value = serde_json::from_str(
+            r#"{"extra_body":{"google":{"safetySettings":[]}}}"#,
+        )
+        .unwrap();
+        prepare_upstream_body(
+            GatewaySourceKind::AgentPlatform,
+            "",
+            "google/gemini-3.8-flash",
+            ThoughtRequestPolicy::FollowClient,
+            &mut explicit_camel,
+        );
+        assert!(explicit_camel["extra_body"]["google"].get("safety_settings").is_none());
+        assert!(explicit_camel["extra_body"]["google"]["safetySettings"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+
+        // 4. AgentPlatform + 非 Gemini 模型不写入
+        let mut non_gemini: Value = serde_json::from_str(r#"{"stream":true}"#).unwrap();
+        prepare_upstream_body(
+            GatewaySourceKind::AgentPlatform,
+            "",
+            "anthropic/claude-sonnet-4",
+            ThoughtRequestPolicy::FollowClient,
+            &mut non_gemini,
+        );
+        assert!(non_gemini.get("extra_body").is_none());
+
+        // 5. GeminiAiStudio 不写入 safety_settings
+        let mut aistudio: Value = serde_json::from_str(r#"{"stream":true}"#).unwrap();
+        prepare_upstream_body(
+            GatewaySourceKind::GeminiAiStudio,
+            "",
+            "gemini-2.5-flash",
+            ThoughtRequestPolicy::FollowClient,
+            &mut aistudio,
+        );
+        assert!(aistudio.get("extra_body").is_none());
+    }
+
+    #[test]
+    fn repair_400_strips_only_safety_settings_and_preserves_thinking_config() {
+        let err = r#"{"error":{"message":"Invalid JSON payload received. Unknown name \"safety_settings\" at 'extra_body.google': Cannot find field."}}"#;
+        let params = repairable_params_on_400(GatewaySourceKind::AgentPlatform, err).unwrap();
+        assert_eq!(params, vec!["extra_body.google.safety_settings"]);
+
+        let mut both = json!({
+            "model": "google/gemini-4-hydrogen",
+            "extra_body": {
+                "google": {
+                    "safety_settings": [{"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "OFF"}],
+                    "thinking_config": {"include_thoughts": true}
+                }
+            }
+        });
+        let removed = apply_400_repairs(&mut both, &params);
+        assert_eq!(removed, vec!["extra_body.google.safety_settings"]);
+        assert!(both["extra_body"]["google"].get("safety_settings").is_none());
+        assert_eq!(
+            both["extra_body"]["google"]["thinking_config"]["include_thoughts"],
+            true
+        );
+
+        let mut only_safety = json!({
+            "model": "google/gemini-2.0-flash",
+            "extra_body": {
+                "google": {
+                    "safety_settings": [{"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "OFF"}]
+                }
+            }
+        });
+        let removed2 = apply_400_repairs(&mut only_safety, &params);
+        assert_eq!(removed2, vec!["extra_body.google.safety_settings"]);
+        assert!(only_safety.get("extra_body").is_none());
     }
 
     #[test]

@@ -30,7 +30,7 @@ const SOFT_LIMIT = 1500;
 //     第 6 个渠道豆包(WebSession 表项 + 逐动作 body + Cookie 分支),
 //     渠道表与统一取数/签到管线是这些文件的本职,不许再从这里长功能以外的行。
 const BUDGETS = {
-  "app/src/index.html": 698,
+  "app/src/index.html": 697,
 };
 
 // 分组预算:拆分后单文件受 SOFT_LIMIT 约束,同时整组总行数仍受原上限约束(只许下调)。
@@ -39,7 +39,13 @@ const GROUP_BUDGETS = [
     label: "app/src/app*.js",
     dir: "app/src",
     pattern: /^app(?:-.+)?\.js$/,
-    limit: 8780,
+    limit: 8705,
+  },
+  {
+    label: "app/src/**/*.js",
+    dir: "app/src",
+    pattern: /\.js$/,
+    limit: 13600,
   },
 ];
 
@@ -64,6 +70,10 @@ function walk(dir, out) {
     }
   }
   return out;
+}
+
+function groupFiles(dir, pattern) {
+  return walk(dir, []).filter(file => pattern.test(path.basename(file)));
 }
 
 function selfTest() {
@@ -96,6 +106,20 @@ function selfTest() {
     fail++;
   } else {
     console.log("  ✓ 分组预算合计超标被判红");
+  }
+  const group = GROUP_BUDGETS[1];
+  const probeDir = path.join(ROOT, "build", "tmp");
+  fs.mkdirSync(probeDir, { recursive: true });
+  const probe = fs.mkdtempSync(path.join(probeDir, "front-budget-"));
+  const feature = path.join(probe, "feature-ui.js");
+  try {
+    fs.writeFileSync(feature, "// x\n".repeat(group.limit + 1), "utf8");
+    const exceeds = groupFiles(probe, group.pattern).reduce((sum, file) => sum + countLines(file), 0) > group.limit;
+    if (!exceeds) { console.error("  ✗ 独立前端模块绕过了总量预算"); fail++; }
+    else console.log("  ✓ 预算计入独立前端模块");
+  } finally {
+    fs.unlinkSync(feature);
+    fs.rmdirSync(probe);
   }
   try { fs.unlinkSync(tmp); } catch {}
   try { fs.unlinkSync(tmp2); } catch {}
@@ -131,12 +155,12 @@ function main() {
       bad.push(`${g.label}  分组目录不存在`);
       continue;
     }
-    const matched = fs.readdirSync(absDir).filter((name) => g.pattern.test(name)).sort();
+    const matched = groupFiles(absDir, g.pattern);
     if (!matched.length) {
       bad.push(`${g.label}  未匹配到任何文件`);
       continue;
     }
-    const sum = matched.reduce((acc, name) => acc + countLines(path.join(absDir, name)), 0);
+    const sum = matched.reduce((acc, file) => acc + countLines(file), 0);
     const pct = ((sum / g.limit) * 100).toFixed(1);
     if (sum > g.limit) {
       bad.push(`${g.label}（${matched.length} 个文件合计）  ${sum} 行 > 上限 ${g.limit}（${pct}%）`);

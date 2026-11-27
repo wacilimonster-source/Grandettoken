@@ -154,8 +154,9 @@ fn redact_keyed_values(text: &str) -> String {
     let mut i = 0usize;
     while i < bytes.len() {
         // 先看前缀形态(Bearer / Basic)
-        let lower_rest = text[i..].to_ascii_lowercase();
-        if let Some(p) = SECRET_PREFIXES.iter().find(|p| lower_rest.starts_with(**p)) {
+        if let Some(p) = SECRET_PREFIXES.iter().find(|p| {
+            bytes[i..].get(..p.len()).is_some_and(|head| head.eq_ignore_ascii_case(p.as_bytes()))
+        }) {
             let p_len = p.len();
             out.push_str(&text[i..i + p_len]);
             let vstart = i + p_len;
@@ -201,10 +202,20 @@ fn match_keyed(text: &str, i: usize) -> Option<(usize, bool, usize)> {
         (i, false)
     };
     // 键名:字母数字下划线横线
+    if !quoted && !b.get(kstart)?.is_ascii_alphanumeric() { return None; }
+    static MAX_KEY: std::sync::LazyLock<usize> =
+        std::sync::LazyLock::new(|| SECRET_KEYS.iter().map(|key| key.len()).max().unwrap_or(0));
+    let mut letters = 0;
     let mut kend = kstart;
     while kend < b.len()
         && (b[kend].is_ascii_alphanumeric() || b[kend] == b'_' || b[kend] == b'-')
     {
+        if b[kend].is_ascii_alphanumeric() {
+            letters += 1;
+            if letters > *MAX_KEY {
+                return None;
+            }
+        }
         kend += 1;
     }
     if kend == kstart {

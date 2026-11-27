@@ -13,6 +13,7 @@
 
 use crate::store::Store;
 use serde::{Deserialize, Serialize};
+use std::time::{Duration, Instant};
 
 /// 缓存键(存在 settings 表里,与取数缓存同一去处)。
 pub const SETTINGS_KEY: &str = "fx_usd_cny";
@@ -72,6 +73,25 @@ pub fn save(store: &Store, f: &FxRate) -> Result<(), String> {
     store.set_setting(SETTINGS_KEY, &txt)
 }
 
+/// 失败退避与进程内取数实例绑定，换月后立即尝试新月份的报价。
+#[derive(Default)]
+pub(crate) struct Retry(Option<(String, Instant)>);
+
+impl Retry {
+    pub(crate) fn pending(&self, now_ts: i64, now: Instant) -> bool {
+        self.0.as_ref().is_some_and(|(month, until)| month == &month_tag(now_ts) && now < *until)
+    }
+
+    pub(crate) fn observe(&mut self, rate: Option<&FxRate>, now_ts: i64, now: Instant) {
+        let month = month_tag(now_ts);
+        self.0 = if rate.is_some_and(|r| r.month == month && sane(r.rate)) {
+            None
+        } else {
+            Some((month, now + Duration::from_secs(300)))
+        };
+    }
+}
+
 /// 本轮该用哪个牌价。`cached` 由调用方在**锁库段**读出来传进来(这个函数会 await,
 /// 不能持着 `std::sync::MutexGuard` 跨 await)。
 ///
@@ -127,6 +147,19 @@ mod tests {
         // 再早一小时的北京 09-30 23:30 还算 9 月
         assert_eq!(month_tag(1_790_785_800), "2026-10");
         assert_eq!(month_tag(1_790_782_200), "2026-09");
+    }
+
+    #[test]
+    fn failure_backoff_keeps_old_rate_and_allows_a_new_month() {
+        let wall = 1_790_839_800;
+        let at = Instant::now();
+        let mut retry = Retry::default();
+        retry.observe(None, wall, at);
+        assert!(retry.pending(wall, at));
+        assert!(!retry.pending(wall, at + Duration::from_secs(300)));
+        assert!(!retry.pending(wall + 32 * 86_400, at));
+        retry.observe(Some(&FxRate { rate: 7.1, month: month_tag(wall), src: "fixture".into() }), wall, at);
+        assert!(!retry.pending(wall, at));
     }
 
     #[test]

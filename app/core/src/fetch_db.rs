@@ -341,7 +341,10 @@ impl Fetcher {
                 }
                 custom_views.push(v);
             }
-            attach_plan_costs(&mut out, &s, &cycle_cached, fx_now.as_ref());
+            drop(s);
+            // 测试与旧调用方可以共用读写连接，两把 guard 的生命周期必须分开。
+            attach_plan_costs(&mut out, &crate::lockx::lock(writer), &cycle_cached, fx_now.as_ref());
+            let s = crate::lockx::lock(reader);
             let mut all = crate::antigravity_accounts::expand_all(
                 out.into_iter().flatten().collect(),
                 &s,

@@ -143,9 +143,9 @@ node build/check-css-forms.js           # 整块容器的 display 必须挂在 b
 app/
   core/                   纯逻辑层,不依赖 Tauri(可独立跑测试)
     src/
-      lib.rs              模块清单(18 个)
+      lib.rs              核心模块入口
       providers.rs        9 个内置渠道定义 + 响应解析(万元组测试)
-      store.rs            SQLite 快照、消耗推算、365 天归档、变动台账
+      store/              SQLite 快照、消耗推算、365 天归档、变动台账
       secrets.rs          Windows 凭据管理器封装(渠道密钥 + 密钥箱两个服务名)
       vault.rs            密钥箱的校验/去重/搜索/排序
       config.rs           设置项(含申请制额度、胶囊渠道、自定义排序、签到默认开)
@@ -155,7 +155,7 @@ app/
       workbuddy.rs        WorkBuddy 桌面端凭据信封(AES-256-GCM)+ refresh 续期
       weblogin.rs         WorkBuddy 网页会话(兜底路径)
       checkin.rs          每日签到的纯逻辑(周期日、退避、幂等、状态机)
-      inject.rs           5 个客户端的写入契约(备份/校验/回滚/幂等)
+      inject/             客户端写入契约(备份/校验/回滚/幂等)
       models.rs           模型页多来源(价目表、可用集合、单价换算、缓存)
       yamledge.rs         极小 YAML 子集解析与行范围编辑(DSH 的 cordis.patch.yml)
       peak.rs             DeepSeek 峰谷时段与法定节假日表
@@ -169,7 +169,7 @@ app/
     logos/                渠道官方图标(来源与版权见该目录 README)
   src-tauri/
     src/
-      lib.rs              43 个命令、托盘、轮询调度、开机自启、置顶
+      lib.rs              命令注册、托盘、轮询调度、开机自启、置顶
       main.rs             入口
     capabilities/         Tauri 2 ACL:窗口尺寸/位置/置顶等权限
     build.rs              链接静态 WebView2 加载器 + 断言两处版本号一致
@@ -255,7 +255,7 @@ OpenAI Chat Completions 请求落到 `/chat/completions`；OpenCode Go 的公开
 Trae 是每个 agent 组各一条;客户端的选中项若正指向这条模型会一并清掉并在预告里说明;
 ZCode 删到最后一个模型时连 provider 与它的 providerRule 一起收走。
 
-四份契约在 `core/src/inject.rs`,每个客户端一张表:WorkBuddy 是明文 JSON 数组(带 BOM、2 空格),
+客户端契约在 `core/src/inject/`,每个客户端一张表:WorkBuddy 是明文 JSON 数组(带 BOM、2 空格),
 ZCode 是两份 JSON(`schemaVersion` 不是 1 就放弃),Trae 是 SQLite 的 `ItemTable`(按后缀找键名,
 键前缀是区域/租户号,会随版本变)。
 
@@ -278,7 +278,7 @@ ZCode 是两份 JSON(`schemaVersion` 不是 1 就放弃),Trae 是 SQLite 的 `It
 
 ### 加一个新客户端
 
-1. `inject.rs` 的 `Client` 枚举加一项(短标签 / 名字 / id / 进程名);
+1. `core/src/inject/` 的 `Client` 枚举加一项(短标签 / 名字 / id / 进程名);
 2. `sites()` 里加落点检测(配置目录存在才返回);
 3. 写一个 `write_xxx_site(&Site, &ModelSpec, ...) -> Result<SiteOutcome, String>`,
    落盘走 `commit()`(备份 → 写 → 读回校验 → 失败回滚),不要自己拼;

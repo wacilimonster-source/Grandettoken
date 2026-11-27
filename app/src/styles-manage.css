@@ -185,8 +185,11 @@ body.manage-index .mhead .mt{letter-spacing:.01em}
 .ccard{border:1px solid var(--line);border-radius:calc(10px*var(--u));background:var(--bg2);
   margin-bottom:calc(9px*var(--u));overflow:hidden}
 .ccard.off{opacity:.62}
-.cchead{display:flex;align-items:center;gap:calc(9px*var(--u));padding:calc(9px*var(--u)) calc(11px*var(--u));cursor:pointer}
+.cchead{position:relative;display:flex;align-items:center;gap:calc(9px*var(--u));padding:calc(9px*var(--u)) calc(11px*var(--u));cursor:pointer}
 .cchead:hover{background:#ffffff07}
+.ccfold{position:absolute;inset:0;border:0;background:transparent;cursor:pointer}
+.ccfold:focus-visible{outline:2px solid var(--ac);outline-offset:-2px}
+.cchead>.eye{position:relative}
 .ccard .ico{width:calc(26px*var(--u));height:calc(26px*var(--u));font-size:calc(10.5px*var(--u));border-radius:calc(7px*var(--u))}
 .ccard.off .ico{filter:grayscale(1)}
 .ccmeta{flex:1;min-width:0}

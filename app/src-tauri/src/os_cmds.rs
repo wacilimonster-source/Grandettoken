@@ -67,7 +67,8 @@ pub(crate) async fn key_copy(app: tauri::AppHandle, id: String) -> Result<String
 /// 输入按 UTF-16LE:clip 按控制台代码页解释字节流,中文标签走 UTF-8 会被切坏。
 pub(crate) fn copy_to_clipboard(text: &str) -> Result<(), String> {
     use std::io::Write;
-    let mut cmd = std::process::Command::new("clip");
+    let system = std::env::var_os("SystemRoot").ok_or("无法定位系统剪贴板工具")?;
+    let mut cmd = std::process::Command::new(std::path::PathBuf::from(system).join("System32").join("clip.exe"));
     cmd.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());

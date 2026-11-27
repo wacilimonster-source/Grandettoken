@@ -415,9 +415,17 @@ try {
     throw "CDP endpoint http://127.0.0.1:$Port/json/list did not expose an app page within 20s"
   }
 
-  $scriptPaths = @($defaultScripts | ForEach-Object { Join-Path $PSScriptRoot $_ })
-  $run = Invoke-CheckSuite -ScriptPaths $scriptPaths -CdpPort $Port -FilterPattern $Filter -OutputDir $OutDir
-  $suiteExit = $run.ExitCode
+  $appProcesses = @(Get-Process -Name @('Grandettoken', 'tokenscope') -ErrorAction SilentlyContinue)
+  if ($appProcesses.Count -ne 1) { throw "expected exactly one debug app process" }
+  $previousAppPid = $env:CDP_APP_PID
+  try {
+    $env:CDP_APP_PID = [string]$appProcesses[0].Id
+    $scriptPaths = @($defaultScripts | ForEach-Object { Join-Path $PSScriptRoot $_ })
+    $run = Invoke-CheckSuite -ScriptPaths $scriptPaths -CdpPort $Port -FilterPattern $Filter -OutputDir $OutDir
+    $suiteExit = $run.ExitCode
+  } finally {
+    $env:CDP_APP_PID = $previousAppPid
+  }
 } finally {
   Wait-ProcessExitByName -ProcessNames @('Grandettoken', 'tokenscope') -TimeoutSec 10
   Restore-DataDir -Manifest $manifest

@@ -21,16 +21,7 @@ async function refresh(force = false) {
   render({ updated: true });
 }
 
-/** 收下一轮轮询推送:`{ views, home }` —— 数据与统一视图**一起**到。
- *
- * 只收 views 的话,面板数字会更新(行里的大数字是前端自己从 `remaining` 算的),
- * 而胶囊主数字 / 行色调 / 分组 / 风险带读的是 `home_view` 的结论 —— 那一份以前
- * 只在启动时取过一次,于是永远停在启动那一刻(2026-10-26 真机:4S 余额一直在动,
- * 胶囊一直不动,托盘也跟着胶囊一起僵住)。
- *
- * 老后端只推一个 views 数组:退回补取一次 `home_view`(与这一轮同一份取数结果,
- * 5 秒内复用缓存,不会多打账务接口),行为不回退。
- */
+/** 新推送同时携带渠道和首页摘要；旧格式单独补读摘要。 */
 function applyChannelsPush(payload) {
   const legacy = Array.isArray(payload);
   CHANNELS = legacy ? payload : (payload && payload.views) || [];
@@ -169,10 +160,20 @@ function applyChannelsPush(payload) {
   // 同一条纪律)── 后端 setup 里就跑首轮取数与红线判定,慢网络下能持续数秒;以前
   // 这批监听挂在 refresh 之后,首检那一刻发出的 channels-updated / crit-alert 没人接,
   // 预警音与应用内提示会丢。全部 await,确保注册完成才放行首轮取数。
-  let receivedPush = false;
+  let receivedPush = false, pushFrame = 0, latestPush;
   await listen("channels-updated", (ev) => {
     receivedPush = true;
-    applyChannelsPush(ev.payload);
+    latestPush = ev.payload;
+    if (WINDOW_VISIBLE === false) {
+      cancelAnimationFrame(pushFrame);
+      pushFrame = 0;
+      applyChannelsPush(latestPush);
+      return;
+    }
+    if (!pushFrame) pushFrame = requestAnimationFrame(() => {
+      pushFrame = 0;
+      applyChannelsPush(latestPush);
+    });
   });
 
   // 跌破红线(Rust 判定、一天一次):播一声预警音(开了才有)+ 应用内提示。
@@ -244,80 +245,4 @@ function applyChannelsPush(payload) {
   setTimeout(() => checkUpdate(false), 30_000);
   setInterval(() => checkUpdate(false), 10 * 60 * 1000);
 })();
-
-/* AI 优惠：列表摘要与本机已读状态。 */
-(() => {
-  const key = "promo-feed-v1", PAGE_SIZE = 24;
-  let state = { items: [], seen: [], updated: 0, initialized: false };
-  try { state = { ...state, ...JSON.parse(localStorage.getItem(key) || "{}") }; } catch (_) { /* silent: 本地已读状态损坏就当作全新会话 */ }
-  let busy = false, failed = "", query = "", scroll = 0, shown = PAGE_SIZE;
-  const expanded = new Set();
-  const save = () => { try { localStorage.setItem(key, JSON.stringify(state)); } catch (_) { /* silent: 已读标记存不下只影响下次的"新条目"计数 */ } };
-  const unread = item => !state.seen.includes(item.id);
-  // 看过列表就算读过:打开列表时把当前条目全部记入 seen,底栏的「N 条新」随之清零。
-  const markAllSeen = () => {
-    if (state.items.some(unread)) { state.seen = state.items.map(x => x.id); save(); }
-  };
-  const date = value => { const d = new Date(value); return Number.isNaN(d.getTime()) ? "" : d.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }); };
-  function entry() {
-    const count = state.items.filter(unread).length;
-    $("promoEntry").textContent = "AI 优惠" + (count ? " · " + (count > 99 ? "99+" : count) + " 条新" : failed ? " · 更新失败" : "");
-    $("promoEntry").classList.toggle("has-new", count > 0);
-    $("promoEntry").title = "查看 AI 工具优惠" + (state.updated ? " · 上次更新 " + date(state.updated) : "");
-  }
-  function render() {
-    if (!$("promoOverlay").hidden) markAllSeen();
-    entry();
-    if ($("promoOverlay").hidden) return;
-    const content = $("promoContent");
-    $("promoHeading").textContent = "AI 优惠";
-    $("promoRefresh").disabled = busy;
-    $("promoRefresh").textContent = busy ? "更新中…" : "刷新";
-    const list = state.items.filter(x => (x.title + " " + x.description).toLowerCase().includes(query.toLowerCase())), visible = list.slice(0, shown);
-    content.innerHTML = `<div class="promo-tools"><input id="promoSearch" type="search" placeholder="搜索优惠或工具名称" value="${esc(query)}" aria-label="搜索优惠"></div>${failed ? `<p class="promo-meta">更新失败 · ${esc(failed)}${state.updated ? " · 上次更新 " + esc(date(state.updated)) : ""}</p>` : ""}<div class="promo-list">${visible.map(x => `<article class="promo-item" data-id="${esc(x.id)}"><button class="promo-title" data-open="${esc(x.id)}">${esc(x.title)} ↗</button><p class="promo-text${expanded.has(x.id) ? " expanded" : ""}">${esc(x.description)}</p><button class="promo-toggle" data-toggle="${esc(x.id)}" aria-expanded="${expanded.has(x.id)}" hidden>${expanded.has(x.id) ? "收起" : "展开"}</button>${x.date ? `<small class="promo-date">发布于 ${esc(date(x.date))}</small>` : ""}</article>`).join("") || `<p class="promo-empty">${busy && !state.items.length ? "正在加载优惠…" : "没有匹配的优惠"}</p>`}</div>${list.length > visible.length ? `<button class="promo-more" id="promoMore">加载更多（还有 ${list.length - visible.length} 条）</button>` : ""}`;
-    content.querySelectorAll(".promo-item").forEach(row => {
-      const text = row.querySelector(".promo-text"), toggle = row.querySelector(".promo-toggle");
-      const isExpanded = text.classList.contains("expanded");
-      if (isExpanded) text.classList.remove("expanded");
-      toggle.hidden = text.scrollHeight <= text.clientHeight + 1;
-      if (isExpanded) text.classList.add("expanded");
-    });
-    $("promoSearch").oninput = e => { query = e.target.value; const start = e.target.selectionStart; render(); $("promoSearch").focus(); $("promoSearch").setSelectionRange(start, start); };
-    content.querySelectorAll("[data-open]").forEach(b => b.onclick = async () => {
-      const item = state.items.find(x => x.id === b.dataset.open);
-      if (!item) return;
-      try {
-        await window.GT_API.promos.openPromoUrl({ url: item.link });
-        scroll = content.scrollTop;
-        render();
-      } catch (_) { showToast("无法打开详情，请重试", true); }
-    });
-    content.querySelectorAll("[data-toggle]").forEach(b => b.onclick = () => {
-      scroll = content.scrollTop;
-      if (expanded.has(b.dataset.toggle)) expanded.delete(b.dataset.toggle); else expanded.add(b.dataset.toggle);
-      render();
-    });
-    const more = $("promoMore"); if (more) more.onclick = () => { scroll = content.scrollTop; shown += PAGE_SIZE; render(); }; content.scrollTop = scroll;
-  }
-  async function refresh() {
-    if (busy) return;
-    busy = true; render();
-    try {
-      const items = await loadPromoList();
-      const previous = new Map(state.items.map(item => [item.link, item])), lastKnown = items.map(item => previous.has(item.link)).lastIndexOf(true); // 官网倒序:排在已知最后一条之后的是扩大取数范围补进的历史优惠,不算新条目
-      state.seen = items.filter((item, i) => !state.initialized || i > lastKnown || state.seen.includes(previous.get(item.link)?.id)).map(item => item.id);
-      state.items = items.map(item => ({ ...item, date: previous.get(item.link)?.date }));
-      state.initialized = true; state.updated = Date.now(); failed = ""; save();
-    } catch (error) { failed = typeof error === "string" ? error : "优惠来源返回的列表格式异常"; }
-    busy = false; render();
-  }
-  $("promoEntry").onclick = () => { $("promoOverlay").hidden = false; render(); if (!state.updated || Date.now() - state.updated > 1800000) refresh(); };
-  $("promoBack").onclick = () => { $("promoOverlay").hidden = true; $("promoEntry").focus(); };
-  $("promoRefresh").onclick = refresh;
-  document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("promoOverlay").hidden) $("promoBack").click(); });
-  entry();
-  if (!state.updated || Date.now() - state.updated > 1800000) setTimeout(refresh, 1000);
-  setInterval(refresh, 1800000);
-})();
-
-// 本地模型网关已拆至 gateway-view.js。
+window.initPromoFeed?.();

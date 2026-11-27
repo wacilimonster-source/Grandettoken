@@ -120,16 +120,14 @@ pub(crate) async fn clear_key_ref(app: tauri::AppHandle, id: String) -> Result<(
         .await
         .map_err(|e| format!("清除密钥引用失败: {e}"))??;
     lock_rw(&store).vault_ref_clear(&id)?;
-    app.state::<AppState>().fetcher.forget_channel(&lock_rw(&store), &id);
+    app.state::<AppState>().fetcher.forget_channel(&lock_rw(&store), &id)?;
     sync_channel_to_gateway(&app, &id);
     Ok(())
 }
 
 /// 全部引用关系(渠道 → 箱子条目)。密钥箱列表一次读出来批量渲染。
 #[tauri::command]
-pub(crate) fn vault_ref_map(app: tauri::AppHandle) -> Result<Vec<(String, String)>, String> {
-    let store = app.state::<AppState>().store.clone();
-    let out = lock_rw(&store).vault_ref_pairs().map_err(|e| e.to_string())?;
-    Ok(out)
+pub(crate) async fn vault_ref_map(app: tauri::AppHandle) -> Result<Vec<(String, String)>, String> {
+    crate::with_store(app.state::<AppState>().read_store.clone(), |store| store.vault_ref_pairs()).await
 }
 

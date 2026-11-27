@@ -109,22 +109,13 @@ jobs:
           Invoke-Gate 'lock-unwrap-self'  { node build/check-lock-unwrap.js --self-test }
           Invoke-Gate 'lock-unwrap'       { node build/check-lock-unwrap.js }
           Invoke-Gate 'syntax'            {
-            Get-ChildItem app/src/app*.js | ForEach-Object {
+            Get-ChildItem app/src/*.js | ForEach-Object {
               node --check $_.FullName
               if ($LASTEXITCODE -ne 0) { throw "node --check failed: $($_.FullName)" }
             }
           }
-          Invoke-Gate 'syntax-expiry'     { node --check app/src/expiry-ui.js }
-          Invoke-Gate 'syntax-quota-plan' { node --check app/src/quota-plan.js }
-          Invoke-Gate 'syntax-quota-data' { node --check app/src/quota-plan-data.js }
-          Invoke-Gate 'syntax-quota-ui'   { node --check app/src/quota-plan-ui.js }
-          Invoke-Gate 'syntax-vault'      { node --check app/src/vault-view.js }
-          Invoke-Gate 'syntax-reset'      { node --check app/src/codex-reset.js }
-          Invoke-Gate 'syntax-google'     { node --check app/src/google-cloud.js }
-          Invoke-Gate 'syntax-antigravity'{ node --check app/src/antigravity.js }
-          Invoke-Gate 'syntax-panel-layout'{ node --check app/src/panel-layout.js }
-          Invoke-Gate 'syntax-gateway'     { node --check app/src/gateway-view.js }
-          Invoke-Gate 'syntax-gateway-adv' { node --check app/src/gateway-advanced.js }
+          Invoke-Gate 'artifact-self' { node build/check-tracked-artifacts.js --self-test }
+          Invoke-Gate 'tracked-artifacts' { node build/check-tracked-artifacts.js }
           Invoke-Gate 'syntax-google-capture' { node --check app/src-tauri/src/google_cloud_capture.js }
           npm install jsdom --no-save --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { throw "npm install jsdom failed" }
@@ -251,7 +242,7 @@ jobs:
       - name: Run core tests before bundling
         shell: pwsh
         working-directory: app/core
-        # 单测不过就不发版。这里跑的是 243 条里能跑的条数(4 条 #[ignore] 是真机用例)。
+        # 单测不过就不发版。用例与忽略项以 cargo test 输出为准。
         run: cargo test --locked
 
       # make-webview2-static.ps1 要从 **cargo registry 的源码检出**里取
@@ -345,6 +336,13 @@ jobs:
             $p = Join-Path $dir $f
             if (-not (Test-Path $p)) { throw "missing artifact: $p" }
           }
+          node build/verify-signature.js --local (Join-Path $dir $exe) --sig (Join-Path $dir "$exe.sig")
+          if ($LASTEXITCODE -ne 0) { throw "installer signature verification failed" }
+          $manifest = Get-Content (Join-Path $dir 'latest.json') -Raw -Encoding utf8 | ConvertFrom-Json
+          $signature = (Get-Content (Join-Path $dir "$exe.sig") -Raw -Encoding utf8).Trim()
+          if ($manifest.platforms.'windows-x86_64'.signature -cne $signature) {
+            throw "latest.json does not contain the verified installer signature"
+          }
           $sha = (Get-FileHash (Join-Path $dir $exe) -Algorithm SHA256).Hash
           echo "sha256=$sha"                    | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           echo "installer=$exe"                 | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
@@ -354,6 +352,7 @@ jobs:
       - name: Create release and upload the three assets
         uses: softprops/action-gh-release@v2
         with:
+          draft: true
           tag_name: ${{ steps.meta.outputs.tag }}
           name: Grandettoken ${{ steps.meta.outputs.version }}
           # 三件套缺一个,自动更新链路就断(RELEASE.md 的教训)。
@@ -427,6 +426,29 @@ jobs:
           $still = @($want | Where-Object { $have -notcontains $_ })
           if ($still.Count -gt 0) { throw "assets still missing after retries: $($still -join ', ')" }
           Write-Host "all three assets present after retries"
+
+      - name: Verify attached bytes and publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ steps.meta.outputs.tag }}"
+          $exe = "${{ steps.art.outputs.installer }}"
+          $local = "app/src-tauri/target/release/bundle/nsis"
+          $download = Join-Path $env:RUNNER_TEMP "release-asset-verification"
+          gh release download $tag --dir $download --clobber --pattern $exe --pattern "$exe.sig" --pattern 'latest.json'
+          if ($LASTEXITCODE -ne 0) { throw "could not retrieve release assets for verification" }
+          foreach ($asset in @($exe, "$exe.sig", 'latest.json')) {
+            if ((Get-FileHash (Join-Path $local $asset)).Hash -ne (Get-FileHash (Join-Path $download $asset)).Hash) {
+              throw "uploaded asset differs from verified local file: $asset"
+            }
+          }
+          $state = gh release view $tag --json isDraft
+          if ($LASTEXITCODE -ne 0) { throw "could not check whether release is a draft" }
+          if (($state | ConvertFrom-Json).isDraft) {
+            gh release edit $tag --draft=false --verify-tag
+            if ($LASTEXITCODE -ne 0) { throw "failed to publish verified draft" }
+          }
 
       # 上传**之后**才核验。第一版把核验放在了上传之前 —— 那时 release 还不存在,
       # 拉 latest.json 只会拿到 GitHub 的 404 错误页,Invoke-RestMethod 直接抛,

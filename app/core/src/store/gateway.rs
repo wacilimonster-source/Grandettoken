@@ -6,7 +6,7 @@ use crate::store::Store;
 use chrono::{Local, TimeZone};
 use rusqlite::params;
 use serde::Serialize;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 /// 台账明细保留天数（与 snapshots 90 天口径对齐）。
 pub const GATEWAY_LEDGER_KEEP_DAYS: i64 = 90;
@@ -80,6 +80,7 @@ pub struct GatewayUsageRecent {
 #[serde(rename_all = "camelCase")]
 pub struct GatewayUsageSummary {
     pub since_ts: i64,
+    pub dropped_records: u64,
     pub total_requests: u64,
     pub ok_requests: u64,
     pub error_requests: u64,
@@ -105,14 +106,6 @@ fn day_string_of(ts: i64) -> String {
         .single()
         .map(|dt| dt.format("%Y-%m-%d").to_string())
         .unwrap_or_else(|| "1970-01-01".to_string())
-}
-
-fn percentile_sorted(sorted: &[u64], pct_num: usize, pct_den: usize) -> Option<u64> {
-    if sorted.is_empty() {
-        return None;
-    }
-    let idx = ((sorted.len() - 1) * pct_num) / pct_den;
-    sorted.get(idx).copied()
 }
 
 /// 仅当渠道指向已知价目表来源（当前为 4SAPI）且能查到确定单价时估算人民币费用；
@@ -175,6 +168,15 @@ impl PricingLookup {
     }
 }
 
+const RECENT_USAGE_SQL: &str = "SELECT id, ts, channel_id, channel_alias, route_group, model, protocol,
+                        stream, status, latency_ms, first_byte_ms,
+                        prompt_tokens, cached_prompt_tokens,
+                        completion_tokens, reasoning_tokens,
+                        failover_count, masked_count, estimated_cost_cny, error_code, agent
+                 FROM gateway_usage_log
+                 WHERE ts >= ?1
+                 ORDER BY ts DESC, id DESC LIMIT ?2";
+
 impl Store {
     pub(crate) fn migrate_gateway_ledger(&self) -> Result<(), String> {
         self.conn()
@@ -203,8 +205,7 @@ impl Store {
                     error_code TEXT,
                     agent TEXT
                 );
-                CREATE INDEX IF NOT EXISTS idx_gw_usage_ts ON gateway_usage_log (ts DESC);
-                CREATE INDEX IF NOT EXISTS idx_gw_usage_day_ch ON gateway_usage_log (day, channel_id);",
+                CREATE INDEX IF NOT EXISTS idx_gw_usage_ts ON gateway_usage_log (ts DESC);",
             )
             .map_err(|e| format!("建立网关台账表失败: {e}"))
     }
@@ -266,23 +267,58 @@ impl Store {
         since_ts: i64,
         recent_limit: usize,
     ) -> Result<GatewayUsageSummary, String> {
-        let mut stmt = self
-            .conn()
-            .prepare(
-                "SELECT id, ts, channel_id, channel_alias, route_group, model, protocol,
-                        stream, status, latency_ms, first_byte_ms,
-                        prompt_tokens, cached_prompt_tokens, cache_creation_tokens,
-                        completion_tokens, reasoning_tokens,
-                        failover_count, masked_count, estimated_cost_cny, error_code, agent
-                 FROM gateway_usage_log
-                 WHERE ts >= ?1
-                 ORDER BY ts DESC, id DESC",
-            )
+        let db = self.conn().unchecked_transaction().map_err(|e| e.to_string())?;
+        let (mut summary, samples) = db.query_row(
+            "SELECT count(*), count(*) FILTER (WHERE status BETWEEN 200 AND 399),
+                    count(*) FILTER (WHERE failover_count > 0), count(first_byte_ms)
+             FROM gateway_usage_log WHERE ts >= ?1", [since_ts], |r| {
+                let total_requests: u64 = r.get(0)?;
+                let ok_requests = r.get(1)?;
+                Ok((GatewayUsageSummary {
+                    since_ts, total_requests, ok_requests, error_requests: total_requests - ok_requests,
+                    failover_requests: r.get(2)?, ..Default::default()
+                }, r.get::<_, i64>(3)?))
+            }).map_err(|e| format!("读取网关台账汇总失败: {e}"))?;
+        if samples > 0 {
+            let mut stmt = db.prepare(
+                "SELECT max(first_byte_ms, 0) AS ms, count(*) FROM gateway_usage_log
+                 WHERE ts >= ?1 AND first_byte_ms IS NOT NULL GROUP BY ms ORDER BY ms",
+            ).map_err(|e| format!("读取首字节时间失败: {e}"))?;
+            let mut groups = stmt.query([since_ts]).map_err(|e| e.to_string())?;
+            let median_rank = (samples - 1) / 2;
+            let upper_rank = (samples - 1) * 95 / 100;
+            let mut seen = 0i64;
+            while let Some(group) = groups.next().map_err(|e| e.to_string())? {
+                seen += group.get::<_, i64>(1).map_err(|e| e.to_string())?;
+                let ms: u64 = group.get(0).map_err(|e| e.to_string())?;
+                if seen > median_rank && summary.ttft_p50_ms.is_none() {
+                    summary.ttft_p50_ms = Some(ms);
+                }
+                if seen > upper_rank {
+                    summary.ttft_p95_ms = Some(ms);
+                    break;
+                }
+            }
+        }
+        summary.by_channel = usage_groups(&db, since_ts, true)?;
+        summary.by_model = usage_groups(&db, since_ts, false)?;
+        for group in &summary.by_channel {
+            summary.prompt_tokens = summary.prompt_tokens.saturating_add(group.prompt_tokens);
+            summary.cached_prompt_tokens = summary.cached_prompt_tokens.saturating_add(group.cached_prompt_tokens);
+            summary.cache_creation_tokens = summary.cache_creation_tokens.saturating_add(group.cache_creation_tokens);
+            summary.completion_tokens = summary.completion_tokens.saturating_add(group.completion_tokens);
+            summary.reasoning_tokens = summary.reasoning_tokens.saturating_add(group.reasoning_tokens);
+            summary.priced_requests += group.priced_requests;
+        }
+        summary.estimated_cost_cny = db.query_row(
+            "SELECT round(sum(estimated_cost_cny), 6) FROM gateway_usage_log WHERE ts >= ?1",
+            [since_ts], |r| r.get(0)).map_err(|e| e.to_string())?;
+        let mut stmt = db.prepare(RECENT_USAGE_SQL)
             .map_err(|e| format!("读取网关台账失败: {e}"))?;
 
         let rows = stmt
-            .query_map(params![since_ts], |r| {
-                Ok(GatewayUsageRowWithId {
+            .query_map(params![since_ts, i64::try_from(recent_limit).unwrap_or(i64::MAX)], |r| {
+                Ok(GatewayUsageRecent {
                     id: r.get(0)?,
                     ts: r.get(1)?,
                     channel_id: r.get(2)?,
@@ -296,105 +332,21 @@ impl Store {
                     first_byte_ms: r.get::<_, Option<i64>>(10)?.map(|v| v.max(0) as u64),
                     prompt_tokens: r.get::<_, Option<i64>>(11)?.map(|v| v.max(0) as u64),
                     cached_prompt_tokens: r.get::<_, Option<i64>>(12)?.map(|v| v.max(0) as u64),
-                    cache_creation_tokens: r.get::<_, Option<i64>>(13)?.map(|v| v.max(0) as u64),
-                    completion_tokens: r.get::<_, Option<i64>>(14)?.map(|v| v.max(0) as u64),
-                    reasoning_tokens: r.get::<_, Option<i64>>(15)?.map(|v| v.max(0) as u64),
-                    failover_count: r.get::<_, i64>(16)?.clamp(0, u8::MAX as i64) as u8,
-                    masked_count: r.get::<_, i64>(17)?.max(0) as usize,
-                    estimated_cost_cny: r.get(18)?,
-                    error_code: r.get(19)?,
-                    agent: r.get(20)?,
+                    completion_tokens: r.get::<_, Option<i64>>(13)?.map(|v| v.max(0) as u64),
+                    reasoning_tokens: r.get::<_, Option<i64>>(14)?.map(|v| v.max(0) as u64),
+                    failover_count: r.get::<_, i64>(15)?.clamp(0, u8::MAX as i64) as u8,
+                    masked_count: r.get::<_, i64>(16)?.max(0) as usize,
+                    estimated_cost_cny: r.get(17)?,
+                    error_code: r.get(18)?,
+                    agent: r.get(19)?,
                 })
             })
             .map_err(|e| format!("查询网关台账失败: {e}"))?;
 
-        let mut summary = GatewayUsageSummary {
-            since_ts,
-            ..Default::default()
-        };
-        let mut ttfts: Vec<u64> = Vec::new();
-        let mut by_channel: BTreeMap<String, GatewayUsageByKey> = BTreeMap::new();
-        let mut by_model: BTreeMap<String, GatewayUsageByKey> = BTreeMap::new();
-        let mut total_cost = 0.0_f64;
-
-        for item in rows {
-            let r = match item {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("跳过损坏的网关台账行: {e}");
-                    continue;
-                }
-            };
-            summary.total_requests += 1;
-            let is_ok = (200..400).contains(&r.status);
-            if is_ok {
-                summary.ok_requests += 1;
-            } else {
-                summary.error_requests += 1;
-            }
-            if r.failover_count > 0 {
-                summary.failover_requests += 1;
-            }
-            let p = r.prompt_tokens.unwrap_or(0);
-            let cp = r.cached_prompt_tokens.unwrap_or(0);
-            let cc = r.cache_creation_tokens.unwrap_or(0);
-            let comp = r.completion_tokens.unwrap_or(0);
-            let reas = r.reasoning_tokens.unwrap_or(0);
-            summary.prompt_tokens = summary.prompt_tokens.saturating_add(p);
-            summary.cached_prompt_tokens = summary.cached_prompt_tokens.saturating_add(cp);
-            summary.cache_creation_tokens = summary.cache_creation_tokens.saturating_add(cc);
-            summary.completion_tokens = summary.completion_tokens.saturating_add(comp);
-            summary.reasoning_tokens = summary.reasoning_tokens.saturating_add(reas);
-            if let Some(ttft) = r.first_byte_ms {
-                ttfts.push(ttft);
-            }
-            if let Some(cost) = r.estimated_cost_cny {
-                total_cost += cost;
-                summary.priced_requests += 1;
-            }
-
-            let ch_key = if r.channel_id.is_empty() {
-                r.channel_alias.clone()
-            } else {
-                r.channel_id.clone()
-            };
-            let ch_label = if r.channel_alias.is_empty() {
-                ch_key.clone()
-            } else {
-                r.channel_alias.clone()
-            };
-            accumulate_bucket(&mut by_channel, &ch_key, &ch_label, &r, is_ok);
-            accumulate_bucket(&mut by_model, &r.model, &r.model, &r, is_ok);
-
-            if summary.recent.len() < recent_limit {
-                summary.recent.push(GatewayUsageRecent {
-                    id: r.id,
-                    ts: r.ts,
-                    channel_id: r.channel_id,
-                    channel_alias: r.channel_alias,
-                    route_group: r.route_group,
-                    model: r.model,
-                    protocol: r.protocol,
-                    stream: r.stream,
-                    status: r.status,
-                    latency_ms: r.latency_ms,
-                    first_byte_ms: r.first_byte_ms,
-                    prompt_tokens: r.prompt_tokens,
-                    cached_prompt_tokens: r.cached_prompt_tokens,
-                    completion_tokens: r.completion_tokens,
-                    reasoning_tokens: r.reasoning_tokens,
-                    failover_count: r.failover_count,
-                    masked_count: r.masked_count,
-                    estimated_cost_cny: r.estimated_cost_cny,
-                    error_code: r.error_code,
-                    agent: r.agent,
-                });
-            }
-        }
-
-        if summary.priced_requests > 0 {
-            summary.estimated_cost_cny = Some((total_cost * 1_000_000.0).round() / 1_000_000.0);
-        }
+        summary.recent = rows.collect::<rusqlite::Result<_>>()
+            .map_err(|e| format!("读取网关明细失败: {e}"))?;
+        drop(stmt);
+        db.commit().map_err(|e| e.to_string())?;
         let cache_denom = summary.prompt_tokens.max(summary.cached_prompt_tokens);
         if cache_denom > 0 && summary.cached_prompt_tokens > 0 {
             let ratio = (summary.cached_prompt_tokens as f64) / (cache_denom as f64);
@@ -402,84 +354,69 @@ impl Store {
         } else if cache_denom > 0 {
             summary.cache_hit_rate = Some(0.0);
         }
-        ttfts.sort_unstable();
-        summary.ttft_p50_ms = percentile_sorted(&ttfts, 50, 100);
-        summary.ttft_p95_ms = percentile_sorted(&ttfts, 95, 100);
-
-        let mut ch_vec: Vec<_> = by_channel.into_values().collect();
-        ch_vec.sort_by(|a, b| b.requests.cmp(&a.requests).then_with(|| a.key.cmp(&b.key)));
-        let mut m_vec: Vec<_> = by_model.into_values().collect();
-        m_vec.sort_by(|a, b| b.requests.cmp(&a.requests).then_with(|| a.key.cmp(&b.key)));
-        summary.by_channel = ch_vec;
-        summary.by_model = m_vec;
         Ok(summary)
     }
 }
 
-struct GatewayUsageRowWithId {
-    id: i64,
-    ts: i64,
-    channel_id: String,
-    channel_alias: String,
-    route_group: Option<String>,
-    model: String,
-    protocol: String,
-    stream: bool,
-    status: u16,
-    latency_ms: u64,
-    first_byte_ms: Option<u64>,
-    prompt_tokens: Option<u64>,
-    cached_prompt_tokens: Option<u64>,
-    cache_creation_tokens: Option<u64>,
-    completion_tokens: Option<u64>,
-    reasoning_tokens: Option<u64>,
-    failover_count: u8,
-    masked_count: usize,
-    estimated_cost_cny: Option<f64>,
-    error_code: Option<String>,
-    agent: Option<String>,
-}
-
-fn accumulate_bucket(
-    map: &mut BTreeMap<String, GatewayUsageByKey>,
-    key: &str,
-    label: &str,
-    r: &GatewayUsageRowWithId,
-    is_ok: bool,
-) {
-    let entry = map.entry(key.to_string()).or_insert_with(|| GatewayUsageByKey {
-        key: key.to_string(),
-        label: label.to_string(),
-        ..Default::default()
-    });
-    entry.requests += 1;
-    if !is_ok {
-        entry.errors += 1;
-    }
-    entry.prompt_tokens = entry.prompt_tokens.saturating_add(r.prompt_tokens.unwrap_or(0));
-    entry.cached_prompt_tokens = entry
-        .cached_prompt_tokens
-        .saturating_add(r.cached_prompt_tokens.unwrap_or(0));
-    entry.cache_creation_tokens = entry
-        .cache_creation_tokens
-        .saturating_add(r.cache_creation_tokens.unwrap_or(0));
-    entry.completion_tokens = entry
-        .completion_tokens
-        .saturating_add(r.completion_tokens.unwrap_or(0));
-    entry.reasoning_tokens = entry
-        .reasoning_tokens
-        .saturating_add(r.reasoning_tokens.unwrap_or(0));
-    if let Some(cost) = r.estimated_cost_cny {
-        let prev = entry.estimated_cost_cny.unwrap_or(0.0);
-        entry.estimated_cost_cny = Some(((prev + cost) * 1_000_000.0).round() / 1_000_000.0);
-        entry.priced_requests += 1;
-    }
+fn usage_groups(db: &rusqlite::Connection, since: i64, channels: bool) -> Result<Vec<GatewayUsageByKey>, String> {
+    let source = if channels {
+        // 同一渠道改名时显示最新记录的别名，同秒按 id 排序。
+        "SELECT coalesce(nullif(channel_id, ''), channel_alias) AS bucket,
+                first_value(coalesce(nullif(channel_alias, ''), channel_id)) OVER (
+                  PARTITION BY coalesce(nullif(channel_id, ''), channel_alias) ORDER BY ts DESC, id DESC
+                ) AS label, status, prompt_tokens, cached_prompt_tokens, cache_creation_tokens,
+                completion_tokens, reasoning_tokens, estimated_cost_cny
+         FROM gateway_usage_log WHERE ts >= ?1"
+    } else {
+        "SELECT model AS bucket, model AS label, status, prompt_tokens, cached_prompt_tokens,
+                cache_creation_tokens, completion_tokens, reasoning_tokens, estimated_cost_cny
+         FROM gateway_usage_log WHERE ts >= ?1"
+    };
+    let sql = format!("WITH labeled AS ({source})
+        SELECT bucket, label, count(*) AS requests, count(*) FILTER (WHERE status NOT BETWEEN 200 AND 399),
+               total(max(prompt_tokens, 0)), total(max(cached_prompt_tokens, 0)), total(max(cache_creation_tokens, 0)),
+               total(max(completion_tokens, 0)), total(max(reasoning_tokens, 0)), count(estimated_cost_cny),
+               round(sum(estimated_cost_cny), 6)
+        FROM labeled GROUP BY bucket ORDER BY requests DESC, bucket");
+    let mut stmt = db.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([since], |r| Ok(GatewayUsageByKey {
+        key: r.get(0)?, label: r.get(1)?, requests: r.get(2)?, errors: r.get(3)?,
+        prompt_tokens: r.get::<_, f64>(4)? as u64, cached_prompt_tokens: r.get::<_, f64>(5)? as u64,
+        cache_creation_tokens: r.get::<_, f64>(6)? as u64, completion_tokens: r.get::<_, f64>(7)? as u64,
+        reasoning_tokens: r.get::<_, f64>(8)? as u64, priced_requests: r.get(9)?, estimated_cost_cny: r.get(10)?,
+    })).map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<_>>().map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn ledger_groups_full_window_with_bounded_recent_rows() {
+        let store = Store::open_memory().unwrap();
+        store.conn().execute_batch(
+            "WITH RECURSIVE seq(i) AS (VALUES(1) UNION ALL SELECT i + 1 FROM seq WHERE i < 10000)
+             INSERT INTO gateway_usage_log (ts, day, channel_id, channel_alias, model, status, latency_ms,
+                                             first_byte_ms, prompt_tokens, cached_prompt_tokens)
+             SELECT 1000, 'fixture', 'c', CASE WHEN i = 10000 THEN 'renamed' ELSE 'old' END,
+                    'gpt', 200, 100, (i % 100), 5, -1 FROM seq"
+        ).unwrap();
+        let summary = store.gateway_usage_summary(1000, 2).unwrap();
+        assert_eq!(summary.total_requests, 10000);
+        assert_eq!(summary.by_channel[0].label, "renamed");
+        assert_eq!(summary.by_model[0].requests, 10000);
+        assert_eq!(summary.prompt_tokens, 50000);
+        assert_eq!(summary.cached_prompt_tokens, 0);
+        assert_eq!((summary.ttft_p50_ms, summary.ttft_p95_ms), (Some(49), Some(94)));
+        assert_eq!(summary.recent.len(), 2);
+        assert_eq!(summary.recent[0].channel_alias, "renamed");
+        let mut plan = store.conn().prepare(&format!("EXPLAIN QUERY PLAN {RECENT_USAGE_SQL}")).unwrap();
+        let details: Vec<String> = plan.query_map([1000, 2], |r| r.get(3)).unwrap()
+            .collect::<rusqlite::Result<_>>().unwrap();
+        assert!(details.iter().any(|line| line.contains("idx_gw_usage_ts")));
+    }
 
     #[test]
     fn ledger_migrates_inserts_summarizes_prunes_and_clears() {

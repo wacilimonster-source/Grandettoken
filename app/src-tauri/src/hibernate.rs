@@ -74,8 +74,10 @@ pub(crate) fn has_live_webview(app: &AppHandle) -> bool {
 }
 
 pub(crate) fn observe_session(app: &AppHandle, id: &str, present: Option<bool>) {
-    if let Some(index) = SESSION_IDS.iter().position(|candidate| *candidate == id) {
-        lock_rw(&app.state::<Hibernate>().web_sessions)[index] = present;
+    if present.is_some() {
+        if let Some(index) = SESSION_IDS.iter().position(|candidate| *candidate == id) {
+            lock_rw(&app.state::<Hibernate>().web_sessions)[index] = present;
+        }
     }
 }
 
@@ -122,14 +124,14 @@ pub(crate) fn hide_main_window(app: &AppHandle, window: &WebviewWindow) -> tauri
     Ok(())
 }
 
-fn show(app: &AppHandle, window: &WebviewWindow) -> tauri::Result<()> {
+fn show(app: &AppHandle, window: &WebviewWindow, max_age_sec: i64) -> tauri::Result<()> {
     let was_visible = window.is_visible()?;
     window.show()?;
     window.set_focus()?;
     if !was_visible {
         let _ = window.emit("window-shown", ());
     }
-    refresh_if_stale(app, 60);
+    refresh_if_stale(app, max_age_sec);
     Ok(())
 }
 
@@ -189,7 +191,7 @@ fn ensure(app: &AppHandle) -> Result<(), String> {
         }
     }
     let window = app.get_webview_window("main").ok_or("主窗口不存在")?;
-    show(app, &window).map_err(|e| e.to_string())
+    show(app, &window, 60).map_err(|e| e.to_string())
 }
 
 async fn reopen(app: AppHandle, geometry: Geometry, presentation: Presentation) {
@@ -212,7 +214,8 @@ async fn reopen(app: AppHandle, geometry: Geometry, presentation: Presentation) 
         match result {
             Ok(window) => {
                 *lock_rw(&state.phase) = Phase::Live;
-                if let Err(error) = show(app, &window) {
+                crate::checkin_scheduler::CHECKIN_WAKE.notify_one();
+                if let Err(error) = show(app, &window, 0) {
                     report(app, "显示重建的主窗口", &error.to_string());
                 }
             }
@@ -328,10 +331,10 @@ fn needs_webview(app: &AppHandle, state: &Hibernate) -> bool {
         }
         match result {
             Some(present) => present,
-            None if matches!(*id, "qoder" | "qoder-cn") => last_views
-                .as_ref()
-                .is_none_or(|views| views.iter().any(|view| view.id == *id && view.has_key)),
-            None => true,
+            // 启动尚未出数时先保留窗口。已出数但渠道从未配置时，不必等到会话读成功。
+            None => last_views.as_ref().is_none_or(|views| {
+                views.iter().any(|view| view.id == *id && view.has_key)
+            }),
         }
     })
 }
