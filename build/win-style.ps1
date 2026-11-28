@@ -8,11 +8,32 @@ Add-Type -Namespace W -Name U -MemberDefinition @'
 '@
 # Match both binary names: bundler output is Grandettoken.exe (mainBinaryName),
 # a plain `cargo build` produces tokenscope.exe.
-$windows = @(Get-Process -Name @('Grandettoken', 'tokenscope') -EA SilentlyContinue |
-  Where-Object { $_.MainWindowHandle -ne 0 -and (-not $AppProcessId -or $_.Id -eq $AppProcessId) })
-if ($windows.Count -ne 1) { throw "expected exactly one app window; found $($windows.Count)" }
-$p = $windows[0]
-if (-not $p) { throw 'app (Grandettoken/tokenscope) is not running or has no main window' }
-$h = $p.MainWindowHandle
-if ($h -eq 0) { throw 'no main window handle' }
-'{0:X8}' -f [W.U]::GetWindowLong($h, -16)
+$pids = @(Get-Process -Name @('Grandettoken', 'tokenscope') -EA SilentlyContinue |
+  Where-Object { -not $AppProcessId -or $_.Id -eq $AppProcessId } |
+  ForEach-Object { $_.Id })
+if ($pids.Count -ne 1) { throw "expected exactly one app process; found $($pids.Count)" }
+# Enumerate top-level windows of the app process and pick the REAL main window by
+# class. Process.MainWindowHandle is a heuristic that tauri helper windows
+# (tray_icon_app / global_hotkey_app / Tao Thread Event Target / single-instance
+# "siw") can win, and their styles differ per run -> false FAIL.
+Add-Type -Namespace W -Name E -MemberDefinition @'
+public delegate bool EnumProc(System.IntPtr h, System.IntPtr l);
+[DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, System.IntPtr l);
+[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(System.IntPtr h, out uint pid);
+[DllImport("user32.dll")] public static extern int GetClassName(System.IntPtr h, System.Text.StringBuilder s, int n);
+'@
+$found = @()
+$cb = [W.E+EnumProc]{
+  param($h, $l)
+  $pid2 = 0
+  [void][W.E]::GetWindowThreadProcessId($h, [ref]$pid2)
+  if ($pid2 -eq $pids[0]) {
+    $c = New-Object System.Text.StringBuilder 256
+    [void][W.E]::GetClassName($h, $c, 256)
+    if ($c.ToString() -eq 'Tauri Window') { $script:found += $h }
+  }
+  return $true
+}
+[void][W.E]::EnumWindows($cb, [System.IntPtr]::Zero)
+if ($found.Count -ne 1) { throw "expected exactly one Tauri Window; found $($found.Count)" }
+'{0:X8}' -f [W.U]::GetWindowLong($found[0], -16)

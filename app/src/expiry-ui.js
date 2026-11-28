@@ -67,11 +67,21 @@
       return at === null ? [] : [{ channel, entry: { at }, type: "account" }];
     });
     entries.sort((a, b) => Number(a.entry.at) - Number(b.entry.at));
+    const earliest = entries.find(item => !item.channel.limited);
+    const midnight = endOfWindow(1, now);
+    let priority = null;
+    if (earliest && Number(earliest.entry.at) < midnight) {
+      const at = Number(earliest.entry.at);
+      const amount = entries.reduce((sum, item) => item.channel.id === earliest.channel.id && Number(item.entry.at) === at
+        ? sum + Number(item.entry.amount) : sum, 0);
+      priority = { channel: earliest.channel, type: "points", entry: { at, amount } };
+    }
     const first = [...entries, ...accounts, ...packages].sort((a, b) => Number(a.entry.at) - Number(b.entry.at))[0] || null;
     return {
       total: Math.round(entries.reduce((sum, item) => sum + Number(item.entry.amount), 0) * 100) / 100,
       channels: new Set(entries.map(item => item.channel.id)).size,
-      entries, accounts, packages, unknown, first,
+      entries, accounts, packages, unknown, first, priority,
+      nextPriorityCheck: (priority ? priority.entry.at : midnight) * 1000,
       hasConfirmed: entries.length > 0 || accounts.length > 0 || packages.length > 0,
     };
   }
@@ -119,5 +129,12 @@
       fresh: false, button: cached ? "重新登录" : "登录网页版" };
   }
 
-  window.ExpiryUI = { entriesWithin, accountWithin, nearest, nextEvent, summary, summaryText, dayIndex, qoderNotice };
+  let nextPriorityCheck = Infinity;
+  function homeEvent(summary) {
+    nextPriorityCheck = summary.nextPriorityCheck;
+    return summary.priority || summary.first;
+  }
+
+  window.ExpiryUI = { entriesWithin, accountWithin, nearest, nextEvent, summary, summaryText, dayIndex, qoderNotice,
+    homeEvent, needsTick: now => now >= nextPriorityCheck };
 })();

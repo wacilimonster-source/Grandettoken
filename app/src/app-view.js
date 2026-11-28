@@ -69,7 +69,7 @@ function renderDetailSheet() {
   const caption = [
     c.id === "google-cloud" ? "Google Cloud 剩余赠金" : KIND_CAPTION[c.kind] || "",
     stale ? (c.recovery && c.recovery.phase === "retrying" ? "更新中 · 保留上次快照" : c.stale ? "保留上次快照" : "暂时无法更新") : "",
-    c.updatedAt ? `更新于 ${relTime(c.updatedAt)}` : "",
+    c.updatedAt && (c.valid || c.stale) ? `上次成功更新于 ${exactLocalTime(c.updatedAt)}` : "",
     c.recovery && c.recovery.attempts ? `已尝试 ${c.recovery.attempts} 次` : "",
     c.error && !c.valid ? c.error : "",
   ].filter(Boolean).join(" · ");
@@ -467,7 +467,7 @@ function renderRiskBand() {
 
   // 有明细缺口时标成“最早可确认”,不把未知日期的渠道误排在它之后。
   let cell2 = "";
-  const first = summary.first;
+  const first = window.ExpiryUI.homeEvent(summary);
   if (first) {
     // 自然日差,与 expiryRelative 同一口径(报告 L4):ceil 的"剩 N 天"会把
     // 今天 23:00 到期的积分写成"剩 1 天",同一界面另一处却是"今天到期"。
@@ -477,7 +477,7 @@ function renderRiskBand() {
     const description = first.type === "package" ? "套餐截止" : first.type === "account" ? "账户额度到期" : `${points(first.entry.amount)} 分`;
     const title = `打开 ${first.channel.name} 的到期明细 · ${fmtDay(first.entry.at)} · ${description}`;
     cell2 = `<button type="button" class="cell metric" data-act="jump" data-id="${esc(first.channel.id)}" title="${esc(title)}">
-      <div class="metric-label lb">${summary.unknown.length ? "最早可确认" : "最先到期"}</div>
+      <div class="metric-label lb">${summary.priority ? "今天优先用" : summary.unknown.length ? "最早可确认" : "最先到期"}</div>
       <div class="metric-number due-date" style="color:${dueColor}">${fmtDay(first.entry.at)}<small style="font-size:11px;color:var(--tx3);margin-left:5px;letter-spacing:0">${when}</small></div>
       <div class="metric-sub"><span class="due-name">${esc(first.channel.name)} · ${description}</span></div></button>`;
   } else if (summary.unknown.length) {

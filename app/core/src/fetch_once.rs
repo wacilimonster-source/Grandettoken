@@ -738,6 +738,11 @@ pub(super) async fn fetch_codex_reset_credits(
     account_id: Option<&str>,
     url: &str,
 ) -> Result<crate::codex::ResetCredits, String> {
+    let slot = super::reset_poll::slot(url, key, account_id);
+    let mut state = slot.lock().await;
+    if state.cooling() {
+        return Ok(state.unavailable());
+    }
     let mut req = client.get(url)
         .bearer_auth(key.trim()).header("Accept", "application/json")
         .header("OpenAI-Beta", "codex-1").header("originator", "Codex Desktop")
@@ -748,12 +753,18 @@ pub(super) async fn fetch_codex_reset_credits(
     let resp = req.send().await.map_err(|e| {
         if e.is_timeout() { "重置卡查询超时".to_string() } else { "重置卡查询连接失败".to_string() }
     })?;
+    if resp.status().as_u16() == 429 {
+        state.pause(retry_after_seconds(resp.headers(), now_ts()));
+        return Ok(state.unavailable());
+    }
     if !resp.status().is_success() {
         return Err(format!("重置卡查询 HTTP {}", resp.status().as_u16()));
     }
     let raw = read_body_capped(resp, 512_000).await.map_err(|(msg, _)| msg)?;
     let body = serde_json::from_slice(&raw).map_err(|_| "重置卡响应不是 JSON".to_string())?;
-    crate::codex::inventory(&body, now_ts()).map_err(str::to_string)
+    let cards = crate::codex::inventory(&body, now_ts()).map_err(str::to_string)?;
+    state.remember(&cards);
+    Ok(cards)
 }
 
 /// 读桌面端凭据候选。`region`:`Some(true)` 只国际版 / `Some(false)` 只国内版 /

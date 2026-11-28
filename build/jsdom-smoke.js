@@ -474,6 +474,14 @@ const HARNESS = `
           EXPIRY_FILTER && !!document.querySelector('#list .row[data-id="qoder-cn"]') &&
           document.querySelector('#sum [data-act="expiry-filter"]').getAttribute('aria-pressed') === 'true');
         if (EXPIRY_FILTER) document.querySelector('#sum [data-act="expiry-filter"]').click();
+        const at = clock / 1000 + 3600;
+        const packs = [{ at, amount: 20 }, { at, amount: 5 }, { at: at + 1, amount: 80 }];
+        CHANNELS = [{ ...q, accountExpiry: { state: "dated", at: at - 30 } },
+          { ...q, id: "wb-expiry", name: "WorkBuddy", expiring: packs, accountExpiry: null }];
+        render({});
+        const pick = document.querySelector('#sum [data-act="jump"]');
+        ck("今天优先用展示最早批次并指向对应渠道 " + layout, pick?.dataset.id === "wb-expiry" &&
+          /今天优先用/.test(pick.textContent) && /WorkBuddy · 25 分/.test(pick.textContent), pick?.outerHTML);
         CHANNELS = [{ ...q, expiring: [{ at: new RealDate(2026, 10, 27, 10).getTime() / 1000, amount: 25 }] }];
         render({});
         const withLaterPack = document.querySelector('#list .row[data-id="qoder-cn"]');

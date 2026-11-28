@@ -465,7 +465,7 @@ function coreCodexResets(c) {
   else if (n > 0 && r.credits == null) notes.push("接口仅返回数量,到期明细未提供");
   else if (n > cards.length) notes.push(`接口返回 ${cards.length} 张到期明细,可用数量以 ${n} 张为准`);
   if (r && r.lastRedeemedAt) notes.push(`最近用卡重置 ${exactLocalTime(r.lastRedeemedAt)}`);
-  const updated = r && r.updatedAt ? `<div class="fn-note">查询于 ${esc(exactLocalTime(r.updatedAt))}${c.stale || !c.valid ? " · 上次快照" : ""}</div>` : "";
+  const updated = r && r.updatedAt ? `<div class="fn-note">查询于 ${esc(exactLocalTime(r.updatedAt))}${c.stale || !c.valid || r.error ? " · 上次快照" : ""}</div>` : "";
   const toggle = cards.length > 3 ? `<button class="sec-more" data-act="sec-more" data-id="codex" data-sec="resets" aria-expanded="${more}">${more ? "收起" : `全部 ${cards.length} 张`}</button>` : "";
   return `<div class="sec codex-resets"><div class="sec-h"><span>重置卡</span><b>${count}</b></div>${rows}${toggle}${notes.map((s) => `<div class="fn-note">${esc(s)}</div>`).join("")}${updated}</div>`;
 }

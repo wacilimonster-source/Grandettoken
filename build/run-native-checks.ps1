@@ -21,6 +21,7 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $defaultScripts = @(
+  'verify-home-priority.js',
   'verify-settings-entry.js',
   'verify-checkin-center.js',
   'verify-resize.js',

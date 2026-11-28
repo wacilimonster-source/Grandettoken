@@ -190,7 +190,7 @@
       : `周额度读取中 · ${cardCountText(c)}`;
     const earliest = earliestExpiryText(c);
     const updatedText = c.resetCredits && c.resetCredits.updatedAt
-      ? `查询于 ${fmtTime(c.resetCredits.updatedAt)}${c.stale || !c.valid ? " · 上次快照" : ""}`
+      ? `查询于 ${fmtTime(c.resetCredits.updatedAt)}${c.stale || !c.valid || c.resetCredits.error ? " · 上次快照" : ""}`
       : "";
     const errNote = c.resetCredits && c.resetCredits.error
       ? `<div class="cr-note bad">${esc(c.resetCredits.error)}</div>`

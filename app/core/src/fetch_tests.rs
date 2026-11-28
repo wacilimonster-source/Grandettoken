@@ -169,6 +169,15 @@ fn quota_attempt_is_single_request_and_rotates_fallback_with_shared_retry_count(
 }
 
 #[test]
+fn automatic_poll_uses_channel_specific_freshness() {
+    let codex = providers::find("codex").unwrap();
+    assert!(reuse_balance(codex, 1000, 1299));
+    assert!(!reuse_balance(codex, 1000, 1300));
+    assert!(!reuse_balance(codex, 1000, 999));
+    assert!(!reuse_balance(providers::find("deepseek").unwrap(), 1000, 1001));
+}
+
+#[test]
 fn codex_reset_credit_read_is_scoped_and_optional_errors_stay_unknown() {
     use std::io::{Read, Write};
     let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -178,6 +187,7 @@ fn codex_reset_credit_read_is_scoped_and_optional_errors_stay_unknown() {
         for response in [
             "HTTP/1.1 200 OK\r\nContent-Length: 34\r\nConnection: close\r\n\r\n{\"available_count\":0,\"credits\":[]}",
             "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 300\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
         ] {
             let (mut stream, _) = server.accept().unwrap();
             stream.set_read_timeout(Some(std::time::Duration::from_secs(3))).unwrap();
@@ -205,6 +215,17 @@ fn codex_reset_credit_read_is_scoped_and_optional_errors_stay_unknown() {
     assert!(cards.available_count.is_none());
     assert!(cards.credits.is_none());
     assert!(cards.error.as_deref().unwrap_or("").contains("403"));
+    // Once the fixture closes its listener, another HTTP attempt would produce a
+    // transport error. A cached 429 must still return the previous inventory.
+    for token in ["test-access", "renewed-test-access"] {
+        let mut balance = FetchResult { valid: true, ..Default::default() };
+        rt.block_on(enrich_codex(&client, token, Some("workspace-test"), &url, &mut balance));
+        let cards = balance.reset_credits.unwrap();
+        assert!(balance.valid);
+        assert!(cards.error.unwrap().contains("限流"));
+        assert_eq!(cards.available_count, Some(0));
+        assert!(cards.updated_at > 0);
+    }
     for req in worker.join().unwrap() {
         assert!(req.starts_with("get /reset-credits"));
         assert!(req.contains("authorization: bearer test-access"));
@@ -222,7 +243,7 @@ async fn polling_and_probe_return_the_same_codex_and_minimax_enrichment() {
     let expiring_at = now_ts() + 3600;
     let upstream = tokio::spawn(async move {
         let mut requests = std::collections::BTreeMap::<String, usize>::new();
-        for _ in 0..8 {
+        for _ in 0..11 {
             let (stream, _) = listener.accept().await.unwrap();
             let mut stream = tokio::io::BufReader::new(stream);
             let mut line = String::new();
@@ -241,6 +262,10 @@ async fn polling_and_probe_return_the_same_codex_and_minimax_enrichment() {
                 "/codex-usage" => serde_json::json!({"rate_limit": {"primary_window": {"used_percent": 25, "limit_window_seconds": 604800}}}),
                 "/backend-api/wham/rate-limit-reset-credits" => {
                     assert!(headers.contains("chatgpt-account-id: fixture-account"));
+                    if requests[&target] == 3 {
+                        stream.get_mut().write_all(b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 300\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+                        continue;
+                    }
                     serde_json::json!({"available_count": 2, "credits": []})
                 }
                 "/minimax-membership" => serde_json::json!({"base_resp": {"status_code": 0}, "op_credit_summary": {"total_remaining_amount": 21}}),
@@ -269,6 +294,15 @@ async fn polling_and_probe_return_the_same_codex_and_minimax_enrichment() {
         assert_eq!(poll_url, probe_url);
         if id == "codex" {
             assert_eq!(polled.reset_credits.as_ref().and_then(|r| r.available_count), Some(2));
+            for manual in [false, true] {
+                if manual { fetcher.request_refresh(); }
+                let (balance, _, error) = fetcher.quota_attempt(&def, &cred, None).await;
+                assert!(balance.valid && error.is_none());
+                let old = balance.reset_credits.unwrap();
+                assert_eq!(old.available_count, Some(2));
+                assert_eq!(old.updated_at, probed.reset_credits.as_ref().unwrap().updated_at);
+                assert!(old.error.unwrap().contains("限流"));
+            }
             // 观察时刻由各入口单独记录，即使请求跨秒，额度和明细也应一致。
             for result in [&mut polled, &mut probed] {
                 let credits = result.reset_credits.as_mut().unwrap();
@@ -283,7 +317,10 @@ async fn polling_and_probe_return_the_same_codex_and_minimax_enrichment() {
     }
     let requests = tokio::time::timeout(std::time::Duration::from_secs(4), upstream).await.unwrap().unwrap();
     assert_eq!(requests.len(), 4);
-    assert!(requests.values().all(|count| *count == 2));
+    assert_eq!(requests["/codex-usage"], 4);
+    assert_eq!(requests["/backend-api/wham/rate-limit-reset-credits"], 3);
+    assert_eq!(requests["/minimax-membership"], 2);
+    assert_eq!(requests["/minimax-cloud/api/v1/credit/details"], 2);
 }
 
 #[test]

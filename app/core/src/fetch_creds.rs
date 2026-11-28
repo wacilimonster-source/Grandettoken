@@ -29,9 +29,13 @@ pub fn key_fp(token: &str) -> String {
 
 /// Prefer an explicit stable account ID; never infer an account from a display name.
 pub(super) fn credential_scope(c: &appauth::Credential) -> String {
-    match c.account_id.as_deref().filter(|id| !id.is_empty()) {
+    account_scope(&c.token, c.account_id.as_deref())
+}
+
+pub(super) fn account_scope(token: &str, account: Option<&str>) -> String {
+    match account.filter(|id| !id.is_empty()) {
         Some(id) => key_fp(&format!("account:{id}")),
-        None => key_fp(&format!("token:{}", c.token)),
+        None => key_fp(&format!("token:{token}")),
     }
 }
 

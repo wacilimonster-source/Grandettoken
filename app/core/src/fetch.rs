@@ -220,6 +220,17 @@ pub use fetch_creds::{
 };
 use fetch_creds::*;
 
+fn reuse_balance(def: &providers::ProviderDef, updated: i64, now: i64) -> bool {
+    let age = now.saturating_sub(updated);
+    let interval = match def.auth {
+        AuthKind::Keyring if !def.unstable => 0,
+        _ => 300,
+    };
+    updated > 0 && (0..interval).contains(&age)
+}
+
+#[path = "reset_poll.rs"]
+mod reset_poll;
 #[path = "fetch_once.rs"]
 mod fetch_once;
 pub use fetch_once::{
@@ -707,6 +718,8 @@ impl Fetcher {
     }
 
     async fn fetch_selected(&self, store: &Arc<Mutex<Store>>, reader: &Arc<Mutex<Store>>, selected: Option<&HashSet<String>>) -> Vec<ChannelView> {
+        let automatic = selected.is_none() && crate::lockx::lock(&self.last_run)
+            .as_ref().is_some_and(|(at, _)| *at != i64::MIN);
         let previous = crate::lockx::lock(&self.progress).rows.clone();
         crate::lockx::lock(&self.progress).begin();
         let should_fetch = |id: &str| selected.map_or_else(
@@ -903,6 +916,13 @@ impl Fetcher {
                         };
                     }
 
+                    if automatic && !self.channel_state().recovery.contains_key(def.id) {
+                        if let Some((result, ts)) = cached.as_ref().filter(|(r, ts)| r.valid &&
+                            reuse_balance(def, *ts, now_ts())) {
+                            return FetchedOne { i, def, fp, view: None,
+                                pending: Some((result.clone(), false, *ts, creds.first().cloned())), success: None };
+                        }
+                    }
                     let memo = self.channel_state().url_memo.get(def.id).cloned();
 
                     // 有多个凭据候选时依次试:只有"服务器明确说这份凭据不行"(401/403)
@@ -1004,6 +1024,14 @@ impl Fetcher {
                     let fetched = if result.valid {
                         let cred = shown_cred.as_ref().unwrap(); // creds 非空且 result.valid 为真时 chosen/last_cred 必为 Some
                         let actual_scope = credential_scope(cred);
+                        if def.id == "codex" {
+                            if let Some(cards) = result.reset_credits.as_mut().filter(|r| r.error.is_some() && r.updated_at == 0) {
+                                if let Some(old) = self.cached(reader, def.id, &actual_scope)
+                                    .and_then(|(r, _)| r.reset_credits).filter(|r| r.updated_at > 0) {
+                                    *cards = crate::codex::unavailable(Some(old), cards.error.take().unwrap_or_default());
+                                }
+                            }
+                        }
                         self.channel_state().scopes.insert(def.id.into(), actual_scope.clone());
                         fetch_db::save_recovery(store.clone(), def.id, Snapshot::new(actual_scope, ts, result.clone())).await;
                         FetchedOne {

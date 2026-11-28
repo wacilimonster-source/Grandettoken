@@ -22,14 +22,16 @@ pub(crate) async fn get_channels(state: State<'_, AppState>, force: Option<bool>
 /// 存在的理由见 `core::view` 的头注:四种形态以前各自解释一次 `valid / limited /
 /// updatedAt`,同一个渠道能给出三种结论。这一条命令之后,前端只负责"画"。
 ///
-/// 取数走 `fetch_shared`(与 `get_channels` 同一闸门、同一份 5 秒内的近期结果),
-/// 所以前端连着调这两条不会多打一次账务接口。
+/// 重绘使用最近一次渠道快照，只在启动或凭据变更后缺少快照时取数。
 #[tauri::command]
 pub(crate) async fn home_view(state: State<'_, AppState>) -> Result<view::HomeView, String> {
     let store = state.store.clone();
     let reader = state.read_store.clone();
     let fetcher = state.fetcher.clone();
-    let views = fetcher.fetch_shared_using(&store, &reader).await;
+    let views = match fetcher.last_views() {
+        Some(views) => views,
+        None => fetcher.fetch_shared_using(&store, &reader).await,
+    };
 
     let cfg = lock_rw(&state.config).clone();
     Ok(home_view_of(&cfg, &views, now_ts()))

@@ -118,7 +118,7 @@ pub(crate) fn refresh_if_stale(app: &tauri::AppHandle, max_age_sec: i64) {
     }
     let h = app.clone();
     tauri::async_runtime::spawn(async move {
-        refresh_now(&h).await;
+        refresh_channels(&h, false).await;
     });
 }
 
@@ -171,11 +171,15 @@ pub(crate) fn quit_when_idle(app: &tauri::AppHandle) {
 }
 
 pub(crate) async fn refresh_now(app: &tauri::AppHandle) {
+    refresh_channels(app, true).await;
+}
+
+async fn refresh_channels(app: &tauri::AppHandle, force: bool) {
     let (store, reader, fetcher) = {
         let state = app.state::<AppState>();
         (state.store.clone(), state.read_store.clone(), state.fetcher.clone())
     };
-    fetcher.request_refresh();
+    if force { fetcher.request_refresh(); }
     let views = fetcher.fetch_shared_using(&store, &reader).await;
     LAST_REFRESH.store(now_ts(), std::sync::atomic::Ordering::Relaxed);
     emit_channels(app, &views);

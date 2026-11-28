@@ -1011,3 +1011,10 @@
 - **PC 到手机同步**：修复 Gist 发布遇到 401 后的重新授权与同账号凭据替换流程（保留同步组与待发密文），并在桌面包内置公开 OAuth Client ID 默认值（见 `docs/report/desktop-sync-auth-2026-11-26.md`）。
 - **代码审查与质量门禁**：将 QA 截图与打包日志移出 Git 索引并启用 `check-tracked-artifacts` 门禁；合入网页休眠误报、套餐周期写入、网关台账与凭据边界、前端渲染及发版离线验签等修复。
 - 三处版本号同步至 `0.3.79`（`Cargo.toml` / `tauri.conf.json` / `Cargo.lock`），并发版前串行复跑全部门禁。
+## 2026-11-28 v0.3.80 首页「今天优先用」与重置卡 429 冷却
+
+- 首页中格在本地今天有未到期批次时显示「今天优先用」,指向截止最早的可见有效批次,同渠道同刻合计,限流渠道不参与;跨过批次截止或本地午夜在下一次分钟刷新重选。产品口径 `docs/product/today-expiry-priority.md`。
+- Codex 重置卡查询遇 429 按账号独立冷却(取 Retry-After),冷却期旧卡仅供查看并标注,主额度照常更新;主额度成功不清除附加接口限流(AGENTS §8.2)。
+- home_view 重绘复用最近渠道快照,仅缺快照时取数;轮询入口不再强制取数,手动刷新保持强制;详情时间改「上次成功更新于」精确时刻。
+- 验证:§4.1 门禁全绿(jsdom 332 项、core 728+6 夹具、双端 cargo check 零 warning、凭据扫描 CLEAN);`verify-home-priority.js` 新增并纳入 `run-native-checks.ps1`,v0.3.80 候选构建真机 9 项 CDP 全过(日志 `build/qa/native-2026-11-28/`,不入库)。期间修复 `win-style.ps1` 假红:`MainWindowHandle` 启发式选中 tauri 辅助窗口,改按类名枚举 Tauri Window(AGENTS §8.4)。
+- 版本号三处同步 0.3.80;backlog 新增 B26(安装版真机验收),B11 随本轮复验通过。

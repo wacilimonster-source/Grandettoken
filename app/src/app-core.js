@@ -280,7 +280,7 @@ function schedulePeakTicks() {
   clearTimeout(peakTickTimer);
   const delay = 60_000 - (Date.now() % 60_000) + 20;
   peakTickTimer = setTimeout(() => {
-    if (WINDOW_VISIBLE && window.QuotaPlanUI?.needsTick(Date.now())) render({});
+    if (WINDOW_VISIBLE && (window.ExpiryUI.needsTick(Date.now()) || window.QuotaPlanUI?.needsTick(Date.now()))) render({});
     else tickPeakCountdowns();
     schedulePeakTicks();
   }, delay);
