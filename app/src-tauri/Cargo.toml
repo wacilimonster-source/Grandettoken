@@ -42,7 +42,7 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 tokio = { version = "1", features = ["time", "macros", "rt-multi-thread"] }
 futures = "0.3"
 axum = "0.8"
-getrandom = "0.2"
+getrandom = "0.4"
 if-addrs = "0.13"
 # 托盘像素改走 base64 传输(报告 O-9),解码在 set_tray_icon 里
 base64 = "0.22"

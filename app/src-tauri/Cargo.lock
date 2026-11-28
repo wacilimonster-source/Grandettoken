@@ -4930,7 +4930,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "futures",
- "getrandom 0.2.17",
+ "getrandom 0.4.3",
  "if-addrs",
  "reqwest 0.12.28",
  "serde",
