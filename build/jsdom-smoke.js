@@ -157,6 +157,7 @@ const quotaFiles = ["quota-plan.js", "quota-plan-data.js", "quota-plan-ui.js"].m
   code: fs.readFileSync(path.join(SRC, name), "utf8"),
 }));
 const cloudJs = fs.readFileSync(path.join(SRC, "google-cloud.js"), "utf8");
+const commanderJs = fs.readFileSync(path.join(SRC, "commander.js"), "utf8");
 let antigravityJs = fs.readFileSync(path.join(SRC, "antigravity.js"), "utf8");
 if (process.env.AG_LAYOUT_SENTINEL === "1") {
   const marker = 'windowHtml(c, w, w.key === "gemini-weekly")';
@@ -172,6 +173,12 @@ const dom = new JSDOM(html, { runScripts: "outside-only", pretendToBeVisual: tru
 const w = dom.window;
 w.__CHECKIN_IDS = checkinIds;
 w.__QUOTA_CSS = fs.readFileSync(path.join(SRC, "quota-plan.css"), "utf8");
+// jsdom 没有 IntersectionObserver;commander.js 的可见性轮询由用例直接驱动回调。
+w.__IO_CB = null;
+w.IntersectionObserver = class {
+  constructor(cb) { w.__IO_CB = cb; }
+  observe() {} unobserve() {} disconnect() {}
+};
 
 const CALLS = Object.create(null);
 w.__CALLS = CALLS;
@@ -210,6 +217,8 @@ w.__TAURI__ = {
       if (cmd === "sync_qr_svg") return '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h1v1H0z"/></svg>';
       if (cmd === "vault_list") return w.__VAULT || [];
       if (cmd === "vault_ref_map") return w.__VAULTREF || [];
+      if (w.__COMMANDER_INVOKE && cmd.startsWith("commander_")) return w.__COMMANDER_INVOKE(cmd);
+      if (cmd.startsWith("commander_")) throw new Error("commander 用例未设置 __COMMANDER_INVOKE 桩");
       return null;
     },
   },
@@ -1668,6 +1677,7 @@ w.localStorage.setItem(promoCacheKey, JSON.stringify({
       ...quotaFiles,
       { name: "promo-page.js", code: fs.readFileSync(path.join(SRC, "promo-page.js"), "utf8") },
       ...appList,
+      { name: "commander.js", code: commanderJs },
       { name: "antigravity.js", code: antigravityJs },
       { name: "google-cloud.js", code: cloudJs },
       { name: "jsdom-harness.js", code: "window.__RUN_HARNESS = async () => { await window.__INIT;\n" + HARNESS + "\n};" },
@@ -2281,6 +2291,76 @@ w.localStorage.setItem(promoCacheKey, JSON.stringify({
       fixtures.push({ name, markup: w.renderRow(c, 0), dual: name !== "week-only" });
     }
     fs.writeFileSync(process.env.CODEX_LAYOUT_FIXTURES, JSON.stringify(fixtures));
+  }
+
+  // ── Desktop Commander 设置区:状态轮询、启动/停止、配对码、旧快照防护 ──
+  {
+    const ck = (name, cond, extra) => w.__R.push({ name, ok: !!cond, extra: cond ? "" : String(extra || "") });
+    const waitFor = async (predicate) => {
+      const deadline = Date.now() + 2000;
+      while (!predicate()) {
+        if (Date.now() >= deadline) throw new Error("等待用例结果超时");
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    };
+    const el = (id) => w.document.getElementById(id);
+    const savedInvoke = w.__COMMANDER_INVOKE;
+    const calls = {};
+    let mode = "off";
+    let heldResolve = null;
+    w.__COMMANDER_INVOKE = (cmd) => {
+      calls[cmd] = (calls[cmd] || 0) + 1;
+      if (cmd === "commander_status") {
+        if (mode === "slow") {
+          return new Promise((resolve) => { heldResolve = () => resolve({ active: false, status: "旧快照状态", logs: [] }); });
+        }
+        if (mode === "on") {
+          return { active: true, status: "正在准备代理依赖", elapsed: 3, logs: ["正在准备代理依赖"],
+            code: "AB12-CD34", verify: "https://mcp.desktopcommander.app/pair" };
+        }
+        return { active: false, status: "未启动", logs: [] };
+      }
+      if (cmd === "commander_start" && mode === "failStart") throw new Error("启动失败样本");
+      return null;
+    };
+    try {
+      w.__IO_CB([{ isIntersecting: true }]);
+      await waitFor(() => el("commanderLog").textContent === "暂无运行记录");
+      ck("Commander 未启动态渲染按钮与日志占位", calls.commander_status >= 1 && !el("commanderToggle").disabled &&
+        el("commanderPair").hidden);
+      w.__IO_CB([{ isIntersecting: false }]);
+      mode = "on";
+      el("commanderToggle").click();
+      await waitFor(() => el("commanderToggle").textContent === "停止");
+      ck("Commander 启动后展示进度配对码与验证入口", calls.commander_start === 1 &&
+        el("commanderState").textContent.includes("· 3 秒") && el("commanderCode").textContent.includes("AB12-CD34") &&
+        !el("commanderPair").hidden && !el("commanderVerify").hidden);
+      el("commanderVerify").click();
+      await Promise.resolve();
+      ck("Commander 打开验证页面走 verify 命令", calls.commander_verify === 1);
+      mode = "slow";
+      w.__IO_CB([{ isIntersecting: true }]);
+      await waitFor(() => heldResolve);
+      mode = "on";
+      w.__IO_CB([{ isIntersecting: true }]);
+      await waitFor(() => el("commanderState").textContent.includes("正在准备代理依赖"));
+      heldResolve();
+      await new Promise((r) => setTimeout(r, 30));
+      ck("Commander 迟到的旧快照不覆盖新状态", el("commanderState").textContent.includes("正在准备代理依赖") &&
+        el("commanderCode").textContent.includes("AB12-CD34"));
+      mode = "off";
+      w.__IO_CB([{ isIntersecting: true }]);
+      await waitFor(() => el("commanderToggle").textContent === "启动");
+      w.__IO_CB([{ isIntersecting: false }]);
+      mode = "failStart";
+      el("commanderToggle").click();
+      await waitFor(() => el("toast").textContent.includes("启动失败样本"));
+      ck("Commander 启动失败提示且按钮恢复", !el("commanderToggle").disabled && el("commanderToggle").textContent === "启动");
+    } finally {
+      w.__IO_CB([{ isIntersecting: false }]);
+      w.__COMMANDER_INVOKE = savedInvoke;
+      await new Promise((r) => setTimeout(r, 30));
+    }
   }
 
   await require("./thumbnail-regression.js")({ w, R, data: DATA, src: SRC });

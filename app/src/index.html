@@ -287,6 +287,14 @@
       <div class="field"><span>令牌过期自动续期<span class="desc">刷新后回写 MiniMax Code 客户端的凭据文件;关掉即只读,过期后要打开客户端续期</span></span>
         <button class="sw" id="cfgMinimaxWriteback" role="switch" aria-checked="true" aria-label="MiniMax 令牌自动续期"></button></div>
 
+      <section id="commanderBox">
+        <h4>Desktop Commander</h4>
+        <div class="field"><span>Gemini 本机代理<span class="desc" id="commanderState" role="status">未启动</span></span>
+          <button class="btn" id="commanderToggle" disabled>启动</button></div>
+        <div id="commanderPair" hidden><span id="commanderCode"></span>
+          <button class="btn" id="commanderVerify">打开验证页面</button></div>
+        <details><summary>运行详情</summary><pre id="commanderLog" style="white-space:pre-wrap"></pre></details>
+      </section>
       <h4>快捷键</h4>
       <div class="field"><span>显示 / 隐藏面板<button class="why" data-why="hotkey" aria-expanded="false" aria-label="快捷键的说明"></button><span class="desc">点框内直接按组合键</span></span>
         <input class="sel hk-rec" id="cfgHotkey" readonly placeholder="未设置"></div>
@@ -582,6 +590,7 @@
   <script src="app-window.js"></script>
   <script src="app-manage.js"></script>
   <script src="app-sync.js"></script>
+  <script src="commander.js"></script>
   <script src="app-settings.js"></script>
   <script src="app-update.js"></script>
   <script src="app-vault.js"></script>

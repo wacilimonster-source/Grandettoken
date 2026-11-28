@@ -1018,3 +1018,10 @@
 - home_view 重绘复用最近渠道快照,仅缺快照时取数;轮询入口不再强制取数,手动刷新保持强制;详情时间改「上次成功更新于」精确时刻。
 - 验证:§4.1 门禁全绿(jsdom 332 项、core 728+6 夹具、双端 cargo check 零 warning、凭据扫描 CLEAN);`verify-home-priority.js` 新增并纳入 `run-native-checks.ps1`,v0.3.80 候选构建真机 9 项 CDP 全过(日志 `build/qa/native-2026-11-28/`,不入库)。期间修复 `win-style.ps1` 假红:`MainWindowHandle` 启发式选中 tauri 辅助窗口,改按类名枚举 Tauri Window(AGENTS §8.4)。
 - 版本号三处同步 0.3.80;backlog 新增 B26(安装版真机验收),B11 随本轮复验通过。
+## 2026-11-28 v0.3.81 Desktop Commander 代理入口
+
+- 设置页新增「Desktop Commander」:手动启动 Gemini 本机代理(npm 固定版本 @wonderwhy-er/desktop-commander@0.3.4 + 远程配对服务),代理可访问当前用户文件与终端;README 已披露,AGENTS §2.4 清单同步新增。
+- 进程树入 kill-on-close Job:bootstrap 先等 Job 归属再经 stdin 放行 npm,停止/退出杀整树;lib 夹具实测孙进程被杀(本机 cargo test 通过)。状态解析只进白名单行,配对码只进 UI 内存。
+- 前端 commander.js:仅设置区可见时 1.5s 轮询,generation 防旧快照;jsdom 冒烟新增 5 项(未启动态/启动进度与配对码/verify/迟到快照不覆盖/失败提示),桩走 IPC 层且未设置时默认失败。
+- 验证:§4.1 全绿(IPC 115/115、jsdom 337 项、core 728+6 夹具、双端 cargo check 零 warning、凭据扫描 CLEAN);原生回归 9 项全过(日志 build/qa/native-2026-11-28/,不入库)。期间加固 win-style.ps1:tauri webview 窗口共用 Tauri Window 类,后台抓取窗口短暂共存时按「标题 + 可见」锁定主窗口,并给 verify-form 补 stderr 输出。
+- backlog 新增 B27(真机配对与代理验收)。

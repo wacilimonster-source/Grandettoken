@@ -238,3 +238,6 @@ CI 在每次 push 上跑 core 的 `cargo test` 与 `cargo check --all-targets`;
 > 产品早期叫 TokenScope,后改名 Grandettoken。仓库里的凭据服务名、bundle identifier
 > (`com.wacil.tokenscope`)与部分文档标题仍沿用旧名 —— 那是为了不破坏已装用户的
 > 更新链路与凭据条目,不是笔误。
+
+### Desktop Commander（Windows）
+在设置的「刷新与启动」页手动启动代理，让已授权的 Gemini 连接器访问当前 Windows 用户的文件和终端。需要 Node.js 22.12+ 和 npm。启动逻辑内置在程序中，首次运行可从 npm 获取固定版本 0.3.4；设备配对和工具调用使用 Desktop Commander 的远程服务。用普通用户运行，首次验证前核对界面中的配对码。使用此入口前请先关闭自行打开的旧代理窗口。隐藏面板或进入托盘时连接继续，点「停止」或退出程序即可结束本次启动的代理。运行详情仅在内存显示。

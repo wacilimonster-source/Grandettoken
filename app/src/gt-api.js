@@ -23,6 +23,12 @@
       runDiagnostic: (args) => invoke("run_diagnostic", args),
       workbuddyLogin: (args) => invoke("workbuddy_login", args),
     },
+    commander: {
+      start: () => invoke("commander_start"),
+      stop: () => invoke("commander_stop"),
+      status: () => invoke("commander_status"),
+      verify: () => invoke("commander_verify"),
+    },
     codexReset: {
       advice: (args) => invoke("codex_reset_advice", args),
       profileGet: (args) => invoke("codex_reset_profile_get", args),

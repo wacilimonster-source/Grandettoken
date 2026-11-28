@@ -171,7 +171,7 @@ async function cornerAlpha(send, evalJs) {
       if (!/^[0-9A-F]{8}$/i.test(out)) styleErr = `unexpected output: ${out}`;
       else style = parseInt(out, 16);
     } catch (e) {
-      styleErr = String(e.message).split('\n')[0];
+      styleErr = [e.message, e.stderr, e.stdout].filter(Boolean).join(' | ').replace(/\s+/g, ' ').slice(0, 300);
     }
 
     console.log('=== form verification ===');

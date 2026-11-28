@@ -30,7 +30,7 @@
 
 ## 1. 2026-11-12 治理基线
 
-全量审计见 `docs/report/code-governance-2026-11-12.md`、`docs/report/redundancy-audit-2026-11-11.md`。当时的结构性问题(产物入库、宽松桩、门禁硬编码本机路径、脚本腐烂、构建失败仍退出 0、空 catch、门禁假阳性等)已全部转化为 §2、§4、§6、§7 的硬约束。
+全量审计见 `docs/report/code-governance-2026-11-12.md`、`docs/report/redundancy-audit-2026-11-11.md`。其结构性问题已全部转化为 §2、§4、§6、§7 的硬约束。
 
 ---
 
@@ -52,7 +52,7 @@
 - 一次性探针/补丁脚本放 `build/tmp/` 并在同一轮删掉;禁止提交本机绝对路径、真实凭据、解密脚本。
 - 脚本禁止硬编码 `G:/...`、`C:/Users/...`,统一用 `path.resolve(__dirname, ...)` / `os.tmpdir()` / 环境变量。
 - 追加型日志文档定期同步头部;与 `git log` 冲突时以 `git log` 为准。
-- 2026-11-22 **文本一律按 UTF-8 读写**:有工具按 GBK 读、UTF-8 写回,PROGRESS.md 46 处汉字丢字节,首次提交即已损坏。PowerShell 5.1 读写文件须显式 `-Encoding utf8`;`build/check-encoding.js` 拦非法 UTF-8 与 U+FFFD。`ci.yml` 对纯文档提交不跑,编码门在独立的 `text-encoding.yml`。
+- 2026-11-22 **文本一律按 UTF-8 读写**:曾有工具按 GBK 读、UTF-8 写回致整文件汉字损坏。PowerShell 5.1 读写文件须显式 `-Encoding utf8`;`build/check-encoding.js` 拦非法 UTF-8 与 U+FFFD。`ci.yml` 对纯文档提交不跑,编码门在独立的 `text-encoding.yml`。
 
 ### 2.3 改代码
 
@@ -69,6 +69,7 @@
 - 用 `ELECTRON_RUN_AS_NODE=1` 启动其它桌面应用并读其内部存储派生凭据密钥,超时用 `taskkill /T /F` 杀进程树;
 - 改写其它客户端(Trae / WorkBuddy / ZCode / DSH)的配置与 SQLite,留备份快照(**2026-11-12 起 Windows DPAPI 加密**,见 `app/core/src/backup_crypto.rs`;换 Windows 账户后旧快照不可解);
 - 读取并解密本机 WebView2 Cookie / 桌面端加密凭据;
+- 2026-11-28 Desktop Commander 代理(设置手动启动):经 npm 取固定版本接入远程配对,代理可访问当前用户文件与终端;进程树入 kill-on-close Job,日志只留白名单状态行。
 - 默认开启的每日自动签到、写注册表自启动、监听局域网的本地网关。
 
 **新增同类能力前先问用户**,禁止以「方便」为由默认打开。禁止把凭据、令牌、Cookie 写入日志/配置/导出/QA 数据 —— `app/core/src/diaglog.rs` 脱敏白名单和 `app/core/src/sync/publish.rs` 的 `crypto::seal` 是既有防线,改动先跑单测。
@@ -200,10 +201,10 @@ jsdom 桩曾对未登记 invoke `return null`,命令漏注册也全绿。**mock 
 
 ### 8.3 签到
 - 前端签到名单必须从 `checkin_state` 动态生成(含已关闭渠道),签到中心/渠道卡/首页统计覆盖后端 `CHECKINS` 全部定义。
-- 直连伪接口要有「平台收紧即下线」预案(豆包 claim 全报 710010702 后已移除签到,复盘见 `docs/report/doubao-checkin-710010702-2026-11-14.md`);与客户端版本联动的参数禁止抓包写死(`app/core/src/doubao_client.rs` 运行时探测 + Golden 双向验证)。
+- 直连伪接口要有「平台收紧即下线」预案(豆包 710010702 后已移除签到,复盘见 `docs/report/doubao-checkin-710010702-2026-11-14.md`);与客户端版本联动的参数禁止抓包写死(`app/core/src/doubao_client.rs` 运行时探测 + Golden 双向验证)。
 
 ### 8.4 面板布局与窗口
-- 2026-11-28 真机窗口样式断言按类名枚举选 `Tauri Window`:tauri 进程有托盘/热键/tao/siw 四个辅助顶层窗口,`MainWindowHandle` 启发式选窗不稳定曾致 `verify-form` 假红(已修 `build/win-style.ps1`)。
+- 2026-11-28 真机窗口样式断言不用 `MainWindowHandle`(tauri 托盘/热键/tao/siw 辅助窗口会抢选);`Tauri Window` 类被全部 webview 窗口共用、后台抓取窗口短暂共存,须按「标题 Grandettoken + 可见」锁定主窗口(`build/win-style.ps1`)。
 - Tauri `destroy()` 异步派发:同名窗口重建须等标签释放,并使旧 session 回调失效。
 - 缩略专用名称/状态只在缩略布局生成;卡片容量按真实列表高度扣除横幅、签到条、间距计算,坏样本覆盖漏行/单列/异常卡高。
 - 尺寸与落点以 Tauri 显示器**工作区**为准;普通打开/贴边展开/解除贴边共用计算,同 DPI 跨屏停稳后复算。核验记录工作区与整屏物理矩形、窗口边界、实际 `scaleFactor`、字号倍率及底栏/列表几何位置,勿假定缩放;坏样本用整屏替代工作区。
@@ -246,3 +247,7 @@ jsdom 桩曾对未登记 invoke `return null`,命令漏注册也全绿。**mock 
 ### 8.11 手机同步
 - 2026-11-26 Gist 发布遇到 401 后须提示重新授权并保留同步组和待发密文。同账号换证与发布共用锁，避免迟到的 401 再次暂停发布。见 `docs/report/desktop-sync-auth-2026-11-26.md`。
 - 2026-11-27 桌面包须内置公开 OAuth Client ID，避免缺少构建变量时已配对设备无法重新授权。
+
+### 8.12 Desktop Commander 代理
+- 先建 kill-on-close Job、stdin 握手后才放行 npm,停止 drop Job 即杀整树(夹具验孙进程被杀);先放行再入 Job 会逃逸进程树。
+- 状态解析只进白名单行,工具载荷/凭据不进内存日志;前端轮询仅可见时进行,generation 防旧快照。

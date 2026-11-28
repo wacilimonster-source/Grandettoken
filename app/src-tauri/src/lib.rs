@@ -61,6 +61,7 @@ mod checkin_scheduler;
 mod checkin_history_cmd;
 mod diag_log_cmds;
 mod promo_cmds;
+mod commander;
 mod os_cmds;
 mod inject_cmds;
 mod startup;
@@ -354,6 +355,7 @@ pub fn run() {
         )
         // 公钥与端点都在 tauri.conf.json 的 plugins.updater 里,插件自己读配置
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(commander::Commander::default())
         .setup(startup::setup)
         // WorkBuddy 登录窗被用户自己关掉(没抓到会话)时,要让界面把「登录中」收回去,
         // 否则会一直卡在等令牌的样子。抓到会话那一次是我们主动关窗的,由 WB_LOGIN_DONE
@@ -445,6 +447,10 @@ pub fn run() {
             inject_cmds::inject_rollback,
             model_cmds::copy_model_bundle,
             model_cmds::model_info,
+            commander::commander_start,
+            commander::commander_stop,
+            commander::commander_status,
+            commander::commander_verify,
             os_cmds::copy_text,
             download::download_link,
             os_cmds::open_path,
