@@ -2,13 +2,13 @@
 #
 # 本项目是 Windows-GNU 非官方路径(Tauri 官方只覆盖 MSVC),所以 runner 上要自己
 # 装 GNU 工具链。core 是纯逻辑层(不依赖 Tauri/WebView2),测试秒级跑完;
-# src-tauri 的 check 不链接 WebView2 运行时也能过 —— 只有真跑 release 时才需要它,
-# 而那件事由 release.yml 在打 tag 时做。
+# src-tauri 的 check 不链接 WebView2 运行时也能过 —— 正式发版改由本机通过
+# build/release-desktop.ps1 / build/release-android.ps1 走 NW 共享工具链完成。
 #
 # 为什么 release 构建不进 CI:单 exe 交付依赖 build/make-webview2-static.ps1 从
-# cargo registry 现成产物重打静态加载器归档(那个归档是 gitignore 的,CI 里要现生成),
-# 而 Windows runner 上的 GNU ld 链接整套 Tauri 依赖树既慢又脆。真正发布走
-# release.yml —— 那条链路本机每次发版都在跑,风险已知。
+# cargo registry 现成产物重打静态加载器归档(那个归档是 gitignore 的),
+# 而 Windows runner 上的 GNU ld 链接整套 Tauri 依赖树既慢又耗时。正式发版走本机
+# 门禁与签名验签流程(见 RELEASE.md),GitHub 只负责源码与门禁校验及 Release 分发。
 name: ci
 
 on:
@@ -189,7 +189,7 @@ jobs:
         shell: pwsh
         run: node build/verify-antigravity-capture.js
 
-      # 网关页是独立模块,此前只在 release.yml 里跑,普通推送不覆盖;与发版门禁保持一致。
+      # 网关页是独立模块,纳入推送门禁与发版前门禁保持一致。
       - name: Gateway view smoke (jsdom)
         shell: pwsh
         run: |

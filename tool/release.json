@@ -1,0 +1,53 @@
+{
+  "project": "Grandettoken",
+  "distribution": "wacilimonster-source/Grandettoken",
+  "keep": { "local": 3, "remote": 3 },
+  "remote": { "pinned": ["android-stable"] },
+  "channels": {
+    "desktop": {
+      "toolchain": "tauri2-gnu",
+      "tag": "v{version}",
+      "title": "Grandettoken {version}",
+      "latest": true,
+      "notes": "release-notes.md",
+      "notesHeader": "## Grandettoken {version}",
+      "notesMin": { "chars": 40, "cjk": 20 },
+      "files": [
+        "Grandettoken_{version}_x64-setup.exe",
+        "Grandettoken_{version}_x64-setup.exe.sig",
+        "latest.json",
+        "release-notes.md"
+      ],
+      "assets": [
+        "Grandettoken_{version}_x64-setup.exe",
+        "Grandettoken_{version}_x64-setup.exe.sig",
+        "latest.json"
+      ],
+      "signingKey": "%USERPROFILE%\\.tauri\\tokenscope.key"
+    },
+    "android": {
+      "toolchain": "android-gradle",
+      "tag": "android-v{version}",
+      "title": "Android {version}",
+      "latest": false,
+      "notes": "release-notes.md",
+      "notesHeader": "## Android {version}",
+      "notesMin": { "chars": 20 },
+      "files": [
+        "Grandettoken-android-v{version}.apk",
+        "android-latest.json",
+        "release-notes.md"
+      ],
+      "assets": ["Grandettoken-android-v{version}.apk"],
+      "pointer": {
+        "tag": "android-stable",
+        "asset": "android-latest.json",
+        "title": "Android stable update manifest",
+        "notes": "Signed Android update pointer. Do not delete; installed apps read this asset."
+      },
+      "package": "com.wacil.grandettoken.sync",
+      "keyAlias": "grandettoken",
+      "material": "%USERPROFILE%\\.android\\Grandettoken"
+    }
+  }
+}

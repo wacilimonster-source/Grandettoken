@@ -74,6 +74,7 @@
 | D4 | SillyTavern / PocketTavern 与主流 Agent 的真实流式 / 思维链联调 | v0.3.56 | 对应客户端 | 待验收 |
 | D5 | 8 MiB 上游缓冲预算对合法超大载荷的兼容;真实端口被抢占时的恢复 | v0.3.68 | 构造大工具参数的真实上游;占用端口的进程 | 待验收 |
 | D6 | Agent Platform 真实 Gemini 请求下 `extra_body.google.safety_settings = OFF` 生效表现，及上游拒收时单次 400 自动剥离并保留 `thinking_config` | v0.3.79 | 真实 Agent Platform 账号 + 少量额度 | 待验收 |
+| D7 | Agent Platform 全量模型清单：安装版上架/刷新后显示账号实际可用的全部模型（当前项目 13 个），手动追加与停用模型生效 | v0.3.82 | 安装版 + 真实 Agent Platform 账号 | 待验收 |
 
 ## E. Android
 

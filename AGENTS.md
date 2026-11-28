@@ -17,20 +17,20 @@
 
 | 要确认什么 | 看哪里 |
 |---|---|
-| 当前版本、最近改了什么 | `PROGRESS.md` **文末最新条目** + `git log`(头部状态是快照,会过时) |
+| 当前版本、最近改动 | `PROGRESS.md` **文末** + `git log`(头部快照会过时) |
 | 产品口径 / 设计裁决 | `DESIGN.md`;§16 是用户裁决,不许推翻 |
-| 发版流程、签名、回滚 | `RELEASE.md` |
+| 发版、签名、清理 | `RELEASE.md`、`tool/release.json`、`../_release/README.md` |
 | 模块划分、加渠道/客户端 | `app/README.md` |
-| 门禁实际跑了什么 | `.github/workflows/ci.yml`、`release.yml`、`text-encoding.yml` |
-| 历史体检、冗余审计、跨版本待验收 | `docs/report/`(待验收:`acceptance-backlog.md`) |
+| 门禁实际跑了什么 | `.github/workflows/ci.yml`、`text-encoding.yml`、`build/run-gates.ps1` |
+| 历史体检与待验收 | `docs/report/`(待验收:`acceptance-backlog.md`) |
 
-**改之前先 grep 现有实现。** 本项目多次出现「同一件事写了第二份」(旧摘要 CSS 被覆盖、`SyncStatus`/`GithubStatus` 重复、`savePosSoon`/`scheduleSettleCheck` 并存)。找不到调用方 ≠ 可新增,先用 `build/check-ipc-contract.js` 和全仓 grep 确认。
+**改之前先 grep 现有实现**(同一件事曾写第二份:摘要 CSS、`SyncStatus`/`GithubStatus`、`savePosSoon`/`scheduleSettleCheck`)。找不到调用方≠可新增,先查 `build/check-ipc-contract.js` 和全仓 grep。
 
 ---
 
-## 1. 2026-11-12 治理基线
+## 1. 治理基线
 
-全量审计见 `docs/report/code-governance-2026-11-12.md`、`docs/report/redundancy-audit-2026-11-11.md`。其结构性问题已全部转化为 §2、§4、§6、§7 的硬约束。
+2026-11-12 审计见 `docs/report/code-governance-2026-11-12.md`、`redundancy-audit-2026-11-11.md`,结构约束已并入 §2/§4/§6/§7。
 
 ---
 
@@ -86,7 +86,7 @@
 
 ### 4.1 门禁清单(仓库根目录,Git Bash 可直接复制)
 
-与 `ci.yml` / `release.yml` 对齐;**不一致时以 workflow 为准并回头修本节**,新增门禁时三处一起改。
+与 `ci.yml` / `build/run-gates.ps1` 对齐;**不一致时以门禁脚本与 workflow 为准并回头修本节**,新增门禁时三处一起改。本机可直接运行 `powershell -NoProfile -ExecutionPolicy Bypass -File build/run-gates.ps1` 串行全跑。
 
 ```bash
 # 零依赖静态门:带 --self-test 的先证红,再正式检查
@@ -125,9 +125,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build/scan-secrets.ps1
 
 ### 4.2 发版
 
-- **发版走 CI**(2026-11-12 起):三处版本号同步 → **先推 main** → 再推 `v*` tag。本地 `build/release-local.sh` 仅 Actions 不可用时使用;详见 `RELEASE.md`。tag 指向的 commit 不在 main 上会导致源码归档不一致。
-- 2026-11-26 新版本用配置公钥离线验签，草稿资产逐件比对摘要后再转正，避免签名错配或上传缺损被客户端拉取。
-- **发版说明**取自发版提交正文,提交必须带说明正文;`release.yml` 打包前按 `verify-release.js` 同一判据拦截。`notes intact` 读线上 `latest.json.notes`,**只改 Release 正文不改核验结果**;修正时同时更新 Release 正文和 `latest.json` 资产,并保留原始失败记录。
+- **2026-11-28 起改本机发版**:桌面 `build/release-desktop.ps1`、Android `build/release-android.ps1`,共用 `../_release/` 工具链与归档库(`tool/release.json`)。版本号同步 → 推 `main` → `-Stage Release`;禁在未推提交上发版。
+- **验签与核对**:桌面离线 `verify-signature.js` 验签再上传草稿,逐件核字节/SHA-256 后转正,末跑 `verify-release.js`;Android 用 `verify-android-release.py` 验包与 `android-stable` 指针,绝不抢桌面 `Latest`。
+- **说明与历史收敛**:说明取自提交正文(桌面须满足 `verify-release.js` 中文与长度要求),不入库 `build/release-notes-*.md`;覆盖升级验收后跑 `-Stage Accept` 与 `-Stage Prune`,本地与远端各渠道仅留最近 3 版。详见 `RELEASE.md`。
 
 ---
 
@@ -152,7 +152,7 @@ jsdom 桩曾对未登记 invoke `return null`,命令漏注册也全绿。**mock 
 - **同一脚本里同类前置缺失用同一口径**(`verify-release.js` 曾缺安装包 SKIP、缺 `.sig` 却 FAIL,发版后稳定假红)。
 
 ### 6.5 「门禁报错就照着改代码」
-**门禁红了,先拿已知正确样本证伪门禁自己。** 2026-11-12 两次假红:IPC 门把注释与下一行粘在一起误报未注册;静默失败门算出 NaN 误报 115 处空 catch。2026-11-22 拆 `app.js` 时暴露 `check-silent-failures.js` 的 `maskSource` 未解析正则字面量(正则字面量未被解析,漏扫中间多处空 catch)。
+**门禁红了,先拿已知正确样本证伪门禁自己。** 2026-11-12 两次假红:IPC 门把注释粘下一行、静默失败门算 NaN 误报 115 处;2026-11-22 拆 `app.js` 暴露 `maskSource` 未解析正则字面量而漏扫空 catch。
 
 ### 6.6 「门禁没有自检与哨兵串扰」
 - 新门禁必须能证明自己会变红(`--self-test` / 哨兵),坏样本贴近真实失败。

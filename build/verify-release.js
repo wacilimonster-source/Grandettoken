@@ -51,8 +51,8 @@ const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
   const sigPath = path.join(nsis, `${EXE}.sig`);
   const localSig = fs.existsSync(sigPath) ? fs.readFileSync(sigPath, 'utf8').trim() : '';
   // 本地没有对应版本的 .sig 时只能 SKIP —— 这与下面安装包的 sha256 对比必须
-  // 用同一口径。CI 发版后本地通常没有产物(构建在 runner 上),若这里判 FAIL,
-  // 「二次确认」会稳定报一个假失败,反而教人忽略这道门(2026-11-12 v0.3.38 实测)。
+  // 用同一口径。远端补验或另一台机器上本地可能没有产物,若这里判 FAIL,
+  // 复核时会稳定报一个假失败,反而教人忽略这道门(2026-11-12 v0.3.38 实测)。
   if (!localSig) {
     lines.push(`SKIP  local .sig not present (${EXE}.sig); live signature ${plat.signature.trim().length} chars`);
   } else if (plat.signature.trim() === localSig) {

@@ -178,6 +178,10 @@ app/
 build/
   install-toolchain.ps1   免管理员工具链安装
   build.ps1               构建入口(check/test/dev/build/bundle,含单 exe 静态加载器准备)
+  run-gates.ps1           发版前串行全量门禁(静态门 + jsdom + Rust + 凭据扫描)
+  release-common.ps1      NW 共享发版库(`../_release/`)接入辅助函数
+  release-desktop.ps1     桌面本机发版入口(Preflight / Build / Publish / Accept / Prune)
+  release-android.ps1     Android 本机发版入口(Build / Publish / Release / Accept / Prune)
   make-webview2-static.ps1 把 MSVC 静态加载器 + CRT 垫片重打成 GNU 归档
   make-latest-json.js     生成更新清单(校验版本/tag/.sig/安装包四件事)
   gen-icons.js            图标生成(手写 PNG/ICO,无依赖)
@@ -192,9 +196,11 @@ build/
   verify-push.js          验证推送结果,并确认 token 没落到本地文件
   stop-app.ps1            停掉运行中的实例
   webview2-static/        垫片源码(msvc-shim.c / msvc-alias.S)
+tool/
+  release.json            渠道声明、NW 共享工具链选择与本地/远端保留数量
 .github/workflows/
-  ci.yml                  push/PR:core cargo test + 两个 crate 的 check
-  release.yml             v* tag:bundle 签名发布 + latest.json
+  ci.yml                  push/PR:core cargo test + 两个 crate 的 check + 静态与 jsdom 门禁
+  text-encoding.yml       纯文档改动亦覆盖的 UTF-8 / U+FFFD 与产物门禁
 ```
 
 ## 加新渠道

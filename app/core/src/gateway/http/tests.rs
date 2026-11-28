@@ -1,4 +1,6 @@
 use super::*;
+use super::agent_models::{agent_platform_probe_root, probe_agent_platform_models, AgentProbeState};
+use crate::gateway_proto::sources::AGENT_PLATFORM_PRESET_MODELS;
 use crate::{store::{Store, VaultItem}, vault::transaction::CredentialStore};
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
@@ -425,4 +427,123 @@ async fn agent_platform_gemini_sends_safety_off_and_repairs_400_without_dropping
 
     gw_task.abort();
     up_task.abort();
+}
+
+#[test]
+fn agent_platform_probe_root_only_derives_from_official_vertex_urls() {
+    let global = "https://aiplatform.googleapis.com/v1/projects/project-11ce9e7c-f85d-4842-951/locations/global/endpoints/openapi";
+    assert_eq!(
+        agent_platform_probe_root(global).unwrap(),
+        "https://aiplatform.googleapis.com/v1/projects/project-11ce9e7c-f85d-4842-951/locations/global/publishers/google/models"
+    );
+    let regional = "https://us-central1-aiplatform.googleapis.com/v1/projects/demo/locations/us-central1/endpoints/openapi";
+    assert_eq!(
+        agent_platform_probe_root(regional).unwrap(),
+        "https://us-central1-aiplatform.googleapis.com/v1/projects/demo/locations/us-central1/publishers/google/models"
+    );
+    assert!(agent_platform_probe_root("https://example.com/v1/projects/p/locations/global/endpoints/openapi").is_none());
+    assert!(agent_platform_probe_root("https://generativelanguage.googleapis.com/v1beta/openai").is_none());
+}
+
+#[tokio::test]
+async fn agent_platform_probe_keeps_unknown_and_drops_missing_models() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = Router::new().fallback(
+        |uri: axum::http::Uri, headers: HeaderMap| async move {
+            assert_eq!(headers["x-goog-api-key"], "opaque-probe-key");
+            assert!(!headers.contains_key(header::AUTHORIZATION));
+            let model = uri
+                .path()
+                .rsplit('/')
+                .next()
+                .unwrap_or("")
+                .trim_end_matches(":countTokens");
+            match model {
+                "gemini-3.8-flash" => (StatusCode::OK, Json(json!({"totalTokens": 1}))).into_response(),
+                "gemini-2.5-pro" => (StatusCode::NOT_FOUND, Json(json!({"error": {"code": 404}}))).into_response(),
+                _ => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": {"code": 500}}))).into_response(),
+            }
+        },
+    );
+    let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let hdrs = vec![("x-goog-api-key".to_string(), "opaque-probe-key".to_string())];
+    let states = probe_agent_platform_models(
+        &client,
+        &format!("http://{addr}/v1/projects/p/locations/global/publishers/google/models"),
+        &hdrs,
+        &[
+            "google/gemini-3.8-flash",
+            "google/gemini-2.5-pro",
+            "google/gemini-3.1-pro-preview",
+        ],
+    )
+    .await;
+    assert_eq!(
+        states,
+        vec![
+            ("google/gemini-3.8-flash".to_string(), AgentProbeState::Available),
+            ("google/gemini-2.5-pro".to_string(), AgentProbeState::Missing),
+            ("google/gemini-3.1-pro-preview".to_string(), AgentProbeState::Unknown),
+        ]
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn agent_platform_falls_back_to_full_catalog_when_models_endpoint_is_absent() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = Router::new().route("/v1/models", get(|| async { StatusCode::NOT_FOUND }));
+    let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let res = fetch_channel_models(
+        &client,
+        GatewaySourceKind::AgentPlatform,
+        &format!("http://{addr}/v1"),
+        Some("opaque-probe-key"),
+        &BTreeMap::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        res.fetched,
+        AGENT_PLATFORM_PRESET_MODELS.iter().map(|m| m.to_string()).collect::<Vec<_>>(),
+        "404 时不能只剩旧的 5 个预置模型"
+    );
+    assert!(res.fetched.len() >= 16);
+    assert!(res.probe_note.unwrap().contains("内置全量"));
+    task.abort();
+}
+
+#[tokio::test]
+async fn agent_platform_custom_endpoint_uses_full_upstream_models_list() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = Router::new().route(
+        "/v1/models",
+        get(|headers: HeaderMap| async move {
+            assert_eq!(headers["x-goog-api-key"], "opaque-probe-key");
+            assert!(!headers.contains_key(header::AUTHORIZATION));
+            Json(json!({"data": [{"id": "custom/agent-pro"}, {"id": "custom/agent-flash"}]}))
+        }),
+    );
+    let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let res = fetch_channel_models(
+        &client,
+        GatewaySourceKind::AgentPlatform,
+        &format!("http://{addr}/v1"),
+        Some("opaque-probe-key"),
+        &BTreeMap::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        res.fetched,
+        vec!["custom/agent-pro".to_string(), "custom/agent-flash".to_string()]
+    );
+    assert!(res.probe_note.is_none());
+    task.abort();
 }

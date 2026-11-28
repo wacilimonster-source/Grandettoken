@@ -201,8 +201,8 @@ Google 登录会话由本机 `google-cloud-profile` 浏览器配置保存；应�
 避免 rustls 的 ring/aws-lc 汇编依赖在 GNU 工具链下需要 nasm 的问题;
 exe 静态链接 WebView2 加载器,单文件交付。
 
-CI 在每次 push 上跑 core 的 `cargo test` 与 `cargo check --all-targets`;
-打 `v*` tag 会自动构建、签名、发 Release 并生成 `latest.json`。
+CI 在每次 push 上跑门禁、core 的 `cargo test` 与 `cargo check --all-targets`;
+正式打包与签名发版在本机通过 `build/release-desktop.ps1` / `build/release-android.ps1` 完成(共用 `../_release/` 工具链),详见 `RELEASE.md`。
 
 ## 文档
 

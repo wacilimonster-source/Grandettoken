@@ -4,13 +4,13 @@ const path = require("node:path");
 
 function blocked(files) {
   return files.filter(file =>
-    /^build\/(?:qa(?:\/|$)|bundle-log-[^/]*\.txt$)/i.test(file) ||
+    /^build\/(?:qa(?:\/|$)|bundle-log-[^/]*\.txt$|(?:release|updater)-notes-[^/]*\.md$)/i.test(file) ||
     /\.(?:apk|exe|msi|zip|har)$/i.test(file)
   );
 }
 
 if (process.argv.includes("--self-test")) {
-  const evidence = ["BUILD/qa/fixture.png", "build/bundle-log-demo.txt", "nested/demo.APK", "capture.har"];
+  const evidence = ["BUILD/qa/fixture.png", "build/bundle-log-demo.txt", "build/release-notes-v0.3.99.md", "build/updater-notes-v0.3.14.md", "nested/demo.APK", "capture.har"];
   assert.deepEqual(blocked(["docs/assets/panel.png", "app/src/brand/mark.png", ...evidence]), evidence);
   console.log("产物门禁自检通过");
 } else {

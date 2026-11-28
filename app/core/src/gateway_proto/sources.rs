@@ -8,13 +8,29 @@ use std::collections::BTreeMap;
 pub const AGENT_PLATFORM_DEFAULT_BASE_URL: &str =
     "https://aiplatform.googleapis.com/v1/projects/project-11ce9e7c-f85d-4842-951/locations/global/endpoints/openapi";
 
-/// Agent Platform 预置可用模型（Vertex OpenAI 兼容端点不提供 `/models` 接口）。
+/// Agent Platform 内置 Gemini 对话模型清单（2026-11-28 官方目录）。
+///
+/// Vertex OpenAI 兼容端点不提供 `/models`；`publishers.google.models.list` 只接受 OAuth，
+/// API Key 会得到 401/404（见 `docs/report/agent-platform-models-2026-11-28.md`）。
+/// 因此这里维护完整的候选清单，运行时再用 `countTokens` 按密钥/项目筛出真正可用的模型；
+/// 前 5 项保持旧顺序，避免刷新后「测连通」选中的首个模型发生变化。
 pub const AGENT_PLATFORM_PRESET_MODELS: &[&str] = &[
     "google/gemini-3.8-flash",
     "google/gemini-3.5-flash-lite",
     "google/gemini-3.1-flash-lite",
     "google/gemini-4-argon",
     "google/gemini-4-hydrogen",
+    "google/gemini-4-carbon",
+    "google/gemini-4-neon",
+    "google/gemini-3.7-flash",
+    "google/gemini-3.6-flash",
+    "google/gemini-3.5-flash",
+    "google/gemini-3.1-pro-preview",
+    "google/gemini-3.1-pro-preview-customtools",
+    "google/gemini-3-flash-preview",
+    "google/gemini-2.5-pro",
+    "google/gemini-2.5-flash",
+    "google/gemini-2.5-flash-lite",
 ];
 
 /// Gemini AI Studio OpenAI 兼容端点。
@@ -396,6 +412,35 @@ mod tests {
             &BTreeMap::new()
         )
         .is_err());
+    }
+
+    /// Agent Platform 内置清单必须覆盖官方目录里的 Gemini 对话模型，且不能有重复项。
+    #[test]
+    fn agent_platform_catalog_covers_gemini_chat_models() {
+        let models = AGENT_PLATFORM_PRESET_MODELS;
+        assert!(models.len() >= 16, "候选清单要覆盖全部 Gemini 对话模型");
+        assert!(models.iter().all(|m| m.starts_with("google/")), "统一使用 publisher/model 形式");
+        let unique: std::collections::BTreeSet<_> = models.iter().collect();
+        assert_eq!(unique.len(), models.len(), "内置清单不能有重复模型");
+        for expected in [
+            "google/gemini-3.8-flash",
+            "google/gemini-4-argon",
+            "google/gemini-4-carbon",
+            "google/gemini-4-neon",
+            "google/gemini-4-hydrogen",
+            "google/gemini-3.7-flash",
+            "google/gemini-3.6-flash",
+            "google/gemini-3.5-flash",
+            "google/gemini-3.1-pro-preview",
+            "google/gemini-3.1-pro-preview-customtools",
+            "google/gemini-3.1-flash-lite",
+            "google/gemini-3-flash-preview",
+            "google/gemini-2.5-pro",
+            "google/gemini-2.5-flash",
+            "google/gemini-2.5-flash-lite",
+        ] {
+            assert!(models.contains(&expected), "缺少 {expected}");
+        }
     }
 
     #[test]

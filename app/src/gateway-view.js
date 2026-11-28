@@ -504,7 +504,7 @@
 
                 <label class="gw-add-field gw-span-2">
                   <span>手动补充模型（可选，每行或逗号分隔；无 /models 的私有端点必填）</span>
-                  <textarea class="inp gw-textarea" id="gwManualModels" rows="2" placeholder="${kind === "agent_platform" ? "已内置 PocketTavern 5 个 Agent Platform 预置模型，可在此追加" : "例如：gpt-4o-mini, deepseek-reasoner"}">${escHtml(draft?.manualModels ?? "")}</textarea>
+                  <textarea class="inp gw-textarea" id="gwManualModels" rows="2" placeholder="${kind === "agent_platform" ? "已内置 Agent Platform 全量 Gemini 模型清单（按账号校验可用性），可在此追加" : "例如：gpt-4o-mini, deepseek-reasoner"}">${escHtml(draft?.manualModels ?? "")}</textarea>
                 </label>
 
                 ${

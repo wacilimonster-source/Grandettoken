@@ -12,6 +12,7 @@ mod anthropic;
 mod dispatch;
 mod responses;
 mod agent_ua;
+mod agent_models;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -27,8 +28,7 @@ use crate::gateway_proto::{
     error::{openai_error_value, parse_upstream_error_summary, redact_known, redact_secrets},
     request::{apply_400_repairs, prepare_upstream_body, repairable_params_on_400},
     sources::{
-        build_upstream_headers, host_of_url, AGENT_PLATFORM_PRESET_MODELS,
-        GEMINI_AISTUDIO_MODELS_URL,
+        build_upstream_headers, host_of_url, GEMINI_AISTUDIO_MODELS_URL,
     },
     responses::from_chat_request,
     stream::{extract_usage_details, StreamStats},
@@ -1263,18 +1263,15 @@ pub async fn fetch_channel_models(
     let sensitive = responses::sensitive_values(api_key, custom_headers);
     match kind {
         GatewaySourceKind::AgentPlatform => {
-            // 校验自定义头语法合法性
-            let _ = build_upstream_headers(kind, api_key, custom_headers)
-                .map_err(|e| redact_known(&e, &sensitive))?;
-            let fetched = AGENT_PLATFORM_PRESET_MODELS
-                .iter()
-                .map(|s| s.to_string())
-                .collect();
-            Ok(ModelFetchResult {
-                fetched,
+            agent_models::fetch_agent_platform_models(
+                client,
+                base_url,
+                api_key,
+                custom_headers,
                 host,
-                probe_note: Some("Agent Platform 端点不提供 /models 接口，已载入预置模型并支持手动增补".into()),
-            })
+                &sensitive,
+            )
+            .await
         }
         GatewaySourceKind::GeminiAiStudio => {
             let is_official = host == "generativelanguage.googleapis.com";

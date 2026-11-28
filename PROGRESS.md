@@ -1025,3 +1025,17 @@
 - 前端 commander.js:仅设置区可见时 1.5s 轮询,generation 防旧快照;jsdom 冒烟新增 5 项(未启动态/启动进度与配对码/verify/迟到快照不覆盖/失败提示),桩走 IPC 层且未设置时默认失败。
 - 验证:§4.1 全绿(IPC 115/115、jsdom 337 项、core 728+6 夹具、双端 cargo check 零 warning、凭据扫描 CLEAN);原生回归 9 项全过(日志 build/qa/native-2026-11-28/,不入库)。期间加固 win-style.ps1:tauri webview 窗口共用 Tauri Window 类,后台抓取窗口短暂共存时按「标题 + 可见」锁定主窗口,并给 verify-form 补 stderr 输出。
 - backlog 新增 B27(真机配对与代理验收)。
+
+## 2026-11-28 改本机发版与 NW 共用依赖及历史收敛
+
+- 桌面与 Android 统一改为本机发版:新增 `tool/release.json`、`build/run-gates.ps1`、`build/release-common.ps1`、`build/release-desktop.ps1`、`build/release-android.ps1`,移除 `.github/workflows/release.yml`、`android-release.yml` 与旧本机脚本 `build/release-local.sh`、`build/android-release.ps1`;`ci.yml` 与 `text-encoding.yml` 保留作推送门禁。
+- 接入 NW 共享发版目录 `../_release/`(`toolchains.json` 新增 `tauri2-gnu` 与 `android-gradle`,共用 Rust/MinGW/Android SDK/JDK/Gradle 缓存;新增 `release_store.py` 负责多渠道 UTF-8 发版说明校验、只读归档、草稿上传字节核对与 `Latest`/`android-stable` 指针校验)。
+- 收敛历史记录:删除仓库内 32 份历史 `build/release-notes-v*.md` / `updater-notes-v*.md` 与旧日志,`build/check-tracked-artifacts.js` 拦截同类说明文件回流;`release_store.py rotate` / `prune-remote` 配合 `-Stage Accept` / `-Stage Prune` 按预览摘要执行两段式清理,本地与远端各渠道保留最近 3 版。
+- 更新 `RELEASE.md`、`AGENTS.md`、`README.md`、`app/README.md`、`../_release/README.md`。
+
+## 2026-11-28 v0.3.82 Agent Platform 全量模型清单与账号可用性校验
+
+- 本地模型网关 Agent Platform 渠道的可见模型不再固定为 5 个：内置候选扩展为官方目录的 16 个 Gemini 对话模型，并在官网上游用 `publishers/google/models/{model}:countTokens` 按密钥/项目逐个校验（200 可用、404 隐藏、其余按未知保留），真实项目实测得到 13 个可用模型；自建/转售端点优先读取 OpenAI `/models`，失败回退内置全量清单，手动模型继续合并。
+- 根因：Vertex OpenAI 兼容端点不提供 `/models`，`publishers.google.models.list` 仅接受 OAuth；API Key 请求 `/models` 为 404、`models.list` 为 401，官方 express mode API 也没有 list 方法，旧实现只能硬编码预置模型。排查与实测记录见 `docs/report/agent-platform-models-2026-11-28.md`。
+- 前端上架抽屉的手动模型提示同步为「已内置 Agent Platform 全量 Gemini 模型清单」。
+- 验证：core `cargo test --locked`（733 passed / 10 ignored + sync_fixtures 6 passed）、双端 `cargo check --all-targets --locked`、全量门禁串行通过；真实 Agent Platform 项目刷新得到 13 个模型、无未知项。三处版本号同步 0.3.82。

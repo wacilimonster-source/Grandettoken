@@ -1,348 +1,142 @@
 # 发布流程
 
-> 桌面交付形态:**只有 NSIS 安装包**(绿色单 exe 已下线,见 PROGRESS「追加调整 12」)。
-> 装到 `%LOCALAPPDATA%\Grandettoken`(实测确认,不是 Programs 子目录),**不需要管理员权限**。
-> 更新走 GitHub Releases。
+> 桌面交付形态:**只有 NSIS 安装包**(绿色单 exe 已下线,见 `docs/report/progress-archive-2026-11-22.md`)。
+> 装到 `%LOCALAPPDATA%\Grandettoken`,**不需要管理员权限**;更新走 GitHub Releases。
 >
-> **2026-11-12 起,发版走 GitHub Actions**(推版本 tag 即发),本地打包降级为应急。
-> 产物由公开、可重放、带完整门禁的流水线生成,而不是某台机器上恰好能过的构建。
+> **2026-11-28 起,桌面与 Android 统一改为本机发版**,并接入 NW 共享发版目录(`..\_release`)。
+> 构建依赖、归档目录与轮转工具全 NW 共用,GitHub Actions 只保留 `ci.yml` 与 `text-encoding.yml` 做推送门禁。
 
-## 为什么改回 CI
+## 共用依赖与仓库分工
 
-v0.1.x 时代 CI 发一次要 22 分钟 —— 其中 12 分钟花在 `cargo install tauri-cli`
-(tauri-cli 没有官方预编译二进制,`cargo-binstall` / `install-action` / npm 都试过),
-所以 2026-10-20 改成本地打包(3 分 11 秒)。代价是**发版不可复现**:
-产物取决于本机装的哪个 cargo-tauri、哪份 `target/` 缓存。
+共享配置见 [`../_release/README.md`](../_release/README.md) 与 [`../_release/toolchains.json`](../_release/toolchains.json);本项目的渠道声明在 [`tool/release.json`](tool/release.json):
 
-2026-11-12 回到 CI,三个前提已经成立:
+| 项目 | 登记名称 | 共用内容 | 项目自留内容 |
+|---|---|---|---|
+| 桌面端(`desktop`) | `tauri2-gnu` | `rustup` GNU 工具链、`CARGO_HOME`、`MinGW`、`cargo-tauri` | `app/src-tauri/target`、签名私钥、`latest.json` |
+| Android(`android`) | `android-gradle` | `G:\Android`(SDK + Build Tools 35.0.0)、JDK 17、`C:\Users\wacil\.gradle` | `android/` 构建缓存、keystore、Ed25519 私钥 |
 
-| 前提 | 做法 |
-|---|---|
-| tauri-cli 编译可缓存 | `actions/cache` 只存 `~/.cargo/bin/cargo-tauri.exe`,key 与项目依赖锁**解耦**(`cargo-tauri-Windows-v2`);命中后该步 0 秒,冷启动约 11 分钟 |
-| Rust 依赖可缓存 | `Swatinem/rust-cache`,`workspaces: app/src-tauri -> target`;命中后 Build 约 2 分钟 |
-| 发版前要有闸 | `release.yml` 的 `Pre-release gates`:零依赖静态门(含文本编码门) + jsdom 冒烟,失败就不打包 |
-
-冷缓存全流程约 25 分钟,热缓存约 8-10 分钟。job 有 `timeout-minutes: 60`,
-防止签名步骤在非交互环境等密码而永久挂住(见「应急:本地打包」里的空密码警告)。
+- 不在项目内复制 Rust/MinGW/Android SDK 或私建 `.gradle` 家目录。
+- 升级共享工具链时,在 `..\_release\toolchains.json` 新增名称,本项目验证一版后再删除旧版本。
+- 发版入口(`build/release-desktop.ps1`、`build/release-android.ps1`)会锁定 `toolchains.json` 登记的路径与版本,不依赖系统默认 `PATH`。
 
 ## 一次性准备
 
 | 项 | 位置 | 说明 |
 |---|---|---|
-| 签名私钥 | 本机 `C:\Users\wacil\.tauri\tokenscope.key` + secret `TAURI_SIGNING_PRIVATE_KEY` | ⚠ 丢了就没法再给已装用户推更新 |
-| 私钥密码 | secret `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | 密钥未加密,值是空串 |
-| 签名公钥 | `tauri.conf.json` 的 `plugins.updater.pubkey` | 公钥丢了可以重新生成,但要连私钥一起换 |
-| 仓库可见性 | public | 私有仓库的 release 资源需要鉴权,更新插件拉不到 |
-| 本机 Rust 工具链 | 仅本地打包/调试需要 | `stable-x86_64-pc-windows-gnu` + MinGW(`~/mingw64/bin`) |
+| 桌面签名私钥 | `C:\Users\wacil\.tauri\tokenscope.key` | 未加密密钥,配套公钥在 `app/src-tauri/tauri.conf.json` 的 `plugins.updater.pubkey`。⚠ 丢了就无法给已装用户推更新 |
+| Android APK 签名仓 | `C:\Users\wacil\.android\Grandettoken\release.p12` | 别名 `grandettoken`;口令密文 `release-password.dpapi`(当前 Windows 用户 DPAPI,也可设 `GRANDETTOKEN_ANDROID_STORE_PASSWORD` 或交互输入) |
+| Android 清单私钥 | `C:\Users\wacil\.android\Grandettoken\manifest-private.dpapi` | Ed25519 私钥(当前 Windows 用户 DPAPI),配套公钥与证书指纹在 `android/release-public/` |
+| GitHub 凭据 | `gh auth login` 或 `GH_TOKEN` | 脚本未设 `GH_TOKEN` 且 `gh` 未登录时自动从 `git credential fill` 读取,不落盘不回显 |
+| 仓库可见性 | public | 私有仓库的 Release 资源需要鉴权,应用内置更新插件拉不到 |
 
-**私钥必须备份到密码管理器。** 它和公钥是配对的:换了密钥对,老版本装的用户
-会因为签名校验失败而永远收不到更新,只能手动重装。Actions secret **只能写不能读**,不算备份。
-备份与恢复演练和 Android 签名材料一起做,见「Android 发版 → 6. 签名材料备份与恢复演练」。
+## 历史记录与清理机制
 
-secret 轮换:
+为了避免本地归档、仓库文件和 GitHub Releases 无限膨胀,发版历史统一按以下上限保留:
 
-```bash
-gh secret set TAURI_SIGNING_PRIVATE_KEY < C:/Users/wacil/.tauri/tokenscope.key
-gh secret list          # 确认两项都在、更新时间是刚改的
-```
+| 位置 | 保留策略 | 执行方式 |
+|---|---|---|
+| 仓库文件 | 不保留逐版本发版说明(`build/release-notes-*.md` / `updater-notes-*.md` 已清除并由 `check-tracked-artifacts.js` 拦截) | 发版说明统一写在发版提交正文和 GitHub Release 正文里 |
+| 构建/核验日志 | 不入库;临时产出放 `build/qa/`(已 gitignore),发版完成即可删 | — |
+| NW 本地归档 | `..\_release\artifacts\Grandettoken\<channel>\<version>\` 每个渠道保留最近 **3** 个版本(`keep.local = 3`),以及已验收版本和比它更新的版本 | 验收后预览并执行 `rotate --apply <PLAN_SHA256>` |
+| GitHub Releases | 每个渠道保留最近 **3** 个已发布版本(`keep.remote = 3`);GitHub `Latest`、`android-stable` 固定指针、草稿和不认识的 tag 始终保留 | 验收后预览并执行 `prune-remote --apply <PLAN_SHA256>`(默认保留 git tag;加 `-WithTags` 才连 tag 一起删) |
 
-## 每次发版
+- 归档目录写入后只读,重跑时逐字节对账,内容不一致立即报错。
+- 破坏性清理全部是两段式:**先预览输出待删清单与 `PLAN_SHA256`,核对无误后再带摘要执行 `--apply`**。
 
-### 1. 版本号**三处**同步
+## 桌面端发版
 
-`app/src-tauri/Cargo.toml`、`app/src-tauri/tauri.conf.json`、**`app/src-tauri/Cargo.lock`**
-的版本号必须相等:
+### 1. 同步版本号(三处)
 
-- 前者是 Rust 里 `env!("CARGO_PKG_VERSION")` 的来源
-- `tauri.conf.json` 决定安装包文件名与更新清单里的版本号
-- **`Cargo.lock` 最容易漏**。改了 Cargo.toml 不跑 `cargo fetch`,任何带 `--locked`
-  的 cargo 调用都会报 `cannot update the lock file`
+`app/src-tauri/Cargo.toml`、`app/src-tauri/tauri.conf.json` 与 `app/src-tauri/Cargo.lock` 必须相等:
 
 ```bash
-cd app/src-tauri && cargo fetch --offline && cd ../..   # 改完版本号先刷新 lock(依赖已在本机缓存时不联网)
+cd app/src-tauri && cargo fetch --offline && cd ../..
 git diff app/src-tauri/Cargo.lock                        # 正常只应看到本包 tokenscope 的 version 行
-cd app/src-tauri && cargo fetch --locked && cd ../..     # 复核:lock 已同步,与 CI 同口径
+cd app/src-tauri && cargo fetch --locked && cd ../..
 ```
 
-> **第一步为什么不能直接 `--locked`**(v0.3.68 实测):`--locked` 的意思是「不许改 lock」,
-> 而刚改完 Cargo.toml 的版本号时 lock 必须改一行,于是必然报 `cannot update the lock file`。
-> `--offline` 只用本机已缓存的依赖完成这次更新;若报缺依赖,去掉 `--offline` 联网再跑一次。
-> `git diff` 里若出现本包版本行以外的变化(依赖升级、新增条目),先查明来源再提交 ——
-> v0.3.68 那次多出的是 core 新接入的 axum 条目,属预期内。CI 全程 `--locked`,只核验不更新。
+> 第一步不能直接 `--locked`:刚改完 `Cargo.toml` 版本号时 lock 必须更新本包这一行,`--offline` 用本机缓存刷新后再用 `--locked` 复核。
 
-CI 的 `Resolve tag and version` 会断言 tag 与版本号一致,不一致直接红在第一步。
+### 2. 更新验收清单、跑全量门禁并推送 `main`
 
-### 2. 提交并推 main
+1. 把本版需要真机/安装版验收的条目写入 [`docs/report/acceptance-backlog.md`](docs/report/acceptance-backlog.md),并更新 `PROGRESS.md` 文末。
+2. 涉及桌面界面、窗口几何或 WebView2 行为的改动,先关闭运行中的 `Grandettoken`,执行一键原生 CDP 回归:
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File build/run-native-checks.ps1
+   ```
+3. 提交并推送 `main`(发版提交正文须至少 40 字符且含 20 个以上中文字符,原样写入 `latest.json.notes` 和 Release 正文):
+   ```bash
+   git add -A && git commit -m "release: vX.Y.Z - 一句话亮点" -m "- 本版变更一" -m "- 本版变更二"
+   git push origin main
+   ```
 
-发版提交前,先把本版新增的待验收项(需安装版原生窗口、真实账号或外部环境验证的条目)写进
-[`docs/report/acceptance-backlog.md`](docs/report/acceptance-backlog.md)。
+> ⚠ **必须先推 `main` 再发版**(`HEAD == origin/main` 且工作树干净),脚本硬拦截未推送提交,避免 tag 与源码归档错位。
 
-```bash
-git add -A && git commit -m "release: vX.Y.Z - 一句话亮点" \
-  -m "- 本版变更一" -m "- 本版变更二"
-git push origin main
-```
-
-> ⚠ **发版提交必须带说明正文。** 提交信息会原样写进 `latest.json.notes` 与 Release 正文;
-> 只写标题时正文中文字符不足 20,`verify-release.js` 的 `notes intact` 会在发布后判 FAIL。
-> `release.yml` 已在打包前按同一判据拦截(v0.3.64 踩过:标题 68 字符 / 13 个中文字符)。
-
-> ⚠ **先推 main 再打 tag**(2026-11-10 v0.3.31 踩过)。`gh release create` 发现远端
-> 没有这个 tag 时会**自动建一个**,取的是**当时的默认分支尖端** —— main 还没推的话,
-> tag 就指到上一版的提交,源码归档(zip/tar.gz)拿错快照。走 CI 同样成立:
-> tag 指向的 commit 必须在 main 上,否则 GitHub 生成的源码归档与代码不一致。
-
-发版提交前若有桌面界面 / 窗口几何改动，建议先关停运行中的实例并跑一遍 `build/run-native-checks.ps1`，同时核对 [`docs/report/acceptance-backlog.md`](docs/report/acceptance-backlog.md) 中的待验收项（见下文第 6 步）。
-
-### 3. 打 tag 并推送(这一步触发发版)
-
-```bash
-git tag vX.Y.Z
-git push origin refs/tags/vX.Y.Z
-```
-
-推送后自动开始:
-
-```
-checkout(tag) → 门禁(ipc / silent / size / css / encoding / jsdom) → GNU 工具链
-  → cargo-tauri(缓存) → MinGW → core 单测 → cargo fetch
-  → bundle + 签名 → latest.json → 用配置公钥验签 → 建草稿 → 三件套核对与补传 → 发布 → verify-release.js
-```
-
-看进度:
-
-```bash
-gh run list --workflow=release --limit 3
-gh run watch <run-id>                  # 实时跟
-gh run view <run-id> --log-failed      # 只看失败的那几步
-```
-
-### 4. 失败重跑
-
-```bash
-gh run rerun <run-id> --failed
-```
-
-或整体重走一遍(会覆盖同名资产):
-
-```bash
-gh workflow run release.yml -f tag=vX.Y.Z
-```
-
-> 重跑是安全的:release 用 `softprops/action-gh-release` + `fail_on_unmatched_files`,
-> 同名资产会被替换;之后的「Ensure all three assets」再逐个核对补齐。
-
-### 5. 核验
-
-```bash
-export GH_TOKEN=$(printf "protocol=https\nhost=github.com\n\n" | git credential fill | sed -n 's/^password=//p')
-node --use-env-proxy build/verify-release.js
-```
-
-14 项:更新端点 200 / 版本 / 签名逐字一致 / 安装包可下载且 SHA 一致 / 三件套齐 /
-非 draft / 说明完整 / latest 指向本版 / 仓库公开。
-CI 里也会跑同一个脚本,所以本地这步是**二次确认**,不是唯一证据。
-
-> Node 24 的 `fetch` 默认不读 `HTTPS_PROXY`;本机设了代理时必须加 `--use-env-proxy`,
-> 否则会看到 `fetch failed`(2026-11-12 v0.3.36 踩过)。
-
-### 6. 同步待验收清单与原生窗口一键回归
-
-- **发版提交前**：把本版新增的待验收项写进 [`docs/report/acceptance-backlog.md`](docs/report/acceptance-backlog.md)；涉及桌面界面 / 窗口几何 / WebView2 行为的改动，先关闭运行中的 `Grandettoken`，再执行一键原生 CDP 回归（脚本会自动拒绝并发实例、按 SHA-256 备份并恢复 `%APPDATA%\com.wacil.tokenscope` 下 `*.db*`/`*.json`、串行跑完 `$defaultScripts` 清单内的 CDP 验证并输出日志到 `build/qa/native-<YYYY-MM-DD>/`，清单以脚本头部为准）：
-  ```powershell
-  powershell -NoProfile -ExecutionPolicy Bypass -File build/run-native-checks.ps1
-  ```
-- **发版并安装后**：逐项完成真机 / 原生窗口 / 真实账号验收，在 [`docs/report/acceptance-backlog.md`](docs/report/acceptance-backlog.md) 里更新对应项的状态和完成日期。
-- `build/verify-release.js` 只核验线上发布产物，不检查本地待验收清单文档。
-
-## Android 发版（CI，独立 tag）
-
-Android 与桌面共用同一套 GitHub Actions，但入口、资产和更新指针完全独立。
-**2026-11-13 起，Android 也走 CI 发版**，本地打包只作应急。
-
-### 1. 打 tag
-
-版本号只从 tag 推导，不再手工改 `build.gradle.kts`：
-
-```bash
-git tag android-vX.Y.Z
-git push origin refs/tags/android-vX.Y.Z
-```
-
-workflow `android-release.yml` 会自动：
-
-```
-checkout(tag) → 单测 + assembleRelease（keystore 来自 secrets）
-  → 校验证书 SHA-256 / versionName / versionCode
-  → 生成 payload → Ed25519 签清单 → 本地回验
-  → 更新 android-stable/android-latest.json
-  → 建 Android release（--latest=false）→ 匿名下载回验 → 确认桌面 latest 未被抢占
-```
-
-`versionCode = major*10000 + minor*100 + patch`（`0.1.13` → `113`）。
-必须单调递增；不要复用已发布过的 `versionCode`。
-
-### 2. CI secrets（一次性配置）
-
-以下名称必须存在于仓库 Actions secrets，值只存不打印：
-
-| secret | 内容 |
-|---|---|
-| `ANDROID_KEYSTORE_BASE64` | `release.p12` 的 base64 |
-| `ANDROID_STORE_PASSWORD` | keystore 口令（与 key 口令相同） |
-| `ANDROID_KEY_ALIAS` | `grandettoken` |
-| `ANDROID_UPDATE_PUBLIC_KEY` | 更新清单 Ed25519 公钥（base64 raw） |
-| `ANDROID_CERT_SHA256` | APK 签名证书 SHA-256（小写 hex） |
-| `ANDROID_MANIFEST_PRIVATE_KEY` | 更新清单 Ed25519 私钥（PEM 文本） |
-
-`ANDROID_MANIFEST_PRIVATE_KEY` 与已装用户收到的更新签名是同一把 key。
-**不要轮换**，否则老版本会因 `UPDATE_KEY_UNKNOWN` 拒绝更新；轮换只能配合一次强制重装。
-
-### 3. 产物与指针
-
-- Android release tag：`android-vX.Y.Z`
-- APK 资产名：`Grandettoken-android-vX.Y.Z.apk`
-- 更新清单：release `android-stable` 的 `android-latest.json`
-- 固定更新地址：
-  `https://github.com/wacilimonster-source/Grandettoken/releases/download/android-stable/android-latest.json`
-- Android release 必须 `--latest=false`，桌面 `releases/latest` 不能被抢走。
-- `android-stable` release **不要删除**；已装 App 只认这个资产。
-
-### 4. 核验
-
-CI 会用 `build/verify-android-release.py` 对**已上传**的清单和 APK 做匿名回验：
-签名、schema、applicationId、versionName/versionCode、minSdk、大小、SHA-256、
-下载地址逐项比对，并断言 `releases/latest` 仍指向桌面版本。
-
-本地复核同一脚本：
-
-```bash
-python build/verify-android-release.py \
-  --manifest build/qa/android-vX.Y.Z/android-latest.json \
-  --public-key ~/.android/Grandettoken/manifest-public.txt \
-  --apk build/qa/android-vX.Y.Z/Grandettoken-android-vX.Y.Z.apk \
-  --expected-version-name X.Y.Z \
-  --expected-version-code <code> \
-  --expected-download-url https://github.com/wacilimonster-source/Grandettoken/releases/download/android-vX.Y.Z/Grandettoken-android-vX.Y.Z.apk
-```
-
-### 5. 应急：本地打包（CI 不可用时）
+### 3. 一键本机构建、签名、归档与发布
 
 ```powershell
-.\build\android-release.ps1 -VersionName 0.1.13 -VersionCode 113
+powershell -NoProfile -ExecutionPolicy Bypass -File build/release-desktop.ps1 -Stage Release
 ```
 
-脚本只产签名 APK，不发布、不签清单。清单仍需
-`build/make-android-manifest.mjs` 生成 payload、`build/sign-android-manifest.py`
-签名（本地默认走 DPAPI；CI 用 `--private-key-pem`），再手工上传
-`android-vX.Y.Z` 和 `android-stable` 两个 release。上传后必须用上面的
-`verify-android-release.py` 复核。
+也可分段执行(`-Stage Preflight` → `-Stage Build` → `-Stage Publish`):
 
-### 6. 签名材料备份与恢复演练
+1. `Preflight`:校验工作树干净、`HEAD == origin/main`、tag 未被占用、提交正文达标、GitHub `Latest` 未超前、工具链与私钥就绪,串行跑完 [`build/run-gates.ps1`](build/run-gates.ps1)(对应 `AGENTS.md` §4.1 全部门禁)并写当前提交的通过标记。
+2. `Build`:设置 `TAURI_SIGNING_PRIVATE_KEY` 与 `CI=true`(使 `cargo tauri build` 回落空密码,避免 PowerShell `$env:X = ''` 删变量导致挂死),调 `build/build.ps1 bundle` 编 NSIS 安装包、打本地 tag `vX.Y.Z`、生成 `latest.json`、用配置公钥离线验签(`verify-signature.js --local`),然后把 `setup.exe`、`.sig`、`latest.json`、`release-notes.md` 归档到 `..\_release\artifacts\Grandettoken\desktop\X.Y.Z\`。
+3. `Publish`:推送 `vX.Y.Z` tag 到 `origin`,建草稿 Release 并上传三件套,逐件校验远端资产状态/字节数/SHA-256(异常时在草稿态幂等补传),转正并设为 `Latest`,最后跑 `node --use-env-proxy build/verify-release.js` 做端到端核验。
 
-**为什么必须做**:Actions secrets **只能写不能读**,不是备份;本机 `~/.android/Grandettoken`
-里的部分材料(如 `manifest-private.dpapi`)由当前 Windows 用户的 DPAPI 加密,换机、重装系统
-或换 Windows 账户后**解不开**。两边同时没了,下面任何一样都无法补救:
+> 若手动排查签名挂死:两次采样 `Get-Process cargo-tauri | Select CPU` 不变且 `bundle/nsis/` 只有 `setup.exe` 无 `.sig` 即为等密码挂住;杀掉进程并删除 `app/src-tauri/target/.build-lock` 后重跑。
+
+### 4. 覆盖升级验收与清理历史
+
+1. 用旧版本安装包的「检查更新」下载新版覆盖安装,确认应用正常升级与核心功能通过,并在 [`docs/report/acceptance-backlog.md`](docs/report/acceptance-backlog.md) 标为完成。
+2. 记录验收并预览清理计划:
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File build/release-desktop.ps1 -Stage Accept
+   ```
+3. 核对输出的文件列表与 Release 列表后,按返回的摘要执行清理(若也要顺手删旧远程 tag 则加 `-WithTags`):
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File build/release-desktop.ps1 -Stage Prune -ApplyLocal <local_plan_sha256> -ApplyRemote <remote_plan_sha256>
+   ```
+
+## Android 发版
+
+Android 与桌面共用同一仓库与 `..\_release\release_store.py`,但渠道(`android`)、tag(`android-vX.Y.Z`)、APK(`Grandettoken-android-vX.Y.Z.apk`)与更新指针(`android-stable/android-latest.json`)完全独立,**绝不抢占桌面 `Latest`**。
+
+`versionCode = major*10000 + minor*100 + patch`(如 `0.1.15` → `10115`),随版本号单调递增。
+
+1. 提交并推送 `main`(提交正文需 >= 20 字符)。
+2. 本机跑单测、构建签名 APK、签更新清单、归档并发布:
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File build/release-android.ps1 -Version 0.1.15 -Stage Release
+   ```
+   - `Build`:校验 `HEAD == origin/main` 与版本号单调性,调共享 `android-gradle` 工具链运行 `:app:testDebugUnitTest :app:assembleRelease`,用 `aapt`/`apksigner` 校验证书指纹与包信息,生成并签名 `android-latest.json`,本地运行 `verify-android-release.py` 后归档至 `..\_release\artifacts\Grandettoken\android\0.1.15\`。
+   - `Publish`:推送 `android-v0.1.15` tag,创建非 `Latest` Release 上传 APK,更新固定指针 `android-stable` 的 `android-latest.json`,匿名下载回验并用 `verify-android-release.py` 校验,同时确认桌面 `Latest` 未被抢占。
+3. 旧版 App 实测覆盖升级后执行验收与清理预览:
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File build/release-android.ps1 -Version 0.1.15 -Stage Accept
+   powershell -NoProfile -ExecutionPolicy Bypass -File build/release-android.ps1 -Stage Prune -ApplyLocal <local_plan_sha256> -ApplyRemote <remote_plan_sha256>
+   ```
+
+- `android-stable` Release **不要删除**,已装 App 只认该固定资产(`keep.remote` 逻辑已将其列为 `pinned`)。
+
+## 签名材料备份与恢复演练
+
+本机 `manifest-private.dpapi` 与 `release-password.dpapi` 受当前 Windows 用户 DPAPI 保护,换机、重装系统或换 Windows 账户后**无法解密**。以下三样私密材料必须存进密码管理器或离线加密介质(**不经 DPAPI**),严禁进仓库/日志/聊天:
 
 | 材料 | 丢了的后果 |
 |---|---|
-| `release.p12` keystore + 口令 + 别名 `grandettoken` | 新 APK 证书变了,已装用户无法覆盖升级,只能卸载重装(本机同步组随之清空) |
-| 更新清单 Ed25519 私钥(PEM) | 已装 App 以 `UPDATE_KEY_UNKNOWN` 拒收所有新清单 |
-| 桌面 `tokenscope.key`(见「一次性准备」) | 已装桌面用户收不到更新 |
+| `tokenscope.key`(桌面) | 已装桌面用户收不到更新 |
+| `release.p12` + 口令 + 别名 `grandettoken` | 新 APK 证书变化,已装用户无法覆盖升级(同步组清空) |
+| Android 清单 Ed25519 私钥(明文 PEM) | 已装 App 以 `UPDATE_KEY_UNKNOWN` 拒收新清单 |
 
-对照用的公开值已在仓库:`android/release-public/certificate-sha256.txt`、
-`android/release-public/manifest-public.txt`、`tauri.conf.json` 的 `plugins.updater.pubkey`。
+**恢复演练**(换机前或改签名流程后,在另一台机器/Windows Sandbox 里只用备份执行):
 
-**备份**:三样私密材料存进密码管理器或离线加密介质,**不经 DPAPI**;
-口令、私钥、PEM 一律不进仓库、日志、聊天或 issue。
+1. APK 证书:`keytool -list -v -keystore release.p12 -storetype PKCS12 -alias grandettoken`,SHA-256 指纹(去冒号小写)须与 `android/release-public/certificate-sha256.txt` 一致。
+2. 清单私钥:`python build/sign-android-manifest.py --payload test-payload.json --out test-signed.json --private-key-pem <备份的 PEM> --public-key android/release-public/manifest-public.txt`,输出 `signed ...` 即通过。
+3. 桌面私钥:`cargo tauri signer sign -f <备份的 tokenscope.key> -p "" <任意测试文件>` 生成 `.sig` 后,运行 `node build/verify-signature.js --local <测试文件> --sig <测试文件>.sig`,输出 `RESULT: PASS` 即通过(`--self-test` 可随时自检)。
+4. 结果记入 `docs/report/acceptance-backlog.md`:日期、通过与否、指纹前 8 位(**不记任何口令**)。演练后清理演练机临时文件。
 
-**恢复演练**(换机前、改签名流程后至少做一次;在另一台机器或 Windows Sandbox 里,**只用备份**):
+## 用户数据与卸载
 
-1. APK 证书:
-
-   ```powershell
-   keytool -list -v -keystore release.p12 -storetype PKCS12 -alias grandettoken
-   ```
-
-   SHA-256 指纹(去掉冒号、转小写)必须与 `android/release-public/certificate-sha256.txt` 一致;
-2. 清单私钥:给任意测试 payload 签名,并用仓库里的公钥校验 ——
-
-   ```powershell
-   python build/sign-android-manifest.py --payload test-payload.json --out test-signed.json `
-     --private-key-pem <备份的 PEM> --public-key android/release-public/manifest-public.txt
-   ```
-
-   脚本签名前会从 PEM 推出公钥、与 `--public-key` 逐字节比对,不一致直接退出
-   (`private key does not match manifest-public.txt`);能输出 `signed ...` 即通过;
-3. 桌面私钥:`cargo tauri signer sign -f <备份的 tokenscope.key> -p "" <任意测试文件>` 能出 `.sig`,
-   再用 `tauri.conf.json` 的 pubkey 本地验签 ——
-
-   ```powershell
-   node build/verify-signature.js --local <测试文件> --sig <测试文件>.sig
-   ```
-
-   输出 `RESULT: PASS` 即通过(脚本内置 `node build/verify-signature.js --self-test` 可随时自检正反样本);
-4. 结果记入 `docs/report/acceptance-backlog.md`:日期、通过与否、指纹前 8 位。**不记任何口令**。
-
-> 演练不需要也不应该轮换任何一把 key。演练机上的材料用完即删。
-
-## 应急：本地打包
-
-CI 不可用(Actions 故障 / 需要发一个尚未合并的提交 / 需要立即回滚发版)时才用:
-
-```bash
-bash build/release-local.sh                       # 约 3-12 分钟,产出 exe + sig
-node build/make-latest-json.js --notes-file <说明文件>
-```
-
-> ⚠ **空密码必须从 bash export。** 在 PowerShell 里写
-> `$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""` 等于**删掉**这个变量(不是设成空串),
-> 签名步骤会去等一个永远不来的密码输入,CPU 全程 0 地挂住 —— 实测踩过两次。
->
-> 挂住的识别:两次采样 `Get-Process cargo-tauri | Select CPU` 不变,
-> 且 `bundle/nsis/` 里只有 `setup.exe`、没有 `.sig`。
-> 处理:杀掉 cargo / cargo-tauri,删掉 `app/src-tauri/target/.build-lock`,重跑。
-
-然后手工建 release:
-
-```bash
-gh release create vX.Y.Z \
-  --title "Grandettoken X.Y.Z — 一句话亮点" \
-  --notes-file <说明文件> \
-  app/src-tauri/target/release/bundle/nsis/Grandettoken_X.Y.Z_x64-setup.exe \
-  app/src-tauri/target/release/bundle/nsis/Grandettoken_X.Y.Z_x64-setup.exe.sig \
-  app/src-tauri/target/release/bundle/nsis/latest.json
-```
-
-**⚠ 上传完必须核一遍三件套齐不齐**(2026-10-20 踩过:`.sig` 上传后"消失",
-release 只挂上 2 个文件,已装用户的自动更新直接断):
-
-```bash
-gh release view vX.Y.Z --json assets --jq '.assets[].name'
-# 必须看到 3 个:setup.exe / setup.exe.sig / latest.json
-```
-
-`gh` 没登录时,可以直接用它已经存在 Windows 凭据管理器里的凭据(不落盘、不回显):
-
-```bash
-export GH_TOKEN=$(printf "protocol=https\nhost=github.com\n\n" | git credential fill | sed -n 's/^password=//p')
-```
-
-更新端点固定是
-`https://github.com/wacilimonster-source/Grandettoken/releases/latest/download/latest.json`
-—— 这个 URL 永远指向最新 release,不用改配置。
-
-## 用户数据
-
-数据库在 `%APPDATA%\com.wacil.tokenscope\tokenscope.db`(目录名是 bundle id,
-产品改名后不变),密钥在 Windows 凭据管理器,
-**都不在安装目录里**,所以升级、重装、覆盖安装都不丢数据。卸载默认也不删。
-
-## 卸载
-
-开始菜单 → Grandettoken → Uninstall(或 `%LOCALAPPDATA%\Grandettoken\uninstall.exe`)。
-卸载时应该清掉开机自启注册表键(`HKCU\...\Run` 里的 Grandettoken),
-否则会残留一个指向已删除 exe 的自启项。
-
-> 签名私钥在 `C:\Users\wacil\.tauri\tokenscope.key`(文件名沿用旧产品名,内容与
-> `tauri.conf.json` 里的公钥配套;产品改名不影响这一对密钥)。
+- 数据库在 `%APPDATA%\com.wacil.tokenscope\tokenscope.db`(目录名沿用旧 bundle id),密钥在 Windows 凭据管理器,**都不在安装目录里**,升级、重装、覆盖安装均不丢数据。
+- 卸载入口:开始菜单 → Grandettoken → Uninstall(或 `%LOCALAPPDATA%\Grandettoken\uninstall.exe`),卸载时自动清理开机自启项与受管代理网关注入块。
